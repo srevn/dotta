@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+#
+# pre-add hook - Runs before adding files to a profile
+#
+# This script runs before dotta adds files to a profile.
+# Use it to validate file contents, check for secrets, etc.
+#
+# Exit with non-zero status to abort the add operation.
+#
+# Environment variables provided by dotta:
+#   DOTTA_REPO_DIR    - Path to dotta repository
+#   DOTTA_OPERATION   - Operation being performed ("add")
+#   DOTTA_PROFILE     - Profile name being modified
+#   DOTTA_FILES       - Newline-separated list of files being added
+#
+
+set -euo pipefail
+
+echo "Pre-add: Validating files before adding to profile '$DOTTA_PROFILE'..."
+
+# Example: Check for secrets in files
+echo "Checking for potential secrets..."
+secrets_found=0
+
+# Read files line by line
+while IFS= read -r file; do
+    [[ -z "$file" ]] && continue
+
+    if [[ -f "$file" ]]; then
+        # Check for common secret patterns
+        if grep -qiE '(password|secret|api[_-]?key|token|private[_-]?key)' "$file" 2>/dev/null; then
+            echo "  WARNING: Potential secret found in: $file" >&2
+            echo "  Please review this file carefully before adding!" >&2
+            secrets_found=$((secrets_found + 1))
+        fi
+
+        # Check for AWS credentials
+        if grep -qE 'AKIA[0-9A-Z]{16}' "$file" 2>/dev/null; then
+            echo "  ERROR: AWS access key detected in: $file" >&2
+            exit 1
+        fi
+
+        # Check for private SSH keys
+        if grep -q 'BEGIN.*PRIVATE KEY' "$file" 2>/dev/null; then
+            echo "  ERROR: Private SSH key detected in: $file" >&2
+            echo "  Do not add private keys to dotfiles!" >&2
+            exit 1
+        fi
+    fi
+done <<< "$DOTTA_FILES"
+
+if [[ $secrets_found -gt 0 ]]; then
+    echo ""
+    echo "Found $secrets_found file(s) with potential secrets."
+    echo "Please review carefully. Proceeding with add..."
+fi
+
+# Example: Validate file sizes
+echo "Checking file sizes..."
+while IFS= read -r file; do
+    [[ -z "$file" ]] && continue
+
+    if [[ -f "$file" ]]; then
+        size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo 0)
+        # Warn if file is larger than 1MB
+        if [[ $size -gt 1048576 ]]; then
+            echo "  WARNING: Large file ($((size / 1024))KB): $file" >&2
+            echo "  Consider using git-lfs or ignoring this file." >&2
+        fi
+    fi
+done <<< "$DOTTA_FILES"
+
+echo "Pre-add validation passed!"
+exit 0

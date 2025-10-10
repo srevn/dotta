@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+#
+# post-add hook - Runs after adding files to a profile
+#
+# This script runs after dotta has successfully added files to a profile.
+# Use it to commit changes, trigger CI/CD, notify team, etc.
+#
+# Environment variables provided by dotta:
+#   DOTTA_REPO_DIR    - Path to dotta repository
+#   DOTTA_OPERATION   - Operation being performed ("add")
+#   DOTTA_PROFILE     - Profile name that was modified
+#   DOTTA_FILES       - Newline-separated list of files that were added
+#
+
+set -euo pipefail
+
+echo "Post-add: Processing files added to profile '$DOTTA_PROFILE'..."
+
+# Count files added
+file_count=$(echo "$DOTTA_FILES" | grep -c . || echo 0)
+echo "Added $file_count file(s) to profile."
+
+# Example: Auto-commit to git (if repo_dir is a git repo)
+if [[ -d "$DOTTA_REPO_DIR/.git" ]]; then
+    echo "Committing changes to git..."
+    cd "$DOTTA_REPO_DIR"
+
+    # Check if there are changes
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        git add -A
+
+        # Create commit message
+        commit_msg="Add files to $DOTTA_PROFILE profile
+
+Added files:
+$DOTTA_FILES
+
+Auto-committed by dotta post-add hook"
+
+        git commit -m "$commit_msg"
+        echo "  Committed to git successfully!"
+
+        # Example: Auto-push (use with caution!)
+        # if git remote | grep -q origin; then
+        #     echo "Pushing to origin..."
+        #     git push origin "$(git branch --show-current)"
+        # fi
+    else
+        echo "  No changes to commit."
+    fi
+fi
+
+# Example: Trigger CI/CD
+# if command -v curl &>/dev/null; then
+#     echo "Triggering CI/CD pipeline..."
+#     curl -X POST "https://ci.example.com/api/trigger" \
+#          -H "Authorization: Bearer $CI_TOKEN" \
+#          -d '{"profile": "'$DOTTA_PROFILE'"}' \
+#          2>/dev/null || true
+# fi
+
+# Example: Send notification to team (Slack)
+# if [[ -n "${SLACK_WEBHOOK_URL:-}" ]]; then
+#     echo "Notifying team..."
+#     curl -X POST "$SLACK_WEBHOOK_URL" \
+#          -H 'Content-Type: application/json' \
+#          -d '{
+#              "text": "Dotfiles updated",
+#              "attachments": [{
+#                  "color": "good",
+#                  "fields": [
+#                      {"title": "Profile", "value": "'"$DOTTA_PROFILE"'", "short": true},
+#                      {"title": "Files", "value": "'"$file_count"'", "short": true}
+#                  ]
+#              }]
+#          }' 2>/dev/null || true
+# fi
+
+# Example: Generate documentation
+# if command -v python3 &>/dev/null; then
+#     echo "Generating profile documentation..."
+#     python3 "$DOTTA_REPO_DIR/scripts/generate_docs.py" "$DOTTA_PROFILE" || true
+# fi
+
+echo "Post-add completed successfully!"
+exit 0

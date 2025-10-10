@@ -1,0 +1,923 @@
+/**
+ * gitops.c - Git operations wrapper implementation
+ *
+ * All libgit2 calls are wrapped with error handling and resource cleanup.
+ */
+
+#define _POSIX_C_SOURCE 200809L  /* For strdup */
+
+#include "gitops.h"
+
+#include <git2.h>
+#include <git2/errors.h>
+#include <string.h>
+
+#include "credentials.h"
+#include "error.h"
+#include "utils/array.h"
+
+/**
+ * Repository operations
+ */
+
+dotta_error_t *gitops_open_repository(git_repository **out, const char *path) {
+    CHECK_NULL(out);
+    CHECK_NULL(path);
+
+    int err = git_repository_open(out, path);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    return NULL;
+}
+
+void gitops_close_repository(git_repository *repo) {
+    if (repo) {
+        git_repository_free(repo);
+    }
+}
+
+dotta_error_t *gitops_discover_repository(char **out, const char *start_path) {
+    CHECK_NULL(out);
+    CHECK_NULL(start_path);
+
+    git_buf buf = GIT_BUF_INIT;
+    int err = git_repository_discover(&buf, start_path, 0, NULL);
+    if (err < 0) {
+        git_buf_dispose(&buf);
+        return error_from_git(err);
+    }
+
+    *out = strdup(buf.ptr);
+    git_buf_dispose(&buf);
+
+    if (!*out) {
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate repository path");
+    }
+
+    return NULL;
+}
+
+dotta_error_t *gitops_discover_and_open(git_repository **out, const char *start_path) {
+    CHECK_NULL(out);
+    CHECK_NULL(start_path);
+
+    char *repo_path = NULL;
+    dotta_error_t *err = gitops_discover_repository(&repo_path, start_path);
+    if (err) {
+        return err;
+    }
+
+    err = gitops_open_repository(out, repo_path);
+    free(repo_path);
+    return err;
+}
+
+/**
+ * Branch/Reference operations
+ */
+
+dotta_error_t *gitops_branch_exists(git_repository *repo, const char *name, bool *exists) {
+    CHECK_NULL(repo);
+    CHECK_NULL(name);
+    CHECK_NULL(exists);
+
+    git_reference *ref = NULL;
+    char refname[256];
+    snprintf(refname, sizeof(refname), "refs/heads/%s", name);
+
+    int err = git_reference_lookup(&ref, repo, refname);
+    if (err == GIT_ENOTFOUND) {
+        *exists = false;
+        return NULL;
+    }
+
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    git_reference_free(ref);
+    *exists = true;
+    return NULL;
+}
+
+dotta_error_t *gitops_create_orphan_branch(git_repository *repo, const char *name) {
+    CHECK_NULL(repo);
+    CHECK_NULL(name);
+
+    /* Create empty tree */
+    git_treebuilder *tb = NULL;
+    git_oid tree_oid;
+    int err;
+
+    err = git_treebuilder_new(&tb, repo, NULL);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    err = git_treebuilder_write(&tree_oid, tb);
+    git_treebuilder_free(tb);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    /* Get tree object */
+    git_tree *tree = NULL;
+    err = git_tree_lookup(&tree, repo, &tree_oid);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    /* Get default signature */
+    git_signature *sig = NULL;
+    err = git_signature_default(&sig, repo);
+    if (err < 0) {
+        git_tree_free(tree);
+        return error_from_git(err);
+    }
+
+    /* Create orphan commit (no parents) */
+    git_oid commit_oid;
+    char refname[256];
+    snprintf(refname, sizeof(refname), "refs/heads/%s", name);
+
+    err = git_commit_create(
+        &commit_oid,
+        repo,
+        refname,  /* This creates the branch reference */
+        sig,
+        sig,
+        NULL,     /* encoding */
+        "Initialize empty branch",
+        tree,
+        0,        /* no parents = orphan */
+        NULL      /* no parent commits */
+    );
+
+    git_signature_free(sig);
+    git_tree_free(tree);
+
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    return NULL;
+}
+
+dotta_error_t *gitops_list_branches(git_repository *repo, string_array_t **out) {
+    CHECK_NULL(repo);
+    CHECK_NULL(out);
+
+    git_branch_iterator *iter = NULL;
+    int err = git_branch_iterator_new(&iter, repo, GIT_BRANCH_LOCAL);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    string_array_t *branches = string_array_create();
+    if (!branches) {
+        git_branch_iterator_free(iter);
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate branch list");
+    }
+
+    git_reference *ref = NULL;
+    git_branch_t branch_type;
+
+    while (git_branch_next(&ref, &branch_type, iter) == 0) {
+        const char *name = NULL;
+        err = git_branch_name(&name, ref);
+        if (err < 0) {
+            git_reference_free(ref);
+            git_branch_iterator_free(iter);
+            string_array_free(branches);
+            return error_from_git(err);
+        }
+
+        dotta_error_t *derr = string_array_push(branches, name);
+        git_reference_free(ref);
+        if (derr) {
+            git_branch_iterator_free(iter);
+            string_array_free(branches);
+            return derr;
+        }
+    }
+
+    git_branch_iterator_free(iter);
+    *out = branches;
+    return NULL;
+}
+
+dotta_error_t *gitops_delete_branch(git_repository *repo, const char *name) {
+    CHECK_NULL(repo);
+    CHECK_NULL(name);
+
+    git_reference *ref = NULL;
+    char refname[256];
+    snprintf(refname, sizeof(refname), "refs/heads/%s", name);
+
+    int err = git_reference_lookup(&ref, repo, refname);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    err = git_branch_delete(ref);
+    git_reference_free(ref);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    return NULL;
+}
+
+dotta_error_t *gitops_current_branch(git_repository *repo, char **out) {
+    CHECK_NULL(repo);
+    CHECK_NULL(out);
+
+    git_reference *head = NULL;
+    int err = git_repository_head(&head, repo);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    const char *name = NULL;
+    err = git_branch_name(&name, head);
+    if (err < 0) {
+        git_reference_free(head);
+        return error_from_git(err);
+    }
+
+    *out = strdup(name);
+    git_reference_free(head);
+
+    if (!*out) {
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate branch name");
+    }
+
+    return NULL;
+}
+
+/**
+ * Tree operations
+ */
+
+dotta_error_t *gitops_load_tree(git_repository *repo, const char *ref_name, git_tree **out) {
+    CHECK_NULL(repo);
+    CHECK_NULL(ref_name);
+    CHECK_NULL(out);
+
+    /* Get reference */
+    git_reference *ref = NULL;
+    int err = git_reference_lookup(&ref, repo, ref_name);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    /* Peel reference to get the underlying object (handles both commits and direct tree refs) */
+    git_object *obj = NULL;
+    err = git_reference_peel(&obj, ref, GIT_OBJECT_ANY);
+    git_reference_free(ref);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    /* Handle different object types */
+    git_object_t obj_type = git_object_type(obj);
+
+    if (obj_type == GIT_OBJECT_COMMIT) {
+        /* Normal branch pointing to commit - get tree from commit */
+        git_commit *commit = (git_commit *)obj;
+        err = git_commit_tree(out, commit);
+        git_object_free(obj);
+        if (err < 0) {
+            return error_from_git(err);
+        }
+    } else if (obj_type == GIT_OBJECT_TREE) {
+        /* Orphan branch pointing directly to tree */
+        *out = (git_tree *)obj;
+        /* Don't free obj - we're transferring ownership to caller */
+    } else {
+        /* Unexpected object type */
+        git_object_free(obj);
+        return ERROR(DOTTA_ERR_GIT,
+                    "Reference '%s' points to unexpected object type: %d",
+                    ref_name, obj_type);
+    }
+
+    return NULL;
+}
+
+dotta_error_t *gitops_tree_walk(git_tree *tree, git_treewalk_cb callback, void *payload) {
+    CHECK_NULL(tree);
+    CHECK_NULL(callback);
+
+    int err = git_tree_walk(tree, GIT_TREEWALK_PRE, callback, payload);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    return NULL;
+}
+
+/**
+ * Commit operations
+ */
+
+dotta_error_t *gitops_create_commit(
+    git_repository *repo,
+    const char *branch_name,
+    git_tree *tree,
+    const char *message,
+    git_oid *out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(branch_name);
+    CHECK_NULL(tree);
+    CHECK_NULL(message);
+
+    /* Get default signature */
+    git_signature *sig = NULL;
+    int err = git_signature_default(&sig, repo);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    /* Check if branch exists to get parent */
+    git_oid commit_oid;
+    git_oid *parent_oid = NULL;
+    git_commit *parent = NULL;
+    char refname[256];
+    snprintf(refname, sizeof(refname), "refs/heads/%s", branch_name);
+
+    git_reference *ref = NULL;
+    if (git_reference_lookup(&ref, repo, refname) == 0) {
+        git_reference_name_to_id(&commit_oid, repo, refname);
+        parent_oid = &commit_oid;
+        err = git_commit_lookup(&parent, repo, parent_oid);
+        git_reference_free(ref);
+        if (err < 0) {
+            git_signature_free(sig);
+            return error_from_git(err);
+        }
+    }
+
+    /* Create commit */
+    const git_commit *parents[] = { parent };
+    int parent_count = parent ? 1 : 0;
+
+    err = git_commit_create(
+        &commit_oid,
+        repo,
+        refname,
+        sig,
+        sig,
+        NULL,
+        message,
+        tree,
+        parent_count,
+        parents
+    );
+
+    git_signature_free(sig);
+    if (parent) {
+        git_commit_free(parent);
+    }
+
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    if (out) {
+        git_oid_cpy(out, &commit_oid);
+    }
+
+    return NULL;
+}
+
+dotta_error_t *gitops_get_commit(
+    git_repository *repo,
+    const char *ref_name,
+    git_commit **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(ref_name);
+    CHECK_NULL(out);
+
+    git_oid oid;
+    int err = git_reference_name_to_id(&oid, repo, ref_name);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    err = git_commit_lookup(out, repo, &oid);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    return NULL;
+}
+
+/**
+ * Remote operations
+ */
+
+dotta_error_t *gitops_clone(
+    git_repository **out,
+    const char *url,
+    const char *local_path
+) {
+    CHECK_NULL(out);
+    CHECK_NULL(url);
+    CHECK_NULL(local_path);
+
+    git_clone_options opts = GIT_CLONE_OPTIONS_INIT;
+
+    /* Set up credential callback */
+    opts.fetch_opts.callbacks.credentials = credentials_callback;
+
+    /* Clone with credential support */
+    int err = git_clone(out, url, local_path, &opts);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    return NULL;
+}
+
+dotta_error_t *gitops_fetch_branch(
+    git_repository *repo,
+    const char *remote_name,
+    const char *branch_name,
+    void *cred_ctx
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(remote_name);
+    CHECK_NULL(branch_name);
+
+    git_remote *remote = NULL;
+    int err = git_remote_lookup(&remote, repo, remote_name);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    /* Fetch with credential support */
+    git_fetch_options fetch_opts = GIT_FETCH_OPTIONS_INIT;
+    fetch_opts.callbacks.credentials = credentials_callback;
+    fetch_opts.callbacks.payload = cred_ctx;
+
+    char refspec[256];
+    snprintf(refspec, sizeof(refspec), "refs/heads/%s:refs/remotes/%s/%s",
+             branch_name, remote_name, branch_name);
+
+    const char *refspecs[] = { refspec };
+    git_strarray refs = { (char **)refspecs, 1 };
+
+    err = git_remote_fetch(remote, &refs, &fetch_opts, NULL);
+    git_remote_free(remote);
+
+    if (err < 0) {
+        /* Authentication failed - reject credentials if they were provided */
+        if (cred_ctx) {
+            credential_context_reject(cred_ctx);
+        }
+        return error_from_git(err);
+    }
+
+    /* Success - approve credentials if they were provided */
+    if (cred_ctx) {
+        credential_context_approve(cred_ctx);
+    }
+
+    return NULL;
+}
+
+dotta_error_t *gitops_push_branch(
+    git_repository *repo,
+    const char *remote_name,
+    const char *branch_name,
+    void *cred_ctx
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(remote_name);
+    CHECK_NULL(branch_name);
+
+    git_remote *remote = NULL;
+    int err = git_remote_lookup(&remote, repo, remote_name);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    /* Push with credential support */
+    git_push_options push_opts = GIT_PUSH_OPTIONS_INIT;
+    push_opts.callbacks.credentials = credentials_callback;
+    push_opts.callbacks.payload = cred_ctx;
+
+    char refspec[256];
+    snprintf(refspec, sizeof(refspec), "refs/heads/%s:refs/heads/%s",
+             branch_name, branch_name);
+
+    const char *refspecs[] = { refspec };
+    git_strarray refs = { (char **)refspecs, 1 };
+
+    err = git_remote_push(remote, &refs, &push_opts);
+    git_remote_free(remote);
+
+    if (err < 0) {
+        /* Authentication failed - reject credentials if they were provided */
+        if (cred_ctx) {
+            credential_context_reject(cred_ctx);
+        }
+        return error_from_git(err);
+    }
+
+    /* Success - approve credentials if they were provided */
+    if (cred_ctx) {
+        credential_context_approve(cred_ctx);
+    }
+
+    return NULL;
+}
+
+dotta_error_t *gitops_merge_ff_only(git_repository *repo, const char *branch_name) {
+    CHECK_NULL(repo);
+    CHECK_NULL(branch_name);
+
+    /* Get their commit */
+    char refname[256];
+    snprintf(refname, sizeof(refname), "refs/heads/%s", branch_name);
+
+    git_annotated_commit *their_head = NULL;
+    git_reference *ref = NULL;
+    int err;
+
+    err = git_reference_lookup(&ref, repo, refname);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    err = git_annotated_commit_from_ref(&their_head, repo, ref);
+    git_reference_free(ref);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    /* Perform fast-forward merge */
+    git_merge_analysis_t analysis;
+    git_merge_preference_t preference;
+    const git_annotated_commit *merge_heads[] = { their_head };
+
+    err = git_merge_analysis(&analysis, &preference, repo, merge_heads, 1);
+    if (err < 0) {
+        git_annotated_commit_free(their_head);
+        return error_from_git(err);
+    }
+
+    if ((analysis & GIT_MERGE_ANALYSIS_FASTFORWARD) == 0) {
+        git_annotated_commit_free(their_head);
+        return ERROR(DOTTA_ERR_GIT, "Fast-forward merge not possible for '%s'", branch_name);
+    }
+
+    /* Perform FF merge */
+    git_reference *target_ref = NULL;
+    err = git_repository_head(&target_ref, repo);
+    if (err < 0) {
+        git_annotated_commit_free(their_head);
+        return error_from_git(err);
+    }
+
+    git_reference *new_target_ref = NULL;
+    err = git_reference_set_target(&new_target_ref, target_ref,
+                                   git_annotated_commit_id(their_head),
+                                   "merge: Fast-forward");
+    git_reference_free(target_ref);
+    git_annotated_commit_free(their_head);
+
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    git_reference_free(new_target_ref);
+    return NULL;
+}
+
+/**
+ * Reference operations
+ */
+
+dotta_error_t *gitops_create_reference(
+    git_repository *repo,
+    const char *name,
+    const git_oid *oid,
+    bool force
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(name);
+    CHECK_NULL(oid);
+
+    git_reference *ref = NULL;
+    int err = git_reference_create(&ref, repo, name, oid, force, NULL);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    git_reference_free(ref);
+    return NULL;
+}
+
+dotta_error_t *gitops_lookup_reference(
+    git_repository *repo,
+    const char *name,
+    git_reference **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(name);
+    CHECK_NULL(out);
+
+    int err = git_reference_lookup(out, repo, name);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    return NULL;
+}
+
+/**
+ * Index operations
+ */
+
+dotta_error_t *gitops_get_index(git_repository *repo, git_index **out) {
+    CHECK_NULL(repo);
+    CHECK_NULL(out);
+
+    int err = git_repository_index(out, repo);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    return NULL;
+}
+
+dotta_error_t *gitops_index_add(git_index *index, const char *path) {
+    CHECK_NULL(index);
+    CHECK_NULL(path);
+
+    int err = git_index_add_bypath(index, path);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    return NULL;
+}
+
+dotta_error_t *gitops_index_write_tree(git_index *index, git_oid *out) {
+    CHECK_NULL(index);
+    CHECK_NULL(out);
+
+    /* Write index to disk */
+    int err = git_index_write(index);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    /* Create tree from index */
+    err = git_index_write_tree(out, index);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    return NULL;
+}
+
+/**
+ * Find file by exact path in tree
+ */
+dotta_error_t *gitops_find_file_in_tree(
+    git_repository *repo,
+    git_tree *tree,
+    const char *path,
+    git_tree_entry **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(tree);
+    CHECK_NULL(path);
+    CHECK_NULL(out);
+
+    /* Normalize path (remove leading slash if present) */
+    const char *normalized_path = path;
+    if (path[0] == '/') {
+        normalized_path = path + 1;
+    }
+
+    /* Lookup entry in tree */
+    git_tree_entry *temp_entry = NULL;
+    int ret = git_tree_entry_bypath(&temp_entry, tree, normalized_path);
+    if (ret < 0) {
+        if (ret == GIT_ENOTFOUND) {
+            return ERROR(DOTTA_ERR_NOT_FOUND,
+                        "File '%s' not found", path);
+        }
+        return error_from_git(ret);
+    }
+
+    *out = temp_entry;
+    return NULL;
+}
+
+/**
+ * Walk tree looking for files with matching basename
+ */
+typedef struct {
+    const char *target_basename;
+    char **matching_paths;
+    size_t count;
+    size_t capacity;
+} basename_search_t;
+
+static int find_by_basename_callback(
+    const char *root,
+    const git_tree_entry *entry,
+    void *payload
+) {
+    basename_search_t *search = (basename_search_t *)payload;
+    const char *entry_name = git_tree_entry_name(entry);
+
+    /* Check if basename matches */
+    if (strcmp(entry_name, search->target_basename) == 0) {
+        /* Build full path */
+        size_t root_len = strlen(root);
+        size_t path_len = root_len + strlen(entry_name) + 2;
+        char *full_path = malloc(path_len);
+        if (!full_path) {
+            return -1;  /* Memory allocation failed */
+        }
+
+        if (root_len > 0 && root[root_len - 1] != '/') {
+            snprintf(full_path, path_len, "%s/%s", root, entry_name);
+        } else if (root_len > 0) {
+            snprintf(full_path, path_len, "%s%s", root, entry_name);
+        } else {
+            snprintf(full_path, path_len, "%s", entry_name);
+        }
+
+        /* Add to results */
+        if (search->count >= search->capacity) {
+            search->capacity = search->capacity == 0 ? 4 : search->capacity * 2;
+            char **new_paths = realloc(search->matching_paths,
+                                      search->capacity * sizeof(char *));
+            if (!new_paths) {
+                free(full_path);
+                return -1;  /* Memory allocation failed */
+            }
+            search->matching_paths = new_paths;
+        }
+
+        search->matching_paths[search->count++] = full_path;
+    }
+
+    return 0;
+}
+
+/**
+ * Find files by basename in tree
+ */
+dotta_error_t *gitops_find_files_by_basename_in_tree(
+    git_repository *repo,
+    git_tree *tree,
+    const char *basename,
+    char ***out_paths,
+    size_t *out_count
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(tree);
+    CHECK_NULL(basename);
+    CHECK_NULL(out_paths);
+    CHECK_NULL(out_count);
+
+    basename_search_t search = {
+        .target_basename = basename,
+        .matching_paths = NULL,
+        .count = 0,
+        .capacity = 0
+    };
+
+    int ret = git_tree_walk(tree, GIT_TREEWALK_PRE, find_by_basename_callback, &search);
+    if (ret < 0) {
+        for (size_t i = 0; i < search.count; i++) {
+            free(search.matching_paths[i]);
+        }
+        free(search.matching_paths);
+        return error_from_git(ret);
+    }
+
+    *out_paths = search.matching_paths;
+    *out_count = search.count;
+    return NULL;
+}
+
+/**
+ * Resolve commit reference within a branch
+ */
+dotta_error_t *gitops_resolve_commit_in_branch(
+    git_repository *repo,
+    const char *branch_name,
+    const char *commit_ref,
+    git_oid *out_oid,
+    git_commit **out_commit
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(branch_name);
+    CHECK_NULL(commit_ref);
+    CHECK_NULL(out_oid);
+
+    git_object *obj = NULL;
+
+    /* Build reference name for branch */
+    size_t ref_name_size = strlen("refs/heads/") + strlen(branch_name) + 1;
+    char *ref_name = malloc(ref_name_size);
+    if (!ref_name) {
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate reference name");
+    }
+    snprintf(ref_name, ref_name_size, "refs/heads/%s", branch_name);
+
+    /* Get the branch reference */
+    git_reference *branch_ref = NULL;
+    int ret = git_reference_lookup(&branch_ref, repo, ref_name);
+    free(ref_name);
+
+    if (ret < 0) {
+        return error_from_git(ret);
+    }
+
+    /* Parse commit_ref relative to this branch */
+    char *full_ref = NULL;
+    if (strncmp(commit_ref, "HEAD", 4) == 0) {
+        /* HEAD~N or HEAD^N - resolve relative to branch HEAD */
+        const git_oid *branch_oid = git_reference_target(branch_ref);
+        if (!branch_oid) {
+            git_reference_free(branch_ref);
+            return ERROR(DOTTA_ERR_GIT, "Branch '%s' has no target", branch_name);
+        }
+
+        /* Try to parse as HEAD~N or HEAD^N */
+        if (strcmp(commit_ref, "HEAD") == 0) {
+            git_oid_cpy(out_oid, branch_oid);
+            git_reference_free(branch_ref);
+
+            if (out_commit) {
+                ret = git_commit_lookup(out_commit, repo, out_oid);
+                if (ret < 0) {
+                    return error_from_git(ret);
+                }
+            }
+            return NULL;
+        } else {
+            /* HEAD~N or HEAD^N */
+            size_t full_ref_size = strlen(branch_name) + strlen(commit_ref) + 10;
+            full_ref = malloc(full_ref_size);
+            if (!full_ref) {
+                git_reference_free(branch_ref);
+                return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate ref string");
+            }
+            snprintf(full_ref, full_ref_size, "%s%s", branch_name, commit_ref + 4);
+        }
+    } else {
+        /* Assume it's a commit SHA or other ref */
+        full_ref = strdup(commit_ref);
+    }
+
+    git_reference_free(branch_ref);
+
+    /* Resolve the reference */
+    ret = git_revparse_single(&obj, repo, full_ref ? full_ref : commit_ref);
+    free(full_ref);
+
+    if (ret < 0) {
+        return ERROR(DOTTA_ERR_NOT_FOUND, "Commit '%s' not found in branch '%s'",
+                    commit_ref, branch_name);
+    }
+
+    /* Get the commit OID */
+    const git_oid *obj_oid = git_object_id(obj);
+    if (!obj_oid) {
+        git_object_free(obj);
+        return ERROR(DOTTA_ERR_GIT, "Failed to get object ID");
+    }
+
+    git_oid_cpy(out_oid, obj_oid);
+
+    /* If caller wants the commit object, look it up */
+    if (out_commit) {
+        git_commit *commit = NULL;
+        ret = git_commit_lookup(&commit, repo, out_oid);
+        git_object_free(obj);
+
+        if (ret < 0) {
+            return error_from_git(ret);
+        }
+        *out_commit = commit;
+    } else {
+        git_object_free(obj);
+    }
+
+    return NULL;
+}

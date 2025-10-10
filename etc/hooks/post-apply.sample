@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+#
+# post-apply hook - Runs after applying profiles
+#
+# This script runs after dotta has successfully applied profiles.
+# Use it to reload services, restart applications, etc.
+#
+# Environment variables provided by dotta:
+#   DOTTA_REPO_DIR    - Path to dotta repository
+#   DOTTA_OPERATION   - Operation being performed ("apply")
+#   DOTTA_PROFILES    - Space-separated list of profiles applied
+#
+
+set -euo pipefail
+
+echo "Post-apply: Reloading configurations..."
+
+# Example: Reload shell configuration
+if [[ -n "${BASH_VERSION:-}" ]]; then
+    echo "Reloading bash configuration..."
+    # Note: Can't reload in this process, just notify user
+    echo "  Run: source ~/.bashrc"
+elif [[ -n "${ZSH_VERSION:-}" ]]; then
+    echo "Reloading zsh configuration..."
+    echo "  Run: source ~/.zshrc"
+fi
+
+# Example: Reload tmux configuration
+if command -v tmux &>/dev/null && [[ -n "${TMUX:-}" ]]; then
+    echo "Reloading tmux configuration..."
+    tmux source-file ~/.tmux.conf 2>/dev/null || true
+fi
+
+# Example: Restart services (be careful with this!)
+# if systemctl --user is-active --quiet some-service; then
+#     echo "Restarting service..."
+#     systemctl --user restart some-service
+# fi
+
+# Example: Update vim/neovim plugins
+# if command -v nvim &>/dev/null; then
+#     echo "Updating neovim plugins..."
+#     nvim --headless +PlugUpdate +qall 2>/dev/null || true
+# fi
+
+# Example: Send notification (macOS)
+# if command -v osascript &>/dev/null; then
+#     osascript -e 'display notification "Dotfiles applied successfully" with title "Dotta"'
+# fi
+
+# Example: Send notification (Linux)
+# if command -v notify-send &>/dev/null; then
+#     notify-send "Dotta" "Dotfiles applied successfully"
+# fi
+
+echo "Post-apply completed successfully!"
+exit 0

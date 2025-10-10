@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+#
+# pre-apply hook - Runs before applying profiles
+#
+# This script runs before dotta applies profiles to your system.
+# Use it to backup current configurations, validate environment, etc.
+#
+# Exit with non-zero status to abort the apply operation.
+#
+# Environment variables provided by dotta:
+#   DOTTA_REPO_DIR    - Path to dotta repository
+#   DOTTA_OPERATION   - Operation being performed ("apply")
+#   DOTTA_PROFILES    - Space-separated list of profiles being applied
+#
+
+set -euo pipefail
+
+# Example: Create backup of current configs
+backup_dir="$HOME/.dotta-backups/$(date +%Y%m%d-%H%M%S)"
+echo "Creating backup in: $backup_dir"
+mkdir -p "$backup_dir"
+
+# Backup common config files
+for file in ~/.bashrc ~/.zshrc ~/.vimrc ~/.gitconfig; do
+    if [[ -f "$file" ]]; then
+        cp "$file" "$backup_dir/" 2>/dev/null || true
+    fi
+done
+
+# Example: Check disk space
+available=$(df -h "$HOME" | awk 'NR==2 {print $4}')
+echo "Available disk space: $available"
+
+# Example: Validate environment
+if [[ -z "${DOTTA_REPO_DIR:-}" ]]; then
+    echo "Error: DOTTA_REPO_DIR not set!" >&2
+    exit 1
+fi
+
+echo "Pre-apply checks passed. Proceeding with apply..."
+exit 0

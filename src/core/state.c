@@ -1,0 +1,1023 @@
+/**
+ * state.c - Deployment state tracking implementation
+ *
+ * Uses JSON format for human readability.
+ * Uses cJSON library for robust JSON parsing/generation.
+ */
+
+/* FreeBSD exposes both strptime and timegm by default */
+#if !defined(__FreeBSD__)
+#define _XOPEN_SOURCE 700  /* For strptime */
+#endif
+
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE   /* For timegm on macOS */
+#endif
+
+#include "state.h"
+
+#include <errno.h>
+#include <git2.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#include "cJSON.h"
+#include "base/error.h"
+#include "base/filesystem.h"
+#include "base/gitops.h"
+#include "utils/array.h"
+#include "utils/buffer.h"
+#include "utils/string.h"
+
+#define STATE_FILE_NAME "dotta-state.json"
+#define STATE_VERSION 2
+
+/**
+ * State structure
+ */
+struct state {
+    int version;
+    time_t timestamp;
+    string_array_t *profiles;
+    state_file_entry_t *files;
+    size_t file_count;
+    size_t file_capacity;
+    state_directory_entry_t *directories;
+    size_t directory_count;
+    size_t directory_capacity;
+};
+
+/**
+ * Get state file path
+ */
+static dotta_error_t *get_state_file_path(git_repository *repo, char **out) {
+    CHECK_NULL(repo);
+    CHECK_NULL(out);
+
+    const char *git_dir = git_repository_path(repo);
+    if (!git_dir) {
+        return ERROR(DOTTA_ERR_GIT, "Failed to get repository path");
+    }
+
+    return fs_path_join(git_dir, STATE_FILE_NAME, out);
+}
+
+/**
+ * Write state to JSON (using cJSON)
+ */
+static dotta_error_t *state_to_json(const state_t *state, buffer_t **out) {
+    CHECK_NULL(state);
+    CHECK_NULL(out);
+
+    /* Create root object */
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to create JSON object");
+    }
+
+    /* Add version */
+    cJSON_AddNumberToObject(root, "version", STATE_VERSION);
+
+    /* Add timestamp */
+    char time_str[64];
+    struct tm *tm_info = gmtime(&state->timestamp);
+    strftime(time_str, sizeof(time_str), "%Y-%m-%dT%H:%M:%SZ", tm_info);
+    cJSON_AddStringToObject(root, "timestamp", time_str);
+
+    /* Add profiles array */
+    cJSON *profiles_array = cJSON_CreateArray();
+    if (!profiles_array) {
+        cJSON_Delete(root);
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to create profiles array");
+    }
+    cJSON_AddItemToObject(root, "profiles", profiles_array);
+
+    if (state->profiles) {
+        for (size_t i = 0; i < string_array_size(state->profiles); i++) {
+            cJSON *profile_str = cJSON_CreateString(string_array_get(state->profiles, i));
+            if (!profile_str) {
+                cJSON_Delete(root);
+                return ERROR(DOTTA_ERR_MEMORY, "Failed to create profile string");
+            }
+            cJSON_AddItemToArray(profiles_array, profile_str);
+        }
+    }
+
+    /* Add files array */
+    cJSON *files_array = cJSON_CreateArray();
+    if (!files_array) {
+        cJSON_Delete(root);
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to create files array");
+    }
+    cJSON_AddItemToObject(root, "files", files_array);
+
+    for (size_t i = 0; i < state->file_count; i++) {
+        const state_file_entry_t *entry = &state->files[i];
+
+        cJSON *file_obj = cJSON_CreateObject();
+        if (!file_obj) {
+            cJSON_Delete(root);
+            return ERROR(DOTTA_ERR_MEMORY, "Failed to create file object");
+        }
+
+        cJSON_AddStringToObject(file_obj, "storage_path", entry->storage_path);
+        cJSON_AddStringToObject(file_obj, "filesystem_path", entry->filesystem_path);
+        cJSON_AddStringToObject(file_obj, "profile", entry->profile);
+
+        const char *type_str = entry->type == STATE_FILE_REGULAR ? "file" :
+                              entry->type == STATE_FILE_SYMLINK ? "symlink" :
+                              "executable";
+        cJSON_AddStringToObject(file_obj, "type", type_str);
+
+        if (entry->hash) {
+            cJSON_AddStringToObject(file_obj, "hash", entry->hash);
+        }
+        if (entry->mode) {
+            cJSON_AddStringToObject(file_obj, "mode", entry->mode);
+        }
+
+        cJSON_AddItemToArray(files_array, file_obj);
+    }
+
+    /* Add directories array */
+    cJSON *directories_array = cJSON_CreateArray();
+    if (!directories_array) {
+        cJSON_Delete(root);
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to create directories array");
+    }
+    cJSON_AddItemToObject(root, "directories", directories_array);
+
+    for (size_t i = 0; i < state->directory_count; i++) {
+        const state_directory_entry_t *entry = &state->directories[i];
+
+        cJSON *dir_obj = cJSON_CreateObject();
+        if (!dir_obj) {
+            cJSON_Delete(root);
+            return ERROR(DOTTA_ERR_MEMORY, "Failed to create directory object");
+        }
+
+        cJSON_AddStringToObject(dir_obj, "filesystem_path", entry->filesystem_path);
+        cJSON_AddStringToObject(dir_obj, "storage_prefix", entry->storage_prefix);
+        cJSON_AddStringToObject(dir_obj, "profile", entry->profile);
+
+        /* Format timestamp */
+        char time_str[64];
+        struct tm *tm_info = gmtime(&entry->added_at);
+        strftime(time_str, sizeof(time_str), "%Y-%m-%dT%H:%M:%SZ", tm_info);
+        cJSON_AddStringToObject(dir_obj, "added_at", time_str);
+
+        cJSON_AddItemToArray(directories_array, dir_obj);
+    }
+
+    /* Convert to formatted string */
+    char *json_str = cJSON_Print(root);
+    cJSON_Delete(root);
+
+    if (!json_str) {
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to print JSON");
+    }
+
+    /* Create buffer from string */
+    buffer_t *buf = buffer_create();
+    if (!buf) {
+        cJSON_free(json_str);
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate buffer");
+    }
+
+    buffer_append_string(buf, json_str);
+    cJSON_free(json_str);
+
+    *out = buf;
+    return NULL;
+}
+
+/**
+ * Create empty state
+ */
+dotta_error_t *state_create_empty(state_t **out) {
+    CHECK_NULL(out);
+
+    state_t *state = calloc(1, sizeof(state_t));
+    if (!state) {
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate state");
+    }
+
+    state->version = STATE_VERSION;
+    state->timestamp = time(NULL);
+    state->profiles = string_array_create();
+    if (!state->profiles) {
+        free(state);
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate profiles array");
+    }
+
+    state->files = NULL;
+    state->file_count = 0;
+    state->file_capacity = 0;
+
+    state->directories = NULL;
+    state->directory_count = 0;
+    state->directory_capacity = 0;
+
+    *out = state;
+    return NULL;
+}
+
+/**
+ * Load state from repository (using cJSON)
+ */
+dotta_error_t *state_load(git_repository *repo, state_t **out) {
+    CHECK_NULL(repo);
+    CHECK_NULL(out);
+
+    /* Get state file path */
+    char *state_path = NULL;
+    dotta_error_t *err = get_state_file_path(repo, &state_path);
+    if (err) {
+        return err;
+    }
+
+    /* Check if state file exists */
+    if (!fs_file_exists(state_path)) {
+        free(state_path);
+        /* No state file - return empty state */
+        return state_create_empty(out);
+    }
+
+    /* Read state file */
+    buffer_t *content = NULL;
+    err = fs_read_file(state_path, &content);
+    free(state_path);
+    if (err) {
+        return error_wrap(err, "Failed to read state file");
+    }
+
+    /* Parse JSON with cJSON */
+    const char *json_str = (const char *)buffer_data(content);
+    cJSON *root = cJSON_Parse(json_str);
+    buffer_free(content);
+
+    if (!root) {
+        const char *error_ptr = cJSON_GetErrorPtr();
+        if (error_ptr) {
+            return ERROR(DOTTA_ERR_STATE_INVALID, "JSON parse error: %s", error_ptr);
+        }
+        return ERROR(DOTTA_ERR_STATE_INVALID, "Failed to parse state file");
+    }
+
+    /* Create state structure */
+    state_t *state = calloc(1, sizeof(state_t));
+    if (!state) {
+        cJSON_Delete(root);
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate state");
+    }
+
+    /* Parse version */
+    cJSON *version_obj = cJSON_GetObjectItem(root, "version");
+    if (!version_obj || !cJSON_IsNumber(version_obj)) {
+        state_free(state);
+        cJSON_Delete(root);
+        return ERROR(DOTTA_ERR_STATE_INVALID, "Missing or invalid version field");
+    }
+    state->version = version_obj->valueint;
+
+    /* Parse timestamp */
+    cJSON *timestamp_obj = cJSON_GetObjectItem(root, "timestamp");
+    if (!timestamp_obj || !cJSON_IsString(timestamp_obj)) {
+        state_free(state);
+        cJSON_Delete(root);
+        return ERROR(DOTTA_ERR_STATE_INVALID, "Missing or invalid timestamp field");
+    }
+
+    struct tm tm_info = {0};
+    if (strptime(timestamp_obj->valuestring, "%Y-%m-%dT%H:%M:%SZ", &tm_info) == NULL) {
+        state_free(state);
+        cJSON_Delete(root);
+        return ERROR(DOTTA_ERR_STATE_INVALID, "Invalid timestamp format");
+    }
+
+    /* Convert to time_t (UTC) - thread-safe version */
+    state->timestamp = timegm(&tm_info);
+
+    /* Parse profiles array */
+    cJSON *profiles_array = cJSON_GetObjectItem(root, "profiles");
+    if (!profiles_array || !cJSON_IsArray(profiles_array)) {
+        state_free(state);
+        cJSON_Delete(root);
+        return ERROR(DOTTA_ERR_STATE_INVALID, "Missing or invalid profiles field");
+    }
+
+    state->profiles = string_array_create();
+    if (!state->profiles) {
+        state_free(state);
+        cJSON_Delete(root);
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate profiles array");
+    }
+
+    cJSON *profile_item = NULL;
+    cJSON_ArrayForEach(profile_item, profiles_array) {
+        if (!cJSON_IsString(profile_item)) {
+            state_free(state);
+            cJSON_Delete(root);
+            return ERROR(DOTTA_ERR_STATE_INVALID, "Invalid profile name in array");
+        }
+        err = string_array_push(state->profiles, profile_item->valuestring);
+        if (err) {
+            state_free(state);
+            cJSON_Delete(root);
+            return err;
+        }
+    }
+
+    /* Parse files array */
+    cJSON *files_array = cJSON_GetObjectItem(root, "files");
+    if (!files_array || !cJSON_IsArray(files_array)) {
+        state_free(state);
+        cJSON_Delete(root);
+        return ERROR(DOTTA_ERR_STATE_INVALID, "Missing or invalid files field");
+    }
+
+    cJSON *file_obj = NULL;
+    cJSON_ArrayForEach(file_obj, files_array) {
+        if (!cJSON_IsObject(file_obj)) {
+            state_free(state);
+            cJSON_Delete(root);
+            return ERROR(DOTTA_ERR_STATE_INVALID, "Invalid file entry in array");
+        }
+
+        /* Extract required fields */
+        cJSON *storage_path_obj = cJSON_GetObjectItem(file_obj, "storage_path");
+        cJSON *filesystem_path_obj = cJSON_GetObjectItem(file_obj, "filesystem_path");
+        cJSON *profile_obj = cJSON_GetObjectItem(file_obj, "profile");
+        cJSON *type_obj = cJSON_GetObjectItem(file_obj, "type");
+
+        if (!storage_path_obj || !cJSON_IsString(storage_path_obj) ||
+            !filesystem_path_obj || !cJSON_IsString(filesystem_path_obj) ||
+            !profile_obj || !cJSON_IsString(profile_obj) ||
+            !type_obj || !cJSON_IsString(type_obj)) {
+            state_free(state);
+            cJSON_Delete(root);
+            return ERROR(DOTTA_ERR_STATE_INVALID, "Missing required file entry fields");
+        }
+
+        /* Parse file type */
+        state_file_type_t type = STATE_FILE_REGULAR;
+        if (strcmp(type_obj->valuestring, "symlink") == 0) {
+            type = STATE_FILE_SYMLINK;
+        } else if (strcmp(type_obj->valuestring, "executable") == 0) {
+            type = STATE_FILE_EXECUTABLE;
+        }
+
+        /* Extract optional fields */
+        cJSON *hash_obj = cJSON_GetObjectItem(file_obj, "hash");
+        cJSON *mode_obj = cJSON_GetObjectItem(file_obj, "mode");
+
+        const char *hash = (hash_obj && cJSON_IsString(hash_obj)) ? hash_obj->valuestring : NULL;
+        const char *mode = (mode_obj && cJSON_IsString(mode_obj)) ? mode_obj->valuestring : NULL;
+
+        /* Create file entry */
+        state_file_entry_t *file_entry = NULL;
+        err = state_create_entry(
+            storage_path_obj->valuestring,
+            filesystem_path_obj->valuestring,
+            profile_obj->valuestring,
+            type,
+            hash,
+            mode,
+            &file_entry
+        );
+
+        if (err) {
+            state_free(state);
+            cJSON_Delete(root);
+            return error_wrap(err, "Failed to create file entry");
+        }
+
+        err = state_add_file(state, file_entry);
+        state_free_entry(file_entry);
+
+        if (err) {
+            state_free(state);
+            cJSON_Delete(root);
+            return error_wrap(err, "Failed to add file entry");
+        }
+    }
+
+    /* Parse directories array */
+    cJSON *directories_array = cJSON_GetObjectItem(root, "directories");
+    if (!directories_array || !cJSON_IsArray(directories_array)) {
+        state_free(state);
+        cJSON_Delete(root);
+        return ERROR(DOTTA_ERR_STATE_INVALID, "Missing or invalid directories field");
+    }
+
+    /* Initialize directories storage */
+    state->directories = NULL;
+    state->directory_count = 0;
+    state->directory_capacity = 0;
+
+    cJSON *dir_obj = NULL;
+    cJSON_ArrayForEach(dir_obj, directories_array) {
+        if (!cJSON_IsObject(dir_obj)) {
+            state_free(state);
+            cJSON_Delete(root);
+            return ERROR(DOTTA_ERR_STATE_INVALID, "Invalid directory entry in array");
+        }
+
+        /* Extract required fields */
+        cJSON *fs_path_obj = cJSON_GetObjectItem(dir_obj, "filesystem_path");
+        cJSON *storage_prefix_obj = cJSON_GetObjectItem(dir_obj, "storage_prefix");
+        cJSON *profile_obj = cJSON_GetObjectItem(dir_obj, "profile");
+        cJSON *added_at_obj = cJSON_GetObjectItem(dir_obj, "added_at");
+
+        if (!fs_path_obj || !cJSON_IsString(fs_path_obj) ||
+            !storage_prefix_obj || !cJSON_IsString(storage_prefix_obj) ||
+            !profile_obj || !cJSON_IsString(profile_obj) ||
+            !added_at_obj || !cJSON_IsString(added_at_obj)) {
+            state_free(state);
+            cJSON_Delete(root);
+            return ERROR(DOTTA_ERR_STATE_INVALID, "Missing required directory entry fields");
+        }
+
+        /* Parse timestamp */
+        struct tm tm_info = {0};
+        if (strptime(added_at_obj->valuestring, "%Y-%m-%dT%H:%M:%SZ", &tm_info) == NULL) {
+            state_free(state);
+            cJSON_Delete(root);
+            return ERROR(DOTTA_ERR_STATE_INVALID, "Invalid directory timestamp format");
+        }
+        time_t added_at = timegm(&tm_info);
+
+        /* Create directory entry */
+        state_directory_entry_t *dir_entry = NULL;
+        err = state_create_directory_entry(
+            fs_path_obj->valuestring,
+            storage_prefix_obj->valuestring,
+            profile_obj->valuestring,
+            added_at,
+            &dir_entry
+        );
+
+        if (err) {
+            state_free(state);
+            cJSON_Delete(root);
+            return error_wrap(err, "Failed to create directory entry");
+        }
+
+        err = state_add_directory(state, dir_entry);
+        state_free_directory_entry(dir_entry);
+
+        if (err) {
+            state_free(state);
+            cJSON_Delete(root);
+            return error_wrap(err, "Failed to add directory entry");
+        }
+    }
+
+    cJSON_Delete(root);
+    *out = state;
+    return NULL;
+}
+
+/**
+ * Save state to repository
+ */
+dotta_error_t *state_save(git_repository *repo, const state_t *state) {
+    CHECK_NULL(repo);
+    CHECK_NULL(state);
+
+    /* Get state file path */
+    char *state_path = NULL;
+    dotta_error_t *err = get_state_file_path(repo, &state_path);
+    if (err) {
+        return err;
+    }
+
+    /* Convert state to JSON */
+    buffer_t *json = NULL;
+    err = state_to_json(state, &json);
+    if (err) {
+        free(state_path);
+        return err;
+    }
+
+    /* Write to temporary file first (atomic write) */
+    char temp_path[PATH_MAX];
+    snprintf(temp_path, sizeof(temp_path), "%s.tmp", state_path);
+
+    err = fs_write_file(temp_path, json);
+    buffer_free(json);
+    if (err) {
+        free(state_path);
+        return error_wrap(err, "Failed to write state file");
+    }
+
+    /* Rename to final location (atomic) */
+    if (rename(temp_path, state_path) < 0) {
+        fs_remove_file(temp_path);
+        free(state_path);
+        return ERROR(DOTTA_ERR_FS, "Failed to save state file: %s", strerror(errno));
+    }
+
+    free(state_path);
+    return NULL;
+}
+
+/**
+ * Free state
+ */
+void state_free(state_t *state) {
+    if (!state) {
+        return;
+    }
+
+    string_array_free(state->profiles);
+
+    for (size_t i = 0; i < state->file_count; i++) {
+        state_file_entry_t *entry = &state->files[i];
+        free(entry->storage_path);
+        free(entry->filesystem_path);
+        free(entry->profile);
+        free(entry->hash);
+        free(entry->mode);
+    }
+    free(state->files);
+
+    for (size_t i = 0; i < state->directory_count; i++) {
+        state_directory_entry_t *entry = &state->directories[i];
+        free(entry->filesystem_path);
+        free(entry->storage_prefix);
+        free(entry->profile);
+    }
+    free(state->directories);
+
+    free(state);
+}
+
+/**
+ * Add file to state
+ */
+dotta_error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
+    CHECK_NULL(state);
+    CHECK_NULL(entry);
+
+    /* Grow array if needed */
+    if (state->file_count >= state->file_capacity) {
+        size_t new_capacity = state->file_capacity == 0 ? 16 : state->file_capacity * 2;
+        state_file_entry_t *new_files = realloc(state->files,
+                                                 new_capacity * sizeof(state_file_entry_t));
+        if (!new_files) {
+            return ERROR(DOTTA_ERR_MEMORY, "Failed to grow files array");
+        }
+        state->files = new_files;
+        state->file_capacity = new_capacity;
+    }
+
+    /* Copy entry */
+    state_file_entry_t *dst = &state->files[state->file_count];
+    memset(dst, 0, sizeof(state_file_entry_t));
+
+    dst->storage_path = strdup(entry->storage_path);
+    dst->filesystem_path = strdup(entry->filesystem_path);
+    dst->profile = strdup(entry->profile);
+    dst->type = entry->type;
+    dst->hash = entry->hash ? strdup(entry->hash) : NULL;
+    dst->mode = entry->mode ? strdup(entry->mode) : NULL;
+
+    if (!dst->storage_path || !dst->filesystem_path || !dst->profile) {
+        free(dst->storage_path);
+        free(dst->filesystem_path);
+        free(dst->profile);
+        free(dst->hash);
+        free(dst->mode);
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to copy file entry");
+    }
+
+    state->file_count++;
+    return NULL;
+}
+
+/**
+ * Remove file entry from state
+ */
+dotta_error_t *state_remove_file(state_t *state, const char *filesystem_path) {
+    CHECK_NULL(state);
+    CHECK_NULL(filesystem_path);
+
+    /* Find file in array */
+    size_t found_index = SIZE_MAX;
+    for (size_t i = 0; i < state->file_count; i++) {
+        if (strcmp(state->files[i].filesystem_path, filesystem_path) == 0) {
+            found_index = i;
+            break;
+        }
+    }
+
+    if (found_index == SIZE_MAX) {
+        return ERROR(DOTTA_ERR_NOT_FOUND,
+                    "File '%s' not found in state", filesystem_path);
+    }
+
+    /* Free the entry's resources */
+    state_file_entry_t *entry = &state->files[found_index];
+    free(entry->storage_path);
+    free(entry->filesystem_path);
+    free(entry->profile);
+    free(entry->hash);
+    free(entry->mode);
+
+    /* Shift remaining entries to fill gap */
+    if (found_index < state->file_count - 1) {
+        memmove(&state->files[found_index],
+                &state->files[found_index + 1],
+                (state->file_count - found_index - 1) * sizeof(state_file_entry_t));
+    }
+
+    /* Decrement count */
+    state->file_count--;
+
+    return NULL;
+}
+
+/**
+ * Check if file exists in state
+ */
+bool state_file_exists(const state_t *state, const char *filesystem_path) {
+    if (!state || !filesystem_path) {
+        return false;
+    }
+
+    for (size_t i = 0; i < state->file_count; i++) {
+        if (strcmp(state->files[i].filesystem_path, filesystem_path) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Get file entry
+ */
+dotta_error_t *state_get_file(
+    const state_t *state,
+    const char *filesystem_path,
+    const state_file_entry_t **out
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(out);
+
+    for (size_t i = 0; i < state->file_count; i++) {
+        if (strcmp(state->files[i].filesystem_path, filesystem_path) == 0) {
+            *out = &state->files[i];
+            return NULL;
+        }
+    }
+
+    return ERROR(DOTTA_ERR_NOT_FOUND, "File not found in state: %s", filesystem_path);
+}
+
+/**
+ * Get all files
+ */
+const state_file_entry_t *state_get_all_files(const state_t *state, size_t *count) {
+    if (!state || !count) {
+        if (count) *count = 0;
+        return NULL;
+    }
+
+    *count = state->file_count;
+    return state->files;
+}
+
+/**
+ * Set profiles
+ */
+dotta_error_t *state_set_profiles(
+    state_t *state,
+    const char **profiles,
+    size_t count
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(profiles);
+
+    string_array_clear(state->profiles);
+
+    for (size_t i = 0; i < count; i++) {
+        dotta_error_t *err = string_array_push(state->profiles, profiles[i]);
+        if (err) {
+            return err;
+        }
+    }
+
+    return NULL;
+}
+
+/**
+ * Get profiles
+ */
+dotta_error_t *state_get_profiles(const state_t *state, string_array_t **out) {
+    CHECK_NULL(state);
+    CHECK_NULL(out);
+
+    /* Create copy */
+    string_array_t *copy = string_array_create();
+    if (!copy) {
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate profiles array");
+    }
+
+    for (size_t i = 0; i < string_array_size(state->profiles); i++) {
+        dotta_error_t *err = string_array_push(copy, string_array_get(state->profiles, i));
+        if (err) {
+            string_array_free(copy);
+            return err;
+        }
+    }
+
+    *out = copy;
+    return NULL;
+}
+
+/**
+ * Get timestamp
+ */
+time_t state_get_timestamp(const state_t *state) {
+    if (!state) {
+        return 0;
+    }
+    return state->timestamp;
+}
+
+/**
+ * Clear files
+ */
+void state_clear_files(state_t *state) {
+    if (!state) {
+        return;
+    }
+
+    for (size_t i = 0; i < state->file_count; i++) {
+        state_file_entry_t *entry = &state->files[i];
+        free(entry->storage_path);
+        free(entry->filesystem_path);
+        free(entry->profile);
+        free(entry->hash);
+        free(entry->mode);
+    }
+
+    state->file_count = 0;
+}
+
+/**
+ * Create file entry
+ */
+dotta_error_t *state_create_entry(
+    const char *storage_path,
+    const char *filesystem_path,
+    const char *profile,
+    state_file_type_t type,
+    const char *hash,
+    const char *mode,
+    state_file_entry_t **out
+) {
+    CHECK_NULL(storage_path);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(profile);
+    CHECK_NULL(out);
+
+    state_file_entry_t *entry = calloc(1, sizeof(state_file_entry_t));
+    if (!entry) {
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate entry");
+    }
+
+    entry->storage_path = strdup(storage_path);
+    entry->filesystem_path = strdup(filesystem_path);
+    entry->profile = strdup(profile);
+    entry->type = type;
+    entry->hash = hash ? strdup(hash) : NULL;
+    entry->mode = mode ? strdup(mode) : NULL;
+
+    if (!entry->storage_path || !entry->filesystem_path || !entry->profile) {
+        state_free_entry(entry);
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to copy entry fields");
+    }
+
+    *out = entry;
+    return NULL;
+}
+
+/**
+ * Free file entry
+ */
+void state_free_entry(state_file_entry_t *entry) {
+    if (!entry) {
+        return;
+    }
+
+    free(entry->storage_path);
+    free(entry->filesystem_path);
+    free(entry->profile);
+    free(entry->hash);
+    free(entry->mode);
+    free(entry);
+}
+
+/**
+ * Add directory to state
+ */
+dotta_error_t *state_add_directory(state_t *state, const state_directory_entry_t *entry) {
+    CHECK_NULL(state);
+    CHECK_NULL(entry);
+
+    /* Grow array if needed */
+    if (state->directory_count >= state->directory_capacity) {
+        size_t new_capacity = state->directory_capacity == 0 ? 16 : state->directory_capacity * 2;
+        state_directory_entry_t *new_dirs = realloc(state->directories,
+                                                     new_capacity * sizeof(state_directory_entry_t));
+        if (!new_dirs) {
+            return ERROR(DOTTA_ERR_MEMORY, "Failed to grow directories array");
+        }
+        state->directories = new_dirs;
+        state->directory_capacity = new_capacity;
+    }
+
+    /* Copy entry */
+    state_directory_entry_t *dst = &state->directories[state->directory_count];
+    memset(dst, 0, sizeof(state_directory_entry_t));
+
+    dst->filesystem_path = strdup(entry->filesystem_path);
+    dst->storage_prefix = strdup(entry->storage_prefix);
+    dst->profile = strdup(entry->profile);
+    dst->added_at = entry->added_at;
+
+    if (!dst->filesystem_path || !dst->storage_prefix || !dst->profile) {
+        free(dst->filesystem_path);
+        free(dst->storage_prefix);
+        free(dst->profile);
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to copy directory entry");
+    }
+
+    state->directory_count++;
+    return NULL;
+}
+
+/**
+ * Remove directory entry from state
+ */
+dotta_error_t *state_remove_directory(state_t *state, const char *filesystem_path) {
+    CHECK_NULL(state);
+    CHECK_NULL(filesystem_path);
+
+    /* Find directory in array */
+    size_t found_index = SIZE_MAX;
+    for (size_t i = 0; i < state->directory_count; i++) {
+        if (strcmp(state->directories[i].filesystem_path, filesystem_path) == 0) {
+            found_index = i;
+            break;
+        }
+    }
+
+    if (found_index == SIZE_MAX) {
+        return ERROR(DOTTA_ERR_NOT_FOUND,
+                    "Directory '%s' not found in state", filesystem_path);
+    }
+
+    /* Free the entry's resources */
+    state_directory_entry_t *entry = &state->directories[found_index];
+    free(entry->filesystem_path);
+    free(entry->storage_prefix);
+    free(entry->profile);
+
+    /* Shift remaining entries to fill gap */
+    if (found_index < state->directory_count - 1) {
+        memmove(&state->directories[found_index],
+                &state->directories[found_index + 1],
+                (state->directory_count - found_index - 1) * sizeof(state_directory_entry_t));
+    }
+
+    /* Decrement count */
+    state->directory_count--;
+
+    return NULL;
+}
+
+/**
+ * Check if directory exists in state
+ */
+bool state_directory_exists(const state_t *state, const char *filesystem_path) {
+    if (!state || !filesystem_path) {
+        return false;
+    }
+
+    for (size_t i = 0; i < state->directory_count; i++) {
+        if (strcmp(state->directories[i].filesystem_path, filesystem_path) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Get directory entry
+ */
+dotta_error_t *state_get_directory(
+    const state_t *state,
+    const char *filesystem_path,
+    const state_directory_entry_t **out
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(out);
+
+    for (size_t i = 0; i < state->directory_count; i++) {
+        if (strcmp(state->directories[i].filesystem_path, filesystem_path) == 0) {
+            *out = &state->directories[i];
+            return NULL;
+        }
+    }
+
+    return ERROR(DOTTA_ERR_NOT_FOUND, "Directory not found in state: %s", filesystem_path);
+}
+
+/**
+ * Get all directories
+ */
+const state_directory_entry_t *state_get_all_directories(const state_t *state, size_t *count) {
+    if (!state || !count) {
+        if (count) *count = 0;
+        return NULL;
+    }
+
+    *count = state->directory_count;
+    return state->directories;
+}
+
+/**
+ * Clear directories
+ */
+void state_clear_directories(state_t *state) {
+    if (!state) {
+        return;
+    }
+
+    for (size_t i = 0; i < state->directory_count; i++) {
+        state_directory_entry_t *entry = &state->directories[i];
+        free(entry->filesystem_path);
+        free(entry->storage_prefix);
+        free(entry->profile);
+    }
+
+    state->directory_count = 0;
+}
+
+/**
+ * Create directory entry
+ */
+dotta_error_t *state_create_directory_entry(
+    const char *filesystem_path,
+    const char *storage_prefix,
+    const char *profile,
+    time_t added_at,
+    state_directory_entry_t **out
+) {
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(storage_prefix);
+    CHECK_NULL(profile);
+    CHECK_NULL(out);
+
+    state_directory_entry_t *entry = calloc(1, sizeof(state_directory_entry_t));
+    if (!entry) {
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate entry");
+    }
+
+    entry->filesystem_path = strdup(filesystem_path);
+    entry->storage_prefix = strdup(storage_prefix);
+    entry->profile = strdup(profile);
+    entry->added_at = added_at;
+
+    if (!entry->filesystem_path || !entry->storage_prefix || !entry->profile) {
+        state_free_directory_entry(entry);
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to copy entry fields");
+    }
+
+    *out = entry;
+    return NULL;
+}
+
+/**
+ * Free directory entry
+ */
+void state_free_directory_entry(state_directory_entry_t *entry) {
+    if (!entry) {
+        return;
+    }
+
+    free(entry->filesystem_path);
+    free(entry->storage_prefix);
+    free(entry->profile);
+    free(entry);
+}

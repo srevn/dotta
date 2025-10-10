@@ -1,0 +1,569 @@
+# Dotta Configuration File
+# =======================
+#
+# This is a sample configuration file for dotta, a dotfile manager.
+# Copy this file to ~/.config/dotta/config.toml and customize it for your needs.
+#
+# Configuration Priority:
+#   1. Environment variables (DOTTA_REPO_DIR, DOTTA_CONFIG_FILE)
+#   2. This config file (~/.config/dotta/config.toml)
+#   3. Built-in defaults
+#
+# All paths support tilde (~) expansion for home directory.
+# Comments start with #
+
+
+# ============================================================================
+# [core] - Core Dotta Settings
+# ============================================================================
+
+[core]
+
+# Repository Directory
+# Where dotta stores all profiles and metadata
+# Default: ~/.local/share/dotta/repo
+repo_dir = "~/.local/share/dotta/repo"
+
+# Auto-detect Profile Requirements
+# Automatically determine which profiles should be applied based on hostname,
+# OS, or other environment factors
+# Default: true
+auto_detect = true
+
+# Strict Mode
+# Fail operations if any validation errors occur
+# When false, warnings are shown but operations continue
+# Default: false
+strict_mode = false
+
+# Auto-detect New Files
+# Automatically detect new files in tracked directories during update/sync
+# When true, new files will be detected and included based on security settings
+# When false, new files are only added with explicit --include-new flag
+# Default: true
+auto_detect_new_files = true
+
+
+# ============================================================================
+# [profiles] - Profile Management
+# ============================================================================
+
+[profiles]
+
+# Profile Application Order
+# Defines the order in which profiles are applied when multiple profiles exist
+# Later profiles can override settings from earlier ones
+# Example use cases:
+#   - ["base", "work", "laptop"] - Apply base settings, then work-specific, then laptop tweaks
+#   - ["minimal", "desktop", "development"] - Build up configuration in layers
+#
+# Default: No specific order (applied alphabetically)
+# order = ["base", "work", "personal"]
+
+
+# ============================================================================
+# [hooks] - Hook Scripts
+# ============================================================================
+#
+# Hooks allow you to run custom scripts before/after certain operations.
+# Place executable scripts in the hooks directory with these names:
+#   - pre-apply    - Runs before applying profiles
+#   - post-apply   - Runs after applying profiles
+#   - pre-add      - Runs before adding files to a profile
+#   - post-add     - Runs after adding files to a profile
+#   - pre-clean    - Runs before cleaning deployed files
+#   - post-clean   - Runs after cleaning deployed files
+#
+# Hooks receive environment variables with context about the operation.
+# If a pre-hook exits with non-zero status, the operation is aborted.
+#
+# ============================================================================
+
+[hooks]
+
+# Hooks Directory
+# Where dotta looks for hook scripts
+# Default: ~/.config/dotta/hooks
+hooks_dir = "~/.config/dotta/hooks"
+
+# Enable/Disable Specific Hooks
+# You can selectively enable or disable hooks
+# Default: pre_apply=true, post_apply=true, pre_add=false, post_add=false, pre_clean=false, post_clean=false
+
+pre_apply = true    # Run before applying profiles (e.g., backup current configs)
+post_apply = true   # Run after applying profiles (e.g., reload shell, restart services)
+pre_add = false     # Run before adding files (e.g., validate file contents)
+post_add = false    # Run after adding files (e.g., commit to git, notify team)
+pre_clean = false   # Run before cleaning deployed files (e.g., backup before removal)
+post_clean = false  # Run after cleaning deployed files (e.g., cleanup caches, notify)
+
+
+# ============================================================================
+# [security] - Security Settings
+# ============================================================================
+
+[security]
+
+# Confirm Destructive Operations
+# Prompt for confirmation before operations that modify/delete files
+# Examples: dotta apply (overwrites files), dotta clean (removes files)
+# Default: true
+confirm_destructive = true
+
+# Confirm New Files
+# Require confirmation before adding newly detected files
+# When auto_detect_new_files is enabled, this provides an extra safety check
+# When false, new files are added automatically (if auto-detect is enabled)
+# When true, prompts for confirmation before adding each batch of new files
+# Default: true
+confirm_new_files = true
+
+
+# ============================================================================
+# [ignore] - File Ignore Patterns
+# ============================================================================
+#
+# Multi-layered ignore system with the following precedence:
+#   1. CLI --exclude flags (highest priority - operation-specific)
+#   2. .dottaignore file (repository-wide, version-controlled)
+#   3. Config ignore patterns (user-specific, below)
+#   4. Source .gitignore (when adding from git repos)
+#
+# Use the config patterns for machine-specific or personal ignore rules
+# that shouldn't be shared with the team (e.g., local IDE settings).
+#
+# ============================================================================
+
+[ignore]
+
+# Personal Ignore Patterns
+# Patterns that are specific to your machine and workflow
+# Uses full .gitignore syntax: wildcards (*, ?, [abc]), negation (!), etc.
+#
+# Common use cases:
+#   - Local IDE settings that differ per developer
+#   - Machine-specific temporary files
+#   - Personal scripts or notes you don't want to track
+#
+# Note: These patterns complement (don't replace) the repository's .dottaignore
+#
+# Default: No personal patterns
+patterns = [
+    # Personal IDE/editor files
+    ".vscode/settings.json",  # VSCode settings (use .vscode/*.json to ignore all)
+    ".idea/workspace.xml",    # IntelliJ workspace
+    "*.local",                # Any .local files
+
+    # Personal scripts/tools
+    ".envrc.local",          # direnv local overrides
+    "*.personal",            # Personal variants of files
+
+    # Machine-specific
+    ".DS_Store",             # macOS (also in .dottaignore, but good for redundancy)
+    "Thumbs.db",             # Windows
+]
+
+# .dottaignore File Location
+# Path to the shared ignore file (usually in the dotta repository)
+# Default: .dottaignore (relative to repo_dir)
+file = ".dottaignore"
+
+# Respect Source .gitignore
+# When adding files from a git repository, check its .gitignore too
+# Prevents accidentally adding files that are ignored in the source repo
+# Default: true
+respect_gitignore = true
+
+
+# ============================================================================
+# [output] - Output Formatting
+# ============================================================================
+
+[output]
+
+# Verbosity Level
+# Controls how much output dotta produces
+# Options:
+#   - "quiet"   - Only errors
+#   - "normal"  - Standard output (default)
+#   - "verbose" - Detailed operation info
+#   - "debug"   - Everything (for troubleshooting)
+# Default: normal
+verbosity = "normal"
+
+# Color Output
+# When to use colored output
+# Options:
+#   - "auto"   - Auto-detect terminal support (default)
+#   - "always" - Always use colors
+#   - "never"  - Never use colors (useful for logs)
+# Default: auto
+color = "auto"
+
+# Output Format
+# How to format command output
+# Options:
+#   - "compact"  - Brief, human-readable (default)
+#   - "detailed" - More information, still human-readable
+#   - "json"     - Machine-readable JSON (for scripts/tools)
+# Default: compact
+format = "compact"
+
+
+# ============================================================================
+# Configuration Examples
+# ============================================================================
+#
+# Example 1: Minimal Configuration
+# ---------------------------------
+# [core]
+# repo_dir = "~/.dotfiles"
+#
+# That's it! Everything else uses sensible defaults.
+#
+#
+# Example 2: Team Environment
+# ----------------------------
+# [core]
+# repo_dir = "~/company-dotfiles"
+#
+# [profiles]
+# order = ["base", "backend-dev", "docker"]
+#
+# [hooks]
+# post_apply = true  # Reload tmux, restart services
+#
+# [ignore]
+# patterns = [".local/*", "*.work"]  # Personal overrides
+#
+#
+# Example 3: Security-Focused
+# ----------------------------
+# [security]
+# confirm_destructive = true
+#
+# [ignore]
+# respect_gitignore = true
+# patterns = [
+#   "*.key",      # Never track keys
+#   "*.pem",      # Never track certificates
+#   ".env",       # Never track environment files
+#   "secrets/*",  # Never track secrets directory
+# ]
+#
+#
+# Example 4: CI/CD Environment
+# -----------------------------
+# [output]
+# verbosity = "verbose"  # Detailed logs for debugging
+# color = "never"        # Plain text for log files
+# format = "json"        # Machine-readable output
+#
+# [security]
+# confirm_destructive = false  # Non-interactive mode
+#
+# ============================================================================
+
+
+# ============================================================================
+# [sync] - Synchronization Settings
+# ============================================================================
+
+[sync]
+
+# Sync Mode
+# Determines which profile branches to fetch and synchronize with remote
+# Options:
+#   - "local" - Sync all local branches + auto-discover new remote branches (default)
+#               Perfect for: Day-to-day variant profile workflows
+#               Example: You have work, personal, darwin locally
+#                       Someone adds "experimental" to remote
+#                       Next sync discovers and creates local "experimental" branch
+#
+#   - "auto"  - Sync only auto-detected profiles (global, OS, hosts/<hostname>)
+#               Perfect for: Minimal machine-focused workflows
+#               Example: Only syncs global + darwin, ignores work/personal variants
+#
+#   - "all"   - Fetch and sync ALL remote branches (like clone behavior)
+#               Perfect for: Hub machines, backup servers, multi-variant management
+#               Example: Mirrors entire remote repository with all profiles
+#
+# Use Cases:
+#   local - Best default for most users (discovers new variant profiles)
+#   auto  - Single-purpose machines (only system-specific configs)
+#   all   - Backup/hub servers (mirror everything)
+#
+# Default: local
+mode = "local"
+
+# Auto-Pull Changes
+# Automatically pull remote changes when the remote branch is ahead
+# When true, `dotta sync` will automatically pull changes if the local branch is behind
+# When false, only fetches changes and warns about being behind (manual pull required)
+# Default: true
+auto_pull = true
+
+# Divergence Strategy
+# How to handle branches that have diverged (both local and remote have unique commits)
+# Options:
+#   - "warn"   - Show warning and stop (default, safest)
+#   - "rebase" - Rebase local changes on top of remote
+#   - "merge"  - Create a merge commit
+#   - "ours"   - Keep local version (discard remote changes)
+#   - "theirs" - Take remote version (discard local changes)
+#
+# WARNING: "ours" and "theirs" are destructive and will lose commits!
+# Default: warn
+diverged_strategy = "warn"
+
+
+# ============================================================================
+# [commit] - Commit Message Templates
+# ============================================================================
+#
+# Customize how dotta generates commit messages when adding or updating files.
+# Templates support variable substitution using {variable} syntax.
+#
+# Available Template Variables:
+# -----------------------------
+#   {host}          - System hostname (from gethostname())
+#   {user}          - Current username (from getlogin() or $USER)
+#   {profile}       - Profile name
+#   {action}        - Action (Add, Update, Sync, Revert)
+#   {action_past}   - Past tense (Added, Updated, Synced, Reverted)
+#   {count}         - Number of files
+#   {datetime}      - Local timestamp with timezone (ISO 8601 format)
+#   {files}         - Formatted file list (bullet points, max 5 shown)
+#   {target_commit} - Target commit SHA (for revert operations, empty otherwise)
+#
+# Default Templates (you can customize these):
+# --------------------------------------------
+
+[commit]
+
+# Commit Title Template
+# Default: "{host}: {action} {profile}"
+# Example output: "macbook-pro: Add darwin"
+title = "{host}: {action} {profile}"
+
+# Commit Body Template
+# Default: Multi-line template with metadata
+# Example output:
+#   Date: 2025-01-09 14:23:45 +0200
+#   User: john
+#   Host: macbook-pro
+#   Profile: darwin
+#   Files: 3
+#
+#   Added:
+#     - .bashrc
+#     - .vimrc
+#     - .tmux.conf
+body = """
+Date: {datetime}
+User: {user}
+Host: {host}
+Profile: {profile}
+Files: {count}
+
+{action_past}:
+{files}
+"""
+
+# ============================================================================
+# Custom Template Examples
+# ============================================================================
+#
+# Minimal Format:
+# ---------------
+# [commit]
+# title = "{action} {profile}"
+# body = "{files}"
+#
+# Output:
+#   Add darwin
+#
+#     - .bashrc
+#     - .vimrc
+#     - .tmux.conf
+#
+#
+# Detailed Format:
+# ----------------
+# [commit]
+# title = "[{profile}] {action} by {user}@{host}"
+# body = """
+# Profile: {profile}
+# Action: {action_past}
+# Date: {datetime}
+# User: {user}
+# Host: {host}
+# Count: {count} file(s)
+#
+# Files:
+# {files}
+# """
+#
+# Output:
+#   [darwin] Add by john@macbook-pro
+#
+#   Profile: darwin
+#   Action: Added
+#   Date: 2025-01-09 14:23:45 +0200
+#   User: john
+#   Host: macbook-pro
+#   Count: 3 file(s)
+#
+#   Files:
+#     - .bashrc
+#     - .vimrc
+#     - .tmux.conf
+#
+#
+# Git Conventional Commits:
+# --------------------------
+# [commit]
+# title = "feat({profile}): {action} {count} config file(s)"
+# body = "{files}"
+#
+# Output:
+#   feat(darwin): Add 3 config file(s)
+#
+#     - .bashrc
+#     - .vimrc
+#     - .tmux.conf
+#
+#
+# Revert-Aware Format:
+# --------------------
+# [commit]
+# title = "{action_past} {count} file(s) in {profile}"
+# body = """
+# Profile: {profile}
+# Action: {action}
+# Target: {target_commit}
+# Files:
+# {files}
+#
+# Timestamp: {datetime}
+# """
+#
+# Output (for revert operations):
+#   Reverted 1 file(s) in global
+#
+#   Profile: global
+#   Action: Revert
+#   Target: 94d98791ced8cd927813ccf085714e7e1a3c5085
+#   Files:
+#     - home/.bashrc
+#
+#   Timestamp: 2025-10-10 22:40:05 +0300
+#
+# Output (for add operations):
+#   Added 3 file(s) in darwin
+#
+#   Profile: darwin
+#   Action: Add
+#   Target:
+#   Files:
+#     - .bashrc
+#     - .vimrc
+#     - .tmux.conf
+#
+#   Timestamp: 2025-01-09 14:23:45 +0200
+#
+# ============================================================================
+
+
+# ============================================================================
+# Environment Variables
+# ============================================================================
+#
+# Some settings can also be controlled via environment variables:
+#
+# DOTTA_REPO_DIR      - Override repo_dir (highest priority)
+# DOTTA_CONFIG_FILE   - Use different config file
+#
+# Example:
+#   export DOTTA_REPO_DIR="/mnt/shared/dotfiles"
+#   dotta init
+#
+# ============================================================================
+
+
+# ============================================================================
+# Common Workflows
+# ============================================================================
+#
+# Initial Setup
+# -------------
+# 1. Copy this file: cp etc/config.toml.sample ~/.config/dotta/config.toml
+# 2. Edit the config: vim ~/.config/dotta/config.toml
+# 3. Initialize repo: dotta init
+# 4. Add your first file: dotta add --profile base ~/.bashrc
+#
+#
+# Team Onboarding
+# ---------------
+# 1. Clone team repo: dotta clone git@github.com:team/dotfiles.git
+# 2. Apply profiles: dotta apply
+# 3. Add local overrides: Edit ~/.config/dotta/config.toml [ignore] patterns
+#
+#
+# Multi-Machine Setup
+# -------------------
+# Machine A (laptop):
+#   [profiles]
+#   order = ["base", "laptop"]
+#
+# Machine B (server):
+#   [profiles]
+#   order = ["base", "server"]
+#
+# Both machines share the same repository but apply different profiles!
+#
+#
+# Variant Profile Workflow (mode=local)
+# --------------------------------------
+# Best for: Teams with multiple configuration variants (work, personal, client1, etc.)
+#
+# [sync]
+# mode = "local"  # Default
+#
+# Machine A creates new profile:
+#   dotta branch experimental
+#   dotta add ~/.experimental_config
+#   dotta sync  # Pushes experimental
+#
+# Machine B automatically discovers it:
+#   dotta sync  # Discovers and creates local "experimental" branch
+#   dotta apply -p experimental  # Now available to use!
+#
+#
+# Minimal Machine (mode=auto)
+# ---------------------------
+# Best for: Single-purpose machines (servers, CI/CD, minimal setups)
+#
+# [sync]
+# mode = "auto"
+#
+# Behavior:
+#   Only syncs: global, darwin/linux/freebsd, hosts/<hostname>
+#   Ignores: All other variant profiles (work, personal, client1, etc.)
+#   Perfect for machines that only need system-specific configs
+#
+#
+# Hub/Backup Server (mode=all)
+# -----------------------------
+# Best for: Central backup server, multi-machine management hub
+#
+# [sync]
+# mode = "all"
+#
+# Behavior:
+#   Mirrors entire remote repository
+#   Creates local branches for ALL remote profiles
+#   Keeps complete backup of all configurations
+#   Perfect for disaster recovery or managing multiple machines
+#
+# ============================================================================

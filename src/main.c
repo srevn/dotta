@@ -21,6 +21,7 @@
 #include "cmds/init.h"
 #include "cmds/list.h"
 #include "cmds/remote.h"
+#include "cmds/remove.h"
 #include "cmds/revert.h"
 #include "cmds/show.h"
 #include "cmds/status.h"
@@ -218,6 +219,117 @@ static int cmd_add_main(int argc, char **argv) {
     dotta_error_t *err = cmd_add(repo, &opts);
     free(files);
     free(excludes);
+    git_repository_free(repo);
+
+    if (err) {
+        error_print(err, stderr);
+        error_free(err);
+        return 1;
+    }
+
+    return 0;
+}
+
+/**
+ * Parse remove command
+ */
+static int cmd_remove_main(int argc, char **argv) {
+    cmd_remove_options_t opts = {
+        .profile = NULL,
+        .paths = NULL,
+        .path_count = 0,
+        .delete_profile = false,
+        .cleanup = false,
+        .dry_run = false,
+        .force = false,
+        .interactive = false,
+        .verbose = false,
+        .quiet = false,
+        .message = NULL
+    };
+
+    /* Collect path arguments */
+    const char **paths = malloc((size_t)argc * sizeof(char *));
+    if (!paths) {
+        fprintf(stderr, "Failed to allocate memory\n");
+        return 1;
+    }
+    size_t path_count = 0;
+
+    /* Parse arguments */
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0) {
+            free(paths);
+            print_remove_help(argv[0]);
+            return 0;
+        } else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--profile") == 0) {
+            if (i + 1 >= argc) {
+                free(paths);
+                fprintf(stderr, "Error: --profile requires an argument\n");
+                return 1;
+            }
+            opts.profile = argv[++i];
+        } else if (strcmp(argv[i], "-m") == 0 || strcmp(argv[i], "--message") == 0) {
+            if (i + 1 >= argc) {
+                free(paths);
+                fprintf(stderr, "Error: --message requires an argument\n");
+                return 1;
+            }
+            opts.message = argv[++i];
+        } else if (strcmp(argv[i], "--delete-profile") == 0) {
+            opts.delete_profile = true;
+        } else if (strcmp(argv[i], "--cleanup") == 0) {
+            opts.cleanup = true;
+        } else if (strcmp(argv[i], "-n") == 0 || strcmp(argv[i], "--dry-run") == 0) {
+            opts.dry_run = true;
+        } else if (strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--force") == 0) {
+            opts.force = true;
+        } else if (strcmp(argv[i], "-i") == 0 || strcmp(argv[i], "--interactive") == 0) {
+            opts.interactive = true;
+        } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
+            opts.verbose = true;
+        } else if (strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--quiet") == 0) {
+            opts.quiet = true;
+        } else {
+            paths[path_count++] = argv[i];
+        }
+    }
+
+    opts.paths = paths;
+    opts.path_count = path_count;
+
+    /* Validate */
+    if (!opts.profile) {
+        free(paths);
+        fprintf(stderr, "Error: --profile is required\n");
+        print_remove_help(argv[0]);
+        return 1;
+    }
+
+    if (!opts.delete_profile && path_count == 0) {
+        free(paths);
+        fprintf(stderr, "Error: at least one path is required (or use --delete-profile)\n");
+        print_remove_help(argv[0]);
+        return 1;
+    }
+
+    if (opts.delete_profile && path_count > 0) {
+        free(paths);
+        fprintf(stderr, "Error: cannot specify paths when using --delete-profile\n");
+        print_remove_help(argv[0]);
+        return 1;
+    }
+
+    /* Open resolved repository */
+    git_repository *repo = open_resolved_repo(NULL);
+    if (!repo) {
+        free(paths);
+        return 1;
+    }
+
+    /* Execute command */
+    dotta_error_t *err = cmd_remove(repo, &opts);
+    free(paths);
     git_repository_free(repo);
 
     if (err) {
@@ -554,7 +666,8 @@ static int cmd_clean_main(int argc, char **argv) {
         .profile_count = 0,
         .dry_run = false,
         .force = false,
-        .verbose = false
+        .verbose = false,
+        .quiet = false
     };
 
     /* Parse arguments */
@@ -568,6 +681,8 @@ static int cmd_clean_main(int argc, char **argv) {
             opts.force = true;
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             opts.verbose = true;
+        } else if (strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--quiet") == 0) {
+            opts.quiet = true;
         } else {
             fprintf(stderr, "Error: Unknown argument '%s'\n", argv[i]);
             print_clean_help(argv[0]);
@@ -1214,6 +1329,8 @@ int main(int argc, char **argv) {
         ret = cmd_clone_main(argc, argv);
     } else if (strcmp(command, "add") == 0) {
         ret = cmd_add_main(argc, argv);
+    } else if (strcmp(command, "remove") == 0) {
+        ret = cmd_remove_main(argc, argv);
     } else if (strcmp(command, "apply") == 0) {
         ret = cmd_apply_main(argc, argv);
     } else if (strcmp(command, "status") == 0) {

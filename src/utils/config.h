@@ -42,6 +42,8 @@ typedef struct {
     bool post_apply;
     bool pre_add;
     bool post_add;
+    bool pre_remove;
+    bool post_remove;
     bool pre_clean;
     bool post_clean;
 

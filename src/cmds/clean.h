@@ -20,6 +20,7 @@ typedef struct {
     bool dry_run;               /* Don't actually remove files */
     bool force;                 /* Remove without confirmation */
     bool verbose;               /* Print verbose output */
+    bool quiet;                 /* Minimal output */
 } cmd_clean_options_t;
 
 /**

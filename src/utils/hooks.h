@@ -19,6 +19,8 @@
 typedef enum {
     HOOK_PRE_ADD,
     HOOK_POST_ADD,
+    HOOK_PRE_REMOVE,
+    HOOK_POST_REMOVE,
     HOOK_PRE_APPLY,
     HOOK_POST_APPLY,
     HOOK_PRE_CLEAN,

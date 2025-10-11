@@ -16,12 +16,14 @@
 
 /* Hook script names */
 static const char *HOOK_NAMES[] = {
-    [HOOK_PRE_ADD]    = "pre-add",
-    [HOOK_POST_ADD]   = "post-add",
-    [HOOK_PRE_APPLY]  = "pre-apply",
-    [HOOK_POST_APPLY] = "post-apply",
-    [HOOK_PRE_CLEAN]  = "pre-clean",
-    [HOOK_POST_CLEAN] = "post-clean"
+    [HOOK_PRE_ADD]     = "pre-add",
+    [HOOK_POST_ADD]    = "post-add",
+    [HOOK_PRE_REMOVE]  = "pre-remove",
+    [HOOK_POST_REMOVE] = "post-remove",
+    [HOOK_PRE_APPLY]   = "pre-apply",
+    [HOOK_POST_APPLY]  = "post-apply",
+    [HOOK_PRE_CLEAN]   = "pre-clean",
+    [HOOK_POST_CLEAN]  = "post-clean"
 };
 
 /**
@@ -47,6 +49,10 @@ bool hook_is_enabled(const dotta_config_t *config, hook_type_t type) {
         return config->pre_add;
     case HOOK_POST_ADD:
         return config->post_add;
+    case HOOK_PRE_REMOVE:
+        return config->pre_remove;
+    case HOOK_POST_REMOVE:
+        return config->post_remove;
     case HOOK_PRE_APPLY:
         return config->pre_apply;
     case HOOK_POST_APPLY:

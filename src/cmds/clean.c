@@ -16,7 +16,9 @@
 #include "utils/array.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
+#include "utils/hooks.h"
 #include "utils/output.h"
+#include "utils/repo.h"
 
 /**
  * Confirm action with user
@@ -64,6 +66,9 @@ dotta_error_t *cmd_clean(git_repository *repo, const cmd_clean_options_t *opts) 
     if (opts->verbose) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
+    if (opts->quiet) {
+        output_set_verbosity(out, OUTPUT_QUIET);
+    }
 
     /* Load state */
     err = state_load(repo, &state);
@@ -95,6 +100,25 @@ dotta_error_t *cmd_clean(git_repository *repo, const cmd_clean_options_t *opts) 
         config_free(config);
         output_free(out);
         return error_wrap(err, "Failed to load profiles");
+    }
+
+    /* Show active profiles in verbose mode */
+    if (opts->verbose && profiles->count > 0) {
+        output_section(out, "Active profiles");
+        for (size_t i = 0; i < profiles->count; i++) {
+            if (output_colors_enabled(out)) {
+                fprintf(out->stream, "  %s%s%s%s\n",
+                       output_color_code(out, OUTPUT_COLOR_CYAN),
+                       profiles->profiles[i].name,
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       profiles->profiles[i].auto_detected ? " (auto)" : "");
+            } else {
+                fprintf(out->stream, "  %s%s\n",
+                       profiles->profiles[i].name,
+                       profiles->profiles[i].auto_detected ? " (auto)" : "");
+            }
+        }
+        fprintf(out->stream, "\n");
     }
 
     /* Build manifest from current profiles */
@@ -181,9 +205,54 @@ dotta_error_t *cmd_clean(git_repository *repo, const cmd_clean_options_t *opts) 
         if (manifest) manifest_free(manifest);
         profile_list_free(profiles);
         state_free(state);
+        config_free(config);
         output_info(out, "No orphaned files to clean");
         output_free(out);
         return NULL;
+    }
+
+    /* Get repository directory for hooks */
+    char *repo_dir = NULL;
+    err = config_get_repo_dir(config, &repo_dir);
+    if (err) {
+        string_array_free(orphaned);
+        if (manifest) manifest_free(manifest);
+        profile_list_free(profiles);
+        state_free(state);
+        config_free(config);
+        output_free(out);
+        return err;
+    }
+
+    /* Execute pre-clean hook */
+    hook_context_t *hook_ctx = hook_context_create(repo_dir, "clean", NULL);
+    if (hook_ctx) {
+        /* Add orphaned files to hook context */
+        hook_context_add_files(hook_ctx,
+                              (const char **)orphaned->items,
+                              orphaned->count);
+
+        hook_result_t *hook_result = NULL;
+        err = hook_execute(config, HOOK_PRE_CLEAN, hook_ctx, &hook_result);
+
+        if (err) {
+            /* Hook failed - abort operation */
+            if (hook_result && hook_result->output && hook_result->output[0]) {
+                fprintf(stderr, "Hook output:\n%s\n", hook_result->output);
+            }
+            hook_result_free(hook_result);
+            hook_context_free(hook_ctx);
+            free(repo_dir);
+            string_array_free(orphaned);
+            if (manifest) manifest_free(manifest);
+            profile_list_free(profiles);
+            state_free(state);
+            config_free(config);
+            output_free(out);
+            return error_wrap(err, "Pre-clean hook failed");
+        }
+        hook_result_free(hook_result);
+        /* Keep hook_ctx for post-clean hook */
     }
 
     /* Show what will be removed */
@@ -206,10 +275,13 @@ dotta_error_t *cmd_clean(git_repository *repo, const cmd_clean_options_t *opts) 
 
     if (opts->dry_run) {
         output_info(out, "Dry-run mode - no files removed");
+        if (hook_ctx) hook_context_free(hook_ctx);
+        free(repo_dir);
         string_array_free(orphaned);
         if (manifest) manifest_free(manifest);
         profile_list_free(profiles);
         state_free(state);
+        config_free(config);
         output_free(out);
         return NULL;
     }
@@ -217,6 +289,8 @@ dotta_error_t *cmd_clean(git_repository *repo, const cmd_clean_options_t *opts) 
     /* Confirm unless --force (only if confirm_destructive is enabled) */
     if (config->confirm_destructive && !opts->force && !confirm_action()) {
         output_info(out, "Cancelled");
+        if (hook_ctx) hook_context_free(hook_ctx);
+        free(repo_dir);
         string_array_free(orphaned);
         if (manifest) manifest_free(manifest);
         profile_list_free(profiles);
@@ -295,14 +369,36 @@ dotta_error_t *cmd_clean(git_repository *repo, const cmd_clean_options_t *opts) 
     if (removed_count > 0 || state_cleaned_count > 0) {
         err = state_save(repo, state);
         if (err) {
+            if (hook_ctx) hook_context_free(hook_ctx);
+            free(repo_dir);
             string_array_free(orphaned);
             if (manifest) manifest_free(manifest);
             profile_list_free(profiles);
             state_free(state);
+            config_free(config);
             output_free(out);
             return error_wrap(err, "Failed to save state after cleaning");
         }
     }
+
+    /* Execute post-clean hook */
+    if (hook_ctx) {
+        hook_result_t *hook_result = NULL;
+        err = hook_execute(config, HOOK_POST_CLEAN, hook_ctx, &hook_result);
+
+        if (err) {
+            /* Hook failed - warn but don't abort (files already cleaned) */
+            fprintf(stderr, "Warning: Post-clean hook failed: %s\n", error_message(err));
+            if (hook_result && hook_result->output && hook_result->output[0]) {
+                fprintf(stderr, "Hook output:\n%s\n", hook_result->output);
+            }
+            error_free(err);
+            err = NULL;
+        }
+        hook_result_free(hook_result);
+        hook_context_free(hook_ctx);
+    }
+    free(repo_dir);
 
     /* Summary */
     fprintf(out->stream, "\n");

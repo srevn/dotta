@@ -28,6 +28,11 @@ void print_init_help(const char *prog_name);
 void print_add_help(const char *prog_name);
 
 /**
+ * Print help for remove command
+ */
+void print_remove_help(const char *prog_name);
+
+/**
  * Print help for apply command
  */
 void print_apply_help(const char *prog_name);

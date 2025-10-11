@@ -87,6 +87,7 @@ const char *commit_action_name(commit_action_t action) {
     switch (action) {
         case COMMIT_ACTION_ADD:    return "Add";
         case COMMIT_ACTION_UPDATE: return "Update";
+        case COMMIT_ACTION_REMOVE: return "Remove";
         case COMMIT_ACTION_SYNC:   return "Sync";
         case COMMIT_ACTION_REVERT: return "Revert";
         default:                   return "Unknown";
@@ -100,6 +101,7 @@ const char *commit_action_name_past(commit_action_t action) {
     switch (action) {
         case COMMIT_ACTION_ADD:    return "Added";
         case COMMIT_ACTION_UPDATE: return "Updated";
+        case COMMIT_ACTION_REMOVE: return "Removed";
         case COMMIT_ACTION_SYNC:   return "Synced";
         case COMMIT_ACTION_REVERT: return "Reverted";
         default:                   return "Unknown";

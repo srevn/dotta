@@ -18,6 +18,7 @@
 typedef enum {
     COMMIT_ACTION_ADD,      /* Adding new files to profile */
     COMMIT_ACTION_UPDATE,   /* Updating existing files */
+    COMMIT_ACTION_REMOVE,   /* Removing files from profile */
     COMMIT_ACTION_SYNC,     /* Syncing from filesystem */
     COMMIT_ACTION_REVERT    /* Reverting files to previous state */
 } commit_action_t;
@@ -44,8 +45,8 @@ typedef struct {
  *   {host}          - System hostname
  *   {user}          - Current username
  *   {profile}       - Profile name
- *   {action}        - Action (Add, Update, Sync, Revert)
- *   {action_past}   - Past tense (Added, Updated, Synced, Reverted)
+ *   {action}        - Action (Add, Update, Remove, Sync, Revert)
+ *   {action_past}   - Past tense (Added, Updated, Removed, Synced, Reverted)
  *   {count}         - Number of files
  *   {datetime}      - Local timestamp with timezone (ISO 8601)
  *   {files}         - Formatted file list (bullet points)

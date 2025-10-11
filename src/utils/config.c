@@ -91,6 +91,8 @@ dotta_config_t *config_create_default(void) {
     config->post_apply = true;
     config->pre_add = false;
     config->post_add = false;
+    config->pre_remove = false;
+    config->post_remove = false;
     config->pre_clean = false;
     config->post_clean = false;
 
@@ -299,6 +301,16 @@ dotta_error_t *config_load(const char *config_path, dotta_config_t **out) {
         toml_datum_t post_add = toml_get(hooks, "post_add");
         if (post_add.type == TOML_BOOLEAN) {
             config->post_add = post_add.u.boolean;
+        }
+
+        toml_datum_t pre_remove = toml_get(hooks, "pre_remove");
+        if (pre_remove.type == TOML_BOOLEAN) {
+            config->pre_remove = pre_remove.u.boolean;
+        }
+
+        toml_datum_t post_remove = toml_get(hooks, "post_remove");
+        if (post_remove.type == TOML_BOOLEAN) {
+            config->post_remove = post_remove.u.boolean;
         }
 
         toml_datum_t pre_clean = toml_get(hooks, "pre_clean");

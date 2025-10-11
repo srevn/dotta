@@ -86,6 +86,42 @@ void print_add_help(const char *prog_name) {
     printf("\n");
 }
 
+void print_remove_help(const char *prog_name) {
+    printf("Usage: %s remove [options] --profile <name> <file|dir>...\n", prog_name);
+    printf("       %s remove [options] --profile <name> --delete-profile\n\n", prog_name);
+    printf("Remove files from a profile or delete entire profile\n\n");
+    printf("Options:\n");
+    printf("  -p, --profile <name>   Profile name (required)\n");
+    printf("  --delete-profile       Delete entire profile branch\n");
+    printf("  --cleanup              Also remove deployed files from filesystem\n");
+    printf("  -m, --message <msg>    Custom commit message\n");
+    printf("  -n, --dry-run          Show what would be removed without doing it\n");
+    printf("  -f, --force            Skip confirmations, ignore missing files\n");
+    printf("  -i, --interactive      Prompt for each file\n");
+    printf("  -v, --verbose          Print verbose output\n");
+    printf("  -q, --quiet            Minimal output\n");
+    printf("  --help                 Show this help message\n");
+    printf("\nExamples:\n");
+    printf("  %s remove --profile global ~/.bashrc\n", prog_name);
+    printf("      Remove ~/.bashrc from 'global' profile (file stays on filesystem)\n\n");
+    printf("  %s remove --profile global ~/.bashrc --cleanup\n", prog_name);
+    printf("      Remove from profile AND delete deployed file\n\n");
+    printf("  %s remove --profile global ~/.config/nvim\n", prog_name);
+    printf("      Remove entire directory from profile\n\n");
+    printf("  %s remove --profile test --delete-profile\n", prog_name);
+    printf("      Delete entire 'test' profile branch\n\n");
+    printf("  %s remove --profile test --delete-profile --cleanup\n", prog_name);
+    printf("      Delete profile AND remove all deployed files\n\n");
+    printf("  %s remove --profile global ~/.bashrc --dry-run\n", prog_name);
+    printf("      Preview what would be removed\n");
+    printf("\nNotes:\n");
+    printf("  - By default, files remain on filesystem after removal from profile\n");
+    printf("  - Use --cleanup to remove deployed files\n");
+    printf("  - Use 'dotta apply --prune' as alternative to clean up filesystem\n");
+    printf("  - Deleted profile branches can be recovered from remote if pushed\n");
+    printf("\n");
+}
+
 void print_apply_help(const char *prog_name) {
     printf("Usage: %s apply [options] [profile]...\n\n", prog_name);
     printf("Apply profiles to filesystem\n\n");
@@ -182,12 +218,32 @@ void print_diff_help(const char *prog_name) {
 
 void print_clean_help(const char *prog_name) {
     printf("Usage: %s clean [options]\n\n", prog_name);
-    printf("Remove orphaned files\n\n");
+    printf("Remove orphaned files from filesystem\n\n");
+    printf("Description:\n");
+    printf("  Finds and removes files that were previously deployed by 'dotta apply'\n");
+    printf("  but are no longer in any active profile.\n\n");
     printf("Options:\n");
-    printf("  -n, --dry-run    Don't actually remove files\n");
+    printf("  -n, --dry-run    Show what would be removed without doing it\n");
     printf("  -f, --force      Remove without confirmation\n");
-    printf("  -v, --verbose    Print verbose output\n");
+    printf("  -v, --verbose    Print detailed output with status for each file\n");
+    printf("  -q, --quiet      Minimal output (only errors)\n");
     printf("  --help           Show this help message\n");
+    printf("\nExamples:\n");
+    printf("  %s clean\n", prog_name);
+    printf("      Find and remove orphaned files (with confirmation)\n\n");
+    printf("  %s clean --dry-run\n", prog_name);
+    printf("      Preview what files would be removed\n\n");
+    printf("  %s clean --force\n", prog_name);
+    printf("      Remove orphaned files without confirmation\n\n");
+    printf("  %s clean --verbose\n", prog_name);
+    printf("      Show detailed status for each file being removed\n");
+    printf("\nUse Cases:\n");
+    printf("  - After manually deleting files from profile branches with git\n");
+    printf("  - After removing files with 'dotta remove' but forgetting --cleanup\n");
+    printf("  - To clean up before switching to a different profile set\n");
+    printf("\nAlternatives:\n");
+    printf("  - 'dotta apply --prune'    Deploy profiles AND clean orphans\n");
+    printf("  - 'dotta remove --cleanup' Remove from profile AND filesystem\n");
     printf("\n");
 }
 

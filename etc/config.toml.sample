@@ -566,4 +566,36 @@ Files: {count}
 #   Keeps complete backup of all configurations
 #   Perfect for disaster recovery or managing multiple machines
 #
+#
+# Removing Files and Profiles
+# ----------------------------
+# Safe file removal workflow:
+#
+#   # Remove file from profile (keeps it on filesystem)
+#   dotta remove --profile global ~/.bashrc
+#
+#   # Preview what would be removed
+#   dotta remove --profile global ~/.config/nvim --dry-run
+#
+#   # Remove from profile AND filesystem
+#   dotta remove --profile global ~/.bashrc --cleanup
+#
+#   # Interactive removal (prompt for each file)
+#   dotta remove --profile global ~/.config/*.conf --interactive
+#
+# Delete entire profile:
+#
+#   # Delete profile branch (files remain on filesystem)
+#   dotta remove --profile experimental --delete-profile
+#
+#   # Delete profile AND remove deployed files
+#   dotta remove --profile experimental --delete-profile --cleanup
+#
+# Safety features:
+#   - Warns about unpushed changes (use 'dotta sync' first)
+#   - Warns about deployed files (use --cleanup or 'dotta apply --prune')
+#   - Prevents deletion of last remaining profile
+#   - Confirms destructive operations (unless --force)
+#   - Executes pre-remove/post-remove hooks (if enabled)
+#
 # ============================================================================

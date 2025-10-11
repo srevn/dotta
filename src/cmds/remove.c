@@ -13,6 +13,7 @@
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "base/gitops.h"
+#include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/path.h"
@@ -561,6 +562,99 @@ static error_t *update_state_after_removal(
 }
 
 /**
+ * Remove metadata entries for removed files
+ *
+ * Loads existing metadata from worktree, removes entries for deleted files,
+ * and saves the updated metadata back. The metadata.json file is then staged.
+ */
+static error_t *cleanup_metadata(
+    worktree_handle_t *wt,
+    const string_array_t *removed_storage_paths,
+    bool verbose
+) {
+    CHECK_NULL(wt);
+    CHECK_NULL(removed_storage_paths);
+
+    const char *worktree_path = worktree_get_path(wt);
+    if (!worktree_path) {
+        return ERROR(ERR_INTERNAL, "Worktree path is NULL");
+    }
+
+    /* Load existing metadata from worktree (if it exists) */
+    metadata_t *metadata = NULL;
+    char *metadata_file_path = str_format("%s/%s", worktree_path, METADATA_FILE_PATH);
+    if (!metadata_file_path) {
+        return ERROR(ERR_MEMORY, "Failed to allocate metadata file path");
+    }
+
+    error_t *err = metadata_load_from_file(metadata_file_path, &metadata);
+    free(metadata_file_path);
+
+    if (err) {
+        if (err->code == ERR_NOT_FOUND) {
+            /* No existing metadata - nothing to clean up */
+            error_free(err);
+            return NULL;
+        } else {
+            /* Real error - propagate */
+            return error_wrap(err, "Failed to load existing metadata");
+        }
+    }
+
+    /* Remove metadata entries for each removed file */
+    size_t removed_count = 0;
+    for (size_t i = 0; i < string_array_size(removed_storage_paths); i++) {
+        const char *storage_path = string_array_get(removed_storage_paths, i);
+
+        /* Check if metadata entry exists */
+        if (metadata_has_entry(metadata, storage_path)) {
+            err = metadata_remove_entry(metadata, storage_path);
+            if (err) {
+                metadata_free(metadata);
+                return error_wrap(err, "Failed to remove metadata entry: %s", storage_path);
+            }
+
+            removed_count++;
+
+            if (verbose) {
+                printf("Removed metadata: %s\n", storage_path);
+            }
+        }
+    }
+
+    /* Save updated metadata to worktree */
+    err = metadata_save_to_worktree(worktree_path, metadata);
+    metadata_free(metadata);
+
+    if (err) {
+        return error_wrap(err, "Failed to save metadata");
+    }
+
+    /* Stage metadata.json file */
+    git_index *index = NULL;
+    err = worktree_get_index(wt, &index);
+    if (err) {
+        return error_wrap(err, "Failed to get worktree index");
+    }
+
+    int git_err = git_index_add_bypath(index, METADATA_FILE_PATH);
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    git_err = git_index_write(index);
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    if (verbose && removed_count > 0) {
+        printf("Cleaned up metadata for %zu file(s)\n", removed_count);
+    }
+
+    return NULL;
+}
+
+/**
  * Remove files from profile
  */
 static error_t *remove_files_from_profile(
@@ -741,6 +835,19 @@ static error_t *remove_files_from_profile(
             return err;
         }
         removed_count++;
+    }
+
+    /* Clean up metadata for removed files */
+    err = cleanup_metadata(wt, storage_paths, opts->verbose);
+    if (err) {
+        worktree_cleanup(wt);
+        hook_context_free(hook_ctx);
+        free(repo_dir);
+        string_array_free(storage_paths);
+        string_array_free(filesystem_paths);
+        state_free(state);
+        config_free(config);
+        return error_wrap(err, "Failed to clean up metadata");
     }
 
     /* Create commit */

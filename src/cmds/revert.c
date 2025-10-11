@@ -728,7 +728,8 @@ static error_t *deploy_reverted_file(
         .verbose = verbose
     };
 
-    err = deploy_file(repo, &file_entry, &deploy_opts);
+    /* TODO: Load metadata from the commit being reverted to */
+    err = deploy_file(repo, &file_entry, NULL, &deploy_opts);
     if (err) {
         err = error_wrap(err, "Failed to deploy reverted file");
         goto cleanup;

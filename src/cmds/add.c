@@ -15,6 +15,7 @@
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "base/gitops.h"
+#include "core/metadata.h"
 #include "core/state.h"
 #include "infra/path.h"
 #include "infra/worktree.h"
@@ -291,6 +292,130 @@ static error_t *add_file_to_worktree(
 
     free(dest_path);
     free(storage_path);
+    return NULL;
+}
+
+/**
+ * Capture and save metadata for added files
+ *
+ * Loads existing metadata from worktree, captures metadata for each added file,
+ * updates the metadata collection, and saves it back to worktree.
+ * The metadata.json file is then staged for commit.
+ */
+static error_t *capture_and_save_metadata(
+    worktree_handle_t *wt,
+    const string_array_t *added_files,
+    const cmd_add_options_t *opts
+) {
+    CHECK_NULL(wt);
+    CHECK_NULL(added_files);
+    CHECK_NULL(opts);
+
+    const char *worktree_path = worktree_get_path(wt);
+    if (!worktree_path) {
+        return ERROR(ERR_INTERNAL, "Worktree path is NULL");
+    }
+
+    /* Load existing metadata from worktree (if it exists) */
+    metadata_t *metadata = NULL;
+    char *metadata_file_path = str_format("%s/%s", worktree_path, METADATA_FILE_PATH);
+    if (!metadata_file_path) {
+        return ERROR(ERR_MEMORY, "Failed to allocate metadata file path");
+    }
+
+    error_t *err = metadata_load_from_file(metadata_file_path, &metadata);
+    free(metadata_file_path);
+
+    if (err) {
+        if (err->code == ERR_NOT_FOUND) {
+            /* No existing metadata - create new */
+            error_free(err);
+            err = metadata_create_empty(&metadata);
+            if (err) {
+                return err;
+            }
+        } else {
+            /* Real error - propagate */
+            return error_wrap(err, "Failed to load existing metadata");
+        }
+    }
+
+    /* Capture metadata for each added file */
+    size_t captured_count = 0;
+    for (size_t i = 0; i < string_array_size(added_files); i++) {
+        const char *filesystem_path = string_array_get(added_files, i);
+
+        /* Convert to storage path */
+        char *storage_path = NULL;
+        path_prefix_t prefix;
+        error_t *err = path_to_storage(filesystem_path, &storage_path, &prefix);
+        if (err) {
+            metadata_free(metadata);
+            return error_wrap(err, "Failed to convert path to storage: %s", filesystem_path);
+        }
+
+        /* Capture metadata */
+        metadata_entry_t *entry = NULL;
+        err = metadata_capture_from_file(filesystem_path, storage_path, &entry);
+        free(storage_path);
+
+        if (err) {
+            metadata_free(metadata);
+            return error_wrap(err, "Failed to capture metadata for: %s", filesystem_path);
+        }
+
+        /* entry will be NULL for symlinks - skip them */
+        if (entry) {
+            /* Save mode before adding (for verbose output) */
+            mode_t mode = entry->mode;
+
+            /* Add to metadata collection */
+            err = metadata_set_entry(metadata, entry->storage_path, entry->mode);
+            metadata_entry_free(entry);
+
+            if (err) {
+                metadata_free(metadata);
+                return error_wrap(err, "Failed to add metadata entry");
+            }
+
+            captured_count++;
+
+            if (opts->verbose) {
+                printf("Captured metadata: %s (mode: %04o)\n",
+                      filesystem_path, mode);
+            }
+        }
+    }
+
+    /* Save metadata to worktree */
+    err = metadata_save_to_worktree(worktree_path, metadata);
+    metadata_free(metadata);
+
+    if (err) {
+        return error_wrap(err, "Failed to save metadata");
+    }
+
+    /* Stage metadata.json file */
+    git_index *index = NULL;
+    err = worktree_get_index(wt, &index);
+    if (err) {
+        return error_wrap(err, "Failed to get worktree index");
+    }
+
+    int git_err = git_index_add_bypath(index, METADATA_FILE_PATH);
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    git_err = git_index_write(index);
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    if (opts->verbose && captured_count > 0) {
+        printf("Updated metadata for %zu file(s)\n", captured_count);
+    }
+
     return NULL;
 }
 
@@ -695,6 +820,19 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             return wrapped_err;
         }
         added_count++;
+    }
+
+    /* Capture and save metadata for added files */
+    err = capture_and_save_metadata(wt, all_files, opts);
+    if (err) {
+        string_array_free(all_files);
+        worktree_cleanup(wt);
+        hook_context_free(hook_ctx);
+        free(repo_dir);
+        ignore_context_free(ignore_ctx);
+        state_free(state);
+        config_free(config);
+        return error_wrap(err, "Failed to capture metadata");
     }
 
     /* Create commit */

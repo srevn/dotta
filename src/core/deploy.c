@@ -137,6 +137,7 @@ error_t *deploy_preflight_check(
 error_t *deploy_file(
     git_repository *repo,
     const file_entry_t *entry,
+    const metadata_t *metadata,
     const deploy_options_t *opts
 ) {
     CHECK_NULL(repo);
@@ -227,15 +228,41 @@ error_t *deploy_file(
         return error_wrap(derr, "Failed to deploy file '%s'", entry->filesystem_path);
     }
 
-    /* Set permissions */
-    mode_t file_mode = (mode == GIT_FILEMODE_BLOB_EXECUTABLE) ? 0755 : 0644;
+    /* Set permissions - use metadata if available, otherwise fallback to git mode */
+    mode_t file_mode;
+    bool used_metadata = false;
+
+    if (metadata) {
+        const metadata_entry_t *meta_entry = NULL;
+        error_t *meta_err = metadata_get_entry(metadata, entry->storage_path, &meta_entry);
+
+        if (meta_err == NULL && meta_entry != NULL) {
+            /* Use mode from metadata */
+            file_mode = meta_entry->mode;
+            used_metadata = true;
+        } else {
+            /* Fallback to git mode */
+            if (meta_err) {
+                error_free(meta_err);
+            }
+            file_mode = (mode == GIT_FILEMODE_BLOB_EXECUTABLE) ? 0755 : 0644;
+        }
+    } else {
+        /* No metadata available - use git mode */
+        file_mode = (mode == GIT_FILEMODE_BLOB_EXECUTABLE) ? 0755 : 0644;
+    }
+
     derr = fs_set_permissions(entry->filesystem_path, file_mode);
     if (derr) {
         return error_wrap(derr, "Failed to set permissions on '%s'", entry->filesystem_path);
     }
 
     if (opts->verbose) {
-        printf("Deployed: %s (mode: %04o)\n", entry->filesystem_path, file_mode);
+        if (used_metadata) {
+            printf("Deployed: %s (mode: %04o from metadata)\n", entry->filesystem_path, file_mode);
+        } else {
+            printf("Deployed: %s (mode: %04o default)\n", entry->filesystem_path, file_mode);
+        }
     }
 
     return NULL;
@@ -247,6 +274,7 @@ error_t *deploy_file(
 error_t *deploy_execute(
     git_repository *repo,
     const manifest_t *manifest,
+    const metadata_t *metadata,
     const deploy_options_t *opts,
     deploy_result_t **out
 ) {
@@ -315,7 +343,7 @@ error_t *deploy_execute(
         }
 
         /* Deploy the file */
-        error_t *err = deploy_file(repo, entry, opts);
+        error_t *err = deploy_file(repo, entry, metadata, opts);
         if (err) {
             /* Record failure */
             string_array_push(result->failed, entry->filesystem_path);

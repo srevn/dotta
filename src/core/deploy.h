@@ -17,6 +17,7 @@
 #include <git2.h>
 
 #include "types.h"
+#include "metadata.h"
 #include "profiles.h"
 #include "state.h"
 
@@ -84,6 +85,7 @@ error_t *deploy_preflight_check(
  *
  * @param repo Repository (must not be NULL)
  * @param manifest Manifest to deploy (must not be NULL)
+ * @param metadata Merged metadata for permission restoration (can be NULL)
  * @param opts Deployment options (must not be NULL)
  * @param out Deployment results (must not be NULL, caller must free)
  * @return Error or NULL on success
@@ -91,6 +93,7 @@ error_t *deploy_preflight_check(
 error_t *deploy_execute(
     git_repository *repo,
     const manifest_t *manifest,
+    const metadata_t *metadata,
     const deploy_options_t *opts,
     deploy_result_t **out
 );
@@ -100,12 +103,14 @@ error_t *deploy_execute(
  *
  * @param repo Repository (must not be NULL)
  * @param entry File entry to deploy (must not be NULL)
+ * @param metadata Metadata for permission restoration (can be NULL)
  * @param opts Deployment options (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *deploy_file(
     git_repository *repo,
     const file_entry_t *entry,
+    const metadata_t *metadata,
     const deploy_options_t *opts
 );
 

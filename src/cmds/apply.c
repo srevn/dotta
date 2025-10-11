@@ -12,6 +12,7 @@
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "core/deploy.h"
+#include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "utils/array.h"
@@ -476,6 +477,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     state_t *state = NULL;
     profile_list_t *profiles = NULL;
     manifest_t *manifest = NULL;
+    metadata_t *merged_metadata = NULL;
     preflight_result_t *preflight = NULL;
     hook_context_t *hook_ctx = NULL;
     char *profiles_str = NULL;
@@ -563,6 +565,87 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     if (opts->verbose) {
         output_print(out, OUTPUT_VERBOSE, "Manifest contains %zu file%s\n",
                     manifest->count, manifest->count == 1 ? "" : "s");
+    }
+
+    /* Load and merge metadata from profiles */
+    output_print(out, OUTPUT_VERBOSE, "\nLoading metadata...\n");
+
+    {
+        /* Allocate array to hold metadata from each profile */
+        const metadata_t **profile_metadata = calloc(profiles->count, sizeof(metadata_t *));
+        if (!profile_metadata) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate profile metadata array");
+            goto cleanup;
+        }
+
+        size_t loaded_count = 0;
+
+        /* Load metadata from each profile (in order for proper layering) */
+        for (size_t i = 0; i < profiles->count; i++) {
+            const char *profile_name = profiles->profiles[i].name;
+            metadata_t *meta = NULL;
+
+            error_t *meta_err = metadata_load_from_branch(repo, profile_name, &meta);
+            if (meta_err) {
+                if (meta_err->code == ERR_NOT_FOUND) {
+                    /* No metadata in this profile - not an error */
+                    if (opts->verbose) {
+                        output_print(out, OUTPUT_VERBOSE,
+                                    "  No metadata in profile '%s'\n", profile_name);
+                    }
+                    error_free(meta_err);
+                } else {
+                    /* Real error - clean up and propagate */
+                    for (size_t j = 0; j < loaded_count; j++) {
+                        metadata_free((metadata_t *)profile_metadata[j]);
+                    }
+                    free(profile_metadata);
+                    err = error_wrap(meta_err, "Failed to load metadata from profile '%s'",
+                                   profile_name);
+                    goto cleanup;
+                }
+            } else {
+                /* Successfully loaded */
+                profile_metadata[i] = meta;
+                loaded_count++;
+                if (opts->verbose) {
+                    output_print(out, OUTPUT_VERBOSE,
+                                "  Loaded %zu metadata entr%s from profile '%s'\n",
+                                meta->count, meta->count == 1 ? "y" : "ies", profile_name);
+                }
+            }
+        }
+
+        /* Merge metadata according to profile precedence */
+        if (loaded_count > 0) {
+            err = metadata_merge(profile_metadata, profiles->count, &merged_metadata);
+
+            /* Free individual profile metadata */
+            for (size_t i = 0; i < profiles->count; i++) {
+                if (profile_metadata[i]) {
+                    metadata_free((metadata_t *)profile_metadata[i]);
+                }
+            }
+
+            if (err) {
+                free(profile_metadata);
+                err = error_wrap(err, "Failed to merge metadata");
+                goto cleanup;
+            }
+
+            if (opts->verbose) {
+                output_print(out, OUTPUT_VERBOSE,
+                            "  Merged metadata: %zu entr%s total\n",
+                            merged_metadata->count,
+                            merged_metadata->count == 1 ? "y" : "ies");
+            }
+        } else {
+            if (opts->verbose) {
+                output_print(out, OUTPUT_VERBOSE, "  No metadata found in any profile\n");
+            }
+        }
+
+        free(profile_metadata);
     }
 
     /* Run pre-flight checks */
@@ -666,7 +749,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         output_print(out, OUTPUT_VERBOSE, "\nDeploying files...\n");
     }
 
-    err = deploy_execute(repo, manifest, &deploy_opts, &deploy_res);
+    err = deploy_execute(repo, manifest, merged_metadata, &deploy_opts, &deploy_res);
     if (err) {
         if (deploy_res) {
             print_deploy_results(out, deploy_res, opts->verbose);
@@ -730,6 +813,7 @@ cleanup:
     if (preflight) preflight_result_free(preflight);
     if (profiles_str) free(profiles_str);
     if (hook_ctx) hook_context_free(hook_ctx);
+    if (merged_metadata) metadata_free(merged_metadata);
     if (manifest) manifest_free(manifest);
     if (profiles) profile_list_free(profiles);
     if (state) state_free(state);

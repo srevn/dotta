@@ -569,7 +569,8 @@ error_t *profile_build_manifest(
                 strcmp(storage_path, ".gitignore") == 0 ||
                 strcmp(storage_path, "README.md") == 0 ||
                 strcmp(storage_path, "README") == 0 ||
-                str_starts_with(storage_path, ".git/")) {
+                str_starts_with(storage_path, ".git/") ||
+                str_starts_with(storage_path, ".dotta/")) {
                 continue;
             }
 

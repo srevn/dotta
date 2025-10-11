@@ -1,3 +1,4 @@
+/.cache
 /bin
 /build
 bin/
@@ -7,3 +8,4 @@ build/
 *.a
 *.so
 *.dylib
+compile_commands.json

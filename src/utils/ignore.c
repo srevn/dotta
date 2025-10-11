@@ -10,9 +10,7 @@
 #include <string.h>
 
 #include "base/error.h"
-#include "base/filesystem.h"
 #include "base/gitops.h"
-#include "utils/buffer.h"
 #include "utils/string.h"
 
 /* Maximum path length for git repository discovery */

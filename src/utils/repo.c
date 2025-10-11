@@ -16,7 +16,6 @@
 #include "base/filesystem.h"
 #include "infra/path.h"
 #include "utils/config.h"
-#include "utils/string.h"
 
 /**
  * Get default repository path

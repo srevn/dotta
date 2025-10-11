@@ -21,7 +21,6 @@
 #include "utils/commit.h"
 #include "utils/config.h"
 #include "utils/hooks.h"
-#include "utils/output.h"
 #include "utils/string.h"
 #include "utils/upstream.h"
 
@@ -772,22 +771,25 @@ static dotta_error_t *remove_files_from_profile(
                 err = NULL;
             }
         }
-    }
 
-    /* Update state */
-    err = update_state_after_removal(state, filesystem_paths, opts->profile);
-    if (err) {
-        fprintf(stderr, "Warning: Failed to update state: %s\n", error_message(err));
-        error_free(err);
-        err = NULL;
-    }
+        /* Update state to remove files that were cleaned up from filesystem
+         * Only do this when --cleanup is used. Without --cleanup, files remain on
+         * the filesystem and in state, so that 'apply --prune' can remove them later.
+         */
+        err = update_state_after_removal(state, filesystem_paths, opts->profile);
+        if (err) {
+            fprintf(stderr, "Warning: Failed to update state: %s\n", error_message(err));
+            error_free(err);
+            err = NULL;
+        }
 
-    /* Save state */
-    err = state_save(repo, state);
-    if (err) {
-        fprintf(stderr, "Warning: Failed to save state: %s\n", error_message(err));
-        error_free(err);
-        err = NULL;
+        /* Save state */
+        err = state_save(repo, state);
+        if (err) {
+            fprintf(stderr, "Warning: Failed to save state: %s\n", error_message(err));
+            error_free(err);
+            err = NULL;
+        }
     }
 
     /* Execute post-remove hook */
@@ -889,7 +891,9 @@ static dotta_error_t *delete_profile_branch(
         return NULL;
     }
 
-    /* Check for unpushed changes */
+    /* Check for unpushed changes and detect remote
+     * Keep remote_name for later use when pushing deletion
+     */
     bool has_unpushed = false;
     char *remote_name = NULL;
     err = upstream_detect_remote(repo, &remote_name);
@@ -909,7 +913,6 @@ static dotta_error_t *delete_profile_branch(
             error_free(err);
             err = NULL;
         }
-        free(remote_name);
     } else if (err) {
         /* No remote configured - this is fine */
         error_free(err);
@@ -955,6 +958,7 @@ static dotta_error_t *delete_profile_branch(
     /* Confirm deletion */
     if (!confirm_profile_deletion(opts->profile, file_count, is_auto_detected, opts)) {
         printf("Cancelled\n");
+        free(remote_name);
         state_free(state);
         return NULL;
     }
@@ -973,6 +977,7 @@ static dotta_error_t *delete_profile_branch(
     char *repo_dir = NULL;
     err = config_get_repo_dir(config, &repo_dir);
     if (err) {
+        free(remote_name);
         state_free(state);
         config_free(config);
         return err;
@@ -992,6 +997,7 @@ static dotta_error_t *delete_profile_branch(
             hook_result_free(hook_result);
             hook_context_free(hook_ctx);
             free(repo_dir);
+            free(remote_name);
             state_free(state);
             config_free(config);
             return error_wrap(err, "Pre-remove hook failed");
@@ -1016,16 +1022,48 @@ static dotta_error_t *delete_profile_branch(
         }
     }
 
-    /* Delete branch */
+    /* Delete local branch */
     err = gitops_delete_branch(repo, opts->profile);
     if (err) {
+        free(remote_name);
         state_free(state);
         config_free(config);
         return error_wrap(err, "Failed to delete profile '%s'", opts->profile);
     }
 
-    /* Update state - remove all files from this profile */
-    if (state) {
+    /* Push deletion to remote if remote exists
+     * This is critical for sync to work - other repos need to know the branch was deleted
+     */
+    if (remote_name) {
+        if (opts->verbose) {
+            printf("Pushing profile deletion to remote '%s'...\n", remote_name);
+        }
+
+        /* We don't have a credential context here, but gitops_delete_remote_branch will handle NULL */
+        err = gitops_delete_remote_branch(repo, remote_name, opts->profile, NULL);
+        if (err) {
+            /* Non-fatal: warn but don't fail the whole operation
+             * The local branch is already deleted, so this is just about syncing
+             */
+            fprintf(stderr, "Warning: Failed to push deletion to remote: %s\n", error_message(err));
+            fprintf(stderr, "         The profile was deleted locally, but sync may not work correctly.\n");
+            fprintf(stderr, "         You can manually push the deletion with: git push %s :%s\n",
+                   remote_name, opts->profile);
+            error_free(err);
+            err = NULL;
+        } else if (opts->verbose) {
+            printf("Profile deletion pushed to remote\n");
+        }
+
+        free(remote_name);
+        remote_name = NULL;
+    }
+
+    /* Update state - remove all files from this profile
+     * Only do this when --cleanup is used. Without --cleanup, files remain on
+     * the filesystem and in state, so that 'apply --prune' can remove them later.
+     */
+    if (opts->cleanup && state) {
         size_t state_file_count = 0;
         const state_file_entry_t *state_files = state_get_all_files(state, &state_file_count);
 

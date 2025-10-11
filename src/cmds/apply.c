@@ -681,17 +681,22 @@ dotta_error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) 
 
     /* Save state (only if not dry-run) */
     if (!opts->dry_run) {
-        err = apply_update_and_save_state(repo, state, profiles, manifest, out);
-        if (err) {
-            goto cleanup;
-        }
-
-        /* Prune orphaned files if requested */
+        /* Prune orphaned files BEFORE updating state (if requested)
+         * This is critical: pruning needs to compare the OLD state (what was previously deployed)
+         * against the NEW manifest (what should be deployed now).
+         * If we update state first, we lose track of previously deployed files.
+         */
         if (opts->prune) {
             err = apply_prune_orphaned_files(repo, state, manifest, out, opts->verbose);
             if (err) {
                 goto cleanup;
             }
+        }
+
+        /* Now update state with the new manifest */
+        err = apply_update_and_save_state(repo, state, profiles, manifest, out);
+        if (err) {
+            goto cleanup;
         }
     }
 

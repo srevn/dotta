@@ -819,36 +819,36 @@ static dotta_error_t *pull_branch_ff(
     }
 
     const git_oid *remote_oid = git_reference_target(remote_ref);
+    const git_oid *local_oid = git_reference_target(local_ref);
 
-    /* Check if fast-forward is possible */
-    git_annotated_commit *remote_commit = NULL;
-    git_err = git_annotated_commit_lookup(&remote_commit, repo, remote_oid);
+    /* Check if branches are at the same commit (up-to-date) */
+    if (git_oid_equal(local_oid, remote_oid)) {
+        git_reference_free(local_ref);
+        git_reference_free(remote_ref);
+        /* Already up-to-date, nothing to do */
+        return NULL;
+    }
+
+    /* Check if fast-forward is possible by checking if local is ancestor of remote
+     * This is independent of where HEAD is currently pointing, which is important
+     * because we're always on dotta-worktree, not on the branch we're updating.
+     */
+    git_err = git_graph_descendant_of(repo, remote_oid, local_oid);
     if (git_err < 0) {
         git_reference_free(local_ref);
         git_reference_free(remote_ref);
         return error_from_git(git_err);
     }
 
-    git_merge_analysis_t analysis;
-    git_merge_preference_t preference;
-    const git_annotated_commit *merge_heads[] = { remote_commit };
-
-    git_err = git_merge_analysis(&analysis, &preference, repo, merge_heads, 1);
-    if (git_err < 0) {
-        git_annotated_commit_free(remote_commit);
-        git_reference_free(local_ref);
-        git_reference_free(remote_ref);
-        return error_from_git(git_err);
-    }
-
-    git_annotated_commit_free(remote_commit);
-
-    if ((analysis & GIT_MERGE_ANALYSIS_FASTFORWARD) == 0) {
+    if (git_err == 0) {
+        /* local is NOT an ancestor of remote - cannot fast-forward */
         git_reference_free(local_ref);
         git_reference_free(remote_ref);
         return ERROR(DOTTA_ERR_CONFLICT,
-                    "Cannot fast-forward '%s'", branch_name);
+                    "Cannot fast-forward '%s' - branches have diverged", branch_name);
     }
+
+    /* git_err == 1 means local IS an ancestor of remote - can fast-forward */
 
     /* Perform fast-forward */
     git_reference *updated_ref = NULL;
@@ -917,6 +917,152 @@ static dotta_error_t *sync_update_phase(
 
 
 /**
+ * Helper: Collect existing remote tracking branches
+ */
+static dotta_error_t *collect_remote_tracking_branches(
+    git_repository *repo,
+    const char *remote_name,
+    string_array_t **out_branches
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(remote_name);
+    CHECK_NULL(out_branches);
+
+    string_array_t *branches = string_array_create();
+    if (!branches) {
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to create array");
+    }
+
+    /* Iterate through all references looking for remote tracking branches */
+    git_reference_iterator *iter = NULL;
+    int git_err = git_reference_iterator_new(&iter, repo);
+    if (git_err < 0) {
+        string_array_free(branches);
+        return error_from_git(git_err);
+    }
+
+    char prefix[256];
+    snprintf(prefix, sizeof(prefix), "refs/remotes/%s/", remote_name);
+    size_t prefix_len = strlen(prefix);
+
+    git_reference *ref = NULL;
+    while (git_reference_next(&ref, iter) == 0) {
+        const char *refname = git_reference_name(ref);
+        if (strncmp(refname, prefix, prefix_len) == 0) {
+            /* Extract branch name */
+            const char *branch_name = refname + prefix_len;
+            string_array_push(branches, branch_name);
+        }
+        git_reference_free(ref);
+    }
+
+    git_reference_iterator_free(iter);
+
+    *out_branches = branches;
+    return NULL;
+}
+
+/**
+ * Helper: Delete local branches whose remote tracking branches were pruned
+ *
+ * Compares the list of remote tracking branches before and after fetch.
+ * If a branch existed before but not after (was pruned), delete the local branch.
+ */
+static dotta_error_t *delete_orphaned_local_branches(
+    git_repository *repo,
+    const char *remote_name,
+    string_array_t *before_branches,
+    profile_list_t *profiles,
+    output_ctx_t *out,
+    bool verbose
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(remote_name);
+    CHECK_NULL(before_branches);
+    CHECK_NULL(profiles);
+    CHECK_NULL(out);
+
+    /* Get current remote tracking branches */
+    string_array_t *after_branches = NULL;
+    dotta_error_t *err = collect_remote_tracking_branches(repo, remote_name, &after_branches);
+    if (err) {
+        return err;
+    }
+
+    /* Find branches that were pruned (existed before but not after) */
+    string_array_t *to_delete = string_array_create();
+    if (!to_delete) {
+        string_array_free(after_branches);
+        return ERROR(DOTTA_ERR_MEMORY, "Failed to create array");
+    }
+
+    for (size_t i = 0; i < string_array_size(before_branches); i++) {
+        const char *branch_name = string_array_get(before_branches, i);
+
+        /* Skip dotta-worktree */
+        if (strcmp(branch_name, "dotta-worktree") == 0) {
+            continue;
+        }
+
+        /* Check if this branch still exists in after_branches */
+        bool found = false;
+        for (size_t j = 0; j < string_array_size(after_branches); j++) {
+            if (strcmp(branch_name, string_array_get(after_branches, j)) == 0) {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            /* Branch was pruned - mark local branch for deletion */
+            string_array_push(to_delete, branch_name);
+        }
+    }
+
+    string_array_free(after_branches);
+
+    /* Delete orphaned branches */
+    size_t deleted_count = 0;
+    for (size_t i = 0; i < string_array_size(to_delete); i++) {
+        const char *branch_name = string_array_get(to_delete, i);
+
+        if (verbose) {
+            output_info(out, "  Deleting local branch '%s' (removed from remote)...", branch_name);
+        }
+
+        /* Delete the local branch */
+        char local_refname[256];
+        snprintf(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
+
+        git_reference *local_ref = NULL;
+        int git_err = git_reference_lookup(&local_ref, repo, local_refname);
+        if (git_err == 0) {
+            git_err = git_reference_delete(local_ref);
+            git_reference_free(local_ref);
+
+            if (git_err == 0) {
+                deleted_count++;
+                if (verbose) {
+                    output_success(out, "    Deleted local branch '%s'", branch_name);
+                }
+            } else {
+                output_warning(out, "    Failed to delete local branch '%s': %s",
+                              branch_name, git_error_last()->message);
+            }
+        }
+    }
+
+    string_array_free(to_delete);
+
+    if (deleted_count > 0 && verbose) {
+        output_info(out, "Deleted %zu orphaned local branch%s",
+                   deleted_count, deleted_count == 1 ? "" : "es");
+    }
+
+    return NULL;
+}
+
+/**
  * Phase 2: Fetch from remote
  *
  * Supports three sync modes:
@@ -961,6 +1107,7 @@ static dotta_error_t *sync_fetch_phase(
     bool auth_failed = false;
     size_t fetch_success_count = 0;
     profile_list_t *final_profiles = *profiles;
+    dotta_error_t *err = NULL;
 
     /* Fetch based on sync mode */
     if (sync_mode == SYNC_MODE_ALL) {
@@ -975,10 +1122,13 @@ static dotta_error_t *sync_fetch_phase(
             return error_from_git(git_err);
         }
 
-        /* Fetch with default refspec (fetches all branches) */
+        /* Fetch with default refspec (fetches all branches)
+         * Enable pruning to remove stale remote tracking branches
+         */
         git_fetch_options fetch_opts = GIT_FETCH_OPTIONS_INIT;
         fetch_opts.callbacks.credentials = credentials_callback;
         fetch_opts.callbacks.payload = cred_ctx;
+        fetch_opts.prune = GIT_FETCH_PRUNE;  /* Prune stale remote branches */
 
         git_err = git_remote_fetch(fetch_remote, NULL, &fetch_opts, NULL);
         git_remote_free(fetch_remote);
@@ -1030,9 +1180,66 @@ static dotta_error_t *sync_fetch_phase(
             return ERROR(DOTTA_ERR_MEMORY, "Failed to create results");
         }
     } else if (sync_mode == SYNC_MODE_LOCAL) {
-        /* Discover new remote branches not in local list */
+        /* Collect remote tracking branches BEFORE fetch to detect deletions */
+        string_array_t *before_remote_branches = NULL;
+        err = collect_remote_tracking_branches(repo, remote_name, &before_remote_branches);
+        if (err) {
+            return error_wrap(err, "Failed to collect remote tracking branches");
+        }
+
+        /* Fetch all remote refs to populate remote tracking branches
+         * This is necessary so upstream_discover_branches can see what's on the remote
+         */
+        git_remote *fetch_remote = NULL;
+        int git_err = git_remote_lookup(&fetch_remote, repo, remote_name);
+        if (git_err < 0) {
+            string_array_free(before_remote_branches);
+            return error_from_git(git_err);
+        }
+
+        /* Fetch with default refspec (fetches all branches)
+         * Enable pruning to remove stale remote tracking branches
+         */
+        git_fetch_options fetch_opts = GIT_FETCH_OPTIONS_INIT;
+        fetch_opts.callbacks.credentials = credentials_callback;
+        fetch_opts.callbacks.payload = cred_ctx;
+        fetch_opts.prune = GIT_FETCH_PRUNE;  /* Prune stale remote branches */
+
+        git_err = git_remote_fetch(fetch_remote, NULL, &fetch_opts, NULL);
+        git_remote_free(fetch_remote);
+
+        if (git_err < 0) {
+            string_array_free(before_remote_branches);
+            return error_from_git(git_err);
+        }
+
+        /* Delete orphaned local branches (branches whose remote was deleted) */
+        err = delete_orphaned_local_branches(repo, remote_name, before_remote_branches, *profiles, out, verbose);
+        string_array_free(before_remote_branches);
+        if (err) {
+            return error_wrap(err, "Failed to delete orphaned local branches");
+        }
+
+        /* Reload profiles after deletion to get updated list */
+        profile_list_free(final_profiles);
+        err = profile_list_all_local(repo, &final_profiles);
+        if (err) {
+            return error_wrap(err, "Failed to reload local profiles after deletion");
+        }
+        *profiles = final_profiles;
+
+        /* Recreate results tracker with updated profile count */
+        if (*results) {
+            sync_results_free(*results);
+        }
+        *results = sync_results_create(final_profiles->count);
+        if (!*results) {
+            return ERROR(DOTTA_ERR_MEMORY, "Failed to create results");
+        }
+
+        /* Now discover new remote branches not in local list */
         string_array_t *new_branches = NULL;
-        dotta_error_t *err = upstream_discover_branches(repo, remote_name, &new_branches);
+        err = upstream_discover_branches(repo, remote_name, &new_branches);
         if (err) {
             return error_wrap(err, "Failed to discover remote branches");
         }

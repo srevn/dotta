@@ -382,8 +382,21 @@ static int cmd_apply_main(int argc, char **argv) {
             opts.skip_existing = true;
         } else if (strcmp(argv[i], "--no-skip-unchanged") == 0) {
             opts.skip_unchanged = false;  /* Disable smart skip */
-        } else {
+        } else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--profile") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: --profile requires an argument\n");
+                free(profiles);
+                return 1;
+            }
+            profiles[profile_count++] = argv[++i];
+        } else if (argv[i][0] != '-') {
+            /* Positional argument - treat as profile name */
             profiles[profile_count++] = argv[i];
+        } else {
+            fprintf(stderr, "Error: Unknown argument '%s'\n", argv[i]);
+            free(profiles);
+            print_apply_help(argv[0]);
+            return 1;
         }
     }
 
@@ -770,7 +783,9 @@ static int cmd_update_main(int argc, char **argv) {
         .message = NULL,
         .dry_run = false,
         .interactive = false,
-        .verbose = false
+        .verbose = false,
+        .include_new = false,
+        .only_new = false
     };
 
     /* Collect file arguments */
@@ -814,6 +829,10 @@ static int cmd_update_main(int argc, char **argv) {
             opts.interactive = true;
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             opts.verbose = true;
+        } else if (strcmp(argv[i], "--include-new") == 0) {
+            opts.include_new = true;
+        } else if (strcmp(argv[i], "--only-new") == 0) {
+            opts.only_new = true;
         } else {
             files[file_count++] = argv[i];
         }

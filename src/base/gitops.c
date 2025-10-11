@@ -538,6 +538,52 @@ dotta_error_t *gitops_push_branch(
     return NULL;
 }
 
+dotta_error_t *gitops_delete_remote_branch(
+    git_repository *repo,
+    const char *remote_name,
+    const char *branch_name,
+    void *cred_ctx
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(remote_name);
+    CHECK_NULL(branch_name);
+
+    git_remote *remote = NULL;
+    int err = git_remote_lookup(&remote, repo, remote_name);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    /* Delete remote branch using empty refspec: :refs/heads/branch */
+    git_push_options push_opts = GIT_PUSH_OPTIONS_INIT;
+    push_opts.callbacks.credentials = credentials_callback;
+    push_opts.callbacks.payload = cred_ctx;
+
+    char refspec[256];
+    snprintf(refspec, sizeof(refspec), ":refs/heads/%s", branch_name);
+
+    const char *refspecs[] = { refspec };
+    git_strarray refs = { (char **)refspecs, 1 };
+
+    err = git_remote_push(remote, &refs, &push_opts);
+    git_remote_free(remote);
+
+    if (err < 0) {
+        /* Authentication failed - reject credentials if they were provided */
+        if (cred_ctx) {
+            credential_context_reject(cred_ctx);
+        }
+        return error_from_git(err);
+    }
+
+    /* Success - approve credentials if they were provided */
+    if (cred_ctx) {
+        credential_context_approve(cred_ctx);
+    }
+
+    return NULL;
+}
+
 dotta_error_t *gitops_merge_ff_only(git_repository *repo, const char *branch_name) {
     CHECK_NULL(repo);
     CHECK_NULL(branch_name);

@@ -289,6 +289,22 @@ dotta_error_t *gitops_push_branch(
 );
 
 /**
+ * Delete a branch from remote repository
+ *
+ * @param repo Repository (must not be NULL)
+ * @param remote_name Remote name (must not be NULL)
+ * @param branch_name Branch name (must not be NULL)
+ * @param cred_ctx Credential context for approve/reject (may be NULL)
+ * @return Error or NULL on success
+ */
+dotta_error_t *gitops_delete_remote_branch(
+    git_repository *repo,
+    const char *remote_name,
+    const char *branch_name,
+    void *cred_ctx
+);
+
+/**
  * Fast-forward merge (no conflicts possible)
  *
  * @param repo Repository (must not be NULL)

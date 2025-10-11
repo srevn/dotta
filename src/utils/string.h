@@ -10,7 +10,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
-#include "dotta/types.h"
+#include "types.h"
 
 /**
  * Check if string starts with prefix
@@ -64,7 +64,7 @@ char *str_format(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
  * @param out Output pointer for duplicated string
  * @return Error or NULL on success
  */
-dotta_error_t *str_dup(const char *str, char **out);
+error_t *str_dup(const char *str, char **out);
 
 /**
  * RAII cleanup for strings

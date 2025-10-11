@@ -10,19 +10,19 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-#include "dotta/types.h"
+#include "types.h"
 
 /**
  * Error structure (opaque)
  *
  * Contains error code, message, source location, and optional cause.
  */
-struct dotta_error {
-    dotta_error_code_t code;
+struct error {
+    error_code_t code;
     char *message;
     const char *file;
     int line;
-    dotta_error_t *cause;  /* Wrapped error (can be NULL) */
+    error_t *cause;  /* Wrapped error (can be NULL) */
 };
 
 /**
@@ -33,7 +33,7 @@ struct dotta_error {
  * @param ... Format arguments
  * @return Newly allocated error (must be freed with error_free)
  */
-dotta_error_t *error_create(dotta_error_code_t code, const char *fmt, ...);
+error_t *error_create(error_code_t code, const char *fmt, ...);
 
 /**
  * Create error with source location
@@ -45,8 +45,8 @@ dotta_error_t *error_create(dotta_error_code_t code, const char *fmt, ...);
  * @param ... Format arguments
  * @return Newly allocated error
  */
-dotta_error_t *error_create_with_location(
-    dotta_error_code_t code,
+error_t *error_create_with_location(
+    error_code_t code,
     const char *file,
     int line,
     const char *fmt,
@@ -61,7 +61,7 @@ dotta_error_t *error_create_with_location(
  * @param ... Format arguments
  * @return New error wrapping the original
  */
-dotta_error_t *error_wrap(dotta_error_t *cause, const char *fmt, ...);
+error_t *error_wrap(error_t *cause, const char *fmt, ...);
 
 /**
  * Create error from libgit2 error
@@ -69,7 +69,7 @@ dotta_error_t *error_wrap(dotta_error_t *cause, const char *fmt, ...);
  * @param git_error_code Git error code (from libgit2)
  * @return Newly allocated error
  */
-dotta_error_t *error_from_git(int git_error_code);
+error_t *error_from_git(int git_error_code);
 
 /**
  * Create error from errno
@@ -77,14 +77,14 @@ dotta_error_t *error_from_git(int git_error_code);
  * @param errno_val errno value
  * @return Newly allocated error
  */
-dotta_error_t *error_from_errno(int errno_val);
+error_t *error_from_errno(int errno_val);
 
 /**
  * Free error and all chained causes
  *
  * @param err Error to free (can be NULL)
  */
-void error_free(dotta_error_t *err);
+void error_free(error_t *err);
 
 /**
  * Get error message
@@ -92,7 +92,7 @@ void error_free(dotta_error_t *err);
  * @param err Error
  * @return Error message (valid until error is freed)
  */
-const char *error_message(const dotta_error_t *err);
+const char *error_message(const error_t *err);
 
 /**
  * Get error code
@@ -100,7 +100,7 @@ const char *error_message(const dotta_error_t *err);
  * @param err Error
  * @return Error code
  */
-dotta_error_code_t error_code(const dotta_error_t *err);
+error_code_t error_code(const error_t *err);
 
 /**
  * Print error to stream
@@ -110,7 +110,7 @@ dotta_error_code_t error_code(const dotta_error_t *err);
  * @param err Error
  * @param stream Output stream (e.g., stderr)
  */
-void error_print(const dotta_error_t *err, FILE *stream);
+void error_print(const error_t *err, FILE *stream);
 
 /**
  * Print error with full context (includes source location)
@@ -118,7 +118,7 @@ void error_print(const dotta_error_t *err, FILE *stream);
  * @param err Error
  * @param stream Output stream
  */
-void error_print_full(const dotta_error_t *err, FILE *stream);
+void error_print_full(const error_t *err, FILE *stream);
 
 /**
  * Convenience macros
@@ -130,18 +130,18 @@ void error_print_full(const dotta_error_t *err, FILE *stream);
 
 /* Return if expression produces error */
 #define RETURN_IF_ERROR(expr) do { \
-    dotta_error_t *_err = (expr); \
+    error_t *_err = (expr); \
     if (_err != NULL) return _err; \
 } while(0)
 
 /* Check argument condition */
 #define CHECK_ARG(cond, msg) do { \
-    if (!(cond)) return ERROR(DOTTA_ERR_INVALID_ARG, msg); \
+    if (!(cond)) return ERROR(ERR_INVALID_ARG, msg); \
 } while(0)
 
 /* Check argument and provide formatted message */
 #define CHECK_ARG_FMT(cond, fmt, ...) do { \
-    if (!(cond)) return ERROR(DOTTA_ERR_INVALID_ARG, fmt, __VA_ARGS__); \
+    if (!(cond)) return ERROR(ERR_INVALID_ARG, fmt, __VA_ARGS__); \
 } while(0)
 
 /* Check for NULL pointer */

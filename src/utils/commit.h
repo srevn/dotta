@@ -9,7 +9,6 @@
 
 #include <stddef.h>
 
-#include "dotta/types.h"
 #include "utils/config.h"
 
 /**

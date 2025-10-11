@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "dotta/version.h"
+#include "version.h"
 
 void print_usage(const char *prog_name) {
     printf("Dotta - Dotfile Manager\n\n");

@@ -20,7 +20,7 @@
  * Repository operations
  */
 
-dotta_error_t *gitops_open_repository(git_repository **out, const char *path) {
+error_t *gitops_open_repository(git_repository **out, const char *path) {
     CHECK_NULL(out);
     CHECK_NULL(path);
 
@@ -38,7 +38,7 @@ void gitops_close_repository(git_repository *repo) {
     }
 }
 
-dotta_error_t *gitops_discover_repository(char **out, const char *start_path) {
+error_t *gitops_discover_repository(char **out, const char *start_path) {
     CHECK_NULL(out);
     CHECK_NULL(start_path);
 
@@ -53,18 +53,18 @@ dotta_error_t *gitops_discover_repository(char **out, const char *start_path) {
     git_buf_dispose(&buf);
 
     if (!*out) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate repository path");
+        return ERROR(ERR_MEMORY, "Failed to allocate repository path");
     }
 
     return NULL;
 }
 
-dotta_error_t *gitops_discover_and_open(git_repository **out, const char *start_path) {
+error_t *gitops_discover_and_open(git_repository **out, const char *start_path) {
     CHECK_NULL(out);
     CHECK_NULL(start_path);
 
     char *repo_path = NULL;
-    dotta_error_t *err = gitops_discover_repository(&repo_path, start_path);
+    error_t *err = gitops_discover_repository(&repo_path, start_path);
     if (err) {
         return err;
     }
@@ -78,7 +78,7 @@ dotta_error_t *gitops_discover_and_open(git_repository **out, const char *start_
  * Branch/Reference operations
  */
 
-dotta_error_t *gitops_branch_exists(git_repository *repo, const char *name, bool *exists) {
+error_t *gitops_branch_exists(git_repository *repo, const char *name, bool *exists) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
     CHECK_NULL(exists);
@@ -102,7 +102,7 @@ dotta_error_t *gitops_branch_exists(git_repository *repo, const char *name, bool
     return NULL;
 }
 
-dotta_error_t *gitops_create_orphan_branch(git_repository *repo, const char *name) {
+error_t *gitops_create_orphan_branch(git_repository *repo, const char *name) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
 
@@ -165,7 +165,7 @@ dotta_error_t *gitops_create_orphan_branch(git_repository *repo, const char *nam
     return NULL;
 }
 
-dotta_error_t *gitops_list_branches(git_repository *repo, string_array_t **out) {
+error_t *gitops_list_branches(git_repository *repo, string_array_t **out) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
 
@@ -178,7 +178,7 @@ dotta_error_t *gitops_list_branches(git_repository *repo, string_array_t **out) 
     string_array_t *branches = string_array_create();
     if (!branches) {
         git_branch_iterator_free(iter);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate branch list");
+        return ERROR(ERR_MEMORY, "Failed to allocate branch list");
     }
 
     git_reference *ref = NULL;
@@ -194,7 +194,7 @@ dotta_error_t *gitops_list_branches(git_repository *repo, string_array_t **out) 
             return error_from_git(err);
         }
 
-        dotta_error_t *derr = string_array_push(branches, name);
+        error_t *derr = string_array_push(branches, name);
         git_reference_free(ref);
         if (derr) {
             git_branch_iterator_free(iter);
@@ -208,7 +208,7 @@ dotta_error_t *gitops_list_branches(git_repository *repo, string_array_t **out) 
     return NULL;
 }
 
-dotta_error_t *gitops_delete_branch(git_repository *repo, const char *name) {
+error_t *gitops_delete_branch(git_repository *repo, const char *name) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
 
@@ -230,7 +230,7 @@ dotta_error_t *gitops_delete_branch(git_repository *repo, const char *name) {
     return NULL;
 }
 
-dotta_error_t *gitops_current_branch(git_repository *repo, char **out) {
+error_t *gitops_current_branch(git_repository *repo, char **out) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
 
@@ -251,7 +251,7 @@ dotta_error_t *gitops_current_branch(git_repository *repo, char **out) {
     git_reference_free(head);
 
     if (!*out) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate branch name");
+        return ERROR(ERR_MEMORY, "Failed to allocate branch name");
     }
 
     return NULL;
@@ -261,7 +261,7 @@ dotta_error_t *gitops_current_branch(git_repository *repo, char **out) {
  * Tree operations
  */
 
-dotta_error_t *gitops_load_tree(git_repository *repo, const char *ref_name, git_tree **out) {
+error_t *gitops_load_tree(git_repository *repo, const char *ref_name, git_tree **out) {
     CHECK_NULL(repo);
     CHECK_NULL(ref_name);
     CHECK_NULL(out);
@@ -299,7 +299,7 @@ dotta_error_t *gitops_load_tree(git_repository *repo, const char *ref_name, git_
     } else {
         /* Unexpected object type */
         git_object_free(obj);
-        return ERROR(DOTTA_ERR_GIT,
+        return ERROR(ERR_GIT,
                     "Reference '%s' points to unexpected object type: %d",
                     ref_name, obj_type);
     }
@@ -307,7 +307,7 @@ dotta_error_t *gitops_load_tree(git_repository *repo, const char *ref_name, git_
     return NULL;
 }
 
-dotta_error_t *gitops_tree_walk(git_tree *tree, git_treewalk_cb callback, void *payload) {
+error_t *gitops_tree_walk(git_tree *tree, git_treewalk_cb callback, void *payload) {
     CHECK_NULL(tree);
     CHECK_NULL(callback);
 
@@ -323,7 +323,7 @@ dotta_error_t *gitops_tree_walk(git_tree *tree, git_treewalk_cb callback, void *
  * Commit operations
  */
 
-dotta_error_t *gitops_create_commit(
+error_t *gitops_create_commit(
     git_repository *repo,
     const char *branch_name,
     git_tree *tree,
@@ -394,7 +394,7 @@ dotta_error_t *gitops_create_commit(
     return NULL;
 }
 
-dotta_error_t *gitops_get_commit(
+error_t *gitops_get_commit(
     git_repository *repo,
     const char *ref_name,
     git_commit **out
@@ -421,7 +421,7 @@ dotta_error_t *gitops_get_commit(
  * Remote operations
  */
 
-dotta_error_t *gitops_clone(
+error_t *gitops_clone(
     git_repository **out,
     const char *url,
     const char *local_path
@@ -444,7 +444,7 @@ dotta_error_t *gitops_clone(
     return NULL;
 }
 
-dotta_error_t *gitops_fetch_branch(
+error_t *gitops_fetch_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
@@ -491,7 +491,7 @@ dotta_error_t *gitops_fetch_branch(
     return NULL;
 }
 
-dotta_error_t *gitops_push_branch(
+error_t *gitops_push_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
@@ -538,7 +538,7 @@ dotta_error_t *gitops_push_branch(
     return NULL;
 }
 
-dotta_error_t *gitops_delete_remote_branch(
+error_t *gitops_delete_remote_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
@@ -584,7 +584,7 @@ dotta_error_t *gitops_delete_remote_branch(
     return NULL;
 }
 
-dotta_error_t *gitops_merge_ff_only(git_repository *repo, const char *branch_name) {
+error_t *gitops_merge_ff_only(git_repository *repo, const char *branch_name) {
     CHECK_NULL(repo);
     CHECK_NULL(branch_name);
 
@@ -620,7 +620,7 @@ dotta_error_t *gitops_merge_ff_only(git_repository *repo, const char *branch_nam
 
     if ((analysis & GIT_MERGE_ANALYSIS_FASTFORWARD) == 0) {
         git_annotated_commit_free(their_head);
-        return ERROR(DOTTA_ERR_GIT, "Fast-forward merge not possible for '%s'", branch_name);
+        return ERROR(ERR_GIT, "Fast-forward merge not possible for '%s'", branch_name);
     }
 
     /* Perform FF merge */
@@ -650,7 +650,7 @@ dotta_error_t *gitops_merge_ff_only(git_repository *repo, const char *branch_nam
  * Reference operations
  */
 
-dotta_error_t *gitops_create_reference(
+error_t *gitops_create_reference(
     git_repository *repo,
     const char *name,
     const git_oid *oid,
@@ -670,7 +670,7 @@ dotta_error_t *gitops_create_reference(
     return NULL;
 }
 
-dotta_error_t *gitops_lookup_reference(
+error_t *gitops_lookup_reference(
     git_repository *repo,
     const char *name,
     git_reference **out
@@ -691,7 +691,7 @@ dotta_error_t *gitops_lookup_reference(
  * Index operations
  */
 
-dotta_error_t *gitops_get_index(git_repository *repo, git_index **out) {
+error_t *gitops_get_index(git_repository *repo, git_index **out) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
 
@@ -703,7 +703,7 @@ dotta_error_t *gitops_get_index(git_repository *repo, git_index **out) {
     return NULL;
 }
 
-dotta_error_t *gitops_index_add(git_index *index, const char *path) {
+error_t *gitops_index_add(git_index *index, const char *path) {
     CHECK_NULL(index);
     CHECK_NULL(path);
 
@@ -715,7 +715,7 @@ dotta_error_t *gitops_index_add(git_index *index, const char *path) {
     return NULL;
 }
 
-dotta_error_t *gitops_index_write_tree(git_index *index, git_oid *out) {
+error_t *gitops_index_write_tree(git_index *index, git_oid *out) {
     CHECK_NULL(index);
     CHECK_NULL(out);
 
@@ -737,7 +737,7 @@ dotta_error_t *gitops_index_write_tree(git_index *index, git_oid *out) {
 /**
  * Find file by exact path in tree
  */
-dotta_error_t *gitops_find_file_in_tree(
+error_t *gitops_find_file_in_tree(
     git_repository *repo,
     git_tree *tree,
     const char *path,
@@ -759,7 +759,7 @@ dotta_error_t *gitops_find_file_in_tree(
     int ret = git_tree_entry_bypath(&temp_entry, tree, normalized_path);
     if (ret < 0) {
         if (ret == GIT_ENOTFOUND) {
-            return ERROR(DOTTA_ERR_NOT_FOUND,
+            return ERROR(ERR_NOT_FOUND,
                         "File '%s' not found", path);
         }
         return error_from_git(ret);
@@ -826,7 +826,7 @@ static int find_by_basename_callback(
 /**
  * Find files by basename in tree
  */
-dotta_error_t *gitops_find_files_by_basename_in_tree(
+error_t *gitops_find_files_by_basename_in_tree(
     git_repository *repo,
     git_tree *tree,
     const char *basename,
@@ -863,7 +863,7 @@ dotta_error_t *gitops_find_files_by_basename_in_tree(
 /**
  * Resolve commit reference within a branch
  */
-dotta_error_t *gitops_resolve_commit_in_branch(
+error_t *gitops_resolve_commit_in_branch(
     git_repository *repo,
     const char *branch_name,
     const char *commit_ref,
@@ -881,7 +881,7 @@ dotta_error_t *gitops_resolve_commit_in_branch(
     size_t ref_name_size = strlen("refs/heads/") + strlen(branch_name) + 1;
     char *ref_name = malloc(ref_name_size);
     if (!ref_name) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate reference name");
+        return ERROR(ERR_MEMORY, "Failed to allocate reference name");
     }
     snprintf(ref_name, ref_name_size, "refs/heads/%s", branch_name);
 
@@ -901,7 +901,7 @@ dotta_error_t *gitops_resolve_commit_in_branch(
         const git_oid *branch_oid = git_reference_target(branch_ref);
         if (!branch_oid) {
             git_reference_free(branch_ref);
-            return ERROR(DOTTA_ERR_GIT, "Branch '%s' has no target", branch_name);
+            return ERROR(ERR_GIT, "Branch '%s' has no target", branch_name);
         }
 
         /* Try to parse as HEAD~N or HEAD^N */
@@ -922,7 +922,7 @@ dotta_error_t *gitops_resolve_commit_in_branch(
             full_ref = malloc(full_ref_size);
             if (!full_ref) {
                 git_reference_free(branch_ref);
-                return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate ref string");
+                return ERROR(ERR_MEMORY, "Failed to allocate ref string");
             }
             snprintf(full_ref, full_ref_size, "%s%s", branch_name, commit_ref + 4);
         }
@@ -938,7 +938,7 @@ dotta_error_t *gitops_resolve_commit_in_branch(
     free(full_ref);
 
     if (ret < 0) {
-        return ERROR(DOTTA_ERR_NOT_FOUND, "Commit '%s' not found in branch '%s'",
+        return ERROR(ERR_NOT_FOUND, "Commit '%s' not found in branch '%s'",
                     commit_ref, branch_name);
     }
 
@@ -946,7 +946,7 @@ dotta_error_t *gitops_resolve_commit_in_branch(
     const git_oid *obj_oid = git_object_id(obj);
     if (!obj_oid) {
         git_object_free(obj);
-        return ERROR(DOTTA_ERR_GIT, "Failed to get object ID");
+        return ERROR(ERR_GIT, "Failed to get object ID");
     }
 
     git_oid_cpy(out_oid, obj_oid);

@@ -13,7 +13,6 @@
 #include "base/error.h"
 #include "base/gitops.h"
 #include "infra/path.h"
-#include "utils/array.h"
 #include "utils/config.h"
 
 /**
@@ -46,11 +45,11 @@ static char *extract_repo_name(const char *url) {
 /**
  * Clone command implementation
  */
-dotta_error_t *cmd_clone(const cmd_clone_options_t *opts) {
+error_t *cmd_clone(const cmd_clone_options_t *opts) {
     CHECK_NULL(opts);
     CHECK_NULL(opts->url);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     git_repository *repo = NULL;
     char *local_path = NULL;
     bool allocated_path = false;
@@ -81,7 +80,7 @@ dotta_error_t *cmd_clone(const cmd_clone_options_t *opts) {
             local_path = extract_repo_name(opts->url);
             if (!local_path) {
                 if (config) config_free(config);
-                return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate repository name");
+                return ERROR(ERR_MEMORY, "Failed to allocate repository name");
             }
             allocated_path = true;
         }

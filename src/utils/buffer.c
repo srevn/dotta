@@ -59,7 +59,7 @@ void buffer_free(buffer_t *buf) {
     free(buf);
 }
 
-dotta_error_t *buffer_reserve(buffer_t *buf, size_t capacity) {
+error_t *buffer_reserve(buffer_t *buf, size_t capacity) {
     CHECK_NULL(buf);
 
     if (capacity <= buf->capacity) {
@@ -68,7 +68,7 @@ dotta_error_t *buffer_reserve(buffer_t *buf, size_t capacity) {
 
     unsigned char *new_data = realloc(buf->data, capacity);
     if (!new_data) {
-        return error_create(DOTTA_ERR_MEMORY, "Failed to grow buffer");
+        return error_create(ERR_MEMORY, "Failed to grow buffer");
     }
 
     buf->data = new_data;
@@ -77,7 +77,7 @@ dotta_error_t *buffer_reserve(buffer_t *buf, size_t capacity) {
     return NULL;
 }
 
-dotta_error_t *buffer_append(buffer_t *buf, const unsigned char *data, size_t size) {
+error_t *buffer_append(buffer_t *buf, const unsigned char *data, size_t size) {
     CHECK_NULL(buf);
     CHECK_NULL(data);
 
@@ -93,7 +93,7 @@ dotta_error_t *buffer_append(buffer_t *buf, const unsigned char *data, size_t si
             new_capacity *= 2;
         }
 
-        dotta_error_t *err = buffer_reserve(buf, new_capacity);
+        error_t *err = buffer_reserve(buf, new_capacity);
         if (err) {
             return err;
         }
@@ -105,7 +105,7 @@ dotta_error_t *buffer_append(buffer_t *buf, const unsigned char *data, size_t si
     return NULL;
 }
 
-dotta_error_t *buffer_append_string(buffer_t *buf, const char *str) {
+error_t *buffer_append_string(buffer_t *buf, const char *str) {
     CHECK_NULL(buf);
     CHECK_NULL(str);
 

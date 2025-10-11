@@ -47,7 +47,7 @@ static const char *get_editor(void) {
  *
  * Creates a new commit with the updated file content.
  */
-static dotta_error_t *update_file_in_branch(
+static error_t *update_file_in_branch(
     git_repository *repo,
     const char *branch_name,
     const char *file_path,
@@ -71,11 +71,11 @@ static dotta_error_t *update_file_in_branch(
     /* Load current tree from branch */
     char *ref_name = str_format("refs/heads/%s", branch_name);
     if (!ref_name) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate ref name");
+        return ERROR(ERR_MEMORY, "Failed to allocate ref name");
     }
 
     git_tree *current_tree = NULL;
-    dotta_error_t *err = gitops_load_tree(repo, ref_name, &current_tree);
+    error_t *err = gitops_load_tree(repo, ref_name, &current_tree);
     if (err) {
         free(ref_name);
         return error_wrap(err, "Failed to load tree from branch '%s'", branch_name);
@@ -135,7 +135,7 @@ static dotta_error_t *update_file_in_branch(
 /**
  * Edit baseline .dottaignore (from dotta-worktree branch)
  */
-static dotta_error_t *edit_baseline_dottaignore(
+static error_t *edit_baseline_dottaignore(
     git_repository *repo,
     const dotta_config_t *config,
     output_ctx_t *out
@@ -145,13 +145,13 @@ static dotta_error_t *edit_baseline_dottaignore(
 
     /* Check if dotta-worktree branch exists */
     bool branch_exists = false;
-    dotta_error_t *err = gitops_branch_exists(repo, "dotta-worktree", &branch_exists);
+    error_t *err = gitops_branch_exists(repo, "dotta-worktree", &branch_exists);
     if (err) {
         return err;
     }
 
     if (!branch_exists) {
-        return ERROR(DOTTA_ERR_INTERNAL,
+        return ERROR(ERR_INTERNAL,
                     "dotta-worktree branch does not exist. Run 'dotta init' first.");
     }
 
@@ -163,13 +163,13 @@ static dotta_error_t *edit_baseline_dottaignore(
 
     char *tmpfile = str_format("%s/dotta-ignore-XXXXXX", tmpdir);
     if (!tmpfile) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate temporary file path");
+        return ERROR(ERR_MEMORY, "Failed to allocate temporary file path");
     }
 
     int fd = mkstemp(tmpfile);
     if (fd < 0) {
         free(tmpfile);
-        return ERROR(DOTTA_ERR_FS, "Failed to create temporary file");
+        return ERROR(ERR_FS, "Failed to create temporary file");
     }
 
     /* Load existing .dottaignore content */
@@ -197,7 +197,7 @@ static dotta_error_t *edit_baseline_dottaignore(
                 close(fd);
                 unlink(tmpfile);
                 free(tmpfile);
-                return ERROR(DOTTA_ERR_FS, "Failed to write to temporary file");
+                return ERROR(ERR_FS, "Failed to write to temporary file");
             }
             git_blob_free(blob);
         }
@@ -209,7 +209,7 @@ static dotta_error_t *edit_baseline_dottaignore(
             close(fd);
             unlink(tmpfile);
             free(tmpfile);
-            return ERROR(DOTTA_ERR_FS, "Failed to write default content");
+            return ERROR(ERR_FS, "Failed to write default content");
         }
     }
 
@@ -222,7 +222,7 @@ static dotta_error_t *edit_baseline_dottaignore(
     if (!cmd) {
         unlink(tmpfile);
         free(tmpfile);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate editor command");
+        return ERROR(ERR_MEMORY, "Failed to allocate editor command");
     }
 
     int status = system(cmd);
@@ -231,7 +231,7 @@ static dotta_error_t *edit_baseline_dottaignore(
     if (status != 0) {
         unlink(tmpfile);
         free(tmpfile);
-        return ERROR(DOTTA_ERR_INTERNAL, "Editor exited with error");
+        return ERROR(ERR_INTERNAL, "Editor exited with error");
     }
 
     /* Read back the content */
@@ -239,7 +239,7 @@ static dotta_error_t *edit_baseline_dottaignore(
     if (!f) {
         unlink(tmpfile);
         free(tmpfile);
-        return ERROR(DOTTA_ERR_FS, "Failed to read temporary file");
+        return ERROR(ERR_FS, "Failed to read temporary file");
     }
 
     /* Get file size */
@@ -252,7 +252,7 @@ static dotta_error_t *edit_baseline_dottaignore(
         fclose(f);
         unlink(tmpfile);
         free(tmpfile);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate content buffer");
+        return ERROR(ERR_MEMORY, "Failed to allocate content buffer");
     }
 
     size_t read_size = fread(new_content, 1, (size_t)fsize, f);
@@ -284,7 +284,7 @@ static dotta_error_t *edit_baseline_dottaignore(
 /**
  * Edit profile-specific .dottaignore
  */
-static dotta_error_t *edit_profile_dottaignore(
+static error_t *edit_profile_dottaignore(
     git_repository *repo,
     const char *profile_name,
     const dotta_config_t *config,
@@ -296,13 +296,13 @@ static dotta_error_t *edit_profile_dottaignore(
 
     /* Check if profile branch exists */
     bool branch_exists = false;
-    dotta_error_t *err = gitops_branch_exists(repo, profile_name, &branch_exists);
+    error_t *err = gitops_branch_exists(repo, profile_name, &branch_exists);
     if (err) {
         return err;
     }
 
     if (!branch_exists) {
-        return ERROR(DOTTA_ERR_INVALID_ARG,
+        return ERROR(ERR_INVALID_ARG,
                     "Profile '%s' does not exist", profile_name);
     }
 
@@ -314,13 +314,13 @@ static dotta_error_t *edit_profile_dottaignore(
 
     char *tmpfile = str_format("%s/dotta-ignore-XXXXXX", tmpdir);
     if (!tmpfile) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate temporary file path");
+        return ERROR(ERR_MEMORY, "Failed to allocate temporary file path");
     }
 
     int fd = mkstemp(tmpfile);
     if (fd < 0) {
         free(tmpfile);
-        return ERROR(DOTTA_ERR_FS, "Failed to create temporary file");
+        return ERROR(ERR_FS, "Failed to create temporary file");
     }
 
     /* Build ref name */
@@ -329,7 +329,7 @@ static dotta_error_t *edit_profile_dottaignore(
         close(fd);
         unlink(tmpfile);
         free(tmpfile);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate ref name");
+        return ERROR(ERR_MEMORY, "Failed to allocate ref name");
     }
 
     /* Load existing .dottaignore content from profile */
@@ -359,7 +359,7 @@ static dotta_error_t *edit_profile_dottaignore(
                 close(fd);
                 unlink(tmpfile);
                 free(tmpfile);
-                return ERROR(DOTTA_ERR_FS, "Failed to write to temporary file");
+                return ERROR(ERR_FS, "Failed to write to temporary file");
             }
             git_blob_free(blob);
         }
@@ -384,7 +384,7 @@ static dotta_error_t *edit_profile_dottaignore(
             close(fd);
             unlink(tmpfile);
             free(tmpfile);
-            return ERROR(DOTTA_ERR_FS, "Failed to write template");
+            return ERROR(ERR_FS, "Failed to write template");
         }
     }
 
@@ -397,7 +397,7 @@ static dotta_error_t *edit_profile_dottaignore(
     if (!cmd) {
         unlink(tmpfile);
         free(tmpfile);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate editor command");
+        return ERROR(ERR_MEMORY, "Failed to allocate editor command");
     }
 
     int status = system(cmd);
@@ -406,7 +406,7 @@ static dotta_error_t *edit_profile_dottaignore(
     if (status != 0) {
         unlink(tmpfile);
         free(tmpfile);
-        return ERROR(DOTTA_ERR_INTERNAL, "Editor exited with error");
+        return ERROR(ERR_INTERNAL, "Editor exited with error");
     }
 
     /* Read back the content */
@@ -414,7 +414,7 @@ static dotta_error_t *edit_profile_dottaignore(
     if (!f) {
         unlink(tmpfile);
         free(tmpfile);
-        return ERROR(DOTTA_ERR_FS, "Failed to read temporary file");
+        return ERROR(ERR_FS, "Failed to read temporary file");
     }
 
     /* Get file size */
@@ -427,7 +427,7 @@ static dotta_error_t *edit_profile_dottaignore(
         fclose(f);
         unlink(tmpfile);
         free(tmpfile);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate content buffer");
+        return ERROR(ERR_MEMORY, "Failed to allocate content buffer");
     }
 
     size_t read_size = fread(new_content, 1, (size_t)fsize, f);
@@ -440,7 +440,7 @@ static dotta_error_t *edit_profile_dottaignore(
     char *commit_msg = str_format("Update .dottaignore for profile '%s'", profile_name);
     if (!commit_msg) {
         free(new_content);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate commit message");
+        return ERROR(ERR_MEMORY, "Failed to allocate commit message");
     }
 
     err = update_file_in_branch(
@@ -466,7 +466,7 @@ static dotta_error_t *edit_profile_dottaignore(
 /**
  * Test if path is ignored across profiles
  */
-static dotta_error_t *test_path_ignore(
+static error_t *test_path_ignore(
     git_repository *repo,
     const dotta_config_t *config,
     const char *test_path,
@@ -490,7 +490,7 @@ static dotta_error_t *test_path_ignore(
     if (specific_profile) {
         /* Load single profile */
         profile_t *profile = NULL;
-        dotta_error_t *err = profile_load(repo, specific_profile, &profile);
+        error_t *err = profile_load(repo, specific_profile, &profile);
         if (err) {
             return error_wrap(err, "Failed to load profile '%s'", specific_profile);
         }
@@ -526,7 +526,7 @@ static dotta_error_t *test_path_ignore(
 
     /* Test against all active profiles */
     profile_list_t *profiles = NULL;
-    dotta_error_t *err = profile_load_with_fallback(
+    error_t *err = profile_load_with_fallback(
         repo,
         NULL, 0,  /* No explicit profiles */
         (const char **)config->profile_order, config->profile_order_count,
@@ -624,13 +624,13 @@ static dotta_error_t *test_path_ignore(
 /**
  * Main command implementation
  */
-dotta_error_t *cmd_ignore(git_repository *repo, const cmd_ignore_options_t *opts) {
+error_t *cmd_ignore(git_repository *repo, const cmd_ignore_options_t *opts) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
     /* Load configuration */
     dotta_config_t *config = NULL;
-    dotta_error_t *err = config_load(NULL, &config);
+    error_t *err = config_load(NULL, &config);
     if (err) {
         /* Non-fatal: continue with defaults */
         config = config_create_default();
@@ -640,7 +640,7 @@ dotta_error_t *cmd_ignore(git_repository *repo, const cmd_ignore_options_t *opts
     output_ctx_t *out = output_create_from_config(config);
     if (!out) {
         config_free(config);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to create output context");
+        return ERROR(ERR_MEMORY, "Failed to create output context");
     }
 
     /* Determine action */

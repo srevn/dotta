@@ -7,7 +7,7 @@
 #ifndef DOTTA_ARRAY_H
 #define DOTTA_ARRAY_H
 
-#include "dotta/types.h"
+#include "types.h"
 
 /**
  * Create a new string array
@@ -38,7 +38,7 @@ void string_array_free(string_array_t *arr);
  * @param str String to push (will be duplicated)
  * @return Error or NULL on success
  */
-dotta_error_t *string_array_push(string_array_t *arr, const char *str);
+error_t *string_array_push(string_array_t *arr, const char *str);
 
 /**
  * Push a string without copying (transfers ownership)
@@ -47,7 +47,7 @@ dotta_error_t *string_array_push(string_array_t *arr, const char *str);
  * @param str String to push (must be heap-allocated, ownership transferred)
  * @return Error or NULL on success
  */
-dotta_error_t *string_array_push_take(string_array_t *arr, char *str);
+error_t *string_array_push_take(string_array_t *arr, char *str);
 
 /**
  * Get string at index
@@ -65,7 +65,7 @@ const char *string_array_get(const string_array_t *arr, size_t index);
  * @param index Index
  * @return Error or NULL on success
  */
-dotta_error_t *string_array_remove(string_array_t *arr, size_t index);
+error_t *string_array_remove(string_array_t *arr, size_t index);
 
 /**
  * Remove string by value (first occurrence)
@@ -74,7 +74,7 @@ dotta_error_t *string_array_remove(string_array_t *arr, size_t index);
  * @param str String to remove
  * @return Error or NULL on success (not an error if not found)
  */
-dotta_error_t *string_array_remove_value(string_array_t *arr, const char *str);
+error_t *string_array_remove_value(string_array_t *arr, const char *str);
 
 /**
  * Check if array contains string

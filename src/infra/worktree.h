@@ -19,7 +19,7 @@
 
 #include <git2.h>
 
-#include "dotta/types.h"
+#include "types.h"
 
 /**
  * Worktree handle (opaque)
@@ -50,7 +50,7 @@ typedef struct worktree_handle worktree_handle_t;
  *
  *   worktree_cleanup(wt);  // ALWAYS call cleanup
  */
-dotta_error_t *worktree_create_temp(
+error_t *worktree_create_temp(
     git_repository *repo,
     worktree_handle_t **out
 );
@@ -62,7 +62,7 @@ dotta_error_t *worktree_create_temp(
  * @param branch_name Branch name (must not be NULL, must exist)
  * @return Error or NULL on success
  */
-dotta_error_t *worktree_checkout_branch(
+error_t *worktree_checkout_branch(
     worktree_handle_t *wt,
     const char *branch_name
 );
@@ -76,7 +76,7 @@ dotta_error_t *worktree_checkout_branch(
  * @param branch_name Branch name (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *worktree_create_orphan(
+error_t *worktree_create_orphan(
     worktree_handle_t *wt,
     const char *branch_name
 );
@@ -121,7 +121,7 @@ git_repository *worktree_get_repo(const worktree_handle_t *wt);
  * @param out Index (must not be NULL, caller must free with git_index_free)
  * @return Error or NULL on success
  */
-dotta_error_t *worktree_get_index(worktree_handle_t *wt, git_index **out);
+error_t *worktree_get_index(worktree_handle_t *wt, git_index **out);
 
 /**
  * RAII cleanup helper

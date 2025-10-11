@@ -10,7 +10,7 @@
 
 #include <git2.h>
 
-#include "dotta/types.h"
+#include "types.h"
 #include "utils/upstream.h"
 
 /* Use upstream module's state tracking */
@@ -54,6 +54,6 @@ typedef struct {
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts);
+error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts);
 
 #endif /* DOTTA_CMD_SYNC_H */

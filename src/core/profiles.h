@@ -22,7 +22,7 @@
 
 #include <git2.h>
 
-#include "dotta/types.h"
+#include "types.h"
 
 /**
  * Profile structure
@@ -72,7 +72,7 @@ typedef struct {
  * @param out Profile list (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *profile_detect_auto(
+error_t *profile_detect_auto(
     git_repository *repo,
     profile_list_t **out
 );
@@ -85,7 +85,7 @@ dotta_error_t *profile_detect_auto(
  * @param out Profile (must not be NULL, caller must free with profile_free)
  * @return Error or NULL on success
  */
-dotta_error_t *profile_load(
+error_t *profile_load(
     git_repository *repo,
     const char *name,
     profile_t **out
@@ -101,7 +101,7 @@ dotta_error_t *profile_load(
  * @param out Profile list (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *profile_list_load(
+error_t *profile_list_load(
     git_repository *repo,
     const char **names,
     size_t count,
@@ -128,7 +128,7 @@ dotta_error_t *profile_list_load(
  * @param out Profile list (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *profile_load_with_fallback(
+error_t *profile_load_with_fallback(
     git_repository *repo,
     const char **names,
     size_t count,
@@ -149,7 +149,7 @@ dotta_error_t *profile_load_with_fallback(
  * @param out Profile list (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *profile_list_all_local(
+error_t *profile_list_all_local(
     git_repository *repo,
     profile_list_t **out
 );
@@ -171,7 +171,7 @@ bool profile_exists(git_repository *repo, const char *name);
  * @param out String array of storage paths (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *profile_list_files(
+error_t *profile_list_files(
     git_repository *repo,
     const profile_t *profile,
     string_array_t **out
@@ -188,7 +188,7 @@ dotta_error_t *profile_list_files(
  * @param out Manifest (must not be NULL, caller must free with manifest_free)
  * @return Error or NULL on success
  */
-dotta_error_t *profile_build_manifest(
+error_t *profile_build_manifest(
     git_repository *repo,
     profile_list_t *profiles,
     manifest_t **out
@@ -223,7 +223,7 @@ void manifest_free(manifest_t *manifest);
  * @param out OS name (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *profile_get_os_name(char **out);
+error_t *profile_get_os_name(char **out);
 
 /**
  * Get hostname for profile detection
@@ -231,6 +231,6 @@ dotta_error_t *profile_get_os_name(char **out);
  * @param out Hostname (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *profile_get_hostname(char **out);
+error_t *profile_get_hostname(char **out);
 
 #endif /* DOTTA_PROFILES_H */

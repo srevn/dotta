@@ -8,8 +8,6 @@
 #ifndef DOTTA_CMD_GIT_H
 #define DOTTA_CMD_GIT_H
 
-#include "dotta/types.h"
-
 /**
  * Git command options
  */

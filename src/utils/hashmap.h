@@ -23,7 +23,7 @@
 
 /* Forward declarations */
 typedef struct hashmap hashmap_t;
-typedef struct dotta_error dotta_error_t;
+typedef struct error error_t;
 
 /**
  * Iterator callback function
@@ -63,7 +63,7 @@ hashmap_t *hashmap_create(size_t initial_capacity);
  * @param value Value pointer (map does not take ownership)
  * @return NULL on success, error otherwise
  */
-dotta_error_t *hashmap_set(hashmap_t *map, const char *key, void *value);
+error_t *hashmap_set(hashmap_t *map, const char *key, void *value);
 
 /**
  * Get value for key
@@ -91,7 +91,7 @@ bool hashmap_has(const hashmap_t *map, const char *key);
  * @param old_value Optional output for removed value (can be NULL)
  * @return NULL on success, error if key not found
  */
-dotta_error_t *hashmap_remove(hashmap_t *map, const char *key, void **old_value);
+error_t *hashmap_remove(hashmap_t *map, const char *key, void **old_value);
 
 /**
  * Iterate over all entries

@@ -10,7 +10,7 @@
 
 #include <git2.h>
 
-#include "dotta/types.h"
+#include "types.h"
 
 /**
  * Update command options
@@ -37,6 +37,6 @@ typedef struct {
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts);
+error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts);
 
 #endif /* DOTTA_CMD_UPDATE_H */

@@ -11,7 +11,7 @@
 #include <stdbool.h>
 
 #include "base/error.h"
-#include "dotta/types.h"
+#include "types.h"
 
 /**
  * Sync mode - determines which branches to fetch/sync
@@ -80,7 +80,7 @@ typedef struct {
  *
  * Returns default config if file doesn't exist (not an error).
  */
-dotta_error_t *config_load(const char *config_path, dotta_config_t **out);
+error_t *config_load(const char *config_path, dotta_config_t **out);
 
 /**
  * Create config with default values
@@ -95,7 +95,7 @@ void config_free(dotta_config_t *config);
 /**
  * Get config file path (checks env vars and defaults)
  */
-dotta_error_t *config_get_path(char **out);
+error_t *config_get_path(char **out);
 
 /**
  * Get boolean value from config string
@@ -105,7 +105,7 @@ bool config_parse_bool(const char *value, bool default_value);
 /**
  * Validate configuration
  */
-dotta_error_t *config_validate(const dotta_config_t *config);
+error_t *config_validate(const dotta_config_t *config);
 
 /**
  * Get repository directory from config or environment
@@ -115,6 +115,6 @@ dotta_error_t *config_validate(const dotta_config_t *config);
  *   2. Config file repo_dir
  *   3. Default: ~/.local/share/dotta/repo
  */
-dotta_error_t *config_get_repo_dir(const dotta_config_t *config, char **out);
+error_t *config_get_repo_dir(const dotta_config_t *config, char **out);
 
 #endif /* DOTTA_CONFIG_H */

@@ -4,6 +4,7 @@
 
 #include "update.h"
 
+#include <dirent.h>
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,17 +16,13 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/compare.h"
-#include "infra/path.h"
 #include "infra/worktree.h"
-#include "utils/array.h"
 #include "utils/commit.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
 #include "utils/ignore.h"
 #include "utils/output.h"
 #include "utils/string.h"
-
-#include <dirent.h>
 
 /**
  * Modified file entry
@@ -68,7 +65,7 @@ static modified_file_list_t *modified_file_list_create(void) {
 /**
  * Add file to list
  */
-static dotta_error_t *modified_file_list_add(
+static error_t *modified_file_list_add(
     modified_file_list_t *list,
     const char *filesystem_path,
     const char *storage_path,
@@ -86,7 +83,7 @@ static dotta_error_t *modified_file_list_add(
         modified_file_t *new_files = realloc(list->files,
                                              new_capacity * sizeof(modified_file_t));
         if (!new_files) {
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to grow file list");
+            return ERROR(ERR_MEMORY, "Failed to grow file list");
         }
         list->files = new_files;
         list->capacity = new_capacity;
@@ -102,7 +99,7 @@ static dotta_error_t *modified_file_list_add(
     if (!entry->filesystem_path || !entry->storage_path) {
         free(entry->filesystem_path);
         free(entry->storage_path);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate paths");
+        return ERROR(ERR_MEMORY, "Failed to allocate paths");
     }
 
     list->count++;
@@ -164,7 +161,7 @@ static new_file_list_t *new_file_list_create(void) {
 /**
  * Add entry to new file list
  */
-static dotta_error_t *new_file_list_add(
+static error_t *new_file_list_add(
     new_file_list_t *list,
     const char *filesystem_path,
     const char *storage_path,
@@ -181,7 +178,7 @@ static dotta_error_t *new_file_list_add(
         new_file_t *new_files = realloc(list->files,
                                         new_capacity * sizeof(new_file_t));
         if (!new_files) {
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to grow new file list");
+            return ERROR(ERR_MEMORY, "Failed to grow new file list");
         }
         list->files = new_files;
         list->capacity = new_capacity;
@@ -196,7 +193,7 @@ static dotta_error_t *new_file_list_add(
     if (!entry->filesystem_path || !entry->storage_path) {
         free(entry->filesystem_path);
         free(entry->storage_path);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate new file entry");
+        return ERROR(ERR_MEMORY, "Failed to allocate new file entry");
     }
 
     list->count++;
@@ -237,7 +234,7 @@ static bool is_file_in_manifest(const manifest_t *manifest, const char *filesyst
 /**
  * Recursively scan directory for new files
  */
-static dotta_error_t *scan_directory_for_new_files(
+static error_t *scan_directory_for_new_files(
     const char *dir_path,
     const char *storage_prefix,
     profile_t *profile,
@@ -268,7 +265,7 @@ static dotta_error_t *scan_directory_for_new_files(
         char *full_path = str_format("%s/%s", dir_path, entry->d_name);
         if (!full_path) {
             closedir(dir);
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate path");
+            return ERROR(ERR_MEMORY, "Failed to allocate path");
         }
 
         /* Check if path exists (handle race conditions) */
@@ -281,7 +278,7 @@ static dotta_error_t *scan_directory_for_new_files(
         bool is_dir = fs_is_directory(full_path);
         if (ignore_ctx) {
             bool ignored = false;
-            dotta_error_t *err = ignore_should_ignore(ignore_ctx, full_path, is_dir, &ignored);
+            error_t *err = ignore_should_ignore(ignore_ctx, full_path, is_dir, &ignored);
             if (!err && ignored) {
                 free(full_path);
                 continue;
@@ -295,10 +292,10 @@ static dotta_error_t *scan_directory_for_new_files(
             if (!sub_storage_prefix) {
                 free(full_path);
                 closedir(dir);
-                return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate storage prefix");
+                return ERROR(ERR_MEMORY, "Failed to allocate storage prefix");
             }
 
-            dotta_error_t *err = scan_directory_for_new_files(
+            error_t *err = scan_directory_for_new_files(
                 full_path,
                 sub_storage_prefix,
                 profile,
@@ -322,10 +319,10 @@ static dotta_error_t *scan_directory_for_new_files(
                 if (!storage_path) {
                     free(full_path);
                     closedir(dir);
-                    return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate storage path");
+                    return ERROR(ERR_MEMORY, "Failed to allocate storage path");
                 }
 
-                dotta_error_t *err = new_file_list_add(new_files, full_path, storage_path, profile);
+                error_t *err = new_file_list_add(new_files, full_path, storage_path, profile);
                 free(storage_path);
                 free(full_path);
 
@@ -368,7 +365,7 @@ static bool file_matches_filter(
 /**
  * Find all modified files
  */
-static dotta_error_t *find_modified_files(
+static error_t *find_modified_files(
     git_repository *repo,
     profile_list_t *profiles,
     const cmd_update_options_t *opts,
@@ -381,12 +378,12 @@ static dotta_error_t *find_modified_files(
 
     modified_file_list_t *modified = modified_file_list_create();
     if (!modified) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to create modified file list");
+        return ERROR(ERR_MEMORY, "Failed to create modified file list");
     }
 
     /* Build manifest */
     manifest_t *manifest = NULL;
-    dotta_error_t *err = profile_build_manifest(repo, profiles, &manifest);
+    error_t *err = profile_build_manifest(repo, profiles, &manifest);
     if (err) {
         modified_file_list_free(modified);
         return error_wrap(err, "Failed to build manifest");
@@ -445,7 +442,7 @@ static dotta_error_t *find_modified_files(
 /**
  * Copy file from filesystem to worktree
  */
-static dotta_error_t *copy_file_to_worktree(
+static error_t *copy_file_to_worktree(
     worktree_handle_t *wt,
     const char *filesystem_path,
     const char *storage_path
@@ -457,12 +454,12 @@ static dotta_error_t *copy_file_to_worktree(
     const char *wt_path = worktree_get_path(wt);
     char *dest_path = str_format("%s/%s", wt_path, storage_path);
     if (!dest_path) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate destination path");
+        return ERROR(ERR_MEMORY, "Failed to allocate destination path");
     }
 
     /* Create parent directory */
     char *parent = NULL;
-    dotta_error_t *err = fs_get_parent_dir(dest_path, &parent);
+    error_t *err = fs_get_parent_dir(dest_path, &parent);
     if (err) {
         free(dest_path);
         return err;
@@ -516,7 +513,7 @@ static dotta_error_t *copy_file_to_worktree(
 /**
  * Update a single profile with its modified files
  */
-static dotta_error_t *update_profile(
+static error_t *update_profile(
     git_repository *repo,
     profile_t *profile,
     modified_file_t *files,
@@ -536,7 +533,7 @@ static dotta_error_t *update_profile(
     }
 
     worktree_handle_t *wt = NULL;
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
 
     /* Create temporary worktree */
     err = worktree_create_temp(repo, &wt);
@@ -620,7 +617,7 @@ static dotta_error_t *update_profile(
     if (!storage_paths) {
         git_tree_free(tree);
         worktree_cleanup(wt);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate storage paths array");
+        return ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
     }
 
     for (size_t i = 0; i < file_count; i++) {
@@ -643,7 +640,7 @@ static dotta_error_t *update_profile(
     if (!message) {
         git_tree_free(tree);
         worktree_cleanup(wt);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to build commit message");
+        return ERROR(ERR_MEMORY, "Failed to build commit message");
     }
 
     /* Create commit */
@@ -678,7 +675,7 @@ static dotta_error_t *update_profile(
  * @param new_files Output list of new files (must not be NULL)
  * @return Error or NULL on success
  */
-static dotta_error_t *update_detect_new_files(
+static error_t *update_detect_new_files(
     git_repository *repo,
     profile_list_t *profiles,
     state_t *state,
@@ -694,13 +691,13 @@ static dotta_error_t *update_detect_new_files(
     CHECK_NULL(out);
     CHECK_NULL(new_files);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     manifest_t *manifest = NULL;
     new_file_list_t *list = NULL;
 
     list = new_file_list_create();
     if (!list) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to create new file list");
+        return ERROR(ERR_MEMORY, "Failed to create new file list");
     }
 
     /* Build manifest for checking */
@@ -852,7 +849,7 @@ typedef enum {
  * @param result Output parameter for confirmation result
  * @return Error or NULL on success (sets result)
  */
-static dotta_error_t *update_confirm_operation(
+static error_t *update_confirm_operation(
     output_ctx_t *out,
     const cmd_update_options_t *opts,
     const modified_file_list_t *modified,
@@ -918,7 +915,7 @@ static dotta_error_t *update_confirm_operation(
 /**
  * Execute profile updates for all profiles
  */
-static dotta_error_t *update_execute_for_all_profiles(
+static error_t *update_execute_for_all_profiles(
     git_repository *repo,
     profile_list_t *profiles,
     modified_file_list_t *modified,
@@ -970,7 +967,7 @@ static dotta_error_t *update_execute_for_all_profiles(
         /* Allocate array for this profile's files (modified + new) */
         profile_files = calloc(total_file_count, sizeof(modified_file_t));
         if (!profile_files) {
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate profile files");
+            return ERROR(ERR_MEMORY, "Failed to allocate profile files");
         }
 
         /* Copy modified file entries */
@@ -1005,7 +1002,7 @@ static dotta_error_t *update_execute_for_all_profiles(
             output_info(out, "Updating profile '%s':", profile->name);
         }
 
-        dotta_error_t *err = update_profile(repo, profile, profile_files, total_file_count, opts, out, config);
+        error_t *err = update_profile(repo, profile, profile_files, total_file_count, opts, out, config);
         free(profile_files);
 
         if (err) {
@@ -1026,12 +1023,12 @@ static dotta_error_t *update_execute_for_all_profiles(
 /**
  * Update command implementation
  */
-dotta_error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
+error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
     /* Declare all resources at top, initialized to NULL */
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     dotta_config_t *config = NULL;
     output_ctx_t *out = NULL;
     profile_list_t *profiles = NULL;
@@ -1050,7 +1047,7 @@ dotta_error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts
         err = NULL;
         config = config_create_default();
         if (!config) {
-            err = ERROR(DOTTA_ERR_MEMORY, "Failed to create default configuration");
+            err = ERROR(ERR_MEMORY, "Failed to create default configuration");
             goto cleanup;
         }
     }
@@ -1058,7 +1055,7 @@ dotta_error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts
     /* Create output context from config */
     out = output_create_from_config(config);
     if (!out) {
-        err = ERROR(DOTTA_ERR_MEMORY, "Failed to create output context");
+        err = ERROR(ERR_MEMORY, "Failed to create output context");
         goto cleanup;
     }
 
@@ -1078,7 +1075,7 @@ dotta_error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts
     }
 
     if (profiles->count == 0) {
-        err = ERROR(DOTTA_ERR_NOT_FOUND, "No profiles found");
+        err = ERROR(ERR_NOT_FOUND, "No profiles found");
         goto cleanup;
     }
 
@@ -1104,7 +1101,7 @@ dotta_error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts
         /* Create empty list when only processing new files */
         modified = modified_file_list_create();
         if (!modified) {
-            err = ERROR(DOTTA_ERR_MEMORY, "Failed to create modified file list");
+            err = ERROR(ERR_MEMORY, "Failed to create modified file list");
             goto cleanup;
         }
     }

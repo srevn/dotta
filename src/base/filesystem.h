@@ -18,7 +18,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#include "dotta/types.h"
+#include "types.h"
 
 /**
  * File operations
@@ -31,7 +31,7 @@
  * @param out Output buffer (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *fs_read_file(const char *path, buffer_t **out);
+error_t *fs_read_file(const char *path, buffer_t **out);
 
 /**
  * Write buffer to file (overwrites if exists)
@@ -42,7 +42,7 @@ dotta_error_t *fs_read_file(const char *path, buffer_t **out);
  * @param content Buffer to write (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *fs_write_file(const char *path, const buffer_t *content);
+error_t *fs_write_file(const char *path, const buffer_t *content);
 
 /**
  * Copy file preserving permissions
@@ -51,7 +51,7 @@ dotta_error_t *fs_write_file(const char *path, const buffer_t *content);
  * @param dst Destination path (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *fs_copy_file(const char *src, const char *dst);
+error_t *fs_copy_file(const char *src, const char *dst);
 
 /**
  * Remove file
@@ -61,7 +61,7 @@ dotta_error_t *fs_copy_file(const char *src, const char *dst);
  * @param path File path (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *fs_remove_file(const char *path);
+error_t *fs_remove_file(const char *path);
 
 /**
  * Check if file exists
@@ -82,7 +82,7 @@ bool fs_file_exists(const char *path);
  * @param parents Create parent directories if true
  * @return Error or NULL on success
  */
-dotta_error_t *fs_create_dir(const char *path, bool parents);
+error_t *fs_create_dir(const char *path, bool parents);
 
 /**
  * Remove directory
@@ -91,7 +91,7 @@ dotta_error_t *fs_create_dir(const char *path, bool parents);
  * @param recursive Remove contents recursively if true
  * @return Error or NULL on success
  */
-dotta_error_t *fs_remove_dir(const char *path, bool recursive);
+error_t *fs_remove_dir(const char *path, bool recursive);
 
 /**
  * Check if path is a directory
@@ -108,7 +108,7 @@ bool fs_is_directory(const char *path);
  * @param out String array of filenames (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *fs_list_dir(const char *path, string_array_t **out);
+error_t *fs_list_dir(const char *path, string_array_t **out);
 
 /**
  * Path operations
@@ -123,7 +123,7 @@ dotta_error_t *fs_list_dir(const char *path, string_array_t **out);
  * @param out Canonical path (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *fs_canonicalize_path(const char *path, char **out);
+error_t *fs_canonicalize_path(const char *path, char **out);
 
 /**
  * Get parent directory path
@@ -132,7 +132,7 @@ dotta_error_t *fs_canonicalize_path(const char *path, char **out);
  * @param out Parent directory (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *fs_get_parent_dir(const char *path, char **out);
+error_t *fs_get_parent_dir(const char *path, char **out);
 
 /**
  * Join path components
@@ -142,7 +142,7 @@ dotta_error_t *fs_get_parent_dir(const char *path, char **out);
  * @param out Joined path (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *fs_path_join(const char *base, const char *component, char **out);
+error_t *fs_path_join(const char *base, const char *component, char **out);
 
 /**
  * Check if path is writable
@@ -163,7 +163,7 @@ bool fs_is_writable(const char *path);
  * @param linkpath Link path (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *fs_create_symlink(const char *target, const char *linkpath);
+error_t *fs_create_symlink(const char *target, const char *linkpath);
 
 /**
  * Read symbolic link target
@@ -172,7 +172,7 @@ dotta_error_t *fs_create_symlink(const char *target, const char *linkpath);
  * @param out Target path (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *fs_read_symlink(const char *linkpath, char **out);
+error_t *fs_read_symlink(const char *linkpath, char **out);
 
 /**
  * Check if path is a symbolic link
@@ -193,7 +193,7 @@ bool fs_is_symlink(const char *path);
  * @param out Mode (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *fs_get_permissions(const char *path, mode_t *out);
+error_t *fs_get_permissions(const char *path, mode_t *out);
 
 /**
  * Set file permissions
@@ -202,7 +202,7 @@ dotta_error_t *fs_get_permissions(const char *path, mode_t *out);
  * @param mode Permission mode
  * @return Error or NULL on success
  */
-dotta_error_t *fs_set_permissions(const char *path, mode_t mode);
+error_t *fs_set_permissions(const char *path, mode_t mode);
 
 /**
  * Check if file is executable

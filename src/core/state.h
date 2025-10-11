@@ -36,7 +36,7 @@
 #include <git2.h>
 #include <time.h>
 
-#include "dotta/types.h"
+#include "types.h"
 
 /**
  * File type in state
@@ -87,7 +87,7 @@ typedef struct state state_t;
  * @param out State structure (must not be NULL, caller must free with state_free)
  * @return Error or NULL on success
  */
-dotta_error_t *state_load(git_repository *repo, state_t **out);
+error_t *state_load(git_repository *repo, state_t **out);
 
 /**
  * Save state to repository
@@ -98,7 +98,7 @@ dotta_error_t *state_load(git_repository *repo, state_t **out);
  * @param state State to save (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *state_save(git_repository *repo, const state_t *state);
+error_t *state_save(git_repository *repo, const state_t *state);
 
 /**
  * Create empty state
@@ -106,7 +106,7 @@ dotta_error_t *state_save(git_repository *repo, const state_t *state);
  * @param out State structure (must not be NULL, caller must free with state_free)
  * @return Error or NULL on success
  */
-dotta_error_t *state_create_empty(state_t **out);
+error_t *state_create_empty(state_t **out);
 
 /**
  * Free state structure
@@ -122,7 +122,7 @@ void state_free(state_t *state);
  * @param entry File entry to add (must not be NULL, copied into state)
  * @return Error or NULL on success
  */
-dotta_error_t *state_add_file(state_t *state, const state_file_entry_t *entry);
+error_t *state_add_file(state_t *state, const state_file_entry_t *entry);
 
 /**
  * Remove file entry from state
@@ -131,7 +131,7 @@ dotta_error_t *state_add_file(state_t *state, const state_file_entry_t *entry);
  * @param filesystem_path File path to remove (must not be NULL)
  * @return Error or NULL on success (not found is an error)
  */
-dotta_error_t *state_remove_file(state_t *state, const char *filesystem_path);
+error_t *state_remove_file(state_t *state, const char *filesystem_path);
 
 /**
  * Check if file exists in state
@@ -150,7 +150,7 @@ bool state_file_exists(const state_t *state, const char *filesystem_path);
  * @param out File entry (must not be NULL, borrowed reference - do not free)
  * @return Error or NULL on success (not found is an error)
  */
-dotta_error_t *state_get_file(
+error_t *state_get_file(
     const state_t *state,
     const char *filesystem_path,
     const state_file_entry_t **out
@@ -173,7 +173,7 @@ const state_file_entry_t *state_get_all_files(const state_t *state, size_t *coun
  * @param count Number of profiles
  * @return Error or NULL on success
  */
-dotta_error_t *state_set_profiles(
+error_t *state_set_profiles(
     state_t *state,
     const char **profiles,
     size_t count
@@ -186,7 +186,7 @@ dotta_error_t *state_set_profiles(
  * @param out Profile names (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *state_get_profiles(const state_t *state, string_array_t **out);
+error_t *state_get_profiles(const state_t *state, string_array_t **out);
 
 /**
  * Get state timestamp
@@ -215,7 +215,7 @@ void state_clear_files(state_t *state);
  * @param out Entry (must not be NULL, caller must free with state_free_entry)
  * @return Error or NULL on success
  */
-dotta_error_t *state_create_entry(
+error_t *state_create_entry(
     const char *storage_path,
     const char *filesystem_path,
     const char *profile,
@@ -242,7 +242,7 @@ void state_free_entry(state_file_entry_t *entry);
  * @param entry Directory entry to add (must not be NULL, copied into state)
  * @return Error or NULL on success
  */
-dotta_error_t *state_add_directory(state_t *state, const state_directory_entry_t *entry);
+error_t *state_add_directory(state_t *state, const state_directory_entry_t *entry);
 
 /**
  * Remove directory entry from state
@@ -251,7 +251,7 @@ dotta_error_t *state_add_directory(state_t *state, const state_directory_entry_t
  * @param filesystem_path Directory path to remove (must not be NULL)
  * @return Error or NULL on success (not found is an error)
  */
-dotta_error_t *state_remove_directory(state_t *state, const char *filesystem_path);
+error_t *state_remove_directory(state_t *state, const char *filesystem_path);
 
 /**
  * Check if directory exists in state
@@ -270,7 +270,7 @@ bool state_directory_exists(const state_t *state, const char *filesystem_path);
  * @param out Directory entry (must not be NULL, borrowed reference - do not free)
  * @return Error or NULL on success (not found is an error)
  */
-dotta_error_t *state_get_directory(
+error_t *state_get_directory(
     const state_t *state,
     const char *filesystem_path,
     const state_directory_entry_t **out
@@ -302,7 +302,7 @@ void state_clear_directories(state_t *state);
  * @param out Entry (must not be NULL, caller must free with state_free_directory_entry)
  * @return Error or NULL on success
  */
-dotta_error_t *state_create_directory_entry(
+error_t *state_create_directory_entry(
     const char *filesystem_path,
     const char *storage_prefix,
     const char *profile,

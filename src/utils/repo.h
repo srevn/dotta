@@ -15,7 +15,7 @@
 
 #include <stdbool.h>
 
-#include "dotta/types.h"
+#include "types.h"
 
 /* Forward declarations */
 typedef struct git_repository git_repository;
@@ -35,7 +35,7 @@ typedef struct git_repository git_repository;
  * @param out Resolved repository path (caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *resolve_repo_path(char **out);
+error_t *resolve_repo_path(char **out);
 
 /**
  * Get default repository path
@@ -45,7 +45,7 @@ dotta_error_t *resolve_repo_path(char **out);
  * @param out Default repository path (caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *get_default_repo_path(char **out);
+error_t *get_default_repo_path(char **out);
 
 /**
  * Check if path is a valid git repository
@@ -64,6 +64,6 @@ bool is_git_repository(const char *path);
  * @param path Full path to file/directory
  * @return Error or NULL on success
  */
-dotta_error_t *ensure_parent_dirs(const char *path);
+error_t *ensure_parent_dirs(const char *path);
 
 #endif /* DOTTA_REPO_H */

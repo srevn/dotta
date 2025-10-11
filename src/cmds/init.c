@@ -21,7 +21,7 @@
 /**
  * Initialize repository
  */
-static dotta_error_t *init_repository(const char *path, git_repository **out) {
+static error_t *init_repository(const char *path, git_repository **out) {
     CHECK_NULL(path);
     CHECK_NULL(out);
 
@@ -54,7 +54,7 @@ static dotta_error_t *init_repository(const char *path, git_repository **out) {
  */
 static bool is_initialized(git_repository *repo) {
     bool exists = false;
-    dotta_error_t *err = gitops_branch_exists(repo, "dotta-worktree", &exists);
+    error_t *err = gitops_branch_exists(repo, "dotta-worktree", &exists);
     if (err) {
         error_free(err);
         return false;
@@ -65,11 +65,11 @@ static bool is_initialized(git_repository *repo) {
 /**
  * Initialize dotta branch structure
  */
-static dotta_error_t *init_branches(git_repository *repo) {
+static error_t *init_branches(git_repository *repo) {
     CHECK_NULL(repo);
 
     /* Create dotta-worktree branch (empty orphan branch) */
-    dotta_error_t *err = gitops_create_orphan_branch(repo, "dotta-worktree");
+    error_t *err = gitops_create_orphan_branch(repo, "dotta-worktree");
     if (err) {
         return error_wrap(err, "Failed to create dotta-worktree branch");
     }
@@ -86,11 +86,11 @@ static dotta_error_t *init_branches(git_repository *repo) {
 /**
  * Initialize state file
  */
-static dotta_error_t *init_state(git_repository *repo) {
+static error_t *init_state(git_repository *repo) {
     CHECK_NULL(repo);
 
     state_t *state = NULL;
-    dotta_error_t *err = state_create_empty(&state);
+    error_t *err = state_create_empty(&state);
     if (err) {
         return err;
     }
@@ -108,19 +108,19 @@ static dotta_error_t *init_state(git_repository *repo) {
 /**
  * Create default .dottaignore file in dotta-worktree branch
  */
-static dotta_error_t *init_dottaignore(git_repository *repo) {
+static error_t *init_dottaignore(git_repository *repo) {
     CHECK_NULL(repo);
 
     /* Get repository path */
     const char *repo_path = git_repository_workdir(repo);
     if (!repo_path) {
-        return ERROR(DOTTA_ERR_INTERNAL, "Repository has no working directory");
+        return ERROR(ERR_INTERNAL, "Repository has no working directory");
     }
 
     /* Build path to .dottaignore */
     char *dottaignore_path = str_format("%s/.dottaignore", repo_path);
     if (!dottaignore_path) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate .dottaignore path");
+        return ERROR(ERR_MEMORY, "Failed to allocate .dottaignore path");
     }
 
     /* Create buffer with default content */
@@ -128,10 +128,10 @@ static dotta_error_t *init_dottaignore(git_repository *repo) {
     buffer_t *content = buffer_create();
     if (!content) {
         free(dottaignore_path);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to create buffer");
+        return ERROR(ERR_MEMORY, "Failed to create buffer");
     }
 
-    dotta_error_t *err = buffer_append(content, (const uint8_t *)default_content, strlen(default_content));
+    error_t *err = buffer_append(content, (const uint8_t *)default_content, strlen(default_content));
     if (err) {
         buffer_free(content);
         free(dottaignore_path);
@@ -207,11 +207,11 @@ static dotta_error_t *init_dottaignore(git_repository *repo) {
 /**
  * Initialize command implementation
  */
-dotta_error_t *cmd_init(const cmd_init_options_t *opts) {
+error_t *cmd_init(const cmd_init_options_t *opts) {
     CHECK_NULL(opts);
 
     git_repository *repo = NULL;
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     char *resolved_path = NULL;
     const char *path = NULL;
 

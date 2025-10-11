@@ -29,7 +29,7 @@
 #include <git2.h>
 #include <stdbool.h>
 
-#include "dotta/types.h"
+#include "types.h"
 #include "utils/config.h"
 
 /**
@@ -74,7 +74,7 @@ typedef struct {
  * @param out Ignore context (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *ignore_context_create(
+error_t *ignore_context_create(
     git_repository *repo,
     const dotta_config_t *config,
     const char *profile_name,
@@ -105,7 +105,7 @@ void ignore_context_free(ignore_context_t *ctx);
  * @param ignored Output boolean (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *ignore_should_ignore(
+error_t *ignore_should_ignore(
     ignore_context_t *ctx,
     const char *path,
     bool is_directory,
@@ -134,7 +134,7 @@ const char *ignore_default_dottaignore_content(void);
  * @param result Output result (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *ignore_test_path(
+error_t *ignore_test_path(
     ignore_context_t *ctx,
     const char *path,
     bool is_directory,

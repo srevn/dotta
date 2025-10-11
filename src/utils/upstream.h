@@ -12,8 +12,7 @@
 #include <stdbool.h>
 #include <time.h>
 
-#include "dotta/types.h"
-#include "utils/array.h"
+#include "types.h"
 
 /**
  * Sync state for a profile relative to remote
@@ -59,7 +58,7 @@ typedef struct {
  * @param out_info Upstream info (caller must free with upstream_info_free)
  * @return Error or NULL on success
  */
-dotta_error_t *upstream_analyze_profile(
+error_t *upstream_analyze_profile(
     git_repository *repo,
     const char *remote_name,
     const char *profile_name,
@@ -101,7 +100,7 @@ const char *upstream_state_symbol(upstream_state_t state);
  * @param out_branches String array of branch names (caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *upstream_discover_branches(
+error_t *upstream_discover_branches(
     git_repository *repo,
     const char *remote_name,
     string_array_t **out_branches
@@ -118,7 +117,7 @@ dotta_error_t *upstream_discover_branches(
  * @param branch_name Branch name
  * @return Error or NULL on success
  */
-dotta_error_t *upstream_create_tracking_branch(
+error_t *upstream_create_tracking_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name
@@ -137,6 +136,6 @@ dotta_error_t *upstream_create_tracking_branch(
  * @param out_remote Remote name (caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *upstream_detect_remote(git_repository *repo, char **out_remote);
+error_t *upstream_detect_remote(git_repository *repo, char **out_remote);
 
 #endif /* DOTTA_UTILS_UPSTREAM_H */

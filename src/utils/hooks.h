@@ -11,7 +11,7 @@
 #include <stdbool.h>
 
 #include "config.h"
-#include "dotta/types.h"
+#include "types.h"
 
 /**
  * Hook types
@@ -61,7 +61,7 @@ bool hook_exists(const dotta_config_t *config, hook_type_t type);
 /**
  * Get hook script path
  */
-dotta_error_t *hook_get_path(
+error_t *hook_get_path(
     const dotta_config_t *config,
     hook_type_t type,
     char **out
@@ -79,7 +79,7 @@ dotta_error_t *hook_get_path(
  * @param result Optional result struct (can be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *hook_execute(
+error_t *hook_execute(
     const dotta_config_t *config,
     hook_type_t type,
     const hook_context_t *context,
@@ -108,7 +108,7 @@ hook_context_t *hook_context_create(
 /**
  * Helper: Add files to hook context
  */
-dotta_error_t *hook_context_add_files(
+error_t *hook_context_add_files(
     hook_context_t *ctx,
     const char **files,
     size_t count

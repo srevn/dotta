@@ -15,7 +15,7 @@
 
 #include <git2.h>
 
-#include "dotta/types.h"
+#include "types.h"
 
 /**
  * Comparison result
@@ -46,7 +46,7 @@ typedef struct {
  * @param result Comparison result (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *compare_blob_to_disk(
+error_t *compare_blob_to_disk(
     git_repository *repo,
     const git_oid *blob_id,
     const char *disk_path,
@@ -64,7 +64,7 @@ dotta_error_t *compare_blob_to_disk(
  * @param result Comparison result (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *compare_tree_entry_to_disk(
+error_t *compare_tree_entry_to_disk(
     git_repository *repo,
     const git_tree_entry *entry,
     const char *disk_path,
@@ -80,7 +80,7 @@ dotta_error_t *compare_tree_entry_to_disk(
  * @param out Diff information (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *compare_generate_diff(
+error_t *compare_generate_diff(
     git_repository *repo,
     const git_tree_entry *entry,
     const char *disk_path,

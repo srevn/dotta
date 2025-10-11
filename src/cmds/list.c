@@ -77,7 +77,7 @@ static void format_upstream_state(
 /**
  * List all profiles with color support
  */
-static dotta_error_t *list_profiles(
+static error_t *list_profiles(
     git_repository *repo,
     const cmd_list_options_t *opts,
     output_ctx_t *out
@@ -88,7 +88,7 @@ static dotta_error_t *list_profiles(
 
     /* Get all branches */
     string_array_t *branches = NULL;
-    dotta_error_t *err = gitops_list_branches(repo, &branches);
+    error_t *err = gitops_list_branches(repo, &branches);
     if (err) {
         return error_wrap(err, "Failed to list branches");
     }
@@ -144,7 +144,7 @@ static dotta_error_t *list_profiles(
         char upstream_str[64] = "";
         if (show_remote) {
             upstream_info_t *info = NULL;
-            dotta_error_t *upstream_err = upstream_analyze_profile(repo, remote_name, name, &info);
+            error_t *upstream_err = upstream_analyze_profile(repo, remote_name, name, &info);
             if (!upstream_err && info) {
                 format_upstream_state(out, info, upstream_str, sizeof(upstream_str));
                 upstream_info_free(info);
@@ -202,7 +202,7 @@ static dotta_error_t *list_profiles(
             char refname[256];
             snprintf(refname, sizeof(refname), "refs/heads/%s", name);
             git_commit *last_commit = NULL;
-            dotta_error_t *commit_err = gitops_get_commit(repo, refname, &last_commit);
+            error_t *commit_err = gitops_get_commit(repo, refname, &last_commit);
 
             if (!commit_err && last_commit) {
                 const git_oid *oid = git_commit_id(last_commit);
@@ -288,7 +288,7 @@ static dotta_error_t *list_profiles(
 /**
  * List files in a profile with color support
  */
-static dotta_error_t *list_files(
+static error_t *list_files(
     git_repository *repo,
     const cmd_list_options_t *opts,
     output_ctx_t *out
@@ -300,7 +300,7 @@ static dotta_error_t *list_files(
 
     /* Load profile */
     profile_t *profile = NULL;
-    dotta_error_t *err = profile_load(repo, opts->profile, &profile);
+    error_t *err = profile_load(repo, opts->profile, &profile);
     if (err) {
         return error_wrap(err, "Failed to load profile '%s'", opts->profile);
     }
@@ -456,7 +456,7 @@ static void print_commit_detailed(
 /**
  * List commit log for profile(s)
  */
-static dotta_error_t *list_log(
+static error_t *list_log(
     git_repository *repo,
     const cmd_list_options_t *opts,
     output_ctx_t *out
@@ -465,7 +465,7 @@ static dotta_error_t *list_log(
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     profile_list_t *profiles = NULL;
 
     /* Load configuration */
@@ -619,13 +619,13 @@ static dotta_error_t *list_log(
 /**
  * List command implementation
  */
-dotta_error_t *cmd_list(git_repository *repo, const cmd_list_options_t *opts) {
+error_t *cmd_list(git_repository *repo, const cmd_list_options_t *opts) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
     /* Load configuration */
     dotta_config_t *config = NULL;
-    dotta_error_t *err = config_load(NULL, &config);
+    error_t *err = config_load(NULL, &config);
     if (err) {
         /* Non-fatal: continue with defaults */
         config = config_create_default();
@@ -635,7 +635,7 @@ dotta_error_t *cmd_list(git_repository *repo, const cmd_list_options_t *opts) {
     output_ctx_t *out = output_create_from_config(config);
     if (!out) {
         config_free(config);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to create output context");
+        return ERROR(ERR_MEMORY, "Failed to create output context");
     }
 
     /* CLI flags override config */
@@ -651,7 +651,7 @@ dotta_error_t *cmd_list(git_repository *repo, const cmd_list_options_t *opts) {
     } else if (opts->mode == LIST_LOG) {
         err = list_log(repo, opts, out);
     } else {
-        err = ERROR(DOTTA_ERR_INVALID_ARG, "Invalid list mode");
+        err = ERROR(ERR_INVALID_ARG, "Invalid list mode");
     }
 
     /* Add trailing newline for UX consistency */

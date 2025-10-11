@@ -26,7 +26,7 @@ const char *compare_result_string(compare_result_t result) {
 /**
  * Compare blob content with disk file
  */
-dotta_error_t *compare_blob_to_disk(
+error_t *compare_blob_to_disk(
     git_repository *repo,
     const git_oid *blob_id,
     const char *disk_path,
@@ -56,7 +56,7 @@ dotta_error_t *compare_blob_to_disk(
 
     /* Read disk file */
     buffer_t *disk_content = NULL;
-    dotta_error_t *derr = fs_read_file(disk_path, &disk_content);
+    error_t *derr = fs_read_file(disk_path, &disk_content);
     if (derr) {
         git_blob_free(blob);
         return derr;
@@ -82,7 +82,7 @@ dotta_error_t *compare_blob_to_disk(
 /**
  * Compare tree entry with disk file
  */
-dotta_error_t *compare_tree_entry_to_disk(
+error_t *compare_tree_entry_to_disk(
     git_repository *repo,
     const git_tree_entry *entry,
     const char *disk_path,
@@ -123,7 +123,7 @@ dotta_error_t *compare_tree_entry_to_disk(
         size_t blob_target_len = git_blob_rawsize(blob);
 
         char *disk_target = NULL;
-        dotta_error_t *derr = fs_read_symlink(disk_path, &disk_target);
+        error_t *derr = fs_read_symlink(disk_path, &disk_target);
         if (derr) {
             git_blob_free(blob);
             return derr;
@@ -156,7 +156,7 @@ dotta_error_t *compare_tree_entry_to_disk(
 
         /* Compare content */
         const git_oid *oid = git_tree_entry_id(entry);
-        dotta_error_t *derr = compare_blob_to_disk(repo, oid, disk_path, result);
+        error_t *derr = compare_blob_to_disk(repo, oid, disk_path, result);
         if (derr) {
             return derr;
         }
@@ -175,7 +175,7 @@ dotta_error_t *compare_tree_entry_to_disk(
     }
 
     /* Unsupported entry type */
-    return ERROR(DOTTA_ERR_INTERNAL,
+    return ERROR(ERR_INTERNAL,
                 "Unsupported git object type: %d", entry_type);
 }
 
@@ -233,7 +233,7 @@ static int diff_line_callback(
 /**
  * Generate unified diff for regular file
  */
-static dotta_error_t *generate_text_diff(
+static error_t *generate_text_diff(
     git_repository *repo,
     const git_oid *blob_oid,
     const char *disk_path,
@@ -245,7 +245,7 @@ static dotta_error_t *generate_text_diff(
     CHECK_NULL(disk_path);
     CHECK_NULL(diff_text);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     git_blob *blob = NULL;
     buffer_t *disk_content = NULL;
     diff_callback_data_t callback_data = {0};
@@ -272,7 +272,7 @@ static dotta_error_t *generate_text_diff(
     if (!callback_data.output) {
         if (disk_content) buffer_free(disk_content);
         git_blob_free(blob);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate diff buffer");
+        return ERROR(ERR_MEMORY, "Failed to allocate diff buffer");
     }
 
     /* Configure diff options */
@@ -316,7 +316,7 @@ static dotta_error_t *generate_text_diff(
 
         if (!*diff_text) {
             buffer_free(callback_data.output);
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate diff text");
+            return ERROR(ERR_MEMORY, "Failed to allocate diff text");
         }
     } else {
         *diff_text = NULL;
@@ -329,7 +329,7 @@ static dotta_error_t *generate_text_diff(
 /**
  * Generate diff for symlink
  */
-static dotta_error_t *generate_symlink_diff(
+static error_t *generate_symlink_diff(
     git_repository *repo,
     const git_oid *blob_oid,
     const char *disk_path,
@@ -353,7 +353,7 @@ static dotta_error_t *generate_symlink_diff(
     /* Read disk symlink target */
     char *disk_target = NULL;
     if (fs_exists(disk_path) && fs_is_symlink(disk_path)) {
-        dotta_error_t *err = fs_read_symlink(disk_path, &disk_target);
+        error_t *err = fs_read_symlink(disk_path, &disk_target);
         if (err) {
             git_blob_free(blob);
             return err;
@@ -365,7 +365,7 @@ static dotta_error_t *generate_symlink_diff(
     if (!buf) {
         free(disk_target);
         git_blob_free(blob);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate buffer");
+        return ERROR(ERR_MEMORY, "Failed to allocate buffer");
     }
 
     buffer_append_string(buf, "Symlink target changed:\n");
@@ -389,7 +389,7 @@ static dotta_error_t *generate_symlink_diff(
     git_blob_free(blob);
 
     if (!*diff_text) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate diff text");
+        return ERROR(ERR_MEMORY, "Failed to allocate diff text");
     }
 
     return NULL;
@@ -398,7 +398,7 @@ static dotta_error_t *generate_symlink_diff(
 /**
  * Generate diff between tree entry and disk file
  */
-dotta_error_t *compare_generate_diff(
+error_t *compare_generate_diff(
     git_repository *repo,
     const git_tree_entry *entry,
     const char *disk_path,
@@ -412,17 +412,17 @@ dotta_error_t *compare_generate_diff(
     /* Allocate diff structure */
     file_diff_t *diff = calloc(1, sizeof(file_diff_t));
     if (!diff) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate diff structure");
+        return ERROR(ERR_MEMORY, "Failed to allocate diff structure");
     }
 
     diff->path = strdup(disk_path);
     if (!diff->path) {
         free(diff);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate path");
+        return ERROR(ERR_MEMORY, "Failed to allocate path");
     }
 
     /* Perform comparison */
-    dotta_error_t *err = compare_tree_entry_to_disk(repo, entry, disk_path, &diff->status);
+    error_t *err = compare_tree_entry_to_disk(repo, entry, disk_path, &diff->status);
     if (err) {
         free(diff->path);
         free(diff);

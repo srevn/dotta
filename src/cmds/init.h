@@ -9,7 +9,7 @@
 
 #include <git2.h>
 
-#include "dotta/types.h"
+#include "types.h"
 
 /**
  * Command options
@@ -28,6 +28,6 @@ typedef struct {
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *cmd_init(const cmd_init_options_t *opts);
+error_t *cmd_init(const cmd_init_options_t *opts);
 
 #endif /* DOTTA_CMD_INIT_H */

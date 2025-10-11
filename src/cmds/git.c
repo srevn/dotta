@@ -10,8 +10,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "base/error.h"
-
 /**
  * Execute git command with passthrough
  *

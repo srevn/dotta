@@ -7,7 +7,7 @@
 #ifndef DOTTA_BUFFER_H
 #define DOTTA_BUFFER_H
 
-#include "dotta/types.h"
+#include "types.h"
 
 /**
  * Create a new buffer
@@ -48,7 +48,7 @@ void buffer_free(buffer_t *buf);
  * @param size Size of data in bytes
  * @return Error or NULL on success
  */
-dotta_error_t *buffer_append(buffer_t *buf, const unsigned char *data, size_t size);
+error_t *buffer_append(buffer_t *buf, const unsigned char *data, size_t size);
 
 /**
  * Append string to buffer (including null terminator)
@@ -57,7 +57,7 @@ dotta_error_t *buffer_append(buffer_t *buf, const unsigned char *data, size_t si
  * @param str String to append
  * @return Error or NULL on success
  */
-dotta_error_t *buffer_append_string(buffer_t *buf, const char *str);
+error_t *buffer_append_string(buffer_t *buf, const char *str);
 
 /**
  * Clear buffer (reset size to 0, keep capacity)
@@ -99,7 +99,7 @@ size_t buffer_capacity(const buffer_t *buf);
  * @param capacity Desired capacity
  * @return Error or NULL on success
  */
-dotta_error_t *buffer_reserve(buffer_t *buf, size_t capacity);
+error_t *buffer_reserve(buffer_t *buf, size_t capacity);
 
 /**
  * RAII cleanup attribute helper

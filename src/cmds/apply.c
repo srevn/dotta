@@ -201,7 +201,7 @@ static void print_deploy_results(const output_ctx_t *out, const deploy_result_t 
  * @param verbose Print detailed output
  * @return Error or NULL on success
  */
-static dotta_error_t *apply_prune_orphaned_files(
+static error_t *apply_prune_orphaned_files(
     git_repository *repo,
     state_t *state,
     const manifest_t *manifest,
@@ -213,7 +213,7 @@ static dotta_error_t *apply_prune_orphaned_files(
     CHECK_NULL(manifest);
     CHECK_NULL(out);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     string_array_t *to_remove = NULL;
     hashmap_t *manifest_paths = NULL;
 
@@ -223,7 +223,7 @@ static dotta_error_t *apply_prune_orphaned_files(
 
     to_remove = string_array_create();
     if (!to_remove) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate removal list");
+        return ERROR(ERR_MEMORY, "Failed to allocate removal list");
     }
 
     /*
@@ -233,7 +233,7 @@ static dotta_error_t *apply_prune_orphaned_files(
     manifest_paths = hashmap_create(manifest->count);
     if (!manifest_paths) {
         string_array_free(to_remove);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to create hashmap for pruning");
+        return ERROR(ERR_MEMORY, "Failed to create hashmap for pruning");
     }
 
     /* Populate hashmap with manifest paths */
@@ -272,7 +272,7 @@ static dotta_error_t *apply_prune_orphaned_files(
             const char *path = string_array_get(to_remove, i);
 
             if (fs_exists(path)) {
-                dotta_error_t *removal_err = fs_remove_file(path);
+                error_t *removal_err = fs_remove_file(path);
                 if (removal_err) {
                     if (verbose) {
                         if (output_colors_enabled(out)) {
@@ -287,7 +287,7 @@ static dotta_error_t *apply_prune_orphaned_files(
                     error_free(removal_err);
                 } else {
                     /* File removed successfully - remove from state */
-                    dotta_error_t *state_err = state_remove_file(state, path);
+                    error_t *state_err = state_remove_file(state, path);
                     if (state_err) {
                         if (verbose) {
                             if (output_colors_enabled(out)) {
@@ -364,7 +364,7 @@ cleanup:
  * @param out Output context for messages (must not be NULL)
  * @return Error or NULL on success
  */
-static dotta_error_t *apply_update_and_save_state(
+static error_t *apply_update_and_save_state(
     git_repository *repo,
     state_t *state,
     const profile_list_t *profiles,
@@ -377,13 +377,13 @@ static dotta_error_t *apply_update_and_save_state(
     CHECK_NULL(manifest);
     CHECK_NULL(out);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     const char **profile_names = NULL;
 
     /* Update state with active profiles */
     profile_names = malloc(profiles->count * sizeof(char *));
     if (!profile_names) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate profile names");
+        return ERROR(ERR_MEMORY, "Failed to allocate profile names");
     }
 
     for (size_t i = 0; i < profiles->count; i++) {
@@ -405,7 +405,7 @@ static dotta_error_t *apply_update_and_save_state(
 
         /* Defensive check: ensure entry is valid */
         if (!entry->entry) {
-            return ERROR(DOTTA_ERR_INTERNAL, "Invalid manifest entry at index %zu", i);
+            return ERROR(ERR_INTERNAL, "Invalid manifest entry at index %zu", i);
         }
 
         /* Determine file type */
@@ -420,7 +420,7 @@ static dotta_error_t *apply_update_and_save_state(
         /* Compute hash from git blob OID */
         const git_oid *oid = git_tree_entry_id(entry->entry);
         if (!oid) {
-            return ERROR(DOTTA_ERR_INTERNAL, "Failed to get OID for entry at index %zu", i);
+            return ERROR(ERR_INTERNAL, "Failed to get OID for entry at index %zu", i);
         }
 
         char hash_str[GIT_OID_HEXSZ + 1];
@@ -464,12 +464,12 @@ static dotta_error_t *apply_update_and_save_state(
 /**
  * Apply command implementation
  */
-dotta_error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
+error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
     /* Declare all resources at the top, initialized to NULL */
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     dotta_config_t *config = NULL;
     output_ctx_t *out = NULL;
     char *repo_dir = NULL;
@@ -489,14 +489,14 @@ dotta_error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) 
         err = NULL;
         config = config_create_default();
         if (!config) {
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to create default configuration");
+            return ERROR(ERR_MEMORY, "Failed to create default configuration");
         }
     }
 
     /* Create output context from config */
     out = output_create_from_config(config);
     if (!out) {
-        err = ERROR(DOTTA_ERR_MEMORY, "Failed to create output context");
+        err = ERROR(ERR_MEMORY, "Failed to create output context");
         goto cleanup;
     }
 
@@ -532,7 +532,7 @@ dotta_error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) 
     }
 
     if (profiles->count == 0) {
-        err = ERROR(DOTTA_ERR_NOT_FOUND, "No profiles found");
+        err = ERROR(ERR_NOT_FOUND, "No profiles found");
         goto cleanup;
     }
 
@@ -586,13 +586,13 @@ dotta_error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) 
 
     /* Check for errors (conflicts, permissions) */
     if (preflight->has_errors) {
-        err = ERROR(DOTTA_ERR_CONFLICT, "Pre-flight checks failed");
+        err = ERROR(ERR_CONFLICT, "Pre-flight checks failed");
         goto cleanup;
     }
 
     /* In strict mode, overlaps are treated as errors */
     if (config->strict_mode && preflight->overlaps && string_array_size(preflight->overlaps) > 0) {
-        err = ERROR(DOTTA_ERR_CONFLICT, "Overlapping files detected in strict mode");
+        err = ERROR(ERR_CONFLICT, "Overlapping files detected in strict mode");
         goto cleanup;
     }
 
@@ -703,7 +703,7 @@ dotta_error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) 
     /* Execute post-apply hook */
     if (config && hook_ctx && !opts->dry_run) {
         hook_result_t *hook_result = NULL;
-        dotta_error_t *hook_err = hook_execute(config, HOOK_POST_APPLY, hook_ctx, &hook_result);
+        error_t *hook_err = hook_execute(config, HOOK_POST_APPLY, hook_ctx, &hook_result);
 
         if (hook_err) {
             /* Hook failed - warn but don't abort (already deployed) */

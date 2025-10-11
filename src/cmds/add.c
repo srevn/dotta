@@ -28,15 +28,15 @@
 /**
  * Validate command options
  */
-static dotta_error_t *validate_options(const cmd_add_options_t *opts) {
+static error_t *validate_options(const cmd_add_options_t *opts) {
     CHECK_NULL(opts);
 
     if (!opts->profile || opts->profile[0] == '\0') {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Profile name is required");
+        return ERROR(ERR_INVALID_ARG, "Profile name is required");
     }
 
     if (!opts->files || opts->file_count == 0) {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "At least one file is required");
+        return ERROR(ERR_INVALID_ARG, "At least one file is required");
     }
 
     return NULL;
@@ -60,7 +60,7 @@ static bool is_excluded(
     /* If we have an ignore context, use it */
     if (ignore_ctx) {
         bool ignored = false;
-        dotta_error_t *err = ignore_should_ignore(ignore_ctx, path, is_directory, &ignored);
+        error_t *err = ignore_should_ignore(ignore_ctx, path, is_directory, &ignored);
         if (err) {
             /* On error, log and continue without ignoring */
             if (opts->verbose) {
@@ -83,7 +83,7 @@ static bool is_excluded(
  * All files including hidden files (dotfiles) are included by default.
  * Use ignore patterns to exclude specific files.
  */
-static dotta_error_t *collect_files_from_dir(
+static error_t *collect_files_from_dir(
     const char *dir_path,
     const cmd_add_options_t *opts,
     ignore_context_t *ignore_ctx,
@@ -95,13 +95,13 @@ static dotta_error_t *collect_files_from_dir(
 
     DIR *dir = opendir(dir_path);
     if (!dir) {
-        return ERROR(DOTTA_ERR_FS, "Failed to open directory: %s", dir_path);
+        return ERROR(ERR_FS, "Failed to open directory: %s", dir_path);
     }
 
     string_array_t *files = string_array_create();
     if (!files) {
         closedir(dir);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate file list");
+        return ERROR(ERR_MEMORY, "Failed to allocate file list");
     }
 
     struct dirent *entry;
@@ -116,7 +116,7 @@ static dotta_error_t *collect_files_from_dir(
         if (!full_path) {
             string_array_free(files);
             closedir(dir);
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate path");
+            return ERROR(ERR_MEMORY, "Failed to allocate path");
         }
 
         /* Check if directory or file (needed for ignore check) */
@@ -135,7 +135,7 @@ static dotta_error_t *collect_files_from_dir(
         if (is_dir) {
             /* Recurse into subdirectory */
             string_array_t *subdir_files = NULL;
-            dotta_error_t *err = collect_files_from_dir(full_path, opts, ignore_ctx, &subdir_files);
+            error_t *err = collect_files_from_dir(full_path, opts, ignore_ctx, &subdir_files);
             free(full_path);
 
             if (err) {
@@ -164,7 +164,7 @@ static dotta_error_t *collect_files_from_dir(
 /**
  * Add single file to worktree
  */
-static dotta_error_t *add_file_to_worktree(
+static error_t *add_file_to_worktree(
     worktree_handle_t *wt,
     const char *filesystem_path,
     const cmd_add_options_t *opts
@@ -173,7 +173,7 @@ static dotta_error_t *add_file_to_worktree(
     CHECK_NULL(filesystem_path);
     CHECK_NULL(opts);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
 
     /* Convert to storage path */
     char *storage_path = NULL;
@@ -195,13 +195,13 @@ static dotta_error_t *add_file_to_worktree(
     char *dest_path = str_format("%s/%s", wt_path, storage_path);
     if (!dest_path) {
         free(storage_path);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate destination path");
+        return ERROR(ERR_MEMORY, "Failed to allocate destination path");
     }
 
     /* Handle existing files */
     if (fs_lexists(dest_path)) {
         if (!opts->force) {
-            dotta_error_t *err = ERROR(DOTTA_ERR_EXISTS,
+            error_t *err = ERROR(ERR_EXISTS,
                         "File '%s' already exists in profile '%s'. Use --force to overwrite.",
                         storage_path, opts->profile);
             free(dest_path);
@@ -210,7 +210,7 @@ static dotta_error_t *add_file_to_worktree(
         }
         err = fs_remove_file(dest_path);
         if (err) {
-            dotta_error_t *wrapped_err = error_wrap(err, "Failed to remove existing file '%s' in worktree", dest_path);
+            error_t *wrapped_err = error_wrap(err, "Failed to remove existing file '%s' in worktree", dest_path);
             free(dest_path);
             free(storage_path);
             return wrapped_err;
@@ -297,7 +297,7 @@ static dotta_error_t *add_file_to_worktree(
 /**
  * Create commit in worktree
  */
-static dotta_error_t *create_commit(
+static error_t *create_commit(
     git_repository *repo,
     worktree_handle_t *wt,
     const cmd_add_options_t *opts,
@@ -311,12 +311,12 @@ static dotta_error_t *create_commit(
 
     git_repository *wt_repo = worktree_get_repo(wt);
     if (!wt_repo) {
-        return ERROR(DOTTA_ERR_INTERNAL, "Worktree repository is NULL");
+        return ERROR(ERR_INTERNAL, "Worktree repository is NULL");
     }
 
     /* Get index tree */
     git_index *index = NULL;
-    dotta_error_t *derr = worktree_get_index(wt, &index);
+    error_t *derr = worktree_get_index(wt, &index);
     if (derr) {
         return error_wrap(derr, "Failed to get worktree index");
     }
@@ -337,7 +337,7 @@ static dotta_error_t *create_commit(
     string_array_t *storage_paths = string_array_create();
     if (!storage_paths) {
         git_tree_free(tree);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate storage paths array");
+        return ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
     }
 
     /* Convert filesystem paths to storage paths for commit message */
@@ -372,7 +372,7 @@ static dotta_error_t *create_commit(
 
     if (!message) {
         git_tree_free(tree);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to build commit message");
+        return ERROR(ERR_MEMORY, "Failed to build commit message");
     }
 
     /* Create commit */
@@ -398,10 +398,10 @@ static dotta_error_t *create_commit(
 /**
  * Add command implementation
  */
-dotta_error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
+error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     CHECK_NULL(repo);
 
-    dotta_error_t *err = validate_options(opts);
+    error_t *err = validate_options(opts);
     if (err) {
         return err;
     }
@@ -530,7 +530,7 @@ dotta_error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         ignore_context_free(ignore_ctx);
         state_free(state);
         config_free(config);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate file list");
+        return ERROR(ERR_MEMORY, "Failed to allocate file list");
     }
 
     /* Process each input path */
@@ -561,7 +561,7 @@ dotta_error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             ignore_context_free(ignore_ctx);
             state_free(state);
             config_free(config);
-            return ERROR(DOTTA_ERR_NOT_FOUND, "Path not found: %s", file);
+            return ERROR(ERR_NOT_FOUND, "Path not found: %s", file);
         }
 
         /* Handle directories vs files */
@@ -669,10 +669,10 @@ dotta_error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         config_free(config);
 
         if (opts->exclude_count > 0) {
-            return ERROR(DOTTA_ERR_INVALID_ARG,
+            return ERROR(ERR_INVALID_ARG,
                         "No files to add (all files excluded by patterns)");
         } else {
-            return ERROR(DOTTA_ERR_INVALID_ARG, "No files to add");
+            return ERROR(ERR_INVALID_ARG, "No files to add");
         }
     }
 
@@ -684,7 +684,7 @@ dotta_error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         /* Add to worktree */
         err = add_file_to_worktree(wt, file_path, opts);
         if (err) {
-            dotta_error_t *wrapped_err = error_wrap(err, "Failed to add file '%s'", file_path);
+            error_t *wrapped_err = error_wrap(err, "Failed to add file '%s'", file_path);
             string_array_free(all_files);
             worktree_cleanup(wt);
             hook_context_free(hook_ctx);

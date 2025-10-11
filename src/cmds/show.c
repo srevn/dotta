@@ -15,7 +15,6 @@
 #include "core/profiles.h"
 #include "infra/path.h"
 #include "utils/config.h"
-#include "utils/output.h"
 
 /**
  * Get basename from path
@@ -29,7 +28,7 @@ static const char *get_basename(const char *path) {
  * Convert filesystem-style path to storage path without requiring file to exist
  * This is a simplified version of path_to_storage for querying purposes
  */
-static dotta_error_t *convert_to_storage_path_query(const char *path, char **out) {
+static error_t *convert_to_storage_path_query(const char *path, char **out) {
     CHECK_NULL(path);
     CHECK_NULL(out);
 
@@ -38,7 +37,7 @@ static dotta_error_t *convert_to_storage_path_query(const char *path, char **out
 
     /* Expand ~ if present */
     if (path[0] == '~') {
-        dotta_error_t *err = path_expand_home(path, &expanded_path);
+        error_t *err = path_expand_home(path, &expanded_path);
         if (err) {
             return err;
         }
@@ -48,12 +47,12 @@ static dotta_error_t *convert_to_storage_path_query(const char *path, char **out
     /* Must be absolute path at this point */
     if (working_path[0] != '/') {
         free(expanded_path);
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Path must be absolute or start with ~");
+        return ERROR(ERR_INVALID_ARG, "Path must be absolute or start with ~");
     }
 
     /* Get HOME directory */
     char *home = NULL;
-    dotta_error_t *err = path_get_home(&home);
+    error_t *err = path_get_home(&home);
     if (err) {
         free(expanded_path);
         return err;
@@ -72,14 +71,14 @@ static dotta_error_t *convert_to_storage_path_query(const char *path, char **out
         if (rel[0] == '\0') {
             free(home);
             free(expanded_path);
-            return ERROR(DOTTA_ERR_INVALID_ARG, "Cannot query HOME directory itself");
+            return ERROR(ERR_INVALID_ARG, "Cannot query HOME directory itself");
         }
 
         result = malloc(strlen("home/") + strlen(rel) + 1);
         if (!result) {
             free(home);
             free(expanded_path);
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate storage path");
+            return ERROR(ERR_MEMORY, "Failed to allocate storage path");
         }
         sprintf(result, "home/%s", rel);
     } else {
@@ -88,7 +87,7 @@ static dotta_error_t *convert_to_storage_path_query(const char *path, char **out
         if (!result) {
             free(home);
             free(expanded_path);
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate storage path");
+            return ERROR(ERR_MEMORY, "Failed to allocate storage path");
         }
         sprintf(result, "root%s", working_path);
     }
@@ -102,7 +101,7 @@ static dotta_error_t *convert_to_storage_path_query(const char *path, char **out
 /**
  * Load tree from commit OID
  */
-static dotta_error_t *load_tree_from_commit(
+static error_t *load_tree_from_commit(
     git_repository *repo,
     const git_oid *commit_oid,
     git_tree **out_tree
@@ -134,7 +133,7 @@ static dotta_error_t *load_tree_from_commit(
 /**
  * Print blob content
  */
-static dotta_error_t *print_blob_content(
+static error_t *print_blob_content(
     git_repository *repo,
     const git_oid *blob_oid,
     bool raw
@@ -175,14 +174,14 @@ static dotta_error_t *print_blob_content(
 /**
  * Show file from a specific profile (optionally at specific commit)
  */
-static dotta_error_t *show_from_profile(
+static error_t *show_from_profile(
     git_repository *repo,
     const char *profile_name,
     const char *file_path,
     const char *commit_ref,
     bool raw
 ) {
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     git_tree *tree = NULL;
     git_tree_entry *entry = NULL;
     git_commit *commit = NULL;
@@ -233,7 +232,7 @@ static dotta_error_t *show_from_profile(
         size_t ref_name_size = strlen("refs/heads/") + strlen(profile_name) + 1;
         char *ref_name = malloc(ref_name_size);
         if (!ref_name) {
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate reference name");
+            return ERROR(ERR_MEMORY, "Failed to allocate reference name");
         }
         snprintf(ref_name, ref_name_size, "refs/heads/%s", profile_name);
 
@@ -259,9 +258,9 @@ static dotta_error_t *show_from_profile(
     if (entry_type == GIT_OBJECT_BLOB) {
         err = print_blob_content(repo, entry_oid, raw);
     } else if (entry_type == GIT_OBJECT_TREE) {
-        err = ERROR(DOTTA_ERR_INVALID_ARG, "'%s' is a directory", file_path);
+        err = ERROR(ERR_INVALID_ARG, "'%s' is a directory", file_path);
     } else {
-        err = ERROR(DOTTA_ERR_INTERNAL, "Unexpected object type for '%s'", file_path);
+        err = ERROR(ERR_INTERNAL, "Unexpected object type for '%s'", file_path);
     }
 
     git_tree_entry_free(entry);
@@ -272,12 +271,12 @@ static dotta_error_t *show_from_profile(
 /**
  * Show command implementation
  */
-dotta_error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
+error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
     CHECK_NULL(opts->file_path);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     dotta_config_t *config = NULL;
     profile_list_t *profiles = NULL;
     char *storage_path_converted = NULL;
@@ -290,7 +289,7 @@ dotta_error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
             return err;
         }
         if (!exists) {
-            return ERROR(DOTTA_ERR_NOT_FOUND, "Profile '%s' not found", opts->profile);
+            return ERROR(ERR_NOT_FOUND, "Profile '%s' not found", opts->profile);
         }
 
         /* Try to convert filesystem path to storage path */
@@ -316,7 +315,7 @@ dotta_error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
 
     /* If commit is specified without profile, require profile to be specified */
     if (opts->commit) {
-        return ERROR(DOTTA_ERR_INVALID_ARG,
+        return ERROR(ERR_INVALID_ARG,
                     "When using --commit, you must also specify --profile\n"
                     "Hint: Use 'dotta log' to see which profiles have commits");
     }
@@ -344,7 +343,7 @@ dotta_error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
     if (profiles->count == 0) {
         config_free(config);
         profile_list_free(profiles);
-        return ERROR(DOTTA_ERR_NOT_FOUND, "No profiles found");
+        return ERROR(ERR_NOT_FOUND, "No profiles found");
     }
 
     /* Try to convert filesystem path to storage path for better matching */
@@ -425,7 +424,7 @@ dotta_error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
     free(storage_path_converted);
 
     if (match_count == 0) {
-        return ERROR(DOTTA_ERR_NOT_FOUND, "File '%s' not found in any profile", opts->file_path);
+        return ERROR(ERR_NOT_FOUND, "File '%s' not found in any profile", opts->file_path);
     }
 
     if (match_count == 1) {
@@ -453,5 +452,5 @@ dotta_error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
     fprintf(stderr, "\nPlease specify --profile to disambiguate\n");
     fprintf(stderr, "\n");
 
-    return ERROR(DOTTA_ERR_INVALID_ARG, "Ambiguous file reference");
+    return ERROR(ERR_INVALID_ARG, "Ambiguous file reference");
 }

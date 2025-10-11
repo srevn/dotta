@@ -208,7 +208,7 @@ static void restore_head_to_worktree(git_repository *repo, const char *operation
 /**
  * Helper: Save branch OID for rollback capability
  */
-static dotta_error_t *save_branch_oid(
+static error_t *save_branch_oid(
     git_repository *repo,
     const char *branch_name,
     git_oid *out_oid
@@ -216,7 +216,7 @@ static dotta_error_t *save_branch_oid(
     char refname[256];
     const char *build_err = build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
     if (build_err) {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Invalid branch name '%s': %s", branch_name, build_err);
+        return ERROR(ERR_INVALID_ARG, "Invalid branch name '%s': %s", branch_name, build_err);
     }
 
     git_reference *ref = NULL;
@@ -235,7 +235,7 @@ static dotta_error_t *save_branch_oid(
 /**
  * Helper: Rollback branch to saved OID
  */
-static dotta_error_t *rollback_branch(
+static error_t *rollback_branch(
     git_repository *repo,
     const char *branch_name,
     const git_oid *saved_oid
@@ -243,7 +243,7 @@ static dotta_error_t *rollback_branch(
     char refname[256];
     const char *build_err = build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
     if (build_err) {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Invalid branch name '%s': %s", branch_name, build_err);
+        return ERROR(ERR_INVALID_ARG, "Invalid branch name '%s': %s", branch_name, build_err);
     }
 
     git_reference *ref = NULL;
@@ -267,7 +267,7 @@ static dotta_error_t *rollback_branch(
 /**
  * Helper: Verify branch state after merge/rebase
  */
-static dotta_error_t *verify_divergence_resolved(
+static error_t *verify_divergence_resolved(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
@@ -275,7 +275,7 @@ static dotta_error_t *verify_divergence_resolved(
     size_t *out_behind
 ) {
     upstream_info_t *info = NULL;
-    dotta_error_t *err = upstream_analyze_profile(repo, remote_name, branch_name, &info);
+    error_t *err = upstream_analyze_profile(repo, remote_name, branch_name, &info);
     if (err) {
         return err;
     }
@@ -290,13 +290,13 @@ static dotta_error_t *verify_divergence_resolved(
 
     /* After successful rebase/merge, we should be ahead of remote (or equal) */
     if (state == UPSTREAM_REMOTE_AHEAD) {
-        return ERROR(DOTTA_ERR_INTERNAL,
+        return ERROR(ERR_INTERNAL,
                     "Divergence resolution completed but branch '%s' is still behind remote (%zu commits)",
                     branch_name, behind);
     }
 
     if (state == UPSTREAM_DIVERGED) {
-        return ERROR(DOTTA_ERR_INTERNAL,
+        return ERROR(ERR_INTERNAL,
                     "Divergence resolution completed but branch '%s' is still diverged (ahead: %zu, behind: %zu)",
                     branch_name, ahead, behind);
     }
@@ -311,7 +311,7 @@ static dotta_error_t *verify_divergence_resolved(
  * the rebase operation (required by libgit2). The HEAD is restored to
  * dotta-worktree on all code paths (success or failure).
  */
-static dotta_error_t *resolve_divergence_rebase(
+static error_t *resolve_divergence_rebase(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name
@@ -320,19 +320,19 @@ static dotta_error_t *resolve_divergence_rebase(
     CHECK_NULL(remote_name);
     CHECK_NULL(branch_name);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     char local_refname[256];
     char remote_refname[256];
     const char *build_err;
 
     build_err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
     if (build_err) {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Invalid branch name '%s': %s", branch_name, build_err);
+        return ERROR(ERR_INVALID_ARG, "Invalid branch name '%s': %s", branch_name, build_err);
     }
 
     build_err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
     if (build_err) {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Invalid remote/branch name '%s/%s': %s", remote_name, branch_name, build_err);
+        return ERROR(ERR_INVALID_ARG, "Invalid remote/branch name '%s/%s': %s", remote_name, branch_name, build_err);
     }
 
     /* Save original HEAD for emergency restoration */
@@ -447,7 +447,7 @@ static dotta_error_t *resolve_divergence_rebase(
  * the merge operation (required by libgit2). The HEAD is restored to
  * dotta-worktree on all code paths (success or failure).
  */
-static dotta_error_t *resolve_divergence_merge(
+static error_t *resolve_divergence_merge(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name
@@ -456,19 +456,19 @@ static dotta_error_t *resolve_divergence_merge(
     CHECK_NULL(remote_name);
     CHECK_NULL(branch_name);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     char local_refname[256];
     char remote_refname[256];
     const char *build_err;
 
     build_err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
     if (build_err) {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Invalid branch name '%s': %s", branch_name, build_err);
+        return ERROR(ERR_INVALID_ARG, "Invalid branch name '%s': %s", branch_name, build_err);
     }
 
     build_err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
     if (build_err) {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Invalid remote/branch name '%s/%s': %s", remote_name, branch_name, build_err);
+        return ERROR(ERR_INVALID_ARG, "Invalid remote/branch name '%s/%s': %s", remote_name, branch_name, build_err);
     }
 
     /* Save original HEAD for emergency restoration */
@@ -540,7 +540,7 @@ static dotta_error_t *resolve_divergence_merge(
         git_repository_state_cleanup(repo);
         restore_head_to_worktree(repo, "merge (conflicts)");
         git_reference_free(original_head);
-        return ERROR(DOTTA_ERR_CONFLICT,
+        return ERROR(ERR_CONFLICT,
                     "Merge resulted in conflicts for '%s'. Please resolve manually.",
                     branch_name);
     }
@@ -639,7 +639,7 @@ static dotta_error_t *resolve_divergence_merge(
 /**
  * Resolve divergence with "ours" strategy (force push local)
  */
-static dotta_error_t *resolve_divergence_ours(
+static error_t *resolve_divergence_ours(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
@@ -701,7 +701,7 @@ static dotta_error_t *resolve_divergence_ours(
 /**
  * Resolve divergence with "theirs" strategy (reset to remote)
  */
-static dotta_error_t *resolve_divergence_theirs(
+static error_t *resolve_divergence_theirs(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
@@ -728,7 +728,7 @@ static dotta_error_t *resolve_divergence_theirs(
     char remote_refname[256];
     const char *build_err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
     if (build_err) {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Invalid remote/branch name '%s/%s': %s", remote_name, branch_name, build_err);
+        return ERROR(ERR_INVALID_ARG, "Invalid remote/branch name '%s/%s': %s", remote_name, branch_name, build_err);
     }
 
     git_reference *remote_ref = NULL;
@@ -744,7 +744,7 @@ static dotta_error_t *resolve_divergence_theirs(
     build_err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
     if (build_err) {
         git_reference_free(remote_ref);
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Invalid branch name '%s': %s", branch_name, build_err);
+        return ERROR(ERR_INVALID_ARG, "Invalid branch name '%s': %s", branch_name, build_err);
     }
 
     git_reference *local_ref = NULL;
@@ -772,7 +772,7 @@ static dotta_error_t *resolve_divergence_theirs(
  * Pull branch with fast-forward only
  * Returns true if branch was updated
  */
-static dotta_error_t *pull_branch_ff(
+static error_t *pull_branch_ff(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
@@ -792,12 +792,12 @@ static dotta_error_t *pull_branch_ff(
 
     build_err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
     if (build_err) {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Invalid branch name '%s': %s", branch_name, build_err);
+        return ERROR(ERR_INVALID_ARG, "Invalid branch name '%s': %s", branch_name, build_err);
     }
 
     build_err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
     if (build_err) {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Invalid remote/branch name '%s/%s': %s", remote_name, branch_name, build_err);
+        return ERROR(ERR_INVALID_ARG, "Invalid remote/branch name '%s/%s': %s", remote_name, branch_name, build_err);
     }
 
     git_reference *local_ref = NULL;
@@ -844,7 +844,7 @@ static dotta_error_t *pull_branch_ff(
         /* local is NOT an ancestor of remote - cannot fast-forward */
         git_reference_free(local_ref);
         git_reference_free(remote_ref);
-        return ERROR(DOTTA_ERR_CONFLICT,
+        return ERROR(ERR_CONFLICT,
                     "Cannot fast-forward '%s' - branches have diverged", branch_name);
     }
 
@@ -869,7 +869,7 @@ static dotta_error_t *pull_branch_ff(
 /**
  * Phase 1: Update local profiles with modified files
  */
-static dotta_error_t *sync_update_phase(
+static error_t *sync_update_phase(
     git_repository *repo,
     const cmd_sync_options_t *opts,
     output_ctx_t *out,
@@ -899,7 +899,7 @@ static dotta_error_t *sync_update_phase(
     };
 
     /* Run update */
-    dotta_error_t *err = cmd_update(repo, &update_opts);
+    error_t *err = cmd_update(repo, &update_opts);
     if (err) {
         /* Check if it's just "no modified files" */
         if (strstr(error_message(err), "No modified files")) {
@@ -919,7 +919,7 @@ static dotta_error_t *sync_update_phase(
 /**
  * Helper: Collect existing remote tracking branches
  */
-static dotta_error_t *collect_remote_tracking_branches(
+static error_t *collect_remote_tracking_branches(
     git_repository *repo,
     const char *remote_name,
     string_array_t **out_branches
@@ -930,7 +930,7 @@ static dotta_error_t *collect_remote_tracking_branches(
 
     string_array_t *branches = string_array_create();
     if (!branches) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to create array");
+        return ERROR(ERR_MEMORY, "Failed to create array");
     }
 
     /* Iterate through all references looking for remote tracking branches */
@@ -968,7 +968,7 @@ static dotta_error_t *collect_remote_tracking_branches(
  * Compares the list of remote tracking branches before and after fetch.
  * If a branch existed before but not after (was pruned), delete the local branch.
  */
-static dotta_error_t *delete_orphaned_local_branches(
+static error_t *delete_orphaned_local_branches(
     git_repository *repo,
     const char *remote_name,
     string_array_t *before_branches,
@@ -984,7 +984,7 @@ static dotta_error_t *delete_orphaned_local_branches(
 
     /* Get current remote tracking branches */
     string_array_t *after_branches = NULL;
-    dotta_error_t *err = collect_remote_tracking_branches(repo, remote_name, &after_branches);
+    error_t *err = collect_remote_tracking_branches(repo, remote_name, &after_branches);
     if (err) {
         return err;
     }
@@ -993,7 +993,7 @@ static dotta_error_t *delete_orphaned_local_branches(
     string_array_t *to_delete = string_array_create();
     if (!to_delete) {
         string_array_free(after_branches);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to create array");
+        return ERROR(ERR_MEMORY, "Failed to create array");
     }
 
     for (size_t i = 0; i < string_array_size(before_branches); i++) {
@@ -1070,7 +1070,7 @@ static dotta_error_t *delete_orphaned_local_branches(
  * - SYNC_MODE_AUTO: Fetch only auto-detected profiles
  * - SYNC_MODE_ALL: Fetch all remote branches
  */
-static dotta_error_t *sync_fetch_phase(
+static error_t *sync_fetch_phase(
     git_repository *repo,
     const char *remote_name,
     sync_mode_t sync_mode,
@@ -1091,7 +1091,7 @@ static dotta_error_t *sync_fetch_phase(
     git_remote *remote = NULL;
     int git_err = git_remote_lookup(&remote, repo, remote_name);
     if (git_err == GIT_ENOTFOUND) {
-        return ERROR(DOTTA_ERR_NOT_FOUND,
+        return ERROR(ERR_NOT_FOUND,
                     "No remote '%s' configured\n"
                     "Hint: Run 'dotta remote add %s <url>' to add a remote",
                     remote_name, remote_name);
@@ -1107,7 +1107,7 @@ static dotta_error_t *sync_fetch_phase(
     bool auth_failed = false;
     size_t fetch_success_count = 0;
     profile_list_t *final_profiles = *profiles;
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
 
     /* Fetch based on sync mode */
     if (sync_mode == SYNC_MODE_ALL) {
@@ -1139,7 +1139,7 @@ static dotta_error_t *sync_fetch_phase(
 
         /* Now discover which remote branches don't have local branches */
         string_array_t *remote_branches = NULL;
-        dotta_error_t *err = upstream_discover_branches(repo, remote_name, &remote_branches);
+        error_t *err = upstream_discover_branches(repo, remote_name, &remote_branches);
         if (err) {
             return error_wrap(err, "Failed to discover remote branches");
         }
@@ -1177,7 +1177,7 @@ static dotta_error_t *sync_fetch_phase(
         }
         *results = sync_results_create(final_profiles->count);
         if (!*results) {
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to create results");
+            return ERROR(ERR_MEMORY, "Failed to create results");
         }
     } else if (sync_mode == SYNC_MODE_LOCAL) {
         /* Collect remote tracking branches BEFORE fetch to detect deletions */
@@ -1234,7 +1234,7 @@ static dotta_error_t *sync_fetch_phase(
         }
         *results = sync_results_create(final_profiles->count);
         if (!*results) {
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to create results");
+            return ERROR(ERR_MEMORY, "Failed to create results");
         }
 
         /* Now discover new remote branches not in local list */
@@ -1284,7 +1284,7 @@ static dotta_error_t *sync_fetch_phase(
             *results = sync_results_create(final_profiles->count);
             if (!*results) {
                 string_array_free(new_branches);
-                return ERROR(DOTTA_ERR_MEMORY, "Failed to create results");
+                return ERROR(ERR_MEMORY, "Failed to create results");
             }
         }
 
@@ -1307,7 +1307,7 @@ static dotta_error_t *sync_fetch_phase(
             output_info(out, "  Fetching %s...", branch_name);
         }
 
-        dotta_error_t *err = gitops_fetch_branch(repo, remote_name, branch_name, cred_ctx);
+        error_t *err = gitops_fetch_branch(repo, remote_name, branch_name, cred_ctx);
         if (err) {
             /* Check if this is an authentication error */
             const char *err_msg = error_message(err);
@@ -1329,7 +1329,7 @@ static dotta_error_t *sync_fetch_phase(
 
     /* Error if all fetches failed */
     if (fetch_success_count == 0 && final_profiles->count > 0) {
-        return ERROR(DOTTA_ERR_GIT,
+        return ERROR(ERR_GIT,
                     "All fetch operations failed\n"
                     "Hint: Check network connectivity and remote accessibility");
     }
@@ -1341,7 +1341,7 @@ static dotta_error_t *sync_fetch_phase(
 /**
  * Phase 3: Analyze branch states
  */
-static dotta_error_t *sync_analyze_phase(
+static error_t *sync_analyze_phase(
     git_repository *repo,
     const char *remote_name,
     profile_list_t *profiles,
@@ -1360,12 +1360,12 @@ static dotta_error_t *sync_analyze_phase(
 
         result->profile_name = strdup(profile->name);
         if (!result->profile_name) {
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate profile name");
+            return ERROR(ERR_MEMORY, "Failed to allocate profile name");
         }
 
         /* Analyze state */
         upstream_info_t *info = NULL;
-        dotta_error_t *err = upstream_analyze_profile(repo, remote_name, profile->name, &info);
+        error_t *err = upstream_analyze_profile(repo, remote_name, profile->name, &info);
 
         if (err) {
             result->failed = true;
@@ -1409,7 +1409,7 @@ static dotta_error_t *sync_analyze_phase(
 /**
  * Phase 4: Sync branches with remote (push/pull/divergence handling)
  */
-static dotta_error_t *sync_push_phase(
+static error_t *sync_push_phase(
     git_repository *repo,
     const char *remote_name,
     sync_results_t *results,
@@ -1454,7 +1454,7 @@ static dotta_error_t *sync_push_phase(
                            result->ahead, result->ahead == 1 ? "" : "s");
                 }
 
-                dotta_error_t *err = gitops_push_branch(repo, remote_name, result->profile_name, cred_ctx);
+                error_t *err = gitops_push_branch(repo, remote_name, result->profile_name, cred_ctx);
                 if (err) {
                     result->failed = true;
                     result->error_message = strdup(error_message(err));
@@ -1481,7 +1481,7 @@ static dotta_error_t *sync_push_phase(
                     printf("  Creating remote branch %s...\n", result->profile_name);
                 }
 
-                dotta_error_t *err = gitops_push_branch(repo, remote_name, result->profile_name, cred_ctx);
+                error_t *err = gitops_push_branch(repo, remote_name, result->profile_name, cred_ctx);
                 if (err) {
                     result->failed = true;
                     result->error_message = strdup(error_message(err));
@@ -1511,7 +1511,7 @@ static dotta_error_t *sync_push_phase(
                     }
 
                     bool pulled = false;
-                    dotta_error_t *err = pull_branch_ff(repo, remote_name, result->profile_name, &pulled);
+                    error_t *err = pull_branch_ff(repo, remote_name, result->profile_name, &pulled);
                     if (err) {
                         result->failed = true;
                         result->error_message = strdup(error_message(err));
@@ -1546,7 +1546,7 @@ static dotta_error_t *sync_push_phase(
                        result->ahead, result->behind);
                 free(colored);
 
-                dotta_error_t *err = NULL;
+                error_t *err = NULL;
                 switch (diverged_strategy) {
                     case DIVERGE_WARN:
                         printf("     Hint: Use --diverged=<strategy> or set sync.diverged_strategy in config\n");
@@ -1725,11 +1725,11 @@ static dotta_error_t *sync_push_phase(
 /**
  * Sync command implementation
  */
-dotta_error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
+error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     dotta_config_t *config = NULL;
     profile_list_t *profiles = NULL;
     sync_results_t *results = NULL;
@@ -1744,7 +1744,7 @@ dotta_error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
 
     if (strcmp(current_branch, "dotta-worktree") != 0) {
         free(current_branch);
-        return ERROR(DOTTA_ERR_STATE_INVALID,
+        return ERROR(ERR_STATE_INVALID,
                     "Main worktree must be on 'dotta-worktree' branch (currently on '%s')\n"
                     "Hint: Run 'git checkout dotta-worktree' to fix",
                     current_branch);
@@ -1762,7 +1762,7 @@ dotta_error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     output_ctx_t *out = output_create_from_config(config);
     if (!out) {
         config_free(config);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to create output context");
+        return ERROR(ERR_MEMORY, "Failed to create output context");
     }
 
     /* CLI flags override config */
@@ -1800,7 +1800,7 @@ dotta_error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         profile_list_free(profiles);
         config_free(config);
         output_free(out);
-        return ERROR(DOTTA_ERR_NOT_FOUND, "No profiles found");
+        return ERROR(ERR_NOT_FOUND, "No profiles found");
     }
 
     /* Create results tracker */
@@ -1809,7 +1809,7 @@ dotta_error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         profile_list_free(profiles);
         config_free(config);
         output_free(out);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to create results");
+        return ERROR(ERR_MEMORY, "Failed to create results");
     }
 
     /* Phase 1: Update local profiles */

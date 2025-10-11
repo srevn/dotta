@@ -23,18 +23,18 @@
 /**
  * Get OS name
  */
-dotta_error_t *profile_get_os_name(char **out) {
+error_t *profile_get_os_name(char **out) {
     CHECK_NULL(out);
 
     struct utsname uts;
     if (uname(&uts) < 0) {
-        return ERROR(DOTTA_ERR_FS, "Failed to get OS name: %s", strerror(errno));
+        return ERROR(ERR_FS, "Failed to get OS name: %s", strerror(errno));
     }
 
     /* Convert to lowercase */
     char *os_name = strdup(uts.sysname);
     if (!os_name) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate OS name");
+        return ERROR(ERR_MEMORY, "Failed to allocate OS name");
     }
 
     for (char *p = os_name; *p; p++) {
@@ -48,12 +48,12 @@ dotta_error_t *profile_get_os_name(char **out) {
 /**
  * Get hostname
  */
-dotta_error_t *profile_get_hostname(char **out) {
+error_t *profile_get_hostname(char **out) {
     CHECK_NULL(out);
 
     char hostname[256];
     if (gethostname(hostname, sizeof(hostname)) < 0) {
-        return ERROR(DOTTA_ERR_FS, "Failed to get hostname: %s", strerror(errno));
+        return ERROR(ERR_FS, "Failed to get hostname: %s", strerror(errno));
     }
 
     /* Null-terminate to be safe */
@@ -61,7 +61,7 @@ dotta_error_t *profile_get_hostname(char **out) {
 
     *out = strdup(hostname);
     if (!*out) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate hostname");
+        return ERROR(ERR_MEMORY, "Failed to allocate hostname");
     }
 
     return NULL;
@@ -76,7 +76,7 @@ bool profile_exists(git_repository *repo, const char *name) {
     }
 
     bool exists = false;
-    dotta_error_t *err = gitops_branch_exists(repo, name, &exists);
+    error_t *err = gitops_branch_exists(repo, name, &exists);
     if (err) {
         error_free(err);
         return false;
@@ -88,7 +88,7 @@ bool profile_exists(git_repository *repo, const char *name) {
 /**
  * Load profile
  */
-dotta_error_t *profile_load(
+error_t *profile_load(
     git_repository *repo,
     const char *name,
     profile_t **out
@@ -99,25 +99,25 @@ dotta_error_t *profile_load(
 
     /* Check if profile exists */
     bool exists;
-    dotta_error_t *err = gitops_branch_exists(repo, name, &exists);
+    error_t *err = gitops_branch_exists(repo, name, &exists);
     if (err) {
         return err;
     }
 
     if (!exists) {
-        return ERROR(DOTTA_ERR_NOT_FOUND, "Profile not found: %s", name);
+        return ERROR(ERR_NOT_FOUND, "Profile not found: %s", name);
     }
 
     /* Allocate profile */
     profile_t *profile = calloc(1, sizeof(profile_t));
     if (!profile) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate profile");
+        return ERROR(ERR_MEMORY, "Failed to allocate profile");
     }
 
     profile->name = strdup(name);
     if (!profile->name) {
         free(profile);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate profile name");
+        return ERROR(ERR_MEMORY, "Failed to allocate profile name");
     }
 
     /* Load reference */
@@ -142,7 +142,7 @@ dotta_error_t *profile_load(
 /**
  * Load profile tree (lazy)
  */
-static dotta_error_t *profile_load_tree(git_repository *repo, profile_t *profile) {
+static error_t *profile_load_tree(git_repository *repo, profile_t *profile) {
     CHECK_NULL(repo);
     CHECK_NULL(profile);
 
@@ -159,7 +159,7 @@ static dotta_error_t *profile_load_tree(git_repository *repo, profile_t *profile
 /**
  * Auto-detect profiles
  */
-dotta_error_t *profile_detect_auto(
+error_t *profile_detect_auto(
     git_repository *repo,
     profile_list_t **out
 ) {
@@ -168,18 +168,18 @@ dotta_error_t *profile_detect_auto(
 
     profile_list_t *list = calloc(1, sizeof(profile_list_t));
     if (!list) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate profile list");
+        return ERROR(ERR_MEMORY, "Failed to allocate profile list");
     }
 
     /* Allocate space for up to 3 profiles */
     list->profiles = calloc(3, sizeof(profile_t));
     if (!list->profiles) {
         free(list);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate profiles array");
+        return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
     }
     list->count = 0;
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
 
     /* 1. Try "global" profile */
     if (profile_exists(repo, "global")) {
@@ -249,7 +249,7 @@ dotta_error_t *profile_detect_auto(
 /**
  * Load multiple profiles
  */
-dotta_error_t *profile_list_load(
+error_t *profile_list_load(
     git_repository *repo,
     const char **names,
     size_t count,
@@ -262,19 +262,19 @@ dotta_error_t *profile_list_load(
 
     profile_list_t *list = calloc(1, sizeof(profile_list_t));
     if (!list) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate profile list");
+        return ERROR(ERR_MEMORY, "Failed to allocate profile list");
     }
 
     list->profiles = calloc(count, sizeof(profile_t));
     if (!list->profiles) {
         free(list);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate profiles array");
+        return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
     }
     list->count = 0;
 
     for (size_t i = 0; i < count; i++) {
         profile_t *profile = NULL;
-        dotta_error_t *err = profile_load(repo, names[i], &profile);
+        error_t *err = profile_load(repo, names[i], &profile);
         if (err) {
             if (strict) {
                 /* In strict mode, fail on missing profiles */
@@ -298,7 +298,7 @@ dotta_error_t *profile_list_load(
 /**
  * Load profiles with config and auto-detect fallback
  */
-dotta_error_t *profile_load_with_fallback(
+error_t *profile_load_with_fallback(
     git_repository *repo,
     const char **names,
     size_t count,
@@ -324,7 +324,7 @@ dotta_error_t *profile_load_with_fallback(
         /* No profiles specified and auto-detect disabled - return empty list */
         profile_list_t *list = calloc(1, sizeof(profile_list_t));
         if (!list) {
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate profile list");
+            return ERROR(ERR_MEMORY, "Failed to allocate profile list");
         }
         list->profiles = NULL;
         list->count = 0;
@@ -338,7 +338,7 @@ dotta_error_t *profile_load_with_fallback(
  *
  * Similar to what clone does, but returns profiles instead of just creating branches.
  */
-dotta_error_t *profile_list_all_local(
+error_t *profile_list_all_local(
     git_repository *repo,
     profile_list_t **out
 ) {
@@ -347,7 +347,7 @@ dotta_error_t *profile_list_all_local(
 
     profile_list_t *list = calloc(1, sizeof(profile_list_t));
     if (!list) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate profile list");
+        return ERROR(ERR_MEMORY, "Failed to allocate profile list");
     }
 
     /* Start with capacity for 16 profiles */
@@ -355,7 +355,7 @@ dotta_error_t *profile_list_all_local(
     list->profiles = calloc(capacity, sizeof(profile_t));
     if (!list->profiles) {
         free(list);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate profiles array");
+        return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
     }
     list->count = 0;
 
@@ -395,14 +395,14 @@ dotta_error_t *profile_list_all_local(
                 git_reference_free(ref);
                 git_reference_iterator_free(iter);
                 profile_list_free(list);
-                return ERROR(DOTTA_ERR_MEMORY, "Failed to grow profiles array");
+                return ERROR(ERR_MEMORY, "Failed to grow profiles array");
             }
             list->profiles = new_profiles;
         }
 
         /* Load this profile */
         profile_t *profile = NULL;
-        dotta_error_t *err = profile_load(repo, branch_name, &profile);
+        error_t *err = profile_load(repo, branch_name, &profile);
         if (err) {
             /* Skip profiles we can't load */
             error_free(err);
@@ -427,7 +427,7 @@ dotta_error_t *profile_list_all_local(
  */
 struct walk_data {
     string_array_t *paths;
-    dotta_error_t *error;
+    error_t *error;
 };
 
 /**
@@ -452,7 +452,7 @@ static int tree_walk_callback(const char *root, const git_tree_entry *entry, voi
     }
 
     /* Add to array */
-    dotta_error_t *err = string_array_push(data->paths, full_path);
+    error_t *err = string_array_push(data->paths, full_path);
     if (err) {
         data->error = err;
         return -1;  /* Stop walk */
@@ -464,7 +464,7 @@ static int tree_walk_callback(const char *root, const git_tree_entry *entry, voi
 /**
  * List files in profile
  */
-dotta_error_t *profile_list_files(
+error_t *profile_list_files(
     git_repository *repo,
     const profile_t *profile,
     string_array_t **out
@@ -475,7 +475,7 @@ dotta_error_t *profile_list_files(
 
     /* Load tree if not loaded */
     profile_t *mutable_profile = (profile_t *)profile;
-    dotta_error_t *err = profile_load_tree(repo, mutable_profile);
+    error_t *err = profile_load_tree(repo, mutable_profile);
     if (err) {
         return err;
     }
@@ -484,7 +484,7 @@ dotta_error_t *profile_list_files(
     struct walk_data data = {0};
     data.paths = string_array_create();
     if (!data.paths) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate paths array");
+        return ERROR(ERR_MEMORY, "Failed to allocate paths array");
     }
     data.error = NULL;
 
@@ -504,7 +504,7 @@ dotta_error_t *profile_list_files(
  * Uses a hashmap for O(1) lookups when checking for duplicates.
  * This changes overall complexity from O(n*m) to O(n) where n is total files.
  */
-dotta_error_t *profile_build_manifest(
+error_t *profile_build_manifest(
     git_repository *repo,
     profile_list_t *profiles,
     manifest_t **out
@@ -516,7 +516,7 @@ dotta_error_t *profile_build_manifest(
     /* Allocate manifest */
     manifest_t *manifest = calloc(1, sizeof(manifest_t));
     if (!manifest) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate manifest");
+        return ERROR(ERR_MEMORY, "Failed to allocate manifest");
     }
 
     /* Allocate entries array */
@@ -524,7 +524,7 @@ dotta_error_t *profile_build_manifest(
     manifest->entries = calloc(capacity, sizeof(file_entry_t));
     if (!manifest->entries) {
         free(manifest);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate manifest entries");
+        return ERROR(ERR_MEMORY, "Failed to allocate manifest entries");
     }
     manifest->count = 0;
 
@@ -536,7 +536,7 @@ dotta_error_t *profile_build_manifest(
     if (!path_map) {
         free(manifest->entries);
         free(manifest);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to create hashmap");
+        return ERROR(ERR_MEMORY, "Failed to create hashmap");
     }
 
     /* Process each profile in order */
@@ -544,7 +544,7 @@ dotta_error_t *profile_build_manifest(
         profile_t *profile = &profiles->profiles[i];
 
         /* Load tree */
-        dotta_error_t *err = profile_load_tree(repo, profile);
+        error_t *err = profile_load_tree(repo, profile);
         if (err) {
             hashmap_free(path_map, NULL);
             manifest_free(manifest);
@@ -621,7 +621,7 @@ dotta_error_t *profile_build_manifest(
                         string_array_free(files);
                         hashmap_free(path_map, NULL);
                         manifest_free(manifest);
-                        return ERROR(DOTTA_ERR_MEMORY, "Failed to grow manifest");
+                        return ERROR(ERR_MEMORY, "Failed to grow manifest");
                     }
                     manifest->entries = new_entries;
                 }

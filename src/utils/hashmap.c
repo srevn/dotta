@@ -127,11 +127,11 @@ static void hashmap_entry_free(hashmap_entry_t *entry) {
 /**
  * Resize hash map to new capacity
  */
-static dotta_error_t *hashmap_resize(hashmap_t *map, size_t new_capacity) {
+static error_t *hashmap_resize(hashmap_t *map, size_t new_capacity) {
     /* Allocate new bucket array */
     hashmap_entry_t **new_buckets = calloc(new_capacity, sizeof(hashmap_entry_t *));
     if (!new_buckets) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate buckets for resize");
+        return ERROR(ERR_MEMORY, "Failed to allocate buckets for resize");
     }
 
     /* Save old buckets */
@@ -204,12 +204,12 @@ hashmap_t *hashmap_create(size_t initial_capacity) {
 /**
  * Insert or update key-value pair
  */
-dotta_error_t *hashmap_set(hashmap_t *map, const char *key, void *value) {
+error_t *hashmap_set(hashmap_t *map, const char *key, void *value) {
     if (!map) {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Hash map is NULL");
+        return ERROR(ERR_INVALID_ARG, "Hash map is NULL");
     }
     if (!key) {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Key is NULL");
+        return ERROR(ERR_INVALID_ARG, "Key is NULL");
     }
 
     /* Find bucket */
@@ -225,7 +225,7 @@ dotta_error_t *hashmap_set(hashmap_t *map, const char *key, void *value) {
     /* Create new entry */
     hashmap_entry_t *new_entry = hashmap_entry_create(key, value);
     if (!new_entry) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate hash map entry");
+        return ERROR(ERR_MEMORY, "Failed to allocate hash map entry");
     }
 
     /* Insert at head of bucket chain */
@@ -235,7 +235,7 @@ dotta_error_t *hashmap_set(hashmap_t *map, const char *key, void *value) {
 
     /* Check if resize needed */
     if (map->entry_count > map->resize_threshold) {
-        dotta_error_t *err = hashmap_resize(map, map->bucket_count * 2);
+        error_t *err = hashmap_resize(map, map->bucket_count * 2);
         if (err) {
             /* Resize failed, but insertion succeeded.
              * Continue with current size, but warn about performance degradation.
@@ -280,12 +280,12 @@ bool hashmap_has(const hashmap_t *map, const char *key) {
 /**
  * Remove key-value pair
  */
-dotta_error_t *hashmap_remove(hashmap_t *map, const char *key, void **old_value) {
+error_t *hashmap_remove(hashmap_t *map, const char *key, void **old_value) {
     if (!map) {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Hash map is NULL");
+        return ERROR(ERR_INVALID_ARG, "Hash map is NULL");
     }
     if (!key) {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Key is NULL");
+        return ERROR(ERR_INVALID_ARG, "Key is NULL");
     }
 
     size_t idx = hashmap_bucket_index(map, key);
@@ -293,7 +293,7 @@ dotta_error_t *hashmap_remove(hashmap_t *map, const char *key, void **old_value)
     hashmap_entry_t *entry = hashmap_find_entry(map->buckets[idx], key, &prev);
 
     if (!entry) {
-        return ERROR(DOTTA_ERR_NOT_FOUND, "Key not found in hash map: %s", key);
+        return ERROR(ERR_NOT_FOUND, "Key not found in hash map: %s", key);
     }
 
     /* Save old value if requested */

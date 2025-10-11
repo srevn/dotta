@@ -19,7 +19,7 @@
 #ifndef DOTTA_PATH_H
 #define DOTTA_PATH_H
 
-#include "dotta/types.h"
+#include "types.h"
 
 /**
  * Convert filesystem path to storage path
@@ -33,7 +33,7 @@
  * @param prefix Output prefix type (can be NULL if not needed)
  * @return Error or NULL on success
  */
-dotta_error_t *path_to_storage(
+error_t *path_to_storage(
     const char *filesystem_path,
     char **storage_path,
     path_prefix_t *prefix
@@ -50,7 +50,7 @@ dotta_error_t *path_to_storage(
  * @param filesystem_path Output filesystem path (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *path_from_storage(
+error_t *path_from_storage(
     const char *storage_path,
     char **filesystem_path
 );
@@ -67,7 +67,7 @@ dotta_error_t *path_from_storage(
  * @param storage_path Path to validate (must not be NULL)
  * @return Error or NULL if valid
  */
-dotta_error_t *path_validate_storage(const char *storage_path);
+error_t *path_validate_storage(const char *storage_path);
 
 /**
  * Validate filesystem path
@@ -80,7 +80,7 @@ dotta_error_t *path_validate_storage(const char *storage_path);
  * @param filesystem_path Path to validate (must not be NULL)
  * @return Error or NULL if valid
  */
-dotta_error_t *path_validate_filesystem(const char *filesystem_path);
+error_t *path_validate_filesystem(const char *filesystem_path);
 
 /**
  * Check if path is under $HOME
@@ -101,7 +101,7 @@ bool path_is_under_home(const char *path);
  * @param out Expanded path (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *path_expand_home(const char *path, char **out);
+error_t *path_expand_home(const char *path, char **out);
 
 /**
  * Make path relative to base
@@ -115,7 +115,7 @@ dotta_error_t *path_expand_home(const char *path, char **out);
  * @param out Relative path (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *path_make_relative(
+error_t *path_make_relative(
     const char *base,
     const char *full,
     char **out
@@ -127,6 +127,6 @@ dotta_error_t *path_make_relative(
  * @param out HOME directory path (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *path_get_home(char **out);
+error_t *path_get_home(char **out);
 
 #endif /* DOTTA_PATH_H */

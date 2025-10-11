@@ -11,7 +11,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 
-#include "config.h"  /* For dotta_config_t */
+#include "config.h"
 
 /**
  * Output format types

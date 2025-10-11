@@ -14,24 +14,24 @@
 /**
  * Forward declarations
  */
-typedef struct dotta_error dotta_error_t;
+typedef struct error error_t;
 
 /**
  * Error codes
  */
 typedef enum {
-    DOTTA_OK = 0,              /* Success */
-    DOTTA_ERR_INVALID_ARG,     /* Invalid argument */
-    DOTTA_ERR_NOT_FOUND,       /* Resource not found */
-    DOTTA_ERR_EXISTS,          /* Resource already exists */
-    DOTTA_ERR_PERMISSION,      /* Permission denied */
-    DOTTA_ERR_GIT,             /* Git operation failed */
-    DOTTA_ERR_FS,              /* Filesystem operation failed */
-    DOTTA_ERR_STATE_INVALID,   /* Invalid state file */
-    DOTTA_ERR_CONFLICT,        /* Conflict detected */
-    DOTTA_ERR_MEMORY,          /* Memory allocation failed */
-    DOTTA_ERR_INTERNAL         /* Internal error */
-} dotta_error_code_t;
+    OK = 0,                    /* Success */
+    ERR_INVALID_ARG,           /* Invalid argument */
+    ERR_NOT_FOUND,             /* Resource not found */
+    ERR_EXISTS,                /* Resource already exists */
+    ERR_PERMISSION,            /* Permission denied */
+    ERR_GIT,                   /* Git operation failed */
+    ERR_FS,                    /* Filesystem operation failed */
+    ERR_STATE_INVALID,         /* Invalid state file */
+    ERR_CONFLICT,              /* Conflict detected */
+    ERR_MEMORY,                /* Memory allocation failed */
+    ERR_INTERNAL               /* Internal error */
+} error_code_t;
 
 /**
  * String array - dynamic array of strings

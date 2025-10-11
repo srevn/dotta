@@ -153,13 +153,13 @@ char *str_format(const char *fmt, ...) {
     return result;
 }
 
-dotta_error_t *str_dup(const char *str, char **out) {
+error_t *str_dup(const char *str, char **out) {
     CHECK_NULL(str);
     CHECK_NULL(out);
 
     *out = strdup(str);
     if (!*out) {
-        return error_create(DOTTA_ERR_MEMORY, "Failed to duplicate string");
+        return error_create(ERR_MEMORY, "Failed to duplicate string");
     }
 
     return NULL;

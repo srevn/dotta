@@ -16,7 +16,7 @@
 
 #include <git2.h>
 
-#include "dotta/types.h"
+#include "types.h"
 #include "profiles.h"
 #include "state.h"
 
@@ -68,7 +68,7 @@ typedef struct {
  * @param out Pre-flight results (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *deploy_preflight_check(
+error_t *deploy_preflight_check(
     git_repository *repo,
     const manifest_t *manifest,
     const state_t *state,
@@ -88,7 +88,7 @@ dotta_error_t *deploy_preflight_check(
  * @param out Deployment results (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *deploy_execute(
+error_t *deploy_execute(
     git_repository *repo,
     const manifest_t *manifest,
     const deploy_options_t *opts,
@@ -103,7 +103,7 @@ dotta_error_t *deploy_execute(
  * @param opts Deployment options (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *deploy_file(
+error_t *deploy_file(
     git_repository *repo,
     const file_entry_t *entry,
     const deploy_options_t *opts

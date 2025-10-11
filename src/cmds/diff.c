@@ -12,7 +12,6 @@
 #include "base/error.h"
 #include "core/profiles.h"
 #include "infra/compare.h"
-#include "utils/array.h"
 #include "utils/config.h"
 #include "utils/output.h"
 
@@ -121,7 +120,7 @@ static const char *get_status_message(compare_result_t result, diff_direction_t 
 /**
  * Show diff for a file with color support
  */
-static dotta_error_t *show_file_diff(
+static error_t *show_file_diff(
     git_repository *repo,
     const file_entry_t *entry,
     diff_direction_t direction,
@@ -135,7 +134,7 @@ static dotta_error_t *show_file_diff(
 
     /* Compare with disk */
     compare_result_t cmp_result;
-    dotta_error_t *err = compare_tree_entry_to_disk(
+    error_t *err = compare_tree_entry_to_disk(
         repo,
         entry->entry,
         entry->filesystem_path,
@@ -251,7 +250,7 @@ static dotta_error_t *show_file_diff(
 /**
  * Show diffs for a specific direction
  */
-static dotta_error_t *show_diffs_for_direction(
+static error_t *show_diffs_for_direction(
     git_repository *repo,
     manifest_t *manifest,
     diff_direction_t direction,
@@ -259,7 +258,7 @@ static dotta_error_t *show_diffs_for_direction(
     output_ctx_t *out,
     size_t *diff_count
 ) {
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     *diff_count = 0;
 
     for (size_t i = 0; i < manifest->count; i++) {
@@ -297,11 +296,11 @@ static dotta_error_t *show_diffs_for_direction(
 /**
  * Diff command implementation
  */
-dotta_error_t *cmd_diff(git_repository *repo, const cmd_diff_options_t *opts) {
+error_t *cmd_diff(git_repository *repo, const cmd_diff_options_t *opts) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     dotta_config_t *config = NULL;
     profile_list_t *profiles = NULL;
     manifest_t *manifest = NULL;
@@ -317,7 +316,7 @@ dotta_error_t *cmd_diff(git_repository *repo, const cmd_diff_options_t *opts) {
     output_ctx_t *out = output_create_from_config(config);
     if (!out) {
         config_free(config);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to create output context");
+        return ERROR(ERR_MEMORY, "Failed to create output context");
     }
 
     /* Load profiles with config fallback */

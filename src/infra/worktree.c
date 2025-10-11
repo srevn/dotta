@@ -55,7 +55,7 @@ static char *generate_worktree_name(void) {
 /**
  * Generate temporary directory path from name
  */
-static dotta_error_t *generate_temp_path_from_name(const char *name, char **out) {
+static error_t *generate_temp_path_from_name(const char *name, char **out) {
     CHECK_NULL(name);
     CHECK_NULL(out);
 
@@ -69,7 +69,7 @@ static dotta_error_t *generate_temp_path_from_name(const char *name, char **out)
     return fs_path_join(tmpdir, name, out);
 }
 
-dotta_error_t *worktree_create_temp(
+error_t *worktree_create_temp(
     git_repository *repo,
     worktree_handle_t **out
 ) {
@@ -79,7 +79,7 @@ dotta_error_t *worktree_create_temp(
     /* Allocate handle */
     worktree_handle_t *wt = calloc(1, sizeof(worktree_handle_t));
     if (!wt) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate worktree handle");
+        return ERROR(ERR_MEMORY, "Failed to allocate worktree handle");
     }
 
     wt->main_repo = repo;
@@ -89,11 +89,11 @@ dotta_error_t *worktree_create_temp(
     wt->name = generate_worktree_name();
     if (!wt->name) {
         free(wt);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to generate worktree name");
+        return ERROR(ERR_MEMORY, "Failed to generate worktree name");
     }
 
     /* Generate temp path from the same name */
-    dotta_error_t *err = generate_temp_path_from_name(wt->name, &wt->path);
+    error_t *err = generate_temp_path_from_name(wt->name, &wt->path);
     if (err) {
         free(wt->name);
         free(wt);
@@ -143,7 +143,7 @@ dotta_error_t *worktree_create_temp(
     return NULL;
 }
 
-dotta_error_t *worktree_checkout_branch(
+error_t *worktree_checkout_branch(
     worktree_handle_t *wt,
     const char *branch_name
 ) {
@@ -151,13 +151,13 @@ dotta_error_t *worktree_checkout_branch(
     CHECK_NULL(branch_name);
 
     if (wt->cleaned_up) {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Worktree already cleaned up");
+        return ERROR(ERR_INVALID_ARG, "Worktree already cleaned up");
     }
 
     /* Build reference name dynamically to support long branch names */
     char *refname = str_format("refs/heads/%s", branch_name);
     if (!refname) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate reference name");
+        return ERROR(ERR_MEMORY, "Failed to allocate reference name");
     }
 
     /* Find the commit for the branch */
@@ -189,7 +189,7 @@ dotta_error_t *worktree_checkout_branch(
     return NULL;
 }
 
-dotta_error_t *worktree_create_orphan(
+error_t *worktree_create_orphan(
     worktree_handle_t *wt,
     const char *branch_name
 ) {
@@ -197,13 +197,13 @@ dotta_error_t *worktree_create_orphan(
     CHECK_NULL(branch_name);
 
     if (wt->cleaned_up) {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Worktree already cleaned up");
+        return ERROR(ERR_INVALID_ARG, "Worktree already cleaned up");
     }
 
     /* Build reference name dynamically to support long branch names */
     char *refname = str_format("refs/heads/%s", branch_name);
     if (!refname) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate reference name");
+        return ERROR(ERR_MEMORY, "Failed to allocate reference name");
     }
 
     /* Set HEAD to new orphan branch (doesn't exist yet) */
@@ -289,12 +289,12 @@ git_repository *worktree_get_repo(const worktree_handle_t *wt) {
     return wt->repo;
 }
 
-dotta_error_t *worktree_get_index(worktree_handle_t *wt, git_index **out) {
+error_t *worktree_get_index(worktree_handle_t *wt, git_index **out) {
     CHECK_NULL(wt);
     CHECK_NULL(out);
 
     if (wt->cleaned_up) {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Worktree already cleaned up");
+        return ERROR(ERR_INVALID_ARG, "Worktree already cleaned up");
     }
 
     int err = git_repository_index(out, wt->repo);

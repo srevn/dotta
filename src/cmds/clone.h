@@ -5,7 +5,7 @@
 #ifndef DOTTA_CMD_CLONE_H
 #define DOTTA_CMD_CLONE_H
 
-#include "dotta/types.h"
+#include "types.h"
 
 /**
  * Clone options
@@ -25,6 +25,6 @@ typedef struct {
  * @param opts Clone options (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *cmd_clone(const cmd_clone_options_t *opts);
+error_t *cmd_clone(const cmd_clone_options_t *opts);
 
 #endif /* DOTTA_CMD_CLONE_H */

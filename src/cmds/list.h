@@ -9,7 +9,7 @@
 
 #include <git2.h>
 
-#include "dotta/types.h"
+#include "types.h"
 
 /**
  * List mode
@@ -39,6 +39,6 @@ typedef struct {
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *cmd_list(git_repository *repo, const cmd_list_options_t *opts);
+error_t *cmd_list(git_repository *repo, const cmd_list_options_t *opts);
 
 #endif /* DOTTA_CMD_LIST_H */

@@ -11,7 +11,6 @@
 #include <time.h>
 
 #include "base/error.h"
-#include "base/filesystem.h"
 #include "base/gitops.h"
 #include "core/deploy.h"
 #include "core/profiles.h"
@@ -44,7 +43,7 @@ typedef struct {
  * Returns profile name and resolved file path.
  * Handles both exact path and basename matching.
  */
-static dotta_error_t *discover_file(
+static error_t *discover_file(
     git_repository *repo,
     const char *file_path,
     const char *profile_hint,
@@ -56,7 +55,7 @@ static dotta_error_t *discover_file(
     CHECK_NULL(out_profile);
     CHECK_NULL(out_resolved_path);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     dotta_config_t *config = NULL;
     profile_list_t *profiles = NULL;
 
@@ -68,14 +67,14 @@ static dotta_error_t *discover_file(
             return err;
         }
         if (!exists) {
-            return ERROR(DOTTA_ERR_NOT_FOUND, "Profile '%s' not found", profile_hint);
+            return ERROR(ERR_NOT_FOUND, "Profile '%s' not found", profile_hint);
         }
 
         /* Load tree for this profile */
         size_t ref_name_size = strlen("refs/heads/") + strlen(profile_hint) + 1;
         char *ref_name = malloc(ref_name_size);
         if (!ref_name) {
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate reference name");
+            return ERROR(ERR_MEMORY, "Failed to allocate reference name");
         }
         snprintf(ref_name, ref_name_size, "refs/heads/%s", profile_hint);
 
@@ -105,7 +104,7 @@ static dotta_error_t *discover_file(
         if (!*out_profile || !*out_resolved_path) {
             free(*out_profile);
             free(*out_resolved_path);
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate output strings");
+            return ERROR(ERR_MEMORY, "Failed to allocate output strings");
         }
 
         return NULL;
@@ -135,7 +134,7 @@ static dotta_error_t *discover_file(
     if (profiles->count == 0) {
         config_free(config);
         profile_list_free(profiles);
-        return ERROR(DOTTA_ERR_NOT_FOUND, "No profiles found");
+        return ERROR(ERR_NOT_FOUND, "No profiles found");
     }
 
     /* Try to find file: first by exact path, then by basename */
@@ -196,7 +195,7 @@ static dotta_error_t *discover_file(
     profile_list_free(profiles);
 
     if (match_count == 0) {
-        return ERROR(DOTTA_ERR_NOT_FOUND, "File '%s' not found in any profile", file_path);
+        return ERROR(ERR_NOT_FOUND, "File '%s' not found in any profile", file_path);
     }
 
     if (match_count == 1) {
@@ -217,13 +216,13 @@ static dotta_error_t *discover_file(
     free(matches);
     fprintf(stderr, "\nPlease specify --profile to disambiguate\n");
 
-    return ERROR(DOTTA_ERR_INVALID_ARG, "Ambiguous file reference");
+    return ERROR(ERR_INVALID_ARG, "Ambiguous file reference");
 }
 
 /**
  * Show diff preview between two blobs
  */
-static dotta_error_t *show_diff_preview(
+static error_t *show_diff_preview(
     git_repository *repo,
     const char *file_path,
     const git_oid *current_oid,
@@ -362,7 +361,7 @@ static dotta_error_t *show_diff_preview(
  * Uses git_status_file to check for BOTH staged and unstaged modifications.
  * This is more robust than manually comparing index to HEAD.
  */
-static dotta_error_t *check_working_tree_status(
+static error_t *check_working_tree_status(
     git_repository *repo,
     const char *profile_name,
     const char *file_path,
@@ -397,7 +396,7 @@ static dotta_error_t *check_working_tree_status(
  *
  * This creates a new commit with the file reverted to its target state.
  */
-static dotta_error_t *revert_file_in_branch(
+static error_t *revert_file_in_branch(
     git_repository *repo,
     const dotta_config_t *config,
     const char *profile_name,
@@ -411,7 +410,7 @@ static dotta_error_t *revert_file_in_branch(
     CHECK_NULL(file_path);
     CHECK_NULL(target_commit_oid);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     git_commit *target_commit = NULL;
     git_tree *target_tree = NULL;
     git_tree_entry *target_entry = NULL;
@@ -443,7 +442,7 @@ static dotta_error_t *revert_file_in_branch(
     ret = git_tree_entry_bypath(&target_entry, target_tree, file_path);
     if (ret < 0) {
         if (ret == GIT_ENOTFOUND) {
-            err = ERROR(DOTTA_ERR_NOT_FOUND,
+            err = ERROR(ERR_NOT_FOUND,
                        "File '%s' not found at target commit", file_path);
         } else {
             err = error_from_git(ret);
@@ -459,7 +458,7 @@ static dotta_error_t *revert_file_in_branch(
     size_t ref_name_size = strlen("refs/heads/") + strlen(profile_name) + 1;
     char *ref_name = malloc(ref_name_size);
     if (!ref_name) {
-        err = ERROR(DOTTA_ERR_MEMORY, "Failed to allocate reference name");
+        err = ERROR(ERR_MEMORY, "Failed to allocate reference name");
         goto cleanup;
     }
     snprintf(ref_name, ref_name_size, "refs/heads/%s", profile_name);
@@ -474,7 +473,7 @@ static dotta_error_t *revert_file_in_branch(
 
     const git_oid *head_oid = git_reference_target(branch_ref);
     if (!head_oid) {
-        err = ERROR(DOTTA_ERR_GIT, "Branch '%s' has no target", profile_name);
+        err = ERROR(ERR_GIT, "Branch '%s' has no target", profile_name);
         goto cleanup;
     }
 
@@ -584,7 +583,7 @@ static dotta_error_t *revert_file_in_branch(
     }
 
     if (!msg) {
-        err = ERROR(DOTTA_ERR_MEMORY, "Failed to allocate commit message");
+        err = ERROR(ERR_MEMORY, "Failed to allocate commit message");
         goto cleanup;
     }
 
@@ -629,7 +628,7 @@ cleanup:
  *
  * Creates necessary structures and calls deploy_file from deploy.c
  */
-static dotta_error_t *deploy_reverted_file(
+static error_t *deploy_reverted_file(
     git_repository *repo,
     const char *profile_name,
     const char *storage_path,
@@ -642,7 +641,7 @@ static dotta_error_t *deploy_reverted_file(
     CHECK_NULL(storage_path);
     CHECK_NULL(out);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     profile_t *profile = NULL;
     char *filesystem_path = NULL;
     git_tree_entry *entry = NULL;
@@ -669,7 +668,7 @@ static dotta_error_t *deploy_reverted_file(
         size_t ref_name_size = strlen("refs/heads/") + strlen(profile_name) + 1;
         char *ref_name = malloc(ref_name_size);
         if (!ref_name) {
-            err = ERROR(DOTTA_ERR_MEMORY, "Failed to allocate reference name");
+            err = ERROR(ERR_MEMORY, "Failed to allocate reference name");
             goto cleanup;
         }
         snprintf(ref_name, ref_name_size, "refs/heads/%s", profile_name);
@@ -687,7 +686,7 @@ static dotta_error_t *deploy_reverted_file(
     int ret = git_tree_entry_bypath(&entry, profile->tree, storage_path);
     if (ret < 0) {
         if (ret == GIT_ENOTFOUND) {
-            err = ERROR(DOTTA_ERR_NOT_FOUND,
+            err = ERROR(ERR_NOT_FOUND,
                        "File '%s' not found in profile '%s' after revert",
                        storage_path, profile_name);
         } else {
@@ -706,7 +705,7 @@ static dotta_error_t *deploy_reverted_file(
         }
 
         if (cmp_result == CMP_DIFFERENT || cmp_result == CMP_MODE_DIFF) {
-            err = ERROR(DOTTA_ERR_CONFLICT,
+            err = ERROR(ERR_CONFLICT,
                        "File '%s' has been modified on disk\n"
                        "Use --force to overwrite local changes",
                        filesystem_path);
@@ -836,13 +835,13 @@ static bool prompt_confirmation(const char *message) {
 /**
  * Revert command implementation
  */
-dotta_error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
+error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
     CHECK_NULL(opts->file_path);
     CHECK_NULL(opts->commit);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     dotta_config_t *config = NULL;
     char *profile_name = NULL;
     char *resolved_path = NULL;
@@ -867,7 +866,7 @@ dotta_error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts
     /* Create output context from config */
     out = output_create_from_config(config);
     if (!out) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to create output context");
+        return ERROR(ERR_MEMORY, "Failed to create output context");
     }
 
     /* CLI flags override config */
@@ -909,7 +908,7 @@ dotta_error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts
     ret = git_tree_entry_bypath(&current_entry, current_tree, resolved_path);
     if (ret < 0) {
         if (ret == GIT_ENOTFOUND) {
-            err = ERROR(DOTTA_ERR_NOT_FOUND, "File '%s' not found in current HEAD", resolved_path);
+            err = ERROR(ERR_NOT_FOUND, "File '%s' not found in current HEAD", resolved_path);
         } else {
             err = error_from_git(ret);
         }
@@ -919,7 +918,7 @@ dotta_error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts
     ret = git_tree_entry_bypath(&target_entry, target_tree, resolved_path);
     if (ret < 0) {
         if (ret == GIT_ENOTFOUND) {
-            err = ERROR(DOTTA_ERR_NOT_FOUND, "File '%s' not found at target commit", resolved_path);
+            err = ERROR(ERR_NOT_FOUND, "File '%s' not found at target commit", resolved_path);
         } else {
             err = error_from_git(ret);
         }
@@ -945,7 +944,7 @@ dotta_error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts
         }
 
         if (has_changes) {
-            err = ERROR(DOTTA_ERR_CONFLICT,
+            err = ERROR(ERR_CONFLICT,
                        "File '%s' has uncommitted changes in profile '%s'\n"
                        "Use --force to discard changes, or commit them first",
                        resolved_path, profile_name);

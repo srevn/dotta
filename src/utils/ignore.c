@@ -121,7 +121,7 @@ static const char *DEFAULT_DOTTAIGNORE =
  * Profile-specific .dottaignore files extend this baseline and can use
  * negation patterns (!) to override baseline rules.
  */
-static dotta_error_t *load_baseline_dottaignore(
+static error_t *load_baseline_dottaignore(
     git_repository *repo,
     char **out_content
 ) {
@@ -132,7 +132,7 @@ static dotta_error_t *load_baseline_dottaignore(
 
     /* Check if dotta-worktree branch exists */
     bool branch_exists = false;
-    dotta_error_t *err = gitops_branch_exists(repo, "dotta-worktree", &branch_exists);
+    error_t *err = gitops_branch_exists(repo, "dotta-worktree", &branch_exists);
     if (err) {
         return err;
     }
@@ -161,7 +161,7 @@ static dotta_error_t *load_baseline_dottaignore(
     const git_oid *oid = git_tree_entry_id(entry);
     if (!oid) {
         git_tree_free(tree);
-        return ERROR(DOTTA_ERR_INTERNAL, "Failed to get .dottaignore OID");
+        return ERROR(ERR_INTERNAL, "Failed to get .dottaignore OID");
     }
 
     /* Load blob */
@@ -181,7 +181,7 @@ static dotta_error_t *load_baseline_dottaignore(
         if (!*out_content) {
             git_blob_free(blob);
             git_tree_free(tree);
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate .dottaignore content");
+            return ERROR(ERR_MEMORY, "Failed to allocate .dottaignore content");
         }
         memcpy(*out_content, raw_content, size);
         (*out_content)[size] = '\0';
@@ -204,7 +204,7 @@ static dotta_error_t *load_baseline_dottaignore(
  *   Profile .dottaignore:  !important.log
  *   Result: important.log is NOT ignored (negation overrides baseline)
  */
-static dotta_error_t *load_profile_dottaignore(
+static error_t *load_profile_dottaignore(
     git_repository *repo,
     const char *profile_name,
     char **out_content
@@ -221,7 +221,7 @@ static dotta_error_t *load_profile_dottaignore(
 
     /* Check if profile branch exists */
     bool branch_exists = false;
-    dotta_error_t *err = gitops_branch_exists(repo, profile_name, &branch_exists);
+    error_t *err = gitops_branch_exists(repo, profile_name, &branch_exists);
     if (err) {
         return err;
     }
@@ -234,7 +234,7 @@ static dotta_error_t *load_profile_dottaignore(
     /* Build ref name */
     char *ref_name = str_format("refs/heads/%s", profile_name);
     if (!ref_name) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate ref name");
+        return ERROR(ERR_MEMORY, "Failed to allocate ref name");
     }
 
     /* Load tree from profile branch */
@@ -260,7 +260,7 @@ static dotta_error_t *load_profile_dottaignore(
     const git_oid *oid = git_tree_entry_id(entry);
     if (!oid) {
         git_tree_free(tree);
-        return ERROR(DOTTA_ERR_INTERNAL, "Failed to get .dottaignore OID");
+        return ERROR(ERR_INTERNAL, "Failed to get .dottaignore OID");
     }
 
     /* Load blob */
@@ -280,7 +280,7 @@ static dotta_error_t *load_profile_dottaignore(
         if (!*out_content) {
             git_blob_free(blob);
             git_tree_free(tree);
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate .dottaignore content");
+            return ERROR(ERR_MEMORY, "Failed to allocate .dottaignore content");
         }
         memcpy(*out_content, raw_content, size);
         (*out_content)[size] = '\0';
@@ -331,7 +331,7 @@ static bool matches_cli_patterns(
 /**
  * Check if path matches .dottaignore patterns using libgit2
  */
-static dotta_error_t *matches_dottaignore(
+static error_t *matches_dottaignore(
     git_repository *repo,
     const char *dottaignore_content,
     const char *path,
@@ -362,7 +362,7 @@ static dotta_error_t *matches_dottaignore(
     }
 
     if (!check_path) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate path");
+        return ERROR(ERR_MEMORY, "Failed to allocate path");
     }
 
     /* Add rules to libgit2 ignore system */
@@ -409,7 +409,7 @@ static bool matches_config_patterns(
  * This prevents accidentally adding files that are already ignored
  * at the source location.
  */
-static dotta_error_t *matches_source_gitignore(
+static error_t *matches_source_gitignore(
     const char *abs_path,
     bool *matched
 ) {
@@ -492,7 +492,7 @@ static dotta_error_t *matches_source_gitignore(
  * Public API
  * ======================================================================== */
 
-dotta_error_t *ignore_context_create(
+error_t *ignore_context_create(
     git_repository *repo,
     const dotta_config_t *config,
     const char *profile_name,
@@ -504,7 +504,7 @@ dotta_error_t *ignore_context_create(
 
     ignore_context_t *ctx = calloc(1, sizeof(ignore_context_t));
     if (!ctx) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate ignore context");
+        return ERROR(ERR_MEMORY, "Failed to allocate ignore context");
     }
 
     ctx->repo = repo;  /* Borrowed reference */
@@ -514,7 +514,7 @@ dotta_error_t *ignore_context_create(
         ctx->cli_patterns = malloc(cli_exclude_count * sizeof(char *));
         if (!ctx->cli_patterns) {
             free(ctx);
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate CLI patterns");
+            return ERROR(ERR_MEMORY, "Failed to allocate CLI patterns");
         }
 
         for (size_t i = 0; i < cli_exclude_count; i++) {
@@ -526,7 +526,7 @@ dotta_error_t *ignore_context_create(
                 }
                 free(ctx->cli_patterns);
                 free(ctx);
-                return ERROR(DOTTA_ERR_MEMORY, "Failed to copy CLI pattern");
+                return ERROR(ERR_MEMORY, "Failed to copy CLI pattern");
             }
         }
         ctx->cli_pattern_count = cli_exclude_count;
@@ -534,7 +534,7 @@ dotta_error_t *ignore_context_create(
 
     /* Load profile-specific .dottaignore (if profile specified) */
     if (repo && profile_name) {
-        dotta_error_t *err = load_profile_dottaignore(repo, profile_name, &ctx->profile_dottaignore_content);
+        error_t *err = load_profile_dottaignore(repo, profile_name, &ctx->profile_dottaignore_content);
         if (err) {
             /* Non-fatal - continue without profile .dottaignore */
             error_free(err);
@@ -543,7 +543,7 @@ dotta_error_t *ignore_context_create(
 
     /* Load baseline .dottaignore from repository */
     if (repo) {
-        dotta_error_t *err = load_baseline_dottaignore(repo, &ctx->baseline_dottaignore_content);
+        error_t *err = load_baseline_dottaignore(repo, &ctx->baseline_dottaignore_content);
         if (err) {
             /* Non-fatal - continue without baseline .dottaignore */
             error_free(err);
@@ -555,7 +555,7 @@ dotta_error_t *ignore_context_create(
         ctx->config_patterns = malloc(config->ignore_pattern_count * sizeof(char *));
         if (!ctx->config_patterns) {
             ignore_context_free(ctx);
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate config patterns");
+            return ERROR(ERR_MEMORY, "Failed to allocate config patterns");
         }
 
         for (size_t i = 0; i < config->ignore_pattern_count; i++) {
@@ -567,7 +567,7 @@ dotta_error_t *ignore_context_create(
                 }
                 free(ctx->config_patterns);
                 ignore_context_free(ctx);
-                return ERROR(DOTTA_ERR_MEMORY, "Failed to copy config pattern");
+                return ERROR(ERR_MEMORY, "Failed to copy config pattern");
             }
         }
         ctx->config_pattern_count = config->ignore_pattern_count;
@@ -608,7 +608,7 @@ void ignore_context_free(ignore_context_t *ctx) {
     free(ctx);
 }
 
-dotta_error_t *ignore_should_ignore(
+error_t *ignore_should_ignore(
     ignore_context_t *ctx,
     const char *path,
     bool is_directory,
@@ -655,7 +655,7 @@ dotta_error_t *ignore_should_ignore(
      */
     if (ctx->baseline_dottaignore_content || ctx->profile_dottaignore_content) {
         bool matched = false;
-        dotta_error_t *err = NULL;
+        error_t *err = NULL;
         char *combined_content = NULL;
 
         /* Combine baseline + profile if both exist */
@@ -713,7 +713,7 @@ dotta_error_t *ignore_should_ignore(
     /* Layer 5: Source .gitignore (lowest priority, when enabled) */
     if (ctx->respect_gitignore && abs_path[0] == '/') {
         bool matched = false;
-        dotta_error_t *err = matches_source_gitignore(abs_path, &matched);
+        error_t *err = matches_source_gitignore(abs_path, &matched);
         if (err) {
             /* Non-fatal - continue without source .gitignore checking */
             error_free(err);
@@ -736,7 +736,7 @@ const char *ignore_default_dottaignore_content(void) {
  *
  * Similar to ignore_should_ignore() but returns which layer matched.
  */
-dotta_error_t *ignore_test_path(
+error_t *ignore_test_path(
     ignore_context_t *ctx,
     const char *path,
     bool is_directory,
@@ -779,7 +779,7 @@ dotta_error_t *ignore_test_path(
      */
     if (ctx->baseline_dottaignore_content || ctx->profile_dottaignore_content) {
         bool matched = false;
-        dotta_error_t *err = NULL;
+        error_t *err = NULL;
         char *combined_content = NULL;
         ignore_source_t source = IGNORE_SOURCE_NONE;
 
@@ -844,7 +844,7 @@ dotta_error_t *ignore_test_path(
     /* Layer 5: Source .gitignore (lowest priority, when enabled) */
     if (ctx->respect_gitignore && abs_path[0] == '/') {
         bool matched = false;
-        dotta_error_t *err = matches_source_gitignore(abs_path, &matched);
+        error_t *err = matches_source_gitignore(abs_path, &matched);
         if (err) {
             /* Non-fatal - continue without source .gitignore checking */
             error_free(err);

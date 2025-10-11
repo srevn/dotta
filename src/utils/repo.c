@@ -20,12 +20,12 @@
 /**
  * Get default repository path
  */
-dotta_error_t *get_default_repo_path(char **out) {
+error_t *get_default_repo_path(char **out) {
     CHECK_NULL(out);
 
     /* Get HOME directory */
     char *home = NULL;
-    dotta_error_t *err = path_get_home(&home);
+    error_t *err = path_get_home(&home);
     if (err) {
         return error_wrap(err, "Failed to determine HOME directory");
     }
@@ -35,7 +35,7 @@ dotta_error_t *get_default_repo_path(char **out) {
     char *path = malloc(len);
     if (!path) {
         free(home);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate default repo path");
+        return ERROR(ERR_MEMORY, "Failed to allocate default repo path");
     }
 
     snprintf(path, len, "%s/.local/share/dotta/repo", home);
@@ -48,11 +48,11 @@ dotta_error_t *get_default_repo_path(char **out) {
 /**
  * Resolve repository path
  */
-dotta_error_t *resolve_repo_path(char **out) {
+error_t *resolve_repo_path(char **out) {
     CHECK_NULL(out);
 
     dotta_config_t *config = NULL;
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     char *repo_dir = NULL;
 
     /* Load configuration
@@ -112,13 +112,13 @@ bool is_git_repository(const char *path) {
 /**
  * Ensure parent directories exist
  */
-dotta_error_t *ensure_parent_dirs(const char *path) {
+error_t *ensure_parent_dirs(const char *path) {
     CHECK_NULL(path);
 
     /* Get parent directory */
     char *path_copy = strdup(path);
     if (!path_copy) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate path copy");
+        return ERROR(ERR_MEMORY, "Failed to allocate path copy");
     }
 
     char *parent = dirname(path_copy);
@@ -135,7 +135,7 @@ dotta_error_t *ensure_parent_dirs(const char *path) {
     }
 
     /* Create parent directories recursively */
-    dotta_error_t *err = fs_create_dir(parent, true);  /* true = recursive */
+    error_t *err = fs_create_dir(parent, true);  /* true = recursive */
     free(path_copy);
 
     if (err) {

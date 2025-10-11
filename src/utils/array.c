@@ -50,12 +50,12 @@ void string_array_free(string_array_t *arr) {
 /**
  * Grow array capacity
  */
-static dotta_error_t *string_array_grow(string_array_t *arr) {
+static error_t *string_array_grow(string_array_t *arr) {
     size_t new_capacity = arr->capacity == 0 ? INITIAL_CAPACITY : arr->capacity * 2;
     char **new_items = realloc(arr->items, new_capacity * sizeof(char *));
 
     if (!new_items) {
-        return error_create(DOTTA_ERR_MEMORY, "Failed to grow string array");
+        return error_create(ERR_MEMORY, "Failed to grow string array");
     }
 
     arr->items = new_items;
@@ -69,24 +69,24 @@ static dotta_error_t *string_array_grow(string_array_t *arr) {
     return NULL;
 }
 
-dotta_error_t *string_array_push(string_array_t *arr, const char *str) {
+error_t *string_array_push(string_array_t *arr, const char *str) {
     CHECK_NULL(arr);
     CHECK_NULL(str);
 
     char *dup = strdup(str);
     if (!dup) {
-        return error_create(DOTTA_ERR_MEMORY, "Failed to duplicate string");
+        return error_create(ERR_MEMORY, "Failed to duplicate string");
     }
 
     return string_array_push_take(arr, dup);
 }
 
-dotta_error_t *string_array_push_take(string_array_t *arr, char *str) {
+error_t *string_array_push_take(string_array_t *arr, char *str) {
     CHECK_NULL(arr);
     CHECK_NULL(str);
 
     if (arr->count >= arr->capacity) {
-        dotta_error_t *err = string_array_grow(arr);
+        error_t *err = string_array_grow(arr);
         if (err) {
             return err;
         }
@@ -103,11 +103,11 @@ const char *string_array_get(const string_array_t *arr, size_t index) {
     return arr->items[index];
 }
 
-dotta_error_t *string_array_remove(string_array_t *arr, size_t index) {
+error_t *string_array_remove(string_array_t *arr, size_t index) {
     CHECK_NULL(arr);
 
     if (index >= arr->count) {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Index out of bounds");
+        return ERROR(ERR_INVALID_ARG, "Index out of bounds");
     }
 
     free(arr->items[index]);
@@ -123,7 +123,7 @@ dotta_error_t *string_array_remove(string_array_t *arr, size_t index) {
     return NULL;
 }
 
-dotta_error_t *string_array_remove_value(string_array_t *arr, const char *str) {
+error_t *string_array_remove_value(string_array_t *arr, const char *str) {
     CHECK_NULL(arr);
     CHECK_NULL(str);
 

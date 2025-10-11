@@ -7,13 +7,13 @@ CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror -O2 -Wno-missing-field-initi
 DEBUG_FLAGS := -g -O0 -fsanitize=address,undefined -DDEBUG
 
 # Vendor libraries (must be defined before INCLUDES)
-VENDOR_DIR := vendor
-CJSON_SRC := $(VENDOR_DIR)/cjson/cJSON.c
-TOML_SRC := $(VENDOR_DIR)/toml/tomlc17.c
-VENDOR_INCLUDES := -I$(VENDOR_DIR)/cjson -I$(VENDOR_DIR)/toml
+LIB_DIR := lib
+CJSON_SRC := $(LIB_DIR)/cjson/cJSON.c
+TOML_SRC := $(LIB_DIR)/toml/tomlc17.c
+LIB_INCLUDES := -I$(LIB_DIR)/cjson -I$(LIB_DIR)/toml
 
 # Include paths
-INCLUDES := -Iinclude -Isrc $(VENDOR_INCLUDES)
+INCLUDES := -Iinclude -Isrc $(LIB_INCLUDES)
 
 # Dependencies
 LIBGIT2_CFLAGS := $(shell pkg-config --cflags libgit2)
@@ -37,9 +37,9 @@ CORE_SRC := $(wildcard $(SRC_DIR)/core/*.c)
 CMDS_SRC := $(wildcard $(SRC_DIR)/cmds/*.c)
 UTILS_SRC := $(wildcard $(SRC_DIR)/utils/*.c)
 
-# Vendor objects
-CJSON_OBJ := $(BUILD_DIR)/vendor/cJSON.o
-TOML_OBJ := $(BUILD_DIR)/vendor/tomlc17.o
+# Library objects
+CJSON_OBJ := $(BUILD_DIR)/lib/cJSON.o
+TOML_OBJ := $(BUILD_DIR)/lib/tomlc17.o
 
 # All source files (excluding main.c for library)
 LIB_SRC := $(BASE_SRC) $(INFRA_SRC) $(CORE_SRC) $(CMDS_SRC) $(UTILS_SRC)
@@ -58,7 +58,7 @@ all: $(TARGET)
 $(BUILD_DIR) $(BIN_DIR):
 	@mkdir -p $@
 
-$(BUILD_DIR)/base $(BUILD_DIR)/infra $(BUILD_DIR)/core $(BUILD_DIR)/cmds $(BUILD_DIR)/utils $(BUILD_DIR)/vendor:
+$(BUILD_DIR)/base $(BUILD_DIR)/infra $(BUILD_DIR)/core $(BUILD_DIR)/cmds $(BUILD_DIR)/utils $(BUILD_DIR)/lib:
 	@mkdir -p $@
 
 # Compile source files
@@ -67,13 +67,13 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)/base $(BUILD_DIR)/infra $(BUILD_
 	@$(CC) $(CFLAGS) $(INCLUDES) $(LIBGIT2_CFLAGS) -c $< -o $@
 
 # Compile vendor files
-$(BUILD_DIR)/vendor/cJSON.o: $(CJSON_SRC) | $(BUILD_DIR)/vendor
+$(BUILD_DIR)/lib/cJSON.o: $(CJSON_SRC) | $(BUILD_DIR)/lib
 	@echo "CC $<"
-	@$(CC) $(CFLAGS) $(VENDOR_INCLUDES) -c $< -o $@
+	@$(CC) $(CFLAGS) $(LIB_INCLUDES) -c $< -o $@
 
-$(BUILD_DIR)/vendor/tomlc17.o: $(TOML_SRC) | $(BUILD_DIR)/vendor
+$(BUILD_DIR)/lib/tomlc17.o: $(TOML_SRC) | $(BUILD_DIR)/lib
 	@echo "CC $<"
-	@$(CC) $(CFLAGS) $(VENDOR_INCLUDES) -c $< -o $@
+	@$(CC) $(CFLAGS) $(LIB_INCLUDES) -c $< -o $@
 
 # Link main executable
 $(TARGET): $(LIB_OBJ) $(MAIN_OBJ) | $(BIN_DIR)
@@ -115,8 +115,6 @@ install: $(TARGET)
 	@install -m 644 $(ETC_DIR)/hooks/README.md $(DATADIR)/hooks/README.md
 	@echo "  Installed: $(DATADIR)/hooks/*.sample"
 	@echo "  Installed: $(DATADIR)/hooks/README.md"
-	@echo ""
-	@echo "Installation complete!"
 	@echo ""
 	@echo "Quick start:"
 	@echo "  1. Copy sample config:"

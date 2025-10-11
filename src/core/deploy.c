@@ -19,7 +19,7 @@
 /**
  * Run pre-flight checks
  */
-dotta_error_t *deploy_preflight_check(
+error_t *deploy_preflight_check(
     git_repository *repo,
     const manifest_t *manifest,
     const state_t *state,
@@ -37,7 +37,7 @@ dotta_error_t *deploy_preflight_check(
     /* Allocate result */
     preflight_result_t *result = calloc(1, sizeof(preflight_result_t));
     if (!result) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate preflight result");
+        return ERROR(ERR_MEMORY, "Failed to allocate preflight result");
     }
 
     result->conflicts = string_array_create();
@@ -47,7 +47,7 @@ dotta_error_t *deploy_preflight_check(
 
     if (!result->conflicts || !result->permission_errors || !result->overlaps) {
         preflight_result_free(result);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate result arrays");
+        return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
     }
 
     /* Detect overlaps: files that appear in multiple profiles */
@@ -58,7 +58,7 @@ dotta_error_t *deploy_preflight_check(
         hashmap_free(seen_paths, NULL);
         hashmap_free(recorded_overlaps, NULL);
         preflight_result_free(result);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to create hashmap for overlap detection");
+        return ERROR(ERR_MEMORY, "Failed to create hashmap for overlap detection");
     }
 
     for (size_t i = 0; i < manifest->count; i++) {
@@ -70,7 +70,7 @@ dotta_error_t *deploy_preflight_check(
             /* Check if we've already recorded it in overlaps array (O(1) lookup) */
             if (!hashmap_has(recorded_overlaps, entry->filesystem_path)) {
                 string_array_push(result->overlaps, entry->filesystem_path);
-                dotta_error_t *err = hashmap_set(recorded_overlaps, entry->filesystem_path, (void *)1);
+                error_t *err = hashmap_set(recorded_overlaps, entry->filesystem_path, (void *)1);
                 if (err) {
                     hashmap_free(seen_paths, NULL);
                     hashmap_free(recorded_overlaps, NULL);
@@ -80,7 +80,7 @@ dotta_error_t *deploy_preflight_check(
             }
         } else {
             /* First time seeing this path - record it */
-            dotta_error_t *err = hashmap_set(seen_paths, entry->filesystem_path, (void *)1);
+            error_t *err = hashmap_set(seen_paths, entry->filesystem_path, (void *)1);
             if (err) {
                 hashmap_free(seen_paths, NULL);
                 hashmap_free(recorded_overlaps, NULL);
@@ -101,7 +101,7 @@ dotta_error_t *deploy_preflight_check(
         if (fs_exists(entry->filesystem_path)) {
             /* Compare with git */
             compare_result_t cmp_result;
-            dotta_error_t *err = compare_tree_entry_to_disk(
+            error_t *err = compare_tree_entry_to_disk(
                 repo,
                 entry->entry,
                 entry->filesystem_path,
@@ -134,7 +134,7 @@ dotta_error_t *deploy_preflight_check(
 /**
  * Deploy single file
  */
-dotta_error_t *deploy_file(
+error_t *deploy_file(
     git_repository *repo,
     const file_entry_t *entry,
     const deploy_options_t *opts
@@ -156,7 +156,7 @@ dotta_error_t *deploy_file(
     git_object_t type = git_tree_entry_type(entry->entry);
 
     if (type != GIT_OBJECT_BLOB) {
-        return ERROR(DOTTA_ERR_INTERNAL,
+        return ERROR(ERR_INTERNAL,
                     "Unsupported object type for '%s'", entry->storage_path);
     }
 
@@ -177,14 +177,14 @@ dotta_error_t *deploy_file(
         char *target_str = malloc(target_len + 1);
         if (!target_str) {
             git_blob_free(blob);
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate symlink target");
+            return ERROR(ERR_MEMORY, "Failed to allocate symlink target");
         }
         memcpy(target_str, target, target_len);
         target_str[target_len] = '\0';
 
         /* Remove existing file/symlink */
         if (fs_exists(entry->filesystem_path)) {
-            dotta_error_t *derr = fs_remove_file(entry->filesystem_path);
+            error_t *derr = fs_remove_file(entry->filesystem_path);
             if (derr) {
                 free(target_str);
                 git_blob_free(blob);
@@ -193,7 +193,7 @@ dotta_error_t *deploy_file(
         }
 
         /* Create symlink */
-        dotta_error_t *derr = fs_create_symlink(target_str, entry->filesystem_path);
+        error_t *derr = fs_create_symlink(target_str, entry->filesystem_path);
         free(target_str);
         git_blob_free(blob);
 
@@ -215,11 +215,11 @@ dotta_error_t *deploy_file(
     buffer_t *buf = buffer_create_from_data((const unsigned char *)content, size);
     if (!buf) {
         git_blob_free(blob);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to create buffer for '%s'", entry->filesystem_path);
+        return ERROR(ERR_MEMORY, "Failed to create buffer for '%s'", entry->filesystem_path);
     }
 
     /* Write file */
-    dotta_error_t *derr = fs_write_file(entry->filesystem_path, buf);
+    error_t *derr = fs_write_file(entry->filesystem_path, buf);
     buffer_free(buf);
     git_blob_free(blob);
 
@@ -244,7 +244,7 @@ dotta_error_t *deploy_file(
 /**
  * Execute deployment
  */
-dotta_error_t *deploy_execute(
+error_t *deploy_execute(
     git_repository *repo,
     const manifest_t *manifest,
     const deploy_options_t *opts,
@@ -258,7 +258,7 @@ dotta_error_t *deploy_execute(
     /* Allocate result */
     deploy_result_t *result = calloc(1, sizeof(deploy_result_t));
     if (!result) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate deploy result");
+        return ERROR(ERR_MEMORY, "Failed to allocate deploy result");
     }
 
     result->deployed = string_array_create();
@@ -270,7 +270,7 @@ dotta_error_t *deploy_execute(
 
     if (!result->deployed || !result->skipped || !result->failed) {
         deploy_result_free(result);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate result arrays");
+        return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
     }
 
     /* Deploy each file */
@@ -290,7 +290,7 @@ dotta_error_t *deploy_execute(
         /* Use Case 1: Smart skip - file already up-to-date */
         if (!should_skip && opts->skip_unchanged && fs_exists(entry->filesystem_path)) {
             compare_result_t cmp_result;
-            dotta_error_t *cmp_err = compare_tree_entry_to_disk(
+            error_t *cmp_err = compare_tree_entry_to_disk(
                 repo,
                 entry->entry,
                 entry->filesystem_path,
@@ -315,7 +315,7 @@ dotta_error_t *deploy_execute(
         }
 
         /* Deploy the file */
-        dotta_error_t *err = deploy_file(repo, entry, opts);
+        error_t *err = deploy_file(repo, entry, opts);
         if (err) {
             /* Record failure */
             string_array_push(result->failed, entry->filesystem_path);
@@ -324,7 +324,7 @@ dotta_error_t *deploy_execute(
 
             /* Fail-stop: don't continue deployment */
             *out = result;
-            return ERROR(DOTTA_ERR_INTERNAL,
+            return ERROR(ERR_INTERNAL,
                         "Deployment failed at '%s'", entry->filesystem_path);
         }
 

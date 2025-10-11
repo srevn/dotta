@@ -11,7 +11,6 @@
 
 #include "tomlc17.h"
 #include "base/filesystem.h"
-#include "buffer.h"
 #include "infra/path.h"
 #include "string.h"
 
@@ -167,7 +166,7 @@ void config_free(dotta_config_t *config) {
     free(config);
 }
 
-dotta_error_t *config_get_path(char **out) {
+error_t *config_get_path(char **out) {
     CHECK_NULL(out);
 
     /* Check environment variable */
@@ -178,7 +177,7 @@ dotta_error_t *config_get_path(char **out) {
 
     /* Use default location */
     char *config_dir = NULL;
-    dotta_error_t *err = path_expand_home(DEFAULT_CONFIG_DIR, &config_dir);
+    error_t *err = path_expand_home(DEFAULT_CONFIG_DIR, &config_dir);
     if (err) {
         return err;
     }
@@ -188,17 +187,17 @@ dotta_error_t *config_get_path(char **out) {
     return err;
 }
 
-dotta_error_t *config_load(const char *config_path, dotta_config_t **out) {
+error_t *config_load(const char *config_path, dotta_config_t **out) {
     CHECK_NULL(out);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     char *path = NULL;
 
     /* Determine config path */
     if (config_path) {
         path = strdup(config_path);
         if (!path) {
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate path");
+            return ERROR(ERR_MEMORY, "Failed to allocate path");
         }
     } else {
         err = config_get_path(&path);
@@ -213,7 +212,7 @@ dotta_error_t *config_load(const char *config_path, dotta_config_t **out) {
         free(path);
         *out = config_create_default();
         if (!*out) {
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to create default config");
+            return ERROR(ERR_MEMORY, "Failed to create default config");
         }
         return NULL;
     }
@@ -223,14 +222,14 @@ dotta_error_t *config_load(const char *config_path, dotta_config_t **out) {
     free(path);
 
     if (!result.ok) {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Failed to parse config: %s", result.errmsg);
+        return ERROR(ERR_INVALID_ARG, "Failed to parse config: %s", result.errmsg);
     }
 
     /* Start with defaults */
     dotta_config_t *config = config_create_default();
     if (!config) {
         toml_free(result);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to create config");
+        return ERROR(ERR_MEMORY, "Failed to create config");
     }
 
     /* Extract [core] section */
@@ -466,7 +465,7 @@ bool config_parse_bool(const char *value, bool default_value) {
     return default_value;
 }
 
-dotta_error_t *config_validate(const dotta_config_t *config) {
+error_t *config_validate(const dotta_config_t *config) {
     CHECK_NULL(config);
 
     /* Validate verbosity */
@@ -475,7 +474,7 @@ dotta_error_t *config_validate(const dotta_config_t *config) {
             strcmp(config->verbosity, "normal") != 0 &&
             strcmp(config->verbosity, "verbose") != 0 &&
             strcmp(config->verbosity, "debug") != 0) {
-            return ERROR(DOTTA_ERR_INVALID_ARG,
+            return ERROR(ERR_INVALID_ARG,
                         "Invalid verbosity: %s (must be quiet/normal/verbose/debug)",
                         config->verbosity);
         }
@@ -486,7 +485,7 @@ dotta_error_t *config_validate(const dotta_config_t *config) {
         if (strcmp(config->color, "auto") != 0 &&
             strcmp(config->color, "always") != 0 &&
             strcmp(config->color, "never") != 0) {
-            return ERROR(DOTTA_ERR_INVALID_ARG,
+            return ERROR(ERR_INVALID_ARG,
                         "Invalid color: %s (must be auto/always/never)",
                         config->color);
         }
@@ -497,7 +496,7 @@ dotta_error_t *config_validate(const dotta_config_t *config) {
         if (strcmp(config->format, "compact") != 0 &&
             strcmp(config->format, "detailed") != 0 &&
             strcmp(config->format, "json") != 0) {
-            return ERROR(DOTTA_ERR_INVALID_ARG,
+            return ERROR(ERR_INVALID_ARG,
                         "Invalid format: %s (must be compact/detailed/json)",
                         config->format);
         }
@@ -510,7 +509,7 @@ dotta_error_t *config_validate(const dotta_config_t *config) {
             strcmp(config->diverged_strategy, "merge") != 0 &&
             strcmp(config->diverged_strategy, "ours") != 0 &&
             strcmp(config->diverged_strategy, "theirs") != 0) {
-            return ERROR(DOTTA_ERR_INVALID_ARG,
+            return ERROR(ERR_INVALID_ARG,
                         "Invalid diverged_strategy: %s (must be warn/rebase/merge/ours/theirs)",
                         config->diverged_strategy);
         }
@@ -519,7 +518,7 @@ dotta_error_t *config_validate(const dotta_config_t *config) {
     return NULL;
 }
 
-dotta_error_t *config_get_repo_dir(const dotta_config_t *config, char **out) {
+error_t *config_get_repo_dir(const dotta_config_t *config, char **out) {
     CHECK_NULL(out);
 
     /* Priority 1: Environment variable */

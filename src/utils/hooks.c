@@ -69,7 +69,7 @@ bool hook_is_enabled(const dotta_config_t *config, hook_type_t type) {
 /**
  * Get hook script path
  */
-dotta_error_t *hook_get_path(
+error_t *hook_get_path(
     const dotta_config_t *config,
     hook_type_t type,
     char **out
@@ -79,12 +79,12 @@ dotta_error_t *hook_get_path(
 
     const char *hook_name = hook_type_name(type);
     if (!hook_name || strcmp(hook_name, "unknown") == 0) {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Invalid hook type: %d", type);
+        return ERROR(ERR_INVALID_ARG, "Invalid hook type: %d", type);
     }
 
     /* Get hooks directory */
     char *hooks_dir = NULL;
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
 
     if (config->hooks_dir) {
         err = path_expand_home(config->hooks_dir, &hooks_dir);
@@ -110,7 +110,7 @@ dotta_error_t *hook_get_path(
 bool hook_exists(const dotta_config_t *config, hook_type_t type) {
     char *hook_path = NULL;
 
-    dotta_error_t *err = hook_get_path(config, type, &hook_path);
+    error_t *err = hook_get_path(config, type, &hook_path);
     if (err) {
         error_free(err);
         return false;
@@ -218,7 +218,7 @@ static void free_hook_env(char **env, size_t count) {
 /**
  * Execute hook script
  */
-dotta_error_t *hook_execute(
+error_t *hook_execute(
     const dotta_config_t *config,
     hook_type_t type,
     const hook_context_t *context,
@@ -238,7 +238,7 @@ dotta_error_t *hook_execute(
 
     /* Check if hook script exists */
     char *hook_path = NULL;
-    dotta_error_t *err = hook_get_path(config, type, &hook_path);
+    error_t *err = hook_get_path(config, type, &hook_path);
     if (err) {
         return err;
     }
@@ -255,7 +255,7 @@ dotta_error_t *hook_execute(
     /* Check if hook is executable */
     if (!fs_is_executable(hook_path)) {
         free(hook_path);
-        return ERROR(DOTTA_ERR_PERMISSION,
+        return ERROR(ERR_PERMISSION,
                     "Hook '%s' is not executable", hook_type_name(type));
     }
 
@@ -268,7 +268,7 @@ dotta_error_t *hook_execute(
     if (pipe(pipefd) == -1) {
         free_hook_env(env, env_count);
         free(hook_path);
-        return ERROR(DOTTA_ERR_FS, "Failed to create pipe for hook output");
+        return ERROR(ERR_FS, "Failed to create pipe for hook output");
     }
 
     /* Fork and execute hook */
@@ -278,7 +278,7 @@ dotta_error_t *hook_execute(
         close(pipefd[1]);
         free_hook_env(env, env_count);
         free(hook_path);
-        return ERROR(DOTTA_ERR_FS, "Failed to fork for hook execution");
+        return ERROR(ERR_FS, "Failed to fork for hook execution");
     }
 
     if (pid == 0) {
@@ -310,7 +310,7 @@ dotta_error_t *hook_execute(
         close(pipefd[0]);
         free_hook_env(env, env_count);
         free(hook_path);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate buffer for hook output");
+        return ERROR(ERR_MEMORY, "Failed to allocate buffer for hook output");
     }
 
     ssize_t n;
@@ -324,7 +324,7 @@ dotta_error_t *hook_execute(
                 close(pipefd[0]);
                 free_hook_env(env, env_count);
                 free(hook_path);
-                return ERROR(DOTTA_ERR_MEMORY, "Failed to resize hook output buffer");
+                return ERROR(ERR_MEMORY, "Failed to resize hook output buffer");
             }
             output = new_output;
         }
@@ -350,7 +350,7 @@ dotta_error_t *hook_execute(
         free(output);
         free_hook_env(env, env_count);
         free(hook_path);
-        return ERROR(DOTTA_ERR_FS, "Failed to wait for hook process");
+        return ERROR(ERR_FS, "Failed to wait for hook process");
     }
 
     /* Check exit status */
@@ -377,7 +377,7 @@ dotta_error_t *hook_execute(
 
     /* Return error if hook failed */
     if (exit_code != 0) {
-        return ERROR(DOTTA_ERR_INTERNAL,
+        return ERROR(ERR_INTERNAL,
                     "Hook '%s' failed with exit code %d",
                     hook_type_name(type), exit_code);
     }
@@ -423,7 +423,7 @@ hook_context_t *hook_context_create(
 /**
  * Helper: Add files to hook context
  */
-dotta_error_t *hook_context_add_files(
+error_t *hook_context_add_files(
     hook_context_t *ctx,
     const char **files,
     size_t count

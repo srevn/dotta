@@ -15,7 +15,7 @@
 
 #include <git2.h>
 
-#include "dotta/types.h"
+#include "types.h"
 
 /**
  * Repository operations
@@ -28,7 +28,7 @@
  * @param path Repository path (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_open_repository(git_repository **out, const char *path);
+error_t *gitops_open_repository(git_repository **out, const char *path);
 
 /**
  * Close repository and free resources
@@ -48,7 +48,7 @@ void gitops_close_repository(git_repository *repo);
  * @param start_path Starting search path (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_discover_repository(char **out, const char *start_path);
+error_t *gitops_discover_repository(char **out, const char *start_path);
 
 /**
  * Discover and open repository
@@ -59,7 +59,7 @@ dotta_error_t *gitops_discover_repository(char **out, const char *start_path);
  * @param start_path Starting search path (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_discover_and_open(git_repository **out, const char *start_path);
+error_t *gitops_discover_and_open(git_repository **out, const char *start_path);
 
 /**
  * Branch/Reference operations
@@ -73,7 +73,7 @@ dotta_error_t *gitops_discover_and_open(git_repository **out, const char *start_
  * @param exists Output boolean (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_branch_exists(git_repository *repo, const char *name, bool *exists);
+error_t *gitops_branch_exists(git_repository *repo, const char *name, bool *exists);
 
 /**
  * Create orphan branch (no parent commits)
@@ -82,7 +82,7 @@ dotta_error_t *gitops_branch_exists(git_repository *repo, const char *name, bool
  * @param name Branch name (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_create_orphan_branch(git_repository *repo, const char *name);
+error_t *gitops_create_orphan_branch(git_repository *repo, const char *name);
 
 /**
  * List all local branches
@@ -91,7 +91,7 @@ dotta_error_t *gitops_create_orphan_branch(git_repository *repo, const char *nam
  * @param out String array of branch names (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_list_branches(git_repository *repo, string_array_t **out);
+error_t *gitops_list_branches(git_repository *repo, string_array_t **out);
 
 /**
  * Delete branch
@@ -100,7 +100,7 @@ dotta_error_t *gitops_list_branches(git_repository *repo, string_array_t **out);
  * @param name Branch name (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_delete_branch(git_repository *repo, const char *name);
+error_t *gitops_delete_branch(git_repository *repo, const char *name);
 
 /**
  * Get current branch name
@@ -109,7 +109,7 @@ dotta_error_t *gitops_delete_branch(git_repository *repo, const char *name);
  * @param out Branch name (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_current_branch(git_repository *repo, char **out);
+error_t *gitops_current_branch(git_repository *repo, char **out);
 
 /**
  * Tree operations
@@ -123,7 +123,7 @@ dotta_error_t *gitops_current_branch(git_repository *repo, char **out);
  * @param out Tree object (must not be NULL, caller must free with git_tree_free)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_load_tree(git_repository *repo, const char *ref_name, git_tree **out);
+error_t *gitops_load_tree(git_repository *repo, const char *ref_name, git_tree **out);
 
 /**
  * Walk tree with callback
@@ -133,7 +133,7 @@ dotta_error_t *gitops_load_tree(git_repository *repo, const char *ref_name, git_
  * @param payload User data passed to callback
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_tree_walk(
+error_t *gitops_tree_walk(
     git_tree *tree,
     git_treewalk_cb callback,
     void *payload
@@ -150,7 +150,7 @@ dotta_error_t *gitops_tree_walk(
  * @param out Tree entry (must not be NULL, caller must free with git_tree_entry_free)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_find_file_in_tree(
+error_t *gitops_find_file_in_tree(
     git_repository *repo,
     git_tree *tree,
     const char *path,
@@ -169,7 +169,7 @@ dotta_error_t *gitops_find_file_in_tree(
  * @param out_count Number of matching paths (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_find_files_by_basename_in_tree(
+error_t *gitops_find_files_by_basename_in_tree(
     git_repository *repo,
     git_tree *tree,
     const char *basename,
@@ -191,7 +191,7 @@ dotta_error_t *gitops_find_files_by_basename_in_tree(
  * @param out Commit OID (can be NULL if not needed)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_create_commit(
+error_t *gitops_create_commit(
     git_repository *repo,
     const char *branch_name,
     git_tree *tree,
@@ -207,7 +207,7 @@ dotta_error_t *gitops_create_commit(
  * @param out Commit object (must not be NULL, caller must free with git_commit_free)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_get_commit(
+error_t *gitops_get_commit(
     git_repository *repo,
     const char *ref_name,
     git_commit **out
@@ -230,7 +230,7 @@ dotta_error_t *gitops_get_commit(
  * @param out_commit Resolved commit object (can be NULL if not needed, caller must free)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_resolve_commit_in_branch(
+error_t *gitops_resolve_commit_in_branch(
     git_repository *repo,
     const char *branch_name,
     const char *commit_ref,
@@ -250,7 +250,7 @@ dotta_error_t *gitops_resolve_commit_in_branch(
  * @param local_path Local path for clone (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_clone(
+error_t *gitops_clone(
     git_repository **out,
     const char *url,
     const char *local_path
@@ -265,7 +265,7 @@ dotta_error_t *gitops_clone(
  * @param cred_ctx Credential context for approve/reject (may be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_fetch_branch(
+error_t *gitops_fetch_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
@@ -281,7 +281,7 @@ dotta_error_t *gitops_fetch_branch(
  * @param cred_ctx Credential context for approve/reject (may be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_push_branch(
+error_t *gitops_push_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
@@ -297,7 +297,7 @@ dotta_error_t *gitops_push_branch(
  * @param cred_ctx Credential context for approve/reject (may be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_delete_remote_branch(
+error_t *gitops_delete_remote_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
@@ -311,7 +311,7 @@ dotta_error_t *gitops_delete_remote_branch(
  * @param branch_name Branch to merge from (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_merge_ff_only(git_repository *repo, const char *branch_name);
+error_t *gitops_merge_ff_only(git_repository *repo, const char *branch_name);
 
 /**
  * Reference operations
@@ -326,7 +326,7 @@ dotta_error_t *gitops_merge_ff_only(git_repository *repo, const char *branch_nam
  * @param force Overwrite if exists
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_create_reference(
+error_t *gitops_create_reference(
     git_repository *repo,
     const char *name,
     const git_oid *oid,
@@ -341,7 +341,7 @@ dotta_error_t *gitops_create_reference(
  * @param out Reference object (must not be NULL, caller must free with git_reference_free)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_lookup_reference(
+error_t *gitops_lookup_reference(
     git_repository *repo,
     const char *name,
     git_reference **out
@@ -358,7 +358,7 @@ dotta_error_t *gitops_lookup_reference(
  * @param out Index object (must not be NULL, caller must free with git_index_free)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_get_index(git_repository *repo, git_index **out);
+error_t *gitops_get_index(git_repository *repo, git_index **out);
 
 /**
  * Add file to index
@@ -367,7 +367,7 @@ dotta_error_t *gitops_get_index(git_repository *repo, git_index **out);
  * @param path Path relative to repository root (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_index_add(git_index *index, const char *path);
+error_t *gitops_index_add(git_index *index, const char *path);
 
 /**
  * Write index to disk and create tree
@@ -376,6 +376,6 @@ dotta_error_t *gitops_index_add(git_index *index, const char *path);
  * @param out Tree OID (must not be NULL)
  * @return Error or NULL on success
  */
-dotta_error_t *gitops_index_write_tree(git_index *index, git_oid *out);
+error_t *gitops_index_write_tree(git_index *index, git_oid *out);
 
 #endif /* DOTTA_GITOPS_H */

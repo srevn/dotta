@@ -16,7 +16,7 @@
 /**
  * Analyze upstream state for a single profile
  */
-dotta_error_t *upstream_analyze_profile(
+error_t *upstream_analyze_profile(
     git_repository *repo,
     const char *remote_name,
     const char *profile_name,
@@ -30,13 +30,13 @@ dotta_error_t *upstream_analyze_profile(
     /* Allocate info structure */
     upstream_info_t *info = calloc(1, sizeof(upstream_info_t));
     if (!info) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate upstream info");
+        return ERROR(ERR_MEMORY, "Failed to allocate upstream info");
     }
 
     info->profile_name = strdup(profile_name);
     if (!info->profile_name) {
         free(info);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate profile name");
+        return ERROR(ERR_MEMORY, "Failed to allocate profile name");
     }
 
     /* Build reference names */
@@ -179,7 +179,7 @@ const char *upstream_state_symbol(upstream_state_t state) {
 /**
  * Detect default remote name for tracking
  */
-dotta_error_t *upstream_detect_remote(git_repository *repo, char **out_remote) {
+error_t *upstream_detect_remote(git_repository *repo, char **out_remote) {
     CHECK_NULL(repo);
     CHECK_NULL(out_remote);
 
@@ -194,7 +194,7 @@ dotta_error_t *upstream_detect_remote(git_repository *repo, char **out_remote) {
 
     if (remotes.count == 0) {
         git_strarray_dispose(&remotes);
-        return ERROR(DOTTA_ERR_NOT_FOUND,
+        return ERROR(ERR_NOT_FOUND,
                     "No remotes configured\n"
                     "Hint: Add a remote with 'dotta remote add <name> <url>'");
     }
@@ -211,19 +211,19 @@ dotta_error_t *upstream_detect_remote(git_repository *repo, char **out_remote) {
     if (has_origin) {
         *out_remote = strdup("origin");
         git_strarray_dispose(&remotes);
-        return *out_remote ? NULL : ERROR(DOTTA_ERR_MEMORY, "Failed to allocate remote name");
+        return *out_remote ? NULL : ERROR(ERR_MEMORY, "Failed to allocate remote name");
     }
 
     /* If exactly one remote, use it */
     if (remotes.count == 1) {
         *out_remote = strdup(remotes.strings[0]);
         git_strarray_dispose(&remotes);
-        return *out_remote ? NULL : ERROR(DOTTA_ERR_MEMORY, "Failed to allocate remote name");
+        return *out_remote ? NULL : ERROR(ERR_MEMORY, "Failed to allocate remote name");
     }
 
     /* Multiple remotes, no origin - need explicit remote name */
     git_strarray_dispose(&remotes);
-    return ERROR(DOTTA_ERR_INVALID_ARG,
+    return ERROR(ERR_INVALID_ARG,
                 "Multiple remotes configured, but no 'origin' found\n"
                 "Hint: Specify remote explicitly or rename preferred remote to 'origin'");
 }
@@ -231,7 +231,7 @@ dotta_error_t *upstream_detect_remote(git_repository *repo, char **out_remote) {
 /**
  * Discover remote branches that don't exist locally
  */
-dotta_error_t *upstream_discover_branches(
+error_t *upstream_discover_branches(
     git_repository *repo,
     const char *remote_name,
     string_array_t **out_branches
@@ -242,7 +242,7 @@ dotta_error_t *upstream_discover_branches(
 
     string_array_t *branches = string_array_create();
     if (!branches) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to create branch array");
+        return ERROR(ERR_MEMORY, "Failed to create branch array");
     }
 
     /* Iterate remote refs */
@@ -278,7 +278,7 @@ dotta_error_t *upstream_discover_branches(
 
         /* Check if local branch exists */
         bool exists = false;
-        dotta_error_t *err = gitops_branch_exists(repo, branch_name, &exists);
+        error_t *err = gitops_branch_exists(repo, branch_name, &exists);
         if (err) {
             error_free(err);
             git_reference_free(ref);
@@ -307,7 +307,7 @@ dotta_error_t *upstream_discover_branches(
 /**
  * Create local tracking branch from remote
  */
-dotta_error_t *upstream_create_tracking_branch(
+error_t *upstream_create_tracking_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name
@@ -329,7 +329,7 @@ dotta_error_t *upstream_create_tracking_branch(
     const git_oid *target_oid = git_reference_target(remote_ref);
     if (!target_oid) {
         git_reference_free(remote_ref);
-        return ERROR(DOTTA_ERR_GIT, "Remote ref '%s' has no target", remote_refname);
+        return ERROR(ERR_GIT, "Remote ref '%s' has no target", remote_refname);
     }
 
     /* Create local branch */

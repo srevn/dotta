@@ -27,17 +27,17 @@
 /**
  * Validate command options
  */
-static dotta_error_t *validate_options(const cmd_remove_options_t *opts) {
+static error_t *validate_options(const cmd_remove_options_t *opts) {
     CHECK_NULL(opts);
 
     if (!opts->profile || opts->profile[0] == '\0') {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Profile name is required");
+        return ERROR(ERR_INVALID_ARG, "Profile name is required");
     }
 
     /* If deleting profile, paths are optional */
     if (opts->delete_profile) {
         if (opts->paths && opts->path_count > 0) {
-            return ERROR(DOTTA_ERR_INVALID_ARG,
+            return ERROR(ERR_INVALID_ARG,
                         "Cannot specify paths when using --delete-profile");
         }
         return NULL;
@@ -45,7 +45,7 @@ static dotta_error_t *validate_options(const cmd_remove_options_t *opts) {
 
     /* If not deleting profile, paths are required */
     if (!opts->paths || opts->path_count == 0) {
-        return ERROR(DOTTA_ERR_INVALID_ARG,
+        return ERROR(ERR_INVALID_ARG,
                     "At least one path is required (or use --delete-profile)");
     }
 
@@ -57,7 +57,7 @@ static dotta_error_t *validate_options(const cmd_remove_options_t *opts) {
  *
  * Converts filesystem paths to storage paths and validates they exist in profile.
  */
-static dotta_error_t *resolve_paths_to_remove(
+static error_t *resolve_paths_to_remove(
     git_repository *repo,
     const char *profile_name,
     const char **input_paths,
@@ -73,14 +73,14 @@ static dotta_error_t *resolve_paths_to_remove(
     CHECK_NULL(filesystem_paths_out);
     CHECK_NULL(opts);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
 
     string_array_t *storage_paths = string_array_create();
     string_array_t *filesystem_paths = string_array_create();
     if (!storage_paths || !filesystem_paths) {
         string_array_free(storage_paths);
         string_array_free(filesystem_paths);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate path arrays");
+        return ERROR(ERR_MEMORY, "Failed to allocate path arrays");
     }
 
     /* Load profile to check file existence */
@@ -193,7 +193,7 @@ static dotta_error_t *resolve_paths_to_remove(
                 profile_free(profile);
                 string_array_free(storage_paths);
                 string_array_free(filesystem_paths);
-                return ERROR(DOTTA_ERR_NOT_FOUND,
+                return ERROR(ERR_NOT_FOUND,
                             "File '%s' not found in profile '%s'\n"
                             "Hint: Use 'dotta list --profile %s' to see tracked files",
                             storage_path, profile_name, profile_name);
@@ -216,7 +216,7 @@ static dotta_error_t *resolve_paths_to_remove(
     if (string_array_size(storage_paths) == 0) {
         string_array_free(storage_paths);
         string_array_free(filesystem_paths);
-        return ERROR(DOTTA_ERR_NOT_FOUND,
+        return ERROR(ERR_NOT_FOUND,
                     "No files found to remove from profile '%s'", profile_name);
     }
 
@@ -228,7 +228,7 @@ static dotta_error_t *resolve_paths_to_remove(
 /**
  * Remove file from worktree
  */
-static dotta_error_t *remove_file_from_worktree(
+static error_t *remove_file_from_worktree(
     worktree_handle_t *wt,
     const char *storage_path,
     const cmd_remove_options_t *opts
@@ -240,14 +240,14 @@ static dotta_error_t *remove_file_from_worktree(
     const char *wt_path = worktree_get_path(wt);
     char *file_path = str_format("%s/%s", wt_path, storage_path);
     if (!file_path) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate file path");
+        return ERROR(ERR_MEMORY, "Failed to allocate file path");
     }
 
     /* Check if file exists */
     if (!fs_exists(file_path)) {
         free(file_path);
         if (!opts->force) {
-            return ERROR(DOTTA_ERR_NOT_FOUND,
+            return ERROR(ERR_NOT_FOUND,
                         "File '%s' not found in worktree", storage_path);
         }
         /* With --force, skip silently */
@@ -255,7 +255,7 @@ static dotta_error_t *remove_file_from_worktree(
     }
 
     /* Remove from filesystem */
-    dotta_error_t *err = fs_remove_file(file_path);
+    error_t *err = fs_remove_file(file_path);
     free(file_path);
     if (err) {
         return error_wrap(err, "Failed to remove file '%s' from worktree", storage_path);
@@ -288,7 +288,7 @@ static dotta_error_t *remove_file_from_worktree(
 /**
  * Cleanup deployed file from filesystem
  */
-static dotta_error_t *cleanup_deployed_file(
+static error_t *cleanup_deployed_file(
     const char *filesystem_path,
     const cmd_remove_options_t *opts
 ) {
@@ -302,7 +302,7 @@ static dotta_error_t *cleanup_deployed_file(
         return NULL;
     }
 
-    dotta_error_t *err = fs_remove_file(filesystem_path);
+    error_t *err = fs_remove_file(filesystem_path);
     if (err) {
         return error_wrap(err, "Failed to remove file '%s' from filesystem",
                          filesystem_path);
@@ -414,7 +414,7 @@ static bool confirm_profile_deletion(
 /**
  * Create commit for removal
  */
-static dotta_error_t *create_removal_commit(
+static error_t *create_removal_commit(
     git_repository *repo,
     worktree_handle_t *wt,
     const cmd_remove_options_t *opts,
@@ -428,12 +428,12 @@ static dotta_error_t *create_removal_commit(
 
     git_repository *wt_repo = worktree_get_repo(wt);
     if (!wt_repo) {
-        return ERROR(DOTTA_ERR_INTERNAL, "Worktree repository is NULL");
+        return ERROR(ERR_INTERNAL, "Worktree repository is NULL");
     }
 
     /* Get index tree */
     git_index *index = NULL;
-    dotta_error_t *err = worktree_get_index(wt, &index);
+    error_t *err = worktree_get_index(wt, &index);
     if (err) {
         return error_wrap(err, "Failed to get worktree index");
     }
@@ -463,7 +463,7 @@ static dotta_error_t *create_removal_commit(
     char *message = build_commit_message(config, &ctx);
     if (!message) {
         git_tree_free(tree);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to build commit message");
+        return ERROR(ERR_MEMORY, "Failed to build commit message");
     }
 
     /* Create commit */
@@ -489,7 +489,7 @@ static dotta_error_t *create_removal_commit(
 /**
  * Update state after file removal
  */
-static dotta_error_t *update_state_after_removal(
+static error_t *update_state_after_removal(
     state_t *state,
     const string_array_t *removed_filesystem_paths,
     const char *profile_name
@@ -503,7 +503,7 @@ static dotta_error_t *update_state_after_removal(
         const char *path = string_array_get(removed_filesystem_paths, i);
 
         if (state_file_exists(state, path)) {
-            dotta_error_t *err = state_remove_file(state, path);
+            error_t *err = state_remove_file(state, path);
             if (err) {
                 /* Non-fatal: just log warning */
                 fprintf(stderr, "Warning: Failed to update state for '%s': %s\n",
@@ -547,7 +547,7 @@ static dotta_error_t *update_state_after_removal(
 
         /* If directory is now empty, remove it from state */
         if (!has_files) {
-            dotta_error_t *err = state_remove_directory(state, dirs[i].filesystem_path);
+            error_t *err = state_remove_directory(state, dirs[i].filesystem_path);
             if (err) {
                 /* Non-fatal: just log warning */
                 fprintf(stderr, "Warning: Failed to remove directory tracking for '%s': %s\n",
@@ -563,7 +563,7 @@ static dotta_error_t *update_state_after_removal(
 /**
  * Remove files from profile
  */
-static dotta_error_t *remove_files_from_profile(
+static error_t *remove_files_from_profile(
     git_repository *repo,
     const cmd_remove_options_t *opts,
     size_t *removed_count_out
@@ -572,7 +572,7 @@ static dotta_error_t *remove_files_from_profile(
     CHECK_NULL(opts);
     CHECK_NULL(removed_count_out);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     *removed_count_out = 0;
 
     /* Load configuration */
@@ -824,19 +824,19 @@ static dotta_error_t *remove_files_from_profile(
 /**
  * Delete entire profile branch
  */
-static dotta_error_t *delete_profile_branch(
+static error_t *delete_profile_branch(
     git_repository *repo,
     const cmd_remove_options_t *opts
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
 
     /* Check if profile exists */
     if (!profile_exists(repo, opts->profile)) {
         if (!opts->force) {
-            return ERROR(DOTTA_ERR_NOT_FOUND,
+            return ERROR(ERR_NOT_FOUND,
                         "Profile '%s' does not exist\n"
                         "Hint: Use 'dotta list' to see available profiles",
                         opts->profile);
@@ -857,7 +857,7 @@ static dotta_error_t *delete_profile_branch(
 
     if (all_profiles->count <= 1) {
         profile_list_free(all_profiles);
-        return ERROR(DOTTA_ERR_INVALID_ARG,
+        return ERROR(ERR_INVALID_ARG,
                     "Cannot delete last remaining profile '%s'\n"
                     "Hint: A repository must have at least one profile",
                     opts->profile);
@@ -1144,12 +1144,12 @@ static dotta_error_t *delete_profile_branch(
 /**
  * Remove command implementation
  */
-dotta_error_t *cmd_remove(git_repository *repo, const cmd_remove_options_t *opts) {
+error_t *cmd_remove(git_repository *repo, const cmd_remove_options_t *opts) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
     /* Validate options */
-    dotta_error_t *err = validate_options(opts);
+    error_t *err = validate_options(opts);
     if (err) {
         return err;
     }

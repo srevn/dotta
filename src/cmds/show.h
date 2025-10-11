@@ -7,7 +7,7 @@
 
 #include <git2.h>
 
-#include "dotta/types.h"
+#include "types.h"
 
 /**
  * Show command options
@@ -22,6 +22,6 @@ typedef struct {
 /**
  * Execute show command
  */
-dotta_error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts);
+error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts);
 
 #endif /* DOTTA_CMD_SHOW_H */

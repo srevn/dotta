@@ -38,11 +38,11 @@ static bool confirm_action(void) {
 /**
  * Clean command implementation
  */
-dotta_error_t *cmd_clean(git_repository *repo, const cmd_clean_options_t *opts) {
+error_t *cmd_clean(git_repository *repo, const cmd_clean_options_t *opts) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     dotta_config_t *config = NULL;
     state_t *state = NULL;
     profile_list_t *profiles = NULL;
@@ -59,7 +59,7 @@ dotta_error_t *cmd_clean(git_repository *repo, const cmd_clean_options_t *opts) 
     output_ctx_t *out = output_create_from_config(config);
     if (!out) {
         config_free(config);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to create output context");
+        return ERROR(ERR_MEMORY, "Failed to create output context");
     }
 
     /* CLI flags override config */
@@ -141,7 +141,7 @@ dotta_error_t *cmd_clean(git_repository *repo, const cmd_clean_options_t *opts) 
         state_free(state);
         config_free(config);
         output_free(out);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate orphaned files array");
+        return ERROR(ERR_MEMORY, "Failed to allocate orphaned files array");
     }
 
     /*
@@ -158,7 +158,7 @@ dotta_error_t *cmd_clean(git_repository *repo, const cmd_clean_options_t *opts) 
             state_free(state);
             config_free(config);
             output_free(out);
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to create hashmap");
+            return ERROR(ERR_MEMORY, "Failed to create hashmap");
         }
 
         /* Populate hashmap with manifest paths */

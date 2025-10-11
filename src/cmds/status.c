@@ -15,8 +15,6 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/compare.h"
-#include "infra/path.h"
-#include "utils/array.h"
 #include "utils/config.h"
 #include "utils/ignore.h"
 #include "utils/output.h"
@@ -64,7 +62,7 @@ static new_file_list_t *new_file_list_create(void) {
 /**
  * Add entry to new file list
  */
-static dotta_error_t *new_file_list_add(
+static error_t *new_file_list_add(
     new_file_list_t *list,
     const char *filesystem_path,
     const char *profile,
@@ -81,7 +79,7 @@ static dotta_error_t *new_file_list_add(
         new_file_entry_t *new_entries = realloc(list->entries,
                                                  new_capacity * sizeof(new_file_entry_t));
         if (!new_entries) {
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to grow new file list");
+            return ERROR(ERR_MEMORY, "Failed to grow new file list");
         }
         list->entries = new_entries;
         list->capacity = new_capacity;
@@ -97,7 +95,7 @@ static dotta_error_t *new_file_list_add(
         free(entry->filesystem_path);
         free(entry->profile);
         free(entry->storage_path);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate new file entry");
+        return ERROR(ERR_MEMORY, "Failed to allocate new file entry");
     }
 
     list->count++;
@@ -139,7 +137,7 @@ static bool is_file_in_manifest(const manifest_t *manifest, const char *filesyst
 /**
  * Recursively scan directory for new files
  */
-static dotta_error_t *scan_directory_for_new_files(
+static error_t *scan_directory_for_new_files(
     const char *dir_path,
     const char *storage_prefix,
     const char *profile,
@@ -170,7 +168,7 @@ static dotta_error_t *scan_directory_for_new_files(
         char *full_path = str_format("%s/%s", dir_path, entry->d_name);
         if (!full_path) {
             closedir(dir);
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate path");
+            return ERROR(ERR_MEMORY, "Failed to allocate path");
         }
 
         /* Check if path exists (handle race conditions) */
@@ -183,7 +181,7 @@ static dotta_error_t *scan_directory_for_new_files(
         bool is_dir = fs_is_directory(full_path);
         if (ignore_ctx) {
             bool ignored = false;
-            dotta_error_t *err = ignore_should_ignore(ignore_ctx, full_path, is_dir, &ignored);
+            error_t *err = ignore_should_ignore(ignore_ctx, full_path, is_dir, &ignored);
             if (!err && ignored) {
                 free(full_path);
                 continue;
@@ -197,10 +195,10 @@ static dotta_error_t *scan_directory_for_new_files(
             if (!sub_storage_prefix) {
                 free(full_path);
                 closedir(dir);
-                return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate storage prefix");
+                return ERROR(ERR_MEMORY, "Failed to allocate storage prefix");
             }
 
-            dotta_error_t *err = scan_directory_for_new_files(
+            error_t *err = scan_directory_for_new_files(
                 full_path,
                 sub_storage_prefix,
                 profile,
@@ -224,10 +222,10 @@ static dotta_error_t *scan_directory_for_new_files(
                 if (!storage_path) {
                     free(full_path);
                     closedir(dir);
-                    return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate storage path");
+                    return ERROR(ERR_MEMORY, "Failed to allocate storage path");
                 }
 
-                dotta_error_t *err = new_file_list_add(new_files, full_path, profile, storage_path);
+                error_t *err = new_file_list_add(new_files, full_path, profile, storage_path);
                 free(storage_path);
                 free(full_path);
 
@@ -329,7 +327,7 @@ static void display_status_summary(
 /**
  * Scan tracked directories for new files
  */
-static dotta_error_t *scan_for_new_files_in_dirs(
+static error_t *scan_for_new_files_in_dirs(
     git_repository *repo,
     const state_t *state,
     const manifest_t *manifest,
@@ -346,10 +344,10 @@ static dotta_error_t *scan_for_new_files_in_dirs(
     CHECK_NULL(opts);
     CHECK_NULL(new_files_out);
 
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     new_file_list_t *new_files = new_file_list_create();
     if (!new_files) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to create new file list");
+        return ERROR(ERR_MEMORY, "Failed to create new file list");
     }
 
     /* Get tracked directories from state */
@@ -406,7 +404,7 @@ static dotta_error_t *scan_for_new_files_in_dirs(
 /**
  * Check status of files in manifest
  */
-static dotta_error_t *check_files_status(
+static error_t *check_files_status(
     git_repository *repo,
     const manifest_t *manifest,
     output_ctx_t *out,
@@ -432,7 +430,7 @@ static dotta_error_t *check_files_status(
 
         /* Compare with disk */
         compare_result_t cmp_result;
-        dotta_error_t *err = compare_tree_entry_to_disk(
+        error_t *err = compare_tree_entry_to_disk(
             repo,
             entry->entry,
             entry->filesystem_path,
@@ -538,7 +536,7 @@ static void display_active_profiles(
  * Note: This function loads ALL local profiles, not just auto-detected ones,
  * to show complete remote sync state across all branches.
  */
-static dotta_error_t *display_remote_status(
+static error_t *display_remote_status(
     git_repository *repo,
     output_ctx_t *out,
     bool verbose,
@@ -549,7 +547,7 @@ static dotta_error_t *display_remote_status(
 
     /* Detect remote */
     char *remote_name = NULL;
-    dotta_error_t *err = upstream_detect_remote(repo, &remote_name);
+    error_t *err = upstream_detect_remote(repo, &remote_name);
     if (err) {
         /* No remote configured - not an error, just skip this section */
         error_free(err);
@@ -579,7 +577,7 @@ static dotta_error_t *display_remote_status(
         /* Fetch each profile branch */
         for (size_t i = 0; i < all_profiles->count; i++) {
             const char *branch_name = all_profiles->profiles[i].name;
-            dotta_error_t *fetch_err = gitops_fetch_branch(repo, remote_name, branch_name, NULL);
+            error_t *fetch_err = gitops_fetch_branch(repo, remote_name, branch_name, NULL);
             if (fetch_err) {
                 /* Non-fatal: just warn */
                 if (verbose) {
@@ -665,7 +663,7 @@ static dotta_error_t *display_remote_status(
             char local_ref[256];
             snprintf(local_ref, sizeof(local_ref), "refs/heads/%s", profile_name);
             git_commit *local_commit = NULL;
-            dotta_error_t *commit_err = gitops_get_commit(repo, local_ref, &local_commit);
+            error_t *commit_err = gitops_get_commit(repo, local_ref, &local_commit);
 
             if (!commit_err && local_commit) {
                 const git_oid *local_oid = git_commit_id(local_commit);
@@ -767,12 +765,12 @@ static dotta_error_t *display_remote_status(
 /**
  * Status command implementation
  */
-dotta_error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
+error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
     /* Initialize all resources to NULL */
-    dotta_error_t *err = NULL;
+    error_t *err = NULL;
     dotta_config_t *config = NULL;
     profile_list_t *profiles = NULL;
     manifest_t *manifest = NULL;
@@ -795,7 +793,7 @@ dotta_error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts
     /* Create output context from config */
     out = output_create_from_config(config);
     if (!out) {
-        err = ERROR(DOTTA_ERR_MEMORY, "Failed to create output context");
+        err = ERROR(ERR_MEMORY, "Failed to create output context");
         goto cleanup;
     }
 

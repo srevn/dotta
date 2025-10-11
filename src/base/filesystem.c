@@ -20,7 +20,6 @@
 #include "error.h"
 #include "utils/array.h"
 #include "utils/buffer.h"
-#include "utils/string.h"
 
 /* Buffer size for file I/O */
 #define IO_BUFFER_SIZE 8192
@@ -28,10 +27,10 @@
 /**
  * Helper: Validate path argument
  */
-static inline dotta_error_t *validate_path(const char *path) {
+static inline error_t *validate_path(const char *path) {
     CHECK_NULL(path);
     if (path[0] == '\0') {
-        return ERROR(DOTTA_ERR_INVALID_ARG, "Path cannot be empty");
+        return ERROR(ERR_INVALID_ARG, "Path cannot be empty");
     }
     return NULL;
 }
@@ -40,14 +39,14 @@ static inline dotta_error_t *validate_path(const char *path) {
  * File operations
  */
 
-dotta_error_t *fs_read_file(const char *path, buffer_t **out) {
+error_t *fs_read_file(const char *path, buffer_t **out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);
 
     /* Open file */
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
-        return ERROR(DOTTA_ERR_FS, "Failed to open '%s': %s", path, strerror(errno));
+        return ERROR(ERR_FS, "Failed to open '%s': %s", path, strerror(errno));
     }
 
     /* Get file size */
@@ -55,14 +54,14 @@ dotta_error_t *fs_read_file(const char *path, buffer_t **out) {
     if (fstat(fd, &st) < 0) {
         int saved_errno = errno;
         close(fd);
-        return ERROR(DOTTA_ERR_FS, "Failed to stat '%s': %s", path, strerror(saved_errno));
+        return ERROR(ERR_FS, "Failed to stat '%s': %s", path, strerror(saved_errno));
     }
 
     /* Create buffer */
     buffer_t *buf = buffer_create_with_capacity(st.st_size > 0 ? st.st_size : IO_BUFFER_SIZE);
     if (!buf) {
         close(fd);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate buffer for '%s'", path);
+        return ERROR(ERR_MEMORY, "Failed to allocate buffer for '%s'", path);
     }
 
     /* Read file in chunks */
@@ -70,7 +69,7 @@ dotta_error_t *fs_read_file(const char *path, buffer_t **out) {
     ssize_t bytes_read;
 
     while ((bytes_read = read(fd, chunk, sizeof(chunk))) > 0) {
-        dotta_error_t *err = buffer_append(buf, chunk, bytes_read);
+        error_t *err = buffer_append(buf, chunk, bytes_read);
         if (err) {
             close(fd);
             buffer_free(buf);
@@ -82,7 +81,7 @@ dotta_error_t *fs_read_file(const char *path, buffer_t **out) {
         int saved_errno = errno;
         close(fd);
         buffer_free(buf);
-        return ERROR(DOTTA_ERR_FS, "Read error on '%s': %s", path, strerror(saved_errno));
+        return ERROR(ERR_FS, "Read error on '%s': %s", path, strerror(saved_errno));
     }
 
     close(fd);
@@ -90,13 +89,13 @@ dotta_error_t *fs_read_file(const char *path, buffer_t **out) {
     return NULL;
 }
 
-dotta_error_t *fs_write_file(const char *path, const buffer_t *content) {
+error_t *fs_write_file(const char *path, const buffer_t *content) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(content);
 
     /* Ensure parent directory exists */
     char *parent = NULL;
-    dotta_error_t *err = fs_get_parent_dir(path, &parent);
+    error_t *err = fs_get_parent_dir(path, &parent);
     if (err) {
         return err;
     }
@@ -114,7 +113,7 @@ dotta_error_t *fs_write_file(const char *path, const buffer_t *content) {
     /* Open file for writing (create if not exists, truncate if exists) */
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
-        return ERROR(DOTTA_ERR_FS, "Failed to open '%s' for writing: %s",
+        return ERROR(ERR_FS, "Failed to open '%s' for writing: %s",
                     path, strerror(errno));
     }
 
@@ -131,7 +130,7 @@ dotta_error_t *fs_write_file(const char *path, const buffer_t *content) {
             }
             int saved_errno = errno;
             close(fd);
-            return ERROR(DOTTA_ERR_FS, "Write error on '%s': %s",
+            return ERROR(ERR_FS, "Write error on '%s': %s",
                         path, strerror(saved_errno));
         }
         written += n;
@@ -141,7 +140,7 @@ dotta_error_t *fs_write_file(const char *path, const buffer_t *content) {
     if (fsync(fd) < 0) {
         int saved_errno = errno;
         close(fd);
-        return ERROR(DOTTA_ERR_FS, "Failed to sync '%s': %s",
+        return ERROR(ERR_FS, "Failed to sync '%s': %s",
                     path, strerror(saved_errno));
     }
 
@@ -149,18 +148,18 @@ dotta_error_t *fs_write_file(const char *path, const buffer_t *content) {
     return NULL;
 }
 
-dotta_error_t *fs_copy_file(const char *src, const char *dst) {
+error_t *fs_copy_file(const char *src, const char *dst) {
     RETURN_IF_ERROR(validate_path(src));
     RETURN_IF_ERROR(validate_path(dst));
 
     /* Check source exists */
     if (!fs_file_exists(src)) {
-        return ERROR(DOTTA_ERR_NOT_FOUND, "Source file not found: %s", src);
+        return ERROR(ERR_NOT_FOUND, "Source file not found: %s", src);
     }
 
     /* Get source permissions */
     mode_t mode;
-    dotta_error_t *err = fs_get_permissions(src, &mode);
+    error_t *err = fs_get_permissions(src, &mode);
     if (err) {
         return err;
     }
@@ -188,14 +187,14 @@ dotta_error_t *fs_copy_file(const char *src, const char *dst) {
     return NULL;
 }
 
-dotta_error_t *fs_remove_file(const char *path) {
+error_t *fs_remove_file(const char *path) {
     RETURN_IF_ERROR(validate_path(path));
 
     if (unlink(path) < 0) {
         if (errno == ENOENT) {
             return NULL;  /* Not an error if file doesn't exist */
         }
-        return ERROR(DOTTA_ERR_FS, "Failed to remove '%s': %s", path, strerror(errno));
+        return ERROR(ERR_FS, "Failed to remove '%s': %s", path, strerror(errno));
     }
 
     return NULL;
@@ -218,7 +217,7 @@ bool fs_file_exists(const char *path) {
  * Directory operations
  */
 
-dotta_error_t *fs_create_dir(const char *path, bool parents) {
+error_t *fs_create_dir(const char *path, bool parents) {
     RETURN_IF_ERROR(validate_path(path));
 
     /* Already exists? */
@@ -229,7 +228,7 @@ dotta_error_t *fs_create_dir(const char *path, bool parents) {
     if (parents) {
         /* Create parent first */
         char *parent = NULL;
-        dotta_error_t *err = fs_get_parent_dir(path, &parent);
+        error_t *err = fs_get_parent_dir(path, &parent);
         if (err) {
             return err;
         }
@@ -250,14 +249,14 @@ dotta_error_t *fs_create_dir(const char *path, bool parents) {
         if (errno == EEXIST && fs_is_directory(path)) {
             return NULL;  /* Race condition - another process created it */
         }
-        return ERROR(DOTTA_ERR_FS, "Failed to create directory '%s': %s",
+        return ERROR(ERR_FS, "Failed to create directory '%s': %s",
                     path, strerror(errno));
     }
 
     return NULL;
 }
 
-dotta_error_t *fs_remove_dir(const char *path, bool recursive) {
+error_t *fs_remove_dir(const char *path, bool recursive) {
     RETURN_IF_ERROR(validate_path(path));
 
     if (!fs_is_directory(path)) {
@@ -267,7 +266,7 @@ dotta_error_t *fs_remove_dir(const char *path, bool recursive) {
     if (recursive) {
         /* List and remove contents first */
         string_array_t *entries = NULL;
-        dotta_error_t *err = fs_list_dir(path, &entries);
+        error_t *err = fs_list_dir(path, &entries);
         if (err) {
             return err;
         }
@@ -309,7 +308,7 @@ dotta_error_t *fs_remove_dir(const char *path, bool recursive) {
         if (errno == ENOENT) {
             return NULL;  /* Not an error if doesn't exist */
         }
-        return ERROR(DOTTA_ERR_FS, "Failed to remove directory '%s': %s",
+        return ERROR(ERR_FS, "Failed to remove directory '%s': %s",
                     path, strerror(errno));
     }
 
@@ -329,26 +328,26 @@ bool fs_is_directory(const char *path) {
     return S_ISDIR(st.st_mode);
 }
 
-dotta_error_t *fs_list_dir(const char *path, string_array_t **out) {
+error_t *fs_list_dir(const char *path, string_array_t **out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);
 
     DIR *dir = opendir(path);
     if (!dir) {
-        return ERROR(DOTTA_ERR_FS, "Failed to open directory '%s': %s",
+        return ERROR(ERR_FS, "Failed to open directory '%s': %s",
                     path, strerror(errno));
     }
 
     string_array_t *entries = string_array_create();
     if (!entries) {
         closedir(dir);
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate directory listing for '%s'", path);
+        return ERROR(ERR_MEMORY, "Failed to allocate directory listing for '%s'", path);
     }
 
     struct dirent *entry;
     errno = 0;
     while ((entry = readdir(dir)) != NULL) {
-        dotta_error_t *err = string_array_push(entries, entry->d_name);
+        error_t *err = string_array_push(entries, entry->d_name);
         if (err) {
             closedir(dir);
             string_array_free(entries);
@@ -361,7 +360,7 @@ dotta_error_t *fs_list_dir(const char *path, string_array_t **out) {
         int saved_errno = errno;
         closedir(dir);
         string_array_free(entries);
-        return ERROR(DOTTA_ERR_FS, "Error reading directory '%s': %s",
+        return ERROR(ERR_FS, "Error reading directory '%s': %s",
                     path, strerror(saved_errno));
     }
 
@@ -374,25 +373,25 @@ dotta_error_t *fs_list_dir(const char *path, string_array_t **out) {
  * Path operations
  */
 
-dotta_error_t *fs_canonicalize_path(const char *path, char **out) {
+error_t *fs_canonicalize_path(const char *path, char **out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);
 
     char resolved[PATH_MAX];
     if (realpath(path, resolved) == NULL) {
-        return ERROR(DOTTA_ERR_FS, "Failed to resolve path '%s': %s",
+        return ERROR(ERR_FS, "Failed to resolve path '%s': %s",
                     path, strerror(errno));
     }
 
     *out = strdup(resolved);
     if (!*out) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate canonical path for '%s'", path);
+        return ERROR(ERR_MEMORY, "Failed to allocate canonical path for '%s'", path);
     }
 
     return NULL;
 }
 
-dotta_error_t *fs_get_parent_dir(const char *path, char **out) {
+error_t *fs_get_parent_dir(const char *path, char **out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);
 
@@ -405,7 +404,7 @@ dotta_error_t *fs_get_parent_dir(const char *path, char **out) {
     /* Make a copy without trailing slashes for processing */
     char *clean_path = strndup(path, path_len);
     if (!clean_path) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate clean path");
+        return ERROR(ERR_MEMORY, "Failed to allocate clean path");
     }
 
     /* Find last slash in cleaned path */
@@ -416,7 +415,7 @@ dotta_error_t *fs_get_parent_dir(const char *path, char **out) {
         free(clean_path);
         *out = strdup(".");
         if (!*out) {
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate parent path");
+            return ERROR(ERR_MEMORY, "Failed to allocate parent path");
         }
         return NULL;
     }
@@ -426,7 +425,7 @@ dotta_error_t *fs_get_parent_dir(const char *path, char **out) {
         free(clean_path);
         *out = strdup("/");
         if (!*out) {
-            return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate parent path");
+            return ERROR(ERR_MEMORY, "Failed to allocate parent path");
         }
         return NULL;
     }
@@ -437,13 +436,13 @@ dotta_error_t *fs_get_parent_dir(const char *path, char **out) {
     free(clean_path);
 
     if (!*out) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate parent path for '%s'", path);
+        return ERROR(ERR_MEMORY, "Failed to allocate parent path for '%s'", path);
     }
 
     return NULL;
 }
 
-dotta_error_t *fs_path_join(const char *base, const char *component, char **out) {
+error_t *fs_path_join(const char *base, const char *component, char **out) {
     RETURN_IF_ERROR(validate_path(base));
     RETURN_IF_ERROR(validate_path(component));
     CHECK_NULL(out);
@@ -457,7 +456,7 @@ dotta_error_t *fs_path_join(const char *base, const char *component, char **out)
     /* Allocate */
     char *result = malloc(total_len + 1);
     if (!result) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate joined path");
+        return ERROR(ERR_MEMORY, "Failed to allocate joined path");
     }
 
     /* Build path */
@@ -512,19 +511,19 @@ bool fs_is_writable(const char *path) {
  * Symlink operations
  */
 
-dotta_error_t *fs_create_symlink(const char *target, const char *linkpath) {
+error_t *fs_create_symlink(const char *target, const char *linkpath) {
     RETURN_IF_ERROR(validate_path(target));
     RETURN_IF_ERROR(validate_path(linkpath));
 
     if (symlink(target, linkpath) < 0) {
-        return ERROR(DOTTA_ERR_FS, "Failed to create symlink '%s' -> '%s': %s",
+        return ERROR(ERR_FS, "Failed to create symlink '%s' -> '%s': %s",
                     linkpath, target, strerror(errno));
     }
 
     return NULL;
 }
 
-dotta_error_t *fs_read_symlink(const char *linkpath, char **out) {
+error_t *fs_read_symlink(const char *linkpath, char **out) {
     RETURN_IF_ERROR(validate_path(linkpath));
     CHECK_NULL(out);
 
@@ -532,14 +531,14 @@ dotta_error_t *fs_read_symlink(const char *linkpath, char **out) {
     ssize_t len = readlink(linkpath, buf, sizeof(buf) - 1);
 
     if (len < 0) {
-        return ERROR(DOTTA_ERR_FS, "Failed to read symlink '%s': %s",
+        return ERROR(ERR_FS, "Failed to read symlink '%s': %s",
                     linkpath, strerror(errno));
     }
 
     buf[len] = '\0';
     *out = strdup(buf);
     if (!*out) {
-        return ERROR(DOTTA_ERR_MEMORY, "Failed to allocate symlink target for '%s'", linkpath);
+        return ERROR(ERR_MEMORY, "Failed to allocate symlink target for '%s'", linkpath);
     }
 
     return NULL;
@@ -562,24 +561,24 @@ bool fs_is_symlink(const char *path) {
  * Permission operations
  */
 
-dotta_error_t *fs_get_permissions(const char *path, mode_t *out) {
+error_t *fs_get_permissions(const char *path, mode_t *out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);
 
     struct stat st;
     if (stat(path, &st) < 0) {
-        return ERROR(DOTTA_ERR_FS, "Failed to stat '%s': %s", path, strerror(errno));
+        return ERROR(ERR_FS, "Failed to stat '%s': %s", path, strerror(errno));
     }
 
     *out = st.st_mode & 0777;
     return NULL;
 }
 
-dotta_error_t *fs_set_permissions(const char *path, mode_t mode) {
+error_t *fs_set_permissions(const char *path, mode_t mode) {
     RETURN_IF_ERROR(validate_path(path));
 
     if (chmod(path, mode) < 0) {
-        return ERROR(DOTTA_ERR_FS, "Failed to set permissions on '%s': %s",
+        return ERROR(ERR_FS, "Failed to set permissions on '%s': %s",
                     path, strerror(errno));
     }
 

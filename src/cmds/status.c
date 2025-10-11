@@ -21,6 +21,7 @@
 #include "utils/ignore.h"
 #include "utils/output.h"
 #include "utils/string.h"
+#include "utils/timeutil.h"
 #include "utils/upstream.h"
 
 #include <dirent.h>
@@ -476,7 +477,9 @@ static dotta_error_t *check_files_status(
 static void display_active_profiles(
     output_ctx_t *out,
     const profile_list_t *profiles,
-    const state_t *state
+    const manifest_t *manifest,
+    const state_t *state,
+    bool verbose
 ) {
     if (!out || !profiles) {
         return;
@@ -484,16 +487,36 @@ static void display_active_profiles(
 
     /* Show active profiles */
     output_section(out, "Active profiles");
+
     for (size_t i = 0; i < profiles->count; i++) {
-        char *colored_name = output_colorize(out, OUTPUT_COLOR_CYAN,
-                                             profiles->profiles[i].name);
-        char *auto_text = profiles->profiles[i].auto_detected ? " (auto-detected)" : "";
+        const profile_t *profile = &profiles->profiles[i];
+
+        /* Format profile name with marker */
+        char *colored_name = output_colorize(out, OUTPUT_COLOR_CYAN, profile->name);
+        char *auto_text = profile->auto_detected ? " (auto-detected)" : "";
+
         if (colored_name) {
-            fprintf(out->stream, "  %s%s\n", colored_name, auto_text);
+            fprintf(out->stream, "  %s %s%s",
+                    profile->auto_detected ? "*" : " ", colored_name, auto_text);
             free(colored_name);
         } else {
-            fprintf(out->stream, "  %s%s\n", profiles->profiles[i].name, auto_text);
+            fprintf(out->stream, "  %s %s%s",
+                    profile->auto_detected ? "*" : " ", profile->name, auto_text);
         }
+
+        /* In verbose mode, show file count for this profile */
+        if (verbose && manifest) {
+            size_t profile_file_count = 0;
+            for (size_t j = 0; j < manifest->count; j++) {
+                if (manifest->entries[j].source_profile == profile) {
+                    profile_file_count++;
+                }
+            }
+            fprintf(out->stream, "\n      %zu file%s",
+                    profile_file_count, profile_file_count == 1 ? "" : "s");
+        }
+
+        fprintf(out->stream, "\n");
     }
 
     /* Show last deployment time if available */
@@ -634,16 +657,82 @@ static dotta_error_t *display_remote_status(
         }
 
         /* Display with colors */
-        if (output_colors_enabled(out)) {
-            fprintf(out->stream, "  %s%-12s%s  %s%s%s\n",
-                    output_color_code(out, OUTPUT_COLOR_CYAN),
-                    profile_name,
-                    output_color_code(out, OUTPUT_COLOR_RESET),
-                    output_color_code(out, color),
-                    status_str,
-                    output_color_code(out, OUTPUT_COLOR_RESET));
+        if (verbose && info->state != UPSTREAM_NO_REMOTE && info->state != UPSTREAM_UNKNOWN) {
+            /* Verbose mode: show detailed commit info */
+            fprintf(out->stream, "\nProfile: %s\n", profile_name);
+
+            /* Get local commit info */
+            char local_ref[256];
+            snprintf(local_ref, sizeof(local_ref), "refs/heads/%s", profile_name);
+            git_commit *local_commit = NULL;
+            dotta_error_t *commit_err = gitops_get_commit(repo, local_ref, &local_commit);
+
+            if (!commit_err && local_commit) {
+                const git_oid *local_oid = git_commit_id(local_commit);
+                char local_oid_str[8];
+                git_oid_tostr(local_oid_str, sizeof(local_oid_str), local_oid);
+
+                const char *local_summary = git_commit_summary(local_commit);
+                git_time_t local_time = git_commit_time(local_commit);
+
+                char time_str[64];
+                format_relative_time(local_time, time_str, sizeof(time_str));
+
+                fprintf(out->stream, "  Status:         ");
+                if (output_colors_enabled(out)) {
+                    fprintf(out->stream, "%s%s%s\n",
+                            output_color_code(out, color),
+                            status_str,
+                            output_color_code(out, OUTPUT_COLOR_RESET));
+                } else {
+                    fprintf(out->stream, "%s\n", status_str);
+                }
+                fprintf(out->stream, "  Local commit:   %s %s (%s)\n",
+                        local_oid_str, local_summary, time_str);
+
+                git_commit_free(local_commit);
+            }
+            error_free(commit_err);
+
+            /* Get remote commit info if it exists */
+            if (info->exists_remotely) {
+                char remote_ref[256];
+                snprintf(remote_ref, sizeof(remote_ref), "refs/remotes/%s/%s",
+                        remote_name, profile_name);
+                git_commit *remote_commit = NULL;
+                commit_err = gitops_get_commit(repo, remote_ref, &remote_commit);
+
+                if (!commit_err && remote_commit) {
+                    const git_oid *remote_oid = git_commit_id(remote_commit);
+                    char remote_oid_str[8];
+                    git_oid_tostr(remote_oid_str, sizeof(remote_oid_str), remote_oid);
+
+                    const char *remote_summary = git_commit_summary(remote_commit);
+                    git_time_t remote_time = git_commit_time(remote_commit);
+
+                    char time_str[64];
+                    format_relative_time(remote_time, time_str, sizeof(time_str));
+
+                    fprintf(out->stream, "  Remote commit:  %s %s (%s)\n",
+                            remote_oid_str, remote_summary, time_str);
+
+                    git_commit_free(remote_commit);
+                }
+                error_free(commit_err);
+            }
         } else {
-            fprintf(out->stream, "  %-12s  %s\n", profile_name, status_str);
+            /* Compact mode: single line */
+            if (output_colors_enabled(out)) {
+                fprintf(out->stream, "  %s%-12s%s  %s%s%s\n",
+                        output_color_code(out, OUTPUT_COLOR_CYAN),
+                        profile_name,
+                        output_color_code(out, OUTPUT_COLOR_RESET),
+                        output_color_code(out, color),
+                        status_str,
+                        output_color_code(out, OUTPUT_COLOR_RESET));
+            } else {
+                fprintf(out->stream, "  %-12s  %s\n", profile_name, status_str);
+            }
         }
 
         upstream_info_free(info);
@@ -737,16 +826,21 @@ dotta_error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts
         goto cleanup;
     }
 
+    /* Build manifest (needed for both profile display and filesystem status) */
+    err = profile_build_manifest(repo, profiles, &manifest);
+    if (err) {
+        err = error_wrap(err, "Failed to build manifest");
+        goto cleanup;
+    }
+
     /* Display active profiles and last deployment info */
-    display_active_profiles(out, profiles, state);
+    display_active_profiles(out, profiles, manifest, state, opts->verbose);
 
     /* Show filesystem status (if requested) */
     if (opts->show_local) {
-        /* Build manifest */
-        err = profile_build_manifest(repo, profiles, &manifest);
-        if (err) {
-            err = error_wrap(err, "Failed to build manifest");
-            goto cleanup;
+        /* Add section header */
+        if (opts->verbose) {
+            output_section(out, "Filesystem status");
         }
 
         /* Check status of all files in manifest */
@@ -787,6 +881,47 @@ dotta_error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts
             /* Non-fatal: might not have remote configured */
             error_free(err);
             err = NULL;
+        }
+    }
+
+    /* Display contextual hints based on detected conditions */
+    bool has_hints = false;
+    if (not_deployed > 0 || modified > 0 || new_files) {
+        if (!has_hints) {
+            has_hints = true;
+        }
+
+        if (not_deployed > 0) {
+            char *hint = output_colorize(out, OUTPUT_COLOR_DIM,
+                    "Hint: Run 'dotta apply' to deploy files to filesystem");
+            if (hint) {
+                fprintf(out->stream, "%s\n", hint);
+                free(hint);
+            } else {
+                fprintf(out->stream, "Hint: Run 'dotta apply' to deploy files to filesystem\n");
+            }
+        }
+
+        if (modified > 0) {
+            char *hint = output_colorize(out, OUTPUT_COLOR_DIM,
+                    "Hint: Use 'dotta apply --force' to overwrite locally modified files");
+            if (hint) {
+                fprintf(out->stream, "%s\n", hint);
+                free(hint);
+            } else {
+                fprintf(out->stream, "Hint: Use 'dotta apply --force' to overwrite locally modified files\n");
+            }
+        }
+
+        if (new_files && new_files->count > 0) {
+            char *hint = output_colorize(out, OUTPUT_COLOR_DIM,
+                    "Hint: Run 'dotta update --include-new' to add new files to profile");
+            if (hint) {
+                fprintf(out->stream, "%s\n", hint);
+                free(hint);
+            } else {
+                fprintf(out->stream, "Hint: Run 'dotta update --include-new' to add new files to profile\n");
+            }
         }
     }
 

@@ -17,6 +17,7 @@
 #include "utils/config.h"
 #include "utils/output.h"
 #include "utils/repo.h"
+#include "utils/timeutil.h"
 #include "utils/upstream.h"
 
 /**
@@ -120,7 +121,6 @@ static dotta_error_t *list_profiles(
 
     /* Print profiles */
     output_section(out, "Available profiles");
-    fprintf(out->stream, "\n");
 
     for (size_t i = 0; i < string_array_size(branches); i++) {
         const char *name = string_array_get(branches, i);
@@ -177,7 +177,7 @@ static dotta_error_t *list_profiles(
             }
         }
 
-        /* Show file count if verbose */
+        /* Show file count and last commit if verbose */
         if (opts->verbose) {
             profile_t *profile = NULL;
             err = profile_load(repo, name, &profile);
@@ -194,9 +194,42 @@ static dotta_error_t *list_profiles(
                 continue;
             }
 
-            fprintf(out->stream, "      (%zu file%s)\n",
+            fprintf(out->stream, "      %zu file%s",
                    string_array_size(files),
                    string_array_size(files) == 1 ? "" : "s");
+
+            /* Get last commit info */
+            char refname[256];
+            snprintf(refname, sizeof(refname), "refs/heads/%s", name);
+            git_commit *last_commit = NULL;
+            dotta_error_t *commit_err = gitops_get_commit(repo, refname, &last_commit);
+
+            if (!commit_err && last_commit) {
+                const git_oid *oid = git_commit_id(last_commit);
+                char oid_str[8];
+                git_oid_tostr(oid_str, sizeof(oid_str), oid);
+
+                const git_signature *author = git_commit_author(last_commit);
+                char time_str[64];
+                format_relative_time(author->when.time, time_str, sizeof(time_str));
+
+                if (output_colors_enabled(out)) {
+                    fprintf(out->stream, ", last: %s%s%s %s%s%s\n",
+                            output_color_code(out, OUTPUT_COLOR_YELLOW),
+                            oid_str,
+                            output_color_code(out, OUTPUT_COLOR_RESET),
+                            output_color_code(out, OUTPUT_COLOR_DIM),
+                            time_str,
+                            output_color_code(out, OUTPUT_COLOR_RESET));
+                } else {
+                    fprintf(out->stream, ", last: %s %s\n", oid_str, time_str);
+                }
+
+                git_commit_free(last_commit);
+            } else {
+                fprintf(out->stream, "\n");
+            }
+            error_free(commit_err);
 
             string_array_free(files);
             profile_free(profile);
@@ -288,7 +321,6 @@ static dotta_error_t *list_files(
         char header[256];
         snprintf(header, sizeof(header), "Files in profile '%s'", opts->profile);
         output_section(out, header);
-        fprintf(out->stream, "\n");
 
         /* Sort for consistent output */
         string_array_sort(files);
@@ -304,7 +336,7 @@ static dotta_error_t *list_files(
             }
         }
 
-        fprintf(out->stream, "\n%zu file%s total\n",
+        fprintf(out->stream, "\nTotal: %zu file%s\n",
                string_array_size(files),
                string_array_size(files) == 1 ? "" : "s");
     }
@@ -353,17 +385,25 @@ static void print_commit_oneline(
         return;
     }
 
+    /* Get relative time */
+    const git_signature *author = git_commit_author(commit);
+    char time_str[64];
+    format_relative_time(author->when.time, time_str, sizeof(time_str));
+
     if (output_colors_enabled(out)) {
-        fprintf(out->stream, "  %s%s%s %s(%s)%s %s\n",
+        fprintf(out->stream, "  %s%s%s %s(%s)%s %s %s(%s)%s\n",
                 output_color_code(out, OUTPUT_COLOR_YELLOW),
                 oid_str,
                 output_color_code(out, OUTPUT_COLOR_RESET),
                 output_color_code(out, OUTPUT_COLOR_CYAN),
                 profile_name,
                 output_color_code(out, OUTPUT_COLOR_RESET),
-                msg_short);
+                msg_short,
+                output_color_code(out, OUTPUT_COLOR_DIM),
+                time_str,
+                output_color_code(out, OUTPUT_COLOR_RESET));
     } else {
-        fprintf(out->stream, "  %s (%s) %s\n", oid_str, profile_name, msg_short);
+        fprintf(out->stream, "  %s (%s) %s (%s)\n", oid_str, profile_name, msg_short, time_str);
     }
 
     free(msg_short);
@@ -384,6 +424,8 @@ static void print_commit_detailed(
     const char *message = git_commit_message(commit);
 
     char *date_str = format_time(author->when.time);
+    char relative_str[64];
+    format_relative_time(author->when.time, relative_str, sizeof(relative_str));
 
     if (output_colors_enabled(out)) {
         fprintf(out->stream, "%scommit %s%s%s\n",
@@ -397,7 +439,15 @@ static void print_commit_detailed(
 
     fprintf(out->stream, "Author: %s <%s>\n", author->name, author->email);
     if (date_str) {
-        fprintf(out->stream, "Date:   %s\n", date_str);
+        if (output_colors_enabled(out)) {
+            fprintf(out->stream, "Date:   %s %s(%s)%s\n",
+                    date_str,
+                    output_color_code(out, OUTPUT_COLOR_DIM),
+                    relative_str,
+                    output_color_code(out, OUTPUT_COLOR_RESET));
+        } else {
+            fprintf(out->stream, "Date:   %s (%s)\n", date_str, relative_str);
+        }
         free(date_str);
     }
     fprintf(out->stream, "\n    %s\n", message);

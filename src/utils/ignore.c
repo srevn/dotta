@@ -48,7 +48,7 @@ struct ignore_context {
 };
 
 /**
- * Default .dottaignore content with sensible defaults
+ * Baseline .dottaignore content with sensible defaults
  */
 static const char *DEFAULT_DOTTAIGNORE =
     "# Dotta Ignore Patterns\n"
@@ -113,6 +113,37 @@ static const char *DEFAULT_DOTTAIGNORE =
     ".cache/\n"
     ".tmp/\n"
     ".temp/\n";
+
+/**
+ * Minimal .dottaignore template for new profiles
+ *
+ * Provides a clean starting point with clear documentation about the layering system.
+ * Users can add profile-specific patterns or use negation (!) to override baseline.
+ */
+static const char *PROFILE_DOTTAIGNORE =
+    "# Dotta Ignore Patterns\n"
+    "#\n"
+    "# This profile's ignore patterns work in layers (in precedence order):\n"
+    "#   1. CLI --exclude flags (highest priority - per-operation)\n"
+    "#   2. Baseline .dottaignore (from dotta-worktree branch, applies to ALL profiles)\n"
+    "#   3. Profile .dottaignore (this file - extends baseline, can use ! to override)\n"
+    "#   4. Config file patterns (from ~/.config/dotta/config.toml)\n"
+    "#   5. Source .gitignore (lowest priority - when adding from git repos)\n"
+    "#\n"
+    "# IMPORTANT: This profile automatically inherits ALL baseline patterns.\n"
+    "# Use negation patterns (!) to override baseline. Example:\n"
+    "#   Baseline has: *.log\n"
+    "#   Profile adds: !important.log\n"
+    "#   Result: important.log is NOT ignored in this profile\n"
+    "#\n"
+    "# This file uses standard .gitignore syntax:\n"
+    "#   - Use # for comments\n"
+    "#   - Use * ? [abc] for glob patterns\n"
+    "#   - Use / at end to match only directories\n"
+    "#   - Use ! to negate a pattern (override baseline)\n"
+    "#   - Use / at start to anchor to repo root\n"
+    "\n"
+    "# Add your profile-specific patterns below:\n";
 
 /**
  * Load baseline .dottaignore from dotta-worktree branch
@@ -729,6 +760,10 @@ error_t *ignore_should_ignore(
 
 const char *ignore_default_dottaignore_content(void) {
     return DEFAULT_DOTTAIGNORE;
+}
+
+const char *ignore_profile_dottaignore_template(void) {
+    return PROFILE_DOTTAIGNORE;
 }
 
 /**

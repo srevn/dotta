@@ -20,6 +20,7 @@
 #include "infra/path.h"
 #include "infra/worktree.h"
 #include "utils/array.h"
+#include "utils/buffer.h"
 #include "utils/commit.h"
 #include "utils/config.h"
 #include "utils/hooks.h"
@@ -292,6 +293,85 @@ static error_t *add_file_to_worktree(
 
     free(dest_path);
     free(storage_path);
+    return NULL;
+}
+
+/**
+ * Initialize profile .dottaignore in a new profile
+ *
+ * Creates a minimal .dottaignore file with clear documentation about
+ * the layering system. This gives users a clean starting point and
+ * documents baseline inheritance.
+ */
+static error_t *init_profile_dottaignore(
+    worktree_handle_t *wt,
+    const cmd_add_options_t *opts
+) {
+    CHECK_NULL(wt);
+    CHECK_NULL(opts);
+
+    const char *wt_path = worktree_get_path(wt);
+    if (!wt_path) {
+        return ERROR(ERR_INTERNAL, "Worktree path is NULL");
+    }
+
+    /* Build path to .dottaignore */
+    char *dottaignore_path = str_format("%s/.dottaignore", wt_path);
+    if (!dottaignore_path) {
+        return ERROR(ERR_MEMORY, "Failed to allocate .dottaignore path");
+    }
+
+    /* Get profile template content */
+    const char *template_content = ignore_profile_dottaignore_template();
+
+    /* Create buffer with template content */
+    buffer_t *content = buffer_create();
+    if (!content) {
+        free(dottaignore_path);
+        return ERROR(ERR_MEMORY, "Failed to create buffer");
+    }
+
+    error_t *err = buffer_append(content, (const uint8_t *)template_content, strlen(template_content));
+
+    if (err) {
+        buffer_free(content);
+        free(dottaignore_path);
+        return error_wrap(err, "Failed to populate buffer");
+    }
+
+    /* Write to file */
+    err = fs_write_file(dottaignore_path, content);
+    buffer_free(content);
+    if (err) {
+        free(dottaignore_path);
+        return error_wrap(err, "Failed to write .dottaignore");
+    }
+
+    /* Stage the file */
+    git_index *index = NULL;
+    err = worktree_get_index(wt, &index);
+    if (err) {
+        free(dottaignore_path);
+        return error_wrap(err, "Failed to get worktree index");
+    }
+
+    int git_err = git_index_add_bypath(index, ".dottaignore");
+    if (git_err < 0) {
+        free(dottaignore_path);
+        return error_from_git(git_err);
+    }
+
+    git_err = git_index_write(index);
+    if (git_err < 0) {
+        free(dottaignore_path);
+        return error_from_git(git_err);
+    }
+
+    if (opts->verbose) {
+        printf("Created .dottaignore for profile '%s'\n", opts->profile);
+    }
+
+    free(dottaignore_path);
     return NULL;
 }
 
@@ -644,6 +724,20 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         state_free(state);
         config_free(config);
         return error_wrap(err, "Failed to prepare profile branch '%s'", opts->profile);
+    }
+
+    /* Initialize .dottaignore for new profiles */
+    if (!profile_exists) {
+        err = init_profile_dottaignore(wt, opts);
+        if (err) {
+            worktree_cleanup(wt);
+            hook_context_free(hook_ctx);
+            free(repo_dir);
+            ignore_context_free(ignore_ctx);
+            state_free(state);
+            config_free(config);
+            return error_wrap(err, "Failed to initialize .dottaignore for profile '%s'", opts->profile);
+        }
     }
 
     /* Collect all files to add (expanding directories) */

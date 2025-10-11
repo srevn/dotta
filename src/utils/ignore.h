@@ -123,6 +123,17 @@ error_t *ignore_should_ignore(
 const char *ignore_default_dottaignore_content(void);
 
 /**
+ * Get profile .dottaignore template
+ *
+ * Returns a minimal template for new profile .dottaignore files.
+ * Includes clear documentation about the layering system and baseline inheritance.
+ * Used when creating new profiles to provide a clean starting point.
+ *
+ * @return Profile .dottaignore template (static string, do not free)
+ */
+const char *ignore_profile_dottaignore_template(void);
+
+/**
  * Test if path should be ignored (with diagnostic info)
  *
  * Like ignore_should_ignore(), but returns which layer caused the ignore.

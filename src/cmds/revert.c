@@ -647,6 +647,7 @@ static error_t *deploy_reverted_file(
     git_tree_entry *entry = NULL;
     state_t *state = NULL;
     state_file_entry_t *state_entry = NULL;
+    metadata_t *metadata = NULL;
 
     /* Load the profile */
     err = profile_load(repo, profile_name, &profile);
@@ -721,6 +722,24 @@ static error_t *deploy_reverted_file(
         .source_profile = profile
     };
 
+    /* Load metadata from the profile branch (commit being reverted to) */
+    error_t *meta_err = metadata_load_from_branch(repo, profile_name, &metadata);
+    if (meta_err) {
+        if (meta_err->code == ERR_NOT_FOUND) {
+            /* No metadata in this profile - not an error, just use defaults */
+            if (verbose) {
+                output_print(out, OUTPUT_VERBOSE,
+                            "  No metadata in profile '%s', using defaults\n", profile_name);
+            }
+            error_free(meta_err);
+            metadata = NULL;
+        } else {
+            /* Real error - propagate */
+            err = error_wrap(meta_err, "Failed to load metadata from profile '%s'", profile_name);
+            goto cleanup;
+        }
+    }
+
     /* Deploy the file */
     deploy_options_t deploy_opts = {
         .force = force,
@@ -728,8 +747,7 @@ static error_t *deploy_reverted_file(
         .verbose = verbose
     };
 
-    /* TODO: Load metadata from the commit being reverted to */
-    err = deploy_file(repo, &file_entry, NULL, &deploy_opts);
+    err = deploy_file(repo, &file_entry, metadata, &deploy_opts);
     if (err) {
         err = error_wrap(err, "Failed to deploy reverted file");
         goto cleanup;
@@ -804,6 +822,7 @@ static error_t *deploy_reverted_file(
     }
 
 cleanup:
+    if (metadata) metadata_free(metadata);
     if (state_entry) state_free_entry(state_entry);
     if (state) state_free(state);
     if (entry) git_tree_entry_free(entry);

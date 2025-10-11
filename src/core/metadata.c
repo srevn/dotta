@@ -15,6 +15,7 @@
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "utils/buffer.h"
+#include "utils/hashmap.h"
 #include "utils/string.h"
 
 #define INITIAL_CAPACITY 16
@@ -34,6 +35,14 @@ error_t *metadata_create_empty(metadata_t **out) {
     if (!metadata->entries) {
         free(metadata);
         return ERROR(ERR_MEMORY, "Failed to allocate metadata entries");
+    }
+
+    /* Create hashmap for O(1) lookups */
+    metadata->index = hashmap_create(INITIAL_CAPACITY);
+    if (!metadata->index) {
+        free(metadata->entries);
+        free(metadata);
+        return ERROR(ERR_MEMORY, "Failed to allocate metadata index");
     }
 
     metadata->count = 0;
@@ -58,6 +67,12 @@ void metadata_free(metadata_t *metadata) {
     }
 
     free(metadata->entries);
+
+    /* Free hashmap (values point to entries array, so no value free callback) */
+    if (metadata->index) {
+        hashmap_free(metadata->index, NULL);
+    }
+
     free(metadata);
 }
 
@@ -167,12 +182,21 @@ error_t *metadata_set_entry(
         return ERROR(ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)", mode);
     }
 
-    /* Check if entry already exists */
-    ssize_t index = find_entry_index(metadata, storage_path);
+    /* Check if entry already exists (use hashmap for O(1) lookup) */
+    metadata_entry_t *existing = NULL;
+    if (metadata->index) {
+        existing = hashmap_get(metadata->index, storage_path);
+    } else {
+        /* Fallback to linear search */
+        ssize_t index = find_entry_index(metadata, storage_path);
+        if (index >= 0) {
+            existing = &metadata->entries[index];
+        }
+    }
 
-    if (index >= 0) {
+    if (existing) {
         /* Update existing entry */
-        metadata->entries[index].mode = mode;
+        existing->mode = mode;
         return NULL;
     }
 
@@ -188,6 +212,17 @@ error_t *metadata_set_entry(
     }
 
     metadata->entries[metadata->count].mode = mode;
+
+    /* Add to hashmap index (points to entry in array) */
+    if (metadata->index) {
+        err = hashmap_set(metadata->index, storage_path, &metadata->entries[metadata->count]);
+        if (err) {
+            /* Clean up on failure */
+            free(metadata->entries[metadata->count].storage_path);
+            return error_wrap(err, "Failed to update metadata index");
+        }
+    }
+
     metadata->count++;
 
     return NULL;
@@ -205,6 +240,17 @@ error_t *metadata_get_entry(
     CHECK_NULL(storage_path);
     CHECK_NULL(out);
 
+    /* Use hashmap for O(1) lookup */
+    if (metadata->index) {
+        metadata_entry_t *entry = hashmap_get(metadata->index, storage_path);
+        if (!entry) {
+            return ERROR(ERR_NOT_FOUND, "Metadata entry not found: %s", storage_path);
+        }
+        *out = entry;
+        return NULL;
+    }
+
+    /* Fallback to linear search if no index */
     ssize_t index = find_entry_index(metadata, storage_path);
 
     if (index < 0) {
@@ -231,6 +277,15 @@ error_t *metadata_remove_entry(
         return ERROR(ERR_NOT_FOUND, "Metadata entry not found: %s", storage_path);
     }
 
+    /* Remove from hashmap index */
+    if (metadata->index) {
+        error_t *err = hashmap_remove(metadata->index, storage_path, NULL);
+        if (err) {
+            /* Log but don't fail - we'll still remove from array */
+            error_free(err);
+        }
+    }
+
     /* Free the storage_path string */
     free(metadata->entries[index].storage_path);
 
@@ -240,6 +295,20 @@ error_t *metadata_remove_entry(
     }
 
     metadata->count--;
+
+    /* Rebuild hashmap index since pointers changed */
+    if (metadata->index) {
+        hashmap_clear(metadata->index, NULL);
+        for (size_t i = 0; i < metadata->count; i++) {
+            error_t *err = hashmap_set(metadata->index,
+                                       metadata->entries[i].storage_path,
+                                       &metadata->entries[i]);
+            if (err) {
+                /* This is bad but we can't easily recover */
+                error_free(err);
+            }
+        }
+    }
 
     return NULL;
 }
@@ -255,6 +324,12 @@ bool metadata_has_entry(
         return false;
     }
 
+    /* Use hashmap for O(1) lookup */
+    if (metadata->index) {
+        return hashmap_has(metadata->index, storage_path);
+    }
+
+    /* Fallback to linear search if no index */
     return find_entry_index(metadata, storage_path) >= 0;
 }
 
@@ -306,23 +381,30 @@ static error_t *metadata_to_json(const metadata_t *metadata, buffer_t **out) {
     CHECK_NULL(metadata);
     CHECK_NULL(out);
 
+    error_t *err = NULL;
+    cJSON *root = NULL;
+    cJSON *files = NULL;
+    char *json_str = NULL;
+    buffer_t *buf = NULL;
+
     /* Create root object */
-    cJSON *root = cJSON_CreateObject();
+    root = cJSON_CreateObject();
     if (!root) {
-        return ERROR(ERR_MEMORY, "Failed to create JSON root object");
+        err = ERROR(ERR_MEMORY, "Failed to create JSON root object");
+        goto cleanup;
     }
 
     /* Add version */
     if (!cJSON_AddNumberToObject(root, "version", metadata->version)) {
-        cJSON_Delete(root);
-        return ERROR(ERR_MEMORY, "Failed to add version to JSON");
+        err = ERROR(ERR_MEMORY, "Failed to add version to JSON");
+        goto cleanup;
     }
 
     /* Create files object */
-    cJSON *files = cJSON_CreateObject();
+    files = cJSON_CreateObject();
     if (!files) {
-        cJSON_Delete(root);
-        return ERROR(ERR_MEMORY, "Failed to create files object");
+        err = ERROR(ERR_MEMORY, "Failed to create files object");
+        goto cleanup;
     }
 
     /* Add each file entry */
@@ -332,58 +414,62 @@ static error_t *metadata_to_json(const metadata_t *metadata, buffer_t **out) {
         /* Create file metadata object */
         cJSON *file_obj = cJSON_CreateObject();
         if (!file_obj) {
-            cJSON_Delete(files);
-            cJSON_Delete(root);
-            return ERROR(ERR_MEMORY, "Failed to create file object");
+            err = ERROR(ERR_MEMORY, "Failed to create file object");
+            goto cleanup;
         }
 
         /* Format mode as string */
         char *mode_str = NULL;
-        error_t *err = metadata_format_mode(entry->mode, &mode_str);
+        err = metadata_format_mode(entry->mode, &mode_str);
         if (err) {
             cJSON_Delete(file_obj);
-            cJSON_Delete(files);
-            cJSON_Delete(root);
-            return err;
+            goto cleanup;
         }
 
         /* Add mode */
         if (!cJSON_AddStringToObject(file_obj, "mode", mode_str)) {
             free(mode_str);
             cJSON_Delete(file_obj);
-            cJSON_Delete(files);
-            cJSON_Delete(root);
-            return ERROR(ERR_MEMORY, "Failed to add mode to file object");
+            err = ERROR(ERR_MEMORY, "Failed to add mode to file object");
+            goto cleanup;
         }
         free(mode_str);
 
-        /* Add file object to files */
+        /* Add file object to files (ownership transferred) */
         cJSON_AddItemToObject(files, entry->storage_path, file_obj);
     }
 
-    /* Add files to root */
+    /* Add files to root (ownership transferred) */
     cJSON_AddItemToObject(root, "files", files);
+    files = NULL;  /* Owned by root now */
 
     /* Convert to formatted string */
-    char *json_str = cJSON_Print(root);
-    cJSON_Delete(root);
-
+    json_str = cJSON_Print(root);
     if (!json_str) {
-        return ERROR(ERR_MEMORY, "Failed to print JSON");
+        err = ERROR(ERR_MEMORY, "Failed to print JSON");
+        goto cleanup;
     }
 
     /* Create buffer from string */
-    buffer_t *buf = buffer_create();
+    buf = buffer_create();
     if (!buf) {
-        cJSON_free(json_str);
-        return ERROR(ERR_MEMORY, "Failed to allocate buffer");
+        err = ERROR(ERR_MEMORY, "Failed to allocate buffer");
+        goto cleanup;
     }
 
     buffer_append_string(buf, json_str);
-    cJSON_free(json_str);
 
+    /* Success */
     *out = buf;
-    return NULL;
+    buf = NULL;  /* Transfer ownership */
+
+cleanup:
+    if (buf) buffer_free(buf);
+    if (json_str) cJSON_free(json_str);
+    if (files) cJSON_Delete(files);  /* Only if not added to root */
+    if (root) cJSON_Delete(root);
+
+    return err;
 }
 
 /**
@@ -558,64 +644,66 @@ error_t *metadata_load_from_branch(
     CHECK_NULL(branch_name);
     CHECK_NULL(out);
 
+    error_t *err = NULL;
+    git_reference *ref = NULL;
+    git_commit *commit = NULL;
+    git_tree *tree = NULL;
+    git_tree_entry *entry = NULL;
+    git_blob *blob = NULL;
+    char *json_str = NULL;
+    metadata_t *metadata = NULL;
+
     /* Look up branch reference */
     char ref_name[256];
     snprintf(ref_name, sizeof(ref_name), "refs/heads/%s", branch_name);
 
-    git_reference *ref = NULL;
     int git_err = git_reference_lookup(&ref, repo, ref_name);
     if (git_err < 0) {
         if (git_err == GIT_ENOTFOUND) {
-            return ERROR(ERR_NOT_FOUND, "Branch not found: %s", branch_name);
+            err = ERROR(ERR_NOT_FOUND, "Branch not found: %s", branch_name);
+        } else {
+            err = error_from_git(git_err);
         }
-        return error_from_git(git_err);
+        goto cleanup;
     }
 
     /* Get commit */
-    git_commit *commit = NULL;
     git_err = git_commit_lookup(&commit, repo, git_reference_target(ref));
-    git_reference_free(ref);
-
     if (git_err < 0) {
-        return error_from_git(git_err);
+        err = error_from_git(git_err);
+        goto cleanup;
     }
 
     /* Get tree */
-    git_tree *tree = NULL;
     git_err = git_commit_tree(&tree, commit);
-    git_commit_free(commit);
-
     if (git_err < 0) {
-        return error_from_git(git_err);
+        err = error_from_git(git_err);
+        goto cleanup;
     }
 
     /* Look for .dotta/metadata.json (use bypath for nested paths) */
-    git_tree_entry *entry = NULL;
     git_err = git_tree_entry_bypath(&entry, tree, METADATA_FILE_PATH);
     if (git_err < 0) {
-        git_tree_free(tree);
         if (git_err == GIT_ENOTFOUND) {
-            return ERROR(ERR_NOT_FOUND, "Metadata file not found in branch: %s", branch_name);
+            err = ERROR(ERR_NOT_FOUND, "Metadata file not found in branch: %s", branch_name);
+        } else {
+            err = error_from_git(git_err);
         }
-        return error_from_git(git_err);
+        goto cleanup;
     }
 
     /* Get OID */
     const git_oid *oid = git_tree_entry_id(entry);
     if (!oid) {
-        git_tree_entry_free(entry);
-        git_tree_free(tree);
-        return ERROR(ERR_INTERNAL, "Failed to get metadata file OID");
+        err = ERROR(ERR_INTERNAL, "Failed to get metadata file OID");
+        goto cleanup;
     }
 
     /* Get blob */
-    git_blob *blob = NULL;
     git_err = git_blob_lookup(&blob, repo, oid);
-    git_tree_entry_free(entry);
-    git_tree_free(tree);
-
     if (git_err < 0) {
-        return error_from_git(git_err);
+        err = error_from_git(git_err);
+        goto cleanup;
     }
 
     /* Get content */
@@ -623,28 +711,36 @@ error_t *metadata_load_from_branch(
     git_object_size_t size = git_blob_rawsize(blob);
 
     /* Null-terminate content */
-    char *json_str = malloc(size + 1);
+    json_str = malloc(size + 1);
     if (!json_str) {
-        git_blob_free(blob);
-        return ERROR(ERR_MEMORY, "Failed to allocate JSON buffer");
+        err = ERROR(ERR_MEMORY, "Failed to allocate JSON buffer");
+        goto cleanup;
     }
 
     memcpy(json_str, content, size);
     json_str[size] = '\0';
 
-    git_blob_free(blob);
-
     /* Parse JSON */
-    metadata_t *metadata = NULL;
-    error_t *err = metadata_from_json(json_str, &metadata);
-    free(json_str);
-
+    err = metadata_from_json(json_str, &metadata);
     if (err) {
-        return error_wrap(err, "Failed to parse metadata from branch: %s", branch_name);
+        err = error_wrap(err, "Failed to parse metadata from branch: %s", branch_name);
+        goto cleanup;
     }
 
+    /* Success */
     *out = metadata;
-    return NULL;
+    metadata = NULL;  /* Transfer ownership */
+
+cleanup:
+    if (json_str) free(json_str);
+    if (blob) git_blob_free(blob);
+    if (entry) git_tree_entry_free(entry);
+    if (tree) git_tree_free(tree);
+    if (commit) git_commit_free(commit);
+    if (ref) git_reference_free(ref);
+    if (metadata) metadata_free(metadata);
+
+    return err;
 }
 
 /**
@@ -693,42 +789,50 @@ error_t *metadata_save_to_worktree(
     CHECK_NULL(worktree_path);
     CHECK_NULL(metadata);
 
+    error_t *err = NULL;
+    char *dotta_dir = NULL;
+    char *metadata_path = NULL;
+    buffer_t *json_buf = NULL;
+
     /* Build path to .dotta directory */
-    char *dotta_dir = str_format("%s/.dotta", worktree_path);
+    dotta_dir = str_format("%s/.dotta", worktree_path);
     if (!dotta_dir) {
-        return ERROR(ERR_MEMORY, "Failed to allocate .dotta directory path");
+        err = ERROR(ERR_MEMORY, "Failed to allocate .dotta directory path");
+        goto cleanup;
     }
 
     /* Create .dotta directory if it doesn't exist */
-    error_t *err = fs_create_dir(dotta_dir, true);  /* true = create parents */
-    free(dotta_dir);
-
+    err = fs_create_dir(dotta_dir, true);  /* true = create parents */
     if (err) {
-        return error_wrap(err, "Failed to create .dotta directory");
+        err = error_wrap(err, "Failed to create .dotta directory");
+        goto cleanup;
     }
 
     /* Build path to metadata.json */
-    char *metadata_path = str_format("%s/%s", worktree_path, METADATA_FILE_PATH);
+    metadata_path = str_format("%s/%s", worktree_path, METADATA_FILE_PATH);
     if (!metadata_path) {
-        return ERROR(ERR_MEMORY, "Failed to allocate metadata file path");
+        err = ERROR(ERR_MEMORY, "Failed to allocate metadata file path");
+        goto cleanup;
     }
 
     /* Convert metadata to JSON */
-    buffer_t *json_buf = NULL;
     err = metadata_to_json(metadata, &json_buf);
     if (err) {
-        free(metadata_path);
-        return error_wrap(err, "Failed to convert metadata to JSON");
+        err = error_wrap(err, "Failed to convert metadata to JSON");
+        goto cleanup;
     }
 
     /* Write to file */
     err = fs_write_file(metadata_path, json_buf);
-    buffer_free(json_buf);
-    free(metadata_path);
-
     if (err) {
-        return error_wrap(err, "Failed to write metadata file");
+        err = error_wrap(err, "Failed to write metadata file");
+        goto cleanup;
     }
 
-    return NULL;
+cleanup:
+    if (json_buf) buffer_free(json_buf);
+    if (metadata_path) free(metadata_path);
+    if (dotta_dir) free(dotta_dir);
+
+    return err;
 }

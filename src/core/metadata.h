@@ -41,14 +41,21 @@ typedef struct {
     mode_t mode;           /* Permission mode (e.g., 0600, 0644, 0755) */
 } metadata_entry_t;
 
+/* Forward declaration */
+typedef struct hashmap hashmap_t;
+
 /**
  * Metadata collection
+ *
+ * Uses both array (for iteration/serialization) and hashmap (for O(1) lookups).
+ * The hashmap values point to entries in the array (no separate allocation).
  */
 typedef struct {
     metadata_entry_t *entries;
     size_t count;
     size_t capacity;
     int version;           /* Schema version (currently 1) */
+    hashmap_t *index;      /* Maps storage_path -> metadata_entry_t* (O(1) lookup) */
 } metadata_t;
 
 /**

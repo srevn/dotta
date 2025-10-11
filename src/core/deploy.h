@@ -16,10 +16,10 @@
 
 #include <git2.h>
 
-#include "types.h"
 #include "metadata.h"
 #include "profiles.h"
 #include "state.h"
+#include "types.h"
 
 /**
  * Pre-flight check results

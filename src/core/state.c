@@ -27,27 +27,35 @@
 #include "cJSON.h"
 #include "base/error.h"
 #include "base/filesystem.h"
-#include "base/gitops.h"
 #include "utils/array.h"
 #include "utils/buffer.h"
-#include "utils/string.h"
+#include "utils/hashmap.h"
 
 #define STATE_FILE_NAME "dotta-state.json"
 #define STATE_VERSION 2
 
 /**
  * State structure
+ *
+ * Uses both arrays (for iteration/serialization) and hashmaps (for O(1) lookups).
+ * The hashmap values point to entries in the arrays (no separate allocation).
  */
 struct state {
     int version;
     time_t timestamp;
     string_array_t *profiles;
+
+    /* File tracking */
     state_file_entry_t *files;
     size_t file_count;
     size_t file_capacity;
+    hashmap_t *file_index;           /* Maps filesystem_path -> state_file_entry_t* (O(1) lookup) */
+
+    /* Directory tracking */
     state_directory_entry_t *directories;
     size_t directory_count;
     size_t directory_capacity;
+    hashmap_t *directory_index;      /* Maps filesystem_path -> state_directory_entry_t* (O(1) lookup) */
 };
 
 /**
@@ -200,29 +208,57 @@ static error_t *state_to_json(const state_t *state, buffer_t **out) {
 error_t *state_create_empty(state_t **out) {
     CHECK_NULL(out);
 
-    state_t *state = calloc(1, sizeof(state_t));
+    error_t *err = NULL;
+    state_t *state = NULL;
+
+    state = calloc(1, sizeof(state_t));
     if (!state) {
-        return ERROR(ERR_MEMORY, "Failed to allocate state");
+        err = ERROR(ERR_MEMORY, "Failed to allocate state");
+        goto cleanup;
     }
 
     state->version = STATE_VERSION;
     state->timestamp = time(NULL);
+
     state->profiles = string_array_create();
     if (!state->profiles) {
-        free(state);
-        return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
+        err = ERROR(ERR_MEMORY, "Failed to allocate profiles array");
+        goto cleanup;
     }
 
+    /* Initialize file tracking */
     state->files = NULL;
     state->file_count = 0;
     state->file_capacity = 0;
+    state->file_index = hashmap_create(16);  /* Initial capacity */
+    if (!state->file_index) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate file index");
+        goto cleanup;
+    }
 
+    /* Initialize directory tracking */
     state->directories = NULL;
     state->directory_count = 0;
     state->directory_capacity = 0;
+    state->directory_index = hashmap_create(16);  /* Initial capacity */
+    if (!state->directory_index) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate directory index");
+        goto cleanup;
+    }
 
+    /* Success */
     *out = state;
-    return NULL;
+    state = NULL;  /* Transfer ownership */
+
+cleanup:
+    if (state) {
+        if (state->directory_index) hashmap_free(state->directory_index, NULL);
+        if (state->file_index) hashmap_free(state->file_index, NULL);
+        if (state->profiles) string_array_free(state->profiles);
+        free(state);
+    }
+
+    return err;
 }
 
 /**
@@ -535,6 +571,7 @@ void state_free(state_t *state) {
 
     string_array_free(state->profiles);
 
+    /* Free file entries */
     for (size_t i = 0; i < state->file_count; i++) {
         state_file_entry_t *entry = &state->files[i];
         free(entry->storage_path);
@@ -545,6 +582,12 @@ void state_free(state_t *state) {
     }
     free(state->files);
 
+    /* Free file index (values point to entries array, so no value free callback) */
+    if (state->file_index) {
+        hashmap_free(state->file_index, NULL);
+    }
+
+    /* Free directory entries */
     for (size_t i = 0; i < state->directory_count; i++) {
         state_directory_entry_t *entry = &state->directories[i];
         free(entry->filesystem_path);
@@ -552,6 +595,11 @@ void state_free(state_t *state) {
         free(entry->profile);
     }
     free(state->directories);
+
+    /* Free directory index (values point to entries array, so no value free callback) */
+    if (state->directory_index) {
+        hashmap_free(state->directory_index, NULL);
+    }
 
     free(state);
 }
@@ -563,6 +611,8 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
     CHECK_NULL(state);
     CHECK_NULL(entry);
 
+    bool need_rebuild = false;
+
     /* Grow array if needed */
     if (state->file_count >= state->file_capacity) {
         size_t new_capacity = state->file_capacity == 0 ? 16 : state->file_capacity * 2;
@@ -573,6 +623,7 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
         }
         state->files = new_files;
         state->file_capacity = new_capacity;
+        need_rebuild = true;  /* Array moved, need to rebuild hashmap */
     }
 
     /* Copy entry */
@@ -596,6 +647,31 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
     }
 
     state->file_count++;
+
+    /* Update hashmap index */
+    if (state->file_index) {
+        if (need_rebuild) {
+            /* Rebuild entire index since array was reallocated */
+            hashmap_clear(state->file_index, NULL);
+            for (size_t i = 0; i < state->file_count; i++) {
+                error_t *err = hashmap_set(state->file_index,
+                                           state->files[i].filesystem_path,
+                                           &state->files[i]);
+                if (err) {
+                    /* Continue despite error - index will be incomplete but functional */
+                    error_free(err);
+                }
+            }
+        } else {
+            /* Just add the new entry */
+            error_t *err = hashmap_set(state->file_index, dst->filesystem_path, dst);
+            if (err) {
+                /* Not fatal - fallback to linear search */
+                error_free(err);
+            }
+        }
+    }
+
     return NULL;
 }
 
@@ -638,6 +714,20 @@ error_t *state_remove_file(state_t *state, const char *filesystem_path) {
     /* Decrement count */
     state->file_count--;
 
+    /* Rebuild hashmap index since pointers changed */
+    if (state->file_index) {
+        hashmap_clear(state->file_index, NULL);
+        for (size_t i = 0; i < state->file_count; i++) {
+            error_t *err = hashmap_set(state->file_index,
+                                       state->files[i].filesystem_path,
+                                       &state->files[i]);
+            if (err) {
+                /* Continue despite error - index will be incomplete but functional */
+                error_free(err);
+            }
+        }
+    }
+
     return NULL;
 }
 
@@ -649,6 +739,12 @@ bool state_file_exists(const state_t *state, const char *filesystem_path) {
         return false;
     }
 
+    /* Use hashmap for O(1) lookup */
+    if (state->file_index) {
+        return hashmap_has(state->file_index, filesystem_path);
+    }
+
+    /* Fallback to linear search if no index */
     for (size_t i = 0; i < state->file_count; i++) {
         if (strcmp(state->files[i].filesystem_path, filesystem_path) == 0) {
             return true;
@@ -670,6 +766,17 @@ error_t *state_get_file(
     CHECK_NULL(filesystem_path);
     CHECK_NULL(out);
 
+    /* Use hashmap for O(1) lookup */
+    if (state->file_index) {
+        state_file_entry_t *entry = hashmap_get(state->file_index, filesystem_path);
+        if (!entry) {
+            return ERROR(ERR_NOT_FOUND, "File not found in state: %s", filesystem_path);
+        }
+        *out = entry;
+        return NULL;
+    }
+
+    /* Fallback to linear search if no index */
     for (size_t i = 0; i < state->file_count; i++) {
         if (strcmp(state->files[i].filesystem_path, filesystem_path) == 0) {
             *out = &state->files[i];
@@ -769,6 +876,11 @@ void state_clear_files(state_t *state) {
     }
 
     state->file_count = 0;
+
+    /* Clear file index */
+    if (state->file_index) {
+        hashmap_clear(state->file_index, NULL);
+    }
 }
 
 /**
@@ -832,6 +944,8 @@ error_t *state_add_directory(state_t *state, const state_directory_entry_t *entr
     CHECK_NULL(state);
     CHECK_NULL(entry);
 
+    bool need_rebuild = false;
+
     /* Grow array if needed */
     if (state->directory_count >= state->directory_capacity) {
         size_t new_capacity = state->directory_capacity == 0 ? 16 : state->directory_capacity * 2;
@@ -842,6 +956,7 @@ error_t *state_add_directory(state_t *state, const state_directory_entry_t *entr
         }
         state->directories = new_dirs;
         state->directory_capacity = new_capacity;
+        need_rebuild = true;  /* Array moved, need to rebuild hashmap */
     }
 
     /* Copy entry */
@@ -861,6 +976,31 @@ error_t *state_add_directory(state_t *state, const state_directory_entry_t *entr
     }
 
     state->directory_count++;
+
+    /* Update hashmap index */
+    if (state->directory_index) {
+        if (need_rebuild) {
+            /* Rebuild entire index since array was reallocated */
+            hashmap_clear(state->directory_index, NULL);
+            for (size_t i = 0; i < state->directory_count; i++) {
+                error_t *err = hashmap_set(state->directory_index,
+                                           state->directories[i].filesystem_path,
+                                           &state->directories[i]);
+                if (err) {
+                    /* Continue despite error - index will be incomplete but functional */
+                    error_free(err);
+                }
+            }
+        } else {
+            /* Just add the new entry */
+            error_t *err = hashmap_set(state->directory_index, dst->filesystem_path, dst);
+            if (err) {
+                /* Not fatal - fallback to linear search */
+                error_free(err);
+            }
+        }
+    }
+
     return NULL;
 }
 
@@ -901,6 +1041,20 @@ error_t *state_remove_directory(state_t *state, const char *filesystem_path) {
     /* Decrement count */
     state->directory_count--;
 
+    /* Rebuild hashmap index since pointers changed */
+    if (state->directory_index) {
+        hashmap_clear(state->directory_index, NULL);
+        for (size_t i = 0; i < state->directory_count; i++) {
+            error_t *err = hashmap_set(state->directory_index,
+                                       state->directories[i].filesystem_path,
+                                       &state->directories[i]);
+            if (err) {
+                /* Continue despite error - index will be incomplete but functional */
+                error_free(err);
+            }
+        }
+    }
+
     return NULL;
 }
 
@@ -912,6 +1066,12 @@ bool state_directory_exists(const state_t *state, const char *filesystem_path) {
         return false;
     }
 
+    /* Use hashmap for O(1) lookup */
+    if (state->directory_index) {
+        return hashmap_has(state->directory_index, filesystem_path);
+    }
+
+    /* Fallback to linear search if no index */
     for (size_t i = 0; i < state->directory_count; i++) {
         if (strcmp(state->directories[i].filesystem_path, filesystem_path) == 0) {
             return true;
@@ -933,6 +1093,17 @@ error_t *state_get_directory(
     CHECK_NULL(filesystem_path);
     CHECK_NULL(out);
 
+    /* Use hashmap for O(1) lookup */
+    if (state->directory_index) {
+        state_directory_entry_t *entry = hashmap_get(state->directory_index, filesystem_path);
+        if (!entry) {
+            return ERROR(ERR_NOT_FOUND, "Directory not found in state: %s", filesystem_path);
+        }
+        *out = entry;
+        return NULL;
+    }
+
+    /* Fallback to linear search if no index */
     for (size_t i = 0; i < state->directory_count; i++) {
         if (strcmp(state->directories[i].filesystem_path, filesystem_path) == 0) {
             *out = &state->directories[i];
@@ -972,6 +1143,11 @@ void state_clear_directories(state_t *state) {
     }
 
     state->directory_count = 0;
+
+    /* Clear directory index */
+    if (state->directory_index) {
+        hashmap_clear(state->directory_index, NULL);
+    }
 }
 
 /**

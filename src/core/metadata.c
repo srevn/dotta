@@ -5,7 +5,10 @@
 #include "metadata.h"
 
 #include <cJSON.h>
+#include <errno.h>
 #include <git2.h>
+#include <grp.h>
+#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -104,6 +107,8 @@ error_t *metadata_entry_create(
     }
 
     entry->mode = mode;
+    entry->owner = NULL;  /* Optional, set by caller if needed */
+    entry->group = NULL;  /* Optional, set by caller if needed */
 
     *out = entry;
     return NULL;
@@ -118,6 +123,8 @@ void metadata_entry_free(metadata_entry_t *entry) {
     }
 
     free(entry->storage_path);
+    free(entry->owner);
+    free(entry->group);
     free(entry);
 }
 
@@ -212,6 +219,8 @@ error_t *metadata_set_entry(
     }
 
     metadata->entries[metadata->count].mode = mode;
+    metadata->entries[metadata->count].owner = NULL;  /* Optional, set by caller if needed */
+    metadata->entries[metadata->count].group = NULL;  /* Optional, set by caller if needed */
 
     /* Add to hashmap index (points to entry in array) */
     if (metadata->index) {
@@ -435,6 +444,24 @@ static error_t *metadata_to_json(const metadata_t *metadata, buffer_t **out) {
         }
         free(mode_str);
 
+        /* Add owner if present (optional, only for root/ prefix) */
+        if (entry->owner) {
+            if (!cJSON_AddStringToObject(file_obj, "owner", entry->owner)) {
+                cJSON_Delete(file_obj);
+                err = ERROR(ERR_MEMORY, "Failed to add owner to file object");
+                goto cleanup;
+            }
+        }
+
+        /* Add group if present (optional, only for root/ prefix) */
+        if (entry->group) {
+            if (!cJSON_AddStringToObject(file_obj, "group", entry->group)) {
+                cJSON_Delete(file_obj);
+                err = ERROR(ERR_MEMORY, "Failed to add group to file object");
+                goto cleanup;
+            }
+        }
+
         /* Add file object to files (ownership transferred) */
         cJSON_AddItemToObject(files, entry->storage_path, file_obj);
     }
@@ -545,12 +572,46 @@ static error_t *metadata_from_json(const char *json_str, metadata_t **out) {
             return error_wrap(err, "Failed to parse mode for file: %s", storage_path);
         }
 
-        /* Add entry */
+        /* Add entry to metadata (creates the entry internally) */
         err = metadata_set_entry(metadata, storage_path, mode);
         if (err) {
             metadata_free(metadata);
             cJSON_Delete(root);
             return error_wrap(err, "Failed to add metadata entry for: %s", storage_path);
+        }
+
+        /* Get the entry we just added so we can set owner/group */
+        const metadata_entry_t *const_entry = NULL;
+        err = metadata_get_entry(metadata, storage_path, &const_entry);
+        if (err) {
+            metadata_free(metadata);
+            cJSON_Delete(root);
+            return error_wrap(err, "Failed to get metadata entry for: %s", storage_path);
+        }
+
+        /* Cast away const - safe since we own the metadata */
+        metadata_entry_t *entry = (metadata_entry_t *)const_entry;
+
+        /* Parse optional owner (only present for root/ prefix files) */
+        cJSON *owner_obj = cJSON_GetObjectItem(file_obj, "owner");
+        if (owner_obj && cJSON_IsString(owner_obj) && owner_obj->valuestring) {
+            entry->owner = strdup(owner_obj->valuestring);
+            if (!entry->owner) {
+                metadata_free(metadata);
+                cJSON_Delete(root);
+                return ERROR(ERR_MEMORY, "Failed to duplicate owner string");
+            }
+        }
+
+        /* Parse optional group (only present for root/ prefix files) */
+        cJSON *group_obj = cJSON_GetObjectItem(file_obj, "group");
+        if (group_obj && cJSON_IsString(group_obj) && group_obj->valuestring) {
+            entry->group = strdup(group_obj->valuestring);
+            if (!entry->group) {
+                metadata_free(metadata);
+                cJSON_Delete(root);
+                return ERROR(ERR_MEMORY, "Failed to duplicate group string");
+            }
         }
     }
 
@@ -629,7 +690,41 @@ error_t *metadata_capture_from_file(
     mode_t mode = st.st_mode & 0777;
 
     /* Create entry */
-    return metadata_entry_create(storage_path, mode, out);
+    metadata_entry_t *entry = NULL;
+    error_t *err = metadata_entry_create(storage_path, mode, &entry);
+    if (err) {
+        return err;
+    }
+
+    /* Capture ownership ONLY for root/ prefix files when running as root */
+    bool is_root_prefix = (strncmp(storage_path, "root/", 5) == 0);
+    bool running_as_root = (getuid() == 0);
+
+    if (is_root_prefix && running_as_root) {
+        /* Resolve UID to username */
+        struct passwd *pwd = getpwuid(st.st_uid);
+        if (pwd && pwd->pw_name) {
+            entry->owner = strdup(pwd->pw_name);
+            if (!entry->owner) {
+                metadata_entry_free(entry);
+                return ERROR(ERR_MEMORY, "Failed to allocate owner string");
+            }
+        }
+
+        /* Resolve GID to groupname */
+        struct group *grp = getgrgid(st.st_gid);
+        if (grp && grp->gr_name) {
+            entry->group = strdup(grp->gr_name);
+            if (!entry->group) {
+                metadata_entry_free(entry);
+                return ERROR(ERR_MEMORY, "Failed to allocate group string");
+            }
+        }
+    }
+    /* For home/ prefix or when not running as root: owner/group remain NULL */
+
+    *out = entry;
+    return NULL;
 }
 
 /**
@@ -776,6 +871,68 @@ error_t *metadata_load_from_file(
     }
 
     *out = metadata;
+    return NULL;
+}
+
+/**
+ * Apply ownership to a file
+ */
+error_t *metadata_apply_ownership(
+    const metadata_entry_t *entry,
+    const char *filesystem_path
+) {
+    CHECK_NULL(entry);
+    CHECK_NULL(filesystem_path);
+
+    /* Skip if no ownership metadata */
+    if (!entry->owner && !entry->group) {
+        return NULL;  /* Nothing to do */
+    }
+
+    /* Only works when running as root */
+    if (getuid() != 0) {
+        return ERROR(ERR_PERMISSION,
+                    "Cannot set ownership (not running as root): %s",
+                    filesystem_path);
+    }
+
+    uid_t uid = (uid_t)-1;  /* -1 means don't change */
+    gid_t gid = (gid_t)-1;  /* -1 means don't change */
+
+    /* Resolve owner to UID */
+    if (entry->owner) {
+        struct passwd *pwd = getpwnam(entry->owner);
+        if (!pwd) {
+            return ERROR(ERR_NOT_FOUND,
+                        "User '%s' does not exist on this system (for %s)",
+                        entry->owner, filesystem_path);
+        }
+        uid = pwd->pw_uid;
+
+        /* If no group specified, use user's primary group */
+        if (!entry->group) {
+            gid = pwd->pw_gid;
+        }
+    }
+
+    /* Resolve group to GID (if specified and not already set from user) */
+    if (entry->group && gid == (gid_t)-1) {
+        struct group *grp = getgrnam(entry->group);
+        if (!grp) {
+            return ERROR(ERR_NOT_FOUND,
+                        "Group '%s' does not exist on this system (for %s)",
+                        entry->group, filesystem_path);
+        }
+        gid = grp->gr_gid;
+    }
+
+    /* Apply ownership */
+    if (chown(filesystem_path, uid, gid) != 0) {
+        return ERROR(ERR_FS,
+                    "Failed to set ownership on %s: %s",
+                    filesystem_path, strerror(errno));
+    }
+
     return NULL;
 }
 

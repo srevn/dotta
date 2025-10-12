@@ -11,6 +11,7 @@
 
 #include "base/error.h"
 #include "base/filesystem.h"
+#include "core/metadata.h"
 #include "infra/compare.h"
 #include "utils/array.h"
 #include "utils/buffer.h"
@@ -231,9 +232,9 @@ error_t *deploy_file(
     /* Set permissions - use metadata if available, otherwise fallback to git mode */
     mode_t file_mode;
     bool used_metadata = false;
+    const metadata_entry_t *meta_entry = NULL;  /* Declare at function level for later use */
 
     if (metadata) {
-        const metadata_entry_t *meta_entry = NULL;
         error_t *meta_err = metadata_get_entry(metadata, entry->storage_path, &meta_entry);
 
         if (meta_err == NULL && meta_entry != NULL) {
@@ -245,6 +246,7 @@ error_t *deploy_file(
             if (meta_err) {
                 error_free(meta_err);
             }
+            meta_entry = NULL;  /* Ensure it's NULL if not found */
             file_mode = (mode == GIT_FILEMODE_BLOB_EXECUTABLE) ? 0755 : 0644;
         }
     } else {
@@ -257,8 +259,31 @@ error_t *deploy_file(
         return error_wrap(derr, "Failed to set permissions on '%s'", entry->filesystem_path);
     }
 
+    /* Apply ownership ONLY for root/ prefix files */
+    bool is_root_prefix = (strncmp(entry->storage_path, "root/", 5) == 0);
+    bool has_ownership = false;
+
+    if (is_root_prefix && metadata && meta_entry && (meta_entry->owner || meta_entry->group)) {
+        error_t *ownership_err = metadata_apply_ownership(meta_entry, entry->filesystem_path);
+        if (ownership_err) {
+            /* Non-fatal: warn and continue */
+            if (opts->verbose || ownership_err->code != ERR_PERMISSION) {
+                fprintf(stderr, "Warning: Could not set ownership on %s: %s\n",
+                        entry->filesystem_path, error_message(ownership_err));
+            }
+            error_free(ownership_err);
+        } else {
+            has_ownership = true;
+        }
+    }
+
     if (opts->verbose) {
-        if (used_metadata) {
+        if (used_metadata && has_ownership) {
+            printf("Deployed: %s (mode: %04o, owner: %s:%s)\n",
+                   entry->filesystem_path, file_mode,
+                   meta_entry->owner ? meta_entry->owner : "?",
+                   meta_entry->group ? meta_entry->group : "?");
+        } else if (used_metadata) {
             printf("Deployed: %s (mode: %04o from metadata)\n", entry->filesystem_path, file_mode);
         } else {
             printf("Deployed: %s (mode: %04o default)\n", entry->filesystem_path, file_mode);

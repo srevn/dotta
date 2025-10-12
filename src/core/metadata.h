@@ -6,18 +6,22 @@
  * enabling permissions to travel with files through git operations.
  *
  * Design principles:
- * - Track mode (permissions) only - no ownership or timestamps
+ * - Track mode (permissions) for all files
+ * - Track ownership (user/group) ONLY for root/ prefix files when running as root
+ * - home/ prefix files always owned by current user (no ownership tracking)
  * - Per-profile storage for natural layering (darwin overrides global)
  * - Automatic capture during add/update operations
  * - Automatic restoration during apply/revert operations
- * - Graceful degradation when metadata is missing
+ * - Graceful degradation when metadata is missing or users don't exist
  *
  * JSON Schema:
  * {
  *   "version": 1,
  *   "files": {
  *     "home/.ssh/config": {"mode": "0600"},
- *     "home/.local/bin/backup.sh": {"mode": "0755"}
+ *     "home/.local/bin/backup.sh": {"mode": "0755"},
+ *     "root/home/user/script.sh": {"mode": "0755", "owner": "user", "group": "user"},
+ *     "root/etc/nginx.conf": {"mode": "0644", "owner": "root", "group": "wheel"}
  *   }
  * }
  */
@@ -39,6 +43,8 @@
 typedef struct {
     char *storage_path;    /* Path in profile (e.g., home/.bashrc) */
     mode_t mode;           /* Permission mode (e.g., 0600, 0644, 0755) */
+    char *owner;           /* Owner username (optional, only for root/ prefix) */
+    char *group;           /* Group name (optional, only for root/ prefix) */
 } metadata_entry_t;
 
 /* Forward declaration */
@@ -180,6 +186,11 @@ error_t *metadata_merge(
  * Reads file permissions from the filesystem and creates a metadata entry.
  * Symlinks are skipped (returns NULL with no error - caller should check *out).
  *
+ * Ownership capture (user/group):
+ * - ONLY captured for root/ prefix files when running as root (UID 0)
+ * - home/ prefix files: ownership never captured (always current user)
+ * - Regular users: ownership never captured (can't chown anyway)
+ *
  * @param filesystem_path Path to file on disk (must not be NULL)
  * @param storage_path Path in profile (must not be NULL)
  * @param out Entry (must not be NULL, caller must free with metadata_entry_free)
@@ -262,5 +273,23 @@ error_t *metadata_parse_mode(const char *mode_str, mode_t *out);
  * @return Error or NULL on success
  */
 error_t *metadata_format_mode(mode_t mode, char **out);
+
+/**
+ * Apply ownership to a file
+ *
+ * Sets file ownership based on metadata entry. This function:
+ * - Only works when running as root (UID 0)
+ * - Validates that the user/group exist on the system
+ * - Returns non-fatal warnings if user doesn't exist
+ * - Should only be called for root/ prefix files
+ *
+ * @param entry Metadata entry with owner/group (must not be NULL)
+ * @param filesystem_path Path to file on disk (must not be NULL)
+ * @return Error or NULL on success (ERR_NOT_FOUND if user doesn't exist)
+ */
+error_t *metadata_apply_ownership(
+    const metadata_entry_t *entry,
+    const char *filesystem_path
+);
 
 #endif /* DOTTA_METADATA_H */

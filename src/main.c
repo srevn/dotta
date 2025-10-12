@@ -915,11 +915,21 @@ static int cmd_update_main(int argc, char **argv) {
  * Parse ignore command
  */
 static int cmd_ignore_main(int argc, char **argv) {
+    /* Temporary storage for patterns (max 100 each) */
+    const char *add_patterns_temp[100];
+    const char *remove_patterns_temp[100];
+    size_t add_count = 0;
+    size_t remove_count = 0;
+
     cmd_ignore_options_t opts = {
         .profile = NULL,
         .test_path = NULL,
         .verbose = false,
-        .mode = NULL
+        .mode = NULL,
+        .add_patterns = NULL,
+        .add_count = 0,
+        .remove_patterns = NULL,
+        .remove_count = 0
     };
 
     /* Parse arguments */
@@ -947,12 +957,38 @@ static int cmd_ignore_main(int argc, char **argv) {
                 return 1;
             }
             opts.mode = argv[++i];
+        } else if (strcmp(argv[i], "--add") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: --add requires a pattern argument\n");
+                return 1;
+            }
+            if (add_count >= 100) {
+                fprintf(stderr, "Error: Maximum 100 patterns can be added at once\n");
+                return 1;
+            }
+            add_patterns_temp[add_count++] = argv[++i];
+        } else if (strcmp(argv[i], "--remove") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: --remove requires a pattern argument\n");
+                return 1;
+            }
+            if (remove_count >= 100) {
+                fprintf(stderr, "Error: Maximum 100 patterns can be removed at once\n");
+                return 1;
+            }
+            remove_patterns_temp[remove_count++] = argv[++i];
         } else {
             fprintf(stderr, "Error: Unknown argument '%s'\n", argv[i]);
             print_ignore_help(argv[0]);
             return 1;
         }
     }
+
+    /* Set pattern arrays in opts */
+    opts.add_patterns = add_patterns_temp;
+    opts.add_count = add_count;
+    opts.remove_patterns = remove_patterns_temp;
+    opts.remove_count = remove_count;
 
     /* Open resolved repository */
     git_repository *repo = open_resolved_repo(NULL);

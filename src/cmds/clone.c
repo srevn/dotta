@@ -12,7 +12,9 @@
 
 #include "base/error.h"
 #include "base/gitops.h"
+#include "core/profiles.h"
 #include "infra/path.h"
+#include "utils/bootstrap.h"
 #include "utils/config.h"
 
 /**
@@ -40,6 +42,21 @@ static char *extract_repo_name(const char *url) {
     memcpy(repo_name, name, len);
     repo_name[len] = '\0';
     return repo_name;
+}
+
+/**
+ * Prompt user for confirmation
+ */
+static bool prompt_confirm(const char *message) {
+    printf("%s (y/n): ", message);
+    fflush(stdout);
+
+    char response[10];
+    if (!fgets(response, sizeof(response), stdin)) {
+        return false;
+    }
+
+    return (response[0] == 'y' || response[0] == 'Y');
 }
 
 /**
@@ -218,15 +235,89 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         return error_from_git(git_err);
     }
 
+    /* Bootstrap detection and execution */
+    bool run_bootstrap = false;
+    bool bootstrap_available = false;
+    profile_list_t *detected_profiles = NULL;
+
+    if (!opts->no_bootstrap) {
+        /* Auto-detect profiles for this machine */
+        err = profile_detect_auto(repo, &detected_profiles);
+        if (err) {
+            /* Non-fatal - continue without bootstrap */
+            error_free(err);
+        } else if (detected_profiles && detected_profiles->count > 0) {
+            /* Check if any detected profiles have bootstrap scripts */
+            for (size_t i = 0; i < detected_profiles->count; i++) {
+                if (bootstrap_exists(repo, detected_profiles->profiles[i].name, NULL)) {
+                    bootstrap_available = true;
+                    break;
+                }
+            }
+
+            if (bootstrap_available && !opts->quiet) {
+                printf("\nAuto-detected profiles for this machine:\n");
+                for (size_t i = 0; i < detected_profiles->count; i++) {
+                    printf("  - %s\n", detected_profiles->profiles[i].name);
+                }
+
+                printf("\nFound bootstrap scripts:\n");
+                for (size_t i = 0; i < detected_profiles->count; i++) {
+                    if (bootstrap_exists(repo, detected_profiles->profiles[i].name, NULL)) {
+                        printf("  ✓ %s/.dotta/bootstrap\n", detected_profiles->profiles[i].name);
+                    }
+                }
+                printf("\n");
+            }
+
+            /* Determine if we should run bootstrap */
+            if (bootstrap_available) {
+                if (opts->bootstrap) {
+                    /* --bootstrap flag set, run automatically */
+                    run_bootstrap = true;
+                } else if (!opts->quiet) {
+                    /* Prompt user */
+                    run_bootstrap = prompt_confirm("Would you like to execute bootstrap scripts now?");
+                }
+            }
+        }
+    }
+
+    /* Execute bootstrap if requested */
+    if (run_bootstrap && detected_profiles) {
+        printf("\n");
+        err = bootstrap_run_for_profiles(repo, local_path,
+                                         (struct profile_list *)detected_profiles,
+                                         false, true);
+        if (err) {
+            profile_list_free(detected_profiles);
+            gitops_close_repository(repo);
+            if (allocated_path) free(local_path);
+            return error_wrap(err, "Bootstrap failed");
+        }
+    }
+
+    /* Cleanup */
+    if (detected_profiles) {
+        profile_list_free(detected_profiles);
+    }
+
     gitops_close_repository(repo);
 
     /* Success message */
     if (!opts->quiet) {
         printf("\nDotta repository cloned successfully!\n");
+
+        if (run_bootstrap) {
+            printf("\nBootstrap complete!\n");
+        }
+
         printf("\nNext steps:\n");
-        printf("  cd %s\n", local_path);
-        printf("  dotta status           # View current state\n");
+        if (!run_bootstrap && bootstrap_available) {
+            printf("  dotta bootstrap        # Run bootstrap scripts\n");
+        }
         printf("  dotta apply            # Apply profiles to your system\n");
+        printf("  dotta status           # View current state\n");
         printf("\n");
     }
 

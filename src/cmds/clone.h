@@ -15,6 +15,8 @@ typedef struct {
     const char *path;         /* Local path (NULL = auto-generate from URL) */
     bool quiet;               /* Suppress output */
     bool verbose;             /* Verbose output */
+    bool bootstrap;           /* Auto-run bootstrap scripts after clone */
+    bool no_bootstrap;        /* Skip bootstrap execution entirely */
 } cmd_clone_options_t;
 
 /**

@@ -9,10 +9,11 @@
 #include <string.h>
 #include <strings.h>
 
-#include "tomlc17.h"
+#include "base/error.h"
 #include "base/filesystem.h"
 #include "infra/path.h"
 #include "string.h"
+#include "tomlc17.h"
 
 /* Default values */
 #define DEFAULT_REPO_DIR "~/.local/share/dotta/repo"

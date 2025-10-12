@@ -14,38 +14,25 @@
 #include "base/gitops.h"
 #include "core/profiles.h"
 #include "utils/config.h"
+#include "utils/editor.h"
 #include "utils/ignore.h"
 #include "utils/output.h"
 #include "utils/string.h"
 
 /**
- * Get editor from environment
- *
- * Priority: DOTTA_EDITOR > VISUAL > EDITOR > vi
- */
-static const char *get_editor(void) {
-    const char *editor = getenv("DOTTA_EDITOR");
-    if (editor) {
-        return editor;
-    }
-
-    editor = getenv("VISUAL");
-    if (editor) {
-        return editor;
-    }
-
-    editor = getenv("EDITOR");
-    if (editor) {
-        return editor;
-    }
-
-    return "vi";
-}
-
-/**
  * Update a file in a branch
  *
  * Creates a new commit with the updated file content.
+ * Supports both root-level files and files in subdirectories.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param branch_name Branch name (must not be NULL)
+ * @param file_path File path relative to repo root (can include subdirs, e.g., ".dotta/script")
+ * @param content File content (must not be NULL)
+ * @param content_size Content size in bytes
+ * @param commit_message Commit message (must not be NULL)
+ * @param file_mode File mode (GIT_FILEMODE_BLOB or GIT_FILEMODE_BLOB_EXECUTABLE)
+ * @return Error or NULL on success
  */
 static error_t *update_file_in_branch(
     git_repository *repo,
@@ -53,13 +40,19 @@ static error_t *update_file_in_branch(
     const char *file_path,
     const char *content,
     size_t content_size,
-    const char *commit_message
+    const char *commit_message,
+    git_filemode_t file_mode
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(branch_name);
     CHECK_NULL(file_path);
     CHECK_NULL(content);
     CHECK_NULL(commit_message);
+
+    /* Validate file mode */
+    if (file_mode != GIT_FILEMODE_BLOB && file_mode != GIT_FILEMODE_BLOB_EXECUTABLE) {
+        file_mode = GIT_FILEMODE_BLOB;
+    }
 
     /* Create blob from content */
     git_oid blob_oid;
@@ -81,29 +74,150 @@ static error_t *update_file_in_branch(
         return error_wrap(err, "Failed to load tree from branch '%s'", branch_name);
     }
 
-    /* Create tree builder from current tree */
-    git_treebuilder *builder = NULL;
-    git_err = git_treebuilder_new(&builder, repo, current_tree);
-    git_tree_free(current_tree);
+    /* Check if file path contains subdirectories */
+    const char *slash = strchr(file_path, '/');
 
-    if (git_err < 0) {
-        free(ref_name);
-        return error_from_git(git_err);
-    }
+    if (!slash) {
+        /* Simple case: root-level file */
+        git_treebuilder *builder = NULL;
+        git_err = git_treebuilder_new(&builder, repo, current_tree);
+        git_tree_free(current_tree);
 
-    /* Insert/update the file */
-    git_err = git_treebuilder_insert(NULL, builder, file_path, &blob_oid, GIT_FILEMODE_BLOB);
-    if (git_err < 0) {
+        if (git_err < 0) {
+            free(ref_name);
+            return error_from_git(git_err);
+        }
+
+        /* Insert/update the file */
+        git_err = git_treebuilder_insert(NULL, builder, file_path, &blob_oid, file_mode);
+        if (git_err < 0) {
+            git_treebuilder_free(builder);
+            free(ref_name);
+            return error_from_git(git_err);
+        }
+
+        /* Write the new tree */
+        git_oid tree_oid;
+        git_err = git_treebuilder_write(&tree_oid, builder);
         git_treebuilder_free(builder);
+
+        if (git_err < 0) {
+            free(ref_name);
+            return error_from_git(git_err);
+        }
+
+        /* Load the new tree */
+        git_tree *new_tree = NULL;
+        git_err = git_tree_lookup(&new_tree, repo, &tree_oid);
+        if (git_err < 0) {
+            free(ref_name);
+            return error_from_git(git_err);
+        }
+
+        /* Create commit */
+        err = gitops_create_commit(
+            repo,
+            branch_name,
+            new_tree,
+            commit_message,
+            NULL
+        );
+
+        git_tree_free(new_tree);
+        free(ref_name);
+
+        return err;
+    }
+
+    /* Complex case: file in subdirectory
+     * Extract directory name and filename */
+    size_t dir_len = (size_t)(slash - file_path);
+    char *dir_name = malloc(dir_len + 1);
+    if (!dir_name) {
+        git_tree_free(current_tree);
+        free(ref_name);
+        return ERROR(ERR_MEMORY, "Failed to allocate directory name");
+    }
+    memcpy(dir_name, file_path, dir_len);
+    dir_name[dir_len] = '\0';
+
+    const char *file_name = slash + 1;
+
+    /* Check if directory exists in the tree */
+    const git_tree_entry *dir_entry = git_tree_entry_byname(current_tree, dir_name);
+    git_tree *dir_tree = NULL;
+    git_treebuilder *dir_builder = NULL;
+
+    if (dir_entry && git_tree_entry_type(dir_entry) == GIT_OBJECT_TREE) {
+        /* Load existing subdirectory tree */
+        const git_oid *dir_oid = git_tree_entry_id(dir_entry);
+        git_err = git_tree_lookup(&dir_tree, repo, dir_oid);
+        if (git_err < 0) {
+            free(dir_name);
+            git_tree_free(current_tree);
+            free(ref_name);
+            return error_from_git(git_err);
+        }
+
+        /* Create builder from existing subdirectory tree */
+        git_err = git_treebuilder_new(&dir_builder, repo, dir_tree);
+        git_tree_free(dir_tree);
+    } else {
+        /* Create new subdirectory */
+        git_err = git_treebuilder_new(&dir_builder, repo, NULL);
+    }
+
+    if (git_err < 0) {
+        free(dir_name);
+        git_tree_free(current_tree);
         free(ref_name);
         return error_from_git(git_err);
     }
 
-    /* Write the new tree */
-    git_oid tree_oid;
-    git_err = git_treebuilder_write(&tree_oid, builder);
-    git_treebuilder_free(builder);
+    /* Insert file into subdirectory tree */
+    git_err = git_treebuilder_insert(NULL, dir_builder, file_name, &blob_oid, file_mode);
+    if (git_err < 0) {
+        git_treebuilder_free(dir_builder);
+        free(dir_name);
+        git_tree_free(current_tree);
+        free(ref_name);
+        return error_from_git(git_err);
+    }
 
+    /* Write the subdirectory tree */
+    git_oid dir_tree_oid;
+    git_err = git_treebuilder_write(&dir_tree_oid, dir_builder);
+    git_treebuilder_free(dir_builder);
+    if (git_err < 0) {
+        free(dir_name);
+        git_tree_free(current_tree);
+        free(ref_name);
+        return error_from_git(git_err);
+    }
+
+    /* Create root tree builder */
+    git_treebuilder *root_builder = NULL;
+    git_err = git_treebuilder_new(&root_builder, repo, current_tree);
+    git_tree_free(current_tree);
+    if (git_err < 0) {
+        free(dir_name);
+        free(ref_name);
+        return error_from_git(git_err);
+    }
+
+    /* Insert/update subdirectory in root tree */
+    git_err = git_treebuilder_insert(NULL, root_builder, dir_name, &dir_tree_oid, GIT_FILEMODE_TREE);
+    free(dir_name);
+    if (git_err < 0) {
+        git_treebuilder_free(root_builder);
+        free(ref_name);
+        return error_from_git(git_err);
+    }
+
+    /* Write the root tree */
+    git_oid tree_oid;
+    git_err = git_treebuilder_write(&tree_oid, root_builder);
+    git_treebuilder_free(root_builder);
     if (git_err < 0) {
         free(ref_name);
         return error_from_git(git_err);
@@ -510,22 +624,12 @@ static error_t *edit_baseline_dottaignore(
     git_tree_free(tree);
     close(fd);
 
-    /* Open in editor */
-    const char *editor = get_editor();
-    char *cmd = str_format("%s %s", editor, tmpfile);
-    if (!cmd) {
+    /* Open in editor - priority: DOTTA_EDITOR, VISUAL, EDITOR, vi */
+    err = editor_launch_with_env(tmpfile, "vi");
+    if (err) {
         unlink(tmpfile);
         free(tmpfile);
-        return ERROR(ERR_MEMORY, "Failed to allocate editor command");
-    }
-
-    int status = system(cmd);
-    free(cmd);
-
-    if (status != 0) {
-        unlink(tmpfile);
-        free(tmpfile);
-        return ERROR(ERR_INTERNAL, "Editor exited with error");
+        return error_wrap(err, "Failed to edit baseline .dottaignore");
     }
 
     /* Read back the content */
@@ -562,7 +666,8 @@ static error_t *edit_baseline_dottaignore(
         ".dottaignore",
         new_content,
         read_size,
-        "Update baseline .dottaignore"
+        "Update baseline .dottaignore",
+        GIT_FILEMODE_BLOB
     );
 
     free(new_content);
@@ -581,12 +686,10 @@ static error_t *edit_baseline_dottaignore(
 static error_t *edit_profile_dottaignore(
     git_repository *repo,
     const char *profile_name,
-    const dotta_config_t *config,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile_name);
-    (void)config;  /* Reserved for future use */
 
     /* Check if profile branch exists */
     bool branch_exists = false;
@@ -685,22 +788,12 @@ static error_t *edit_profile_dottaignore(
     git_tree_free(tree);
     close(fd);
 
-    /* Open in editor */
-    const char *editor = get_editor();
-    char *cmd = str_format("%s %s", editor, tmpfile);
-    if (!cmd) {
+    /* Open in editor - priority: DOTTA_EDITOR, VISUAL, EDITOR, vi */
+    err = editor_launch_with_env(tmpfile, "vi");
+    if (err) {
         unlink(tmpfile);
         free(tmpfile);
-        return ERROR(ERR_MEMORY, "Failed to allocate editor command");
-    }
-
-    int status = system(cmd);
-    free(cmd);
-
-    if (status != 0) {
-        unlink(tmpfile);
-        free(tmpfile);
-        return ERROR(ERR_INTERNAL, "Editor exited with error");
+        return error_wrap(err, "Failed to edit profile .dottaignore");
     }
 
     /* Read back the content */
@@ -743,7 +836,8 @@ static error_t *edit_profile_dottaignore(
         ".dottaignore",
         new_content,
         read_size,
-        commit_msg
+        commit_msg,
+        GIT_FILEMODE_BLOB
     );
 
     free(commit_msg);
@@ -921,7 +1015,8 @@ static error_t *modify_baseline_dottaignore(
         ".dottaignore",
         new_content,
         strlen(new_content),
-        commit_msg
+        commit_msg,
+        GIT_FILEMODE_BLOB
     );
 
     free(commit_msg);
@@ -1125,7 +1220,8 @@ static error_t *modify_profile_dottaignore(
         ".dottaignore",
         new_content,
         strlen(new_content),
-        commit_msg
+        commit_msg,
+        GIT_FILEMODE_BLOB
     );
 
     free(commit_msg);
@@ -1372,7 +1468,7 @@ error_t *cmd_ignore(git_repository *repo, const cmd_ignore_options_t *opts) {
     } else {
         /* Edit mode (default) */
         if (opts->profile) {
-            err = edit_profile_dottaignore(repo, opts->profile, config, out);
+            err = edit_profile_dottaignore(repo, opts->profile, out);
         } else {
             err = edit_baseline_dottaignore(repo, config, out);
         }

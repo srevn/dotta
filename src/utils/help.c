@@ -29,6 +29,7 @@ void print_usage(const char *prog_name) {
     printf("  update     Update profiles with modified files\n");
     printf("  sync       Intelligently sync with remote\n");
     printf("  ignore     Manage ignore patterns\n");
+    printf("  bootstrap  Execute profile bootstrap scripts\n");
     printf("  git        Execute git commands in repository\n");
     printf("\nRun '%s <command> --help' for more information on a command.\n", prog_name);
 }
@@ -260,9 +261,22 @@ void print_clone_help(const char *prog_name) {
     printf("  <url>            Remote repository URL\n");
     printf("  [path]           Local directory (default: derived from URL)\n");
     printf("\nOptions:\n");
-    printf("  -q, --quiet      Suppress output\n");
-    printf("  -v, --verbose    Print verbose output\n");
-    printf("  --help           Show this help message\n");
+    printf("  -q, --quiet        Suppress output\n");
+    printf("  -v, --verbose      Print verbose output\n");
+    printf("  --bootstrap        Automatically run bootstrap scripts after clone\n");
+    printf("  --no-bootstrap     Skip bootstrap execution entirely\n");
+    printf("  --help             Show this help message\n");
+    printf("\nBootstrap Integration:\n");
+    printf("  After cloning, dotta will auto-detect profiles and check for bootstrap scripts.\n");
+    printf("  By default, you'll be prompted to run them. Use --bootstrap to auto-run or\n");
+    printf("  --no-bootstrap to skip.\n");
+    printf("\nExamples:\n");
+    printf("  %s clone git@github.com:user/dotfiles.git\n", prog_name);
+    printf("  %s clone <url> --bootstrap              # Auto-run bootstrap\n", prog_name);
+    printf("  %s clone <url> --no-bootstrap           # Skip bootstrap\n", prog_name);
+    printf("\nAfter cloning:\n");
+    printf("  %s bootstrap                            # Run bootstrap manually\n", prog_name);
+    printf("  %s apply                                # Apply profiles\n", prog_name);
     printf("\n");
 }
 
@@ -477,5 +491,63 @@ void print_ignore_help(const char *prog_name) {
     printf("  %s ignore --test ~/.config/nvim/node_modules\n\n", prog_name);
     printf("  # Test against specific profile only\n");
     printf("  %s ignore --test ~/.bashrc --profile global\n", prog_name);
+    printf("\n");
+}
+
+void print_bootstrap_help(const char *prog_name) {
+    printf("Usage: %s bootstrap [options]\n\n", prog_name);
+    printf("Execute bootstrap scripts for profile setup\n\n");
+    printf("Bootstrap scripts are per-profile shell scripts stored in .dotta/bootstrap\n");
+    printf("within each profile branch. They run during initial setup to install\n");
+    printf("dependencies, configure system settings, and prepare the environment.\n\n");
+    printf("Options:\n");
+    printf("  -p, --profile <name>      Specify profile(s) to bootstrap (can be repeated)\n");
+    printf("  --all                     Bootstrap all available profiles\n");
+    printf("  -e, --edit                Edit bootstrap script (requires --profile)\n");
+    printf("  --show                    Show bootstrap script content (requires --profile)\n");
+    printf("  -l, --list                List all bootstrap scripts\n");
+    printf("  -n, --dry-run             Show what would be executed without running\n");
+    printf("  -y, --yes, --no-confirm   Skip confirmation prompts\n");
+    printf("  --continue-on-error       Continue if a bootstrap script fails\n");
+    printf("  --help                    Show this help message\n");
+    printf("\nExecution Order:\n");
+    printf("  Bootstrap scripts execute in profile resolution order:\n");
+    printf("    1. global/.dotta/bootstrap\n");
+    printf("    2. <os>/.dotta/bootstrap (darwin, linux, freebsd)\n");
+    printf("    3. hosts/<hostname>/.dotta/bootstrap\n");
+    printf("\nEnvironment Variables:\n");
+    printf("  Scripts receive these environment variables:\n");
+    printf("    DOTTA_REPO_DIR   - Path to dotta repository\n");
+    printf("    DOTTA_PROFILE    - Current profile name\n");
+    printf("    DOTTA_PROFILES   - Space-separated list of all profiles\n");
+    printf("    HOME             - User home directory\n");
+    printf("\nBootstrap Script Location:\n");
+    printf("  Scripts are stored in: <repo>/<profile>/.dotta/bootstrap\n");
+    printf("  They are version-controlled and travel with your dotfiles.\n");
+    printf("\nEditor Selection (for --edit):\n");
+    printf("  $DOTTA_EDITOR → $VISUAL → $EDITOR → nano\n");
+    printf("\nExamples:\n");
+    printf("  # Run bootstrap for auto-detected profiles\n");
+    printf("  %s bootstrap\n\n", prog_name);
+    printf("  # Run for specific profile\n");
+    printf("  %s bootstrap --profile darwin\n\n", prog_name);
+    printf("  # Create/edit bootstrap script for darwin profile\n");
+    printf("  %s bootstrap --profile darwin --edit\n\n", prog_name);
+    printf("  # List all bootstrap scripts\n");
+    printf("  %s bootstrap --list\n\n", prog_name);
+    printf("  # Show darwin bootstrap script\n");
+    printf("  %s bootstrap --profile darwin --show\n\n", prog_name);
+    printf("  # Dry-run (show what would execute)\n");
+    printf("  %s bootstrap --dry-run\n\n", prog_name);
+    printf("  # Run without prompts\n");
+    printf("  %s bootstrap --yes\n", prog_name);
+    printf("\nIntegration with Clone:\n");
+    printf("  Bootstrap is automatically detected after cloning:\n");
+    printf("    %s clone <url>                    # Prompts to run bootstrap\n", prog_name);
+    printf("    %s clone <url> --bootstrap        # Auto-runs bootstrap\n", prog_name);
+    printf("    %s clone <url> --no-bootstrap     # Skips bootstrap\n", prog_name);
+    printf("\n");
+    printf("  After clone, apply profiles:\n");
+    printf("    %s apply                          # Deploy configurations\n", prog_name);
     printf("\n");
 }

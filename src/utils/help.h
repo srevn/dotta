@@ -92,4 +92,9 @@ void print_sync_help(const char *prog_name);
  */
 void print_ignore_help(const char *prog_name);
 
+/**
+ * Print help for bootstrap command
+ */
+void print_bootstrap_help(const char *prog_name);
+
 #endif /* DOTTA_HELP_H */

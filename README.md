@@ -162,6 +162,61 @@ dotta ignore --profile darwin --add 'somefile'
 dotta ignore --test ~/.config/nvim/node_modules
 ```
 
+### 9. Bootstrap System
+
+Automate system setup with per-profile bootstrap scripts that run during initial configuration:
+
+```bash
+# Create/edit bootstrap script for a profile
+dotta bootstrap --profile darwin --edit
+
+# List bootstrap scripts across profiles
+dotta bootstrap --list
+
+# Run bootstrap scripts (auto-detected profiles)
+dotta bootstrap
+
+# Run for specific profiles with auto-confirmation
+dotta bootstrap --profile global --profile darwin --yes
+
+# Preview what would execute
+dotta bootstrap --dry-run
+
+# Continue even if a script fails
+dotta bootstrap --continue-on-error
+```
+
+**Bootstrap scripts** are stored in `.dotta/bootstrap` within each profile branch and receive environment context:
+
+- `DOTTA_REPO_DIR` - Path to dotta repository
+- `DOTTA_PROFILE` - Current profile being bootstrapped
+- `DOTTA_PROFILES` - Space-separated list of all profiles
+- `DOTTA_DRY_RUN` - Set to "1" during dry-run mode
+- `HOME` - User home directory
+
+**Integration with clone:**
+```bash
+# Clone prompts to run bootstrap if scripts detected
+dotta clone git@github.com:user/dotfiles.git
+
+# Auto-run bootstrap without prompt
+dotta clone <url> --bootstrap
+
+# Skip bootstrap entirely
+dotta clone <url> --no-bootstrap
+
+# After clone, apply profiles
+dotta apply
+```
+
+**Use cases:**
+- Install package managers (Homebrew, apt, yum)
+- Install system dependencies
+- Configure OS preferences (macOS defaults, systemd)
+- Clone additional repositories
+- Generate SSH keys or certificates
+- Set up development environments
+
 ## How It Works
 
 ### Repository Structure
@@ -266,11 +321,14 @@ dotta status
 # Clone dotfiles repository
 dotta clone git@github.com:username/dotfiles.git
 
+# Run bootstrap scripts if present (prompts for confirmation)
+dotta bootstrap
+
 # Apply configurations
 dotta apply
 
-# Check what was deployed
-dotta list global
+# Or clone with auto-bootstrap
+dotta clone <url> --bootstrap
 ```
 
 ### Daily Workflow
@@ -329,9 +387,11 @@ dotta clean                                       # Remove orphaned files
 dotta revert <file> <commit>                      # Revert to previous version
 ```
 
-### Configuration
+### Configuration & Setup
 
 ```bash
+dotta bootstrap [--profile <name>]  # Run bootstrap scripts
+dotta bootstrap --edit              # Create/edit bootstrap script
 dotta ignore                        # Edit .dottaignore
 dotta ignore --test <path>          # Test if path would be ignored
 dotta git <command>                 # Run git commands in repository
@@ -372,6 +432,7 @@ patterns = [                              # Personal ignore patterns
 ```bash
 DOTTA_REPO_DIR       # Override repo_dir
 DOTTA_CONFIG_FILE    # Use different config file
+DOTTA_EDITOR         # Editor for bootstrap/ignore (fallback: VISUAL → EDITOR → vi/nano)
 ```
 
 ## Architecture
@@ -459,50 +520,6 @@ mode = "all"  # Mirror all remote profiles
 
 Maintain complete backups of all configurations for disaster recovery.
 
-### Development Environment Bootstrap
-
-```bash
-# Clone and apply in one session
-dotta clone git@github.com:team/dev-configs.git
-dotta apply
-
-# Hooks auto-install packages, configure services
-# ~/.config/dotta/hooks/post-apply handles setup
-```
-
-## Safety Features
-
-### Pre-Flight Checks
-
-Before deployment, Dotta checks for:
-- File conflicts (local modifications)
-- Permission errors (unwritable paths)
-- Profile overlaps (same file in multiple profiles)
-
-### Confirmation Prompts
-
-Operations that modify files require confirmation:
-- `dotta apply` (overwrites files) - unless `--force`
-- `dotta clean` (removes files) - unless `--force`
-- `dotta remove --cleanup` (deletes from filesystem)
-- New file detection during `update` (configurable)
-
-### Fail-Safe Deployment
-
-Deployment stops on first error:
-- Partial deployments are avoided
-- Clear error messages with file paths
-- State file only updated on success
-
-### Dry-Run Mode
-
-Preview operations without making changes:
-```bash
-dotta apply --dry-run
-dotta clean --dry-run
-dotta update --dry-run
-```
-
 ## Advanced Features
 
 ### Custom Commit Messages
@@ -561,6 +578,40 @@ hosts/
     └── db01
 ```
 
+### Bootstrap Scripts
+
+Bootstrap scripts automate system setup when cloning configurations to a new machine. Each profile can have its own bootstrap script in `.dotta/bootstrap`:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "Running darwin bootstrap..."
+
+# Install Homebrew if not present
+if ! command -v brew >/dev/null 2>&1; then
+    echo "Installing Homebrew..."
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+fi
+
+# Install essential packages
+brew install git fish neovim tmux
+
+# Set macOS preferences
+defaults write NSGlobalDomain ApplePressAndHoldEnabled -bool false
+defaults write com.apple.dock autohide -bool true
+
+echo "darwin bootstrap complete!"
+```
+
+**Environment variables available in scripts:**
+- `$DOTTA_REPO_DIR` - Repository location
+- `$DOTTA_PROFILE` - Current profile name
+- `$DOTTA_PROFILES` - All profiles being bootstrapped
+- `$DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
+
+**Execution order:** Bootstrap scripts run in profile layering order (global → OS → host), allowing base scripts to install dependencies for host-specific scripts.
+
 ### File-Level Revert
 
 Revert individual files to previous versions:
@@ -588,108 +639,6 @@ Dotta is designed for efficiency:
 - **Streaming tree walks** - Doesn't load all files into memory
 - **Efficient blob comparison** - Short-circuit on size mismatch
 - **Incremental operations** - Only processes changed files during update
-
-## Troubleshooting
-
-### Common Issues
-
-**Worktree errors:**
-```bash
-# Clean up stale worktrees
-dotta git worktree prune
-```
-
-**State mismatch:**
-```bash
-# Rebuild state
-dotta apply --force
-```
-
-**Permission denied:**
-```bash
-# System files require root
-sudo dotta apply
-
-# Or use hooks to handle ownership
-```
-
-**Conflicts:**
-```bash
-# View conflicts
-dotta status
-
-# Force overwrite
-dotta apply --force
-
-# Or manually resolve
-dotta diff
-```
-
-### Debug Mode
-
-```bash
-# Enable verbose output
-dotta -v apply
-
-# Or configure in config.toml
-[output]
-verbosity = "debug"
-```
-
-### Repository Verification
-
-```bash
-# Check repository health
-dotta git fsck
-
-# View branches
-dotta git branch -a
-
-# Inspect state file
-cat ~/.local/share/dotta/repo/.git/dotta-state.json
-```
-
-## Contributing
-
-### Development Setup
-
-```bash
-# Clone repository
-git clone https://github.com/yourusername/dotta.git
-cd dotta
-
-# Build debug version with sanitizers
-make debug
-
-# Run tests (when available)
-make test
-
-# Format code
-make format
-```
-
-### Adding Features
-
-When adding new source files, simply place them in the appropriate layer directory:
-
-```
-src/
-├── base/      # Foundation layer
-├── infra/     # Infrastructure
-├── core/      # Business logic
-├── cmds/      # Commands
-└── utils/     # Utilities
-```
-
-The Makefile automatically discovers and compiles new `.c` files - no manual updates needed.
-
-### Code Style
-
-- C11 standard
-- Layer-respecting dependencies (base ← infra ← core ← cmds)
-- Error handling with `error_t` type
-- Null checks with `CHECK_NULL` macro
-- Memory cleanup with goto-style error handling
 
 ## License
 

@@ -13,6 +13,7 @@
 #include "base/gitops.h"
 #include "cmds/add.h"
 #include "cmds/apply.h"
+#include "cmds/bootstrap.h"
 #include "cmds/clean.h"
 #include "cmds/clone.h"
 #include "cmds/diff.h"
@@ -761,7 +762,9 @@ static int cmd_clone_main(int argc, char **argv) {
         .url = NULL,
         .path = NULL,
         .quiet = false,
-        .verbose = false
+        .verbose = false,
+        .bootstrap = false,
+        .no_bootstrap = false
     };
 
     /* Parse arguments */
@@ -773,6 +776,10 @@ static int cmd_clone_main(int argc, char **argv) {
             opts.quiet = true;
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             opts.verbose = true;
+        } else if (strcmp(argv[i], "--bootstrap") == 0) {
+            opts.bootstrap = true;
+        } else if (strcmp(argv[i], "--no-bootstrap") == 0) {
+            opts.no_bootstrap = true;
         } else if (!opts.url) {
             opts.url = argv[i];
         } else if (!opts.path) {
@@ -1418,6 +1425,82 @@ static int cmd_revert_main(int argc, char **argv) {
     return 0;
 }
 
+/**
+ * Parse bootstrap command
+ */
+static int cmd_bootstrap_main(int argc, char **argv) {
+    /* Collect profile arguments */
+    const char **profiles = malloc((size_t)argc * sizeof(char *));
+    if (!profiles) {
+        fprintf(stderr, "Failed to allocate memory\n");
+        return 1;
+    }
+    size_t profile_count = 0;
+
+    cmd_bootstrap_options_t opts = {
+        .profiles = NULL,
+        .profile_count = 0,
+        .all_profiles = false,
+        .edit = false,
+        .show = false,
+        .list = false,
+        .dry_run = false,
+        .yes = false,
+        .continue_on_error = false
+    };
+
+    /* Parse arguments */
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0) {
+            print_bootstrap_help(argv[0]);
+            free(profiles);
+            return 0;
+        } else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--profile") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: --profile requires an argument\n");
+                free(profiles);
+                return 1;
+            }
+            profiles[profile_count++] = argv[++i];
+        } else if (strcmp(argv[i], "--all") == 0) {
+            opts.all_profiles = true;
+        } else if (strcmp(argv[i], "-e") == 0 || strcmp(argv[i], "--edit") == 0) {
+            opts.edit = true;
+        } else if (strcmp(argv[i], "--show") == 0) {
+            opts.show = true;
+        } else if (strcmp(argv[i], "-l") == 0 || strcmp(argv[i], "--list") == 0) {
+            opts.list = true;
+        } else if (strcmp(argv[i], "-n") == 0 || strcmp(argv[i], "--dry-run") == 0) {
+            opts.dry_run = true;
+        } else if (strcmp(argv[i], "-y") == 0 || strcmp(argv[i], "--yes") == 0 || strcmp(argv[i], "--no-confirm") == 0) {
+            opts.yes = true;
+        } else if (strcmp(argv[i], "--continue-on-error") == 0) {
+            opts.continue_on_error = true;
+        } else {
+            fprintf(stderr, "Error: Unknown argument '%s'\n", argv[i]);
+            free(profiles);
+            return 1;
+        }
+    }
+
+    if (profile_count > 0) {
+        opts.profiles = profiles;
+        opts.profile_count = profile_count;
+    }
+
+    /* Execute command */
+    error_t *err = cmd_bootstrap(&opts);
+    free(profiles);
+
+    if (err) {
+        error_print(err, stderr);
+        error_free(err);
+        return 1;
+    }
+
+    return 0;
+}
+
 int main(int argc, char **argv) {
     /* Initialize libgit2 */
     if (git_libgit2_init() < 0) {
@@ -1469,6 +1552,8 @@ int main(int argc, char **argv) {
         ret = cmd_sync_main(argc, argv);
     } else if (strcmp(command, "ignore") == 0) {
         ret = cmd_ignore_main(argc, argv);
+    } else if (strcmp(command, "bootstrap") == 0) {
+        ret = cmd_bootstrap_main(argc, argv);
     } else if (strcmp(command, "git") == 0) {
         ret = cmd_git_main(argc, argv);
     } else {

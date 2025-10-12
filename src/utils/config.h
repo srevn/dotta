@@ -14,21 +14,12 @@
 #include "types.h"
 
 /**
- * Sync mode - determines which branches to fetch/sync
- */
-typedef enum {
-    SYNC_MODE_LOCAL,  /* Sync all local branches + discover new remote branches (default) */
-    SYNC_MODE_AUTO,   /* Sync only auto-detected profiles (global, os, hosts/<hostname>) */
-    SYNC_MODE_ALL     /* Fetch and sync all remote branches (like clone) */
-} sync_mode_t;
-
-/**
  * Configuration structure
  */
-typedef struct {
+typedef struct dotta_config {
     /* [core] */
     char *repo_dir;
-    bool auto_detect;
+    profile_mode_t mode;         /* Profile resolution mode (local, auto, all) */
     bool strict_mode;
     bool auto_detect_new_files;  /* Auto-detect new files in tracked directories */
 
@@ -67,7 +58,6 @@ typedef struct {
     char *commit_body;    /* Body template for commits */
 
     /* [sync] */
-    sync_mode_t sync_mode;       /* Sync mode: local, auto, or all */
     bool auto_pull;              /* Auto-pull when remote is ahead (default: true) */
     char *diverged_strategy;     /* Strategy for diverged branches: warn, rebase, merge, ours, theirs */
 } dotta_config_t;
@@ -116,5 +106,14 @@ error_t *config_validate(const dotta_config_t *config);
  *   3. Default: ~/.local/share/dotta/repo
  */
 error_t *config_get_repo_dir(const dotta_config_t *config, char **out);
+
+/**
+ * Parse profile mode from string
+ *
+ * @param str Mode string ("local", "auto", "all", or NULL)
+ * @param default_mode Fallback mode if str is NULL or invalid
+ * @return Parsed mode (or default_mode if invalid)
+ */
+profile_mode_t config_parse_mode(const char *str, profile_mode_t default_mode);
 
 #endif /* DOTTA_CONFIG_H */

@@ -26,6 +26,7 @@ typedef struct {
     bool verbose;                /* Verbose output */
     bool include_new;            /* Include new files from tracked directories */
     bool only_new;               /* Only process new files (ignore modified) */
+    const char *mode;            /* Profile mode override: "local", "auto", "all" (CLI only) */
 } cmd_update_options_t;
 
 /**

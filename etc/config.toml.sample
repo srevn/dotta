@@ -24,11 +24,14 @@
 # Default: ~/.local/share/dotta/repo
 repo_dir = "~/.local/share/dotta/repo"
 
-# Auto-detect Profile Requirements
-# Automatically determine which profiles should be applied based on hostname,
-# OS, or other environment factors
-# Default: true
-auto_detect = true
+# Profile Resolution Mode
+# Determines which profiles to operate on (applies to ALL commands)
+# Options:
+#   - "local" - All local branches (default, variant-friendly workflow)
+#   - "auto"  - Auto-detect: global + OS + hosts/<hostname> (minimal workflow)
+#   - "all"   - All available profiles (backup/hub workflow)
+# Default: local
+mode = "local"
 
 # Strict Mode
 # Fail operations if any validation errors occur
@@ -271,31 +274,6 @@ format = "compact"
 
 [sync]
 
-# Sync Mode
-# Determines which profile branches to fetch and synchronize with remote
-# Options:
-#   - "local" - Sync all local branches + auto-discover new remote branches (default)
-#               Perfect for: Day-to-day variant profile workflows
-#               Example: You have work, personal, darwin locally
-#                       Someone adds "experimental" to remote
-#                       Next sync discovers and creates local "experimental" branch
-#
-#   - "auto"  - Sync only auto-detected profiles (global, OS, hosts/<hostname>)
-#               Perfect for: Minimal machine-focused workflows
-#               Example: Only syncs global + darwin, ignores work/personal variants
-#
-#   - "all"   - Fetch and sync ALL remote branches (like clone behavior)
-#               Perfect for: Hub machines, backup servers, multi-variant management
-#               Example: Mirrors entire remote repository with all profiles
-#
-# Use Cases:
-#   local - Best default for most users (discovers new variant profiles)
-#   auto  - Single-purpose machines (only system-specific configs)
-#   all   - Backup/hub servers (mirror everything)
-#
-# Default: local
-mode = "local"
-
 # Auto-Pull Changes
 # Automatically pull remote changes when the remote branch is ahead
 # When true, `dotta sync` will automatically pull changes if the local branch is behind
@@ -523,11 +501,11 @@ Files: {count}
 # Both machines share the same repository but apply different profiles!
 #
 #
-# Variant Profile Workflow (mode=local)
+# Variant Profile Workflow (mode="local")
 # --------------------------------------
 # Best for: Teams with multiple configuration variants (work, personal, client1, etc.)
 #
-# [sync]
+# [core]
 # mode = "local"  # Default
 #
 # Machine A creates new profile:
@@ -540,28 +518,30 @@ Files: {count}
 #   dotta apply -p experimental  # Now available to use!
 #
 #
-# Minimal Machine (mode=auto)
+# Minimal Machine (mode="auto")
 # ---------------------------
 # Best for: Single-purpose machines (servers, CI/CD, minimal setups)
 #
-# [sync]
+# [core]
 # mode = "auto"
 #
 # Behavior:
-#   Only syncs: global, darwin/linux/freebsd, hosts/<hostname>
+#   Operates on: global, darwin/linux/freebsd, hosts/<hostname>
 #   Ignores: All other variant profiles (work, personal, client1, etc.)
 #   Perfect for machines that only need system-specific configs
+#   Affects ALL commands (apply, update, sync, status, etc.)
 #
 #
-# Hub/Backup Server (mode=all)
+# Hub/Backup Server (mode="all")
 # -----------------------------
 # Best for: Central backup server, multi-machine management hub
 #
-# [sync]
+# [core]
 # mode = "all"
 #
 # Behavior:
-#   Mirrors entire remote repository
+#   Operates on all available profiles
+#   For sync: Mirrors entire remote repository
 #   Creates local branches for ALL remote profiles
 #   Keeps complete backup of all configurations
 #   Perfect for disaster recovery or managing multiple machines

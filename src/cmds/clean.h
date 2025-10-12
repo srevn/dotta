@@ -21,6 +21,7 @@ typedef struct {
     bool force;                 /* Remove without confirmation */
     bool verbose;               /* Print verbose output */
     bool quiet;                 /* Minimal output */
+    const char *mode;           /* Profile mode override: "local", "auto", "all" (CLI only) */
 } cmd_clean_options_t;
 
 /**

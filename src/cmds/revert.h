@@ -25,6 +25,7 @@ typedef struct {
     bool force;                 /* Skip confirmation and override conflicts */
     bool dry_run;               /* Preview without making changes */
     bool verbose;               /* Print verbose output */
+    const char *mode;           /* Profile mode override: "local", "auto", "all" (CLI only) */
 } cmd_revert_options_t;
 
 /**

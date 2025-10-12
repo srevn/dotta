@@ -24,6 +24,9 @@
 
 #include "types.h"
 
+/* Forward declaration - full definition in utils/config.h */
+struct dotta_config;
+
 /**
  * Profile structure
  */
@@ -110,31 +113,32 @@ error_t *profile_list_load(
 );
 
 /**
- * Load profiles with config and auto-detect fallback
+ * Resolve profiles based on mode (unified profile resolution)
  *
- * Priority:
- * 1. If profile names are provided, loads those specific profiles
- * 2. If config->profile_order is set, uses those profiles
- * 3. If auto_detect is true, auto-detects profiles (global, OS, host)
- * 4. Otherwise, returns empty profile list
+ * This is the primary function for loading profiles throughout the application.
+ * All commands (apply, update, sync, status, etc.) use this function.
+ *
+ * Resolution priority:
+ * 1. Explicit profiles (CLI -p/--profile) - ALWAYS takes precedence
+ * 2. Config profile_order - Manual config override
+ * 3. Mode-based selection:
+ *    - PROFILE_MODE_LOCAL: All local branches
+ *    - PROFILE_MODE_AUTO: Auto-detect (global, OS, host)
+ *    - PROFILE_MODE_ALL: All available (same as LOCAL for non-sync commands)
  *
  * @param repo Repository (must not be NULL)
- * @param names Profile names (can be NULL for auto-detect)
- * @param count Number of profiles (0 for auto-detect)
- * @param config_profiles Profile names from config (can be NULL)
- * @param config_profile_count Number of config profiles (0 if none)
- * @param auto_detect Enable auto-detection (from config)
- * @param strict_mode If true, error on non-existent profiles in config; if false, skip them
+ * @param explicit_profiles CLI profiles (can be NULL)
+ * @param explicit_count Count of CLI profiles (0 if none)
+ * @param config Config with mode and profile_order (must not be NULL)
+ * @param strict_mode If true, error on missing profiles; if false, skip them
  * @param out Profile list (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *profile_load_with_fallback(
+error_t *profile_resolve(
     git_repository *repo,
-    const char **names,
-    size_t count,
-    const char **config_profiles,
-    size_t config_profile_count,
-    bool auto_detect,
+    const char **explicit_profiles,
+    size_t explicit_count,
+    const struct dotta_config *config,
     bool strict_mode,
     profile_list_t **out
 );

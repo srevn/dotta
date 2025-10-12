@@ -485,13 +485,11 @@ static error_t *list_log(
             return error_wrap(err, "Failed to load profile '%s'", opts->profile);
         }
     } else {
-        /* Use all configured profiles (config order or auto-detect) */
-        err = profile_load_with_fallback(
+        /* Use all configured profiles (config order or mode-based) */
+        err = profile_resolve(
             repo,
             NULL, 0,  /* No CLI profiles */
-            (const char **)config->profile_order,
-            config->profile_order_count,
-            config->auto_detect,
+            config,
             config->strict_mode,
             &profiles
         );

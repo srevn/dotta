@@ -17,6 +17,7 @@
 #include "base/gitops.h"
 #include "infra/path.h"
 #include "utils/array.h"
+#include "utils/config.h"
 #include "utils/hashmap.h"
 #include "utils/string.h"
 
@@ -296,40 +297,50 @@ error_t *profile_list_load(
 }
 
 /**
- * Load profiles with config and auto-detect fallback
+ * Resolve profiles based on mode (unified profile resolution)
  */
-error_t *profile_load_with_fallback(
+error_t *profile_resolve(
     git_repository *repo,
-    const char **names,
-    size_t count,
-    const char **config_profiles,
-    size_t config_profile_count,
-    bool auto_detect,
+    const char **explicit_profiles,
+    size_t explicit_count,
+    const struct dotta_config *config,
     bool strict_mode,
     profile_list_t **out
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(config);
     CHECK_NULL(out);
 
-    if (names && count > 0) {
-        /* Explicit profiles provided (highest priority) - always strict */
-        return profile_list_load(repo, names, count, true, out);
-    } else if (config_profiles && config_profile_count > 0) {
-        /* Config profiles (second priority) - respect strict_mode */
-        return profile_list_load(repo, config_profiles, config_profile_count, strict_mode, out);
-    } else if (auto_detect) {
-        /* Auto-detect profiles (third priority, if enabled) */
-        return profile_detect_auto(repo, out);
-    } else {
-        /* No profiles specified and auto-detect disabled - return empty list */
-        profile_list_t *list = calloc(1, sizeof(profile_list_t));
-        if (!list) {
-            return ERROR(ERR_MEMORY, "Failed to allocate profile list");
-        }
-        list->profiles = NULL;
-        list->count = 0;
-        *out = list;
-        return NULL;
+    /* Priority 1: Explicit CLI profiles (always takes precedence) */
+    if (explicit_profiles && explicit_count > 0) {
+        return profile_list_load(repo, explicit_profiles, explicit_count, true, out);
+    }
+
+    /* Priority 2: Config profile_order (manual override) */
+    if (config->profile_order && config->profile_order_count > 0) {
+        return profile_list_load(repo,
+                                (const char **)config->profile_order,
+                                config->profile_order_count,
+                                strict_mode,
+                                out);
+    }
+
+    /* Priority 3: Mode-based selection */
+    switch (config->mode) {
+        case PROFILE_MODE_LOCAL:
+            /* All local branches */
+            return profile_list_all_local(repo, out);
+
+        case PROFILE_MODE_AUTO:
+            /* Auto-detect: global + OS + host */
+            return profile_detect_auto(repo, out);
+
+        case PROFILE_MODE_ALL:
+            /* All available (same as LOCAL for most commands; sync handles specially) */
+            return profile_list_all_local(repo, out);
+
+        default:
+            return ERROR(ERR_INVALID_ARG, "Invalid profile mode");
     }
 }
 

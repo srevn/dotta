@@ -39,6 +39,7 @@ typedef struct {
     bool name_only;             /* Only show file names, not diffs */
     bool all_changes;           /* Show all changed files (deprecated, use direction) */
     diff_direction_t direction; /* Which direction to show */
+    const char *mode;           /* Profile mode override: "local", "auto", "all" (CLI only) */
 } cmd_diff_options_t;
 
 /**

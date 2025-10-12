@@ -18,6 +18,7 @@ typedef struct {
     const char *profile;        /* Profile name (NULL for baseline or all profiles) */
     const char *test_path;      /* Path to test (NULL for edit mode) */
     bool verbose;               /* Print verbose output */
+    const char *mode;           /* Profile mode override: "local", "auto", "all" (CLI only) */
 } cmd_ignore_options_t;
 
 /**

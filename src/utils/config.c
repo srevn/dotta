@@ -78,7 +78,7 @@ dotta_config_t *config_create_default(void) {
 
     /* Set defaults */
     config->repo_dir = strdup(DEFAULT_REPO_DIR);
-    config->auto_detect = true;
+    config->mode = PROFILE_MODE_LOCAL;  /* Default: all local branches (variant-friendly) */
     config->strict_mode = false;
     config->auto_detect_new_files = true;  /* Default: detect new files */
 
@@ -122,7 +122,6 @@ dotta_config_t *config_create_default(void) {
     );
 
     /* [sync] defaults */
-    config->sync_mode = SYNC_MODE_LOCAL;  /* Default: sync all local branches + discover new */
     config->auto_pull = true;  /* Default: auto-pull when remote ahead */
     config->diverged_strategy = strdup("warn");  /* Default: warn on divergence */
 
@@ -241,9 +240,16 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
             config->repo_dir = strdup(repo_dir.u.s);
         }
 
-        toml_datum_t auto_detect = toml_get(core, "auto_detect");
-        if (auto_detect.type == TOML_BOOLEAN) {
-            config->auto_detect = auto_detect.u.boolean;
+        toml_datum_t mode = toml_get(core, "mode");
+        if (mode.type == TOML_STRING) {
+            if (strcmp(mode.u.s, "local") == 0) {
+                config->mode = PROFILE_MODE_LOCAL;
+            } else if (strcmp(mode.u.s, "auto") == 0) {
+                config->mode = PROFILE_MODE_AUTO;
+            } else if (strcmp(mode.u.s, "all") == 0) {
+                config->mode = PROFILE_MODE_ALL;
+            }
+            /* Invalid values caught by config_validate() */
         }
 
         toml_datum_t strict_mode = toml_get(core, "strict_mode");
@@ -405,18 +411,6 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
     /* Extract [sync] section */
     toml_datum_t sync = toml_get(result.toptab, "sync");
     if (sync.type == TOML_TABLE) {
-        toml_datum_t mode = toml_get(sync, "mode");
-        if (mode.type == TOML_STRING) {
-            if (strcmp(mode.u.s, "local") == 0) {
-                config->sync_mode = SYNC_MODE_LOCAL;
-            } else if (strcmp(mode.u.s, "auto") == 0) {
-                config->sync_mode = SYNC_MODE_AUTO;
-            } else if (strcmp(mode.u.s, "all") == 0) {
-                config->sync_mode = SYNC_MODE_ALL;
-            }
-            /* Invalid values are caught by config_validate() */
-        }
-
         toml_datum_t auto_pull = toml_get(sync, "auto_pull");
         if (auto_pull.type == TOML_BOOLEAN) {
             config->auto_pull = auto_pull.u.boolean;
@@ -467,6 +461,14 @@ bool config_parse_bool(const char *value, bool default_value) {
 
 error_t *config_validate(const dotta_config_t *config) {
     CHECK_NULL(config);
+
+    /* Validate profile mode */
+    if (config->mode != PROFILE_MODE_LOCAL &&
+        config->mode != PROFILE_MODE_AUTO &&
+        config->mode != PROFILE_MODE_ALL) {
+        return ERROR(ERR_INVALID_ARG,
+                    "Invalid mode value (must be local, auto, or all)");
+    }
 
     /* Validate verbosity */
     if (config->verbosity) {
@@ -534,4 +536,23 @@ error_t *config_get_repo_dir(const dotta_config_t *config, char **out) {
 
     /* Priority 3: Default */
     return path_expand_home(DEFAULT_REPO_DIR, out);
+}
+
+profile_mode_t config_parse_mode(const char *str, profile_mode_t default_mode) {
+    if (!str) {
+        return default_mode;
+    }
+
+    if (strcmp(str, "local") == 0) {
+        return PROFILE_MODE_LOCAL;
+    } else if (strcmp(str, "auto") == 0) {
+        return PROFILE_MODE_AUTO;
+    } else if (strcmp(str, "all") == 0) {
+        return PROFILE_MODE_ALL;
+    }
+
+    /* Invalid mode - warn user and fall back to default */
+    fprintf(stderr, "WARNING: Invalid mode '%s' (valid: local, auto, all)\n"
+                   "         Falling back to configured default\n", str);
+    return default_mode;
 }

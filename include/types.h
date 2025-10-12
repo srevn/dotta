@@ -59,4 +59,29 @@ typedef enum {
     PREFIX_ROOT     /* Absolute path (stored as root/etc/hosts) */
 } path_prefix_t;
 
+/**
+ * Profile resolution mode - determines which profiles to operate on
+ *
+ * This is an application-wide setting that affects ALL commands:
+ * apply, update, sync, status, list, diff, clean, show, revert, ignore.
+ *
+ * Modes:
+ *   LOCAL - All local branches (default, variant-friendly workflow)
+ *           Best for: Teams with multiple configuration variants
+ *           Behavior: Operates on all existing local profile branches
+ *
+ *   AUTO  - Auto-detect: global + OS + hosts/<hostname> (minimal workflow)
+ *           Best for: Single-purpose machines (servers, CI/CD, minimal setups)
+ *           Behavior: Only operates on auto-detected system-specific profiles
+ *
+ *   ALL   - All available profiles (backup/hub workflow)
+ *           Best for: Hub machines, backup servers, disaster recovery
+ *           Behavior: Mirrors entire repository (all local, sync fetches all remote)
+ */
+typedef enum {
+    PROFILE_MODE_LOCAL,   /* All local branches (default) */
+    PROFILE_MODE_AUTO,    /* Auto-detect: global + OS + host */
+    PROFILE_MODE_ALL      /* All available profiles */
+} profile_mode_t;
+
 #endif /* DOTTA_TYPES_H */

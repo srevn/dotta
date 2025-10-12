@@ -353,7 +353,8 @@ static int cmd_apply_main(int argc, char **argv) {
         .prune = false,
         .verbose = false,
         .skip_existing = false,
-        .skip_unchanged = true  /* Default: enabled for efficiency */
+        .skip_unchanged = true,  /* Default: enabled for efficiency */
+        .mode = NULL
     };
 
     /* Collect profile arguments */
@@ -389,6 +390,13 @@ static int cmd_apply_main(int argc, char **argv) {
                 return 1;
             }
             profiles[profile_count++] = argv[++i];
+        } else if (strcmp(argv[i], "--mode") == 0) {
+            if (i + 1 >= argc) {
+                free(profiles);
+                fprintf(stderr, "Error: --mode requires an argument\n");
+                return 1;
+            }
+            opts.mode = argv[++i];
         } else if (argv[i][0] != '-') {
             /* Positional argument - treat as profile name */
             profiles[profile_count++] = argv[i];
@@ -436,7 +444,8 @@ static int cmd_status_main(int argc, char **argv) {
         .verbose = false,
         .show_local = true,   /* Default: show filesystem status */
         .show_remote = true,  /* Default: show remote status */
-        .no_fetch = false     /* Default: fetch before remote check */
+        .no_fetch = false,    /* Default: fetch before remote check */
+        .mode = NULL
     };
 
     /* Collect profile arguments */
@@ -472,6 +481,13 @@ static int cmd_status_main(int argc, char **argv) {
                 return 1;
             }
             profiles[profile_count++] = argv[++i];
+        } else if (strcmp(argv[i], "--mode") == 0) {
+            if (i + 1 >= argc) {
+                free(profiles);
+                fprintf(stderr, "Error: --mode requires an argument\n");
+                return 1;
+            }
+            opts.mode = argv[++i];
         } else if (argv[i][0] != '-') {
             /* Positional argument - treat as profile name */
             profiles[profile_count++] = argv[i];
@@ -613,7 +629,8 @@ static int cmd_diff_main(int argc, char **argv) {
         .profile_count = 0,
         .name_only = false,
         .all_changes = false,
-        .direction = DIFF_UPSTREAM  /* Default: show repo → filesystem */
+        .direction = DIFF_UPSTREAM,  /* Default: show repo → filesystem */
+        .mode = NULL
     };
 
     /* Collect file arguments */
@@ -639,6 +656,13 @@ static int cmd_diff_main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--all") == 0 || strcmp(argv[i], "-a") == 0) {
             opts.all_changes = true;
             opts.direction = DIFF_BOTH;  /* --all shows both directions */
+        } else if (strcmp(argv[i], "--mode") == 0) {
+            if (i + 1 >= argc) {
+                free(files);
+                fprintf(stderr, "Error: --mode requires an argument\n");
+                return 1;
+            }
+            opts.mode = argv[++i];
         } else {
             files[file_count++] = argv[i];
         }
@@ -680,7 +704,8 @@ static int cmd_clean_main(int argc, char **argv) {
         .dry_run = false,
         .force = false,
         .verbose = false,
-        .quiet = false
+        .quiet = false,
+        .mode = NULL
     };
 
     /* Parse arguments */
@@ -696,6 +721,12 @@ static int cmd_clean_main(int argc, char **argv) {
             opts.verbose = true;
         } else if (strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--quiet") == 0) {
             opts.quiet = true;
+        } else if (strcmp(argv[i], "--mode") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: --mode requires an argument\n");
+                return 1;
+            }
+            opts.mode = argv[++i];
         } else {
             fprintf(stderr, "Error: Unknown argument '%s'\n", argv[i]);
             print_clean_help(argv[0]);
@@ -785,7 +816,8 @@ static int cmd_update_main(int argc, char **argv) {
         .interactive = false,
         .verbose = false,
         .include_new = false,
-        .only_new = false
+        .only_new = false,
+        .mode = NULL
     };
 
     /* Collect file arguments */
@@ -833,6 +865,14 @@ static int cmd_update_main(int argc, char **argv) {
             opts.include_new = true;
         } else if (strcmp(argv[i], "--only-new") == 0) {
             opts.only_new = true;
+        } else if (strcmp(argv[i], "--mode") == 0) {
+            if (i + 1 >= argc) {
+                free(files);
+                free(profiles);
+                fprintf(stderr, "Error: --mode requires an argument\n");
+                return 1;
+            }
+            opts.mode = argv[++i];
         } else {
             files[file_count++] = argv[i];
         }
@@ -878,7 +918,8 @@ static int cmd_ignore_main(int argc, char **argv) {
     cmd_ignore_options_t opts = {
         .profile = NULL,
         .test_path = NULL,
-        .verbose = false
+        .verbose = false,
+        .mode = NULL
     };
 
     /* Parse arguments */
@@ -900,6 +941,12 @@ static int cmd_ignore_main(int argc, char **argv) {
             opts.test_path = argv[++i];
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             opts.verbose = true;
+        } else if (strcmp(argv[i], "--mode") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: --mode requires an argument\n");
+                return 1;
+            }
+            opts.mode = argv[++i];
         } else {
             fprintf(stderr, "Error: Unknown argument '%s'\n", argv[i]);
             print_ignore_help(argv[0]);
@@ -1172,7 +1219,8 @@ static int cmd_show_main(int argc, char **argv) {
         .profile = NULL,
         .file_path = NULL,
         .commit = NULL,
-        .raw = false
+        .raw = false,
+        .mode = NULL
     };
 
     /* Parse arguments */
@@ -1194,6 +1242,12 @@ static int cmd_show_main(int argc, char **argv) {
             opts.commit = argv[++i];
         } else if (strcmp(argv[i], "--raw") == 0) {
             opts.raw = true;
+        } else if (strcmp(argv[i], "--mode") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: --mode requires an argument\n");
+                return 1;
+            }
+            opts.mode = argv[++i];
         } else if (!opts.file_path) {
             opts.file_path = argv[i];
         } else {
@@ -1242,7 +1296,8 @@ static int cmd_revert_main(int argc, char **argv) {
         .message = NULL,
         .force = false,
         .dry_run = false,
-        .verbose = false
+        .verbose = false,
+        .mode = NULL
     };
 
     /* Parse arguments */
@@ -1272,6 +1327,12 @@ static int cmd_revert_main(int argc, char **argv) {
             opts.dry_run = true;
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             opts.verbose = true;
+        } else if (strcmp(argv[i], "--mode") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: --mode requires an argument\n");
+                return 1;
+            }
+            opts.mode = argv[++i];
         } else if (!opts.file_path) {
             opts.file_path = argv[i];
         } else if (!opts.commit) {

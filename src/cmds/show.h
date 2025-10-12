@@ -17,6 +17,7 @@ typedef struct {
     const char *file_path;   /* File path within profile (required) */
     const char *commit;      /* Commit reference (NULL = HEAD of profile branch) */
     bool raw;                /* Show raw content without formatting */
+    const char *mode;        /* Profile mode override: "local", "auto", "all" (CLI only) */
 } cmd_show_options_t;
 
 /**

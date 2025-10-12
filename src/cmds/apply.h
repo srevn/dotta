@@ -23,6 +23,7 @@ typedef struct {
     bool verbose;               /* Print verbose output */
     bool skip_existing;         /* Skip files that already exist */
     bool skip_unchanged;        /* Skip files that match profile content (default: true) */
+    const char *mode;           /* Profile mode override: "local", "auto", "all" (CLI only) */
 } cmd_apply_options_t;
 
 /**

@@ -126,6 +126,8 @@ void print_apply_help(const char *prog_name) {
     printf("Usage: %s apply [options] [profile]...\n\n", prog_name);
     printf("Apply profiles to filesystem\n\n");
     printf("Options:\n");
+    printf("  -p, --profile <name>   Specify profile(s) to apply\n");
+    printf("  --mode <mode>          Override profile mode (local/auto/all)\n");
     printf("  -f, --force            Overwrite modified files\n");
     printf("  -n, --dry-run          Don't actually deploy\n");
     printf("  --prune                Remove untracked managed files\n");
@@ -145,6 +147,7 @@ void print_status_help(const char *prog_name) {
     printf("Show status of managed files and remote sync state\n\n");
     printf("Options:\n");
     printf("  -p, --profile <name>   Check specific profile\n");
+    printf("  --mode <mode>          Override profile mode (local/auto/all)\n");
     printf("  -v, --verbose          Print verbose output\n");
     printf("\nScope:\n");
     printf("  --local                Show only filesystem status (files deployed/modified)\n");
@@ -208,6 +211,8 @@ void print_diff_help(const char *prog_name) {
     printf("  --downstream     Show filesystem → repo (what 'update' would commit)\n");
     printf("  -a, --all        Show both upstream and downstream with headers\n");
     printf("\nOther options:\n");
+    printf("  -p, --profile <name>  Check specific profile\n");
+    printf("  --mode <mode>    Override profile mode (local/auto/all)\n");
     printf("  --name-only      Only show file names, not diffs\n");
     printf("  --help           Show this help message\n");
     printf("\nConcepts:\n");
@@ -223,6 +228,7 @@ void print_clean_help(const char *prog_name) {
     printf("  Finds and removes files that were previously deployed by 'dotta apply'\n");
     printf("  but are no longer in any active profile.\n\n");
     printf("Options:\n");
+    printf("  --mode <mode>    Override profile mode (local/auto/all)\n");
     printf("  -n, --dry-run    Show what would be removed without doing it\n");
     printf("  -f, --force      Remove without confirmation\n");
     printf("  -v, --verbose    Print detailed output with status for each file\n");
@@ -267,6 +273,7 @@ void print_show_help(const char *prog_name) {
     printf("  <file>           File path or basename to search for\n");
     printf("\nOptions:\n");
     printf("  -p, --profile <name>  Profile name (searches all configured profiles if omitted)\n");
+    printf("  --mode <mode>         Override profile mode (local/auto/all)\n");
     printf("  -c, --commit <ref>    Show file from specific commit (requires --profile)\n");
     printf("                        Examples: HEAD, HEAD~3, abc123\n");
     printf("  --raw                 Show raw content without header\n");
@@ -286,6 +293,7 @@ void print_revert_help(const char *prog_name) {
     printf("  <commit>         Target commit reference (e.g., HEAD~3, abc123)\n");
     printf("\nOptions:\n");
     printf("  -p, --profile <name>  Profile name (required if file exists in multiple profiles)\n");
+    printf("  --mode <mode>        Override profile mode (local/auto/all)\n");
     printf("  --apply              Deploy reverted file to filesystem after reverting\n");
     printf("  --commit             Create a commit with the reverted changes\n");
     printf("  -m, --message <msg>  Commit message (requires --commit)\n");
@@ -340,6 +348,7 @@ void print_update_help(const char *prog_name) {
     printf("Options:\n");
     printf("  -m, --message <msg>    Custom commit message\n");
     printf("  -p, --profile <name>   Only update files from this profile\n");
+    printf("  --mode <mode>          Override profile mode (local/auto/all)\n");
     printf("  -n, --dry-run          Show what would be updated\n");
     printf("  -i, --interactive      Prompt for confirmation\n");
     printf("  -v, --verbose          Verbose output\n");
@@ -392,8 +401,10 @@ void print_sync_help(const char *prog_name) {
     printf("  6. Warns about diverged branches (or resolves based on --diverged strategy)\n");
     printf("\nConfiguration:\n");
     printf("  Set defaults in ~/.config/dotta/config.toml:\n");
-    printf("    [sync]\n");
+    printf("    [core]\n");
     printf("    mode = \"local\"              # local (default), auto, or all\n");
+    printf("\n");
+    printf("    [sync]\n");
     printf("    auto_pull = true\n");
     printf("    diverged_strategy = \"warn\"\n");
     printf("\nExamples:\n");
@@ -425,6 +436,7 @@ void print_ignore_help(const char *prog_name) {
     printf("Options:\n");
     printf("  -p, --profile <name>   Profile name (edit: edit profile .dottaignore,\n");
     printf("                         test: test against specific profile only)\n");
+    printf("  --mode <mode>          Override profile mode (local/auto/all)\n");
     printf("  --test <path>          Test if path would be ignored by active profiles\n");
     printf("  -v, --verbose          Print verbose output (test mode: show all patterns)\n");
     printf("  --help                 Show this help message\n");

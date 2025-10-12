@@ -113,27 +113,6 @@ static divergence_strategy_t parse_divergence_strategy(const char *str) {
     return DIVERGE_WARN;  /* Default */
 }
 
-/**
- * Parse sync mode from string
- */
-static sync_mode_t parse_sync_mode(const char *str, sync_mode_t default_mode) {
-    if (!str) {
-        return default_mode;
-    }
-
-    if (strcmp(str, "local") == 0) {
-        return SYNC_MODE_LOCAL;
-    } else if (strcmp(str, "auto") == 0) {
-        return SYNC_MODE_AUTO;
-    } else if (strcmp(str, "all") == 0) {
-        return SYNC_MODE_ALL;
-    }
-
-    /* Invalid mode - warn user and fall back to default */
-    fprintf(stderr, "WARNING: Invalid sync mode '%s' (valid: local, auto, all)\n"
-                   "         Falling back to configured default\n", str);
-    return default_mode;
-}
 
 /**
  * Validate and build a reference name
@@ -1065,15 +1044,15 @@ static error_t *delete_orphaned_local_branches(
 /**
  * Phase 2: Fetch from remote
  *
- * Supports three sync modes:
- * - SYNC_MODE_LOCAL: Fetch all local branches + discover new remote branches
- * - SYNC_MODE_AUTO: Fetch only auto-detected profiles
- * - SYNC_MODE_ALL: Fetch all remote branches
+ * Supports three profile modes:
+ * - PROFILE_MODE_LOCAL: Fetch all local branches + discover new remote branches
+ * - PROFILE_MODE_AUTO: Fetch only auto-detected profiles
+ * - PROFILE_MODE_ALL: Fetch all remote branches
  */
 static error_t *sync_fetch_phase(
     git_repository *repo,
     const char *remote_name,
-    sync_mode_t sync_mode,
+    profile_mode_t mode,
     profile_list_t **profiles,
     sync_results_t **results,
     output_ctx_t *out,
@@ -1109,8 +1088,8 @@ static error_t *sync_fetch_phase(
     profile_list_t *final_profiles = *profiles;
     error_t *err = NULL;
 
-    /* Fetch based on sync mode */
-    if (sync_mode == SYNC_MODE_ALL) {
+    /* Fetch based on profile mode */
+    if (mode == PROFILE_MODE_ALL) {
         /* First, fetch all remote refs to populate remote tracking branches */
         if (verbose) {
             output_info(out, "Fetching all remote refs...");
@@ -1179,7 +1158,7 @@ static error_t *sync_fetch_phase(
         if (!*results) {
             return ERROR(ERR_MEMORY, "Failed to create results");
         }
-    } else if (sync_mode == SYNC_MODE_LOCAL) {
+    } else if (mode == PROFILE_MODE_LOCAL) {
         /* Collect remote tracking branches BEFORE fetch to detect deletions */
         string_array_t *before_remote_branches = NULL;
         err = collect_remote_tracking_branches(repo, remote_name, &before_remote_branches);
@@ -1770,13 +1749,13 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* Determine sync mode: CLI overrides config */
-    sync_mode_t sync_mode = parse_sync_mode(opts->mode, config->sync_mode);
+    /* Determine profile mode: CLI overrides config */
+    profile_mode_t mode = config_parse_mode(opts->mode, config->mode);
 
-    /* Load profiles based on sync mode */
-    if (sync_mode == SYNC_MODE_LOCAL || sync_mode == SYNC_MODE_ALL) {
-        /* For LOCAL and ALL modes: load all local branches initially
-         * (remote discovery happens during fetch phase) */
+    /* Load profiles based on mode */
+    if (mode == PROFILE_MODE_ALL) {
+        /* For ALL mode: load all local branches initially
+         * (all remote branches fetched during fetch phase) */
         err = profile_list_all_local(repo, &profiles);
         if (err) {
             config_free(config);
@@ -1784,11 +1763,9 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
             return error_wrap(err, "Failed to load local profiles");
         }
     } else {
-        /* For AUTO mode: use standard profile resolution */
-        err = profile_load_with_fallback(repo, opts->profiles, opts->profile_count,
-                                          (const char **)config->profile_order,
-                                          config->profile_order_count,
-                                          config->auto_detect, config->strict_mode, &profiles);
+        /* For LOCAL and AUTO modes: use standard profile resolution */
+        err = profile_resolve(repo, opts->profiles, opts->profile_count,
+                             config, config->strict_mode, &profiles);
         if (err) {
             config_free(config);
             output_free(out);
@@ -1876,7 +1853,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     );
 
     /* Phase 2: Fetch from remote */
-    err = sync_fetch_phase(repo, remote_name, sync_mode, &profiles, &results, out, opts->verbose, cred_ctx);
+    err = sync_fetch_phase(repo, remote_name, mode, &profiles, &results, out, opts->verbose, cred_ctx);
     if (err) {
         credential_context_free(cred_ctx);
         free(remote_name);

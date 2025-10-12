@@ -47,6 +47,7 @@ static error_t *discover_file(
     git_repository *repo,
     const char *file_path,
     const char *profile_hint,
+    const char *mode_override,
     char **out_profile,
     char **out_resolved_path
 ) {
@@ -116,15 +117,24 @@ static error_t *discover_file(
         return error_wrap(err, "Failed to load config");
     }
 
-    err = profile_load_with_fallback(
+    /* Apply mode override if provided */
+    profile_mode_t original_mode = config->mode;
+    if (mode_override) {
+        ((dotta_config_t *)config)->mode = config_parse_mode(mode_override, config->mode);
+    }
+
+    err = profile_resolve(
         repo,
         NULL, 0,
-        (const char **)config->profile_order,
-        config->profile_order_count,
-        config->auto_detect,
+        config,
         config->strict_mode,
         &profiles
     );
+
+    /* Restore original mode */
+    if (mode_override) {
+        ((dotta_config_t *)config)->mode = original_mode;
+    }
 
     if (err) {
         config_free(config);
@@ -897,7 +907,7 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     /* Step 1: Discover file in profiles */
     output_print(out, OUTPUT_VERBOSE, "Discovering file in profiles...\n");
 
-    err = discover_file(repo, opts->file_path, opts->profile, &profile_name, &resolved_path);
+    err = discover_file(repo, opts->file_path, opts->profile, opts->mode, &profile_name, &resolved_path);
     if (err) goto cleanup;
 
     output_print(out, OUTPUT_VERBOSE, "Found file in profile '%s': %s\n", profile_name, resolved_path);

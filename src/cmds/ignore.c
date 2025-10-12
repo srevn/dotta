@@ -526,11 +526,10 @@ static error_t *test_path_ignore(
 
     /* Test against all active profiles */
     profile_list_t *profiles = NULL;
-    error_t *err = profile_load_with_fallback(
+    error_t *err = profile_resolve(
         repo,
         NULL, 0,  /* No explicit profiles */
-        (const char **)config->profile_order, config->profile_order_count,
-        config->auto_detect,
+        config,
         false,  /* Not strict - skip missing profiles */
         &profiles
     );
@@ -643,6 +642,12 @@ error_t *cmd_ignore(git_repository *repo, const cmd_ignore_options_t *opts) {
         return ERROR(ERR_MEMORY, "Failed to create output context");
     }
 
+    /* Apply mode override if provided */
+    profile_mode_t original_mode = config->mode;
+    if (opts->mode) {
+        ((dotta_config_t *)config)->mode = config_parse_mode(opts->mode, config->mode);
+    }
+
     /* Determine action */
     if (opts->test_path) {
         /* Test mode */
@@ -654,6 +659,11 @@ error_t *cmd_ignore(git_repository *repo, const cmd_ignore_options_t *opts) {
         } else {
             err = edit_baseline_dottaignore(repo, config, out);
         }
+    }
+
+    /* Restore original mode */
+    if (opts->mode) {
+        ((dotta_config_t *)config)->mode = original_mode;
     }
 
     /* Add trailing newline for UX consistency */

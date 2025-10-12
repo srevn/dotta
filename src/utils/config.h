@@ -10,7 +10,6 @@
 
 #include <stdbool.h>
 
-#include "base/error.h"
 #include "types.h"
 
 /**

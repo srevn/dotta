@@ -446,14 +446,18 @@ static error_t *capture_and_save_metadata(
 
         /* entry will be NULL for symlinks - skip them */
         if (entry) {
-            /* Save mode before adding (for verbose output) */
+            /* Save metadata before adding (for verbose output) */
             mode_t mode = entry->mode;
+            char *owner = entry->owner ? strdup(entry->owner) : NULL;
+            char *group = entry->group ? strdup(entry->group) : NULL;
 
-            /* Add to metadata collection */
-            err = metadata_set_entry(metadata, entry->storage_path, entry->mode);
+            /* Add to metadata collection (copies all fields including owner/group) */
+            err = metadata_add_entry(metadata, entry);
             metadata_entry_free(entry);
 
             if (err) {
+                free(owner);
+                free(group);
                 metadata_free(metadata);
                 return error_wrap(err, "Failed to add metadata entry");
             }
@@ -461,9 +465,18 @@ static error_t *capture_and_save_metadata(
             captured_count++;
 
             if (opts->verbose) {
-                printf("Captured metadata: %s (mode: %04o)\n",
-                      filesystem_path, mode);
+                if (owner || group) {
+                    printf("Captured metadata: %s (mode: %04o, owner: %s:%s)\n",
+                          filesystem_path, mode,
+                          owner ? owner : "?",
+                          group ? group : "?");
+                } else {
+                    printf("Captured metadata: %s (mode: %04o)\n",
+                          filesystem_path, mode);
+                }
             }
+            free(owner);
+            free(group);
         }
     }
 

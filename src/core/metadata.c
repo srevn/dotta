@@ -238,6 +238,53 @@ error_t *metadata_set_entry(
 }
 
 /**
+ * Add or update metadata entry from captured entry
+ */
+error_t *metadata_add_entry(
+    metadata_t *metadata,
+    const metadata_entry_t *source
+) {
+    CHECK_NULL(metadata);
+    CHECK_NULL(source);
+
+    /* First, add/update the basic entry with mode */
+    error_t *err = metadata_set_entry(metadata, source->storage_path, source->mode);
+    if (err) {
+        return err;
+    }
+
+    /* Now get the entry we just added/updated so we can set owner/group */
+    const metadata_entry_t *const_entry = NULL;
+    err = metadata_get_entry(metadata, source->storage_path, &const_entry);
+    if (err) {
+        return error_wrap(err, "Failed to get metadata entry after adding");
+    }
+
+    /* Cast away const - safe since we own the metadata */
+    metadata_entry_t *entry = (metadata_entry_t *)const_entry;
+
+    /* Copy owner if present */
+    if (source->owner) {
+        free(entry->owner);  /* Free existing if any */
+        entry->owner = strdup(source->owner);
+        if (!entry->owner) {
+            return ERROR(ERR_MEMORY, "Failed to duplicate owner string");
+        }
+    }
+
+    /* Copy group if present */
+    if (source->group) {
+        free(entry->group);  /* Free existing if any */
+        entry->group = strdup(source->group);
+        if (!entry->group) {
+            return ERROR(ERR_MEMORY, "Failed to duplicate group string");
+        }
+    }
+
+    return NULL;
+}
+
+/**
  * Get metadata entry
  */
 error_t *metadata_get_entry(

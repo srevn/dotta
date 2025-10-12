@@ -103,10 +103,11 @@ error_t *metadata_entry_create(
 void metadata_entry_free(metadata_entry_t *entry);
 
 /**
- * Add or update metadata entry
+ * Add or update metadata entry (mode only)
  *
  * If an entry with the same storage_path exists, it is replaced.
  * Otherwise, a new entry is added.
+ * This function only sets mode - owner/group will be NULL.
  *
  * @param metadata Metadata collection (must not be NULL)
  * @param storage_path Path in profile (must not be NULL)
@@ -117,6 +118,22 @@ error_t *metadata_set_entry(
     metadata_t *metadata,
     const char *storage_path,
     mode_t mode
+);
+
+/**
+ * Add or update metadata entry from captured entry
+ *
+ * Copies all fields (mode, owner, group) from the source entry.
+ * If an entry with the same storage_path exists, it is replaced.
+ * Otherwise, a new entry is added.
+ *
+ * @param metadata Metadata collection (must not be NULL)
+ * @param source Source entry to copy from (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *metadata_add_entry(
+    metadata_t *metadata,
+    const metadata_entry_t *source
 );
 
 /**

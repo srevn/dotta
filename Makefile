@@ -18,6 +18,17 @@ INCLUDES := -Iinclude -Isrc $(LIB_INCLUDES)
 # Dependencies
 LIBGIT2_CFLAGS := $(shell pkg-config --cflags libgit2)
 LIBGIT2_LIBS := $(shell pkg-config --libs libgit2)
+LIBGIT2_LIBDIR := $(shell pkg-config --variable=libdir libgit2)
+LIBGIT2_STATIC_LIB := $(LIBGIT2_LIBDIR)/libgit2.a
+LIBGIT2_STATIC_DEPS := $(shell pkg-config --libs --static libgit2 | sed 's/-lgit2//')
+
+# Check if static library exists
+ifneq ($(wildcard $(LIBGIT2_STATIC_LIB)),)
+    LIBGIT2_STATIC_LIBS := $(LIBGIT2_STATIC_LIB) $(LIBGIT2_STATIC_DEPS)
+    HAS_STATIC_LIBGIT2 := 1
+else
+    HAS_STATIC_LIBGIT2 := 0
+endif
 
 # Directories
 SRC_DIR := src
@@ -84,6 +95,29 @@ $(TARGET): $(LIB_OBJ) $(MAIN_OBJ) | $(BIN_DIR)
 .PHONY: debug
 debug: CFLAGS := -std=c11 -Wall -Wextra -Wpedantic $(DEBUG_FLAGS)
 debug: clean $(TARGET)
+
+# Static build (with libgit2 statically linked for portability)
+.PHONY: static
+static:
+	@if [ "$(HAS_STATIC_LIBGIT2)" = "0" ]; then \
+		echo "Error: libgit2 static library not found at $(LIBGIT2_STATIC_LIB)"; \
+		echo ""; \
+		echo "To build a static binary, you need libgit2 compiled with static libraries."; \
+		echo ""; \
+		echo "On macOS with Homebrew:"; \
+		echo "  Static libraries are usually included in the libgit2 package"; \
+		echo ""; \
+		echo "On FreeBSD:"; \
+		echo "  pkg install libgit2 only provides shared libraries"; \
+		echo "  You may need to build libgit2 from source with -DBUILD_SHARED_LIBS=OFF"; \
+		echo ""; \
+		echo "On Debian/Ubuntu:"; \
+		echo "  sudo apt install libgit2-dev"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@$(MAKE) clean
+	@$(MAKE) LIBGIT2_LIBS="$(LIBGIT2_STATIC_LIBS)" $(TARGET)
 
 # Clean build artifacts
 .PHONY: clean
@@ -160,6 +194,7 @@ help:
 	@echo "Dotta Makefile targets:"
 	@echo "  all          - Build main executable (default)"
 	@echo "  debug        - Build with debug symbols"
+	@echo "  static       - Build with libgit2 statically linked (portable)"
 	@echo "  clean        - Remove build artifacts"
 	@echo "  install      - Install binary, configs, and hooks to $(PREFIX)"
 	@echo "  uninstall    - Remove installed files from $(PREFIX)"

@@ -1140,9 +1140,12 @@ error_t *gitops_create_merge_commit(
         return ERROR(ERR_CONFLICT, "Cannot create merge commit: index has conflicts");
     }
 
-    /* Write index to tree */
+    /* Write index to tree
+     * IMPORTANT: Use git_index_write_tree_to() because the index from git_merge_trees()
+     * is not backed by a repository, so we must explicitly write to the repo's ODB.
+     */
     git_oid tree_oid;
-    int err = git_index_write_tree(&tree_oid, index);
+    int err = git_index_write_tree_to(&tree_oid, index, repo);
     if (err < 0) {
         return error_from_git(err);
     }
@@ -1266,8 +1269,10 @@ error_t *gitops_rebase_inmemory_safe(
             git_rebase_abort(rebase);
             git_rebase_free(rebase);
 
-            /* Check for merge conflicts specifically */
-            if (git_err == GIT_EMERGECONFLICT) {
+            /* Check for merge conflicts
+             * Both GIT_EMERGECONFLICT (-13) and GIT_EUNMERGED (-10) indicate conflicts
+             */
+            if (git_err == GIT_EMERGECONFLICT || git_err == GIT_EUNMERGED) {
                 return ERROR(ERR_CONFLICT,
                             "Rebase resulted in conflicts. "
                             "Please resolve manually using 'git rebase' or try merge strategy instead.");

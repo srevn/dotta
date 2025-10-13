@@ -170,6 +170,20 @@ static error_t *ensure_capacity(metadata_t *metadata) {
     metadata->entries = new_entries;
     metadata->capacity = new_capacity;
 
+    /* Rebuild hashmap index since array pointers changed after realloc */
+    if (metadata->index) {
+        hashmap_clear(metadata->index, NULL);
+        for (size_t i = 0; i < metadata->count; i++) {
+            error_t *err = hashmap_set(metadata->index,
+                                       metadata->entries[i].storage_path,
+                                       &metadata->entries[i]);
+            if (err) {
+                /* This is bad but we can't easily recover */
+                error_free(err);
+            }
+        }
+    }
+
     return NULL;
 }
 

@@ -1072,6 +1072,7 @@ static int cmd_sync_main(int argc, char **argv) {
         .verbose = false,
         .include_new = false,
         .only_new = false,
+        .skip_undeployed = false,
         .diverged = NULL,
         .mode = NULL
     };
@@ -1128,6 +1129,8 @@ static int cmd_sync_main(int argc, char **argv) {
             opts.include_new = true;
         } else if (strcmp(argv[i], "--only-new") == 0) {
             opts.only_new = true;
+        } else if (strcmp(argv[i], "--skip-undeployed") == 0) {
+            opts.skip_undeployed = true;
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             opts.verbose = true;
         } else {

@@ -16,6 +16,7 @@
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
+#include "core/workspace.h"
 #include "infra/compare.h"
 #include "infra/worktree.h"
 #include "utils/commit.h"
@@ -364,7 +365,16 @@ static bool file_matches_filter(
 }
 
 /**
- * Find all modified files
+ * Find all modified files using workspace divergence analysis
+ *
+ * This function uses the workspace module to detect divergence between
+ * profile state, deployment state, and filesystem state. It correctly
+ * distinguishes between:
+ * - MODIFIED: Files deployed and changed on disk (include)
+ * - DELETED: Files deployed and removed from disk (include)
+ * - MODE_DIFF: Files with permission changes (include)
+ * - TYPE_DIFF: Files with type changes (include)
+ * - UNDEPLOYED: Files in profile but never deployed (exclude - not a modification)
  */
 static error_t *find_modified_files(
     git_repository *repo,
@@ -382,112 +392,87 @@ static error_t *find_modified_files(
         return ERROR(ERR_MEMORY, "Failed to create modified file list");
     }
 
-    /* Build manifest */
-    manifest_t *manifest = NULL;
-    error_t *err = profile_build_manifest(repo, profiles, &manifest);
+    /* Load workspace to analyze divergence */
+    workspace_t *ws = NULL;
+    error_t *err = workspace_load(repo, profiles, &ws);
     if (err) {
         modified_file_list_free(modified);
-        return error_wrap(err, "Failed to build manifest");
+        return error_wrap(err, "Failed to load workspace");
     }
 
-    /* Load state to check if missing files were previously deployed
-     * This prevents treating undeployed files (e.g., from remote sync) as deletions
-     */
-    state_t *state = NULL;
-    err = state_load(repo, &state);
-    if (err) {
-        /* Non-fatal: If state can't be loaded, treat all CMP_MISSING as deletions (legacy behavior) */
-        error_free(err);
-        err = NULL;
-        state = NULL;
-    }
+    /* Get all diverged files */
+    size_t count = 0;
+    const workspace_file_t *diverged = workspace_get_all_diverged(ws, &count);
 
-    /* Check each file for modifications */
-    for (size_t i = 0; i < manifest->count; i++) {
-        const file_entry_t *entry = &manifest->entries[i];
+    /* Process each diverged file */
+    for (size_t i = 0; i < count; i++) {
+        const workspace_file_t *file = &diverged[i];
 
-        /* Apply file filter if specified */
-        if (!file_matches_filter(entry->filesystem_path, opts)) {
+        /* Skip undeployed files - these are not modifications */
+        if (file->type == DIVERGENCE_UNDEPLOYED) {
             continue;
         }
 
-        /* Compare with disk */
+        /* Skip orphaned files - these are state cleanup issues, not file updates */
+        if (file->type == DIVERGENCE_ORPHANED) {
+            continue;
+        }
+
+        /* Apply file filter if specified */
+        if (!file_matches_filter(file->filesystem_path, opts)) {
+            continue;
+        }
+
+        /* Map workspace divergence type to compare result type for compatibility */
         compare_result_t cmp_result;
-        err = compare_tree_entry_to_disk(
-            repo,
-            entry->entry,
-            entry->filesystem_path,
-            &cmp_result
+        switch (file->type) {
+            case DIVERGENCE_MODIFIED:
+                cmp_result = CMP_DIFFERENT;
+                break;
+            case DIVERGENCE_DELETED:
+                cmp_result = CMP_MISSING;
+                break;
+            case DIVERGENCE_MODE_DIFF:
+                cmp_result = CMP_MODE_DIFF;
+                break;
+            case DIVERGENCE_TYPE_DIFF:
+                cmp_result = CMP_TYPE_DIFF;
+                break;
+            default:
+                continue;  /* Skip unknown types */
+        }
+
+        /* Find the profile for this file */
+        profile_t *source_profile = NULL;
+        for (size_t j = 0; j < profiles->count; j++) {
+            if (strcmp(profiles->profiles[j].name, file->profile) == 0) {
+                source_profile = &profiles->profiles[j];
+                break;
+            }
+        }
+
+        if (!source_profile) {
+            /* Profile not in active set - skip */
+            continue;
+        }
+
+        /* Add to modified list */
+        err = modified_file_list_add(
+            modified,
+            file->filesystem_path,
+            file->storage_path,
+            source_profile,
+            cmp_result
         );
 
         if (err) {
-            if (state) state_free(state);
+            workspace_free(ws);
             modified_file_list_free(modified);
-            manifest_free(manifest);
-            return error_wrap(err, "Failed to compare '%s'", entry->filesystem_path);
-        }
-
-        /* Add if modified or deleted */
-        if (cmp_result == CMP_DIFFERENT ||
-            cmp_result == CMP_MODE_DIFF ||
-            cmp_result == CMP_TYPE_DIFF) {
-            /* File is modified - always include */
-            err = modified_file_list_add(
-                modified,
-                entry->filesystem_path,
-                entry->storage_path,
-                entry->source_profile,
-                cmp_result
-            );
-
-            if (err) {
-                if (state) state_free(state);
-                modified_file_list_free(modified);
-                manifest_free(manifest);
-                return err;
-            }
-        } else if (cmp_result == CMP_MISSING) {
-            /* File is missing from filesystem - check if it was ever deployed
-             * Only treat as deletion if the file exists in state (was previously deployed)
-             */
-            if (state && state_file_exists(state, entry->filesystem_path)) {
-                /* File was previously deployed - treat as intentional deletion */
-                err = modified_file_list_add(
-                    modified,
-                    entry->filesystem_path,
-                    entry->storage_path,
-                    entry->source_profile,
-                    cmp_result
-                );
-
-                if (err) {
-                    if (state) state_free(state);
-                    modified_file_list_free(modified);
-                    manifest_free(manifest);
-                    return err;
-                }
-            } else if (!state) {
-                /* No state available - fall back to legacy behavior (treat as deletion) */
-                err = modified_file_list_add(
-                    modified,
-                    entry->filesystem_path,
-                    entry->storage_path,
-                    entry->source_profile,
-                    cmp_result
-                );
-
-                if (err) {
-                    modified_file_list_free(modified);
-                    manifest_free(manifest);
-                    return err;
-                }
-            }
-            /* else: File not in state - never deployed - skip (not a deletion) */
+            return err;
         }
     }
 
-    if (state) state_free(state);
-    manifest_free(manifest);
+    workspace_free(ws);
     *out = modified;
     return NULL;
 }

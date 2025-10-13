@@ -40,6 +40,7 @@ typedef struct {
     bool verbose;                /* Verbose output */
     bool include_new;            /* Include new files from tracked directories */
     bool only_new;               /* Only process new files (ignore modified) */
+    bool skip_undeployed;        /* Allow sync with undeployed files (skip workspace check) */
     const char *diverged;        /* Divergence strategy override (CLI only) */
     const char *mode;            /* Sync mode override: "local", "auto", "all" (CLI only) */
 } cmd_sync_options_t;

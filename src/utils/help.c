@@ -405,6 +405,7 @@ void print_sync_help(const char *prog_name) {
     printf("  -v, --verbose              Verbose output\n");
     printf("  --include-new              Include new files from tracked directories\n");
     printf("  --only-new                 Only sync new files (ignore modified)\n");
+    printf("  --skip-undeployed          Skip workspace validation for undeployed files\n");
     printf("  --help                     Show this help message\n");
     printf("\nWhat it does:\n");
     printf("  1. Updates local profiles with any modified files (and new files if enabled)\n");

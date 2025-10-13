@@ -15,6 +15,7 @@
 #include "base/error.h"
 #include "base/gitops.h"
 #include "core/profiles.h"
+#include "core/workspace.h"
 #include "update.h"
 #include "utils/array.h"
 #include "utils/config.h"
@@ -1823,6 +1824,61 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         config_free(config);
         output_free(out);
         return NULL;
+    }
+
+    /* Phase 1.5: Workspace validation
+     * Check for undeployed files before syncing to prevent data loss.
+     * Files that exist in profile branches but were never deployed should not
+     * be treated as deletions during update operations.
+     */
+    if (!opts->skip_undeployed) {
+        workspace_t *ws = NULL;
+        err = workspace_load(repo, profiles, &ws);
+        if (err) {
+            /* Workspace load failure is non-fatal but we should warn */
+            output_warning(out, "Failed to validate workspace: %s", error_message(err));
+            output_info(out, "Continuing without workspace validation (use --skip-undeployed to suppress)");
+            error_free(err);
+            err = NULL;
+        } else {
+            /* Check workspace status */
+            size_t undeployed_count = workspace_count_divergence(ws, DIVERGENCE_UNDEPLOYED);
+            size_t orphaned_count = workspace_count_divergence(ws, DIVERGENCE_ORPHANED);
+
+            if (undeployed_count > 0) {
+                fprintf(out->stream, "\n");
+                output_warning(out, "Workspace has %zu undeployed file%s",
+                              undeployed_count, undeployed_count == 1 ? "" : "s");
+                output_info(out, "These files exist in profiles but have never been deployed:");
+                fprintf(out->stream, "\n");
+
+                /* Display undeployed files */
+                size_t count = 0;
+                const workspace_file_t *undeployed = workspace_get_diverged(ws, DIVERGENCE_UNDEPLOYED, &count);
+                if (undeployed) {
+                    for (size_t i = 0; i < count; i++) {
+                        if (undeployed[i].type == DIVERGENCE_UNDEPLOYED) {
+                            char info[1024];
+                            snprintf(info, sizeof(info), "%s (from %s)",
+                                    undeployed[i].filesystem_path, undeployed[i].profile);
+                            output_item(out, "[undeployed]", OUTPUT_COLOR_YELLOW, info);
+                        }
+                    }
+                }
+
+                fprintf(out->stream, "\n");
+                output_info(out, "Hint: Run 'dotta apply' to deploy these files, or use --skip-undeployed to continue anyway");
+                fprintf(out->stream, "\n");
+            }
+
+            if (orphaned_count > 0) {
+                output_warning(out, "Workspace has %zu orphaned state entr%s",
+                              orphaned_count, orphaned_count == 1 ? "y" : "ies");
+                output_info(out, "Hint: These are state entries for files no longer in any profile");
+            }
+
+            workspace_free(ws);
+        }
     }
 
     /* Auto-detect remote */

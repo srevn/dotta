@@ -14,6 +14,7 @@
 #include "base/gitops.h"
 #include "core/profiles.h"
 #include "core/state.h"
+#include "core/workspace.h"
 #include "infra/compare.h"
 #include "utils/config.h"
 #include "utils/ignore.h"
@@ -531,6 +532,161 @@ static void display_active_profiles(
 }
 
 /**
+ * Display workspace status
+ *
+ * Shows the consistency between profile state, deployment state, and filesystem.
+ * Displays counts and details for undeployed, modified, deleted, and orphaned files.
+ */
+static void display_workspace_status(
+    git_repository *repo,
+    profile_list_t *profiles,
+    output_ctx_t *out,
+    bool verbose
+) {
+    if (!repo || !profiles || !out) {
+        return;
+    }
+
+    /* Load workspace */
+    workspace_t *ws = NULL;
+    error_t *err = workspace_load(repo, profiles, &ws);
+    if (err) {
+        /* Non-fatal: if workspace fails to load, skip this section */
+        if (verbose) {
+            output_warning(out, "Failed to load workspace: %s", error_message(err));
+        }
+        error_free(err);
+        return;
+    }
+
+    /* Get workspace status */
+    workspace_status_t ws_status = workspace_get_status(ws);
+
+    /* Count divergence types */
+    size_t undeployed = workspace_count_divergence(ws, DIVERGENCE_UNDEPLOYED);
+    size_t modified = workspace_count_divergence(ws, DIVERGENCE_MODIFIED);
+    size_t deleted = workspace_count_divergence(ws, DIVERGENCE_DELETED);
+    size_t orphaned = workspace_count_divergence(ws, DIVERGENCE_ORPHANED);
+    size_t mode_diff = workspace_count_divergence(ws, DIVERGENCE_MODE_DIFF);
+    size_t type_diff = workspace_count_divergence(ws, DIVERGENCE_TYPE_DIFF);
+
+    /* Only display section if there's something to report */
+    if (ws_status != WORKSPACE_CLEAN || verbose) {
+        output_section(out, "Workspace status");
+
+        /* Display overall status with color */
+        switch (ws_status) {
+            case WORKSPACE_CLEAN:
+                output_success(out, "Clean - all states aligned");
+                break;
+
+            case WORKSPACE_DIRTY:
+                output_warning(out, "Dirty - has divergence");
+                if (undeployed > 0) {
+                    output_info(out, "  %zu undeployed file%s (in profile, never deployed)",
+                               undeployed, undeployed == 1 ? "" : "s");
+                }
+                if (modified > 0) {
+                    output_info(out, "  %zu modified file%s (deployed, changed on disk)",
+                               modified, modified == 1 ? "" : "s");
+                }
+                if (deleted > 0) {
+                    output_info(out, "  %zu deleted file%s (deployed, removed from disk)",
+                               deleted, deleted == 1 ? "" : "s");
+                }
+                if (mode_diff > 0) {
+                    output_info(out, "  %zu file%s with mode differences",
+                               mode_diff, mode_diff == 1 ? "" : "s");
+                }
+                if (type_diff > 0) {
+                    output_info(out, "  %zu file%s with type differences",
+                               type_diff, type_diff == 1 ? "" : "s");
+                }
+                break;
+
+            case WORKSPACE_INVALID:
+                output_error(out, "Invalid - has orphaned state entries");
+                if (orphaned > 0) {
+                    output_info(out, "  %zu orphaned state entr%s (state without profile file)",
+                               orphaned, orphaned == 1 ? "y" : "ies");
+                }
+                break;
+        }
+
+        /* In verbose mode, show affected files */
+        if (verbose && ws_status != WORKSPACE_CLEAN) {
+            fprintf(out->stream, "\n");
+            output_info(out, "Affected files:");
+
+            size_t count = 0;
+            const workspace_file_t *diverged = workspace_get_all_diverged(ws, &count);
+            if (diverged) {
+                for (size_t i = 0; i < count; i++) {
+                    const workspace_file_t *file = &diverged[i];
+                    char info[1024];
+                    const char *label = NULL;
+                    output_color_t color = OUTPUT_COLOR_YELLOW;
+
+                    switch (file->type) {
+                        case DIVERGENCE_UNDEPLOYED:
+                            label = "[undeployed]";
+                            color = OUTPUT_COLOR_CYAN;
+                            snprintf(info, sizeof(info), "%s (from %s)",
+                                    file->filesystem_path, file->profile);
+                            break;
+                        case DIVERGENCE_MODIFIED:
+                            label = "[modified]";
+                            color = OUTPUT_COLOR_YELLOW;
+                            snprintf(info, sizeof(info), "%s", file->filesystem_path);
+                            break;
+                        case DIVERGENCE_DELETED:
+                            label = "[deleted]";
+                            color = OUTPUT_COLOR_RED;
+                            snprintf(info, sizeof(info), "%s", file->filesystem_path);
+                            break;
+                        case DIVERGENCE_ORPHANED:
+                            label = "[orphaned]";
+                            color = OUTPUT_COLOR_RED;
+                            snprintf(info, sizeof(info), "%s (from %s)",
+                                    file->filesystem_path, file->profile);
+                            break;
+                        case DIVERGENCE_MODE_DIFF:
+                            label = "[mode]";
+                            color = OUTPUT_COLOR_YELLOW;
+                            snprintf(info, sizeof(info), "%s", file->filesystem_path);
+                            break;
+                        case DIVERGENCE_TYPE_DIFF:
+                            label = "[type]";
+                            color = OUTPUT_COLOR_RED;
+                            snprintf(info, sizeof(info), "%s", file->filesystem_path);
+                            break;
+                        default:
+                            continue;
+                    }
+
+                    output_item(out, label, color, info);
+                }
+            }
+        }
+
+        /* Show hints based on what's detected */
+        if (ws_status != WORKSPACE_CLEAN) {
+            fprintf(out->stream, "\n");
+            if (undeployed > 0) {
+                output_info(out, "Hint: Run 'dotta apply' to deploy undeployed files");
+            }
+            if (orphaned > 0) {
+                output_info(out, "Hint: Orphaned state entries indicate removed profile files");
+            }
+        }
+
+        fprintf(out->stream, "\n");
+    }
+
+    workspace_free(ws);
+}
+
+/**
  * Display remote sync status for profiles
  *
  * Note: This function loads ALL local profiles, not just auto-detected ones,
@@ -843,6 +999,9 @@ error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
 
     /* Display active profiles and last deployment info */
     display_active_profiles(out, profiles, manifest, state, opts->verbose);
+
+    /* Display workspace status */
+    display_workspace_status(repo, profiles, out, opts->verbose);
 
     /* Show filesystem status (if requested) */
     if (opts->show_local) {

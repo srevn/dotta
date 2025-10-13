@@ -17,7 +17,10 @@
 typedef upstream_state_t sync_branch_state_t;
 
 /**
- * Divergence resolution strategy
+ * Divergence resolution strategy for sync command
+ *
+ * Note: This is a sync-level enum. The core/divergence module has its own
+ * strategy enum. These are mapped in sync.c's switch statements.
  */
 typedef enum {
     DIVERGE_WARN,         /* Warn user, manual resolution (default) */
@@ -25,7 +28,7 @@ typedef enum {
     DIVERGE_MERGE,        /* Create merge commit */
     DIVERGE_OURS,         /* Keep local, force push (destructive) */
     DIVERGE_THEIRS        /* Keep remote, reset local (destructive) */
-} divergence_strategy_t;
+} sync_divergence_strategy_t;
 
 /**
  * Sync command options

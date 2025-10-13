@@ -14,6 +14,7 @@
 #include "base/credentials.h"
 #include "base/error.h"
 #include "base/gitops.h"
+#include "core/divergence.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "core/workspace.h"
@@ -93,7 +94,7 @@ static void sync_results_free(sync_results_t *results) {
 /**
  * Parse divergence strategy from string
  */
-static divergence_strategy_t parse_divergence_strategy(const char *str) {
+static sync_divergence_strategy_t parse_divergence_strategy(const char *str) {
     if (!str) {
         return DIVERGE_WARN;
     }
@@ -118,476 +119,17 @@ static divergence_strategy_t parse_divergence_strategy(const char *str) {
 
 
 /**
- * Helper: Restore HEAD to dotta-worktree with error checking
+ * Perform force push (for OURS strategy)
  */
-static void restore_head_to_worktree(git_repository *repo, const char *operation) {
-    int git_err = git_repository_set_head(repo, "refs/heads/dotta-worktree");
-    if (git_err < 0) {
-        fprintf(stderr, "CRITICAL: Failed to restore HEAD to dotta-worktree after %s (error %d)\n",
-                operation, git_err);
-        fprintf(stderr, "         Your repository HEAD may be in an invalid state.\n");
-        fprintf(stderr, "         Run 'git checkout dotta-worktree' manually to fix.\n");
-    }
-}
-
-/**
- * Helper: Save branch OID for rollback capability
- */
-static error_t *save_branch_oid(
-    git_repository *repo,
-    const char *branch_name,
-    git_oid *out_oid
-) {
-    char refname[256];
-    error_t *err = build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
-    if (err) {
-        return error_wrap(err, "Invalid branch name '%s'", branch_name);
-    }
-
-    git_reference *ref = NULL;
-    int git_err = git_reference_lookup(&ref, repo, refname);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    const git_oid *oid = git_reference_target(ref);
-    git_oid_cpy(out_oid, oid);
-    git_reference_free(ref);
-
-    return NULL;
-}
-
-/**
- * Helper: Rollback branch to saved OID
- */
-static error_t *rollback_branch(
-    git_repository *repo,
-    const char *branch_name,
-    const git_oid *saved_oid
-) {
-    char refname[256];
-    error_t *err = build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
-    if (err) {
-        return error_wrap(err, "Invalid branch name '%s'", branch_name);
-    }
-
-    git_reference *ref = NULL;
-    int git_err = git_reference_lookup(&ref, repo, refname);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    git_reference *new_ref = NULL;
-    git_err = git_reference_set_target(&new_ref, ref, saved_oid, "sync: Rollback after push failure");
-    git_reference_free(ref);
-
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    git_reference_free(new_ref);
-    return NULL;
-}
-
-/**
- * Helper: Verify branch state after merge/rebase
- */
-static error_t *verify_divergence_resolved(
+static error_t *force_push_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
-    size_t *out_ahead,
-    size_t *out_behind
-) {
-    upstream_info_t *info = NULL;
-    error_t *err = upstream_analyze_profile(repo, remote_name, branch_name, &info);
-    if (err) {
-        return err;
-    }
-
-    if (out_ahead) *out_ahead = info->ahead;
-    if (out_behind) *out_behind = info->behind;
-
-    sync_branch_state_t state = info->state;
-    size_t ahead = info->ahead;
-    size_t behind = info->behind;
-    upstream_info_free(info);
-
-    /* After successful rebase/merge, we should be ahead of remote (or equal) */
-    if (state == UPSTREAM_REMOTE_AHEAD) {
-        return ERROR(ERR_INTERNAL,
-                    "Divergence resolution completed but branch '%s' is still behind remote (%zu commits)",
-                    branch_name, behind);
-    }
-
-    if (state == UPSTREAM_DIVERGED) {
-        return ERROR(ERR_INTERNAL,
-                    "Divergence resolution completed but branch '%s' is still diverged (ahead: %zu, behind: %zu)",
-                    branch_name, ahead, behind);
-    }
-
-    return NULL;
-}
-
-/**
- * Resolve divergence with rebase strategy
- *
- * NOTE: This function temporarily modifies the main worktree HEAD to perform
- * the rebase operation (required by libgit2). The HEAD is restored to
- * dotta-worktree on all code paths (success or failure).
- */
-static error_t *resolve_divergence_rebase(
-    git_repository *repo,
-    const char *remote_name,
-    const char *branch_name
+    credential_context_t *cred_ctx
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(branch_name);
-
-    error_t *err = NULL;
-    char local_refname[256];
-    char remote_refname[256];
-
-    err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
-    if (err) {
-        return error_wrap(err, "Invalid branch name '%s'", branch_name);
-    }
-
-    err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
-    if (err) {
-        return error_wrap(err, "Invalid remote/branch name '%s/%s'", remote_name, branch_name);
-    }
-
-    /* Save original HEAD for emergency restoration */
-    git_reference *original_head = NULL;
-    int git_err = git_reference_lookup(&original_head, repo, "HEAD");
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    /* Step 1: Checkout the target branch temporarily
-     * ARCHITECTURAL NOTE: This violates the "HEAD must always be dotta-worktree" principle.
-     * It's done because libgit2's rebase API requires HEAD to point to the branch.
-     * We ensure HEAD is restored on ALL code paths below.
-     */
-    git_err = git_repository_set_head(repo, local_refname);
-    if (git_err < 0) {
-        git_reference_free(original_head);
-        return error_from_git(git_err);
-    }
-
-    /* Step 2: Get remote reference */
-    git_reference *remote_ref = NULL;
-    git_err = git_reference_lookup(&remote_ref, repo, remote_refname);
-    if (git_err < 0) {
-        restore_head_to_worktree(repo, "rebase (get remote ref)");
-        git_reference_free(original_head);
-        return error_from_git(git_err);
-    }
-
-    const git_oid *remote_oid = git_reference_target(remote_ref);
-
-    /* Step 3: Create annotated commit for rebase */
-    git_annotated_commit *remote_head = NULL;
-    git_err = git_annotated_commit_lookup(&remote_head, repo, remote_oid);
-    git_reference_free(remote_ref);
-    if (git_err < 0) {
-        restore_head_to_worktree(repo, "rebase (annotated commit)");
-        git_reference_free(original_head);
-        return error_from_git(git_err);
-    }
-
-    /* Step 4: Perform rebase */
-    git_rebase *rebase = NULL;
-    git_rebase_options rebase_opts = GIT_REBASE_OPTIONS_INIT;
-
-    const git_annotated_commit *onto = remote_head;
-    git_err = git_rebase_init(&rebase, repo, NULL, NULL, onto, &rebase_opts);
-    git_annotated_commit_free(remote_head);
-
-    if (git_err < 0) {
-        restore_head_to_worktree(repo, "rebase (init)");
-        git_reference_free(original_head);
-        return error_from_git(git_err);
-    }
-
-    /* Step 5: Iterate through rebase operations */
-    git_rebase_operation *op = NULL;
-    while ((git_err = git_rebase_next(&op, rebase)) == 0) {
-        /* Commit the rebased operation */
-        git_oid commit_id;
-        git_signature *sig = NULL;
-
-        git_err = git_signature_default(&sig, repo);
-        if (git_err < 0) {
-            git_rebase_abort(rebase);
-            git_rebase_free(rebase);
-            restore_head_to_worktree(repo, "rebase (signature)");
-            git_reference_free(original_head);
-            return error_from_git(git_err);
-        }
-
-        git_err = git_rebase_commit(&commit_id, rebase, NULL, sig, NULL, NULL);
-        git_signature_free(sig);
-
-        if (git_err < 0) {
-            git_rebase_abort(rebase);
-            git_rebase_free(rebase);
-            restore_head_to_worktree(repo, "rebase (commit)");
-            git_reference_free(original_head);
-            return error_from_git(git_err);
-        }
-    }
-
-    /* Step 6: Check if rebase completed successfully */
-    if (git_err != GIT_ITEROVER) {
-        git_rebase_abort(rebase);
-        git_rebase_free(rebase);
-        restore_head_to_worktree(repo, "rebase (iteration)");
-        git_reference_free(original_head);
-        return error_from_git(git_err);
-    }
-
-    /* Step 7: Finish rebase */
-    git_err = git_rebase_finish(rebase, NULL);
-    git_rebase_free(rebase);
-
-    if (git_err < 0) {
-        err = error_from_git(git_err);
-    }
-
-    /* Step 8: Restore HEAD to dotta-worktree (CRITICAL - must always happen) */
-    restore_head_to_worktree(repo, "rebase (final)");
-    git_reference_free(original_head);
-
-    return err;
-}
-
-/**
- * Resolve divergence with merge strategy
- *
- * NOTE: This function temporarily modifies the main worktree HEAD to perform
- * the merge operation (required by libgit2). The HEAD is restored to
- * dotta-worktree on all code paths (success or failure).
- */
-static error_t *resolve_divergence_merge(
-    git_repository *repo,
-    const char *remote_name,
-    const char *branch_name
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(branch_name);
-
-    error_t *err = NULL;
-    char local_refname[256];
-    char remote_refname[256];
-
-    err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
-    if (err) {
-        return error_wrap(err, "Invalid branch name '%s'", branch_name);
-    }
-
-    err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
-    if (err) {
-        return error_wrap(err, "Invalid remote/branch name '%s/%s'", remote_name, branch_name);
-    }
-
-    /* Save original HEAD for emergency restoration */
-    git_reference *original_head = NULL;
-    int git_err = git_reference_lookup(&original_head, repo, "HEAD");
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    /* Step 1: Checkout the target branch temporarily
-     * ARCHITECTURAL NOTE: This violates the "HEAD must always be dotta-worktree" principle.
-     * It's done because libgit2's merge API requires HEAD to point to the branch.
-     * We ensure HEAD is restored on ALL code paths below.
-     */
-    git_err = git_repository_set_head(repo, local_refname);
-    if (git_err < 0) {
-        git_reference_free(original_head);
-        return error_from_git(git_err);
-    }
-
-    /* Step 2: Get remote reference */
-    git_reference *remote_ref = NULL;
-    git_err = git_reference_lookup(&remote_ref, repo, remote_refname);
-    if (git_err < 0) {
-        restore_head_to_worktree(repo, "merge (get remote ref)");
-        git_reference_free(original_head);
-        return error_from_git(git_err);
-    }
-
-    const git_oid *remote_oid = git_reference_target(remote_ref);
-
-    /* Step 3: Create annotated commit for merge */
-    git_annotated_commit *remote_head = NULL;
-    git_err = git_annotated_commit_lookup(&remote_head, repo, remote_oid);
-    git_reference_free(remote_ref);
-    if (git_err < 0) {
-        restore_head_to_worktree(repo, "merge (annotated commit)");
-        git_reference_free(original_head);
-        return error_from_git(git_err);
-    }
-
-    /* Step 4: Perform merge */
-    git_merge_options merge_opts = GIT_MERGE_OPTIONS_INIT;
-    git_checkout_options checkout_opts = GIT_CHECKOUT_OPTIONS_INIT;
-    checkout_opts.checkout_strategy = GIT_CHECKOUT_FORCE;  /* Force since no working tree conflicts */
-
-    const git_annotated_commit *merge_heads[] = { remote_head };
-    git_err = git_merge(repo, merge_heads, 1, &merge_opts, &checkout_opts);
-    git_annotated_commit_free(remote_head);
-
-    if (git_err < 0) {
-        restore_head_to_worktree(repo, "merge (perform)");
-        git_reference_free(original_head);
-        return error_from_git(git_err);
-    }
-
-    /* Step 5: Check for conflicts */
-    git_index *index = NULL;
-    git_err = git_repository_index(&index, repo);
-    if (git_err < 0) {
-        git_repository_state_cleanup(repo);
-        restore_head_to_worktree(repo, "merge (get index)");
-        git_reference_free(original_head);
-        return error_from_git(git_err);
-    }
-
-    if (git_index_has_conflicts(index)) {
-        git_index_free(index);
-        git_repository_state_cleanup(repo);
-        restore_head_to_worktree(repo, "merge (conflicts)");
-        git_reference_free(original_head);
-        return ERROR(ERR_CONFLICT,
-                    "Merge resulted in conflicts for '%s'. Please resolve manually.",
-                    branch_name);
-    }
-
-    /* Step 6: Write the merge commit */
-    git_oid tree_oid, commit_oid;
-    git_err = git_index_write_tree(&tree_oid, index);
-    git_index_free(index);
-    if (git_err < 0) {
-        git_repository_state_cleanup(repo);
-        restore_head_to_worktree(repo, "merge (write tree)");
-        git_reference_free(original_head);
-        return error_from_git(git_err);
-    }
-
-    git_tree *tree = NULL;
-    git_err = git_tree_lookup(&tree, repo, &tree_oid);
-    if (git_err < 0) {
-        git_repository_state_cleanup(repo);
-        restore_head_to_worktree(repo, "merge (lookup tree)");
-        git_reference_free(original_head);
-        return error_from_git(git_err);
-    }
-
-    /* Get local branch commit (now HEAD since we checked it out) */
-    git_reference *local_ref = NULL;
-    git_commit *local_commit = NULL;
-    git_err = git_reference_lookup(&local_ref, repo, local_refname);
-    if (git_err < 0) {
-        git_tree_free(tree);
-        git_repository_state_cleanup(repo);
-        restore_head_to_worktree(repo, "merge (lookup local ref)");
-        git_reference_free(original_head);
-        return error_from_git(git_err);
-    }
-
-    const git_oid *local_oid = git_reference_target(local_ref);
-    git_err = git_commit_lookup(&local_commit, repo, local_oid);
-    git_reference_free(local_ref);
-    if (git_err < 0) {
-        git_tree_free(tree);
-        git_repository_state_cleanup(repo);
-        restore_head_to_worktree(repo, "merge (lookup local commit)");
-        git_reference_free(original_head);
-        return error_from_git(git_err);
-    }
-
-    /* Get remote commit */
-    git_commit *remote_commit = NULL;
-    git_err = git_commit_lookup(&remote_commit, repo, remote_oid);
-    if (git_err < 0) {
-        git_commit_free(local_commit);
-        git_tree_free(tree);
-        git_repository_state_cleanup(repo);
-        restore_head_to_worktree(repo, "merge (lookup remote commit)");
-        git_reference_free(original_head);
-        return error_from_git(git_err);
-    }
-
-    /* Create merge commit */
-    git_signature *sig = NULL;
-    git_err = git_signature_default(&sig, repo);
-    if (git_err < 0) {
-        git_commit_free(remote_commit);
-        git_commit_free(local_commit);
-        git_tree_free(tree);
-        git_repository_state_cleanup(repo);
-        restore_head_to_worktree(repo, "merge (signature)");
-        git_reference_free(original_head);
-        return error_from_git(git_err);
-    }
-
-    char message[256];
-    snprintf(message, sizeof(message), "Merge remote-tracking branch '%s/%s'", remote_name, branch_name);
-
-    const git_commit *parents[] = { local_commit, remote_commit };
-    git_err = git_commit_create(&commit_oid, repo, local_refname, sig, sig, NULL, message, tree, 2, parents);
-
-    git_signature_free(sig);
-    git_commit_free(remote_commit);
-    git_commit_free(local_commit);
-    git_tree_free(tree);
-
-    if (git_err < 0) {
-        err = error_from_git(git_err);
-    }
-
-    /* Step 7: Cleanup and restore HEAD to dotta-worktree (CRITICAL - must always happen) */
-    git_repository_state_cleanup(repo);
-    restore_head_to_worktree(repo, "merge (final)");
-    git_reference_free(original_head);
-
-    return err;
-}
-
-/**
- * Resolve divergence with "ours" strategy (force push local)
- */
-static error_t *resolve_divergence_ours(
-    git_repository *repo,
-    const char *remote_name,
-    const char *branch_name,
-    credential_context_t *cred_ctx,
-    bool confirm
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(branch_name);
-
-    if (confirm) {
-        char prompt[512];
-        snprintf(prompt, sizeof(prompt),
-                "WARNING: This will force push and OVERWRITE remote '%s' with local changes.\n"
-                "Remote commits will be LOST. Continue?", branch_name);
-
-        output_ctx_t *out = output_create();
-        bool confirmed = output_confirm_or_default(out, prompt, false, false);
-        output_free(out);
-
-        if (!confirmed) {  /* Never auto-confirm force push */
-            printf("Operation cancelled.\n");
-            return NULL;  /* User declined, not an error */
-        }
-    }
 
     /* Force push local to remote */
     git_remote *remote = NULL;
@@ -600,8 +142,8 @@ static error_t *resolve_divergence_ours(
     push_opts.callbacks.credentials = credentials_callback;
     push_opts.callbacks.payload = cred_ctx;
 
-    /* Force push refspec */
-    char refspec[256];
+    /* Force push refspec ('+' prefix forces the push) */
+    char refspec[DOTTA_REFSPEC_MAX];
     snprintf(refspec, sizeof(refspec), "+refs/heads/%s:refs/heads/%s", branch_name, branch_name);
 
     const char *refspecs[] = { refspec };
@@ -625,80 +167,6 @@ static error_t *resolve_divergence_ours(
 }
 
 /**
- * Resolve divergence with "theirs" strategy (reset to remote)
- */
-static error_t *resolve_divergence_theirs(
-    git_repository *repo,
-    const char *remote_name,
-    const char *branch_name,
-    bool confirm
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(branch_name);
-
-    if (confirm) {
-        char prompt[512];
-        snprintf(prompt, sizeof(prompt),
-                "WARNING: This will reset '%s' to remote and DISCARD local commits.\n"
-                "Local changes will be LOST. Continue?",
-                branch_name);
-
-        output_ctx_t *out = output_create();
-        bool confirmed = output_confirm_or_default(out, prompt, false, false);
-        output_free(out);
-
-        if (!confirmed) {  /* Never auto-confirm reset */
-            printf("Operation cancelled.\n");
-            return NULL;  /* User declined, not an error */
-        }
-    }
-
-    /* Get remote reference */
-    char remote_refname[256];
-    error_t *err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
-    if (err) {
-        return error_wrap(err, "Invalid remote/branch name '%s/%s'", remote_name, branch_name);
-    }
-
-    git_reference *remote_ref = NULL;
-    int git_err = git_reference_lookup(&remote_ref, repo, remote_refname);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    const git_oid *remote_oid = git_reference_target(remote_ref);
-
-    /* Reset local branch to remote */
-    char local_refname[256];
-    err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
-    if (err) {
-        git_reference_free(remote_ref);
-        return error_wrap(err, "Invalid branch name '%s'", branch_name);
-    }
-
-    git_reference *local_ref = NULL;
-    git_err = git_reference_lookup(&local_ref, repo, local_refname);
-    if (git_err < 0) {
-        git_reference_free(remote_ref);
-        return error_from_git(git_err);
-    }
-
-    git_reference *new_ref = NULL;
-    git_err = git_reference_set_target(&new_ref, local_ref, remote_oid,
-                                      "sync: Reset to remote (theirs strategy)");
-    git_reference_free(local_ref);
-    git_reference_free(remote_ref);
-
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    git_reference_free(new_ref);
-    return NULL;
-}
-
-/**
  * Pull branch with fast-forward only
  * Returns true if branch was updated
  */
@@ -716,8 +184,8 @@ static error_t *pull_branch_ff(
     *updated = false;
 
     /* Get local and remote refs */
-    char local_refname[256];
-    char remote_refname[256];
+    char local_refname[DOTTA_REFNAME_MAX];
+    char remote_refname[DOTTA_REFNAME_MAX];
     error_t *err;
 
     err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
@@ -871,7 +339,7 @@ static error_t *collect_remote_tracking_branches(
         return error_from_git(git_err);
     }
 
-    char prefix[256];
+    char prefix[DOTTA_REFNAME_MAX];
     snprintf(prefix, sizeof(prefix), "refs/remotes/%s/", remote_name);
     size_t prefix_len = strlen(prefix);
 
@@ -1035,7 +503,7 @@ static error_t *delete_orphaned_local_branches(
         }
 
         /* Delete the local branch */
-        char local_refname[256];
+        char local_refname[DOTTA_REFNAME_MAX];
         snprintf(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
 
         git_reference *local_ref = NULL;
@@ -1145,7 +613,7 @@ static error_t *sync_fetch_phase(
     }
     git_remote_free(remote);
 
-    char section_title[256];
+    char section_title[DOTTA_MESSAGE_MAX];
     snprintf(section_title, sizeof(section_title), "Fetching from remote '%s'", remote_name);
     output_section(out, section_title);
 
@@ -1461,7 +929,7 @@ static error_t *sync_push_phase(
     output_ctx_t *out,
     bool verbose,
     bool auto_pull,
-    divergence_strategy_t diverged_strategy,
+    sync_divergence_strategy_t diverged_strategy,
     credential_context_t *cred_ctx,
     bool confirm_destructive
 ) {
@@ -1604,19 +1072,23 @@ static error_t *sync_push_phase(
                         results->diverged_count++;
                         break;
 
-                    case DIVERGE_REBASE: {
+                    case DIVERGE_REBASE:
+                    {
                         output_info(out, "   Resolving with rebase strategy...");
 
-                        /* Save original branch state for rollback */
-                        git_oid saved_oid;
-                        err = save_branch_oid(repo, result->profile_name, &saved_oid);
+                        /* Initialize divergence context */
+                        divergence_context_t ctx;
+                        err = divergence_context_init(&ctx, repo, remote_name, result->profile_name,
+                                                      DIVERGENCE_STRATEGY_REBASE);
                         if (err) {
-                            output_error(out, "   ✗ Failed to save branch state: %s", error_message(err));
+                            output_error(out, "   ✗ Failed to initialize divergence context: %s",
+                                        error_message(err));
                             error_free(err);
                             break;
                         }
 
-                        err = resolve_divergence_rebase(repo, remote_name, result->profile_name);
+                        /* Perform in-memory rebase (never modifies HEAD) */
+                        err = divergence_resolve(&ctx, NULL);
                         if (err) {
                             result->failed = true;
                             result->error_message = strdup(error_message(err));
@@ -1626,14 +1098,20 @@ static error_t *sync_push_phase(
                         } else {
                             /* Verify rebase succeeded */
                             size_t ahead = 0;
-                            err = verify_divergence_resolved(repo, remote_name, result->profile_name, &ahead, NULL);
+                            err = divergence_verify(&ctx, &ahead, NULL);
                             if (err) {
+                                result->failed = true;
+                                result->error_message = strdup(error_message(err));
+                                results->failed_count++;
                                 output_error(out, "   ✗ Rebase verification failed: %s", error_message(err));
                                 error_free(err);
                                 /* Rollback */
-                                err = rollback_branch(repo, result->profile_name, &saved_oid);
+                                err = divergence_rollback(&ctx);
                                 if (err) {
-                                    output_error(out, "   ✗ Rollback failed: %s", error_message(err));
+                                    output_error(out, "   ✗ CRITICAL: Rollback failed: %s", error_message(err));
+                                    free(result->error_message);
+                                    result->error_message = strdup("Verification failed and rollback failed"
+                                                                   " - repository may be inconsistent");
                                     error_free(err);
                                 } else {
                                     output_info(out, "   ↺ Rolled back to original state");
@@ -1652,9 +1130,12 @@ static error_t *sync_push_phase(
                                     error_free(err);
                                     /* Rollback since push failed */
                                     output_info(out, "   ↺ Rolling back rebase (push failed)...");
-                                    err = rollback_branch(repo, result->profile_name, &saved_oid);
+                                    err = divergence_rollback(&ctx);
                                     if (err) {
-                                        output_error(out, "   ✗ Rollback failed: %s", error_message(err));
+                                        output_error(out, "   ✗ CRITICAL: Rollback failed: %s", error_message(err));
+                                        free(result->error_message);
+                                        result->error_message = strdup("Push failed and rollback failed"
+                                                                       " - repository may be inconsistent");
                                         error_free(err);
                                     } else {
                                         output_success(out, "   Rolled back to original state");
@@ -1669,19 +1150,23 @@ static error_t *sync_push_phase(
                         break;
                     }
 
-                    case DIVERGE_MERGE: {
+                    case DIVERGE_MERGE:
+                    {
                         output_info(out, "   Resolving with merge strategy...");
 
-                        /* Save original branch state for rollback */
-                        git_oid saved_oid;
-                        err = save_branch_oid(repo, result->profile_name, &saved_oid);
+                        /* Initialize divergence context */
+                        divergence_context_t ctx;
+                        err = divergence_context_init(&ctx, repo, remote_name, result->profile_name,
+                                                      DIVERGENCE_STRATEGY_MERGE);
                         if (err) {
-                            output_error(out, "   ✗ Failed to save branch state: %s", error_message(err));
+                            output_error(out, "   ✗ Failed to initialize divergence context: %s",
+                                        error_message(err));
                             error_free(err);
                             break;
                         }
 
-                        err = resolve_divergence_merge(repo, remote_name, result->profile_name);
+                        /* Perform tree-based merge (never modifies HEAD) */
+                        err = divergence_resolve(&ctx, NULL);
                         if (err) {
                             result->failed = true;
                             result->error_message = strdup(error_message(err));
@@ -1691,14 +1176,20 @@ static error_t *sync_push_phase(
                         } else {
                             /* Verify merge succeeded */
                             size_t ahead = 0;
-                            err = verify_divergence_resolved(repo, remote_name, result->profile_name, &ahead, NULL);
+                            err = divergence_verify(&ctx, &ahead, NULL);
                             if (err) {
+                                result->failed = true;
+                                result->error_message = strdup(error_message(err));
+                                results->failed_count++;
                                 output_error(out, "   ✗ Merge verification failed: %s", error_message(err));
                                 error_free(err);
                                 /* Rollback */
-                                err = rollback_branch(repo, result->profile_name, &saved_oid);
+                                err = divergence_rollback(&ctx);
                                 if (err) {
-                                    output_error(out, "   ✗ Rollback failed: %s", error_message(err));
+                                    output_error(out, "   ✗ CRITICAL: Rollback failed: %s", error_message(err));
+                                    free(result->error_message);
+                                    result->error_message = strdup("Verification failed and rollback failed"
+                                                                   " - repository may be inconsistent");
                                     error_free(err);
                                 } else {
                                     output_info(out, "   ↺ Rolled back to original state");
@@ -1717,9 +1208,12 @@ static error_t *sync_push_phase(
                                     error_free(err);
                                     /* Rollback since push failed */
                                     output_info(out, "   ↺ Rolling back merge (push failed)...");
-                                    err = rollback_branch(repo, result->profile_name, &saved_oid);
+                                    err = divergence_rollback(&ctx);
                                     if (err) {
-                                        output_error(out, "   ✗ Rollback failed: %s", error_message(err));
+                                        output_error(out, "   ✗ CRITICAL: Rollback failed: %s", error_message(err));
+                                        free(result->error_message);
+                                        result->error_message = strdup("Push failed and rollback failed"
+                                                                       " - repository may be inconsistent");
                                         error_free(err);
                                     } else {
                                         output_success(out, "   Rolled back to original state");
@@ -1735,9 +1229,49 @@ static error_t *sync_push_phase(
                     }
 
                     case DIVERGE_OURS:
+                    {
                         output_info(out, "   Resolving with 'ours' strategy (force push)...");
-                        err = resolve_divergence_ours(repo, remote_name, result->profile_name,
-                                                      cred_ctx, confirm_destructive);
+
+                        /* Get user confirmation for destructive operation */
+                        if (confirm_destructive) {
+                            char prompt[DOTTA_MESSAGE_MAX];
+                            snprintf(prompt, sizeof(prompt),
+                                    "WARNING: This will force push and OVERWRITE remote '%s'.\n"
+                                    "Remote commits will be LOST. Continue?", result->profile_name);
+                            bool confirmed = output_confirm_or_default(out, prompt, false, false);
+                            if (!confirmed) {
+                                output_info(out, "   Operation cancelled by user");
+                                break;
+                            }
+                        }
+
+                        /* Initialize divergence context (saves current state for rollback) */
+                        divergence_context_t ctx;
+                        err = divergence_context_init(&ctx, repo, remote_name, result->profile_name,
+                                                      DIVERGENCE_STRATEGY_OURS);
+                        if (err) {
+                            result->failed = true;
+                            result->error_message = strdup(error_message(err));
+                            results->failed_count++;
+                            output_error(out, "   ✗ Failed to initialize divergence context: %s",
+                                        error_message(err));
+                            error_free(err);
+                            break;
+                        }
+
+                        /* Resolve divergence (for OURS, this is a no-op - local stays unchanged) */
+                        err = divergence_resolve(&ctx, NULL);
+                        if (err) {
+                            result->failed = true;
+                            result->error_message = strdup(error_message(err));
+                            results->failed_count++;
+                            output_error(out, "   ✗ Resolution failed: %s", error_message(err));
+                            error_free(err);
+                            break;
+                        }
+
+                        /* Force push to remote */
+                        err = force_push_branch(repo, remote_name, result->profile_name, cred_ctx);
                         if (err) {
                             result->failed = true;
                             result->error_message = strdup(error_message(err));
@@ -1745,14 +1279,46 @@ static error_t *sync_push_phase(
                             output_error(out, "   ✗ Force push failed: %s", error_message(err));
                             error_free(err);
                         } else {
-                            output_success(out, "   Forced push to remote (remote commits discarded)");
+                            output_success(out, "   Force pushed to remote (remote commits discarded)");
+                            result->pushed = true;
+                            results->pushed_count++;
                         }
                         break;
+                    }
 
                     case DIVERGE_THEIRS:
+                    {
                         output_info(out, "   Resolving with 'theirs' strategy (reset to remote)...");
-                        err = resolve_divergence_theirs(repo, remote_name, result->profile_name,
-                                                        confirm_destructive);
+
+                        /* Get user confirmation for destructive operation */
+                        if (confirm_destructive) {
+                            char prompt[DOTTA_MESSAGE_MAX];
+                            snprintf(prompt, sizeof(prompt),
+                                    "WARNING: This will reset '%s' to remote and DISCARD local commits.\n"
+                                    "Local changes will be LOST. Continue?", result->profile_name);
+                            bool confirmed = output_confirm_or_default(out, prompt, false, false);
+                            if (!confirmed) {
+                                output_info(out, "   Operation cancelled by user");
+                                break;
+                            }
+                        }
+
+                        /* Initialize divergence context (saves current state for rollback) */
+                        divergence_context_t ctx;
+                        err = divergence_context_init(&ctx, repo, remote_name, result->profile_name,
+                                                      DIVERGENCE_STRATEGY_THEIRS);
+                        if (err) {
+                            result->failed = true;
+                            result->error_message = strdup(error_message(err));
+                            results->failed_count++;
+                            output_error(out, "   ✗ Failed to initialize divergence context: %s",
+                                        error_message(err));
+                            error_free(err);
+                            break;
+                        }
+
+                        /* Resolve divergence (resets local branch to remote) */
+                        err = divergence_resolve(&ctx, NULL);
                         if (err) {
                             result->failed = true;
                             result->error_message = strdup(error_message(err));
@@ -1760,9 +1326,22 @@ static error_t *sync_push_phase(
                             output_error(out, "   ✗ Reset failed: %s", error_message(err));
                             error_free(err);
                         } else {
-                            output_success(out, "   Reset to remote (local commits discarded)");
+                            /* Verify reset succeeded */
+                            err = divergence_verify(&ctx, NULL, NULL);
+                            if (err) {
+                                result->failed = true;
+                                result->error_message = strdup(error_message(err));
+                                results->failed_count++;
+                                output_error(out, "   ✗ Reset verification failed: %s", error_message(err));
+                                output_warning(out, "   Local branch was reset but verification failed");
+                                error_free(err);
+                            } else {
+                                output_success(out, "   Reset to remote (local commits discarded)");
+                                /* No push needed - local is now at remote */
+                            }
                         }
                         break;
+                    }
                 }
                 break;
             }
@@ -1980,7 +1559,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     bool auto_pull = opts->no_pull ? false : config->auto_pull;
 
     /* Determine divergence strategy: CLI overrides config */
-    divergence_strategy_t diverged_strategy = parse_divergence_strategy(
+    sync_divergence_strategy_t diverged_strategy = parse_divergence_strategy(
         opts->diverged ? opts->diverged : config->diverged_strategy
     );
 

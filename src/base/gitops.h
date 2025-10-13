@@ -378,4 +378,125 @@ error_t *gitops_index_add(git_index *index, const char *path);
  */
 error_t *gitops_index_write_tree(git_index *index, git_oid *out);
 
+/**
+ * Advanced merge/rebase operations (HEAD-safe)
+ *
+ * These operations never modify HEAD and are designed for dotta's architecture
+ * where HEAD must always point to dotta-worktree.
+ */
+
+/**
+ * Get tree from commit OID
+ *
+ * Convenience function to extract tree from a commit.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param commit_oid Commit OID (must not be NULL)
+ * @param out_tree Tree object (must not be NULL, caller must free with git_tree_free)
+ * @return Error or NULL on success
+ */
+error_t *gitops_get_tree_from_commit(
+    git_repository *repo,
+    const git_oid *commit_oid,
+    git_tree **out_tree
+);
+
+/**
+ * Find merge base between two commits
+ *
+ * Finds the best common ancestor for a three-way merge.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param one First commit OID (must not be NULL)
+ * @param two Second commit OID (must not be NULL)
+ * @param out_oid Merge base commit OID (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *gitops_find_merge_base(
+    git_repository *repo,
+    const git_oid *one,
+    const git_oid *two,
+    git_oid *out_oid
+);
+
+/**
+ * Merge trees without modifying HEAD or working directory
+ *
+ * Performs a three-way merge using common ancestor. This is a pure
+ * tree-level operation that never touches HEAD.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param ancestor_oid Common ancestor commit (must not be NULL)
+ * @param our_oid Our commit (local) (must not be NULL)
+ * @param their_oid Their commit (remote) (must not be NULL)
+ * @param out_index Resulting merge index (must not be NULL, caller must free with git_index_free)
+ * @return Error or NULL on success
+ */
+error_t *gitops_merge_trees_safe(
+    git_repository *repo,
+    const git_oid *ancestor_oid,
+    const git_oid *our_oid,
+    const git_oid *their_oid,
+    git_index **out_index
+);
+
+/**
+ * Create merge commit from index
+ *
+ * Creates a merge commit with two parents. Does not update any references.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param index Merged index (must not be NULL, must not have conflicts)
+ * @param our_commit Our commit (local) (must not be NULL)
+ * @param their_commit Their commit (remote) (must not be NULL)
+ * @param message Commit message (must not be NULL)
+ * @param out_oid Created commit OID (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *gitops_create_merge_commit(
+    git_repository *repo,
+    git_index *index,
+    git_commit *our_commit,
+    git_commit *their_commit,
+    const char *message,
+    git_oid *out_oid
+);
+
+/**
+ * Perform in-memory rebase without modifying HEAD
+ *
+ * Rebases branch_oid onto onto_oid using libgit2's in-memory mode.
+ * This never touches HEAD or the working directory.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param branch_oid Branch to rebase (must not be NULL)
+ * @param onto_oid Target to rebase onto (must not be NULL)
+ * @param out_oid Final rebased commit OID (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *gitops_rebase_inmemory_safe(
+    git_repository *repo,
+    const git_oid *branch_oid,
+    const git_oid *onto_oid,
+    git_oid *out_oid
+);
+
+/**
+ * Update branch reference to new commit
+ *
+ * Updates a branch reference without modifying HEAD. Thread-safe with reflog.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param branch_name Branch name (must not be NULL)
+ * @param new_oid New commit OID (must not be NULL)
+ * @param reflog_msg Reflog message (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *gitops_update_branch_reference(
+    git_repository *repo,
+    const char *branch_name,
+    const git_oid *new_oid,
+    const char *reflog_msg
+);
+
 #endif /* DOTTA_GITOPS_H */

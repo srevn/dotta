@@ -362,7 +362,7 @@ error_t *gitops_create_commit(
     error_t *err_build = build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
     if (err_build) {
         git_signature_free(sig);
-        git_tree_free(tree);
+        /* NOTE: Do not free 'tree' - it is owned by the caller */
         return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
     }
 
@@ -995,5 +995,349 @@ error_t *gitops_resolve_commit_in_branch(
         git_object_free(obj);
     }
 
+    return NULL;
+}
+
+/**
+ * Advanced merge/rebase operations (HEAD-safe)
+ */
+
+/**
+ * Get tree from commit OID
+ */
+error_t *gitops_get_tree_from_commit(
+    git_repository *repo,
+    const git_oid *commit_oid,
+    git_tree **out_tree
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(commit_oid);
+    CHECK_NULL(out_tree);
+
+    /* Lookup commit */
+    git_commit *commit = NULL;
+    int err = git_commit_lookup(&commit, repo, commit_oid);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    /* Get tree from commit */
+    err = git_commit_tree(out_tree, commit);
+    git_commit_free(commit);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    return NULL;
+}
+
+/**
+ * Find merge base between two commits
+ */
+error_t *gitops_find_merge_base(
+    git_repository *repo,
+    const git_oid *one,
+    const git_oid *two,
+    git_oid *out_oid
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(one);
+    CHECK_NULL(two);
+    CHECK_NULL(out_oid);
+
+    int err = git_merge_base(out_oid, repo, one, two);
+    if (err < 0) {
+        if (err == GIT_ENOTFOUND) {
+            return ERROR(ERR_NOT_FOUND, "No merge base found between commits");
+        }
+        return error_from_git(err);
+    }
+
+    return NULL;
+}
+
+/**
+ * Merge trees without modifying HEAD or working directory
+ */
+error_t *gitops_merge_trees_safe(
+    git_repository *repo,
+    const git_oid *ancestor_oid,
+    const git_oid *our_oid,
+    const git_oid *their_oid,
+    git_index **out_index
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(ancestor_oid);
+    CHECK_NULL(our_oid);
+    CHECK_NULL(their_oid);
+    CHECK_NULL(out_index);
+
+    git_tree *ancestor_tree = NULL;
+    git_tree *our_tree = NULL;
+    git_tree *their_tree = NULL;
+    git_index *index = NULL;
+    error_t *err = NULL;
+    int git_err;
+
+    /* Get tree from ancestor commit */
+    err = gitops_get_tree_from_commit(repo, ancestor_oid, &ancestor_tree);
+    if (err) {
+        return error_wrap(err, "Failed to get ancestor tree");
+    }
+
+    /* Get tree from our commit */
+    err = gitops_get_tree_from_commit(repo, our_oid, &our_tree);
+    if (err) {
+        git_tree_free(ancestor_tree);
+        return error_wrap(err, "Failed to get our tree");
+    }
+
+    /* Get tree from their commit */
+    err = gitops_get_tree_from_commit(repo, their_oid, &their_tree);
+    if (err) {
+        git_tree_free(our_tree);
+        git_tree_free(ancestor_tree);
+        return error_wrap(err, "Failed to get their tree");
+    }
+
+    /* Perform three-way merge on trees */
+    git_merge_options merge_opts = GIT_MERGE_OPTIONS_INIT;
+    git_err = git_merge_trees(&index, repo, ancestor_tree, our_tree, their_tree, &merge_opts);
+
+    /* Clean up trees */
+    git_tree_free(their_tree);
+    git_tree_free(our_tree);
+    git_tree_free(ancestor_tree);
+
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    *out_index = index;
+    return NULL;
+}
+
+/**
+ * Create merge commit from index
+ */
+error_t *gitops_create_merge_commit(
+    git_repository *repo,
+    git_index *index,
+    git_commit *our_commit,
+    git_commit *their_commit,
+    const char *message,
+    git_oid *out_oid
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(index);
+    CHECK_NULL(our_commit);
+    CHECK_NULL(their_commit);
+    CHECK_NULL(message);
+    CHECK_NULL(out_oid);
+
+    /* Check for conflicts */
+    if (git_index_has_conflicts(index)) {
+        return ERROR(ERR_CONFLICT, "Cannot create merge commit: index has conflicts");
+    }
+
+    /* Write index to tree */
+    git_oid tree_oid;
+    int err = git_index_write_tree(&tree_oid, index);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    /* Lookup tree object */
+    git_tree *tree = NULL;
+    err = git_tree_lookup(&tree, repo, &tree_oid);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    /* Get signature */
+    git_signature *sig = NULL;
+    err = git_signature_default(&sig, repo);
+    if (err < 0) {
+        git_tree_free(tree);
+        return error_from_git(err);
+    }
+
+    /* Create merge commit with two parents
+     * NOTE: We pass NULL as the reference name to avoid updating any reference.
+     * The caller is responsible for updating branch references.
+     */
+    const git_commit *parents[] = { our_commit, their_commit };
+    err = git_commit_create(
+        out_oid,
+        repo,
+        NULL,  /* Don't update any reference */
+        sig,
+        sig,
+        NULL,  /* encoding */
+        message,
+        tree,
+        2,     /* parent count */
+        parents
+    );
+
+    git_signature_free(sig);
+    git_tree_free(tree);
+
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    return NULL;
+}
+
+/**
+ * Perform in-memory rebase without modifying HEAD
+ */
+error_t *gitops_rebase_inmemory_safe(
+    git_repository *repo,
+    const git_oid *branch_oid,
+    const git_oid *onto_oid,
+    git_oid *out_oid
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(branch_oid);
+    CHECK_NULL(onto_oid);
+    CHECK_NULL(out_oid);
+
+    git_annotated_commit *branch_commit = NULL;
+    git_annotated_commit *onto_commit = NULL;
+    git_rebase *rebase = NULL;
+    error_t *err = NULL;
+    int git_err;
+
+    /* Create annotated commits for rebase */
+    git_err = git_annotated_commit_lookup(&branch_commit, repo, branch_oid);
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    git_err = git_annotated_commit_lookup(&onto_commit, repo, onto_oid);
+    if (git_err < 0) {
+        git_annotated_commit_free(branch_commit);
+        return error_from_git(git_err);
+    }
+
+    /* Initialize in-memory rebase
+     * CRITICAL: opts.inmemory = 1 ensures HEAD is never modified
+     */
+    git_rebase_options opts = GIT_REBASE_OPTIONS_INIT;
+    opts.inmemory = 1;  /* This is the key - never touch HEAD or working directory */
+
+    git_err = git_rebase_init(&rebase, repo, branch_commit, NULL, onto_commit, &opts);
+    git_annotated_commit_free(onto_commit);
+    git_annotated_commit_free(branch_commit);
+
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    /* Process each rebase operation
+     * Initialize commit_oid to onto_oid - if there are no operations to rebase
+     * (branch is already up-to-date or behind), we return onto_oid which is
+     * correct for both cases (no-op or fast-forward).
+     */
+    git_rebase_operation *op = NULL;
+    git_oid commit_oid;
+    git_oid_cpy(&commit_oid, onto_oid);
+
+    while ((git_err = git_rebase_next(&op, rebase)) == 0) {
+        /* Get signature */
+        git_signature *sig = NULL;
+        git_err = git_signature_default(&sig, repo);
+        if (git_err < 0) {
+            err = error_from_git(git_err);
+            git_rebase_abort(rebase);
+            git_rebase_free(rebase);
+            return error_wrap(err, "Failed to get signature during rebase");
+        }
+
+        /* Commit the rebased operation
+         * In inmemory mode, this doesn't touch HEAD or working directory
+         */
+        git_err = git_rebase_commit(&commit_oid, rebase, NULL, sig, NULL, NULL);
+        git_signature_free(sig);
+
+        if (git_err < 0) {
+            git_rebase_abort(rebase);
+            git_rebase_free(rebase);
+
+            /* Check for merge conflicts specifically */
+            if (git_err == GIT_EMERGECONFLICT) {
+                return ERROR(ERR_CONFLICT,
+                            "Rebase resulted in conflicts. "
+                            "Please resolve manually using 'git rebase' or try merge strategy instead.");
+            }
+
+            err = error_from_git(git_err);
+            return error_wrap(err, "Failed to commit during rebase");
+        }
+    }
+
+    /* Check if rebase completed successfully */
+    if (git_err != GIT_ITEROVER) {
+        err = error_from_git(git_err);
+        git_rebase_abort(rebase);
+        git_rebase_free(rebase);
+        return error_wrap(err, "Rebase iteration failed");
+    }
+
+    /* Finish rebase */
+    git_err = git_rebase_finish(rebase, NULL);
+    git_rebase_free(rebase);
+
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    /* Return the final commit OID */
+    git_oid_cpy(out_oid, &commit_oid);
+    return NULL;
+}
+
+/**
+ * Update branch reference to new commit
+ */
+error_t *gitops_update_branch_reference(
+    git_repository *repo,
+    const char *branch_name,
+    const git_oid *new_oid,
+    const char *reflog_msg
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(branch_name);
+    CHECK_NULL(new_oid);
+    CHECK_NULL(reflog_msg);
+
+    /* Build reference name */
+    char refname[256];
+    error_t *err = build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
+    if (err) {
+        return error_wrap(err, "Invalid branch name '%s'", branch_name);
+    }
+
+    /* Lookup existing reference */
+    git_reference *ref = NULL;
+    int git_err = git_reference_lookup(&ref, repo, refname);
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    /* Update reference to new OID with reflog message
+     * This is an atomic operation that updates the branch without touching HEAD
+     */
+    git_reference *new_ref = NULL;
+    git_err = git_reference_set_target(&new_ref, ref, new_oid, reflog_msg);
+    git_reference_free(ref);
+
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    git_reference_free(new_ref);
     return NULL;
 }

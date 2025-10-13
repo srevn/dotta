@@ -21,6 +21,17 @@
 typedef struct git_repository git_repository;
 
 /**
+ * Common buffer size constants
+ *
+ * These constants define standard buffer sizes used throughout dotta.
+ * Git allows up to 255 chars per reference component, but we use
+ * conservative limits for safety and to catch truncation early.
+ */
+#define DOTTA_REFNAME_MAX 256    /* For git reference names (refs/heads/...) */
+#define DOTTA_REFSPEC_MAX 256    /* For git refspecs (refs/heads/foo:refs/remotes/...) */
+#define DOTTA_MESSAGE_MAX 512    /* For commit messages and prompts */
+
+/**
  * Resolve repository path
  *
  * Determines the dotta repository location based on:
@@ -82,7 +93,7 @@ error_t *ensure_parent_dirs(const char *path);
  * @return Error or NULL on success
  *
  * Example:
- *   char refname[256];
+ *   char refname[DOTTA_REFNAME_MAX];
  *   error_t *err = build_refname(refname, sizeof(refname), "refs/heads/%s", branch);
  *   if (err) {
  *       // Handle truncation or formatting error

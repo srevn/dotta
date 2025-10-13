@@ -67,6 +67,8 @@ void metadata_free(metadata_t *metadata) {
     /* Free all entries */
     for (size_t i = 0; i < metadata->count; i++) {
         free(metadata->entries[i].storage_path);
+        free(metadata->entries[i].owner);
+        free(metadata->entries[i].group);
     }
 
     free(metadata->entries);
@@ -178,8 +180,10 @@ static error_t *ensure_capacity(metadata_t *metadata) {
                                        metadata->entries[i].storage_path,
                                        &metadata->entries[i]);
             if (err) {
-                /* This is bad but we can't easily recover */
-                error_free(err);
+                /* This is bad, but we must not leave the index corrupted.
+                 * The entries array was already reallocated, so we can't
+                 * fully recover, but we must propagate the error. */
+                return error_wrap(err, "Failed to rebuild metadata index after capacity change");
             }
         }
     }
@@ -356,12 +360,15 @@ error_t *metadata_remove_entry(
         }
     }
 
-    /* Free the storage_path string */
+    /* Free the entry's contents */
     free(metadata->entries[index].storage_path);
+    free(metadata->entries[index].owner);
+    free(metadata->entries[index].group);
 
-    /* Shift remaining entries down */
-    for (size_t i = index; i < metadata->count - 1; i++) {
-        metadata->entries[i] = metadata->entries[i + 1];
+    /* Shift remaining entries down using memmove for efficiency */
+    if ((size_t)index < metadata->count - 1) {
+        memmove(&metadata->entries[index], &metadata->entries[index + 1],
+                (metadata->count - 1 - (size_t)index) * sizeof(metadata_entry_t));
     }
 
     metadata->count--;
@@ -374,8 +381,10 @@ error_t *metadata_remove_entry(
                                        metadata->entries[i].storage_path,
                                        &metadata->entries[i]);
             if (err) {
-                /* This is bad but we can't easily recover */
-                error_free(err);
+                /* This is bad, but we must not leave the index corrupted.
+                 * The entry was already removed from the array, so we can't
+                 * fully recover, but we must propagate the error. */
+                return error_wrap(err, "Failed to rebuild metadata index after removal");
             }
         }
     }
@@ -710,7 +719,8 @@ error_t *metadata_merge(
         for (size_t j = 0; j < source->count; j++) {
             const metadata_entry_t *entry = &source->entries[j];
 
-            err = metadata_set_entry(result, entry->storage_path, entry->mode);
+            /* Use add_entry to copy all fields (mode, owner, group) */
+            err = metadata_add_entry(result, entry);
             if (err) {
                 metadata_free(result);
                 return error_wrap(err, "Failed to merge metadata entry: %s",

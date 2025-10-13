@@ -29,6 +29,7 @@ typedef enum {
     ERR_FS,                    /* Filesystem operation failed */
     ERR_STATE_INVALID,         /* Invalid state file */
     ERR_CONFLICT,              /* Conflict detected */
+    ERR_VALIDATION,            /* Validation failed */
     ERR_MEMORY,                /* Memory allocation failed */
     ERR_INTERNAL               /* Internal error */
 } error_code_t;
@@ -83,5 +84,21 @@ typedef enum {
     PROFILE_MODE_AUTO,    /* Auto-detect: global + OS + host */
     PROFILE_MODE_ALL      /* All available profiles */
 } profile_mode_t;
+
+/**
+ * Workspace divergence category
+ *
+ * Represents the relationship between profile state (Git), deployment state
+ * (.git/dotta-state.json), and filesystem state (actual files).
+ */
+typedef enum {
+    DIVERGENCE_CLEAN,       /* All states aligned */
+    DIVERGENCE_UNDEPLOYED,  /* In profile, not in deployment state */
+    DIVERGENCE_MODIFIED,    /* Deployed, content changed on filesystem */
+    DIVERGENCE_DELETED,     /* Deployed, removed from filesystem */
+    DIVERGENCE_ORPHANED,    /* In deployment state, not in profile */
+    DIVERGENCE_MODE_DIFF,   /* Deployed, mode changed on filesystem */
+    DIVERGENCE_TYPE_DIFF    /* Deployed, type changed on filesystem */
+} divergence_type_t;
 
 #endif /* DOTTA_TYPES_H */

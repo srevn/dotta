@@ -1499,6 +1499,11 @@ static error_t *sync_push_phase(
                                     result->profile_name, error_message(err));
                         error_free(err);
                     } else if (pulled) {
+                        /* Pull succeeded - decrement need_pull_count since we resolved it */
+                        if (results->need_pull_count > 0) {
+                            results->need_pull_count--;
+                        }
+
                         char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
                         printf("  ✓ %s: pulled %zu commit%s (fast-forward)\n",
                                colored ? colored : result->profile_name,

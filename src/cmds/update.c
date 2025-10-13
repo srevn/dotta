@@ -390,6 +390,18 @@ static error_t *find_modified_files(
         return error_wrap(err, "Failed to build manifest");
     }
 
+    /* Load state to check if missing files were previously deployed
+     * This prevents treating undeployed files (e.g., from remote sync) as deletions
+     */
+    state_t *state = NULL;
+    err = state_load(repo, &state);
+    if (err) {
+        /* Non-fatal: If state can't be loaded, treat all CMP_MISSING as deletions (legacy behavior) */
+        error_free(err);
+        err = NULL;
+        state = NULL;
+    }
+
     /* Check each file for modifications */
     for (size_t i = 0; i < manifest->count; i++) {
         const file_entry_t *entry = &manifest->entries[i];
@@ -409,6 +421,7 @@ static error_t *find_modified_files(
         );
 
         if (err) {
+            if (state) state_free(state);
             modified_file_list_free(modified);
             manifest_free(manifest);
             return error_wrap(err, "Failed to compare '%s'", entry->filesystem_path);
@@ -417,8 +430,8 @@ static error_t *find_modified_files(
         /* Add if modified or deleted */
         if (cmp_result == CMP_DIFFERENT ||
             cmp_result == CMP_MODE_DIFF ||
-            cmp_result == CMP_TYPE_DIFF ||
-            cmp_result == CMP_MISSING) {
+            cmp_result == CMP_TYPE_DIFF) {
+            /* File is modified - always include */
             err = modified_file_list_add(
                 modified,
                 entry->filesystem_path,
@@ -428,13 +441,52 @@ static error_t *find_modified_files(
             );
 
             if (err) {
+                if (state) state_free(state);
                 modified_file_list_free(modified);
                 manifest_free(manifest);
                 return err;
             }
+        } else if (cmp_result == CMP_MISSING) {
+            /* File is missing from filesystem - check if it was ever deployed
+             * Only treat as deletion if the file exists in state (was previously deployed)
+             */
+            if (state && state_file_exists(state, entry->filesystem_path)) {
+                /* File was previously deployed - treat as intentional deletion */
+                err = modified_file_list_add(
+                    modified,
+                    entry->filesystem_path,
+                    entry->storage_path,
+                    entry->source_profile,
+                    cmp_result
+                );
+
+                if (err) {
+                    if (state) state_free(state);
+                    modified_file_list_free(modified);
+                    manifest_free(manifest);
+                    return err;
+                }
+            } else if (!state) {
+                /* No state available - fall back to legacy behavior (treat as deletion) */
+                err = modified_file_list_add(
+                    modified,
+                    entry->filesystem_path,
+                    entry->storage_path,
+                    entry->source_profile,
+                    cmp_result
+                );
+
+                if (err) {
+                    modified_file_list_free(modified);
+                    manifest_free(manifest);
+                    return err;
+                }
+            }
+            /* else: File not in state - never deployed - skip (not a deletion) */
         }
     }
 
+    if (state) state_free(state);
     manifest_free(manifest);
     *out = modified;
     return NULL;

@@ -85,6 +85,7 @@ error_t *deploy_preflight_check(
  *
  * @param repo Repository (must not be NULL)
  * @param manifest Manifest to deploy (must not be NULL)
+ * @param state Current state for tracking deployed files (can be NULL)
  * @param metadata Merged metadata for permission restoration (can be NULL)
  * @param opts Deployment options (must not be NULL)
  * @param out Deployment results (must not be NULL, caller must free)
@@ -93,6 +94,7 @@ error_t *deploy_preflight_check(
 error_t *deploy_execute(
     git_repository *repo,
     const manifest_t *manifest,
+    const state_t *state,
     const metadata_t *metadata,
     const deploy_options_t *opts,
     deploy_result_t **out

@@ -745,7 +745,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         output_print(out, OUTPUT_VERBOSE, "\nDeploying files...\n");
     }
 
-    err = deploy_execute(repo, manifest, merged_metadata, &deploy_opts, &deploy_res);
+    err = deploy_execute(repo, manifest, state, merged_metadata, &deploy_opts, &deploy_res);
     if (err) {
         if (deploy_res) {
             print_deploy_results(out, deploy_res, opts->verbose);

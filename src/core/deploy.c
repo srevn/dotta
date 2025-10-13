@@ -299,6 +299,7 @@ error_t *deploy_file(
 error_t *deploy_execute(
     git_repository *repo,
     const manifest_t *manifest,
+    const state_t *state,
     const metadata_t *metadata,
     const deploy_options_t *opts,
     deploy_result_t **out
@@ -340,21 +341,35 @@ error_t *deploy_execute(
             skip_reason = "exists";
         }
 
-        /* Use Case 1: Smart skip - file already up-to-date */
+        /* Use Case 1: Smart skip - file already up-to-date AND tracked in state */
         if (!should_skip && opts->skip_unchanged && fs_exists(entry->filesystem_path)) {
-            compare_result_t cmp_result;
-            error_t *cmp_err = compare_tree_entry_to_disk(
-                repo,
-                entry->entry,
-                entry->filesystem_path,
-                &cmp_result
-            );
-
-            if (!cmp_err && cmp_result == CMP_EQUAL) {
-                should_skip = true;
-                skip_reason = "unchanged";
+            /* Check if file is tracked in state - only skip if it is */
+            bool tracked_in_state = false;
+            if (state) {
+                const state_file_entry_t *state_entry = NULL;
+                error_t *state_err = state_get_file(state, entry->filesystem_path, &state_entry);
+                if (!state_err && state_entry) {
+                    tracked_in_state = true;
+                }
+                error_free(state_err); /* Not found is not an error */
             }
-            error_free(cmp_err); /* Ignore comparison errors, proceed with deployment */
+
+            /* Only skip if tracked in state AND content matches */
+            if (tracked_in_state) {
+                compare_result_t cmp_result;
+                error_t *cmp_err = compare_tree_entry_to_disk(
+                    repo,
+                    entry->entry,
+                    entry->filesystem_path,
+                    &cmp_result
+                );
+
+                if (!cmp_err && cmp_result == CMP_EQUAL) {
+                    should_skip = true;
+                    skip_reason = "unchanged";
+                }
+                error_free(cmp_err); /* Ignore comparison errors, proceed with deployment */
+            }
         }
 
         if (should_skip) {

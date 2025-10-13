@@ -1542,7 +1542,7 @@ static error_t *sync_push_phase(
                     results->pushed_count++;
 
                     char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
-                    output_success(out, "✓ %s: pushed %zu commit%s",
+                    output_success(out, "%s: pushed %zu commit%s",
                            colored ? colored : result->profile_name,
                            result->ahead, result->ahead == 1 ? "" : "s");
                     free(colored);
@@ -1569,7 +1569,7 @@ static error_t *sync_push_phase(
                     results->pushed_count++;
 
                     char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
-                    output_success(out, "✓ %s: created remote branch",
+                    output_success(out, "%s: created remote branch",
                            colored ? colored : result->profile_name);
                     free(colored);
                 }
@@ -1601,7 +1601,7 @@ static error_t *sync_push_phase(
                         }
 
                         char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
-                        output_success(out, "✓ %s: pulled %zu commit%s (fast-forward)",
+                        output_success(out, "%s: pulled %zu commit%s (fast-forward)",
                                colored ? colored : result->profile_name,
                                result->behind, result->behind == 1 ? "" : "s");
                         free(colored);
@@ -1669,7 +1669,7 @@ static error_t *sync_push_phase(
                                     output_info(out, "   ↺ Rolled back to original state");
                                 }
                             } else {
-                                output_success(out, "   ✓ Successfully rebased onto remote (%zu commit%s to push)",
+                                output_success(out, "   Successfully rebased onto remote (%zu commit%s to push)",
                                        ahead, ahead == 1 ? "" : "s");
 
                                 /* Now push the rebased commits */
@@ -1687,10 +1687,10 @@ static error_t *sync_push_phase(
                                         output_error(out, "   ✗ Rollback failed: %s", error_message(err));
                                         error_free(err);
                                     } else {
-                                        output_success(out, "   ✓ Rolled back to original state");
+                                        output_success(out, "   Rolled back to original state");
                                     }
                                 } else {
-                                    output_success(out, "   ✓ Pushed rebased commits");
+                                    output_success(out, "   Pushed rebased commits");
                                     result->pushed = true;
                                     results->pushed_count++;
                                 }
@@ -1734,7 +1734,7 @@ static error_t *sync_push_phase(
                                     output_info(out, "   ↺ Rolled back to original state");
                                 }
                             } else {
-                                output_success(out, "   ✓ Successfully merged with remote (%zu commit%s to push)",
+                                output_success(out, "   Successfully merged with remote (%zu commit%s to push)",
                                        ahead, ahead == 1 ? "" : "s");
 
                                 /* Now push the merge commit */
@@ -1752,10 +1752,10 @@ static error_t *sync_push_phase(
                                         output_error(out, "   ✗ Rollback failed: %s", error_message(err));
                                         error_free(err);
                                     } else {
-                                        output_success(out, "   ✓ Rolled back to original state");
+                                        output_success(out, "   Rolled back to original state");
                                     }
                                 } else {
-                                    output_success(out, "   ✓ Pushed merge commit");
+                                    output_success(out, "   Pushed merge commit");
                                     result->pushed = true;
                                     results->pushed_count++;
                                 }
@@ -1775,7 +1775,7 @@ static error_t *sync_push_phase(
                             output_error(out, "   ✗ Force push failed: %s", error_message(err));
                             error_free(err);
                         } else {
-                            output_success(out, "   ✓ Forced push to remote (remote commits discarded)");
+                            output_success(out, "   Forced push to remote (remote commits discarded)");
                         }
                         break;
 
@@ -1790,7 +1790,7 @@ static error_t *sync_push_phase(
                             output_error(out, "   ✗ Reset failed: %s", error_message(err));
                             error_free(err);
                         } else {
-                            output_success(out, "   ✓ Reset to remote (local commits discarded)");
+                            output_success(out, "   Reset to remote (local commits discarded)");
                         }
                         break;
                 }

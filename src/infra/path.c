@@ -426,16 +426,24 @@ error_t *path_make_relative(
     /* Handle case where paths are identical */
     if (buffer_size(result_buf) == 0) {
         *out = strdup(".");
-    } else {
-        /* Remove trailing slash if present */
-        if (buffer_data(result_buf)[buffer_size(result_buf) - 1] == '/') {
-            ((char *)buffer_data(result_buf))[buffer_size(result_buf) - 1] = '\0';
+        if (!*out) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate relative path");
         }
-        *out = strndup((const char *)buffer_data(result_buf), buffer_size(result_buf));
-    }
+    } else {
+        /* Transfer ownership from buffer to avoid copy */
+        err = buffer_release_data(result_buf, out);
+        if (err) {
+            goto cleanup;
+        }
 
-    if (!*out) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate relative path");
+        /* Remove trailing slash if present */
+        size_t len = strlen(*out);
+        if (len > 0 && (*out)[len - 1] == '/') {
+            (*out)[len - 1] = '\0';
+        }
+
+        /* Set result_buf to NULL since ownership was transferred */
+        result_buf = NULL;
     }
 
 cleanup:

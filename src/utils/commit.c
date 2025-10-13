@@ -10,6 +10,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "base/error.h"
 #include "buffer.h"
 #include "config.h"
 #include "string.h"
@@ -143,15 +144,14 @@ static char *format_file_list(const char **files, size_t count) {
         buffer_append_string(buf, truncate_msg);
     }
 
-    /* Convert buffer to null-terminated string */
-    size_t buf_size = buffer_size(buf);
-    char *result = malloc(buf_size + 1);
-    if (result) {
-        memcpy(result, buffer_data(buf), buf_size);
-        result[buf_size] = '\0';
+    /* Transfer ownership from buffer to avoid copy */
+    char *result = NULL;
+    error_t *err = buffer_release_data(buf, &result);
+    if (err) {
+        error_free(err);
+        return NULL;
     }
 
-    buffer_free(buf);
     return result;
 }
 
@@ -254,15 +254,14 @@ static char *substitute_template(
         p++;
     }
 
-    /* Convert buffer to string */
-    size_t buf_size = buffer_size(buf);
-    char *result = malloc(buf_size + 1);
-    if (result) {
-        memcpy(result, buffer_data(buf), buf_size);
-        result[buf_size] = '\0';
+    /* Transfer ownership from buffer to avoid copy */
+    char *result = NULL;
+    error_t *err = buffer_release_data(buf, &result);
+    if (err) {
+        error_free(err);
+        return NULL;
     }
 
-    buffer_free(buf);
     return result;
 }
 

@@ -102,6 +102,19 @@ size_t buffer_capacity(const buffer_t *buf);
 error_t *buffer_reserve(buffer_t *buf, size_t capacity);
 
 /**
+ * Release buffer data and transfer ownership to caller
+ *
+ * This function transfers ownership of the internal buffer data to the caller,
+ * null-terminates it (adding a byte if needed), and frees the buffer structure.
+ * Useful for avoiding unnecessary memory copies when converting buffer to string.
+ *
+ * @param buf Buffer (will be freed, must not be used after this call)
+ * @param out Pointer to receive the null-terminated string (caller must free)
+ * @return Error or NULL on success
+ */
+error_t *buffer_release_data(buffer_t *buf, char **out);
+
+/**
  * RAII cleanup attribute helper
  */
 static inline void cleanup_buffer(buffer_t **buf) {

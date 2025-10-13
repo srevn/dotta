@@ -4,9 +4,13 @@
 
 #include "compare.h"
 
+#include <errno.h>
+#include <fcntl.h>
 #include <git2.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "base/error.h"
 #include "base/filesystem.h"
@@ -25,6 +29,10 @@ const char *compare_result_string(compare_result_t result) {
 
 /**
  * Compare blob content with disk file
+ *
+ * Uses mmap() for efficient memory-mapped comparison without loading
+ * the entire file into memory. Falls back to chunked reading for
+ * files that cannot be mapped (e.g., empty files, special files).
  */
 error_t *compare_blob_to_disk(
     git_repository *repo,
@@ -54,27 +62,66 @@ error_t *compare_blob_to_disk(
     const void *blob_data = git_blob_rawcontent(blob);
     git_object_size_t blob_size = git_blob_rawsize(blob);
 
-    /* Read disk file */
-    buffer_t *disk_content = NULL;
-    error_t *derr = fs_read_file(disk_path, &disk_content);
-    if (derr) {
+    /* Open disk file */
+    int fd = open(disk_path, O_RDONLY);
+    if (fd < 0) {
         git_blob_free(blob);
-        return derr;
+        return ERROR(ERR_FS, "Failed to open '%s': %s", disk_path, strerror(errno));
     }
 
-    /* Compare sizes first */
-    if (blob_size != buffer_size(disk_content)) {
+    /* Get disk file size */
+    struct stat st;
+    if (fstat(fd, &st) < 0) {
+        int saved_errno = errno;
+        close(fd);
+        git_blob_free(blob);
+        return ERROR(ERR_FS, "Failed to stat '%s': %s", disk_path, strerror(saved_errno));
+    }
+
+    /* Compare sizes first - fast path */
+    if ((size_t)st.st_size != blob_size) {
         *result = CMP_DIFFERENT;
+        close(fd);
+        git_blob_free(blob);
+        return NULL;
+    }
+
+    /* Handle empty files */
+    if (st.st_size == 0) {
+        *result = CMP_EQUAL;
+        close(fd);
+        git_blob_free(blob);
+        return NULL;
+    }
+
+    /* Memory-map the disk file for efficient comparison */
+    void *disk_data = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (disk_data == MAP_FAILED) {
+        /* mmap failed - fall back to reading in chunks */
+        close(fd);
+
+        buffer_t *disk_content = NULL;
+        error_t *derr = fs_read_file(disk_path, &disk_content);
+        if (derr) {
+            git_blob_free(blob);
+            return derr;
+        }
+
+        int cmp = memcmp(blob_data, buffer_data(disk_content), blob_size);
+        *result = (cmp == 0) ? CMP_EQUAL : CMP_DIFFERENT;
+
         buffer_free(disk_content);
         git_blob_free(blob);
         return NULL;
     }
 
-    /* Compare content */
-    int cmp = memcmp(blob_data, buffer_data(disk_content), blob_size);
+    /* Compare content using memory-mapped data */
+    int cmp = memcmp(blob_data, disk_data, blob_size);
     *result = (cmp == 0) ? CMP_EQUAL : CMP_DIFFERENT;
 
-    buffer_free(disk_content);
+    /* Cleanup */
+    munmap(disk_data, st.st_size);
+    close(fd);
     git_blob_free(blob);
     return NULL;
 }
@@ -307,22 +354,17 @@ static error_t *generate_text_diff(
         return error_from_git(git_err);
     }
 
-    /* Extract result */
+    /* Extract result - transfer ownership from buffer to avoid copy */
     if (buffer_size(callback_data.output) > 0) {
-        *diff_text = strndup(
-            (const char *)buffer_data(callback_data.output),
-            buffer_size(callback_data.output)
-        );
-
-        if (!*diff_text) {
-            buffer_free(callback_data.output);
-            return ERROR(ERR_MEMORY, "Failed to allocate diff text");
+        error_t *err = buffer_release_data(callback_data.output, diff_text);
+        if (err) {
+            return error_wrap(err, "Failed to release diff text");
         }
     } else {
         *diff_text = NULL;
+        buffer_free(callback_data.output);
     }
 
-    buffer_free(callback_data.output);
     return NULL;
 }
 
@@ -379,17 +421,14 @@ static error_t *generate_symlink_diff(
     }
     buffer_append_string(buf, "\n");
 
-    *diff_text = strndup(
-        (const char *)buffer_data(buf),
-        buffer_size(buf)
-    );
+    /* Transfer ownership from buffer to avoid copy */
+    error_t *err = buffer_release_data(buf, diff_text);
 
-    buffer_free(buf);
     free(disk_target);
     git_blob_free(blob);
 
-    if (!*diff_text) {
-        return ERROR(ERR_MEMORY, "Failed to allocate diff text");
+    if (err) {
+        return error_wrap(err, "Failed to release symlink diff text");
     }
 
     return NULL;

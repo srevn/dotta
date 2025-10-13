@@ -140,3 +140,41 @@ size_t buffer_capacity(const buffer_t *buf) {
     }
     return buf->capacity;
 }
+
+error_t *buffer_release_data(buffer_t *buf, char **out) {
+    CHECK_NULL(buf);
+    CHECK_NULL(out);
+
+    /* Handle empty buffer */
+    if (buf->size == 0) {
+        /* Allocate minimal string */
+        *out = malloc(1);
+        if (!*out) {
+            buffer_free(buf);
+            return ERROR(ERR_MEMORY, "Failed to allocate empty string");
+        }
+        (*out)[0] = '\0';
+        buffer_free(buf);
+        return NULL;
+    }
+
+    /* Ensure space for null terminator */
+    if (buf->size >= buf->capacity) {
+        error_t *err = buffer_reserve(buf, buf->size + 1);
+        if (err) {
+            buffer_free(buf);
+            return err;
+        }
+    }
+
+    /* Null-terminate the buffer */
+    buf->data[buf->size] = '\0';
+
+    /* Transfer ownership */
+    *out = (char *)buf->data;
+
+    /* Free only the structure, not the data */
+    free(buf);
+
+    return NULL;
+}

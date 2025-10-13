@@ -93,13 +93,19 @@ workspace_status_t workspace_get_status(const workspace_t *ws);
 /**
  * Get diverged files by category
  *
- * Returns array of files matching the specified divergence type.
+ * Returns the full diverged array with count of matching entries.
  * The returned array is borrowed and valid until workspace is freed.
+ *
+ * IMPORTANT: The returned array contains ALL diverged files. The count
+ * parameter indicates how many entries match the requested type.
+ * Callers must filter by checking file->type == type when iterating.
+ *
+ * This design avoids allocation overhead while providing accurate counts.
  *
  * @param ws Workspace (must not be NULL)
  * @param type Divergence type to query
- * @param count Output count (must not be NULL)
- * @return Array of files (borrowed reference, do not free)
+ * @param count Output count of matching entries (must not be NULL)
+ * @return Full diverged array (borrowed reference, do not free) or NULL if none match
  */
 const workspace_file_t *workspace_get_diverged(
     const workspace_t *ws,

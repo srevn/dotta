@@ -445,7 +445,7 @@ const workspace_file_t *workspace_get_diverged(
         return NULL;
     }
 
-    /* Count matching entries (we'll return a subset view) */
+    /* Single pass: count matching entries */
     *count = 0;
     for (size_t i = 0; i < ws->diverged_count; i++) {
         if (ws->diverged[i].type == type) {
@@ -458,40 +458,12 @@ const workspace_file_t *workspace_get_diverged(
         return NULL;
     }
 
-    /* Return pointer to first matching entry
-     * NOTE: This is a simple implementation that returns the whole array.
-     * Caller must check type field to find matching entries.
-     * A more sophisticated implementation would build a filtered array.
+    /* Return full array with accurate count.
+     * NOTE: Caller must filter by checking file->type == type.
+     * This approach avoids allocation overhead and memory management complexity.
+     * The count returned is accurate for the number of matching entries.
      */
-    *count = 0;  /* Reset and recount with proper return */
-    for (size_t i = 0; i < ws->diverged_count; i++) {
-        if (ws->diverged[i].type == type) {
-            if (*count == 0) {
-                /* Return pointer to first match, but set count correctly */
-                size_t match_count = 0;
-                for (size_t j = i; j < ws->diverged_count; j++) {
-                    if (ws->diverged[j].type == type) {
-                        match_count++;
-                    }
-                }
-                *count = match_count;
-                /* Note: This simple implementation requires caller to filter.
-                 * For Phase 1, we'll return all and let caller filter.
-                 */
-                break;
-            }
-        }
-    }
-
-    /* Simpler approach: just return whole array with type filtering by caller */
-    *count = 0;
-    for (size_t i = 0; i < ws->diverged_count; i++) {
-        if (ws->diverged[i].type == type) {
-            (*count)++;
-        }
-    }
-
-    return ws->diverged;  /* Caller must filter by type */
+    return ws->diverged;
 }
 
 /**

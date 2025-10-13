@@ -20,6 +20,7 @@
 #include "update.h"
 #include "utils/array.h"
 #include "utils/config.h"
+#include "utils/hashmap.h"
 #include "utils/output.h"
 #include "utils/repo.h"
 #include "utils/upstream.h"
@@ -1031,10 +1032,31 @@ static error_t *delete_orphaned_local_branches(
         return err;
     }
 
+    /* Build hashmap from after_branches for O(1) lookup
+     * This optimizes the branch comparison from O(N*M) to O(N+M)
+     */
+    hashmap_t *after_set = hashmap_create(string_array_size(after_branches));
+    if (!after_set) {
+        string_array_free(after_branches);
+        return ERROR(ERR_MEMORY, "Failed to create hashmap");
+    }
+
+    for (size_t i = 0; i < string_array_size(after_branches); i++) {
+        const char *branch_name = string_array_get(after_branches, i);
+        error_t *err = hashmap_set(after_set, branch_name, (void*)1);
+        if (err) {
+            hashmap_free(after_set, NULL);
+            string_array_free(after_branches);
+            return error_wrap(err, "Failed to build branch hashmap");
+        }
+    }
+
+    string_array_free(after_branches);
+
     /* Find branches that were pruned (existed before but not after) */
     string_array_t *to_delete = string_array_create();
     if (!to_delete) {
-        string_array_free(after_branches);
+        hashmap_free(after_set, NULL);
         return ERROR(ERR_MEMORY, "Failed to create array");
     }
 
@@ -1046,22 +1068,14 @@ static error_t *delete_orphaned_local_branches(
             continue;
         }
 
-        /* Check if this branch still exists in after_branches */
-        bool found = false;
-        for (size_t j = 0; j < string_array_size(after_branches); j++) {
-            if (strcmp(branch_name, string_array_get(after_branches, j)) == 0) {
-                found = true;
-                break;
-            }
-        }
-
-        if (!found) {
+        /* Check if this branch still exists using hashmap (O(1) lookup) */
+        if (!hashmap_has(after_set, branch_name)) {
             /* Branch was pruned - mark local branch for deletion */
             string_array_push(to_delete, branch_name);
         }
     }
 
-    string_array_free(after_branches);
+    hashmap_free(after_set, NULL);
 
     /* Delete orphaned branches */
     size_t deleted_count = 0;
@@ -1321,24 +1335,7 @@ static error_t *sync_fetch_phase(
             return error_wrap(err, "Failed to delete orphaned local branches");
         }
 
-        /* Reload profiles after deletion to get updated list */
-        profile_list_free(final_profiles);
-        err = profile_list_all_local(repo, &final_profiles);
-        if (err) {
-            return error_wrap(err, "Failed to reload local profiles after deletion");
-        }
-        *profiles = final_profiles;
-
-        /* Recreate results tracker with updated profile count */
-        if (*results) {
-            sync_results_free(*results);
-        }
-        *results = sync_results_create(final_profiles->count);
-        if (!*results) {
-            return ERROR(ERR_MEMORY, "Failed to create results");
-        }
-
-        /* Now discover new remote branches not in local list */
+        /* Discover new remote branches not in local list */
         string_array_t *new_branches = NULL;
         err = upstream_discover_branches(repo, remote_name, &new_branches);
         if (err) {
@@ -1367,29 +1364,28 @@ static error_t *sync_fetch_phase(
                     error_free(err);
                 }
             }
-
-            /* Reload all local profiles */
-            profile_list_free(final_profiles);
-            err = profile_list_all_local(repo, &final_profiles);
-            if (err) {
-                string_array_free(new_branches);
-                return error_wrap(err, "Failed to reload local profiles");
-            }
-
-            *profiles = final_profiles;
-
-            /* Recreate results tracker */
-            if (*results) {
-                sync_results_free(*results);
-            }
-            *results = sync_results_create(final_profiles->count);
-            if (!*results) {
-                string_array_free(new_branches);
-                return ERROR(ERR_MEMORY, "Failed to create results");
-            }
         }
 
         string_array_free(new_branches);
+
+        /* Single reload after both deletion and creation operations
+         * This consolidates two separate reload cycles into one, improving efficiency.
+         */
+        profile_list_free(final_profiles);
+        err = profile_list_all_local(repo, &final_profiles);
+        if (err) {
+            return error_wrap(err, "Failed to reload local profiles");
+        }
+        *profiles = final_profiles;
+
+        /* Recreate results tracker with final profile count */
+        if (*results) {
+            sync_results_free(*results);
+        }
+        *results = sync_results_create(final_profiles->count);
+        if (!*results) {
+            return ERROR(ERR_MEMORY, "Failed to create results");
+        }
     }
     /* SYNC_MODE_AUTO: Use profiles as-is (existing behavior) */
 
@@ -1701,6 +1697,9 @@ static error_t *sync_push_phase(
                                 /* Now push the rebased commits */
                                 err = gitops_push_branch(repo, remote_name, result->profile_name, cred_ctx);
                                 if (err) {
+                                    result->failed = true;
+                                    result->error_message = strdup(error_message(err));
+                                    results->failed_count++;
                                     output_error(out, "     ✗ Push after rebase failed: %s", error_message(err));
                                     error_free(err);
                                     /* Rollback since push failed */
@@ -1763,6 +1762,9 @@ static error_t *sync_push_phase(
                                 /* Now push the merge commit */
                                 err = gitops_push_branch(repo, remote_name, result->profile_name, cred_ctx);
                                 if (err) {
+                                    result->failed = true;
+                                    result->error_message = strdup(error_message(err));
+                                    results->failed_count++;
                                     output_error(out, "     ✗ Push after merge failed: %s", error_message(err));
                                     error_free(err);
                                     /* Rollback since push failed */

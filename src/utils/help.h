@@ -23,6 +23,11 @@ void print_version(void);
 void print_init_help(const char *prog_name);
 
 /**
+ * Print help for clone command
+ */
+void print_clone_help(const char *prog_name);
+
+/**
  * Print help for add command
  */
 void print_add_help(const char *prog_name);
@@ -43,24 +48,24 @@ void print_apply_help(const char *prog_name);
 void print_status_help(const char *prog_name);
 
 /**
- * Print help for list command
- */
-void print_list_help(const char *prog_name);
-
-/**
  * Print help for diff command
  */
 void print_diff_help(const char *prog_name);
 
 /**
+ * Print help for list command
+ */
+void print_list_help(const char *prog_name);
+
+/**
+ * Print help for profile command
+ */
+void print_profile_help(const char *prog_name);
+
+/**
  * Print help for clean command
  */
 void print_clean_help(const char *prog_name);
-
-/**
- * Print help for clone command
- */
-void print_clone_help(const char *prog_name);
 
 /**
  * Print help for show command

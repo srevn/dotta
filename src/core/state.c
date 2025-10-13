@@ -699,6 +699,9 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
 
 /**
  * Remove file entry from state
+ *
+ * Uses swap-with-last optimization for O(1) removal.
+ * Correctly handles memory management to avoid dangling pointers.
  */
 error_t *state_remove_file(state_t *state, const char *filesystem_path) {
     CHECK_NULL(state);
@@ -717,39 +720,40 @@ error_t *state_remove_file(state_t *state, const char *filesystem_path) {
         return ERROR(ERR_NOT_FOUND, "File '%s' not found in state", filesystem_path);
     }
 
+    /* Remove from hashmap first (using the entry we're about to free) */
+    if (state->file_index) {
+        hashmap_remove(state->file_index, filesystem_path, NULL);
+    }
+
+    /* Free the strings at found_index BEFORE any swapping */
+    state_file_entry_t *entry_to_remove = &state->files[found_index];
+    free(entry_to_remove->storage_path);
+    free(entry_to_remove->filesystem_path);
+    free(entry_to_remove->profile);
+    free(entry_to_remove->hash);
+    free(entry_to_remove->mode);
+
     /* Calculate last element index */
     size_t last_index = state->file_count - 1;
 
-    /* Move the last element into the gap to avoid a full array shift (O(1) removal) */
+    /* If not removing last element, move last element into the gap */
     if (found_index < last_index) {
-        /* Swap: copy last element into the gap (shallow copy) */
+        /* Shallow copy is safe now since we freed the old strings */
         state->files[found_index] = state->files[last_index];
 
-        /* Update the hashmap to point to the new location of the moved entry */
+        /* Update hashmap to point to the moved entry's new location */
         if (state->file_index) {
             error_t *err = hashmap_set(state->file_index,
                                        state->files[found_index].filesystem_path,
                                        &state->files[found_index]);
             if (err) {
-                /* Inconsistency risk, but we follow the existing pattern */
+                /* Continue despite hashmap inconsistency - linear search fallback exists */
                 error_free(err);
             }
         }
     }
 
-    /* Free the resources at last_index (original entry or duplicate after swap) */
-    state_file_entry_t *entry_to_free = &state->files[last_index];
-    free(entry_to_free->storage_path);
-    free(entry_to_free->filesystem_path);
-    free(entry_to_free->profile);
-    free(entry_to_free->hash);
-    free(entry_to_free->mode);
-
-    /* Remove from hashmap using the caller's filesystem_path parameter */
-    if (state->file_index) {
-        hashmap_remove(state->file_index, filesystem_path, NULL);
-    }
-
+    /* Decrement count (last element is now unused) */
     state->file_count--;
 
     return NULL;
@@ -1030,6 +1034,9 @@ error_t *state_add_directory(state_t *state, const state_directory_entry_t *entr
 
 /**
  * Remove directory entry from state
+ *
+ * Uses swap-with-last optimization for O(1) removal.
+ * Correctly handles memory management to avoid dangling pointers.
  */
 error_t *state_remove_directory(state_t *state, const char *filesystem_path) {
     CHECK_NULL(state);
@@ -1048,37 +1055,38 @@ error_t *state_remove_directory(state_t *state, const char *filesystem_path) {
         return ERROR(ERR_NOT_FOUND, "Directory '%s' not found in state", filesystem_path);
     }
 
+    /* Remove from hashmap first (using the entry we're about to free) */
+    if (state->directory_index) {
+        hashmap_remove(state->directory_index, filesystem_path, NULL);
+    }
+
+    /* Free the strings at found_index BEFORE any swapping */
+    state_directory_entry_t *entry_to_remove = &state->directories[found_index];
+    free(entry_to_remove->filesystem_path);
+    free(entry_to_remove->storage_prefix);
+    free(entry_to_remove->profile);
+
     /* Calculate last element index */
     size_t last_index = state->directory_count - 1;
 
-    /* Move the last element into the gap to avoid a full array shift (O(1) removal) */
+    /* If not removing last element, move last element into the gap */
     if (found_index < last_index) {
-        /* Swap: copy last element into the gap (shallow copy) */
+        /* Shallow copy is safe now since we freed the old strings */
         state->directories[found_index] = state->directories[last_index];
 
-        /* Update the hashmap to point to the new location of the moved entry */
+        /* Update hashmap to point to the moved entry's new location */
         if (state->directory_index) {
             error_t *err = hashmap_set(state->directory_index,
                                        state->directories[found_index].filesystem_path,
                                        &state->directories[found_index]);
             if (err) {
-                /* Inconsistency risk, but we follow the existing pattern */
+                /* Continue despite hashmap inconsistency - linear search fallback exists */
                 error_free(err);
             }
         }
     }
 
-    /* Free the resources at last_index (original entry or duplicate after swap) */
-    state_directory_entry_t *entry_to_free = &state->directories[last_index];
-    free(entry_to_free->filesystem_path);
-    free(entry_to_free->storage_prefix);
-    free(entry_to_free->profile);
-
-    /* Remove from hashmap using the caller's filesystem_path parameter */
-    if (state->directory_index) {
-        hashmap_remove(state->directory_index, filesystem_path, NULL);
-    }
-
+    /* Decrement count (last element is now unused) */
     state->directory_count--;
 
     return NULL;

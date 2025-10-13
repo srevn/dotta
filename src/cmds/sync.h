@@ -34,7 +34,7 @@ typedef enum {
  * Sync command options
  */
 typedef struct {
-    const char **profiles;       /* Specific profiles (NULL = auto-detect) */
+    const char **profiles;       /* Specific profiles (NULL = use state/config) */
     size_t profile_count;        /* Number of profiles */
     const char *message;         /* Commit message for update */
     bool dry_run;                /* Preview only */
@@ -45,7 +45,6 @@ typedef struct {
     bool only_new;               /* Only process new files (ignore modified) */
     bool skip_undeployed;        /* Allow sync with undeployed files (skip workspace check) */
     const char *diverged;        /* Divergence strategy override (CLI only) */
-    const char *mode;            /* Sync mode override: "local", "auto", "all" (CLI only) */
 } cmd_sync_options_t;
 
 /**

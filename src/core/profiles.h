@@ -113,15 +113,16 @@ error_t *profile_list_load(
 );
 
 /**
- * Resolve profiles based on mode (unified profile resolution)
+ * Resolve profiles based on priority hierarchy (unified profile resolution)
  *
  * This is the primary function for loading profiles throughout the application.
  * All commands (apply, update, sync, status, etc.) use this function.
  *
- * Resolution priority:
+ * Resolution priority (highest to lowest):
  * 1. Explicit profiles (CLI -p/--profile) - ALWAYS takes precedence
  * 2. Config profile_order - Manual config override
- * 3. Mode-based selection:
+ * 3. State file profiles - Machine-specific active profiles (NEW)
+ * 4. Mode-based selection - Fallback when state is empty:
  *    - PROFILE_MODE_LOCAL: All local branches
  *    - PROFILE_MODE_AUTO: Auto-detect (global, OS, host)
  *    - PROFILE_MODE_ALL: All available (same as LOCAL for non-sync commands)
@@ -132,6 +133,7 @@ error_t *profile_list_load(
  * @param config Config with mode and profile_order (must not be NULL)
  * @param strict_mode If true, error on missing profiles; if false, skip them
  * @param out Profile list (must not be NULL, caller must free)
+ * @param source_out Optional: receives the source of resolved profiles (can be NULL)
  * @return Error or NULL on success
  */
 error_t *profile_resolve(
@@ -140,7 +142,8 @@ error_t *profile_resolve(
     size_t explicit_count,
     const struct dotta_config *config,
     bool strict_mode,
-    profile_list_t **out
+    profile_list_t **out,
+    profile_source_t *source_out
 );
 
 /**

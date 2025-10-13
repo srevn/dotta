@@ -340,13 +340,20 @@ cleanup:
  * Update state with deployed files and save to disk
  *
  * Updates the state with:
- * - Active profile names
+ * - Active profile names (only if appropriate based on source)
  * - Files from manifest (with computed hashes)
+ *
+ * State profile update policy:
+ * - EXPLICIT (CLI -p): Don't update state (temporary override)
+ * - CONFIG (profile_order): Don't update state (config controls profiles)
+ * - STATE (active profiles): Update state (keep state current)
+ * - MODE (fallback): Update state (migrate to explicit state)
  *
  * @param repo Repository (must not be NULL)
  * @param state State to update (must not be NULL)
  * @param profiles Profiles being applied (must not be NULL)
  * @param manifest Manifest of deployed files (must not be NULL)
+ * @param profile_source Source of profiles (determines update behavior)
  * @param out Output context for messages (must not be NULL)
  * @return Error or NULL on success
  */
@@ -355,6 +362,7 @@ static error_t *apply_update_and_save_state(
     state_t *state,
     const profile_list_t *profiles,
     const manifest_t *manifest,
+    profile_source_t profile_source,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
@@ -366,21 +374,34 @@ static error_t *apply_update_and_save_state(
     error_t *err = NULL;
     const char **profile_names = NULL;
 
-    /* Update state with active profiles */
-    profile_names = malloc(profiles->count * sizeof(char *));
-    if (!profile_names) {
-        return ERROR(ERR_MEMORY, "Failed to allocate profile names");
-    }
+    /* Update state with active profiles (only if not from explicit/config override) */
+    bool should_update_profiles = (profile_source == PROFILE_SOURCE_STATE ||
+                                   profile_source == PROFILE_SOURCE_MODE);
 
-    for (size_t i = 0; i < profiles->count; i++) {
-        profile_names[i] = profiles->profiles[i].name;
-    }
+    if (should_update_profiles) {
+        profile_names = malloc(profiles->count * sizeof(char *));
+        if (!profile_names) {
+            return ERROR(ERR_MEMORY, "Failed to allocate profile names");
+        }
 
-    err = state_set_profiles(state, profile_names, profiles->count);
-    free(profile_names);
+        for (size_t i = 0; i < profiles->count; i++) {
+            profile_names[i] = profiles->profiles[i].name;
+        }
 
-    if (err) {
-        return error_wrap(err, "Failed to update state profiles");
+        err = state_set_profiles(state, profile_names, profiles->count);
+        free(profile_names);
+
+        if (err) {
+            return error_wrap(err, "Failed to update state profiles");
+        }
+
+        output_print(out, OUTPUT_VERBOSE, "Updated active profiles in state\n");
+    } else {
+        /* Explicit or config override - don't update state */
+        const char *source_desc = (profile_source == PROFILE_SOURCE_EXPLICIT)
+            ? "CLI override" : "config file";
+        output_print(out, OUTPUT_VERBOSE,
+                    "Profiles from %s - state not updated\n", source_desc);
     }
 
     /* Clear old files and add new manifest */
@@ -516,8 +537,10 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         ((dotta_config_t *)config)->mode = config_parse_mode(opts->mode, config->mode);
     }
 
+    /* Track profile source to determine state update behavior */
+    profile_source_t profile_source = PROFILE_SOURCE_MODE;
     err = profile_resolve(repo, opts->profiles, opts->profile_count,
-                         config, config->strict_mode, &profiles);
+                         config, config->strict_mode, &profiles, &profile_source);
 
     /* Restore original mode */
     if (opts->mode) {
@@ -773,7 +796,8 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
 
         /* Now update state with the new manifest */
-        err = apply_update_and_save_state(repo, state, profiles, manifest, out);
+        err = apply_update_and_save_state(repo, state, profiles, manifest,
+                                         profile_source, out);
         if (err) {
             goto cleanup;
         }

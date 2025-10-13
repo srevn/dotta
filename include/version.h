@@ -22,7 +22,7 @@
  * These can be compared numerically for version checks.
  */
 #define DOTTA_VERSION_MAJOR 0
-#define DOTTA_VERSION_MINOR 1
+#define DOTTA_VERSION_MINOR 2
 #define DOTTA_VERSION_PATCH 0
 
 /**

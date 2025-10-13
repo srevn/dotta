@@ -86,6 +86,25 @@ typedef enum {
 } profile_mode_t;
 
 /**
+ * Profile resolution source - tracks where profiles came from
+ *
+ * Used to determine whether profile state should be updated after operations.
+ * Higher priority sources should not update persistent state.
+ *
+ * Priority order (highest to lowest):
+ *   EXPLICIT - CLI flags (-p/--profile), temporary override
+ *   CONFIG   - Config file profile_order, team/shared configuration
+ *   STATE    - State file profiles array, machine-specific active profiles
+ *   MODE     - Mode-based fallback, computed from system detection
+ */
+typedef enum {
+    PROFILE_SOURCE_EXPLICIT,   /* CLI -p flag (highest priority) */
+    PROFILE_SOURCE_CONFIG,     /* Config file profile_order */
+    PROFILE_SOURCE_STATE,      /* State file (machine-specific) */
+    PROFILE_SOURCE_MODE        /* Mode-based fallback (computed) */
+} profile_source_t;
+
+/**
  * Workspace divergence category
  *
  * Represents the relationship between profile state (Git), deployment state

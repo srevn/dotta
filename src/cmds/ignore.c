@@ -1319,8 +1319,8 @@ static error_t *test_path_ignore(
         NULL, 0,  /* No explicit profiles */
         config,
         false,  /* Not strict - skip missing profiles */
-        &profiles
-    );
+        &profiles,
+        NULL);
 
     if (err) {
         return error_wrap(err, "Failed to load profiles");

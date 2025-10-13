@@ -128,8 +128,8 @@ static error_t *discover_file(
         NULL, 0,
         config,
         config->strict_mode,
-        &profiles
-    );
+        &profiles,
+        NULL);
 
     /* Restore original mode */
     if (mode_override) {

@@ -15,6 +15,7 @@
 
 #include "base/error.h"
 #include "base/gitops.h"
+#include "core/state.h"
 #include "infra/path.h"
 #include "utils/array.h"
 #include "utils/config.h"
@@ -187,13 +188,18 @@ error_t *profile_detect_auto(
         profile_t *profile = NULL;
         err = profile_load(repo, "global", &profile);
         if (err) {
+            /* Defensive: ensure profile is freed if partially allocated */
+            if (profile) {
+                profile_free(profile);
+            }
             free(list->profiles);
             free(list);
             return err;
         }
         profile->auto_detected = true;
         list->profiles[list->count++] = *profile;
-        free(profile);  /* Shallow copy, don't free internals */
+        free(profile);  /* Shallow copy of internals to list, only free struct */
+        profile = NULL;  /* Prevent accidental reuse */
     }
 
     /* 2. Try OS profile */
@@ -297,7 +303,75 @@ error_t *profile_list_load(
 }
 
 /**
- * Resolve profiles based on mode (unified profile resolution)
+ * Validate state profiles and filter out non-existent ones
+ *
+ * Checks that all profiles listed in state exist as local branches.
+ * Warns about missing profiles and filters them out.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param state_profiles Profiles from state (must not be NULL)
+ * @param out_valid_profiles Valid profiles (caller must free)
+ * @param out_missing_profiles Missing profiles (caller must free, can be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *validate_state_profiles(
+    git_repository *repo,
+    const string_array_t *state_profiles,
+    string_array_t **out_valid_profiles,
+    string_array_t **out_missing_profiles
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(state_profiles);
+    CHECK_NULL(out_valid_profiles);
+
+    string_array_t *valid = string_array_create();
+    if (!valid) {
+        return ERROR(ERR_MEMORY, "Failed to allocate valid profiles array");
+    }
+
+    string_array_t *missing = NULL;
+    if (out_missing_profiles) {
+        missing = string_array_create();
+        if (!missing) {
+            string_array_free(valid);
+            return ERROR(ERR_MEMORY, "Failed to allocate missing profiles array");
+        }
+    }
+
+    /* Check each profile */
+    for (size_t i = 0; i < string_array_size(state_profiles); i++) {
+        const char *name = string_array_get(state_profiles, i);
+
+        if (profile_exists(repo, name)) {
+            error_t *err = string_array_push(valid, name);
+            if (err) {
+                if (missing) string_array_free(missing);
+                string_array_free(valid);
+                return err;
+            }
+        } else {
+            /* Profile doesn't exist */
+            if (missing) {
+                error_t *err = string_array_push(missing, name);
+                if (err) {
+                    string_array_free(missing);
+                    string_array_free(valid);
+                    return err;
+                }
+            }
+        }
+    }
+
+    *out_valid_profiles = valid;
+    if (out_missing_profiles) {
+        *out_missing_profiles = missing;
+    }
+
+    return NULL;
+}
+
+/**
+ * Resolve profiles based on priority hierarchy (unified profile resolution)
  */
 error_t *profile_resolve(
     git_repository *repo,
@@ -305,19 +379,26 @@ error_t *profile_resolve(
     size_t explicit_count,
     const struct dotta_config *config,
     bool strict_mode,
-    profile_list_t **out
+    profile_list_t **out,
+    profile_source_t *source_out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(config);
     CHECK_NULL(out);
 
+    profile_source_t source = PROFILE_SOURCE_MODE;  /* Default to mode */
+
     /* Priority 1: Explicit CLI profiles (always takes precedence) */
     if (explicit_profiles && explicit_count > 0) {
+        source = PROFILE_SOURCE_EXPLICIT;
+        if (source_out) *source_out = source;
         return profile_list_load(repo, explicit_profiles, explicit_count, true, out);
     }
 
     /* Priority 2: Config profile_order (manual override) */
     if (config->profile_order && config->profile_order_count > 0) {
+        source = PROFILE_SOURCE_CONFIG;
+        if (source_out) *source_out = source;
         return profile_list_load(repo,
                                 (const char **)config->profile_order,
                                 config->profile_order_count,
@@ -325,7 +406,134 @@ error_t *profile_resolve(
                                 out);
     }
 
-    /* Priority 3: Mode-based selection */
+    /* Priority 3: State module (NEW) */
+    state_t *state = NULL;
+    error_t *err = state_load(repo, &state);
+
+    if (!err && state) {
+        string_array_t *state_profiles = NULL;
+        err = state_get_profiles(state, &state_profiles);
+
+        if (!err && state_profiles && string_array_size(state_profiles) > 0) {
+            /* State has active profiles - validate and use them */
+            string_array_t *valid_profiles = NULL;
+            string_array_t *missing_profiles = NULL;
+
+            err = validate_state_profiles(repo, state_profiles, &valid_profiles, &missing_profiles);
+
+            if (err) {
+                string_array_free(state_profiles);
+                state_free(state);
+                return error_wrap(err, "Failed to validate state profiles");
+            }
+
+            /* Warn about missing profiles (diagnostic message) */
+            if (missing_profiles && string_array_size(missing_profiles) > 0) {
+                fprintf(stderr, "Warning: State references non-existent profiles:\n");
+                for (size_t i = 0; i < string_array_size(missing_profiles); i++) {
+                    fprintf(stderr, "  • %s\n", string_array_get(missing_profiles, i));
+                }
+                fprintf(stderr, "\nHint: Run 'dotta profile validate' to fix state\n");
+                fprintf(stderr, "      or 'dotta profile activate <name>' to update active profiles\n\n");
+            }
+            string_array_free(missing_profiles);
+
+            /* Use valid profiles if any exist */
+            if (string_array_size(valid_profiles) > 0) {
+                /* Convert string_array to const char** for profile_list_load */
+                size_t count = string_array_size(valid_profiles);
+                const char **names = malloc(count * sizeof(char *));
+                if (!names) {
+                    string_array_free(valid_profiles);
+                    string_array_free(state_profiles);
+                    state_free(state);
+                    return ERROR(ERR_MEMORY, "Failed to allocate profile names");
+                }
+
+                for (size_t i = 0; i < count; i++) {
+                    names[i] = string_array_get(valid_profiles, i);
+                }
+
+                err = profile_list_load(repo, names, count, strict_mode, out);
+                free(names);
+                string_array_free(valid_profiles);
+                string_array_free(state_profiles);
+                state_free(state);
+
+                if (!err) {
+                    source = PROFILE_SOURCE_STATE;
+                    if (source_out) *source_out = source;
+                }
+                return err;
+            }
+
+            /* No valid profiles - fall through to mode-based selection */
+            string_array_free(valid_profiles);
+        }
+
+        string_array_free(state_profiles);
+    } else if (err) {
+        /* Non-fatal: if state loading fails, continue with mode-based selection */
+        error_free(err);
+        err = NULL;
+    }
+
+    /* Check if state exists but is empty (needs migration) */
+    if (state) {
+        string_array_t *profiles_check = NULL;
+        err = state_get_profiles(state, &profiles_check);
+        bool state_is_empty = (!err && profiles_check && string_array_size(profiles_check) == 0);
+        string_array_free(profiles_check);
+
+        if (state_is_empty) {
+            /* Empty state in existing repo - auto-migrate with detected profiles */
+            profile_list_t *detected = NULL;
+            err = profile_detect_auto(repo, &detected);
+
+            if (!err && detected && detected->count > 0) {
+                /* Initialize state with detected profiles */
+                const char **names = malloc(detected->count * sizeof(char *));
+                if (names) {
+                    for (size_t i = 0; i < detected->count; i++) {
+                        names[i] = detected->profiles[i].name;
+                    }
+
+                    /* Save detected profiles to state */
+                    state_set_profiles(state, names, detected->count);
+                    state_save(repo, state);
+                    free(names);
+
+                    /* Inform user about auto-migration (diagnostic message) */
+                    fprintf(stderr, "Note: Initialized active profiles from auto-detection:\n");
+                    for (size_t i = 0; i < detected->count; i++) {
+                        fprintf(stderr, "  • %s\n", detected->profiles[i].name);
+                    }
+                    fprintf(stderr, "\n");
+
+                    state_free(state);
+                    source = PROFILE_SOURCE_STATE;
+                    if (source_out) *source_out = source;
+                    *out = detected;
+                    return NULL;
+                }
+            }
+
+            if (err) {
+                error_free(err);
+                err = NULL;
+            }
+            if (detected) {
+                profile_list_free(detected);
+            }
+        }
+    }
+
+    state_free(state);
+
+    /* Priority 4: Mode-based fallback */
+    source = PROFILE_SOURCE_MODE;
+    if (source_out) *source_out = source;
+
     switch (config->mode) {
         case PROFILE_MODE_LOCAL:
             /* All local branches */

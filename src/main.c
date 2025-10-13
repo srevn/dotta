@@ -21,6 +21,7 @@
 #include "cmds/ignore.h"
 #include "cmds/init.h"
 #include "cmds/list.h"
+#include "cmds/profile.h"
 #include "cmds/remote.h"
 #include "cmds/remove.h"
 #include "cmds/revert.h"
@@ -620,6 +621,208 @@ static int cmd_list_main(int argc, char **argv) {
 }
 
 /**
+ * Parse profile command
+ */
+static int cmd_profile_main(int argc, char **argv) {
+    cmd_profile_options_t opts = {
+        .subcommand = PROFILE_LIST,  /* Default subcommand */
+        .profiles = NULL,
+        .profile_count = 0,
+        .show_remote = false,
+        .show_available = true,  /* Default: show available profiles */
+        .fetch_all = false,
+        .all_profiles = false,
+        .fix = false,
+        .verbose = false,
+        .quiet = false
+    };
+
+    /* Parse subcommand */
+    if (argc < 3) {
+        /* No subcommand - default to list */
+        opts.subcommand = PROFILE_LIST;
+    } else if (strcmp(argv[2], "--help") == 0) {
+        print_profile_help(argv[0]);
+        return 0;
+    } else if (strcmp(argv[2], "list") == 0) {
+        opts.subcommand = PROFILE_LIST;
+
+        /* Parse list options */
+        for (int i = 3; i < argc; i++) {
+            if (strcmp(argv[i], "--help") == 0) {
+                print_profile_help(argv[0]);
+                return 0;
+            } else if (strcmp(argv[i], "--remote") == 0) {
+                opts.show_remote = true;
+            } else if (strcmp(argv[i], "--available") == 0) {
+                opts.show_available = true;
+            } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
+                opts.verbose = true;
+            } else if (strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--quiet") == 0) {
+                opts.quiet = true;
+            } else {
+                fprintf(stderr, "Error: Unknown argument '%s'\n", argv[i]);
+                print_profile_help(argv[0]);
+                return 1;
+            }
+        }
+    } else if (strcmp(argv[2], "fetch") == 0) {
+        opts.subcommand = PROFILE_FETCH;
+
+        /* Collect profile arguments */
+        const char **profiles = malloc((size_t)argc * sizeof(char *));
+        if (!profiles) {
+            fprintf(stderr, "Failed to allocate memory\n");
+            return 1;
+        }
+        size_t profile_count = 0;
+
+        /* Parse fetch options */
+        for (int i = 3; i < argc; i++) {
+            if (strcmp(argv[i], "--help") == 0) {
+                free(profiles);
+                print_profile_help(argv[0]);
+                return 0;
+            } else if (strcmp(argv[i], "--all") == 0) {
+                opts.fetch_all = true;
+            } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
+                opts.verbose = true;
+            } else if (strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--quiet") == 0) {
+                opts.quiet = true;
+            } else if (argv[i][0] != '-') {
+                profiles[profile_count++] = argv[i];
+            } else {
+                fprintf(stderr, "Error: Unknown argument '%s'\n", argv[i]);
+                free(profiles);
+                print_profile_help(argv[0]);
+                return 1;
+            }
+        }
+
+        opts.profiles = profiles;
+        opts.profile_count = profile_count;
+    } else if (strcmp(argv[2], "activate") == 0) {
+        opts.subcommand = PROFILE_ACTIVATE;
+
+        /* Collect profile arguments */
+        const char **profiles = malloc((size_t)argc * sizeof(char *));
+        if (!profiles) {
+            fprintf(stderr, "Failed to allocate memory\n");
+            return 1;
+        }
+        size_t profile_count = 0;
+
+        /* Parse activate options */
+        for (int i = 3; i < argc; i++) {
+            if (strcmp(argv[i], "--help") == 0) {
+                free(profiles);
+                print_profile_help(argv[0]);
+                return 0;
+            } else if (strcmp(argv[i], "--all") == 0) {
+                opts.all_profiles = true;
+            } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
+                opts.verbose = true;
+            } else if (strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--quiet") == 0) {
+                opts.quiet = true;
+            } else if (argv[i][0] != '-') {
+                profiles[profile_count++] = argv[i];
+            } else {
+                fprintf(stderr, "Error: Unknown argument '%s'\n", argv[i]);
+                free(profiles);
+                print_profile_help(argv[0]);
+                return 1;
+            }
+        }
+
+        opts.profiles = profiles;
+        opts.profile_count = profile_count;
+    } else if (strcmp(argv[2], "deactivate") == 0) {
+        opts.subcommand = PROFILE_DEACTIVATE;
+
+        /* Collect profile arguments */
+        const char **profiles = malloc((size_t)argc * sizeof(char *));
+        if (!profiles) {
+            fprintf(stderr, "Failed to allocate memory\n");
+            return 1;
+        }
+        size_t profile_count = 0;
+
+        /* Parse deactivate options */
+        for (int i = 3; i < argc; i++) {
+            if (strcmp(argv[i], "--help") == 0) {
+                free(profiles);
+                print_profile_help(argv[0]);
+                return 0;
+            } else if (strcmp(argv[i], "--all") == 0) {
+                opts.all_profiles = true;
+            } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
+                opts.verbose = true;
+            } else if (strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--quiet") == 0) {
+                opts.quiet = true;
+            } else if (argv[i][0] != '-') {
+                profiles[profile_count++] = argv[i];
+            } else {
+                fprintf(stderr, "Error: Unknown argument '%s'\n", argv[i]);
+                free(profiles);
+                print_profile_help(argv[0]);
+                return 1;
+            }
+        }
+
+        opts.profiles = profiles;
+        opts.profile_count = profile_count;
+    } else if (strcmp(argv[2], "validate") == 0) {
+        opts.subcommand = PROFILE_VALIDATE;
+
+        /* Parse validate options */
+        for (int i = 3; i < argc; i++) {
+            if (strcmp(argv[i], "--help") == 0) {
+                print_profile_help(argv[0]);
+                return 0;
+            } else if (strcmp(argv[i], "--fix") == 0) {
+                opts.fix = true;
+            } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
+                opts.verbose = true;
+            } else if (strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--quiet") == 0) {
+                opts.quiet = true;
+            } else {
+                fprintf(stderr, "Error: Unknown argument '%s'\n", argv[i]);
+                print_profile_help(argv[0]);
+                return 1;
+            }
+        }
+    } else {
+        fprintf(stderr, "Error: Unknown subcommand '%s'\n", argv[2]);
+        print_profile_help(argv[0]);
+        return 1;
+    }
+
+    /* Open resolved repository */
+    git_repository *repo = open_resolved_repo(NULL);
+    if (!repo) {
+        if (opts.profiles) {
+            free(opts.profiles);
+        }
+        return 1;
+    }
+
+    /* Execute command */
+    error_t *err = cmd_profile(repo, &opts);
+    if (opts.profiles) {
+        free(opts.profiles);
+    }
+    git_repository_free(repo);
+
+    if (err) {
+        error_print(err, stderr);
+        error_free(err);
+        return 1;
+    }
+
+    return 0;
+}
+
+/**
  * Parse diff command
  */
 static int cmd_diff_main(int argc, char **argv) {
@@ -764,12 +967,24 @@ static int cmd_clone_main(int argc, char **argv) {
         .quiet = false,
         .verbose = false,
         .bootstrap = false,
-        .no_bootstrap = false
+        .no_bootstrap = false,
+        .fetch_all = false,
+        .profiles = NULL,
+        .profile_count = 0
     };
+
+    /* Collect explicit profiles */
+    const char **profiles = malloc((size_t)argc * sizeof(char *));
+    if (!profiles) {
+        fprintf(stderr, "Failed to allocate memory\n");
+        return 1;
+    }
+    size_t profile_count = 0;
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0) {
+            free(profiles);
             print_clone_help(argv[0]);
             return 0;
         } else if (strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--quiet") == 0) {
@@ -780,11 +995,27 @@ static int cmd_clone_main(int argc, char **argv) {
             opts.bootstrap = true;
         } else if (strcmp(argv[i], "--no-bootstrap") == 0) {
             opts.no_bootstrap = true;
+        } else if (strcmp(argv[i], "--all") == 0) {
+            opts.fetch_all = true;
+        } else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--profile") == 0 || strcmp(argv[i], "--profiles") == 0) {
+            if (i + 1 >= argc) {
+                free(profiles);
+                fprintf(stderr, "Error: --profile requires an argument\n");
+                return 1;
+            }
+            /* Collect all remaining args as profile names until next flag */
+            i++;
+            while (i < argc && argv[i][0] != '-') {
+                profiles[profile_count++] = argv[i];
+                i++;
+            }
+            i--; /* Back up one since the for loop will increment */
         } else if (!opts.url) {
             opts.url = argv[i];
         } else if (!opts.path) {
             opts.path = argv[i];
         } else {
+            free(profiles);
             fprintf(stderr, "Error: Unexpected argument '%s'\n", argv[i]);
             print_clone_help(argv[0]);
             return 1;
@@ -792,13 +1023,22 @@ static int cmd_clone_main(int argc, char **argv) {
     }
 
     if (!opts.url) {
+        free(profiles);
         fprintf(stderr, "Error: URL required\n");
         print_clone_help(argv[0]);
         return 1;
     }
 
+    /* Set profiles if any were specified */
+    if (profile_count > 0) {
+        opts.profiles = profiles;
+        opts.profile_count = profile_count;
+    }
+
     /* Execute command */
     error_t *err = cmd_clone(&opts);
+    free(profiles);
+
     if (err) {
         error_print(err, stderr);
         error_free(err);
@@ -1073,8 +1313,7 @@ static int cmd_sync_main(int argc, char **argv) {
         .include_new = false,
         .only_new = false,
         .skip_undeployed = false,
-        .diverged = NULL,
-        .mode = NULL
+        .diverged = NULL
     };
 
     /* Collect profile arguments */
@@ -1118,13 +1357,6 @@ static int cmd_sync_main(int argc, char **argv) {
                 return 1;
             }
             opts.diverged = argv[++i];
-        } else if (strcmp(argv[i], "--mode") == 0) {
-            if (i + 1 >= argc) {
-                free(profiles);
-                fprintf(stderr, "Error: --mode requires an argument\n");
-                return 1;
-            }
-            opts.mode = argv[++i];
         } else if (strcmp(argv[i], "--include-new") == 0) {
             opts.include_new = true;
         } else if (strcmp(argv[i], "--only-new") == 0) {
@@ -1539,6 +1771,8 @@ int main(int argc, char **argv) {
         ret = cmd_status_main(argc, argv);
     } else if (strcmp(command, "list") == 0) {
         ret = cmd_list_main(argc, argv);
+    } else if (strcmp(command, "profile") == 0) {
+        ret = cmd_profile_main(argc, argv);
     } else if (strcmp(command, "diff") == 0) {
         ret = cmd_diff_main(argc, argv);
     } else if (strcmp(command, "clean") == 0) {

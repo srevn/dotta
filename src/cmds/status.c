@@ -979,7 +979,7 @@ error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
 
     /* Load profiles with config fallback */
     err = profile_resolve(repo, opts->profiles, opts->profile_count,
-                         config, config->strict_mode, &profiles);
+                         config, config->strict_mode, &profiles, NULL);
 
     /* Restore original mode */
     if (mode_overridden) {

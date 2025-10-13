@@ -336,8 +336,8 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
         NULL, 0,
         config,
         config->strict_mode,
-        &profiles
-    );
+        &profiles,
+        NULL);
 
     /* Restore original mode */
     if (opts->mode) {

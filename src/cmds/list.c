@@ -490,8 +490,9 @@ static error_t *list_log(
             NULL, 0,  /* No CLI profiles */
             config,
             config->strict_mode,
-            &profiles
-        );
+            &profiles,
+            NULL);
+
         if (err) {
             config_free(config);
             return error_wrap(err, "Failed to load profiles");

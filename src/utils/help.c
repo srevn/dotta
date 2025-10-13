@@ -18,10 +18,12 @@ void print_usage(const char *prog_name) {
     printf("  init         Initialize a new dotta repository\n");
     printf("  clone        Clone a dotta repository\n");
     printf("  add          Add files to a profile\n");
+    printf("  remove       Remove files from a profile or delete profile\n");
     printf("  apply        Apply profiles to filesystem\n");
     printf("  status       Show status of managed files\n");
     printf("  diff         Show differences between profiles and filesystem\n");
     printf("  list         List profiles, files, and commit history\n");
+    printf("  profile      Manage profile lifecycle (list, fetch, activate, deactivate)\n");
     printf("  clean        Remove untracked managed files\n");
     printf("  show         Show file content from profile\n");
     printf("  revert       Revert file to previous commit state\n");
@@ -63,6 +65,49 @@ void print_init_help(const char *prog_name) {
     printf("Options:\n");
     printf("  -q, --quiet    Suppress output\n");
     printf("  --help         Show this help message\n");
+    printf("\n");
+}
+
+void print_clone_help(const char *prog_name) {
+    printf("Usage: %s clone [options] <url> [path]\n\n", prog_name);
+    printf("Clone a dotta repository from remote\n\n");
+    printf("Arguments:\n");
+    printf("  <url>              Remote repository URL\n");
+    printf("  [path]             Local directory (default: derived from URL)\n");
+    printf("\nProfile Selection (choose one):\n");
+    printf("  (default)          Auto-detect profiles for this system (global, OS, host)\n");
+    printf("  --all              Fetch all remote profiles (hub/backup workflow)\n");
+    printf("  -p, --profiles <name>...  Fetch specific profiles explicitly\n");
+    printf("\nOther Options:\n");
+    printf("  -q, --quiet        Suppress output\n");
+    printf("  -v, --verbose      Print verbose output\n");
+    printf("  --bootstrap        Automatically run bootstrap scripts after clone\n");
+    printf("  --no-bootstrap     Skip bootstrap execution entirely\n");
+    printf("  --help             Show this help message\n");
+    printf("\nProfile Behavior:\n");
+    printf("  By default, clone auto-detects profiles relevant to the current system\n");
+    printf("  (e.g., 'global', 'darwin', 'hosts/macbook') and fetches only those.\n");
+    printf("  This creates a safe default where only appropriate configs are active.\n\n");
+    printf("  Fetched profiles are automatically activated and stored in state.\n");
+    printf("  Use 'dotta profile list' to view active vs available profiles.\n");
+    printf("\nBootstrap Integration:\n");
+    printf("  After cloning, dotta checks for bootstrap scripts in detected profiles.\n");
+    printf("  By default, you'll be prompted to run them. Use --bootstrap to auto-run\n");
+    printf("  or --no-bootstrap to skip.\n");
+    printf("\nExamples:\n");
+    printf("  %s clone git@github.com:user/dotfiles.git\n", prog_name);
+    printf("      Clone and auto-detect profiles for this system\n\n");
+    printf("  %s clone <url> --all\n", prog_name);
+    printf("      Hub mode: fetch all profiles (for backup/mirror machines)\n\n");
+    printf("  %s clone <url> --profiles global darwin fish\n", prog_name);
+    printf("      Fetch specific profiles explicitly\n\n");
+    printf("  %s clone <url> --bootstrap\n", prog_name);
+    printf("      Clone and automatically run bootstrap scripts\n");
+    printf("\nAfter cloning:\n");
+    printf("  %s profile list                         # View active profiles\n", prog_name);
+    printf("  %s profile activate <name>              # Activate additional profiles\n", prog_name);
+    printf("  %s bootstrap                            # Run bootstrap manually\n", prog_name);
+    printf("  %s apply                                # Apply profiles\n", prog_name);
     printf("\n");
 }
 
@@ -174,6 +219,24 @@ void print_status_help(const char *prog_name) {
     printf("\n");
 }
 
+void print_diff_help(const char *prog_name) {
+    printf("Usage: %s diff [options] [file]...\n\n", prog_name);
+    printf("Show differences between profiles and filesystem\n\n");
+    printf("Direction options:\n");
+    printf("  --upstream       Show repo → filesystem (what 'apply' would change) [default]\n");
+    printf("  --downstream     Show filesystem → repo (what 'update' would commit)\n");
+    printf("  -a, --all        Show both upstream and downstream with headers\n");
+    printf("\nOther options:\n");
+    printf("  -p, --profile <name>  Check specific profile\n");
+    printf("  --mode <mode>         Override profile mode (local/auto/all)\n");
+    printf("  --name-only           Only show file names, not diffs\n");
+    printf("  --help                Show this help message\n");
+    printf("\nConcepts:\n");
+    printf("  Upstream:   Repository (source of truth for configuration)\n");
+    printf("  Downstream: Filesystem (deployed state)\n");
+    printf("\n");
+}
+
 void print_list_help(const char *prog_name) {
     printf("Usage: %s list [options] [profile]\n\n", prog_name);
     printf("List profiles, files, or commit history\n\n");
@@ -204,21 +267,47 @@ void print_list_help(const char *prog_name) {
     printf("\n");
 }
 
-void print_diff_help(const char *prog_name) {
-    printf("Usage: %s diff [options] [file]...\n\n", prog_name);
-    printf("Show differences between profiles and filesystem\n\n");
-    printf("Direction options:\n");
-    printf("  --upstream       Show repo → filesystem (what 'apply' would change) [default]\n");
-    printf("  --downstream     Show filesystem → repo (what 'update' would commit)\n");
-    printf("  -a, --all        Show both upstream and downstream with headers\n");
-    printf("\nOther options:\n");
-    printf("  -p, --profile <name>  Check specific profile\n");
-    printf("  --mode <mode>         Override profile mode (local/auto/all)\n");
-    printf("  --name-only           Only show file names, not diffs\n");
-    printf("  --help                Show this help message\n");
-    printf("\nConcepts:\n");
-    printf("  Upstream:   Repository (source of truth for configuration)\n");
-    printf("  Downstream: Filesystem (deployed state)\n");
+void print_profile_help(const char *prog_name) {
+    printf("Usage: %s profile <subcommand> [options]\n\n", prog_name);
+    printf("Manage profile lifecycle and activation state\n\n");
+    printf("Profile lifecycle separates availability from activation:\n");
+    printf("  • Available profiles exist locally but are not used by commands\n");
+    printf("  • Active profiles are used by apply, update, sync, status, and diff\n");
+    printf("  • Profile activation state persists in .git/dotta-state.json\n\n");
+    printf("Subcommands:\n");
+    printf("  list                     Show profiles with activation status\n");
+    printf("  fetch <name>...          Download profiles from remote without activating\n");
+    printf("  activate <name>...       Add profiles to active set\n");
+    printf("  deactivate <name>...     Remove profiles from active set\n");
+    printf("  validate                 Check and fix state consistency\n");
+    printf("\nOptions (list):\n");
+    printf("  --remote                 Show remote profiles not yet fetched\n");
+    printf("  --available              Show available (inactive) profiles\n");
+    printf("  -v, --verbose            Show file counts per profile\n");
+    printf("\nOptions (fetch/activate/deactivate):\n");
+    printf("  --all                    Operate on all profiles\n");
+    printf("  -v, --verbose            Show detailed progress\n");
+    printf("\nOptions (validate):\n");
+    printf("  --fix                    Auto-fix state inconsistencies\n");
+    printf("  -v, --verbose            Show detailed validation checks\n");
+    printf("\nCommon Options:\n");
+    printf("  -q, --quiet              Suppress non-error output\n");
+    printf("  --help                   Show this help message\n");
+    printf("\nTypical Workflow:\n");
+    printf("  1. Clone repo (profiles auto-activated based on system)\n");
+    printf("  2. Check status:       %s profile list\n", prog_name);
+    printf("  3. Fetch more:         %s profile fetch <name>\n", prog_name);
+    printf("  4. Activate as needed: %s profile activate <name>\n", prog_name);
+    printf("  5. Use in commands:    %s apply, %s status, etc.\n", prog_name, prog_name);
+    printf("\nExamples:\n");
+    printf("  %s profile list                       # Show active vs available\n", prog_name);
+    printf("  %s profile list --remote -v           # Show remote + file counts\n", prog_name);
+    printf("  %s profile fetch darwin linux         # Download specific profiles\n", prog_name);
+    printf("  %s profile fetch --all                # Download all remote profiles\n", prog_name);
+    printf("  %s profile activate darwin            # Activate for use\n", prog_name);
+    printf("  %s profile activate fish zsh tmux     # Activate multiple\n", prog_name);
+    printf("  %s profile deactivate --all           # Deactivate everything\n", prog_name);
+    printf("  %s profile validate --fix             # Fix state issues\n", prog_name);
     printf("\n");
 }
 
@@ -251,32 +340,6 @@ void print_clean_help(const char *prog_name) {
     printf("\nAlternatives:\n");
     printf("  - 'dotta apply --prune'    Deploy profiles AND clean orphans\n");
     printf("  - 'dotta remove --cleanup' Remove from profile AND filesystem\n");
-    printf("\n");
-}
-
-void print_clone_help(const char *prog_name) {
-    printf("Usage: %s clone [options] <url> [path]\n\n", prog_name);
-    printf("Clone a dotta repository from remote\n\n");
-    printf("Arguments:\n");
-    printf("  <url>              Remote repository URL\n");
-    printf("  [path]             Local directory (default: derived from URL)\n");
-    printf("\nOptions:\n");
-    printf("  -q, --quiet        Suppress output\n");
-    printf("  -v, --verbose      Print verbose output\n");
-    printf("  --bootstrap        Automatically run bootstrap scripts after clone\n");
-    printf("  --no-bootstrap     Skip bootstrap execution entirely\n");
-    printf("  --help             Show this help message\n");
-    printf("\nBootstrap Integration:\n");
-    printf("  After cloning, dotta will auto-detect profiles and check for bootstrap scripts.\n");
-    printf("  By default, you'll be prompted to run them. Use --bootstrap to auto-run or\n");
-    printf("  --no-bootstrap to skip.\n");
-    printf("\nExamples:\n");
-    printf("  %s clone git@github.com:user/dotfiles.git\n", prog_name);
-    printf("  %s clone <url> --bootstrap              # Auto-run bootstrap\n", prog_name);
-    printf("  %s clone <url> --no-bootstrap           # Skip bootstrap\n", prog_name);
-    printf("\nAfter cloning:\n");
-    printf("  %s bootstrap                            # Run bootstrap manually\n", prog_name);
-    printf("  %s apply                                # Apply profiles\n", prog_name);
     printf("\n");
 }
 
@@ -387,19 +450,15 @@ void print_update_help(const char *prog_name) {
 
 void print_sync_help(const char *prog_name) {
     printf("Usage: %s sync [options]\n\n", prog_name);
-    printf("Intelligently synchronize with remote repository\n\n");
+    printf("Intelligently synchronize active profiles with remote repository\n\n");
     printf("Combines update + fetch + conditional push/pull with safety checks.\n");
-    printf("The 'do what I mean' command for dotfile synchronization.\n\n");
+    printf("Operates only on active profiles (use 'dotta profile' to manage).\n\n");
     printf("Options:\n");
     printf("  -m, --message <msg>        Custom commit message for updates\n");
-    printf("  -p, --profile <name>       Only sync specific profile\n");
+    printf("  -p, --profile <name>       Only sync specific profile (doesn't change state)\n");
     printf("  -n, --dry-run              Show what would happen\n");
     printf("  --no-push                  Update locally but skip push\n");
     printf("  --no-pull                  Skip pulling remote changes (push-only)\n");
-    printf("  --mode <mode>              Sync mode: local, auto, all\n");
-    printf("                             local: All local branches + discover new (default)\n");
-    printf("                             auto: Only auto-detected profiles\n");
-    printf("                             all: Fetch and sync all remote branches\n");
     printf("  --diverged <strategy>      How to handle diverged branches:\n");
     printf("                             warn (default), rebase, merge, ours, theirs\n");
     printf("  -v, --verbose              Verbose output\n");
@@ -408,37 +467,31 @@ void print_sync_help(const char *prog_name) {
     printf("  --skip-undeployed          Skip workspace validation for undeployed files\n");
     printf("  --help                     Show this help message\n");
     printf("\nWhat it does:\n");
-    printf("  1. Updates local profiles with any modified files (and new files if enabled)\n");
-    printf("  2. Fetches latest changes from remote\n");
-    printf("  3. Analyzes each branch (ahead/behind/diverged)\n");
+    printf("  1. Updates active profiles with any modified files (and new files if enabled)\n");
+    printf("  2. Fetches latest changes from remote for active profiles only\n");
+    printf("  3. Analyzes each active profile (ahead/behind/diverged)\n");
     printf("  4. Auto-pulls when remote is ahead (fast-forward only)\n");
     printf("  5. Auto-pushes when local is ahead\n");
     printf("  6. Warns about diverged branches (or resolves based on --diverged strategy)\n");
     printf("\nConfiguration:\n");
     printf("  Set defaults in ~/.config/dotta/config.toml:\n");
-    printf("    [core]\n");
-    printf("    mode = \"local\"              # local (default), auto, or all\n");
-    printf("\n");
     printf("    [sync]\n");
     printf("    auto_pull = true\n");
     printf("    diverged_strategy = \"warn\"\n");
     printf("\nExamples:\n");
-    printf("  %s sync                       # Smart sync (default: mode=local)\n", prog_name);
-    printf("  %s sync --mode=auto           # Only sync auto-detected profiles\n", prog_name);
-    printf("  %s sync --mode=all            # Mirror entire remote (all branches)\n", prog_name);
+    printf("  %s sync                       # Sync active profiles\n", prog_name);
     printf("  %s sync --include-new         # Sync modified AND new files\n", prog_name);
     printf("  %s sync --profile global      # Sync only specific profile\n", prog_name);
     printf("  %s sync --dry-run             # Preview sync actions\n", prog_name);
     printf("  %s sync --no-push             # Update but don't push\n", prog_name);
     printf("  %s sync --no-pull             # Push only, skip pulling\n", prog_name);
     printf("  %s sync --diverged ours       # Keep local version on divergence\n", prog_name);
-    printf("\nSync Modes:\n");
-    printf("  local (default): Sync all local branches + discover new remote branches\n");
-    printf("                   Perfect for variant profile workflows\n");
-    printf("  auto:            Only sync global + OS + hosts/<hostname>\n");
-    printf("                   Perfect for minimal/single-purpose machines\n");
-    printf("  all:             Mirror entire remote repository\n");
-    printf("                   Perfect for hub/backup servers\n");
+    printf("\nActive Profile Management:\n");
+    printf("  Use 'dotta profile' to manage which profiles are active:\n");
+    printf("    %s profile list            # Show active vs available profiles\n", prog_name);
+    printf("    %s profile activate <name> # Activate a profile\n", prog_name);
+    printf("    %s profile deactivate <name> # Deactivate a profile\n", prog_name);
+    printf("    %s profile fetch <name>    # Fetch without activating\n", prog_name);
     printf("\n");
 }
 

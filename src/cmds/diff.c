@@ -327,7 +327,7 @@ error_t *cmd_diff(git_repository *repo, const cmd_diff_options_t *opts) {
     }
 
     err = profile_resolve(repo, opts->profiles, opts->profile_count,
-                         config, config->strict_mode, &profiles);
+                         config, config->strict_mode, &profiles, NULL);
 
     /* Restore original mode */
     if (opts->mode) {

@@ -16,11 +16,9 @@
 #include "base/gitops.h"
 #include "core/divergence.h"
 #include "core/profiles.h"
-#include "core/state.h"
 #include "core/upstream.h"
 #include "core/workspace.h"
 #include "update.h"
-#include "utils/array.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
 #include "utils/output.h"
@@ -312,282 +310,14 @@ static error_t *sync_update_phase(
     return NULL;
 }
 
-
 /**
- * Helper: Collect existing remote tracking branches
+ * Phase 2: Fetch active profiles from remote
  */
-static error_t *collect_remote_tracking_branches(
+static error_t *sync_fetch_active_profiles(
     git_repository *repo,
     const char *remote_name,
-    string_array_t **out_branches
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(out_branches);
-
-    string_array_t *branches = string_array_create();
-    if (!branches) {
-        return ERROR(ERR_MEMORY, "Failed to create array");
-    }
-
-    /* Iterate through all references looking for remote tracking branches */
-    git_reference_iterator *iter = NULL;
-    int git_err = git_reference_iterator_new(&iter, repo);
-    if (git_err < 0) {
-        string_array_free(branches);
-        return error_from_git(git_err);
-    }
-
-    char prefix[DOTTA_REFNAME_MAX];
-    snprintf(prefix, sizeof(prefix), "refs/remotes/%s/", remote_name);
-    size_t prefix_len = strlen(prefix);
-
-    git_reference *ref = NULL;
-    while (git_reference_next(&ref, iter) == 0) {
-        const char *refname = git_reference_name(ref);
-        if (strncmp(refname, prefix, prefix_len) == 0) {
-            /* Extract branch name */
-            const char *branch_name = refname + prefix_len;
-            string_array_push(branches, branch_name);
-        }
-        git_reference_free(ref);
-    }
-
-    git_reference_iterator_free(iter);
-
-    *out_branches = branches;
-    return NULL;
-}
-
-/**
- * Helper: Count state file entries for a specific profile
- *
- * @param state State (must not be NULL)
- * @param profile Profile name (must not be NULL)
- * @return Number of file entries belonging to this profile
- */
-static size_t count_state_entries_for_profile(
-    const state_t *state,
-    const char *profile
-) {
-    if (!state || !profile) {
-        return 0;
-    }
-
-    size_t count = 0;
-    size_t total_files = 0;
-    const state_file_entry_t *files = state_get_all_files(state, &total_files);
-
-    for (size_t i = 0; i < total_files; i++) {
-        if (strcmp(files[i].profile, profile) == 0) {
-            count++;
-        }
-    }
-
-    return count;
-}
-
-/**
- * Helper: Count state directory entries for a specific profile
- *
- * @param state State (must not be NULL)
- * @param profile Profile name (must not be NULL)
- * @return Number of directory entries belonging to this profile
- */
-static size_t count_state_dirs_for_profile(
-    const state_t *state,
-    const char *profile
-) {
-    if (!state || !profile) {
-        return 0;
-    }
-
-    size_t count = 0;
-    size_t total_dirs = 0;
-    const state_directory_entry_t *dirs = state_get_all_directories(state, &total_dirs);
-
-    for (size_t i = 0; i < total_dirs; i++) {
-        if (strcmp(dirs[i].profile, profile) == 0) {
-            count++;
-        }
-    }
-
-    return count;
-}
-
-/**
- * Helper: Delete local branches whose remote tracking branches were pruned
- *
- * Compares the list of remote tracking branches before and after fetch.
- * If a branch existed before but not after (was pruned), delete the local branch.
- *
- * Additionally detects and warns about orphaned state entries when a profile
- * is deleted remotely but still has deployed files/directories in state.
- */
-static error_t *delete_orphaned_local_branches(
-    git_repository *repo,
-    const char *remote_name,
-    string_array_t *before_branches,
     profile_list_t *profiles,
-    state_t *state,
-    output_ctx_t *out,
-    bool verbose
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(before_branches);
-    CHECK_NULL(profiles);
-    /* state can be NULL - non-fatal if state loading failed */
-    CHECK_NULL(out);
-
-    /* Get current remote tracking branches */
-    string_array_t *after_branches = NULL;
-    error_t *err = collect_remote_tracking_branches(repo, remote_name, &after_branches);
-    if (err) {
-        return err;
-    }
-
-    /* Build hashmap from after_branches for O(1) lookup
-     * This optimizes the branch comparison from O(N*M) to O(N+M)
-     */
-    hashmap_t *after_set = hashmap_create(string_array_size(after_branches));
-    if (!after_set) {
-        string_array_free(after_branches);
-        return ERROR(ERR_MEMORY, "Failed to create hashmap");
-    }
-
-    for (size_t i = 0; i < string_array_size(after_branches); i++) {
-        const char *branch_name = string_array_get(after_branches, i);
-        error_t *err = hashmap_set(after_set, branch_name, (void*)1);
-        if (err) {
-            hashmap_free(after_set, NULL);
-            string_array_free(after_branches);
-            return error_wrap(err, "Failed to build branch hashmap");
-        }
-    }
-
-    string_array_free(after_branches);
-
-    /* Find branches that were pruned (existed before but not after) */
-    string_array_t *to_delete = string_array_create();
-    if (!to_delete) {
-        hashmap_free(after_set, NULL);
-        return ERROR(ERR_MEMORY, "Failed to create array");
-    }
-
-    for (size_t i = 0; i < string_array_size(before_branches); i++) {
-        const char *branch_name = string_array_get(before_branches, i);
-
-        /* Skip dotta-worktree */
-        if (strcmp(branch_name, "dotta-worktree") == 0) {
-            continue;
-        }
-
-        /* Check if this branch still exists using hashmap (O(1) lookup) */
-        if (!hashmap_has(after_set, branch_name)) {
-            /* Branch was pruned - mark local branch for deletion */
-            string_array_push(to_delete, branch_name);
-        }
-    }
-
-    hashmap_free(after_set, NULL);
-
-    /* Delete orphaned branches */
-    size_t deleted_count = 0;
-    for (size_t i = 0; i < string_array_size(to_delete); i++) {
-        const char *branch_name = string_array_get(to_delete, i);
-
-        if (verbose) {
-            output_info(out, "  Deleting local branch '%s' (removed from remote)...", branch_name);
-        }
-
-        /* Delete the local branch */
-        char local_refname[DOTTA_REFNAME_MAX];
-        snprintf(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
-
-        git_reference *local_ref = NULL;
-        int git_err = git_reference_lookup(&local_ref, repo, local_refname);
-        if (git_err == 0) {
-            git_err = git_reference_delete(local_ref);
-            git_reference_free(local_ref);
-
-            if (git_err == 0) {
-                deleted_count++;
-                if (verbose) {
-                    output_success(out, "    Deleted local branch '%s'", branch_name);
-                }
-            } else {
-                output_warning(out, "    Failed to delete local branch '%s': %s",
-                              branch_name, git_error_last()->message);
-            }
-        }
-    }
-
-    /* Check for orphaned state entries after deleting branches */
-    bool has_orphaned_state = false;
-    if (deleted_count > 0 && state) {
-        for (size_t i = 0; i < string_array_size(to_delete); i++) {
-            const char *branch_name = string_array_get(to_delete, i);
-
-            /* Count state entries for this deleted profile */
-            size_t orphaned_files = count_state_entries_for_profile(state, branch_name);
-            size_t orphaned_dirs = count_state_dirs_for_profile(state, branch_name);
-            size_t total_orphaned = orphaned_files + orphaned_dirs;
-
-            if (total_orphaned > 0) {
-                /* Profile had deployed files/dirs - warn user */
-                has_orphaned_state = true;
-
-                output_warning(out,
-                              "Profile '%s' was deleted remotely but has %zu deployed entr%s",
-                              branch_name, total_orphaned, total_orphaned == 1 ? "y" : "ies");
-
-                if (verbose) {
-                    if (orphaned_files > 0) {
-                        output_info(out, "  %zu file%s tracked in state",
-                                   orphaned_files, orphaned_files == 1 ? "" : "s");
-                    }
-                    if (orphaned_dirs > 0) {
-                        output_info(out, "  %zu director%s tracked in state",
-                                   orphaned_dirs, orphaned_dirs == 1 ? "y" : "ies");
-                    }
-                }
-            }
-        }
-    }
-
-    string_array_free(to_delete);
-
-    if (deleted_count > 0 && verbose) {
-        output_info(out, "Deleted %zu orphaned local branch%s",
-                   deleted_count, deleted_count == 1 ? "" : "es");
-    }
-
-    /* Provide actionable guidance if orphaned state detected */
-    if (has_orphaned_state) {
-        output_info(out, "");
-        output_info(out, "To clean up orphaned entries:");
-        output_info(out, "  Run 'dotta clean' to remove orphaned files");
-        output_info(out, "  Or run 'dotta apply --prune' during next deployment");
-    }
-
-    return NULL;
-}
-
-/**
- * Phase 2: Fetch from remote
- *
- * Supports three profile modes:
- * - PROFILE_MODE_LOCAL: Fetch all local branches + discover new remote branches
- * - PROFILE_MODE_AUTO: Fetch only auto-detected profiles
- * - PROFILE_MODE_ALL: Fetch all remote branches
- */
-static error_t *sync_fetch_phase(
-    git_repository *repo,
-    const char *remote_name,
-    profile_mode_t mode,
-    profile_list_t **profiles,
-    sync_results_t **results,
+    sync_results_t *results,
     output_ctx_t *out,
     bool verbose,
     credential_context_t *cred_ctx
@@ -595,7 +325,6 @@ static error_t *sync_fetch_phase(
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(profiles);
-    CHECK_NULL(*profiles);
     CHECK_NULL(results);
     CHECK_NULL(out);
 
@@ -613,205 +342,21 @@ static error_t *sync_fetch_phase(
     git_remote_free(remote);
 
     char section_title[DOTTA_MESSAGE_MAX];
-    snprintf(section_title, sizeof(section_title), "Fetching from remote '%s'", remote_name);
+    snprintf(section_title, sizeof(section_title), "Fetching active profiles from '%s'", remote_name);
     output_section(out, section_title);
 
     bool auth_failed = false;
     size_t fetch_success_count = 0;
-    profile_list_t *final_profiles = *profiles;
-    error_t *err = NULL;
 
-    /* Fetch based on profile mode */
-    if (mode == PROFILE_MODE_ALL) {
-        /* First, fetch all remote refs to populate remote tracking branches */
-        if (verbose) {
-            output_info(out, "Fetching all remote refs...");
-        }
-
-        git_remote *fetch_remote = NULL;
-        int git_err = git_remote_lookup(&fetch_remote, repo, remote_name);
-        if (git_err < 0) {
-            return error_from_git(git_err);
-        }
-
-        /* Fetch with default refspec (fetches all branches)
-         * Enable pruning to remove stale remote tracking branches
-         */
-        git_fetch_options fetch_opts = GIT_FETCH_OPTIONS_INIT;
-        fetch_opts.callbacks.credentials = credentials_callback;
-        fetch_opts.callbacks.payload = cred_ctx;
-        fetch_opts.prune = GIT_FETCH_PRUNE;  /* Prune stale remote branches */
-
-        git_err = git_remote_fetch(fetch_remote, NULL, &fetch_opts, NULL);
-        git_remote_free(fetch_remote);
-
-        if (git_err < 0) {
-            return error_from_git(git_err);
-        }
-
-        /* Now discover which remote branches don't have local branches */
-        string_array_t *remote_branches = NULL;
-        error_t *err = upstream_discover_branches(repo, remote_name, &remote_branches);
-        if (err) {
-            return error_wrap(err, "Failed to discover remote branches");
-        }
-
-        /* Create local tracking branches for discovered branches */
-        for (size_t i = 0; i < string_array_size(remote_branches); i++) {
-            const char *branch_name = string_array_get(remote_branches, i);
-
-            if (verbose) {
-                output_info(out, "  Creating local branch '%s' from remote...", branch_name);
-            }
-
-            err = upstream_create_tracking_branch(repo, remote_name, branch_name);
-            if (err) {
-                output_warning(out, "Failed to create local branch '%s': %s",
-                              branch_name, error_message(err));
-                error_free(err);
-            }
-        }
-
-        string_array_free(remote_branches);
-
-        /* Reload all local profiles */
-        profile_list_free(final_profiles);
-        err = profile_list_all_local(repo, &final_profiles);
-        if (err) {
-            return error_wrap(err, "Failed to reload local profiles");
-        }
-
-        *profiles = final_profiles;
-
-        /* Recreate results tracker with new profile count */
-        if (*results) {
-            sync_results_free(*results);
-        }
-        *results = sync_results_create(final_profiles->count);
-        if (!*results) {
-            return ERROR(ERR_MEMORY, "Failed to create results");
-        }
-    } else if (mode == PROFILE_MODE_LOCAL) {
-        /* Collect remote tracking branches BEFORE fetch to detect deletions */
-        string_array_t *before_remote_branches = NULL;
-        err = collect_remote_tracking_branches(repo, remote_name, &before_remote_branches);
-        if (err) {
-            return error_wrap(err, "Failed to collect remote tracking branches");
-        }
-
-        /* Fetch all remote refs to populate remote tracking branches
-         * This is necessary so upstream_discover_branches can see what's on the remote
-         */
-        git_remote *fetch_remote = NULL;
-        int git_err = git_remote_lookup(&fetch_remote, repo, remote_name);
-        if (git_err < 0) {
-            string_array_free(before_remote_branches);
-            return error_from_git(git_err);
-        }
-
-        /* Fetch with default refspec (fetches all branches)
-         * Enable pruning to remove stale remote tracking branches
-         */
-        git_fetch_options fetch_opts = GIT_FETCH_OPTIONS_INIT;
-        fetch_opts.callbacks.credentials = credentials_callback;
-        fetch_opts.callbacks.payload = cred_ctx;
-        fetch_opts.prune = GIT_FETCH_PRUNE;  /* Prune stale remote branches */
-
-        git_err = git_remote_fetch(fetch_remote, NULL, &fetch_opts, NULL);
-        git_remote_free(fetch_remote);
-
-        if (git_err < 0) {
-            string_array_free(before_remote_branches);
-            return error_from_git(git_err);
-        }
-
-        /* Load state for orphan detection (non-fatal if this fails) */
-        state_t *state = NULL;
-        err = state_load(repo, &state);
-        if (err) {
-            if (verbose) {
-                output_warning(out, "Failed to load state for orphan detection: %s",
-                              error_message(err));
-                output_info(out, "Continuing without orphan detection");
-            }
-            error_free(err);
-            err = NULL;
-        }
-
-        /* Delete orphaned local branches (branches whose remote was deleted) */
-        err = delete_orphaned_local_branches(repo, remote_name, before_remote_branches,
-                                            *profiles, state, out, verbose);
-
-        /* Clean up state (NULL-safe) */
-        state_free(state);
-        string_array_free(before_remote_branches);
-
-        if (err) {
-            return error_wrap(err, "Failed to delete orphaned local branches");
-        }
-
-        /* Discover new remote branches not in local list */
-        string_array_t *new_branches = NULL;
-        err = upstream_discover_branches(repo, remote_name, &new_branches);
-        if (err) {
-            return error_wrap(err, "Failed to discover remote branches");
-        }
-
-        size_t discovered_count = string_array_size(new_branches);
-        if (discovered_count > 0) {
-            if (verbose) {
-                output_info(out, "Discovered %zu new remote branch%s",
-                           discovered_count, discovered_count == 1 ? "" : "es");
-            }
-
-            /* Create local tracking branches */
-            for (size_t i = 0; i < discovered_count; i++) {
-                const char *branch_name = string_array_get(new_branches, i);
-
-                if (verbose) {
-                    output_info(out, "  Creating local branch '%s'...", branch_name);
-                }
-
-                err = upstream_create_tracking_branch(repo, remote_name, branch_name);
-                if (err) {
-                    output_warning(out, "Failed to create local branch '%s': %s",
-                                  branch_name, error_message(err));
-                    error_free(err);
-                }
-            }
-        }
-
-        string_array_free(new_branches);
-
-        /* Single reload after both deletion and creation operations
-         * This consolidates two separate reload cycles into one, improving efficiency.
-         */
-        profile_list_free(final_profiles);
-        err = profile_list_all_local(repo, &final_profiles);
-        if (err) {
-            return error_wrap(err, "Failed to reload local profiles");
-        }
-        *profiles = final_profiles;
-
-        /* Recreate results tracker with final profile count */
-        if (*results) {
-            sync_results_free(*results);
-        }
-        *results = sync_results_create(final_profiles->count);
-        if (!*results) {
-            return ERROR(ERR_MEMORY, "Failed to create results");
-        }
-    }
-    /* SYNC_MODE_AUTO: Use profiles as-is (existing behavior) */
-
-    /* Fetch each profile branch */
-    for (size_t i = 0; i < final_profiles->count; i++) {
-        const char *branch_name = final_profiles->profiles[i].name;
+    /* Fetch each active profile */
+    for (size_t i = 0; i < profiles->count; i++) {
+        const char *branch_name = profiles->profiles[i].name;
 
         /* Skip remaining fetches if authentication failed */
         if (auth_failed) {
-            output_info(out, "  Skipping %s (authentication failed)", branch_name);
-            (*results)->fetch_failed_count++;
+            if (verbose) {
+                output_info(out, "  Skipping %s (authentication failed)", branch_name);
+            }
             continue;
         }
 
@@ -826,13 +371,13 @@ static error_t *sync_fetch_phase(
             if (strstr(err_msg, "authentication") || strstr(err_msg, "credentials") ||
                 strstr(err_msg, "permission denied") || strstr(err_msg, "unauthorized")) {
                 auth_failed = true;
-                (*results)->auth_failed_count++;
+                results->auth_failed_count++;
                 output_error(out, "Authentication failed for '%s': %s", branch_name, err_msg);
                 output_error(out, "Skipping remaining fetches due to authentication failure");
             } else {
+                results->fetch_failed_count++;
                 output_warning(out, "Failed to fetch '%s': %s", branch_name, err_msg);
             }
-            (*results)->fetch_failed_count++;
             error_free(err);
         } else {
             fetch_success_count++;
@@ -840,10 +385,16 @@ static error_t *sync_fetch_phase(
     }
 
     /* Error if all fetches failed */
-    if (fetch_success_count == 0 && final_profiles->count > 0) {
+    if (fetch_success_count == 0 && profiles->count > 0) {
         return ERROR(ERR_GIT,
                     "All fetch operations failed\n"
                     "Hint: Check network connectivity and remote accessibility");
+    }
+
+    if (verbose) {
+        output_success(out, "Fetched %zu active profile%s",
+                      fetch_success_count,
+                      fetch_success_count == 1 ? "" : "s");
     }
 
     fprintf(out->stream, "\n");
@@ -1042,6 +593,18 @@ static error_t *sync_push_phase(
                                colored ? colored : result->profile_name,
                                result->behind, result->behind == 1 ? "" : "s");
                         free(colored);
+                    } else {
+                        /* Already up-to-date - report in verbose mode */
+                        if (verbose) {
+                            char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
+                            output_info(out, "= %s: already up-to-date",
+                                   colored ? colored : result->profile_name);
+                            free(colored);
+                        }
+                        /* Decrement need_pull_count since it was already up-to-date */
+                        if (results->need_pull_count > 0) {
+                            results->need_pull_count--;
+                        }
                     }
                 } else {
                     /* Just warn - don't auto-pull */
@@ -1404,35 +967,27 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* Determine profile mode: CLI overrides config */
-    profile_mode_t mode = config_parse_mode(opts->mode, config->mode);
-
-    /* Load profiles based on mode */
-    if (mode == PROFILE_MODE_ALL) {
-        /* For ALL mode: load all local branches initially
-         * (all remote branches fetched during fetch phase) */
-        err = profile_list_all_local(repo, &profiles);
-        if (err) {
-            config_free(config);
-            output_free(out);
-            return error_wrap(err, "Failed to load local profiles");
-        }
-    } else {
-        /* For LOCAL and AUTO modes: use standard profile resolution */
-        err = profile_resolve(repo, opts->profiles, opts->profile_count,
-                             config, config->strict_mode, &profiles);
-        if (err) {
-            config_free(config);
-            output_free(out);
-            return error_wrap(err, "Failed to load profiles");
-        }
+    /* Load active profiles using standard profile resolution
+     * Priority: CLI -p > config profile_order > state > mode fallback
+     */
+    profile_source_t source;
+    err = profile_resolve(repo, opts->profiles, opts->profile_count,
+                         config, config->strict_mode, &profiles, &source);
+    if (err) {
+        config_free(config);
+        output_free(out);
+        return error_wrap(err, "Failed to resolve active profiles");
     }
 
+    /* Provide helpful error when no active profiles */
     if (profiles->count == 0) {
         profile_list_free(profiles);
         config_free(config);
         output_free(out);
-        return ERROR(ERR_NOT_FOUND, "No profiles found");
+        return ERROR(ERR_NOT_FOUND,
+                    "No active profiles to sync\n"
+                    "Hint: Run 'dotta profile activate <name>' to activate profiles\n"
+                    "      Or run 'dotta profile list --remote' to see available profiles");
     }
 
     /* Create results tracker */
@@ -1475,8 +1030,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         return NULL;
     }
 
-    /* Phase 1.5: Workspace validation
-     * Check for undeployed files before syncing to prevent data loss.
+    /* Check for undeployed files before syncing to prevent data loss.
      * Files that exist in profile branches but were never deployed should not
      * be treated as deletions during update operations.
      */
@@ -1562,8 +1116,8 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         opts->diverged ? opts->diverged : config->diverged_strategy
     );
 
-    /* Phase 2: Fetch from remote */
-    err = sync_fetch_phase(repo, remote_name, mode, &profiles, &results, out, opts->verbose, cred_ctx);
+    /* Phase 2: Fetch active profiles from remote */
+    err = sync_fetch_active_profiles(repo, remote_name, profiles, results, out, opts->verbose, cred_ctx);
     if (err) {
         credential_context_free(cred_ctx);
         free(remote_name);

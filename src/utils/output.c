@@ -553,3 +553,161 @@ void output_json_array_end(const output_ctx_t *ctx, bool last) {
 
     fprintf(ctx->stream, "  ]%s\n", last ? "" : ",");
 }
+
+/* ========================================================================
+ * User Confirmation Prompts
+ * ======================================================================== */
+
+/**
+ * Clear stdin buffer to prevent input pollution
+ *
+ * This ensures that any remaining characters in the input buffer
+ * (from user pressing more than just y/n) don't affect subsequent reads.
+ */
+static void clear_stdin_buffer(void) {
+    int c;
+    while ((c = getchar()) != '\n' && c != EOF) {
+        /* Discard remaining characters */
+    }
+}
+
+/**
+ * Read and validate user response
+ *
+ * Reads a single line, handles buffer overflow safely, and validates
+ * the response. Returns true for yes, false for no/error.
+ */
+static bool read_user_response(bool default_value) {
+    char response[16];
+
+    if (fgets(response, sizeof(response), stdin) == NULL) {
+        /* EOF or read error - return default */
+        return default_value;
+    }
+
+    /* Check if we read a complete line */
+    size_t len = strlen(response);
+    if (len > 0 && response[len - 1] != '\n') {
+        /* Buffer was too small - clear remaining input */
+        clear_stdin_buffer();
+    }
+
+    /* Empty input (just Enter) - use default */
+    if (len == 0 || response[0] == '\n') {
+        return default_value;
+    }
+
+    /* Check first character for y/Y or n/N */
+    char first = response[0];
+    return (first == 'y' || first == 'Y');
+}
+
+bool output_confirm(
+    const output_ctx_t *ctx,
+    const char *message,
+    bool default_value
+) {
+    if (!ctx || !message) {
+        return false;
+    }
+
+    /* Use stderr for prompts (standard practice for interactive input) */
+    FILE *prompt_stream = stderr;
+
+    /* Format prompt with default indicator */
+    const char *prompt_suffix = default_value ? " [Y/n] " : " [y/N] ";
+
+    if (ctx->color_enabled) {
+        fprintf(prompt_stream, "%s%s%s%s",
+                output_color_code(ctx, OUTPUT_COLOR_BOLD),
+                message,
+                output_color_code(ctx, OUTPUT_COLOR_RESET),
+                prompt_suffix);
+    } else {
+        fprintf(prompt_stream, "%s%s", message, prompt_suffix);
+    }
+
+    fflush(prompt_stream);
+
+    return read_user_response(default_value);
+}
+
+bool output_confirm_or_default(
+    const output_ctx_t *ctx,
+    const char *message,
+    bool default_value,
+    bool non_interactive_default
+) {
+    if (!ctx || !message) {
+        return false;
+    }
+
+    /* Check if stdin is a TTY (interactive terminal) */
+    if (!isatty(STDIN_FILENO)) {
+        /* Non-interactive mode */
+        FILE *warn_stream = stderr;
+
+        if (non_interactive_default) {
+            if (ctx->color_enabled) {
+                fprintf(warn_stream, "%sWARNING:%s Running non-interactively, auto-confirming: %s\n",
+                        output_color_code(ctx, OUTPUT_COLOR_YELLOW),
+                        output_color_code(ctx, OUTPUT_COLOR_RESET),
+                        message);
+            } else {
+                fprintf(warn_stream, "WARNING: Running non-interactively, auto-confirming: %s\n", message);
+            }
+        } else {
+            if (ctx->color_enabled) {
+                fprintf(warn_stream, "%sERROR:%s Running non-interactively, refusing: %s\n",
+                        output_color_code(ctx, OUTPUT_COLOR_RED),
+                        output_color_code(ctx, OUTPUT_COLOR_RESET),
+                        message);
+            } else {
+                fprintf(warn_stream, "ERROR: Running non-interactively, refusing: %s\n", message);
+            }
+        }
+
+        return non_interactive_default;
+    }
+
+    /* Interactive mode - use standard confirmation */
+    return output_confirm(ctx, message, default_value);
+}
+
+bool output_confirm_destructive(
+    const output_ctx_t *ctx,
+    const dotta_config_t *config,
+    const char *message,
+    bool force_flag
+) {
+    if (!ctx || !message) {
+        return false;
+    }
+
+    /* Skip confirmation if force flag is set */
+    if (force_flag) {
+        return true;
+    }
+
+    /* Check config for confirm_destructive setting */
+    bool require_confirmation = true;
+    if (config) {
+        require_confirmation = config->confirm_destructive;
+    }
+
+    /* If confirmation not required by config, proceed */
+    if (!require_confirmation) {
+        return true;
+    }
+
+    /* Show warning and ask for confirmation */
+    if (ctx->color_enabled) {
+        fprintf(stderr, "%sWARNING:%s This is a destructive operation!\n",
+                output_color_code(ctx, OUTPUT_COLOR_YELLOW),
+                output_color_code(ctx, OUTPUT_COLOR_RESET));
+    } else {
+        fprintf(stderr, "WARNING: This is a destructive operation!\n");
+    }
+
+    return output_confirm(ctx, message, false);  /* Default to NO for destructive ops */
+}

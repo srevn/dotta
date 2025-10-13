@@ -22,21 +22,6 @@
 #include "utils/output.h"
 
 /**
- * Confirm action with user
- */
-static bool confirm_action(const char *prompt) {
-    fprintf(stderr, "%s [y/N] ", prompt ? prompt : "Proceed?");
-    fflush(stderr);
-
-    char response[10];
-    if (fgets(response, sizeof(response), stdin) == NULL) {
-        return false;
-    }
-
-    return (response[0] == 'y' || response[0] == 'Y');
-}
-
-/**
  * Print pre-flight results
  */
 static void print_preflight_results(const output_ctx_t *out, const preflight_result_t *result, bool strict_mode) {
@@ -743,10 +728,10 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     /* Confirm before deployment if configured (unless --force or --dry-run) */
     if (config->confirm_destructive && !opts->force && !opts->dry_run) {
         char prompt[256];
-        snprintf(prompt, sizeof(prompt), "\nDeploy %zu file%s to filesystem?",
+        snprintf(prompt, sizeof(prompt), "Deploy %zu file%s to filesystem?",
                 manifest->count, manifest->count == 1 ? "" : "s");
 
-        if (!confirm_action(prompt)) {
+        if (!output_confirm(out, prompt, false)) {
             output_info(out, "Cancelled");
             err = NULL;  /* Not an error - user cancelled */
             goto cleanup;

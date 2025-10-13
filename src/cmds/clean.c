@@ -21,21 +21,6 @@
 #include "utils/repo.h"
 
 /**
- * Confirm action with user
- */
-static bool confirm_action(void) {
-    printf("Proceed? (y/N): ");
-    fflush(stdout);
-
-    char response[10];
-    if (fgets(response, sizeof(response), stdin) == NULL) {
-        return false;
-    }
-
-    return (response[0] == 'y' || response[0] == 'Y');
-}
-
-/**
  * Clean command implementation
  */
 error_t *cmd_clean(git_repository *repo, const cmd_clean_options_t *opts) {
@@ -297,7 +282,7 @@ error_t *cmd_clean(git_repository *repo, const cmd_clean_options_t *opts) {
     }
 
     /* Confirm unless --force (only if confirm_destructive is enabled) */
-    if (config->confirm_destructive && !opts->force && !confirm_action()) {
+    if (!output_confirm_destructive(out, config, "Proceed?", opts->force)) {
         output_info(out, "Cancelled");
         if (hook_ctx) hook_context_free(hook_ctx);
         free(repo_dir);

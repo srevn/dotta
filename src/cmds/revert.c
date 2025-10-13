@@ -843,26 +843,6 @@ cleanup:
 }
 
 /**
- * Prompt user for confirmation
- */
-static bool prompt_confirmation(const char *message) {
-    if (!message) {
-        message = "Proceed?";
-    }
-
-    fprintf(stderr, "\n%s [y/N] ", message);
-    fflush(stderr);
-
-    char response[8] = {0};
-    if (fgets(response, sizeof(response), stdin) == NULL) {
-        return false;
-    }
-
-    /* Check first character */
-    return (response[0] == 'y' || response[0] == 'Y');
-}
-
-/**
  * Revert command implementation
  */
 error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
@@ -1042,7 +1022,7 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
             snprintf(prompt_msg, sizeof(prompt_msg), "Revert file?");
         }
 
-        if (!prompt_confirmation(prompt_msg)) {
+        if (!output_confirm(out, prompt_msg, false)) {
             fprintf(stderr, "Aborted.\n");
             user_aborted = true;
             goto cleanup;

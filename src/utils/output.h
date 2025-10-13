@@ -274,4 +274,81 @@ void output_json_array_begin(const output_ctx_t *ctx, const char *key);
  */
 void output_json_array_end(const output_ctx_t *ctx, bool last);
 
+/* ========================================================================
+ * User Confirmation Prompts
+ * ======================================================================== */
+
+/**
+ * Prompt user for confirmation
+ *
+ * Displays a yes/no prompt and waits for user input. Handles input buffer
+ * clearing to prevent pollution. Uses stderr for prompts (standard practice).
+ *
+ * @param ctx Output context (for color/format settings)
+ * @param message Confirmation message to display
+ * @param default_value Default if user just presses Enter (true=Y, false=N)
+ * @return true if user confirms (y/Y), false otherwise
+ *
+ * Example:
+ *   if (output_confirm(out, "Delete all files?", false)) {
+ *       // User confirmed
+ *   }
+ */
+bool output_confirm(
+    const output_ctx_t *ctx,
+    const char *message,
+    bool default_value
+);
+
+/**
+ * Prompt for confirmation with TTY detection
+ *
+ * Like output_confirm() but handles non-interactive mode gracefully.
+ * When stdin is not a TTY (e.g., piped input, CI/CD), uses the
+ * non_interactive_default value and prints a warning or error.
+ *
+ * @param ctx Output context
+ * @param message Confirmation message
+ * @param default_value Default for Enter key in interactive mode
+ * @param non_interactive_default Return value when not a TTY
+ * @return true if confirmed or non_interactive_default if not a TTY
+ *
+ * Example:
+ *   // In sync operations, auto-confirm non-destructive pulls
+ *   if (output_confirm_or_default(out, "Pull changes?", true, true)) {
+ *       // Proceed
+ *   }
+ */
+bool output_confirm_or_default(
+    const output_ctx_t *ctx,
+    const char *message,
+    bool default_value,
+    bool non_interactive_default
+);
+
+/**
+ * Prompt for destructive operation (checks config)
+ *
+ * Specialized confirmation for destructive operations. Respects the
+ * config->confirm_destructive setting and force_flag. Shows warning
+ * before prompting. Always defaults to NO for safety.
+ *
+ * @param ctx Output context
+ * @param config Config (checks confirm_destructive setting, can be NULL)
+ * @param message Confirmation message
+ * @param force_flag If true, skip confirmation and return true
+ * @return true if should proceed, false if user declined
+ *
+ * Example:
+ *   if (output_confirm_destructive(out, config, "Remove all files?", opts->force)) {
+ *       // User confirmed or force flag set
+ *   }
+ */
+bool output_confirm_destructive(
+    const output_ctx_t *ctx,
+    const dotta_config_t *config,
+    const char *message,
+    bool force_flag
+);
+
 #endif /* DOTTA_OUTPUT_H */

@@ -19,33 +19,9 @@
 #include "utils/bootstrap.h"
 #include "utils/config.h"
 #include "utils/editor.h"
+#include "utils/output.h"
 #include "utils/repo.h"
 #include "utils/string.h"
-
-/**
- * Prompt user for confirmation
- */
-static bool prompt_confirm(const char *message) {
-    printf("%s (y/n): ", message);
-    fflush(stdout);
-
-    char response[10];
-    if (!fgets(response, sizeof(response), stdin)) {
-        return false;
-    }
-
-    /* Check if we read a complete line (ends with newline) */
-    size_t len = strlen(response);
-    if (len > 0 && response[len - 1] != '\n') {
-        /* Buffer was too small - consume rest of line to prevent stdin pollution */
-        int c;
-        while ((c = getchar()) != '\n' && c != EOF) {
-            /* Discard remaining characters */
-        }
-    }
-
-    return (response[0] == 'y' || response[0] == 'Y');
-}
 
 /* Bootstrap script template */
 static const char *BOOTSTRAP_TEMPLATE =
@@ -642,7 +618,11 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
 
     /* Prompt for confirmation unless --yes or --dry-run */
     if (!opts->yes && !opts->dry_run) {
-        if (!prompt_confirm("Would you like to execute bootstrap scripts now?")) {
+        output_ctx_t *out = output_create_from_config(config);
+        bool confirmed = output_confirm(out, "Would you like to execute bootstrap scripts now?", false);
+        output_free(out);
+
+        if (!confirmed) {
             printf("Bootstrap cancelled.\n");
             profile_list_free(profiles);
             gitops_close_repository(repo);

@@ -22,6 +22,7 @@
 #include "utils/commit.h"
 #include "utils/config.h"
 #include "utils/hooks.h"
+#include "utils/output.h"
 #include "utils/string.h"
 #include "utils/upstream.h"
 
@@ -351,23 +352,21 @@ static bool confirm_removal(
     }
 
     /* Prompt user */
+    char prompt[256];
     if (opts->cleanup) {
         printf("This will remove %zu file%s from profile AND filesystem.\n",
                count, count == 1 ? "" : "s");
+        snprintf(prompt, sizeof(prompt), "Continue?");
     } else {
-        printf("Remove %zu file%s from profile '%s'?\n",
-               count, count == 1 ? "" : "s", opts->profile);
+        snprintf(prompt, sizeof(prompt), "Remove %zu file%s from profile '%s'?",
+                count, count == 1 ? "" : "s", opts->profile);
     }
 
-    printf("Continue? [y/N] ");
-    fflush(stdout);
+    output_ctx_t *out = output_create_from_config(config);
+    bool confirmed = output_confirm(out, prompt, false);
+    output_free(out);
 
-    char response[10];
-    if (!fgets(response, sizeof(response), stdin)) {
-        return false;
-    }
-
-    return (response[0] == 'y' || response[0] == 'Y');
+    return confirmed;
 }
 
 /**
@@ -401,15 +400,11 @@ static bool confirm_profile_deletion(
         printf("         Hint: Use 'dotta apply --prune' to clean up.\n");
     }
 
-    printf("\nContinue? [y/N] ");
-    fflush(stdout);
+    output_ctx_t *out = output_create();
+    bool confirmed = output_confirm(out, "Continue?", false);
+    output_free(out);
 
-    char response[10];
-    if (!fgets(response, sizeof(response), stdin)) {
-        return false;
-    }
-
-    return (response[0] == 'y' || response[0] == 'Y');
+    return confirmed;
 }
 
 /**

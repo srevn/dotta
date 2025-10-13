@@ -146,35 +146,6 @@ static const char *build_refname(char *buffer, size_t buffer_size, const char *f
 }
 
 /**
- * Prompt user for confirmation (for destructive operations)
- *
- * @param message Confirmation prompt message
- * @param non_interactive_default Default behavior when not running interactively
- * @return true if user confirms, or non_interactive_default if not a TTY
- */
-static bool confirm_action(const char *message, bool non_interactive_default) {
-    /* Check if stdin is a TTY (interactive terminal) */
-    if (!isatty(STDIN_FILENO)) {
-        if (non_interactive_default) {
-            fprintf(stderr, "WARNING: Running non-interactively, auto-confirming: %s\n", message);
-        } else {
-            fprintf(stderr, "ERROR: Running non-interactively, refusing destructive operation: %s\n", message);
-        }
-        return non_interactive_default;
-    }
-
-    printf("%s [y/N]: ", message);
-    fflush(stdout);
-
-    char response[10];
-    if (fgets(response, sizeof(response), stdin) == NULL) {
-        return false;
-    }
-
-    return (response[0] == 'y' || response[0] == 'Y');
-}
-
-/**
  * Helper: Restore HEAD to dotta-worktree with error checking
  */
 static void restore_head_to_worktree(git_repository *repo, const char *operation) {
@@ -636,10 +607,13 @@ static error_t *resolve_divergence_ours(
         char prompt[512];
         snprintf(prompt, sizeof(prompt),
                 "WARNING: This will force push and OVERWRITE remote '%s' with local changes.\n"
-                "Remote commits will be LOST. Continue?",
-                branch_name);
+                "Remote commits will be LOST. Continue?", branch_name);
 
-        if (!confirm_action(prompt, false)) {  /* Never auto-confirm force push */
+        output_ctx_t *out = output_create();
+        bool confirmed = output_confirm_or_default(out, prompt, false, false);
+        output_free(out);
+
+        if (!confirmed) {  /* Never auto-confirm force push */
             printf("Operation cancelled.\n");
             return NULL;  /* User declined, not an error */
         }
@@ -700,7 +674,11 @@ static error_t *resolve_divergence_theirs(
                 "Local changes will be LOST. Continue?",
                 branch_name);
 
-        if (!confirm_action(prompt, false)) {  /* Never auto-confirm reset */
+        output_ctx_t *out = output_create();
+        bool confirmed = output_confirm_or_default(out, prompt, false, false);
+        output_free(out);
+
+        if (!confirmed) {  /* Never auto-confirm reset */
             printf("Operation cancelled.\n");
             return NULL;  /* User declined, not an error */
         }

@@ -16,6 +16,7 @@
 #include "infra/path.h"
 #include "utils/bootstrap.h"
 #include "utils/config.h"
+#include "utils/output.h"
 
 /**
  * Extract repository name from URL
@@ -42,21 +43,6 @@ static char *extract_repo_name(const char *url) {
     memcpy(repo_name, name, len);
     repo_name[len] = '\0';
     return repo_name;
-}
-
-/**
- * Prompt user for confirmation
- */
-static bool prompt_confirm(const char *message) {
-    printf("%s (y/n): ", message);
-    fflush(stdout);
-
-    char response[10];
-    if (!fgets(response, sizeof(response), stdin)) {
-        return false;
-    }
-
-    return (response[0] == 'y' || response[0] == 'Y');
 }
 
 /**
@@ -277,7 +263,10 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
                     run_bootstrap = true;
                 } else if (!opts->quiet) {
                     /* Prompt user */
-                    run_bootstrap = prompt_confirm("Would you like to execute bootstrap scripts now?");
+                    output_ctx_t *out = output_create_from_config(config);
+                    run_bootstrap = output_confirm(out,
+                            "Would you like to execute bootstrap scripts now?", false);
+                    output_free(out);
                 }
             }
         }

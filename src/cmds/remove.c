@@ -1171,48 +1171,16 @@ static error_t *delete_profile_branch(
      * the filesystem and in state, so that 'apply --prune' can remove them later.
      */
     if (opts->cleanup && state) {
-        size_t state_file_count = 0;
-        const state_file_entry_t *state_files = state_get_all_files(state, &state_file_count);
-
-        /* Collect files to remove (can't modify while iterating) */
-        string_array_t *files_to_remove = string_array_create();
-        for (size_t i = 0; i < state_file_count; i++) {
-            if (strcmp(state_files[i].profile, opts->profile) == 0) {
-                string_array_push(files_to_remove, state_files[i].filesystem_path);
-            }
+        size_t removed_count = 0;
+        err = state_cleanup_profile(state, opts->profile, &removed_count);
+        if (err) {
+            fprintf(stderr, "Warning: Failed to update state: %s\n", error_message(err));
+            error_free(err);
+            err = NULL;
+        } else if (opts->verbose && removed_count > 0) {
+            printf("Removed %zu state entr%s for profile '%s'\n",
+                   removed_count, removed_count == 1 ? "y" : "ies", opts->profile);
         }
-
-        /* Remove files */
-        for (size_t i = 0; i < string_array_size(files_to_remove); i++) {
-            err = state_remove_file(state, string_array_get(files_to_remove, i));
-            if (err) {
-                fprintf(stderr, "Warning: Failed to update state: %s\n", error_message(err));
-                error_free(err);
-                err = NULL;
-            }
-        }
-        string_array_free(files_to_remove);
-
-        /* Remove directory tracking for this profile */
-        size_t dir_count = 0;
-        const state_directory_entry_t *dirs = state_get_all_directories(state, &dir_count);
-
-        string_array_t *dirs_to_remove = string_array_create();
-        for (size_t i = 0; i < dir_count; i++) {
-            if (strcmp(dirs[i].profile, opts->profile) == 0) {
-                string_array_push(dirs_to_remove, dirs[i].filesystem_path);
-            }
-        }
-
-        for (size_t i = 0; i < string_array_size(dirs_to_remove); i++) {
-            err = state_remove_directory(state, string_array_get(dirs_to_remove, i));
-            if (err) {
-                fprintf(stderr, "Warning: Failed to remove directory tracking: %s\n", error_message(err));
-                error_free(err);
-                err = NULL;
-            }
-        }
-        string_array_free(dirs_to_remove);
 
         /* Save state */
         err = state_save(repo, state);

@@ -15,6 +15,7 @@
 #include "base/error.h"
 #include "base/gitops.h"
 #include "core/profiles.h"
+#include "core/state.h"
 #include "core/workspace.h"
 #include "update.h"
 #include "utils/array.h"
@@ -943,16 +944,76 @@ static error_t *collect_remote_tracking_branches(
 }
 
 /**
+ * Helper: Count state file entries for a specific profile
+ *
+ * @param state State (must not be NULL)
+ * @param profile Profile name (must not be NULL)
+ * @return Number of file entries belonging to this profile
+ */
+static size_t count_state_entries_for_profile(
+    const state_t *state,
+    const char *profile
+) {
+    if (!state || !profile) {
+        return 0;
+    }
+
+    size_t count = 0;
+    size_t total_files = 0;
+    const state_file_entry_t *files = state_get_all_files(state, &total_files);
+
+    for (size_t i = 0; i < total_files; i++) {
+        if (strcmp(files[i].profile, profile) == 0) {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+/**
+ * Helper: Count state directory entries for a specific profile
+ *
+ * @param state State (must not be NULL)
+ * @param profile Profile name (must not be NULL)
+ * @return Number of directory entries belonging to this profile
+ */
+static size_t count_state_dirs_for_profile(
+    const state_t *state,
+    const char *profile
+) {
+    if (!state || !profile) {
+        return 0;
+    }
+
+    size_t count = 0;
+    size_t total_dirs = 0;
+    const state_directory_entry_t *dirs = state_get_all_directories(state, &total_dirs);
+
+    for (size_t i = 0; i < total_dirs; i++) {
+        if (strcmp(dirs[i].profile, profile) == 0) {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+/**
  * Helper: Delete local branches whose remote tracking branches were pruned
  *
  * Compares the list of remote tracking branches before and after fetch.
  * If a branch existed before but not after (was pruned), delete the local branch.
+ *
+ * Additionally detects and warns about orphaned state entries when a profile
+ * is deleted remotely but still has deployed files/directories in state.
  */
 static error_t *delete_orphaned_local_branches(
     git_repository *repo,
     const char *remote_name,
     string_array_t *before_branches,
     profile_list_t *profiles,
+    state_t *state,
     output_ctx_t *out,
     bool verbose
 ) {
@@ -960,6 +1021,7 @@ static error_t *delete_orphaned_local_branches(
     CHECK_NULL(remote_name);
     CHECK_NULL(before_branches);
     CHECK_NULL(profiles);
+    /* state can be NULL - non-fatal if state loading failed */
     CHECK_NULL(out);
 
     /* Get current remote tracking branches */
@@ -1032,11 +1094,52 @@ static error_t *delete_orphaned_local_branches(
         }
     }
 
+    /* Check for orphaned state entries after deleting branches */
+    bool has_orphaned_state = false;
+    if (deleted_count > 0 && state) {
+        for (size_t i = 0; i < string_array_size(to_delete); i++) {
+            const char *branch_name = string_array_get(to_delete, i);
+
+            /* Count state entries for this deleted profile */
+            size_t orphaned_files = count_state_entries_for_profile(state, branch_name);
+            size_t orphaned_dirs = count_state_dirs_for_profile(state, branch_name);
+            size_t total_orphaned = orphaned_files + orphaned_dirs;
+
+            if (total_orphaned > 0) {
+                /* Profile had deployed files/dirs - warn user */
+                has_orphaned_state = true;
+
+                output_warning(out,
+                              "Profile '%s' was deleted remotely but has %zu deployed entr%s",
+                              branch_name, total_orphaned, total_orphaned == 1 ? "y" : "ies");
+
+                if (verbose) {
+                    if (orphaned_files > 0) {
+                        output_info(out, "  %zu file%s tracked in state",
+                                   orphaned_files, orphaned_files == 1 ? "" : "s");
+                    }
+                    if (orphaned_dirs > 0) {
+                        output_info(out, "  %zu director%s tracked in state",
+                                   orphaned_dirs, orphaned_dirs == 1 ? "y" : "ies");
+                    }
+                }
+            }
+        }
+    }
+
     string_array_free(to_delete);
 
     if (deleted_count > 0 && verbose) {
         output_info(out, "Deleted %zu orphaned local branch%s",
                    deleted_count, deleted_count == 1 ? "" : "es");
+    }
+
+    /* Provide actionable guidance if orphaned state detected */
+    if (has_orphaned_state) {
+        output_info(out, "");
+        output_info(out, "To clean up orphaned entries:");
+        output_info(out, "  Run 'dotta clean' to remove orphaned files");
+        output_info(out, "  Or run 'dotta apply --prune' during next deployment");
     }
 
     return NULL;
@@ -1193,9 +1296,27 @@ static error_t *sync_fetch_phase(
             return error_from_git(git_err);
         }
 
+        /* Load state for orphan detection (non-fatal if this fails) */
+        state_t *state = NULL;
+        err = state_load(repo, &state);
+        if (err) {
+            if (verbose) {
+                output_warning(out, "Failed to load state for orphan detection: %s",
+                              error_message(err));
+                output_info(out, "Continuing without orphan detection");
+            }
+            error_free(err);
+            err = NULL;
+        }
+
         /* Delete orphaned local branches (branches whose remote was deleted) */
-        err = delete_orphaned_local_branches(repo, remote_name, before_remote_branches, *profiles, out, verbose);
+        err = delete_orphaned_local_branches(repo, remote_name, before_remote_branches,
+                                            *profiles, state, out, verbose);
+
+        /* Clean up state (NULL-safe) */
+        state_free(state);
         string_array_free(before_remote_branches);
+
         if (err) {
             return error_wrap(err, "Failed to delete orphaned local branches");
         }

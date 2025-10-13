@@ -1223,3 +1223,99 @@ void state_free_directory_entry(state_directory_entry_t *entry) {
     free(entry->profile);
     free(entry);
 }
+
+/**
+ * Remove all file and directory entries for a specific profile
+ *
+ * Implementation note: We must collect paths first, then remove them.
+ * Cannot remove during iteration because state_remove_file/directory
+ * may reorder the array (swap-with-last optimization).
+ */
+error_t *state_cleanup_profile(
+    state_t *state,
+    const char *profile,
+    size_t *removed_count
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(profile);
+
+    size_t total_removed = 0;
+    error_t *err = NULL;
+
+    /* Step 1: Collect file paths that match this profile */
+    string_array_t *files_to_remove = string_array_create();
+    if (!files_to_remove) {
+        return ERROR(ERR_MEMORY, "Failed to create file removal array");
+    }
+
+    for (size_t i = 0; i < state->file_count; i++) {
+        if (strcmp(state->files[i].profile, profile) == 0) {
+            err = string_array_push(files_to_remove, state->files[i].filesystem_path);
+            if (err) {
+                string_array_free(files_to_remove);
+                return error_wrap(err, "Failed to collect file paths");
+            }
+        }
+    }
+
+    /* Step 2: Remove collected files */
+    for (size_t i = 0; i < string_array_size(files_to_remove); i++) {
+        const char *path = string_array_get(files_to_remove, i);
+        err = state_remove_file(state, path);
+        if (err) {
+            /* Individual removal failure shouldn't stop the whole cleanup
+             * (defensive: continue cleaning up other entries) */
+            error_free(err);
+            err = NULL;
+        } else {
+            total_removed++;
+        }
+    }
+
+    string_array_free(files_to_remove);
+
+    /* Step 3: Collect directory paths that match this profile */
+    string_array_t *dirs_to_remove = string_array_create();
+    if (!dirs_to_remove) {
+        /* Already removed some files, return partial success with warning */
+        if (removed_count) {
+            *removed_count = total_removed;
+        }
+        return ERROR(ERR_MEMORY, "Failed to create directory removal array (partial cleanup completed)");
+    }
+
+    for (size_t i = 0; i < state->directory_count; i++) {
+        if (strcmp(state->directories[i].profile, profile) == 0) {
+            err = string_array_push(dirs_to_remove, state->directories[i].filesystem_path);
+            if (err) {
+                string_array_free(dirs_to_remove);
+                if (removed_count) {
+                    *removed_count = total_removed;
+                }
+                return error_wrap(err, "Failed to collect directory paths (partial cleanup completed)");
+            }
+        }
+    }
+
+    /* Step 4: Remove collected directories */
+    for (size_t i = 0; i < string_array_size(dirs_to_remove); i++) {
+        const char *path = string_array_get(dirs_to_remove, i);
+        err = state_remove_directory(state, path);
+        if (err) {
+            /* Individual removal failure shouldn't stop the whole cleanup */
+            error_free(err);
+            err = NULL;
+        } else {
+            total_removed++;
+        }
+    }
+
+    string_array_free(dirs_to_remove);
+
+    /* Return total count (caller can handle removed_count being NULL) */
+    if (removed_count) {
+        *removed_count = total_removed;
+    }
+
+    return NULL;
+}

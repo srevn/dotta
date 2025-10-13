@@ -317,4 +317,25 @@ error_t *state_create_directory_entry(
  */
 void state_free_directory_entry(state_directory_entry_t *entry);
 
+/**
+ * Remove all file and directory entries for a specific profile
+ *
+ * This is a helper that removes all state tracking for files and directories
+ * deployed from a particular profile. Used when a profile is deleted or
+ * needs cleanup.
+ *
+ * This function is safe to call even if the profile has no entries in state.
+ * It will return success with removed_count=0 in that case.
+ *
+ * @param state State (must not be NULL)
+ * @param profile Profile name to clean up (must not be NULL)
+ * @param removed_count Optional output for total number of entries removed (can be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_cleanup_profile(
+    state_t *state,
+    const char *profile,
+    size_t *removed_count
+);
+
 #endif /* DOTTA_STATE_H */

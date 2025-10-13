@@ -13,12 +13,12 @@
 #include "base/error.h"
 #include "base/gitops.h"
 #include "core/profiles.h"
+#include "core/upstream.h"
 #include "utils/array.h"
 #include "utils/config.h"
 #include "utils/output.h"
 #include "utils/repo.h"
 #include "utils/timeutil.h"
-#include "utils/upstream.h"
 
 /**
  * Format upstream state for display

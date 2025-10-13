@@ -13,6 +13,7 @@
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "base/gitops.h"
+#include "core/ignore.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
@@ -22,7 +23,6 @@
 #include "utils/commit.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
-#include "utils/ignore.h"
 #include "utils/output.h"
 #include "utils/string.h"
 

@@ -12,8 +12,8 @@
 
 #include "base/error.h"
 #include "base/gitops.h"
+#include "core/upstream.h"
 #include "utils/repo.h"
-#include "utils/upstream.h"
 
 /**
  * Initialize divergence context

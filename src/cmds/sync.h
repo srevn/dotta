@@ -10,8 +10,8 @@
 
 #include <git2.h>
 
+#include "core/upstream.h"
 #include "types.h"
-#include "utils/upstream.h"
 
 /* Use upstream module's state tracking */
 typedef upstream_state_t sync_branch_state_t;

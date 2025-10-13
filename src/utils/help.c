@@ -431,7 +431,7 @@ void print_sync_help(const char *prog_name) {
     printf("  %s sync --dry-run             # Preview sync actions\n", prog_name);
     printf("  %s sync --no-push             # Update but don't push\n", prog_name);
     printf("  %s sync --no-pull             # Push only, skip pulling\n", prog_name);
-    printf("  %s sync --diverged=ours       # Keep local version on divergence\n", prog_name);
+    printf("  %s sync --diverged ours       # Keep local version on divergence\n", prog_name);
     printf("\nSync Modes:\n");
     printf("  local (default): Sync all local branches + discover new remote branches\n");
     printf("                   Perfect for variant profile workflows\n");

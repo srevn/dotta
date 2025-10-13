@@ -12,10 +12,10 @@
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "base/gitops.h"
+#include "core/ignore.h"
 #include "core/profiles.h"
 #include "utils/config.h"
 #include "utils/editor.h"
-#include "utils/ignore.h"
 #include "utils/output.h"
 #include "utils/string.h"
 

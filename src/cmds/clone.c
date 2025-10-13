@@ -12,9 +12,9 @@
 
 #include "base/error.h"
 #include "base/gitops.h"
+#include "core/bootstrap.h"
 #include "core/profiles.h"
 #include "infra/path.h"
-#include "utils/bootstrap.h"
 #include "utils/config.h"
 #include "utils/output.h"
 

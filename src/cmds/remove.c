@@ -16,6 +16,7 @@
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
+#include "core/upstream.h"
 #include "infra/path.h"
 #include "infra/worktree.h"
 #include "utils/array.h"
@@ -24,7 +25,6 @@
 #include "utils/hooks.h"
 #include "utils/output.h"
 #include "utils/string.h"
-#include "utils/upstream.h"
 
 /**
  * Validate command options

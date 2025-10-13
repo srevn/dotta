@@ -4,6 +4,7 @@
 
 #include "status.h"
 
+#include <dirent.h>
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,18 +13,16 @@
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "base/gitops.h"
+#include "core/ignore.h"
 #include "core/profiles.h"
 #include "core/state.h"
+#include "core/upstream.h"
 #include "core/workspace.h"
 #include "infra/compare.h"
 #include "utils/config.h"
-#include "utils/ignore.h"
 #include "utils/output.h"
 #include "utils/string.h"
 #include "utils/timeutil.h"
-#include "utils/upstream.h"
-
-#include <dirent.h>
 
 /**
  * New file entry

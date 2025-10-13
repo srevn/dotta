@@ -12,9 +12,9 @@
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "base/gitops.h"
+#include "core/ignore.h"
 #include "core/state.h"
 #include "utils/buffer.h"
-#include "utils/ignore.h"
 #include "utils/repo.h"
 #include "utils/string.h"
 

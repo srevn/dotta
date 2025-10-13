@@ -17,6 +17,7 @@
 #include "core/divergence.h"
 #include "core/profiles.h"
 #include "core/state.h"
+#include "core/upstream.h"
 #include "core/workspace.h"
 #include "update.h"
 #include "utils/array.h"
@@ -24,7 +25,6 @@
 #include "utils/hashmap.h"
 #include "utils/output.h"
 #include "utils/repo.h"
-#include "utils/upstream.h"
 
 /**
  * Per-profile sync result

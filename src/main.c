@@ -30,7 +30,6 @@
 #include "cmds/sync.h"
 #include "cmds/update.h"
 #include "types.h"
-#include "version.h"
 #include "utils/help.h"
 #include "utils/repo.h"
 

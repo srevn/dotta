@@ -28,21 +28,53 @@
 #include "utils/config.h"
 #include "utils/output.h"
 
+/* Default repository name when URL parsing fails */
+#define DEFAULT_REPO_NAME "dotta-repo"
+
+/* Maximum length for remote reference prefix (refs/remotes/<name>/) */
+#define REMOTE_REF_PREFIX_MAX 256
+
 /**
  * Extract repository name from URL
+ *
+ * Handles both HTTP-style URLs (https://host/user/repo.git)
+ * and SCP-style URLs (git@host:user/repo.git)
  */
 static char *extract_repo_name(const char *url) {
     const char *last_slash = strrchr(url, '/');
-    if (!last_slash) {
-        return strdup("dotta-repo");
+    const char *last_colon = strrchr(url, ':');
+
+    /* Use the rightmost separator (either / or :) */
+    const char *separator = NULL;
+    if (last_slash && last_colon) {
+        separator = (last_slash > last_colon) ? last_slash : last_colon;
+    } else if (last_slash) {
+        separator = last_slash;
+    } else if (last_colon) {
+        separator = last_colon;
     }
 
-    const char *name = last_slash + 1;
+    /* No separator found - use default name */
+    if (!separator) {
+        return strdup(DEFAULT_REPO_NAME);
+    }
+
+    const char *name = separator + 1;
+
+    /* Handle edge case: URL ends with separator */
+    if (*name == '\0') {
+        return strdup(DEFAULT_REPO_NAME);
+    }
 
     /* Remove .git extension if present */
     size_t len = strlen(name);
     if (len > 4 && strcmp(name + len - 4, ".git") == 0) {
         len -= 4;
+    }
+
+    /* Edge case: name was only ".git" */
+    if (len == 0) {
+        return strdup(DEFAULT_REPO_NAME);
     }
 
     char *repo_name = malloc(len + 1);
@@ -64,7 +96,8 @@ static char *extract_repo_name(const char *url) {
  * @param count Number of profiles
  * @param out Output context for messages
  * @param cred_ctx Credential context
- * @param fetched_count Output: number successfully fetched
+ * @param fetched_count Output: number successfully fetched (can be NULL)
+ * @param fetched_names Optional: array to populate with successfully fetched names (can be NULL)
  * @return Error or NULL on success
  */
 static error_t *fetch_profiles(
@@ -74,14 +107,14 @@ static error_t *fetch_profiles(
     size_t count,
     output_ctx_t *out,
     credential_context_t *cred_ctx,
-    size_t *fetched_count
+    size_t *fetched_count,
+    string_array_t *fetched_names
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile_names);
     CHECK_NULL(out);
-    CHECK_NULL(fetched_count);
 
-    *fetched_count = 0;
+    size_t local_count = 0;
     error_t *err = NULL;
 
     for (size_t i = 0; i < count; i++) {
@@ -109,7 +142,16 @@ static error_t *fetch_profiles(
             continue;
         }
 
-        (*fetched_count)++;
+        local_count++;
+
+        /* Add to fetched names array if provided */
+        if (fetched_names) {
+            string_array_push(fetched_names, profile_name);
+        }
+    }
+
+    if (fetched_count) {
+        *fetched_count = local_count;
     }
 
     return NULL;
@@ -144,6 +186,15 @@ static error_t *fetch_all_profiles(
         return ERROR(ERR_MEMORY, "Failed to create array");
     }
 
+    /* Build remote reference prefix */
+    char prefix[REMOTE_REF_PREFIX_MAX];
+    int ret = snprintf(prefix, sizeof(prefix), "refs/remotes/%s/", remote_name);
+    if (ret < 0 || (size_t)ret >= sizeof(prefix)) {
+        string_array_free(all_branches);
+        return ERROR(ERR_INVALID_ARG, "Remote name too long");
+    }
+    size_t prefix_len = strlen(prefix);
+
     /* Iterate remote refs to find all branches */
     git_reference_iterator *iter = NULL;
     int git_err = git_reference_iterator_new(&iter, repo);
@@ -156,9 +207,9 @@ static error_t *fetch_all_profiles(
     while (git_reference_next(&ref, iter) == 0) {
         const char *refname = git_reference_name(ref);
 
-        /* Only process remote tracking branches */
-        if (strncmp(refname, "refs/remotes/origin/", 20) == 0) {
-            const char *branch_name = refname + 20;
+        /* Only process remote tracking branches for our remote */
+        if (strncmp(refname, prefix, prefix_len) == 0) {
+            const char *branch_name = refname + prefix_len;
 
             /* Skip dotta-worktree and HEAD */
             if (strcmp(branch_name, "dotta-worktree") != 0 &&
@@ -172,22 +223,31 @@ static error_t *fetch_all_profiles(
 
     git_reference_iterator_free(iter);
 
+    /* Create array for successfully fetched profiles */
+    string_array_t *successful = string_array_create();
+    if (!successful) {
+        string_array_free(all_branches);
+        return ERROR(ERR_MEMORY, "Failed to create fetched profiles array");
+    }
+
     /* Fetch and create local branches */
     size_t fetched_count = 0;
     error_t *err = fetch_profiles(repo, remote_name,
                                   (const char **)all_branches->items,
                                   all_branches->count,
-                                  out, cred_ctx, &fetched_count);
+                                  out, cred_ctx, &fetched_count, successful);
+
+    string_array_free(all_branches);
 
     if (err) {
-        string_array_free(all_branches);
+        string_array_free(successful);
         return err;
     }
 
     output_success(out, "Fetched %zu profile%s\n",
                   fetched_count, fetched_count == 1 ? "" : "s");
 
-    *fetched_profiles = all_branches;
+    *fetched_profiles = successful;
     return NULL;
 }
 
@@ -242,14 +302,21 @@ static error_t *handle_no_profiles_detected(
 
             /* Fetch global */
             const char *global_name = "global";
-            size_t fetched = 0;
-            err = fetch_profiles(repo, remote_name, &global_name, 1,
-                                out, cred_ctx, &fetched);
+            *fallback_profiles = string_array_create();
+            if (!*fallback_profiles) {
+                string_array_free(remote_branches);
+                return ERROR(ERR_MEMORY, "Failed to create fallback array");
+            }
 
-            if (!err && fetched > 0) {
-                *fallback_profiles = string_array_create();
-                string_array_push(*fallback_profiles, "global");
+            err = fetch_profiles(repo, remote_name, &global_name, 1,
+                                out, cred_ctx, NULL, *fallback_profiles);
+
+            if (!err && string_array_size(*fallback_profiles) > 0) {
                 output_success(out, "Using 'global' profile\n");
+            } else {
+                /* Failed to fetch - clean up */
+                string_array_free(*fallback_profiles);
+                *fallback_profiles = NULL;
             }
         } else {
             output_info(out, "No 'global' profile found.");
@@ -334,8 +401,9 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     CHECK_NULL(opts->url);
 
     error_t *err = NULL;
+    error_t *final_err = NULL;
     git_repository *repo = NULL;
-    char *local_path = NULL;
+    const char *local_path = NULL;
     bool allocated_path = false;
     dotta_config_t *config = NULL;
     output_ctx_t *out = NULL;
@@ -357,32 +425,33 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
 
     /* Determine local path */
     if (opts->path) {
-        local_path = (char *)opts->path;
+        local_path = opts->path;
     } else {
         /* Try to load config to get default repo location */
         err = config_load(NULL, &config);
         if (err) {
             /* If config doesn't exist, create default config */
             error_free(err);
+            err = NULL;
             config = config_create_default();
         }
 
         if (config && config->repo_dir) {
             /* Use default repo location */
-            err = path_expand_home(config->repo_dir, &local_path);
+            char *expanded_path = NULL;
+            err = path_expand_home(config->repo_dir, &expanded_path);
             if (err) {
-                output_free(out);
-                config_free(config);
-                return error_wrap(err, "Failed to expand default repo path");
+                final_err = error_wrap(err, "Failed to expand default repo path");
+                goto cleanup;
             }
+            local_path = expanded_path;
             allocated_path = true;
         } else {
             /* Fallback: extract repo name from URL */
             local_path = extract_repo_name(opts->url);
             if (!local_path) {
-                output_free(out);
-                if (config) config_free(config);
-                return ERROR(ERR_MEMORY, "Failed to allocate repository name");
+                final_err = ERROR(ERR_MEMORY, "Failed to allocate repository name");
+                goto cleanup;
             }
             allocated_path = true;
         }
@@ -400,9 +469,8 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     /* Clone repository */
     err = gitops_clone(&repo, opts->url, local_path);
     if (err) {
-        output_free(out);
-        if (allocated_path) free(local_path);
-        return error_wrap(err, "Failed to clone repository");
+        final_err = error_wrap(err, "Failed to clone repository");
+        goto cleanup;
     }
 
     /* Setup credential context */
@@ -422,11 +490,8 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     /* Determine which profiles to fetch */
     fetched_profiles = string_array_create();
     if (!fetched_profiles) {
-        credential_context_free(cred_ctx);
-        gitops_close_repository(repo);
-        output_free(out);
-        if (allocated_path) free(local_path);
-        return ERROR(ERR_MEMORY, "Failed to create profile array");
+        final_err = ERROR(ERR_MEMORY, "Failed to create profile array");
+        goto cleanup;
     }
 
     if (opts->profiles && opts->profile_count > 0) {
@@ -435,19 +500,12 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
 
         size_t fetched_count = 0;
         err = fetch_profiles(repo, "origin", opts->profiles, opts->profile_count,
-                            out, cred_ctx, &fetched_count);
+                            out, cred_ctx, &fetched_count, fetched_profiles);
 
         if (err) {
             output_error(out, "Failed to fetch profiles: %s", error_message(err));
             /* Continue - some profiles may have been fetched */
             error_free(err);
-        }
-
-        /* Add successfully fetched profiles to array */
-        for (size_t i = 0; i < opts->profile_count; i++) {
-            if (profile_exists(repo, opts->profiles[i])) {
-                string_array_push(fetched_profiles, opts->profiles[i]);
-            }
         }
 
         output_success(out, "Fetched %zu of %zu specified profile%s\n",
@@ -489,13 +547,8 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             /* Build profile names array */
             const char **profile_names = malloc(detected_profiles->count * sizeof(char *));
             if (!profile_names) {
-                profile_list_free(detected_profiles);
-                credential_context_free(cred_ctx);
-                string_array_free(fetched_profiles);
-                gitops_close_repository(repo);
-                output_free(out);
-                if (allocated_path) free(local_path);
-                return ERROR(ERR_MEMORY, "Failed to allocate profile names");
+                final_err = ERROR(ERR_MEMORY, "Failed to allocate profile names");
+                goto cleanup;
             }
 
             for (size_t i = 0; i < detected_profiles->count; i++) {
@@ -505,21 +558,14 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             /* Fetch detected profiles */
             size_t fetched_count = 0;
             err = fetch_profiles(repo, "origin", profile_names, detected_profiles->count,
-                                out, cred_ctx, &fetched_count);
+                                out, cred_ctx, &fetched_count, fetched_profiles);
+
+            free(profile_names);
 
             if (err) {
                 output_warning(out, "Some profiles failed to fetch: %s", error_message(err));
                 error_free(err);
             }
-
-            /* Add successfully fetched profiles */
-            for (size_t i = 0; i < detected_profiles->count; i++) {
-                if (profile_exists(repo, profile_names[i])) {
-                    string_array_push(fetched_profiles, profile_names[i]);
-                }
-            }
-
-            free(profile_names);
 
             if (fetched_count > 0) {
                 output_success(out, "Fetched %zu profile%s\n",
@@ -564,13 +610,8 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     bool worktree_exists;
     err = gitops_branch_exists(repo, "dotta-worktree", &worktree_exists);
     if (err) {
-        profile_list_free(detected_profiles);
-        credential_context_free(cred_ctx);
-        string_array_free(fetched_profiles);
-        gitops_close_repository(repo);
-        output_free(out);
-        if (allocated_path) free(local_path);
-        return error_wrap(err, "Failed to check for dotta-worktree branch");
+        final_err = error_wrap(err, "Failed to check for dotta-worktree branch");
+        goto cleanup;
     }
 
     if (!worktree_exists) {
@@ -580,26 +621,16 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
 
         err = gitops_create_orphan_branch(repo, "dotta-worktree");
         if (err) {
-            profile_list_free(detected_profiles);
-            credential_context_free(cred_ctx);
-            string_array_free(fetched_profiles);
-            gitops_close_repository(repo);
-            output_free(out);
-            if (allocated_path) free(local_path);
-            return error_wrap(err, "Failed to create dotta-worktree branch");
+            final_err = error_wrap(err, "Failed to create dotta-worktree branch");
+            goto cleanup;
         }
     }
 
     /* Checkout dotta-worktree */
     int git_err = git_repository_set_head(repo, "refs/heads/dotta-worktree");
     if (git_err < 0) {
-        profile_list_free(detected_profiles);
-        credential_context_free(cred_ctx);
-        string_array_free(fetched_profiles);
-        gitops_close_repository(repo);
-        output_free(out);
-        if (allocated_path) free(local_path);
-        return error_from_git(git_err);
+        final_err = error_from_git(git_err);
+        goto cleanup;
     }
 
     /* Clean working directory */
@@ -607,23 +638,20 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     checkout_opts.checkout_strategy = GIT_CHECKOUT_FORCE;
     git_err = git_checkout_head(repo, &checkout_opts);
     if (git_err < 0) {
-        profile_list_free(detected_profiles);
-        credential_context_free(cred_ctx);
-        string_array_free(fetched_profiles);
-        gitops_close_repository(repo);
-        output_free(out);
-        if (allocated_path) free(local_path);
-        return error_from_git(git_err);
+        final_err = error_from_git(git_err);
+        goto cleanup;
     }
 
     /* Bootstrap detection and execution */
     bool run_bootstrap = false;
     bool bootstrap_available = false;
 
-    if (!opts->no_bootstrap && detected_profiles && detected_profiles->count > 0) {
-        /* Check if any detected profiles have bootstrap scripts */
-        for (size_t i = 0; i < detected_profiles->count; i++) {
-            if (bootstrap_exists(repo, detected_profiles->profiles[i].name, NULL)) {
+    /* Check bootstrap scripts in all fetched profiles */
+    if (!opts->no_bootstrap && string_array_size(fetched_profiles) > 0) {
+        /* Check if any fetched profiles have bootstrap scripts */
+        for (size_t i = 0; i < string_array_size(fetched_profiles); i++) {
+            const char *profile_name = string_array_get(fetched_profiles, i);
+            if (bootstrap_exists(repo, profile_name, NULL)) {
                 bootstrap_available = true;
                 break;
             }
@@ -633,10 +661,10 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             fprintf(out->stream, "\n");
             output_section(out, "Bootstrap scripts available");
 
-            for (size_t i = 0; i < detected_profiles->count; i++) {
-                if (bootstrap_exists(repo, detected_profiles->profiles[i].name, NULL)) {
-                    output_info(out, "  ✓ %s/.dotta/bootstrap",
-                               detected_profiles->profiles[i].name);
+            for (size_t i = 0; i < string_array_size(fetched_profiles); i++) {
+                const char *profile_name = string_array_get(fetched_profiles, i);
+                if (bootstrap_exists(repo, profile_name, NULL)) {
+                    output_info(out, "  ✓ %s/.dotta/bootstrap", profile_name);
                 }
             }
             fprintf(out->stream, "\n");
@@ -654,27 +682,34 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     }
 
     /* Execute bootstrap if requested */
-    if (run_bootstrap && detected_profiles) {
-        fprintf(out->stream, "\n");
-        err = bootstrap_run_for_profiles(repo, local_path,
-                                         (struct profile_list *)detected_profiles,
-                                         false, true);
-        if (err) {
-            output_error(out, "Bootstrap failed: %s", error_message(err));
+    if (run_bootstrap && string_array_size(fetched_profiles) > 0) {
+        /* Load profiles for bootstrap execution */
+        profile_list_t *bootstrap_profiles = NULL;
+        err = profile_list_load(repo,
+                               (const char **)fetched_profiles->items,
+                               string_array_size(fetched_profiles),
+                               false, /* non-strict: skip non-existent */
+                               &bootstrap_profiles);
+
+        if (!err && bootstrap_profiles) {
+            fprintf(out->stream, "\n");
+            err = bootstrap_run_for_profiles(repo, local_path,
+                                             (struct profile_list *)bootstrap_profiles,
+                                             false, true);
+            if (err) {
+                output_error(out, "Bootstrap failed: %s", error_message(err));
+                error_free(err);
+                /* Non-fatal - continue */
+            }
+            profile_list_free(bootstrap_profiles);
+        } else if (err) {
+            output_warning(out, "Failed to load profiles for bootstrap: %s",
+                          error_message(err));
             error_free(err);
-            /* Non-fatal - continue */
         }
     }
 
-    /* Cleanup */
-    if (detected_profiles) {
-        profile_list_free(detected_profiles);
-    }
-    credential_context_free(cred_ctx);
-    string_array_free(fetched_profiles);
-    gitops_close_repository(repo);
-
-    /* Success message */
+    /* Success - print messages before cleanup */
     fprintf(out->stream, "\n");
     output_success(out, "Dotta repository cloned successfully!\n");
 
@@ -692,7 +727,27 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     output_info(out, "  dotta status           # View current state");
     fprintf(out->stream, "\n");
 
-    output_free(out);
-    if (allocated_path) free(local_path);
-    return NULL;
+cleanup:
+    /* Cleanup resources */
+    if (detected_profiles) {
+        profile_list_free(detected_profiles);
+    }
+    if (cred_ctx) {
+        credential_context_free(cred_ctx);
+    }
+    if (fetched_profiles) {
+        string_array_free(fetched_profiles);
+    }
+    if (repo) {
+        gitops_close_repository(repo);
+    }
+    if (out) {
+        output_free(out);
+    }
+    if (allocated_path && local_path) {
+        /* Safe to cast: we know it's heap-allocated when allocated_path is true */
+        free((char *)local_path);
+    }
+
+    return final_err;
 }

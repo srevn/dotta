@@ -310,6 +310,20 @@ error_t *state_load(git_repository *repo, state_t **out) {
         return ERROR(ERR_MEMORY, "Failed to allocate state");
     }
 
+    state->file_index = hashmap_create(16);
+    if (!state->file_index) {
+        state_free(state);
+        cJSON_Delete(root);
+        return ERROR(ERR_MEMORY, "Failed to create file index");
+    }
+
+    state->directory_index = hashmap_create(16);
+    if (!state->directory_index) {
+        state_free(state);
+        cJSON_Delete(root);
+        return ERROR(ERR_MEMORY, "Failed to create directory index");
+    }
+
     /* Parse version */
     cJSON *version_obj = cJSON_GetObjectItem(root, "version");
     if (!version_obj || !cJSON_IsNumber(version_obj)) {
@@ -318,6 +332,14 @@ error_t *state_load(git_repository *repo, state_t **out) {
         return ERROR(ERR_STATE_INVALID, "Missing or invalid version field");
     }
     state->version = version_obj->valueint;
+    
+    if (state->version != STATE_VERSION) {
+        state_free(state);
+        cJSON_Delete(root);
+        return ERROR(ERR_STATE_INVALID,
+                    "State file version %d is incompatible with supported version %d",
+                    state->version, STATE_VERSION);
+    }
 
     /* Parse timestamp */
     cJSON *timestamp_obj = cJSON_GetObjectItem(root, "timestamp");
@@ -682,7 +704,7 @@ error_t *state_remove_file(state_t *state, const char *filesystem_path) {
     CHECK_NULL(state);
     CHECK_NULL(filesystem_path);
 
-    /* Find file in array */
+    /* Find file in array to get its index */
     size_t found_index = SIZE_MAX;
     for (size_t i = 0; i < state->file_count; i++) {
         if (strcmp(state->files[i].filesystem_path, filesystem_path) == 0) {
@@ -692,41 +714,43 @@ error_t *state_remove_file(state_t *state, const char *filesystem_path) {
     }
 
     if (found_index == SIZE_MAX) {
-        return ERROR(ERR_NOT_FOUND,
-                    "File '%s' not found in state", filesystem_path);
+        return ERROR(ERR_NOT_FOUND, "File '%s' not found in state", filesystem_path);
     }
 
-    /* Free the entry's resources */
-    state_file_entry_t *entry = &state->files[found_index];
-    free(entry->storage_path);
-    free(entry->filesystem_path);
-    free(entry->profile);
-    free(entry->hash);
-    free(entry->mode);
+    /* Calculate last element index */
+    size_t last_index = state->file_count - 1;
 
-    /* Shift remaining entries to fill gap */
-    if (found_index < state->file_count - 1) {
-        memmove(&state->files[found_index],
-                &state->files[found_index + 1],
-                (state->file_count - found_index - 1) * sizeof(state_file_entry_t));
-    }
+    /* Move the last element into the gap to avoid a full array shift (O(1) removal) */
+    if (found_index < last_index) {
+        /* Swap: copy last element into the gap (shallow copy) */
+        state->files[found_index] = state->files[last_index];
 
-    /* Decrement count */
-    state->file_count--;
-
-    /* Rebuild hashmap index since pointers changed */
-    if (state->file_index) {
-        hashmap_clear(state->file_index, NULL);
-        for (size_t i = 0; i < state->file_count; i++) {
+        /* Update the hashmap to point to the new location of the moved entry */
+        if (state->file_index) {
             error_t *err = hashmap_set(state->file_index,
-                                       state->files[i].filesystem_path,
-                                       &state->files[i]);
+                                       state->files[found_index].filesystem_path,
+                                       &state->files[found_index]);
             if (err) {
-                /* Continue despite error - index will be incomplete but functional */
+                /* Inconsistency risk, but we follow the existing pattern */
                 error_free(err);
             }
         }
     }
+
+    /* Free the resources at last_index (original entry or duplicate after swap) */
+    state_file_entry_t *entry_to_free = &state->files[last_index];
+    free(entry_to_free->storage_path);
+    free(entry_to_free->filesystem_path);
+    free(entry_to_free->profile);
+    free(entry_to_free->hash);
+    free(entry_to_free->mode);
+
+    /* Remove from hashmap using the caller's filesystem_path parameter */
+    if (state->file_index) {
+        hashmap_remove(state->file_index, filesystem_path, NULL);
+    }
+
+    state->file_count--;
 
     return NULL;
 }
@@ -1011,7 +1035,7 @@ error_t *state_remove_directory(state_t *state, const char *filesystem_path) {
     CHECK_NULL(state);
     CHECK_NULL(filesystem_path);
 
-    /* Find directory in array */
+    /* Find directory in array to get its index */
     size_t found_index = SIZE_MAX;
     for (size_t i = 0; i < state->directory_count; i++) {
         if (strcmp(state->directories[i].filesystem_path, filesystem_path) == 0) {
@@ -1021,39 +1045,41 @@ error_t *state_remove_directory(state_t *state, const char *filesystem_path) {
     }
 
     if (found_index == SIZE_MAX) {
-        return ERROR(ERR_NOT_FOUND,
-                    "Directory '%s' not found in state", filesystem_path);
+        return ERROR(ERR_NOT_FOUND, "Directory '%s' not found in state", filesystem_path);
     }
 
-    /* Free the entry's resources */
-    state_directory_entry_t *entry = &state->directories[found_index];
-    free(entry->filesystem_path);
-    free(entry->storage_prefix);
-    free(entry->profile);
+    /* Calculate last element index */
+    size_t last_index = state->directory_count - 1;
 
-    /* Shift remaining entries to fill gap */
-    if (found_index < state->directory_count - 1) {
-        memmove(&state->directories[found_index],
-                &state->directories[found_index + 1],
-                (state->directory_count - found_index - 1) * sizeof(state_directory_entry_t));
-    }
+    /* Move the last element into the gap to avoid a full array shift (O(1) removal) */
+    if (found_index < last_index) {
+        /* Swap: copy last element into the gap (shallow copy) */
+        state->directories[found_index] = state->directories[last_index];
 
-    /* Decrement count */
-    state->directory_count--;
-
-    /* Rebuild hashmap index since pointers changed */
-    if (state->directory_index) {
-        hashmap_clear(state->directory_index, NULL);
-        for (size_t i = 0; i < state->directory_count; i++) {
+        /* Update the hashmap to point to the new location of the moved entry */
+        if (state->directory_index) {
             error_t *err = hashmap_set(state->directory_index,
-                                       state->directories[i].filesystem_path,
-                                       &state->directories[i]);
+                                       state->directories[found_index].filesystem_path,
+                                       &state->directories[found_index]);
             if (err) {
-                /* Continue despite error - index will be incomplete but functional */
+                /* Inconsistency risk, but we follow the existing pattern */
                 error_free(err);
             }
         }
     }
+
+    /* Free the resources at last_index (original entry or duplicate after swap) */
+    state_directory_entry_t *entry_to_free = &state->directories[last_index];
+    free(entry_to_free->filesystem_path);
+    free(entry_to_free->storage_prefix);
+    free(entry_to_free->profile);
+
+    /* Remove from hashmap using the caller's filesystem_path parameter */
+    if (state->directory_index) {
+        hashmap_remove(state->directory_index, filesystem_path, NULL);
+    }
+
+    state->directory_count--;
 
     return NULL;
 }

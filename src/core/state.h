@@ -8,7 +8,7 @@
  *
  * JSON Schema:
  * {
- *   "version": 1,
+ *   "version": 2,
  *   "timestamp": "2025-01-15T10:30:00Z",
  *   "profiles": ["global", "darwin"],
  *   "files": [

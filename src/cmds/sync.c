@@ -1538,7 +1538,7 @@ static error_t *sync_push_phase(
             case UPSTREAM_UP_TO_DATE:
                 if (verbose) {
                     char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
-                    printf("  = %s: up-to-date\n", colored ? colored : result->profile_name);
+                    output_info(out, "= %s: up-to-date", colored ? colored : result->profile_name);
                     free(colored);
                 }
                 break;
@@ -1546,7 +1546,7 @@ static error_t *sync_push_phase(
             case UPSTREAM_LOCAL_AHEAD: {
                 /* Safe to push - local has new commits */
                 if (verbose) {
-                    printf("  Pushing %s (%zu commit%s)...\n",
+                    output_info(out, "Pushing %s (%zu commit%s)...",
                            result->profile_name,
                            result->ahead, result->ahead == 1 ? "" : "s");
                 }
@@ -1556,7 +1556,7 @@ static error_t *sync_push_phase(
                     result->failed = true;
                     result->error_message = strdup(error_message(err));
                     results->failed_count++;
-                    output_error(out, "  ✗ %s: push failed - %s",
+                    output_error(out, "✗ %s: push failed - %s",
                                 result->profile_name, error_message(err));
                     error_free(err);
                 } else {
@@ -1564,7 +1564,7 @@ static error_t *sync_push_phase(
                     results->pushed_count++;
 
                     char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
-                    printf("  ✓ %s: pushed %zu commit%s\n",
+                    output_success(out, "✓ %s: pushed %zu commit%s",
                            colored ? colored : result->profile_name,
                            result->ahead, result->ahead == 1 ? "" : "s");
                     free(colored);
@@ -1575,7 +1575,7 @@ static error_t *sync_push_phase(
             case UPSTREAM_NO_REMOTE: {
                 /* Remote branch doesn't exist - create it */
                 if (verbose) {
-                    printf("  Creating remote branch %s...\n", result->profile_name);
+                    output_info(out, "Creating remote branch %s...", result->profile_name);
                 }
 
                 error_t *err = gitops_push_branch(repo, remote_name, result->profile_name, cred_ctx);
@@ -1583,7 +1583,7 @@ static error_t *sync_push_phase(
                     result->failed = true;
                     result->error_message = strdup(error_message(err));
                     results->failed_count++;
-                    output_error(out, "  ✗ %s: failed to create remote branch - %s",
+                    output_error(out, "✗ %s: failed to create remote branch - %s",
                                 result->profile_name, error_message(err));
                     error_free(err);
                 } else {
@@ -1591,7 +1591,7 @@ static error_t *sync_push_phase(
                     results->pushed_count++;
 
                     char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
-                    printf("  ✓ %s: created remote branch\n",
+                    output_success(out, "✓ %s: created remote branch",
                            colored ? colored : result->profile_name);
                     free(colored);
                 }
@@ -1602,7 +1602,7 @@ static error_t *sync_push_phase(
                 if (auto_pull) {
                     /* Auto-pull when safe (fast-forward only) */
                     if (verbose) {
-                        printf("  Pulling %s (%zu commit%s behind)...\n",
+                        output_info(out, "Pulling %s (%zu commit%s behind)...",
                                result->profile_name,
                                result->behind, result->behind == 1 ? "" : "s");
                     }
@@ -1613,7 +1613,7 @@ static error_t *sync_push_phase(
                         result->failed = true;
                         result->error_message = strdup(error_message(err));
                         results->failed_count++;
-                        output_error(out, "  ✗ %s: pull failed - %s",
+                        output_error(out, "✗ %s: pull failed - %s",
                                     result->profile_name, error_message(err));
                         error_free(err);
                     } else if (pulled) {
@@ -1623,7 +1623,7 @@ static error_t *sync_push_phase(
                         }
 
                         char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
-                        printf("  ✓ %s: pulled %zu commit%s (fast-forward)\n",
+                        output_success(out, "✓ %s: pulled %zu commit%s (fast-forward)",
                                colored ? colored : result->profile_name,
                                result->behind, result->behind == 1 ? "" : "s");
                         free(colored);
@@ -1631,10 +1631,10 @@ static error_t *sync_push_phase(
                 } else {
                     /* Just warn - don't auto-pull */
                     char *colored = output_colorize(out, OUTPUT_COLOR_YELLOW, result->profile_name);
-                    printf("  ↓ %s: remote has %zu new commit%s\n",
+                    output_info(out, "↓ %s: remote has %zu new commit%s",
                            colored ? colored : result->profile_name,
                            result->behind, result->behind == 1 ? "" : "s");
-                    printf("     Hint: Run 'dotta pull' or enable auto_pull in config to automatically pull\n");
+                    output_info(out, "   Hint: Run 'dotta pull' or enable auto_pull in config to automatically pull");
                     free(colored);
                 }
                 break;
@@ -1643,7 +1643,7 @@ static error_t *sync_push_phase(
             case UPSTREAM_DIVERGED: {
                 /* Handle divergence based on strategy */
                 char *colored = output_colorize(out, OUTPUT_COLOR_RED, result->profile_name);
-                printf("  ⚠ %s: diverged (%zu local, %zu remote commits)\n",
+                output_warning(out, "⚠ %s: diverged (%zu local, %zu remote commits)",
                        colored ? colored : result->profile_name,
                        result->ahead, result->behind);
                 free(colored);
@@ -1651,19 +1651,19 @@ static error_t *sync_push_phase(
                 error_t *err = NULL;
                 switch (diverged_strategy) {
                     case DIVERGE_WARN:
-                        printf("     Hint: Use --diverged=<strategy> or set sync.diverged_strategy in config\n");
-                        printf("     Strategies: rebase, merge, ours (keep local), theirs (keep remote)\n");
+                        output_info(out, "   Hint: Use --diverged=<strategy> or set sync.diverged_strategy in config");
+                        output_info(out, "   Strategies: rebase, merge, ours (keep local), theirs (keep remote)");
                         results->diverged_count++;
                         break;
 
                     case DIVERGE_REBASE: {
-                        printf("     Resolving with rebase strategy...\n");
+                        output_info(out, "   Resolving with rebase strategy...");
 
                         /* Save original branch state for rollback */
                         git_oid saved_oid;
                         err = save_branch_oid(repo, result->profile_name, &saved_oid);
                         if (err) {
-                            output_error(out, "     ✗ Failed to save branch state: %s", error_message(err));
+                            output_error(out, "   ✗ Failed to save branch state: %s", error_message(err));
                             error_free(err);
                             break;
                         }
@@ -1673,25 +1673,25 @@ static error_t *sync_push_phase(
                             result->failed = true;
                             result->error_message = strdup(error_message(err));
                             results->failed_count++;
-                            output_error(out, "     ✗ Rebase failed: %s", error_message(err));
+                            output_error(out, "   ✗ Rebase failed: %s", error_message(err));
                             error_free(err);
                         } else {
                             /* Verify rebase succeeded */
                             size_t ahead = 0;
                             err = verify_divergence_resolved(repo, remote_name, result->profile_name, &ahead, NULL);
                             if (err) {
-                                output_error(out, "     ✗ Rebase verification failed: %s", error_message(err));
+                                output_error(out, "   ✗ Rebase verification failed: %s", error_message(err));
                                 error_free(err);
                                 /* Rollback */
                                 err = rollback_branch(repo, result->profile_name, &saved_oid);
                                 if (err) {
-                                    output_error(out, "     ✗ Rollback failed: %s", error_message(err));
+                                    output_error(out, "   ✗ Rollback failed: %s", error_message(err));
                                     error_free(err);
                                 } else {
-                                    printf("     ↺ Rolled back to original state\n");
+                                    output_info(out, "   ↺ Rolled back to original state");
                                 }
                             } else {
-                                printf("     ✓ Successfully rebased onto remote (%zu commit%s to push)\n",
+                                output_success(out, "   ✓ Successfully rebased onto remote (%zu commit%s to push)",
                                        ahead, ahead == 1 ? "" : "s");
 
                                 /* Now push the rebased commits */
@@ -1700,19 +1700,19 @@ static error_t *sync_push_phase(
                                     result->failed = true;
                                     result->error_message = strdup(error_message(err));
                                     results->failed_count++;
-                                    output_error(out, "     ✗ Push after rebase failed: %s", error_message(err));
+                                    output_error(out, "   ✗ Push after rebase failed: %s", error_message(err));
                                     error_free(err);
                                     /* Rollback since push failed */
-                                    printf("     ↺ Rolling back rebase (push failed)...\n");
+                                    output_info(out, "   ↺ Rolling back rebase (push failed)...");
                                     err = rollback_branch(repo, result->profile_name, &saved_oid);
                                     if (err) {
-                                        output_error(out, "     ✗ Rollback failed: %s", error_message(err));
+                                        output_error(out, "   ✗ Rollback failed: %s", error_message(err));
                                         error_free(err);
                                     } else {
-                                        printf("     ✓ Rolled back to original state\n");
+                                        output_success(out, "   ✓ Rolled back to original state");
                                     }
                                 } else {
-                                    printf("     ✓ Pushed rebased commits\n");
+                                    output_success(out, "   ✓ Pushed rebased commits");
                                     result->pushed = true;
                                     results->pushed_count++;
                                 }
@@ -1722,13 +1722,13 @@ static error_t *sync_push_phase(
                     }
 
                     case DIVERGE_MERGE: {
-                        printf("     Resolving with merge strategy...\n");
+                        output_info(out, "   Resolving with merge strategy...");
 
                         /* Save original branch state for rollback */
                         git_oid saved_oid;
                         err = save_branch_oid(repo, result->profile_name, &saved_oid);
                         if (err) {
-                            output_error(out, "     ✗ Failed to save branch state: %s", error_message(err));
+                            output_error(out, "   ✗ Failed to save branch state: %s", error_message(err));
                             error_free(err);
                             break;
                         }
@@ -1738,25 +1738,25 @@ static error_t *sync_push_phase(
                             result->failed = true;
                             result->error_message = strdup(error_message(err));
                             results->failed_count++;
-                            output_error(out, "     ✗ Merge failed: %s", error_message(err));
+                            output_error(out, "   ✗ Merge failed: %s", error_message(err));
                             error_free(err);
                         } else {
                             /* Verify merge succeeded */
                             size_t ahead = 0;
                             err = verify_divergence_resolved(repo, remote_name, result->profile_name, &ahead, NULL);
                             if (err) {
-                                output_error(out, "     ✗ Merge verification failed: %s", error_message(err));
+                                output_error(out, "   ✗ Merge verification failed: %s", error_message(err));
                                 error_free(err);
                                 /* Rollback */
                                 err = rollback_branch(repo, result->profile_name, &saved_oid);
                                 if (err) {
-                                    output_error(out, "     ✗ Rollback failed: %s", error_message(err));
+                                    output_error(out, "   ✗ Rollback failed: %s", error_message(err));
                                     error_free(err);
                                 } else {
-                                    printf("     ↺ Rolled back to original state\n");
+                                    output_info(out, "   ↺ Rolled back to original state");
                                 }
                             } else {
-                                printf("     ✓ Successfully merged with remote (%zu commit%s to push)\n",
+                                output_success(out, "   ✓ Successfully merged with remote (%zu commit%s to push)",
                                        ahead, ahead == 1 ? "" : "s");
 
                                 /* Now push the merge commit */
@@ -1765,19 +1765,19 @@ static error_t *sync_push_phase(
                                     result->failed = true;
                                     result->error_message = strdup(error_message(err));
                                     results->failed_count++;
-                                    output_error(out, "     ✗ Push after merge failed: %s", error_message(err));
+                                    output_error(out, "   ✗ Push after merge failed: %s", error_message(err));
                                     error_free(err);
                                     /* Rollback since push failed */
-                                    printf("     ↺ Rolling back merge (push failed)...\n");
+                                    output_info(out, "   ↺ Rolling back merge (push failed)...");
                                     err = rollback_branch(repo, result->profile_name, &saved_oid);
                                     if (err) {
-                                        output_error(out, "     ✗ Rollback failed: %s", error_message(err));
+                                        output_error(out, "   ✗ Rollback failed: %s", error_message(err));
                                         error_free(err);
                                     } else {
-                                        printf("     ✓ Rolled back to original state\n");
+                                        output_success(out, "   ✓ Rolled back to original state");
                                     }
                                 } else {
-                                    printf("     ✓ Pushed merge commit\n");
+                                    output_success(out, "   ✓ Pushed merge commit");
                                     result->pushed = true;
                                     results->pushed_count++;
                                 }
@@ -1787,32 +1787,32 @@ static error_t *sync_push_phase(
                     }
 
                     case DIVERGE_OURS:
-                        printf("     Resolving with 'ours' strategy (force push)...\n");
+                        output_info(out, "   Resolving with 'ours' strategy (force push)...");
                         err = resolve_divergence_ours(repo, remote_name, result->profile_name,
                                                       cred_ctx, confirm_destructive);
                         if (err) {
                             result->failed = true;
                             result->error_message = strdup(error_message(err));
                             results->failed_count++;
-                            output_error(out, "     ✗ Force push failed: %s", error_message(err));
+                            output_error(out, "   ✗ Force push failed: %s", error_message(err));
                             error_free(err);
                         } else {
-                            printf("     ✓ Forced push to remote (remote commits discarded)\n");
+                            output_success(out, "   ✓ Forced push to remote (remote commits discarded)");
                         }
                         break;
 
                     case DIVERGE_THEIRS:
-                        printf("     Resolving with 'theirs' strategy (reset to remote)...\n");
+                        output_info(out, "   Resolving with 'theirs' strategy (reset to remote)...");
                         err = resolve_divergence_theirs(repo, remote_name, result->profile_name,
                                                         confirm_destructive);
                         if (err) {
                             result->failed = true;
                             result->error_message = strdup(error_message(err));
                             results->failed_count++;
-                            output_error(out, "     ✗ Reset failed: %s", error_message(err));
+                            output_error(out, "   ✗ Reset failed: %s", error_message(err));
                             error_free(err);
                         } else {
-                            printf("     ✓ Reset to remote (local commits discarded)\n");
+                            output_success(out, "   ✓ Reset to remote (local commits discarded)");
                         }
                         break;
                 }

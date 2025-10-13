@@ -7,6 +7,8 @@
 #include <git2.h>
 #include <libgen.h>
 #include <limits.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -140,6 +142,35 @@ error_t *ensure_parent_dirs(const char *path) {
 
     if (err) {
         return error_wrap(err, "Failed to create parent directories for: %s", path);
+    }
+
+    return NULL;
+}
+
+/**
+ * Validate and build a Git reference name
+ */
+error_t *build_refname(char *buffer, size_t buffer_size, const char *format, ...) {
+    CHECK_NULL(buffer);
+    CHECK_NULL(format);
+
+    if (buffer_size == 0) {
+        return ERROR(ERR_INVALID_ARG, "Buffer size must be greater than 0");
+    }
+
+    va_list args;
+    va_start(args, format);
+    int written = vsnprintf(buffer, buffer_size, format, args);
+    va_end(args);
+
+    if (written < 0) {
+        return ERROR(ERR_INTERNAL, "Failed to format reference name");
+    }
+
+    if ((size_t)written >= buffer_size) {
+        return ERROR(ERR_INVALID_ARG,
+                    "Reference name too long (truncated): needs %d bytes, buffer is %zu bytes",
+                    written + 1, buffer_size);
     }
 
     return NULL;

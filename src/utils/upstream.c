@@ -12,6 +12,7 @@
 #include "base/error.h"
 #include "base/gitops.h"
 #include "utils/array.h"
+#include "utils/repo.h"
 
 /**
  * Analyze upstream state for a single profile
@@ -42,9 +43,20 @@ error_t *upstream_analyze_profile(
     /* Build reference names */
     char local_refname[256];
     char remote_refname[256];
-    snprintf(local_refname, sizeof(local_refname), "refs/heads/%s", profile_name);
-    snprintf(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
-             remote_name, profile_name);
+    error_t *err;
+
+    err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", profile_name);
+    if (err) {
+        upstream_info_free(info);
+        return error_wrap(err, "Invalid profile name '%s'", profile_name);
+    }
+
+    err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
+                       remote_name, profile_name);
+    if (err) {
+        upstream_info_free(info);
+        return error_wrap(err, "Invalid remote/profile name '%s/%s'", remote_name, profile_name);
+    }
 
     /* Check local branch exists */
     git_reference *local_ref = NULL;
@@ -254,7 +266,12 @@ error_t *upstream_discover_branches(
     }
 
     char remote_prefix[256];
-    snprintf(remote_prefix, sizeof(remote_prefix), "refs/remotes/%s/", remote_name);
+    error_t *err = build_refname(remote_prefix, sizeof(remote_prefix), "refs/remotes/%s/", remote_name);
+    if (err) {
+        git_reference_iterator_free(iter);
+        string_array_free(branches);
+        return error_wrap(err, "Invalid remote name '%s'", remote_name);
+    }
     size_t prefix_len = strlen(remote_prefix);
 
     git_reference *ref = NULL;
@@ -318,7 +335,10 @@ error_t *upstream_create_tracking_branch(
 
     /* Get remote ref */
     char remote_refname[256];
-    snprintf(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
+    error_t *err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
+    if (err) {
+        return error_wrap(err, "Invalid remote/branch name '%s/%s'", remote_name, branch_name);
+    }
 
     git_reference *remote_ref = NULL;
     int git_err = git_reference_lookup(&remote_ref, repo, remote_refname);
@@ -334,7 +354,11 @@ error_t *upstream_create_tracking_branch(
 
     /* Create local branch */
     char local_refname[256];
-    snprintf(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
+    err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
+    if (err) {
+        git_reference_free(remote_ref);
+        return error_wrap(err, "Invalid branch name '%s'", branch_name);
+    }
 
     git_reference *local_ref = NULL;
     git_err = git_reference_create(&local_ref, repo, local_refname, target_oid, 0, NULL);

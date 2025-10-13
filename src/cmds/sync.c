@@ -118,34 +118,6 @@ static divergence_strategy_t parse_divergence_strategy(const char *str) {
 
 
 /**
- * Validate and build a reference name
- *
- * Builds a reference name and validates it fits in the buffer.
- * Git allows up to 255 chars per component, but we use conservative limits.
- *
- * @param buffer Output buffer
- * @param buffer_size Size of output buffer
- * @param format Printf-style format string
- * @return NULL on success, error message on failure
- */
-static const char *build_refname(char *buffer, size_t buffer_size, const char *format, ...) {
-    va_list args;
-    va_start(args, format);
-    int written = vsnprintf(buffer, buffer_size, format, args);
-    va_end(args);
-
-    if (written < 0) {
-        return "Failed to format reference name";
-    }
-
-    if ((size_t)written >= buffer_size) {
-        return "Reference name too long (truncated)";
-    }
-
-    return NULL;  /* Success */
-}
-
-/**
  * Helper: Restore HEAD to dotta-worktree with error checking
  */
 static void restore_head_to_worktree(git_repository *repo, const char *operation) {
@@ -167,9 +139,9 @@ static error_t *save_branch_oid(
     git_oid *out_oid
 ) {
     char refname[256];
-    const char *build_err = build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
-    if (build_err) {
-        return ERROR(ERR_INVALID_ARG, "Invalid branch name '%s': %s", branch_name, build_err);
+    error_t *err = build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
+    if (err) {
+        return error_wrap(err, "Invalid branch name '%s'", branch_name);
     }
 
     git_reference *ref = NULL;
@@ -194,9 +166,9 @@ static error_t *rollback_branch(
     const git_oid *saved_oid
 ) {
     char refname[256];
-    const char *build_err = build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
-    if (build_err) {
-        return ERROR(ERR_INVALID_ARG, "Invalid branch name '%s': %s", branch_name, build_err);
+    error_t *err = build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
+    if (err) {
+        return error_wrap(err, "Invalid branch name '%s'", branch_name);
     }
 
     git_reference *ref = NULL;
@@ -276,16 +248,15 @@ static error_t *resolve_divergence_rebase(
     error_t *err = NULL;
     char local_refname[256];
     char remote_refname[256];
-    const char *build_err;
 
-    build_err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
-    if (build_err) {
-        return ERROR(ERR_INVALID_ARG, "Invalid branch name '%s': %s", branch_name, build_err);
+    err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
+    if (err) {
+        return error_wrap(err, "Invalid branch name '%s'", branch_name);
     }
 
-    build_err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
-    if (build_err) {
-        return ERROR(ERR_INVALID_ARG, "Invalid remote/branch name '%s/%s': %s", remote_name, branch_name, build_err);
+    err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
+    if (err) {
+        return error_wrap(err, "Invalid remote/branch name '%s/%s'", remote_name, branch_name);
     }
 
     /* Save original HEAD for emergency restoration */
@@ -412,16 +383,15 @@ static error_t *resolve_divergence_merge(
     error_t *err = NULL;
     char local_refname[256];
     char remote_refname[256];
-    const char *build_err;
 
-    build_err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
-    if (build_err) {
-        return ERROR(ERR_INVALID_ARG, "Invalid branch name '%s': %s", branch_name, build_err);
+    err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
+    if (err) {
+        return error_wrap(err, "Invalid branch name '%s'", branch_name);
     }
 
-    build_err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
-    if (build_err) {
-        return ERROR(ERR_INVALID_ARG, "Invalid remote/branch name '%s/%s': %s", remote_name, branch_name, build_err);
+    err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
+    if (err) {
+        return error_wrap(err, "Invalid remote/branch name '%s/%s'", remote_name, branch_name);
     }
 
     /* Save original HEAD for emergency restoration */
@@ -686,9 +656,9 @@ static error_t *resolve_divergence_theirs(
 
     /* Get remote reference */
     char remote_refname[256];
-    const char *build_err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
-    if (build_err) {
-        return ERROR(ERR_INVALID_ARG, "Invalid remote/branch name '%s/%s': %s", remote_name, branch_name, build_err);
+    error_t *err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
+    if (err) {
+        return error_wrap(err, "Invalid remote/branch name '%s/%s'", remote_name, branch_name);
     }
 
     git_reference *remote_ref = NULL;
@@ -701,10 +671,10 @@ static error_t *resolve_divergence_theirs(
 
     /* Reset local branch to remote */
     char local_refname[256];
-    build_err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
-    if (build_err) {
+    err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
+    if (err) {
         git_reference_free(remote_ref);
-        return ERROR(ERR_INVALID_ARG, "Invalid branch name '%s': %s", branch_name, build_err);
+        return error_wrap(err, "Invalid branch name '%s'", branch_name);
     }
 
     git_reference *local_ref = NULL;
@@ -748,16 +718,16 @@ static error_t *pull_branch_ff(
     /* Get local and remote refs */
     char local_refname[256];
     char remote_refname[256];
-    const char *build_err;
+    error_t *err;
 
-    build_err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
-    if (build_err) {
-        return ERROR(ERR_INVALID_ARG, "Invalid branch name '%s': %s", branch_name, build_err);
+    err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
+    if (err) {
+        return error_wrap(err, "Invalid branch name '%s'", branch_name);
     }
 
-    build_err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
-    if (build_err) {
-        return ERROR(ERR_INVALID_ARG, "Invalid remote/branch name '%s/%s': %s", remote_name, branch_name, build_err);
+    err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
+    if (err) {
+        return error_wrap(err, "Invalid remote/branch name '%s/%s'", remote_name, branch_name);
     }
 
     git_reference *local_ref = NULL;

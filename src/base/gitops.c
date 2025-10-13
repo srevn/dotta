@@ -15,6 +15,7 @@
 #include "credentials.h"
 #include "error.h"
 #include "utils/array.h"
+#include "utils/repo.h"
 
 /**
  * Repository operations
@@ -85,7 +86,10 @@ error_t *gitops_branch_exists(git_repository *repo, const char *name, bool *exis
 
     git_reference *ref = NULL;
     char refname[256];
-    snprintf(refname, sizeof(refname), "refs/heads/%s", name);
+    error_t *err_build = build_refname(refname, sizeof(refname), "refs/heads/%s", name);
+    if (err_build) {
+        return error_wrap(err_build, "Invalid branch name '%s'", name);
+    }
 
     int err = git_reference_lookup(&ref, repo, refname);
     if (err == GIT_ENOTFOUND) {
@@ -140,7 +144,12 @@ error_t *gitops_create_orphan_branch(git_repository *repo, const char *name) {
     /* Create orphan commit (no parents) */
     git_oid commit_oid;
     char refname[256];
-    snprintf(refname, sizeof(refname), "refs/heads/%s", name);
+    error_t *err_build = build_refname(refname, sizeof(refname), "refs/heads/%s", name);
+    if (err_build) {
+        git_signature_free(sig);
+        git_tree_free(tree);
+        return error_wrap(err_build, "Invalid branch name '%s'", name);
+    }
 
     err = git_commit_create(
         &commit_oid,
@@ -214,7 +223,10 @@ error_t *gitops_delete_branch(git_repository *repo, const char *name) {
 
     git_reference *ref = NULL;
     char refname[256];
-    snprintf(refname, sizeof(refname), "refs/heads/%s", name);
+    error_t *err_build = build_refname(refname, sizeof(refname), "refs/heads/%s", name);
+    if (err_build) {
+        return error_wrap(err_build, "Invalid branch name '%s'", name);
+    }
 
     int err = git_reference_lookup(&ref, repo, refname);
     if (err < 0) {
@@ -347,7 +359,12 @@ error_t *gitops_create_commit(
     git_oid *parent_oid = NULL;
     git_commit *parent = NULL;
     char refname[256];
-    snprintf(refname, sizeof(refname), "refs/heads/%s", branch_name);
+    error_t *err_build = build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
+    if (err_build) {
+        git_signature_free(sig);
+        git_tree_free(tree);
+        return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
+    }
 
     git_reference *ref = NULL;
     if (git_reference_lookup(&ref, repo, refname) == 0) {
@@ -466,8 +483,12 @@ error_t *gitops_fetch_branch(
     fetch_opts.callbacks.payload = cred_ctx;
 
     char refspec[256];
-    snprintf(refspec, sizeof(refspec), "refs/heads/%s:refs/remotes/%s/%s",
-             branch_name, remote_name, branch_name);
+    error_t *err_build = build_refname(refspec, sizeof(refspec), "refs/heads/%s:refs/remotes/%s/%s",
+                                       branch_name, remote_name, branch_name);
+    if (err_build) {
+        git_remote_free(remote);
+        return error_wrap(err_build, "Invalid branch/remote name '%s/%s'", remote_name, branch_name);
+    }
 
     const char *refspecs[] = { refspec };
     git_strarray refs = { (char **)refspecs, 1 };
@@ -513,8 +534,12 @@ error_t *gitops_push_branch(
     push_opts.callbacks.payload = cred_ctx;
 
     char refspec[256];
-    snprintf(refspec, sizeof(refspec), "refs/heads/%s:refs/heads/%s",
-             branch_name, branch_name);
+    error_t *err_build = build_refname(refspec, sizeof(refspec), "refs/heads/%s:refs/heads/%s",
+                                       branch_name, branch_name);
+    if (err_build) {
+        git_remote_free(remote);
+        return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
+    }
 
     const char *refspecs[] = { refspec };
     git_strarray refs = { (char **)refspecs, 1 };
@@ -560,7 +585,11 @@ error_t *gitops_delete_remote_branch(
     push_opts.callbacks.payload = cred_ctx;
 
     char refspec[256];
-    snprintf(refspec, sizeof(refspec), ":refs/heads/%s", branch_name);
+    error_t *err_build = build_refname(refspec, sizeof(refspec), ":refs/heads/%s", branch_name);
+    if (err_build) {
+        git_remote_free(remote);
+        return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
+    }
 
     const char *refspecs[] = { refspec };
     git_strarray refs = { (char **)refspecs, 1 };
@@ -590,7 +619,10 @@ error_t *gitops_merge_ff_only(git_repository *repo, const char *branch_name) {
 
     /* Get their commit */
     char refname[256];
-    snprintf(refname, sizeof(refname), "refs/heads/%s", branch_name);
+    error_t *err_build = build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
+    if (err_build) {
+        return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
+    }
 
     git_annotated_commit *their_head = NULL;
     git_reference *ref = NULL;
@@ -878,17 +910,15 @@ error_t *gitops_resolve_commit_in_branch(
     git_object *obj = NULL;
 
     /* Build reference name for branch */
-    size_t ref_name_size = strlen("refs/heads/") + strlen(branch_name) + 1;
-    char *ref_name = malloc(ref_name_size);
-    if (!ref_name) {
-        return ERROR(ERR_MEMORY, "Failed to allocate reference name");
+    char ref_name[256];
+    error_t *err_build = build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", branch_name);
+    if (err_build) {
+        return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
     }
-    snprintf(ref_name, ref_name_size, "refs/heads/%s", branch_name);
 
     /* Get the branch reference */
     git_reference *branch_ref = NULL;
     int ret = git_reference_lookup(&branch_ref, repo, ref_name);
-    free(ref_name);
 
     if (ret < 0) {
         return error_from_git(ret);

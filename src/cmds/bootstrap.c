@@ -34,6 +34,16 @@ static bool prompt_confirm(const char *message) {
         return false;
     }
 
+    /* Check if we read a complete line (ends with newline) */
+    size_t len = strlen(response);
+    if (len > 0 && response[len - 1] != '\n') {
+        /* Buffer was too small - consume rest of line to prevent stdin pollution */
+        int c;
+        while ((c = getchar()) != '\n' && c != EOF) {
+            /* Discard remaining characters */
+        }
+    }
+
     return (response[0] == 'y' || response[0] == 'Y');
 }
 
@@ -153,7 +163,17 @@ static error_t *bootstrap_create_template(
         return ERROR(ERR_MEMORY, "Failed to generate bootstrap template");
     }
 
-    /* Write template to file */
+    /* Create blob from in-memory content first (before writing to file) */
+    git_oid blob_oid;
+    size_t content_len = strlen(content);
+    int git_err = git_blob_create_from_buffer(&blob_oid, repo, content, content_len);
+    if (git_err < 0) {
+        free(content);
+        free(script_path);
+        return error_from_git(git_err);
+    }
+
+    /* Now write the same content to file */
     FILE *fp = fopen(script_path, "w");
     if (!fp) {
         free(content);
@@ -169,52 +189,6 @@ static error_t *bootstrap_create_template(
     if (chmod(script_path, 0755) != 0) {
         free(script_path);
         return ERROR(ERR_FS, "Failed to make bootstrap script executable");
-    }
-
-    /* Auto-commit the bootstrap script to the profile branch */
-    /* Read the file content into memory */
-    FILE *fp_read = fopen(script_path, "rb");
-    if (!fp_read) {
-        free(script_path);
-        return ERROR(ERR_FS, "Failed to open bootstrap script for reading: %s", script_path);
-    }
-
-    /* Get file size */
-    fseek(fp_read, 0, SEEK_END);
-    long file_size = ftell(fp_read);
-    fseek(fp_read, 0, SEEK_SET);
-
-    if (file_size < 0) {
-        fclose(fp_read);
-        free(script_path);
-        return ERROR(ERR_FS, "Failed to determine file size");
-    }
-
-    /* Read file content */
-    char *file_content = malloc((size_t)file_size);
-    if (!file_content) {
-        fclose(fp_read);
-        free(script_path);
-        return ERROR(ERR_MEMORY, "Failed to allocate buffer for file content");
-    }
-
-    size_t bytes_read = fread(file_content, 1, (size_t)file_size, fp_read);
-    fclose(fp_read);
-
-    if (bytes_read != (size_t)file_size) {
-        free(file_content);
-        free(script_path);
-        return ERROR(ERR_FS, "Failed to read complete file content");
-    }
-
-    /* Create blob from buffer */
-    git_oid blob_oid;
-    int git_err = git_blob_create_from_buffer(&blob_oid, repo, file_content, (size_t)file_size);
-    free(file_content);
-
-    if (git_err < 0) {
-        free(script_path);
-        return error_from_git(git_err);
     }
 
     free(script_path);  /* Done with script_path */

@@ -140,8 +140,21 @@ static char **build_bootstrap_env(const bootstrap_context_t *context, size_t *en
         return NULL;
     }
 
-    /* Allocate environment array */
-    char **env = malloc(32 * sizeof(char *));
+    /* Count how many environment variables we need */
+    extern char **environ;
+    size_t env_var_count = 0;
+    for (char **e = environ; *e; e++) {
+        /* Skip DOTTA_* variables as we'll add our own */
+        if (strncmp(*e, "DOTTA_", 6) != 0) {
+            env_var_count++;
+        }
+    }
+
+    /* Calculate total capacity: 4 DOTTA_* vars + existing vars + NULL terminator */
+    size_t capacity = 4 + env_var_count + 1;
+
+    /* Allocate environment array dynamically based on actual need */
+    char **env = malloc(capacity * sizeof(char *));
     if (!env) {
         *env_count = 0;
         return NULL;
@@ -184,8 +197,7 @@ static char **build_bootstrap_env(const bootstrap_context_t *context, size_t *en
     count++;
 
     /* Copy existing environment variables (PATH, HOME, etc.) */
-    extern char **environ;
-    for (char **e = environ; *e && count < 30; e++) {
+    for (char **e = environ; *e; e++) {
         /* Skip DOTTA_* variables to avoid conflicts */
         if (strncmp(*e, "DOTTA_", 6) != 0) {
             env[count] = strdup(*e);
@@ -342,7 +354,22 @@ error_t *bootstrap_execute(
 
     ssize_t n;
     char buf[1024];
-    while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) {
+    while (1) {
+        /* Read from pipe with EINTR handling */
+        n = read(pipefd[0], buf, sizeof(buf));
+        if (n < 0) {
+            /* Retry on signal interruption */
+            if (errno == EINTR) {
+                continue;
+            }
+            /* Real error - stop reading */
+            break;
+        }
+        if (n == 0) {
+            /* EOF - child process closed the pipe */
+            break;
+        }
+
         /* Print output in real-time */
         write(STDOUT_FILENO, buf, (size_t)n);
 

@@ -111,6 +111,17 @@ bool fs_is_directory(const char *path);
 error_t *fs_list_dir(const char *path, string_array_t **out);
 
 /**
+ * Ensure parent directories exist
+ *
+ * Creates all parent directories for the given path if they don't exist.
+ * Similar to `mkdir -p $(dirname path)`.
+ *
+ * @param path Full path to file/directory (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *fs_ensure_parent_dirs(const char *path);
+
+/**
  * Path operations
  */
 

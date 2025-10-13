@@ -13,7 +13,6 @@
 #include "base/error.h"
 #include "base/gitops.h"
 #include "core/upstream.h"
-#include "utils/repo.h"
 
 /**
  * Initialize divergence context
@@ -32,7 +31,7 @@ error_t *divergence_context_init(
 
     /* Build branch reference name */
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err = build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
+    error_t *err = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
     if (err) {
         return error_wrap(err, "Invalid branch name '%s'", branch_name);
     }
@@ -72,12 +71,12 @@ static error_t *resolve_rebase_inmemory(divergence_context_t *ctx, git_oid *out_
     char remote_refname[DOTTA_REFNAME_MAX];
     error_t *err;
 
-    err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", ctx->branch_name);
+    err = gitops_build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", ctx->branch_name);
     if (err) {
         return error_wrap(err, "Invalid branch name '%s'", ctx->branch_name);
     }
 
-    err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
+    err = gitops_build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
                        ctx->remote_name, ctx->branch_name);
     if (err) {
         return error_wrap(err, "Invalid remote/branch name '%s/%s'",
@@ -133,12 +132,12 @@ static error_t *resolve_merge_trees(divergence_context_t *ctx, git_oid *out_oid)
     char remote_refname[DOTTA_REFNAME_MAX];
     error_t *err;
 
-    err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", ctx->branch_name);
+    err = gitops_build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", ctx->branch_name);
     if (err) {
         return error_wrap(err, "Invalid branch name '%s'", ctx->branch_name);
     }
 
-    err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
+    err = gitops_build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
                        ctx->remote_name, ctx->branch_name);
     if (err) {
         return error_wrap(err, "Invalid remote/branch name '%s/%s'",
@@ -256,7 +255,7 @@ static error_t *resolve_theirs(divergence_context_t *ctx, git_oid *out_oid) {
 
     /* Get remote reference */
     char remote_refname[DOTTA_REFNAME_MAX];
-    error_t *err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
+    error_t *err = gitops_build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
                                   ctx->remote_name, ctx->branch_name);
     if (err) {
         return error_wrap(err, "Invalid remote/branch name '%s/%s'",
@@ -329,7 +328,7 @@ error_t *divergence_rollback(divergence_context_t *ctx) {
 
     /* Build branch reference name */
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err = build_refname(refname, sizeof(refname), "refs/heads/%s", ctx->branch_name);
+    error_t *err = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", ctx->branch_name);
     if (err) {
         return error_wrap(err, "Invalid branch name '%s'", ctx->branch_name);
     }

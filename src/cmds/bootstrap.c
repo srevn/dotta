@@ -453,7 +453,7 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
     }
 
     /* Check if repository exists */
-    if (!is_git_repository(repo_path)) {
+    if (!gitops_is_repository(repo_path)) {
         free(repo_path);
         config_free(config);
         return ERROR(ERR_NOT_FOUND,

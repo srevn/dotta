@@ -18,6 +18,17 @@
 #include "types.h"
 
 /**
+ * Common buffer size constants for Git operations
+ *
+ * These constants define standard buffer sizes used throughout dotta.
+ * Git allows up to 255 chars per reference component, but we use
+ * conservative limits for safety and to catch truncation early.
+ */
+#define DOTTA_REFNAME_MAX 256    /* For git reference names (refs/heads/...) */
+#define DOTTA_REFSPEC_MAX 256    /* For git refspecs (refs/heads/foo:refs/remotes/...) */
+#define DOTTA_MESSAGE_MAX 512    /* For commit messages and prompts */
+
+/**
  * Repository operations
  */
 
@@ -60,6 +71,14 @@ error_t *gitops_discover_repository(char **out, const char *start_path);
  * @return Error or NULL on success
  */
 error_t *gitops_discover_and_open(git_repository **out, const char *start_path);
+
+/**
+ * Check if path is a valid git repository
+ *
+ * @param path Path to check (must not be NULL)
+ * @return true if path exists and is a valid git repository
+ */
+bool gitops_is_repository(const char *path);
 
 /**
  * Branch/Reference operations
@@ -346,6 +365,27 @@ error_t *gitops_lookup_reference(
     const char *name,
     git_reference **out
 );
+
+/**
+ * Validate and build a Git reference name
+ *
+ * Builds a reference name using printf-style formatting and validates
+ * it fits in the provided buffer without truncation.
+ *
+ * Git allows up to 255 chars per component, but we use conservative limits
+ * to prevent silent failures with libgit2 operations.
+ *
+ * @param buffer Output buffer for the reference name (must not be NULL)
+ * @param buffer_size Size of output buffer
+ * @param format Printf-style format string (must not be NULL)
+ * @param ... Format arguments
+ * @return Error or NULL on success
+ *
+ * Example:
+ *   char refname[256];
+ *   error_t *err = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", branch);
+ */
+error_t *gitops_build_refname(char *buffer, size_t buffer_size, const char *format, ...);
 
 /**
  * Index operations

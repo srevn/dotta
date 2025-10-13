@@ -228,7 +228,7 @@ error_t *cmd_init(const cmd_init_options_t *opts) {
         path = resolved_path;
 
         /* Ensure parent directories exist */
-        err = ensure_parent_dirs(path);
+        err = fs_ensure_parent_dirs(path);
         if (err) {
             free(resolved_path);
             return error_wrap(err, "Failed to create parent directories");

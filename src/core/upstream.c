@@ -12,7 +12,6 @@
 #include "base/error.h"
 #include "base/gitops.h"
 #include "utils/array.h"
-#include "utils/repo.h"
 
 /**
  * Analyze upstream state for a single profile
@@ -45,13 +44,13 @@ error_t *upstream_analyze_profile(
     char remote_refname[256];
     error_t *err;
 
-    err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", profile_name);
+    err = gitops_build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", profile_name);
     if (err) {
         upstream_info_free(info);
         return error_wrap(err, "Invalid profile name '%s'", profile_name);
     }
 
-    err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
+    err = gitops_build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
                        remote_name, profile_name);
     if (err) {
         upstream_info_free(info);
@@ -266,7 +265,7 @@ error_t *upstream_discover_branches(
     }
 
     char remote_prefix[256];
-    error_t *err = build_refname(remote_prefix, sizeof(remote_prefix), "refs/remotes/%s/", remote_name);
+    error_t *err = gitops_build_refname(remote_prefix, sizeof(remote_prefix), "refs/remotes/%s/", remote_name);
     if (err) {
         git_reference_iterator_free(iter);
         string_array_free(branches);
@@ -335,7 +334,7 @@ error_t *upstream_create_tracking_branch(
 
     /* Get remote ref */
     char remote_refname[256];
-    error_t *err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
+    error_t *err = gitops_build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
     if (err) {
         return error_wrap(err, "Invalid remote/branch name '%s/%s'", remote_name, branch_name);
     }
@@ -354,7 +353,7 @@ error_t *upstream_create_tracking_branch(
 
     /* Create local branch */
     char local_refname[256];
-    err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
+    err = gitops_build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
     if (err) {
         git_reference_free(remote_ref);
         return error_wrap(err, "Invalid branch name '%s'", branch_name);

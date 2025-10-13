@@ -11,6 +11,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <libgen.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
@@ -614,4 +615,40 @@ bool fs_lexists(const char *path) {
 
     struct stat st;
     return lstat(path, &st) == 0;
+}
+
+/**
+ * Ensure parent directories exist
+ */
+error_t *fs_ensure_parent_dirs(const char *path) {
+    RETURN_IF_ERROR(validate_path(path));
+
+    /* Get parent directory */
+    char *path_copy = strdup(path);
+    if (!path_copy) {
+        return ERROR(ERR_MEMORY, "Failed to allocate path copy");
+    }
+
+    char *parent = dirname(path_copy);
+    if (!parent || strcmp(parent, ".") == 0 || strcmp(parent, "/") == 0) {
+        /* No parent to create, or parent is root */
+        free(path_copy);
+        return NULL;
+    }
+
+    /* Check if parent exists */
+    if (fs_is_directory(parent)) {
+        free(path_copy);
+        return NULL;
+    }
+
+    /* Create parent directories recursively */
+    error_t *err = fs_create_dir(parent, true);  /* true = recursive */
+    free(path_copy);
+
+    if (err) {
+        return error_wrap(err, "Failed to create parent directories for: %s", path);
+    }
+
+    return NULL;
 }

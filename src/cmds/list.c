@@ -17,7 +17,6 @@
 #include "utils/array.h"
 #include "utils/config.h"
 #include "utils/output.h"
-#include "utils/repo.h"
 #include "utils/timeutil.h"
 
 /**

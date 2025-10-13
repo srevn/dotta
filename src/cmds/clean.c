@@ -18,7 +18,6 @@
 #include "utils/hashmap.h"
 #include "utils/hooks.h"
 #include "utils/output.h"
-#include "utils/repo.h"
 
 /**
  * Find orphaned files (files in state but not in manifest)

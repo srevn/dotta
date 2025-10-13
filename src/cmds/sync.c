@@ -24,7 +24,6 @@
 #include "utils/config.h"
 #include "utils/hashmap.h"
 #include "utils/output.h"
-#include "utils/repo.h"
 
 /**
  * Per-profile sync result
@@ -188,12 +187,12 @@ static error_t *pull_branch_ff(
     char remote_refname[DOTTA_REFNAME_MAX];
     error_t *err;
 
-    err = build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
+    err = gitops_build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
     if (err) {
         return error_wrap(err, "Invalid branch name '%s'", branch_name);
     }
 
-    err = build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
+    err = gitops_build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
     if (err) {
         return error_wrap(err, "Invalid remote/branch name '%s/%s'", remote_name, branch_name);
     }

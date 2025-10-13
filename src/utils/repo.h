@@ -17,20 +17,6 @@
 
 #include "types.h"
 
-/* Forward declarations */
-typedef struct git_repository git_repository;
-
-/**
- * Common buffer size constants
- *
- * These constants define standard buffer sizes used throughout dotta.
- * Git allows up to 255 chars per reference component, but we use
- * conservative limits for safety and to catch truncation early.
- */
-#define DOTTA_REFNAME_MAX 256    /* For git reference names (refs/heads/...) */
-#define DOTTA_REFSPEC_MAX 256    /* For git refspecs (refs/heads/foo:refs/remotes/...) */
-#define DOTTA_MESSAGE_MAX 512    /* For commit messages and prompts */
-
 /**
  * Resolve repository path
  *
@@ -57,48 +43,5 @@ error_t *resolve_repo_path(char **out);
  * @return Error or NULL on success
  */
 error_t *get_default_repo_path(char **out);
-
-/**
- * Check if path is a valid git repository
- *
- * @param path Path to check
- * @return true if path exists and is a valid git repository
- */
-bool is_git_repository(const char *path);
-
-/**
- * Ensure parent directories exist
- *
- * Creates all parent directories for the given path if they don't exist.
- * Similar to `mkdir -p $(dirname path)`.
- *
- * @param path Full path to file/directory
- * @return Error or NULL on success
- */
-error_t *ensure_parent_dirs(const char *path);
-
-/**
- * Validate and build a Git reference name
- *
- * Builds a reference name using printf-style formatting and validates
- * it fits in the provided buffer without truncation.
- *
- * Git allows up to 255 chars per component, but we use conservative limits
- * to prevent silent failures with libgit2 operations.
- *
- * @param buffer Output buffer for the reference name
- * @param buffer_size Size of output buffer
- * @param format Printf-style format string
- * @param ... Format arguments
- * @return Error or NULL on success
- *
- * Example:
- *   char refname[DOTTA_REFNAME_MAX];
- *   error_t *err = build_refname(refname, sizeof(refname), "refs/heads/%s", branch);
- *   if (err) {
- *       // Handle truncation or formatting error
- *   }
- */
-error_t *build_refname(char *buffer, size_t buffer_size, const char *format, ...);
 
 #endif /* DOTTA_REPO_H */

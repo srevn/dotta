@@ -15,7 +15,6 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/compare.h"
-#include "utils/array.h"
 #include "utils/hashmap.h"
 
 /**

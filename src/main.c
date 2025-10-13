@@ -53,7 +53,7 @@ static git_repository *open_resolved_repo(char **repo_path_out) {
     }
 
     /* Check if repository exists */
-    if (!is_git_repository(repo_path)) {
+    if (!gitops_is_repository(repo_path)) {
         fprintf(stderr, "Error: No dotta repository found at: %s\n", repo_path);
         fprintf(stderr, "\nRun 'dotta init' to create a new repository\n");
 
@@ -1031,7 +1031,7 @@ static int cmd_git_main(int argc, char **argv) {
     }
 
     /* Check if repository exists */
-    if (!is_git_repository(repo_path)) {
+    if (!gitops_is_repository(repo_path)) {
         fprintf(stderr, "Error: No dotta repository found at: %s\n", repo_path);
         fprintf(stderr, "\nRun 'dotta init' to create a new repository\n");
 

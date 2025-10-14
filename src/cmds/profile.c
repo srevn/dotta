@@ -448,6 +448,7 @@ static error_t *profile_activate(
     CHECK_NULL(out);
 
     /* Resource tracking for cleanup */
+    dotta_config_t *config = NULL;
     state_t *state = NULL;
     string_array_t *active = NULL;
     string_array_t *to_activate = NULL;
@@ -459,6 +460,48 @@ static error_t *profile_activate(
     size_t activated_count = 0;
     size_t already_active = 0;
     size_t not_found = 0;
+
+    /*
+     * Load configuration to check if profiles are managed by config file
+     *
+     * Guard mechanism: If profile_order is set in config, profile management
+     * is declarative (config-driven) and state should not be modified directly.
+     * This prevents confusing scenarios where user activates a profile but
+     * the next 'apply' uses config instead, silently overriding the change.
+     */
+    err = config_load(NULL, &config);
+    if (err) {
+        /* Non-fatal: if config doesn't exist, we're in state-driven mode */
+        error_free(err);
+        err = NULL;
+    }
+
+    if (config && config->profile_order && config->profile_order_count > 0) {
+        /* Config is managing profiles - reject permanent state modification */
+        output_error(out, "Cannot activate profiles: profile management is controlled by config file");
+        output_newline(out);
+        output_info(out, "Your config file has 'profile_order' set, which means profiles are");
+        output_info(out, "managed declaratively through the config file, not through state.");
+        output_newline(out);
+        output_info(out, "To temporarily use different profiles:");
+        output_info(out, "  dotta apply -p <profile>           # Temporary override");
+        output_info(out, "  dotta apply                        # Revert to config");
+        output_newline(out);
+        output_info(out, "To permanently change profiles:");
+        output_info(out, "  1. Edit your config.toml file and modify the profile_order list");
+        output_info(out, "  2. Run 'dotta apply' to activate the new configuration");
+        output_newline(out);
+        output_info(out, "Current profile_order in config:");
+        for (size_t i = 0; i < config->profile_order_count; i++) {
+            output_info(out, "  %zu. %s", i + 1, config->profile_order[i]);
+        }
+        output_newline(out);
+        output_info(out, "Or remove 'profile_order' from config to enable state-based management");
+        output_info(out, "with activate/deactivate commands.");
+
+        err = ERROR(ERR_CONFLICT, "Profile management controlled by config file");
+        goto cleanup;
+    }
 
     /* Load state (with locking for write transaction) */
     err = state_load_for_update(repo, &state);
@@ -584,6 +627,7 @@ static error_t *profile_activate(
 
 cleanup:
     /* Cleanup all resources */
+    config_free(config);
     free(profile_names);
     string_array_free(all_branches);
     string_array_free(to_activate);
@@ -635,6 +679,7 @@ static error_t *profile_deactivate(
     CHECK_NULL(out);
 
     /* Resource tracking for cleanup */
+    dotta_config_t *config = NULL;
     state_t *state = NULL;
     string_array_t *active = NULL;
     string_array_t *to_deactivate = NULL;
@@ -645,6 +690,37 @@ static error_t *profile_deactivate(
     /* Counters for summary (not cleaned up) */
     size_t deactivated_count = 0;
     size_t not_active = 0;
+
+    /*
+     * Load configuration to check if profiles are managed by config file
+     *
+     * Same guard as activate: prevent state modification when config
+     * has profile_order set.
+     */
+    err = config_load(NULL, &config);
+    if (err) {
+        /* Non-fatal: if config doesn't exist, we're in state-driven mode */
+        error_free(err);
+        err = NULL;
+    }
+
+    if (config && config->profile_order && config->profile_order_count > 0) {
+        /* Config is managing profiles - reject permanent state modification */
+        output_error(out, "Cannot deactivate profiles: profile management is controlled by config file");
+        output_newline(out);
+        output_info(out, "Your config file has 'profile_order' set, which means profiles are");
+        output_info(out, "managed declaratively through the config file, not through state.");
+        output_newline(out);
+        output_info(out, "To permanently deactivate profiles:");
+        output_info(out, "  1. Edit your config.toml file and remove profiles from profile_order");
+        output_info(out, "  2. Run 'dotta apply' to activate the new configuration");
+        output_newline(out);
+        output_info(out, "Or remove 'profile_order' from config to enable state-based management");
+        output_info(out, "with activate/deactivate commands.");
+
+        err = ERROR(ERR_CONFLICT, "Profile management controlled by config file");
+        goto cleanup;
+    }
 
     /* Load state (with locking for write transaction) */
     err = state_load_for_update(repo, &state);
@@ -894,6 +970,7 @@ static error_t *profile_deactivate(
 
 cleanup:
     /* Cleanup all resources */
+    config_free(config);
     free(profile_names);
     string_array_free(new_active);
     string_array_free(to_deactivate);
@@ -979,10 +1056,19 @@ static error_t *profile_reorder(
 
     /* Check if config overrides state */
     if (config && config->profile_order && config->profile_order_count > 0) {
-        err = ERROR(ERR_VALIDATION,
-                   "Cannot reorder profiles: controlled by config file\n"
-                   "Hint: Remove '[profiles] order' from config.toml to use state-based activation\n"
-                   "      or edit the config file directly");
+        output_error(out, "Cannot reorder profiles: profile management is controlled by config file");
+        output_newline(out);
+        output_info(out, "Your config file has 'profile_order' set, which means profiles are");
+        output_info(out, "managed declaratively through the config file, not through state.");
+        output_newline(out);
+        output_info(out, "To reorder profiles:");
+        output_info(out, "  1. Edit your config.toml file and reorder the profile_order list");
+        output_info(out, "  2. Run 'dotta apply' to activate the new profile configuration");
+        output_newline(out);
+        output_info(out, "Alternatively, remove 'profile_order' from config to enable state-based");
+        output_info(out, "profile management with activate/deactivate/reorder commands.");
+
+        err = ERROR(ERR_CONFLICT, "Profile management controlled by config file");
         goto cleanup;
     }
 

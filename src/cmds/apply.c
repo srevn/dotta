@@ -555,6 +555,57 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
+    /*
+     * Inform user about profile management mode
+     *
+     * Three scenarios to communicate:
+     * 1. Temporary override: -p flag used while config has profile_order
+     * 2. Reverting to config: No -p flag, config has profile_order (after temp override)
+     * 3. Normal operation: Using whatever source without conflicts
+     */
+    if (config->profile_order && config->profile_order_count > 0) {
+        if (profile_source == PROFILE_SOURCE_EXPLICIT) {
+            /* Scenario 1: Temporary override */
+            output_newline(out);
+            output_warning(out, "Temporary profile override active");
+            output_info(out, "  Your config has profile_order = [%s, ...]",
+                       config->profile_order[0]);
+            output_info(out, "  This -p flag temporarily overrides that configuration.");
+            output_info(out, "  Run 'dotta apply' (without -p) to revert to config-controlled profiles.");
+            output_newline(out);
+        } else if (profile_source == PROFILE_SOURCE_CONFIG) {
+            /* Scenario 2: Using config (may be reverting from temp override) */
+            /* Check if state had different profiles (indicating a revert) */
+            string_array_t *state_profiles = NULL;
+            error_t *check_err = state_get_profiles(state, &state_profiles);
+
+            if (!check_err && state_profiles && string_array_size(state_profiles) > 0) {
+                /* Check if state profiles differ from config profiles */
+                bool differs = false;
+                if (string_array_size(state_profiles) != config->profile_order_count) {
+                    differs = true;
+                } else {
+                    for (size_t i = 0; i < config->profile_order_count; i++) {
+                        if (strcmp(string_array_get(state_profiles, i), config->profile_order[i]) != 0) {
+                            differs = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (differs) {
+                    output_newline(out);
+                    output_success(out, "Reverting to config-controlled profiles");
+                    output_info(out, "  Using profile_order from config.toml");
+                    output_newline(out);
+                }
+            }
+
+            string_array_free(state_profiles);
+            error_free(check_err);
+        }
+    }
+
     if (opts->verbose) {
         output_print(out, OUTPUT_VERBOSE, "Using %zu profile%s:\n",
                     profiles->count, profiles->count == 1 ? "" : "s");

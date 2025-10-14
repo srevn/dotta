@@ -24,15 +24,6 @@
 # Default: ~/.local/share/dotta/repo
 repo_dir = "~/.local/share/dotta/repo"
 
-# Profile Resolution Mode
-# Determines which profiles to operate on (applies to ALL commands)
-# Options:
-#   - "local" - All local branches (default, variant-friendly workflow)
-#   - "auto"  - Auto-detect: global + OS + hosts/<hostname> (minimal workflow)
-#   - "all"   - All available profiles (backup/hub workflow)
-# Default: local
-mode = "local"
-
 # Strict Mode
 # Fail operations if any validation errors occur
 # When false, warnings are shown but operations continue
@@ -211,62 +202,6 @@ color = "auto"
 #   - "json"     - Machine-readable JSON (for scripts/tools)
 # Default: compact
 format = "compact"
-
-
-# ============================================================================
-# Configuration Examples
-# ============================================================================
-#
-# Example 1: Minimal Configuration
-# ---------------------------------
-# [core]
-# repo_dir = "~/.dotfiles"
-#
-# That's it! Everything else uses sensible defaults.
-#
-#
-# Example 2: Team Environment
-# ----------------------------
-# [core]
-# repo_dir = "~/company-dotfiles"
-#
-# [profiles]
-# order = ["base", "backend-dev", "docker"]
-#
-# [hooks]
-# post_apply = true  # Reload tmux, restart services
-#
-# [ignore]
-# patterns = [".local/*", "*.work"]  # Personal overrides
-#
-#
-# Example 3: Security-Focused
-# ----------------------------
-# [security]
-# confirm_destructive = true
-#
-# [ignore]
-# respect_gitignore = true
-# patterns = [
-#   "*.key",      # Never track keys
-#   "*.pem",      # Never track certificates
-#   ".env",       # Never track environment files
-#   "secrets/*",  # Never track secrets directory
-# ]
-#
-#
-# Example 4: CI/CD Environment
-# -----------------------------
-# [output]
-# verbosity = "verbose"  # Detailed logs for debugging
-# color = "never"        # Plain text for log files
-# format = "json"        # Machine-readable output
-#
-# [security]
-# confirm_destructive = false  # Non-interactive mode
-#
-# ============================================================================
-
 
 # ============================================================================
 # [sync] - Synchronization Settings
@@ -465,117 +400,5 @@ Files: {count}
 # Example:
 #   export DOTTA_REPO_DIR="/mnt/shared/dotfiles"
 #   dotta init
-#
-# ============================================================================
-
-
-# ============================================================================
-# Common Workflows
-# ============================================================================
-#
-# Initial Setup
-# -------------
-# 1. Copy this file: cp etc/config.toml.sample ~/.config/dotta/config.toml
-# 2. Edit the config: vim ~/.config/dotta/config.toml
-# 3. Initialize repo: dotta init
-# 4. Add your first file: dotta add --profile base ~/.bashrc
-#
-#
-# Team Onboarding
-# ---------------
-# 1. Clone team repo: dotta clone git@github.com:team/dotfiles.git
-# 2. Apply profiles: dotta apply
-# 3. Add local overrides: Edit ~/.config/dotta/config.toml [ignore] patterns
-#
-#
-# Multi-Machine Setup
-# -------------------
-# Machine A (laptop):
-#   [profiles]
-#   order = ["base", "laptop"]
-#
-# Machine B (server):
-#   [profiles]
-#   order = ["base", "server"]
-#
-# Both machines share the same repository but apply different profiles!
-#
-#
-# Variant Profile Workflow (mode="local")
-# --------------------------------------
-# Best for: Teams with multiple configuration variants (work, personal, client1, etc.)
-#
-# [core]
-# mode = "local"  # Default
-#
-# Machine A creates new profile:
-#   dotta branch experimental
-#   dotta add ~/.experimental_config
-#   dotta sync  # Pushes experimental
-#
-# Machine B automatically discovers it:
-#   dotta sync  # Discovers and creates local "experimental" branch
-#   dotta apply -p experimental  # Now available to use!
-#
-#
-# Minimal Machine (mode="auto")
-# ---------------------------
-# Best for: Single-purpose machines (servers, CI/CD, minimal setups)
-#
-# [core]
-# mode = "auto"
-#
-# Behavior:
-#   Operates on: global, darwin/linux/freebsd, hosts/<hostname>
-#   Ignores: All other variant profiles (work, personal, client1, etc.)
-#   Perfect for machines that only need system-specific configs
-#   Affects ALL commands (apply, update, sync, status, etc.)
-#
-#
-# Hub/Backup Server (mode="all")
-# -----------------------------
-# Best for: Central backup server, multi-machine management hub
-#
-# [core]
-# mode = "all"
-#
-# Behavior:
-#   Operates on all available profiles
-#   For sync: Mirrors entire remote repository
-#   Creates local branches for ALL remote profiles
-#   Keeps complete backup of all configurations
-#   Perfect for disaster recovery or managing multiple machines
-#
-#
-# Removing Files and Profiles
-# ----------------------------
-# Safe file removal workflow:
-#
-#   # Remove file from profile (keeps it on filesystem)
-#   dotta remove --profile global ~/.bashrc
-#
-#   # Preview what would be removed
-#   dotta remove --profile global ~/.config/nvim --dry-run
-#
-#   # Remove from profile AND filesystem
-#   dotta remove --profile global ~/.bashrc --cleanup
-#
-#   # Interactive removal (prompt for each file)
-#   dotta remove --profile global ~/.config/*.conf --interactive
-#
-# Delete entire profile:
-#
-#   # Delete profile branch (files remain on filesystem)
-#   dotta remove --profile experimental --delete-profile
-#
-#   # Delete profile AND remove deployed files
-#   dotta remove --profile experimental --delete-profile --cleanup
-#
-# Safety features:
-#   - Warns about unpushed changes (use 'dotta sync' first)
-#   - Warns about deployed files (use --cleanup or 'dotta apply --prune')
-#   - Prevents deletion of last remaining profile
-#   - Confirms destructive operations (unless --force)
-#   - Executes pre-remove/post-remove hooks (if enabled)
 #
 # ============================================================================

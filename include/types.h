@@ -61,31 +61,6 @@ typedef enum {
 } path_prefix_t;
 
 /**
- * Profile resolution mode - determines which profiles to operate on
- *
- * This is an application-wide setting that affects ALL commands:
- * apply, update, sync, status, list, diff, clean, show, revert, ignore.
- *
- * Modes:
- *   LOCAL - All local branches (default, variant-friendly workflow)
- *           Best for: Teams with multiple configuration variants
- *           Behavior: Operates on all existing local profile branches
- *
- *   AUTO  - Auto-detect: global + OS + hosts/<hostname> (minimal workflow)
- *           Best for: Single-purpose machines (servers, CI/CD, minimal setups)
- *           Behavior: Only operates on auto-detected system-specific profiles
- *
- *   ALL   - All available profiles (backup/hub workflow)
- *           Best for: Hub machines, backup servers, disaster recovery
- *           Behavior: Mirrors entire repository (all local, sync fetches all remote)
- */
-typedef enum {
-    PROFILE_MODE_LOCAL,   /* All local branches (default) */
-    PROFILE_MODE_AUTO,    /* Auto-detect: global + OS + host */
-    PROFILE_MODE_ALL      /* All available profiles */
-} profile_mode_t;
-
-/**
  * Profile resolution source - tracks where profiles came from
  *
  * Used to determine whether profile state should be updated after operations.
@@ -95,13 +70,11 @@ typedef enum {
  *   EXPLICIT - CLI flags (-p/--profile), temporary override
  *   CONFIG   - Config file profile_order, team/shared configuration
  *   STATE    - State file profiles array, machine-specific active profiles
- *   MODE     - Mode-based fallback, computed from system detection
  */
 typedef enum {
     PROFILE_SOURCE_EXPLICIT,   /* CLI -p flag (highest priority) */
     PROFILE_SOURCE_CONFIG,     /* Config file profile_order */
-    PROFILE_SOURCE_STATE,      /* State file (machine-specific) */
-    PROFILE_SOURCE_MODE        /* Mode-based fallback (computed) */
+    PROFILE_SOURCE_STATE       /* State file (machine-specific) */
 } profile_source_t;
 
 /**

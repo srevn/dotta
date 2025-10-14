@@ -386,7 +386,7 @@ error_t *profile_resolve(
     CHECK_NULL(config);
     CHECK_NULL(out);
 
-    profile_source_t source = PROFILE_SOURCE_MODE;  /* Default to mode */
+    profile_source_t source;
 
     /* Priority 1: Explicit CLI profiles (always takes precedence) */
     if (explicit_profiles && explicit_count > 0) {
@@ -467,89 +467,25 @@ error_t *profile_resolve(
                 return err;
             }
 
-            /* No valid profiles - fall through to mode-based selection */
+            /* No valid profiles in state - treat as no active profiles */
             string_array_free(valid_profiles);
         }
 
         string_array_free(state_profiles);
     } else if (err) {
-        /* Non-fatal: if state loading fails, continue with mode-based selection */
+        /* Non-fatal: if state loading fails, fall through to error */
         error_free(err);
         err = NULL;
     }
 
-    /* Check if state exists but is empty (needs migration) */
-    if (state) {
-        string_array_t *profiles_check = NULL;
-        err = state_get_profiles(state, &profiles_check);
-        bool state_is_empty = (!err && profiles_check && string_array_size(profiles_check) == 0);
-        string_array_free(profiles_check);
-
-        if (state_is_empty) {
-            /* Empty state in existing repo - auto-migrate with detected profiles */
-            profile_list_t *detected = NULL;
-            err = profile_detect_auto(repo, &detected);
-
-            if (!err && detected && detected->count > 0) {
-                /* Initialize state with detected profiles */
-                const char **names = malloc(detected->count * sizeof(char *));
-                if (names) {
-                    for (size_t i = 0; i < detected->count; i++) {
-                        names[i] = detected->profiles[i].name;
-                    }
-
-                    /* Save detected profiles to state */
-                    state_set_profiles(state, names, detected->count);
-                    state_save(repo, state);
-                    free(names);
-
-                    /* Inform user about auto-migration (diagnostic message) */
-                    fprintf(stderr, "Note: Initialized active profiles from auto-detection:\n");
-                    for (size_t i = 0; i < detected->count; i++) {
-                        fprintf(stderr, "  • %s\n", detected->profiles[i].name);
-                    }
-                    fprintf(stderr, "\n");
-
-                    state_free(state);
-                    source = PROFILE_SOURCE_STATE;
-                    if (source_out) *source_out = source;
-                    *out = detected;
-                    return NULL;
-                }
-            }
-
-            if (err) {
-                error_free(err);
-                err = NULL;
-            }
-            if (detected) {
-                profile_list_free(detected);
-            }
-        }
-    }
-
     state_free(state);
 
-    /* Priority 4: Mode-based fallback */
-    source = PROFILE_SOURCE_MODE;
-    if (source_out) *source_out = source;
-
-    switch (config->mode) {
-        case PROFILE_MODE_LOCAL:
-            /* All local branches */
-            return profile_list_all_local(repo, out);
-
-        case PROFILE_MODE_AUTO:
-            /* Auto-detect: global + OS + host */
-            return profile_detect_auto(repo, out);
-
-        case PROFILE_MODE_ALL:
-            /* All available (same as LOCAL for most commands; sync handles specially) */
-            return profile_list_all_local(repo, out);
-
-        default:
-            return ERROR(ERR_INVALID_ARG, "Invalid profile mode");
-    }
+    /* No profiles found from any source - return helpful error */
+    return ERROR(ERR_NOT_FOUND,
+                "No active profiles found\n"
+                "Hint: Run 'dotta profile activate <name>' to activate profiles\n"
+                "      Or use 'dotta profile list --remote' to see available profiles\n"
+                "      Or specify profiles explicitly with -p/--profile");
 }
 
 /**

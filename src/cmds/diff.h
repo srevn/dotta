@@ -34,12 +34,11 @@ typedef enum {
 typedef struct {
     const char **files;         /* Specific files to diff (NULL = all) */
     size_t file_count;          /* Number of files */
-    const char **profiles;      /* Profile names (NULL = auto-detect) */
+    const char **profiles;      /* Profile names (NULL = use state/config) */
     size_t profile_count;       /* Number of profiles */
     bool name_only;             /* Only show file names, not diffs */
     bool all_changes;           /* Show all changed files (deprecated, use direction) */
     diff_direction_t direction; /* Which direction to show */
-    const char *mode;           /* Profile mode override: "local", "auto", "all" (CLI only) */
 } cmd_diff_options_t;
 
 /**

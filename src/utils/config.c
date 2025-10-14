@@ -67,10 +67,6 @@ static bool extract_string_array(toml_datum_t arr, char ***out_items, size_t *ou
     return true;
 }
 
-/* ========================================================================
- * Public API
- * ======================================================================== */
-
 dotta_config_t *config_create_default(void) {
     dotta_config_t *config = calloc(1, sizeof(dotta_config_t));
     if (!config) {
@@ -79,7 +75,6 @@ dotta_config_t *config_create_default(void) {
 
     /* Set defaults */
     config->repo_dir = strdup(DEFAULT_REPO_DIR);
-    config->mode = PROFILE_MODE_LOCAL;  /* Default: all local branches (variant-friendly) */
     config->strict_mode = false;
     config->auto_detect_new_files = true;  /* Default: detect new files */
 
@@ -239,18 +234,6 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
         if (repo_dir.type == TOML_STRING) {
             free(config->repo_dir);
             config->repo_dir = strdup(repo_dir.u.s);
-        }
-
-        toml_datum_t mode = toml_get(core, "mode");
-        if (mode.type == TOML_STRING) {
-            if (strcmp(mode.u.s, "local") == 0) {
-                config->mode = PROFILE_MODE_LOCAL;
-            } else if (strcmp(mode.u.s, "auto") == 0) {
-                config->mode = PROFILE_MODE_AUTO;
-            } else if (strcmp(mode.u.s, "all") == 0) {
-                config->mode = PROFILE_MODE_ALL;
-            }
-            /* Invalid values caught by config_validate() */
         }
 
         toml_datum_t strict_mode = toml_get(core, "strict_mode");
@@ -463,14 +446,6 @@ bool config_parse_bool(const char *value, bool default_value) {
 error_t *config_validate(const dotta_config_t *config) {
     CHECK_NULL(config);
 
-    /* Validate profile mode */
-    if (config->mode != PROFILE_MODE_LOCAL &&
-        config->mode != PROFILE_MODE_AUTO &&
-        config->mode != PROFILE_MODE_ALL) {
-        return ERROR(ERR_INVALID_ARG,
-                    "Invalid mode value (must be local, auto, or all)");
-    }
-
     /* Validate verbosity */
     if (config->verbosity) {
         if (strcmp(config->verbosity, "quiet") != 0 &&
@@ -537,23 +512,4 @@ error_t *config_get_repo_dir(const dotta_config_t *config, char **out) {
 
     /* Priority 3: Default */
     return path_expand_home(DEFAULT_REPO_DIR, out);
-}
-
-profile_mode_t config_parse_mode(const char *str, profile_mode_t default_mode) {
-    if (!str) {
-        return default_mode;
-    }
-
-    if (strcmp(str, "local") == 0) {
-        return PROFILE_MODE_LOCAL;
-    } else if (strcmp(str, "auto") == 0) {
-        return PROFILE_MODE_AUTO;
-    } else if (strcmp(str, "all") == 0) {
-        return PROFILE_MODE_ALL;
-    }
-
-    /* Invalid mode - warn user and fall back to default */
-    fprintf(stderr, "WARNING: Invalid mode '%s' (valid: local, auto, all)\n"
-                   "         Falling back to configured default\n", str);
-    return default_mode;
 }

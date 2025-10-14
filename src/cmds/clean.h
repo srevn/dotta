@@ -15,13 +15,12 @@
  * Command options
  */
 typedef struct {
-    const char **profiles;      /* Profile names (NULL = auto-detect) */
+    const char **profiles;      /* Profile names (NULL = use state/config) */
     size_t profile_count;       /* Number of profiles */
     bool dry_run;               /* Don't actually remove files */
     bool force;                 /* Remove without confirmation */
     bool verbose;               /* Print verbose output */
     bool quiet;                 /* Minimal output */
-    const char *mode;           /* Profile mode override: "local", "auto", "all" (CLI only) */
 } cmd_clean_options_t;
 
 /**

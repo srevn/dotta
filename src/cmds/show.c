@@ -325,12 +325,6 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
         return error_wrap(err, "Failed to load config");
     }
 
-    /* Apply mode override if provided */
-    profile_mode_t original_mode = config->mode;
-    if (opts->mode) {
-        ((dotta_config_t *)config)->mode = config_parse_mode(opts->mode, config->mode);
-    }
-
     err = profile_resolve(
         repo,
         NULL, 0,
@@ -338,11 +332,6 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
         config->strict_mode,
         &profiles,
         NULL);
-
-    /* Restore original mode */
-    if (opts->mode) {
-        ((dotta_config_t *)config)->mode = original_mode;
-    }
 
     if (err) {
         config_free(config);

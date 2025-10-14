@@ -18,7 +18,6 @@
 typedef struct dotta_config {
     /* [core] */
     char *repo_dir;
-    profile_mode_t mode;         /* Profile resolution mode (local, auto, all) */
     bool strict_mode;
     bool auto_detect_new_files;  /* Auto-detect new files in tracked directories */
 
@@ -39,7 +38,7 @@ typedef struct dotta_config {
 
     /* [security] */
     bool confirm_destructive;
-    bool confirm_new_files;  /* Require confirmation before adding new files */
+    bool confirm_new_files;       /* Require confirmation before adding new files */
 
     /* [ignore] */
     char **ignore_patterns;       /* Array of patterns from config */
@@ -48,17 +47,17 @@ typedef struct dotta_config {
     bool respect_gitignore;       /* Check .gitignore in source directories */
 
     /* [output] */
-    char *verbosity;      /* "quiet", "normal", "verbose", "debug" */
-    char *color;          /* "auto", "always", "never" */
-    char *format;         /* "compact", "detailed", "json" */
+    char *verbosity;              /* "quiet", "normal", "verbose", "debug" */
+    char *color;                  /* "auto", "always", "never" */
+    char *format;                 /* "compact", "detailed", "json" */
 
     /* [commit] */
-    char *commit_title;   /* Title template for commits */
-    char *commit_body;    /* Body template for commits */
+    char *commit_title;           /* Title template for commits */
+    char *commit_body;            /* Body template for commits */
 
     /* [sync] */
-    bool auto_pull;              /* Auto-pull when remote is ahead (default: true) */
-    char *diverged_strategy;     /* Strategy for diverged branches: warn, rebase, merge, ours, theirs */
+    bool auto_pull;               /* Auto-pull when remote is ahead (default: true) */
+    char *diverged_strategy;      /* Strategy for diverged branches: warn, rebase, merge, ours, theirs */
 } dotta_config_t;
 
 /**
@@ -105,14 +104,5 @@ error_t *config_validate(const dotta_config_t *config);
  *   3. Default: ~/.local/share/dotta/repo
  */
 error_t *config_get_repo_dir(const dotta_config_t *config, char **out);
-
-/**
- * Parse profile mode from string
- *
- * @param str Mode string ("local", "auto", "all", or NULL)
- * @param default_mode Fallback mode if str is NULL or invalid
- * @return Parsed mode (or default_mode if invalid)
- */
-profile_mode_t config_parse_mode(const char *str, profile_mode_t default_mode);
 
 #endif /* DOTTA_CONFIG_H */

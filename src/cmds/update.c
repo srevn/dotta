@@ -1250,19 +1250,8 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     }
 
     /* Load profiles with config fallback */
-    /* Apply mode override if provided */
-    profile_mode_t original_mode = config->mode;
-    if (opts->mode) {
-        ((dotta_config_t *)config)->mode = config_parse_mode(opts->mode, config->mode);
-    }
-
     err = profile_resolve(repo, opts->profiles, opts->profile_count,
                          config, config->strict_mode, &profiles, NULL);
-
-    /* Restore original mode */
-    if (opts->mode) {
-        ((dotta_config_t *)config)->mode = original_mode;
-    }
 
     if (err) {
         err = error_wrap(err, "Failed to load profiles");

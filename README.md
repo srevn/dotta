@@ -36,39 +36,27 @@ Profiles are applied in **layered order**, with later profiles overriding earlie
 - Host-specific overrides
 - Custom profile variants for different contexts (work, personal, client projects)
 
-### 2. Three Workflow Modes
+### 2. Active Profile Management
 
-Dotta supports three distinct profile resolution modes to fit different use cases:
+Dotta uses **explicit active profile management** to provide safe, predictable control over which configurations are deployed on each machine:
 
-#### `local` mode (default) - Variant-Friendly Workflow
-Operates on all local branches. Perfect for teams or individuals managing multiple configuration variants:
-
-```bash
-# Machine A creates a new variant
-dotta add --profile experimental ~/.new_config
-dotta sync  # Pushes to remote
-
-# Machine B automatically discovers it
-dotta sync  # Creates local branch, ready to use
-dotta apply -p experimental
-```
-
-#### `auto` mode - Minimal Machine Workflow
-Only operates on auto-detected profiles (`global` + OS + hostname). Perfect for single-purpose machines:
+- **Available Profiles**: Exist as local Git branches - can be inspected, not automatically deployed
+- **Active Profiles**: Tracked in `.git/dotta-state.json` - participate in all operations (apply, update, sync, status)
 
 ```bash
-# Ignores all variant profiles
-# Only manages: global, darwin/linux, hosts/<hostname>
-dotta apply  # Only deploys system-relevant configs
+# Activate profiles for this machine
+dotta profile activate global darwin
+
+# View active vs available profiles
+dotta profile list
+
+# Operations use active profiles
+dotta apply   # Deploys: global, darwin
+dotta status  # Checks: global, darwin
+dotta sync    # Syncs: global, darwin
 ```
 
-#### `all` mode - Hub/Backup Workflow
-Mirrors the entire remote repository. Perfect for backup servers or multi-machine management hubs:
-
-```bash
-# Syncs and maintains local copies of ALL remote profiles
-dotta sync  # Complete mirror for disaster recovery
-```
+**Clone automatically activates** detected profiles (global + OS + hostname).
 
 ### 3. Metadata Preservation
 
@@ -252,13 +240,17 @@ Profile branch "darwin":
 
 The repository's main worktree always points to `dotta-worktree` (an empty branch). This prevents Git status pollution and keeps your repository clean. All profile operations use temporary worktrees.
 
-### Profile Layering
+### Profile Resolution & Layering
 
-When you run `dotta apply`, profiles are applied in order:
+Profile resolution follows a strict priority order:
 
-1. Auto-detected profiles: `global` → OS-specific → `hosts/<hostname>`
-2. Or manually specified: `dotta apply profile-A profile-B` (B overrides A)
-3. Files from later profiles override files from earlier profiles
+1. **Explicit CLI** (`-p/--profile flags`) - Temporary override for testing
+2. **Config file** (`profile_order` in config.toml) - Team/shared configuration
+3. **State file** (`profiles` array in `.git/dotta-state.json`) - Machine-specific active profiles
+
+When profiles are applied, later profiles override earlier ones:
+- `dotta apply` uses active profiles from state (e.g., global → darwin → hosts/laptop)
+- Files from later profiles override files from earlier profiles
 
 ## Installation
 
@@ -311,15 +303,26 @@ dotta init
 dotta add --profile global ~/.bashrc ~/.vimrc
 dotta add --profile darwin ~/.config/fish/config.fish
 
+# Activate profiles for this machine
+dotta profile activate global darwin
+
 # View status
 dotta status
+
+# Apply configurations
+dotta apply
 ```
 
 ### Clone an Existing Repository
 
 ```bash
-# Clone dotfiles repository
+# Clone dotfiles repository (auto-detects and activates profiles)
 dotta clone git@github.com:username/dotfiles.git
+
+# Cloning automatically:
+# 1. Detects relevant profiles (global + OS + hostname)
+# 2. Fetches detected profiles
+# 3. Activates them in state
 
 # Run bootstrap scripts if present (prompts for confirmation)
 dotta bootstrap
@@ -357,14 +360,25 @@ dotta clone <url>                   # Clone existing repository
 dotta remote add origin <url>       # Add remote
 ```
 
+### Profile Management
+
+```bash
+dotta profile list                  # Show active vs available profiles
+dotta profile list --remote         # Show remote profiles
+dotta profile fetch <name>          # Download profile without activating
+dotta profile activate <name>       # Activate profile for this machine
+dotta profile deactivate <name>     # Deactivate profile
+dotta profile validate              # Check state consistency
+```
+
 ### Profile Operations
 
 ```bash
 dotta add --profile <name> <file>   # Add files to profile
-dotta apply [profile]...            # Deploy profiles to filesystem
+dotta apply [profile]...            # Deploy active profiles (or specified)
 dotta apply --prune                 # Deploy and remove orphaned files
-dotta update                        # Update profiles with modified files
-dotta sync                          # Intelligent two-way sync
+dotta update                        # Update active profiles with modified files
+dotta sync                          # Intelligent two-way sync of active profiles
 ```
 
 ### Information & Inspection
@@ -406,11 +420,10 @@ Configuration file: `~/.config/dotta/config.toml`
 ```toml
 [core]
 repo_dir = "~/.local/share/dotta/repo"    # Repository location
-mode = "local"                            # local, auto, or all
 strict_mode = false                       # Fail on validation errors
 
 [profiles]
-order = ["base", "work", "laptop"]        # Manual profile order (optional)
+order = ["global", "darwin", "hosts/laptop"]  # Override active profiles (optional)
 
 [security]
 confirm_destructive = true                # Prompt before overwrites
@@ -462,11 +475,13 @@ Dotta is built in distinct architectural layers (all in C11):
 
 ### Key Concepts
 
-**Profile Resolution:** Determines which profiles to operate on based on CLI args → config → mode (local/auto/all)
+**Profile Resolution:** Determines which profiles to operate on based on priority: CLI args (`-p`) → config (`[profiles] order`) → state file (active profiles)
+
+**Active Profiles:** Stored in `.git/dotta-state.json`, represent the machine-specific set of profiles that participate in all operations
 
 **Manifest:** In-memory representation of files to deploy, built by walking profile trees and applying precedence rules
 
-**State File:** `.git/dotta-state.json` tracks deployed files, enabling orphan detection and smart operations
+**State File:** `.git/dotta-state.json` tracks active profiles and deployed files, enabling orphan detection and smart operations
 
 **Metadata File:** `.dotta/metadata.json` in each profile branch preserves permissions and ownership
 
@@ -476,26 +491,31 @@ Dotta is built in distinct architectural layers (all in C11):
 
 ### Personal Dotfiles Across Multiple Machines
 
-```toml
-# ~/.config/dotta/config.toml
-[core]
-mode = "local"
+```bash
+# On laptop
+$ dotta clone git@github.com:user/dotfiles.git
+Auto-detected profiles: global, darwin, hosts/laptop
+✓ Activated: global, darwin, hosts/laptop
 
-[profiles]
-order = ["global", "darwin", "hosts/macbook"]
+$ dotta apply
+Deployed 47 files from 3 profiles
 ```
 
 Manage your personal configurations with OS and host-specific overrides.
 
 ### Team Configuration Management
 
+```bash
+# Team repository with base configs
+$ dotta clone git@github.com:team/dotfiles.git
+
+# Customize for your needs
+$ dotta profile activate base backend-dev docker
+$ dotta apply
+```
+
 ```toml
-[core]
-mode = "local"
-
-[profiles]
-order = ["base", "backend-dev", "docker"]
-
+# ~/.config/dotta/config.toml (optional)
 [ignore]
 patterns = [".local/*", "*.work"]  # Personal overrides
 ```
@@ -504,21 +524,31 @@ Share base configurations while allowing personal customizations.
 
 ### Single-Purpose Server
 
-```toml
-[core]
-mode = "auto"  # Only global + OS + hostname
+```bash
+# Simple setup - only essential profiles
+$ dotta clone git@github.com:ops/server-configs.git
+Auto-detected profiles: global, linux
+✓ Activated: global, linux
+
+# Minimal, focused configuration
+$ dotta apply
 ```
 
-Minimal configuration for servers that don't need variant profiles.
+Perfect for servers that only need core system configurations.
 
-### Centralized Backup Hub
+### Hub Machine (Development Workstation)
 
-```toml
-[core]
-mode = "all"  # Mirror all remote profiles
+```bash
+# Fetch everything for exploration
+$ dotta clone git@github.com:user/dotfiles.git --all
+Fetched 15 profiles
+
+# Activate what you need
+$ dotta profile activate global darwin work client-a
+$ dotta apply
 ```
 
-Maintain complete backups of all configurations for disaster recovery.
+Maintain access to all profile variants for testing and development.
 
 ## Advanced Features
 
@@ -546,9 +576,10 @@ Variables: `{host}`, `{user}`, `{profile}`, `{action}`, `{count}`, `{files}`, `{
 Track which profiles exist on remote without downloading:
 
 ```bash
-dotta list --remote              # Show local + remote profiles
+dotta profile list --remote      # Show available remote profiles
+dotta profile fetch linux        # Download without activating
+dotta profile activate linux     # Make it active
 dotta status --remote            # Check sync state
-dotta sync --mode=all            # Sync all remote profiles
 ```
 
 ### Profile-Specific Ignore Patterns

@@ -18,14 +18,13 @@
 typedef struct {
     const char *file_path;      /* File path within profile (required) */
     const char *commit;         /* Commit reference (required) */
-    const char *profile;        /* Profile name (NULL = auto-detect) */
+    const char *profile;        /* Profile name (NULL = use state/config) */
     bool apply;                 /* Deploy reverted file to filesystem */
     bool commit_changes;        /* Create commit after reverting */
     const char *message;        /* Commit message (NULL = auto-generate) */
     bool force;                 /* Skip confirmation and override conflicts */
     bool dry_run;               /* Preview without making changes */
     bool verbose;               /* Print verbose output */
-    const char *mode;           /* Profile mode override: "local", "auto", "all" (CLI only) */
 } cmd_revert_options_t;
 
 /**

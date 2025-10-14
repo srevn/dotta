@@ -121,16 +121,15 @@ error_t *profile_list_load(
  * Resolution priority (highest to lowest):
  * 1. Explicit profiles (CLI -p/--profile) - ALWAYS takes precedence
  * 2. Config profile_order - Manual config override
- * 3. State file profiles - Machine-specific active profiles (NEW)
- * 4. Mode-based selection - Fallback when state is empty:
- *    - PROFILE_MODE_LOCAL: All local branches
- *    - PROFILE_MODE_AUTO: Auto-detect (global, OS, host)
- *    - PROFILE_MODE_ALL: All available (same as LOCAL for non-sync commands)
+ * 3. State file profiles - Machine-specific active profiles
+ *
+ * If no profiles are found from any source, returns an error. Profiles must be
+ * explicitly activated using 'dotta profile activate' or specified via CLI/config.
  *
  * @param repo Repository (must not be NULL)
  * @param explicit_profiles CLI profiles (can be NULL)
  * @param explicit_count Count of CLI profiles (0 if none)
- * @param config Config with mode and profile_order (must not be NULL)
+ * @param config Config with profile_order (must not be NULL)
  * @param strict_mode If true, error on missing profiles; if false, skip them
  * @param out Profile list (must not be NULL, caller must free)
  * @param source_out Optional: receives the source of resolved profiles (can be NULL)

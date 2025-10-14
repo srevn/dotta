@@ -374,9 +374,8 @@ static error_t *apply_update_and_save_state(
     error_t *err = NULL;
     const char **profile_names = NULL;
 
-    /* Update state with active profiles (only if not from explicit/config override) */
-    bool should_update_profiles = (profile_source == PROFILE_SOURCE_STATE ||
-                                   profile_source == PROFILE_SOURCE_MODE);
+    /* Update state with active profiles (only if from state, not from explicit/config override) */
+    bool should_update_profiles = (profile_source == PROFILE_SOURCE_STATE);
 
     if (should_update_profiles) {
         profile_names = malloc(profiles->count * sizeof(char *));
@@ -531,21 +530,10 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     /* Load profiles */
     output_print(out, OUTPUT_VERBOSE, "Loading profiles...\n");
 
-    /* Apply mode override if provided */
-    profile_mode_t original_mode = config->mode;
-    if (opts->mode) {
-        ((dotta_config_t *)config)->mode = config_parse_mode(opts->mode, config->mode);
-    }
-
     /* Track profile source to determine state update behavior */
-    profile_source_t profile_source = PROFILE_SOURCE_MODE;
+    profile_source_t profile_source;
     err = profile_resolve(repo, opts->profiles, opts->profile_count,
                          config, config->strict_mode, &profiles, &profile_source);
-
-    /* Restore original mode */
-    if (opts->mode) {
-        ((dotta_config_t *)config)->mode = original_mode;
-    }
 
     if (err) {
         err = error_wrap(err, "Failed to load profiles");

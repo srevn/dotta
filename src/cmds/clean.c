@@ -187,8 +187,6 @@ error_t *cmd_clean(git_repository *repo, const cmd_clean_options_t *opts) {
     string_array_t *orphaned = NULL;
     char *repo_dir = NULL;
     hook_context_t *hook_ctx = NULL;
-    profile_mode_t original_mode = PROFILE_MODE_LOCAL;
-    bool mode_overridden = false;
 
     /* Local variables for file removal tracking */
     size_t removed_count = 0;
@@ -239,21 +237,9 @@ error_t *cmd_clean(git_repository *repo, const cmd_clean_options_t *opts) {
         goto cleanup;
     }
 
-    /* Apply mode override if provided */
-    if (opts->mode) {
-        original_mode = config->mode;
-        config->mode = config_parse_mode(opts->mode, config->mode);
-        mode_overridden = true;
-    }
-
-    /* Load profiles with config fallback */
+    /* Load profiles */
     err = profile_resolve(repo, opts->profiles, opts->profile_count,
                          config, config->strict_mode, &profiles, NULL);
-
-    /* Restore original mode */
-    if (mode_overridden) {
-        config->mode = original_mode;
-    }
 
     if (err) {
         err = error_wrap(err, "Failed to load profiles");

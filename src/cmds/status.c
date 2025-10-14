@@ -932,8 +932,6 @@ error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
     state_t *state = NULL;
     output_ctx_t *out = NULL;
     new_file_list_t *new_files = NULL;
-    profile_mode_t original_mode = PROFILE_MODE_LOCAL;
-    bool mode_overridden = false;
     size_t up_to_date = 0;
     size_t modified = 0;
     size_t not_deployed = 0;
@@ -970,21 +968,9 @@ error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
         goto cleanup;
     }
 
-    /* Apply mode override if provided */
-    if (opts->mode) {
-        original_mode = config->mode;
-        config->mode = config_parse_mode(opts->mode, config->mode);
-        mode_overridden = true;
-    }
-
-    /* Load profiles with config fallback */
+    /* Load profiles */
     err = profile_resolve(repo, opts->profiles, opts->profile_count,
                          config, config->strict_mode, &profiles, NULL);
-
-    /* Restore original mode */
-    if (mode_overridden) {
-        config->mode = original_mode;
-    }
 
     if (err) {
         err = error_wrap(err, "Failed to load profiles");

@@ -1430,12 +1430,6 @@ error_t *cmd_ignore(git_repository *repo, const cmd_ignore_options_t *opts) {
         return ERROR(ERR_MEMORY, "Failed to create output context");
     }
 
-    /* Apply mode override if provided */
-    profile_mode_t original_mode = config->mode;
-    if (opts->mode) {
-        ((dotta_config_t *)config)->mode = config_parse_mode(opts->mode, config->mode);
-    }
-
     /* Validate mutual exclusivity */
     bool has_add = opts->add_count > 0;
     bool has_remove = opts->remove_count > 0;
@@ -1472,11 +1466,6 @@ error_t *cmd_ignore(git_repository *repo, const cmd_ignore_options_t *opts) {
         } else {
             err = edit_baseline_dottaignore(repo, config, out);
         }
-    }
-
-    /* Restore original mode */
-    if (opts->mode) {
-        ((dotta_config_t *)config)->mode = original_mode;
     }
 
     /* Add trailing newline for UX consistency */

@@ -15,7 +15,7 @@
  * Command options
  */
 typedef struct {
-    const char **profiles;      /* Profile names (NULL = auto-detect) */
+    const char **profiles;      /* Profile names (NULL = use state/config) */
     size_t profile_count;       /* Number of profiles */
     bool force;                 /* Overwrite modified files */
     bool dry_run;               /* Don't actually deploy */
@@ -23,7 +23,6 @@ typedef struct {
     bool verbose;               /* Print verbose output */
     bool skip_existing;         /* Skip files that already exist */
     bool skip_unchanged;        /* Skip files that match profile content (default: true) */
-    const char *mode;           /* Profile mode override: "local", "auto", "all" (CLI only) */
 } cmd_apply_options_t;
 
 /**

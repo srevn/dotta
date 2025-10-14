@@ -535,7 +535,7 @@ error_t *workspace_validate(
 
         case WORKSPACE_INVALID:
             return ERROR(ERR_VALIDATION,
-                        "Cannot %s: workspace has orphaned state entries (run 'dotta check --fix')",
+                        "Cannot %s: workspace has orphaned state entries (run 'dotta profile validate --fix')",
                         operation);
     }
 

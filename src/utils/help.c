@@ -299,7 +299,7 @@ void print_profile_help(const char *prog_name) {
     printf("  list                     Show profiles with activation status\n");
     printf("  fetch <name>...          Download profiles from remote without activating\n");
     printf("  activate <name>...       Add profiles to active set\n");
-    printf("  deactivate <name>...     Remove profiles from active set (and deployed files)\n");
+    printf("  deactivate <name>...     Remove profiles from active set\n");
     printf("  reorder <name>...        Change order of active profiles (affects layering)\n");
     printf("  validate                 Check and fix state consistency\n");
     printf("\nOptions (list):\n");
@@ -311,8 +311,7 @@ void print_profile_help(const char *prog_name) {
     printf("  -v, --verbose            Show detailed progress\n");
     printf("\nOptions (deactivate):\n");
     printf("  --all                    Deactivate all profiles\n");
-    printf("  --keep-files             Keep deployed files on filesystem\n");
-    printf("  -n, --dry-run            Show what would be removed without doing it\n");
+    printf("  -n, --dry-run            Show what would change without doing it\n");
     printf("  -v, --verbose            Show detailed progress\n");
     printf("\nOptions (reorder):\n");
     printf("  -v, --verbose            Show before/after profile order\n");
@@ -365,12 +364,12 @@ void print_clean_help(const char *prog_name) {
     printf("\nUse Cases:\n");
     printf("  - After manually deleting files from profile branches with git\n");
     printf("  - After removing files with 'dotta remove --keep-files'\n");
-    printf("  - After deactivating profiles with 'dotta profile deactivate --keep-files'\n");
+    printf("  - After deactivating profiles (files remain until 'apply' is run)\n");
     printf("  - To clean up before switching to a different profile set\n");
     printf("\nAlternatives:\n");
     printf("  - 'dotta apply --prune'          Deploy profiles AND clean orphans\n");
+    printf("  - 'dotta apply'                  Deploy after deactivating profiles\n");
     printf("  - 'dotta remove <file>'          Remove from profile AND filesystem (atomic)\n");
-    printf("  - 'dotta profile deactivate'     Deactivate AND remove files (atomic)\n");
     printf("\n");
 }
 

@@ -44,7 +44,6 @@ typedef struct {
 
     /* Activate/deactivate options */
     bool all_profiles;      /* Activate/deactivate all local profiles */
-    bool keep_files;        /* Don't remove deployed files (opt-out for atomic operations) */
     bool dry_run;           /* Show what would be changed without doing it */
 
     /* Validate options */

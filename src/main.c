@@ -741,8 +741,6 @@ static int cmd_profile_main(int argc, char **argv) {
                 return 0;
             } else if (strcmp(argv[i], "--all") == 0) {
                 opts.all_profiles = true;
-            } else if (strcmp(argv[i], "--keep-files") == 0) {
-                opts.keep_files = true;
             } else if (strcmp(argv[i], "-n") == 0 || strcmp(argv[i], "--dry-run") == 0) {
                 opts.dry_run = true;
             } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {

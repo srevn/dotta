@@ -769,22 +769,6 @@ static error_t *profile_deactivate(
         goto cleanup;
     }
 
-    /* Count how many files will be affected (for confirmation) */
-    size_t total_files_to_remove = 0;
-    if (!opts->keep_files) {
-        size_t state_file_count = 0;
-        const state_file_entry_t *state_files = state_get_all_files(state, &state_file_count);
-
-        for (size_t i = 0; i < string_array_size(to_deactivate); i++) {
-            const char *profile_name = string_array_get(to_deactivate, i);
-            for (size_t j = 0; j < state_file_count; j++) {
-                if (strcmp(state_files[j].profile, profile_name) == 0) {
-                    total_files_to_remove++;
-                }
-            }
-        }
-    }
-
     /* Build new active list and count profiles */
     for (size_t i = 0; i < string_array_size(active); i++) {
         const char *profile_name = string_array_get(active, i);
@@ -848,28 +832,10 @@ static error_t *profile_deactivate(
                     output_printf(out, OUTPUT_NORMAL, "  - %s\n", profile_name);
                 }
             }
-
-            if (!opts->keep_files && total_files_to_remove > 0) {
-                output_newline(out);
-                output_info(out, "Would remove %zu deployed file%s from filesystem",
-                           total_files_to_remove, total_files_to_remove == 1 ? "" : "s");
-            }
+            output_newline(out);
+            output_info(out, "Run 'dotta apply' to remove deployed files");
         }
         goto cleanup;
-    }
-
-    /* Confirmation prompt for multi-file operations */
-    if (deactivated_count > 0 && !opts->keep_files && total_files_to_remove > 1) {
-        char prompt[256];
-        snprintf(prompt, sizeof(prompt),
-                "Deactivate %zu profile%s and remove %zu file%s from filesystem?",
-                deactivated_count, deactivated_count == 1 ? "" : "s",
-                total_files_to_remove, total_files_to_remove == 1 ? "" : "s");
-
-        if (!output_confirm(out, prompt, false)) {
-            output_info(out, "Cancelled");
-            goto cleanup;
-        }
     }
 
     /* Update state with new active profiles */
@@ -890,77 +856,7 @@ static error_t *profile_deactivate(
             goto cleanup;
         }
 
-        /* ATOMIC OPERATION: Clean up deployed files and state entries
-         *
-         * This is the core of the atomic operation design. By default,
-         * deactivating a profile removes both:
-         * 1. The files from the filesystem (deploy_cleanup_profile_files)
-         * 2. The state tracking entries (already done by deploy_cleanup_profile_files)
-         *
-         * This prevents the split-brain architecture where profile branches
-         * and filesystem state can diverge indefinitely.
-         *
-         * Users can opt-out with --keep-files to preserve the old behavior
-         * (useful for advanced workflows or temporarily switching profiles).
-         */
-        if (!opts->keep_files) {
-            /* Clean up filesystem and state for each deactivated profile */
-            for (size_t i = 0; i < string_array_size(to_deactivate); i++) {
-                const char *profile_name = string_array_get(to_deactivate, i);
-
-                size_t removed_count = 0;
-                error_t *cleanup_err = deploy_cleanup_profile_files(
-                    state,
-                    profile_name,
-                    false,  /* not dry-run (we already checked) */
-                    opts->verbose,
-                    &removed_count
-                );
-
-                if (cleanup_err) {
-                    /* Non-fatal: Continue with other profiles */
-                    if (opts->verbose) {
-                        output_warning(out, "Failed to clean files for '%s': %s",
-                                      profile_name, error_message(cleanup_err));
-                    }
-                    error_free(cleanup_err);
-                } else if (opts->verbose && removed_count > 0) {
-                    output_success(out, "  Removed %zu file%s for profile '%s'",
-                                  removed_count, removed_count == 1 ? "" : "s",
-                                  profile_name);
-                }
-            }
-        } else {
-            /* --keep-files flag: Keep files on filesystem AND in state
-             *
-             * Design rationale:
-             * - Files remain deployed on the filesystem for the user to manage
-             * - State entries MUST remain so 'dotta apply --prune' can find them
-             * - Only the active profiles list is modified (already done above)
-             *
-             * This enables the intended workflow:
-             *   1. dotta profile deactivate work --keep-files
-             *      (profile removed from active list, files remain on disk and in state)
-             *   2. dotta apply --prune
-             *      (compares state files vs new manifest, removes orphaned files)
-             *
-             * Implementation note:
-             * We do NOT call state_cleanup_profile() or any cleanup function here.
-             * The profile has already been removed from the active_profiles list
-             * (line 811 via state_set_profiles). The state file entries must remain
-             * untouched so that subsequent 'apply --prune' can identify and remove them.
-             *
-             * If we removed state entries here, the files would become permanently
-             * orphaned because 'apply --prune' wouldn't know they exist.
-             */
-            if (opts->verbose) {
-                output_info(out, "Keeping %zu file%s in state for later cleanup",
-                           total_files_to_remove, total_files_to_remove == 1 ? "" : "s");
-                output_info(out, "Run 'dotta apply --prune' to remove deployed files");
-            }
-        }
-
-        /* Save state (includes profile deactivation and optional file cleanup) */
+        /* Save state (profile deactivation only - filesystem cleanup via 'apply') */
         err = state_save(repo, state);
         if (err) {
             err = error_wrap(err, "Failed to save state");
@@ -990,15 +886,7 @@ cleanup:
     if (deactivated_count > 0) {
         output_success(out, "Deactivated %zu profile%s",
                       deactivated_count, deactivated_count == 1 ? "" : "s");
-
-        /* Inform user about file cleanup */
-        if (!opts->keep_files && total_files_to_remove > 0) {
-            output_success(out, "Removed %zu deployed file%s from filesystem",
-                          total_files_to_remove, total_files_to_remove == 1 ? "" : "s");
-        } else if (opts->keep_files && total_files_to_remove > 0) {
-            output_info(out, "Deployed files remain on filesystem (--keep-files)");
-            output_info(out, "Run 'dotta apply --prune' to clean up later");
-        }
+        output_info(out, "Run 'dotta apply' to remove deployed files from filesystem");
     }
     if (not_active > 0 && !opts->quiet) {
         output_info(out, "%zu profile%s were not active",

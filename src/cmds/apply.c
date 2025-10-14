@@ -340,20 +340,28 @@ cleanup:
  * Update state with deployed files and save to disk
  *
  * Updates the state with:
- * - Active profile names (only if appropriate based on source)
+ * - Active profile names (always - state must reflect reality)
  * - Files from manifest (with computed hashes)
  *
- * State profile update policy:
- * - EXPLICIT (CLI -p): Don't update state (temporary override)
- * - CONFIG (profile_order): Don't update state (config controls profiles)
- * - STATE (active profiles): Update state (keep state current)
- * - MODE (fallback): Update state (migrate to explicit state)
+ * State consistency principle:
+ * Every deployment operation updates BOTH profiles and files in state.
+ * This ensures state remains internally consistent and accurately reflects
+ * what is deployed on the filesystem.
+ *
+ * The state file is the single source of truth for:
+ * - Which profiles are currently active
+ * - Which files are currently deployed
+ * - Where those files came from (profile tracking)
+ *
+ * This consistency is critical for:
+ * - `apply --prune` to correctly identify orphaned files
+ * - `status` to show accurate workspace state
+ * - `revert` to restore correct versions
  *
  * @param repo Repository (must not be NULL)
  * @param state State to update (must not be NULL)
  * @param profiles Profiles being applied (must not be NULL)
  * @param manifest Manifest of deployed files (must not be NULL)
- * @param profile_source Source of profiles (determines update behavior)
  * @param out Output context for messages (must not be NULL)
  * @return Error or NULL on success
  */
@@ -362,7 +370,6 @@ static error_t *apply_update_and_save_state(
     state_t *state,
     const profile_list_t *profiles,
     const manifest_t *manifest,
-    profile_source_t profile_source,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
@@ -374,34 +381,31 @@ static error_t *apply_update_and_save_state(
     error_t *err = NULL;
     const char **profile_names = NULL;
 
-    /* Update state with active profiles (only if from state, not from explicit/config override) */
-    bool should_update_profiles = (profile_source == PROFILE_SOURCE_STATE);
-
-    if (should_update_profiles) {
-        profile_names = malloc(profiles->count * sizeof(char *));
-        if (!profile_names) {
-            return ERROR(ERR_MEMORY, "Failed to allocate profile names");
-        }
-
-        for (size_t i = 0; i < profiles->count; i++) {
-            profile_names[i] = profiles->profiles[i].name;
-        }
-
-        err = state_set_profiles(state, profile_names, profiles->count);
-        free(profile_names);
-
-        if (err) {
-            return error_wrap(err, "Failed to update state profiles");
-        }
-
-        output_print(out, OUTPUT_VERBOSE, "Updated active profiles in state\n");
-    } else {
-        /* Explicit or config override - don't update state */
-        const char *source_desc = (profile_source == PROFILE_SOURCE_EXPLICIT)
-            ? "CLI override" : "config file";
-        output_print(out, OUTPUT_VERBOSE,
-                    "Profiles from %s - state not updated\n", source_desc);
+    /*
+     * Update state with active profiles
+     *
+     * Critical: State must always reflect reality. Every deployment updates
+     * both the profile list and file list to maintain internal consistency.
+     *
+     * This ensures commands like `apply --prune` and `status` remain reliable.
+     */
+    profile_names = malloc(profiles->count * sizeof(char *));
+    if (!profile_names) {
+        return ERROR(ERR_MEMORY, "Failed to allocate profile names");
     }
+
+    for (size_t i = 0; i < profiles->count; i++) {
+        profile_names[i] = profiles->profiles[i].name;
+    }
+
+    err = state_set_profiles(state, profile_names, profiles->count);
+    free(profile_names);
+
+    if (err) {
+        return error_wrap(err, "Failed to update state profiles");
+    }
+
+    output_print(out, OUTPUT_VERBOSE, "Updated active profiles in state\n");
 
     /* Clear old files and add new manifest */
     state_clear_files(state);
@@ -530,8 +534,14 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     /* Load profiles */
     output_print(out, OUTPUT_VERBOSE, "Loading profiles...\n");
 
-    /* Track profile source to determine state update behavior */
-    profile_source_t profile_source;
+    /*
+     * Resolve profiles using standard priority hierarchy:
+     * 1. CLI -p flag (explicit)
+     * 2. Config profile_order
+     * 3. State active_profiles
+     * 4. Auto-detection (mode-based fallback)
+     */
+    profile_source_t profile_source;  /* For informational purposes only */
     err = profile_resolve(repo, opts->profiles, opts->profile_count,
                          config, config->strict_mode, &profiles, &profile_source);
 
@@ -784,8 +794,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
 
         /* Now update state with the new manifest */
-        err = apply_update_and_save_state(repo, state, profiles, manifest,
-                                         profile_source, out);
+        err = apply_update_and_save_state(repo, state, profiles, manifest, out);
         if (err) {
             goto cleanup;
         }

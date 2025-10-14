@@ -204,8 +204,8 @@ static error_t *add_file_to_worktree(
     if (fs_lexists(dest_path)) {
         if (!opts->force) {
             error_t *err = ERROR(ERR_EXISTS,
-                        "File '%s' already exists in profile '%s'. Use --force to overwrite.",
-                        storage_path, opts->profile);
+                        "File '%s' (as '%s') already exists in profile '%s'. Use --force to overwrite.",
+                        filesystem_path, storage_path, opts->profile);
             free(dest_path);
             free(storage_path);
             return err;
@@ -275,12 +275,14 @@ static error_t *add_file_to_worktree(
 
     int git_err = git_index_add_bypath(index, storage_path);
     if (git_err < 0) {
+        git_index_free(index);
         free(dest_path);
         free(storage_path);
         return error_from_git(git_err);
     }
 
     git_err = git_index_write(index);
+    git_index_free(index);
     if (git_err < 0) {
         free(dest_path);
         free(storage_path);
@@ -357,11 +359,13 @@ static error_t *init_profile_dottaignore(
 
     int git_err = git_index_add_bypath(index, ".dottaignore");
     if (git_err < 0) {
+        git_index_free(index);
         free(dottaignore_path);
         return error_from_git(git_err);
     }
 
     git_err = git_index_write(index);
+    git_index_free(index);
     if (git_err < 0) {
         free(dottaignore_path);
         return error_from_git(git_err);
@@ -446,37 +450,29 @@ static error_t *capture_and_save_metadata(
 
         /* entry will be NULL for symlinks - skip them */
         if (entry) {
-            /* Save metadata before adding (for verbose output) */
-            mode_t mode = entry->mode;
-            char *owner = entry->owner ? strdup(entry->owner) : NULL;
-            char *group = entry->group ? strdup(entry->group) : NULL;
+            /* Verbose output before consuming the entry */
+            if (opts->verbose) {
+                if (entry->owner || entry->group) {
+                    printf("Captured metadata: %s (mode: %04o, owner: %s:%s)\n",
+                          filesystem_path, entry->mode,
+                          entry->owner ? entry->owner : "?",
+                          entry->group ? entry->group : "?");
+                } else {
+                    printf("Captured metadata: %s (mode: %04o)\n",
+                          filesystem_path, entry->mode);
+                }
+            }
 
             /* Add to metadata collection (copies all fields including owner/group) */
             err = metadata_add_entry(metadata, entry);
             metadata_entry_free(entry);
 
             if (err) {
-                free(owner);
-                free(group);
                 metadata_free(metadata);
                 return error_wrap(err, "Failed to add metadata entry");
             }
 
             captured_count++;
-
-            if (opts->verbose) {
-                if (owner || group) {
-                    printf("Captured metadata: %s (mode: %04o, owner: %s:%s)\n",
-                          filesystem_path, mode,
-                          owner ? owner : "?",
-                          group ? group : "?");
-                } else {
-                    printf("Captured metadata: %s (mode: %04o)\n",
-                          filesystem_path, mode);
-                }
-            }
-            free(owner);
-            free(group);
         }
     }
 
@@ -497,10 +493,12 @@ static error_t *capture_and_save_metadata(
 
     int git_err = git_index_add_bypath(index, METADATA_FILE_PATH);
     if (git_err < 0) {
+        git_index_free(index);
         return error_from_git(git_err);
     }
 
     git_err = git_index_write(index);
+    git_index_free(index);
     if (git_err < 0) {
         return error_from_git(git_err);
     }
@@ -683,6 +681,7 @@ static error_t *create_commit(
 
     git_oid tree_oid;
     int git_err = git_index_write_tree(&tree_oid, index);
+    git_index_free(index);
     if (git_err < 0) {
         return error_from_git(git_err);
     }
@@ -766,8 +765,18 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         return err;
     }
 
-    /* Load configuration for hooks and ignore patterns */
+    /* Initialize all resources to NULL for safe cleanup */
     dotta_config_t *config = NULL;
+    state_t *state = NULL;
+    ignore_context_t *ignore_ctx = NULL;
+    char *repo_dir = NULL;
+    hook_context_t *hook_ctx = NULL;
+    worktree_handle_t *wt = NULL;
+    string_array_t *all_files = NULL;
+    size_t added_count = 0;
+    bool profile_was_new = false;
+
+    /* Load configuration for hooks and ignore patterns */
     err = config_load(NULL, &config);
     if (err) {
         /* Non-fatal: continue without config */
@@ -777,15 +786,13 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     }
 
     /* Load state (with locking for write transaction) */
-    state_t *state = NULL;
     err = state_load_for_update(repo, &state);
     if (err) {
-        config_free(config);
-        return error_wrap(err, "Failed to load state");
+        err = error_wrap(err, "Failed to load state");
+        goto cleanup;
     }
 
     /* Create ignore context */
-    ignore_context_t *ignore_ctx = NULL;
     const char **cli_patterns = (const char **)opts->exclude_patterns;
     err = ignore_context_create(
         repo,
@@ -806,17 +813,13 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     }
 
     /* Get repository directory */
-    char *repo_dir = NULL;
     err = config_get_repo_dir(config, &repo_dir);
     if (err) {
-        ignore_context_free(ignore_ctx);
-        state_free(state);
-        config_free(config);
-        return err;
+        goto cleanup;
     }
 
     /* Execute pre-add hook */
-    hook_context_t *hook_ctx = hook_context_create(repo_dir, "add", opts->profile);
+    hook_ctx = hook_context_create(repo_dir, "add", opts->profile);
     if (hook_ctx) {
         hook_context_add_files(hook_ctx, opts->files, opts->file_count);
 
@@ -829,41 +832,24 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                 fprintf(stderr, "Hook output:\n%s\n", hook_result->output);
             }
             hook_result_free(hook_result);
-            hook_context_free(hook_ctx);
-            free(repo_dir);
-            ignore_context_free(ignore_ctx);
-            state_free(state);
-            config_free(config);
-            return error_wrap(err, "Pre-add hook failed");
+            err = error_wrap(err, "Pre-add hook failed");
+            goto cleanup;
         }
         hook_result_free(hook_result);
     }
 
-    worktree_handle_t *wt = NULL;
-    bool profile_was_new = false;  /* Track if we created a new profile */
-
     /* Create temporary worktree */
     err = worktree_create_temp(repo, &wt);
     if (err) {
-        hook_context_free(hook_ctx);
-        free(repo_dir);
-        ignore_context_free(ignore_ctx);
-        state_free(state);
-        config_free(config);
-        return error_wrap(err, "Failed to create temporary worktree");
+        err = error_wrap(err, "Failed to create temporary worktree");
+        goto cleanup;
     }
 
     /* Checkout or create profile branch */
     bool profile_exists = false;
     err = gitops_branch_exists(repo, opts->profile, &profile_exists);
     if (err) {
-        worktree_cleanup(wt);
-        hook_context_free(hook_ctx);
-        free(repo_dir);
-        ignore_context_free(ignore_ctx);
-        state_free(state);
-        config_free(config);
-        return err;
+        goto cleanup;
     }
 
     if (profile_exists) {
@@ -874,39 +860,24 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     }
 
     if (err) {
-        worktree_cleanup(wt);
-        hook_context_free(hook_ctx);
-        free(repo_dir);
-        ignore_context_free(ignore_ctx);
-        state_free(state);
-        config_free(config);
-        return error_wrap(err, "Failed to prepare profile branch '%s'", opts->profile);
+        err = error_wrap(err, "Failed to prepare profile branch '%s'", opts->profile);
+        goto cleanup;
     }
 
     /* Initialize .dottaignore for new profiles */
     if (!profile_exists) {
         err = init_profile_dottaignore(wt, opts);
         if (err) {
-            worktree_cleanup(wt);
-            hook_context_free(hook_ctx);
-            free(repo_dir);
-            ignore_context_free(ignore_ctx);
-            state_free(state);
-            config_free(config);
-            return error_wrap(err, "Failed to initialize .dottaignore for profile '%s'", opts->profile);
+            err = error_wrap(err, "Failed to initialize .dottaignore for profile '%s'", opts->profile);
+            goto cleanup;
         }
     }
 
     /* Collect all files to add (expanding directories) */
-    string_array_t *all_files = string_array_create();
+    all_files = string_array_create();
     if (!all_files) {
-        worktree_cleanup(wt);
-        hook_context_free(hook_ctx);
-        free(repo_dir);
-        ignore_context_free(ignore_ctx);
-        state_free(state);
-        config_free(config);
-        return ERROR(ERR_MEMORY, "Failed to allocate file list");
+        err = ERROR(ERR_MEMORY, "Failed to allocate file list");
+        goto cleanup;
     }
 
     /* Process each input path */
@@ -917,27 +888,15 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         char *canonical = NULL;
         err = fs_canonicalize_path(file, &canonical);
         if (err) {
-            string_array_free(all_files);
-            worktree_cleanup(wt);
-            hook_context_free(hook_ctx);
-            free(repo_dir);
-            ignore_context_free(ignore_ctx);
-            state_free(state);
-            config_free(config);
-            return error_wrap(err, "Failed to resolve path '%s'", file);
+            err = error_wrap(err, "Failed to resolve path '%s'", file);
+            goto cleanup;
         }
 
         /* Check path exists */
         if (!fs_exists(canonical)) {
             free(canonical);
-            string_array_free(all_files);
-            worktree_cleanup(wt);
-            hook_context_free(hook_ctx);
-            free(repo_dir);
-            ignore_context_free(ignore_ctx);
-            state_free(state);
-            config_free(config);
-            return ERROR(ERR_NOT_FOUND, "Path not found: %s", file);
+            err = ERROR(ERR_NOT_FOUND, "Path not found: %s", file);
+            goto cleanup;
         }
 
         /* Handle directories vs files */
@@ -948,14 +907,8 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
 
             if (err) {
                 free(canonical);
-                string_array_free(all_files);
-                worktree_cleanup(wt);
-                hook_context_free(hook_ctx);
-                free(repo_dir);
-                ignore_context_free(ignore_ctx);
-                state_free(state);
-                config_free(config);
-                return error_wrap(err, "Failed to collect files from '%s'", file);
+                err = error_wrap(err, "Failed to collect files from '%s'", file);
+                goto cleanup;
             }
 
             /* Merge directory files into all_files */
@@ -1036,39 +989,23 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
 
     /* Check if we have any files to add */
     if (string_array_size(all_files) == 0) {
-        string_array_free(all_files);
-        worktree_cleanup(wt);
-        hook_context_free(hook_ctx);
-        free(repo_dir);
-        ignore_context_free(ignore_ctx);
-        state_free(state);
-        config_free(config);
-
         if (opts->exclude_count > 0) {
-            return ERROR(ERR_INVALID_ARG,
-                        "No files to add (all files excluded by patterns)");
+            err = ERROR(ERR_INVALID_ARG, "No files to add (all files excluded by patterns)");
         } else {
-            return ERROR(ERR_INVALID_ARG, "No files to add");
+            err = ERROR(ERR_INVALID_ARG, "No files to add");
         }
+        goto cleanup;
     }
 
     /* Add each collected file to worktree */
-    size_t added_count = 0;
     for (size_t i = 0; i < string_array_size(all_files); i++) {
         const char *file_path = string_array_get(all_files, i);
 
         /* Add to worktree */
         err = add_file_to_worktree(wt, file_path, opts);
         if (err) {
-            error_t *wrapped_err = error_wrap(err, "Failed to add file '%s'", file_path);
-            string_array_free(all_files);
-            worktree_cleanup(wt);
-            hook_context_free(hook_ctx);
-            free(repo_dir);
-            ignore_context_free(ignore_ctx);
-            state_free(state);
-            config_free(config);
-            return wrapped_err;
+            err = error_wrap(err, "Failed to add file '%s'", file_path);
+            goto cleanup;
         }
         added_count++;
     }
@@ -1076,49 +1013,35 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     /* Capture and save metadata for added files */
     err = capture_and_save_metadata(wt, all_files, opts);
     if (err) {
-        string_array_free(all_files);
-        worktree_cleanup(wt);
-        hook_context_free(hook_ctx);
-        free(repo_dir);
-        ignore_context_free(ignore_ctx);
-        state_free(state);
-        config_free(config);
-        return error_wrap(err, "Failed to capture metadata");
+        err = error_wrap(err, "Failed to capture metadata");
+        goto cleanup;
     }
 
     /* Create commit */
     err = create_commit(repo, wt, opts, all_files, config);
     if (err) {
-        string_array_free(all_files);
-        worktree_cleanup(wt);
-        hook_context_free(hook_ctx);
-        free(repo_dir);
-        ignore_context_free(ignore_ctx);
-        state_free(state);
-        config_free(config);
-        return err;
+        goto cleanup;
     }
 
-    /* Cleanup worktree */
+    /* Cleanup worktree before post-processing */
     worktree_cleanup(wt);
+    wt = NULL;
 
     /* Mark files as deployed if they exist at target location */
-    err = mark_added_files_as_deployed(repo, state, opts, all_files);
-    if (err) {
-        fprintf(stderr, "Warning: Failed to mark files as deployed: %s\n", error_message(err));
-        error_free(err);
+    error_t *temp_err = mark_added_files_as_deployed(repo, state, opts, all_files);
+    if (temp_err) {
+        fprintf(stderr, "Warning: Failed to mark files as deployed: %s\n", error_message(temp_err));
+        error_free(temp_err);
         /* Non-fatal: continue */
     }
 
-    string_array_free(all_files);
-
     /* Auto-activate newly created profile */
     if (profile_was_new) {
-        err = state_ensure_profile_activated(state, opts->profile);
-        if (err) {
+        temp_err = state_ensure_profile_activated(state, opts->profile);
+        if (temp_err) {
             fprintf(stderr, "Warning: Created profile '%s' but failed to activate: %s\n",
-                    opts->profile, error_message(err));
-            error_free(err);
+                    opts->profile, error_message(temp_err));
+            error_free(temp_err);
             /* Non-fatal: continue - files are already added */
         } else if (opts->verbose) {
             printf("Auto-activated profile '%s'\n", opts->profile);
@@ -1126,45 +1049,50 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     }
 
     /* Save state with tracked directories and deployed files */
-    err = state_save(repo, state);
-    if (err) {
-        fprintf(stderr, "Warning: Failed to save state: %s\n", error_message(err));
-        error_free(err);
+    temp_err = state_save(repo, state);
+    if (temp_err) {
+        fprintf(stderr, "Warning: Failed to save state: %s\n", error_message(temp_err));
+        error_free(temp_err);
         /* Non-fatal: continue */
     }
 
     /* Execute post-add hook */
     if (hook_ctx) {
         hook_result_t *hook_result = NULL;
-        err = hook_execute(config, HOOK_POST_ADD, hook_ctx, &hook_result);
+        temp_err = hook_execute(config, HOOK_POST_ADD, hook_ctx, &hook_result);
 
-        if (err) {
+        if (temp_err) {
             /* Hook failed - warn but don't abort (files already added) */
-            fprintf(stderr, "Warning: Post-add hook failed: %s\n", error_message(err));
+            fprintf(stderr, "Warning: Post-add hook failed: %s\n", error_message(temp_err));
             if (hook_result && hook_result->output && hook_result->output[0]) {
                 fprintf(stderr, "Hook output:\n%s\n", hook_result->output);
             }
-            error_free(err);
+            error_free(temp_err);
         }
         hook_result_free(hook_result);
-        hook_context_free(hook_ctx);
     }
 
-    /* Cleanup */
-    free(repo_dir);
-    ignore_context_free(ignore_ctx);
-    state_free(state);
-    config_free(config);
+    /* Show summary on success */
+    if (added_count > 0) {
+        printf("Added %zu file%s to profile '%s'\n",
+               added_count, added_count == 1 ? "" : "s", opts->profile);
 
-    /* Always show summary */
-    printf("Added %zu file%s to profile '%s'\n",
-           added_count, added_count == 1 ? "" : "s", opts->profile);
+        if (profile_was_new) {
+            printf("Profile '%s' created and activated\n", opts->profile);
+        }
 
-    if (profile_was_new) {
-        printf("Profile '%s' created and activated\n", opts->profile);
+        printf("\n");
     }
 
-    printf("\n");
+cleanup:
+    /* Free resources in reverse order of allocation */
+    if (all_files) string_array_free(all_files);
+    if (wt) worktree_cleanup(wt);
+    if (hook_ctx) hook_context_free(hook_ctx);
+    if (repo_dir) free(repo_dir);
+    if (ignore_ctx) ignore_context_free(ignore_ctx);
+    if (state) state_free(state);
+    if (config) config_free(config);
 
-    return NULL;
+    return err;
 }

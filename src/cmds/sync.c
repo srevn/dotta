@@ -19,7 +19,6 @@
 #include "core/profiles.h"
 #include "core/upstream.h"
 #include "core/workspace.h"
-#include "update.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
 #include "utils/output.h"
@@ -270,56 +269,7 @@ static error_t *pull_branch_ff(
 }
 
 /**
- * Phase 1: Update local profiles with modified files
- */
-static error_t *sync_update_phase(
-    git_repository *repo,
-    const cmd_sync_options_t *opts,
-    output_ctx_t *out,
-    bool *had_updates
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(opts);
-    CHECK_NULL(out);
-    CHECK_NULL(had_updates);
-
-    *had_updates = false;
-
-    output_section(out, "Updating local profiles");
-
-    /* Build update options */
-    cmd_update_options_t update_opts = {
-        .files = NULL,
-        .file_count = 0,
-        .profiles = opts->profiles,
-        .profile_count = opts->profile_count,
-        .message = opts->message,
-        .dry_run = opts->dry_run,
-        .interactive = false,
-        .verbose = opts->verbose,
-        .include_new = opts->include_new,
-        .only_new = opts->only_new
-    };
-
-    /* Run update */
-    error_t *err = cmd_update(repo, &update_opts);
-    if (err) {
-        /* Check if it's just "no modified files" */
-        if (strstr(error_message(err), "No modified files")) {
-            error_free(err);
-            output_info(out, "No modified files to update");
-            output_newline(out);
-            return NULL;
-        }
-        return err;
-    }
-
-    *had_updates = true;
-    return NULL;
-}
-
-/**
- * Phase 2: Fetch active profiles from remote
+ * Phase 1: Fetch active profiles from remote
  */
 static error_t *sync_fetch_active_profiles(
     git_repository *repo,
@@ -404,7 +354,7 @@ static error_t *sync_fetch_active_profiles(
 }
 
 /**
- * Phase 3: Analyze branch states
+ * Phase 2: Analyze branch states
  */
 static error_t *sync_analyze_phase(
     git_repository *repo,
@@ -472,7 +422,7 @@ static error_t *sync_analyze_phase(
 }
 
 /**
- * Phase 4: Sync branches with remote (push/pull/divergence handling)
+ * Phase 3: Sync branches with remote (push/pull/divergence handling)
  */
 static error_t *sync_push_phase(
     git_repository *repo,
@@ -1003,16 +953,95 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         return ERROR(ERR_MEMORY, "Failed to create results");
     }
 
-    /* Phase 1: Update local profiles */
-    bool had_updates = false;
-    err = sync_update_phase(repo, opts, out, &had_updates);
+    /* Validate workspace - sync requires clean workspace (no uncommitted changes) */
+    workspace_t *ws = NULL;
+    err = workspace_load(repo, profiles, config, &ws);
     if (err) {
         sync_results_free(results);
         profile_list_free(profiles);
         config_free(config);
         output_free(out);
-        return err;
+        return error_wrap(err, "Failed to load workspace");
     }
+
+    /* Count all types of divergence */
+    size_t modified_count = workspace_count_divergence(ws, DIVERGENCE_MODIFIED);
+    size_t deleted_count = workspace_count_divergence(ws, DIVERGENCE_DELETED);
+    size_t mode_diff_count = workspace_count_divergence(ws, DIVERGENCE_MODE_DIFF);
+    size_t type_diff_count = workspace_count_divergence(ws, DIVERGENCE_TYPE_DIFF);
+    size_t untracked_count = workspace_count_divergence(ws, DIVERGENCE_UNTRACKED);
+    size_t undeployed_count = workspace_count_divergence(ws, DIVERGENCE_UNDEPLOYED);
+    size_t orphaned_count = workspace_count_divergence(ws, DIVERGENCE_ORPHANED);
+
+    size_t uncommitted_count = modified_count + deleted_count + mode_diff_count +
+                               type_diff_count + untracked_count;
+
+    /* Check for uncommitted changes (fatal unless --force) */
+    if (uncommitted_count > 0 && !opts->force) {
+        output_section(out, "Workspace has uncommitted changes");
+        output_newline(out);
+
+        /* Show what's uncommitted */
+        if (modified_count > 0) {
+            output_info(out, "  %zu modified file%s", modified_count,
+                       modified_count == 1 ? "" : "s");
+        }
+        if (deleted_count > 0) {
+            output_info(out, "  %zu deleted file%s", deleted_count,
+                       deleted_count == 1 ? "" : "s");
+        }
+        if (mode_diff_count > 0) {
+            output_info(out, "  %zu file%s with permission changes", mode_diff_count,
+                       mode_diff_count == 1 ? "" : "s");
+        }
+        if (type_diff_count > 0) {
+            output_info(out, "  %zu file%s with type changes", type_diff_count,
+                       type_diff_count == 1 ? "" : "s");
+        }
+        if (untracked_count > 0) {
+            output_info(out, "  %zu new untracked file%s", untracked_count,
+                       untracked_count == 1 ? "" : "s");
+        }
+
+        output_newline(out);
+        output_info(out, "Sync requires a clean workspace to prevent data loss.");
+        output_newline(out);
+        output_info(out, "Next steps:");
+        output_info(out, "  1. Run 'dotta update' to commit these changes to profile branches");
+        output_info(out, "  2. Then run 'dotta sync' to synchronize with remote");
+        output_newline(out);
+        output_info(out, "Or run 'dotta sync --force' to sync without committing local changes.");
+        output_newline(out);
+
+        workspace_free(ws);
+        sync_results_free(results);
+        profile_list_free(profiles);
+        config_free(config);
+        output_free(out);
+        return ERROR(ERR_VALIDATION,
+                    "Cannot sync with uncommitted changes (found %zu uncommitted file%s)",
+                    uncommitted_count, uncommitted_count == 1 ? "" : "s");
+    }
+
+    /* Warn about undeployed files (non-fatal) */
+    if (undeployed_count > 0) {
+        output_warning(out, "Workspace has %zu undeployed file%s",
+                      undeployed_count, undeployed_count == 1 ? "" : "s");
+        output_info(out, "These files exist in profiles but have never been deployed.");
+        output_info(out, "Run 'dotta apply' after sync to deploy them.");
+        output_newline(out);
+    }
+
+    /* Warn about orphaned state entries (non-fatal) */
+    if (orphaned_count > 0) {
+        output_warning(out, "Workspace has %zu orphaned state entr%s",
+                      orphaned_count, orphaned_count == 1 ? "y" : "ies");
+        output_info(out, "These are state entries for files no longer in any profile.");
+        output_info(out, "Run 'dotta status' for details.");
+        output_newline(out);
+    }
+
+    workspace_free(ws);
 
     /* Exit early if dry run */
     if (opts->dry_run) {
@@ -1022,70 +1051,6 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         config_free(config);
         output_free(out);
         return NULL;
-    }
-
-    /* Exit if no-push flag set */
-    if (opts->no_push) {
-        output_info(out, "Update complete (--no-push specified)");
-        sync_results_free(results);
-        profile_list_free(profiles);
-        config_free(config);
-        output_free(out);
-        return NULL;
-    }
-
-    /* Check for undeployed files before syncing to prevent data loss.
-     * Files that exist in profile branches but were never deployed should not
-     * be treated as deletions during update operations.
-     */
-    if (!opts->skip_undeployed) {
-        workspace_t *ws = NULL;
-        err = workspace_load(repo, profiles, config, &ws);
-        if (err) {
-            /* Workspace load failure is non-fatal but we should warn */
-            output_warning(out, "Failed to validate workspace: %s", error_message(err));
-            output_info(out, "Continuing without workspace validation (use --skip-undeployed to suppress)");
-            error_free(err);
-            err = NULL;
-        } else {
-            /* Check workspace status */
-            size_t undeployed_count = workspace_count_divergence(ws, DIVERGENCE_UNDEPLOYED);
-            size_t orphaned_count = workspace_count_divergence(ws, DIVERGENCE_ORPHANED);
-
-            if (undeployed_count > 0) {
-                output_newline(out);
-                output_warning(out, "Workspace has %zu undeployed file%s",
-                              undeployed_count, undeployed_count == 1 ? "" : "s");
-                output_info(out, "These files exist in profiles but have never been deployed:");
-                output_newline(out);
-
-                /* Display undeployed files */
-                size_t count = 0;
-                const workspace_file_t *undeployed = workspace_get_diverged(ws, DIVERGENCE_UNDEPLOYED, &count);
-                if (undeployed) {
-                    for (size_t i = 0; i < count; i++) {
-                        if (undeployed[i].type == DIVERGENCE_UNDEPLOYED) {
-                            char info[1024];
-                            snprintf(info, sizeof(info), "%s (from %s)",
-                                    undeployed[i].filesystem_path, undeployed[i].profile);
-                            output_item(out, "[undeployed]", OUTPUT_COLOR_YELLOW, info);
-                        }
-                    }
-                }
-
-                output_newline(out);
-                output_info(out, "Hint: Run 'dotta apply' to deploy these files, or use --skip-undeployed to continue anyway");
-                output_newline(out);
-            }
-
-            if (orphaned_count > 0) {
-                output_warning(out, "Workspace has %zu orphaned state entr%s",
-                              orphaned_count, orphaned_count == 1 ? "y" : "ies");
-                output_info(out, "Hint: These are state entries for files no longer in any profile");
-            }
-
-            workspace_free(ws);
-        }
     }
 
     /* Auto-detect remote */
@@ -1128,7 +1093,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         opts->diverged ? opts->diverged : config->diverged_strategy
     );
 
-    /* Phase 2: Fetch active profiles from remote */
+    /* Phase 1: Fetch active profiles from remote */
     err = sync_fetch_active_profiles(repo, remote_name, profiles, results, out, opts->verbose, xfer);
     if (err) {
         transfer_context_free(xfer);
@@ -1140,7 +1105,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         return err;
     }
 
-    /* Phase 3: Analyze branch states */
+    /* Phase 2: Analyze branch states */
     err = sync_analyze_phase(repo, remote_name, profiles, results, out);
     if (err) {
         transfer_context_free(xfer);
@@ -1152,7 +1117,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         return err;
     }
 
-    /* Phase 4: Sync with remote (push/pull/divergence handling) */
+    /* Phase 3: Sync with remote (push/pull/divergence handling) */
     err = sync_push_phase(repo, remote_name, results, out, opts->verbose,
                           auto_pull, diverged_strategy, xfer,
                           config->confirm_destructive);

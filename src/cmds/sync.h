@@ -1,8 +1,9 @@
 /**
- * sync.h - Intelligent synchronization command
+ * sync.h - Remote synchronization command
  *
- * Combines update, fetch, and conditional push into a single safe operation.
- * The "do what I mean" command for dotfile synchronization.
+ * Synchronizes local repository with remote (fetch, pull, push).
+ * Handles branch divergence resolution strategies.
+ * Requires clean workspace - use 'update' command first to commit local changes.
  */
 
 #ifndef DOTTA_CMD_SYNC_H
@@ -36,22 +37,23 @@ typedef enum {
 typedef struct {
     const char **profiles;       /* Specific profiles (NULL = use state/config) */
     size_t profile_count;        /* Number of profiles */
-    const char *message;         /* Commit message for update */
     bool dry_run;                /* Preview only */
-    bool no_push;                /* Update but don't push */
+    bool no_push;                /* Don't push (fetch and analyze only) */
     bool no_pull;                /* Don't pull remote changes (push-only) */
     bool verbose;                /* Verbose output */
-    bool include_new;            /* Include new files from tracked directories */
-    bool only_new;               /* Only process new files (ignore modified) */
-    bool skip_undeployed;        /* Allow sync with undeployed files (skip workspace check) */
+    bool force;                  /* Force sync even with uncommitted changes */
     const char *diverged;        /* Divergence strategy override (CLI only) */
 } cmd_sync_options_t;
 
 /**
  * Sync command implementation
  *
- * Intelligently synchronizes local changes with remote repository.
- * Combines update + fetch + conditional push with safety checks.
+ * Synchronizes local repository with remote repository.
+ * Fetches from remote, analyzes branch states, and pushes/pulls as needed.
+ * Handles divergence resolution using configured strategy.
+ *
+ * Requires workspace to be clean (no uncommitted changes) unless --force is used.
+ * Run 'update' command first to commit local changes to profile branches.
  *
  * @param repo Repository (must not be NULL)
  * @param opts Command options (must not be NULL)

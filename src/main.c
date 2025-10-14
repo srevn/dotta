@@ -1297,14 +1297,11 @@ static int cmd_sync_main(int argc, char **argv) {
     cmd_sync_options_t opts = {
         .profiles = NULL,
         .profile_count = 0,
-        .message = NULL,
         .dry_run = false,
         .no_push = false,
         .no_pull = false,
         .verbose = false,
-        .include_new = false,
-        .only_new = false,
-        .skip_undeployed = false,
+        .force = false,
         .diverged = NULL
     };
 
@@ -1322,13 +1319,6 @@ static int cmd_sync_main(int argc, char **argv) {
             free(profiles);
             print_sync_help(argv[0]);
             return 0;
-        } else if (strcmp(argv[i], "-m") == 0 || strcmp(argv[i], "--message") == 0) {
-            if (i + 1 >= argc) {
-                free(profiles);
-                fprintf(stderr, "Error: --message requires an argument\n");
-                return 1;
-            }
-            opts.message = argv[++i];
         } else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--profile") == 0) {
             if (i + 1 >= argc) {
                 free(profiles);
@@ -1342,6 +1332,8 @@ static int cmd_sync_main(int argc, char **argv) {
             opts.no_push = true;
         } else if (strcmp(argv[i], "--no-pull") == 0) {
             opts.no_pull = true;
+        } else if (strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--force") == 0) {
+            opts.force = true;
         } else if (strcmp(argv[i], "--diverged") == 0) {
             if (i + 1 >= argc) {
                 free(profiles);
@@ -1349,12 +1341,6 @@ static int cmd_sync_main(int argc, char **argv) {
                 return 1;
             }
             opts.diverged = argv[++i];
-        } else if (strcmp(argv[i], "--include-new") == 0) {
-            opts.include_new = true;
-        } else if (strcmp(argv[i], "--only-new") == 0) {
-            opts.only_new = true;
-        } else if (strcmp(argv[i], "--skip-undeployed") == 0) {
-            opts.skip_undeployed = true;
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             opts.verbose = true;
         } else {

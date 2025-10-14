@@ -276,6 +276,7 @@ void print_profile_help(const char *prog_name) {
     printf("  fetch <name>...          Download profiles from remote without activating\n");
     printf("  activate <name>...       Add profiles to active set\n");
     printf("  deactivate <name>...     Remove profiles from active set\n");
+    printf("  reorder <name>...        Change order of active profiles (affects layering)\n");
     printf("  validate                 Check and fix state consistency\n");
     printf("\nOptions (list):\n");
     printf("  --remote                 Show remote profiles not yet fetched\n");
@@ -284,6 +285,8 @@ void print_profile_help(const char *prog_name) {
     printf("\nOptions (fetch/activate/deactivate):\n");
     printf("  --all                    Operate on all profiles\n");
     printf("  -v, --verbose            Show detailed progress\n");
+    printf("\nOptions (reorder):\n");
+    printf("  -v, --verbose            Show before/after profile order\n");
     printf("\nOptions (validate):\n");
     printf("  --fix                    Auto-fix state inconsistencies\n");
     printf("  -v, --verbose            Show detailed validation checks\n");
@@ -304,6 +307,7 @@ void print_profile_help(const char *prog_name) {
     printf("  %s profile activate darwin            # Activate for use\n", prog_name);
     printf("  %s profile activate fish zsh tmux     # Activate multiple\n", prog_name);
     printf("  %s profile deactivate --all           # Deactivate everything\n", prog_name);
+    printf("  %s profile reorder darwin global      # Change profile order\n", prog_name);
     printf("  %s profile validate --fix             # Fix state issues\n", prog_name);
     printf("\n");
 }

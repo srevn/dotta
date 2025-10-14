@@ -21,6 +21,7 @@ typedef enum {
     PROFILE_FETCH,       /* Fetch profiles without activating */
     PROFILE_ACTIVATE,    /* Add profiles to active set */
     PROFILE_DEACTIVATE,  /* Remove profiles from active set */
+    PROFILE_REORDER,     /* Reorder active profiles */
     PROFILE_VALIDATE     /* Validate and fix state consistency */
 } profile_subcommand_t;
 

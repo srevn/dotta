@@ -754,6 +754,39 @@ static int cmd_profile_main(int argc, char **argv) {
 
         opts.profiles = profiles;
         opts.profile_count = profile_count;
+    } else if (strcmp(argv[2], "reorder") == 0) {
+        opts.subcommand = PROFILE_REORDER;
+
+        /* Collect profile arguments */
+        const char **profiles = malloc((size_t)argc * sizeof(char *));
+        if (!profiles) {
+            fprintf(stderr, "Failed to allocate memory\n");
+            return 1;
+        }
+        size_t profile_count = 0;
+
+        /* Parse reorder options */
+        for (int i = 3; i < argc; i++) {
+            if (strcmp(argv[i], "--help") == 0) {
+                free(profiles);
+                print_profile_help(argv[0]);
+                return 0;
+            } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
+                opts.verbose = true;
+            } else if (strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--quiet") == 0) {
+                opts.quiet = true;
+            } else if (argv[i][0] != '-') {
+                profiles[profile_count++] = argv[i];
+            } else {
+                fprintf(stderr, "Error: Unknown argument '%s'\n", argv[i]);
+                free(profiles);
+                print_profile_help(argv[0]);
+                return 1;
+            }
+        }
+
+        opts.profiles = profiles;
+        opts.profile_count = profile_count;
     } else if (strcmp(argv[2], "validate") == 0) {
         opts.subcommand = PROFILE_VALIDATE;
 

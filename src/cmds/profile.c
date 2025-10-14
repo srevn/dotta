@@ -797,6 +797,204 @@ cleanup:
 }
 
 /**
+ * Profile reorder subcommand
+ *
+ * Changes the order of active profiles, which affects layering precedence.
+ */
+static error_t *profile_reorder(
+    git_repository *repo,
+    const cmd_profile_options_t *opts,
+    output_ctx_t *out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(opts);
+    CHECK_NULL(out);
+
+    /* Resource tracking for cleanup */
+    state_t *state = NULL;
+    string_array_t *current_active = NULL;
+    dotta_config_t *config = NULL;
+    error_t *err = NULL;
+
+    /* Validation: at least one profile specified */
+    if (opts->profile_count == 0) {
+        err = ERROR(ERR_INVALID_ARG,
+                    "No profiles specified\n"
+                    "Hint: Provide profiles in desired order: dotta profile reorder <p1> <p2> ...");
+        goto cleanup;
+    }
+
+    /* Load config to check for profile_order override */
+    err = config_load(NULL, &config);
+    if (err) {
+        /* Non-fatal: use defaults */
+        config = config_create_default();
+        err = NULL;
+    }
+
+    /* Check if config overrides state */
+    if (config && config->profile_order && config->profile_order_count > 0) {
+        err = ERROR(ERR_VALIDATION,
+                   "Cannot reorder profiles: controlled by config file\n"
+                   "Hint: Remove '[profiles] order' from config.toml to use state-based activation\n"
+                   "      or edit the config file directly");
+        goto cleanup;
+    }
+
+    /* Load state (with locking for write transaction) */
+    err = state_load_for_update(repo, &state);
+    if (err) {
+        err = error_wrap(err, "Failed to load state");
+        goto cleanup;
+    }
+
+    /* Get current active profiles */
+    err = state_get_profiles(state, &current_active);
+    if (err) {
+        err = error_wrap(err, "Failed to get active profiles");
+        goto cleanup;
+    }
+
+    /* Edge case: no active profiles */
+    if (string_array_size(current_active) == 0) {
+        err = ERROR(ERR_VALIDATION,
+                   "No active profiles to reorder\n"
+                   "Hint: Run 'dotta profile activate <name>' first");
+        goto cleanup;
+    }
+
+    /* Edge case: single profile */
+    if (string_array_size(current_active) == 1) {
+        if (!opts->quiet) {
+            output_info(out, "Only one active profile, nothing to reorder");
+        }
+        goto cleanup;  /* Success, but no-op */
+    }
+
+    /* Validation 1: Check for duplicates in new order */
+    for (size_t i = 0; i < opts->profile_count; i++) {
+        for (size_t j = i + 1; j < opts->profile_count; j++) {
+            if (strcmp(opts->profiles[i], opts->profiles[j]) == 0) {
+                err = ERROR(ERR_VALIDATION,
+                           "Profile '%s' appears multiple times in reorder list",
+                           opts->profiles[i]);
+                goto cleanup;
+            }
+        }
+    }
+
+    /* Validation 2: All provided profiles must be currently active */
+    for (size_t i = 0; i < opts->profile_count; i++) {
+        bool is_active = false;
+        for (size_t j = 0; j < string_array_size(current_active); j++) {
+            if (strcmp(opts->profiles[i], string_array_get(current_active, j)) == 0) {
+                is_active = true;
+                break;
+            }
+        }
+        if (!is_active) {
+            err = ERROR(ERR_VALIDATION,
+                       "Profile '%s' is not active\n"
+                       "Hint: Only active profiles can be reordered. Run 'dotta profile list' to see active profiles",
+                       opts->profiles[i]);
+            goto cleanup;
+        }
+    }
+
+    /* Validation 3: Profile count must match */
+    if (opts->profile_count != string_array_size(current_active)) {
+        err = ERROR(ERR_VALIDATION,
+                   "Profile count mismatch: %zu active, %zu provided\n"
+                   "Hint: All active profiles must be included in reorder",
+                   string_array_size(current_active),
+                   opts->profile_count);
+        goto cleanup;
+    }
+
+    /* Validation 4: All currently active profiles must be included */
+    for (size_t i = 0; i < string_array_size(current_active); i++) {
+        const char *active_profile = string_array_get(current_active, i);
+        bool found = false;
+        for (size_t j = 0; j < opts->profile_count; j++) {
+            if (strcmp(opts->profiles[j], active_profile) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            err = ERROR(ERR_VALIDATION,
+                       "Missing active profile '%s' from reorder list\n"
+                       "Hint: All active profiles must be included",
+                       active_profile);
+            goto cleanup;
+        }
+    }
+
+    /* Check if order actually changed (idempotency) */
+    bool order_changed = false;
+    for (size_t i = 0; i < opts->profile_count; i++) {
+        if (strcmp(opts->profiles[i], string_array_get(current_active, i)) != 0) {
+            order_changed = true;
+            break;
+        }
+    }
+
+    if (!order_changed) {
+        if (!opts->quiet) {
+            output_info(out, "No change - profiles already in requested order");
+        }
+        goto cleanup;  /* Success, but no-op */
+    }
+
+    /* Show before/after in verbose mode */
+    if (opts->verbose) {
+        output_section(out, "Profile order change");
+        fprintf(out->stream, "  Before:");
+        for (size_t i = 0; i < string_array_size(current_active); i++) {
+            fprintf(out->stream, " %s", string_array_get(current_active, i));
+        }
+        fprintf(out->stream, "\n");
+
+        fprintf(out->stream, "  After: ");
+        for (size_t i = 0; i < opts->profile_count; i++) {
+            fprintf(out->stream, " %s", opts->profiles[i]);
+        }
+        fprintf(out->stream, "\n\n");
+    }
+
+    /* Update state with new order */
+    err = state_set_profiles(state, opts->profiles, opts->profile_count);
+    if (err) {
+        err = error_wrap(err, "Failed to update state");
+        goto cleanup;
+    }
+
+    /* Save state (releases lock automatically) */
+    err = state_save(repo, state);
+    if (err) {
+        err = error_wrap(err, "Failed to save state");
+        goto cleanup;
+    }
+
+    /* Success message */
+    if (!opts->quiet) {
+        fprintf(out->stream, "\n");
+        output_success(out, "Reordered %zu profile%s",
+                      opts->profile_count,
+                      opts->profile_count == 1 ? "" : "s");
+        output_info(out, "Run 'dotta apply' to deploy with new profile order");
+    }
+
+cleanup:
+    /* Cleanup all resources */
+    config_free(config);
+    string_array_free(current_active);
+    state_free(state);
+
+    return err;
+}
+
+/**
  * Profile validate subcommand
  *
  * Checks state consistency and offers to fix issues.
@@ -1010,6 +1208,10 @@ error_t *cmd_profile(git_repository *repo, const cmd_profile_options_t *opts) {
 
         case PROFILE_DEACTIVATE:
             result = profile_deactivate(repo, opts, out);
+            break;
+
+        case PROFILE_REORDER:
+            result = profile_reorder(repo, opts, out);
             break;
 
         case PROFILE_VALIDATE:

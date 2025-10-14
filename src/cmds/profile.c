@@ -7,14 +7,10 @@
 
 #include "profile.h"
 
-#include <errno.h>
-#include <fcntl.h>
 #include <git2.h>
-#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "base/credentials.h"
 #include "base/error.h"
@@ -25,125 +21,6 @@
 #include "utils/array.h"
 #include "utils/config.h"
 #include "utils/output.h"
-
-/**
- * State lock handle
- */
-typedef struct {
-    int fd;
-    char *lock_path;
-} state_lock_t;
-
-/**
- * Acquire state file lock
- *
- * Creates a .lock file to prevent concurrent state modifications.
- * Uses fcntl advisory locking for robustness.
- *
- * @param repo Repository (must not be NULL)
- * @param lock Output lock handle (must not be NULL)
- * @return Error or NULL on success
- */
-static error_t *state_lock_acquire(git_repository *repo, state_lock_t **lock) {
-    CHECK_NULL(repo);
-    CHECK_NULL(lock);
-
-    const char *git_dir = git_repository_path(repo);
-    if (!git_dir) {
-        return ERROR(ERR_INTERNAL, "Failed to get repository path");
-    }
-
-    /* Build lock file path */
-    char lock_path[PATH_MAX];
-    int ret = snprintf(lock_path, sizeof(lock_path), "%s/dotta-state.json.lock", git_dir);
-    if (ret < 0 || (size_t)ret >= sizeof(lock_path)) {
-        return ERROR(ERR_FS, "Lock path too long");
-    }
-
-    /* Open lock file with O_CLOEXEC to prevent fd leaks to child processes */
-    int fd = open(lock_path, O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
-    if (fd < 0) {
-        return ERROR(ERR_FS, "Failed to open lock file: %s", strerror(errno));
-    }
-
-    /* Try to acquire exclusive lock (non-blocking) */
-    struct flock fl = {
-        .l_type = F_WRLCK,
-        .l_whence = SEEK_SET,
-        .l_start = 0,
-        .l_len = 0  /* Lock entire file */
-    };
-
-    if (fcntl(fd, F_SETLK, &fl) == -1) {
-        close(fd);
-        if (errno == EACCES || errno == EAGAIN) {
-            return ERROR(ERR_CONFLICT,
-                        "State file is locked by another process\n"
-                        "Hint: Wait for the other operation to complete");
-        }
-        return ERROR(ERR_FS, "Failed to acquire lock: %s", strerror(errno));
-    }
-
-    /* Write PID to lock file for debugging */
-    pid_t pid = getpid();
-    char pid_str[32];
-    snprintf(pid_str, sizeof(pid_str), "%d\n", pid);
-    if (write(fd, pid_str, strlen(pid_str)) < 0) {
-        /* Non-fatal - lock is still acquired */
-    }
-
-    /* Create lock handle */
-    state_lock_t *l = calloc(1, sizeof(state_lock_t));
-    if (!l) {
-        close(fd);
-        unlink(lock_path);
-        return ERROR(ERR_MEMORY, "Failed to allocate lock");
-    }
-
-    l->fd = fd;
-    l->lock_path = strdup(lock_path);
-    if (!l->lock_path) {
-        close(fd);
-        free(l);
-        unlink(lock_path);
-        return ERROR(ERR_MEMORY, "Failed to allocate lock path");
-    }
-
-    *lock = l;
-    return NULL;
-}
-
-/**
- * Release state file lock
- *
- * @param lock Lock handle (can be NULL)
- */
-static void state_lock_release(state_lock_t *lock) {
-    if (!lock) {
-        return;
-    }
-
-    if (lock->fd >= 0) {
-        /* Release lock (automatically released on close, but explicit is better) */
-        struct flock fl = {
-            .l_type = F_UNLCK,
-            .l_whence = SEEK_SET,
-            .l_start = 0,
-            .l_len = 0
-        };
-        fcntl(lock->fd, F_SETLK, &fl);
-
-        close(lock->fd);
-    }
-
-    if (lock->lock_path) {
-        /* Remove lock file */
-        unlink(lock->lock_path);
-        free(lock->lock_path);
-    }
-
-    free(lock);
-}
 
 /**
  * Count files in profile
@@ -511,7 +388,6 @@ static error_t *profile_activate(
     CHECK_NULL(out);
 
     /* Resource tracking for cleanup */
-    state_lock_t *lock = NULL;
     state_t *state = NULL;
     string_array_t *active = NULL;
     string_array_t *to_activate = NULL;
@@ -524,14 +400,8 @@ static error_t *profile_activate(
     size_t already_active = 0;
     size_t not_found = 0;
 
-    /* Acquire state lock */
-    err = state_lock_acquire(repo, &lock);
-    if (err) {
-        goto cleanup;
-    }
-
-    /* Load state */
-    err = state_load(repo, &state);
+    /* Load state (with locking for write transaction) */
+    err = state_load_for_update(repo, &state);
     if (err) {
         err = error_wrap(err, "Failed to load state");
         goto cleanup;
@@ -659,7 +529,6 @@ cleanup:
     string_array_free(to_activate);
     string_array_free(active);
     state_free(state);
-    state_lock_release(lock);
 
     /* If there's an error, return it now */
     if (err) {
@@ -706,7 +575,6 @@ static error_t *profile_deactivate(
     CHECK_NULL(out);
 
     /* Resource tracking for cleanup */
-    state_lock_t *lock = NULL;
     state_t *state = NULL;
     string_array_t *active = NULL;
     string_array_t *to_deactivate = NULL;
@@ -718,14 +586,8 @@ static error_t *profile_deactivate(
     size_t deactivated_count = 0;
     size_t not_active = 0;
 
-    /* Acquire state lock */
-    err = state_lock_acquire(repo, &lock);
-    if (err) {
-        goto cleanup;
-    }
-
-    /* Load state */
-    err = state_load(repo, &state);
+    /* Load state (with locking for write transaction) */
+    err = state_load_for_update(repo, &state);
     if (err) {
         err = error_wrap(err, "Failed to load state");
         goto cleanup;
@@ -846,7 +708,6 @@ cleanup:
     string_array_free(to_deactivate);
     string_array_free(active);
     state_free(state);
-    state_lock_release(lock);
 
     /* If there's an error, return it now */
     if (err) {
@@ -895,7 +756,6 @@ static error_t *profile_validate(
     CHECK_NULL(out);
 
     /* Resource tracking for cleanup */
-    state_lock_t *lock = NULL;
     state_t *state = NULL;
     string_array_t *active = NULL;
     string_array_t *missing = NULL;
@@ -907,16 +767,12 @@ static error_t *profile_validate(
     bool has_issues = false;
     size_t orphaned_files = 0;
 
-    /* Acquire state lock if we're going to fix issues */
+    /* Load state (with locking if we're going to fix issues) */
     if (opts->fix) {
-        err = state_lock_acquire(repo, &lock);
-        if (err) {
-            goto cleanup;
-        }
+        err = state_load_for_update(repo, &state);
+    } else {
+        err = state_load(repo, &state);
     }
-
-    /* Load state */
-    err = state_load(repo, &state);
     if (err) {
         err = error_wrap(err, "Failed to load state");
         goto cleanup;
@@ -1031,7 +887,6 @@ cleanup:
     string_array_free(missing);
     string_array_free(active);
     state_free(state);
-    state_lock_release(lock);
 
     /* If there's an error, return it now */
     if (err) {

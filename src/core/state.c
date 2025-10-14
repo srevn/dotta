@@ -17,12 +17,14 @@
 #include "state.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <git2.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "cJSON.h"
 #include "base/error.h"
@@ -33,6 +35,17 @@
 
 #define STATE_FILE_NAME "dotta-state.json"
 #define STATE_VERSION 2
+
+/**
+ * State lock handle
+ *
+ * Used to coordinate concurrent access to the state file across processes.
+ * Uses fcntl advisory locking for robustness and portability.
+ */
+typedef struct {
+    int fd;
+    char *lock_path;
+} state_lock_t;
 
 /**
  * State structure
@@ -56,6 +69,9 @@ struct state {
     size_t directory_count;
     size_t directory_capacity;
     hashmap_t *directory_index;      /* Maps filesystem_path -> state_directory_entry_t* (O(1) lookup) */
+
+    /* Locking for write transactions */
+    state_lock_t *lock;              /* NULL for read-only, non-NULL if acquired via state_load_for_update() */
 };
 
 /**
@@ -71,6 +87,117 @@ static error_t *get_state_file_path(git_repository *repo, char **out) {
     }
 
     return fs_path_join(git_dir, STATE_FILE_NAME, out);
+}
+
+/**
+ * Acquire state file lock
+ *
+ * Creates a .lock file to prevent concurrent state modifications.
+ * Uses fcntl advisory locking for robustness and portability.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param lock Output lock handle (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *state_lock_acquire(git_repository *repo, state_lock_t **lock) {
+    CHECK_NULL(repo);
+    CHECK_NULL(lock);
+
+    const char *git_dir = git_repository_path(repo);
+    if (!git_dir) {
+        return ERROR(ERR_INTERNAL, "Failed to get repository path");
+    }
+
+    /* Build lock file path */
+    char lock_path[PATH_MAX];
+    int ret = snprintf(lock_path, sizeof(lock_path), "%s/dotta-state.json.lock", git_dir);
+    if (ret < 0 || (size_t)ret >= sizeof(lock_path)) {
+        return ERROR(ERR_FS, "Lock path too long");
+    }
+
+    /* Open lock file with O_CLOEXEC to prevent fd leaks to child processes */
+    int fd = open(lock_path, O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
+    if (fd < 0) {
+        return ERROR(ERR_FS, "Failed to open lock file: %s", strerror(errno));
+    }
+
+    /* Try to acquire exclusive lock (non-blocking) */
+    struct flock fl = {
+        .l_type = F_WRLCK,
+        .l_whence = SEEK_SET,
+        .l_start = 0,
+        .l_len = 0  /* Lock entire file */
+    };
+
+    if (fcntl(fd, F_SETLK, &fl) == -1) {
+        close(fd);
+        if (errno == EACCES || errno == EAGAIN) {
+            return ERROR(ERR_CONFLICT,
+                        "State file is locked by another process\n"
+                        "Hint: Wait for the other operation to complete");
+        }
+        return ERROR(ERR_FS, "Failed to acquire lock: %s", strerror(errno));
+    }
+
+    /* Write PID to lock file for debugging */
+    pid_t pid = getpid();
+    char pid_str[32];
+    snprintf(pid_str, sizeof(pid_str), "%d\n", pid);
+    if (write(fd, pid_str, strlen(pid_str)) < 0) {
+        /* Non-fatal - lock is still acquired */
+    }
+
+    /* Create lock handle */
+    state_lock_t *l = calloc(1, sizeof(state_lock_t));
+    if (!l) {
+        close(fd);
+        unlink(lock_path);
+        return ERROR(ERR_MEMORY, "Failed to allocate lock");
+    }
+
+    l->fd = fd;
+    l->lock_path = strdup(lock_path);
+    if (!l->lock_path) {
+        close(fd);
+        free(l);
+        unlink(lock_path);
+        return ERROR(ERR_MEMORY, "Failed to allocate lock path");
+    }
+
+    *lock = l;
+    return NULL;
+}
+
+/**
+ * Release state file lock
+ *
+ * @param lock Lock handle (can be NULL)
+ */
+static void state_lock_release(state_lock_t *lock) {
+    if (!lock) {
+        return;
+    }
+
+    if (lock->fd >= 0) {
+        /* Release lock (automatically released on close, but explicit is better) */
+        struct flock fl = {
+            .l_type = F_UNLCK,
+            .l_whence = SEEK_SET,
+            .l_start = 0,
+            .l_len = 0
+        };
+        fcntl(lock->fd, F_SETLK, &fl);
+
+        close(lock->fd);
+    }
+
+    if (lock->lock_path) {
+        /* Remove lock file */
+        unlink(lock->lock_path);
+        free(lock->lock_path);
+    }
+
+    free(lock);
 }
 
 /**
@@ -245,6 +372,9 @@ error_t *state_create_empty(state_t **out) {
         err = ERROR(ERR_MEMORY, "Failed to allocate directory index");
         goto cleanup;
     }
+
+    /* Initialize lock (no lock by default) */
+    state->lock = NULL;
 
     /* Success */
     *out = state;
@@ -540,16 +670,74 @@ error_t *state_load(git_repository *repo, state_t **out) {
 }
 
 /**
+ * Load state for update (with locking)
+ *
+ * This function loads state and acquires an exclusive lock to prevent
+ * concurrent modifications. The lock is stored in the state structure
+ * and automatically released by state_save() or state_free().
+ *
+ * @param repo Repository (must not be NULL)
+ * @param out State structure (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_load_for_update(git_repository *repo, state_t **out) {
+    CHECK_NULL(repo);
+    CHECK_NULL(out);
+
+    error_t *err = NULL;
+    state_t *state = NULL;
+    state_lock_t *lock = NULL;
+
+    /* Acquire lock first (before loading state) */
+    err = state_lock_acquire(repo, &lock);
+    if (err) {
+        return err;
+    }
+
+    /* Load state */
+    err = state_load(repo, &state);
+    if (err) {
+        state_lock_release(lock);
+        return err;
+    }
+
+    /* Attach lock to state for automatic cleanup */
+    state->lock = lock;
+
+    *out = state;
+    return NULL;
+}
+
+/**
  * Save state to repository
  */
-error_t *state_save(git_repository *repo, const state_t *state) {
+error_t *state_save(git_repository *repo, state_t *state) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
 
+    error_t *err = NULL;
+    bool acquired_lock_here = false;
+
+    /* If no lock is held, acquire one for this save operation
+     * This handles cases like state_create_empty() where we create
+     * state without loading (init, clone commands).
+     */
+    if (!state->lock) {
+        err = state_lock_acquire(repo, &state->lock);
+        if (err) {
+            return err;
+        }
+        acquired_lock_here = true;
+    }
+
     /* Get state file path */
     char *state_path = NULL;
-    error_t *err = get_state_file_path(repo, &state_path);
+    err = get_state_file_path(repo, &state_path);
     if (err) {
+        if (acquired_lock_here) {
+            state_lock_release(state->lock);
+            state->lock = NULL;
+        }
         return err;
     }
 
@@ -558,6 +746,10 @@ error_t *state_save(git_repository *repo, const state_t *state) {
     err = state_to_json(state, &json);
     if (err) {
         free(state_path);
+        if (acquired_lock_here) {
+            state_lock_release(state->lock);
+            state->lock = NULL;
+        }
         return err;
     }
 
@@ -569,6 +761,10 @@ error_t *state_save(git_repository *repo, const state_t *state) {
     buffer_free(json);
     if (err) {
         free(state_path);
+        if (acquired_lock_here) {
+            state_lock_release(state->lock);
+            state->lock = NULL;
+        }
         return error_wrap(err, "Failed to write state file");
     }
 
@@ -576,10 +772,19 @@ error_t *state_save(git_repository *repo, const state_t *state) {
     if (rename(temp_path, state_path) < 0) {
         fs_remove_file(temp_path);
         free(state_path);
+        if (acquired_lock_here) {
+            state_lock_release(state->lock);
+            state->lock = NULL;
+        }
         return ERROR(ERR_FS, "Failed to save state file: %s", strerror(errno));
     }
 
     free(state_path);
+
+    /* Always release lock after successful save */
+    state_lock_release(state->lock);
+    state->lock = NULL;
+
     return NULL;
 }
 
@@ -589,6 +794,12 @@ error_t *state_save(git_repository *repo, const state_t *state) {
 void state_free(state_t *state) {
     if (!state) {
         return;
+    }
+
+    /* Release lock if still held (cleanup for error paths) */
+    if (state->lock) {
+        state_lock_release(state->lock);
+        state->lock = NULL;
     }
 
     string_array_free(state->profiles);

@@ -776,9 +776,9 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         config = config_create_default();
     }
 
-    /* Load state */
+    /* Load state (with locking for write transaction) */
     state_t *state = NULL;
-    err = state_load(repo, &state);
+    err = state_load_for_update(repo, &state);
     if (err) {
         config_free(config);
         return error_wrap(err, "Failed to load state");

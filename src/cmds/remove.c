@@ -674,9 +674,9 @@ static error_t *remove_files_from_profile(
         config = config_create_default();
     }
 
-    /* Load state */
+    /* Load state (with locking for write transaction) */
     state_t *state = NULL;
-    err = state_load(repo, &state);
+    err = state_load_for_update(repo, &state);
     if (err) {
         config_free(config);
         return error_wrap(err, "Failed to load state");
@@ -1028,9 +1028,9 @@ static error_t *delete_profile_branch(
         printf("         Consider running 'dotta sync' first.\n\n");
     }
 
-    /* Load state to check for deployed files and active profiles */
+    /* Load state to check for deployed files and active profiles (with locking for potential writes) */
     state_t *state = NULL;
-    err = state_load(repo, &state);
+    err = state_load_for_update(repo, &state);
     if (err) {
         /* Non-fatal */
         error_free(err);

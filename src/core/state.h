@@ -78,10 +78,13 @@ typedef struct {
 typedef struct state state_t;
 
 /**
- * Load state from repository
+ * Load state from repository (read-only)
  *
  * If state file doesn't exist, returns empty state.
  * If state file is corrupt, returns error.
+ *
+ * Use this function for read-only operations (status, list).
+ * For operations that will modify and save state, use state_load_for_update().
  *
  * @param repo Repository (must not be NULL)
  * @param out State structure (must not be NULL, caller must free with state_free)
@@ -90,15 +93,35 @@ typedef struct state state_t;
 error_t *state_load(git_repository *repo, state_t **out);
 
 /**
+ * Load state for update (with locking)
+ *
+ * Acquires an exclusive lock on the state file to prevent concurrent modifications.
+ * The lock is automatically released when state_save() is called or when
+ * state_free() is called (cleanup on error paths).
+ *
+ * Use this function for operations that will modify state (add, apply, remove, etc.).
+ * For read-only operations, use state_load().
+ *
+ * If another process holds the lock, returns ERR_CONFLICT immediately (non-blocking).
+ *
+ * @param repo Repository (must not be NULL)
+ * @param out State structure (must not be NULL, caller must free with state_free)
+ * @return Error or NULL on success
+ */
+error_t *state_load_for_update(git_repository *repo, state_t **out);
+
+/**
  * Save state to repository
  *
  * Writes atomically (temp file + rename).
+ * If the state was loaded with state_load_for_update(), the lock is
+ * automatically released after a successful save.
  *
  * @param repo Repository (must not be NULL)
  * @param state State to save (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_save(git_repository *repo, const state_t *state);
+error_t *state_save(git_repository *repo, state_t *state);
 
 /**
  * Create empty state

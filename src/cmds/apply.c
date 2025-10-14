@@ -520,8 +520,8 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Load state */
-    err = state_load(repo, &state);
+    /* Load state (with locking for write transaction) */
+    err = state_load_for_update(repo, &state);
     if (err) {
         err = error_wrap(err, "Failed to load state");
         goto cleanup;

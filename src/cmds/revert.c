@@ -751,8 +751,8 @@ static error_t *deploy_reverted_file(
         goto cleanup;
     }
 
-    /* Update state after successful deployment */
-    err = state_load(repo, &state);
+    /* Update state after successful deployment (with locking for write transaction) */
+    err = state_load_for_update(repo, &state);
     if (err) {
         /* If state doesn't exist, create it */
         err = state_create_empty(&state);

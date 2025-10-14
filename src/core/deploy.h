@@ -130,4 +130,30 @@ void preflight_result_free(preflight_result_t *result);
  */
 void deploy_result_free(deploy_result_t *result);
 
+/**
+ * Remove deployed files for a specific profile from filesystem
+ *
+ * Cleans up files that were deployed from a profile by:
+ * 1. Finding all state entries for the profile
+ * 2. Removing files from filesystem (if they exist)
+ * 3. Removing state entries for successfully deleted files
+ *
+ * This is used for atomic operations where profile deactivation or
+ * deletion should also clean up the deployed files.
+ *
+ * @param state State tracking deployed files (must not be NULL)
+ * @param profile Profile name to clean up (must not be NULL)
+ * @param dry_run If true, only show what would be removed
+ * @param verbose Print detailed output
+ * @param removed_count Output: number of files actually removed (can be NULL)
+ * @return Error or NULL on success
+ */
+error_t *deploy_cleanup_profile_files(
+    state_t *state,
+    const char *profile,
+    bool dry_run,
+    bool verbose,
+    size_t *removed_count
+);
+
 #endif /* DOTTA_DEPLOY_H */

@@ -25,7 +25,7 @@ typedef struct {
 
     /* Operation modes */
     bool delete_profile;        /* Delete entire profile branch */
-    bool cleanup;               /* Also remove deployed files from filesystem */
+    bool keep_files;            /* Keep deployed files on filesystem */
 
     /* Safety flags */
     bool dry_run;               /* Show what would be removed without doing it */

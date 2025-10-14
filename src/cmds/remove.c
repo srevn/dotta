@@ -347,19 +347,19 @@ static bool confirm_removal(
     }
 
     /* No confirmation needed for small operations */
-    if (count < threshold && !opts->cleanup) {
+    if (count < threshold && opts->keep_files) {
         return true;
     }
 
     /* Prompt user */
     char prompt[256];
-    if (opts->cleanup) {
+    if (opts->keep_files) {
+        snprintf(prompt, sizeof(prompt), "Remove %zu file%s from profile '%s' (keeping filesystem files)?",
+                count, count == 1 ? "" : "s", opts->profile);
+    } else {
         printf("This will remove %zu file%s from profile AND filesystem.\n",
                count, count == 1 ? "" : "s");
         snprintf(prompt, sizeof(prompt), "Continue?");
-    } else {
-        snprintf(prompt, sizeof(prompt), "Remove %zu file%s from profile '%s'?",
-                count, count == 1 ? "" : "s", opts->profile);
     }
 
     output_ctx_t *out = output_create_from_config(config);
@@ -393,11 +393,11 @@ static bool confirm_profile_deletion(
     printf("WARNING: This will delete profile '%s' (%zu file%s).\n",
            profile_name, file_count, file_count == 1 ? "" : "s");
 
-    if (opts->cleanup) {
-        printf("         Deployed files will be removed from filesystem.\n");
-    } else {
+    if (opts->keep_files) {
         printf("         Deployed files will remain on filesystem.\n");
         printf("         Hint: Use 'dotta apply --prune' to clean up.\n");
+    } else {
+        printf("         Deployed files will be removed from filesystem.\n");
     }
 
     output_ctx_t *out = output_create();
@@ -861,8 +861,8 @@ static error_t *remove_files_from_profile(
     /* Cleanup worktree */
     worktree_cleanup(wt);
 
-    /* Cleanup filesystem if requested */
-    if (opts->cleanup) {
+    /* Cleanup filesystem by default (unless --keep-files) */
+    if (!opts->keep_files) {
         for (size_t i = 0; i < string_array_size(filesystem_paths); i++) {
             const char *fs_path = string_array_get(filesystem_paths, i);
 
@@ -875,8 +875,9 @@ static error_t *remove_files_from_profile(
         }
 
         /* Update state to remove files that were cleaned up from filesystem
-         * Only do this when --cleanup is used. Without --cleanup, files remain on
-         * the filesystem and in state, so that 'apply --prune' can remove them later.
+         * This is part of the atomic operation - state should reflect reality.
+         * With --keep-files, files remain on filesystem and in state,
+         * so that 'apply --prune' can remove them later.
          */
         err = update_state_after_removal(state, filesystem_paths, opts->profile);
         if (err) {
@@ -1071,11 +1072,11 @@ static error_t *delete_profile_branch(
     }
 
     /* Warn about deployed files */
-    if (deployed_count > 0 && !opts->cleanup && !opts->force) {
+    if (deployed_count > 0 && opts->keep_files && !opts->force) {
         printf("\nWARNING: Profile '%s' has %zu deployed file%s!\n",
                opts->profile, deployed_count, deployed_count == 1 ? "" : "s");
-        printf("         These files will remain on your filesystem after deletion.\n");
-        printf("         Use --cleanup to remove them, or run 'dotta apply --prune' later.\n\n");
+        printf("         These files will remain on your filesystem after deletion (--keep-files).\n");
+        printf("         Run 'dotta apply --prune' later to clean up.\n\n");
     }
 
     /* Confirm deletion */
@@ -1128,8 +1129,8 @@ static error_t *delete_profile_branch(
         hook_result_free(hook_result);
     }
 
-    /* Cleanup deployed files if requested */
-    if (opts->cleanup && state) {
+    /* Cleanup deployed files by default (unless --keep-files) */
+    if (!opts->keep_files && state) {
         size_t state_file_count = 0;
         const state_file_entry_t *state_files = state_get_all_files(state, &state_file_count);
 
@@ -1250,11 +1251,8 @@ static error_t *delete_profile_branch(
         }
     }
 
-    /* Update state - remove all files from this profile
-     * Only do this when --cleanup is used. Without --cleanup, files remain on
-     * the filesystem and in state, so that 'apply --prune' can remove them later.
-     */
-    if (opts->cleanup && state) {
+    /* Update state - remove all files from this profile */
+    if (!opts->keep_files && state) {
         size_t removed_count = 0;
         err = state_cleanup_profile(state, opts->profile, &removed_count);
         if (err) {
@@ -1330,9 +1328,11 @@ error_t *cmd_remove(git_repository *repo, const cmd_remove_options_t *opts) {
         if (!opts->quiet && !opts->dry_run) {
             printf("Deleted profile '%s'\n", opts->profile);
 
-            if (!opts->cleanup) {
-                printf("\nHint: Deployed files remain on filesystem.\n");
+            if (opts->keep_files) {
+                printf("\nHint: Deployed files remain on filesystem (--keep-files).\n");
                 printf("      Run 'dotta apply --prune' to clean up.\n");
+            } else {
+                printf("Deployed files removed from filesystem.\n");
             }
             printf("\n");
         }
@@ -1352,9 +1352,11 @@ error_t *cmd_remove(git_repository *repo, const cmd_remove_options_t *opts) {
         printf("Removed %zu file%s from profile '%s'\n",
                removed_count, removed_count == 1 ? "" : "s", opts->profile);
 
-        if (!opts->cleanup) {
-            printf("\nHint: Files remain on filesystem.\n");
-            printf("      Use --cleanup or run 'dotta apply --prune' to remove them.\n");
+        if (opts->keep_files) {
+            printf("\nHint: Files remain on filesystem (--keep-files).\n");
+            printf("      Run 'dotta apply --prune' to remove them.\n");
+        } else {
+            printf("Files also removed from filesystem.\n");
         }
         printf("\n");
     }

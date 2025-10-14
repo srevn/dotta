@@ -273,16 +273,26 @@ static error_t *profile_fetch(
                 continue;
             }
 
-            /* Create local tracking branch */
-            fetch_err = upstream_create_tracking_branch(repo, remote_name, branch_name);
-            if (fetch_err) {
-                output_warning(out, "Failed to create local branch '%s': %s",
-                              branch_name, error_message(fetch_err));
-                error_free(fetch_err);
-            } else {
+            /* Create local tracking branch if needed */
+            bool already_exists = profile_exists(repo, branch_name);
+            if (already_exists) {
+                /* Branch already exists - fetch updated the remote ref */
                 fetched_count++;
                 if (opts->verbose) {
-                    output_success(out, "  ✓ Fetched %s", branch_name);
+                    output_success(out, "  ✓ Updated %s", branch_name);
+                }
+            } else {
+                fetch_err = upstream_create_tracking_branch(repo, remote_name, branch_name);
+                if (fetch_err) {
+                    output_error(out, "Failed to create local branch '%s': %s",
+                                branch_name, error_message(fetch_err));
+                    error_free(fetch_err);
+                    failed_count++;
+                } else {
+                    fetched_count++;
+                    if (opts->verbose) {
+                        output_success(out, "  ✓ Fetched %s", branch_name);
+                    }
                 }
             }
         }
@@ -294,6 +304,51 @@ static error_t *profile_fetch(
                         "Hint: Use 'dotta profile fetch <name>' or '--all'");
             goto cleanup;
         }
+
+        /* Pre-flight validation: query remote for available branches */
+        string_array_t *available_remote = NULL;
+        err = upstream_query_remote_branches(repo, remote_name, cred_ctx, &available_remote);
+        if (err) {
+            err = error_wrap(err, "Failed to query remote branches");
+            goto cleanup;
+        }
+
+        /* Validate requested profiles exist on remote */
+        bool has_missing = false;
+        for (size_t i = 0; i < opts->profile_count; i++) {
+            const char *profile_name = opts->profiles[i];
+            bool found = false;
+
+            /* Check if profile exists on remote */
+            for (size_t j = 0; j < string_array_size(available_remote); j++) {
+                if (strcmp(string_array_get(available_remote, j), profile_name) == 0) {
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found) {
+                output_error(out, "Profile '%s' does not exist on remote '%s'",
+                            profile_name, remote_name);
+                has_missing = true;
+            }
+        }
+
+        /* If any profiles are missing, show available profiles and error */
+        if (has_missing) {
+            if (string_array_size(available_remote) > 0) {
+                output_section(out, "Available profiles on remote");
+                for (size_t i = 0; i < string_array_size(available_remote); i++) {
+                    fprintf(out->stream, "  • %s\n", string_array_get(available_remote, i));
+                }
+                fprintf(out->stream, "\n");
+            }
+            string_array_free(available_remote);
+            err = ERROR(ERR_NOT_FOUND, "One or more requested profiles not found on remote");
+            goto cleanup;
+        }
+
+        string_array_free(available_remote);
 
         for (size_t i = 0; i < opts->profile_count; i++) {
             const char *profile_name = opts->profiles[i];

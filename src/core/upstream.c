@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/credentials.h"
 #include "base/error.h"
 #include "base/gitops.h"
 #include "utils/array.h"
@@ -316,6 +317,109 @@ error_t *upstream_discover_branches(
     }
 
     git_reference_iterator_free(iter);
+    *out_branches = branches;
+    return NULL;
+}
+
+/**
+ * Query remote server for available branches
+ */
+error_t *upstream_query_remote_branches(
+    git_repository *repo,
+    const char *remote_name,
+    void *cred_ctx,
+    string_array_t **out_branches
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(remote_name);
+    CHECK_NULL(out_branches);
+
+    /* Resource tracking */
+    git_remote *remote = NULL;
+    string_array_t *branches = NULL;
+    error_t *err = NULL;
+
+    /* Create branch array */
+    branches = string_array_create();
+    if (!branches) {
+        return ERROR(ERR_MEMORY, "Failed to create branch array");
+    }
+
+    /* Lookup remote */
+    int git_err = git_remote_lookup(&remote, repo, remote_name);
+    if (git_err < 0) {
+        string_array_free(branches);
+        return error_from_git(git_err);
+    }
+
+    /* Setup callbacks for authentication */
+    git_remote_callbacks callbacks = GIT_REMOTE_CALLBACKS_INIT;
+    if (cred_ctx) {
+        callbacks.credentials = credentials_callback;
+        callbacks.payload = cred_ctx;
+    }
+
+    /* Connect to remote (network operation) */
+    git_err = git_remote_connect(remote, GIT_DIRECTION_FETCH, &callbacks, NULL, NULL);
+    if (git_err < 0) {
+        if (cred_ctx) {
+            credential_context_reject(cred_ctx);
+        }
+        git_remote_free(remote);
+        string_array_free(branches);
+        return error_from_git(git_err);
+    }
+
+    /* Get list of refs from remote */
+    const git_remote_head **refs = NULL;
+    size_t refs_len = 0;
+    git_err = git_remote_ls(&refs, &refs_len, remote);
+    if (git_err < 0) {
+        git_remote_disconnect(remote);
+        git_remote_free(remote);
+        string_array_free(branches);
+        return error_from_git(git_err);
+    }
+
+    /* Approve credentials on successful connection */
+    if (cred_ctx) {
+        credential_context_approve(cred_ctx);
+    }
+
+    /* Extract branch names from refs/heads/ prefix */
+    const char *heads_prefix = "refs/heads/";
+    size_t prefix_len = strlen(heads_prefix);
+
+    for (size_t i = 0; i < refs_len; i++) {
+        const char *refname = refs[i]->name;
+
+        /* Only process branch refs */
+        if (strncmp(refname, heads_prefix, prefix_len) != 0) {
+            continue;
+        }
+
+        /* Extract branch name */
+        const char *branch_name = refname + prefix_len;
+
+        /* Skip dotta-worktree and any empty names */
+        if (strcmp(branch_name, "dotta-worktree") == 0 || strlen(branch_name) == 0) {
+            continue;
+        }
+
+        /* Add to list */
+        err = string_array_push(branches, branch_name);
+        if (err) {
+            git_remote_disconnect(remote);
+            git_remote_free(remote);
+            string_array_free(branches);
+            return err;
+        }
+    }
+
+    /* Cleanup */
+    git_remote_disconnect(remote);
+    git_remote_free(remote);
+
     *out_branches = branches;
     return NULL;
 }

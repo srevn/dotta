@@ -107,6 +107,29 @@ error_t *upstream_discover_branches(
 );
 
 /**
+ * Query remote server for available branches
+ *
+ * Performs a network operation to query the remote server for all
+ * available branches. This is more comprehensive than upstream_discover_branches
+ * which only looks at local remote tracking refs.
+ *
+ * Use this when you need to validate branch existence on the server before
+ * attempting operations like fetch.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param remote_name Remote name (e.g., "origin")
+ * @param cred_ctx Credential context for authentication (may be NULL)
+ * @param out_branches String array of branch names on remote (caller must free)
+ * @return Error or NULL on success
+ */
+error_t *upstream_query_remote_branches(
+    git_repository *repo,
+    const char *remote_name,
+    void *cred_ctx,
+    string_array_t **out_branches
+);
+
+/**
  * Create local tracking branch from remote
  *
  * Creates a local branch that tracks a remote branch, setting the

@@ -998,35 +998,50 @@ static error_t *delete_profile_branch(
      * Keep remote_name for later use when pushing deletion
      */
     bool has_unpushed = false;
+    bool is_local_only = false;
     char *remote_name = NULL;
+    upstream_info_t *upstream_info = NULL;
+
     err = upstream_detect_remote(repo, &remote_name);
     if (!err && remote_name) {
         /* Remote exists - check upstream state */
-        upstream_info_t *upstream_info = NULL;
         err = upstream_analyze_profile(repo, remote_name, opts->profile, &upstream_info);
         if (!err && upstream_info) {
-            if (upstream_info->state == UPSTREAM_LOCAL_AHEAD ||
-                upstream_info->state == UPSTREAM_DIVERGED ||
-                upstream_info->state == UPSTREAM_NO_REMOTE) {
+            /* Determine if profile has actual remote tracking */
+            if (upstream_info->state == UPSTREAM_NO_REMOTE) {
+                /* Profile exists locally but was never pushed to remote */
+                is_local_only = true;
+            } else if (upstream_info->state == UPSTREAM_LOCAL_AHEAD ||
+                       upstream_info->state == UPSTREAM_DIVERGED) {
+                /* Profile has remote tracking and has unpushed changes */
                 has_unpushed = true;
             }
-            upstream_info_free(upstream_info);
         } else if (err) {
             /* Non-fatal: can't determine upstream state */
             error_free(err);
             err = NULL;
         }
     } else if (err) {
-        /* No remote configured - this is fine */
+        /* No remote configured - treat as local-only */
+        is_local_only = true;
         error_free(err);
         err = NULL;
     }
 
-    /* Warn about unpushed changes */
+    /* Warn about unpushed changes (only if profile has remote tracking) */
     if (has_unpushed && !opts->force) {
         printf("\nWARNING: Profile '%s' has unpushed changes!\n", opts->profile);
         printf("         Deleting now may result in data loss.\n");
         printf("         Consider running 'dotta sync' first.\n\n");
+    } else if (is_local_only && opts->verbose) {
+        /* Inform about local-only status in verbose mode (not a warning) */
+        printf("Note: Profile '%s' is local-only (not pushed to remote)\n", opts->profile);
+    }
+
+    /* Free upstream_info after we're done using is_local_only */
+    if (upstream_info) {
+        upstream_info_free(upstream_info);
+        upstream_info = NULL;
     }
 
     /* Load state to check for deployed files and active profiles (with locking for potential writes) */

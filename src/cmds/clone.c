@@ -16,7 +16,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "base/credentials.h"
 #include "base/error.h"
 #include "base/gitops.h"
 #include "base/transfer.h"

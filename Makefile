@@ -6,6 +6,15 @@ CC := clang
 CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror -O2 -Wno-missing-field-initializers -D_DEFAULT_SOURCE
 DEBUG_FLAGS := -g -O0 -fsanitize=address,undefined -DDEBUG
 
+# Version information (captured at build time)
+GIT_COMMIT := $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo "unknown")
+GIT_COMMIT_FULL := $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
+GIT_DIRTY := $(shell git diff-index --quiet HEAD -- 2>/dev/null || echo "-dirty")
+GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+BUILD_OS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
+BUILD_ARCH := $(shell uname -m)
+CC_VERSION := $(shell $(CC) --version | head -n1)
+
 # Vendor libraries (must be defined before INCLUDES)
 LIB_DIR := lib
 CJSON_SRC := $(LIB_DIR)/cjson/cJSON.c
@@ -14,6 +23,14 @@ LIB_INCLUDES := -I$(LIB_DIR)/cjson -I$(LIB_DIR)/toml
 
 # Include paths
 INCLUDES := -Iinclude -Isrc $(LIB_INCLUDES)
+
+# Version build flags
+VERSION_FLAGS := -DDOTTA_BUILD_COMMIT="\"$(GIT_COMMIT)$(GIT_DIRTY)\"" \
+                 -DDOTTA_BUILD_COMMIT_FULL="\"$(GIT_COMMIT_FULL)\"" \
+                 -DDOTTA_BUILD_BRANCH="\"$(GIT_BRANCH)\"" \
+                 -DDOTTA_BUILD_OS="\"$(BUILD_OS)\"" \
+                 -DDOTTA_BUILD_ARCH="\"$(BUILD_ARCH)\"" \
+                 -DDOTTA_BUILD_CC="\"$(CC_VERSION)\""
 
 # Dependencies
 LIBGIT2_CFLAGS := $(shell pkg-config --cflags libgit2)
@@ -75,7 +92,7 @@ $(BUILD_DIR)/base $(BUILD_DIR)/infra $(BUILD_DIR)/core $(BUILD_DIR)/cmds $(BUILD
 # Compile source files
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)/base $(BUILD_DIR)/infra $(BUILD_DIR)/core $(BUILD_DIR)/cmds $(BUILD_DIR)/utils
 	@echo "CC $<"
-	@$(CC) $(CFLAGS) $(INCLUDES) $(LIBGIT2_CFLAGS) -c $< -o $@
+	@$(CC) $(CFLAGS) $(INCLUDES) $(LIBGIT2_CFLAGS) $(VERSION_FLAGS) -c $< -o $@
 
 # Compile vendor files
 $(BUILD_DIR)/lib/cJSON.o: $(CJSON_SRC) | $(BUILD_DIR)/lib

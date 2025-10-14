@@ -22,7 +22,7 @@
  * These can be compared numerically for version checks.
  */
 #define DOTTA_VERSION_MAJOR 0
-#define DOTTA_VERSION_MINOR 1
+#define DOTTA_VERSION_MINOR 2
 #define DOTTA_VERSION_PATCH 0
 
 /**
@@ -37,7 +37,7 @@
  *
  * Format: "MAJOR.MINOR.PATCH[-PRERELEASE]"
  */
-#define DOTTA_VERSION_STRING "0.1.0-dev"
+#define DOTTA_VERSION_STRING "0.2.0-dev"
 
 /**
  * Numeric version for comparisons
@@ -57,9 +57,22 @@
  *   -DDOTTA_BUILD_COMMIT="abc123"
  *   -DDOTTA_BUILD_DATE="2025-01-15"
  *   -DDOTTA_BUILD_TIME="10:30:00"
+ *   -DDOTTA_BUILD_OS="darwin"
+ *   -DDOTTA_BUILD_ARCH="arm64"
+ *   -DDOTTA_BUILD_TYPE="release"
+ *   -DDOTTA_BUILD_BRANCH="main"
+ *   -DDOTTA_BUILD_CC="clang version 15.0.0"
  */
 #ifndef DOTTA_BUILD_COMMIT
 #define DOTTA_BUILD_COMMIT "unknown"
+#endif
+
+#ifndef DOTTA_BUILD_COMMIT_FULL
+#define DOTTA_BUILD_COMMIT_FULL "unknown"
+#endif
+
+#ifndef DOTTA_BUILD_BRANCH
+#define DOTTA_BUILD_BRANCH "unknown"
 #endif
 
 #ifndef DOTTA_BUILD_DATE
@@ -68,6 +81,22 @@
 
 #ifndef DOTTA_BUILD_TIME
 #define DOTTA_BUILD_TIME __TIME__
+#endif
+
+#ifndef DOTTA_BUILD_OS
+#define DOTTA_BUILD_OS "unknown"
+#endif
+
+#ifndef DOTTA_BUILD_ARCH
+#define DOTTA_BUILD_ARCH "unknown"
+#endif
+
+#ifndef DOTTA_BUILD_TYPE
+#define DOTTA_BUILD_TYPE "alpha"
+#endif
+
+#ifndef DOTTA_BUILD_CC
+#define DOTTA_BUILD_CC "unknown"
 #endif
 
 /**
@@ -154,6 +183,60 @@ static inline const char *dotta_version_build_date(void) {
  */
 static inline const char *dotta_version_build_time(void) {
     return DOTTA_BUILD_TIME;
+}
+
+/**
+ * Get full commit hash
+ *
+ * @return Full Git commit hash or "unknown"
+ */
+static inline const char *dotta_version_commit_full(void) {
+    return DOTTA_BUILD_COMMIT_FULL;
+}
+
+/**
+ * Get build branch
+ *
+ * @return Git branch name or "unknown"
+ */
+static inline const char *dotta_version_branch(void) {
+    return DOTTA_BUILD_BRANCH;
+}
+
+/**
+ * Get build OS
+ *
+ * @return Build operating system (darwin, linux, freebsd, etc.)
+ */
+static inline const char *dotta_version_build_os(void) {
+    return DOTTA_BUILD_OS;
+}
+
+/**
+ * Get build architecture
+ *
+ * @return Build architecture (x86_64, arm64, etc.)
+ */
+static inline const char *dotta_version_build_arch(void) {
+    return DOTTA_BUILD_ARCH;
+}
+
+/**
+ * Get build type
+ *
+ * @return Build type (release, debug, etc.)
+ */
+static inline const char *dotta_version_build_type(void) {
+    return DOTTA_BUILD_TYPE;
+}
+
+/**
+ * Get compiler version
+ *
+ * @return Compiler version string
+ */
+static inline const char *dotta_version_build_cc(void) {
+    return DOTTA_BUILD_CC;
 }
 
 /**

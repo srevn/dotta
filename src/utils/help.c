@@ -43,20 +43,43 @@ void print_version(void) {
     /* Print dotta version */
     printf("dotta version %s\n", dotta_version_string());
 
-    /* Print build information */
+    /* Print git information */
     const char *commit = dotta_version_commit();
+    const char *branch = dotta_version_branch();
     if (commit && strcmp(commit, "unknown") != 0) {
-        printf("Build: %s (commit %s)\n",
-               dotta_version_build_date(),
-               commit);
-    } else {
-        printf("Build: %s %s\n",
-               dotta_version_build_date(),
-               dotta_version_build_time());
+        printf("Git: %s", commit);
+        if (branch && strcmp(branch, "unknown") != 0) {
+            printf(" (%s)", branch);
+        }
+        printf("\n");
+    }
+
+    /* Print platform information */
+    const char *build_os = dotta_version_build_os();
+    const char *build_arch = dotta_version_build_arch();
+    if (build_os && strcmp(build_os, "unknown") != 0 &&
+        build_arch && strcmp(build_arch, "unknown") != 0) {
+        printf("Platform: %s/%s\n", build_os, build_arch);
+    }
+
+    /* Print build information */
+    const char *build_type = dotta_version_build_type();
+    printf("Build: %s", build_type);
+    if (build_type && strcmp(build_type, "debug") == 0) {
+        printf(" (with sanitizers)");
+    }
+    printf(" - %s %s\n",
+           dotta_version_build_date(),
+           dotta_version_build_time());
+
+    /* Print compiler information */
+    const char *cc = dotta_version_build_cc();
+    if (cc && strcmp(cc, "unknown") != 0) {
+        printf("Compiler: %s\n", cc);
     }
 
     /* Print libgit2 version */
-    printf("Built with libgit2 %d.%d.%d\n", major, minor, rev);
+    printf("libgit2: %d.%d.%d\n", major, minor, rev);
 }
 
 void print_init_help(const char *prog_name) {

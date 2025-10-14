@@ -855,30 +855,36 @@ static error_t *profile_deactivate(
                 }
             }
         } else {
-            /* --keep-files flag: Only clean state entries, not filesystem
+            /* --keep-files flag: Keep files on filesystem AND in state
              *
-             * This preserves the old behavior for users who want to:
-             * - Temporarily deactivate profiles
-             * - Manually manage filesystem cleanup
-             * - Use 'dotta apply --prune' later
+             * Design rationale:
+             * - Files remain deployed on the filesystem for the user to manage
+             * - State entries MUST remain so 'dotta apply --prune' can find them
+             * - Only the active profiles list is modified (already done above)
+             *
+             * This enables the intended workflow:
+             *   1. dotta profile deactivate work --keep-files
+             *      (profile removed from active list, files remain on disk and in state)
+             *   2. dotta apply --prune
+             *      (compares state files vs new manifest, removes orphaned files)
+             *
+             * Implementation note:
+             * We do NOT call state_cleanup_profile() or any cleanup function here.
+             * The profile has already been removed from the active_profiles list
+             * (line 811 via state_set_profiles). The state file entries must remain
+             * untouched so that subsequent 'apply --prune' can identify and remove them.
+             *
+             * If we removed state entries here, the files would become permanently
+             * orphaned because 'apply --prune' wouldn't know they exist.
              */
-            for (size_t i = 0; i < string_array_size(to_deactivate); i++) {
-                const char *profile_name = string_array_get(to_deactivate, i);
-
-                size_t removed_count = 0;
-                error_t *cleanup_err = state_cleanup_profile(state, profile_name, &removed_count);
-                if (cleanup_err) {
-                    /* Non-fatal: Partial cleanup is better than no cleanup */
-                    if (opts->verbose) {
-                        output_warning(out, "Failed to clean state entries for '%s': %s",
-                                      profile_name, error_message(cleanup_err));
-                    }
-                    error_free(cleanup_err);
-                }
+            if (opts->verbose) {
+                output_info(out, "Keeping %zu file%s in state for later cleanup",
+                           total_files_to_remove, total_files_to_remove == 1 ? "" : "s");
+                output_info(out, "Run 'dotta apply --prune' to remove deployed files");
             }
         }
 
-        /* Save state (includes profile deactivation and state cleanup) */
+        /* Save state (includes profile deactivation and optional file cleanup) */
         err = state_save(repo, state);
         if (err) {
             err = error_wrap(err, "Failed to save state");

@@ -6,9 +6,18 @@
  * Profile precedence (lowest to highest):
  * 1. global
  * 2. <os> (darwin, linux, freebsd)
- * 3. hosts/<hostname>
+ * 3. hosts/<hostname> (base profile, if no sub-profiles)
+ * 4. hosts/<hostname>/<variant> (sub-profiles, sorted alphabetically)
  *
  * Later profiles override earlier ones for conflicting files.
+ *
+ * Hierarchical host profiles:
+ * - Base profile: hosts/<hostname> (e.g., hosts/visavis)
+ * - Sub-profiles: hosts/<hostname>/<variant> (e.g., hosts/visavis/github)
+ * - Sub-profiles are limited to one level deep for safety
+ * - Multiple sub-profiles are applied in alphabetical order
+ * - Git limitation: Cannot have both base AND sub-profiles (ref namespace conflict)
+ *   Use either hosts/<hostname> OR hosts/<hostname>/<variant>, not both
  *
  * Design principles:
  * - Auto-detect system profiles
@@ -68,8 +77,23 @@ typedef struct {
 /**
  * Auto-detect profiles
  *
- * Detects: global, OS name, hosts/<hostname>
+ * Detects profiles in precedence order:
+ * 1. global - Universal settings
+ * 2. <os> - OS-specific (darwin, linux, freebsd)
+ * 3. hosts/<hostname> - Host base profile (if no sub-profiles exist)
+ * 4. hosts/<hostname>/<variant> - Host sub-profiles (one level deep, sorted alphabetically)
+ *
  * Only includes profiles that exist as branches.
+ *
+ * Examples:
+ * - Hostname "visavis" with profile "hosts/visavis":
+ *   → global → darwin → hosts/visavis
+ *
+ * - Hostname "visavis" with profiles "hosts/visavis/github" and "hosts/visavis/work":
+ *   → global → darwin → hosts/visavis/github → hosts/visavis/work
+ *
+ * Note: Git refs don't allow both hosts/<hostname> and hosts/<hostname>/<variant>
+ * to coexist. Use either a base profile OR sub-profiles, not both.
  *
  * @param repo Repository (must not be NULL)
  * @param out Profile list (must not be NULL, caller must free)

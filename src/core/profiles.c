@@ -159,7 +159,225 @@ static error_t *profile_load_tree(git_repository *repo, profile_t *profile) {
 }
 
 /**
+ * Helper: Compare strings for qsort (case-sensitive alphabetical)
+ */
+static int string_compare(const void *a, const void *b) {
+    const char *str_a = *(const char **)a;
+    const char *str_b = *(const char **)b;
+    return strcmp(str_a, str_b);
+}
+
+/**
+ * Detect host-specific profiles (base + sub-profiles)
+ *
+ * Finds both base host profile (hosts/<hostname>) and sub-profiles
+ * (hosts/<hostname>/<variant>) for hierarchical configuration.
+ *
+ * Sub-profiles are sorted alphabetically for deterministic ordering.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param hostname Hostname (must not be NULL)
+ * @param list Profile list to append to (must not be NULL)
+ * @param capacity Current capacity of list->profiles array (must not be NULL, updated on realloc)
+ * @return Error or NULL on success
+ */
+static error_t *detect_host_profiles(
+    git_repository *repo,
+    const char *hostname,
+    profile_list_t *list,
+    size_t *capacity
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(hostname);
+    CHECK_NULL(list);
+    CHECK_NULL(capacity);
+
+    error_t *err = NULL;
+
+    /* Build host profile prefix */
+    char host_prefix[256];
+    int ret = snprintf(host_prefix, sizeof(host_prefix), "hosts/%s", hostname);
+    if (ret < 0 || (size_t)ret >= sizeof(host_prefix)) {
+        return ERROR(ERR_INTERNAL, "Host prefix too long");
+    }
+    size_t prefix_len = strlen(host_prefix);
+
+    /* Get all branches */
+    string_array_t *branches = NULL;
+    err = gitops_list_branches(repo, &branches);
+    if (err) {
+        return err;
+    }
+
+    /* Collect matching profiles: base + sub-profiles */
+    string_array_t *base_profile = string_array_create();
+    string_array_t *sub_profiles = string_array_create();
+
+    if (!base_profile || !sub_profiles) {
+        string_array_free(base_profile);
+        string_array_free(sub_profiles);
+        string_array_free(branches);
+        return ERROR(ERR_MEMORY, "Failed to allocate profile arrays");
+    }
+
+    for (size_t i = 0; i < string_array_size(branches); i++) {
+        const char *branch = string_array_get(branches, i);
+
+        /* Check if branch starts with "hosts/<hostname>" */
+        if (strncmp(branch, host_prefix, prefix_len) != 0) {
+            continue;
+        }
+
+        const char *suffix = branch + prefix_len;
+
+        /* Exact match: hosts/<hostname> */
+        if (suffix[0] == '\0') {
+            err = string_array_push(base_profile, branch);
+            if (err) {
+                string_array_free(base_profile);
+                string_array_free(sub_profiles);
+                string_array_free(branches);
+                return err;
+            }
+        }
+        /* Sub-profile: hosts/<hostname>/something */
+        else if (suffix[0] == '/') {
+            /* Ensure only one level deep: no additional '/' after the first */
+            const char *after_slash = suffix + 1;
+            if (strchr(after_slash, '/') == NULL && after_slash[0] != '\0') {
+                err = string_array_push(sub_profiles, branch);
+                if (err) {
+                    string_array_free(base_profile);
+                    string_array_free(sub_profiles);
+                    string_array_free(branches);
+                    return err;
+                }
+            }
+        }
+    }
+
+    string_array_free(branches);
+
+    /* Calculate total profiles to add */
+    size_t base_count = string_array_size(base_profile);
+    size_t sub_count = string_array_size(sub_profiles);
+    size_t total_to_add = base_count + sub_count;
+
+    if (total_to_add == 0) {
+        /* No host profiles found */
+        string_array_free(base_profile);
+        string_array_free(sub_profiles);
+        return NULL;
+    }
+
+    /* Ensure capacity */
+    size_t needed_capacity = list->count + total_to_add;
+    if (needed_capacity > *capacity) {
+        size_t new_capacity = *capacity * 2;
+        while (new_capacity < needed_capacity) {
+            new_capacity *= 2;
+        }
+
+        profile_t *new_profiles = realloc(list->profiles, new_capacity * sizeof(profile_t));
+        if (!new_profiles) {
+            string_array_free(base_profile);
+            string_array_free(sub_profiles);
+            return ERROR(ERR_MEMORY, "Failed to grow profiles array");
+        }
+
+        list->profiles = new_profiles;
+        *capacity = new_capacity;
+    }
+
+    /* Sort sub-profiles alphabetically for deterministic ordering */
+    if (sub_count > 1) {
+        /* Get direct access to internal array for sorting */
+        const char **sub_array = malloc(sub_count * sizeof(char *));
+        if (!sub_array) {
+            string_array_free(base_profile);
+            string_array_free(sub_profiles);
+            return ERROR(ERR_MEMORY, "Failed to allocate sort array");
+        }
+
+        for (size_t i = 0; i < sub_count; i++) {
+            sub_array[i] = string_array_get(sub_profiles, i);
+        }
+
+        qsort(sub_array, sub_count, sizeof(char *), string_compare);
+
+        /* Rebuild sorted array */
+        string_array_t *sorted_subs = string_array_create();
+        if (!sorted_subs) {
+            free(sub_array);
+            string_array_free(base_profile);
+            string_array_free(sub_profiles);
+            return ERROR(ERR_MEMORY, "Failed to allocate sorted array");
+        }
+
+        for (size_t i = 0; i < sub_count; i++) {
+            err = string_array_push(sorted_subs, sub_array[i]);
+            if (err) {
+                free(sub_array);
+                string_array_free(sorted_subs);
+                string_array_free(base_profile);
+                string_array_free(sub_profiles);
+                return err;
+            }
+        }
+
+        free(sub_array);
+        string_array_free(sub_profiles);
+        sub_profiles = sorted_subs;
+    }
+
+    /* Add base profile first (if exists) */
+    for (size_t i = 0; i < base_count; i++) {
+        const char *profile_name = string_array_get(base_profile, i);
+        profile_t *profile = NULL;
+        err = profile_load(repo, profile_name, &profile);
+        if (err) {
+            string_array_free(base_profile);
+            string_array_free(sub_profiles);
+            return err;
+        }
+
+        profile->auto_detected = true;
+        list->profiles[list->count++] = *profile;
+        free(profile);  /* Shallow copy of internals to list, only free struct */
+    }
+
+    /* Add sub-profiles (sorted alphabetically) */
+    for (size_t i = 0; i < sub_count; i++) {
+        const char *profile_name = string_array_get(sub_profiles, i);
+        profile_t *profile = NULL;
+        err = profile_load(repo, profile_name, &profile);
+        if (err) {
+            string_array_free(base_profile);
+            string_array_free(sub_profiles);
+            return err;
+        }
+
+        profile->auto_detected = true;
+        list->profiles[list->count++] = *profile;
+        free(profile);  /* Shallow copy of internals to list, only free struct */
+    }
+
+    string_array_free(base_profile);
+    string_array_free(sub_profiles);
+
+    return NULL;
+}
+
+/**
  * Auto-detect profiles
+ *
+ * Detection order (lower numbers = lower precedence):
+ * 1. global - Universal settings
+ * 2. <os> - OS-specific (darwin, linux, freebsd)
+ * 3. hosts/<hostname> - Host base profile
+ * 4. hosts/<hostname>/<variant> - Host sub-profiles (sorted alphabetically)
+ *
+ * Later profiles override earlier ones for conflicting files.
  */
 error_t *profile_detect_auto(
     git_repository *repo,
@@ -173,8 +391,9 @@ error_t *profile_detect_auto(
         return ERROR(ERR_MEMORY, "Failed to allocate profile list");
     }
 
-    /* Allocate space for up to 3 profiles */
-    list->profiles = calloc(3, sizeof(profile_t));
+    /* Start with capacity for typical case: global + os + host + 2 sub-profiles */
+    size_t capacity = 5;
+    list->profiles = calloc(capacity, sizeof(profile_t));
     if (!list->profiles) {
         free(list);
         return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
@@ -224,27 +443,19 @@ error_t *profile_detect_auto(
         err = NULL;
     }
 
-    /* 3. Try hosts/<hostname> profile */
+    /* 3. Detect host profiles (base + sub-profiles, hierarchical) */
     char *hostname = NULL;
     err = profile_get_hostname(&hostname);
     if (!err && hostname) {
-        char host_profile[256];
-        snprintf(host_profile, sizeof(host_profile), "hosts/%s", hostname);
-
-        if (profile_exists(repo, host_profile)) {
-            profile_t *profile = NULL;
-            err = profile_load(repo, host_profile, &profile);
-            if (!err) {
-                profile->auto_detected = true;
-                list->profiles[list->count++] = *profile;
-                free(profile);
-            } else {
-                error_free(err);
-                err = NULL;
-            }
+        err = detect_host_profiles(repo, hostname, list, &capacity);
+        if (err) {
+            free(hostname);
+            profile_list_free(list);
+            return err;
         }
         free(hostname);
     } else {
+        /* Non-fatal: unable to get hostname */
         error_free(err);
         err = NULL;
     }

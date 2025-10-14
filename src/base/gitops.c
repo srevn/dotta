@@ -916,15 +916,13 @@ static int find_by_basename_callback(
     if (strcmp(entry_name, search->target_basename) == 0) {
         /* Build full path */
         size_t root_len = strlen(root);
-        size_t path_len = root_len + strlen(entry_name) + 2;
+        size_t path_len = root_len + strlen(entry_name) + 1;
         char *full_path = malloc(path_len);
         if (!full_path) {
             return -1;  /* Memory allocation failed */
         }
 
-        if (root_len > 0 && root[root_len - 1] != '/') {
-            snprintf(full_path, path_len, "%s/%s", root, entry_name);
-        } else if (root_len > 0) {
+        if (root_len > 0) {
             snprintf(full_path, path_len, "%s%s", root, entry_name);
         } else {
             snprintf(full_path, path_len, "%s", entry_name);

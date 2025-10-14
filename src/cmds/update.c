@@ -13,10 +13,8 @@
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "base/gitops.h"
-#include "core/ignore.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
-#include "core/state.h"
 #include "core/workspace.h"
 #include "infra/compare.h"
 #include "infra/worktree.h"
@@ -218,131 +216,6 @@ static void new_file_list_free(new_file_list_t *list) {
 }
 
 /**
- * Check if file is in manifest
- */
-static bool is_file_in_manifest(const manifest_t *manifest, const char *filesystem_path) {
-    if (!manifest || !filesystem_path) {
-        return false;
-    }
-
-    for (size_t i = 0; i < manifest->count; i++) {
-        if (strcmp(manifest->entries[i].filesystem_path, filesystem_path) == 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/**
- * Recursively scan directory for new files
- */
-static error_t *scan_directory_for_new_files(
-    const char *dir_path,
-    const char *storage_prefix,
-    profile_t *profile,
-    const manifest_t *manifest,
-    ignore_context_t *ignore_ctx,
-    new_file_list_t *new_files
-) {
-    CHECK_NULL(dir_path);
-    CHECK_NULL(storage_prefix);
-    CHECK_NULL(profile);
-    CHECK_NULL(manifest);
-    CHECK_NULL(new_files);
-
-    DIR *dir = opendir(dir_path);
-    if (!dir) {
-        /* Non-fatal: directory might have been deleted or permissions issue */
-        return NULL;
-    }
-
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL) {
-        /* Skip . and .. */
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-            continue;
-        }
-
-        /* Build full path */
-        char *full_path = str_format("%s/%s", dir_path, entry->d_name);
-        if (!full_path) {
-            closedir(dir);
-            return ERROR(ERR_MEMORY, "Failed to allocate path");
-        }
-
-        /* Check if path exists (handle race conditions) */
-        if (!fs_lexists(full_path)) {
-            free(full_path);
-            continue;
-        }
-
-        /* Check if ignored */
-        bool is_dir = fs_is_directory(full_path);
-        if (ignore_ctx) {
-            bool ignored = false;
-            error_t *err = ignore_should_ignore(ignore_ctx, full_path, is_dir, &ignored);
-            if (!err && ignored) {
-                free(full_path);
-                continue;
-            }
-            error_free(err);  /* Ignore errors in ignore checking */
-        }
-
-        if (is_dir) {
-            /* Recurse into subdirectory */
-            char *sub_storage_prefix = str_format("%s/%s", storage_prefix, entry->d_name);
-            if (!sub_storage_prefix) {
-                free(full_path);
-                closedir(dir);
-                return ERROR(ERR_MEMORY, "Failed to allocate storage prefix");
-            }
-
-            error_t *err = scan_directory_for_new_files(
-                full_path,
-                sub_storage_prefix,
-                profile,
-                manifest,
-                ignore_ctx,
-                new_files
-            );
-
-            free(sub_storage_prefix);
-            free(full_path);
-
-            if (err) {
-                closedir(dir);
-                return err;
-            }
-        } else {
-            /* Check if this file is already tracked */
-            if (!is_file_in_manifest(manifest, full_path)) {
-                /* This is a new file! */
-                char *storage_path = str_format("%s/%s", storage_prefix, entry->d_name);
-                if (!storage_path) {
-                    free(full_path);
-                    closedir(dir);
-                    return ERROR(ERR_MEMORY, "Failed to allocate storage path");
-                }
-
-                error_t *err = new_file_list_add(new_files, full_path, storage_path, profile);
-                free(storage_path);
-                free(full_path);
-
-                if (err) {
-                    closedir(dir);
-                    return err;
-                }
-            } else {
-                free(full_path);
-            }
-        }
-    }
-
-    closedir(dir);
-    return NULL;
-}
-
-/**
  * Check if file matches filter (if any)
  */
 static bool file_matches_filter(
@@ -365,43 +238,57 @@ static bool file_matches_filter(
 }
 
 /**
- * Find all modified files using workspace divergence analysis
+ * Find all modified and new files using workspace divergence analysis
  *
  * This function uses the workspace module to detect divergence between
  * profile state, deployment state, and filesystem state. It correctly
  * distinguishes between:
- * - MODIFIED: Files deployed and changed on disk (include)
- * - DELETED: Files deployed and removed from disk (include)
- * - MODE_DIFF: Files with permission changes (include)
- * - TYPE_DIFF: Files with type changes (include)
- * - UNDEPLOYED: Files in profile but never deployed (exclude - not a modification)
+ * - MODIFIED: Files deployed and changed on disk (modified files)
+ * - DELETED: Files deployed and removed from disk (modified files)
+ * - MODE_DIFF: Files with permission changes (modified files)
+ * - TYPE_DIFF: Files with type changes (modified files)
+ * - UNTRACKED: New files in tracked directories (new files)
+ * - UNDEPLOYED: Files in profile but never deployed (skip - not a modification)
+ * - ORPHANED: State cleanup issues (skip - not file updates)
+ *
+ * This single workspace load efficiently provides both modified and new files,
+ * eliminating the need for separate scanning logic.
  */
-static error_t *find_modified_files(
+static error_t *find_modified_and_new_files(
     git_repository *repo,
     profile_list_t *profiles,
     const dotta_config_t *config,
     const cmd_update_options_t *opts,
-    modified_file_list_t **out
+    modified_file_list_t **modified_out,
+    new_file_list_t **new_out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profiles);
     CHECK_NULL(opts);
-    CHECK_NULL(out);
+    CHECK_NULL(modified_out);
+    CHECK_NULL(new_out);
 
     modified_file_list_t *modified = modified_file_list_create();
     if (!modified) {
         return ERROR(ERR_MEMORY, "Failed to create modified file list");
     }
 
-    /* Load workspace to analyze divergence */
+    new_file_list_t *new_files = new_file_list_create();
+    if (!new_files) {
+        modified_file_list_free(modified);
+        return ERROR(ERR_MEMORY, "Failed to create new file list");
+    }
+
+    /* Load workspace to analyze ALL divergence (modified + new) */
     workspace_t *ws = NULL;
     error_t *err = workspace_load(repo, profiles, config, &ws);
     if (err) {
         modified_file_list_free(modified);
+        new_file_list_free(new_files);
         return error_wrap(err, "Failed to load workspace");
     }
 
-    /* Get all diverged files */
+    /* Get all diverged files from single source of truth */
     size_t count = 0;
     const workspace_file_t *diverged = workspace_get_all_diverged(ws, &count);
 
@@ -424,6 +311,33 @@ static error_t *find_modified_files(
             continue;
         }
 
+        /* Find the profile for this file */
+        profile_t *source_profile = NULL;
+        for (size_t j = 0; j < profiles->count; j++) {
+            if (strcmp(profiles->profiles[j].name, file->profile) == 0) {
+                source_profile = &profiles->profiles[j];
+                break;
+            }
+        }
+
+        if (!source_profile) {
+            /* Profile not in active set - skip */
+            continue;
+        }
+
+        /* Handle new (untracked) files separately */
+        if (file->type == DIVERGENCE_UNTRACKED) {
+            err = new_file_list_add(new_files, file->filesystem_path,
+                                   file->storage_path, source_profile);
+            if (err) {
+                workspace_free(ws);
+                modified_file_list_free(modified);
+                new_file_list_free(new_files);
+                return err;
+            }
+            continue;
+        }
+
         /* Map workspace divergence type to compare result type for compatibility */
         compare_result_t cmp_result;
         switch (file->type) {
@@ -443,20 +357,6 @@ static error_t *find_modified_files(
                 continue;  /* Skip unknown types */
         }
 
-        /* Find the profile for this file */
-        profile_t *source_profile = NULL;
-        for (size_t j = 0; j < profiles->count; j++) {
-            if (strcmp(profiles->profiles[j].name, file->profile) == 0) {
-                source_profile = &profiles->profiles[j];
-                break;
-            }
-        }
-
-        if (!source_profile) {
-            /* Profile not in active set - skip */
-            continue;
-        }
-
         /* Add to modified list */
         err = modified_file_list_add(
             modified,
@@ -469,12 +369,14 @@ static error_t *find_modified_files(
         if (err) {
             workspace_free(ws);
             modified_file_list_free(modified);
+            new_file_list_free(new_files);
             return err;
         }
     }
 
     workspace_free(ws);
-    *out = modified;
+    *modified_out = modified;
+    *new_out = new_files;
     return NULL;
 }
 
@@ -848,117 +750,6 @@ static error_t *update_profile(
 }
 
 /**
- * Detect new files in tracked directories
- *
- * Scans directories tracked in state for files not yet in the manifest.
- *
- * @param repo Repository (must not be NULL)
- * @param profiles Active profiles (must not be NULL)
- * @param state State with tracked directories (must not be NULL)
- * @param config Configuration (may be NULL)
- * @param opts Command options (must not be NULL)
- * @param out Output context (must not be NULL)
- * @param new_files Output list of new files (must not be NULL)
- * @return Error or NULL on success
- */
-static error_t *update_detect_new_files(
-    git_repository *repo,
-    profile_list_t *profiles,
-    state_t *state,
-    const dotta_config_t *config,
-    const cmd_update_options_t *opts,
-    output_ctx_t *out,
-    new_file_list_t **new_files
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(profiles);
-    CHECK_NULL(state);
-    CHECK_NULL(opts);
-    CHECK_NULL(out);
-    CHECK_NULL(new_files);
-
-    error_t *err = NULL;
-    manifest_t *manifest = NULL;
-    new_file_list_t *list = NULL;
-
-    list = new_file_list_create();
-    if (!list) {
-        return ERROR(ERR_MEMORY, "Failed to create new file list");
-    }
-
-    /* Build manifest for checking */
-    err = profile_build_manifest(repo, profiles, &manifest);
-    if (err) {
-        new_file_list_free(list);
-        return error_wrap(err, "Failed to build manifest");
-    }
-
-    /* Get tracked directories from state */
-    size_t dir_count = 0;
-    const state_directory_entry_t *directories = state_get_all_directories(state, &dir_count);
-
-    if (directories && dir_count > 0) {
-        for (size_t i = 0; i < dir_count; i++) {
-            const state_directory_entry_t *dir_entry = &directories[i];
-
-            /* Check if directory still exists */
-            if (!fs_exists(dir_entry->filesystem_path)) {
-                continue;
-            }
-
-            /* Find the profile for this directory */
-            profile_t *dir_profile = NULL;
-            for (size_t j = 0; j < profiles->count; j++) {
-                if (strcmp(profiles->profiles[j].name, dir_entry->profile) == 0) {
-                    dir_profile = &profiles->profiles[j];
-                    break;
-                }
-            }
-
-            if (!dir_profile) {
-                continue;  /* Profile not active */
-            }
-
-            /* Create profile-specific ignore context for this directory */
-            ignore_context_t *ignore_ctx = NULL;
-            err = ignore_context_create(repo, config, dir_entry->profile, NULL, 0, &ignore_ctx);
-            if (err) {
-                /* Non-fatal: continue without ignore filtering */
-                error_free(err);
-                err = NULL;
-            }
-
-            /* Scan this directory for new files */
-            err = scan_directory_for_new_files(
-                dir_entry->filesystem_path,
-                dir_entry->storage_prefix,
-                dir_profile,
-                manifest,
-                ignore_ctx,
-                list
-            );
-
-            /* Free ignore context */
-            ignore_context_free(ignore_ctx);
-
-            if (err) {
-                /* Log warning but continue with other directories */
-                if (opts->verbose) {
-                    output_warning(out, "Failed to scan directory '%s': %s",
-                                  dir_entry->filesystem_path, error_message(err));
-                }
-                error_free(err);
-                err = NULL;
-            }
-        }
-    }
-
-    manifest_free(manifest);
-    *new_files = list;
-    return NULL;
-}
-
-/**
  * Display summary of files to be updated
  */
 static void update_display_summary(
@@ -1220,7 +1011,6 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     profile_list_t *profiles = NULL;
     modified_file_list_t *modified = NULL;
     new_file_list_t *new_files = NULL;
-    state_t *state = NULL;
     bool should_detect_new = false;
     bool skip_new_files = false;
     size_t total_updated = 0;
@@ -1267,35 +1057,26 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     /* Determine if we should detect new files */
     should_detect_new = opts->include_new || opts->only_new || config->auto_detect_new_files;
 
-    /* Load state for new file detection */
-    if (should_detect_new) {
-        err = state_load(repo, &state);
-        if (err) {
-            err = error_wrap(err, "Failed to load state");
-            goto cleanup;
-        }
+    /* Find diverged files (modified + new) using unified workspace analysis */
+    err = find_modified_and_new_files(repo, profiles, config, opts, &modified, &new_files);
+    if (err) {
+        err = error_wrap(err, "Failed to analyze divergence");
+        goto cleanup;
     }
 
-    /* Find modified files (unless only_new is set) */
-    if (!opts->only_new) {
-        err = find_modified_files(repo, profiles, config, opts, &modified);
-        if (err) {
-            goto cleanup;
-        }
-    } else {
-        /* Create empty list when only processing new files */
+    /* Filter new files based on detection settings */
+    if (!should_detect_new && new_files) {
+        /* User didn't request new file detection - discard them */
+        new_file_list_free(new_files);
+        new_files = NULL;
+    }
+
+    /* Handle only_new flag - discard modified files if set */
+    if (opts->only_new && modified) {
+        modified_file_list_free(modified);
         modified = modified_file_list_create();
         if (!modified) {
             err = ERROR(ERR_MEMORY, "Failed to create modified file list");
-            goto cleanup;
-        }
-    }
-
-    /* Detect new files if requested (by flag or config) */
-    if (should_detect_new) {
-        err = update_detect_new_files(repo, profiles, state, config, opts, out, &new_files);
-        if (err) {
-            err = error_wrap(err, "Failed to detect new files");
             goto cleanup;
         }
     }
@@ -1370,7 +1151,6 @@ cleanup:
     }
 
     /* Free all resources in reverse order */
-    if (state) state_free(state);
     if (new_files) new_file_list_free(new_files);
     if (modified) modified_file_list_free(modified);
     if (profiles) profile_list_free(profiles);

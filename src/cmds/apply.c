@@ -832,12 +832,18 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
 
     /* Save state (only if not dry-run) */
     if (!opts->dry_run) {
-        /* Prune orphaned files BEFORE updating state (if requested)
+        /* Prune orphaned files BEFORE updating state (unless --keep-orphans)
+         *
          * This is critical: pruning needs to compare the OLD state (what was previously deployed)
          * against the NEW manifest (what should be deployed now).
          * If we update state first, we lose track of previously deployed files.
+         *
+         * Apply is a synchronization operation - it ensures the filesystem matches
+         * the declared state by both deploying new/updated files AND removing orphaned ones.
+         *
+         * The --keep-orphans flag allows opting out of automatic cleanup for advanced workflows.
          */
-        if (opts->prune) {
+        if (!opts->keep_orphans) {
             err = apply_prune_orphaned_files(repo, state, manifest, out, opts->verbose);
             if (err) {
                 goto cleanup;

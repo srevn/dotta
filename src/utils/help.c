@@ -186,19 +186,24 @@ void print_remove_help(const char *prog_name) {
     printf("\nNotes:\n");
     printf("  - By default, files are removed from BOTH profile and filesystem (atomic operation)\n");
     printf("  - Use --keep-files to preserve files on filesystem after removal from profile\n");
-    printf("  - Use 'dotta apply --prune' later to clean up orphaned files\n");
+    printf("  - Use 'dotta apply' later to clean up orphaned files\n");
     printf("  - Deleted profile branches can be recovered from remote if pushed\n");
     printf("\n");
 }
 
 void print_apply_help(const char *prog_name) {
     printf("Usage: %s apply [options] [profile]...\n\n", prog_name);
-    printf("Apply profiles to filesystem\n\n");
+    printf("Synchronize filesystem with profiles\n\n");
+    printf("Description:\n");
+    printf("  Apply performs a complete synchronization:\n");
+    printf("  • Deploys new and updated files from active profiles\n");
+    printf("  • Removes orphaned files (from deactivated profiles)\n");
+    printf("  • Updates state to reflect current deployment\n\n");
     printf("Options:\n");
     printf("  -p, --profile <name>   Specify profile(s) to apply\n");
     printf("  -f, --force            Overwrite modified files\n");
     printf("  -n, --dry-run          Don't actually deploy\n");
-    printf("  --prune                Remove untracked managed files\n");
+    printf("  --keep-orphans         Don't remove orphaned files (advanced)\n");
     printf("  --skip-existing        Skip files that already exist\n");
     printf("  --no-skip-unchanged    Disable smart skipping (default: enabled)\n");
     printf("  -v, --verbose          Print verbose output\n");
@@ -364,11 +369,10 @@ void print_clean_help(const char *prog_name) {
     printf("\nUse Cases:\n");
     printf("  - After manually deleting files from profile branches with git\n");
     printf("  - After removing files with 'dotta remove --keep-files'\n");
-    printf("  - After deactivating profiles (files remain until 'apply' is run)\n");
+    printf("  - After deactivating profiles with 'dotta apply --keep-orphans'\n");
     printf("  - To clean up before switching to a different profile set\n");
     printf("\nAlternatives:\n");
-    printf("  - 'dotta apply --prune'          Deploy profiles AND clean orphans\n");
-    printf("  - 'dotta apply'                  Deploy after deactivating profiles\n");
+    printf("  - 'dotta apply'                  Synchronize (deploy AND clean orphans)\n");
     printf("  - 'dotta remove <file>'          Remove from profile AND filesystem (atomic)\n");
     printf("\n");
 }

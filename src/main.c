@@ -351,7 +351,7 @@ static int cmd_apply_main(int argc, char **argv) {
         .profile_count = 0,
         .force = false,
         .dry_run = false,
-        .prune = false,
+        .keep_orphans = false,  /* Default: prune orphaned files */
         .verbose = false,
         .skip_existing = false,
         .skip_unchanged = true  /* Default: enabled for efficiency */
@@ -375,8 +375,8 @@ static int cmd_apply_main(int argc, char **argv) {
             opts.force = true;
         } else if (strcmp(argv[i], "-n") == 0 || strcmp(argv[i], "--dry-run") == 0) {
             opts.dry_run = true;
-        } else if (strcmp(argv[i], "--prune") == 0) {
-            opts.prune = true;
+        } else if (strcmp(argv[i], "--keep-orphans") == 0) {
+            opts.keep_orphans = true;
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             opts.verbose = true;
         } else if (strcmp(argv[i], "--skip-existing") == 0) {

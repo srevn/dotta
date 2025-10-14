@@ -19,7 +19,7 @@ typedef struct {
     size_t profile_count;       /* Number of profiles */
     bool force;                 /* Overwrite modified files */
     bool dry_run;               /* Don't actually deploy */
-    bool prune;                 /* Remove untracked managed files */
+    bool keep_orphans;          /* Don't remove orphaned files (opt-out from default cleanup) */
     bool verbose;               /* Print verbose output */
     bool skip_existing;         /* Skip files that already exist */
     bool skip_unchanged;        /* Skip files that match profile content (default: true) */

@@ -18,6 +18,7 @@
 
 /* Forward declarations */
 static char *extract_hostname(const char *url);
+static bool is_valid_hostname(const char *hostname);
 
 /**
  * Create credential context
@@ -70,7 +71,7 @@ void credential_context_approve(credential_context_t *ctx) {
     /* Build and execute git credential approve command */
     char cmd[1024];
     snprintf(cmd, sizeof(cmd),
-            "git credential approve 2>/dev/null <<EOF\n"
+            "git credential approve 2>/dev/null <<'EOF'\n"
             "protocol=https\n"
             "host=%s\n"
             "username=%s\n"
@@ -103,7 +104,7 @@ void credential_context_reject(credential_context_t *ctx) {
     /* Build and execute git credential reject command */
     char cmd[1024];
     snprintf(cmd, sizeof(cmd),
-            "git credential reject 2>/dev/null <<EOF\n"
+            "git credential reject 2>/dev/null <<'EOF'\n"
             "protocol=https\n"
             "host=%s\n"
             "username=%s\n"
@@ -138,14 +139,42 @@ static const char *get_home_dir(void) {
 }
 
 /**
+ * Validate hostname to prevent command injection
+ * Hostnames should only contain alphanumeric characters, dots, hyphens, and underscores
+ */
+static bool is_valid_hostname(const char *hostname) {
+    if (!hostname || !*hostname) {
+        return false;
+    }
+
+    for (const char *p = hostname; *p; p++) {
+        if (!((*p >= 'a' && *p <= 'z') ||
+              (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') ||
+              *p == '.' || *p == '-' || *p == '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
  * Try to get credentials from git credential helper
  * Returns 0 on success, -1 on failure
  */
 static int get_credentials_from_helper(const char *url, char *username, char *password, size_t max_len) {
-    /* Build credential helper command */
+    /* Validate hostname to prevent command injection */
+    if (!is_valid_hostname(url)) {
+        return -1;
+    }
+
+    /* Build credential helper command using safe heredoc */
     char cmd[1024];
     snprintf(cmd, sizeof(cmd),
-            "echo 'protocol=https\nhost=%s\n' | git credential fill 2>/dev/null",
+            "git credential fill 2>/dev/null <<'EOF'\n"
+            "protocol=https\n"
+            "host=%s\n"
+            "EOF\n",
             url);
 
     /* Execute command and read output */

@@ -12,7 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "base/credentials.h"
 #include "base/error.h"
 #include "base/gitops.h"
 #include "base/transfer.h"
@@ -753,7 +752,34 @@ static error_t *profile_deactivate(
             goto cleanup;
         }
 
-        /* Save state */
+        /* Clean up state entries for deactivated profiles
+         *
+         * This prevents permanent orphaning when 'apply' is run without '--prune'
+         * after deactivation. Without this, 'apply' calls state_clear_files() and
+         * rebuilds from the new manifest, permanently losing track of files from
+         * deactivated profiles.
+         *
+         * After cleanup:
+         * - Files remain on filesystem (manual removal needed)
+         * - State no longer tracks these files (maintains consistency)
+         * - No data loss from forgetting 'apply --prune'
+         */
+        for (size_t i = 0; i < string_array_size(to_deactivate); i++) {
+            const char *profile_name = string_array_get(to_deactivate, i);
+
+            size_t removed_count = 0;
+            error_t *cleanup_err = state_cleanup_profile(state, profile_name, &removed_count);
+            if (cleanup_err) {
+                /* Non-fatal: Partial cleanup is better than no cleanup */
+                if (opts->verbose) {
+                    output_warning(out, "Failed to clean state entries for '%s': %s",
+                                  profile_name, error_message(cleanup_err));
+                }
+                error_free(cleanup_err);
+            }
+        }
+
+        /* Save state (includes both profile deactivation and file cleanup) */
         err = state_save(repo, state);
         if (err) {
             err = error_wrap(err, "Failed to save state");

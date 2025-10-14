@@ -285,29 +285,29 @@ static error_t *show_diff_preview(
 
     /* Show header */
     if (output_colors_enabled(out)) {
-        fprintf(out->stream, "\n%s--- Changes preview ---%s\n",
+        output_printf(out, OUTPUT_NORMAL, "\n%s--- Changes preview ---%s\n",
                 output_color_code(out, OUTPUT_COLOR_BOLD),
                 output_color_code(out, OUTPUT_COLOR_RESET));
     } else {
-        fprintf(out->stream, "\n--- Changes preview ---\n");
+        output_printf(out, OUTPUT_NORMAL, "\n--- Changes preview ---\n");
     }
 
     /* Show stats */
     if (output_colors_enabled(out)) {
-        fprintf(out->stream, "File: %s%s%s\n",
+        output_printf(out, OUTPUT_NORMAL, "File: %s%s%s\n",
                 output_color_code(out, OUTPUT_COLOR_CYAN),
                 file_path,
                 output_color_code(out, OUTPUT_COLOR_RESET));
-        fprintf(out->stream, "Changes: %s+%zu%s / %s-%zu%s\n",
+        output_printf(out, OUTPUT_NORMAL, "Changes: %s+%zu%s / %s-%zu%s\n",
                 output_color_code(out, OUTPUT_COLOR_GREEN), additions,
                 output_color_code(out, OUTPUT_COLOR_RESET),
                 output_color_code(out, OUTPUT_COLOR_RED), deletions,
                 output_color_code(out, OUTPUT_COLOR_RESET));
     } else {
-        fprintf(out->stream, "File: %s\n", file_path);
-        fprintf(out->stream, "Changes: +%zu / -%zu\n", additions, deletions);
+        output_printf(out, OUTPUT_NORMAL, "File: %s\n", file_path);
+        output_printf(out, OUTPUT_NORMAL, "Changes: +%zu / -%zu\n", additions, deletions);
     }
-    fprintf(out->stream, "\n");
+    output_newline(out);
 
     /* Print patch */
     git_buf buf = {0};
@@ -333,17 +333,17 @@ static error_t *show_diff_preview(
                 }
 
                 if (color) {
-                    fprintf(out->stream, "%s%.*s%s\n",
+                    output_printf(out, OUTPUT_NORMAL, "%s%.*s%s\n",
                             color, (int)line_len, line,
                             output_color_code(out, OUTPUT_COLOR_RESET));
                 } else {
-                    fprintf(out->stream, "%.*s\n", (int)line_len, line);
+                    output_printf(out, OUTPUT_NORMAL, "%.*s\n", (int)line_len, line);
                 }
 
                 line = next_line ? next_line + 1 : NULL;
             }
         } else {
-            fprintf(out->stream, "%s", buf.ptr);
+            output_printf(out, OUTPUT_NORMAL, "%s", buf.ptr);
         }
     }
 
@@ -811,12 +811,12 @@ static error_t *deploy_reverted_file(
 
     /* Print success message before cleanup */
     if (output_colors_enabled(out)) {
-        fprintf(out->stream, "%s✓%s Deployed %s\n",
+        output_printf(out, OUTPUT_NORMAL, "%s✓%s Deployed %s\n",
                 output_color_code(out, OUTPUT_COLOR_GREEN),
                 output_color_code(out, OUTPUT_COLOR_RESET),
                 filesystem_path);
     } else {
-        fprintf(out->stream, "✓ Deployed %s\n", filesystem_path);
+        output_printf(out, OUTPUT_NORMAL, "✓ Deployed %s\n", filesystem_path);
     }
 
 cleanup:
@@ -954,11 +954,11 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     if (!opts->dry_run) {
         /* Show commit metadata */
         if (output_colors_enabled(out)) {
-            fprintf(out->stream, "\n%sRevert preview:%s\n",
+            output_printf(out, OUTPUT_NORMAL, "\n%sRevert preview:%s\n",
                     output_color_code(out, OUTPUT_COLOR_BOLD),
                     output_color_code(out, OUTPUT_COLOR_RESET));
         } else {
-            fprintf(out->stream, "\nRevert preview:\n");
+            output_printf(out, OUTPUT_NORMAL, "\nRevert preview:\n");
         }
 
         char oid_str[8];
@@ -971,16 +971,16 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
         strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
 
         if (output_colors_enabled(out)) {
-            fprintf(out->stream, "  Profile: %s%s%s\n",
+            output_printf(out, OUTPUT_NORMAL, "  Profile: %s%s%s\n",
                     output_color_code(out, OUTPUT_COLOR_CYAN),
                     profile_name,
                     output_color_code(out, OUTPUT_COLOR_RESET));
-            fprintf(out->stream, "  File: %s\n", resolved_path);
-            fprintf(out->stream, "  Target commit: %s (%s)\n", oid_str, time_buf);
+            output_printf(out, OUTPUT_NORMAL, "  File: %s\n", resolved_path);
+            output_printf(out, OUTPUT_NORMAL, "  Target commit: %s (%s)\n", oid_str, time_buf);
         } else {
-            fprintf(out->stream, "  Profile: %s\n", profile_name);
-            fprintf(out->stream, "  File: %s\n", resolved_path);
-            fprintf(out->stream, "  Target commit: %s (%s)\n", oid_str, time_buf);
+            output_printf(out, OUTPUT_NORMAL, "  Profile: %s\n", profile_name);
+            output_printf(out, OUTPUT_NORMAL, "  File: %s\n", resolved_path);
+            output_printf(out, OUTPUT_NORMAL, "  Target commit: %s (%s)\n", oid_str, time_buf);
         }
 
         /* Show diff preview */
@@ -1044,12 +1044,12 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     }
 
     if (output_colors_enabled(out)) {
-        fprintf(out->stream, "%s✓%s Reverted %s in profile '%s'\n",
+        output_printf(out, OUTPUT_NORMAL, "%s✓%s Reverted %s in profile '%s'\n",
                 output_color_code(out, OUTPUT_COLOR_GREEN),
                 output_color_code(out, OUTPUT_COLOR_RESET),
                 resolved_path, profile_name);
     } else {
-        fprintf(out->stream, "✓ Reverted %s in profile '%s'\n", resolved_path, profile_name);
+        output_printf(out, OUTPUT_NORMAL, "✓ Reverted %s in profile '%s'\n", resolved_path, profile_name);
     }
 
     /* Step 10: Deploy if requested */
@@ -1075,8 +1075,8 @@ cleanup:
     if (profile_name) free(profile_name);
     if (resolved_path) free(resolved_path);
     /* Add trailing newline for UX consistency */
-    if (out && out->stream) {
-        fprintf(out->stream, "\n");
+    if (out) {
+        output_newline(out);
     }
 
     if (out) output_free(out);

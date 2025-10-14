@@ -136,14 +136,14 @@ static error_t *profile_list(
 
             /* Show file counts if available, otherwise indicate error */
             if (count_err) {
-                fprintf(out->stream, "  %zu. %s (file count unavailable)\n", i + 1, name);
+                output_printf(out, OUTPUT_NORMAL, "  %zu. %s (file count unavailable)\n", i + 1, name);
                 error_free(count_err);
             } else {
-                fprintf(out->stream, "  %zu. %s (%zu file%s)\n",
+                output_printf(out, OUTPUT_NORMAL, "  %zu. %s (%zu file%s)\n",
                        i + 1, name, file_count, file_count == 1 ? "" : "s");
             }
         }
-        fprintf(out->stream, "\n");
+        output_newline(out);
     } else {
         output_info(out, "No active profiles");
         output_info(out, "Hint: Run 'dotta profile activate <name>' to activate a profile\n");
@@ -159,14 +159,14 @@ static error_t *profile_list(
 
             /* Show file counts if available, otherwise indicate error */
             if (count_err) {
-                fprintf(out->stream, "  • %s (file count unavailable)\n", name);
+                output_printf(out, OUTPUT_NORMAL, "  • %s (file count unavailable)\n", name);
                 error_free(count_err);
             } else {
-                fprintf(out->stream, "  • %s (%zu file%s)\n",
+                output_printf(out, OUTPUT_NORMAL, "  • %s (%zu file%s)\n",
                        name, file_count, file_count == 1 ? "" : "s");
             }
         }
-        fprintf(out->stream, "\n");
+        output_newline(out);
     }
 
     /* Show remote profiles if requested */
@@ -180,9 +180,9 @@ static error_t *profile_list(
             if (!remote_err && string_array_size(remote_branches) > 0) {
                 output_section(out, "Remote (not fetched)");
                 for (size_t i = 0; i < string_array_size(remote_branches); i++) {
-                    fprintf(out->stream, "  • %s\n", string_array_get(remote_branches, i));
+                    output_printf(out, OUTPUT_NORMAL, "  • %s\n", string_array_get(remote_branches, i));
                 }
-                fprintf(out->stream, "\n");
+                output_newline(out);
             }
             if (remote_err) {
                 error_free(remote_err);
@@ -339,9 +339,9 @@ static error_t *profile_fetch(
             if (string_array_size(available_remote) > 0) {
                 output_section(out, "Available profiles on remote");
                 for (size_t i = 0; i < string_array_size(available_remote); i++) {
-                    fprintf(out->stream, "  • %s\n", string_array_get(available_remote, i));
+                    output_printf(out, OUTPUT_NORMAL, "  • %s\n", string_array_get(available_remote, i));
                 }
-                fprintf(out->stream, "\n");
+                output_newline(out);
             }
             string_array_free(available_remote);
             err = ERROR(ERR_NOT_FOUND, "One or more requested profiles not found on remote");
@@ -405,7 +405,7 @@ cleanup:
     }
 
     /* Summary (only shown on success) */
-    fprintf(out->stream, "\n");
+    output_newline(out);
     if (fetched_count > 0) {
         output_success(out, "Fetched %zu profile%s",
                       fetched_count, fetched_count == 1 ? "" : "s");
@@ -592,7 +592,7 @@ cleanup:
 
     /* Summary (only shown on success) */
     if (!opts->verbose) {
-        fprintf(out->stream, "\n");
+        output_newline(out);
     }
 
     if (activated_count > 0) {
@@ -771,7 +771,7 @@ cleanup:
 
     /* Summary (only shown on success) */
     if (!opts->verbose) {
-        fprintf(out->stream, "\n");
+        output_newline(out);
     }
 
     if (deactivated_count > 0) {
@@ -949,17 +949,17 @@ static error_t *profile_reorder(
     /* Show before/after in verbose mode */
     if (opts->verbose) {
         output_section(out, "Profile order change");
-        fprintf(out->stream, "  Before:");
+        output_printf(out, OUTPUT_NORMAL, "  Before:");
         for (size_t i = 0; i < string_array_size(current_active); i++) {
-            fprintf(out->stream, " %s", string_array_get(current_active, i));
+            output_printf(out, OUTPUT_NORMAL, " %s", string_array_get(current_active, i));
         }
-        fprintf(out->stream, "\n");
+        output_newline(out);
 
-        fprintf(out->stream, "  After: ");
+        output_printf(out, OUTPUT_NORMAL, "  After: ");
         for (size_t i = 0; i < opts->profile_count; i++) {
-            fprintf(out->stream, " %s", opts->profiles[i]);
+            output_printf(out, OUTPUT_NORMAL, " %s", opts->profiles[i]);
         }
-        fprintf(out->stream, "\n\n");
+        output_newline(out); output_newline(out);
     }
 
     /* Update state with new order */
@@ -978,7 +978,7 @@ static error_t *profile_reorder(
 
     /* Success message */
     if (!opts->quiet) {
-        fprintf(out->stream, "\n");
+        output_newline(out);
         output_success(out, "Reordered %zu profile%s",
                       opts->profile_count,
                       opts->profile_count == 1 ? "" : "s");
@@ -1062,7 +1062,7 @@ static error_t *profile_validate(
                       string_array_size(missing) == 1 ? "" : "s");
 
         for (size_t i = 0; i < string_array_size(missing); i++) {
-            fprintf(out->stream, "  • %s\n", string_array_get(missing, i));
+            output_printf(out, OUTPUT_NORMAL, "  • %s\n", string_array_get(missing, i));
         }
 
         if (opts->fix) {
@@ -1147,7 +1147,7 @@ cleanup:
     }
 
     /* Summary (only shown on success) */
-    fprintf(out->stream, "\n");
+    output_newline(out);
     if (!has_issues) {
         output_success(out, "Profile state is valid");
     } else {

@@ -123,7 +123,7 @@ static error_t *remove_orphaned_files_internal(
             } else {
                 (*state_cleaned_count)++;
                 if (opts->verbose) {
-                    fprintf(out->stream, "  [skip] %s (already removed, cleaned from state)\n", path);
+                    output_printf(out, OUTPUT_NORMAL, "  [skip] %s (already removed, cleaned from state)\n", path);
                 }
             }
             continue;
@@ -156,12 +156,12 @@ static error_t *remove_orphaned_files_internal(
             (*removed_count)++;
             if (opts->verbose) {
                 if (output_colors_enabled(out)) {
-                    fprintf(out->stream, "  %s[ok]%s   %s\n",
+                    output_printf(out, OUTPUT_NORMAL, "  %s[ok]%s   %s\n",
                             output_color_code(out, OUTPUT_COLOR_GREEN),
                             output_color_code(out, OUTPUT_COLOR_RESET),
                             path);
                 } else {
-                    fprintf(out->stream, "  [ok]   %s\n", path);
+                    output_printf(out, OUTPUT_NORMAL, "  [ok]   %s\n", path);
                 }
             }
         }
@@ -251,18 +251,18 @@ error_t *cmd_clean(git_repository *repo, const cmd_clean_options_t *opts) {
         output_section(out, "Active profiles");
         for (size_t i = 0; i < profiles->count; i++) {
             if (output_colors_enabled(out)) {
-                fprintf(out->stream, "  %s%s%s%s\n",
+                output_printf(out, OUTPUT_NORMAL, "  %s%s%s%s\n",
                        output_color_code(out, OUTPUT_COLOR_CYAN),
                        profiles->profiles[i].name,
                        output_color_code(out, OUTPUT_COLOR_RESET),
                        profiles->profiles[i].auto_detected ? " (auto)" : "");
             } else {
-                fprintf(out->stream, "  %s%s\n",
+                output_printf(out, OUTPUT_NORMAL, "  %s%s\n",
                        profiles->profiles[i].name,
                        profiles->profiles[i].auto_detected ? " (auto)" : "");
             }
         }
-        fprintf(out->stream, "\n");
+        output_newline(out);
     }
 
     /* Build manifest from current profiles */
@@ -326,19 +326,19 @@ error_t *cmd_clean(git_repository *repo, const cmd_clean_options_t *opts) {
     char header[128];
     snprintf(header, sizeof(header), "Files to remove (%zu)", string_array_size(orphaned));
     output_section(out, header);
-    fprintf(out->stream, "\n");
+    output_newline(out);
 
     for (size_t i = 0; i < string_array_size(orphaned); i++) {
         if (output_colors_enabled(out)) {
-            fprintf(out->stream, "  %s%s%s\n",
+            output_printf(out, OUTPUT_NORMAL, "  %s%s%s\n",
                     output_color_code(out, OUTPUT_COLOR_YELLOW),
                     string_array_get(orphaned, i),
                     output_color_code(out, OUTPUT_COLOR_RESET));
         } else {
-            fprintf(out->stream, "  %s\n", string_array_get(orphaned, i));
+            output_printf(out, OUTPUT_NORMAL, "  %s\n", string_array_get(orphaned, i));
         }
     }
-    fprintf(out->stream, "\n");
+    output_newline(out);
 
     if (opts->dry_run) {
         output_info(out, "Dry-run mode - no files removed");
@@ -384,16 +384,16 @@ error_t *cmd_clean(git_repository *repo, const cmd_clean_options_t *opts) {
     }
 
     /* Summary */
-    fprintf(out->stream, "\n");
+    output_newline(out);
     if (removed_count > 0) {
         if (output_colors_enabled(out)) {
-            fprintf(out->stream, "Removed %s%zu%s file%s\n",
+            output_printf(out, OUTPUT_NORMAL, "Removed %s%zu%s file%s\n",
                     output_color_code(out, OUTPUT_COLOR_GREEN),
                     removed_count,
                     output_color_code(out, OUTPUT_COLOR_RESET),
                     removed_count == 1 ? "" : "s");
         } else {
-            fprintf(out->stream, "Removed %zu file%s\n",
+            output_printf(out, OUTPUT_NORMAL, "Removed %zu file%s\n",
                     removed_count, removed_count == 1 ? "" : "s");
         }
     }
@@ -411,8 +411,8 @@ error_t *cmd_clean(git_repository *repo, const cmd_clean_options_t *opts) {
     }
 
     /* Add trailing newline for UX consistency */
-    if (out && out->stream) {
-        fprintf(out->stream, "\n");
+    if (out) {
+        output_newline(out);
     }
 
 cleanup:

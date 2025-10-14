@@ -128,7 +128,7 @@ static error_t *remote_list(git_repository *repo, bool verbose) {
         }
     }
 
-    printf("\n");
+    output_newline(out);
 
     git_strarray_dispose(&remotes);
     config_free(config);

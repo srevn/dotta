@@ -290,9 +290,9 @@ static error_t *handle_no_profiles_detected(
     if (!err && remote_branches && string_array_size(remote_branches) > 0) {
         output_section(out, "Available remote profiles");
         for (size_t i = 0; i < string_array_size(remote_branches); i++) {
-            fprintf(out->stream, "  • %s\n", string_array_get(remote_branches, i));
+            output_printf(out, OUTPUT_NORMAL, "  • %s\n", string_array_get(remote_branches, i));
         }
-        fprintf(out->stream, "\n");
+        output_newline(out);
 
         /* Check if 'global' exists */
         bool has_global = false;
@@ -390,7 +390,7 @@ static error_t *initialize_state(
     if (output_colors_enabled(out)) {
         output_success(out, "Initialized active profiles: ");
         for (size_t i = 0; i < count; i++) {
-            fprintf(out->stream, "%s%s",
+            output_printf(out, OUTPUT_NORMAL, "%s%s",
                    profile_names[i],
                    (i < count - 1) ? ", " : "\n");
         }
@@ -548,7 +548,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             for (size_t i = 0; i < detected_profiles->count; i++) {
                 output_info(out, "  • %s", detected_profiles->profiles[i].name);
             }
-            fprintf(out->stream, "\n");
+            output_newline(out);
 
             /* Build profile names array */
             const char **profile_names = malloc(detected_profiles->count * sizeof(char *));
@@ -664,7 +664,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         }
 
         if (bootstrap_available) {
-            fprintf(out->stream, "\n");
+            output_newline(out);
             output_section(out, "Bootstrap scripts available");
 
             for (size_t i = 0; i < string_array_size(fetched_profiles); i++) {
@@ -673,7 +673,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
                     output_info(out, "  ✓ %s/.dotta/bootstrap", profile_name);
                 }
             }
-            fprintf(out->stream, "\n");
+            output_newline(out);
 
             /* Determine if we should run bootstrap */
             if (opts->bootstrap) {
@@ -698,7 +698,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
                                &bootstrap_profiles);
 
         if (!err && bootstrap_profiles) {
-            fprintf(out->stream, "\n");
+            output_newline(out);
             err = bootstrap_run_for_profiles(repo, local_path,
                                              (struct profile_list *)bootstrap_profiles,
                                              false, true);
@@ -716,14 +716,14 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     }
 
     /* Success - print messages before cleanup */
-    fprintf(out->stream, "\n");
+    output_newline(out);
     output_success(out, "Dotta repository cloned successfully!\n");
 
     if (run_bootstrap) {
         output_success(out, "Bootstrap complete!\n");
     }
 
-    fprintf(out->stream, "\n");
+    output_newline(out);
     output_section(out, "Next steps");
     if (!run_bootstrap && bootstrap_available) {
         output_info(out, "  dotta bootstrap        # Run bootstrap scripts");
@@ -731,7 +731,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     output_info(out, "  dotta profile list     # View active profiles");
     output_info(out, "  dotta apply            # Apply profiles to your system");
     output_info(out, "  dotta status           # View current state");
-    fprintf(out->stream, "\n");
+    output_newline(out);
 
 cleanup:
     /* Cleanup resources */

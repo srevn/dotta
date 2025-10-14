@@ -266,60 +266,55 @@ static void display_status_summary(
     output_info(out, "%s", summary_text);
 
     if (output_colors_enabled(out)) {
-        char *colored = output_colorize(out, OUTPUT_COLOR_GREEN,
-                                       (char[]){0}); /* dummy to get color code */
-        free(colored);
-        snprintf(summary_text, sizeof(summary_text), "%s%zu%s up to date",
+        snprintf(summary_text, sizeof(summary_text), "  %s%zu%s up to date",
                 output_color_code(out, OUTPUT_COLOR_GREEN), up_to_date,
                 output_color_code(out, OUTPUT_COLOR_RESET));
-        fprintf(out->stream, "  %s\n", summary_text);
+        output_printf(out, OUTPUT_NORMAL, "%s\n", summary_text);
     } else {
-        fprintf(out->stream, "  %zu up to date\n", up_to_date);
+        output_info(out, "  %zu up to date", up_to_date);
     }
 
     if (not_deployed > 0) {
         if (output_colors_enabled(out)) {
             snprintf(summary_text, sizeof(summary_text),
-                    "%s%zu%s not deployed (run '%sdotta apply%s')",
+                    "  %s%zu%s not deployed (run '%sdotta apply%s')",
                     output_color_code(out, OUTPUT_COLOR_RED), not_deployed,
                     output_color_code(out, OUTPUT_COLOR_RESET),
                     output_color_code(out, OUTPUT_COLOR_CYAN),
                     output_color_code(out, OUTPUT_COLOR_RESET));
-            fprintf(out->stream, "  %s\n", summary_text);
+            output_printf(out, OUTPUT_NORMAL, "%s\n", summary_text);
         } else {
-            fprintf(out->stream, "  %zu not deployed (run 'dotta apply')\n",
-                   not_deployed);
+            output_info(out, "  %zu not deployed (run 'dotta apply')", not_deployed);
         }
     }
 
     if (modified > 0) {
         if (output_colors_enabled(out)) {
             snprintf(summary_text, sizeof(summary_text),
-                    "%s%zu%s modified locally (use %s--force%s to overwrite)",
+                    "  %s%zu%s modified locally (use %s--force%s to overwrite)",
                     output_color_code(out, OUTPUT_COLOR_YELLOW), modified,
                     output_color_code(out, OUTPUT_COLOR_RESET),
                     output_color_code(out, OUTPUT_COLOR_CYAN),
                     output_color_code(out, OUTPUT_COLOR_RESET));
-            fprintf(out->stream, "  %s\n", summary_text);
+            output_printf(out, OUTPUT_NORMAL, "%s\n", summary_text);
         } else {
-            fprintf(out->stream, "  %zu modified locally (use --force to overwrite)\n",
-                   modified);
+            output_info(out, "  %zu modified locally (use --force to overwrite)", modified);
         }
     }
 
     if (new_file_count > 0) {
         if (output_colors_enabled(out)) {
             snprintf(summary_text, sizeof(summary_text),
-                    "%s%zu%s new file%s detected (run '%sdotta update --include-new%s' to add)",
+                    "  %s%zu%s new file%s detected (run '%sdotta update --include-new%s' to add)",
                     output_color_code(out, OUTPUT_COLOR_CYAN), new_file_count,
                     output_color_code(out, OUTPUT_COLOR_RESET),
                     new_file_count == 1 ? "" : "s",
                     output_color_code(out, OUTPUT_COLOR_CYAN),
                     output_color_code(out, OUTPUT_COLOR_RESET));
-            fprintf(out->stream, "  %s\n", summary_text);
+            output_printf(out, OUTPUT_NORMAL, "%s\n", summary_text);
         } else {
-            fprintf(out->stream, "  %zu new file%s detected (run 'dotta update --include-new' to add)\n",
-                   new_file_count, new_file_count == 1 ? "" : "s");
+            output_info(out, "  %zu new file%s detected (run 'dotta update --include-new' to add)",
+                       new_file_count, new_file_count == 1 ? "" : "s");
         }
     }
 }
@@ -494,12 +489,12 @@ static void display_active_profiles(
         char *auto_text = profile->auto_detected ? " (auto-detected)" : "";
 
         if (colored_name) {
-            fprintf(out->stream, "  %s %s%s",
-                    profile->auto_detected ? "*" : " ", colored_name, auto_text);
+            output_printf(out, OUTPUT_NORMAL, "  %s %s%s",
+                         profile->auto_detected ? "*" : " ", colored_name, auto_text);
             free(colored_name);
         } else {
-            fprintf(out->stream, "  %s %s%s",
-                    profile->auto_detected ? "*" : " ", profile->name, auto_text);
+            output_printf(out, OUTPUT_NORMAL, "  %s %s%s",
+                         profile->auto_detected ? "*" : " ", profile->name, auto_text);
         }
 
         /* In verbose mode, show file count for this profile */
@@ -510,11 +505,11 @@ static void display_active_profiles(
                     profile_file_count++;
                 }
             }
-            fprintf(out->stream, "\n      %zu file%s",
-                    profile_file_count, profile_file_count == 1 ? "" : "s");
+            output_printf(out, OUTPUT_NORMAL, "\n      %zu file%s",
+                         profile_file_count, profile_file_count == 1 ? "" : "s");
         }
 
-        fprintf(out->stream, "\n");
+        output_newline(out);
     }
 
     /* Show last deployment time if available */
@@ -524,10 +519,10 @@ static void display_active_profiles(
             char time_buf[64];
             struct tm *tm_info = localtime(&last_deploy);
             strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
-            fprintf(out->stream, "  Last deployed: %s\n", time_buf);
+            output_info(out, "  Last deployed: %s", time_buf);
         }
     }
-    fprintf(out->stream, "\n");
+    output_newline(out);
 }
 
 /**
@@ -614,7 +609,7 @@ static void display_workspace_status(
 
         /* In verbose mode, show affected files */
         if (verbose && ws_status != WORKSPACE_CLEAN) {
-            fprintf(out->stream, "\n");
+            output_newline(out);
             output_info(out, "Affected files:");
 
             size_t count = 0;
@@ -670,7 +665,7 @@ static void display_workspace_status(
 
         /* Show hints based on what's detected */
         if (ws_status != WORKSPACE_CLEAN) {
-            fprintf(out->stream, "\n");
+            output_newline(out);
             if (undeployed > 0) {
                 output_info(out, "Hint: Run 'dotta apply' to deploy undeployed files");
             }
@@ -679,7 +674,7 @@ static void display_workspace_status(
             }
         }
 
-        fprintf(out->stream, "\n");
+        output_newline(out);
     }
 
     workspace_free(ws);
@@ -742,7 +737,7 @@ static error_t *display_remote_status(
                 error_free(fetch_err);
             }
         }
-        fprintf(out->stream, "\n");
+        output_newline(out);
     }
 
     /* Display remote sync status section */
@@ -812,7 +807,8 @@ static error_t *display_remote_status(
         /* Display with colors */
         if (verbose && info->state != UPSTREAM_NO_REMOTE && info->state != UPSTREAM_UNKNOWN) {
             /* Verbose mode: show detailed commit info */
-            fprintf(out->stream, "\nProfile: %s\n", profile_name);
+            output_newline(out);
+            output_printf(out, OUTPUT_NORMAL, "Profile: %s\n", profile_name);
 
             /* Get local commit info */
             char local_ref[256];
@@ -831,17 +827,17 @@ static error_t *display_remote_status(
                 char time_str[64];
                 format_relative_time(local_time, time_str, sizeof(time_str));
 
-                fprintf(out->stream, "  Status:         ");
+                output_printf(out, OUTPUT_NORMAL, "  Status:         ");
                 if (output_colors_enabled(out)) {
-                    fprintf(out->stream, "%s%s%s\n",
-                            output_color_code(out, color),
-                            status_str,
-                            output_color_code(out, OUTPUT_COLOR_RESET));
+                    output_printf(out, OUTPUT_NORMAL, "%s%s%s\n",
+                                 output_color_code(out, color),
+                                 status_str,
+                                 output_color_code(out, OUTPUT_COLOR_RESET));
                 } else {
-                    fprintf(out->stream, "%s\n", status_str);
+                    output_printf(out, OUTPUT_NORMAL, "%s\n", status_str);
                 }
-                fprintf(out->stream, "  Local commit:   %s %s (%s)\n",
-                        local_oid_str, local_summary, time_str);
+                output_printf(out, OUTPUT_NORMAL, "  Local commit:   %s %s (%s)\n",
+                             local_oid_str, local_summary, time_str);
 
                 git_commit_free(local_commit);
             }
@@ -866,8 +862,8 @@ static error_t *display_remote_status(
                     char time_str[64];
                     format_relative_time(remote_time, time_str, sizeof(time_str));
 
-                    fprintf(out->stream, "  Remote commit:  %s %s (%s)\n",
-                            remote_oid_str, remote_summary, time_str);
+                    output_printf(out, OUTPUT_NORMAL, "  Remote commit:  %s %s (%s)\n",
+                                 remote_oid_str, remote_summary, time_str);
 
                     git_commit_free(remote_commit);
                 }
@@ -876,22 +872,22 @@ static error_t *display_remote_status(
         } else {
             /* Compact mode: single line */
             if (output_colors_enabled(out)) {
-                fprintf(out->stream, "  %s%-12s%s  %s%s%s\n",
-                        output_color_code(out, OUTPUT_COLOR_CYAN),
-                        profile_name,
-                        output_color_code(out, OUTPUT_COLOR_RESET),
-                        output_color_code(out, color),
-                        status_str,
-                        output_color_code(out, OUTPUT_COLOR_RESET));
+                output_printf(out, OUTPUT_NORMAL, "  %s%-12s%s  %s%s%s\n",
+                             output_color_code(out, OUTPUT_COLOR_CYAN),
+                             profile_name,
+                             output_color_code(out, OUTPUT_COLOR_RESET),
+                             output_color_code(out, color),
+                             status_str,
+                             output_color_code(out, OUTPUT_COLOR_RESET));
             } else {
-                fprintf(out->stream, "  %-12s  %s\n", profile_name, status_str);
+                output_printf(out, OUTPUT_NORMAL, "  %-12s  %s\n", profile_name, status_str);
             }
         }
 
         upstream_info_free(info);
     }
 
-    fprintf(out->stream, "\n");
+    output_newline(out);
 
     /* Display summary */
     output_section(out, "Sync summary");
@@ -906,7 +902,7 @@ static error_t *display_remote_status(
     }
     if (diverged > 0) {
         output_warning(out, "%zu diverged (needs resolution)", diverged);
-        fprintf(out->stream, "  Hint: Run 'dotta sync --diverged=rebase' or 'dotta sync --diverged=merge' to resolve\n");
+        output_info(out, "  Hint: Run 'dotta sync --diverged=rebase' or 'dotta sync --diverged=merge' to resolve");
     }
     if (no_remote > 0) {
         output_info(out, "%zu without remote branch", no_remote);
@@ -993,11 +989,13 @@ error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
     display_active_profiles(out, profiles, manifest, state, opts->verbose);
 
     /* Display workspace status */
+    output_newline(out);
     display_workspace_status(repo, profiles, out, opts->verbose);
 
     /* Show filesystem status (if requested) */
     if (opts->show_local) {
         /* Add section header */
+        output_newline(out);
         if (opts->verbose) {
             output_section(out, "Filesystem status");
         }
@@ -1035,6 +1033,7 @@ error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
 
     /* Show remote sync status (if requested) */
     if (opts->show_remote) {
+        output_newline(out);
         err = display_remote_status(repo, out, opts->verbose, opts->no_fetch);
         if (err) {
             /* Non-fatal: might not have remote configured */
@@ -1054,10 +1053,10 @@ error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
             char *hint = output_colorize(out, OUTPUT_COLOR_DIM,
                     "Hint: Run 'dotta apply' to deploy files to filesystem");
             if (hint) {
-                fprintf(out->stream, "%s\n", hint);
+                output_printf(out, OUTPUT_NORMAL, "%s\n", hint);
                 free(hint);
             } else {
-                fprintf(out->stream, "Hint: Run 'dotta apply' to deploy files to filesystem\n");
+                output_info(out, "Hint: Run 'dotta apply' to deploy files to filesystem");
             }
         }
 
@@ -1065,10 +1064,10 @@ error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
             char *hint = output_colorize(out, OUTPUT_COLOR_DIM,
                     "Hint: Use 'dotta apply --force' to overwrite locally modified files");
             if (hint) {
-                fprintf(out->stream, "%s\n", hint);
+                output_printf(out, OUTPUT_NORMAL, "%s\n", hint);
                 free(hint);
             } else {
-                fprintf(out->stream, "Hint: Use 'dotta apply --force' to overwrite locally modified files\n");
+                output_info(out, "Hint: Use 'dotta apply --force' to overwrite locally modified files");
             }
         }
 
@@ -1076,17 +1075,17 @@ error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
             char *hint = output_colorize(out, OUTPUT_COLOR_DIM,
                     "Hint: Run 'dotta update --include-new' to add new files to profile");
             if (hint) {
-                fprintf(out->stream, "%s\n", hint);
+                output_printf(out, OUTPUT_NORMAL, "%s\n", hint);
                 free(hint);
             } else {
-                fprintf(out->stream, "Hint: Run 'dotta update --include-new' to add new files to profile\n");
+                output_info(out, "Hint: Run 'dotta update --include-new' to add new files to profile");
             }
         }
     }
 
     /* Add trailing newline for UX consistency */
-    if (out && out->stream) {
-        fprintf(out->stream, "\n");
+    if (out) {
+        output_newline(out);
     }
 
 cleanup:

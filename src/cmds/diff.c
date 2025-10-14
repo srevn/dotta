@@ -151,25 +151,25 @@ static error_t *show_file_diff(
     }
 
     if (opts->name_only) {
-        fprintf(out->stream, "%s\n", entry->filesystem_path);
+        output_printf(out, OUTPUT_NORMAL, "%s\n", entry->filesystem_path);
         return NULL;
     }
 
     /* Show file header with colors */
     if (output_colors_enabled(out)) {
         char *cyan_path = output_colorize(out, OUTPUT_COLOR_CYAN, entry->storage_path);
-        fprintf(out->stream, "%sdiff --dotta a/%s b/%s%s\n",
+        output_printf(out, OUTPUT_NORMAL, "%sdiff --dotta a/%s b/%s%s\n",
                 output_color_code(out, OUTPUT_COLOR_BOLD),
                 entry->storage_path, entry->storage_path,
                 output_color_code(out, OUTPUT_COLOR_RESET));
-        fprintf(out->stream, "profile: %s%s%s\n",
+        output_printf(out, OUTPUT_NORMAL, "profile: %s%s%s\n",
                 output_color_code(out, OUTPUT_COLOR_CYAN),
                 entry->source_profile->name,
                 output_color_code(out, OUTPUT_COLOR_RESET));
         free(cyan_path);
     } else {
-        fprintf(out->stream, "diff --dotta a/%s b/%s\n", entry->storage_path, entry->storage_path);
-        fprintf(out->stream, "profile: %s\n", entry->source_profile->name);
+        output_printf(out, OUTPUT_NORMAL, "diff --dotta a/%s b/%s\n", entry->storage_path, entry->storage_path);
+        output_printf(out, OUTPUT_NORMAL, "profile: %s\n", entry->source_profile->name);
     }
 
     /* Show status with appropriate color and message based on direction */
@@ -181,12 +181,12 @@ static error_t *show_file_diff(
     }
 
     if (output_colors_enabled(out)) {
-        fprintf(out->stream, "status: %s%s%s\n",
+        output_printf(out, OUTPUT_NORMAL, "status: %s%s%s\n",
                 output_color_code(out, status_color),
                 status_msg,
                 output_color_code(out, OUTPUT_COLOR_RESET));
     } else {
-        fprintf(out->stream, "status: %s\n", status_msg);
+        output_printf(out, OUTPUT_NORMAL, "status: %s\n", status_msg);
     }
 
     /* For missing files, no diff to show */
@@ -228,17 +228,17 @@ static error_t *show_file_diff(
                 }
 
                 if (color) {
-                    fprintf(out->stream, "%s%.*s%s\n",
+                    output_printf(out, OUTPUT_NORMAL, "%s%.*s%s\n",
                             color, (int)line_len, line,
                             output_color_code(out, OUTPUT_COLOR_RESET));
                 } else {
-                    fprintf(out->stream, "%.*s\n", (int)line_len, line);
+                    output_printf(out, OUTPUT_NORMAL, "%.*s\n", (int)line_len, line);
                 }
 
                 line = next_line ? next_line + 1 : NULL;
             }
         } else {
-            fprintf(out->stream, "%s\n", diff->diff_text);
+            output_printf(out, OUTPUT_NORMAL, "%s\n", diff->diff_text);
         }
     }
 
@@ -371,7 +371,7 @@ error_t *cmd_diff(git_repository *repo, const cmd_diff_options_t *opts) {
         }
 
         /* Downstream section */
-        fprintf(out->stream, "\n");
+        output_newline(out);
         output_section(out, "Downstream (filesystem \u2192 repository)");
         output_info(out, "Shows what 'dotta update' would commit\n");
 
@@ -411,8 +411,8 @@ error_t *cmd_diff(git_repository *repo, const cmd_diff_options_t *opts) {
     }
 
     /* Add trailing newline for UX consistency */
-    if (out && out->stream) {
-        fprintf(out->stream, "\n");
+    if (out) {
+        output_newline(out);
     }
 
     /* Cleanup */

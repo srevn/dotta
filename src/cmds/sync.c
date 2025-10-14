@@ -299,14 +299,14 @@ static error_t *sync_update_phase(
         /* Check if it's just "no modified files" */
         if (strstr(error_message(err), "No modified files")) {
             error_free(err);
-            output_info(out, "No local changes to update");
+            output_info(out, "No modified files to update");
+            output_newline(out);
             return NULL;
         }
         return err;
     }
 
     *had_updates = true;
-    fprintf(out->stream, "\n");
     return NULL;
 }
 
@@ -391,7 +391,7 @@ static error_t *sync_fetch_active_profiles(
                       profiles->count == 1 ? "" : "s");
     }
 
-    fprintf(out->stream, "\n");
+    output_newline(out);
     return NULL;
 }
 
@@ -909,7 +909,7 @@ static error_t *sync_push_phase(
         }
     }
 
-    fprintf(out->stream, "\n");
+    output_newline(out);
     return NULL;
 }
 
@@ -1045,11 +1045,11 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
             size_t orphaned_count = workspace_count_divergence(ws, DIVERGENCE_ORPHANED);
 
             if (undeployed_count > 0) {
-                fprintf(out->stream, "\n");
+                output_newline(out);
                 output_warning(out, "Workspace has %zu undeployed file%s",
                               undeployed_count, undeployed_count == 1 ? "" : "s");
                 output_info(out, "These files exist in profiles but have never been deployed:");
-                fprintf(out->stream, "\n");
+                output_newline(out);
 
                 /* Display undeployed files */
                 size_t count = 0;
@@ -1065,9 +1065,9 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
                     }
                 }
 
-                fprintf(out->stream, "\n");
+                output_newline(out);
                 output_info(out, "Hint: Run 'dotta apply' to deploy these files, or use --skip-undeployed to continue anyway");
-                fprintf(out->stream, "\n");
+                output_newline(out);
             }
 
             if (orphaned_count > 0) {
@@ -1199,8 +1199,8 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     }
 
     /* Add trailing newline for UX consistency */
-    if (out && out->stream) {
-        fprintf(out->stream, "\n");
+    if (out) {
+        output_newline(out);
     }
 
     /* Cleanup */

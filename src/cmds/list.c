@@ -154,7 +154,7 @@ static error_t *list_profiles(
 
         if (is_auto) {
             if (output_colors_enabled(out)) {
-                fprintf(out->stream, "  %s*%s %s%s%s %s\n",
+                output_printf(out, OUTPUT_NORMAL, "  %s*%s %s%s%s %s\n",
                         output_color_code(out, OUTPUT_COLOR_GREEN),
                         output_color_code(out, OUTPUT_COLOR_RESET),
                         output_color_code(out, OUTPUT_COLOR_CYAN),
@@ -162,17 +162,17 @@ static error_t *list_profiles(
                         output_color_code(out, OUTPUT_COLOR_RESET),
                         upstream_str);
             } else {
-                fprintf(out->stream, "  * %s %s\n", name, upstream_str);
+                output_printf(out, OUTPUT_NORMAL, "  * %s %s\n", name, upstream_str);
             }
         } else {
             if (output_colors_enabled(out)) {
-                fprintf(out->stream, "    %s%s%s %s\n",
+                output_printf(out, OUTPUT_NORMAL, "    %s%s%s %s\n",
                         output_color_code(out, OUTPUT_COLOR_CYAN),
                         name,
                         output_color_code(out, OUTPUT_COLOR_RESET),
                         upstream_str);
             } else {
-                fprintf(out->stream, "    %s %s\n", name, upstream_str);
+                output_printf(out, OUTPUT_NORMAL, "    %s %s\n", name, upstream_str);
             }
         }
 
@@ -193,7 +193,7 @@ static error_t *list_profiles(
                 continue;
             }
 
-            fprintf(out->stream, "      %zu file%s",
+            output_printf(out, OUTPUT_NORMAL, "      %zu file%s",
                    string_array_size(files),
                    string_array_size(files) == 1 ? "" : "s");
 
@@ -213,7 +213,7 @@ static error_t *list_profiles(
                 format_relative_time(author->when.time, time_str, sizeof(time_str));
 
                 if (output_colors_enabled(out)) {
-                    fprintf(out->stream, ", last: %s%s%s %s%s%s\n",
+                    output_printf(out, OUTPUT_NORMAL, ", last: %s%s%s %s%s%s\n",
                             output_color_code(out, OUTPUT_COLOR_YELLOW),
                             oid_str,
                             output_color_code(out, OUTPUT_COLOR_RESET),
@@ -221,12 +221,12 @@ static error_t *list_profiles(
                             time_str,
                             output_color_code(out, OUTPUT_COLOR_RESET));
                 } else {
-                    fprintf(out->stream, ", last: %s %s\n", oid_str, time_str);
+                    output_printf(out, OUTPUT_NORMAL, ", last: %s %s\n", oid_str, time_str);
                 }
 
                 git_commit_free(last_commit);
             } else {
-                fprintf(out->stream, "\n");
+                output_newline(out);
             }
             error_free(commit_err);
 
@@ -237,40 +237,40 @@ static error_t *list_profiles(
 
     /* Print legend */
     if (has_auto || show_remote) {
-        fprintf(out->stream, "\n");
+        output_newline(out);
     }
 
     if (has_auto) {
         if (output_colors_enabled(out)) {
-            fprintf(out->stream, "%s*%s = auto-detected for this system\n",
+            output_printf(out, OUTPUT_NORMAL, "%s*%s = auto-detected for this system\n",
                     output_color_code(out, OUTPUT_COLOR_GREEN),
                     output_color_code(out, OUTPUT_COLOR_RESET));
         } else {
-            fprintf(out->stream, "* = auto-detected for this system\n");
+            output_printf(out, OUTPUT_NORMAL, "* = auto-detected for this system\n");
         }
     }
 
     if (show_remote) {
-        fprintf(out->stream, "\nRemote tracking (from %s):\n", remote_name);
+        output_printf(out, OUTPUT_NORMAL, "\nRemote tracking (from %s):\n", remote_name);
         if (output_colors_enabled(out)) {
-            fprintf(out->stream, "  %s[=]%s  up-to-date    ",
+            output_printf(out, OUTPUT_NORMAL, "  %s[=]%s  up-to-date    ",
                     output_color_code(out, OUTPUT_COLOR_GREEN),
                     output_color_code(out, OUTPUT_COLOR_RESET));
-            fprintf(out->stream, "%s[↑n]%s ahead    ",
+            output_printf(out, OUTPUT_NORMAL, "%s[↑n]%s ahead    ",
                     output_color_code(out, OUTPUT_COLOR_YELLOW),
                     output_color_code(out, OUTPUT_COLOR_RESET));
-            fprintf(out->stream, "%s[↓n]%s behind\n",
+            output_printf(out, OUTPUT_NORMAL, "%s[↓n]%s behind\n",
                     output_color_code(out, OUTPUT_COLOR_YELLOW),
                     output_color_code(out, OUTPUT_COLOR_RESET));
-            fprintf(out->stream, "  %s[↕]%s  diverged      ",
+            output_printf(out, OUTPUT_NORMAL, "  %s[↕]%s  diverged      ",
                     output_color_code(out, OUTPUT_COLOR_RED),
                     output_color_code(out, OUTPUT_COLOR_RESET));
-            fprintf(out->stream, "%s[•]%s  no remote\n",
+            output_printf(out, OUTPUT_NORMAL, "%s[•]%s  no remote\n",
                     output_color_code(out, OUTPUT_COLOR_CYAN),
                     output_color_code(out, OUTPUT_COLOR_RESET));
         } else {
-            fprintf(out->stream, "  [=] up-to-date    [↑n] ahead     [↓n] behind\n");
-            fprintf(out->stream, "  [↕] diverged      [•]  no remote\n");
+            output_printf(out, OUTPUT_NORMAL, "  [=] up-to-date    [↑n] ahead     [↓n] behind\n");
+            output_printf(out, OUTPUT_NORMAL, "  [↕] diverged      [•]  no remote\n");
         }
     }
 
@@ -326,16 +326,16 @@ static error_t *list_files(
 
         for (size_t i = 0; i < string_array_size(files); i++) {
             if (output_colors_enabled(out)) {
-                fprintf(out->stream, "  %s%s%s\n",
+                output_printf(out, OUTPUT_NORMAL, "  %s%s%s\n",
                         output_color_code(out, OUTPUT_COLOR_CYAN),
                         string_array_get(files, i),
                         output_color_code(out, OUTPUT_COLOR_RESET));
             } else {
-                fprintf(out->stream, "  %s\n", string_array_get(files, i));
+                output_printf(out, OUTPUT_NORMAL, "  %s\n", string_array_get(files, i));
             }
         }
 
-        fprintf(out->stream, "\nTotal: %zu file%s\n",
+        output_printf(out, OUTPUT_NORMAL, "\nTotal: %zu file%s\n",
                string_array_size(files),
                string_array_size(files) == 1 ? "" : "s");
     }
@@ -390,7 +390,7 @@ static void print_commit_oneline(
     format_relative_time(author->when.time, time_str, sizeof(time_str));
 
     if (output_colors_enabled(out)) {
-        fprintf(out->stream, "  %s%s%s %s(%s)%s %s %s(%s)%s\n",
+        output_printf(out, OUTPUT_NORMAL, "  %s%s%s %s(%s)%s %s %s(%s)%s\n",
                 output_color_code(out, OUTPUT_COLOR_YELLOW),
                 oid_str,
                 output_color_code(out, OUTPUT_COLOR_RESET),
@@ -402,7 +402,7 @@ static void print_commit_oneline(
                 time_str,
                 output_color_code(out, OUTPUT_COLOR_RESET));
     } else {
-        fprintf(out->stream, "  %s (%s) %s (%s)\n", oid_str, profile_name, msg_short, time_str);
+        output_printf(out, OUTPUT_NORMAL, "  %s (%s) %s (%s)\n", oid_str, profile_name, msg_short, time_str);
     }
 
     free(msg_short);
@@ -427,29 +427,29 @@ static void print_commit_detailed(
     format_relative_time(author->when.time, relative_str, sizeof(relative_str));
 
     if (output_colors_enabled(out)) {
-        fprintf(out->stream, "%scommit %s%s%s\n",
+        output_printf(out, OUTPUT_NORMAL, "%scommit %s%s%s\n",
                 output_color_code(out, OUTPUT_COLOR_BOLD),
                 output_color_code(out, OUTPUT_COLOR_YELLOW),
                 oid_str,
                 output_color_code(out, OUTPUT_COLOR_RESET));
     } else {
-        fprintf(out->stream, "commit %s\n", oid_str);
+        output_printf(out, OUTPUT_NORMAL, "commit %s\n", oid_str);
     }
 
-    fprintf(out->stream, "Author: %s <%s>\n", author->name, author->email);
+    output_printf(out, OUTPUT_NORMAL, "Author: %s <%s>\n", author->name, author->email);
     if (date_str) {
         if (output_colors_enabled(out)) {
-            fprintf(out->stream, "Date:   %s %s(%s)%s\n",
+            output_printf(out, OUTPUT_NORMAL, "Date:   %s %s(%s)%s\n",
                     date_str,
                     output_color_code(out, OUTPUT_COLOR_DIM),
                     relative_str,
                     output_color_code(out, OUTPUT_COLOR_RESET));
         } else {
-            fprintf(out->stream, "Date:   %s (%s)\n", date_str, relative_str);
+            output_printf(out, OUTPUT_NORMAL, "Date:   %s (%s)\n", date_str, relative_str);
         }
         free(date_str);
     }
-    fprintf(out->stream, "\n    %s\n", message);
+    output_printf(out, OUTPUT_NORMAL, "\n    %s\n", message);
 }
 
 /**
@@ -527,7 +527,7 @@ static error_t *list_log(
         /* Show profile header for multiple profiles in detailed mode */
         if (profiles->count > 1 && !opts->oneline) {
             if (i > 0) {
-                fprintf(out->stream, "\n");  /* Separator between profiles */
+                output_newline(out);  /* Separator between profiles */
             }
             char section_header[256];
             snprintf(section_header, sizeof(section_header), "Profile: %s", profile_name);
@@ -653,8 +653,8 @@ error_t *cmd_list(git_repository *repo, const cmd_list_options_t *opts) {
     }
 
     /* Add trailing newline for UX consistency */
-    if (out && out->stream) {
-        fprintf(out->stream, "\n");
+    if (out) {
+        output_newline(out);
     }
 
     /* Cleanup */

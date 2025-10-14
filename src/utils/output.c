@@ -387,6 +387,39 @@ void output_debug(const output_ctx_t *ctx, const char *fmt, ...) {
     fprintf(ctx->stream, "\n");
 }
 
+void output_newline(const output_ctx_t *ctx) {
+    if (!ctx) {
+        return;
+    }
+
+    if (ctx->verbosity < OUTPUT_NORMAL) {
+        return;
+    }
+
+    fprintf(ctx->stream, "\n");
+}
+
+void output_printf(
+    const output_ctx_t *ctx,
+    output_verbosity_t min_level,
+    const char *fmt,
+    ...
+) {
+    if (!ctx || !fmt) {
+        return;
+    }
+
+    /* Check verbosity level */
+    if (ctx->verbosity < min_level) {
+        return;
+    }
+
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(ctx->stream, fmt, args);
+    va_end(args);
+}
+
 /* ========================================================================
  * Structured Output
  * ======================================================================== */
@@ -401,9 +434,9 @@ void output_section(const output_ctx_t *ctx, const char *title) {
     }
 
     if (ctx->color_enabled) {
-        fprintf(ctx->stream, "\n%s%s%s\n", ANSI_BOLD, title, ANSI_RESET);
+        fprintf(ctx->stream, "%s%s%s\n", ANSI_BOLD, title, ANSI_RESET);
     } else {
-        fprintf(ctx->stream, "\n%s\n", title);
+        fprintf(ctx->stream, "%s\n", title);
     }
 }
 

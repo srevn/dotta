@@ -100,12 +100,12 @@ static void print_deploy_results(const output_ctx_t *out, const deploy_result_t 
         output_section(out, "Deployed files");
         for (size_t i = 0; i < string_array_size(result->deployed); i++) {
             if (output_colors_enabled(out)) {
-                fprintf(out->stream, "  %s✓%s %s\n",
+                output_printf(out, OUTPUT_NORMAL, "  %s✓%s %s\n",
                        output_color_code(out, OUTPUT_COLOR_GREEN),
                        output_color_code(out, OUTPUT_COLOR_RESET),
                        string_array_get(result->deployed, i));
             } else {
-                fprintf(out->stream, "  ✓ %s\n", string_array_get(result->deployed, i));
+                output_printf(out, OUTPUT_NORMAL, "  ✓ %s\n", string_array_get(result->deployed, i));
             }
         }
     }
@@ -114,12 +114,12 @@ static void print_deploy_results(const output_ctx_t *out, const deploy_result_t 
         output_section(out, "Skipped files");
         for (size_t i = 0; i < string_array_size(result->skipped); i++) {
             if (output_colors_enabled(out)) {
-                fprintf(out->stream, "  %s⊘%s %s\n",
+                output_printf(out, OUTPUT_NORMAL, "  %s⊘%s %s\n",
                        output_color_code(out, OUTPUT_COLOR_CYAN),
                        output_color_code(out, OUTPUT_COLOR_RESET),
                        string_array_get(result->skipped, i));
             } else {
-                fprintf(out->stream, "  ⊘ %s\n", string_array_get(result->skipped, i));
+                output_printf(out, OUTPUT_NORMAL, "  ⊘ %s\n", string_array_get(result->skipped, i));
             }
         }
     }
@@ -146,13 +146,13 @@ static void print_deploy_results(const output_ctx_t *out, const deploy_result_t 
         /* Print summary */
         if (result->deployed_count > 0) {
             if (output_colors_enabled(out)) {
-                fprintf(out->stream, "Deployed %s%zu%s file%s\n",
+                output_printf(out, OUTPUT_NORMAL, "Deployed %s%zu%s file%s\n",
                        output_color_code(out, OUTPUT_COLOR_GREEN),
                        result->deployed_count,
                        output_color_code(out, OUTPUT_COLOR_RESET),
                        result->deployed_count == 1 ? "" : "s");
             } else {
-                fprintf(out->stream, "Deployed %zu file%s\n",
+                output_printf(out, OUTPUT_NORMAL, "Deployed %zu file%s\n",
                        result->deployed_count,
                        result->deployed_count == 1 ? "" : "s");
             }
@@ -160,13 +160,13 @@ static void print_deploy_results(const output_ctx_t *out, const deploy_result_t 
 
         if (result->skipped_count > 0) {
             if (output_colors_enabled(out)) {
-                fprintf(out->stream, "Skipped %s%zu%s file%s (up-to-date)\n",
+                output_printf(out, OUTPUT_NORMAL, "Skipped %s%zu%s file%s (up-to-date)\n",
                        output_color_code(out, OUTPUT_COLOR_CYAN),
                        result->skipped_count,
                        output_color_code(out, OUTPUT_COLOR_RESET),
                        result->skipped_count == 1 ? "" : "s");
             } else {
-                fprintf(out->stream, "Skipped %zu file%s (up-to-date)\n",
+                output_printf(out, OUTPUT_NORMAL, "Skipped %zu file%s (up-to-date)\n",
                        result->skipped_count,
                        result->skipped_count == 1 ? "" : "s");
             }
@@ -291,12 +291,12 @@ static error_t *apply_prune_orphaned_files(
                         removed_count++;
                         if (verbose) {
                             if (output_colors_enabled(out)) {
-                                fprintf(out->stream, "  %s[removed]%s %s\n",
+                                output_printf(out, OUTPUT_NORMAL, "  %s[removed]%s %s\n",
                                        output_color_code(out, OUTPUT_COLOR_GREEN),
                                        output_color_code(out, OUTPUT_COLOR_RESET),
                                        path);
                             } else {
-                                fprintf(out->stream, "  [removed] %s\n", path);
+                                output_printf(out, OUTPUT_NORMAL, "  [removed] %s\n", path);
                             }
                         }
                     }
@@ -317,13 +317,13 @@ static error_t *apply_prune_orphaned_files(
 
         if (!verbose && removed_count > 0) {
             if (output_colors_enabled(out)) {
-                fprintf(out->stream, "Pruned %s%zu%s orphaned file%s\n",
+                output_printf(out, OUTPUT_NORMAL, "Pruned %s%zu%s orphaned file%s\n",
                        output_color_code(out, OUTPUT_COLOR_YELLOW),
                        removed_count,
                        output_color_code(out, OUTPUT_COLOR_RESET),
                        removed_count == 1 ? "" : "s");
             } else {
-                fprintf(out->stream, "Pruned %zu orphaned file%s\n",
+                output_printf(out, OUTPUT_NORMAL, "Pruned %zu orphaned file%s\n",
                        removed_count,
                        removed_count == 1 ? "" : "s");
             }
@@ -550,12 +550,12 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                     profiles->count, profiles->count == 1 ? "" : "s");
         for (size_t i = 0; i < profiles->count; i++) {
             if (output_colors_enabled(out)) {
-                fprintf(out->stream, "  %s•%s %s\n",
+                output_printf(out, OUTPUT_NORMAL, "  %s•%s %s\n",
                        output_color_code(out, OUTPUT_COLOR_CYAN),
                        output_color_code(out, OUTPUT_COLOR_RESET),
                        profiles->profiles[i].name);
             } else {
-                fprintf(out->stream, "  • %s\n", profiles->profiles[i].name);
+                output_printf(out, OUTPUT_NORMAL, "  • %s\n", profiles->profiles[i].name);
             }
         }
     }
@@ -811,8 +811,8 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     err = NULL;
 
     /* Add trailing newline for UX consistency */
-    if (out && out->stream) {
-        fprintf(out->stream, "\n");
+    if (out) {
+        output_newline(out);
     }
 
 cleanup:

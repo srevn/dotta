@@ -1359,7 +1359,7 @@ static error_t *test_path_ignore(
     /* Test against each active profile */
     output_info(out, "Testing path: %s", test_path);
     output_info(out, "Active profiles: %zu", profiles->count);
-    printf("\n");
+    output_newline(out);
 
     bool any_ignored = false;
     for (size_t i = 0; i < profiles->count; i++) {
@@ -1398,7 +1398,7 @@ static error_t *test_path_ignore(
     profile_list_free(profiles);
 
     /* Summary */
-    printf("\n");
+    output_newline(out);
     if (any_ignored) {
         output_info(out, "Result: Path would be IGNORED during add/update operations");
     } else {
@@ -1469,8 +1469,8 @@ error_t *cmd_ignore(git_repository *repo, const cmd_ignore_options_t *opts) {
     }
 
     /* Add trailing newline for UX consistency */
-    if (out && out->stream) {
-        fprintf(out->stream, "\n");
+    if (out) {
+        output_newline(out);
     }
 
     output_free(out);

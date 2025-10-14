@@ -182,12 +182,47 @@ void output_info(const output_ctx_t *ctx, const char *fmt, ...)
 void output_debug(const output_ctx_t *ctx, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
 
+/**
+ * Print newline (respects verbosity)
+ *
+ * Use this instead of fprintf(out->stream, "\n") for consistent
+ * output that respects verbosity settings.
+ */
+void output_newline(const output_ctx_t *ctx);
+
+/**
+ * Print formatted text (respects output context)
+ *
+ * Use this instead of fprintf(out->stream, ...) or printf(...).
+ * Respects verbosity settings and output context.
+ *
+ * Example:
+ *   output_printf(out, "Files: %zu\n", count);
+ */
+void output_printf(
+    const output_ctx_t *ctx,
+    output_verbosity_t min_level,
+    const char *fmt,
+    ...
+) __attribute__((format(printf, 3, 4)));
+
 /* ========================================================================
  * Structured Output (for status-like displays)
  * ======================================================================== */
 
 /**
  * Print section header
+ *
+ * Note: Does NOT add leading newline automatically. Use output_newline()
+ * before this function to add spacing between sections.
+ *
+ * Example:
+ *   output_section(out, "First Section");      // No leading newline
+ *   output_info(out, "content...");
+ *
+ *   output_newline(out);                       // Add spacing
+ *   output_section(out, "Second Section");
+ *   output_info(out, "more content...");
  */
 void output_section(const output_ctx_t *ctx, const char *title);
 

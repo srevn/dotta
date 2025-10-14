@@ -1015,7 +1015,7 @@ static void update_display_summary(
         }
     }
 
-    fprintf(out->stream, "\n");
+    output_newline(out);
 }
 
 /**
@@ -1357,15 +1357,15 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     }
 
     /* Summary */
-    fprintf(out->stream, "\n");
+    output_newline(out);
     output_success(out, "Updated %zu file%s across %zu profile%s",
                    total_updated, total_updated == 1 ? "" : "s",
                    profiles->count, profiles->count == 1 ? "" : "s");
 
 cleanup:
     /* Add trailing newline for UX consistency */
-    if (out && out->stream) {
-        fprintf(out->stream, "\n");
+    if (out) {
+        output_newline(out);
     }
 
     /* Free all resources in reverse order */

@@ -1040,7 +1040,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
      */
     if (!opts->skip_undeployed) {
         workspace_t *ws = NULL;
-        err = workspace_load(repo, profiles, &ws);
+        err = workspace_load(repo, profiles, config, &ws);
         if (err) {
             /* Workspace load failure is non-fatal but we should warn */
             output_warning(out, "Failed to validate workspace: %s", error_message(err));

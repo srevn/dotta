@@ -222,6 +222,7 @@ void print_status_help(const char *prog_name) {
     printf("  (default)              Show both filesystem and remote status\n");
     printf("\nRemote options:\n");
     printf("  --no-fetch             Don't fetch before checking remote (faster, may be stale)\n");
+    printf("  --all                  Show all local profiles, not just active ones\n");
     printf("\nHelp:\n");
     printf("  --help                 Show this help message\n");
     printf("\nRemote State Indicators:\n");

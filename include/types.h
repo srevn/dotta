@@ -90,7 +90,8 @@ typedef enum {
     DIVERGENCE_DELETED,     /* Deployed, removed from filesystem */
     DIVERGENCE_ORPHANED,    /* In deployment state, not in profile */
     DIVERGENCE_MODE_DIFF,   /* Deployed, mode changed on filesystem */
-    DIVERGENCE_TYPE_DIFF    /* Deployed, type changed on filesystem */
+    DIVERGENCE_TYPE_DIFF,   /* Deployed, type changed on filesystem */
+    DIVERGENCE_UNTRACKED    /* On filesystem in tracked directory, not in manifest */
 } divergence_type_t;
 
 #endif /* DOTTA_TYPES_H */

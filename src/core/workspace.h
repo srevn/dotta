@@ -66,14 +66,19 @@ typedef enum {
  * - Deployment state: Files tracked in .git/dotta-state.json
  * - Filesystem state: Actual files on disk
  *
+ * Additionally scans tracked directories for untracked files (new files
+ * that appeared in directories previously added via 'dotta add').
+ *
  * @param repo Git repository (must not be NULL)
  * @param profiles Profile list to analyze (must not be NULL)
+ * @param config Configuration (for ignore patterns, can be NULL)
  * @param out Workspace (must not be NULL, caller must free with workspace_free)
  * @return Error or NULL on success
  */
 error_t *workspace_load(
     git_repository *repo,
     profile_list_t *profiles,
+    const struct dotta_config *config,
     workspace_t **out
 );
 

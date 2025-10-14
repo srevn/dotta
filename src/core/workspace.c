@@ -7,15 +7,19 @@
 
 #include "workspace.h"
 
+#include <dirent.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "base/error.h"
 #include "base/filesystem.h"
+#include "core/ignore.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/compare.h"
+#include "utils/config.h"
 #include "utils/hashmap.h"
+#include "utils/string.h"
 
 /**
  * Workspace structure
@@ -340,6 +344,7 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
             case DIVERGENCE_DELETED:
             case DIVERGENCE_MODE_DIFF:
             case DIVERGENCE_TYPE_DIFF:
+            case DIVERGENCE_UNTRACKED:
                 has_warnings = true;
                 break;
 
@@ -359,11 +364,202 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
 }
 
 /**
+ * Recursively scan directory for untracked files
+ */
+static error_t *scan_directory_for_untracked(
+    const char *dir_path,
+    const char *storage_prefix,
+    const char *profile,
+    const hashmap_t *manifest_index,
+    ignore_context_t *ignore_ctx,
+    workspace_t *ws
+) {
+    CHECK_NULL(dir_path);
+    CHECK_NULL(storage_prefix);
+    CHECK_NULL(profile);
+    CHECK_NULL(manifest_index);
+    CHECK_NULL(ws);
+
+    DIR *dir = opendir(dir_path);
+    if (!dir) {
+        /* Non-fatal: directory might have been deleted or permissions issue */
+        return NULL;
+    }
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        /* Skip . and .. */
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        /* Build full path */
+        char *full_path = str_format("%s/%s", dir_path, entry->d_name);
+        if (!full_path) {
+            closedir(dir);
+            return ERROR(ERR_MEMORY, "Failed to allocate path");
+        }
+
+        /* Check if path exists (handle race conditions) */
+        if (!fs_lexists(full_path)) {
+            free(full_path);
+            continue;
+        }
+
+        /* Check if ignored */
+        bool is_dir = fs_is_directory(full_path);
+        if (ignore_ctx) {
+            bool ignored = false;
+            error_t *err = ignore_should_ignore(ignore_ctx, full_path, is_dir, &ignored);
+            if (!err && ignored) {
+                free(full_path);
+                continue;
+            }
+            error_free(err);  /* Ignore errors in ignore checking */
+        }
+
+        if (is_dir) {
+            /* Recurse into subdirectory */
+            char *sub_storage_prefix = str_format("%s/%s", storage_prefix, entry->d_name);
+            if (!sub_storage_prefix) {
+                free(full_path);
+                closedir(dir);
+                return ERROR(ERR_MEMORY, "Failed to allocate storage prefix");
+            }
+
+            error_t *err = scan_directory_for_untracked(
+                full_path,
+                sub_storage_prefix,
+                profile,
+                manifest_index,
+                ignore_ctx,
+                ws
+            );
+
+            free(sub_storage_prefix);
+            free(full_path);
+
+            if (err) {
+                closedir(dir);
+                return err;
+            }
+        } else {
+            /* Check if this file is already in manifest */
+            file_entry_t *manifest_entry = hashmap_get((hashmap_t*)manifest_index, full_path);
+
+            if (!manifest_entry) {
+                /* This is an untracked file! */
+                char *storage_path = str_format("%s/%s", storage_prefix, entry->d_name);
+                if (!storage_path) {
+                    free(full_path);
+                    closedir(dir);
+                    return ERROR(ERR_MEMORY, "Failed to allocate storage path");
+                }
+
+                error_t *err = workspace_add_diverged(
+                    ws,
+                    full_path,
+                    storage_path,
+                    profile,
+                    DIVERGENCE_UNTRACKED,
+                    false,  /* not in profile */
+                    false,  /* not in state */
+                    true,   /* on filesystem */
+                    false   /* content_differs N/A */
+                );
+
+                free(storage_path);
+                free(full_path);
+
+                if (err) {
+                    closedir(dir);
+                    return err;
+                }
+            } else {
+                free(full_path);
+            }
+        }
+    }
+
+    closedir(dir);
+    return NULL;
+}
+
+/**
+ * Analyze tracked directories for untracked files
+ */
+static error_t *analyze_untracked_files(workspace_t *ws, const dotta_config_t *config) {
+    CHECK_NULL(ws);
+    CHECK_NULL(ws->state);
+
+    /* Get tracked directories from state */
+    size_t dir_count = 0;
+    const state_directory_entry_t *directories = state_get_all_directories(ws->state, &dir_count);
+
+    if (!directories || dir_count == 0) {
+        /* No tracked directories - nothing to do */
+        return NULL;
+    }
+
+    error_t *err = NULL;
+
+    /* Scan each tracked directory */
+    for (size_t i = 0; i < dir_count; i++) {
+        const state_directory_entry_t *dir_entry = &directories[i];
+
+        /* Check if directory still exists */
+        if (!fs_exists(dir_entry->filesystem_path)) {
+            continue;
+        }
+
+        /* Create profile-specific ignore context for this directory */
+        ignore_context_t *ignore_ctx = NULL;
+        err = ignore_context_create(
+            ws->repo,
+            config,
+            dir_entry->profile,
+            NULL,
+            0,
+            &ignore_ctx
+        );
+
+        if (err) {
+            /* Non-fatal: continue without ignore filtering */
+            error_free(err);
+            err = NULL;
+            ignore_ctx = NULL;
+        }
+
+        /* Scan this directory for untracked files */
+        err = scan_directory_for_untracked(
+            dir_entry->filesystem_path,
+            dir_entry->storage_prefix,
+            dir_entry->profile,
+            ws->manifest_index,
+            ignore_ctx,
+            ws
+        );
+
+        /* Free ignore context */
+        ignore_context_free(ignore_ctx);
+
+        if (err) {
+            /* Log would go here, but for now just continue with other directories */
+            error_free(err);
+            err = NULL;
+        }
+    }
+
+    return NULL;
+}
+
+/**
  * Load workspace from repository
  */
 error_t *workspace_load(
     git_repository *repo,
     profile_list_t *profiles,
+    const dotta_config_t *config,
     workspace_t **out
 ) {
     CHECK_NULL(repo);
@@ -405,6 +601,13 @@ error_t *workspace_load(
     if (err) {
         workspace_free(ws);
         return error_wrap(err, "Failed to analyze divergence");
+    }
+
+    /* Analyze tracked directories for untracked files */
+    err = analyze_untracked_files(ws, config);
+    if (err) {
+        workspace_free(ws);
+        return error_wrap(err, "Failed to analyze untracked files");
     }
 
     /* Compute status */

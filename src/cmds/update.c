@@ -379,6 +379,7 @@ static bool file_matches_filter(
 static error_t *find_modified_files(
     git_repository *repo,
     profile_list_t *profiles,
+    const dotta_config_t *config,
     const cmd_update_options_t *opts,
     modified_file_list_t **out
 ) {
@@ -394,7 +395,7 @@ static error_t *find_modified_files(
 
     /* Load workspace to analyze divergence */
     workspace_t *ws = NULL;
-    error_t *err = workspace_load(repo, profiles, &ws);
+    error_t *err = workspace_load(repo, profiles, config, &ws);
     if (err) {
         modified_file_list_free(modified);
         return error_wrap(err, "Failed to load workspace");
@@ -1277,7 +1278,7 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
 
     /* Find modified files (unless only_new is set) */
     if (!opts->only_new) {
-        err = find_modified_files(repo, profiles, opts, &modified);
+        err = find_modified_files(repo, profiles, config, opts, &modified);
         if (err) {
             goto cleanup;
         }

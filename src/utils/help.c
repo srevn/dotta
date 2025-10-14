@@ -24,7 +24,6 @@ void print_usage(const char *prog_name) {
     printf("  diff         Show differences between profiles and filesystem\n");
     printf("  list         List profiles, files, and commit history\n");
     printf("  profile      Manage profile lifecycle (list, fetch, activate, deactivate)\n");
-    printf("  clean        Remove untracked managed files\n");
     printf("  show         Show file content from profile\n");
     printf("  revert       Revert file to previous commit state\n");
     printf("  remote       Manage remote repositories\n");
@@ -342,38 +341,6 @@ void print_profile_help(const char *prog_name) {
     printf("  %s profile deactivate --all           # Deactivate everything\n", prog_name);
     printf("  %s profile reorder darwin global      # Change profile order\n", prog_name);
     printf("  %s profile validate --fix             # Fix state issues\n", prog_name);
-    printf("\n");
-}
-
-void print_clean_help(const char *prog_name) {
-    printf("Usage: %s clean [options]\n\n", prog_name);
-    printf("Remove orphaned files from filesystem\n\n");
-    printf("Description:\n");
-    printf("  Finds and removes files that were previously deployed by 'dotta apply'\n");
-    printf("  but are no longer in any active profile.\n\n");
-    printf("Options:\n");
-    printf("  -n, --dry-run     Show what would be removed without doing it\n");
-    printf("  -f, --force       Remove without confirmation\n");
-    printf("  -v, --verbose     Print detailed output with status for each file\n");
-    printf("  -q, --quiet       Minimal output (only errors)\n");
-    printf("  --help            Show this help message\n");
-    printf("\nExamples:\n");
-    printf("  %s clean\n", prog_name);
-    printf("      Find and remove orphaned files (with confirmation)\n\n");
-    printf("  %s clean --dry-run\n", prog_name);
-    printf("      Preview what files would be removed\n\n");
-    printf("  %s clean --force\n", prog_name);
-    printf("      Remove orphaned files without confirmation\n\n");
-    printf("  %s clean --verbose\n", prog_name);
-    printf("      Show detailed status for each file being removed\n");
-    printf("\nUse Cases:\n");
-    printf("  - After manually deleting files from profile branches with git\n");
-    printf("  - After removing files with 'dotta remove --keep-files'\n");
-    printf("  - After deactivating profiles with 'dotta apply --keep-orphans'\n");
-    printf("  - To clean up before switching to a different profile set\n");
-    printf("\nAlternatives:\n");
-    printf("  - 'dotta apply'                  Synchronize (deploy AND clean orphans)\n");
-    printf("  - 'dotta remove <file>'          Remove from profile AND filesystem (atomic)\n");
     printf("\n");
 }
 

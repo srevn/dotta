@@ -86,19 +86,19 @@ Dotta optimizes the deployment process:
 - **Conflict resolution** - Clear error messages with `--force` override option
 - **State tracking** - Tracks deployed files in `.git/dotta-state.json`
 
-### 5. Orphan Detection & Cleanup
+### 5. Automatic Synchronization
 
-Dotta tracks what it deploys and can clean up files that are no longer managed:
+Dotta's `apply` command performs complete synchronization:
 
 ```bash
-# Remove files that were deployed but removed from profiles
-dotta clean
+# Deploy new/updated files AND remove orphaned files
+dotta apply
 
-# Preview what would be removed
-dotta clean --dry-run
+# Preview what would change
+dotta apply --dry-run
 
-# Or clean during apply
-dotta apply --prune
+# Advanced: apply without removing orphaned files
+dotta apply --keep-orphans
 ```
 
 ### 6. Bidirectional Sync
@@ -397,7 +397,6 @@ dotta show <file>                   # Show file content from profile
 ```bash
 dotta remove --profile <name> <file>              # Remove from profile
 dotta remove --profile <name> --delete-profile    # Delete entire profile
-dotta clean                                       # Remove orphaned files
 dotta revert <file> <commit>                      # Revert to previous version
 ```
 

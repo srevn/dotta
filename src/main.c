@@ -14,7 +14,6 @@
 #include "cmds/add.h"
 #include "cmds/apply.h"
 #include "cmds/bootstrap.h"
-#include "cmds/clean.h"
 #include "cmds/clone.h"
 #include "cmds/diff.h"
 #include "cmds/git.h"
@@ -912,58 +911,6 @@ static int cmd_diff_main(int argc, char **argv) {
 }
 
 /**
- * Parse clean command
- */
-static int cmd_clean_main(int argc, char **argv) {
-    cmd_clean_options_t opts = {
-        .profiles = NULL,
-        .profile_count = 0,
-        .dry_run = false,
-        .force = false,
-        .verbose = false,
-        .quiet = false
-    };
-
-    /* Parse arguments */
-    for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "--help") == 0) {
-            print_clean_help(argv[0]);
-            return 0;
-        } else if (strcmp(argv[i], "-n") == 0 || strcmp(argv[i], "--dry-run") == 0) {
-            opts.dry_run = true;
-        } else if (strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--force") == 0) {
-            opts.force = true;
-        } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
-            opts.verbose = true;
-        } else if (strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--quiet") == 0) {
-            opts.quiet = true;
-        } else {
-            fprintf(stderr, "Error: Unknown argument '%s'\n", argv[i]);
-            print_clean_help(argv[0]);
-            return 1;
-        }
-    }
-
-    /* Open resolved repository */
-    git_repository *repo = open_resolved_repo(NULL);
-    if (!repo) {
-        return 1;
-    }
-
-    /* Execute command */
-    error_t *err = cmd_clean(repo, &opts);
-    git_repository_free(repo);
-
-    if (err) {
-        error_print(err, stderr);
-        error_free(err);
-        return 1;
-    }
-
-    return 0;
-}
-
-/**
  * Parse clone command
  */
 static int cmd_clone_main(int argc, char **argv) {
@@ -1737,8 +1684,6 @@ int main(int argc, char **argv) {
         ret = cmd_profile_main(argc, argv);
     } else if (strcmp(command, "diff") == 0) {
         ret = cmd_diff_main(argc, argv);
-    } else if (strcmp(command, "clean") == 0) {
-        ret = cmd_clean_main(argc, argv);
     } else if (strcmp(command, "show") == 0) {
         ret = cmd_show_main(argc, argv);
     } else if (strcmp(command, "revert") == 0) {

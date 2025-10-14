@@ -63,11 +63,6 @@ void print_list_help(const char *prog_name);
 void print_profile_help(const char *prog_name);
 
 /**
- * Print help for clean command
- */
-void print_clean_help(const char *prog_name);
-
-/**
  * Print help for show command
  */
 void print_show_help(const char *prog_name);

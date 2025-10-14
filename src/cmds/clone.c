@@ -19,6 +19,7 @@
 #include "base/credentials.h"
 #include "base/error.h"
 #include "base/gitops.h"
+#include "base/transfer.h"
 #include "core/bootstrap.h"
 #include "core/profiles.h"
 #include "core/state.h"
@@ -106,7 +107,7 @@ static error_t *fetch_profiles(
     const char **profile_names,
     size_t count,
     output_ctx_t *out,
-    credential_context_t *cred_ctx,
+    transfer_context_t *xfer,
     size_t *fetched_count,
     string_array_t *fetched_names
 ) {
@@ -125,7 +126,7 @@ static error_t *fetch_profiles(
         }
 
         /* Fetch the profile branch */
-        err = gitops_fetch_branch(repo, remote_name, profile_name, cred_ctx);
+        err = gitops_fetch_branch(repo, remote_name, profile_name, xfer);
         if (err) {
             output_warning(out, "Failed to fetch '%s': %s",
                           profile_name, error_message(err));
@@ -169,7 +170,7 @@ static error_t *fetch_profiles(
  * @param repo Repository
  * @param remote_name Remote name
  * @param out Output context
- * @param cred_ctx Credential context
+ * @param xfer Transfer context
  * @param fetched_profiles Output: fetched profile names array
  * @return Error or NULL on success
  */
@@ -177,7 +178,7 @@ static error_t *fetch_all_profiles(
     git_repository *repo,
     const char *remote_name,
     output_ctx_t *out,
-    credential_context_t *cred_ctx,
+    transfer_context_t *xfer,
     string_array_t **fetched_profiles
 ) {
     CHECK_NULL(repo);
@@ -241,7 +242,7 @@ static error_t *fetch_all_profiles(
     error_t *err = fetch_profiles(repo, remote_name,
                                   (const char **)all_branches->items,
                                   all_branches->count,
-                                  out, cred_ctx, &fetched_count, successful);
+                                  out, xfer, &fetched_count, successful);
 
     string_array_free(all_branches);
 
@@ -266,7 +267,7 @@ static error_t *fetch_all_profiles(
  * @param repo Repository
  * @param remote_name Remote name
  * @param out Output context
- * @param cred_ctx Credential context
+ * @param xfer Transfer context
  * @param fallback_profiles Output: fallback profiles to use
  * @return Error or NULL on success
  */
@@ -274,7 +275,7 @@ static error_t *handle_no_profiles_detected(
     git_repository *repo,
     const char *remote_name,
     output_ctx_t *out,
-    credential_context_t *cred_ctx,
+    transfer_context_t *xfer,
     string_array_t **fallback_profiles
 ) {
     CHECK_NULL(repo);
@@ -315,7 +316,7 @@ static error_t *handle_no_profiles_detected(
             }
 
             err = fetch_profiles(repo, remote_name, &global_name, 1,
-                                out, cred_ctx, NULL, *fallback_profiles);
+                                out, xfer, NULL, *fallback_profiles);
 
             if (!err && string_array_size(*fallback_profiles) > 0) {
                 output_success(out, "Using 'global' profile\n");
@@ -413,7 +414,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     bool allocated_path = false;
     dotta_config_t *config = NULL;
     output_ctx_t *out = NULL;
-    credential_context_t *cred_ctx = NULL;
+    transfer_context_t *xfer = NULL;
     string_array_t *fetched_profiles = NULL;
     profile_list_t *detected_profiles = NULL;
 
@@ -472,26 +473,19 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     output_info(out, "  URL: %s", opts->url);
     output_info(out, "  Path: %s\n", local_path);
 
-    /* Clone repository */
-    err = gitops_clone(&repo, opts->url, local_path);
+    /* Create transfer context for progress reporting and credentials */
+    xfer = transfer_context_create(out, opts->url);
+    if (!xfer) {
+        final_err = ERROR(ERR_MEMORY, "Failed to create transfer context");
+        goto cleanup;
+    }
+
+    /* Clone repository with progress reporting */
+    err = gitops_clone(&repo, opts->url, local_path, xfer);
     if (err) {
         final_err = error_wrap(err, "Failed to clone repository");
         goto cleanup;
     }
-
-    /* Setup credential context */
-    git_remote *remote_obj = NULL;
-    char *remote_url = NULL;
-    if (git_remote_lookup(&remote_obj, repo, "origin") == 0) {
-        const char *url = git_remote_url(remote_obj);
-        if (url) {
-            remote_url = strdup(url);
-        }
-        git_remote_free(remote_obj);
-    }
-
-    cred_ctx = credential_context_create(remote_url);
-    free(remote_url);
 
     /* Determine which profiles to fetch */
     fetched_profiles = string_array_create();
@@ -506,7 +500,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
 
         size_t fetched_count = 0;
         err = fetch_profiles(repo, "origin", opts->profiles, opts->profile_count,
-                            out, cred_ctx, &fetched_count, fetched_profiles);
+                            out, xfer, &fetched_count, fetched_profiles);
 
         if (err) {
             output_error(out, "Failed to fetch profiles: %s", error_message(err));
@@ -521,7 +515,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     } else if (opts->fetch_all) {
         /* Hub mode - fetch all profiles */
         string_array_t *all_profiles = NULL;
-        err = fetch_all_profiles(repo, "origin", out, cred_ctx, &all_profiles);
+        err = fetch_all_profiles(repo, "origin", out, xfer, &all_profiles);
 
         if (err) {
             output_error(out, "Failed to fetch all profiles: %s", error_message(err));
@@ -564,7 +558,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             /* Fetch detected profiles */
             size_t fetched_count = 0;
             err = fetch_profiles(repo, "origin", profile_names, detected_profiles->count,
-                                out, cred_ctx, &fetched_count, fetched_profiles);
+                                out, xfer, &fetched_count, fetched_profiles);
 
             free(profile_names);
 
@@ -581,7 +575,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         } else {
             /* No profiles detected - handle gracefully */
             string_array_t *fallback = NULL;
-            err = handle_no_profiles_detected(repo, "origin", out, cred_ctx, &fallback);
+            err = handle_no_profiles_detected(repo, "origin", out, xfer, &fallback);
             if (!err && fallback) {
                 /* Use fallback profiles */
                 string_array_free(fetched_profiles);
@@ -738,8 +732,8 @@ cleanup:
     if (detected_profiles) {
         profile_list_free(detected_profiles);
     }
-    if (cred_ctx) {
-        credential_context_free(cred_ctx);
+    if (xfer) {
+        transfer_context_free(xfer);
     }
     if (fetched_profiles) {
         string_array_free(fetched_profiles);

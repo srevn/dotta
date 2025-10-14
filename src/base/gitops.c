@@ -15,6 +15,7 @@
 
 #include "credentials.h"
 #include "error.h"
+#include "transfer.h"
 #include "utils/array.h"
 
 /**
@@ -441,7 +442,8 @@ error_t *gitops_get_commit(
 error_t *gitops_clone(
     git_repository **out,
     const char *url,
-    const char *local_path
+    const char *local_path,
+    transfer_context_t *xfer
 ) {
     CHECK_NULL(out);
     CHECK_NULL(url);
@@ -449,13 +451,29 @@ error_t *gitops_clone(
 
     git_clone_options opts = GIT_CLONE_OPTIONS_INIT;
 
-    /* Set up credential callback */
-    opts.fetch_opts.callbacks.credentials = credentials_callback;
+    /* Set up transfer callbacks if context provided */
+    if (xfer) {
+        opts.fetch_opts.callbacks.credentials = transfer_credentials_callback;
+        opts.fetch_opts.callbacks.transfer_progress = transfer_progress_callback;
+        opts.fetch_opts.callbacks.payload = xfer;
+    } else {
+        /* No transfer context - use basic credential callback */
+        opts.fetch_opts.callbacks.credentials = credentials_callback;
+    }
 
-    /* Clone with credential support */
+    /* Clone with credential and progress support */
     int err = git_clone(out, url, local_path, &opts);
     if (err < 0) {
+        /* Reject credentials on failure if context provided */
+        if (xfer && xfer->cred) {
+            credential_context_reject(xfer->cred);
+        }
         return error_from_git(err);
+    }
+
+    /* Approve credentials on success if context provided */
+    if (xfer && xfer->cred) {
+        credential_context_approve(xfer->cred);
     }
 
     return NULL;
@@ -465,7 +483,7 @@ error_t *gitops_fetch_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
-    void *cred_ctx
+    transfer_context_t *xfer
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
@@ -477,10 +495,16 @@ error_t *gitops_fetch_branch(
         return error_from_git(err);
     }
 
-    /* Fetch with credential support */
+    /* Set up transfer callbacks if context provided */
     git_fetch_options fetch_opts = GIT_FETCH_OPTIONS_INIT;
-    fetch_opts.callbacks.credentials = credentials_callback;
-    fetch_opts.callbacks.payload = cred_ctx;
+    if (xfer) {
+        fetch_opts.callbacks.credentials = transfer_credentials_callback;
+        fetch_opts.callbacks.transfer_progress = transfer_progress_callback;
+        fetch_opts.callbacks.payload = xfer;
+    } else {
+        /* No transfer context - use basic credential callback */
+        fetch_opts.callbacks.credentials = credentials_callback;
+    }
 
     char refspec[256];
     error_t *err_build = gitops_build_refname(refspec, sizeof(refspec), "refs/heads/%s:refs/remotes/%s/%s",
@@ -498,15 +522,15 @@ error_t *gitops_fetch_branch(
 
     if (err < 0) {
         /* Authentication failed - reject credentials if they were provided */
-        if (cred_ctx) {
-            credential_context_reject(cred_ctx);
+        if (xfer && xfer->cred) {
+            credential_context_reject(xfer->cred);
         }
         return error_from_git(err);
     }
 
     /* Success - approve credentials if they were provided */
-    if (cred_ctx) {
-        credential_context_approve(cred_ctx);
+    if (xfer && xfer->cred) {
+        credential_context_approve(xfer->cred);
     }
 
     return NULL;
@@ -517,7 +541,7 @@ error_t *gitops_fetch_branches(
     const char *remote_name,
     const char **branch_names,
     size_t branch_count,
-    void *cred_ctx
+    transfer_context_t *xfer
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
@@ -567,10 +591,16 @@ error_t *gitops_fetch_branches(
         }
     }
 
-    /* Fetch with credential support */
+    /* Set up transfer callbacks if context provided */
     git_fetch_options fetch_opts = GIT_FETCH_OPTIONS_INIT;
-    fetch_opts.callbacks.credentials = credentials_callback;
-    fetch_opts.callbacks.payload = cred_ctx;
+    if (xfer) {
+        fetch_opts.callbacks.credentials = transfer_credentials_callback;
+        fetch_opts.callbacks.transfer_progress = transfer_progress_callback;
+        fetch_opts.callbacks.payload = xfer;
+    } else {
+        /* No transfer context - use basic credential callback */
+        fetch_opts.callbacks.credentials = credentials_callback;
+    }
 
     /* Build git_strarray from our refspecs */
     git_strarray refs = { refspecs, branch_count };
@@ -580,16 +610,16 @@ error_t *gitops_fetch_branches(
 
     if (err < 0) {
         /* Authentication failed - reject credentials if they were provided */
-        if (cred_ctx) {
-            credential_context_reject(cred_ctx);
+        if (xfer && xfer->cred) {
+            credential_context_reject(xfer->cred);
         }
         err_result = error_from_git(err);
         goto cleanup;
     }
 
     /* Success - approve credentials if they were provided */
-    if (cred_ctx) {
-        credential_context_approve(cred_ctx);
+    if (xfer && xfer->cred) {
+        credential_context_approve(xfer->cred);
     }
 
 cleanup:
@@ -609,7 +639,7 @@ error_t *gitops_push_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
-    void *cred_ctx
+    transfer_context_t *xfer
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
@@ -621,10 +651,16 @@ error_t *gitops_push_branch(
         return error_from_git(err);
     }
 
-    /* Push with credential support */
+    /* Set up transfer callbacks if context provided */
     git_push_options push_opts = GIT_PUSH_OPTIONS_INIT;
-    push_opts.callbacks.credentials = credentials_callback;
-    push_opts.callbacks.payload = cred_ctx;
+    if (xfer) {
+        push_opts.callbacks.credentials = transfer_credentials_callback;
+        push_opts.callbacks.push_transfer_progress = transfer_push_progress_callback;
+        push_opts.callbacks.payload = xfer;
+    } else {
+        /* No transfer context - use basic credential callback */
+        push_opts.callbacks.credentials = credentials_callback;
+    }
 
     char refspec[256];
     error_t *err_build = gitops_build_refname(refspec, sizeof(refspec), "refs/heads/%s:refs/heads/%s",
@@ -642,15 +678,15 @@ error_t *gitops_push_branch(
 
     if (err < 0) {
         /* Authentication failed - reject credentials if they were provided */
-        if (cred_ctx) {
-            credential_context_reject(cred_ctx);
+        if (xfer && xfer->cred) {
+            credential_context_reject(xfer->cred);
         }
         return error_from_git(err);
     }
 
     /* Success - approve credentials if they were provided */
-    if (cred_ctx) {
-        credential_context_approve(cred_ctx);
+    if (xfer && xfer->cred) {
+        credential_context_approve(xfer->cred);
     }
 
     return NULL;
@@ -660,7 +696,7 @@ error_t *gitops_delete_remote_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
-    void *cred_ctx
+    transfer_context_t *xfer
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
@@ -672,11 +708,18 @@ error_t *gitops_delete_remote_branch(
         return error_from_git(err);
     }
 
-    /* Delete remote branch using empty refspec: :refs/heads/branch */
+    /* Set up transfer callbacks if context provided */
     git_push_options push_opts = GIT_PUSH_OPTIONS_INIT;
-    push_opts.callbacks.credentials = credentials_callback;
-    push_opts.callbacks.payload = cred_ctx;
+    if (xfer) {
+        push_opts.callbacks.credentials = transfer_credentials_callback;
+        push_opts.callbacks.push_transfer_progress = transfer_push_progress_callback;
+        push_opts.callbacks.payload = xfer;
+    } else {
+        /* No transfer context - use basic credential callback */
+        push_opts.callbacks.credentials = credentials_callback;
+    }
 
+    /* Delete remote branch using empty refspec: :refs/heads/branch */
     char refspec[256];
     error_t *err_build = gitops_build_refname(refspec, sizeof(refspec), ":refs/heads/%s", branch_name);
     if (err_build) {
@@ -692,15 +735,15 @@ error_t *gitops_delete_remote_branch(
 
     if (err < 0) {
         /* Authentication failed - reject credentials if they were provided */
-        if (cred_ctx) {
-            credential_context_reject(cred_ctx);
+        if (xfer && xfer->cred) {
+            credential_context_reject(xfer->cred);
         }
         return error_from_git(err);
     }
 
     /* Success - approve credentials if they were provided */
-    if (cred_ctx) {
-        credential_context_approve(cred_ctx);
+    if (xfer && xfer->cred) {
+        credential_context_approve(xfer->cred);
     }
 
     return NULL;

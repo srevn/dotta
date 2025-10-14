@@ -261,18 +261,23 @@ error_t *gitops_resolve_commit_in_branch(
  * Remote operations
  */
 
+/* Forward declaration for transfer context */
+typedef struct transfer_context_s transfer_context_t;
+
 /**
  * Clone repository from URL
  *
  * @param out Repository handle (must not be NULL)
  * @param url Remote URL (must not be NULL)
  * @param local_path Local path for clone (must not be NULL)
+ * @param xfer Transfer context for credentials and progress (may be NULL)
  * @return Error or NULL on success
  */
 error_t *gitops_clone(
     git_repository **out,
     const char *url,
-    const char *local_path
+    const char *local_path,
+    transfer_context_t *xfer
 );
 
 /**
@@ -281,14 +286,14 @@ error_t *gitops_clone(
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin") (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
- * @param cred_ctx Credential context for approve/reject (may be NULL)
+ * @param xfer Transfer context for credentials and progress (may be NULL)
  * @return Error or NULL on success
  */
 error_t *gitops_fetch_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
-    void *cred_ctx
+    transfer_context_t *xfer
 );
 
 /**
@@ -301,7 +306,7 @@ error_t *gitops_fetch_branch(
  * @param remote_name Remote name (e.g., "origin") (must not be NULL)
  * @param branch_names Array of branch names (must not be NULL)
  * @param branch_count Number of branches to fetch (must be > 0)
- * @param cred_ctx Credential context for approve/reject (may be NULL)
+ * @param xfer Transfer context for credentials and progress (may be NULL)
  * @return Error or NULL on success
  */
 error_t *gitops_fetch_branches(
@@ -309,7 +314,7 @@ error_t *gitops_fetch_branches(
     const char *remote_name,
     const char **branch_names,
     size_t branch_count,
-    void *cred_ctx
+    transfer_context_t *xfer
 );
 
 /**
@@ -318,14 +323,14 @@ error_t *gitops_fetch_branches(
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
- * @param cred_ctx Credential context for approve/reject (may be NULL)
+ * @param xfer Transfer context for credentials and progress (may be NULL)
  * @return Error or NULL on success
  */
 error_t *gitops_push_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
-    void *cred_ctx
+    transfer_context_t *xfer
 );
 
 /**
@@ -334,14 +339,14 @@ error_t *gitops_push_branch(
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
- * @param cred_ctx Credential context for approve/reject (may be NULL)
+ * @param xfer Transfer context for credentials and progress (may be NULL)
  * @return Error or NULL on success
  */
 error_t *gitops_delete_remote_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
-    void *cred_ctx
+    transfer_context_t *xfer
 );
 
 /**

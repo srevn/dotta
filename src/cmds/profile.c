@@ -15,6 +15,7 @@
 #include "base/credentials.h"
 #include "base/error.h"
 #include "base/gitops.h"
+#include "base/transfer.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "core/upstream.h"
@@ -220,7 +221,7 @@ static error_t *profile_fetch(
     char *remote_name = NULL;
     char *remote_url = NULL;
     git_remote *remote_obj = NULL;
-    credential_context_t *cred_ctx = NULL;
+    transfer_context_t *xfer = NULL;
     string_array_t *remote_branches = NULL;
     error_t *err = NULL;
 
@@ -235,7 +236,7 @@ static error_t *profile_fetch(
         goto cleanup;
     }
 
-    /* Create credential context */
+    /* Create transfer context for progress and credentials */
     if (git_remote_lookup(&remote_obj, repo, remote_name) == 0) {
         const char *url = git_remote_url(remote_obj);
         if (url) {
@@ -245,7 +246,11 @@ static error_t *profile_fetch(
         remote_obj = NULL;
     }
 
-    cred_ctx = credential_context_create(remote_url);
+    xfer = transfer_context_create(out, remote_url);
+    if (!xfer) {
+        err = ERROR(ERR_MEMORY, "Failed to create transfer context");
+        goto cleanup;
+    }
 
     output_section(out, "Fetching profiles");
 
@@ -264,7 +269,7 @@ static error_t *profile_fetch(
                 output_info(out, "  Fetching %s...", branch_name);
             }
 
-            error_t *fetch_err = gitops_fetch_branch(repo, remote_name, branch_name, cred_ctx);
+            error_t *fetch_err = gitops_fetch_branch(repo, remote_name, branch_name, xfer);
             if (fetch_err) {
                 output_error(out, "Failed to fetch '%s': %s",
                             branch_name, error_message(fetch_err));
@@ -307,7 +312,7 @@ static error_t *profile_fetch(
 
         /* Pre-flight validation: query remote for available branches */
         string_array_t *available_remote = NULL;
-        err = upstream_query_remote_branches(repo, remote_name, cred_ctx, &available_remote);
+        err = upstream_query_remote_branches(repo, remote_name, xfer ? xfer->cred : NULL, &available_remote);
         if (err) {
             err = error_wrap(err, "Failed to query remote branches");
             goto cleanup;
@@ -360,7 +365,7 @@ static error_t *profile_fetch(
                            profile_name);
             }
 
-            error_t *fetch_err = gitops_fetch_branch(repo, remote_name, profile_name, cred_ctx);
+            error_t *fetch_err = gitops_fetch_branch(repo, remote_name, profile_name, xfer);
             if (fetch_err) {
                 output_error(out, "Failed to fetch '%s': %s",
                             profile_name, error_message(fetch_err));
@@ -395,7 +400,7 @@ static error_t *profile_fetch(
 cleanup:
     /* Cleanup all resources */
     string_array_free(remote_branches);
-    credential_context_free(cred_ctx);
+    transfer_context_free(xfer);
     free(remote_url);
     free(remote_name);
 

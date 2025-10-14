@@ -14,6 +14,7 @@
 #include "base/credentials.h"
 #include "base/error.h"
 #include "base/gitops.h"
+#include "base/transfer.h"
 #include "core/divergence.h"
 #include "core/profiles.h"
 #include "core/upstream.h"
@@ -122,7 +123,7 @@ static error_t *force_push_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
-    credential_context_t *cred_ctx
+    transfer_context_t *xfer
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
@@ -135,9 +136,16 @@ static error_t *force_push_branch(
         return error_from_git(git_err);
     }
 
+    /* Set up transfer callbacks if context provided */
     git_push_options push_opts = GIT_PUSH_OPTIONS_INIT;
-    push_opts.callbacks.credentials = credentials_callback;
-    push_opts.callbacks.payload = cred_ctx;
+    if (xfer) {
+        push_opts.callbacks.credentials = transfer_credentials_callback;
+        push_opts.callbacks.push_transfer_progress = transfer_push_progress_callback;
+        push_opts.callbacks.payload = xfer;
+    } else {
+        /* No transfer context - use basic credential callback */
+        push_opts.callbacks.credentials = credentials_callback;
+    }
 
     /* Force push refspec ('+' prefix forces the push) */
     char refspec[DOTTA_REFSPEC_MAX];
@@ -150,14 +158,14 @@ static error_t *force_push_branch(
     git_remote_free(remote);
 
     if (git_err < 0) {
-        if (cred_ctx) {
-            credential_context_reject(cred_ctx);
+        if (xfer && xfer->cred) {
+            credential_context_reject(xfer->cred);
         }
         return error_from_git(git_err);
     }
 
-    if (cred_ctx) {
-        credential_context_approve(cred_ctx);
+    if (xfer && xfer->cred) {
+        credential_context_approve(xfer->cred);
     }
 
     return NULL;
@@ -320,7 +328,7 @@ static error_t *sync_fetch_active_profiles(
     sync_results_t *results,
     output_ctx_t *out,
     bool verbose,
-    credential_context_t *cred_ctx
+    transfer_context_t *xfer
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
@@ -364,7 +372,7 @@ static error_t *sync_fetch_active_profiles(
                    profiles->count, profiles->count == 1 ? "" : "s");
     }
 
-    error_t *err = gitops_fetch_branches(repo, remote_name, branch_names, profiles->count, cred_ctx);
+    error_t *err = gitops_fetch_branches(repo, remote_name, branch_names, profiles->count, xfer);
     free(branch_names);
 
     if (err) {
@@ -474,7 +482,7 @@ static error_t *sync_push_phase(
     bool verbose,
     bool auto_pull,
     sync_divergence_strategy_t diverged_strategy,
-    credential_context_t *cred_ctx,
+    transfer_context_t *xfer,
     bool confirm_destructive
 ) {
     CHECK_NULL(repo);
@@ -511,7 +519,7 @@ static error_t *sync_push_phase(
                            result->ahead, result->ahead == 1 ? "" : "s");
                 }
 
-                error_t *err = gitops_push_branch(repo, remote_name, result->profile_name, cred_ctx);
+                error_t *err = gitops_push_branch(repo, remote_name, result->profile_name, xfer);
                 if (err) {
                     result->failed = true;
                     result->error_message = strdup(error_message(err));
@@ -538,7 +546,7 @@ static error_t *sync_push_phase(
                     output_info(out, "Creating remote branch %s...", result->profile_name);
                 }
 
-                error_t *err = gitops_push_branch(repo, remote_name, result->profile_name, cred_ctx);
+                error_t *err = gitops_push_branch(repo, remote_name, result->profile_name, xfer);
                 if (err) {
                     result->failed = true;
                     result->error_message = strdup(error_message(err));
@@ -677,7 +685,7 @@ static error_t *sync_push_phase(
                                        ahead, ahead == 1 ? "" : "s");
 
                                 /* Now push the rebased commits */
-                                err = gitops_push_branch(repo, remote_name, result->profile_name, cred_ctx);
+                                err = gitops_push_branch(repo, remote_name, result->profile_name, xfer);
                                 if (err) {
                                     result->failed = true;
                                     result->error_message = strdup(error_message(err));
@@ -755,7 +763,7 @@ static error_t *sync_push_phase(
                                        ahead, ahead == 1 ? "" : "s");
 
                                 /* Now push the merge commit */
-                                err = gitops_push_branch(repo, remote_name, result->profile_name, cred_ctx);
+                                err = gitops_push_branch(repo, remote_name, result->profile_name, xfer);
                                 if (err) {
                                     result->failed = true;
                                     result->error_message = strdup(error_message(err));
@@ -827,7 +835,7 @@ static error_t *sync_push_phase(
                         }
 
                         /* Force push to remote */
-                        err = force_push_branch(repo, remote_name, result->profile_name, cred_ctx);
+                        err = force_push_branch(repo, remote_name, result->profile_name, xfer);
                         if (err) {
                             result->failed = true;
                             result->error_message = strdup(error_message(err));
@@ -1090,7 +1098,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         return err;
     }
 
-    /* Create credential context */
+    /* Create transfer context for progress reporting and credentials */
     git_remote *remote_obj = NULL;
     char *remote_url = NULL;
     if (git_remote_lookup(&remote_obj, repo, remote_name) == 0) {
@@ -1101,8 +1109,16 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         git_remote_free(remote_obj);
     }
 
-    credential_context_t *cred_ctx = credential_context_create(remote_url);
+    transfer_context_t *xfer = transfer_context_create(out, remote_url);
     free(remote_url);
+    if (!xfer) {
+        free(remote_name);
+        sync_results_free(results);
+        profile_list_free(profiles);
+        config_free(config);
+        output_free(out);
+        return ERROR(ERR_MEMORY, "Failed to create transfer context");
+    }
 
     /* Determine auto_pull setting: CLI --no-pull overrides config */
     bool auto_pull = opts->no_pull ? false : config->auto_pull;
@@ -1113,9 +1129,9 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     );
 
     /* Phase 2: Fetch active profiles from remote */
-    err = sync_fetch_active_profiles(repo, remote_name, profiles, results, out, opts->verbose, cred_ctx);
+    err = sync_fetch_active_profiles(repo, remote_name, profiles, results, out, opts->verbose, xfer);
     if (err) {
-        credential_context_free(cred_ctx);
+        transfer_context_free(xfer);
         free(remote_name);
         sync_results_free(results);
         profile_list_free(profiles);
@@ -1127,7 +1143,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     /* Phase 3: Analyze branch states */
     err = sync_analyze_phase(repo, remote_name, profiles, results, out);
     if (err) {
-        credential_context_free(cred_ctx);
+        transfer_context_free(xfer);
         free(remote_name);
         sync_results_free(results);
         profile_list_free(profiles);
@@ -1138,10 +1154,10 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
 
     /* Phase 4: Sync with remote (push/pull/divergence handling) */
     err = sync_push_phase(repo, remote_name, results, out, opts->verbose,
-                          auto_pull, diverged_strategy, cred_ctx,
+                          auto_pull, diverged_strategy, xfer,
                           config->confirm_destructive);
     if (err) {
-        credential_context_free(cred_ctx);
+        transfer_context_free(xfer);
         free(remote_name);
         sync_results_free(results);
         profile_list_free(profiles);
@@ -1150,7 +1166,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         return err;
     }
 
-    credential_context_free(cred_ctx);
+    transfer_context_free(xfer);
     free(remote_name);
 
     /* Final summary */

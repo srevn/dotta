@@ -425,7 +425,7 @@ void print_update_help(const char *prog_name) {
     printf("  --include-new          Include new files from tracked directories\n");
     printf("  --only-new             Only process new files (ignore modified)\n");
     printf("  --help                 Show this help message\n");
-    printf("\nNew File Detection:\n");
+    printf("\nFile Detection:\n");
     printf("  By default, new files are auto-detected based on config settings:\n");
     printf("    - core.auto_detect_new_files controls automatic detection\n");
     printf("    - security.confirm_new_files controls confirmation prompts\n");

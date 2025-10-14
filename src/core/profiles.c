@@ -371,7 +371,7 @@ static error_t *validate_state_profiles(
 }
 
 /**
- * Resolve profiles based on priority hierarchy (unified profile resolution)
+ * Resolve profiles based on priority hierarchy
  */
 error_t *profile_resolve(
     git_repository *repo,
@@ -388,7 +388,7 @@ error_t *profile_resolve(
 
     profile_source_t source;
 
-    /* Priority 1: Explicit CLI profiles (always takes precedence) */
+    /* Priority 1: Explicit CLI profiles */
     if (explicit_profiles && explicit_count > 0) {
         source = PROFILE_SOURCE_EXPLICIT;
         if (source_out) *source_out = source;
@@ -406,7 +406,7 @@ error_t *profile_resolve(
                                 out);
     }
 
-    /* Priority 3: State module (NEW) */
+    /* Priority 3: State module */
     state_t *state = NULL;
     error_t *err = state_load(repo, &state);
 

@@ -292,6 +292,27 @@ error_t *gitops_fetch_branch(
 );
 
 /**
+ * Fetch multiple branches from remote in a single operation
+ *
+ * Performs a batched fetch of multiple branches, significantly reducing
+ * network overhead compared to fetching each branch individually.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param remote_name Remote name (e.g., "origin") (must not be NULL)
+ * @param branch_names Array of branch names (must not be NULL)
+ * @param branch_count Number of branches to fetch (must be > 0)
+ * @param cred_ctx Credential context for approve/reject (may be NULL)
+ * @return Error or NULL on success
+ */
+error_t *gitops_fetch_branches(
+    git_repository *repo,
+    const char *remote_name,
+    const char **branch_names,
+    size_t branch_count,
+    void *cred_ctx
+);
+
+/**
  * Push branch to remote
  *
  * @param repo Repository (must not be NULL)

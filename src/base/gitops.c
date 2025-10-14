@@ -512,6 +512,99 @@ error_t *gitops_fetch_branch(
     return NULL;
 }
 
+error_t *gitops_fetch_branches(
+    git_repository *repo,
+    const char *remote_name,
+    const char **branch_names,
+    size_t branch_count,
+    void *cred_ctx
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(remote_name);
+    CHECK_NULL(branch_names);
+    CHECK_ARG(branch_count > 0, "branch_count must be greater than 0");
+
+    /* Look up remote once */
+    git_remote *remote = NULL;
+    int err = git_remote_lookup(&remote, repo, remote_name);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    /* Build array of refspecs for all branches */
+    char **refspecs = calloc(branch_count, sizeof(char *));
+    if (!refspecs) {
+        git_remote_free(remote);
+        return ERROR(ERR_MEMORY, "Failed to allocate refspecs array");
+    }
+
+    /* Construct refspecs for each branch */
+    error_t *err_result = NULL;
+    for (size_t i = 0; i < branch_count; i++) {
+        if (!branch_names[i]) {
+            err_result = ERROR(ERR_INVALID_ARG, "branch_names[%zu] is NULL", i);
+            goto cleanup;
+        }
+
+        /* Allocate buffer for this refspec */
+        refspecs[i] = malloc(256);
+        if (!refspecs[i]) {
+            err_result = ERROR(ERR_MEMORY, "Failed to allocate refspec buffer");
+            goto cleanup;
+        }
+
+        /* Build refspec: refs/heads/branch:refs/remotes/origin/branch */
+        error_t *err_build = gitops_build_refname(
+            refspecs[i], 256,
+            "refs/heads/%s:refs/remotes/%s/%s",
+            branch_names[i], remote_name, branch_names[i]
+        );
+        if (err_build) {
+            err_result = error_wrap(err_build,
+                "Invalid branch/remote name '%s/%s'",
+                remote_name, branch_names[i]);
+            goto cleanup;
+        }
+    }
+
+    /* Fetch with credential support */
+    git_fetch_options fetch_opts = GIT_FETCH_OPTIONS_INIT;
+    fetch_opts.callbacks.credentials = credentials_callback;
+    fetch_opts.callbacks.payload = cred_ctx;
+
+    /* Build git_strarray from our refspecs */
+    git_strarray refs = { refspecs, branch_count };
+
+    /* Perform the batched fetch */
+    err = git_remote_fetch(remote, &refs, &fetch_opts, NULL);
+
+    if (err < 0) {
+        /* Authentication failed - reject credentials if they were provided */
+        if (cred_ctx) {
+            credential_context_reject(cred_ctx);
+        }
+        err_result = error_from_git(err);
+        goto cleanup;
+    }
+
+    /* Success - approve credentials if they were provided */
+    if (cred_ctx) {
+        credential_context_approve(cred_ctx);
+    }
+
+cleanup:
+    /* Free refspecs array */
+    if (refspecs) {
+        for (size_t i = 0; i < branch_count; i++) {
+            free(refspecs[i]);
+        }
+        free(refspecs);
+    }
+
+    git_remote_free(remote);
+    return err_result;
+}
+
 error_t *gitops_push_branch(
     git_repository *repo,
     const char *remote_name,

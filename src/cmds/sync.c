@@ -345,56 +345,50 @@ static error_t *sync_fetch_active_profiles(
     snprintf(section_title, sizeof(section_title), "Fetching active profiles from '%s'", remote_name);
     output_section(out, section_title);
 
-    bool auth_failed = false;
-    size_t fetch_success_count = 0;
+    /* Build array of branch names for batched fetch */
+    const char **branch_names = malloc(profiles->count * sizeof(char *));
+    if (!branch_names) {
+        return ERROR(ERR_MEMORY, "Failed to allocate branch names array");
+    }
 
-    /* Fetch each active profile */
     for (size_t i = 0; i < profiles->count; i++) {
-        const char *branch_name = profiles->profiles[i].name;
-
-        /* Skip remaining fetches if authentication failed */
-        if (auth_failed) {
-            if (verbose) {
-                output_info(out, "  Skipping %s (authentication failed)", branch_name);
-            }
-            continue;
-        }
-
+        branch_names[i] = profiles->profiles[i].name;
         if (verbose) {
-            output_info(out, "  Fetching %s...", branch_name);
-        }
-
-        error_t *err = gitops_fetch_branch(repo, remote_name, branch_name, cred_ctx);
-        if (err) {
-            /* Check if this is an authentication error */
-            const char *err_msg = error_message(err);
-            if (strstr(err_msg, "authentication") || strstr(err_msg, "credentials") ||
-                strstr(err_msg, "permission denied") || strstr(err_msg, "unauthorized")) {
-                auth_failed = true;
-                results->auth_failed_count++;
-                output_error(out, "Authentication failed for '%s': %s", branch_name, err_msg);
-                output_error(out, "Skipping remaining fetches due to authentication failure");
-            } else {
-                results->fetch_failed_count++;
-                output_warning(out, "Failed to fetch '%s': %s", branch_name, err_msg);
-            }
-            error_free(err);
-        } else {
-            fetch_success_count++;
+            output_info(out, "  Queuing %s...", branch_names[i]);
         }
     }
 
-    /* Error if all fetches failed */
-    if (fetch_success_count == 0 && profiles->count > 0) {
+    /* Perform batched fetch - single network operation for all branches */
+    if (verbose) {
+        output_info(out, "  Fetching %zu profile%s in batch...",
+                   profiles->count, profiles->count == 1 ? "" : "s");
+    }
+
+    error_t *err = gitops_fetch_branches(repo, remote_name, branch_names, profiles->count, cred_ctx);
+    free(branch_names);
+
+    if (err) {
+        /* Check if this is an authentication error */
+        const char *err_msg = error_message(err);
+        if (strstr(err_msg, "authentication") || strstr(err_msg, "credentials") ||
+            strstr(err_msg, "permission denied") || strstr(err_msg, "unauthorized")) {
+            results->auth_failed_count++;
+            output_error(out, "Authentication failed: %s", err_msg);
+        } else {
+            results->fetch_failed_count++;
+            output_error(out, "Fetch failed: %s", err_msg);
+        }
+        error_free(err);
+
         return ERROR(ERR_GIT,
-                    "All fetch operations failed\n"
+                    "Failed to fetch profiles from remote\n"
                     "Hint: Check network connectivity and remote accessibility");
     }
 
     if (verbose) {
         output_success(out, "Fetched %zu active profile%s",
-                      fetch_success_count,
-                      fetch_success_count == 1 ? "" : "s");
+                      profiles->count,
+                      profiles->count == 1 ? "" : "s");
     }
 
     fprintf(out->stream, "\n");
@@ -952,6 +946,8 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     err = config_load(NULL, &config);
     if (err) {
         /* Non-fatal: continue with defaults */
+        error_free(err);
+        err = NULL;
         config = config_create_default();
     }
 

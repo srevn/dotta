@@ -1088,6 +1088,31 @@ error_t *state_get_profiles(const state_t *state, string_array_t **out) {
 }
 
 /**
+ * Ensure profile is activated (idempotent)
+ */
+error_t *state_ensure_profile_activated(state_t *state, const char *profile) {
+    CHECK_NULL(state);
+    CHECK_NULL(profile);
+
+    /* Check if profile is already active */
+    for (size_t i = 0; i < string_array_size(state->profiles); i++) {
+        const char *active_profile = string_array_get(state->profiles, i);
+        if (strcmp(active_profile, profile) == 0) {
+            /* Already active - nothing to do */
+            return NULL;
+        }
+    }
+
+    /* Profile not active - add it */
+    error_t *err = string_array_push(state->profiles, profile);
+    if (err) {
+        return error_wrap(err, "Failed to activate profile");
+    }
+
+    return NULL;
+}
+
+/**
  * Get timestamp
  */
 time_t state_get_timestamp(const state_t *state) {

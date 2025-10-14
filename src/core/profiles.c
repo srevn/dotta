@@ -482,10 +482,17 @@ error_t *profile_resolve(
 
     /* No profiles found from any source - return helpful error */
     return ERROR(ERR_NOT_FOUND,
-                "No active profiles found\n"
-                "Hint: Run 'dotta profile activate <name>' to activate profiles\n"
-                "      Or use 'dotta profile list --remote' to see available profiles\n"
-                "      Or specify profiles explicitly with -p/--profile");
+                "No active profiles found\n\n"
+                "To activate profiles:\n"
+                "  dotta profile activate <name>       # Activate specific profile\n"
+                "  dotta profile activate --all        # Activate all local profiles\n\n"
+                "To create and activate a new profile:\n"
+                "  dotta add -p <name> <file>          # Automatically activates new profiles\n\n"
+                "To use profiles without activating:\n"
+                "  dotta status -p <name>              # Use -p flag for any command\n\n"
+                "To see available profiles:\n"
+                "  dotta profile list                  # List local profiles\n"
+                "  dotta profile list --remote         # List remote profiles");
 }
 
 /**

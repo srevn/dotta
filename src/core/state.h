@@ -212,6 +212,21 @@ error_t *state_set_profiles(
 error_t *state_get_profiles(const state_t *state, string_array_t **out);
 
 /**
+ * Ensure profile is in active set
+ *
+ * Checks if the profile is already activated. If not, adds it to the active
+ * profile list while preserving existing profiles. This is idempotent - safe
+ * to call multiple times with the same profile.
+ *
+ * Use case: Auto-activation when creating new profiles via 'dotta add'.
+ *
+ * @param state State (must not be NULL)
+ * @param profile Profile name to activate (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_ensure_profile_activated(state_t *state, const char *profile);
+
+/**
  * Get state timestamp
  *
  * @param state State (must not be NULL)

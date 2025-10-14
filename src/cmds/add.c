@@ -840,6 +840,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     }
 
     worktree_handle_t *wt = NULL;
+    bool profile_was_new = false;  /* Track if we created a new profile */
 
     /* Create temporary worktree */
     err = worktree_create_temp(repo, &wt);
@@ -869,6 +870,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         err = worktree_checkout_branch(wt, opts->profile);
     } else {
         err = worktree_create_orphan(wt, opts->profile);
+        profile_was_new = true;  /* Profile is newly created */
     }
 
     if (err) {
@@ -1110,6 +1112,19 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
 
     string_array_free(all_files);
 
+    /* Auto-activate newly created profile */
+    if (profile_was_new) {
+        err = state_ensure_profile_activated(state, opts->profile);
+        if (err) {
+            fprintf(stderr, "Warning: Created profile '%s' but failed to activate: %s\n",
+                    opts->profile, error_message(err));
+            error_free(err);
+            /* Non-fatal: continue - files are already added */
+        } else if (opts->verbose) {
+            printf("Auto-activated profile '%s'\n", opts->profile);
+        }
+    }
+
     /* Save state with tracked directories and deployed files */
     err = state_save(repo, state);
     if (err) {
@@ -1144,6 +1159,11 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     /* Always show summary */
     printf("Added %zu file%s to profile '%s'\n",
            added_count, added_count == 1 ? "" : "s", opts->profile);
+
+    if (profile_was_new) {
+        printf("Profile '%s' created and activated\n", opts->profile);
+    }
+
     printf("\n");
 
     return NULL;

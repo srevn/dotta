@@ -208,8 +208,12 @@ static void print_deploy_results(const output_ctx_t *out, const deploy_result_t 
  * Removes files that are tracked in state but not in the current manifest.
  * This happens when files are removed from profiles.
  *
+ * This function ONLY handles filesystem operations. State modifications
+ * are handled separately by apply_update_and_save_state(), which rebuilds
+ * the entire state from the manifest atomically.
+ *
  * @param repo Repository (must not be NULL)
- * @param state State (must not be NULL)
+ * @param state State (must not be NULL, read-only - used to identify orphaned files)
  * @param manifest Current manifest (must not be NULL)
  * @param out Output context (must not be NULL)
  * @param verbose Print detailed output
@@ -300,47 +304,20 @@ static error_t *apply_prune_orphaned_files(
                     }
                     error_free(removal_err);
                 } else {
-                    /* File removed successfully - remove from state */
-                    error_t *state_err = state_remove_file(state, path);
-                    if (state_err) {
-                        if (verbose) {
-                            if (output_colors_enabled(out)) {
-                                fprintf(stderr, "  %s[warning]%s Failed to remove '%s' from state: %s\n",
-                                       output_color_code(out, OUTPUT_COLOR_YELLOW),
-                                       output_color_code(out, OUTPUT_COLOR_RESET),
-                                       path, error_message(state_err));
-                            } else {
-                                fprintf(stderr, "  [warning] Failed to remove '%s' from state: %s\n",
-                                       path, error_message(state_err));
-                            }
-                        }
-                        error_free(state_err);
-                    } else {
-                        removed_count++;
-                        if (verbose) {
-                            if (output_colors_enabled(out)) {
-                                output_printf(out, OUTPUT_NORMAL, "  %s[removed]%s %s\n",
-                                       output_color_code(out, OUTPUT_COLOR_GREEN),
-                                       output_color_code(out, OUTPUT_COLOR_RESET),
-                                       path);
-                            } else {
-                                output_printf(out, OUTPUT_NORMAL, "  [removed] %s\n", path);
-                            }
+                    /* File removed successfully from filesystem */
+                    removed_count++;
+                    if (verbose) {
+                        if (output_colors_enabled(out)) {
+                            output_printf(out, OUTPUT_NORMAL, "  %s[removed]%s %s\n",
+                                   output_color_code(out, OUTPUT_COLOR_GREEN),
+                                   output_color_code(out, OUTPUT_COLOR_RESET),
+                                   path);
+                        } else {
+                            output_printf(out, OUTPUT_NORMAL, "  [removed] %s\n", path);
                         }
                     }
                 }
             }
-        }
-
-        /* Save updated state after pruning */
-        if (removed_count > 0) {
-            err = state_save(repo, state);
-            if (err) {
-                err = error_wrap(err, "Failed to save state after pruning");
-                goto cleanup;
-            }
-
-            output_print(out, OUTPUT_VERBOSE, "\nState updated after pruning\n");
         }
 
         if (!verbose && removed_count > 0) {
@@ -862,9 +839,15 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     if (!opts->dry_run) {
         /* Prune orphaned files BEFORE updating state (unless --keep-orphans)
          *
-         * This is critical: pruning needs to compare the OLD state (what was previously deployed)
-         * against the NEW manifest (what should be deployed now).
-         * If we update state first, we lose track of previously deployed files.
+         * Architecture:
+         * 1. Pruning identifies orphaned files by comparing OLD state against NEW manifest
+         * 2. Pruning removes orphaned files from filesystem ONLY (no state modification)
+         * 3. State is rebuilt atomically from manifest (orphaned files naturally absent)
+         *
+         * This separation ensures:
+         * - Single source of truth: state updated once, atomically
+         * - Clear responsibility: filesystem ops separate from state tracking
+         * - Better atomicity: all-or-nothing state update
          *
          * Apply is a synchronization operation - it ensures the filesystem matches
          * the declared state by both deploying new/updated files AND removing orphaned ones.

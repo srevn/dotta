@@ -571,6 +571,123 @@ static error_t *remove_files_from_profile(
         return err;
     }
 
+    /* Check for multi-profile files (critical safety check) */
+    output_ctx_t *out = output_create_from_config(config);
+    string_array_t **files_in_other_profiles = calloc(string_array_size(storage_paths), sizeof(string_array_t *));
+    size_t multi_profile_count = 0;
+    bool has_deployed_multi_profile = false;
+
+    if (!files_in_other_profiles) {
+        string_array_free(storage_paths);
+        string_array_free(filesystem_paths);
+        config_free(config);
+        output_free(out);
+        return ERROR(ERR_MEMORY, "Failed to allocate multi-profile tracking");
+    }
+
+    /* Get all profiles */
+    string_array_t *all_branches = NULL;
+    err = gitops_list_branches(repo, &all_branches);
+    if (!err) {
+        for (size_t i = 0; i < string_array_size(storage_paths); i++) {
+            const char *storage_path = string_array_get(storage_paths, i);
+            files_in_other_profiles[i] = string_array_create();
+
+            /* Check each other profile */
+            for (size_t j = 0; j < string_array_size(all_branches); j++) {
+                const char *branch_name = string_array_get(all_branches, j);
+
+                /* Skip current profile and dotta-worktree */
+                if (strcmp(branch_name, opts->profile) == 0 ||
+                    strcmp(branch_name, "dotta-worktree") == 0) {
+                    continue;
+                }
+
+                /* Load profile and check if file exists */
+                profile_t *check_profile = NULL;
+                error_t *check_err = profile_load(repo, branch_name, &check_profile);
+                if (!check_err) {
+                    check_err = profile_load_tree(repo, check_profile);
+                    if (!check_err) {
+                        git_tree_entry *entry = NULL;
+                        int git_err = git_tree_entry_bypath(&entry, check_profile->tree, storage_path);
+                        if (git_err == 0) {
+                            string_array_push(files_in_other_profiles[i], branch_name);
+                            multi_profile_count++;
+                            git_tree_entry_free(entry);
+
+                            /* Check if this file is currently deployed from another profile */
+                            state_t *state = NULL;
+                            error_t *state_err = state_load(repo, &state);
+                            if (!state_err && state && state_file_exists(state, string_array_get(filesystem_paths, i))) {
+                                const state_file_entry_t *state_entry = NULL;
+                                state_err = state_get_file(state, string_array_get(filesystem_paths, i), &state_entry);
+                                if (!state_err && state_entry &&
+                                    strcmp(state_entry->profile, opts->profile) != 0) {
+                                    has_deployed_multi_profile = true;
+                                }
+                                error_free(state_err);
+                            }
+                            state_free(state);
+                        }
+                    }
+                    profile_free(check_profile);
+                }
+                error_free(check_err);
+            }
+        }
+        string_array_free(all_branches);
+    }
+    error_free(err);
+
+    /* Display multi-profile warnings BEFORE any operation */
+    if (multi_profile_count > 0) {
+        output_newline(out);
+        output_section(out, "Multi-profile file warning");
+        output_warning(out, "%zu file%s exist%s in multiple profiles:",
+                      multi_profile_count,
+                      multi_profile_count == 1 ? "" : "s",
+                      multi_profile_count == 1 ? "s" : "");
+
+        for (size_t i = 0; i < string_array_size(storage_paths); i++) {
+            if (files_in_other_profiles[i] && string_array_size(files_in_other_profiles[i]) > 0) {
+                const char *fs_path = string_array_get(filesystem_paths, i);
+                if (output_colors_enabled(out)) {
+                    output_printf(out, OUTPUT_NORMAL, "  %s%s%s also in:",
+                                 output_color_code(out, OUTPUT_COLOR_YELLOW),
+                                 fs_path,
+                                 output_color_code(out, OUTPUT_COLOR_RESET));
+                } else {
+                    output_printf(out, OUTPUT_NORMAL, "  %s also in:", fs_path);
+                }
+
+                for (size_t j = 0; j < string_array_size(files_in_other_profiles[i]); j++) {
+                    if (output_colors_enabled(out)) {
+                        output_printf(out, OUTPUT_NORMAL, " %s%s%s",
+                                     output_color_code(out, OUTPUT_COLOR_CYAN),
+                                     string_array_get(files_in_other_profiles[i], j),
+                                     output_color_code(out, OUTPUT_COLOR_RESET));
+                    } else {
+                        output_printf(out, OUTPUT_NORMAL, " %s",
+                                     string_array_get(files_in_other_profiles[i], j));
+                    }
+                }
+                output_newline(out);
+            }
+        }
+
+        output_newline(out);
+        output_info(out, "These files will be removed ONLY from profile '%s'.", opts->profile);
+
+        if (has_deployed_multi_profile) {
+            output_warning(out, "Some files are currently deployed from other profiles.");
+            output_info(out, "Those files will remain on the filesystem.");
+        } else {
+            output_info(out, "Files deployed from '%s' will remain until 'dotta apply'.", opts->profile);
+        }
+        output_newline(out);
+    }
+
     /* Dry run - just show what would be removed */
     if (opts->dry_run) {
         printf("Would remove from profile '%s':\n", opts->profile);
@@ -582,20 +699,37 @@ static error_t *remove_files_from_profile(
                string_array_size(storage_paths) == 1 ? "" : "s");
         printf("(Filesystem files would remain until 'dotta apply')\n");
 
+        for (size_t i = 0; i < string_array_size(storage_paths); i++) {
+            string_array_free(files_in_other_profiles[i]);
+        }
+        free(files_in_other_profiles);
         string_array_free(storage_paths);
         string_array_free(filesystem_paths);
         config_free(config);
+        output_free(out);
         return NULL;
     }
 
     /* Confirm operation */
     if (!confirm_removal(storage_paths, opts, config)) {
         printf("Cancelled\n");
+        for (size_t i = 0; i < string_array_size(storage_paths); i++) {
+            string_array_free(files_in_other_profiles[i]);
+        }
+        free(files_in_other_profiles);
         string_array_free(storage_paths);
         string_array_free(filesystem_paths);
         config_free(config);
+        output_free(out);
         return NULL;
     }
+
+    /* Cleanup multi-profile tracking arrays */
+    for (size_t i = 0; i < string_array_size(storage_paths); i++) {
+        string_array_free(files_in_other_profiles[i]);
+    }
+    free(files_in_other_profiles);
+    output_free(out);
 
     /* Get repository directory for hooks */
     char *repo_dir = NULL;

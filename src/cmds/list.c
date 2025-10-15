@@ -285,7 +285,73 @@ static error_t *list_profiles(
 }
 
 /**
+ * Check if a file exists in other profiles
+ *
+ * Helper to detect multi-profile files for list command.
+ */
+static string_array_t *find_other_profiles_with_file(
+    git_repository *repo,
+    const char *storage_path,
+    const char *current_profile_name
+) {
+    string_array_t *other_profiles = string_array_create();
+    if (!other_profiles) {
+        return NULL;
+    }
+
+    /* Get all branches */
+    string_array_t *branches = NULL;
+    error_t *err = gitops_list_branches(repo, &branches);
+    if (err) {
+        error_free(err);
+        return other_profiles;
+    }
+
+    /* Check each profile */
+    for (size_t i = 0; i < string_array_size(branches); i++) {
+        const char *profile_name = string_array_get(branches, i);
+
+        /* Skip current profile and dotta-worktree */
+        if (strcmp(profile_name, current_profile_name) == 0 ||
+            strcmp(profile_name, "dotta-worktree") == 0) {
+            continue;
+        }
+
+        /* Load profile */
+        profile_t *profile = NULL;
+        err = profile_load(repo, profile_name, &profile);
+        if (err) {
+            error_free(err);
+            continue;
+        }
+
+        /* Load tree */
+        err = profile_load_tree(repo, profile);
+        if (err) {
+            profile_free(profile);
+            error_free(err);
+            continue;
+        }
+
+        /* Check if file exists in tree */
+        git_tree_entry *entry = NULL;
+        int git_err = git_tree_entry_bypath(&entry, profile->tree, storage_path);
+        if (git_err == 0) {
+            string_array_push(other_profiles, profile_name);
+            git_tree_entry_free(entry);
+        }
+
+        profile_free(profile);
+    }
+
+    string_array_free(branches);
+    return other_profiles;
+}
+
+/**
  * List files in a profile with color support
+ *
+ * Enhanced to show which files also exist in other profiles.
  */
 static error_t *list_files(
     git_repository *repo,
@@ -324,20 +390,58 @@ static error_t *list_files(
         /* Sort for consistent output */
         string_array_sort(files);
 
+        size_t multi_profile_count = 0;
+
         for (size_t i = 0; i < string_array_size(files); i++) {
+            const char *file_path = string_array_get(files, i);
+
+            /* In verbose mode, check if file exists in other profiles */
+            string_array_t *other_profiles = NULL;
+            if (opts->verbose) {
+                other_profiles = find_other_profiles_with_file(repo, file_path, opts->profile);
+            }
+
             if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s%s%s\n",
+                output_printf(out, OUTPUT_NORMAL, "  %s%s%s",
                         output_color_code(out, OUTPUT_COLOR_CYAN),
-                        string_array_get(files, i),
+                        file_path,
                         output_color_code(out, OUTPUT_COLOR_RESET));
             } else {
-                output_printf(out, OUTPUT_NORMAL, "  %s\n", string_array_get(files, i));
+                output_printf(out, OUTPUT_NORMAL, "  %s", file_path);
             }
+
+            /* Show overlap indicator if file exists in other profiles */
+            if (other_profiles && string_array_size(other_profiles) > 0) {
+                multi_profile_count++;
+                if (output_colors_enabled(out)) {
+                    output_printf(out, OUTPUT_NORMAL, " %s[also in:",
+                            output_color_code(out, OUTPUT_COLOR_DIM));
+                    for (size_t j = 0; j < string_array_size(other_profiles); j++) {
+                        output_printf(out, OUTPUT_NORMAL, " %s", string_array_get(other_profiles, j));
+                    }
+                    output_printf(out, OUTPUT_NORMAL, "]%s",
+                            output_color_code(out, OUTPUT_COLOR_RESET));
+                } else {
+                    output_printf(out, OUTPUT_NORMAL, " [also in:");
+                    for (size_t j = 0; j < string_array_size(other_profiles); j++) {
+                        output_printf(out, OUTPUT_NORMAL, " %s", string_array_get(other_profiles, j));
+                    }
+                    output_printf(out, OUTPUT_NORMAL, "]");
+                }
+            }
+
+            output_newline(out);
+            string_array_free(other_profiles);
         }
 
-        output_printf(out, OUTPUT_NORMAL, "\nTotal: %zu file%s\n",
+        output_printf(out, OUTPUT_NORMAL, "\nTotal: %zu file%s",
                string_array_size(files),
                string_array_size(files) == 1 ? "" : "s");
+
+        if (opts->verbose && multi_profile_count > 0) {
+            output_printf(out, OUTPUT_NORMAL, " (%zu in multiple profiles)", multi_profile_count);
+        }
+        output_newline(out);
     }
 
     string_array_free(files);

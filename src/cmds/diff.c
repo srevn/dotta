@@ -12,6 +12,7 @@
 #include "base/error.h"
 #include "core/profiles.h"
 #include "infra/compare.h"
+#include "utils/array.h"
 #include "utils/config.h"
 #include "utils/output.h"
 
@@ -162,14 +163,45 @@ static error_t *show_file_diff(
                 output_color_code(out, OUTPUT_COLOR_BOLD),
                 entry->storage_path, entry->storage_path,
                 output_color_code(out, OUTPUT_COLOR_RESET));
-        output_printf(out, OUTPUT_NORMAL, "profile: %s%s%s\n",
+
+        /* Show profile with multi-profile indicator if applicable */
+        output_printf(out, OUTPUT_NORMAL, "profile: %s%s%s",
                 output_color_code(out, OUTPUT_COLOR_CYAN),
                 entry->source_profile->name,
                 output_color_code(out, OUTPUT_COLOR_RESET));
+
+        /* Show if file exists in other profiles */
+        if (entry->all_profiles && string_array_size(entry->all_profiles) > 0) {
+            output_printf(out, OUTPUT_NORMAL, " %s(also in:",
+                    output_color_code(out, OUTPUT_COLOR_DIM));
+            for (size_t i = 0; i < string_array_size(entry->all_profiles); i++) {
+                const char *profile_name = string_array_get(entry->all_profiles, i);
+                /* Don't repeat the source profile */
+                if (strcmp(profile_name, entry->source_profile->name) != 0) {
+                    output_printf(out, OUTPUT_NORMAL, " %s", profile_name);
+                }
+            }
+            output_printf(out, OUTPUT_NORMAL, ")%s",
+                    output_color_code(out, OUTPUT_COLOR_RESET));
+        }
+        output_newline(out);
         free(cyan_path);
     } else {
         output_printf(out, OUTPUT_NORMAL, "diff --dotta a/%s b/%s\n", entry->storage_path, entry->storage_path);
-        output_printf(out, OUTPUT_NORMAL, "profile: %s\n", entry->source_profile->name);
+        output_printf(out, OUTPUT_NORMAL, "profile: %s", entry->source_profile->name);
+
+        /* Show if file exists in other profiles */
+        if (entry->all_profiles && string_array_size(entry->all_profiles) > 0) {
+            output_printf(out, OUTPUT_NORMAL, " (also in:");
+            for (size_t i = 0; i < string_array_size(entry->all_profiles); i++) {
+                const char *profile_name = string_array_get(entry->all_profiles, i);
+                if (strcmp(profile_name, entry->source_profile->name) != 0) {
+                    output_printf(out, OUTPUT_NORMAL, " %s", profile_name);
+                }
+            }
+            output_printf(out, OUTPUT_NORMAL, ")");
+        }
+        output_newline(out);
     }
 
     /* Show status with appropriate color and message based on direction */

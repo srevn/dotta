@@ -164,38 +164,30 @@ static error_t *collect_files_from_dir(
 
 /**
  * Add single file to worktree
+ *
+ * @param wt Worktree handle
+ * @param filesystem_path Source path on filesystem
+ * @param storage_path Pre-computed storage path (e.g., "home/.bashrc")
+ * @param opts Command options
+ * @return Error or NULL on success
  */
 static error_t *add_file_to_worktree(
     worktree_handle_t *wt,
     const char *filesystem_path,
+    const char *storage_path,
     const cmd_add_options_t *opts
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(filesystem_path);
+    CHECK_NULL(storage_path);
     CHECK_NULL(opts);
 
     error_t *err = NULL;
-
-    /* Convert to storage path */
-    char *storage_path = NULL;
-    path_prefix_t prefix;
-    err = path_to_storage(filesystem_path, &storage_path, &prefix);
-    if (err) {
-        return error_wrap(err, "Failed to convert path '%s'", filesystem_path);
-    }
-
-    /* Validate storage path */
-    err = path_validate_storage(storage_path);
-    if (err) {
-        free(storage_path);
-        return err;
-    }
 
     /* Build destination path in worktree */
     const char *wt_path = worktree_get_path(wt);
     char *dest_path = str_format("%s/%s", wt_path, storage_path);
     if (!dest_path) {
-        free(storage_path);
         return ERROR(ERR_MEMORY, "Failed to allocate destination path");
     }
 
@@ -206,14 +198,12 @@ static error_t *add_file_to_worktree(
                         "File '%s' (as '%s') already exists in profile '%s'. Use --force to overwrite.",
                         filesystem_path, storage_path, opts->profile);
             free(dest_path);
-            free(storage_path);
             return err;
         }
         err = fs_remove_file(dest_path);
         if (err) {
             error_t *wrapped_err = error_wrap(err, "Failed to remove existing file '%s' in worktree", dest_path);
             free(dest_path);
-            free(storage_path);
             return wrapped_err;
         }
     }
@@ -223,7 +213,6 @@ static error_t *add_file_to_worktree(
     err = fs_get_parent_dir(dest_path, &parent);
     if (err) {
         free(dest_path);
-        free(storage_path);
         return err;
     }
 
@@ -231,7 +220,6 @@ static error_t *add_file_to_worktree(
     free(parent);
     if (err) {
         free(dest_path);
-        free(storage_path);
         return error_wrap(err, "Failed to create parent directory");
     }
 
@@ -242,7 +230,6 @@ static error_t *add_file_to_worktree(
         err = fs_read_symlink(filesystem_path, &target);
         if (err) {
             free(dest_path);
-            free(storage_path);
             return error_wrap(err, "Failed to read symlink '%s'", filesystem_path);
         }
 
@@ -250,7 +237,6 @@ static error_t *add_file_to_worktree(
         free(target);
         if (err) {
             free(dest_path);
-            free(storage_path);
             return error_wrap(err, "Failed to create symlink in worktree");
         }
     } else {
@@ -258,7 +244,6 @@ static error_t *add_file_to_worktree(
         err = fs_copy_file(filesystem_path, dest_path);
         if (err) {
             free(dest_path);
-            free(storage_path);
             return error_wrap(err, "Failed to copy file to worktree");
         }
     }
@@ -268,7 +253,6 @@ static error_t *add_file_to_worktree(
     err = worktree_get_index(wt, &index);
     if (err) {
         free(dest_path);
-        free(storage_path);
         return error_wrap(err, "Failed to get worktree index");
     }
 
@@ -276,7 +260,6 @@ static error_t *add_file_to_worktree(
     if (git_err < 0) {
         git_index_free(index);
         free(dest_path);
-        free(storage_path);
         return error_from_git(git_err);
     }
 
@@ -284,7 +267,6 @@ static error_t *add_file_to_worktree(
     git_index_free(index);
     if (git_err < 0) {
         free(dest_path);
-        free(storage_path);
         return error_from_git(git_err);
     }
 
@@ -293,7 +275,6 @@ static error_t *add_file_to_worktree(
     }
 
     free(dest_path);
-    free(storage_path);
     return NULL;
 }
 
@@ -385,212 +366,6 @@ typedef struct {
     char *filesystem_path;
     char *storage_prefix;
 } tracked_dir_t;
-
-/**
- * Capture and save metadata for added files and tracked directories
- *
- * Loads existing metadata from worktree, captures metadata for each added file,
- * adds tracked directories, updates the metadata collection, and saves it back to worktree.
- * The metadata.json file is then staged for commit.
- */
-static error_t *capture_and_save_metadata(
-    worktree_handle_t *wt,
-    const string_array_t *added_files,
-    const tracked_dir_t *tracked_dirs,
-    size_t tracked_dir_count,
-    const cmd_add_options_t *opts
-) {
-    CHECK_NULL(wt);
-    CHECK_NULL(added_files);
-    CHECK_NULL(opts);
-
-    const char *worktree_path = worktree_get_path(wt);
-    if (!worktree_path) {
-        return ERROR(ERR_INTERNAL, "Worktree path is NULL");
-    }
-
-    /* Load existing metadata from worktree (if it exists) */
-    metadata_t *metadata = NULL;
-    char *metadata_file_path = str_format("%s/%s", worktree_path, METADATA_FILE_PATH);
-    if (!metadata_file_path) {
-        return ERROR(ERR_MEMORY, "Failed to allocate metadata file path");
-    }
-
-    error_t *err = metadata_load_from_file(metadata_file_path, &metadata);
-    free(metadata_file_path);
-
-    if (err) {
-        if (err->code == ERR_NOT_FOUND) {
-            /* No existing metadata - create new */
-            error_free(err);
-            err = metadata_create_empty(&metadata);
-            if (err) {
-                return err;
-            }
-        } else {
-            /* Real error - propagate */
-            return error_wrap(err, "Failed to load existing metadata");
-        }
-    }
-
-    /* Capture metadata for each added file */
-    size_t captured_count = 0;
-    for (size_t i = 0; i < string_array_size(added_files); i++) {
-        const char *filesystem_path = string_array_get(added_files, i);
-
-        /* Convert to storage path */
-        char *storage_path = NULL;
-        path_prefix_t prefix;
-        error_t *err = path_to_storage(filesystem_path, &storage_path, &prefix);
-        if (err) {
-            metadata_free(metadata);
-            return error_wrap(err, "Failed to convert path to storage: %s", filesystem_path);
-        }
-
-        /* Capture metadata */
-        metadata_entry_t *entry = NULL;
-        err = metadata_capture_from_file(filesystem_path, storage_path, &entry);
-        free(storage_path);
-
-        if (err) {
-            metadata_free(metadata);
-            return error_wrap(err, "Failed to capture metadata for: %s", filesystem_path);
-        }
-
-        /* entry will be NULL for symlinks - skip them */
-        if (entry) {
-            /* Verbose output before consuming the entry */
-            if (opts->verbose) {
-                if (entry->owner || entry->group) {
-                    printf("Captured metadata: %s (mode: %04o, owner: %s:%s)\n",
-                          filesystem_path, entry->mode,
-                          entry->owner ? entry->owner : "?",
-                          entry->group ? entry->group : "?");
-                } else {
-                    printf("Captured metadata: %s (mode: %04o)\n",
-                          filesystem_path, entry->mode);
-                }
-            }
-
-            /* Add to metadata collection (copies all fields including owner/group) */
-            err = metadata_add_entry(metadata, entry);
-            metadata_entry_free(entry);
-
-            if (err) {
-                metadata_free(metadata);
-                return error_wrap(err, "Failed to add metadata entry");
-            }
-
-            captured_count++;
-        }
-    }
-
-    /* Add tracked directories to metadata */
-    size_t dir_tracked_count = 0;
-    for (size_t i = 0; i < tracked_dir_count; i++) {
-        const tracked_dir_t *dir = &tracked_dirs[i];
-
-        /* Capture directory metadata */
-        metadata_directory_entry_t *dir_entry = NULL;
-        err = metadata_capture_from_directory(
-            dir->filesystem_path,
-            dir->storage_prefix,
-            &dir_entry
-        );
-
-        if (err) {
-            /* Non-fatal: log warning and continue */
-            if (opts->verbose) {
-                fprintf(stderr, "Warning: failed to capture metadata for directory '%s': %s\n",
-                       dir->filesystem_path, error_message(err));
-            }
-            error_free(err);
-            err = NULL;
-            continue;
-        }
-
-        /* Verbose output before consuming the entry */
-        if (opts->verbose) {
-            if (dir_entry->owner || dir_entry->group) {
-                printf("Captured directory metadata: %s (mode: %04o, owner: %s:%s)\n",
-                      dir->filesystem_path, dir_entry->mode,
-                      dir_entry->owner ? dir_entry->owner : "?",
-                      dir_entry->group ? dir_entry->group : "?");
-            } else {
-                printf("Captured directory metadata: %s (mode: %04o)\n",
-                      dir->filesystem_path, dir_entry->mode);
-            }
-        }
-
-        /* Add directory to metadata */
-        err = metadata_add_tracked_directory(
-            metadata,
-            dir_entry->filesystem_path,
-            dir_entry->storage_prefix,
-            dir_entry->added_at,
-            dir_entry->mode,
-            dir_entry->owner,
-            dir_entry->group
-        );
-
-        metadata_directory_entry_free(dir_entry);
-
-        if (err) {
-            /* Non-fatal: log warning and continue */
-            if (opts->verbose) {
-                fprintf(stderr, "Warning: failed to track directory '%s': %s\n",
-                       dir->filesystem_path, error_message(err));
-            }
-            error_free(err);
-            err = NULL;
-        } else {
-            dir_tracked_count++;
-            if (opts->verbose) {
-                printf("Tracked directory: %s -> %s\n",
-                       dir->filesystem_path, dir->storage_prefix);
-            }
-        }
-    }
-
-    /* Save metadata to worktree */
-    err = metadata_save_to_worktree(worktree_path, metadata);
-    metadata_free(metadata);
-
-    if (err) {
-        return error_wrap(err, "Failed to save metadata");
-    }
-
-    /* Stage metadata.json file */
-    git_index *index = NULL;
-    err = worktree_get_index(wt, &index);
-    if (err) {
-        return error_wrap(err, "Failed to get worktree index");
-    }
-
-    int git_err = git_index_add_bypath(index, METADATA_FILE_PATH);
-    if (git_err < 0) {
-        git_index_free(index);
-        return error_from_git(git_err);
-    }
-
-    git_err = git_index_write(index);
-    git_index_free(index);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    if (opts->verbose) {
-        if (captured_count > 0) {
-            printf("Updated metadata for %zu file(s)\n", captured_count);
-        }
-        if (dir_tracked_count > 0) {
-            printf("Tracked %zu director%s for change detection\n",
-                   dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies");
-        }
-    }
-
-    return NULL;
-}
 
 /**
  * Create commit in worktree
@@ -716,7 +491,9 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     size_t tracked_dir_count = 0;
     size_t tracked_dir_capacity = 0;
     size_t added_count = 0;
+    size_t metadata_count = 0;
     bool profile_was_new = false;
+    metadata_t *metadata = NULL;
 
     /* Load configuration for hooks and ignore patterns */
     err = config_load(NULL, &config);
@@ -916,24 +693,208 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Add each collected file to worktree */
+    /* Load or create metadata collection before processing files */
+    const char *worktree_path = worktree_get_path(wt);
+    char *metadata_file_path = str_format("%s/%s", worktree_path, METADATA_FILE_PATH);
+    if (!metadata_file_path) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate metadata file path");
+        goto cleanup;
+    }
+
+    err = metadata_load_from_file(metadata_file_path, &metadata);
+    free(metadata_file_path);
+
+    if (err) {
+        if (err->code == ERR_NOT_FOUND) {
+            /* No existing metadata - create new */
+            error_free(err);
+            err = metadata_create_empty(&metadata);
+            if (err) {
+                goto cleanup;
+            }
+        } else {
+            /* Real error - propagate */
+            err = error_wrap(err, "Failed to load existing metadata");
+            goto cleanup;
+        }
+    }
+
+    /* Single-pass: add files and capture metadata inline */
     for (size_t i = 0; i < string_array_size(all_files); i++) {
         const char *file_path = string_array_get(all_files, i);
 
-        /* Add to worktree */
-        err = add_file_to_worktree(wt, file_path, opts);
+        /* Compute storage path once */
+        char *storage_path = NULL;
+        path_prefix_t prefix;
+        err = path_to_storage(file_path, &storage_path, &prefix);
         if (err) {
+            err = error_wrap(err, "Failed to convert path '%s'", file_path);
+            goto cleanup;
+        }
+
+        /* Validate storage path */
+        err = path_validate_storage(storage_path);
+        if (err) {
+            free(storage_path);
+            goto cleanup;
+        }
+
+        /* Capture metadata FIRST (fail early before copying file) */
+        metadata_entry_t *entry = NULL;
+        err = metadata_capture_from_file(file_path, storage_path, &entry);
+        if (err) {
+            free(storage_path);
+            err = error_wrap(err, "Failed to capture metadata for: %s", file_path);
+            goto cleanup;
+        }
+
+        /* Add file to worktree (with pre-computed storage_path) */
+        err = add_file_to_worktree(wt, file_path, storage_path, opts);
+        if (err) {
+            if (entry) {
+                metadata_entry_free(entry);
+            }
+            free(storage_path);
             err = error_wrap(err, "Failed to add file '%s'", file_path);
             goto cleanup;
         }
+
+        /* Add metadata entry to collection (entry will be NULL for symlinks - that's ok) */
+        if (entry) {
+            /* Verbose output for metadata capture */
+            if (opts->verbose) {
+                if (entry->owner || entry->group) {
+                    printf("Captured metadata: %s (mode: %04o, owner: %s:%s)\n",
+                          file_path, entry->mode,
+                          entry->owner ? entry->owner : "?",
+                          entry->group ? entry->group : "?");
+                } else {
+                    printf("Captured metadata: %s (mode: %04o)\n",
+                          file_path, entry->mode);
+                }
+            }
+
+            err = metadata_add_entry(metadata, entry);
+            metadata_entry_free(entry);
+
+            if (err) {
+                free(storage_path);
+                err = error_wrap(err, "Failed to add metadata entry");
+                goto cleanup;
+            }
+
+            metadata_count++;
+        }
+
+        free(storage_path);
         added_count++;
     }
 
-    /* Capture and save metadata for added files and tracked directories */
-    err = capture_and_save_metadata(wt, all_files, tracked_dirs, tracked_dir_count, opts);
+    /* Handle tracked directories metadata */
+    size_t dir_tracked_count = 0;
+    for (size_t i = 0; i < tracked_dir_count; i++) {
+        const tracked_dir_t *dir = &tracked_dirs[i];
+
+        /* Capture directory metadata */
+        metadata_directory_entry_t *dir_entry = NULL;
+        err = metadata_capture_from_directory(
+            dir->filesystem_path,
+            dir->storage_prefix,
+            &dir_entry
+        );
+
+        if (err) {
+            /* Non-fatal: log warning and continue */
+            if (opts->verbose) {
+                fprintf(stderr, "Warning: failed to capture metadata for directory '%s': %s\n",
+                       dir->filesystem_path, error_message(err));
+            }
+            error_free(err);
+            err = NULL;
+            continue;
+        }
+
+        /* Verbose output before consuming the entry */
+        if (opts->verbose) {
+            if (dir_entry->owner || dir_entry->group) {
+                printf("Captured directory metadata: %s (mode: %04o, owner: %s:%s)\n",
+                      dir->filesystem_path, dir_entry->mode,
+                      dir_entry->owner ? dir_entry->owner : "?",
+                      dir_entry->group ? dir_entry->group : "?");
+            } else {
+                printf("Captured directory metadata: %s (mode: %04o)\n",
+                      dir->filesystem_path, dir_entry->mode);
+            }
+        }
+
+        /* Add directory to metadata */
+        err = metadata_add_tracked_directory(
+            metadata,
+            dir_entry->filesystem_path,
+            dir_entry->storage_prefix,
+            dir_entry->added_at,
+            dir_entry->mode,
+            dir_entry->owner,
+            dir_entry->group
+        );
+
+        metadata_directory_entry_free(dir_entry);
+
+        if (err) {
+            /* Non-fatal: log warning and continue */
+            if (opts->verbose) {
+                fprintf(stderr, "Warning: failed to track directory '%s': %s\n",
+                       dir->filesystem_path, error_message(err));
+            }
+            error_free(err);
+            err = NULL;
+        } else {
+            dir_tracked_count++;
+            if (opts->verbose) {
+                printf("Tracked directory: %s -> %s\n",
+                       dir->filesystem_path, dir->storage_prefix);
+            }
+        }
+    }
+
+    /* Save metadata to worktree */
+    err = metadata_save_to_worktree(worktree_path, metadata);
     if (err) {
-        err = error_wrap(err, "Failed to capture metadata");
+        err = error_wrap(err, "Failed to save metadata");
         goto cleanup;
+    }
+
+    /* Stage metadata.json file */
+    git_index *index = NULL;
+    err = worktree_get_index(wt, &index);
+    if (err) {
+        err = error_wrap(err, "Failed to get worktree index");
+        goto cleanup;
+    }
+
+    int git_err = git_index_add_bypath(index, METADATA_FILE_PATH);
+    if (git_err < 0) {
+        git_index_free(index);
+        err = error_from_git(git_err);
+        goto cleanup;
+    }
+
+    git_err = git_index_write(index);
+    git_index_free(index);
+    if (git_err < 0) {
+        err = error_from_git(git_err);
+        goto cleanup;
+    }
+
+    /* Verbose summary */
+    if (opts->verbose) {
+        if (metadata_count > 0) {
+            printf("Updated metadata for %zu file(s)\n", metadata_count);
+        }
+        if (dir_tracked_count > 0) {
+            printf("Tracked %zu director%s for change detection\n",
+                   dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies");
+        }
     }
 
     /* Create commit */
@@ -991,6 +952,7 @@ cleanup:
     }
 
     /* Free resources in reverse order of allocation */
+    if (metadata) metadata_free(metadata);
     if (all_files) string_array_free(all_files);
     if (wt) worktree_cleanup(wt);
     if (hook_ctx) hook_context_free(hook_ctx);

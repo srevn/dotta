@@ -822,89 +822,89 @@ static error_t *metadata_from_json(const char *json_str, metadata_t **out) {
 
     cJSON *dir_obj = NULL;
     cJSON_ArrayForEach(dir_obj, tracked_dirs) {
-            if (!cJSON_IsObject(dir_obj)) {
-                metadata_free(metadata);
-                cJSON_Delete(root);
-                return ERROR(ERR_INVALID_ARG, "Invalid directory entry in directories array");
-            }
-
-            /* Get filesystem_path */
-            cJSON *fs_path_obj = cJSON_GetObjectItem(dir_obj, "filesystem_path");
-            if (!fs_path_obj || !cJSON_IsString(fs_path_obj)) {
-                metadata_free(metadata);
-                cJSON_Delete(root);
-                return ERROR(ERR_INVALID_ARG, "Missing or invalid filesystem_path in directory entry");
-            }
-
-            /* Get storage_prefix */
-            cJSON *storage_prefix_obj = cJSON_GetObjectItem(dir_obj, "storage_prefix");
-            if (!storage_prefix_obj || !cJSON_IsString(storage_prefix_obj)) {
-                metadata_free(metadata);
-                cJSON_Delete(root);
-                return ERROR(ERR_INVALID_ARG, "Missing or invalid storage_prefix in directory entry");
-            }
-
-            /* Get added_at timestamp */
-            cJSON *added_at_obj = cJSON_GetObjectItem(dir_obj, "added_at");
-            if (!added_at_obj || !cJSON_IsString(added_at_obj)) {
-                metadata_free(metadata);
-                cJSON_Delete(root);
-                return ERROR(ERR_INVALID_ARG, "Missing or invalid added_at in directory entry");
-            }
-
-            /* Parse timestamp */
-            struct tm tm_info = {0};
-            if (strptime(added_at_obj->valuestring, "%Y-%m-%dT%H:%M:%SZ", &tm_info) == NULL) {
-                metadata_free(metadata);
-                cJSON_Delete(root);
-                return ERROR(ERR_INVALID_ARG, "Invalid timestamp format in directory entry");
-            }
-            time_t added_at = timegm(&tm_info);
-
-            /* Parse mode (required in v2 with directory metadata) */
-            cJSON *mode_obj = cJSON_GetObjectItem(dir_obj, "mode");
-            if (!mode_obj || !cJSON_IsString(mode_obj)) {
-                metadata_free(metadata);
-                cJSON_Delete(root);
-                return ERROR(ERR_INVALID_ARG, "Missing or invalid mode in directory entry");
-            }
-
-            mode_t mode;
-            err = metadata_parse_mode(mode_obj->valuestring, &mode);
-            if (err) {
-                metadata_free(metadata);
-                cJSON_Delete(root);
-                return error_wrap(err, "Failed to parse mode for directory");
-            }
-
-            /* Parse optional owner (only present for root/ prefix directories) */
-            const char *owner = NULL;
-            cJSON *owner_obj = cJSON_GetObjectItem(dir_obj, "owner");
-            if (owner_obj && cJSON_IsString(owner_obj) && owner_obj->valuestring) {
-                owner = owner_obj->valuestring;
-            }
-
-            /* Parse optional group (only present for root/ prefix directories) */
-            const char *group = NULL;
-            cJSON *group_obj = cJSON_GetObjectItem(dir_obj, "group");
-            if (group_obj && cJSON_IsString(group_obj) && group_obj->valuestring) {
-                group = group_obj->valuestring;
-            }
-
-            /* Add directory to metadata */
-            err = metadata_add_tracked_directory(metadata,
-                                                  fs_path_obj->valuestring,
-                                                  storage_prefix_obj->valuestring,
-                                                  added_at,
-                                                  mode,
-                                                  owner,
-                                                  group);
-            if (err) {
-                metadata_free(metadata);
-                cJSON_Delete(root);
-                return error_wrap(err, "Failed to add tracked directory");
-            }
+        if (!cJSON_IsObject(dir_obj)) {
+            metadata_free(metadata);
+            cJSON_Delete(root);
+            return ERROR(ERR_INVALID_ARG, "Invalid directory entry in directories array");
         }
+
+        /* Get filesystem_path */
+        cJSON *fs_path_obj = cJSON_GetObjectItem(dir_obj, "filesystem_path");
+        if (!fs_path_obj || !cJSON_IsString(fs_path_obj)) {
+            metadata_free(metadata);
+            cJSON_Delete(root);
+            return ERROR(ERR_INVALID_ARG, "Missing or invalid filesystem_path in directory entry");
+        }
+
+        /* Get storage_prefix */
+        cJSON *storage_prefix_obj = cJSON_GetObjectItem(dir_obj, "storage_prefix");
+        if (!storage_prefix_obj || !cJSON_IsString(storage_prefix_obj)) {
+            metadata_free(metadata);
+            cJSON_Delete(root);
+            return ERROR(ERR_INVALID_ARG, "Missing or invalid storage_prefix in directory entry");
+        }
+
+        /* Get added_at timestamp */
+        cJSON *added_at_obj = cJSON_GetObjectItem(dir_obj, "added_at");
+        if (!added_at_obj || !cJSON_IsString(added_at_obj)) {
+            metadata_free(metadata);
+            cJSON_Delete(root);
+            return ERROR(ERR_INVALID_ARG, "Missing or invalid added_at in directory entry");
+        }
+
+        /* Parse timestamp */
+        struct tm tm_info = {0};
+        if (strptime(added_at_obj->valuestring, "%Y-%m-%dT%H:%M:%SZ", &tm_info) == NULL) {
+            metadata_free(metadata);
+            cJSON_Delete(root);
+            return ERROR(ERR_INVALID_ARG, "Invalid timestamp format in directory entry");
+        }
+        time_t added_at = timegm(&tm_info);
+
+        /* Parse mode (required in v2 with directory metadata) */
+        cJSON *mode_obj = cJSON_GetObjectItem(dir_obj, "mode");
+        if (!mode_obj || !cJSON_IsString(mode_obj)) {
+            metadata_free(metadata);
+            cJSON_Delete(root);
+            return ERROR(ERR_INVALID_ARG, "Missing or invalid mode in directory entry");
+        }
+
+        mode_t mode;
+        err = metadata_parse_mode(mode_obj->valuestring, &mode);
+        if (err) {
+            metadata_free(metadata);
+            cJSON_Delete(root);
+            return error_wrap(err, "Failed to parse mode for directory");
+        }
+
+        /* Parse optional owner (only present for root/ prefix directories) */
+        const char *owner = NULL;
+        cJSON *owner_obj = cJSON_GetObjectItem(dir_obj, "owner");
+        if (owner_obj && cJSON_IsString(owner_obj) && owner_obj->valuestring) {
+            owner = owner_obj->valuestring;
+        }
+
+        /* Parse optional group (only present for root/ prefix directories) */
+        const char *group = NULL;
+        cJSON *group_obj = cJSON_GetObjectItem(dir_obj, "group");
+        if (group_obj && cJSON_IsString(group_obj) && group_obj->valuestring) {
+            group = group_obj->valuestring;
+        }
+
+        /* Add directory to metadata */
+        err = metadata_add_tracked_directory(metadata,
+                                              fs_path_obj->valuestring,
+                                              storage_prefix_obj->valuestring,
+                                              added_at,
+                                              mode,
+                                              owner,
+                                              group);
+        if (err) {
+            metadata_free(metadata);
+            cJSON_Delete(root);
+            return error_wrap(err, "Failed to add tracked directory");
+        }
+    }
 
     cJSON_Delete(root);
     *out = metadata;

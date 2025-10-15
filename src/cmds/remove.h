@@ -5,6 +5,9 @@
  * 1. Remove specific files/directories from a profile branch
  * 2. Delete an entire profile branch
  *
+ * Architectural principle: This command modifies the Git repository only.
+ * Filesystem synchronization is handled by 'dotta apply'.
+ *
  * Uses temporary worktrees to safely modify profile branches.
  */
 
@@ -25,7 +28,6 @@ typedef struct {
 
     /* Operation modes */
     bool delete_profile;        /* Delete entire profile branch */
-    bool keep_files;            /* Keep deployed files on filesystem */
 
     /* Safety flags */
     bool dry_run;               /* Show what would be removed without doing it */
@@ -47,8 +49,11 @@ typedef struct {
  * - If delete_profile=true: Deletes the entire profile branch
  * - If delete_profile=false: Removes specified files from profile
  *
+ * This command modifies the Git repository only. Deployed files remain
+ * on the filesystem until 'dotta apply' is run.
+ *
  * Uses temporary worktree to safely modify profile branches.
- * Updates state tracking and executes hooks.
+ * Executes hooks but does not modify deployed files or state file entries.
  *
  * @param repo Repository (must not be NULL)
  * @param opts Command options (must not be NULL)

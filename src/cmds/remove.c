@@ -288,36 +288,6 @@ static error_t *remove_file_from_worktree(
 }
 
 /**
- * Cleanup deployed file from filesystem
- */
-static error_t *cleanup_deployed_file(
-    const char *filesystem_path,
-    const cmd_remove_options_t *opts
-) {
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(opts);
-
-    if (!fs_exists(filesystem_path)) {
-        if (opts->verbose) {
-            printf("File already removed from filesystem: %s\n", filesystem_path);
-        }
-        return NULL;
-    }
-
-    error_t *err = fs_remove_file(filesystem_path);
-    if (err) {
-        return error_wrap(err, "Failed to remove file '%s' from filesystem",
-                         filesystem_path);
-    }
-
-    if (opts->verbose) {
-        printf("Cleaned up: %s\n", filesystem_path);
-    }
-
-    return NULL;
-}
-
-/**
  * Confirm removal operation
  */
 static bool confirm_removal(
@@ -346,21 +316,17 @@ static bool confirm_removal(
         threshold = 1;  /* Always confirm in strict mode */
     }
 
-    /* No confirmation needed for small operations */
-    if (count < threshold && opts->keep_files) {
+    /* No confirmation needed for small operations below threshold */
+    if (count < threshold) {
         return true;
     }
 
     /* Prompt user */
-    char prompt[256];
-    if (opts->keep_files) {
-        snprintf(prompt, sizeof(prompt), "Remove %zu file%s from profile '%s' (keeping filesystem files)?",
-                count, count == 1 ? "" : "s", opts->profile);
-    } else {
-        printf("This will remove %zu file%s from profile AND filesystem.\n",
-               count, count == 1 ? "" : "s");
-        snprintf(prompt, sizeof(prompt), "Continue?");
-    }
+    char prompt[512];
+    snprintf(prompt, sizeof(prompt),
+            "Remove %zu file%s from profile '%s'?\n"
+            "(Filesystem files will remain until 'dotta apply')",
+            count, count == 1 ? "" : "s", opts->profile);
 
     output_ctx_t *out = output_create_from_config(config);
     bool confirmed = output_confirm(out, prompt, false);
@@ -392,13 +358,8 @@ static bool confirm_profile_deletion(
 
     printf("WARNING: This will delete profile '%s' (%zu file%s).\n",
            profile_name, file_count, file_count == 1 ? "" : "s");
-
-    if (opts->keep_files) {
-        printf("         Deployed files will remain on filesystem.\n");
-        printf("         Hint: Use 'dotta apply --prune' to clean up.\n");
-    } else {
-        printf("         Deployed files will be removed from filesystem.\n");
-    }
+    printf("         Deployed files will remain on filesystem.\n");
+    printf("         Run 'dotta apply' to remove them.\n");
 
     output_ctx_t *out = output_create();
     bool confirmed = output_confirm(out, "Continue?", false);
@@ -477,80 +438,6 @@ static error_t *create_removal_commit(
 
     if (err) {
         return error_wrap(err, "Failed to create commit");
-    }
-
-    return NULL;
-}
-
-/**
- * Update state after file removal
- */
-static error_t *update_state_after_removal(
-    state_t *state,
-    const string_array_t *removed_filesystem_paths,
-    const char *profile_name
-) {
-    CHECK_NULL(state);
-    CHECK_NULL(removed_filesystem_paths);
-    CHECK_NULL(profile_name);
-
-    /* Remove each file from state */
-    for (size_t i = 0; i < string_array_size(removed_filesystem_paths); i++) {
-        const char *path = string_array_get(removed_filesystem_paths, i);
-
-        if (state_file_exists(state, path)) {
-            error_t *err = state_remove_file(state, path);
-            if (err) {
-                /* Non-fatal: just log warning */
-                fprintf(stderr, "Warning: Failed to update state for '%s': %s\n",
-                       path, error_message(err));
-                error_free(err);
-            }
-        }
-    }
-
-    /* Check if any tracked directories are now empty and should be removed */
-    size_t dir_count = 0;
-    const state_directory_entry_t *dirs = state_get_all_directories(state, &dir_count);
-
-    for (size_t i = 0; i < dir_count; i++) {
-        /* Only check directories for this profile */
-        if (strcmp(dirs[i].profile, profile_name) != 0) {
-            continue;
-        }
-
-        /* Check if any files still exist under this directory's storage prefix */
-        bool has_files = false;
-        size_t file_count = 0;
-        const state_file_entry_t *files = state_get_all_files(state, &file_count);
-
-        const char *dir_prefix = dirs[i].storage_prefix;
-        size_t prefix_len = strlen(dir_prefix);
-
-        for (size_t j = 0; j < file_count; j++) {
-            /* Check if file is from same profile and under this directory */
-            if (strcmp(files[j].profile, profile_name) == 0) {
-                const char *file_storage = files[j].storage_path;
-                if (strncmp(file_storage, dir_prefix, prefix_len) == 0) {
-                    /* Check directory boundary */
-                    if (file_storage[prefix_len] == '/' || file_storage[prefix_len] == '\0') {
-                        has_files = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        /* If directory is now empty, remove it from state */
-        if (!has_files) {
-            error_t *err = state_remove_directory(state, dirs[i].filesystem_path);
-            if (err) {
-                /* Non-fatal: just log warning */
-                fprintf(stderr, "Warning: Failed to remove directory tracking for '%s': %s\n",
-                       dirs[i].filesystem_path, error_message(err));
-                error_free(err);
-            }
-        }
     }
 
     return NULL;
@@ -674,21 +561,12 @@ static error_t *remove_files_from_profile(
         config = config_create_default();
     }
 
-    /* Load state (with locking for write transaction) */
-    state_t *state = NULL;
-    err = state_load_for_update(repo, &state);
-    if (err) {
-        config_free(config);
-        return error_wrap(err, "Failed to load state");
-    }
-
     /* Resolve paths */
     string_array_t *storage_paths = NULL;
     string_array_t *filesystem_paths = NULL;
     err = resolve_paths_to_remove(repo, opts->profile, opts->paths, opts->path_count,
                                    &storage_paths, &filesystem_paths, opts);
     if (err) {
-        state_free(state);
         config_free(config);
         return err;
     }
@@ -699,13 +577,13 @@ static error_t *remove_files_from_profile(
         for (size_t i = 0; i < string_array_size(storage_paths); i++) {
             printf("  - %s\n", string_array_get(storage_paths, i));
         }
-        printf("\nTotal: %zu file%s would be removed\n",
+        printf("\nTotal: %zu file%s would be removed from profile\n",
                string_array_size(storage_paths),
                string_array_size(storage_paths) == 1 ? "" : "s");
+        printf("(Filesystem files would remain until 'dotta apply')\n");
 
         string_array_free(storage_paths);
         string_array_free(filesystem_paths);
-        state_free(state);
         config_free(config);
         return NULL;
     }
@@ -715,7 +593,6 @@ static error_t *remove_files_from_profile(
         printf("Cancelled\n");
         string_array_free(storage_paths);
         string_array_free(filesystem_paths);
-        state_free(state);
         config_free(config);
         return NULL;
     }
@@ -726,7 +603,6 @@ static error_t *remove_files_from_profile(
     if (err) {
         string_array_free(storage_paths);
         string_array_free(filesystem_paths);
-        state_free(state);
         config_free(config);
         return err;
     }
@@ -752,7 +628,6 @@ static error_t *remove_files_from_profile(
             free(repo_dir);
             string_array_free(storage_paths);
             string_array_free(filesystem_paths);
-            state_free(state);
             config_free(config);
             return error_wrap(err, "Pre-remove hook failed");
         }
@@ -767,7 +642,6 @@ static error_t *remove_files_from_profile(
         free(repo_dir);
         string_array_free(storage_paths);
         string_array_free(filesystem_paths);
-        state_free(state);
         config_free(config);
         return error_wrap(err, "Failed to create temporary worktree");
     }
@@ -780,7 +654,6 @@ static error_t *remove_files_from_profile(
         free(repo_dir);
         string_array_free(storage_paths);
         string_array_free(filesystem_paths);
-        state_free(state);
         config_free(config);
         return error_wrap(err, "Failed to checkout profile '%s'", opts->profile);
     }
@@ -825,7 +698,6 @@ static error_t *remove_files_from_profile(
             free(repo_dir);
             string_array_free(storage_paths);
             string_array_free(filesystem_paths);
-            state_free(state);
             config_free(config);
             return err;
         }
@@ -840,7 +712,6 @@ static error_t *remove_files_from_profile(
         free(repo_dir);
         string_array_free(storage_paths);
         string_array_free(filesystem_paths);
-        state_free(state);
         config_free(config);
         return error_wrap(err, "Failed to clean up metadata");
     }
@@ -853,7 +724,6 @@ static error_t *remove_files_from_profile(
         free(repo_dir);
         string_array_free(storage_paths);
         string_array_free(filesystem_paths);
-        state_free(state);
         config_free(config);
         return err;
     }
@@ -861,39 +731,16 @@ static error_t *remove_files_from_profile(
     /* Cleanup worktree */
     worktree_cleanup(wt);
 
-    /* Cleanup filesystem by default (unless --keep-files) */
-    if (!opts->keep_files) {
-        for (size_t i = 0; i < string_array_size(filesystem_paths); i++) {
-            const char *fs_path = string_array_get(filesystem_paths, i);
-
-            err = cleanup_deployed_file(fs_path, opts);
-            if (err) {
-                fprintf(stderr, "Warning: %s\n", error_message(err));
-                error_free(err);
-                err = NULL;
-            }
-        }
-
-        /* Update state to remove files that were cleaned up from filesystem
-         * This is part of the atomic operation - state should reflect reality.
-         * With --keep-files, files remain on filesystem and in state,
-         * so that 'apply --prune' can remove them later.
-         */
-        err = update_state_after_removal(state, filesystem_paths, opts->profile);
-        if (err) {
-            fprintf(stderr, "Warning: Failed to update state: %s\n", error_message(err));
-            error_free(err);
-            err = NULL;
-        }
-
-        /* Save state */
-        err = state_save(repo, state);
-        if (err) {
-            fprintf(stderr, "Warning: Failed to save state: %s\n", error_message(err));
-            error_free(err);
-            err = NULL;
-        }
-    }
+    /*
+     * Architectural note: We do NOT delete files from the filesystem here.
+     * This maintains separation of concerns:
+     * - `remove` modifies the Git repository (profile branches)
+     * - `apply` synchronizes the filesystem (prunes orphaned files by default)
+     *
+     * This ensures `apply` has global context from all active profiles to
+     * correctly determine if a file should be removed (avoiding premature
+     * deletion of files still needed by higher-priority profiles).
+     */
 
     /* Execute post-remove hook */
     if (hook_ctx) {
@@ -917,7 +764,6 @@ static error_t *remove_files_from_profile(
     free(repo_dir);
     string_array_free(storage_paths);
     string_array_free(filesystem_paths);
-    state_free(state);
     config_free(config);
 
     *removed_count_out = removed_count;
@@ -1086,12 +932,11 @@ static error_t *delete_profile_branch(
         }
     }
 
-    /* Warn about deployed files */
-    if (deployed_count > 0 && opts->keep_files && !opts->force) {
-        printf("\nWARNING: Profile '%s' has %zu deployed file%s!\n",
+    /* Inform about deployed files (informational, not a warning) */
+    if (deployed_count > 0 && opts->verbose) {
+        printf("\nNote: Profile '%s' has %zu deployed file%s\n",
                opts->profile, deployed_count, deployed_count == 1 ? "" : "s");
-        printf("         These files will remain on your filesystem after deletion (--keep-files).\n");
-        printf("         Run 'dotta apply --prune' later to clean up.\n\n");
+        printf("      Run 'dotta apply' after deletion to remove them.\n\n");
     }
 
     /* Confirm deletion */
@@ -1144,22 +989,11 @@ static error_t *delete_profile_branch(
         hook_result_free(hook_result);
     }
 
-    /* Cleanup deployed files by default (unless --keep-files) */
-    if (!opts->keep_files && state) {
-        size_t state_file_count = 0;
-        const state_file_entry_t *state_files = state_get_all_files(state, &state_file_count);
-
-        for (size_t i = 0; i < state_file_count; i++) {
-            if (strcmp(state_files[i].profile, opts->profile) == 0) {
-                err = cleanup_deployed_file(state_files[i].filesystem_path, opts);
-                if (err) {
-                    fprintf(stderr, "Warning: %s\n", error_message(err));
-                    error_free(err);
-                    err = NULL;
-                }
-            }
-        }
-    }
+    /*
+     * Architectural note: We do NOT delete files from the filesystem here.
+     * This maintains separation of concerns - `apply` handles filesystem cleanup.
+     * This ensures proper global context when determining file removal.
+     */
 
     /* Delete local branch */
     err = gitops_delete_branch(repo, opts->profile);
@@ -1201,10 +1035,16 @@ static error_t *delete_profile_branch(
     /* Track whether state was modified and needs saving */
     bool state_modified = false;
 
-    /* Deactivate profile if it was active
-     * This MUST happen regardless of --cleanup to maintain state consistency.
-     * If we don't do this, the deleted profile remains in state.profiles[] which
-     * will cause 'dotta apply' to fail with "profile not found".
+    /*
+     * Deactivate profile if it was active
+     *
+     * This MUST happen to maintain state consistency - a deleted profile
+     * cannot remain in the active list, or `apply` will fail with
+     * "profile not found".
+     *
+     * Note: We only modify state.profiles[] here, NOT state.files[].
+     * File cleanup is handled by `apply` (which prunes orphaned files by default)
+     * as it has the global context to correctly determine which files should be removed.
      */
     if (is_active && state) {
         /* Build new active profiles list without the deleted profile */
@@ -1255,7 +1095,7 @@ static error_t *delete_profile_branch(
             } else {
                 state_modified = true;
                 if (opts->verbose) {
-                    printf("Auto-deactivated profile '%s' from active list\n", opts->profile);
+                    printf("Deactivated profile '%s' from active list\n", opts->profile);
                 }
             }
         } else {
@@ -1266,26 +1106,7 @@ static error_t *delete_profile_branch(
         }
     }
 
-    /* Update state - remove all files from this profile */
-    if (!opts->keep_files && state) {
-        size_t removed_count = 0;
-        err = state_cleanup_profile(state, opts->profile, &removed_count);
-        if (err) {
-            fprintf(stderr, "Warning: Failed to update state: %s\n", error_message(err));
-            error_free(err);
-            err = NULL;
-        } else {
-            if (removed_count > 0) {
-                state_modified = true;
-                if (opts->verbose) {
-                    printf("Removed %zu state entr%s for profile '%s'\n",
-                           removed_count, removed_count == 1 ? "y" : "ies", opts->profile);
-                }
-            }
-        }
-    }
-
-    /* Save state if it was modified (either by deactivation or cleanup) */
+    /* Save state if profile was deactivated */
     if (state_modified && state) {
         err = state_save(repo, state);
         if (err) {
@@ -1341,14 +1162,8 @@ error_t *cmd_remove(git_repository *repo, const cmd_remove_options_t *opts) {
         }
 
         if (!opts->quiet && !opts->dry_run) {
-            printf("Deleted profile '%s'\n", opts->profile);
-
-            if (opts->keep_files) {
-                printf("\nHint: Deployed files remain on filesystem (--keep-files).\n");
-                printf("      Run 'dotta apply --prune' to clean up.\n");
-            } else {
-                printf("Deployed files removed from filesystem.\n");
-            }
+            printf("Profile '%s' deleted\n", opts->profile);
+            printf("Run 'dotta apply' to remove deployed files from filesystem\n");
             printf("\n");
         }
 
@@ -1366,13 +1181,7 @@ error_t *cmd_remove(git_repository *repo, const cmd_remove_options_t *opts) {
     if (!opts->quiet && !opts->dry_run) {
         printf("Removed %zu file%s from profile '%s'\n",
                removed_count, removed_count == 1 ? "" : "s", opts->profile);
-
-        if (opts->keep_files) {
-            printf("\nHint: Files remain on filesystem (--keep-files).\n");
-            printf("      Run 'dotta apply --prune' to remove them.\n");
-        } else {
-            printf("Files also removed from filesystem.\n");
-        }
+        printf("Run 'dotta apply' to remove files from filesystem\n");
         printf("\n");
     }
 

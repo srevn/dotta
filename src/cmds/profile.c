@@ -15,7 +15,6 @@
 #include "base/error.h"
 #include "base/gitops.h"
 #include "base/transfer.h"
-#include "core/deploy.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "core/upstream.h"

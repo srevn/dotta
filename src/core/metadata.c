@@ -103,6 +103,8 @@ void metadata_free(metadata_t *metadata) {
     for (size_t i = 0; i < metadata->directory_count; i++) {
         free(metadata->directories[i].filesystem_path);
         free(metadata->directories[i].storage_prefix);
+        free(metadata->directories[i].owner);
+        free(metadata->directories[i].group);
     }
 
     free(metadata->directories);
@@ -619,6 +621,44 @@ static error_t *metadata_to_json(const metadata_t *metadata, buffer_t **out) {
             goto cleanup;
         }
 
+        /* Add mode */
+        char *mode_str = NULL;
+        err = metadata_format_mode(dir_entry->mode, &mode_str);
+        if (err) {
+            cJSON_Delete(dir_obj);
+            cJSON_Delete(tracked_dirs);
+            goto cleanup;
+        }
+
+        if (!cJSON_AddStringToObject(dir_obj, "mode", mode_str)) {
+            free(mode_str);
+            cJSON_Delete(dir_obj);
+            cJSON_Delete(tracked_dirs);
+            err = ERROR(ERR_MEMORY, "Failed to add mode to directory object");
+            goto cleanup;
+        }
+        free(mode_str);
+
+        /* Add owner if present (optional, only for root/ prefix) */
+        if (dir_entry->owner) {
+            if (!cJSON_AddStringToObject(dir_obj, "owner", dir_entry->owner)) {
+                cJSON_Delete(dir_obj);
+                cJSON_Delete(tracked_dirs);
+                err = ERROR(ERR_MEMORY, "Failed to add owner to directory object");
+                goto cleanup;
+            }
+        }
+
+        /* Add group if present (optional, only for root/ prefix) */
+        if (dir_entry->group) {
+            if (!cJSON_AddStringToObject(dir_obj, "group", dir_entry->group)) {
+                cJSON_Delete(dir_obj);
+                cJSON_Delete(tracked_dirs);
+                err = ERROR(ERR_MEMORY, "Failed to add group to directory object");
+                goto cleanup;
+            }
+        }
+
         /* Add directory object to array (ownership transferred) */
         cJSON_AddItemToArray(tracked_dirs, dir_obj);
     }
@@ -821,11 +861,44 @@ static error_t *metadata_from_json(const char *json_str, metadata_t **out) {
             }
             time_t added_at = timegm(&tm_info);
 
+            /* Parse mode (required in v2 with directory metadata) */
+            cJSON *mode_obj = cJSON_GetObjectItem(dir_obj, "mode");
+            if (!mode_obj || !cJSON_IsString(mode_obj)) {
+                metadata_free(metadata);
+                cJSON_Delete(root);
+                return ERROR(ERR_INVALID_ARG, "Missing or invalid mode in directory entry");
+            }
+
+            mode_t mode;
+            err = metadata_parse_mode(mode_obj->valuestring, &mode);
+            if (err) {
+                metadata_free(metadata);
+                cJSON_Delete(root);
+                return error_wrap(err, "Failed to parse mode for directory");
+            }
+
+            /* Parse optional owner (only present for root/ prefix directories) */
+            const char *owner = NULL;
+            cJSON *owner_obj = cJSON_GetObjectItem(dir_obj, "owner");
+            if (owner_obj && cJSON_IsString(owner_obj) && owner_obj->valuestring) {
+                owner = owner_obj->valuestring;
+            }
+
+            /* Parse optional group (only present for root/ prefix directories) */
+            const char *group = NULL;
+            cJSON *group_obj = cJSON_GetObjectItem(dir_obj, "group");
+            if (group_obj && cJSON_IsString(group_obj) && group_obj->valuestring) {
+                group = group_obj->valuestring;
+            }
+
             /* Add directory to metadata */
             err = metadata_add_tracked_directory(metadata,
                                                   fs_path_obj->valuestring,
                                                   storage_prefix_obj->valuestring,
-                                                  added_at);
+                                                  added_at,
+                                                  mode,
+                                                  owner,
+                                                  group);
             if (err) {
                 metadata_free(metadata);
                 cJSON_Delete(root);
@@ -1156,17 +1229,178 @@ error_t *metadata_apply_ownership(
 }
 
 /**
+ * Capture metadata from filesystem directory
+ */
+error_t *metadata_capture_from_directory(
+    const char *filesystem_path,
+    const char *storage_prefix,
+    metadata_directory_entry_t **out
+) {
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(storage_prefix);
+    CHECK_NULL(out);
+
+    /* Get directory stats */
+    struct stat st;
+    if (stat(filesystem_path, &st) != 0) {
+        return ERROR(ERR_FS, "Failed to stat directory: %s", filesystem_path);
+    }
+
+    /* Verify it's actually a directory */
+    if (!S_ISDIR(st.st_mode)) {
+        return ERROR(ERR_INVALID_ARG, "Path is not a directory: %s", filesystem_path);
+    }
+
+    /* Extract mode (permissions only, not file type bits) */
+    mode_t mode = st.st_mode & 0777;
+
+    /* Allocate entry */
+    metadata_directory_entry_t *entry = calloc(1, sizeof(metadata_directory_entry_t));
+    if (!entry) {
+        return ERROR(ERR_MEMORY, "Failed to allocate directory metadata entry");
+    }
+
+    entry->filesystem_path = strdup(filesystem_path);
+    entry->storage_prefix = strdup(storage_prefix);
+
+    if (!entry->filesystem_path || !entry->storage_prefix) {
+        metadata_directory_entry_free(entry);
+        return ERROR(ERR_MEMORY, "Failed to duplicate directory paths");
+    }
+
+    entry->added_at = time(NULL);
+    entry->mode = mode;
+    entry->owner = NULL;  /* Set below if applicable */
+    entry->group = NULL;  /* Set below if applicable */
+
+    /* Capture ownership ONLY for root/ prefix directories when running as root */
+    bool is_root_prefix = (strncmp(storage_prefix, "root/", 5) == 0);
+    bool running_as_root = (getuid() == 0);
+
+    if (is_root_prefix && running_as_root) {
+        /* Resolve UID to username */
+        struct passwd *pwd = getpwuid(st.st_uid);
+        if (pwd && pwd->pw_name) {
+            entry->owner = strdup(pwd->pw_name);
+            if (!entry->owner) {
+                metadata_directory_entry_free(entry);
+                return ERROR(ERR_MEMORY, "Failed to allocate owner string");
+            }
+        }
+
+        /* Resolve GID to groupname */
+        struct group *grp = getgrgid(st.st_gid);
+        if (grp && grp->gr_name) {
+            entry->group = strdup(grp->gr_name);
+            if (!entry->group) {
+                metadata_directory_entry_free(entry);
+                return ERROR(ERR_MEMORY, "Failed to allocate group string");
+            }
+        }
+    }
+    /* For home/ prefix or when not running as root: owner/group remain NULL */
+
+    *out = entry;
+    return NULL;
+}
+
+/**
+ * Free directory entry
+ */
+void metadata_directory_entry_free(metadata_directory_entry_t *entry) {
+    if (!entry) {
+        return;
+    }
+
+    free(entry->filesystem_path);
+    free(entry->storage_prefix);
+    free(entry->owner);
+    free(entry->group);
+    free(entry);
+}
+
+/**
+ * Apply ownership to a directory
+ */
+error_t *metadata_apply_directory_ownership(
+    const metadata_directory_entry_t *entry,
+    const char *filesystem_path
+) {
+    CHECK_NULL(entry);
+    CHECK_NULL(filesystem_path);
+
+    /* Skip if no ownership metadata */
+    if (!entry->owner && !entry->group) {
+        return NULL;  /* Nothing to do */
+    }
+
+    /* Only works when running as root */
+    if (getuid() != 0) {
+        return ERROR(ERR_PERMISSION,
+                    "Cannot set directory ownership (not running as root): %s",
+                    filesystem_path);
+    }
+
+    uid_t uid = (uid_t)-1;  /* -1 means don't change */
+    gid_t gid = (gid_t)-1;  /* -1 means don't change */
+
+    /* Resolve owner to UID */
+    if (entry->owner) {
+        struct passwd *pwd = getpwnam(entry->owner);
+        if (!pwd) {
+            return ERROR(ERR_NOT_FOUND,
+                        "User '%s' does not exist on this system (for %s)",
+                        entry->owner, filesystem_path);
+        }
+        uid = pwd->pw_uid;
+
+        /* If no group specified, use user's primary group */
+        if (!entry->group) {
+            gid = pwd->pw_gid;
+        }
+    }
+
+    /* Resolve group to GID (if specified and not already set from user) */
+    if (entry->group && gid == (gid_t)-1) {
+        struct group *grp = getgrnam(entry->group);
+        if (!grp) {
+            return ERROR(ERR_NOT_FOUND,
+                        "Group '%s' does not exist on this system (for %s)",
+                        entry->group, filesystem_path);
+        }
+        gid = grp->gr_gid;
+    }
+
+    /* Apply ownership */
+    if (chown(filesystem_path, uid, gid) != 0) {
+        return ERROR(ERR_FS,
+                    "Failed to set directory ownership on %s: %s",
+                    filesystem_path, strerror(errno));
+    }
+
+    return NULL;
+}
+
+/**
  * Add tracked directory to metadata
  */
 error_t *metadata_add_tracked_directory(
     metadata_t *metadata,
     const char *filesystem_path,
     const char *storage_prefix,
-    time_t added_at
+    time_t added_at,
+    mode_t mode,
+    const char *owner,
+    const char *group
 ) {
     CHECK_NULL(metadata);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(storage_prefix);
+
+    /* Validate mode */
+    if (mode > 0777) {
+        return ERROR(ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)", mode);
+    }
 
     /* Check if directory already exists (use hashmap for O(1) lookup) */
     metadata_directory_entry_t *existing = NULL;
@@ -1182,6 +1416,28 @@ error_t *metadata_add_tracked_directory(
             return ERROR(ERR_MEMORY, "Failed to duplicate storage prefix");
         }
         existing->added_at = added_at;
+        existing->mode = mode;
+
+        /* Update owner if provided */
+        free(existing->owner);
+        existing->owner = NULL;
+        if (owner) {
+            existing->owner = strdup(owner);
+            if (!existing->owner) {
+                return ERROR(ERR_MEMORY, "Failed to duplicate owner string");
+            }
+        }
+
+        /* Update group if provided */
+        free(existing->group);
+        existing->group = NULL;
+        if (group) {
+            existing->group = strdup(group);
+            if (!existing->group) {
+                return ERROR(ERR_MEMORY, "Failed to duplicate group string");
+            }
+        }
+
         return NULL;
     }
 
@@ -1228,6 +1484,32 @@ error_t *metadata_add_tracked_directory(
     }
 
     entry->added_at = added_at;
+    entry->mode = mode;
+
+    /* Copy owner if provided */
+    if (owner) {
+        entry->owner = strdup(owner);
+        if (!entry->owner) {
+            free(entry->filesystem_path);
+            free(entry->storage_prefix);
+            return ERROR(ERR_MEMORY, "Failed to duplicate owner string");
+        }
+    } else {
+        entry->owner = NULL;
+    }
+
+    /* Copy group if provided */
+    if (group) {
+        entry->group = strdup(group);
+        if (!entry->group) {
+            free(entry->filesystem_path);
+            free(entry->storage_prefix);
+            free(entry->owner);
+            return ERROR(ERR_MEMORY, "Failed to duplicate group string");
+        }
+    } else {
+        entry->group = NULL;
+    }
 
     /* Add to hashmap index (points to entry in array) */
     if (metadata->directory_index) {
@@ -1279,6 +1561,8 @@ error_t *metadata_remove_tracked_directory(
     /* Free the entry's contents */
     free(metadata->directories[found_index].filesystem_path);
     free(metadata->directories[found_index].storage_prefix);
+    free(metadata->directories[found_index].owner);
+    free(metadata->directories[found_index].group);
 
     /* Shift remaining entries down using memmove for efficiency */
     if ((size_t)found_index < metadata->directory_count - 1) {

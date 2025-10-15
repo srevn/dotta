@@ -59,11 +59,21 @@ typedef struct {
  *
  * Tracks directories that were explicitly added via `dotta add`,
  * enabling detection of new files that appear in those directories.
+ * Also preserves directory metadata (permissions and ownership) for
+ * proper replication across machines.
+ *
+ * Metadata preservation follows the same rules as files:
+ * - mode: Always captured and applied
+ * - owner/group: Only for root/ prefix when running as root
+ * - home/ prefix: Directories owned by current user (or actual user when sudo)
  */
 typedef struct {
     char *filesystem_path;   /* Original directory path (/home/user/.config/nvim) */
     char *storage_prefix;    /* Storage prefix in profile (home/.config/nvim) */
     time_t added_at;         /* When this directory was added */
+    mode_t mode;             /* Permission mode (e.g., 0700, 0755, 0750) */
+    char *owner;             /* Owner username (optional, only for root/ prefix) */
+    char *group;             /* Group name (optional, only for root/ prefix) */
 } metadata_directory_entry_t;
 
 /* Forward declaration */
@@ -336,23 +346,77 @@ error_t *metadata_apply_ownership(
 );
 
 /**
+ * Capture metadata from filesystem directory
+ *
+ * Reads directory permissions from the filesystem and creates a metadata entry.
+ * Follows the same rules as file metadata capture.
+ *
+ * Ownership capture (user/group):
+ * - ONLY captured for root/ prefix directories when running as root (UID 0)
+ * - home/ prefix directories: ownership never captured (always current user)
+ * - Regular users: ownership never captured (can't chown anyway)
+ *
+ * @param filesystem_path Path to directory on disk (must not be NULL)
+ * @param storage_prefix Storage prefix in profile (must not be NULL)
+ * @param out Entry (must not be NULL, caller must free with metadata_directory_entry_free)
+ * @return Error or NULL on success
+ */
+error_t *metadata_capture_from_directory(
+    const char *filesystem_path,
+    const char *storage_prefix,
+    metadata_directory_entry_t **out
+);
+
+/**
+ * Free directory entry
+ *
+ * @param entry Entry to free (can be NULL)
+ */
+void metadata_directory_entry_free(metadata_directory_entry_t *entry);
+
+/**
+ * Apply ownership to a directory
+ *
+ * Sets directory ownership based on metadata entry. This function:
+ * - Only works when running as root (UID 0)
+ * - Validates that the user/group exist on the system
+ * - Returns non-fatal warnings if user doesn't exist
+ * - Should only be called for root/ prefix directories
+ *
+ * @param entry Directory metadata entry with owner/group (must not be NULL)
+ * @param filesystem_path Path to directory on disk (must not be NULL)
+ * @return Error or NULL on success (ERR_NOT_FOUND if user doesn't exist)
+ */
+error_t *metadata_apply_directory_ownership(
+    const metadata_directory_entry_t *entry,
+    const char *filesystem_path
+);
+
+/**
  * Add tracked directory to metadata
  *
  * Records that a directory was explicitly added via `dotta add`,
  * enabling detection of new files that appear in this directory later.
+ * Also captures directory metadata (permissions and ownership).
  * If the directory already exists, it is updated.
  *
  * @param metadata Metadata collection (must not be NULL)
  * @param filesystem_path Directory path on disk (must not be NULL)
  * @param storage_prefix Storage prefix in profile (must not be NULL)
  * @param added_at Timestamp when added (use time(NULL) for current time)
+ * @param mode Permission mode (e.g., 0700, 0755, 0750)
+ * @param owner Owner username (optional, can be NULL)
+ * @param group Group name (optional, can be NULL)
  * @return Error or NULL on success
  */
 error_t *metadata_add_tracked_directory(
     metadata_t *metadata,
     const char *filesystem_path,
     const char *storage_prefix,
-    time_t added_at
+    time_t added_at,
+    mode_t mode,
+    const char *owner,
+    const char *group
 );
 
 /**

@@ -274,6 +274,51 @@ error_t *fs_create_dir(const char *path, bool parents) {
     return NULL;
 }
 
+error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
+    RETURN_IF_ERROR(validate_path(path));
+
+    /* Validate mode */
+    if (mode > 0777) {
+        return ERROR(ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)", mode);
+    }
+
+    /* If directory already exists, return success */
+    if (fs_is_directory(path)) {
+        return NULL;
+    }
+
+    /* Create parent directories if requested */
+    if (parents) {
+        char *parent = NULL;
+        error_t *err = fs_get_parent_dir(path, &parent);
+        if (err) {
+            return err;
+        }
+
+        if (parent && !fs_is_directory(parent)) {
+            /* Use default 0755 for parent directories */
+            err = fs_create_dir(parent, true);
+            free(parent);
+            if (err) {
+                return err;
+            }
+        } else {
+            free(parent);
+        }
+    }
+
+    /* Create target directory with specified mode */
+    if (mkdir(path, mode) < 0) {
+        if (errno == EEXIST && fs_is_directory(path)) {
+            return NULL;  /* Race condition - another process created it */
+        }
+        return ERROR(ERR_FS, "Failed to create directory '%s' with mode %04o: %s",
+                    path, mode, strerror(errno));
+    }
+
+    return NULL;
+}
+
 error_t *fs_remove_dir(const char *path, bool recursive) {
     RETURN_IF_ERROR(validate_path(path));
 

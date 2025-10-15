@@ -490,21 +490,50 @@ static error_t *capture_and_save_metadata(
     for (size_t i = 0; i < tracked_dir_count; i++) {
         const tracked_dir_t *dir = &tracked_dirs[i];
 
-        /* Check if directory already tracked to avoid duplicates */
-        if (metadata_has_tracked_directory(metadata, dir->filesystem_path)) {
+        /* Capture directory metadata */
+        metadata_directory_entry_t *dir_entry = NULL;
+        err = metadata_capture_from_directory(
+            dir->filesystem_path,
+            dir->storage_prefix,
+            &dir_entry
+        );
+
+        if (err) {
+            /* Non-fatal: log warning and continue */
             if (opts->verbose) {
-                printf("Directory already tracked: %s\n", dir->filesystem_path);
+                fprintf(stderr, "Warning: failed to capture metadata for directory '%s': %s\n",
+                       dir->filesystem_path, error_message(err));
             }
+            error_free(err);
+            err = NULL;
             continue;
+        }
+
+        /* Verbose output before consuming the entry */
+        if (opts->verbose) {
+            if (dir_entry->owner || dir_entry->group) {
+                printf("Captured directory metadata: %s (mode: %04o, owner: %s:%s)\n",
+                      dir->filesystem_path, dir_entry->mode,
+                      dir_entry->owner ? dir_entry->owner : "?",
+                      dir_entry->group ? dir_entry->group : "?");
+            } else {
+                printf("Captured directory metadata: %s (mode: %04o)\n",
+                      dir->filesystem_path, dir_entry->mode);
+            }
         }
 
         /* Add directory to metadata */
         err = metadata_add_tracked_directory(
             metadata,
-            dir->filesystem_path,
-            dir->storage_prefix,
-            time(NULL)
+            dir_entry->filesystem_path,
+            dir_entry->storage_prefix,
+            dir_entry->added_at,
+            dir_entry->mode,
+            dir_entry->owner,
+            dir_entry->group
         );
+
+        metadata_directory_entry_free(dir_entry);
 
         if (err) {
             /* Non-fatal: log warning and continue */

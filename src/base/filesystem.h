@@ -103,6 +103,20 @@ bool fs_file_exists(const char *path);
 error_t *fs_create_dir(const char *path, bool parents);
 
 /**
+ * Create directory with specific mode
+ *
+ * Creates a directory with the specified permissions. If parents is true,
+ * parent directories are created with default mode (0755), while the target
+ * directory is created with the specified mode.
+ *
+ * @param path Directory path (must not be NULL)
+ * @param mode Permission mode for the target directory (e.g., 0700, 0755)
+ * @param parents Create parent directories if true
+ * @return Error or NULL on success
+ */
+error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents);
+
+/**
  * Remove directory
  *
  * @param path Directory path (must not be NULL)

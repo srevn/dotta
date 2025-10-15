@@ -4,10 +4,12 @@
 
 #include "deploy.h"
 
+#include <errno.h>
 #include <git2.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "base/error.h"
 #include "base/filesystem.h"
@@ -367,6 +369,129 @@ error_t *deploy_file(
 }
 
 /**
+ * Deploy tracked directories with metadata
+ *
+ * Creates all tracked directories with proper permissions and ownership before
+ * deploying files. This ensures that directories are created with correct metadata
+ * from the start, preventing security issues like world-readable sensitive dirs.
+ *
+ * @param metadata Merged metadata containing tracked directories (can be NULL)
+ * @param opts Deployment options (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *deploy_tracked_directories(
+    const metadata_t *metadata,
+    const deploy_options_t *opts
+) {
+    if (!metadata) {
+        return NULL;  /* No metadata, nothing to do */
+    }
+
+    /* Get all tracked directories */
+    size_t dir_count = 0;
+    const metadata_directory_entry_t *directories =
+        metadata_get_all_tracked_directories(metadata, &dir_count);
+
+    if (dir_count == 0) {
+        return NULL;  /* No tracked directories */
+    }
+
+    if (opts->verbose) {
+        printf("Creating %zu tracked director%s with metadata...\n",
+               dir_count, dir_count == 1 ? "y" : "ies");
+    }
+
+    /* Deploy each tracked directory */
+    for (size_t i = 0; i < dir_count; i++) {
+        const metadata_directory_entry_t *dir_entry = &directories[i];
+
+        /* Skip if directory already exists and we're not forcing */
+        if (fs_is_directory(dir_entry->filesystem_path) && !opts->force) {
+            if (opts->verbose) {
+                printf("  Skipped: %s (already exists)\n", dir_entry->filesystem_path);
+            }
+            continue;
+        }
+
+        /* Dry-run: just print what would happen */
+        if (opts->dry_run) {
+            if (opts->verbose) {
+                if (dir_entry->owner || dir_entry->group) {
+                    printf("  Would create: %s (mode: %04o, owner: %s:%s)\n",
+                          dir_entry->filesystem_path, dir_entry->mode,
+                          dir_entry->owner ? dir_entry->owner : "?",
+                          dir_entry->group ? dir_entry->group : "?");
+                } else {
+                    printf("  Would create: %s (mode: %04o)\n",
+                          dir_entry->filesystem_path, dir_entry->mode);
+                }
+            }
+            continue;
+        }
+
+        /* Create directory with proper mode */
+        error_t *err = fs_create_dir_with_mode(
+            dir_entry->filesystem_path,
+            dir_entry->mode,
+            true  /* create parents */
+        );
+
+        if (err) {
+            return error_wrap(err, "Failed to create tracked directory: %s",
+                            dir_entry->filesystem_path);
+        }
+
+        /* Apply ownership based on prefix and sudo status */
+        bool is_root_prefix = (strncmp(dir_entry->storage_prefix, "root/", 5) == 0);
+        bool is_home_prefix = (strncmp(dir_entry->storage_prefix, "home/", 5) == 0);
+
+        if (is_root_prefix && dir_entry->owner && dir_entry->group) {
+            /* For root/ prefix: apply ownership from metadata */
+            err = metadata_apply_directory_ownership(dir_entry, dir_entry->filesystem_path);
+            if (err) {
+                /* Non-fatal: warn and continue */
+                if (opts->verbose || err->code != ERR_PERMISSION) {
+                    fprintf(stderr, "Warning: Could not set directory ownership on %s: %s\n",
+                            dir_entry->filesystem_path, error_message(err));
+                }
+                error_free(err);
+            }
+        } else if (is_home_prefix && fs_is_running_as_root()) {
+            /* For home/ prefix when running as root: use actual user (sudo handling) */
+            uid_t target_uid;
+            gid_t target_gid;
+
+            err = fs_get_actual_user(&target_uid, &target_gid);
+            if (err) {
+                return error_wrap(err,
+                                "Failed to determine actual user for home/ directory: %s",
+                                dir_entry->filesystem_path);
+            }
+
+            /* Apply ownership */
+            if (chown(dir_entry->filesystem_path, target_uid, target_gid) != 0) {
+                return ERROR(ERR_FS,
+                            "Failed to set directory ownership on %s: %s",
+                            dir_entry->filesystem_path, strerror(errno));
+            }
+
+            if (opts->verbose) {
+                printf("  Created: %s (mode: %04o, owner: actual user)\n",
+                      dir_entry->filesystem_path, dir_entry->mode);
+            }
+        } else {
+            /* Normal case: directory created with current user ownership */
+            if (opts->verbose) {
+                printf("  Created: %s (mode: %04o)\n",
+                      dir_entry->filesystem_path, dir_entry->mode);
+            }
+        }
+    }
+
+    return NULL;
+}
+
+/**
  * Execute deployment
  */
 error_t *deploy_execute(
@@ -398,6 +523,13 @@ error_t *deploy_execute(
     if (!result->deployed || !result->skipped || !result->failed) {
         deploy_result_free(result);
         return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
+    }
+
+    /* Deploy tracked directories with metadata first */
+    error_t *err = deploy_tracked_directories(metadata, opts);
+    if (err) {
+        deploy_result_free(result);
+        return error_wrap(err, "Failed to deploy tracked directories");
     }
 
     /* Deploy each file */

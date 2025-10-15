@@ -90,9 +90,9 @@ error_t *fs_read_file(const char *path, buffer_t **out) {
     return NULL;
 }
 
-error_t *fs_write_file(const char *path, const buffer_t *content) {
+error_t *fs_write_file_raw(const char *path, const unsigned char *data, size_t size) {
     RETURN_IF_ERROR(validate_path(path));
-    CHECK_NULL(content);
+    /* Note: data can be NULL if size is 0 (empty file) */
 
     /* Ensure parent directory exists */
     char *parent = NULL;
@@ -118,13 +118,10 @@ error_t *fs_write_file(const char *path, const buffer_t *content) {
                     path, strerror(errno));
     }
 
-    /* Write data */
-    const unsigned char *data = buffer_data(content);
-    size_t total = buffer_size(content);
+    /* Write data (handle zero-length writes) */
     size_t written = 0;
-
-    while (written < total) {
-        ssize_t n = write(fd, data + written, total - written);
+    while (written < size) {
+        ssize_t n = write(fd, data + written, size - written);
         if (n < 0) {
             if (errno == EINTR) {
                 continue;  /* Interrupted, retry */
@@ -147,6 +144,13 @@ error_t *fs_write_file(const char *path, const buffer_t *content) {
 
     close(fd);
     return NULL;
+}
+
+error_t *fs_write_file(const char *path, const buffer_t *content) {
+    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(content);
+
+    return fs_write_file_raw(path, buffer_data(content), buffer_size(content));
 }
 
 error_t *fs_copy_file(const char *src, const char *dst) {

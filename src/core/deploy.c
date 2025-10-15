@@ -14,7 +14,6 @@
 #include "core/metadata.h"
 #include "infra/compare.h"
 #include "utils/array.h"
-#include "utils/buffer.h"
 #include "utils/hashmap.h"
 
 /**
@@ -213,16 +212,12 @@ error_t *deploy_file(
     const void *content = git_blob_rawcontent(blob);
     git_object_size_t size = git_blob_rawsize(blob);
 
-    /* Create buffer */
-    buffer_t *buf = buffer_create_from_data((const unsigned char *)content, size);
-    if (!buf) {
-        git_blob_free(blob);
-        return ERROR(ERR_MEMORY, "Failed to create buffer for '%s'", entry->filesystem_path);
-    }
-
-    /* Write file */
-    error_t *derr = fs_write_file(entry->filesystem_path, buf);
-    buffer_free(buf);
+    /* Write directly from git blob to filesystem */
+    error_t *derr = fs_write_file_raw(
+        entry->filesystem_path,
+        (const unsigned char *)content,
+        (size_t)size
+    );
     git_blob_free(blob);
 
     if (derr) {

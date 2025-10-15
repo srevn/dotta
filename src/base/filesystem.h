@@ -34,6 +34,21 @@
 error_t *fs_read_file(const char *path, buffer_t **out);
 
 /**
+ * Write raw bytes to file (overwrites if exists)
+ *
+ * Creates parent directories if needed.
+ * This is a lower-level function for writing data directly from memory
+ * without the buffer_t abstraction. Useful for writing directly from
+ * git blobs or other external data sources.
+ *
+ * @param path File path (must not be NULL)
+ * @param data Raw data bytes (can be NULL if size is 0)
+ * @param size Number of bytes to write
+ * @return Error or NULL on success
+ */
+error_t *fs_write_file_raw(const char *path, const unsigned char *data, size_t size);
+
+/**
  * Write buffer to file (overwrites if exists)
  *
  * Creates parent directories if needed.

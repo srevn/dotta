@@ -511,148 +511,6 @@ static error_t *capture_and_save_metadata(
 }
 
 /**
- * Mark added files as deployed in state
- *
- * For files that already exist at their target location when added,
- * mark them as deployed in state to prevent false "undeployed" warnings.
- *
- * This follows the same pattern as apply.c:apply_update_and_save_state.
- */
-static error_t *mark_added_files_as_deployed(
-    git_repository *repo,
-    state_t *state,
-    const cmd_add_options_t *opts,
-    const string_array_t *added_files
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(opts);
-    CHECK_NULL(added_files);
-
-    error_t *err = NULL;
-    git_reference *branch_ref = NULL;
-    git_tree *tree = NULL;
-
-    /* Get reference to profile branch */
-    char *ref_name = str_format("refs/heads/%s", opts->profile);
-    if (!ref_name) {
-        return ERROR(ERR_MEMORY, "Failed to allocate reference name");
-    }
-
-    int git_err = git_reference_lookup(&branch_ref, repo, ref_name);
-    free(ref_name);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    /* Get commit */
-    git_commit *commit = NULL;
-    git_err = git_commit_lookup(&commit, repo, git_reference_target(branch_ref));
-    git_reference_free(branch_ref);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    /* Get tree from commit */
-    git_err = git_commit_tree(&tree, commit);
-    git_commit_free(commit);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    /* Process each added file */
-    size_t marked_count = 0;
-    for (size_t i = 0; i < string_array_size(added_files); i++) {
-        const char *filesystem_path = string_array_get(added_files, i);
-
-        /* Check if file exists at target location */
-        if (!fs_lexists(filesystem_path)) {
-            /* File doesn't exist - skip (will be marked as undeployed, which is correct) */
-            continue;
-        }
-
-        /* Convert to storage path */
-        char *storage_path = NULL;
-        path_prefix_t prefix;
-        err = path_to_storage(filesystem_path, &storage_path, &prefix);
-        if (err) {
-            git_tree_free(tree);
-            return error_wrap(err, "Failed to convert path to storage: %s", filesystem_path);
-        }
-
-        /* Lookup tree entry for this file */
-        git_tree_entry *entry = NULL;
-        git_err = git_tree_entry_bypath(&entry, tree, storage_path);
-        if (git_err < 0) {
-            /* File not found in tree - skip (shouldn't happen but handle gracefully) */
-            if (opts->verbose) {
-                fprintf(stderr, "Warning: File '%s' not found in profile tree\n", storage_path);
-            }
-            free(storage_path);
-            continue;
-        }
-
-        /* Determine file type */
-        git_filemode_t mode = git_tree_entry_filemode(entry);
-        state_file_type_t type = STATE_FILE_REGULAR;
-        if (mode == GIT_FILEMODE_LINK) {
-            type = STATE_FILE_SYMLINK;
-        } else if (mode == GIT_FILEMODE_BLOB_EXECUTABLE) {
-            type = STATE_FILE_EXECUTABLE;
-        }
-
-        /* Get blob OID for hash */
-        const git_oid *oid = git_tree_entry_id(entry);
-        char hash_str[GIT_OID_HEXSZ + 1];
-        git_oid_tostr(hash_str, sizeof(hash_str), oid);
-
-        /* Create state entry */
-        state_file_entry_t *state_entry = NULL;
-        err = state_create_entry(
-            storage_path,
-            filesystem_path,
-            opts->profile,
-            type,
-            hash_str,
-            NULL,  /* mode - not needed for state tracking */
-            &state_entry
-        );
-
-        git_tree_entry_free(entry);
-        free(storage_path);
-
-        if (err) {
-            git_tree_free(tree);
-            return error_wrap(err, "Failed to create state entry for '%s'", filesystem_path);
-        }
-
-        /* Add to state */
-        err = state_add_file(state, state_entry);
-        state_free_entry(state_entry);
-
-        if (err) {
-            git_tree_free(tree);
-            return error_wrap(err, "Failed to add file to state: %s", filesystem_path);
-        }
-
-        marked_count++;
-
-        if (opts->verbose) {
-            printf("Marked as deployed: %s\n", filesystem_path);
-        }
-    }
-
-    git_tree_free(tree);
-
-    if (opts->verbose && marked_count > 0) {
-        printf("Marked %zu file%s as deployed\n",
-               marked_count, marked_count == 1 ? "" : "s");
-    }
-
-    return NULL;
-}
-
-/**
  * Create commit in worktree
  */
 static error_t *create_commit(
@@ -1027,17 +885,9 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     worktree_cleanup(wt);
     wt = NULL;
 
-    /* Mark files as deployed if they exist at target location */
-    error_t *temp_err = mark_added_files_as_deployed(repo, state, opts, all_files);
-    if (temp_err) {
-        fprintf(stderr, "Warning: Failed to mark files as deployed: %s\n", error_message(temp_err));
-        error_free(temp_err);
-        /* Non-fatal: continue */
-    }
-
     /* Auto-activate newly created profile */
     if (profile_was_new) {
-        temp_err = state_ensure_profile_activated(state, opts->profile);
+        error_t *temp_err = state_ensure_profile_activated(state, opts->profile);
         if (temp_err) {
             fprintf(stderr, "Warning: Created profile '%s' but failed to activate: %s\n",
                     opts->profile, error_message(temp_err));
@@ -1048,8 +898,8 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         }
     }
 
-    /* Save state with tracked directories and deployed files */
-    temp_err = state_save(repo, state);
+    /* Save state with tracked directories */
+    error_t *temp_err = state_save(repo, state);
     if (temp_err) {
         fprintf(stderr, "Warning: Failed to save state: %s\n", error_message(temp_err));
         error_free(temp_err);

@@ -165,23 +165,52 @@ static error_t *resolve_paths_to_remove(
                 char *file_fs_path = NULL;
                 err = path_from_storage(profile_file, &file_fs_path);
                 if (err) {
-                    error_free(err);
                     /* Fallback: use canonical path if it's an exact match, otherwise skip */
                     if (strcmp(profile_file, storage_path) == 0) {
+                        /* Exact match - safe to use canonical path */
+                        error_free(err);
                         file_fs_path = strdup(canonical);
                         if (!file_fs_path) {
-                            /* Memory allocation failed, skip this file */
+                            /* Memory allocation failed - this is serious */
+                            if (opts->verbose || !opts->force) {
+                                fprintf(stderr, "Warning: Memory allocation failed for '%s', skipping\n",
+                                       profile_file);
+                            }
                             continue;
                         }
                     } else {
-                        /* Can't determine filesystem path, skip this file */
+                        /* Directory member - path conversion failed */
+                        if (opts->verbose || !opts->force) {
+                            fprintf(stderr, "Warning: Failed to resolve filesystem path for '%s': %s\n"
+                                          "         This file will be skipped. Use --verbose for details.\n",
+                                   profile_file, error_message(err));
+                        }
+                        error_free(err);
                         continue;
                     }
                 }
 
                 /* Both paths are valid - add to both arrays together to maintain sync */
-                string_array_push(storage_paths, profile_file);
-                string_array_push(filesystem_paths, file_fs_path);
+                err = string_array_push(storage_paths, profile_file);
+                if (err) {
+                    free(file_fs_path);
+                    string_array_free(profile_files);
+                    profile_free(profile);
+                    string_array_free(storage_paths);
+                    string_array_free(filesystem_paths);
+                    return error_wrap(err, "Failed to track storage path for removal");
+                }
+
+                err = string_array_push(filesystem_paths, file_fs_path);
+                if (err) {
+                    free(file_fs_path);
+                    string_array_free(profile_files);
+                    profile_free(profile);
+                    string_array_free(storage_paths);
+                    string_array_free(filesystem_paths);
+                    return error_wrap(err, "Failed to track filesystem path for removal");
+                }
+
                 free(file_fs_path);
                 matches_found++;
             }
@@ -1331,15 +1360,42 @@ static error_t *delete_profile_branch(
     bool state_modified = false;
 
     /*
+     * Clean up all state entries for the deleted profile
+     *
+     * This removes both file and directory entries that belong to this profile.
+     * Using the existing state_cleanup_profile() function ensures symmetric
+     * handling: add creates entries, remove deletes them.
+     *
+     * This immediate cleanup is cleaner than waiting for the next `apply` and
+     * prevents orphaned entries if user doesn't run `apply` after deletion.
+     */
+    if (state) {
+        size_t cleanup_count = 0;
+        err = state_cleanup_profile(state, opts->profile, &cleanup_count);
+        if (err) {
+            /* Non-fatal: warn but continue */
+            fprintf(stderr, "Warning: Failed to clean up state entries for profile: %s\n",
+                   error_message(err));
+            error_free(err);
+            err = NULL;
+        } else if (cleanup_count > 0) {
+            state_modified = true;
+            if (opts->verbose) {
+                printf("Cleaned up %zu state entr%s for profile '%s'\n",
+                       cleanup_count, cleanup_count == 1 ? "y" : "ies", opts->profile);
+            }
+        }
+    }
+
+    /*
      * Deactivate profile if it was active
      *
      * This MUST happen to maintain state consistency - a deleted profile
      * cannot remain in the active list, or `apply` will fail with
      * "profile not found".
      *
-     * Note: We only modify state.profiles[] here, NOT state.files[].
-     * File cleanup is handled by `apply` (which prunes orphaned files by default)
-     * as it has the global context to correctly determine which files should be removed.
+     * Note: state_cleanup_profile() above handles file and directory entries.
+     * This section only handles removing the profile from state.profiles[].
      */
     if (is_active && state) {
         /* Build new active profiles list without the deleted profile */

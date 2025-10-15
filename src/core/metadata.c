@@ -52,6 +52,27 @@ error_t *metadata_create_empty(metadata_t **out) {
     metadata->capacity = INITIAL_CAPACITY;
     metadata->version = METADATA_VERSION;
 
+    /* Initialize directory tracking */
+    metadata->directories = calloc(INITIAL_CAPACITY, sizeof(metadata_directory_entry_t));
+    if (!metadata->directories) {
+        hashmap_free(metadata->index, NULL);
+        free(metadata->entries);
+        free(metadata);
+        return ERROR(ERR_MEMORY, "Failed to allocate directory tracking");
+    }
+
+    metadata->directory_index = hashmap_create(INITIAL_CAPACITY);
+    if (!metadata->directory_index) {
+        free(metadata->directories);
+        hashmap_free(metadata->index, NULL);
+        free(metadata->entries);
+        free(metadata);
+        return ERROR(ERR_MEMORY, "Failed to allocate directory index");
+    }
+
+    metadata->directory_count = 0;
+    metadata->directory_capacity = INITIAL_CAPACITY;
+
     *out = metadata;
     return NULL;
 }
@@ -64,7 +85,7 @@ void metadata_free(metadata_t *metadata) {
         return;
     }
 
-    /* Free all entries */
+    /* Free all file entries */
     for (size_t i = 0; i < metadata->count; i++) {
         free(metadata->entries[i].storage_path);
         free(metadata->entries[i].owner);
@@ -76,6 +97,19 @@ void metadata_free(metadata_t *metadata) {
     /* Free hashmap (values point to entries array, so no value free callback) */
     if (metadata->index) {
         hashmap_free(metadata->index, NULL);
+    }
+
+    /* Free all directory entries */
+    for (size_t i = 0; i < metadata->directory_count; i++) {
+        free(metadata->directories[i].filesystem_path);
+        free(metadata->directories[i].storage_prefix);
+    }
+
+    free(metadata->directories);
+
+    /* Free directory index (values point to directories array, so no value free callback) */
+    if (metadata->directory_index) {
+        hashmap_free(metadata->directory_index, NULL);
     }
 
     free(metadata);
@@ -540,6 +574,59 @@ static error_t *metadata_to_json(const metadata_t *metadata, buffer_t **out) {
     cJSON_AddItemToObject(root, "files", files);
     files = NULL;  /* Owned by root now */
 
+    /* Create directories array */
+    cJSON *tracked_dirs = cJSON_CreateArray();
+    if (!tracked_dirs) {
+        err = ERROR(ERR_MEMORY, "Failed to create directories array");
+        goto cleanup;
+    }
+
+    /* Add each tracked directory */
+    for (size_t i = 0; i < metadata->directory_count; i++) {
+        const metadata_directory_entry_t *dir_entry = &metadata->directories[i];
+
+        cJSON *dir_obj = cJSON_CreateObject();
+        if (!dir_obj) {
+            cJSON_Delete(tracked_dirs);
+            err = ERROR(ERR_MEMORY, "Failed to create directory object");
+            goto cleanup;
+        }
+
+        /* Add filesystem_path */
+        if (!cJSON_AddStringToObject(dir_obj, "filesystem_path", dir_entry->filesystem_path)) {
+            cJSON_Delete(dir_obj);
+            cJSON_Delete(tracked_dirs);
+            err = ERROR(ERR_MEMORY, "Failed to add filesystem_path to directory object");
+            goto cleanup;
+        }
+
+        /* Add storage_prefix */
+        if (!cJSON_AddStringToObject(dir_obj, "storage_prefix", dir_entry->storage_prefix)) {
+            cJSON_Delete(dir_obj);
+            cJSON_Delete(tracked_dirs);
+            err = ERROR(ERR_MEMORY, "Failed to add storage_prefix to directory object");
+            goto cleanup;
+        }
+
+        /* Add added_at timestamp */
+        char time_str[64];
+        struct tm *tm_info = gmtime(&dir_entry->added_at);
+        strftime(time_str, sizeof(time_str), "%Y-%m-%dT%H:%M:%SZ", tm_info);
+        if (!cJSON_AddStringToObject(dir_obj, "added_at", time_str)) {
+            cJSON_Delete(dir_obj);
+            cJSON_Delete(tracked_dirs);
+            err = ERROR(ERR_MEMORY, "Failed to add added_at to directory object");
+            goto cleanup;
+        }
+
+        /* Add directory object to array (ownership transferred) */
+        cJSON_AddItemToArray(tracked_dirs, dir_obj);
+    }
+
+    /* Add directories to root (ownership transferred) */
+    cJSON_AddItemToObject(root, "directories", tracked_dirs);
+    tracked_dirs = NULL;  /* Owned by root now */
+
     /* Convert to formatted string */
     json_str = cJSON_Print(root);
     if (!json_str) {
@@ -684,6 +771,67 @@ static error_t *metadata_from_json(const char *json_str, metadata_t **out) {
             }
         }
     }
+
+    /* Parse directories array (required in v2) */
+    cJSON *tracked_dirs = cJSON_GetObjectItem(root, "directories");
+    if (!tracked_dirs || !cJSON_IsArray(tracked_dirs)) {
+        metadata_free(metadata);
+        cJSON_Delete(root);
+        return ERROR(ERR_INVALID_ARG, "Missing or invalid directories array");
+    }
+
+    cJSON *dir_obj = NULL;
+    cJSON_ArrayForEach(dir_obj, tracked_dirs) {
+            if (!cJSON_IsObject(dir_obj)) {
+                metadata_free(metadata);
+                cJSON_Delete(root);
+                return ERROR(ERR_INVALID_ARG, "Invalid directory entry in directories array");
+            }
+
+            /* Get filesystem_path */
+            cJSON *fs_path_obj = cJSON_GetObjectItem(dir_obj, "filesystem_path");
+            if (!fs_path_obj || !cJSON_IsString(fs_path_obj)) {
+                metadata_free(metadata);
+                cJSON_Delete(root);
+                return ERROR(ERR_INVALID_ARG, "Missing or invalid filesystem_path in directory entry");
+            }
+
+            /* Get storage_prefix */
+            cJSON *storage_prefix_obj = cJSON_GetObjectItem(dir_obj, "storage_prefix");
+            if (!storage_prefix_obj || !cJSON_IsString(storage_prefix_obj)) {
+                metadata_free(metadata);
+                cJSON_Delete(root);
+                return ERROR(ERR_INVALID_ARG, "Missing or invalid storage_prefix in directory entry");
+            }
+
+            /* Get added_at timestamp */
+            cJSON *added_at_obj = cJSON_GetObjectItem(dir_obj, "added_at");
+            if (!added_at_obj || !cJSON_IsString(added_at_obj)) {
+                metadata_free(metadata);
+                cJSON_Delete(root);
+                return ERROR(ERR_INVALID_ARG, "Missing or invalid added_at in directory entry");
+            }
+
+            /* Parse timestamp */
+            struct tm tm_info = {0};
+            if (strptime(added_at_obj->valuestring, "%Y-%m-%dT%H:%M:%SZ", &tm_info) == NULL) {
+                metadata_free(metadata);
+                cJSON_Delete(root);
+                return ERROR(ERR_INVALID_ARG, "Invalid timestamp format in directory entry");
+            }
+            time_t added_at = timegm(&tm_info);
+
+            /* Add directory to metadata */
+            err = metadata_add_tracked_directory(metadata,
+                                                  fs_path_obj->valuestring,
+                                                  storage_prefix_obj->valuestring,
+                                                  added_at);
+            if (err) {
+                metadata_free(metadata);
+                cJSON_Delete(root);
+                return error_wrap(err, "Failed to add tracked directory");
+            }
+        }
 
     cJSON_Delete(root);
     *out = metadata;
@@ -1005,6 +1153,230 @@ error_t *metadata_apply_ownership(
     }
 
     return NULL;
+}
+
+/**
+ * Add tracked directory to metadata
+ */
+error_t *metadata_add_tracked_directory(
+    metadata_t *metadata,
+    const char *filesystem_path,
+    const char *storage_prefix,
+    time_t added_at
+) {
+    CHECK_NULL(metadata);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(storage_prefix);
+
+    /* Check if directory already exists (use hashmap for O(1) lookup) */
+    metadata_directory_entry_t *existing = NULL;
+    if (metadata->directory_index) {
+        existing = hashmap_get(metadata->directory_index, filesystem_path);
+    }
+
+    if (existing) {
+        /* Update existing entry */
+        free(existing->storage_prefix);
+        existing->storage_prefix = strdup(storage_prefix);
+        if (!existing->storage_prefix) {
+            return ERROR(ERR_MEMORY, "Failed to duplicate storage prefix");
+        }
+        existing->added_at = added_at;
+        return NULL;
+    }
+
+    /* Add new entry - grow array if needed */
+    if (metadata->directory_count >= metadata->directory_capacity) {
+        size_t new_capacity = metadata->directory_capacity * 2;
+        metadata_directory_entry_t *new_dirs = realloc(
+            metadata->directories,
+            new_capacity * sizeof(metadata_directory_entry_t)
+        );
+
+        if (!new_dirs) {
+            return ERROR(ERR_MEMORY, "Failed to grow directories array");
+        }
+
+        metadata->directories = new_dirs;
+        metadata->directory_capacity = new_capacity;
+
+        /* Rebuild hashmap index since array pointers changed after realloc */
+        if (metadata->directory_index) {
+            hashmap_clear(metadata->directory_index, NULL);
+            for (size_t i = 0; i < metadata->directory_count; i++) {
+                error_t *err = hashmap_set(metadata->directory_index,
+                                           metadata->directories[i].filesystem_path,
+                                           &metadata->directories[i]);
+                if (err) {
+                    return error_wrap(err, "Failed to rebuild directory index after capacity change");
+                }
+            }
+        }
+    }
+
+    /* Allocate and populate new entry */
+    metadata_directory_entry_t *entry = &metadata->directories[metadata->directory_count];
+    memset(entry, 0, sizeof(metadata_directory_entry_t));
+
+    entry->filesystem_path = strdup(filesystem_path);
+    entry->storage_prefix = strdup(storage_prefix);
+
+    if (!entry->filesystem_path || !entry->storage_prefix) {
+        free(entry->filesystem_path);
+        free(entry->storage_prefix);
+        return ERROR(ERR_MEMORY, "Failed to duplicate directory entry fields");
+    }
+
+    entry->added_at = added_at;
+
+    /* Add to hashmap index (points to entry in array) */
+    if (metadata->directory_index) {
+        error_t *err = hashmap_set(metadata->directory_index, filesystem_path, entry);
+        if (err) {
+            free(entry->filesystem_path);
+            free(entry->storage_prefix);
+            return error_wrap(err, "Failed to update directory index");
+        }
+    }
+
+    metadata->directory_count++;
+
+    return NULL;
+}
+
+/**
+ * Remove tracked directory from metadata
+ */
+error_t *metadata_remove_tracked_directory(
+    metadata_t *metadata,
+    const char *filesystem_path
+) {
+    CHECK_NULL(metadata);
+    CHECK_NULL(filesystem_path);
+
+    /* Find directory in array */
+    ssize_t found_index = -1;
+    for (size_t i = 0; i < metadata->directory_count; i++) {
+        if (strcmp(metadata->directories[i].filesystem_path, filesystem_path) == 0) {
+            found_index = (ssize_t)i;
+            break;
+        }
+    }
+
+    if (found_index < 0) {
+        return ERROR(ERR_NOT_FOUND, "Directory not tracked: %s", filesystem_path);
+    }
+
+    /* Remove from hashmap index */
+    if (metadata->directory_index) {
+        error_t *err = hashmap_remove(metadata->directory_index, filesystem_path, NULL);
+        if (err) {
+            /* Log but don't fail - we'll still remove from array */
+            error_free(err);
+        }
+    }
+
+    /* Free the entry's contents */
+    free(metadata->directories[found_index].filesystem_path);
+    free(metadata->directories[found_index].storage_prefix);
+
+    /* Shift remaining entries down using memmove for efficiency */
+    if ((size_t)found_index < metadata->directory_count - 1) {
+        memmove(&metadata->directories[found_index], &metadata->directories[found_index + 1],
+                (metadata->directory_count - 1 - (size_t)found_index) * sizeof(metadata_directory_entry_t));
+    }
+
+    metadata->directory_count--;
+
+    /* Rebuild hashmap index since pointers changed */
+    if (metadata->directory_index) {
+        hashmap_clear(metadata->directory_index, NULL);
+        for (size_t i = 0; i < metadata->directory_count; i++) {
+            error_t *err = hashmap_set(metadata->directory_index,
+                                       metadata->directories[i].filesystem_path,
+                                       &metadata->directories[i]);
+            if (err) {
+                return error_wrap(err, "Failed to rebuild directory index after removal");
+            }
+        }
+    }
+
+    return NULL;
+}
+
+/**
+ * Get tracked directory entry
+ */
+error_t *metadata_get_tracked_directory(
+    const metadata_t *metadata,
+    const char *filesystem_path,
+    const metadata_directory_entry_t **out
+) {
+    CHECK_NULL(metadata);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(out);
+
+    /* Use hashmap for O(1) lookup */
+    if (metadata->directory_index) {
+        metadata_directory_entry_t *entry = hashmap_get(metadata->directory_index, filesystem_path);
+        if (!entry) {
+            return ERROR(ERR_NOT_FOUND, "Directory not tracked: %s", filesystem_path);
+        }
+        *out = entry;
+        return NULL;
+    }
+
+    /* Fallback to linear search if no index */
+    for (size_t i = 0; i < metadata->directory_count; i++) {
+        if (strcmp(metadata->directories[i].filesystem_path, filesystem_path) == 0) {
+            *out = &metadata->directories[i];
+            return NULL;
+        }
+    }
+
+    return ERROR(ERR_NOT_FOUND, "Directory not tracked: %s", filesystem_path);
+}
+
+/**
+ * Check if directory is tracked
+ */
+bool metadata_has_tracked_directory(
+    const metadata_t *metadata,
+    const char *filesystem_path
+) {
+    if (!metadata || !filesystem_path) {
+        return false;
+    }
+
+    /* Use hashmap for O(1) lookup */
+    if (metadata->directory_index) {
+        return hashmap_has(metadata->directory_index, filesystem_path);
+    }
+
+    /* Fallback to linear search if no index */
+    for (size_t i = 0; i < metadata->directory_count; i++) {
+        if (strcmp(metadata->directories[i].filesystem_path, filesystem_path) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Get all tracked directories
+ */
+const metadata_directory_entry_t *metadata_get_all_tracked_directories(
+    const metadata_t *metadata,
+    size_t *count
+) {
+    if (!metadata || !count) {
+        if (count) *count = 0;
+        return NULL;
+    }
+
+    *count = metadata->directory_count;
+    return metadata->directories;
 }
 
 /**

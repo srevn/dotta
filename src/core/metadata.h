@@ -16,13 +16,20 @@
  *
  * JSON Schema:
  * {
- *   "version": 1,
+ *   "version": 2,
  *   "files": {
  *     "home/.ssh/config": {"mode": "0600"},
  *     "home/.local/bin/backup.sh": {"mode": "0755"},
  *     "root/home/user/script.sh": {"mode": "0755", "owner": "user", "group": "user"},
  *     "root/etc/nginx.conf": {"mode": "0644", "owner": "root", "group": "wheel"}
- *   }
+ *   },
+ *   "directories": [
+ *     {
+ *       "filesystem_path": "/home/user/.config/nvim",
+ *       "storage_prefix": "home/.config/nvim",
+ *       "added_at": "2025-01-15T10:30:00Z"
+ *     }
+ *   ]
  * }
  */
 
@@ -35,7 +42,7 @@
 #include "types.h"
 
 #define METADATA_FILE_PATH ".dotta/metadata.json"
-#define METADATA_VERSION 1
+#define METADATA_VERSION 2
 
 /**
  * Metadata entry for a single file
@@ -47,6 +54,18 @@ typedef struct {
     char *group;           /* Group name (optional, only for root/ prefix) */
 } metadata_entry_t;
 
+/**
+ * Tracked directory entry
+ *
+ * Tracks directories that were explicitly added via `dotta add`,
+ * enabling detection of new files that appear in those directories.
+ */
+typedef struct {
+    char *filesystem_path;   /* Original directory path (/home/user/.config/nvim) */
+    char *storage_prefix;    /* Storage prefix in profile (home/.config/nvim) */
+    time_t added_at;         /* When this directory was added */
+} metadata_directory_entry_t;
+
 /* Forward declaration */
 typedef struct hashmap hashmap_t;
 
@@ -57,11 +76,18 @@ typedef struct hashmap hashmap_t;
  * The hashmap values point to entries in the array (no separate allocation).
  */
 typedef struct {
+    /* File metadata */
     metadata_entry_t *entries;
     size_t count;
     size_t capacity;
-    int version;           /* Schema version (currently 1) */
+    int version;           /* Schema version (currently 2) */
     hashmap_t *index;      /* Maps storage_path -> metadata_entry_t* (O(1) lookup) */
+
+    /* Tracked directories */
+    metadata_directory_entry_t *directories;
+    size_t directory_count;
+    size_t directory_capacity;
+    hashmap_t *directory_index;  /* Maps filesystem_path -> metadata_directory_entry_t* (O(1) lookup) */
 } metadata_t;
 
 /**
@@ -307,6 +333,76 @@ error_t *metadata_format_mode(mode_t mode, char **out);
 error_t *metadata_apply_ownership(
     const metadata_entry_t *entry,
     const char *filesystem_path
+);
+
+/**
+ * Add tracked directory to metadata
+ *
+ * Records that a directory was explicitly added via `dotta add`,
+ * enabling detection of new files that appear in this directory later.
+ * If the directory already exists, it is updated.
+ *
+ * @param metadata Metadata collection (must not be NULL)
+ * @param filesystem_path Directory path on disk (must not be NULL)
+ * @param storage_prefix Storage prefix in profile (must not be NULL)
+ * @param added_at Timestamp when added (use time(NULL) for current time)
+ * @return Error or NULL on success
+ */
+error_t *metadata_add_tracked_directory(
+    metadata_t *metadata,
+    const char *filesystem_path,
+    const char *storage_prefix,
+    time_t added_at
+);
+
+/**
+ * Remove tracked directory from metadata
+ *
+ * @param metadata Metadata collection (must not be NULL)
+ * @param filesystem_path Directory path to remove (must not be NULL)
+ * @return Error or NULL on success (ERR_NOT_FOUND if not tracked)
+ */
+error_t *metadata_remove_tracked_directory(
+    metadata_t *metadata,
+    const char *filesystem_path
+);
+
+/**
+ * Get tracked directory entry
+ *
+ * @param metadata Metadata collection (must not be NULL)
+ * @param filesystem_path Directory path to lookup (must not be NULL)
+ * @param out Directory entry (must not be NULL, borrowed reference - do not free)
+ * @return Error or NULL on success (ERR_NOT_FOUND if not tracked)
+ */
+error_t *metadata_get_tracked_directory(
+    const metadata_t *metadata,
+    const char *filesystem_path,
+    const metadata_directory_entry_t **out
+);
+
+/**
+ * Check if directory is tracked
+ *
+ * @param metadata Metadata collection (must not be NULL)
+ * @param filesystem_path Directory path to check (must not be NULL)
+ * @return true if directory is tracked
+ */
+bool metadata_has_tracked_directory(
+    const metadata_t *metadata,
+    const char *filesystem_path
+);
+
+/**
+ * Get all tracked directories
+ *
+ * @param metadata Metadata collection (must not be NULL)
+ * @param count Output count (must not be NULL)
+ * @return Array of directory entries (borrowed reference - do not free individual entries)
+ */
+const metadata_directory_entry_t *metadata_get_all_tracked_directories(
+    const metadata_t *metadata,
+    size_t *count
 );
 
 #endif /* DOTTA_METADATA_H */

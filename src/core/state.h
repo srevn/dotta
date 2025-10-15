@@ -59,18 +59,6 @@ typedef struct {
     char *mode;              /* Permission mode (e.g., "0644") */
 } state_file_entry_t;
 
-/**
- * State directory entry
- *
- * Tracks directories that were explicitly added via `dotta add`,
- * enabling detection of new files that appear in those directories.
- */
-typedef struct {
-    char *filesystem_path;   /* Original directory path (/home/user/.config/nvim) */
-    char *storage_prefix;    /* Storage prefix in profile (home/.config/nvim) */
-    char *profile;           /* Profile name (global, darwin, etc.) */
-    time_t added_at;         /* When this directory was added */
-} state_directory_entry_t;
 
 /**
  * State structure (opaque)
@@ -212,21 +200,6 @@ error_t *state_set_profiles(
 error_t *state_get_profiles(const state_t *state, string_array_t **out);
 
 /**
- * Ensure profile is in active set
- *
- * Checks if the profile is already activated. If not, adds it to the active
- * profile list while preserving existing profiles. This is idempotent - safe
- * to call multiple times with the same profile.
- *
- * Use case: Auto-activation when creating new profiles via 'dotta add'.
- *
- * @param state State (must not be NULL)
- * @param profile Profile name to activate (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *state_ensure_profile_activated(state_t *state, const char *profile);
-
-/**
  * Get state timestamp
  *
  * @param state State (must not be NULL)
@@ -269,111 +242,5 @@ error_t *state_create_entry(
  * @param entry Entry to free (can be NULL)
  */
 void state_free_entry(state_file_entry_t *entry);
-
-/**
- * Add directory entry to state
- *
- * Records that a directory was explicitly tracked, enabling detection
- * of new files that appear in this directory later.
- *
- * @param state State (must not be NULL)
- * @param entry Directory entry to add (must not be NULL, copied into state)
- * @return Error or NULL on success
- */
-error_t *state_add_directory(state_t *state, const state_directory_entry_t *entry);
-
-/**
- * Remove directory entry from state
- *
- * @param state State (must not be NULL)
- * @param filesystem_path Directory path to remove (must not be NULL)
- * @return Error or NULL on success (not found is an error)
- */
-error_t *state_remove_directory(state_t *state, const char *filesystem_path);
-
-/**
- * Check if directory exists in state
- *
- * @param state State (must not be NULL)
- * @param filesystem_path Directory path to check (must not be NULL)
- * @return true if directory exists in state
- */
-bool state_directory_exists(const state_t *state, const char *filesystem_path);
-
-/**
- * Get directory entry from state
- *
- * @param state State (must not be NULL)
- * @param filesystem_path Directory path to lookup (must not be NULL)
- * @param out Directory entry (must not be NULL, borrowed reference - do not free)
- * @return Error or NULL on success (not found is an error)
- */
-error_t *state_get_directory(
-    const state_t *state,
-    const char *filesystem_path,
-    const state_directory_entry_t **out
-);
-
-/**
- * Get all directory entries
- *
- * @param state State (must not be NULL)
- * @param count Output count (must not be NULL)
- * @return Array of entries (borrowed reference - do not free individual entries)
- */
-const state_directory_entry_t *state_get_all_directories(const state_t *state, size_t *count);
-
-/**
- * Clear all directory entries (keeps files, profiles, and timestamp)
- *
- * @param state State (must not be NULL)
- */
-void state_clear_directories(state_t *state);
-
-/**
- * Helper: Create directory entry
- *
- * @param filesystem_path Filesystem path (must not be NULL)
- * @param storage_prefix Storage prefix (must not be NULL)
- * @param profile Profile name (must not be NULL)
- * @param added_at Timestamp when added (use time(NULL) for current time)
- * @param out Entry (must not be NULL, caller must free with state_free_directory_entry)
- * @return Error or NULL on success
- */
-error_t *state_create_directory_entry(
-    const char *filesystem_path,
-    const char *storage_prefix,
-    const char *profile,
-    time_t added_at,
-    state_directory_entry_t **out
-);
-
-/**
- * Free directory entry
- *
- * @param entry Entry to free (can be NULL)
- */
-void state_free_directory_entry(state_directory_entry_t *entry);
-
-/**
- * Remove all file and directory entries for a specific profile
- *
- * This is a helper that removes all state tracking for files and directories
- * deployed from a particular profile. Used when a profile is deleted or
- * needs cleanup.
- *
- * This function is safe to call even if the profile has no entries in state.
- * It will return success with removed_count=0 in that case.
- *
- * @param state State (must not be NULL)
- * @param profile Profile name to clean up (must not be NULL)
- * @param removed_count Optional output for total number of entries removed (can be NULL)
- * @return Error or NULL on success
- */
-error_t *state_cleanup_profile(
-    state_t *state,
-    const char *profile,
-    size_t *removed_count
-);
 
 #endif /* DOTTA_STATE_H */

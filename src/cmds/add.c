@@ -17,7 +17,6 @@
 #include "base/gitops.h"
 #include "core/ignore.h"
 #include "core/metadata.h"
-#include "core/state.h"
 #include "infra/path.h"
 #include "infra/worktree.h"
 #include "utils/array.h"
@@ -380,15 +379,25 @@ static error_t *init_profile_dottaignore(
 }
 
 /**
- * Capture and save metadata for added files
+ * Directory tracking entry for passing to metadata
+ */
+typedef struct {
+    char *filesystem_path;
+    char *storage_prefix;
+} tracked_dir_t;
+
+/**
+ * Capture and save metadata for added files and tracked directories
  *
  * Loads existing metadata from worktree, captures metadata for each added file,
- * updates the metadata collection, and saves it back to worktree.
+ * adds tracked directories, updates the metadata collection, and saves it back to worktree.
  * The metadata.json file is then staged for commit.
  */
 static error_t *capture_and_save_metadata(
     worktree_handle_t *wt,
     const string_array_t *added_files,
+    const tracked_dir_t *tracked_dirs,
+    size_t tracked_dir_count,
     const cmd_add_options_t *opts
 ) {
     CHECK_NULL(wt);
@@ -476,6 +485,44 @@ static error_t *capture_and_save_metadata(
         }
     }
 
+    /* Add tracked directories to metadata */
+    size_t dir_tracked_count = 0;
+    for (size_t i = 0; i < tracked_dir_count; i++) {
+        const tracked_dir_t *dir = &tracked_dirs[i];
+
+        /* Check if directory already tracked to avoid duplicates */
+        if (metadata_has_tracked_directory(metadata, dir->filesystem_path)) {
+            if (opts->verbose) {
+                printf("Directory already tracked: %s\n", dir->filesystem_path);
+            }
+            continue;
+        }
+
+        /* Add directory to metadata */
+        err = metadata_add_tracked_directory(
+            metadata,
+            dir->filesystem_path,
+            dir->storage_prefix,
+            time(NULL)
+        );
+
+        if (err) {
+            /* Non-fatal: log warning and continue */
+            if (opts->verbose) {
+                fprintf(stderr, "Warning: failed to track directory '%s': %s\n",
+                       dir->filesystem_path, error_message(err));
+            }
+            error_free(err);
+            err = NULL;
+        } else {
+            dir_tracked_count++;
+            if (opts->verbose) {
+                printf("Tracked directory: %s -> %s\n",
+                       dir->filesystem_path, dir->storage_prefix);
+            }
+        }
+    }
+
     /* Save metadata to worktree */
     err = metadata_save_to_worktree(worktree_path, metadata);
     metadata_free(metadata);
@@ -503,8 +550,14 @@ static error_t *capture_and_save_metadata(
         return error_from_git(git_err);
     }
 
-    if (opts->verbose && captured_count > 0) {
-        printf("Updated metadata for %zu file(s)\n", captured_count);
+    if (opts->verbose) {
+        if (captured_count > 0) {
+            printf("Updated metadata for %zu file(s)\n", captured_count);
+        }
+        if (dir_tracked_count > 0) {
+            printf("Tracked %zu director%s for change detection\n",
+                   dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies");
+        }
     }
 
     return NULL;
@@ -625,12 +678,14 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
 
     /* Initialize all resources to NULL for safe cleanup */
     dotta_config_t *config = NULL;
-    state_t *state = NULL;
     ignore_context_t *ignore_ctx = NULL;
     char *repo_dir = NULL;
     hook_context_t *hook_ctx = NULL;
     worktree_handle_t *wt = NULL;
     string_array_t *all_files = NULL;
+    tracked_dir_t *tracked_dirs = NULL;
+    size_t tracked_dir_count = 0;
+    size_t tracked_dir_capacity = 0;
     size_t added_count = 0;
     bool profile_was_new = false;
 
@@ -641,13 +696,6 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         error_free(err);
         err = NULL;
         config = config_create_default();
-    }
-
-    /* Load state (with locking for write transaction) */
-    err = state_load_for_update(repo, &state);
-    if (err) {
-        err = error_wrap(err, "Failed to load state");
-        goto cleanup;
     }
 
     /* Create ignore context */
@@ -787,43 +835,27 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                 }
                 error_free(err);
                 err = NULL;
-            } else {
-                /* Create and add directory entry to state */
-                state_directory_entry_t *dir_entry = NULL;
-                err = state_create_directory_entry(
-                    canonical,
-                    storage_prefix,
-                    opts->profile,
-                    time(NULL),
-                    &dir_entry
-                );
-
-                if (err) {
-                    /* Non-fatal: just log warning */
-                    if (opts->verbose) {
-                        fprintf(stderr, "Warning: failed to create directory entry: %s\n",
-                               error_message(err));
-                    }
-                    error_free(err);
-                    err = NULL;
-                } else {
-                    /* Check if directory already tracked to avoid duplicates */
-                    if (!state_directory_exists(state, canonical)) {
-                        err = state_add_directory(state, dir_entry);
-                        if (err) {
-                            /* Non-fatal: just log warning */
-                            if (opts->verbose) {
-                                fprintf(stderr, "Warning: failed to track directory: %s\n",
-                                       error_message(err));
-                            }
-                            error_free(err);
-                            err = NULL;
-                        }
-                    }
-                    state_free_directory_entry(dir_entry);
-                }
-                free(storage_prefix);
+                free(canonical);
+                continue;
             }
+
+            /* Add to tracked directories list */
+            if (tracked_dir_count >= tracked_dir_capacity) {
+                size_t new_capacity = tracked_dir_capacity == 0 ? 8 : tracked_dir_capacity * 2;
+                tracked_dir_t *new_dirs = realloc(tracked_dirs, new_capacity * sizeof(tracked_dir_t));
+                if (!new_dirs) {
+                    free(storage_prefix);
+                    free(canonical);
+                    err = ERROR(ERR_MEMORY, "Failed to allocate tracked directories");
+                    goto cleanup;
+                }
+                tracked_dirs = new_dirs;
+                tracked_dir_capacity = new_capacity;
+            }
+
+            tracked_dirs[tracked_dir_count].filesystem_path = strdup(canonical);
+            tracked_dirs[tracked_dir_count].storage_prefix = storage_prefix;
+            tracked_dir_count++;
 
             if (opts->verbose) {
                 printf("Added directory: %s\n", canonical);
@@ -868,8 +900,8 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         added_count++;
     }
 
-    /* Capture and save metadata for added files */
-    err = capture_and_save_metadata(wt, all_files, opts);
+    /* Capture and save metadata for added files and tracked directories */
+    err = capture_and_save_metadata(wt, all_files, tracked_dirs, tracked_dir_count, opts);
     if (err) {
         err = error_wrap(err, "Failed to capture metadata");
         goto cleanup;
@@ -885,39 +917,18 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     worktree_cleanup(wt);
     wt = NULL;
 
-    /* Auto-activate newly created profile */
-    if (profile_was_new) {
-        error_t *temp_err = state_ensure_profile_activated(state, opts->profile);
-        if (temp_err) {
-            fprintf(stderr, "Warning: Created profile '%s' but failed to activate: %s\n",
-                    opts->profile, error_message(temp_err));
-            error_free(temp_err);
-            /* Non-fatal: continue - files are already added */
-        } else if (opts->verbose) {
-            printf("Auto-activated profile '%s'\n", opts->profile);
-        }
-    }
-
-    /* Save state with tracked directories */
-    error_t *temp_err = state_save(repo, state);
-    if (temp_err) {
-        fprintf(stderr, "Warning: Failed to save state: %s\n", error_message(temp_err));
-        error_free(temp_err);
-        /* Non-fatal: continue */
-    }
-
     /* Execute post-add hook */
     if (hook_ctx) {
         hook_result_t *hook_result = NULL;
-        temp_err = hook_execute(config, HOOK_POST_ADD, hook_ctx, &hook_result);
+        error_t *hook_err = hook_execute(config, HOOK_POST_ADD, hook_ctx, &hook_result);
 
-        if (temp_err) {
+        if (hook_err) {
             /* Hook failed - warn but don't abort (files already added) */
-            fprintf(stderr, "Warning: Post-add hook failed: %s\n", error_message(temp_err));
+            fprintf(stderr, "Warning: Post-add hook failed: %s\n", error_message(hook_err));
             if (hook_result && hook_result->output && hook_result->output[0]) {
                 fprintf(stderr, "Hook output:\n%s\n", hook_result->output);
             }
-            error_free(temp_err);
+            error_free(hook_err);
         }
         hook_result_free(hook_result);
     }
@@ -928,20 +939,34 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                added_count, added_count == 1 ? "" : "s", opts->profile);
 
         if (profile_was_new) {
-            printf("Profile '%s' created and activated\n", opts->profile);
+            printf("Profile '%s' created\n", opts->profile);
         }
 
+        if (tracked_dir_count > 0) {
+            printf("Tracking %zu director%s for change detection\n",
+                   tracked_dir_count, tracked_dir_count == 1 ? "y" : "ies");
+        }
+
+        printf("\nHint: Run 'dotta apply -p %s' to deploy files to filesystem\n", opts->profile);
         printf("\n");
     }
 
 cleanup:
+    /* Free tracked directories */
+    if (tracked_dirs) {
+        for (size_t i = 0; i < tracked_dir_count; i++) {
+            free(tracked_dirs[i].filesystem_path);
+            free(tracked_dirs[i].storage_prefix);
+        }
+        free(tracked_dirs);
+    }
+
     /* Free resources in reverse order of allocation */
     if (all_files) string_array_free(all_files);
     if (wt) worktree_cleanup(wt);
     if (hook_ctx) hook_context_free(hook_ctx);
     if (repo_dir) free(repo_dir);
     if (ignore_ctx) ignore_context_free(ignore_ctx);
-    if (state) state_free(state);
     if (config) config_free(config);
 
     return err;

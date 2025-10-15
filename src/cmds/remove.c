@@ -1344,37 +1344,17 @@ static error_t *delete_profile_branch(
         upstream_info = NULL;
     }
 
-    /* Load state to check for deployed files and active profiles (with locking for potential writes) */
+    /* Load state to check for deployed files (read-only, informational only) */
     state_t *state = NULL;
-    err = state_load_for_update(repo, &state);
+    err = state_load(repo, &state);
     if (err) {
         /* Non-fatal */
         error_free(err);
         err = NULL;
+        state = NULL;
     }
 
-    /* Check if profile is active and needs to be deactivated */
-    bool is_active = false;
-    if (state) {
-        string_array_t *active_profiles = NULL;
-        err = state_get_profiles(state, &active_profiles);
-        if (!err) {
-            /* Check if profile is in active list */
-            for (size_t i = 0; i < string_array_size(active_profiles); i++) {
-                if (strcmp(string_array_get(active_profiles, i), opts->profile) == 0) {
-                    is_active = true;
-                    break;
-                }
-            }
-            string_array_free(active_profiles);
-        } else {
-            /* Non-fatal: just proceed without checking active status */
-            error_free(err);
-            err = NULL;
-        }
-    }
-
-    /* Check if profile has deployed files */
+    /* Check if profile has deployed files (informational message for user) */
     size_t deployed_count = 0;
     if (state) {
         size_t state_file_count = 0;
@@ -1390,14 +1370,19 @@ static error_t *delete_profile_branch(
     if (deployed_count > 0 && opts->verbose) {
         printf("\nNote: Profile '%s' has %zu deployed file%s\n",
                opts->profile, deployed_count, deployed_count == 1 ? "" : "s");
-        printf("      Run 'dotta apply' after deletion to remove them.\n\n");
+        printf("      These will be removed when you run 'dotta apply'.\n\n");
+    }
+
+    /* Free state (no longer needed - we don't modify it) */
+    if (state) {
+        state_free(state);
+        state = NULL;
     }
 
     /* Confirm deletion */
     if (!confirm_profile_deletion(opts->profile, file_count, is_auto_detected, opts)) {
         printf("Cancelled\n");
         free(remote_name);
-        state_free(state);
         return NULL;
     }
 
@@ -1486,116 +1471,15 @@ static error_t *delete_profile_branch(
         remote_name = NULL;
     }
 
-    /* Track whether state was modified and needs saving */
-    bool state_modified = false;
-
     /*
-     * Clean up all state entries for the deleted profile
+     * Architectural note: We do not modify state here.
+     * State cleanup happens automatically on next `apply`:
+     * - Profile resolution won't include deleted profile
+     * - Orphaned files will be pruned during deployment
+     * - State will be rebuilt to reflect new reality
      *
-     * This removes both file and directory entries that belong to this profile.
-     * Using the existing state_cleanup_profile() function ensures symmetric
-     * handling: add creates entries, remove deletes them.
-     *
-     * This immediate cleanup is cleaner than waiting for the next `apply` and
-     * prevents orphaned entries if user doesn't run `apply` after deletion.
+     * This ensures `apply` has full global context for cleanup decisions.
      */
-    if (state) {
-        size_t cleanup_count = 0;
-        err = state_cleanup_profile(state, opts->profile, &cleanup_count);
-        if (err) {
-            /* Non-fatal: warn but continue */
-            fprintf(stderr, "Warning: Failed to clean up state entries for profile: %s\n",
-                   error_message(err));
-            error_free(err);
-            err = NULL;
-        } else if (cleanup_count > 0) {
-            state_modified = true;
-            if (opts->verbose) {
-                printf("Cleaned up %zu state entr%s for profile '%s'\n",
-                       cleanup_count, cleanup_count == 1 ? "y" : "ies", opts->profile);
-            }
-        }
-    }
-
-    /*
-     * Deactivate profile if it was active
-     *
-     * This MUST happen to maintain state consistency - a deleted profile
-     * cannot remain in the active list, or `apply` will fail with
-     * "profile not found".
-     *
-     * Note: state_cleanup_profile() above handles file and directory entries.
-     * This section only handles removing the profile from state.profiles[].
-     */
-    if (is_active && state) {
-        /* Build new active profiles list without the deleted profile */
-        string_array_t *active_profiles = NULL;
-        err = state_get_profiles(state, &active_profiles);
-        if (!err) {
-            string_array_t *new_active = string_array_create();
-            if (!new_active) {
-                string_array_free(active_profiles);
-                free(repo_dir);
-                state_free(state);
-                config_free(config);
-                return ERROR(ERR_MEMORY, "Failed to create active profiles array");
-            }
-
-            /* Copy all profiles except the one being deleted */
-            for (size_t i = 0; i < string_array_size(active_profiles); i++) {
-                const char *name = string_array_get(active_profiles, i);
-                if (strcmp(name, opts->profile) != 0) {
-                    string_array_push(new_active, name);
-                }
-            }
-
-            /* Update state with new active profiles list */
-            const char **profile_names = malloc(string_array_size(new_active) * sizeof(char *));
-            if (!profile_names) {
-                string_array_free(new_active);
-                string_array_free(active_profiles);
-                free(repo_dir);
-                state_free(state);
-                config_free(config);
-                return ERROR(ERR_MEMORY, "Failed to allocate profile names array");
-            }
-
-            for (size_t i = 0; i < string_array_size(new_active); i++) {
-                profile_names[i] = string_array_get(new_active, i);
-            }
-
-            err = state_set_profiles(state, profile_names, string_array_size(new_active));
-            free(profile_names);
-            string_array_free(new_active);
-            string_array_free(active_profiles);
-
-            if (err) {
-                fprintf(stderr, "Warning: Failed to deactivate profile in state: %s\n", error_message(err));
-                error_free(err);
-                err = NULL;
-            } else {
-                state_modified = true;
-                if (opts->verbose) {
-                    printf("Deactivated profile '%s' from active list\n", opts->profile);
-                }
-            }
-        } else {
-            /* Non-fatal: warn but continue */
-            fprintf(stderr, "Warning: Failed to deactivate profile: %s\n", error_message(err));
-            error_free(err);
-            err = NULL;
-        }
-    }
-
-    /* Save state if profile was deactivated */
-    if (state_modified && state) {
-        err = state_save(repo, state);
-        if (err) {
-            fprintf(stderr, "Warning: Failed to save state: %s\n", error_message(err));
-            error_free(err);
-            err = NULL;
-        }
-    }
 
     /* Execute post-remove hook */
     if (hook_ctx) {
@@ -1616,7 +1500,6 @@ static error_t *delete_profile_branch(
     }
 
     free(repo_dir);
-    state_free(state);
     config_free(config);
 
     return NULL;

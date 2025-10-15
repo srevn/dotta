@@ -14,9 +14,11 @@
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "core/ignore.h"
+#include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/compare.h"
+#include "utils/array.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
 #include "utils/string.h"
@@ -492,64 +494,90 @@ static error_t *analyze_untracked_files(workspace_t *ws, const dotta_config_t *c
     CHECK_NULL(ws);
     CHECK_NULL(ws->state);
 
-    /* Get tracked directories from state */
-    size_t dir_count = 0;
-    const state_directory_entry_t *directories = state_get_all_directories(ws->state, &dir_count);
-
-    if (!directories || dir_count == 0) {
-        /* No tracked directories - nothing to do */
-        return NULL;
-    }
-
     error_t *err = NULL;
 
-    /* Scan each tracked directory */
-    for (size_t i = 0; i < dir_count; i++) {
-        const state_directory_entry_t *dir_entry = &directories[i];
+    /* Get active profiles from state */
+    string_array_t *active_profiles = NULL;
+    err = state_get_profiles(ws->state, &active_profiles);
+    if (err) {
+        return error_wrap(err, "Failed to get active profiles");
+    }
 
-        /* Check if directory still exists */
-        if (!fs_exists(dir_entry->filesystem_path)) {
+    if (!active_profiles || string_array_size(active_profiles) == 0) {
+        string_array_free(active_profiles);
+        return NULL;  /* No active profiles */
+    }
+
+    /* Scan tracked directories from each profile's metadata */
+    for (size_t p = 0; p < string_array_size(active_profiles); p++) {
+        const char *profile_name = string_array_get(active_profiles, p);
+
+        /* Load metadata for this profile */
+        metadata_t *metadata = NULL;
+        err = metadata_load_from_branch(ws->repo, profile_name, &metadata);
+        if (err) {
+            /* Non-fatal: profile may not have metadata yet */
+            error_free(err);
+            err = NULL;
             continue;
         }
 
-        /* Create profile-specific ignore context for this directory */
-        ignore_context_t *ignore_ctx = NULL;
-        err = ignore_context_create(
-            ws->repo,
-            config,
-            dir_entry->profile,
-            NULL,
-            0,
-            &ignore_ctx
-        );
+        /* Get tracked directories from metadata */
+        size_t dir_count = 0;
+        const metadata_directory_entry_t *directories =
+            metadata_get_all_tracked_directories(metadata, &dir_count);
 
-        if (err) {
-            /* Non-fatal: continue without ignore filtering */
-            error_free(err);
-            err = NULL;
-            ignore_ctx = NULL;
+        /* Scan each tracked directory */
+        for (size_t i = 0; i < dir_count; i++) {
+            const metadata_directory_entry_t *dir_entry = &directories[i];
+
+            /* Check if directory still exists */
+            if (!fs_exists(dir_entry->filesystem_path)) {
+                continue;
+            }
+
+            /* Create profile-specific ignore context for this directory */
+            ignore_context_t *ignore_ctx = NULL;
+            err = ignore_context_create(
+                ws->repo,
+                config,
+                profile_name,
+                NULL,
+                0,
+                &ignore_ctx
+            );
+
+            if (err) {
+                /* Non-fatal: continue without ignore filtering */
+                error_free(err);
+                err = NULL;
+                ignore_ctx = NULL;
+            }
+
+            /* Scan this directory for untracked files */
+            err = scan_directory_for_untracked(
+                dir_entry->filesystem_path,
+                dir_entry->storage_prefix,
+                profile_name,
+                ws->manifest_index,
+                ignore_ctx,
+                ws
+            );
+
+            /* Free ignore context */
+            ignore_context_free(ignore_ctx);
+
+            if (err) {
+                /* Log would go here, but for now just continue with other directories */
+                error_free(err);
+                err = NULL;
+            }
         }
 
-        /* Scan this directory for untracked files */
-        err = scan_directory_for_untracked(
-            dir_entry->filesystem_path,
-            dir_entry->storage_prefix,
-            dir_entry->profile,
-            ws->manifest_index,
-            ignore_ctx,
-            ws
-        );
-
-        /* Free ignore context */
-        ignore_context_free(ignore_ctx);
-
-        if (err) {
-            /* Log would go here, but for now just continue with other directories */
-            error_free(err);
-            err = NULL;
-        }
+        metadata_free(metadata);
     }
 
+    string_array_free(active_profiles);
     return NULL;
 }
 

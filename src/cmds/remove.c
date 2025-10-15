@@ -58,7 +58,11 @@ static error_t *validate_options(const cmd_remove_options_t *opts) {
 /**
  * Resolve input paths to storage paths
  *
- * Converts filesystem paths to storage paths and validates they exist in profile.
+ * Accepts both filesystem paths and storage paths as input.
+ * Uses hashmap for O(M+N) performance instead of O(N×M) nested loops.
+ *
+ * Complexity: O(M) to build index + O(N) to process inputs = O(M+N)
+ * Old implementation: O(N×M) with nested loops
  */
 static error_t *resolve_paths_to_remove(
     git_repository *repo,
@@ -77,6 +81,7 @@ static error_t *resolve_paths_to_remove(
     CHECK_NULL(opts);
 
     error_t *err = NULL;
+    hashmap_t *profile_files_map = NULL;
 
     string_array_t *storage_paths = string_array_create();
     string_array_t *filesystem_paths = string_array_create();
@@ -105,115 +110,176 @@ static error_t *resolve_paths_to_remove(
         return error_wrap(err, "Failed to list files in profile");
     }
 
-    /* Process each input path */
-    for (size_t i = 0; i < path_count; i++) {
-        const char *input_path = input_paths[i];
+    /* Build hashmap index for O(1) lookups */
+    profile_files_map = hashmap_create(string_array_size(profile_files));
+    if (!profile_files_map) {
+        string_array_free(profile_files);
+        profile_free(profile);
+        string_array_free(storage_paths);
+        string_array_free(filesystem_paths);
+        return ERROR(ERR_MEMORY, "Failed to create profile files index");
+    }
 
-        /* Canonicalize filesystem path */
-        char *canonical = NULL;
-        err = fs_canonicalize_path(input_path, &canonical);
+    for (size_t i = 0; i < string_array_size(profile_files); i++) {
+        const char *file = string_array_get(profile_files, i);
+        err = hashmap_set(profile_files_map, file, (void *)1);  /* Dummy value */
         if (err) {
-            /* If path doesn't exist on filesystem, try to interpret as storage path */
-            if (!opts->force) {
-                string_array_free(profile_files);
-                profile_free(profile);
-                string_array_free(storage_paths);
-                string_array_free(filesystem_paths);
-                return error_wrap(err, "Failed to resolve path '%s'", input_path);
-            }
-            /* With --force, continue to next path */
-            error_free(err);
-            err = NULL;
-            continue;
-        }
-
-        /* Convert to storage path */
-        char *storage_path = NULL;
-        path_prefix_t prefix;
-        err = path_to_storage(canonical, &storage_path, &prefix);
-        if (err) {
-            free(canonical);
+            hashmap_free(profile_files_map, NULL);
             string_array_free(profile_files);
             profile_free(profile);
             string_array_free(storage_paths);
             string_array_free(filesystem_paths);
-            return error_wrap(err, "Failed to convert path '%s'", input_path);
+            return error_wrap(err, "Failed to index profile files");
+        }
+    }
+
+    /* Process each input path */
+    for (size_t i = 0; i < path_count; i++) {
+        const char *input_path = input_paths[i];
+        char *storage_path = NULL;
+        char *canonical = NULL;
+        bool is_storage_path_format = false;
+
+        /* Strategy: Try filesystem path first, then storage path */
+
+        /* Attempt 1: Treat as filesystem path */
+        err = fs_canonicalize_path(input_path, &canonical);
+        if (!err) {
+            /* Successfully canonicalized - convert to storage path */
+            path_prefix_t prefix;
+            err = path_to_storage(canonical, &storage_path, &prefix);
+            if (err) {
+                free(canonical);
+                hashmap_free(profile_files_map, NULL);
+                string_array_free(profile_files);
+                profile_free(profile);
+                string_array_free(storage_paths);
+                string_array_free(filesystem_paths);
+                return error_wrap(err, "Failed to convert filesystem path '%s'", input_path);
+            }
+        } else {
+            /* Attempt 2: Treat as storage path directly */
+            error_free(err);
+            err = NULL;
+
+            /* Validate it looks like a storage path (home/... or root/...) */
+            if (strncmp(input_path, "home/", 5) == 0 || strncmp(input_path, "root/", 5) == 0) {
+                storage_path = strdup(input_path);
+                is_storage_path_format = true;
+
+                /* Try to reconstruct filesystem path for output */
+                err = path_from_storage(storage_path, &canonical);
+                if (err) {
+                    /* Non-fatal: we can still work with storage path only */
+                    error_free(err);
+                    err = NULL;
+                    canonical = NULL;
+                }
+            } else {
+                /* Neither filesystem nor storage path */
+                if (!opts->force) {
+                    hashmap_free(profile_files_map, NULL);
+                    string_array_free(profile_files);
+                    profile_free(profile);
+                    string_array_free(storage_paths);
+                    string_array_free(filesystem_paths);
+                    return ERROR(ERR_INVALID_ARG,
+                                "Path '%s' is neither a valid filesystem path nor storage path\n"
+                                "Hint: Storage paths must start with 'home/' or 'root/'",
+                                input_path);
+                }
+                /* With --force, skip this path */
+                if (opts->verbose) {
+                    fprintf(stderr, "Warning: Skipping invalid path '%s'\n", input_path);
+                }
+                continue;
+            }
         }
 
         /* Find all files that match this path (exact match or directory prefix) */
         size_t matches_found = 0;
         size_t storage_path_len = strlen(storage_path);
 
-        for (size_t j = 0; j < string_array_size(profile_files); j++) {
-            const char *profile_file = string_array_get(profile_files, j);
-            bool match = false;
-
-            /* Exact match */
-            if (strcmp(profile_file, storage_path) == 0) {
-                match = true;
-            }
-            /* Directory prefix match (e.g., "home/.config/nvim" matches "home/.config/nvim/init.vim") */
-            else if (strncmp(profile_file, storage_path, storage_path_len) == 0) {
-                /* Ensure it's a directory boundary (next char is '/') */
-                if (profile_file[storage_path_len] == '/' ||
-                    profile_file[storage_path_len] == '\0') {
-                    match = true;
+        /* Check exact match first - O(1) with hashmap */
+        if (hashmap_has(profile_files_map, storage_path)) {
+            /* Exact file match found */
+            char *fs_path = canonical ? strdup(canonical) : NULL;
+            if (!fs_path && !is_storage_path_format) {
+                /* Try to reconstruct from storage path */
+                err = path_from_storage(storage_path, &fs_path);
+                if (err) {
+                    error_free(err);
+                    err = NULL;
                 }
             }
 
-            if (match) {
-                /* Reconstruct filesystem path for this file */
-                char *file_fs_path = NULL;
-                err = path_from_storage(profile_file, &file_fs_path);
-                if (err) {
-                    /* Fallback: use canonical path if it's an exact match, otherwise skip */
-                    if (strcmp(profile_file, storage_path) == 0) {
-                        /* Exact match - safe to use canonical path */
-                        error_free(err);
-                        file_fs_path = strdup(canonical);
-                        if (!file_fs_path) {
-                            /* Memory allocation failed - this is serious */
-                            if (opts->verbose || !opts->force) {
-                                fprintf(stderr, "Warning: Memory allocation failed for '%s', skipping\n",
-                                       profile_file);
-                            }
-                            continue;
-                        }
-                    } else {
-                        /* Directory member - path conversion failed */
+            err = string_array_push(storage_paths, storage_path);
+            if (!err) {
+                err = string_array_push(filesystem_paths, fs_path ? fs_path : storage_path);
+            }
+
+            free(fs_path);
+
+            if (err) {
+                free(storage_path);
+                free(canonical);
+                hashmap_free(profile_files_map, NULL);
+                string_array_free(profile_files);
+                profile_free(profile);
+                string_array_free(storage_paths);
+                string_array_free(filesystem_paths);
+                return error_wrap(err, "Failed to track path for removal");
+            }
+
+            matches_found++;
+        }
+
+        /* Check for directory prefix matches - requires iteration */
+        for (size_t j = 0; j < string_array_size(profile_files); j++) {
+            const char *profile_file = string_array_get(profile_files, j);
+
+            /* Skip if already matched as exact */
+            if (strcmp(profile_file, storage_path) == 0) {
+                continue;
+            }
+
+            /* Directory prefix match */
+            if (strncmp(profile_file, storage_path, storage_path_len) == 0) {
+                /* Ensure it's a directory boundary */
+                if (profile_file[storage_path_len] == '/') {
+                    /* Reconstruct filesystem path for this file */
+                    char *file_fs_path = NULL;
+                    err = path_from_storage(profile_file, &file_fs_path);
+                    if (err) {
                         if (opts->verbose || !opts->force) {
-                            fprintf(stderr, "Warning: Failed to resolve filesystem path for '%s': %s\n"
-                                          "         This file will be skipped. Use --verbose for details.\n",
+                            fprintf(stderr, "Warning: Failed to resolve filesystem path for '%s': %s\n",
                                    profile_file, error_message(err));
                         }
                         error_free(err);
+                        err = NULL;
                         continue;
                     }
-                }
 
-                /* Both paths are valid - add to both arrays together to maintain sync */
-                err = string_array_push(storage_paths, profile_file);
-                if (err) {
+                    err = string_array_push(storage_paths, profile_file);
+                    if (!err) {
+                        err = string_array_push(filesystem_paths, file_fs_path);
+                    }
+
                     free(file_fs_path);
-                    string_array_free(profile_files);
-                    profile_free(profile);
-                    string_array_free(storage_paths);
-                    string_array_free(filesystem_paths);
-                    return error_wrap(err, "Failed to track storage path for removal");
-                }
 
-                err = string_array_push(filesystem_paths, file_fs_path);
-                if (err) {
-                    free(file_fs_path);
-                    string_array_free(profile_files);
-                    profile_free(profile);
-                    string_array_free(storage_paths);
-                    string_array_free(filesystem_paths);
-                    return error_wrap(err, "Failed to track filesystem path for removal");
-                }
+                    if (err) {
+                        free(storage_path);
+                        free(canonical);
+                        hashmap_free(profile_files_map, NULL);
+                        string_array_free(profile_files);
+                        profile_free(profile);
+                        string_array_free(storage_paths);
+                        string_array_free(filesystem_paths);
+                        return error_wrap(err, "Failed to track path for removal");
+                    }
 
-                free(file_fs_path);
-                matches_found++;
+                    matches_found++;
+                }
             }
         }
 
@@ -221,6 +287,7 @@ static error_t *resolve_paths_to_remove(
             if (!opts->force) {
                 free(storage_path);
                 free(canonical);
+                hashmap_free(profile_files_map, NULL);
                 string_array_free(profile_files);
                 profile_free(profile);
                 string_array_free(storage_paths);
@@ -241,6 +308,7 @@ static error_t *resolve_paths_to_remove(
         free(canonical);
     }
 
+    hashmap_free(profile_files_map, NULL);
     string_array_free(profile_files);
     profile_free(profile);
 

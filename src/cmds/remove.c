@@ -22,6 +22,7 @@
 #include "utils/array.h"
 #include "utils/commit.h"
 #include "utils/config.h"
+#include "utils/hashmap.h"
 #include "utils/hooks.h"
 #include "utils/output.h"
 #include "utils/string.h"
@@ -356,34 +357,45 @@ static bool is_deployed_from_other_profile(
 }
 
 /**
- * Find all other profiles containing a specific file
+ * Build inverted index: storage_path -> set of profiles containing that path
  *
- * Returns a string array of profile names (excluding current_profile).
- * Caller must free the returned array with string_array_free().
+ * Loads all profiles once and builds an index for O(1) lookups.
+ * This is a massive optimization over loading profiles repeatedly per-file.
+ *
+ * Complexity: O(M×P) where M = profile count, P = avg files per profile
+ * Old approach was: O(N×M×GitOps) where N = files being checked
+ *
+ * @param repo Repository (must not be NULL)
+ * @param current_profile Profile to exclude from results (must not be NULL)
+ * @param out_index Output hashmap storage_path -> string_array_t of profile names
+ * @return Error or NULL on success
  */
-static string_array_t *find_profiles_containing_file(
+static error_t *build_profile_file_index(
     git_repository *repo,
-    const char *storage_path,
-    const char *current_profile
+    const char *current_profile,
+    hashmap_t **out_index
 ) {
-    if (!repo || !storage_path || !current_profile) {
-        return NULL;
-    }
+    CHECK_NULL(repo);
+    CHECK_NULL(current_profile);
+    CHECK_NULL(out_index);
 
-    string_array_t *other_profiles = string_array_create();
-    if (!other_profiles) {
-        return NULL;
+    error_t *err = NULL;
+
+    /* Create index hashmap */
+    hashmap_t *index = hashmap_create(256);  /* Reasonable initial size */
+    if (!index) {
+        return ERROR(ERR_MEMORY, "Failed to create profile file index");
     }
 
     /* Get all branches */
     string_array_t *all_branches = NULL;
-    error_t *err = gitops_list_branches(repo, &all_branches);
+    err = gitops_list_branches(repo, &all_branches);
     if (err) {
-        error_free(err);
-        return other_profiles;
+        hashmap_free(index, NULL);
+        return error_wrap(err, "Failed to list branches");
     }
 
-    /* Check each branch */
+    /* Load each profile once and index its files */
     for (size_t i = 0; i < string_array_size(all_branches); i++) {
         const char *branch_name = string_array_get(all_branches, i);
 
@@ -398,31 +410,59 @@ static string_array_t *find_profiles_containing_file(
         err = profile_load(repo, branch_name, &profile);
         if (err) {
             error_free(err);
-            continue;
+            continue;  /* Non-fatal: skip this profile */
         }
 
-        /* Load tree */
-        err = profile_load_tree(repo, profile);
-        if (err) {
-            profile_free(profile);
-            error_free(err);
-            continue;
-        }
-
-        /* Check if file exists */
-        git_tree_entry *entry = NULL;
-        int git_err = git_tree_entry_bypath(&entry, profile->tree, storage_path);
-
-        if (git_err == 0) {
-            string_array_push(other_profiles, branch_name);
-            git_tree_entry_free(entry);
-        }
-
+        /* Get list of all files in this profile */
+        string_array_t *files = NULL;
+        err = profile_list_files(repo, profile, &files);
         profile_free(profile);
+
+        if (err) {
+            error_free(err);
+            continue;  /* Non-fatal: skip this profile */
+        }
+
+        /* Add this profile to the index for each of its files */
+        for (size_t j = 0; j < string_array_size(files); j++) {
+            const char *storage_path = string_array_get(files, j);
+
+            /* Get or create profile list for this storage path */
+            string_array_t *profile_list = hashmap_get(index, storage_path);
+            if (!profile_list) {
+                profile_list = string_array_create();
+                if (!profile_list) {
+                    string_array_free(files);
+                    string_array_free(all_branches);
+                    /* Free index and all its arrays */
+                    hashmap_free(index, (void (*)(void *))string_array_free);
+                    return ERROR(ERR_MEMORY, "Failed to create profile list for file");
+                }
+
+                err = hashmap_set(index, storage_path, profile_list);
+                if (err) {
+                    string_array_free(profile_list);
+                    string_array_free(files);
+                    string_array_free(all_branches);
+                    hashmap_free(index, (void (*)(void *))string_array_free);
+                    return error_wrap(err, "Failed to index file");
+                }
+            }
+
+            /* Add this profile to the list */
+            err = string_array_push(profile_list, branch_name);
+            if (err) {
+                /* Non-fatal: continue without this entry */
+                error_free(err);
+            }
+        }
+
+        string_array_free(files);
     }
 
     string_array_free(all_branches);
-    return other_profiles;
+    *out_index = index;
+    return NULL;
 }
 
 /**
@@ -431,6 +471,9 @@ static string_array_t *find_profiles_containing_file(
  * Checks each file against all other profiles and determines:
  * - Which other profiles contain the file
  * - Whether the file is deployed from another profile
+ *
+ * Performance: O(M×P + N) where M=profiles, P=avg files/profile, N=files checked
+ * Old implementation: O(N×M×GitOps) - massive improvement!
  *
  * Returns arrays of other profiles per file (caller must free).
  */
@@ -451,6 +494,7 @@ static error_t *analyze_multi_profile_conflicts(
     CHECK_NULL(multi_profile_count_out);
     CHECK_NULL(has_deployed_from_other_out);
 
+    error_t *err = NULL;
     size_t file_count = string_array_size(storage_paths);
 
     /* Allocate array to hold other_profiles for each file */
@@ -459,26 +503,44 @@ static error_t *analyze_multi_profile_conflicts(
         return ERROR(ERR_MEMORY, "Failed to allocate multi-profile tracking");
     }
 
+    /* Build profile file index once (O(M×P) - loads all profiles) */
+    hashmap_t *profile_index = NULL;
+    err = build_profile_file_index(repo, current_profile, &profile_index);
+    if (err) {
+        free(other_profiles);
+        return error_wrap(err, "Failed to build profile index");
+    }
+
     size_t multi_profile_count = 0;
     bool has_deployed_from_other = false;
 
-    /* Check each file */
+    /* Check each file using O(1) index lookups */
     for (size_t i = 0; i < file_count; i++) {
         const char *storage_path = string_array_get(storage_paths, i);
         const char *filesystem_path = string_array_get(filesystem_paths, i);
 
-        /* Find other profiles containing this file */
-        other_profiles[i] = find_profiles_containing_file(repo, storage_path, current_profile);
+        /* Lookup profiles containing this file - O(1) */
+        string_array_t *indexed_profiles = hashmap_get(profile_index, storage_path);
 
-        if (other_profiles[i] && string_array_size(other_profiles[i]) > 0) {
-            multi_profile_count++;
+        if (indexed_profiles && string_array_size(indexed_profiles) > 0) {
+            /* Create a copy for the output (index owns the original) */
+            other_profiles[i] = string_array_create();
+            if (other_profiles[i]) {
+                for (size_t j = 0; j < string_array_size(indexed_profiles); j++) {
+                    string_array_push(other_profiles[i], string_array_get(indexed_profiles, j));
+                }
+                multi_profile_count++;
 
-            /* Check if deployed from another profile */
-            if (is_deployed_from_other_profile(repo, filesystem_path, current_profile)) {
-                has_deployed_from_other = true;
+                /* Check if deployed from another profile */
+                if (is_deployed_from_other_profile(repo, filesystem_path, current_profile)) {
+                    has_deployed_from_other = true;
+                }
             }
         }
     }
+
+    /* Free the index (and all its string arrays) */
+    hashmap_free(profile_index, (void (*)(void *))string_array_free);
 
     *other_profiles_out = other_profiles;
     *multi_profile_count_out = multi_profile_count;

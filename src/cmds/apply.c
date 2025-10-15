@@ -509,28 +509,41 @@ static error_t *apply_update_and_save_state(
             return ERROR(ERR_MEMORY, "Failed to allocate directory removal list");
         }
 
-        /* Collect directories from inactive profiles */
+        /* Build hashmap of active profiles for O(1) lookups */
+        hashmap_t *active_profiles_map = hashmap_create(profiles->count);
+        if (!active_profiles_map) {
+            string_array_free(dirs_to_remove);
+            return ERROR(ERR_MEMORY, "Failed to create active profiles hashmap");
+        }
+
+        for (size_t i = 0; i < profiles->count; i++) {
+            err = hashmap_set(active_profiles_map, profiles->profiles[i].name, (void *)1);
+            if (err) {
+                hashmap_free(active_profiles_map, NULL);
+                string_array_free(dirs_to_remove);
+                return error_wrap(err, "Failed to populate active profiles hashmap");
+            }
+        }
+
+        /* Collect directories from inactive profiles (O(N) with hashmap) */
         for (size_t i = 0; i < dir_count; i++) {
             const state_directory_entry_t *dir_entry = &directories[i];
 
-            /* Check if this directory's profile is in the active set */
-            bool profile_active = false;
-            for (size_t j = 0; j < profiles->count; j++) {
-                if (strcmp(dir_entry->profile, profiles->profiles[j].name) == 0) {
-                    profile_active = true;
-                    break;
-                }
-            }
+            /* Check if this directory's profile is in the active set - O(1) lookup */
+            bool profile_active = hashmap_has(active_profiles_map, dir_entry->profile);
 
             /* Mark for removal if profile is no longer active */
             if (!profile_active) {
                 err = string_array_push(dirs_to_remove, dir_entry->filesystem_path);
                 if (err) {
+                    hashmap_free(active_profiles_map, NULL);
                     string_array_free(dirs_to_remove);
                     return error_wrap(err, "Failed to track directory for removal");
                 }
             }
         }
+
+        hashmap_free(active_profiles_map, NULL);
 
         /* Remove orphaned directories */
         size_t removed_dir_count = 0;

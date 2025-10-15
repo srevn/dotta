@@ -940,7 +940,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         output_free(out);
         return ERROR(ERR_NOT_FOUND,
                     "No active profiles to sync\n"
-                    "Hint: Run 'dotta profile activate <name>' to activate profiles\n"
+                    "Hint: Run 'dotta profile select <name>' to select profiles\n"
                     "      Or run 'dotta profile list --remote' to see available profiles");
     }
 

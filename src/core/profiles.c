@@ -645,7 +645,7 @@ error_t *profile_resolve(
                     fprintf(stderr, "  • %s\n", string_array_get(missing_profiles, i));
                 }
                 fprintf(stderr, "\nHint: Run 'dotta profile validate' to fix state\n");
-                fprintf(stderr, "      or 'dotta profile activate <name>' to update active profiles\n\n");
+                fprintf(stderr, "      or 'dotta profile select <name>' to update active profiles\n\n");
             }
             string_array_free(missing_profiles);
 
@@ -694,12 +694,12 @@ error_t *profile_resolve(
     /* No profiles found from any source - return helpful error */
     return ERROR(ERR_NOT_FOUND,
                 "No active profiles found\n\n"
-                "To activate profiles:\n"
-                "  dotta profile activate <name>       # Activate specific profile\n"
-                "  dotta profile activate --all        # Activate all local profiles\n\n"
-                "To create and activate a new profile:\n"
-                "  dotta add -p <name> <file>          # Automatically activates new profiles\n\n"
-                "To use profiles without activating:\n"
+                "To select profiles:\n"
+                "  dotta profile select <name>         # Select specific profile\n"
+                "  dotta profile select --all          # Select all local profiles\n\n"
+                "To create and select a new profile:\n"
+                "  dotta add -p <name> <file>          # Automatically selects new profiles\n\n"
+                "To use profiles without selecting:\n"
                 "  dotta status -p <name>              # Use -p flag for any command\n\n"
                 "To see available profiles:\n"
                 "  dotta profile list                  # List local profiles\n"

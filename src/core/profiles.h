@@ -147,7 +147,7 @@ error_t *profile_list_load(
  * 3. State file profiles - Machine-specific active profiles
  *
  * If no profiles are found from any source, returns an error. Profiles must be
- * explicitly activated using 'dotta profile activate' or specified via CLI/config.
+ * explicitly selected using 'dotta profile select' or specified via CLI/config.
  *
  * @param repo Repository (must not be NULL)
  * @param explicit_profiles CLI profiles (can be NULL)

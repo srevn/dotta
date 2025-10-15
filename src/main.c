@@ -683,8 +683,8 @@ static int cmd_profile_main(int argc, char **argv) {
 
         opts.profiles = profiles;
         opts.profile_count = profile_count;
-    } else if (strcmp(argv[2], "activate") == 0) {
-        opts.subcommand = PROFILE_ACTIVATE;
+    } else if (strcmp(argv[2], "select") == 0) {
+        opts.subcommand = PROFILE_SELECT;
 
         /* Collect profile arguments */
         const char **profiles = malloc((size_t)argc * sizeof(char *));
@@ -694,7 +694,7 @@ static int cmd_profile_main(int argc, char **argv) {
         }
         size_t profile_count = 0;
 
-        /* Parse activate options */
+        /* Parse select options */
         for (int i = 3; i < argc; i++) {
             if (strcmp(argv[i], "--help") == 0) {
                 free(profiles);
@@ -718,8 +718,8 @@ static int cmd_profile_main(int argc, char **argv) {
 
         opts.profiles = profiles;
         opts.profile_count = profile_count;
-    } else if (strcmp(argv[2], "deactivate") == 0) {
-        opts.subcommand = PROFILE_DEACTIVATE;
+    } else if (strcmp(argv[2], "unselect") == 0) {
+        opts.subcommand = PROFILE_UNSELECT;
 
         /* Collect profile arguments */
         const char **profiles = malloc((size_t)argc * sizeof(char *));
@@ -729,7 +729,7 @@ static int cmd_profile_main(int argc, char **argv) {
         }
         size_t profile_count = 0;
 
-        /* Parse deactivate options */
+        /* Parse unselect options */
         for (int i = 3; i < argc; i++) {
             if (strcmp(argv[i], "--help") == 0) {
                 free(profiles);

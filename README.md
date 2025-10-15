@@ -44,8 +44,8 @@ Dotta uses **explicit active profile management** to provide safe, predictable c
 - **Active Profiles**: Tracked in `.git/dotta-state.json` - participate in all operations (apply, update, sync, status)
 
 ```bash
-# Activate profiles for this machine
-dotta profile activate global darwin
+# Select active profiles for this machine
+dotta profile select global darwin
 
 # View active vs available profiles
 dotta profile list
@@ -56,7 +56,7 @@ dotta status  # Checks: global, darwin
 dotta sync    # Syncs: global, darwin
 ```
 
-**Clone automatically activates** detected profiles (global + OS + hostname).
+**Clone automatically selects** detected profiles (global + OS + hostname).
 
 ### 3. Metadata Preservation
 
@@ -303,8 +303,8 @@ dotta init
 dotta add --profile global ~/.bashrc ~/.vimrc
 dotta add --profile darwin ~/.config/fish/config.fish
 
-# Activate profiles for this machine
-dotta profile activate global darwin
+# Select active profiles for this machine
+dotta profile select global darwin
 
 # View status
 dotta status
@@ -366,8 +366,8 @@ dotta remote add origin <url>       # Add remote
 dotta profile list                  # Show active vs available profiles
 dotta profile list --remote         # Show remote profiles
 dotta profile fetch <name>          # Download profile without activating
-dotta profile activate <name>       # Activate profile for this machine
-dotta profile deactivate <name>     # Deactivate profile
+dotta profile select <name>         # Selects profile for this machine
+dotta profile unselect <name>       # Deselects profile
 dotta profile validate              # Check state consistency
 ```
 
@@ -509,7 +509,7 @@ Manage your personal configurations with OS and host-specific overrides.
 $ dotta clone git@github.com:team/dotfiles.git
 
 # Customize for your needs
-$ dotta profile activate base backend-dev docker
+$ dotta profile select base backend-dev docker
 $ dotta apply
 ```
 
@@ -543,7 +543,7 @@ $ dotta clone git@github.com:user/dotfiles.git --all
 Fetched 15 profiles
 
 # Activate what you need
-$ dotta profile activate global darwin work client-a
+$ dotta profile select global darwin work client-a
 $ dotta apply
 ```
 
@@ -577,7 +577,7 @@ Track which profiles exist on remote without downloading:
 ```bash
 dotta profile list --remote      # Show available remote profiles
 dotta profile fetch linux        # Download without activating
-dotta profile activate linux     # Make it active
+dotta profile select linux       # Make it active
 dotta status --remote            # Check sync state
 ```
 

@@ -326,7 +326,7 @@ static error_t *handle_no_profiles_detected(
             }
         } else {
             output_info(out, "No 'global' profile found.");
-            output_info(out, "Run 'dotta profile activate <name>' after setup\n");
+            output_info(out, "Run 'dotta profile select <name>' after setup\n");
         }
     }
 

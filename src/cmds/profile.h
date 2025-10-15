@@ -1,8 +1,8 @@
 /**
  * profile.h - Profile lifecycle management
  *
- * Explicit profile management: list, fetch, activate, deactivate, validate.
- * Separates profile availability from activation.
+ * Explicit profile management: list, fetch, select, unselect, validate.
+ * Separates profile availability from selection.
  */
 
 #ifndef DOTTA_CMD_PROFILE_H
@@ -18,9 +18,9 @@
  */
 typedef enum {
     PROFILE_LIST,        /* List profiles (active vs available) */
-    PROFILE_FETCH,       /* Fetch profiles without activating */
-    PROFILE_ACTIVATE,    /* Add profiles to active set */
-    PROFILE_DEACTIVATE,  /* Remove profiles from active set */
+    PROFILE_FETCH,       /* Fetch profiles without selecting */
+    PROFILE_SELECT,      /* Add profiles to active set */
+    PROFILE_UNSELECT,    /* Remove profiles from active set */
     PROFILE_REORDER,     /* Reorder active profiles */
     PROFILE_VALIDATE     /* Validate and fix state consistency */
 } profile_subcommand_t;
@@ -31,7 +31,7 @@ typedef enum {
 typedef struct {
     profile_subcommand_t subcommand;
 
-    /* Profile names (for activate/deactivate/fetch) */
+    /* Profile names (for select/unselect/fetch) */
     const char **profiles;
     size_t profile_count;
 
@@ -42,8 +42,8 @@ typedef struct {
     /* Fetch options */
     bool fetch_all;         /* Fetch all remote profiles */
 
-    /* Activate/deactivate options */
-    bool all_profiles;      /* Activate/deactivate all local profiles */
+    /* Select/unselect options */
+    bool all_profiles;      /* Select/unselect all local profiles */
     bool dry_run;           /* Show what would be changed without doing it */
 
     /* Validate options */

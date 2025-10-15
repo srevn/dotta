@@ -146,7 +146,7 @@ static error_t *profile_list(
         output_newline(out);
     } else {
         output_info(out, "No active profiles");
-        output_info(out, "Hint: Run 'dotta profile activate <name>' to activate a profile\n");
+        output_info(out, "Hint: Run 'dotta profile select <name>' to select a profile\n");
     }
 
     /* Print available (inactive) profiles */
@@ -433,11 +433,11 @@ cleanup:
 }
 
 /**
- * Profile activate subcommand
+ * Profile select subcommand
  *
  * Adds profiles to the active set in state.
  */
-static error_t *profile_activate(
+static error_t *profile_select(
     git_repository *repo,
     const cmd_profile_options_t *opts,
     output_ctx_t *out
@@ -450,13 +450,13 @@ static error_t *profile_activate(
     dotta_config_t *config = NULL;
     state_t *state = NULL;
     string_array_t *active = NULL;
-    string_array_t *to_activate = NULL;
+    string_array_t *to_select = NULL;
     string_array_t *all_branches = NULL;
     const char **profile_names = NULL;
     error_t *err = NULL;
 
     /* Counters for summary (not cleaned up) */
-    size_t activated_count = 0;
+    size_t selected_count = 0;
     size_t already_active = 0;
     size_t not_found = 0;
 
@@ -465,7 +465,7 @@ static error_t *profile_activate(
      *
      * Guard mechanism: If profile_order is set in config, profile management
      * is declarative (config-driven) and state should not be modified directly.
-     * This prevents confusing scenarios where user activates a profile but
+     * This prevents confusing scenarios where user selects a profile but
      * the next 'apply' uses config instead, silently overriding the change.
      */
     err = config_load(NULL, &config);
@@ -477,7 +477,7 @@ static error_t *profile_activate(
 
     if (config && config->profile_order && config->profile_order_count > 0) {
         /* Config is managing profiles - reject permanent state modification */
-        output_error(out, "Cannot activate profiles: profile management is controlled by config file");
+        output_error(out, "Cannot select profiles: profile management is controlled by config file");
         output_newline(out);
         output_info(out, "Your config file has 'profile_order' set, which means profiles are");
         output_info(out, "managed declaratively through the config file, not through state.");
@@ -488,7 +488,7 @@ static error_t *profile_activate(
         output_newline(out);
         output_info(out, "To permanently change profiles:");
         output_info(out, "  1. Edit your config.toml file and modify the profile_order list");
-        output_info(out, "  2. Run 'dotta apply' to activate the new configuration");
+        output_info(out, "  2. Run 'dotta apply' to apply the new configuration");
         output_newline(out);
         output_info(out, "Current profile_order in config:");
         for (size_t i = 0; i < config->profile_order_count; i++) {
@@ -496,7 +496,7 @@ static error_t *profile_activate(
         }
         output_newline(out);
         output_info(out, "Or remove 'profile_order' from config to enable state-based management");
-        output_info(out, "with activate/deactivate commands.");
+        output_info(out, "with select/unselect commands.");
 
         err = ERROR(ERR_CONFLICT, "Profile management controlled by config file");
         goto cleanup;
@@ -516,15 +516,15 @@ static error_t *profile_activate(
         goto cleanup;
     }
 
-    /* Determine which profiles to activate */
-    to_activate = string_array_create();
-    if (!to_activate) {
+    /* Determine which profiles to select */
+    to_select = string_array_create();
+    if (!to_select) {
         err = ERROR(ERR_MEMORY, "Failed to create array");
         goto cleanup;
     }
 
     if (opts->all_profiles) {
-        /* Activate all local profiles */
+        /* Select all local profiles */
         err = gitops_list_branches(repo, &all_branches);
         if (err) {
             err = error_wrap(err, "Failed to list branches");
@@ -534,26 +534,26 @@ static error_t *profile_activate(
         for (size_t i = 0; i < string_array_size(all_branches); i++) {
             const char *name = string_array_get(all_branches, i);
             if (strcmp(name, "dotta-worktree") != 0) {
-                string_array_push(to_activate, name);
+                string_array_push(to_select, name);
             }
         }
     } else {
-        /* Activate specified profiles */
+        /* Select specified profiles */
         if (opts->profile_count == 0) {
             err = ERROR(ERR_INVALID_ARG,
                        "No profiles specified\n"
-                       "Hint: Use 'dotta profile activate <name>' or '--all'");
+                       "Hint: Use 'dotta profile select <name>' or '--all'");
             goto cleanup;
         }
 
         for (size_t i = 0; i < opts->profile_count; i++) {
-            string_array_push(to_activate, opts->profiles[i]);
+            string_array_push(to_select, opts->profiles[i]);
         }
     }
 
     /* Process each profile */
-    for (size_t i = 0; i < string_array_size(to_activate); i++) {
-        const char *profile_name = string_array_get(to_activate, i);
+    for (size_t i = 0; i < string_array_size(to_select); i++) {
+        const char *profile_name = string_array_get(to_select, i);
 
         /* Check if already active */
         bool is_active = false;
@@ -582,24 +582,24 @@ static error_t *profile_activate(
 
         /* Add to active list */
         string_array_push(active, profile_name);
-        activated_count++;
+        selected_count++;
 
         if (opts->verbose) {
             size_t file_count = 0;
             error_t *count_err = count_profile_files(repo, profile_name, &file_count);
 
             if (count_err) {
-                output_success(out, "  ✓ Activated %s", profile_name);
+                output_success(out, "  ✓ Selected %s", profile_name);
                 error_free(count_err);
             } else {
-                output_success(out, "  ✓ Activated %s (%zu file%s)",
+                output_success(out, "  ✓ Selected %s (%zu file%s)",
                               profile_name, file_count, file_count == 1 ? "" : "s");
             }
         }
     }
 
     /* Update state with new active profiles */
-    if (activated_count > 0) {
+    if (selected_count > 0) {
         profile_names = malloc(string_array_size(active) * sizeof(char *));
         if (!profile_names) {
             err = ERROR(ERR_MEMORY, "Failed to allocate profile names");
@@ -629,7 +629,7 @@ cleanup:
     config_free(config);
     free(profile_names);
     string_array_free(all_branches);
-    string_array_free(to_activate);
+    string_array_free(to_select);
     string_array_free(active);
     state_free(state);
 
@@ -643,12 +643,13 @@ cleanup:
         output_newline(out);
     }
 
-    if (activated_count > 0) {
-        output_success(out, "Activated %zu profile%s",
-                      activated_count, activated_count == 1 ? "" : "s");
+    if (selected_count > 0) {
+        output_success(out, "Selected %zu profile%s",
+                      selected_count, selected_count == 1 ? "" : "s");
+        output_info(out, "Run 'dotta apply' to deploy these profiles to your filesystem");
     }
     if (already_active > 0 && !opts->quiet) {
-        output_info(out, "%zu profile%s already active",
+        output_info(out, "%zu profile%s already selected",
                    already_active, already_active == 1 ? "" : "s");
     }
     if (not_found > 0) {
@@ -656,19 +657,19 @@ cleanup:
                       not_found, not_found == 1 ? "" : "s");
     }
 
-    if (activated_count == 0 && not_found > 0) {
-        return ERROR(ERR_NOT_FOUND, "No profiles were activated");
+    if (selected_count == 0 && not_found > 0) {
+        return ERROR(ERR_NOT_FOUND, "No profiles were selected");
     }
 
     return NULL;
 }
 
 /**
- * Profile deactivate subcommand
+ * Profile unselect subcommand
  *
  * Removes profiles from the active set.
  */
-static error_t *profile_deactivate(
+static error_t *profile_unselect(
     git_repository *repo,
     const cmd_profile_options_t *opts,
     output_ctx_t *out
@@ -681,19 +682,19 @@ static error_t *profile_deactivate(
     dotta_config_t *config = NULL;
     state_t *state = NULL;
     string_array_t *active = NULL;
-    string_array_t *to_deactivate = NULL;
+    string_array_t *to_unselect = NULL;
     string_array_t *new_active = NULL;
     const char **profile_names = NULL;
     error_t *err = NULL;
 
     /* Counters for summary (not cleaned up) */
-    size_t deactivated_count = 0;
+    size_t unselected_count = 0;
     size_t not_active = 0;
 
     /*
      * Load configuration to check if profiles are managed by config file
      *
-     * Same guard as activate: prevent state modification when config
+     * Same guard as select: prevent state modification when config
      * has profile_order set.
      */
     err = config_load(NULL, &config);
@@ -705,17 +706,17 @@ static error_t *profile_deactivate(
 
     if (config && config->profile_order && config->profile_order_count > 0) {
         /* Config is managing profiles - reject permanent state modification */
-        output_error(out, "Cannot deactivate profiles: profile management is controlled by config file");
+        output_error(out, "Cannot unselect profiles: profile management is controlled by config file");
         output_newline(out);
         output_info(out, "Your config file has 'profile_order' set, which means profiles are");
         output_info(out, "managed declaratively through the config file, not through state.");
         output_newline(out);
-        output_info(out, "To permanently deactivate profiles:");
+        output_info(out, "To permanently remove profiles:");
         output_info(out, "  1. Edit your config.toml file and remove profiles from profile_order");
-        output_info(out, "  2. Run 'dotta apply' to activate the new configuration");
+        output_info(out, "  2. Run 'dotta apply' to apply the new configuration");
         output_newline(out);
         output_info(out, "Or remove 'profile_order' from config to enable state-based management");
-        output_info(out, "with activate/deactivate commands.");
+        output_info(out, "with select/unselect commands.");
 
         err = ERROR(ERR_CONFLICT, "Profile management controlled by config file");
         goto cleanup;
@@ -735,33 +736,33 @@ static error_t *profile_deactivate(
         goto cleanup;
     }
 
-    /* Determine which profiles to deactivate */
-    to_deactivate = string_array_create();
-    if (!to_deactivate) {
+    /* Determine which profiles to unselect */
+    to_unselect = string_array_create();
+    if (!to_unselect) {
         err = ERROR(ERR_MEMORY, "Failed to create array");
         goto cleanup;
     }
 
     if (opts->all_profiles) {
-        /* Deactivate all */
+        /* Unselect all */
         for (size_t i = 0; i < string_array_size(active); i++) {
-            string_array_push(to_deactivate, string_array_get(active, i));
+            string_array_push(to_unselect, string_array_get(active, i));
         }
     } else {
-        /* Deactivate specified profiles */
+        /* Unselect specified profiles */
         if (opts->profile_count == 0) {
             err = ERROR(ERR_INVALID_ARG,
                        "No profiles specified\n"
-                       "Hint: Use 'dotta profile deactivate <name>' or '--all'");
+                       "Hint: Use 'dotta profile unselect <name>' or '--all'");
             goto cleanup;
         }
 
         for (size_t i = 0; i < opts->profile_count; i++) {
-            string_array_push(to_deactivate, opts->profiles[i]);
+            string_array_push(to_unselect, opts->profiles[i]);
         }
     }
 
-    /* Build new active list (excluding deactivated) */
+    /* Build new active list (excluding unselected) */
     new_active = string_array_create();
     if (!new_active) {
         err = ERROR(ERR_MEMORY, "Failed to create array");
@@ -772,19 +773,19 @@ static error_t *profile_deactivate(
     for (size_t i = 0; i < string_array_size(active); i++) {
         const char *profile_name = string_array_get(active, i);
 
-        /* Check if should be deactivated */
-        bool should_deactivate = false;
-        for (size_t j = 0; j < string_array_size(to_deactivate); j++) {
-            if (strcmp(string_array_get(to_deactivate, j), profile_name) == 0) {
-                should_deactivate = true;
+        /* Check if should be unselected */
+        bool should_unselect = false;
+        for (size_t j = 0; j < string_array_size(to_unselect); j++) {
+            if (strcmp(string_array_get(to_unselect, j), profile_name) == 0) {
+                should_unselect = true;
                 break;
             }
         }
 
-        if (should_deactivate) {
-            deactivated_count++;
+        if (should_unselect) {
+            unselected_count++;
             if (opts->verbose) {
-                output_success(out, "  ✓ Deactivated %s", profile_name);
+                output_success(out, "  ✓ Unselected %s", profile_name);
             }
         } else {
             string_array_push(new_active, profile_name);
@@ -792,8 +793,8 @@ static error_t *profile_deactivate(
     }
 
     /* Check for profiles that weren't active */
-    for (size_t i = 0; i < string_array_size(to_deactivate); i++) {
-        const char *profile_name = string_array_get(to_deactivate, i);
+    for (size_t i = 0; i < string_array_size(to_unselect); i++) {
+        const char *profile_name = string_array_get(to_unselect, i);
 
         bool was_active = false;
         for (size_t j = 0; j < string_array_size(active); j++) {
@@ -813,12 +814,12 @@ static error_t *profile_deactivate(
 
     /* Dry-run mode: show what would happen and exit */
     if (opts->dry_run) {
-        if (deactivated_count > 0) {
+        if (unselected_count > 0) {
             output_newline(out);
-            output_info(out, "Would deactivate %zu profile%s:",
-                       deactivated_count, deactivated_count == 1 ? "" : "s");
-            for (size_t i = 0; i < string_array_size(to_deactivate); i++) {
-                const char *profile_name = string_array_get(to_deactivate, i);
+            output_info(out, "Would unselect %zu profile%s:",
+                       unselected_count, unselected_count == 1 ? "" : "s");
+            for (size_t i = 0; i < string_array_size(to_unselect); i++) {
+                const char *profile_name = string_array_get(to_unselect, i);
                 /* Check if it was actually active */
                 bool was_active = false;
                 for (size_t j = 0; j < string_array_size(active); j++) {
@@ -838,7 +839,7 @@ static error_t *profile_deactivate(
     }
 
     /* Update state with new active profiles */
-    if (deactivated_count > 0) {
+    if (unselected_count > 0) {
         profile_names = malloc(string_array_size(new_active) * sizeof(char *));
         if (!profile_names) {
             err = ERROR(ERR_MEMORY, "Failed to allocate profile names");
@@ -855,7 +856,7 @@ static error_t *profile_deactivate(
             goto cleanup;
         }
 
-        /* Save state (profile deactivation only - filesystem cleanup via 'apply') */
+        /* Save state (profile unselection only - filesystem cleanup via 'apply') */
         err = state_save(repo, state);
         if (err) {
             err = error_wrap(err, "Failed to save state");
@@ -868,7 +869,7 @@ cleanup:
     config_free(config);
     free(profile_names);
     string_array_free(new_active);
-    string_array_free(to_deactivate);
+    string_array_free(to_unselect);
     string_array_free(active);
     state_free(state);
 
@@ -882,24 +883,24 @@ cleanup:
         output_newline(out);
     }
 
-    if (deactivated_count > 0) {
-        output_success(out, "Deactivated %zu profile%s",
-                      deactivated_count, deactivated_count == 1 ? "" : "s");
+    if (unselected_count > 0) {
+        output_success(out, "Unselected %zu profile%s",
+                      unselected_count, unselected_count == 1 ? "" : "s");
         output_info(out, "Run 'dotta apply' to remove deployed files from filesystem");
     }
     if (not_active > 0 && !opts->quiet) {
-        output_info(out, "%zu profile%s were not active",
+        output_info(out, "%zu profile%s were not selected",
                    not_active, not_active == 1 ? "" : "s");
     }
 
     /* Return success if profiles were already inactive (idempotent) */
-    if (deactivated_count == 0 && not_active > 0) {
+    if (unselected_count == 0 && not_active > 0) {
         return NULL;
     }
 
     /* Only error if nothing was specified or found */
-    if (deactivated_count == 0) {
-        return ERROR(ERR_NOT_FOUND, "No specified profiles were active or found");
+    if (unselected_count == 0) {
+        return ERROR(ERR_NOT_FOUND, "No specified profiles were selected or found");
     }
 
     return NULL;
@@ -950,10 +951,10 @@ static error_t *profile_reorder(
         output_newline(out);
         output_info(out, "To reorder profiles:");
         output_info(out, "  1. Edit your config.toml file and reorder the profile_order list");
-        output_info(out, "  2. Run 'dotta apply' to activate the new profile configuration");
+        output_info(out, "  2. Run 'dotta apply' to apply the new profile configuration");
         output_newline(out);
         output_info(out, "Alternatively, remove 'profile_order' from config to enable state-based");
-        output_info(out, "profile management with activate/deactivate/reorder commands.");
+        output_info(out, "profile management with select/unselect/reorder commands.");
 
         err = ERROR(ERR_CONFLICT, "Profile management controlled by config file");
         goto cleanup;
@@ -977,7 +978,7 @@ static error_t *profile_reorder(
     if (string_array_size(current_active) == 0) {
         err = ERROR(ERR_VALIDATION,
                    "No active profiles to reorder\n"
-                   "Hint: Run 'dotta profile activate <name>' first");
+                   "Hint: Run 'dotta profile select <name>' first");
         goto cleanup;
     }
 
@@ -1320,12 +1321,12 @@ error_t *cmd_profile(git_repository *repo, const cmd_profile_options_t *opts) {
             result = profile_fetch(repo, opts, out);
             break;
 
-        case PROFILE_ACTIVATE:
-            result = profile_activate(repo, opts, out);
+        case PROFILE_SELECT:
+            result = profile_select(repo, opts, out);
             break;
 
-        case PROFILE_DEACTIVATE:
-            result = profile_deactivate(repo, opts, out);
+        case PROFILE_UNSELECT:
+            result = profile_unselect(repo, opts, out);
             break;
 
         case PROFILE_REORDER:

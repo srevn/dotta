@@ -212,11 +212,36 @@ error_t *deploy_file(
     const void *content = git_blob_rawcontent(blob);
     git_object_size_t size = git_blob_rawsize(blob);
 
+    /* Determine ownership for the file based on prefix
+     *
+     * For home/ files when running as root: Use actual user's UID/GID
+     * For root/ files: Use -1 (preserve root ownership)
+     * When not running as root: Use -1 (preserve current user)
+     */
+    uid_t target_uid = -1;
+    gid_t target_gid = -1;
+
+    bool is_home_prefix = (strncmp(entry->storage_path, "home/", 5) == 0);
+
+    if (is_home_prefix && fs_is_running_as_root()) {
+        /* Running as root, deploying home/ file - use actual user's credentials */
+        error_t *owner_err = fs_get_actual_user(&target_uid, &target_gid);
+        if (owner_err) {
+            git_blob_free(blob);
+            return error_wrap(owner_err,
+                            "Failed to determine actual user for home/ file: %s",
+                            entry->filesystem_path);
+        }
+    }
+    /* For root/ files or when not running as root: leave uid/gid as -1 (no change) */
+
     /* Write directly from git blob to filesystem */
     error_t *derr = fs_write_file_raw(
         entry->filesystem_path,
         (const unsigned char *)content,
-        (size_t)size
+        (size_t)size,
+        target_uid,
+        target_gid
     );
     git_blob_free(blob);
 

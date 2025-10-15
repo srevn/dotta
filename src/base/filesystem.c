@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <libgen.h>
 #include <limits.h>
+#include <pwd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -90,7 +91,8 @@ error_t *fs_read_file(const char *path, buffer_t **out) {
     return NULL;
 }
 
-error_t *fs_write_file_raw(const char *path, const unsigned char *data, size_t size) {
+error_t *fs_write_file_raw(const char *path, const unsigned char *data, size_t size,
+                           uid_t uid, gid_t gid) {
     RETURN_IF_ERROR(validate_path(path));
     /* Note: data can be NULL if size is 0 (empty file) */
 
@@ -134,6 +136,17 @@ error_t *fs_write_file_raw(const char *path, const unsigned char *data, size_t s
         written += n;
     }
 
+    /* Apply ownership if requested (before sync, while FD is open)
+     * Use -1 to skip ownership change */
+    if (uid != (uid_t)-1 || gid != (gid_t)-1) {
+        if (fchown(fd, uid, gid) < 0) {
+            int saved_errno = errno;
+            close(fd);
+            return ERROR(ERR_FS, "Failed to set ownership on '%s': %s",
+                        path, strerror(saved_errno));
+        }
+    }
+
     /* Sync to disk */
     if (fsync(fd) < 0) {
         int saved_errno = errno;
@@ -150,7 +163,7 @@ error_t *fs_write_file(const char *path, const buffer_t *content) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(content);
 
-    return fs_write_file_raw(path, buffer_data(content), buffer_size(content));
+    return fs_write_file_raw(path, buffer_data(content), buffer_size(content), -1, -1);
 }
 
 error_t *fs_copy_file(const char *src, const char *dst) {
@@ -654,5 +667,59 @@ error_t *fs_ensure_parent_dirs(const char *path) {
         return error_wrap(err, "Failed to create parent directories for: %s", path);
     }
 
+    return NULL;
+}
+
+/**
+ * Privilege and ownership operations
+ */
+
+bool fs_is_running_as_root(void) {
+    return geteuid() == 0;
+}
+
+error_t *fs_get_actual_user(uid_t *uid, gid_t *gid) {
+    CHECK_NULL(uid);
+    CHECK_NULL(gid);
+
+    /* Check if running under sudo by examining SUDO_UID environment variable */
+    const char *sudo_uid_str = getenv("SUDO_UID");
+    const char *sudo_gid_str = getenv("SUDO_GID");
+
+    if (sudo_uid_str && sudo_gid_str) {
+        /* Running under sudo - parse the environment variables */
+        char *endptr;
+
+        /* Parse UID */
+        errno = 0;
+        long parsed_uid = strtol(sudo_uid_str, &endptr, 10);
+        if (errno != 0 || *endptr != '\0' || parsed_uid < 0) {
+            return ERROR(ERR_INVALID_ARG,
+                        "Invalid SUDO_UID environment variable: %s", sudo_uid_str);
+        }
+
+        /* Parse GID */
+        errno = 0;
+        long parsed_gid = strtol(sudo_gid_str, &endptr, 10);
+        if (errno != 0 || *endptr != '\0' || parsed_gid < 0) {
+            return ERROR(ERR_INVALID_ARG,
+                        "Invalid SUDO_GID environment variable: %s", sudo_gid_str);
+        }
+
+        /* Validate that the UID actually exists in the system */
+        struct passwd *pw = getpwuid((uid_t)parsed_uid);
+        if (!pw) {
+            return ERROR(ERR_NOT_FOUND,
+                        "User with UID %ld (from SUDO_UID) not found in system", parsed_uid);
+        }
+
+        *uid = (uid_t)parsed_uid;
+        *gid = (gid_t)parsed_gid;
+        return NULL;
+    }
+
+    /* Not running under sudo - return current effective UID/GID */
+    *uid = geteuid();
+    *gid = getegid();
     return NULL;
 }

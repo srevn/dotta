@@ -44,9 +44,12 @@ error_t *fs_read_file(const char *path, buffer_t **out);
  * @param path File path (must not be NULL)
  * @param data Raw data bytes (can be NULL if size is 0)
  * @param size Number of bytes to write
+ * @param uid Target UID for file ownership (use -1 to preserve current)
+ * @param gid Target GID for file ownership (use -1 to preserve current)
  * @return Error or NULL on success
  */
-error_t *fs_write_file_raw(const char *path, const unsigned char *data, size_t size);
+error_t *fs_write_file_raw(const char *path, const unsigned char *data, size_t size,
+                           uid_t uid, gid_t gid);
 
 /**
  * Write buffer to file (overwrites if exists)
@@ -253,5 +256,29 @@ bool fs_exists(const char *path);
  * @return true if path exists
  */
 bool fs_lexists(const char *path);
+
+/**
+ * Privilege and ownership operations
+ */
+
+/**
+ * Get the actual user's UID/GID when running under sudo
+ *
+ * When dotta is run via sudo, this returns the original user's credentials
+ * (from SUDO_UID/SUDO_GID environment variables). When not running under sudo,
+ * returns the current process's UID/GID.
+ *
+ * @param uid Output for user ID (must not be NULL)
+ * @param gid Output for group ID (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *fs_get_actual_user(uid_t *uid, gid_t *gid);
+
+/**
+ * Check if running as root (effective UID is 0)
+ *
+ * @return true if effective UID is 0
+ */
+bool fs_is_running_as_root(void);
 
 #endif /* DOTTA_FILESYSTEM_H */

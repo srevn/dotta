@@ -1245,9 +1245,9 @@ static error_t *profile_validate(
         output_info(out, "  These reference non-existent profiles");
 
         if (opts->fix) {
-            output_info(out, "  Hint: Run 'dotta apply --prune' to clean up\n");
+            output_info(out, "  Hint: Run 'dotta apply' to clean up\n");
         } else {
-            output_info(out, "  Hint: Run 'dotta apply --prune' to clean up\n");
+            output_info(out, "  Hint: Run 'dotta apply' to clean up\n");
         }
     }
 

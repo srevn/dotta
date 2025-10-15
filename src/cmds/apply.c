@@ -382,7 +382,7 @@ cleanup:
  * - Where those files came from (profile tracking)
  *
  * This consistency is critical for:
- * - `apply --prune` to correctly identify orphaned files
+ * - `apply` to correctly identify orphaned files
  * - `status` to show accurate workspace state
  * - `revert` to restore correct versions
  *
@@ -415,7 +415,7 @@ static error_t *apply_update_and_save_state(
      * Critical: State must always reflect reality. Every deployment updates
      * both the profile list and file list to maintain internal consistency.
      *
-     * This ensures commands like `apply --prune` and `status` remain reliable.
+     * This ensures commands like `apply` and `status` remain reliable.
      */
     profile_names = malloc(profiles->count * sizeof(char *));
     if (!profile_names) {

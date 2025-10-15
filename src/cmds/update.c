@@ -21,6 +21,7 @@
 #include "utils/commit.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
+#include "utils/hooks.h"
 #include "utils/output.h"
 #include "utils/string.h"
 
@@ -1011,6 +1012,8 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     profile_list_t *profiles = NULL;
     modified_file_list_t *modified = NULL;
     new_file_list_t *new_files = NULL;
+    hook_context_t *hook_ctx = NULL;
+    char *repo_dir = NULL;
     bool should_detect_new = false;
     bool skip_new_files = false;
     size_t total_updated = 0;
@@ -1052,6 +1055,33 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     if (profiles->count == 0) {
         err = ERROR(ERR_NOT_FOUND, "No profiles found");
         goto cleanup;
+    }
+
+    /* Get repository directory for hooks */
+    err = config_get_repo_dir(config, &repo_dir);
+    if (err) {
+        goto cleanup;
+    }
+
+    /* Execute pre-update hook */
+    hook_ctx = hook_context_create(repo_dir, "update", NULL);
+    if (hook_ctx) {
+        hook_ctx->dry_run = opts->dry_run;
+        hook_context_add_files(hook_ctx, opts->files, opts->file_count);
+
+        hook_result_t *hook_result = NULL;
+        err = hook_execute(config, HOOK_PRE_UPDATE, hook_ctx, &hook_result);
+
+        if (err) {
+            /* Hook failed - abort operation */
+            if (hook_result && hook_result->output && hook_result->output[0]) {
+                fprintf(stderr, "Hook output:\n%s\n", hook_result->output);
+            }
+            hook_result_free(hook_result);
+            err = error_wrap(err, "Pre-update hook failed");
+            goto cleanup;
+        }
+        hook_result_free(hook_result);
     }
 
     /* Determine if we should detect new files */
@@ -1138,6 +1168,22 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
         goto cleanup;
     }
 
+    /* Execute post-update hook */
+    if (hook_ctx && !opts->dry_run) {
+        hook_result_t *hook_result = NULL;
+        error_t *temp_err = hook_execute(config, HOOK_POST_UPDATE, hook_ctx, &hook_result);
+
+        if (temp_err) {
+            /* Hook failed - warn but don't abort (files already updated) */
+            fprintf(stderr, "Warning: Post-update hook failed: %s\n", error_message(temp_err));
+            if (hook_result && hook_result->output && hook_result->output[0]) {
+                fprintf(stderr, "Hook output:\n%s\n", hook_result->output);
+            }
+            error_free(temp_err);
+        }
+        hook_result_free(hook_result);
+    }
+
     /* Summary */
     output_newline(out);
     output_success(out, "Updated %zu file%s across %zu profile%s",
@@ -1151,6 +1197,8 @@ cleanup:
     }
 
     /* Free all resources in reverse order */
+    if (hook_ctx) hook_context_free(hook_ctx);
+    if (repo_dir) free(repo_dir);
     if (new_files) new_file_list_free(new_files);
     if (modified) modified_file_list_free(modified);
     if (profiles) profile_list_free(profiles);

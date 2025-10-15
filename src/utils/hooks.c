@@ -22,8 +22,8 @@ static const char *HOOK_NAMES[] = {
     [HOOK_POST_REMOVE] = "post-remove",
     [HOOK_PRE_APPLY]   = "pre-apply",
     [HOOK_POST_APPLY]  = "post-apply",
-    [HOOK_PRE_CLEAN]   = "pre-clean",
-    [HOOK_POST_CLEAN]  = "post-clean"
+    [HOOK_PRE_UPDATE]  = "pre-update",
+    [HOOK_POST_UPDATE] = "post-update"
 };
 
 /**
@@ -57,10 +57,10 @@ bool hook_is_enabled(const dotta_config_t *config, hook_type_t type) {
         return config->pre_apply;
     case HOOK_POST_APPLY:
         return config->post_apply;
-    case HOOK_PRE_CLEAN:
-        return config->pre_clean;
-    case HOOK_POST_CLEAN:
-        return config->post_clean;
+    case HOOK_PRE_UPDATE:
+        return config->pre_update;
+    case HOOK_POST_UPDATE:
+        return config->post_update;
     default:
         return false;
     }

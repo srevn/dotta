@@ -65,8 +65,8 @@ auto_detect_new_files = true
 #   - post-apply   - Runs after applying profiles
 #   - pre-add      - Runs before adding files to a profile
 #   - post-add     - Runs after adding files to a profile
-#   - pre-clean    - Runs before cleaning deployed files
-#   - post-clean   - Runs after cleaning deployed files
+#   - pre-update   - Runs before updating profiles with modified files
+#   - post-update  - Runs after updating profiles with modified files
 #
 # Hooks receive environment variables with context about the operation.
 # If a pre-hook exits with non-zero status, the operation is aborted.
@@ -82,14 +82,14 @@ hooks_dir = "~/.config/dotta/hooks"
 
 # Enable/Disable Specific Hooks
 # You can selectively enable or disable hooks
-# Default: pre_apply=true, post_apply=true, pre_add=false, post_add=false, pre_clean=false, post_clean=false
+# Default: pre_apply=true, post_apply=true, pre_add=false, post_add=false, pre_update=false, post_update=false
 
-pre_apply = true    # Run before applying profiles (e.g., backup current configs)
-post_apply = true   # Run after applying profiles (e.g., reload shell, restart services)
-pre_add = false     # Run before adding files (e.g., validate file contents)
-post_add = false    # Run after adding files (e.g., commit to git, notify team)
-pre_clean = false   # Run before cleaning deployed files (e.g., backup before removal)
-post_clean = false  # Run after cleaning deployed files (e.g., cleanup caches, notify)
+pre_apply = true     # Run before applying profiles (e.g., backup current configs)
+post_apply = true    # Run after applying profiles (e.g., reload shell, restart services)
+pre_add = false      # Run before adding files (e.g., validate file contents)
+post_add = false     # Run after adding files (e.g., commit to git, notify team)
+pre_update = false   # Run before updating profiles with modified files (e.g., validate changes)
+post_update = false  # Run after updating profiles with modified files (e.g., sync to remote, notify)
 
 
 # ============================================================================

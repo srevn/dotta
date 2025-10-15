@@ -33,8 +33,8 @@ typedef struct dotta_config {
     bool post_add;
     bool pre_remove;
     bool post_remove;
-    bool pre_clean;
-    bool post_clean;
+    bool pre_update;
+    bool post_update;
 
     /* [security] */
     bool confirm_destructive;

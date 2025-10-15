@@ -23,8 +23,8 @@ typedef enum {
     HOOK_POST_REMOVE,
     HOOK_PRE_APPLY,
     HOOK_POST_APPLY,
-    HOOK_PRE_CLEAN,
-    HOOK_POST_CLEAN
+    HOOK_PRE_UPDATE,
+    HOOK_POST_UPDATE
 } hook_type_t;
 
 /**

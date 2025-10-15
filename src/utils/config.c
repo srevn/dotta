@@ -88,8 +88,8 @@ dotta_config_t *config_create_default(void) {
     config->post_add = false;
     config->pre_remove = false;
     config->post_remove = false;
-    config->pre_clean = false;
-    config->post_clean = false;
+    config->pre_update = false;
+    config->post_update = false;
 
     config->confirm_destructive = true;
     config->confirm_new_files = true;  /* Default: confirm before adding new files */
@@ -302,14 +302,14 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
             config->post_remove = post_remove.u.boolean;
         }
 
-        toml_datum_t pre_clean = toml_get(hooks, "pre_clean");
-        if (pre_clean.type == TOML_BOOLEAN) {
-            config->pre_clean = pre_clean.u.boolean;
+        toml_datum_t pre_update = toml_get(hooks, "pre_update");
+        if (pre_update.type == TOML_BOOLEAN) {
+            config->pre_update = pre_update.u.boolean;
         }
 
-        toml_datum_t post_clean = toml_get(hooks, "post_clean");
-        if (post_clean.type == TOML_BOOLEAN) {
-            config->post_clean = post_clean.u.boolean;
+        toml_datum_t post_update = toml_get(hooks, "post_update");
+        if (post_update.type == TOML_BOOLEAN) {
+            config->post_update = post_update.u.boolean;
         }
     }
 

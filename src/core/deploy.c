@@ -31,9 +31,6 @@ error_t *deploy_preflight_check(
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
-    /* Suppress unused parameter warning (state used for future conflict detection) */
-    (void)state;
-
     /* Allocate result */
     preflight_result_t *result = calloc(1, sizeof(preflight_result_t));
     if (!result) {
@@ -43,6 +40,8 @@ error_t *deploy_preflight_check(
     result->conflicts = string_array_create();
     result->permission_errors = string_array_create();
     result->overlaps = string_array_create();
+    result->ownership_changes = NULL;
+    result->ownership_change_count = 0;
     result->has_errors = false;
 
     if (!result->conflicts || !result->permission_errors || !result->overlaps) {
@@ -92,6 +91,60 @@ error_t *deploy_preflight_check(
 
     hashmap_free(seen_paths, NULL);
     hashmap_free(recorded_overlaps, NULL);
+
+    /* Detect ownership changes: files deployed from one profile, now being deployed from another */
+    if (state) {
+        /* Count ownership changes first */
+        size_t ownership_change_capacity = 16;
+        result->ownership_changes = calloc(ownership_change_capacity, sizeof(ownership_change_t));
+        if (!result->ownership_changes) {
+            preflight_result_free(result);
+            return ERROR(ERR_MEMORY, "Failed to allocate ownership changes array");
+        }
+
+        for (size_t i = 0; i < manifest->count; i++) {
+            const file_entry_t *entry = &manifest->entries[i];
+
+            /* Check if file exists in state */
+            if (state_file_exists(state, entry->filesystem_path)) {
+                const state_file_entry_t *state_entry = NULL;
+                error_t *err = state_get_file(state, entry->filesystem_path, &state_entry);
+
+                if (!err && state_entry) {
+                    /* Check if profile is changing */
+                    if (strcmp(state_entry->profile, entry->source_profile->name) != 0) {
+                        /* Ownership is changing - add to list */
+                        if (result->ownership_change_count >= ownership_change_capacity) {
+                            ownership_change_capacity *= 2;
+                            ownership_change_t *new_changes = realloc(result->ownership_changes,
+                                                                      ownership_change_capacity * sizeof(ownership_change_t));
+                            if (!new_changes) {
+                                preflight_result_free(result);
+                                return ERROR(ERR_MEMORY, "Failed to grow ownership changes array");
+                            }
+                            result->ownership_changes = new_changes;
+                        }
+
+                        ownership_change_t *change = &result->ownership_changes[result->ownership_change_count];
+                        change->filesystem_path = strdup(entry->filesystem_path);
+                        change->old_profile = strdup(state_entry->profile);
+                        change->new_profile = strdup(entry->source_profile->name);
+
+                        if (!change->filesystem_path || !change->old_profile || !change->new_profile) {
+                            preflight_result_free(result);
+                            return ERROR(ERR_MEMORY, "Failed to allocate ownership change entry");
+                        }
+
+                        result->ownership_change_count++;
+                    }
+                }
+
+                if (err) {
+                    error_free(err);
+                }
+            }
+        }
+    }
 
     /* Check each file */
     for (size_t i = 0; i < manifest->count; i++) {
@@ -436,6 +489,17 @@ void preflight_result_free(preflight_result_t *result) {
     string_array_free(result->conflicts);
     string_array_free(result->permission_errors);
     string_array_free(result->overlaps);
+
+    /* Free ownership changes */
+    if (result->ownership_changes) {
+        for (size_t i = 0; i < result->ownership_change_count; i++) {
+            free(result->ownership_changes[i].filesystem_path);
+            free(result->ownership_changes[i].old_profile);
+            free(result->ownership_changes[i].new_profile);
+        }
+        free(result->ownership_changes);
+    }
+
     free(result);
 }
 

@@ -88,6 +88,34 @@ static void print_preflight_results(const output_ctx_t *out, const preflight_res
             }
         }
     }
+
+    /* Print ownership changes */
+    if (result->ownership_changes && result->ownership_change_count > 0) {
+        output_section(out, "Ownership changes");
+        output_info(out, "  The following files will change ownership:");
+        for (size_t i = 0; i < result->ownership_change_count; i++) {
+            const ownership_change_t *change = &result->ownership_changes[i];
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "  %s→%s %s: %s%s%s → %s%s%s\n",
+                       output_color_code(out, OUTPUT_COLOR_YELLOW),
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       change->filesystem_path,
+                       output_color_code(out, OUTPUT_COLOR_CYAN),
+                       change->old_profile,
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       output_color_code(out, OUTPUT_COLOR_CYAN),
+                       change->new_profile,
+                       output_color_code(out, OUTPUT_COLOR_RESET));
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "  → %s: %s → %s\n",
+                       change->filesystem_path,
+                       change->old_profile,
+                       change->new_profile);
+            }
+        }
+        output_info(out, "  This means these files will now be managed by a different profile.");
+        output_newline(out);
+    }
 }
 
 /**

@@ -144,7 +144,7 @@ error_t *profile_load(
 /**
  * Load profile tree (lazy)
  */
-static error_t *profile_load_tree(git_repository *repo, profile_t *profile) {
+error_t *profile_load_tree(git_repository *repo, profile_t *profile) {
     CHECK_NULL(repo);
     CHECK_NULL(profile);
 
@@ -972,8 +972,43 @@ error_t *profile_build_manifest(
             void *idx_ptr = hashmap_get(path_map, filesystem_path);
 
             if (idx_ptr) {
-                /* Override existing entry */
+                /* Override existing entry (profile with higher precedence) */
                 size_t existing_idx = (size_t)(uintptr_t)idx_ptr - 1;
+
+                /* Add current profile to all_profiles list (for overlap tracking) */
+                if (!manifest->entries[existing_idx].all_profiles) {
+                    manifest->entries[existing_idx].all_profiles = string_array_create();
+                    if (!manifest->entries[existing_idx].all_profiles) {
+                        free(filesystem_path);
+                        git_tree_entry_free(entry);
+                        string_array_free(files);
+                        hashmap_free(path_map, NULL);
+                        manifest_free(manifest);
+                        return ERROR(ERR_MEMORY, "Failed to create all_profiles array");
+                    }
+                    /* Add the original profile that was there first */
+                    err = string_array_push(manifest->entries[existing_idx].all_profiles,
+                                           manifest->entries[existing_idx].source_profile->name);
+                    if (err) {
+                        free(filesystem_path);
+                        git_tree_entry_free(entry);
+                        string_array_free(files);
+                        hashmap_free(path_map, NULL);
+                        manifest_free(manifest);
+                        return err;
+                    }
+                }
+
+                /* Add current profile (the one with higher precedence) */
+                err = string_array_push(manifest->entries[existing_idx].all_profiles, profile->name);
+                if (err) {
+                    free(filesystem_path);
+                    git_tree_entry_free(entry);
+                    string_array_free(files);
+                    hashmap_free(path_map, NULL);
+                    manifest_free(manifest);
+                    return err;
+                }
 
                 free(manifest->entries[existing_idx].storage_path);
                 free(manifest->entries[existing_idx].filesystem_path);
@@ -1005,6 +1040,7 @@ error_t *profile_build_manifest(
                 manifest->entries[manifest->count].filesystem_path = filesystem_path;
                 manifest->entries[manifest->count].entry = entry;
                 manifest->entries[manifest->count].source_profile = profile;
+                manifest->entries[manifest->count].all_profiles = NULL;  /* Initialize to NULL (single profile) */
 
                 /* Store index in hashmap (offset by 1 to distinguish from NULL) */
                 err = hashmap_set(path_map, filesystem_path,
@@ -1084,6 +1120,9 @@ void manifest_free(manifest_t *manifest) {
         free(manifest->entries[i].filesystem_path);
         if (manifest->entries[i].entry) {
             git_tree_entry_free(manifest->entries[i].entry);
+        }
+        if (manifest->entries[i].all_profiles) {
+            string_array_free(manifest->entries[i].all_profiles);
         }
     }
 

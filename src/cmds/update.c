@@ -18,6 +18,7 @@
 #include "core/workspace.h"
 #include "infra/compare.h"
 #include "infra/worktree.h"
+#include "utils/array.h"
 #include "utils/commit.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
@@ -751,24 +752,108 @@ static error_t *update_profile(
 }
 
 /**
+ * Check if file exists in a specific profile
+ *
+ * Helper function to detect multi-profile files during update.
+ */
+static bool file_exists_in_profile(
+    git_repository *repo,
+    const char *storage_path,
+    const char *profile_name
+) {
+    /* Load profile */
+    profile_t *profile = NULL;
+    error_t *err = profile_load(repo, profile_name, &profile);
+    if (err) {
+        error_free(err);
+        return false;
+    }
+
+    /* Load tree */
+    err = profile_load_tree(repo, profile);
+    if (err) {
+        profile_free(profile);
+        error_free(err);
+        return false;
+    }
+
+    /* Check if file exists in tree */
+    git_tree_entry *entry = NULL;
+    int git_err = git_tree_entry_bypath(&entry, profile->tree, storage_path);
+    bool exists = (git_err == 0);
+
+    if (entry) {
+        git_tree_entry_free(entry);
+    }
+    profile_free(profile);
+
+    return exists;
+}
+
+/**
  * Display summary of files to be updated
+ *
+ * Enhanced to show multi-profile warnings when files exist in multiple profiles.
  */
 static void update_display_summary(
     output_ctx_t *out,
     const modified_file_list_t *modified,
-    const new_file_list_t *new_files
+    const new_file_list_t *new_files,
+    git_repository *repo,
+    const profile_list_t *profiles
 ) {
     if (!out || !modified) {
         return;
     }
 
+    /* Track multi-profile files for warning */
+    size_t multi_profile_count = 0;
+
     /* Show modified files */
     output_section(out, "Modified files");
     for (size_t i = 0; i < modified->count; i++) {
         modified_file_t *file = &modified->files[i];
+
+        /* Check if file exists in other profiles */
+        string_array_t *other_profiles = string_array_create();
+        if (other_profiles) {
+            for (size_t j = 0; j < profiles->count; j++) {
+                const char *profile_name = profiles->profiles[j].name;
+                /* Skip the source profile */
+                if (strcmp(profile_name, file->source_profile->name) == 0) {
+                    continue;
+                }
+                /* Check if file exists in this profile */
+                if (file_exists_in_profile(repo, file->storage_path, profile_name)) {
+                    string_array_push(other_profiles, profile_name);
+                }
+            }
+        }
+
         char info[1024];
-        snprintf(info, sizeof(info), "%s (in %s)",
-                file->filesystem_path, file->source_profile->name);
+        if (other_profiles && string_array_size(other_profiles) > 0) {
+            /* File exists in multiple profiles - add warning indicator */
+            snprintf(info, sizeof(info), "%s (in %s) %s[also in:",
+                    file->filesystem_path, file->source_profile->name,
+                    output_color_code(out, OUTPUT_COLOR_DIM));
+
+            for (size_t j = 0; j < string_array_size(other_profiles); j++) {
+                char temp[1024];
+                snprintf(temp, sizeof(temp), "%s %s", info, string_array_get(other_profiles, j));
+                strncpy(info, temp, sizeof(info) - 1);
+                info[sizeof(info) - 1] = '\0';
+            }
+
+            char temp[1024];
+            snprintf(temp, sizeof(temp), "%s]%s", info, output_color_code(out, OUTPUT_COLOR_RESET));
+            strncpy(info, temp, sizeof(info) - 1);
+            info[sizeof(info) - 1] = '\0';
+
+            multi_profile_count++;
+        } else {
+            snprintf(info, sizeof(info), "%s (in %s)",
+                    file->filesystem_path, file->source_profile->name);
+        }
 
         const char *status_label = NULL;
         output_color_t color = OUTPUT_COLOR_YELLOW;
@@ -794,6 +879,19 @@ static void update_display_summary(
         }
 
         output_item(out, status_label, color, info);
+
+        string_array_free(other_profiles);
+    }
+
+    /* Show multi-profile warning if needed */
+    if (multi_profile_count > 0) {
+        output_newline(out);
+        output_warning(out, "%zu file%s exist%s in multiple profiles",
+                      multi_profile_count,
+                      multi_profile_count == 1 ? "" : "s",
+                      multi_profile_count == 1 ? "s" : "");
+        output_info(out, "  Updates will be committed to the profile that deployed them (shown above).");
+        output_info(out, "  To update a different profile, remove the file from the current profile first.");
     }
 
     /* Show new files if any */
@@ -1126,7 +1224,7 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     }
 
     /* Display summary of files to update */
-    update_display_summary(out, modified, new_files);
+    update_display_summary(out, modified, new_files, repo, profiles);
 
     /* Handle user confirmations */
     confirm_result_t confirm_result;

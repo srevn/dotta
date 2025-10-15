@@ -22,6 +22,17 @@
 #include "types.h"
 
 /**
+ * Ownership change entry
+ *
+ * Represents a file where the owning profile is changing.
+ */
+typedef struct {
+    char *filesystem_path;       /* File path */
+    char *old_profile;          /* Previous owning profile */
+    char *new_profile;          /* New owning profile */
+} ownership_change_t;
+
+/**
  * Pre-flight check results
  */
 typedef struct {
@@ -29,6 +40,8 @@ typedef struct {
     string_array_t *conflicts;   /* Files modified locally */
     string_array_t *permission_errors; /* Files with permission issues */
     string_array_t *overlaps;    /* Files in multiple profiles (warnings) */
+    ownership_change_t *ownership_changes;  /* Files changing ownership */
+    size_t ownership_change_count;         /* Number of ownership changes */
 } preflight_result_t;
 
 /**

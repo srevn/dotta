@@ -32,9 +32,7 @@
 #include <git2.h>
 
 #include "types.h"
-
-/* Forward declaration - full definition in utils/config.h */
-struct dotta_config;
+#include "utils/config.h"
 
 /**
  * Profile structure
@@ -52,10 +50,11 @@ typedef struct {
  * Represents a single file to be deployed.
  */
 typedef struct {
-    char *storage_path;      /* Path in profile (home/.bashrc) */
-    char *filesystem_path;   /* Deployed path (/home/user/.bashrc) */
-    git_tree_entry *entry;   /* Git tree entry (borrowed from tree) */
-    profile_t *source_profile; /* Which profile provides this file */
+    char *storage_path;              /* Path in profile (home/.bashrc) */
+    char *filesystem_path;           /* Deployed path (/home/user/.bashrc) */
+    git_tree_entry *entry;           /* Git tree entry (borrowed from tree) */
+    profile_t *source_profile;       /* Which profile provides this file (highest precedence) */
+    string_array_t *all_profiles;    /* All profile names containing this file (for overlap detection) */
 } file_entry_t;
 
 /**
@@ -192,6 +191,21 @@ error_t *profile_list_all_local(
  * @return true if profile branch exists
  */
 bool profile_exists(git_repository *repo, const char *name);
+
+/**
+ * Load profile tree (lazy loading)
+ *
+ * Loads the Git tree for a profile if not already loaded.
+ * The tree is cached in the profile structure.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param profile Profile (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *profile_load_tree(
+    git_repository *repo,
+    profile_t *profile
+);
 
 /**
  * List files in profile

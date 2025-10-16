@@ -94,8 +94,6 @@ static void display_active_profiles(
 
         output_newline(out);
     }
-
-    output_newline(out);
 }
 
 /**
@@ -141,6 +139,7 @@ static void display_workspace_status(
 
     /* Only display section if there's something to report */
     if (ws_status != WORKSPACE_CLEAN || verbose) {
+        output_newline(out);
         output_section(out, "Workspace status");
 
         /* Display overall status with color */
@@ -355,6 +354,7 @@ static void display_multi_profile_files(
         return;
     }
 
+    output_newline(out);
     output_section(out, "Multi-profile files");
     output_info(out, "%zu file%s exist%s in multiple profiles:",
                multi_profile_count,
@@ -486,6 +486,7 @@ static error_t *display_remote_status(
     }
 
     /* Display remote sync status section */
+    output_newline(out);
     char section_title[256];
     snprintf(section_title, sizeof(section_title), "Remote sync status (%s)", remote_name);
     output_section(out, section_title);
@@ -734,16 +735,13 @@ error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
     display_active_profiles(out, profiles, manifest, state, opts->verbose);
 
     /* Display workspace status */
-    output_newline(out);
     display_workspace_status(repo, profiles, config, out, opts->verbose);
 
     /* Display multi-profile files (if verbose mode or if there are any) */
-    output_newline(out);
     display_multi_profile_files(repo, profiles, manifest, out);
 
     /* Show remote sync status (if requested) */
     if (opts->show_remote) {
-        output_newline(out);
         err = display_remote_status(repo, profiles, out, opts->all_profiles,
                                     opts->verbose, opts->no_fetch);
         if (err) {

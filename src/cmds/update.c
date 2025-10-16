@@ -455,8 +455,6 @@ static error_t *copy_file_to_worktree(
 
 /**
  * Capture and save metadata for updated files
- *
- * Similar to add.c, but works with modified_file_t array.
  */
 static error_t *capture_and_save_metadata(
     worktree_handle_t *wt,
@@ -753,10 +751,6 @@ static error_t *update_profile(
 
 /**
  * Display summary of files to be updated
- *
- * Enhanced to show multi-profile warnings when files exist in multiple profiles.
- * Uses centralized profile_build_file_index() for O(M×P) performance instead of
- * O(N×M×GitOps) with the old approach.
  */
 static void update_display_summary(
     output_ctx_t *out,
@@ -1273,11 +1267,6 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
                    profiles->count, profiles->count == 1 ? "" : "s");
 
 cleanup:
-    /* Add trailing newline for UX consistency */
-    if (out) {
-        output_newline(out);
-    }
-
     /* Free all resources in reverse order */
     if (hook_ctx) hook_context_free(hook_ctx);
     if (repo_dir) free(repo_dir);

@@ -830,11 +830,6 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     /* Success - fall through to cleanup */
     err = NULL;
 
-    /* Add trailing newline for UX consistency */
-    if (out) {
-        output_newline(out);
-    }
-
 cleanup:
     /* Free resources in reverse order of allocation */
     if (deploy_res) deploy_result_free(deploy_res);

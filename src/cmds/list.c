@@ -755,11 +755,6 @@ error_t *cmd_list(git_repository *repo, const cmd_list_options_t *opts) {
         err = ERROR(ERR_INVALID_ARG, "Invalid list mode");
     }
 
-    /* Add trailing newline for UX consistency */
-    if (out) {
-        output_newline(out);
-    }
-
     /* Cleanup */
     config_free(config);
     output_free(out);

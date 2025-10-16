@@ -442,11 +442,6 @@ error_t *cmd_diff(git_repository *repo, const cmd_diff_options_t *opts) {
         }
     }
 
-    /* Add trailing newline for UX consistency */
-    if (out) {
-        output_newline(out);
-    }
-
     /* Cleanup */
     manifest_free(manifest);
     profile_list_free(profiles);

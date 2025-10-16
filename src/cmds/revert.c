@@ -843,10 +843,6 @@ cleanup:
     if (target_commit) git_commit_free(target_commit);
     if (profile_name) free(profile_name);
     if (resolved_path) free(resolved_path);
-    /* Add trailing newline for UX consistency */
-    if (out) {
-        output_newline(out);
-    }
 
     if (out) output_free(out);
     if (config) config_free(config);

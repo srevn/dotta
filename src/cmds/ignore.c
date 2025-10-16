@@ -1467,11 +1467,6 @@ error_t *cmd_ignore(git_repository *repo, const cmd_ignore_options_t *opts) {
         }
     }
 
-    /* Add trailing newline for UX consistency */
-    if (out) {
-        output_newline(out);
-    }
-
     output_free(out);
     config_free(config);
     return err;

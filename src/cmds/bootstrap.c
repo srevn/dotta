@@ -297,7 +297,8 @@ static error_t *bootstrap_create_template(
 static error_t *bootstrap_edit(
     git_repository *repo,
     const char *repo_dir,
-    const char *profile_name
+    const char *profile_name,
+    output_ctx_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(repo_dir);
@@ -311,7 +312,9 @@ static error_t *bootstrap_edit(
         if (err) {
             return error_wrap(err, "Failed to create bootstrap template");
         }
-        printf("Created bootstrap script for profile '%s'\n", profile_name);
+        if (out) {
+            output_success(out, "Created bootstrap script for profile '%s'", profile_name);
+        }
     }
 
     /* Get script path */
@@ -339,7 +342,8 @@ static error_t *bootstrap_show(
     git_repository *repo,
     const char *repo_dir,
     const char *profile_name,
-    const char *script_name
+    const char *script_name,
+    output_ctx_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(repo_dir);
@@ -371,7 +375,9 @@ static error_t *bootstrap_show(
 
     char buf[1024];
     while (fgets(buf, sizeof(buf), fp)) {
-        printf("%s", buf);
+        if (out) {
+            output_printf(out, OUTPUT_NORMAL, "%s", buf);
+        }
     }
 
     fclose(fp);
@@ -386,7 +392,8 @@ static error_t *bootstrap_list(
     git_repository *repo,
     const char *repo_dir,
     struct profile_list *profiles,
-    const char *script_name
+    const char *script_name,
+    output_ctx_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(repo_dir);
@@ -398,29 +405,41 @@ static error_t *bootstrap_list(
 
     profile_list_t *plist = (profile_list_t *)profiles;
 
-    printf("Bootstrap scripts:\n");
+    if (out) {
+        output_section(out, "Bootstrap scripts");
 
-    for (size_t i = 0; i < plist->count; i++) {
-        profile_t *profile = &plist->profiles[i];
-        bool exists = bootstrap_exists(repo, profile->name, script_name);
+        for (size_t i = 0; i < plist->count; i++) {
+            profile_t *profile = &plist->profiles[i];
+            bool exists = bootstrap_exists(repo, profile->name, script_name);
 
-        if (exists) {
-            char *script_path = NULL;
-            error_t *err = bootstrap_get_path(repo_dir, profile->name, script_name, &script_path);
-            if (err) {
-                error_free(err);
-                printf("  ✓ %-15s (path error)\n", profile->name);
+            if (exists) {
+                char *script_path = NULL;
+                error_t *err = bootstrap_get_path(repo_dir, profile->name, script_name, &script_path);
+                if (err) {
+                    error_free(err);
+                    output_printf(out, OUTPUT_NORMAL, "  ✓ %-15s (path error)\n", profile->name);
+                } else {
+                    output_printf(out, OUTPUT_NORMAL, "  ✓ %-15s %s\n", profile->name, script_path);
+                    free(script_path);
+                }
             } else {
-                printf("  ✓ %-15s %s\n", profile->name, script_path);
-                free(script_path);
+                output_printf(out, OUTPUT_NORMAL, "  ✗ %-15s (no bootstrap script)\n", profile->name);
             }
+        }
+
+        output_newline(out);
+        if (output_colors_enabled(out)) {
+            output_printf(out, OUTPUT_NORMAL, "%sHint: Create a bootstrap script with:%s\n",
+                         output_color_code(out, OUTPUT_COLOR_DIM),
+                         output_color_code(out, OUTPUT_COLOR_RESET));
+            output_printf(out, OUTPUT_NORMAL, "%s  dotta bootstrap --profile <profile> --edit%s\n",
+                         output_color_code(out, OUTPUT_COLOR_DIM),
+                         output_color_code(out, OUTPUT_COLOR_RESET));
         } else {
-            printf("  ✗ %-15s (no bootstrap script)\n", profile->name);
+            output_info(out, "Hint: Create a bootstrap script with:");
+            output_info(out, "  dotta bootstrap --profile <profile> --edit");
         }
     }
-
-    printf("\nTip: Create a bootstrap script with:\n");
-    printf("  dotta bootstrap --profile <profile> --edit\n");
 
     return NULL;
 }
@@ -436,6 +455,7 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
     char *repo_path = NULL;
     profile_list_t *profiles = NULL;
     dotta_config_t *config = NULL;
+    output_ctx_t *out = NULL;
 
     /* Load config */
     err = config_load(NULL, &config);
@@ -445,56 +465,53 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
         config = config_create_default();
     }
 
+    /* Create output context from config */
+    out = output_create_from_config(config);
+    if (!out) {
+        err = ERROR(ERR_MEMORY, "Failed to create output context");
+        goto cleanup;
+    }
+
     /* Resolve repository path */
     err = resolve_repo_path(&repo_path);
     if (err) {
-        config_free(config);
-        return error_wrap(err, "Failed to resolve repository path");
+        err = error_wrap(err, "Failed to resolve repository path");
+        goto cleanup;
     }
 
     /* Check if repository exists */
     if (!gitops_is_repository(repo_path)) {
-        free(repo_path);
-        config_free(config);
-        return ERROR(ERR_NOT_FOUND,
-                    "No dotta repository found at: %s\n"
-                    "Run 'dotta init' to create a new repository or 'dotta clone' to clone an existing one",
-                    repo_path);
+        err = ERROR(ERR_NOT_FOUND,
+                   "No dotta repository found at: %s\n"
+                   "Run 'dotta init' to create a new repository or 'dotta clone' to clone an existing one",
+                   repo_path);
+        goto cleanup;
     }
 
     /* Open repository */
     err = gitops_open_repository(&repo, repo_path);
     if (err) {
-        free(repo_path);
-        config_free(config);
-        return error_wrap(err, "Failed to open repository");
+        err = error_wrap(err, "Failed to open repository");
+        goto cleanup;
     }
 
     /* Handle --edit flag */
     if (opts->edit) {
         /* Check profile count */
         if (opts->profile_count > 1) {
-            gitops_close_repository(repo);
-            free(repo_path);
-            config_free(config);
-            return ERROR(ERR_INVALID_ARG,
-                        "Can only edit one profile at a time");
+            err = ERROR(ERR_INVALID_ARG, "Can only edit one profile at a time");
+            goto cleanup;
         }
 
         /* Default to 'global' profile if none specified */
         const char *profile_to_edit = (opts->profile_count == 0) ? "global" : opts->profiles[0];
 
         /* Edit the bootstrap script */
-        err = bootstrap_edit(repo, repo_path, profile_to_edit);
-        gitops_close_repository(repo);
-        free(repo_path);
-        config_free(config);
-
+        err = bootstrap_edit(repo, repo_path, profile_to_edit, out);
         if (err) {
-            return error_wrap(err, "Failed to edit bootstrap script");
+            err = error_wrap(err, "Failed to edit bootstrap script");
         }
-
-        return NULL;
+        goto cleanup;
     }
 
     /* Resolve profiles */
@@ -503,84 +520,68 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
         err = profile_list_load(repo, opts->profiles, opts->profile_count,
                                true, &profiles);
         if (err) {
-            gitops_close_repository(repo);
-            free(repo_path);
-            config_free(config);
-            return error_wrap(err, "Failed to load profiles");
+            err = error_wrap(err, "Failed to load profiles");
+            goto cleanup;
         }
     } else if (opts->all_profiles) {
         /* List all local profiles */
         err = profile_list_all_local(repo, &profiles);
         if (err) {
-            gitops_close_repository(repo);
-            free(repo_path);
-            config_free(config);
-            return error_wrap(err, "Failed to list all profiles");
+            err = error_wrap(err, "Failed to list all profiles");
+            goto cleanup;
         }
     } else {
         /* Auto-detect profiles */
         err = profile_detect_auto(repo, &profiles);
         if (err) {
-            gitops_close_repository(repo);
-            free(repo_path);
-            config_free(config);
-            return error_wrap(err, "Failed to auto-detect profiles");
+            err = error_wrap(err, "Failed to auto-detect profiles");
+            goto cleanup;
         }
 
         if (profiles->count == 0) {
-            printf("No profiles detected for this machine.\n");
-            printf("\nTip: Create a profile with:\n");
-            printf("  dotta add --profile <profile-name> <file>\n");
-            profile_list_free(profiles);
-            gitops_close_repository(repo);
-            free(repo_path);
-            config_free(config);
-            return NULL;
+            output_info(out, "No profiles detected for this machine.");
+            output_newline(out);
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "%sHint: Create a profile with:%s\n",
+                             output_color_code(out, OUTPUT_COLOR_DIM),
+                             output_color_code(out, OUTPUT_COLOR_RESET));
+                output_printf(out, OUTPUT_NORMAL, "%s  dotta add --profile <profile-name> <file>%s\n",
+                             output_color_code(out, OUTPUT_COLOR_DIM),
+                             output_color_code(out, OUTPUT_COLOR_RESET));
+            } else {
+                output_info(out, "Hint: Create a profile with:");
+                output_info(out, "  dotta add --profile <profile-name> <file>");
+            }
+            goto cleanup;
         }
     }
 
     /* Handle --list flag */
     if (opts->list) {
-        err = bootstrap_list(repo, repo_path, (struct profile_list *)profiles, NULL);
-        profile_list_free(profiles);
-        gitops_close_repository(repo);
-        free(repo_path);
-        config_free(config);
-
+        err = bootstrap_list(repo, repo_path, (struct profile_list *)profiles, NULL, out);
         if (err) {
-            return error_wrap(err, "Failed to list bootstrap scripts");
+            err = error_wrap(err, "Failed to list bootstrap scripts");
         }
-
-        return NULL;
+        goto cleanup;
     }
 
     /* Handle --show flag */
     if (opts->show) {
         /* Check profile count */
         if (opts->profile_count > 1) {
-            profile_list_free(profiles);
-            gitops_close_repository(repo);
-            free(repo_path);
-            config_free(config);
-            return ERROR(ERR_INVALID_ARG,
-                        "Can only show one profile at a time");
+            err = ERROR(ERR_INVALID_ARG, "Can only show one profile at a time");
+            goto cleanup;
         }
 
         /* Default to 'global' profile if none specified */
         const char *profile_to_show = (opts->profile_count == 0) ? "global" : opts->profiles[0];
 
         /* Show the bootstrap script */
-        err = bootstrap_show(repo, repo_path, profile_to_show, NULL);
-        profile_list_free(profiles);
-        gitops_close_repository(repo);
-        free(repo_path);
-        config_free(config);
-
+        err = bootstrap_show(repo, repo_path, profile_to_show, NULL, out);
         if (err) {
-            return error_wrap(err, "Failed to show bootstrap script");
+            err = error_wrap(err, "Failed to show bootstrap script");
         }
-
-        return NULL;
+        goto cleanup;
     }
 
     /* Count bootstrap scripts that exist */
@@ -592,43 +593,42 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
     }
 
     if (script_count == 0) {
-        printf("No bootstrap scripts found in selected profiles.\n");
-        printf("\nProfiles checked:\n");
+        output_info(out, "No bootstrap scripts found in selected profiles.");
+        output_newline(out);
+        output_section(out, "Profiles checked");
         for (size_t i = 0; i < profiles->count; i++) {
-            printf("  - %s\n", profiles->profiles[i].name);
+            output_printf(out, OUTPUT_NORMAL, "  - %s\n", profiles->profiles[i].name);
         }
-        printf("\nTip: Create a bootstrap script with:\n");
-        printf("  dotta bootstrap --profile <profile> --edit\n");
-
-        profile_list_free(profiles);
-        gitops_close_repository(repo);
-        free(repo_path);
-        config_free(config);
-        return NULL;
+        output_newline(out);
+        if (output_colors_enabled(out)) {
+            output_printf(out, OUTPUT_NORMAL, "%sHint: Create a bootstrap script with:%s\n",
+                         output_color_code(out, OUTPUT_COLOR_DIM),
+                         output_color_code(out, OUTPUT_COLOR_RESET));
+            output_printf(out, OUTPUT_NORMAL, "%s  dotta bootstrap --profile <profile> --edit%s\n",
+                         output_color_code(out, OUTPUT_COLOR_DIM),
+                         output_color_code(out, OUTPUT_COLOR_RESET));
+        } else {
+            output_info(out, "Hint: Create a bootstrap script with:");
+            output_info(out, "  dotta bootstrap --profile <profile> --edit");
+        }
+        goto cleanup;
     }
 
     /* Display what will be executed */
-    printf("Found bootstrap scripts:\n");
+    output_section(out, "Found bootstrap scripts");
     for (size_t i = 0; i < profiles->count; i++) {
         if (bootstrap_exists(repo, profiles->profiles[i].name, NULL)) {
-            printf("  ✓ %s/.dotta/bootstrap\n", profiles->profiles[i].name);
+            output_printf(out, OUTPUT_NORMAL, "  ✓ %s/.dotta/bootstrap\n", profiles->profiles[i].name);
         }
     }
-    printf("\n");
+    output_newline(out);
 
     /* Prompt for confirmation unless --yes or --dry-run */
     if (!opts->yes && !opts->dry_run) {
-        output_ctx_t *out = output_create_from_config(config);
         bool confirmed = output_confirm(out, "Would you like to execute bootstrap scripts now?", false);
-        output_free(out);
-
         if (!confirmed) {
-            printf("Bootstrap cancelled.\n");
-            profile_list_free(profiles);
-            gitops_close_repository(repo);
-            free(repo_path);
-            config_free(config);
-            return NULL;
+            output_info(out, "Bootstrap cancelled.");
+            goto cleanup;
         }
     }
 
@@ -637,22 +637,37 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
     err = bootstrap_run_for_profiles(repo, repo_path,
                                      (struct profile_list *)profiles,
                                      opts->dry_run, stop_on_error);
-
-    profile_list_free(profiles);
-    gitops_close_repository(repo);
-    free(repo_path);
-    config_free(config);
-
     if (err) {
-        return error_wrap(err, "Bootstrap failed");
+        err = error_wrap(err, "Bootstrap failed");
+        goto cleanup;
     }
 
     if (!opts->dry_run) {
-        printf("\nBootstrap complete!\n");
-        printf("\nNext steps:\n");
-        printf("  dotta apply            # Apply profiles to your system\n");
-        printf("  dotta status           # View current state\n");
+        output_newline(out);
+        output_success(out, "Bootstrap complete!");
+        output_newline(out);
+        if (output_colors_enabled(out)) {
+            output_printf(out, OUTPUT_NORMAL, "%sNext steps:%s\n",
+                         output_color_code(out, OUTPUT_COLOR_DIM),
+                         output_color_code(out, OUTPUT_COLOR_RESET));
+            output_printf(out, OUTPUT_NORMAL, "%s  dotta apply            # Apply profiles to your system%s\n",
+                         output_color_code(out, OUTPUT_COLOR_DIM),
+                         output_color_code(out, OUTPUT_COLOR_RESET));
+            output_printf(out, OUTPUT_NORMAL, "%s  dotta status           # View current state%s\n",
+                         output_color_code(out, OUTPUT_COLOR_DIM),
+                         output_color_code(out, OUTPUT_COLOR_RESET));
+        } else {
+            output_info(out, "Next steps:");
+            output_info(out, "  dotta apply            # Apply profiles to your system");
+            output_info(out, "  dotta status           # View current state");
+        }
     }
 
-    return NULL;
+cleanup:
+    if (profiles) profile_list_free(profiles);
+    if (repo) gitops_close_repository(repo);
+    if (repo_path) free(repo_path);
+    if (out) output_free(out);
+    if (config) config_free(config);
+    return err;
 }

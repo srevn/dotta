@@ -24,6 +24,7 @@
 #include "utils/commit.h"
 #include "utils/config.h"
 #include "utils/hooks.h"
+#include "utils/output.h"
 #include "utils/string.h"
 
 /**
@@ -52,7 +53,8 @@ static bool is_excluded(
     const char *path,
     bool is_directory,
     ignore_context_t *ignore_ctx,
-    const cmd_add_options_t *opts
+    const cmd_add_options_t *opts,
+    output_ctx_t *out
 ) {
     if (!path) {
         return false;
@@ -64,9 +66,9 @@ static bool is_excluded(
         error_t *err = ignore_should_ignore(ignore_ctx, path, is_directory, &ignored);
         if (err) {
             /* On error, log and continue without ignoring */
-            if (opts->verbose) {
-                fprintf(stderr, "Warning: ignore check failed for %s: %s\n",
-                       path, error_message(err));
+            if (opts->verbose && out) {
+                output_warning(out, "Ignore check failed for %s: %s",
+                              path, error_message(err));
             }
             error_free(err);
             return false;
@@ -88,6 +90,7 @@ static error_t *collect_files_from_dir(
     const char *dir_path,
     const cmd_add_options_t *opts,
     ignore_context_t *ignore_ctx,
+    output_ctx_t *out,
     string_array_t **out_files
 ) {
     CHECK_NULL(dir_path);
@@ -124,9 +127,9 @@ static error_t *collect_files_from_dir(
         bool is_dir = fs_is_directory(full_path);
 
         /* Check exclude patterns */
-        if (is_excluded(full_path, is_dir, ignore_ctx, opts)) {
-            if (opts->verbose) {
-                printf("Excluded: %s\n", full_path);
+        if (is_excluded(full_path, is_dir, ignore_ctx, opts, out)) {
+            if (opts->verbose && out) {
+                output_info(out, "Excluded: %s", full_path);
             }
             free(full_path);
             continue;
@@ -136,7 +139,7 @@ static error_t *collect_files_from_dir(
         if (is_dir) {
             /* Recurse into subdirectory */
             string_array_t *subdir_files = NULL;
-            error_t *err = collect_files_from_dir(full_path, opts, ignore_ctx, &subdir_files);
+            error_t *err = collect_files_from_dir(full_path, opts, ignore_ctx, out, &subdir_files);
             free(full_path);
 
             if (err) {
@@ -169,13 +172,15 @@ static error_t *collect_files_from_dir(
  * @param filesystem_path Source path on filesystem
  * @param storage_path Pre-computed storage path (e.g., "home/.bashrc")
  * @param opts Command options
+ * @param out Output context
  * @return Error or NULL on success
  */
 static error_t *add_file_to_worktree(
     worktree_handle_t *wt,
     const char *filesystem_path,
     const char *storage_path,
-    const cmd_add_options_t *opts
+    const cmd_add_options_t *opts,
+    output_ctx_t *out
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(filesystem_path);
@@ -270,8 +275,8 @@ static error_t *add_file_to_worktree(
         return error_from_git(git_err);
     }
 
-    if (opts->verbose) {
-        printf("Added: %s -> %s\n", filesystem_path, storage_path);
+    if (opts->verbose && out) {
+        output_info(out, "Added: %s -> %s", filesystem_path, storage_path);
     }
 
     free(dest_path);
@@ -287,7 +292,8 @@ static error_t *add_file_to_worktree(
  */
 static error_t *init_profile_dottaignore(
     worktree_handle_t *wt,
-    const cmd_add_options_t *opts
+    const cmd_add_options_t *opts,
+    output_ctx_t *out
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(opts);
@@ -351,8 +357,8 @@ static error_t *init_profile_dottaignore(
         return error_from_git(git_err);
     }
 
-    if (opts->verbose) {
-        printf("Created .dottaignore for profile '%s'\n", opts->profile);
+    if (opts->verbose && out) {
+        output_info(out, "Created .dottaignore for profile '%s'", opts->profile);
     }
 
     free(dottaignore_path);
@@ -482,6 +488,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
 
     /* Initialize all resources to NULL for safe cleanup */
     dotta_config_t *config = NULL;
+    output_ctx_t *out = NULL;
     ignore_context_t *ignore_ctx = NULL;
     char *repo_dir = NULL;
     hook_context_t *hook_ctx = NULL;
@@ -504,6 +511,18 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         config = config_create_default();
     }
 
+    /* Create output context from config */
+    out = output_create_from_config(config);
+    if (!out) {
+        err = ERROR(ERR_MEMORY, "Failed to create output context");
+        goto cleanup;
+    }
+
+    /* CLI flags override config */
+    if (opts->verbose) {
+        output_set_verbosity(out, OUTPUT_VERBOSE);
+    }
+
     /* Create ignore context */
     const char **cli_patterns = (const char **)opts->exclude_patterns;
     err = ignore_context_create(
@@ -516,9 +535,9 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     );
     if (err) {
         /* Non-fatal: continue without ignore context */
-        if (opts->verbose) {
-            fprintf(stderr, "Warning: failed to create ignore context: %s\n",
-                   error_message(err));
+        if (opts->verbose && out) {
+            output_warning(out, "Failed to create ignore context: %s",
+                          error_message(err));
         }
         error_free(err);
         err = NULL;
@@ -540,8 +559,8 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
 
         if (err) {
             /* Hook failed - abort operation */
-            if (hook_result && hook_result->output && hook_result->output[0]) {
-                fprintf(stderr, "Hook output:\n%s\n", hook_result->output);
+            if (hook_result && hook_result->output && hook_result->output[0] && out) {
+                output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
             }
             hook_result_free(hook_result);
             err = error_wrap(err, "Pre-add hook failed");
@@ -578,7 +597,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
 
     /* Initialize .dottaignore for new profiles */
     if (!profile_exists) {
-        err = init_profile_dottaignore(wt, opts);
+        err = init_profile_dottaignore(wt, opts, out);
         if (err) {
             err = error_wrap(err, "Failed to initialize .dottaignore for profile '%s'", opts->profile);
             goto cleanup;
@@ -615,7 +634,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         if (fs_is_directory(canonical)) {
             /* Recursively collect files from directory */
             string_array_t *dir_files = NULL;
-            err = collect_files_from_dir(canonical, opts, ignore_ctx, &dir_files);
+            err = collect_files_from_dir(canonical, opts, ignore_ctx, out, &dir_files);
 
             if (err) {
                 free(canonical);
@@ -635,9 +654,9 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             err = path_to_storage(canonical, &storage_prefix, &prefix);
             if (err) {
                 /* Non-fatal: just log warning */
-                if (opts->verbose) {
-                    fprintf(stderr, "Warning: failed to compute storage prefix for directory '%s': %s\n",
-                           canonical, error_message(err));
+                if (opts->verbose && out) {
+                    output_warning(out, "Failed to compute storage prefix for directory '%s': %s",
+                                  canonical, error_message(err));
                 }
                 error_free(err);
                 err = NULL;
@@ -663,14 +682,14 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             tracked_dirs[tracked_dir_count].storage_prefix = storage_prefix;
             tracked_dir_count++;
 
-            if (opts->verbose) {
-                printf("Added directory: %s\n", canonical);
+            if (opts->verbose && out) {
+                output_info(out, "Added directory: %s", canonical);
             }
         } else {
             /* Single file - check if excluded */
-            if (is_excluded(canonical, false, ignore_ctx, opts)) {
-                if (opts->verbose) {
-                    printf("Excluded: %s\n", canonical);
+            if (is_excluded(canonical, false, ignore_ctx, opts, out)) {
+                if (opts->verbose && out) {
+                    output_info(out, "Excluded: %s", canonical);
                 }
                 free(canonical);
                 continue;
@@ -749,7 +768,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         }
 
         /* Add file to worktree (with pre-computed storage_path) */
-        err = add_file_to_worktree(wt, file_path, storage_path, opts);
+        err = add_file_to_worktree(wt, file_path, storage_path, opts, out);
         if (err) {
             if (entry) {
                 metadata_entry_free(entry);
@@ -762,15 +781,15 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         /* Add metadata entry to collection (entry will be NULL for symlinks - that's ok) */
         if (entry) {
             /* Verbose output for metadata capture */
-            if (opts->verbose) {
+            if (opts->verbose && out) {
                 if (entry->owner || entry->group) {
-                    printf("Captured metadata: %s (mode: %04o, owner: %s:%s)\n",
-                          file_path, entry->mode,
-                          entry->owner ? entry->owner : "?",
-                          entry->group ? entry->group : "?");
+                    output_info(out, "Captured metadata: %s (mode: %04o, owner: %s:%s)",
+                               file_path, entry->mode,
+                               entry->owner ? entry->owner : "?",
+                               entry->group ? entry->group : "?");
                 } else {
-                    printf("Captured metadata: %s (mode: %04o)\n",
-                          file_path, entry->mode);
+                    output_info(out, "Captured metadata: %s (mode: %04o)",
+                               file_path, entry->mode);
                 }
             }
 
@@ -805,9 +824,9 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
 
         if (err) {
             /* Non-fatal: log warning and continue */
-            if (opts->verbose) {
-                fprintf(stderr, "Warning: failed to capture metadata for directory '%s': %s\n",
-                       dir->filesystem_path, error_message(err));
+            if (opts->verbose && out) {
+                output_warning(out, "Failed to capture metadata for directory '%s': %s",
+                              dir->filesystem_path, error_message(err));
             }
             error_free(err);
             err = NULL;
@@ -815,15 +834,15 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         }
 
         /* Verbose output before consuming the entry */
-        if (opts->verbose) {
+        if (opts->verbose && out) {
             if (dir_entry->owner || dir_entry->group) {
-                printf("Captured directory metadata: %s (mode: %04o, owner: %s:%s)\n",
-                      dir->filesystem_path, dir_entry->mode,
-                      dir_entry->owner ? dir_entry->owner : "?",
-                      dir_entry->group ? dir_entry->group : "?");
+                output_info(out, "Captured directory metadata: %s (mode: %04o, owner: %s:%s)",
+                           dir->filesystem_path, dir_entry->mode,
+                           dir_entry->owner ? dir_entry->owner : "?",
+                           dir_entry->group ? dir_entry->group : "?");
             } else {
-                printf("Captured directory metadata: %s (mode: %04o)\n",
-                      dir->filesystem_path, dir_entry->mode);
+                output_info(out, "Captured directory metadata: %s (mode: %04o)",
+                           dir->filesystem_path, dir_entry->mode);
             }
         }
 
@@ -842,17 +861,17 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
 
         if (err) {
             /* Non-fatal: log warning and continue */
-            if (opts->verbose) {
-                fprintf(stderr, "Warning: failed to track directory '%s': %s\n",
-                       dir->filesystem_path, error_message(err));
+            if (opts->verbose && out) {
+                output_warning(out, "Failed to track directory '%s': %s",
+                              dir->filesystem_path, error_message(err));
             }
             error_free(err);
             err = NULL;
         } else {
             dir_tracked_count++;
-            if (opts->verbose) {
-                printf("Tracked directory: %s -> %s\n",
-                       dir->filesystem_path, dir->storage_prefix);
+            if (opts->verbose && out) {
+                output_info(out, "Tracked directory: %s -> %s",
+                           dir->filesystem_path, dir->storage_prefix);
             }
         }
     }
@@ -887,13 +906,13 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     }
 
     /* Verbose summary */
-    if (opts->verbose) {
+    if (opts->verbose && out) {
         if (metadata_count > 0) {
-            printf("Updated metadata for %zu file(s)\n", metadata_count);
+            output_info(out, "Updated metadata for %zu file(s)", metadata_count);
         }
         if (dir_tracked_count > 0) {
-            printf("Tracked %zu director%s for change detection\n",
-                   dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies");
+            output_info(out, "Tracked %zu director%s for change detection",
+                       dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies");
         }
     }
 
@@ -914,9 +933,11 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
 
         if (hook_err) {
             /* Hook failed - warn but don't abort (files already added) */
-            fprintf(stderr, "Warning: Post-add hook failed: %s\n", error_message(hook_err));
-            if (hook_result && hook_result->output && hook_result->output[0]) {
-                fprintf(stderr, "Hook output:\n%s\n", hook_result->output);
+            if (out) {
+                output_warning(out, "Post-add hook failed: %s", error_message(hook_err));
+                if (hook_result && hook_result->output && hook_result->output[0]) {
+                    output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
+                }
             }
             error_free(hook_err);
         }
@@ -924,21 +945,28 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     }
 
     /* Show summary on success */
-    if (added_count > 0) {
-        printf("Added %zu file%s to profile '%s'\n",
-               added_count, added_count == 1 ? "" : "s", opts->profile);
+    if (added_count > 0 && out) {
+        output_success(out, "Added %zu file%s to profile '%s'",
+                      added_count, added_count == 1 ? "" : "s", opts->profile);
 
         if (profile_was_new) {
-            printf("Profile '%s' created\n", opts->profile);
+            output_success(out, "Profile '%s' created", opts->profile);
         }
 
         if (tracked_dir_count > 0) {
-            printf("Tracking %zu director%s for change detection\n",
-                   tracked_dir_count, tracked_dir_count == 1 ? "y" : "ies");
+            output_info(out, "Tracking %zu director%s for change detection",
+                       tracked_dir_count, tracked_dir_count == 1 ? "y" : "ies");
         }
 
-        printf("\nHint: Run 'dotta apply -p %s' to deploy files to filesystem\n", opts->profile);
-        printf("\n");
+        output_newline(out);
+        if (output_colors_enabled(out)) {
+            output_printf(out, OUTPUT_NORMAL, "%sHint: Run 'dotta apply -p %s' to deploy files to filesystem%s\n",
+                         output_color_code(out, OUTPUT_COLOR_DIM),
+                         opts->profile,
+                         output_color_code(out, OUTPUT_COLOR_RESET));
+        } else {
+            output_info(out, "Hint: Run 'dotta apply -p %s' to deploy files to filesystem", opts->profile);
+        }
     }
 
 cleanup:
@@ -958,6 +986,7 @@ cleanup:
     if (hook_ctx) hook_context_free(hook_ctx);
     if (repo_dir) free(repo_dir);
     if (ignore_ctx) ignore_context_free(ignore_ctx);
+    if (out) output_free(out);
     if (config) config_free(config);
 
     return err;

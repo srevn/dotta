@@ -15,6 +15,8 @@
 #include "core/ignore.h"
 #include "core/state.h"
 #include "utils/buffer.h"
+#include "utils/config.h"
+#include "utils/output.h"
 #include "utils/repo.h"
 #include "utils/string.h"
 
@@ -214,6 +216,29 @@ error_t *cmd_init(const cmd_init_options_t *opts) {
     error_t *err = NULL;
     char *resolved_path = NULL;
     const char *path = NULL;
+    dotta_config_t *config = NULL;
+    output_ctx_t *out = NULL;
+
+    /* Load configuration */
+    err = config_load(NULL, &config);
+    if (err) {
+        /* Non-fatal: continue with defaults */
+        error_free(err);
+        err = NULL;
+        config = config_create_default();
+    }
+
+    /* Create output context from config */
+    out = output_create_from_config(config);
+    if (!out) {
+        err = ERROR(ERR_MEMORY, "Failed to create output context");
+        goto cleanup;
+    }
+
+    /* Handle quiet flag */
+    if (opts->quiet) {
+        output_set_verbosity(out, OUTPUT_QUIET);
+    }
 
     /* Determine repository path */
     if (opts->repo_path) {
@@ -238,55 +263,62 @@ error_t *cmd_init(const cmd_init_options_t *opts) {
     /* Initialize or open repository */
     err = init_repository(path, &repo);
     if (err) {
-        if (resolved_path) free(resolved_path);
-        return error_wrap(err, "Failed to initialize repository");
+        err = error_wrap(err, "Failed to initialize repository");
+        goto cleanup;
     }
 
     /* Check if already initialized */
     if (is_initialized(repo)) {
+        output_info(out, "Dotta already initialized in this repository");
         git_repository_free(repo);
-        if (resolved_path) free(resolved_path);
-        if (!opts->quiet) {
-            printf("Dotta already initialized in this repository\n");
-        }
-        return NULL;
+        repo = NULL;
+        goto cleanup;
     }
 
     /* Create branch structure */
     err = init_branches(repo);
     if (err) {
-        git_repository_free(repo);
-        if (resolved_path) free(resolved_path);
-        return err;
+        goto cleanup;
     }
 
     /* Create initial state */
     err = init_state(repo);
     if (err) {
-        git_repository_free(repo);
-        if (resolved_path) free(resolved_path);
-        return err;
+        goto cleanup;
     }
 
     /* Create default .dottaignore */
     err = init_dottaignore(repo);
     if (err) {
-        git_repository_free(repo);
-        if (resolved_path) free(resolved_path);
-        return err;
+        goto cleanup;
     }
 
     /* Success */
     git_repository_free(repo);
+    repo = NULL;
 
-    if (!opts->quiet) {
-        printf("Initialized dotta repository in %s\n", path);
-        printf("\nNext steps:\n");
-        printf("  1. Create a profile: dotta add --profile global ~/.bashrc\n");
-        printf("  2. Apply profiles: dotta apply\n");
-        printf("\n");
+    output_success(out, "Initialized dotta repository in %s", path);
+    output_newline(out);
+
+    if (output_colors_enabled(out)) {
+        output_printf(out, OUTPUT_NORMAL, "%sNext steps:%s\n",
+                     output_color_code(out, OUTPUT_COLOR_DIM),
+                     output_color_code(out, OUTPUT_COLOR_RESET));
+        output_printf(out, OUTPUT_NORMAL, "%s  1. Create a profile: dotta add --profile global ~/.bashrc%s\n",
+                     output_color_code(out, OUTPUT_COLOR_DIM),
+                     output_color_code(out, OUTPUT_COLOR_RESET));
+        output_printf(out, OUTPUT_NORMAL, "%s  2. Apply profiles: dotta apply%s\n",
+                     output_color_code(out, OUTPUT_COLOR_DIM),
+                     output_color_code(out, OUTPUT_COLOR_RESET));
+    } else {
+        output_info(out, "Next steps:");
+        output_info(out, "  Create a profile: dotta add --profile global ~/.bashrc");
     }
 
+cleanup:
+    if (repo) git_repository_free(repo);
     if (resolved_path) free(resolved_path);
-    return NULL;
+    if (out) output_free(out);
+    if (config) config_free(config);
+    return err;
 }

@@ -1179,11 +1179,6 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
                     results->auth_failed_count == 1 ? "" : "s");
     }
 
-    /* Add trailing newline for UX consistency */
-    if (out) {
-        output_newline(out);
-    }
-
     /* Cleanup */
     sync_results_free(results);
     profile_list_free(profiles);

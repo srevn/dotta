@@ -250,7 +250,7 @@ static error_t *fetch_all_profiles(
         return err;
     }
 
-    output_success(out, "Fetched %zu profile%s\n",
+    output_success(out, "Fetched %zu profile%s",
                   fetched_count, fetched_count == 1 ? "" : "s");
 
     *fetched_profiles = successful;
@@ -281,7 +281,7 @@ static error_t *handle_no_profiles_detected(
     CHECK_NULL(out);
     CHECK_NULL(fallback_profiles);
 
-    output_warning(out, "No profiles auto-detected for this system\n");
+    output_warning(out, "No profiles auto-detected for this system");
 
     /* List available remote profiles */
     string_array_t *remote_branches = NULL;
@@ -304,7 +304,7 @@ static error_t *handle_no_profiles_detected(
         }
 
         if (has_global) {
-            output_info(out, "Fetching 'global' profile as fallback...\n");
+            output_info(out, "Fetching 'global' profile as fallback...");
 
             /* Fetch global */
             const char *global_name = "global";
@@ -318,7 +318,7 @@ static error_t *handle_no_profiles_detected(
                                 out, xfer, NULL, *fallback_profiles);
 
             if (!err && string_array_size(*fallback_profiles) > 0) {
-                output_success(out, "Using 'global' profile\n");
+                output_success(out, "Using 'global' profile");
             } else {
                 /* Failed to fetch - clean up */
                 string_array_free(*fallback_profiles);
@@ -326,7 +326,7 @@ static error_t *handle_no_profiles_detected(
             }
         } else {
             output_info(out, "No 'global' profile found.");
-            output_info(out, "Run 'dotta profile select <name>' after setup\n");
+            output_info(out, "Run 'dotta profile select <name>' after setup");
         }
     }
 
@@ -461,7 +461,8 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
 
     output_section(out, "Cloning dotta repository");
     output_info(out, "  URL: %s", opts->url);
-    output_info(out, "  Path: %s\n", local_path);
+    output_info(out, "  Path: %s", local_path);
+    output_newline(out);
 
     /* Create transfer context for progress reporting and credentials */
     xfer = transfer_context_create(out, opts->url);
@@ -498,7 +499,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             error_free(err);
         }
 
-        output_success(out, "Fetched %zu of %zu specified profile%s\n",
+        output_success(out, "Fetched %zu of %zu specified profile%s",
                       fetched_count, opts->profile_count,
                       opts->profile_count == 1 ? "" : "s");
 
@@ -558,7 +559,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             }
 
             if (fetched_count > 0) {
-                output_success(out, "Fetched %zu profile%s\n",
+                output_success(out, "Fetched %zu profile%s",
                               fetched_count, fetched_count == 1 ? "" : "s");
             }
 
@@ -701,10 +702,10 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
 
     /* Success - print messages before cleanup */
     output_newline(out);
-    output_success(out, "Dotta repository cloned successfully!\n");
+    output_success(out, "Dotta repository cloned successfully!");
 
     if (run_bootstrap) {
-        output_success(out, "Bootstrap complete!\n");
+        output_success(out, "Bootstrap complete!");
     }
 
     output_newline(out);

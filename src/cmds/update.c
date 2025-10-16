@@ -752,48 +752,11 @@ static error_t *update_profile(
 }
 
 /**
- * Check if file exists in a specific profile
- *
- * Helper function to detect multi-profile files during update.
- */
-static bool file_exists_in_profile(
-    git_repository *repo,
-    const char *storage_path,
-    const char *profile_name
-) {
-    /* Load profile */
-    profile_t *profile = NULL;
-    error_t *err = profile_load(repo, profile_name, &profile);
-    if (err) {
-        error_free(err);
-        return false;
-    }
-
-    /* Load tree */
-    err = profile_load_tree(repo, profile);
-    if (err) {
-        profile_free(profile);
-        error_free(err);
-        return false;
-    }
-
-    /* Check if file exists in tree */
-    git_tree_entry *entry = NULL;
-    int git_err = git_tree_entry_bypath(&entry, profile->tree, storage_path);
-    bool exists = (git_err == 0);
-
-    if (entry) {
-        git_tree_entry_free(entry);
-    }
-    profile_free(profile);
-
-    return exists;
-}
-
-/**
  * Display summary of files to be updated
  *
  * Enhanced to show multi-profile warnings when files exist in multiple profiles.
+ * Uses centralized profile_build_file_index() for O(M×P) performance instead of
+ * O(N×M×GitOps) with the old approach.
  */
 static void update_display_summary(
     output_ctx_t *out,
@@ -809,23 +772,40 @@ static void update_display_summary(
     /* Track multi-profile files for warning */
     size_t multi_profile_count = 0;
 
+    /* Build profile file index once for O(M×P) instead of O(N×M×GitOps)
+     * This is a massive performance improvement for repos with many profiles */
+    hashmap_t *profile_index = NULL;
+
     /* Show modified files */
     output_section(out, "Modified files");
     for (size_t i = 0; i < modified->count; i++) {
         modified_file_t *file = &modified->files[i];
 
-        /* Check if file exists in other profiles */
-        string_array_t *other_profiles = string_array_create();
-        if (other_profiles) {
-            for (size_t j = 0; j < profiles->count; j++) {
-                const char *profile_name = profiles->profiles[j].name;
-                /* Skip the source profile */
-                if (strcmp(profile_name, file->source_profile->name) == 0) {
-                    continue;
-                }
-                /* Check if file exists in this profile */
-                if (file_exists_in_profile(repo, file->storage_path, profile_name)) {
-                    string_array_push(other_profiles, profile_name);
+        /* Lazy-build index on first file needing multi-profile check */
+        if (!profile_index && i == 0) {
+            error_t *err = profile_build_file_index(repo, NULL, &profile_index);
+            if (err) {
+                /* Non-fatal: continue without multi-profile detection */
+                error_free(err);
+                profile_index = NULL;
+            }
+        }
+
+        /* Check if file exists in other profiles using O(1) index lookup */
+        string_array_t *other_profiles = NULL;
+        if (profile_index) {
+            string_array_t *indexed_profiles = hashmap_get(profile_index, file->storage_path);
+            if (indexed_profiles && string_array_size(indexed_profiles) > 0) {
+                /* Create filtered copy excluding the source profile */
+                other_profiles = string_array_create();
+                if (other_profiles) {
+                    for (size_t j = 0; j < string_array_size(indexed_profiles); j++) {
+                        const char *profile_name = string_array_get(indexed_profiles, j);
+                        /* Skip the source profile */
+                        if (strcmp(profile_name, file->source_profile->name) != 0) {
+                            string_array_push(other_profiles, profile_name);
+                        }
+                    }
                 }
             }
         }
@@ -881,6 +861,11 @@ static void update_display_summary(
         output_item(out, status_label, color, info);
 
         string_array_free(other_profiles);
+    }
+
+    /* Free the profile index */
+    if (profile_index) {
+        hashmap_free(profile_index, (void (*)(void *))string_array_free);
     }
 
     /* Show multi-profile warning if needed */

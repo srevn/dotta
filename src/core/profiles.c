@@ -1058,6 +1058,113 @@ error_t *profile_build_manifest(
 }
 
 /**
+ * Build inverted index of all files across profiles
+ *
+ * Loads all profile branches once and builds an in-memory hashmap that maps
+ * each storage path to a list of profile names containing that file.
+ *
+ * This is the centralized, optimized solution for multi-profile operations.
+ * Complexity: O(M×P) where M = profile count, P = avg files per profile.
+ * Lookups are then O(1) instead of O(M×GitOps).
+ */
+error_t *profile_build_file_index(
+    git_repository *repo,
+    const char *exclude_profile,
+    hashmap_t **out_index
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(out_index);
+
+    error_t *err = NULL;
+
+    /* Create index hashmap */
+    hashmap_t *index = hashmap_create(256);  /* Reasonable initial size */
+    if (!index) {
+        return ERROR(ERR_MEMORY, "Failed to create profile file index");
+    }
+
+    /* Get all branches */
+    string_array_t *all_branches = NULL;
+    err = gitops_list_branches(repo, &all_branches);
+    if (err) {
+        hashmap_free(index, NULL);
+        return error_wrap(err, "Failed to list branches");
+    }
+
+    /* Load each profile once and index its files */
+    for (size_t i = 0; i < string_array_size(all_branches); i++) {
+        const char *branch_name = string_array_get(all_branches, i);
+
+        /* Skip excluded profile and dotta-worktree */
+        if (strcmp(branch_name, "dotta-worktree") == 0) {
+            continue;
+        }
+
+        if (exclude_profile && strcmp(branch_name, exclude_profile) == 0) {
+            continue;
+        }
+
+        /* Try to load profile */
+        profile_t *profile = NULL;
+        err = profile_load(repo, branch_name, &profile);
+        if (err) {
+            error_free(err);
+            continue;  /* Non-fatal: skip this profile */
+        }
+
+        /* Get list of all files in this profile */
+        string_array_t *files = NULL;
+        err = profile_list_files(repo, profile, &files);
+        profile_free(profile);
+
+        if (err) {
+            error_free(err);
+            continue;  /* Non-fatal: skip this profile */
+        }
+
+        /* Add this profile to the index for each of its files */
+        for (size_t j = 0; j < string_array_size(files); j++) {
+            const char *storage_path = string_array_get(files, j);
+
+            /* Get or create profile list for this storage path */
+            string_array_t *profile_list = hashmap_get(index, storage_path);
+            if (!profile_list) {
+                profile_list = string_array_create();
+                if (!profile_list) {
+                    string_array_free(files);
+                    string_array_free(all_branches);
+                    /* Free index and all its arrays */
+                    hashmap_free(index, (void (*)(void *))string_array_free);
+                    return ERROR(ERR_MEMORY, "Failed to create profile list for file");
+                }
+
+                err = hashmap_set(index, storage_path, profile_list);
+                if (err) {
+                    string_array_free(profile_list);
+                    string_array_free(files);
+                    string_array_free(all_branches);
+                    hashmap_free(index, (void (*)(void *))string_array_free);
+                    return error_wrap(err, "Failed to index file");
+                }
+            }
+
+            /* Add this profile to the list */
+            err = string_array_push(profile_list, branch_name);
+            if (err) {
+                /* Non-fatal: continue without this entry */
+                error_free(err);
+            }
+        }
+
+        string_array_free(files);
+    }
+
+    string_array_free(all_branches);
+    *out_index = index;
+    return NULL;
+}
+
+/**
  * Free profile
  */
 void profile_free(profile_t *profile) {

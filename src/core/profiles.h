@@ -33,6 +33,9 @@
 
 #include "types.h"
 
+/* Forward declarations */
+typedef struct hashmap hashmap_t;
+
 /**
  * Profile structure
  */
@@ -272,5 +275,37 @@ error_t *profile_get_os_name(char **out);
  * @return Error or NULL on success
  */
 error_t *profile_get_hostname(char **out);
+
+/**
+ * Build inverted index of all files across profiles
+ *
+ * Creates a hashmap that maps storage paths to lists of profile names,
+ * enabling O(1) lookups for multi-profile conflict detection and overlap analysis.
+ *
+ * The index maps: storage_path (char*) -> string_array_t* (list of profile names)
+ *
+ * This is a performance optimization for operations that need to check which
+ * profiles contain specific files. Instead of loading each profile's tree
+ * repeatedly (O(N×M×GitOps)), this function loads all profiles once (O(M×P))
+ * and provides O(1) lookups.
+ *
+ * Usage:
+ * - Multi-profile conflict detection (update, remove commands)
+ * - File overlap analysis
+ * - Profile relationship mapping
+ *
+ * Complexity: O(M×P) where M = profile count, P = avg files per profile
+ *
+ * @param repo Repository (must not be NULL)
+ * @param exclude_profile Optional profile name to exclude from index (can be NULL)
+ * @param out_index Output hashmap: storage_path -> string_array_t* of profile names
+ *                  (must not be NULL, caller must free with hashmap_free(..., string_array_free))
+ * @return Error or NULL on success
+ */
+error_t *profile_build_file_index(
+    git_repository *repo,
+    const char *exclude_profile,
+    hashmap_t **out_index
+);
 
 #endif /* DOTTA_PROFILES_H */

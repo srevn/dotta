@@ -425,115 +425,6 @@ static bool is_deployed_from_other_profile(
 }
 
 /**
- * Build inverted index: storage_path -> set of profiles containing that path
- *
- * Loads all profiles once and builds an index for O(1) lookups.
- * This is a massive optimization over loading profiles repeatedly per-file.
- *
- * Complexity: O(M×P) where M = profile count, P = avg files per profile
- * Old approach was: O(N×M×GitOps) where N = files being checked
- *
- * @param repo Repository (must not be NULL)
- * @param current_profile Profile to exclude from results (must not be NULL)
- * @param out_index Output hashmap storage_path -> string_array_t of profile names
- * @return Error or NULL on success
- */
-static error_t *build_profile_file_index(
-    git_repository *repo,
-    const char *current_profile,
-    hashmap_t **out_index
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(current_profile);
-    CHECK_NULL(out_index);
-
-    error_t *err = NULL;
-
-    /* Create index hashmap */
-    hashmap_t *index = hashmap_create(256);  /* Reasonable initial size */
-    if (!index) {
-        return ERROR(ERR_MEMORY, "Failed to create profile file index");
-    }
-
-    /* Get all branches */
-    string_array_t *all_branches = NULL;
-    err = gitops_list_branches(repo, &all_branches);
-    if (err) {
-        hashmap_free(index, NULL);
-        return error_wrap(err, "Failed to list branches");
-    }
-
-    /* Load each profile once and index its files */
-    for (size_t i = 0; i < string_array_size(all_branches); i++) {
-        const char *branch_name = string_array_get(all_branches, i);
-
-        /* Skip current profile and dotta-worktree */
-        if (strcmp(branch_name, current_profile) == 0 ||
-            strcmp(branch_name, "dotta-worktree") == 0) {
-            continue;
-        }
-
-        /* Try to load profile */
-        profile_t *profile = NULL;
-        err = profile_load(repo, branch_name, &profile);
-        if (err) {
-            error_free(err);
-            continue;  /* Non-fatal: skip this profile */
-        }
-
-        /* Get list of all files in this profile */
-        string_array_t *files = NULL;
-        err = profile_list_files(repo, profile, &files);
-        profile_free(profile);
-
-        if (err) {
-            error_free(err);
-            continue;  /* Non-fatal: skip this profile */
-        }
-
-        /* Add this profile to the index for each of its files */
-        for (size_t j = 0; j < string_array_size(files); j++) {
-            const char *storage_path = string_array_get(files, j);
-
-            /* Get or create profile list for this storage path */
-            string_array_t *profile_list = hashmap_get(index, storage_path);
-            if (!profile_list) {
-                profile_list = string_array_create();
-                if (!profile_list) {
-                    string_array_free(files);
-                    string_array_free(all_branches);
-                    /* Free index and all its arrays */
-                    hashmap_free(index, (void (*)(void *))string_array_free);
-                    return ERROR(ERR_MEMORY, "Failed to create profile list for file");
-                }
-
-                err = hashmap_set(index, storage_path, profile_list);
-                if (err) {
-                    string_array_free(profile_list);
-                    string_array_free(files);
-                    string_array_free(all_branches);
-                    hashmap_free(index, (void (*)(void *))string_array_free);
-                    return error_wrap(err, "Failed to index file");
-                }
-            }
-
-            /* Add this profile to the list */
-            err = string_array_push(profile_list, branch_name);
-            if (err) {
-                /* Non-fatal: continue without this entry */
-                error_free(err);
-            }
-        }
-
-        string_array_free(files);
-    }
-
-    string_array_free(all_branches);
-    *out_index = index;
-    return NULL;
-}
-
-/**
  * Analyze multi-profile conflicts for files to be removed
  *
  * Checks each file against all other profiles and determines:
@@ -541,7 +432,7 @@ static error_t *build_profile_file_index(
  * - Whether the file is deployed from another profile
  *
  * Performance: O(M×P + N) where M=profiles, P=avg files/profile, N=files checked
- * Old implementation: O(N×M×GitOps) - massive improvement!
+ * Uses centralized profile_build_file_index() for optimal performance.
  *
  * Returns arrays of other profiles per file (caller must free).
  */
@@ -571,9 +462,10 @@ static error_t *analyze_multi_profile_conflicts(
         return ERROR(ERR_MEMORY, "Failed to allocate multi-profile tracking");
     }
 
-    /* Build profile file index once (O(M×P) - loads all profiles) */
+    /* Build profile file index once (O(M×P) - loads all profiles)
+     * Uses centralized function from core/profiles.c */
     hashmap_t *profile_index = NULL;
-    err = build_profile_file_index(repo, current_profile, &profile_index);
+    err = profile_build_file_index(repo, current_profile, &profile_index);
     if (err) {
         free(other_profiles);
         return error_wrap(err, "Failed to build profile index");

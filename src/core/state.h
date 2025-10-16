@@ -228,17 +228,18 @@ error_t *state_set_profiles(
 error_t *state_get_profiles(const state_t *state, string_array_t **out);
 
 /**
- * Get state timestamp
+ * Get last deployed timestamp for a profile
  *
- * Returns timestamp of last state modification.
+ * Returns the most recent deployment timestamp for files from the specified profile.
  *
  * @param state State (must not be NULL)
- * @return Timestamp (0 if not set)
+ * @param profile_name Profile name (must not be NULL)
+ * @return Timestamp (0 if profile has no deployed files)
  */
-time_t state_get_timestamp(const state_t *state);
+time_t state_get_profile_timestamp(const state_t *state, const char *profile_name);
 
 /**
- * Clear all file entries (keeps profiles and timestamp)
+ * Clear all file entries (keeps profiles)
  *
  * Efficiently truncates deployed_files table.
  *

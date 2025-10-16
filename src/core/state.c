@@ -47,15 +47,11 @@ struct state {
     char *db_path;
 
     /* Transaction state */
-    bool is_write_mode;      /* Opened with load_for_update() */
     bool in_transaction;     /* BEGIN IMMEDIATE executed */
 
     /* Cached active profiles (loaded lazily) */
     string_array_t *profiles;
     bool profiles_loaded;
-
-    /* Timestamp (for compatibility) */
-    time_t timestamp;
 
     /* Prepared statements (initialized once, reused) */
     sqlite3_stmt *stmt_insert_file;     /* INSERT OR REPLACE deployed_files */
@@ -1065,11 +1061,9 @@ error_t *state_load(git_repository *repo, state_t **out) {
 
     state->db = db;
     state->db_path = db_path;
-    state->is_write_mode = false;
     state->in_transaction = false;
     state->profiles = NULL;
     state->profiles_loaded = false;
-    state->timestamp = time(NULL);
 
     /* Prepare statements */
     err = prepare_statements(state);
@@ -1124,11 +1118,9 @@ error_t *state_load_for_update(git_repository *repo, state_t **out) {
 
     state->db = db;
     state->db_path = db_path;
-    state->is_write_mode = true;
     state->in_transaction = false;
     state->profiles = NULL;
     state->profiles_loaded = false;
-    state->timestamp = time(NULL);
 
     /* Prepare statements */
     err = prepare_statements(state);
@@ -1298,11 +1290,9 @@ error_t *state_create_empty(state_t **out) {
 
     state->db = NULL;
     state->db_path = NULL;
-    state->is_write_mode = false;
     state->in_transaction = false;
     state->profiles = string_array_create();
     state->profiles_loaded = true;  /* Empty array is loaded */
-    state->timestamp = time(NULL);
 
     if (!state->profiles) {
         free(state);
@@ -1357,19 +1347,6 @@ void state_free(state_t *state) {
 }
 
 /**
- * Get state timestamp
- *
- * @param state State (must not be NULL)
- * @return Timestamp (0 if not set)
- */
-time_t state_get_timestamp(const state_t *state) {
-    if (!state) {
-        return 0;
-    }
-    return state->timestamp;
-}
-
-/**
  * Create file entry
  *
  * Helper function to allocate and initialize a file entry.
@@ -1416,6 +1393,43 @@ error_t *state_create_entry(
 
     *out = entry;
     return NULL;
+}
+
+/**
+ * Get last deployed timestamp for a profile
+ *
+ * Queries the maximum deployed_at timestamp for files from the specified profile.
+ *
+ * @param state State (must not be NULL)
+ * @param profile_name Profile name (must not be NULL)
+ * @return Timestamp (0 if profile has no deployed files)
+ */
+time_t state_get_profile_timestamp(const state_t *state, const char *profile_name) {
+    if (!state || !profile_name || !state->db) {
+        return 0;
+    }
+
+    const char *sql = "SELECT MAX(deployed_at) FROM deployed_files WHERE profile = ?;";
+    sqlite3_stmt *stmt = NULL;
+
+    /* Cast away const for statement preparation */
+    sqlite3 *db = ((state_t *)state)->db;
+
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return 0;
+    }
+
+    sqlite3_bind_text(stmt, 1, profile_name, -1, SQLITE_TRANSIENT);
+
+    time_t timestamp = 0;
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        timestamp = (time_t)sqlite3_column_int64(stmt, 0);
+    }
+
+    sqlite3_finalize(stmt);
+    return timestamp;
 }
 
 /**

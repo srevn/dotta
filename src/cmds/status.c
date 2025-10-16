@@ -53,6 +53,33 @@ static void display_active_profiles(
                          profile->auto_detected ? "*" : " ", profile->name, auto_text);
         }
 
+        /* Show per-profile last deployed timestamp */
+        if (state) {
+            time_t profile_deploy_time = state_get_profile_timestamp(state, profile->name);
+            if (profile_deploy_time > 0) {
+                char time_buf[64];
+                char relative_buf[64];
+
+                /* Format both absolute and relative time */
+                struct tm *tm_info = localtime(&profile_deploy_time);
+                strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
+                format_relative_time(profile_deploy_time, relative_buf, sizeof(relative_buf));
+
+                /* Display dimmed timestamp */
+                char *dimmed_time = output_colorize(out, OUTPUT_COLOR_DIM,
+                    time_buf);
+                if (dimmed_time) {
+                    output_printf(out, OUTPUT_NORMAL, "  %s(deployed %s)%s",
+                                 output_color_code(out, OUTPUT_COLOR_DIM),
+                                 relative_buf,
+                                 output_color_code(out, OUTPUT_COLOR_RESET));
+                    free(dimmed_time);
+                } else {
+                    output_printf(out, OUTPUT_NORMAL, "  (deployed %s)", relative_buf);
+                }
+            }
+        }
+
         /* In verbose mode, show file count for this profile */
         if (verbose && manifest) {
             size_t profile_file_count = 0;
@@ -68,16 +95,6 @@ static void display_active_profiles(
         output_newline(out);
     }
 
-    /* Show last deployment time if available */
-    if (state) {
-        time_t last_deploy = state_get_timestamp(state);
-        if (last_deploy > 0) {
-            char time_buf[64];
-            struct tm *tm_info = localtime(&last_deploy);
-            strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
-            output_info(out, "  Last deployed: %s", time_buf);
-        }
-    }
     output_newline(out);
 }
 

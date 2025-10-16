@@ -344,28 +344,22 @@ cleanup:
 /**
  * Update state with deployed files and save to disk
  *
- * Updates the state with:
- * - Active profile names (always - state must reflect reality)
- * - Files from manifest (with computed hashes)
+ * This function does NOT modify the active profile list in state.
+ * Active profiles are managed exclusively by 'dotta profile select/unselect'
+ * commands. Apply only deploys files and updates the file tracking list.
  *
- * State consistency principle:
- * Every deployment operation updates BOTH profiles and files in state.
- * This ensures state remains internally consistent and accurately reflects
- * what is deployed on the filesystem.
+ * The state file tracks:
+ * - Active profiles - Modified ONLY by 'dotta profile' commands
+ * - Deployed files - Modified by 'dotta apply' and 'dotta revert'
  *
- * The state file is the single source of truth for:
- * - Which profiles are currently active
- * - Which files are currently deployed
- * - Where those files came from (profile tracking)
- *
- * This consistency is critical for:
- * - `apply` to correctly identify orphaned files
- * - `status` to show accurate workspace state
- * - `revert` to restore correct versions
+ * This separation ensures:
+ * - User's explicit profile selections are never overwritten
+ * - Temporary CLI overrides (-p flag) don't persist to state
+ * - Profile management is predictable and intentional
  *
  * @param repo Repository (must not be NULL)
  * @param state State to update (must not be NULL)
- * @param profiles Profiles being applied (must not be NULL)
+ * @param profiles Profiles being applied (used for file tracking only)
  * @param manifest Manifest of deployed files (must not be NULL)
  * @param out Output context for messages (must not be NULL)
  * @return Error or NULL on success
@@ -384,33 +378,6 @@ static error_t *apply_update_and_save_state(
     CHECK_NULL(out);
 
     error_t *err = NULL;
-    const char **profile_names = NULL;
-
-    /*
-     * Update state with active profiles
-     *
-     * Critical: State must always reflect reality. Every deployment updates
-     * both the profile list and file list to maintain internal consistency.
-     *
-     * This ensures commands like `apply` and `status` remain reliable.
-     */
-    profile_names = malloc(profiles->count * sizeof(char *));
-    if (!profile_names) {
-        return ERROR(ERR_MEMORY, "Failed to allocate profile names");
-    }
-
-    for (size_t i = 0; i < profiles->count; i++) {
-        profile_names[i] = profiles->profiles[i].name;
-    }
-
-    err = state_set_profiles(state, profile_names, profiles->count);
-    free(profile_names);
-
-    if (err) {
-        return error_wrap(err, "Failed to update state profiles");
-    }
-
-    output_print(out, OUTPUT_VERBOSE, "Updated active profiles in state\n");
 
     /* Clear old files and add new manifest */
     state_clear_files(state);
@@ -540,15 +507,13 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     output_print(out, OUTPUT_VERBOSE, "Loading profiles...\n");
 
     /*
-     * Resolve profiles using standard priority hierarchy:
-     * 1. CLI -p flag (explicit)
-     * 2. Config profile_order
-     * 3. State active_profiles
-     * 4. Auto-detection (mode-based fallback)
+     * Resolve profiles using priority hierarchy:
+     * 1. CLI -p flag (temporary override)
+     * 2. State active_profiles (persistent selection via 'dotta profile select')
      */
     profile_source_t profile_source;  /* For informational purposes only */
     err = profile_resolve(repo, opts->profiles, opts->profile_count,
-                         config, config->strict_mode, &profiles, &profile_source);
+                         config->strict_mode, &profiles, &profile_source);
 
     if (err) {
         err = error_wrap(err, "Failed to load profiles");
@@ -558,57 +523,6 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     if (profiles->count == 0) {
         err = ERROR(ERR_NOT_FOUND, "No profiles found");
         goto cleanup;
-    }
-
-    /*
-     * Inform user about profile management mode
-     *
-     * Three scenarios to communicate:
-     * 1. Temporary override: -p flag used while config has profile_order
-     * 2. Reverting to config: No -p flag, config has profile_order (after temp override)
-     * 3. Normal operation: Using whatever source without conflicts
-     */
-    if (config->profile_order && config->profile_order_count > 0) {
-        if (profile_source == PROFILE_SOURCE_EXPLICIT) {
-            /* Scenario 1: Temporary override */
-            output_newline(out);
-            output_warning(out, "Temporary profile override active");
-            output_info(out, "  Your config has profile_order = [%s, ...]",
-                       config->profile_order[0]);
-            output_info(out, "  This -p flag temporarily overrides that configuration.");
-            output_info(out, "  Run 'dotta apply' (without -p) to revert to config-controlled profiles.");
-            output_newline(out);
-        } else if (profile_source == PROFILE_SOURCE_CONFIG) {
-            /* Scenario 2: Using config (may be reverting from temp override) */
-            /* Check if state had different profiles (indicating a revert) */
-            string_array_t *state_profiles = NULL;
-            error_t *check_err = state_get_profiles(state, &state_profiles);
-
-            if (!check_err && state_profiles && string_array_size(state_profiles) > 0) {
-                /* Check if state profiles differ from config profiles */
-                bool differs = false;
-                if (string_array_size(state_profiles) != config->profile_order_count) {
-                    differs = true;
-                } else {
-                    for (size_t i = 0; i < config->profile_order_count; i++) {
-                        if (strcmp(string_array_get(state_profiles, i), config->profile_order[i]) != 0) {
-                            differs = true;
-                            break;
-                        }
-                    }
-                }
-
-                if (differs) {
-                    output_newline(out);
-                    output_success(out, "Reverting to config-controlled profiles");
-                    output_info(out, "  Using profile_order from config.toml");
-                    output_newline(out);
-                }
-            }
-
-            string_array_free(state_profiles);
-            error_free(check_err);
-        }
     }
 
     if (opts->verbose) {

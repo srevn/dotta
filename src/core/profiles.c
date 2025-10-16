@@ -18,7 +18,6 @@
 #include "core/state.h"
 #include "infra/path.h"
 #include "utils/array.h"
-#include "utils/config.h"
 #include "utils/hashmap.h"
 #include "utils/string.h"
 
@@ -583,41 +582,33 @@ static error_t *validate_state_profiles(
 
 /**
  * Resolve profiles based on priority hierarchy
+ *
+ * Priority order (highest to lowest):
+ * 1. Explicit CLI profiles (-p flag) - Temporary override
+ * 2. State profiles - Persistent selection (set via 'dotta profile select')
+ * 3. Error - No profiles found
  */
 error_t *profile_resolve(
     git_repository *repo,
     const char **explicit_profiles,
     size_t explicit_count,
-    const struct dotta_config *config,
     bool strict_mode,
     profile_list_t **out,
     profile_source_t *source_out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(config);
     CHECK_NULL(out);
 
     profile_source_t source;
 
-    /* Priority 1: Explicit CLI profiles */
+    /* Priority 1: Explicit CLI profiles (temporary override) */
     if (explicit_profiles && explicit_count > 0) {
         source = PROFILE_SOURCE_EXPLICIT;
         if (source_out) *source_out = source;
         return profile_list_load(repo, explicit_profiles, explicit_count, true, out);
     }
 
-    /* Priority 2: Config profile_order (manual override) */
-    if (config->profile_order && config->profile_order_count > 0) {
-        source = PROFILE_SOURCE_CONFIG;
-        if (source_out) *source_out = source;
-        return profile_list_load(repo,
-                                (const char **)config->profile_order,
-                                config->profile_order_count,
-                                strict_mode,
-                                out);
-    }
-
-    /* Priority 3: State module */
+    /* Priority 2: State profiles (persistent selection) */
     state_t *state = NULL;
     error_t *err = state_load(repo, &state);
 

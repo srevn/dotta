@@ -37,24 +37,6 @@ strict_mode = false
 # Default: true
 auto_detect_new_files = true
 
-
-# ============================================================================
-# [profiles] - Profile Management
-# ============================================================================
-
-[profiles]
-
-# Profile Application Order
-# Defines the order in which profiles are applied when multiple profiles exist
-# Later profiles can override settings from earlier ones
-# Example use cases:
-#   - ["base", "work", "laptop"] - Apply base settings, then work-specific, then laptop tweaks
-#   - ["minimal", "desktop", "development"] - Build up configuration in layers
-#
-# Default: No specific order (applied alphabetically)
-# order = ["base", "work", "personal"]
-
-
 # ============================================================================
 # [hooks] - Hook Scripts
 # ============================================================================

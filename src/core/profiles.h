@@ -32,7 +32,6 @@
 #include <git2.h>
 
 #include "types.h"
-#include "utils/config.h"
 
 /**
  * Profile structure
@@ -142,17 +141,15 @@ error_t *profile_list_load(
  * All commands (apply, update, sync, status, etc.) use this function.
  *
  * Resolution priority (highest to lowest):
- * 1. Explicit profiles (CLI -p/--profile) - ALWAYS takes precedence
- * 2. Config profile_order - Manual config override
- * 3. State file profiles - Machine-specific active profiles
+ * 1. Explicit profiles (CLI -p/--profile) - Temporary override
+ * 2. State file profiles - Persistent selection (via 'dotta profile select')
  *
  * If no profiles are found from any source, returns an error. Profiles must be
- * explicitly selected using 'dotta profile select' or specified via CLI/config.
+ * explicitly selected using 'dotta profile select' or specified via CLI.
  *
  * @param repo Repository (must not be NULL)
  * @param explicit_profiles CLI profiles (can be NULL)
  * @param explicit_count Count of CLI profiles (0 if none)
- * @param config Config with profile_order (must not be NULL)
  * @param strict_mode If true, error on missing profiles; if false, skip them
  * @param out Profile list (must not be NULL, caller must free)
  * @param source_out Optional: receives the source of resolved profiles (can be NULL)
@@ -162,7 +159,6 @@ error_t *profile_resolve(
     git_repository *repo,
     const char **explicit_profiles,
     size_t explicit_count,
-    const struct dotta_config *config,
     bool strict_mode,
     profile_list_t **out,
     profile_source_t *source_out

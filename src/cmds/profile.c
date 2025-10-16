@@ -447,7 +447,6 @@ static error_t *profile_select(
     CHECK_NULL(out);
 
     /* Resource tracking for cleanup */
-    dotta_config_t *config = NULL;
     state_t *state = NULL;
     string_array_t *active = NULL;
     string_array_t *to_select = NULL;
@@ -459,48 +458,6 @@ static error_t *profile_select(
     size_t selected_count = 0;
     size_t already_active = 0;
     size_t not_found = 0;
-
-    /*
-     * Load configuration to check if profiles are managed by config file
-     *
-     * Guard mechanism: If profile_order is set in config, profile management
-     * is declarative (config-driven) and state should not be modified directly.
-     * This prevents confusing scenarios where user selects a profile but
-     * the next 'apply' uses config instead, silently overriding the change.
-     */
-    err = config_load(NULL, &config);
-    if (err) {
-        /* Non-fatal: if config doesn't exist, we're in state-driven mode */
-        error_free(err);
-        err = NULL;
-    }
-
-    if (config && config->profile_order && config->profile_order_count > 0) {
-        /* Config is managing profiles - reject permanent state modification */
-        output_error(out, "Cannot select profiles: profile management is controlled by config file");
-        output_newline(out);
-        output_info(out, "Your config file has 'profile_order' set, which means profiles are");
-        output_info(out, "managed declaratively through the config file, not through state.");
-        output_newline(out);
-        output_info(out, "To temporarily use different profiles:");
-        output_info(out, "  dotta apply -p <profile>           # Temporary override");
-        output_info(out, "  dotta apply                        # Revert to config");
-        output_newline(out);
-        output_info(out, "To permanently change profiles:");
-        output_info(out, "  1. Edit your config.toml file and modify the profile_order list");
-        output_info(out, "  2. Run 'dotta apply' to apply the new configuration");
-        output_newline(out);
-        output_info(out, "Current profile_order in config:");
-        for (size_t i = 0; i < config->profile_order_count; i++) {
-            output_info(out, "  %zu. %s", i + 1, config->profile_order[i]);
-        }
-        output_newline(out);
-        output_info(out, "Or remove 'profile_order' from config to enable state-based management");
-        output_info(out, "with select/unselect commands.");
-
-        err = ERROR(ERR_CONFLICT, "Profile management controlled by config file");
-        goto cleanup;
-    }
 
     /* Load state (with locking for write transaction) */
     err = state_load_for_update(repo, &state);
@@ -626,7 +583,6 @@ static error_t *profile_select(
 
 cleanup:
     /* Cleanup all resources */
-    config_free(config);
     free(profile_names);
     string_array_free(all_branches);
     string_array_free(to_select);
@@ -679,7 +635,6 @@ static error_t *profile_unselect(
     CHECK_NULL(out);
 
     /* Resource tracking for cleanup */
-    dotta_config_t *config = NULL;
     state_t *state = NULL;
     string_array_t *active = NULL;
     string_array_t *to_unselect = NULL;
@@ -690,37 +645,6 @@ static error_t *profile_unselect(
     /* Counters for summary (not cleaned up) */
     size_t unselected_count = 0;
     size_t not_active = 0;
-
-    /*
-     * Load configuration to check if profiles are managed by config file
-     *
-     * Same guard as select: prevent state modification when config
-     * has profile_order set.
-     */
-    err = config_load(NULL, &config);
-    if (err) {
-        /* Non-fatal: if config doesn't exist, we're in state-driven mode */
-        error_free(err);
-        err = NULL;
-    }
-
-    if (config && config->profile_order && config->profile_order_count > 0) {
-        /* Config is managing profiles - reject permanent state modification */
-        output_error(out, "Cannot unselect profiles: profile management is controlled by config file");
-        output_newline(out);
-        output_info(out, "Your config file has 'profile_order' set, which means profiles are");
-        output_info(out, "managed declaratively through the config file, not through state.");
-        output_newline(out);
-        output_info(out, "To permanently remove profiles:");
-        output_info(out, "  1. Edit your config.toml file and remove profiles from profile_order");
-        output_info(out, "  2. Run 'dotta apply' to apply the new configuration");
-        output_newline(out);
-        output_info(out, "Or remove 'profile_order' from config to enable state-based management");
-        output_info(out, "with select/unselect commands.");
-
-        err = ERROR(ERR_CONFLICT, "Profile management controlled by config file");
-        goto cleanup;
-    }
 
     /* Load state (with locking for write transaction) */
     err = state_load_for_update(repo, &state);
@@ -866,7 +790,6 @@ static error_t *profile_unselect(
 
 cleanup:
     /* Cleanup all resources */
-    config_free(config);
     free(profile_names);
     string_array_free(new_active);
     string_array_free(to_unselect);
@@ -923,7 +846,6 @@ static error_t *profile_reorder(
     /* Resource tracking for cleanup */
     state_t *state = NULL;
     string_array_t *current_active = NULL;
-    dotta_config_t *config = NULL;
     error_t *err = NULL;
 
     /* Validation: at least one profile specified */
@@ -931,32 +853,6 @@ static error_t *profile_reorder(
         err = ERROR(ERR_INVALID_ARG,
                     "No profiles specified\n"
                     "Hint: Provide profiles in desired order: dotta profile reorder <p1> <p2> ...");
-        goto cleanup;
-    }
-
-    /* Load config to check for profile_order override */
-    err = config_load(NULL, &config);
-    if (err) {
-        /* Non-fatal: use defaults */
-        config = config_create_default();
-        err = NULL;
-    }
-
-    /* Check if config overrides state */
-    if (config && config->profile_order && config->profile_order_count > 0) {
-        output_error(out, "Cannot reorder profiles: profile management is controlled by config file");
-        output_newline(out);
-        output_info(out, "Your config file has 'profile_order' set, which means profiles are");
-        output_info(out, "managed declaratively through the config file, not through state.");
-        output_newline(out);
-        output_info(out, "To reorder profiles:");
-        output_info(out, "  1. Edit your config.toml file and reorder the profile_order list");
-        output_info(out, "  2. Run 'dotta apply' to apply the new profile configuration");
-        output_newline(out);
-        output_info(out, "Alternatively, remove 'profile_order' from config to enable state-based");
-        output_info(out, "profile management with select/unselect/reorder commands.");
-
-        err = ERROR(ERR_CONFLICT, "Profile management controlled by config file");
         goto cleanup;
     }
 
@@ -1106,7 +1002,6 @@ static error_t *profile_reorder(
 
 cleanup:
     /* Cleanup all resources */
-    config_free(config);
     string_array_free(current_active);
     state_free(state);
 

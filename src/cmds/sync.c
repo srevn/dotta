@@ -922,11 +922,11 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     }
 
     /* Load active profiles using standard profile resolution
-     * Priority: CLI -p > config profile_order > state > mode fallback
+     * Priority: CLI -p (temporary) > state (persistent selection)
      */
     profile_source_t source;
     err = profile_resolve(repo, opts->profiles, opts->profile_count,
-                         config, config->strict_mode, &profiles, &source);
+                         config->strict_mode, &profiles, &source);
     if (err) {
         config_free(config);
         output_free(out);

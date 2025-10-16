@@ -328,7 +328,6 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
     err = profile_resolve(
         repo,
         NULL, 0,
-        config,
         config->strict_mode,
         &profiles,
         NULL);

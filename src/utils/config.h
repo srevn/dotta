@@ -21,10 +21,6 @@ typedef struct dotta_config {
     bool strict_mode;
     bool auto_detect_new_files;  /* Auto-detect new files in tracked directories */
 
-    /* [profiles] */
-    char **profile_order;
-    size_t profile_order_count;
-
     /* [hooks] */
     char *hooks_dir;
     bool pre_apply;

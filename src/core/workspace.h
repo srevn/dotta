@@ -23,6 +23,7 @@
 
 #include "types.h"
 #include "core/profiles.h"
+#include "utils/config.h"
 
 /**
  * Diverged file entry

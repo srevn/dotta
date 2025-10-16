@@ -78,9 +78,6 @@ dotta_config_t *config_create_default(void) {
     config->strict_mode = false;
     config->auto_detect_new_files = true;  /* Default: detect new files */
 
-    config->profile_order = NULL;
-    config->profile_order_count = 0;
-
     config->hooks_dir = strdup(DEFAULT_HOOKS_DIR);
     config->pre_apply = true;
     config->post_apply = true;
@@ -130,13 +127,6 @@ void config_free(dotta_config_t *config) {
     }
 
     free(config->repo_dir);
-
-    if (config->profile_order) {
-        for (size_t i = 0; i < config->profile_order_count; i++) {
-            free(config->profile_order[i]);
-        }
-        free(config->profile_order);
-    }
 
     free(config->hooks_dir);
 
@@ -244,22 +234,6 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
         toml_datum_t auto_detect_new_files = toml_get(core, "auto_detect_new_files");
         if (auto_detect_new_files.type == TOML_BOOLEAN) {
             config->auto_detect_new_files = auto_detect_new_files.u.boolean;
-        }
-    }
-
-    /* Extract [profiles] section */
-    toml_datum_t profiles = toml_get(result.toptab, "profiles");
-    if (profiles.type == TOML_TABLE) {
-        toml_datum_t order = toml_get(profiles, "order");
-        if (order.type == TOML_ARRAY) {
-            /* Free existing array */
-            if (config->profile_order) {
-                for (size_t i = 0; i < config->profile_order_count; i++) {
-                    free(config->profile_order[i]);
-                }
-                free(config->profile_order);
-            }
-            extract_string_array(order, &config->profile_order, &config->profile_order_count);
         }
     }
 

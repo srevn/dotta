@@ -351,9 +351,9 @@ error_t *cmd_diff(git_repository *repo, const cmd_diff_options_t *opts) {
         return ERROR(ERR_MEMORY, "Failed to create output context");
     }
 
-    /* Load profiles with config fallback */
+    /* Load profiles */
     err = profile_resolve(repo, opts->profiles, opts->profile_count,
-                         config, config->strict_mode, &profiles, NULL);
+                         config->strict_mode, &profiles, NULL);
 
     if (err) {
         config_free(config);

@@ -588,11 +588,10 @@ static error_t *list_log(
             return error_wrap(err, "Failed to load profile '%s'", opts->profile);
         }
     } else {
-        /* Use all configured profiles (config order or mode-based) */
+        /* Use all active profiles from state */
         err = profile_resolve(
             repo,
             NULL, 0,  /* No CLI profiles */
-            config,
             config->strict_mode,
             &profiles,
             NULL);

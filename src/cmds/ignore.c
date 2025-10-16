@@ -1317,7 +1317,6 @@ static error_t *test_path_ignore(
     error_t *err = profile_resolve(
         repo,
         NULL, 0,  /* No explicit profiles */
-        config,
         false,  /* Not strict - skip missing profiles */
         &profiles,
         NULL);

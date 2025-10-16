@@ -1,4 +1,4 @@
-# Dotta
+# dotta
 
 A declarative, profile-based dotfile manager built on Git that uses orphan branches to manage configurations across multiple machines and operating systems.
 
@@ -245,8 +245,9 @@ The repository's main worktree always points to `dotta-worktree` (an empty branc
 Profile resolution follows a strict priority order:
 
 1. **Explicit CLI** (`-p/--profile flags`) - Temporary override for testing
-2. **Config file** (`profile_order` in config.toml) - Team/shared configuration
-3. **State file** (`profiles` array in `.git/dotta-state.json`) - Machine-specific active profiles
+2. **State file** (`profiles` array in `.git/dotta-state.json`) - Persistent selection via `dotta profile select`
+
+Active profiles are managed exclusively through `dotta profile select/unselect/reorder` commands. The state file is the single source of truth for which profiles are active on each machine.
 
 When profiles are applied, later profiles override earlier ones:
 - `dotta apply` uses active profiles from state (e.g., global → darwin → hosts/laptop)
@@ -485,69 +486,6 @@ Dotta is built in distinct architectural layers (all in C11):
 **Metadata File:** `.dotta/metadata.json` in each profile branch preserves permissions and ownership
 
 **Temporary Worktrees:** Profile operations use ephemeral worktrees to avoid polluting the main working directory
-
-## Use Cases
-
-### Personal Dotfiles Across Multiple Machines
-
-```bash
-# On laptop
-$ dotta clone git@github.com:user/dotfiles.git
-Auto-detected profiles: global, darwin, hosts/laptop
-✓ Activated: global, darwin, hosts/laptop
-
-$ dotta apply
-Deployed 47 files from 3 profiles
-```
-
-Manage your personal configurations with OS and host-specific overrides.
-
-### Team Configuration Management
-
-```bash
-# Team repository with base configs
-$ dotta clone git@github.com:team/dotfiles.git
-
-# Customize for your needs
-$ dotta profile select base backend-dev docker
-$ dotta apply
-```
-
-```toml
-# ~/.config/dotta/config.toml (optional)
-[ignore]
-patterns = [".local/*", "*.work"]  # Personal overrides
-```
-
-Share base configurations while allowing personal customizations.
-
-### Single-Purpose Server
-
-```bash
-# Simple setup - only essential profiles
-$ dotta clone git@github.com:ops/server-configs.git
-Auto-detected profiles: global, linux
-✓ Activated: global, linux
-
-# Minimal, focused configuration
-$ dotta apply
-```
-
-Perfect for servers that only need core system configurations.
-
-### Hub Machine (Development Workstation)
-
-```bash
-# Fetch everything for exploration
-$ dotta clone git@github.com:user/dotfiles.git --all
-Fetched 15 profiles
-
-# Activate what you need
-$ dotta profile select global darwin work client-a
-$ dotta apply
-```
-
-Maintain access to all profile variants for testing and development.
 
 ## Advanced Features
 

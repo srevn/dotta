@@ -694,7 +694,7 @@ error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
 
     /* Load profiles */
     err = profile_resolve(repo, opts->profiles, opts->profile_count,
-                         config, config->strict_mode, &profiles, NULL);
+                         config->strict_mode, &profiles, NULL);
 
     if (err) {
         err = error_wrap(err, "Failed to load profiles");

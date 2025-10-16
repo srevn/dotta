@@ -63,18 +63,15 @@ typedef enum {
 /**
  * Profile resolution source - tracks where profiles came from
  *
- * Used to determine whether profile state should be updated after operations.
- * Higher priority sources should not update persistent state.
+ * Used for informational/diagnostic purposes only.
  *
  * Priority order (highest to lowest):
  *   EXPLICIT - CLI flags (-p/--profile), temporary override
- *   CONFIG   - Config file profile_order, team/shared configuration
- *   STATE    - State file profiles array, machine-specific active profiles
+ *   STATE    - State file profiles array, persistent selection
  */
 typedef enum {
-    PROFILE_SOURCE_EXPLICIT,   /* CLI -p flag (highest priority) */
-    PROFILE_SOURCE_CONFIG,     /* Config file profile_order */
-    PROFILE_SOURCE_STATE       /* State file (machine-specific) */
+    PROFILE_SOURCE_EXPLICIT,   /* CLI -p flag (temporary override) */
+    PROFILE_SOURCE_STATE       /* State file (persistent selection) */
 } profile_source_t;
 
 /**

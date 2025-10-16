@@ -1141,9 +1141,9 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* Load profiles with config fallback */
+    /* Load profiles */
     err = profile_resolve(repo, opts->profiles, opts->profile_count,
-                         config, config->strict_mode, &profiles, NULL);
+                         config->strict_mode, &profiles, NULL);
 
     if (err) {
         err = error_wrap(err, "Failed to load profiles");

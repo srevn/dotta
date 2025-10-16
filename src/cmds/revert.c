@@ -119,7 +119,6 @@ static error_t *discover_file(
     err = profile_resolve(
         repo,
         NULL, 0,
-        config,
         config->strict_mode,
         &profiles,
         NULL);

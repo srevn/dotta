@@ -1482,7 +1482,6 @@ static int cmd_revert_main(int argc, char **argv) {
         .file_path = NULL,
         .commit = NULL,
         .profile = NULL,
-        .apply = false,
         .commit_changes = false,
         .message = NULL,
         .force = false,
@@ -1507,8 +1506,6 @@ static int cmd_revert_main(int argc, char **argv) {
                 return 1;
             }
             opts.message = argv[++i];
-        } else if (strcmp(argv[i], "--apply") == 0) {
-            opts.apply = true;
         } else if (strcmp(argv[i], "--commit") == 0) {
             opts.commit_changes = true;
         } else if (strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--force") == 0) {

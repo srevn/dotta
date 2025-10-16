@@ -19,7 +19,6 @@ typedef struct {
     const char *file_path;      /* File path within profile (required) */
     const char *commit;         /* Commit reference (required) */
     const char *profile;        /* Profile name (NULL = use state/config) */
-    bool apply;                 /* Deploy reverted file to filesystem */
     bool commit_changes;        /* Create commit after reverting */
     const char *message;        /* Commit message (NULL = auto-generate) */
     bool force;                 /* Skip confirmation and override conflicts */
@@ -31,14 +30,16 @@ typedef struct {
  * Execute revert command
  *
  * Reverts a file in a profile branch to its state at the specified commit.
+ * This command modifies the Git repository only - deployed files remain
+ * unchanged until 'dotta apply' is run.
+ *
  * The operation:
  * 1. Discovers file in profiles (requires --profile if ambiguous)
  * 2. Resolves commit reference in profile branch history
  * 3. Shows diff preview (current → target state)
  * 4. Prompts for confirmation (unless --force)
- * 5. Checks out file from target commit
- * 6. Optionally deploys to filesystem (with --apply)
- * 7. Optionally creates commit (with --commit)
+ * 5. Reverts file to target commit state
+ * 6. Optionally creates commit (with --commit)
  *
  * @param repo Repository (must not be NULL)
  * @param opts Command options (must not be NULL)

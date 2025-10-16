@@ -13,9 +13,7 @@
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "base/gitops.h"
-#include "core/deploy.h"
 #include "core/profiles.h"
-#include "core/state.h"
 #include "infra/compare.h"
 #include "infra/path.h"
 #include "utils/array.h"
@@ -28,13 +26,12 @@
  * Discover file in profiles
  *
  * Returns profile name and resolved storage path.
- * Accepts filesystem paths or storage paths (like remove.c).
- * Uses profile_build_file_index() for O(M×P) performance instead of O(M×GitOps).
+ * Accepts filesystem paths or storage paths.
+ * Uses profile_build_file_index()
  *
- * Pattern (consistent with remove.c):
+ * Pattern:
  * 1. Try as filesystem path → convert to storage path
  * 2. Try as storage path directly (home/.bashrc)
- * 3. NO basename matching (safety + consistency)
  */
 static error_t *discover_file(
     git_repository *repo,
@@ -618,215 +615,6 @@ cleanup:
 }
 
 /**
- * Deploy a single reverted file to filesystem
- *
- * Creates necessary structures and calls deploy_file from deploy.c
- */
-static error_t *deploy_reverted_file(
-    git_repository *repo,
-    const char *profile_name,
-    const char *storage_path,
-    bool force,
-    bool verbose,
-    output_ctx_t *out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(profile_name);
-    CHECK_NULL(storage_path);
-    CHECK_NULL(out);
-
-    error_t *err = NULL;
-    profile_t *profile = NULL;
-    char *filesystem_path = NULL;
-    git_tree_entry *entry = NULL;
-    state_t *state = NULL;
-    state_file_entry_t *state_entry = NULL;
-    metadata_t *metadata = NULL;
-
-    /* Load the profile */
-    err = profile_load(repo, profile_name, &profile);
-    if (err) {
-        err = error_wrap(err, "Failed to load profile '%s'", profile_name);
-        goto cleanup;
-    }
-
-    /* Resolve filesystem path from storage path */
-    err = path_from_storage(storage_path, &filesystem_path);
-    if (err) {
-        err = error_wrap(err, "Failed to resolve filesystem path for '%s'", storage_path);
-        goto cleanup;
-    }
-
-    /* Get tree entry from profile */
-    if (!profile->tree) {
-        /* Load tree if not loaded */
-        size_t ref_name_size = strlen("refs/heads/") + strlen(profile_name) + 1;
-        char *ref_name = malloc(ref_name_size);
-        if (!ref_name) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate reference name");
-            goto cleanup;
-        }
-        snprintf(ref_name, ref_name_size, "refs/heads/%s", profile_name);
-
-        err = gitops_load_tree(repo, ref_name, &profile->tree);
-        free(ref_name);
-
-        if (err) {
-            err = error_wrap(err, "Failed to load tree for profile '%s'", profile_name);
-            goto cleanup;
-        }
-    }
-
-    /* Find file entry in tree */
-    int ret = git_tree_entry_bypath(&entry, profile->tree, storage_path);
-    if (ret < 0) {
-        if (ret == GIT_ENOTFOUND) {
-            err = ERROR(ERR_NOT_FOUND,
-                       "File '%s' not found in profile '%s' after revert",
-                       storage_path, profile_name);
-        } else {
-            err = error_from_git(ret);
-        }
-        goto cleanup;
-    }
-
-    /* Check for conflicts (file modified on disk) */
-    if (!force) {
-        compare_result_t cmp_result;
-        err = compare_tree_entry_to_disk(repo, entry, filesystem_path, &cmp_result);
-        if (err) {
-            err = error_wrap(err, "Failed to compare file with disk");
-            goto cleanup;
-        }
-
-        if (cmp_result == CMP_DIFFERENT || cmp_result == CMP_MODE_DIFF) {
-            err = ERROR(ERR_CONFLICT,
-                       "File '%s' has been modified on disk\n"
-                       "Use --force to overwrite local changes",
-                       filesystem_path);
-            goto cleanup;
-        }
-    }
-
-    /* Create file entry for deployment */
-    file_entry_t file_entry = {
-        .storage_path = (char *)storage_path,
-        .filesystem_path = filesystem_path,
-        .entry = entry,
-        .source_profile = profile
-    };
-
-    /* Load metadata from the profile branch (commit being reverted to) */
-    error_t *meta_err = metadata_load_from_branch(repo, profile_name, &metadata);
-    if (meta_err) {
-        if (meta_err->code == ERR_NOT_FOUND) {
-            /* No metadata in this profile - not an error, just use defaults */
-            if (verbose) {
-                output_print(out, OUTPUT_VERBOSE,
-                            "  No metadata in profile '%s', using defaults\n", profile_name);
-            }
-            error_free(meta_err);
-            metadata = NULL;
-        } else {
-            /* Real error - propagate */
-            err = error_wrap(meta_err, "Failed to load metadata from profile '%s'", profile_name);
-            goto cleanup;
-        }
-    }
-
-    /* Deploy the file */
-    deploy_options_t deploy_opts = {
-        .force = force,
-        .dry_run = false,
-        .verbose = verbose
-    };
-
-    err = deploy_file(repo, &file_entry, metadata, &deploy_opts);
-    if (err) {
-        err = error_wrap(err, "Failed to deploy reverted file");
-        goto cleanup;
-    }
-
-    /* Update state after successful deployment (with locking for write transaction) */
-    err = state_load_for_update(repo, &state);
-    if (err) {
-        /* If state doesn't exist, create it */
-        err = state_create_empty(&state);
-        if (err) {
-            err = error_wrap(err, "Failed to create state");
-            goto cleanup;
-        }
-    }
-
-    /* Get file metadata from tree entry */
-    const git_oid *blob_oid = git_tree_entry_id(entry);
-    git_filemode_t mode = git_tree_entry_filemode(entry);
-
-    /* Determine file type */
-    state_file_type_t file_type = STATE_FILE_REGULAR;
-    if (mode == GIT_FILEMODE_LINK) {
-        file_type = STATE_FILE_SYMLINK;
-    } else if (mode == GIT_FILEMODE_BLOB_EXECUTABLE) {
-        file_type = STATE_FILE_EXECUTABLE;
-    }
-
-    /* Compute hash from blob OID */
-    char hash_str[GIT_OID_HEXSZ + 1];
-    git_oid_tostr(hash_str, sizeof(hash_str), blob_oid);
-
-    /* Create state entry */
-    err = state_create_entry(
-        storage_path,
-        filesystem_path,
-        profile_name,
-        file_type,
-        hash_str,
-        NULL,  /* mode */
-        &state_entry
-    );
-    if (err) {
-        err = error_wrap(err, "Failed to create state entry");
-        goto cleanup;
-    }
-
-    /* Remove old entry if exists, then add new one */
-    state_remove_file(state, filesystem_path);  /* Ignore errors - file might not exist */
-
-    err = state_add_file(state, state_entry);
-    if (err) {
-        err = error_wrap(err, "Failed to add file to state");
-        goto cleanup;
-    }
-
-    /* Save updated state */
-    err = state_save(repo, state);
-    if (err) {
-        err = error_wrap(err, "Failed to save state");
-        goto cleanup;
-    }
-
-    /* Print success message before cleanup */
-    if (output_colors_enabled(out)) {
-        output_printf(out, OUTPUT_NORMAL, "%s✓%s Deployed %s\n",
-                output_color_code(out, OUTPUT_COLOR_GREEN),
-                output_color_code(out, OUTPUT_COLOR_RESET),
-                filesystem_path);
-    } else {
-        output_printf(out, OUTPUT_NORMAL, "✓ Deployed %s\n", filesystem_path);
-    }
-
-cleanup:
-    if (metadata) metadata_free(metadata);
-    if (state_entry) state_free_entry(state_entry);
-    if (state) state_free(state);
-    if (entry) git_tree_entry_free(entry);
-    if (filesystem_path) free(filesystem_path);
-    if (profile) profile_free(profile);
-
-    return err;
-}
-
-/**
  * Revert command implementation
  */
 error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
@@ -999,14 +787,7 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
 
     /* Step 8: Prompt for confirmation (unless --force or --dry-run) */
     if (config->confirm_destructive && !opts->force && !opts->dry_run) {
-        char prompt_msg[256];
-        if (opts->apply) {
-            snprintf(prompt_msg, sizeof(prompt_msg), "Revert and deploy file?");
-        } else {
-            snprintf(prompt_msg, sizeof(prompt_msg), "Revert file?");
-        }
-
-        if (!output_confirm(out, prompt_msg, false)) {
+        if (!output_confirm(out, "Revert file?", false)) {
             fprintf(stderr, "Aborted.\n");
             user_aborted = true;
             goto cleanup;
@@ -1048,16 +829,8 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
         output_printf(out, OUTPUT_NORMAL, "✓ Reverted %s in profile '%s'\n", resolved_path, profile_name);
     }
 
-    /* Step 10: Deploy if requested */
-    if (opts->apply) {
-        output_print(out, OUTPUT_VERBOSE, "\nDeploying reverted file...\n");
-
-        err = deploy_reverted_file(repo, profile_name, resolved_path, opts->force, opts->verbose, out);
-        if (err) {
-            err = error_wrap(err, "Failed to deploy reverted file");
-            goto cleanup;
-        }
-    } else if (!opts->commit_changes) {
+    /* Guide user to deploy changes */
+    if (!opts->commit_changes) {
         output_info(out, "\nRun 'dotta apply' to deploy changes to filesystem");
     }
 

@@ -591,9 +591,6 @@ dotta list --log global
 # Revert to specific commit
 dotta revert ~/.bashrc abc123
 
-# Revert and deploy
-dotta revert --apply ~/.bashrc HEAD~3
-
 # Revert with commit
 dotta revert --commit -m "Fix config" ~/.bashrc HEAD~1
 ```

@@ -3,7 +3,7 @@
  *
  * The workspace provides a unified view of three parallel states:
  * 1. Profile State (Git branches): Authoritative source - what files *should* be tracked
- * 2. Deployment State (.git/dotta-state.json): Tracking layer - what files *have been* deployed
+ * 2. Deployment State (.git/dotta.db): Tracking layer - what files *have been* deployed
  * 3. Filesystem State (actual files): Physical reality - what files *actually* exist
  *
  * Detects and categorizes divergence between states to prevent data loss and provide
@@ -64,7 +64,7 @@ typedef enum {
  *
  * Loads all three states and performs divergence analysis:
  * - Profile state: Files in profile branches
- * - Deployment state: Files tracked in .git/dotta-state.json
+ * - Deployment state: Files tracked in .git/dotta.db
  * - Filesystem state: Actual files on disk
  *
  * Additionally scans tracked directories for untracked files (new files

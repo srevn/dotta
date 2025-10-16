@@ -2,10 +2,6 @@
 
 A declarative, profile-based dotfile manager built on Git that uses orphan branches to manage configurations across multiple machines and operating systems.
 
-## What is Dotta?
-
-Dotta manages your configuration files (dotfiles) across different machines using Git as the underlying storage mechanism. Unlike traditional dotfile managers that use symlinks or track your home directory directly, Dotta uses **Git orphan branches** as independent configuration profiles, giving you powerful version control without the complexity of managing a monorepo.
-
 ### Core Principle
 
 Files are stored with **location prefixes** (`home/`, `root/`) in isolated profile branches, then deployed to their actual filesystem locations on demand. This provides:
@@ -41,7 +37,7 @@ Profiles are applied in **layered order**, with later profiles overriding earlie
 Dotta uses **explicit active profile management** to provide safe, predictable control over which configurations are deployed on each machine:
 
 - **Available Profiles**: Exist as local Git branches - can be inspected, not automatically deployed
-- **Active Profiles**: Tracked in `.git/dotta-state.json` - participate in all operations (apply, update, sync, status)
+- **Active Profiles**: Tracked in `.git/dotta.db` - participate in all operations (apply, update, sync, status)
 
 ```bash
 # Select active profiles for this machine
@@ -84,7 +80,7 @@ Dotta optimizes the deployment process:
 - **Overlap detection** - Warns when files appear in multiple profiles
 - **Smart skipping** - Avoids rewriting unchanged files (enabled by default)
 - **Conflict resolution** - Clear error messages with `--force` override option
-- **State tracking** - Tracks deployed files in `.git/dotta-state.json`
+- **State tracking** - Tracks deployed files in `.git/dotta.db`
 
 ### 5. Automatic Synchronization
 
@@ -110,7 +106,7 @@ Unlike many dotfile managers that only deploy *from* repository *to* filesystem,
 dotta update
 
 # Two-way sync with remote
-dotta sync  # update + fetch + push/pull with conflict detection
+dotta sync  # fetch + push/pull with conflict detection
 ```
 
 ### 7. Hook System
@@ -217,7 +213,7 @@ dotta apply
 │   ├── darwin             # macOS-specific
 │   ├── linux              # Linux-specific
 │   └── hosts/laptop       # Host-specific
-└── dotta-state.json       # Deployment tracking
+└── dotta.db               # Deployment tracking
 ```
 
 ### File Storage Model
@@ -228,7 +224,7 @@ Files are stored with deployment prefixes in profile branches:
 Profile branch "darwin":
   home/.bashrc                       → deploys to: $HOME/.bashrc
   home/.config/fish/config.fish      → deploys to: $HOME/.config/fish/config.fish
-  root/etc/apcupsd/apcupsd.conf     → deploys to: /etc/apcupsd/apcupsd.conf
+  root/etc/apcupsd/apcupsd.conf      → deploys to: /etc/apcupsd/apcupsd.conf
   .dotta/metadata.json               → metadata for permissions/ownership
 ```
 
@@ -245,7 +241,7 @@ The repository's main worktree always points to `dotta-worktree` (an empty branc
 Profile resolution follows a strict priority order:
 
 1. **Explicit CLI** (`-p/--profile flags`) - Temporary override for testing
-2. **State file** (`profiles` array in `.git/dotta-state.json`) - Persistent selection via `dotta profile select`
+2. **State file** (`profiles` array in `.git/dotta.db`) - Persistent selection via `dotta profile select`
 
 Active profiles are managed exclusively through `dotta profile select/unselect/reorder` commands. The state file is the single source of truth for which profiles are active on each machine.
 
@@ -258,6 +254,7 @@ When profiles are applied, later profiles override earlier ones:
 ### Prerequisites
 
 - libgit2 1.5+
+- sqlite3 3.40+
 - C11-compliant compiler (clang recommended)
 - POSIX system (macOS, Linux, FreeBSD)
 
@@ -377,7 +374,7 @@ dotta profile validate              # Check state consistency
 ```bash
 dotta add --profile <name> <file>   # Add files to profile
 dotta apply [profile]...            # Deploy active profiles (or specified)
-dotta apply --prune                 # Deploy and remove orphaned files
+dotta apply                         # Deploy and remove orphaned files
 dotta update                        # Update active profiles with modified files
 dotta sync                          # Intelligent two-way sync of active profiles
 ```
@@ -422,9 +419,6 @@ Configuration file: `~/.config/dotta/config.toml`
 repo_dir = "~/.local/share/dotta/repo"    # Repository location
 strict_mode = false                       # Fail on validation errors
 
-[profiles]
-order = ["global", "darwin", "hosts/laptop"]  # Override active profiles (optional)
-
 [security]
 confirm_destructive = true                # Prompt before overwrites
 confirm_new_files = true                  # Prompt for new file detection
@@ -447,45 +441,6 @@ DOTTA_REPO_DIR       # Override repo_dir
 DOTTA_CONFIG_FILE    # Use different config file
 DOTTA_EDITOR         # Editor for bootstrap/ignore (fallback: VISUAL → EDITOR → vi/nano)
 ```
-
-## Architecture
-
-### Layered Design
-
-Dotta is built in distinct architectural layers (all in C11):
-
-```
-┌─────────────────────────────────────┐
-│  Commands (cmds/)                   │  ← User-facing commands
-│  init, add, apply, status, sync...  │
-├─────────────────────────────────────┤
-│  Core Logic (core/)                 │  ← Business logic
-│  state, profiles, deploy, metadata  │
-├─────────────────────────────────────┤
-│  Infrastructure (infra/)            │  ← Path & worktree management
-│  path, worktree, compare            │
-├─────────────────────────────────────┤
-│  Base Layer (base/)                 │  ← Git & filesystem operations
-│  gitops, filesystem, error          │
-├─────────────────────────────────────┤
-│  Utilities (utils/)                 │  ← Cross-cutting concerns
-│  config, hooks, output, buffer...   │
-└─────────────────────────────────────┘
-```
-
-### Key Concepts
-
-**Profile Resolution:** Determines which profiles to operate on based on priority: CLI args (`-p`) → config (`[profiles] order`) → state file (active profiles)
-
-**Active Profiles:** Stored in `.git/dotta-state.json`, represent the machine-specific set of profiles that participate in all operations
-
-**Manifest:** In-memory representation of files to deploy, built by walking profile trees and applying precedence rules
-
-**State File:** `.git/dotta-state.json` tracks active profiles and deployed files, enabling orphan detection and smart operations
-
-**Metadata File:** `.dotta/metadata.json` in each profile branch preserves permissions and ownership
-
-**Temporary Worktrees:** Profile operations use ephemeral worktrees to avoid polluting the main working directory
 
 ## Advanced Features
 

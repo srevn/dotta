@@ -12,7 +12,7 @@
 #include "version.h"
 
 void print_usage(const char *prog_name) {
-    printf("Dotta - Dotfile Manager\n\n");
+    printf("dotta - Dotfile Manager\n\n");
     printf("Usage: %s <command> [options]\n\n", prog_name);
     printf("Commands:\n");
     printf("  init         Initialize a new dotta repository\n");
@@ -296,7 +296,7 @@ void print_profile_help(const char *prog_name) {
     printf("Profile selection separates availability from activation:\n");
     printf("  • Available profiles exist locally but are not used by commands\n");
     printf("  • Active profiles are used by apply, update, sync, status, and diff\n");
-    printf("  • Profile activation state persists in .git/dotta-state.json\n\n");
+    printf("  • Profile activation state persists in .git/dotta.db\n\n");
     printf("Subcommands:\n");
     printf("  list                     Show profiles with selection status\n");
     printf("  fetch <name>...          Download profiles from remote without selecting\n");

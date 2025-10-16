@@ -91,7 +91,7 @@ static void sync_results_free(sync_results_t *results) {
 /**
  * Parse divergence strategy from string
  */
-static sync_divergence_strategy_t parse_divergence_strategy(const char *str) {
+static sync_divergence_strategy_t parse_divergence_strategy(const char *str, output_ctx_t *out) {
     if (!str) {
         return DIVERGE_WARN;
     }
@@ -109,8 +109,10 @@ static sync_divergence_strategy_t parse_divergence_strategy(const char *str) {
     }
 
     /* Invalid strategy - warn user and fall back to safe default */
-    fprintf(stderr, "WARNING: Invalid divergence strategy '%s' (valid: warn, rebase, merge, ours, theirs)\n"
-                   "         Falling back to 'warn' (safe default)\n", str);
+    if (out) {
+        output_warning(out, "Invalid divergence strategy '%s' (valid: warn, rebase, merge, ours, theirs)", str);
+        output_info(out, "Falling back to 'warn' (safe default)");
+    }
     return DIVERGE_WARN;  /* Default */
 }
 
@@ -1090,7 +1092,8 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
 
     /* Determine divergence strategy: CLI overrides config */
     sync_divergence_strategy_t diverged_strategy = parse_divergence_strategy(
-        opts->diverged ? opts->diverged : config->diverged_strategy
+        opts->diverged ? opts->diverged : config->diverged_strategy,
+        out
     );
 
     /* Phase 1: Fetch active profiles from remote */

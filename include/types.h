@@ -78,7 +78,7 @@ typedef enum {
  * Workspace divergence category
  *
  * Represents the relationship between profile state (Git), deployment state
- * (.git/dotta-state.json), and filesystem state (actual files).
+ * (.git/dotta.db), and filesystem state (actual files).
  */
 typedef enum {
     DIVERGENCE_CLEAN,       /* All states aligned */

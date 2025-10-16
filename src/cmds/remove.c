@@ -411,7 +411,7 @@ static bool is_deployed_from_other_profile(
         return false;
     }
 
-    const state_file_entry_t *state_entry = NULL;
+    state_file_entry_t *state_entry = NULL;
     err = state_get_file(state, filesystem_path, &state_entry);
 
     bool is_other = false;
@@ -420,6 +420,7 @@ static bool is_deployed_from_other_profile(
     }
 
     error_free(err);
+    state_free_entry(state_entry);
     state_free(state);
     return is_other;
 }
@@ -1250,11 +1251,18 @@ static error_t *delete_profile_branch(
     size_t deployed_count = 0;
     if (state) {
         size_t state_file_count = 0;
-        const state_file_entry_t *state_files = state_get_all_files(state, &state_file_count);
-        for (size_t i = 0; i < state_file_count; i++) {
-            if (strcmp(state_files[i].profile, opts->profile) == 0) {
-                deployed_count++;
+        state_file_entry_t *state_files = NULL;
+        error_t *err = state_get_all_files(state, &state_files, &state_file_count);
+        if (!err && state_files) {
+            for (size_t i = 0; i < state_file_count; i++) {
+                if (strcmp(state_files[i].profile, opts->profile) == 0) {
+                    deployed_count++;
+                }
             }
+            state_free_all_files(state_files, state_file_count);
+        }
+        if (err) {
+            error_free(err);
         }
     }
 

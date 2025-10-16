@@ -353,32 +353,23 @@ static error_t *initialize_state(
     CHECK_NULL(profile_names);
     CHECK_NULL(out);
 
-    if (count == 0) {
-        /* No profiles - create empty state */
-        state_t *state = NULL;
-        error_t *err = state_create_empty(&state);
-        if (err) {
-            return error_wrap(err, "Failed to create empty state");
-        }
-
-        err = state_save(repo, state);
-        state_free(state);
-        return err;
-    }
-
-    /* Create state with active profiles */
+    /* Create state database (with or without profiles) */
     state_t *state = NULL;
-    error_t *err = state_create_empty(&state);
+    error_t *err = state_load_for_update(repo, &state);
     if (err) {
-        return error_wrap(err, "Failed to create state");
+        return error_wrap(err, "Failed to initialize state database");
     }
 
-    err = state_set_profiles(state, profile_names, count);
-    if (err) {
-        state_free(state);
-        return error_wrap(err, "Failed to set profiles in state");
+    /* Set active profiles (if any) */
+    if (count > 0) {
+        err = state_set_profiles(state, profile_names, count);
+        if (err) {
+            state_free(state);
+            return error_wrap(err, "Failed to set profiles in state");
+        }
     }
 
+    /* Commit transaction */
     err = state_save(repo, state);
     if (err) {
         state_free(state);

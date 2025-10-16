@@ -109,7 +109,7 @@ error_t *deploy_preflight_check(
 
             /* Check if file exists in state */
             if (state_file_exists(state, entry->filesystem_path)) {
-                const state_file_entry_t *state_entry = NULL;
+                state_file_entry_t *state_entry = NULL;
                 error_t *err = state_get_file(state, entry->filesystem_path, &state_entry);
 
                 if (!err && state_entry) {
@@ -144,6 +144,9 @@ error_t *deploy_preflight_check(
                 if (err) {
                     error_free(err);
                 }
+
+                /* Free the entry (owned memory from SQLite) */
+                state_free_entry(state_entry);
             }
         }
     }
@@ -551,12 +554,13 @@ error_t *deploy_execute(
             /* Check if file is tracked in state - only skip if it is */
             bool tracked_in_state = false;
             if (state) {
-                const state_file_entry_t *state_entry = NULL;
+                state_file_entry_t *state_entry = NULL;
                 error_t *state_err = state_get_file(state, entry->filesystem_path, &state_entry);
                 if (!state_err && state_entry) {
                     tracked_in_state = true;
                 }
                 error_free(state_err); /* Not found is not an error */
+                state_free_entry(state_entry); /* Free owned memory from SQLite */
             }
 
             /* Only skip if tracked in state AND content matches */

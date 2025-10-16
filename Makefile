@@ -39,6 +39,9 @@ LIBGIT2_LIBDIR := $(shell pkg-config --variable=libdir libgit2)
 LIBGIT2_STATIC_LIB := $(LIBGIT2_LIBDIR)/libgit2.a
 LIBGIT2_STATIC_DEPS := $(shell pkg-config --libs --static libgit2 | sed 's/-lgit2//')
 
+SQLITE3_CFLAGS := $(shell pkg-config --cflags sqlite3)
+SQLITE3_LIBS := $(shell pkg-config --libs sqlite3)
+
 # Check if static library exists
 ifneq ($(wildcard $(LIBGIT2_STATIC_LIB)),)
     LIBGIT2_STATIC_LIBS := $(LIBGIT2_STATIC_LIB) $(LIBGIT2_STATIC_DEPS)
@@ -92,7 +95,7 @@ $(BUILD_DIR)/base $(BUILD_DIR)/infra $(BUILD_DIR)/core $(BUILD_DIR)/cmds $(BUILD
 # Compile source files
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)/base $(BUILD_DIR)/infra $(BUILD_DIR)/core $(BUILD_DIR)/cmds $(BUILD_DIR)/utils
 	@echo "CC $<"
-	@$(CC) $(CFLAGS) $(INCLUDES) $(LIBGIT2_CFLAGS) $(VERSION_FLAGS) -c $< -o $@
+	@$(CC) $(CFLAGS) $(INCLUDES) $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) $(VERSION_FLAGS) -c $< -o $@
 
 # Compile vendor files
 $(BUILD_DIR)/lib/cJSON.o: $(CJSON_SRC) | $(BUILD_DIR)/lib
@@ -106,7 +109,7 @@ $(BUILD_DIR)/lib/tomlc17.o: $(TOML_SRC) | $(BUILD_DIR)/lib
 # Link main executable
 $(TARGET): $(LIB_OBJ) $(MAIN_OBJ) | $(BIN_DIR)
 	@echo "LD $@"
-	@$(CC) $(CFLAGS) $^ $(LIBGIT2_LIBS) -o $@
+	@$(CC) $(CFLAGS) $^ $(LIBGIT2_LIBS) $(SQLITE3_LIBS) -o $@
 
 # Debug build
 .PHONY: debug

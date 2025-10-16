@@ -1124,7 +1124,11 @@ static error_t *profile_validate(
 
     /* Check 2: State file entries reference valid profiles */
     size_t state_file_count = 0;
-    const state_file_entry_t *state_files = state_get_all_files(state, &state_file_count);
+    state_file_entry_t *state_files = NULL;
+    err = state_get_all_files(state, &state_files, &state_file_count);
+    if (err) {
+        goto cleanup;
+    }
 
     for (size_t i = 0; i < state_file_count; i++) {
         const char *profile_name = state_files[i].profile;
@@ -1133,6 +1137,8 @@ static error_t *profile_validate(
             has_issues = true;
         }
     }
+
+    state_free_all_files(state_files, state_file_count);
 
     if (orphaned_files > 0) {
         output_warning(out, "Found %zu orphaned file entr%s in state",

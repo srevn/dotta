@@ -237,10 +237,15 @@ static error_t *apply_prune_orphaned_files(
 
     /* Get all files tracked in state */
     size_t state_file_count = 0;
-    const state_file_entry_t *state_files = state_get_all_files(state, &state_file_count);
+    state_file_entry_t *state_files = NULL;
+    err = state_get_all_files(state, &state_files, &state_file_count);
+    if (err) {
+        return err;
+    }
 
     to_remove = string_array_create();
     if (!to_remove) {
+        state_free_all_files(state_files, state_file_count);
         return ERROR(ERR_MEMORY, "Failed to allocate removal list");
     }
 
@@ -338,6 +343,7 @@ static error_t *apply_prune_orphaned_files(
 cleanup:
     if (manifest_paths) hashmap_free(manifest_paths, NULL);
     if (to_remove) string_array_free(to_remove);
+    state_free_all_files(state_files, state_file_count);
     return err;
 }
 
@@ -382,7 +388,10 @@ static error_t *apply_update_and_save_state(
     error_t *err = NULL;
 
     /* Clear old files and add new manifest */
-    state_clear_files(state);
+    err = state_clear_files(state);
+    if (err) {
+        return error_wrap(err, "Failed to clear deployment state");
+    }
 
     for (size_t i = 0; i < manifest->count; i++) {
         const file_entry_t *entry = &manifest->entries[i];

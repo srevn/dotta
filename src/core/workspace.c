@@ -240,7 +240,11 @@ static error_t *analyze_orphaned_state(workspace_t *ws) {
 
     /* Get all files in state */
     size_t state_file_count = 0;
-    const state_file_entry_t *state_files = state_get_all_files(ws->state, &state_file_count);
+    state_file_entry_t *state_files = NULL;
+    error_t *err = state_get_all_files(ws->state, &state_files, &state_file_count);
+    if (err) {
+        return err;
+    }
 
     /* Check each state entry */
     for (size_t i = 0; i < state_file_count; i++) {
@@ -267,11 +271,13 @@ static error_t *analyze_orphaned_state(workspace_t *ws) {
             );
 
             if (err) {
+                state_free_all_files(state_files, state_file_count);
                 return err;
             }
         }
     }
 
+    state_free_all_files(state_files, state_file_count);
     return NULL;
 }
 
@@ -290,13 +296,14 @@ static error_t *workspace_analyze_divergence(workspace_t *ws) {
         const file_entry_t *manifest_entry = &ws->manifest->entries[i];
 
         /* Check if file is in deployment state */
-        const state_file_entry_t *state_entry = NULL;
+        state_file_entry_t *state_entry = NULL;
         error_t *lookup_err = state_get_file(ws->state,
                                              manifest_entry->filesystem_path,
                                              &state_entry);
 
         if (lookup_err && lookup_err->code != ERR_NOT_FOUND) {
             /* Real error */
+            state_free_entry(state_entry);
             return lookup_err;
         }
 
@@ -308,6 +315,8 @@ static error_t *workspace_analyze_divergence(workspace_t *ws) {
 
         /* Analyze this file */
         err = analyze_file_divergence(ws, manifest_entry, state_entry);
+        state_free_entry(state_entry);  /* Free owned memory from SQLite */
+
         if (err) {
             return err;
         }

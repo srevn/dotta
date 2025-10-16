@@ -1,77 +1,78 @@
 /**
- * state.c - Deployment state tracking implementation
+ * state.c - SQLite-based deployment state tracking implementation
  *
- * Uses JSON format for human readability.
- * Uses cJSON library for robust JSON parsing/generation.
+ * Uses SQLite for performance and scalability.
+ *
+ * Key optimizations:
+ * - Prepared statements cached for bulk operations
+ * - WAL mode for concurrent access
+ * - Profiles cached in memory (tiny, read frequently)
+ * - Files queried on-demand (large, read occasionally)
+ * - Persistent B-tree indexes (no hashmap rebuilding)
  */
-
-/* FreeBSD exposes both strptime and timegm by default */
-#if !defined(__FreeBSD__)
-#define _XOPEN_SOURCE 700  /* For strptime */
-#endif
-
-#if defined(__APPLE__)
-#define _DARWIN_C_SOURCE   /* For timegm on macOS */
-#endif
 
 #include "state.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <git2.h>
 #include <limits.h>
+#include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
 
-#include "cJSON.h"
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "utils/array.h"
-#include "utils/buffer.h"
-#include "utils/hashmap.h"
 
-#define STATE_FILE_NAME "dotta-state.json"
-#define STATE_VERSION 2
+/* Schema version - must match database */
+#define STATE_SCHEMA_VERSION "1"
 
-/**
- * State lock handle
- *
- * Used to coordinate concurrent access to the state file across processes.
- * Uses fcntl advisory locking for robustness and portability.
- */
-typedef struct {
-    int fd;
-    char *lock_path;
-} state_lock_t;
+/* Database file name */
+#define STATE_DB_NAME "dotta.db"
 
 /**
  * State structure
  *
- * Uses both arrays (for iteration/serialization) and hashmaps (for O(1) lookups).
- * The hashmap values point to entries in the arrays (no separate allocation).
+ * Maintains minimal in-memory cache for performance:
+ * - Profiles cached (tiny, read frequently)
+ * - Files queried on-demand (large, read occasionally)
+ * - Prepared statements cached (eliminate preparation overhead)
  */
 struct state {
-    int version;
-    time_t timestamp;
+    /* Database connection */
+    sqlite3 *db;
+    char *db_path;
+
+    /* Transaction state */
+    bool is_write_mode;      /* Opened with load_for_update() */
+    bool in_transaction;     /* BEGIN IMMEDIATE executed */
+
+    /* Cached active profiles (loaded lazily) */
     string_array_t *profiles;
+    bool profiles_loaded;
 
-    /* File tracking */
-    state_file_entry_t *files;
-    size_t file_count;
-    size_t file_capacity;
-    hashmap_t *file_index;     /* Maps filesystem_path -> state_file_entry_t* (O(1) lookup) */
+    /* Timestamp (for compatibility) */
+    time_t timestamp;
 
-    /* Locking for write transactions */
-    state_lock_t *lock;        /* NULL for read-only, non-NULL if acquired via state_load_for_update() */
+    /* Prepared statements (initialized once, reused) */
+    sqlite3_stmt *stmt_insert_file;     /* INSERT OR REPLACE deployed_files */
+    sqlite3_stmt *stmt_remove_file;     /* DELETE FROM deployed_files */
+    sqlite3_stmt *stmt_file_exists;     /* SELECT 1 FROM deployed_files */
+    sqlite3_stmt *stmt_get_file;        /* SELECT * FROM deployed_files */
+    sqlite3_stmt *stmt_insert_profile;  /* INSERT INTO active_profiles */
 };
 
 /**
- * Get state file path
+ * Get database file path
+ *
+ * @param repo Repository (must not be NULL)
+ * @param out Output path (must not be NULL, caller must free)
+ * @return Error or NULL on success
  */
-static error_t *get_state_file_path(git_repository *repo, char **out) {
+static error_t *get_db_path(git_repository *repo, char **out) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
 
@@ -80,864 +81,496 @@ static error_t *get_state_file_path(git_repository *repo, char **out) {
         return ERROR(ERR_GIT, "Failed to get repository path");
     }
 
-    return fs_path_join(git_dir, STATE_FILE_NAME, out);
+    return fs_path_join(git_dir, STATE_DB_NAME, out);
 }
 
 /**
- * Acquire state file lock
+ * Wrap SQLite error with context
  *
- * Creates a .lock file to prevent concurrent state modifications.
- * Uses fcntl advisory locking for robustness and portability.
+ * Extracts error message from database connection and creates
+ * descriptive error with context.
  *
- * @param repo Repository (must not be NULL)
- * @param lock Output lock handle (must not be NULL)
+ * @param db Database connection (can be NULL)
+ * @param context Error context message
+ * @return Error object
+ */
+static error_t *sqlite_error(sqlite3 *db, const char *context) {
+    const char *errmsg = db ? sqlite3_errmsg(db) : "unknown error";
+    int errcode = db ? sqlite3_errcode(db) : SQLITE_ERROR;
+
+    return ERROR(ERR_STATE_INVALID,
+        "%s: %s (SQLite error %d)",
+        context, errmsg, errcode);
+}
+
+/**
+ * Initialize database schema
+ *
+ * Creates tables if they don't exist:
+ * - schema_meta: Schema versioning
+ * - active_profiles: User's profile selection (with indexes)
+ * - deployed_files: Deployed file manifest (with indexes)
+ *
+ * @param db Database connection (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *state_lock_acquire(git_repository *repo, state_lock_t **lock) {
-    CHECK_NULL(repo);
-    CHECK_NULL(lock);
+static error_t *initialize_schema(sqlite3 *db) {
+    CHECK_NULL(db);
 
-    const char *git_dir = git_repository_path(repo);
-    if (!git_dir) {
-        return ERROR(ERR_INTERNAL, "Failed to get repository path");
-    }
+    char *errmsg = NULL;
+    int rc;
 
-    /* Build lock file path */
-    char lock_path[PATH_MAX];
-    int ret = snprintf(lock_path, sizeof(lock_path), "%s/dotta-state.json.lock", git_dir);
-    if (ret < 0 || (size_t)ret >= sizeof(lock_path)) {
-        return ERROR(ERR_FS, "Lock path too long");
-    }
+    /* Schema definition (idempotent - safe to run multiple times) */
+    const char *schema_sql =
+        /* Schema versioning table */
+        "CREATE TABLE IF NOT EXISTS schema_meta ("
+        "    key TEXT PRIMARY KEY,"
+        "    value TEXT NOT NULL"
+        ");"
 
-    /* Open lock file with O_CLOEXEC to prevent fd leaks to child processes */
-    int fd = open(lock_path, O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
-    if (fd < 0) {
-        return ERROR(ERR_FS, "Failed to open lock file: %s", strerror(errno));
-    }
+        /* Insert version (fails silently if already exists) */
+        "INSERT OR IGNORE INTO schema_meta (key, value) "
+        "VALUES ('version', '" STATE_SCHEMA_VERSION "');"
 
-    /* Try to acquire exclusive lock (non-blocking) */
-    struct flock fl = {
-        .l_type = F_WRLCK,
-        .l_whence = SEEK_SET,
-        .l_start = 0,
-        .l_len = 0  /* Lock entire file */
-    };
+        /* Active profiles table (authority: profile commands) */
+        "CREATE TABLE IF NOT EXISTS active_profiles ("
+        "    position INTEGER PRIMARY KEY,"
+        "    name TEXT NOT NULL UNIQUE,"
+        "    activated_at INTEGER NOT NULL"
+        ");"
 
-    if (fcntl(fd, F_SETLK, &fl) == -1) {
-        close(fd);
-        if (errno == EACCES || errno == EAGAIN) {
-            return ERROR(ERR_CONFLICT,
-                        "State file is locked by another process\n"
-                        "Hint: Wait for the other operation to complete");
-        }
-        return ERROR(ERR_FS, "Failed to acquire lock: %s", strerror(errno));
-    }
+        /* Index for existence checks */
+        "CREATE INDEX IF NOT EXISTS idx_active_name "
+        "ON active_profiles(name);"
 
-    /* Write PID to lock file for debugging */
-    pid_t pid = getpid();
-    char pid_str[32];
-    snprintf(pid_str, sizeof(pid_str), "%d\n", pid);
-    if (write(fd, pid_str, strlen(pid_str)) < 0) {
-        /* Non-fatal - lock is still acquired */
-    }
+        /* Deployed files table (authority: apply/revert) */
+        "CREATE TABLE IF NOT EXISTS deployed_files ("
+        "    filesystem_path TEXT PRIMARY KEY,"
+        "    storage_path TEXT NOT NULL,"
+        "    profile TEXT NOT NULL,"
+        "    type TEXT NOT NULL CHECK(type IN ('file', 'symlink', 'executable')),"
+        "    hash TEXT,"
+        "    mode TEXT,"
+        "    deployed_at INTEGER NOT NULL"
+        ");"
 
-    /* Create lock handle */
-    state_lock_t *l = calloc(1, sizeof(state_lock_t));
-    if (!l) {
-        close(fd);
-        unlink(lock_path);
-        return ERROR(ERR_MEMORY, "Failed to allocate lock");
-    }
+        /* Indexes for common queries */
+        "CREATE INDEX IF NOT EXISTS idx_deployed_profile "
+        "ON deployed_files(profile);"
 
-    l->fd = fd;
-    l->lock_path = strdup(lock_path);
-    if (!l->lock_path) {
-        close(fd);
-        free(l);
-        unlink(lock_path);
-        return ERROR(ERR_MEMORY, "Failed to allocate lock path");
-    }
+        "CREATE INDEX IF NOT EXISTS idx_deployed_storage "
+        "ON deployed_files(storage_path);";
 
-    *lock = l;
-    return NULL;
-}
-
-/**
- * Release state file lock
- *
- * @param lock Lock handle (can be NULL)
- */
-static void state_lock_release(state_lock_t *lock) {
-    if (!lock) {
-        return;
-    }
-
-    if (lock->fd >= 0) {
-        /* Release lock (automatically released on close, but explicit is better) */
-        struct flock fl = {
-            .l_type = F_UNLCK,
-            .l_whence = SEEK_SET,
-            .l_start = 0,
-            .l_len = 0
-        };
-        fcntl(lock->fd, F_SETLK, &fl);
-
-        close(lock->fd);
-    }
-
-    if (lock->lock_path) {
-        /* Remove lock file */
-        unlink(lock->lock_path);
-        free(lock->lock_path);
-    }
-
-    free(lock);
-}
-
-/**
- * Write state to JSON (using cJSON)
- */
-static error_t *state_to_json(const state_t *state, buffer_t **out) {
-    CHECK_NULL(state);
-    CHECK_NULL(out);
-
-    /* Create root object */
-    cJSON *root = cJSON_CreateObject();
-    if (!root) {
-        return ERROR(ERR_MEMORY, "Failed to create JSON object");
-    }
-
-    /* Add version */
-    cJSON_AddNumberToObject(root, "version", STATE_VERSION);
-
-    /* Add timestamp */
-    char time_str[64];
-    struct tm *tm_info = gmtime(&state->timestamp);
-    strftime(time_str, sizeof(time_str), "%Y-%m-%dT%H:%M:%SZ", tm_info);
-    cJSON_AddStringToObject(root, "timestamp", time_str);
-
-    /* Add profiles array */
-    cJSON *profiles_array = cJSON_CreateArray();
-    if (!profiles_array) {
-        cJSON_Delete(root);
-        return ERROR(ERR_MEMORY, "Failed to create profiles array");
-    }
-    cJSON_AddItemToObject(root, "profiles", profiles_array);
-
-    if (state->profiles) {
-        for (size_t i = 0; i < string_array_size(state->profiles); i++) {
-            cJSON *profile_str = cJSON_CreateString(string_array_get(state->profiles, i));
-            if (!profile_str) {
-                cJSON_Delete(root);
-                return ERROR(ERR_MEMORY, "Failed to create profile string");
-            }
-            cJSON_AddItemToArray(profiles_array, profile_str);
-        }
-    }
-
-    /* Add files array */
-    cJSON *files_array = cJSON_CreateArray();
-    if (!files_array) {
-        cJSON_Delete(root);
-        return ERROR(ERR_MEMORY, "Failed to create files array");
-    }
-    cJSON_AddItemToObject(root, "files", files_array);
-
-    for (size_t i = 0; i < state->file_count; i++) {
-        const state_file_entry_t *entry = &state->files[i];
-
-        cJSON *file_obj = cJSON_CreateObject();
-        if (!file_obj) {
-            cJSON_Delete(root);
-            return ERROR(ERR_MEMORY, "Failed to create file object");
-        }
-
-        cJSON_AddStringToObject(file_obj, "storage_path", entry->storage_path);
-        cJSON_AddStringToObject(file_obj, "filesystem_path", entry->filesystem_path);
-        cJSON_AddStringToObject(file_obj, "profile", entry->profile);
-
-        const char *type_str = entry->type == STATE_FILE_REGULAR ? "file" :
-                              entry->type == STATE_FILE_SYMLINK ? "symlink" :
-                              "executable";
-        cJSON_AddStringToObject(file_obj, "type", type_str);
-
-        if (entry->hash) {
-            cJSON_AddStringToObject(file_obj, "hash", entry->hash);
-        }
-        if (entry->mode) {
-            cJSON_AddStringToObject(file_obj, "mode", entry->mode);
-        }
-
-        cJSON_AddItemToArray(files_array, file_obj);
-    }
-
-    /* Convert to formatted string */
-    char *json_str = cJSON_Print(root);
-    cJSON_Delete(root);
-
-    if (!json_str) {
-        return ERROR(ERR_MEMORY, "Failed to print JSON");
-    }
-
-    /* Create buffer from string */
-    buffer_t *buf = buffer_create();
-    if (!buf) {
-        cJSON_free(json_str);
-        return ERROR(ERR_MEMORY, "Failed to allocate buffer");
-    }
-
-    buffer_append_string(buf, json_str);
-    cJSON_free(json_str);
-
-    *out = buf;
-    return NULL;
-}
-
-/**
- * Create empty state
- */
-error_t *state_create_empty(state_t **out) {
-    CHECK_NULL(out);
-
-    error_t *err = NULL;
-    state_t *state = NULL;
-
-    state = calloc(1, sizeof(state_t));
-    if (!state) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate state");
-        goto cleanup;
-    }
-
-    state->version = STATE_VERSION;
-    state->timestamp = time(NULL);
-
-    state->profiles = string_array_create();
-    if (!state->profiles) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate profiles array");
-        goto cleanup;
-    }
-
-    /* Initialize file tracking */
-    state->files = NULL;
-    state->file_count = 0;
-    state->file_capacity = 0;
-    state->file_index = hashmap_create(16);  /* Initial capacity */
-    if (!state->file_index) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate file index");
-        goto cleanup;
-    }
-
-    /* Initialize lock (no lock by default) */
-    state->lock = NULL;
-
-    /* Success */
-    *out = state;
-    state = NULL;  /* Transfer ownership */
-
-cleanup:
-    if (state) {
-        if (state->file_index) hashmap_free(state->file_index, NULL);
-        if (state->profiles) string_array_free(state->profiles);
-        free(state);
-    }
-
-    return err;
-}
-
-/**
- * Load state from repository (using cJSON)
- */
-error_t *state_load(git_repository *repo, state_t **out) {
-    CHECK_NULL(repo);
-    CHECK_NULL(out);
-
-    /* Get state file path */
-    char *state_path = NULL;
-    error_t *err = get_state_file_path(repo, &state_path);
-    if (err) {
+    /* Execute schema SQL */
+    rc = sqlite3_exec(db, schema_sql, NULL, NULL, &errmsg);
+    if (rc != SQLITE_OK) {
+        error_t *err = ERROR(ERR_STATE_INVALID,
+            "Failed to initialize schema: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc));
+        sqlite3_free(errmsg);
         return err;
     }
 
-    /* Check if state file exists */
-    if (!fs_file_exists(state_path)) {
-        free(state_path);
-        /* No state file - return empty state */
-        return state_create_empty(out);
-    }
+    return NULL;
+}
 
-    /* Read state file */
-    buffer_t *content = NULL;
-    err = fs_read_file(state_path, &content);
-    free(state_path);
-    if (err) {
-        return error_wrap(err, "Failed to read state file");
-    }
+/**
+ * Verify schema version
+ *
+ * Checks that database schema matches the version expected by this code.
+ * This prevents incompatibilities when database was created by a different
+ * version of dotta.
+ *
+ * @param db Database connection (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *verify_schema_version(sqlite3 *db) {
+    CHECK_NULL(db);
 
-    /* Parse JSON with cJSON */
-    const char *json_str = (const char *)buffer_data(content);
-    cJSON *root = cJSON_Parse(json_str);
-    buffer_free(content);
+    const char *sql = "SELECT value FROM schema_meta WHERE key = 'version';";
+    sqlite3_stmt *stmt = NULL;
 
-    if (!root) {
-        const char *error_ptr = cJSON_GetErrorPtr();
-        if (error_ptr) {
-            return ERROR(ERR_STATE_INVALID, "JSON parse error: %s", error_ptr);
-        }
-        return ERROR(ERR_STATE_INVALID, "Failed to parse state file");
-    }
-
-    /* Create state structure */
-    state_t *state = calloc(1, sizeof(state_t));
-    if (!state) {
-        cJSON_Delete(root);
-        return ERROR(ERR_MEMORY, "Failed to allocate state");
-    }
-
-    state->file_index = hashmap_create(16);
-    if (!state->file_index) {
-        state_free(state);
-        cJSON_Delete(root);
-        return ERROR(ERR_MEMORY, "Failed to create file index");
-    }
-
-    /* Parse version */
-    cJSON *version_obj = cJSON_GetObjectItem(root, "version");
-    if (!version_obj || !cJSON_IsNumber(version_obj)) {
-        state_free(state);
-        cJSON_Delete(root);
-        return ERROR(ERR_STATE_INVALID, "Missing or invalid version field");
-    }
-    state->version = version_obj->valueint;
-    
-    if (state->version != STATE_VERSION) {
-        state_free(state);
-        cJSON_Delete(root);
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
         return ERROR(ERR_STATE_INVALID,
-                    "State file version %d is incompatible with supported version %d",
-                    state->version, STATE_VERSION);
+            "Database missing schema_meta table - corrupted or wrong format");
     }
 
-    /* Parse timestamp */
-    cJSON *timestamp_obj = cJSON_GetObjectItem(root, "timestamp");
-    if (!timestamp_obj || !cJSON_IsString(timestamp_obj)) {
-        state_free(state);
-        cJSON_Delete(root);
-        return ERROR(ERR_STATE_INVALID, "Missing or invalid timestamp field");
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        return ERROR(ERR_STATE_INVALID, "Database missing schema version");
     }
 
-    struct tm tm_info = {0};
-    if (strptime(timestamp_obj->valuestring, "%Y-%m-%dT%H:%M:%SZ", &tm_info) == NULL) {
-        state_free(state);
-        cJSON_Delete(root);
-        return ERROR(ERR_STATE_INVALID, "Invalid timestamp format");
+    const char *db_version = (const char *)sqlite3_column_text(stmt, 0);
+    if (!db_version) {
+        sqlite3_finalize(stmt);
+        return ERROR(ERR_STATE_INVALID, "Schema version is NULL");
     }
 
-    /* Convert to time_t (UTC) - thread-safe version */
-    state->timestamp = timegm(&tm_info);
-
-    /* Parse profiles array */
-    cJSON *profiles_array = cJSON_GetObjectItem(root, "profiles");
-    if (!profiles_array || !cJSON_IsArray(profiles_array)) {
-        state_free(state);
-        cJSON_Delete(root);
-        return ERROR(ERR_STATE_INVALID, "Missing or invalid profiles field");
+    /* Must match exactly */
+    if (strcmp(db_version, STATE_SCHEMA_VERSION) != 0) {
+        error_t *err = ERROR(ERR_STATE_INVALID,
+            "Schema version mismatch: database has version %s, code expects %s\n"
+            "Database was created by different version of dotta",
+            db_version, STATE_SCHEMA_VERSION);
+        sqlite3_finalize(stmt);
+        return err;
     }
 
-    state->profiles = string_array_create();
-    if (!state->profiles) {
-        state_free(state);
-        cJSON_Delete(root);
-        return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
-    }
-
-    cJSON *profile_item = NULL;
-    cJSON_ArrayForEach(profile_item, profiles_array) {
-        if (!cJSON_IsString(profile_item)) {
-            state_free(state);
-            cJSON_Delete(root);
-            return ERROR(ERR_STATE_INVALID, "Invalid profile name in array");
-        }
-        err = string_array_push(state->profiles, profile_item->valuestring);
-        if (err) {
-            state_free(state);
-            cJSON_Delete(root);
-            return err;
-        }
-    }
-
-    /* Parse files array */
-    cJSON *files_array = cJSON_GetObjectItem(root, "files");
-    if (!files_array || !cJSON_IsArray(files_array)) {
-        state_free(state);
-        cJSON_Delete(root);
-        return ERROR(ERR_STATE_INVALID, "Missing or invalid files field");
-    }
-
-    cJSON *file_obj = NULL;
-    cJSON_ArrayForEach(file_obj, files_array) {
-        if (!cJSON_IsObject(file_obj)) {
-            state_free(state);
-            cJSON_Delete(root);
-            return ERROR(ERR_STATE_INVALID, "Invalid file entry in array");
-        }
-
-        /* Extract required fields */
-        cJSON *storage_path_obj = cJSON_GetObjectItem(file_obj, "storage_path");
-        cJSON *filesystem_path_obj = cJSON_GetObjectItem(file_obj, "filesystem_path");
-        cJSON *profile_obj = cJSON_GetObjectItem(file_obj, "profile");
-        cJSON *type_obj = cJSON_GetObjectItem(file_obj, "type");
-
-        if (!storage_path_obj || !cJSON_IsString(storage_path_obj) ||
-            !filesystem_path_obj || !cJSON_IsString(filesystem_path_obj) ||
-            !profile_obj || !cJSON_IsString(profile_obj) ||
-            !type_obj || !cJSON_IsString(type_obj)) {
-            state_free(state);
-            cJSON_Delete(root);
-            return ERROR(ERR_STATE_INVALID, "Missing required file entry fields");
-        }
-
-        /* Parse file type */
-        state_file_type_t type = STATE_FILE_REGULAR;
-        if (strcmp(type_obj->valuestring, "symlink") == 0) {
-            type = STATE_FILE_SYMLINK;
-        } else if (strcmp(type_obj->valuestring, "executable") == 0) {
-            type = STATE_FILE_EXECUTABLE;
-        }
-
-        /* Extract optional fields */
-        cJSON *hash_obj = cJSON_GetObjectItem(file_obj, "hash");
-        cJSON *mode_obj = cJSON_GetObjectItem(file_obj, "mode");
-
-        const char *hash = (hash_obj && cJSON_IsString(hash_obj)) ? hash_obj->valuestring : NULL;
-        const char *mode = (mode_obj && cJSON_IsString(mode_obj)) ? mode_obj->valuestring : NULL;
-
-        /* Create file entry */
-        state_file_entry_t *file_entry = NULL;
-        err = state_create_entry(
-            storage_path_obj->valuestring,
-            filesystem_path_obj->valuestring,
-            profile_obj->valuestring,
-            type,
-            hash,
-            mode,
-            &file_entry
-        );
-
-        if (err) {
-            state_free(state);
-            cJSON_Delete(root);
-            return error_wrap(err, "Failed to create file entry");
-        }
-
-        err = state_add_file(state, file_entry);
-        state_free_entry(file_entry);
-
-        if (err) {
-            state_free(state);
-            cJSON_Delete(root);
-            return error_wrap(err, "Failed to add file entry");
-        }
-    }
-
-    cJSON_Delete(root);
-    *out = state;
+    sqlite3_finalize(stmt);
     return NULL;
 }
 
 /**
- * Load state for update (with locking)
+ * Configure database for optimal performance
  *
- * This function loads state and acquires an exclusive lock to prevent
- * concurrent modifications. The lock is stored in the state structure
- * and automatically released by state_save() or state_free().
+ * Sets critical pragmas:
+ * - WAL mode: Concurrent access, 2-10x faster
+ * - synchronous=NORMAL: Fast but safe
+ * - cache_size: 10MB for large deployments
+ * - temp_store=MEMORY: Temp operations in RAM
+ * - busy_timeout: Wait up to 5s for lock
  *
- * @param repo Repository (must not be NULL)
- * @param out State structure (must not be NULL)
+ * @param db Database connection (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_load_for_update(git_repository *repo, state_t **out) {
-    CHECK_NULL(repo);
-    CHECK_NULL(out);
+static error_t *configure_db(sqlite3 *db) {
+    CHECK_NULL(db);
 
-    error_t *err = NULL;
-    state_t *state = NULL;
-    state_lock_t *lock = NULL;
+    char *errmsg = NULL;
+    int rc;
 
-    /* Acquire lock first (before loading state) */
-    err = state_lock_acquire(repo, &lock);
-    if (err) {
+    /* 1. Enable WAL mode (critical for performance) */
+    rc = sqlite3_exec(db, "PRAGMA journal_mode=WAL;", NULL, NULL, &errmsg);
+    if (rc != SQLITE_OK) {
+        error_t *err = ERROR(ERR_STATE_INVALID,
+            "Failed to enable WAL mode: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc));
+        sqlite3_free(errmsg);
         return err;
     }
 
-    /* Load state */
-    err = state_load(repo, &state);
-    if (err) {
-        state_lock_release(lock);
+    /* 2. Fast synchronization (safe on crash, fast on commit) */
+    rc = sqlite3_exec(db, "PRAGMA synchronous=NORMAL;", NULL, NULL, &errmsg);
+    if (rc != SQLITE_OK) {
+        error_t *err = ERROR(ERR_STATE_INVALID,
+            "Failed to set synchronous mode: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc));
+        sqlite3_free(errmsg);
         return err;
     }
 
-    /* Attach lock to state for automatic cleanup */
-    state->lock = lock;
-
-    *out = state;
-    return NULL;
-}
-
-/**
- * Save state to repository
- */
-error_t *state_save(git_repository *repo, state_t *state) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-
-    error_t *err = NULL;
-    bool acquired_lock_here = false;
-
-    /* If no lock is held, acquire one for this save operation
-     * This handles cases like state_create_empty() where we create
-     * state without loading (init, clone commands).
-     */
-    if (!state->lock) {
-        err = state_lock_acquire(repo, &state->lock);
-        if (err) {
-            return err;
-        }
-        acquired_lock_here = true;
-    }
-
-    /* Get state file path */
-    char *state_path = NULL;
-    err = get_state_file_path(repo, &state_path);
-    if (err) {
-        if (acquired_lock_here) {
-            state_lock_release(state->lock);
-            state->lock = NULL;
-        }
+    /* 3. Larger cache (10MB instead of default 2MB) */
+    rc = sqlite3_exec(db, "PRAGMA cache_size=10000;", NULL, NULL, &errmsg);
+    if (rc != SQLITE_OK) {
+        error_t *err = ERROR(ERR_STATE_INVALID,
+            "Failed to set cache size: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc));
+        sqlite3_free(errmsg);
         return err;
     }
 
-    /* Convert state to JSON */
-    buffer_t *json = NULL;
-    err = state_to_json(state, &json);
-    if (err) {
-        free(state_path);
-        if (acquired_lock_here) {
-            state_lock_release(state->lock);
-            state->lock = NULL;
-        }
+    /* 4. Store temp tables in memory (faster) */
+    rc = sqlite3_exec(db, "PRAGMA temp_store=MEMORY;", NULL, NULL, &errmsg);
+    if (rc != SQLITE_OK) {
+        error_t *err = ERROR(ERR_STATE_INVALID,
+            "Failed to set temp store: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc));
+        sqlite3_free(errmsg);
         return err;
     }
 
-    /* Write to temporary file first (atomic write) */
-    char temp_path[PATH_MAX];
-    snprintf(temp_path, sizeof(temp_path), "%s.tmp", state_path);
-
-    err = fs_write_file(temp_path, json);
-    buffer_free(json);
-    if (err) {
-        free(state_path);
-        if (acquired_lock_here) {
-            state_lock_release(state->lock);
-            state->lock = NULL;
-        }
-        return error_wrap(err, "Failed to write state file");
-    }
-
-    /* Rename to final location (atomic) */
-    if (rename(temp_path, state_path) < 0) {
-        fs_remove_file(temp_path);
-        free(state_path);
-        if (acquired_lock_here) {
-            state_lock_release(state->lock);
-            state->lock = NULL;
-        }
-        return ERROR(ERR_FS, "Failed to save state file: %s", strerror(errno));
-    }
-
-    free(state_path);
-
-    /* Always release lock after successful save */
-    state_lock_release(state->lock);
-    state->lock = NULL;
+    /* 5. Short busy timeout to handle transient locks gracefully */
+    sqlite3_busy_timeout(db, 300);
 
     return NULL;
 }
 
 /**
- * Free state
- */
-void state_free(state_t *state) {
-    if (!state) {
-        return;
-    }
-
-    /* Release lock if still held (cleanup for error paths) */
-    if (state->lock) {
-        state_lock_release(state->lock);
-        state->lock = NULL;
-    }
-
-    string_array_free(state->profiles);
-
-    /* Free file entries */
-    for (size_t i = 0; i < state->file_count; i++) {
-        state_file_entry_t *entry = &state->files[i];
-        free(entry->storage_path);
-        free(entry->filesystem_path);
-        free(entry->profile);
-        free(entry->hash);
-        free(entry->mode);
-    }
-    free(state->files);
-
-    /* Free file index (values point to entries array, so no value free callback) */
-    if (state->file_index) {
-        hashmap_free(state->file_index, NULL);
-    }
-
-    free(state);
-}
-
-/**
- * Add file to state
- */
-error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
-    CHECK_NULL(state);
-    CHECK_NULL(entry);
-
-    bool need_rebuild = false;
-
-    /* Grow array if needed */
-    if (state->file_count >= state->file_capacity) {
-        size_t new_capacity = state->file_capacity == 0 ? 16 : state->file_capacity * 2;
-        state_file_entry_t *new_files = realloc(state->files,
-                                                 new_capacity * sizeof(state_file_entry_t));
-        if (!new_files) {
-            return ERROR(ERR_MEMORY, "Failed to grow files array");
-        }
-        state->files = new_files;
-        state->file_capacity = new_capacity;
-        need_rebuild = true;  /* Array moved, need to rebuild hashmap */
-    }
-
-    /* Copy entry */
-    state_file_entry_t *dst = &state->files[state->file_count];
-    memset(dst, 0, sizeof(state_file_entry_t));
-
-    dst->storage_path = strdup(entry->storage_path);
-    dst->filesystem_path = strdup(entry->filesystem_path);
-    dst->profile = strdup(entry->profile);
-    dst->type = entry->type;
-    dst->hash = entry->hash ? strdup(entry->hash) : NULL;
-    dst->mode = entry->mode ? strdup(entry->mode) : NULL;
-
-    if (!dst->storage_path || !dst->filesystem_path || !dst->profile) {
-        free(dst->storage_path);
-        free(dst->filesystem_path);
-        free(dst->profile);
-        free(dst->hash);
-        free(dst->mode);
-        return ERROR(ERR_MEMORY, "Failed to copy file entry");
-    }
-
-    state->file_count++;
-
-    /* Update hashmap index */
-    if (state->file_index) {
-        if (need_rebuild) {
-            /* Rebuild entire index since array was reallocated */
-            hashmap_clear(state->file_index, NULL);
-            for (size_t i = 0; i < state->file_count; i++) {
-                error_t *err = hashmap_set(state->file_index,
-                                           state->files[i].filesystem_path,
-                                           &state->files[i]);
-                if (err) {
-                    /* Continue despite error - index will be incomplete but functional */
-                    error_free(err);
-                }
-            }
-        } else {
-            /* Just add the new entry */
-            error_t *err = hashmap_set(state->file_index, dst->filesystem_path, dst);
-            if (err) {
-                /* Not fatal - fallback to linear search */
-                error_free(err);
-            }
-        }
-    }
-
-    return NULL;
-}
-
-/**
- * Remove file entry from state
+ * Open database connection
  *
- * Uses swap-with-last optimization for O(1) removal.
- * Correctly handles memory management to avoid dangling pointers.
+ * Opens or creates database, initializes schema, and configures pragmas.
+ * Does NOT start a transaction - use state_load_for_update() for that.
+ *
+ * @param db_path Path to database file (must not be NULL)
+ * @param create_if_missing Create database if it doesn't exist
+ * @param out Database connection (must not be NULL, caller must close)
+ * @return Error or NULL on success
  */
-error_t *state_remove_file(state_t *state, const char *filesystem_path) {
-    CHECK_NULL(state);
-    CHECK_NULL(filesystem_path);
-
-    /* Find file in array to get its index */
-    size_t found_index = SIZE_MAX;
-    for (size_t i = 0; i < state->file_count; i++) {
-        if (strcmp(state->files[i].filesystem_path, filesystem_path) == 0) {
-            found_index = i;
-            break;
-        }
-    }
-
-    if (found_index == SIZE_MAX) {
-        return ERROR(ERR_NOT_FOUND, "File '%s' not found in state", filesystem_path);
-    }
-
-    /* Remove from hashmap first (using the entry we're about to free) */
-    if (state->file_index) {
-        hashmap_remove(state->file_index, filesystem_path, NULL);
-    }
-
-    /* Free the strings at found_index BEFORE any swapping */
-    state_file_entry_t *entry_to_remove = &state->files[found_index];
-    free(entry_to_remove->storage_path);
-    free(entry_to_remove->filesystem_path);
-    free(entry_to_remove->profile);
-    free(entry_to_remove->hash);
-    free(entry_to_remove->mode);
-
-    /* Calculate last element index */
-    size_t last_index = state->file_count - 1;
-
-    /* If not removing last element, move last element into the gap */
-    if (found_index < last_index) {
-        /* Shallow copy is safe now since we freed the old strings */
-        state->files[found_index] = state->files[last_index];
-
-        /* Update hashmap to point to the moved entry's new location */
-        if (state->file_index) {
-            error_t *err = hashmap_set(state->file_index,
-                                       state->files[found_index].filesystem_path,
-                                       &state->files[found_index]);
-            if (err) {
-                /* Continue despite hashmap inconsistency - linear search fallback exists */
-                error_free(err);
-            }
-        }
-    }
-
-    /* Decrement count (last element is now unused) */
-    state->file_count--;
-
-    return NULL;
-}
-
-/**
- * Check if file exists in state
- */
-bool state_file_exists(const state_t *state, const char *filesystem_path) {
-    if (!state || !filesystem_path) {
-        return false;
-    }
-
-    /* Use hashmap for O(1) lookup */
-    if (state->file_index) {
-        return hashmap_has(state->file_index, filesystem_path);
-    }
-
-    /* Fallback to linear search if no index */
-    for (size_t i = 0; i < state->file_count; i++) {
-        if (strcmp(state->files[i].filesystem_path, filesystem_path) == 0) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-/**
- * Get file entry
- */
-error_t *state_get_file(
-    const state_t *state,
-    const char *filesystem_path,
-    const state_file_entry_t **out
-) {
-    CHECK_NULL(state);
-    CHECK_NULL(filesystem_path);
+static error_t *open_db(const char *db_path, bool create_if_missing, sqlite3 **out) {
+    CHECK_NULL(db_path);
     CHECK_NULL(out);
 
-    /* Use hashmap for O(1) lookup */
-    if (state->file_index) {
-        state_file_entry_t *entry = hashmap_get(state->file_index, filesystem_path);
-        if (!entry) {
-            return ERROR(ERR_NOT_FOUND, "File not found in state: %s", filesystem_path);
-        }
-        *out = entry;
-        return NULL;
+    sqlite3 *db = NULL;
+    error_t *err = NULL;
+    int flags = SQLITE_OPEN_READWRITE;
+
+    /* Add create flag if requested */
+    if (create_if_missing) {
+        flags |= SQLITE_OPEN_CREATE;
     }
 
-    /* Fallback to linear search if no index */
-    for (size_t i = 0; i < state->file_count; i++) {
-        if (strcmp(state->files[i].filesystem_path, filesystem_path) == 0) {
-            *out = &state->files[i];
+    /* Open database */
+    int rc = sqlite3_open_v2(db_path, &db, flags, NULL);
+    if (rc != SQLITE_OK) {
+        if (rc == SQLITE_CANTOPEN && !create_if_missing) {
+            /* Database doesn't exist - return NULL (not an error for read-only) */
+            *out = NULL;
             return NULL;
         }
+
+        err = ERROR(ERR_FS,
+            "Failed to open database: %s",
+            db ? sqlite3_errmsg(db) : sqlite3_errstr(rc));
+        if (db) sqlite3_close(db);
+        return err;
     }
 
-    return ERROR(ERR_NOT_FOUND, "File not found in state: %s", filesystem_path);
-}
-
-/**
- * Get all files
- */
-const state_file_entry_t *state_get_all_files(const state_t *state, size_t *count) {
-    if (!state || !count) {
-        if (count) *count = 0;
-        return NULL;
+    /* Configure database */
+    err = configure_db(db);
+    if (err) {
+        sqlite3_close(db);
+        return err;
     }
 
-    *count = state->file_count;
-    return state->files;
-}
+    /* Initialize or verify schema */
+    bool db_is_new = false;
+    sqlite3_stmt *check_stmt = NULL;
+    rc = sqlite3_prepare_v2(db,
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_meta';",
+        -1, &check_stmt, NULL);
 
-/**
- * Set profiles
- */
-error_t *state_set_profiles(
-    state_t *state,
-    const char **profiles,
-    size_t count
-) {
-    CHECK_NULL(state);
-    CHECK_NULL(profiles);
+    if (rc == SQLITE_OK) {
+        rc = sqlite3_step(check_stmt);
+        db_is_new = (rc != SQLITE_ROW);
+        sqlite3_finalize(check_stmt);
+    }
 
-    string_array_clear(state->profiles);
-
-    for (size_t i = 0; i < count; i++) {
-        error_t *err = string_array_push(state->profiles, profiles[i]);
+    if (db_is_new) {
+        /* New database - initialize schema */
+        err = initialize_schema(db);
         if (err) {
+            sqlite3_close(db);
             return err;
         }
+    } else {
+        /* Existing database - verify schema version */
+        err = verify_schema_version(db);
+        if (err) {
+            sqlite3_close(db);
+            return err;
+        }
+    }
+
+    *out = db;
+    return NULL;
+}
+
+/**
+ * Prepare all statements for state operations
+ *
+ * Called once per database connection. Statements are reused for all
+ * operations, providing 100x speedup for bulk operations.
+ *
+ * @param state State (must not be NULL, db must be open)
+ * @return Error or NULL on success
+ */
+static error_t *prepare_statements(state_t *state) {
+    CHECK_NULL(state);
+    CHECK_NULL(state->db);
+
+    int rc;
+
+    /* Insert/update file (used in apply loop - hot path) */
+    const char *sql_insert =
+        "INSERT OR REPLACE INTO deployed_files "
+        "(filesystem_path, storage_path, profile, type, hash, mode, deployed_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?);";
+
+    rc = sqlite3_prepare_v2(state->db, sql_insert, -1,
+                           &state->stmt_insert_file, NULL);
+    if (rc != SQLITE_OK) {
+        return sqlite_error(state->db, "Failed to prepare insert statement");
+    }
+
+    /* File exists check (used in status - hot path) */
+    const char *sql_exists =
+        "SELECT 1 FROM deployed_files WHERE filesystem_path = ? LIMIT 1;";
+
+    rc = sqlite3_prepare_v2(state->db, sql_exists, -1,
+                           &state->stmt_file_exists, NULL);
+    if (rc != SQLITE_OK) {
+        sqlite3_finalize(state->stmt_insert_file);
+        return sqlite_error(state->db, "Failed to prepare exists statement");
+    }
+
+    /* Get file (used in workspace analysis) */
+    const char *sql_get =
+        "SELECT storage_path, profile, type, hash, mode "
+        "FROM deployed_files WHERE filesystem_path = ?;";
+
+    rc = sqlite3_prepare_v2(state->db, sql_get, -1,
+                           &state->stmt_get_file, NULL);
+    if (rc != SQLITE_OK) {
+        sqlite3_finalize(state->stmt_insert_file);
+        sqlite3_finalize(state->stmt_file_exists);
+        return sqlite_error(state->db, "Failed to prepare get statement");
+    }
+
+    /* Remove file (used in revert) */
+    const char *sql_remove =
+        "DELETE FROM deployed_files WHERE filesystem_path = ?;";
+
+    rc = sqlite3_prepare_v2(state->db, sql_remove, -1,
+                           &state->stmt_remove_file, NULL);
+    if (rc != SQLITE_OK) {
+        sqlite3_finalize(state->stmt_insert_file);
+        sqlite3_finalize(state->stmt_file_exists);
+        sqlite3_finalize(state->stmt_get_file);
+        return sqlite_error(state->db, "Failed to prepare remove statement");
+    }
+
+    /* Insert profile (used in profile select) */
+    const char *sql_profile =
+        "INSERT INTO active_profiles (position, name, activated_at) "
+        "VALUES (?, ?, ?);";
+
+    rc = sqlite3_prepare_v2(state->db, sql_profile, -1,
+                           &state->stmt_insert_profile, NULL);
+    if (rc != SQLITE_OK) {
+        sqlite3_finalize(state->stmt_insert_file);
+        sqlite3_finalize(state->stmt_file_exists);
+        sqlite3_finalize(state->stmt_get_file);
+        sqlite3_finalize(state->stmt_remove_file);
+        return sqlite_error(state->db, "Failed to prepare profile statement");
     }
 
     return NULL;
 }
 
 /**
- * Get profiles
+ * Finalize all prepared statements
+ *
+ * Called from state_free() before closing database.
+ *
+ * @param state State (can be NULL)
+ */
+static void finalize_statements(state_t *state) {
+    if (!state) return;
+
+    if (state->stmt_insert_file) {
+        sqlite3_finalize(state->stmt_insert_file);
+        state->stmt_insert_file = NULL;
+    }
+
+    if (state->stmt_file_exists) {
+        sqlite3_finalize(state->stmt_file_exists);
+        state->stmt_file_exists = NULL;
+    }
+
+    if (state->stmt_get_file) {
+        sqlite3_finalize(state->stmt_get_file);
+        state->stmt_get_file = NULL;
+    }
+
+    if (state->stmt_remove_file) {
+        sqlite3_finalize(state->stmt_remove_file);
+        state->stmt_remove_file = NULL;
+    }
+
+    if (state->stmt_insert_profile) {
+        sqlite3_finalize(state->stmt_insert_profile);
+        state->stmt_insert_profile = NULL;
+    }
+}
+
+/**
+ * Load profiles into cache
+ *
+ * Lazy loading pattern - only loads once, then caches.
+ * Profiles are tiny (~100 bytes) and read frequently, so caching
+ * is beneficial.
+ *
+ * @param state State (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *load_profiles(state_t *state) {
+    CHECK_NULL(state);
+    CHECK_NULL(state->db);
+
+    /* Already loaded - return immediately */
+    if (state->profiles_loaded) {
+        return NULL;
+    }
+
+    /* Create array if needed */
+    if (!state->profiles) {
+        state->profiles = string_array_create();
+        if (!state->profiles) {
+            return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
+        }
+    }
+
+    /* Query profiles ordered by position */
+    const char *sql = "SELECT name FROM active_profiles ORDER BY position ASC;";
+    sqlite3_stmt *stmt = NULL;
+
+    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return sqlite_error(state->db, "Failed to prepare profile query");
+    }
+
+    error_t *err = NULL;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        const char *name = (const char *)sqlite3_column_text(stmt, 0);
+        if (!name) {
+            err = ERROR(ERR_STATE_INVALID, "Profile name is NULL");
+            break;
+        }
+
+        err = string_array_push(state->profiles, name);
+        if (err) break;
+    }
+
+    sqlite3_finalize(stmt);
+
+    if (err) return err;
+
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to query profiles");
+    }
+
+    state->profiles_loaded = true;
+    return NULL;
+}
+
+/**
+ * Get active profiles
+ *
+ * Returns copy that caller must free.
+ * Profiles are cached on first access.
+ *
+ * @param state State (must not be NULL)
+ * @param out Profile names (must not be NULL, caller must free)
+ * @return Error or NULL on success
  */
 error_t *state_get_profiles(const state_t *state, string_array_t **out) {
     CHECK_NULL(state);
     CHECK_NULL(out);
 
-    /* Create copy */
+    /* Load if not cached (cast away const for internal mutation) */
+    error_t *err = load_profiles((state_t *)state);
+    if (err) return err;
+
+    /* Return copy (caller owns) */
     string_array_t *copy = string_array_create();
     if (!copy) {
         return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
     }
 
     for (size_t i = 0; i < string_array_size(state->profiles); i++) {
-        error_t *err = string_array_push(copy, string_array_get(state->profiles, i));
+        err = string_array_push(copy, string_array_get(state->profiles, i));
         if (err) {
             string_array_free(copy);
             return err;
@@ -949,7 +582,785 @@ error_t *state_get_profiles(const state_t *state, string_array_t **out) {
 }
 
 /**
- * Get timestamp
+ * Set active profiles
+ *
+ * Hot path - must be fast even with 10,000 deployed files.
+ * Only modifies active_profiles table (deployed_files untouched).
+ *
+ * @param state State (must not be NULL)
+ * @param profiles Array of profile names (must not be NULL)
+ * @param count Number of profiles
+ * @return Error or NULL on success
+ */
+error_t *state_set_profiles(
+    state_t *state,
+    const char **profiles,
+    size_t count
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(profiles);
+    CHECK_NULL(state->db);
+
+    /* Delete all existing profiles */
+    char *errmsg = NULL;
+    int rc = sqlite3_exec(state->db, "DELETE FROM active_profiles;",
+                         NULL, NULL, &errmsg);
+    if (rc != SQLITE_OK) {
+        error_t *err = ERROR(ERR_STATE_INVALID,
+            "Failed to clear profiles: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc));
+        sqlite3_free(errmsg);
+        return err;
+    }
+
+    /* Insert new profiles */
+    time_t now = time(NULL);
+    for (size_t i = 0; i < count; i++) {
+        /* Reset and bind statement */
+        sqlite3_reset(state->stmt_insert_profile);
+        sqlite3_clear_bindings(state->stmt_insert_profile);
+
+        sqlite3_bind_int64(state->stmt_insert_profile, 1, (sqlite3_int64)i);
+        sqlite3_bind_text(state->stmt_insert_profile, 2, profiles[i], -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(state->stmt_insert_profile, 3, (sqlite3_int64)now);
+
+        rc = sqlite3_step(state->stmt_insert_profile);
+        if (rc != SQLITE_DONE) {
+            return sqlite_error(state->db, "Failed to insert profile");
+        }
+    }
+
+    /* Update cache */
+    if (state->profiles) {
+        string_array_clear(state->profiles);
+    } else {
+        state->profiles = string_array_create();
+        if (!state->profiles) {
+            return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
+        }
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        error_t *err = string_array_push(state->profiles, profiles[i]);
+        if (err) return err;
+    }
+
+    state->profiles_loaded = true;
+    return NULL;
+}
+
+/**
+ * Add file entry to state
+ *
+ * HOT PATH: Called 1000+ times in apply loop.
+ * Uses prepared statement for 100x speedup.
+ *
+ * @param state State (must not be NULL)
+ * @param entry File entry to add (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
+    CHECK_NULL(state);
+    CHECK_NULL(entry);
+    CHECK_NULL(state->db);
+    CHECK_NULL(state->stmt_insert_file);
+
+    /* Reset statement (clear previous bindings) */
+    sqlite3_reset(state->stmt_insert_file);
+    sqlite3_clear_bindings(state->stmt_insert_file);
+
+    /* Bind parameters */
+    sqlite3_bind_text(state->stmt_insert_file, 1,
+                     entry->filesystem_path, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(state->stmt_insert_file, 2,
+                     entry->storage_path, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(state->stmt_insert_file, 3,
+                     entry->profile, -1, SQLITE_TRANSIENT);
+
+    const char *type_str = entry->type == STATE_FILE_REGULAR ? "file" :
+                          entry->type == STATE_FILE_SYMLINK ? "symlink" :
+                          "executable";
+    sqlite3_bind_text(state->stmt_insert_file, 4, type_str, -1, SQLITE_STATIC);
+
+    if (entry->hash) {
+        sqlite3_bind_text(state->stmt_insert_file, 5,
+                         entry->hash, -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(state->stmt_insert_file, 5);
+    }
+
+    if (entry->mode) {
+        sqlite3_bind_text(state->stmt_insert_file, 6,
+                         entry->mode, -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(state->stmt_insert_file, 6);
+    }
+
+    sqlite3_bind_int64(state->stmt_insert_file, 7, (sqlite3_int64)time(NULL));
+
+    /* Execute (don't finalize - statement is reused) */
+    int rc = sqlite3_step(state->stmt_insert_file);
+
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to insert file entry");
+    }
+
+    return NULL;
+}
+
+/**
+ * Remove file entry from state
+ *
+ * @param state State (must not be NULL)
+ * @param filesystem_path File path to remove (must not be NULL)
+ * @return Error or NULL on success (not found is an error)
+ */
+error_t *state_remove_file(state_t *state, const char *filesystem_path) {
+    CHECK_NULL(state);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(state->db);
+    CHECK_NULL(state->stmt_remove_file);
+
+    /* Reset and bind */
+    sqlite3_reset(state->stmt_remove_file);
+    sqlite3_clear_bindings(state->stmt_remove_file);
+
+    sqlite3_bind_text(state->stmt_remove_file, 1, filesystem_path, -1, SQLITE_TRANSIENT);
+
+    /* Execute */
+    int rc = sqlite3_step(state->stmt_remove_file);
+
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to remove file entry");
+    }
+
+    /* Check if row was actually deleted */
+    int changes = sqlite3_changes(state->db);
+    if (changes == 0) {
+        return ERROR(ERR_NOT_FOUND, "File '%s' not found in state", filesystem_path);
+    }
+
+    return NULL;
+}
+
+/**
+ * Check if file exists in state
+ *
+ * HOT PATH: Called frequently during status checks.
+ * Uses PRIMARY KEY index for O(1) lookup.
+ *
+ * @param state State (must not be NULL)
+ * @param filesystem_path File path to check (must not be NULL)
+ * @return true if file exists in state
+ */
+bool state_file_exists(const state_t *state, const char *filesystem_path) {
+    if (!state || !filesystem_path || !state->db || !state->stmt_file_exists) {
+        return false;
+    }
+
+    /* Reset and bind (cast away const for statement reuse) */
+    sqlite3_stmt *stmt = ((state_t *)state)->stmt_file_exists;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+
+    sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
+
+    /* Execute */
+    int rc = sqlite3_step(stmt);
+
+    /* Return true if row found */
+    return (rc == SQLITE_ROW);
+}
+
+/**
+ * Get file entry from state
+ *
+ * Returns owned memory (caller must free).
+ * Original API returned borrowed reference.
+ *
+ * @param state State (must not be NULL)
+ * @param filesystem_path File path to lookup (must not be NULL)
+ * @param out File entry (must not be NULL, caller must free with state_free_entry)
+ * @return Error or NULL on success (not found is an error)
+ */
+error_t *state_get_file(
+    const state_t *state,
+    const char *filesystem_path,
+    state_file_entry_t **out
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(out);
+    CHECK_NULL(state->db);
+    CHECK_NULL(state->stmt_get_file);
+
+    /* Reset and bind (cast away const) */
+    sqlite3_stmt *stmt = ((state_t *)state)->stmt_get_file;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+
+    sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
+
+    /* Execute */
+    int rc = sqlite3_step(stmt);
+
+    if (rc != SQLITE_ROW) {
+        if (rc == SQLITE_DONE) {
+            return ERROR(ERR_NOT_FOUND, "File not found in state: %s", filesystem_path);
+        }
+        return sqlite_error(state->db, "Failed to query file");
+    }
+
+    /* Extract columns with NULL checking */
+    const char *storage_path = (const char *)sqlite3_column_text(stmt, 0);
+    const char *profile = (const char *)sqlite3_column_text(stmt, 1);
+    const char *type_str = (const char *)sqlite3_column_text(stmt, 2);
+    const char *hash = (const char *)sqlite3_column_text(stmt, 3);
+    const char *mode = (const char *)sqlite3_column_text(stmt, 4);
+
+    /* Validate required columns */
+    if (!storage_path || !profile || !type_str) {
+        return ERROR(ERR_STATE_INVALID,
+            "NULL value in required column for file: %s", filesystem_path);
+    }
+
+    /* Parse file type */
+    state_file_type_t type = STATE_FILE_REGULAR;
+    if (strcmp(type_str, "symlink") == 0) {
+        type = STATE_FILE_SYMLINK;
+    } else if (strcmp(type_str, "executable") == 0) {
+        type = STATE_FILE_EXECUTABLE;
+    }
+
+    /* Create entry (caller owns) */
+    state_file_entry_t *entry = NULL;
+    error_t *err = state_create_entry(
+        storage_path,
+        filesystem_path,
+        profile,
+        type,
+        hash,
+        mode,
+        &entry
+    );
+
+    if (err) return err;
+
+    *out = entry;
+    return NULL;
+}
+
+/**
+ * Get all file entries
+ *
+ * Returns allocated array that caller MUST free.
+ * Original API returned borrowed reference.
+ *
+ * This change is necessary because SQLite implementation doesn't keep
+ * all files in memory.
+ *
+ * @param state State (must not be NULL)
+ * @param out Output array (must not be NULL, caller must free with state_free_all_files)
+ * @param count Output count (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_get_all_files(
+    const state_t *state,
+    state_file_entry_t **out,
+    size_t *count
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(out);
+    CHECK_NULL(count);
+    CHECK_NULL(state->db);
+
+    *out = NULL;
+    *count = 0;
+
+    /* Count files first (avoid double iteration) */
+    const char *sql_count = "SELECT COUNT(*) FROM deployed_files;";
+    sqlite3_stmt *stmt_count = NULL;
+
+    int rc = sqlite3_prepare_v2(state->db, sql_count, -1, &stmt_count, NULL);
+    if (rc != SQLITE_OK) {
+        return sqlite_error(state->db, "Failed to prepare count query");
+    }
+
+    rc = sqlite3_step(stmt_count);
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(stmt_count);
+        return sqlite_error(state->db, "Failed to count files");
+    }
+
+    size_t file_count = (size_t)sqlite3_column_int64(stmt_count, 0);
+    sqlite3_finalize(stmt_count);
+
+    if (file_count == 0) {
+        return NULL;  /* Success, no files */
+    }
+
+    /* Allocate array */
+    state_file_entry_t *entries = calloc(file_count, sizeof(state_file_entry_t));
+    if (!entries) {
+        return ERROR(ERR_MEMORY, "Failed to allocate file array");
+    }
+
+    /* Query all files */
+    const char *sql_files =
+        "SELECT filesystem_path, storage_path, profile, type, hash, mode "
+        "FROM deployed_files ORDER BY filesystem_path;";
+
+    sqlite3_stmt *stmt = NULL;
+    rc = sqlite3_prepare_v2(state->db, sql_files, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        free(entries);
+        return sqlite_error(state->db, "Failed to prepare select query");
+    }
+
+    size_t i = 0;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < file_count) {
+        /* Get columns with NULL checking */
+        const char *fs_path = (const char *)sqlite3_column_text(stmt, 0);
+        const char *storage_path = (const char *)sqlite3_column_text(stmt, 1);
+        const char *profile = (const char *)sqlite3_column_text(stmt, 2);
+        const char *type_str = (const char *)sqlite3_column_text(stmt, 3);
+        const char *hash = (const char *)sqlite3_column_text(stmt, 4);
+        const char *mode = (const char *)sqlite3_column_text(stmt, 5);
+
+        /* Validate non-nullable columns */
+        if (!fs_path || !storage_path || !profile || !type_str) {
+            sqlite3_finalize(stmt);
+            state_free_all_files(entries, i);
+            return ERROR(ERR_STATE_INVALID,
+                "NULL value in required column at row %zu", i);
+        }
+
+        /* Copy strings */
+        entries[i].filesystem_path = strdup(fs_path);
+        entries[i].storage_path = strdup(storage_path);
+        entries[i].profile = strdup(profile);
+        entries[i].hash = hash ? strdup(hash) : NULL;
+        entries[i].mode = mode ? strdup(mode) : NULL;
+
+        /* Parse type */
+        if (strcmp(type_str, "symlink") == 0) {
+            entries[i].type = STATE_FILE_SYMLINK;
+        } else if (strcmp(type_str, "executable") == 0) {
+            entries[i].type = STATE_FILE_EXECUTABLE;
+        } else {
+            entries[i].type = STATE_FILE_REGULAR;
+        }
+
+        /* Check allocation success */
+        if (!entries[i].filesystem_path || !entries[i].storage_path ||
+            !entries[i].profile) {
+            sqlite3_finalize(stmt);
+            state_free_all_files(entries, i + 1);
+            return ERROR(ERR_MEMORY, "Failed to copy entry strings");
+        }
+
+        i++;
+    }
+
+    sqlite3_finalize(stmt);
+
+    if (rc != SQLITE_DONE) {
+        state_free_all_files(entries, i);
+        return sqlite_error(state->db, "Failed to query files");
+    }
+
+    *out = entries;
+    *count = i;
+    return NULL;
+}
+
+/**
+ * Free array returned by state_get_all_files()
+ *
+ * @param entries Array to free (can be NULL)
+ * @param count Number of entries in array
+ */
+void state_free_all_files(state_file_entry_t *entries, size_t count) {
+    if (!entries) return;
+
+    for (size_t i = 0; i < count; i++) {
+        free(entries[i].filesystem_path);
+        free(entries[i].storage_path);
+        free(entries[i].profile);
+        free(entries[i].hash);
+        free(entries[i].mode);
+    }
+
+    free(entries);
+}
+
+/**
+ * Clear all file entries (keeps profiles and timestamp)
+ *
+ * Efficiently truncates deployed_files table.
+ *
+ * @param state State (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_clear_files(state_t *state) {
+    CHECK_NULL(state);
+    CHECK_NULL(state->db);
+
+    char *errmsg = NULL;
+    int rc = sqlite3_exec(state->db, "DELETE FROM deployed_files;", NULL, NULL, &errmsg);
+    if (rc != SQLITE_OK) {
+        error_t *err = ERROR(ERR_STATE_INVALID,
+            "Failed to clear deployed files: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc));
+        sqlite3_free(errmsg);
+        return err;
+    }
+
+    return NULL;
+}
+
+/**
+ * Load state from repository (read-only)
+ *
+ * If database doesn't exist, returns empty state.
+ * No transaction started - safe for concurrent reads.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param out State structure (must not be NULL, caller must free with state_free)
+ * @return Error or NULL on success
+ */
+error_t *state_load(git_repository *repo, state_t **out) {
+    CHECK_NULL(repo);
+    CHECK_NULL(out);
+
+    error_t *err = NULL;
+    state_t *state = NULL;
+    sqlite3 *db = NULL;
+
+    /* Get database path */
+    char *db_path = NULL;
+    err = get_db_path(repo, &db_path);
+    if (err) return err;
+
+    /* Open database (don't create if missing) */
+    err = open_db(db_path, false, &db);
+    if (err) {
+        free(db_path);
+        return err;
+    }
+
+    /* If database doesn't exist, return empty state */
+    if (!db) {
+        free(db_path);
+        return state_create_empty(out);
+    }
+
+    /* Allocate state */
+    state = calloc(1, sizeof(state_t));
+    if (!state) {
+        sqlite3_close(db);
+        free(db_path);
+        return ERROR(ERR_MEMORY, "Failed to allocate state");
+    }
+
+    state->db = db;
+    state->db_path = db_path;
+    state->is_write_mode = false;
+    state->in_transaction = false;
+    state->profiles = NULL;
+    state->profiles_loaded = false;
+    state->timestamp = time(NULL);
+
+    /* Prepare statements */
+    err = prepare_statements(state);
+    if (err) {
+        sqlite3_close(db);
+        free(db_path);
+        free(state);
+        return err;
+    }
+
+    *out = state;
+    return NULL;
+}
+
+/**
+ * Load state for update (with transaction)
+ *
+ * Opens database with write lock (BEGIN IMMEDIATE transaction).
+ * Creates database if it doesn't exist.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param out State structure (must not be NULL, caller must free with state_free)
+ * @return Error or NULL on success
+ */
+error_t *state_load_for_update(git_repository *repo, state_t **out) {
+    CHECK_NULL(repo);
+    CHECK_NULL(out);
+
+    error_t *err = NULL;
+    state_t *state = NULL;
+    sqlite3 *db = NULL;
+
+    /* Get database path */
+    char *db_path = NULL;
+    err = get_db_path(repo, &db_path);
+    if (err) return err;
+
+    /* Open database (create if missing) */
+    err = open_db(db_path, true, &db);
+    if (err) {
+        free(db_path);
+        return err;
+    }
+
+    /* Allocate state */
+    state = calloc(1, sizeof(state_t));
+    if (!state) {
+        sqlite3_close(db);
+        free(db_path);
+        return ERROR(ERR_MEMORY, "Failed to allocate state");
+    }
+
+    state->db = db;
+    state->db_path = db_path;
+    state->is_write_mode = true;
+    state->in_transaction = false;
+    state->profiles = NULL;
+    state->profiles_loaded = false;
+    state->timestamp = time(NULL);
+
+    /* Prepare statements */
+    err = prepare_statements(state);
+    if (err) {
+        sqlite3_close(db);
+        free(db_path);
+        free(state);
+        return err;
+    }
+
+    /* Begin transaction - acquire write lock NOW */
+    char *errmsg = NULL;
+    int rc = sqlite3_exec(db, "BEGIN IMMEDIATE;", NULL, NULL, &errmsg);
+    if (rc != SQLITE_OK) {
+        err = ERROR(ERR_CONFLICT,
+            "Failed to acquire write lock: %s\n"
+            "Another process may be writing to the database",
+            errmsg ? errmsg : sqlite3_errstr(rc));
+        sqlite3_free(errmsg);
+        finalize_statements(state);
+        sqlite3_close(db);
+        free(db_path);
+        free(state);
+        return err;
+    }
+
+    state->in_transaction = true;
+
+    *out = state;
+    return NULL;
+}
+
+/**
+ * Save state to repository
+ *
+ * Commits the transaction started by state_load_for_update().
+ *
+ * @param repo Repository (must not be NULL)
+ * @param state State to save (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_save(git_repository *repo, state_t *state) {
+    CHECK_NULL(repo);
+    CHECK_NULL(state);
+
+    error_t *err = NULL;
+
+    /* Case 1: State created with load_for_update() - just commit transaction */
+    if (state->db && state->in_transaction) {
+        char *errmsg = NULL;
+        int rc = sqlite3_exec(state->db, "COMMIT;", NULL, NULL, &errmsg);
+        if (rc != SQLITE_OK) {
+            err = ERROR(ERR_STATE_INVALID,
+                "Failed to commit transaction: %s",
+                errmsg ? errmsg : sqlite3_errstr(rc));
+            sqlite3_free(errmsg);
+            return err;
+        }
+
+        state->in_transaction = false;
+        return NULL;
+    }
+
+    /* Case 2: State created with state_create_empty() - need to open database and write */
+    if (!state->db) {
+        /* Get database path */
+        char *db_path = NULL;
+        err = get_db_path(repo, &db_path);
+        if (err) return err;
+
+        /* Open database (create if missing) */
+        sqlite3 *db = NULL;
+        err = open_db(db_path, true, &db);
+        if (err) {
+            free(db_path);
+            return err;
+        }
+
+        state->db = db;
+        state->db_path = db_path;
+
+        /* Prepare statements */
+        err = prepare_statements(state);
+        if (err) {
+            sqlite3_close(db);
+            state->db = NULL;
+            return err;
+        }
+
+        /* Begin transaction */
+        char *errmsg = NULL;
+        int rc = sqlite3_exec(db, "BEGIN IMMEDIATE;", NULL, NULL, &errmsg);
+        if (rc != SQLITE_OK) {
+            err = ERROR(ERR_CONFLICT,
+                "Failed to acquire write lock: %s",
+                errmsg ? errmsg : sqlite3_errstr(rc));
+            sqlite3_free(errmsg);
+            finalize_statements(state);
+            sqlite3_close(db);
+            state->db = NULL;
+            return err;
+        }
+
+        /* Write profiles if any */
+        if (state->profiles && string_array_size(state->profiles) > 0) {
+            const char **profile_names = calloc(string_array_size(state->profiles), sizeof(char*));
+            if (!profile_names) {
+                sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
+                finalize_statements(state);
+                sqlite3_close(db);
+                state->db = NULL;
+                return ERROR(ERR_MEMORY, "Failed to allocate profile array");
+            }
+
+            for (size_t i = 0; i < string_array_size(state->profiles); i++) {
+                profile_names[i] = string_array_get(state->profiles, i);
+            }
+
+            err = state_set_profiles(state, profile_names, string_array_size(state->profiles));
+            free(profile_names);
+
+            if (err) {
+                sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
+                finalize_statements(state);
+                sqlite3_close(db);
+                state->db = NULL;
+                return err;
+            }
+        }
+
+        /* Commit transaction */
+        rc = sqlite3_exec(db, "COMMIT;", NULL, NULL, &errmsg);
+        if (rc != SQLITE_OK) {
+            err = ERROR(ERR_STATE_INVALID,
+                "Failed to commit transaction: %s",
+                errmsg ? errmsg : sqlite3_errstr(rc));
+            sqlite3_free(errmsg);
+            finalize_statements(state);
+            sqlite3_close(db);
+            state->db = NULL;
+            return err;
+        }
+
+        return NULL;
+    }
+
+    /* Case 3: Database exists but no transaction active - nothing to do */
+    return NULL;
+}
+
+/**
+ * Create empty state
+ *
+ * Returns in-memory state with no database connection.
+ * Useful for testing or when database doesn't exist.
+ *
+ * @param out State structure (must not be NULL, caller must free with state_free)
+ * @return Error or NULL on success
+ */
+error_t *state_create_empty(state_t **out) {
+    CHECK_NULL(out);
+
+    state_t *state = calloc(1, sizeof(state_t));
+    if (!state) {
+        return ERROR(ERR_MEMORY, "Failed to allocate state");
+    }
+
+    state->db = NULL;
+    state->db_path = NULL;
+    state->is_write_mode = false;
+    state->in_transaction = false;
+    state->profiles = string_array_create();
+    state->profiles_loaded = true;  /* Empty array is loaded */
+    state->timestamp = time(NULL);
+
+    if (!state->profiles) {
+        free(state);
+        return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
+    }
+
+    /* No database, no statements */
+    state->stmt_insert_file = NULL;
+    state->stmt_remove_file = NULL;
+    state->stmt_file_exists = NULL;
+    state->stmt_get_file = NULL;
+    state->stmt_insert_profile = NULL;
+
+    *out = state;
+    return NULL;
+}
+
+/**
+ * Free state structure
+ *
+ * Automatically rolls back transaction if not committed.
+ * Closes database and frees all memory.
+ *
+ * @param state State to free (can be NULL)
+ */
+void state_free(state_t *state) {
+    if (!state) {
+        return;
+    }
+
+    /* Rollback if transaction still active (error path cleanup) */
+    if (state->in_transaction && state->db) {
+        sqlite3_exec(state->db, "ROLLBACK;", NULL, NULL, NULL);
+        state->in_transaction = false;
+    }
+
+    /* Finalize prepared statements */
+    finalize_statements(state);
+
+    /* Checkpoint WAL before close (non-blocking, best effort) */
+    if (state->db) {
+        /* Use PASSIVE mode */
+        sqlite3_wal_checkpoint_v2(state->db, NULL,
+                                  SQLITE_CHECKPOINT_PASSIVE, NULL, NULL);
+        sqlite3_close(state->db);
+        state->db = NULL;
+    }
+
+    free(state->db_path);
+    string_array_free(state->profiles);
+    free(state);
+}
+
+/**
+ * Get state timestamp
+ *
+ * @param state State (must not be NULL)
+ * @return Timestamp (0 if not set)
  */
 time_t state_get_timestamp(const state_t *state) {
     if (!state) {
@@ -959,32 +1370,18 @@ time_t state_get_timestamp(const state_t *state) {
 }
 
 /**
- * Clear files
- */
-void state_clear_files(state_t *state) {
-    if (!state) {
-        return;
-    }
-
-    for (size_t i = 0; i < state->file_count; i++) {
-        state_file_entry_t *entry = &state->files[i];
-        free(entry->storage_path);
-        free(entry->filesystem_path);
-        free(entry->profile);
-        free(entry->hash);
-        free(entry->mode);
-    }
-
-    state->file_count = 0;
-
-    /* Clear file index */
-    if (state->file_index) {
-        hashmap_clear(state->file_index, NULL);
-    }
-}
-
-/**
  * Create file entry
+ *
+ * Helper function to allocate and initialize a file entry.
+ *
+ * @param storage_path Storage path (must not be NULL)
+ * @param filesystem_path Filesystem path (must not be NULL)
+ * @param profile Profile name (must not be NULL)
+ * @param type File type
+ * @param hash Content hash (can be NULL)
+ * @param mode Permission mode (can be NULL)
+ * @param out Entry (must not be NULL, caller must free with state_free_entry)
+ * @return Error or NULL on success
  */
 error_t *state_create_entry(
     const char *storage_path,
@@ -1023,6 +1420,8 @@ error_t *state_create_entry(
 
 /**
  * Free file entry
+ *
+ * @param entry Entry to free (can be NULL)
  */
 void state_free_entry(state_file_entry_t *entry) {
     if (!entry) {

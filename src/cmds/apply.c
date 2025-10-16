@@ -361,6 +361,7 @@ cleanup:
  * @param state State to update (must not be NULL)
  * @param profiles Profiles being applied (used for file tracking only)
  * @param manifest Manifest of deployed files (must not be NULL)
+ * @param metadata Merged metadata for mode extraction (can be NULL)
  * @param out Output context for messages (must not be NULL)
  * @return Error or NULL on success
  */
@@ -369,6 +370,7 @@ static error_t *apply_update_and_save_state(
     state_t *state,
     const profile_list_t *profiles,
     const manifest_t *manifest,
+    const metadata_t *metadata,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
@@ -408,6 +410,24 @@ static error_t *apply_update_and_save_state(
         char hash_str[GIT_OID_HEXSZ + 1];
         git_oid_tostr(hash_str, sizeof(hash_str), oid);
 
+        /* Look up mode from metadata (if available) */
+        const char *mode_str = NULL;
+        char mode_buf[5];  /* Stack buffer for "0777\0" (max 5 bytes) */
+
+        if (metadata) {
+            const metadata_entry_t *meta_entry = NULL;
+            error_t *meta_err = metadata_get_entry(metadata, entry->storage_path, &meta_entry);
+
+            if (!meta_err && meta_entry) {
+                /* Format mode directly into stack buffer (no heap allocation) */
+                snprintf(mode_buf, sizeof(mode_buf), "%04o", (unsigned int)(meta_entry->mode & 0777));
+                mode_str = mode_buf;
+            } else if (meta_err) {
+                /* Not found is expected for symlinks and other cases - not an error */
+                error_free(meta_err);
+            }
+        }
+
         /* Create state entry */
         state_file_entry_t *state_entry = NULL;
         err = state_create_entry(
@@ -416,7 +436,7 @@ static error_t *apply_update_and_save_state(
             entry->source_profile->name,
             type,
             hash_str,  /* hash computed from blob OID */
-            NULL,      /* mode */
+            mode_str,  /* mode from metadata (may be NULL) */
             &state_entry
         );
 
@@ -776,7 +796,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
 
         /* Now update state with the new manifest */
-        err = apply_update_and_save_state(repo, state, profiles, manifest, out);
+        err = apply_update_and_save_state(repo, state, profiles, manifest, merged_metadata, out);
         if (err) {
             goto cleanup;
         }

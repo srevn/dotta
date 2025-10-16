@@ -762,8 +762,7 @@ static void update_display_summary(
     output_ctx_t *out,
     const modified_file_list_t *modified,
     const new_file_list_t *new_files,
-    git_repository *repo,
-    const profile_list_t *profiles
+    git_repository *repo
 ) {
     if (!out || !modified) {
         return;
@@ -1209,7 +1208,7 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     }
 
     /* Display summary of files to update */
-    update_display_summary(out, modified, new_files, repo, profiles);
+    update_display_summary(out, modified, new_files, repo);
 
     /* Handle user confirmations */
     confirm_result_t confirm_result;

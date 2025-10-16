@@ -364,7 +364,7 @@ void print_revert_help(const char *prog_name) {
     printf("Usage: %s revert [options] <file> <commit>\n\n", prog_name);
     printf("Revert a file in a profile to its state at a specific commit\n\n");
     printf("Arguments:\n");
-    printf("  <file>                File path or basename to revert\n");
+    printf("  <file>                Filesystem path or storage path (home/..., root/...)\n");
     printf("  <commit>              Target commit reference (e.g., HEAD~3, abc123)\n");
     printf("\nOptions:\n");
     printf("  -p, --profile <name>  Profile name (required if file exists in multiple profiles)\n");

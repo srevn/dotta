@@ -11,37 +11,30 @@
 #include <time.h>
 
 #include "base/error.h"
+#include "base/filesystem.h"
 #include "base/gitops.h"
 #include "core/deploy.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/compare.h"
 #include "infra/path.h"
+#include "utils/array.h"
 #include "utils/commit.h"
 #include "utils/config.h"
+#include "utils/hashmap.h"
 #include "utils/output.h"
-
-/**
- * Get basename from path
- */
-static const char *get_basename(const char *path) {
-    const char *last_slash = strrchr(path, '/');
-    return last_slash ? last_slash + 1 : path;
-}
-
-/**
- * File match result
- */
-typedef struct {
-    char *profile_name;
-    char *file_path;
-} file_match_t;
 
 /**
  * Discover file in profiles
  *
- * Returns profile name and resolved file path.
- * Handles both exact path and basename matching.
+ * Returns profile name and resolved storage path.
+ * Accepts filesystem paths or storage paths (like remove.c).
+ * Uses profile_build_file_index() for O(M×P) performance instead of O(M×GitOps).
+ *
+ * Pattern (consistent with remove.c):
+ * 1. Try as filesystem path → convert to storage path
+ * 2. Try as storage path directly (home/.bashrc)
+ * 3. NO basename matching (safety + consistency)
  */
 static error_t *discover_file(
     git_repository *repo,
@@ -56,162 +49,166 @@ static error_t *discover_file(
     CHECK_NULL(out_resolved_path);
 
     error_t *err = NULL;
-    dotta_config_t *config = NULL;
-    profile_list_t *profiles = NULL;
+    char *storage_path = NULL;
 
-    /* If profile specified, check only that profile */
+    /* Strategy: Try filesystem path first, then storage path */
+
+    /* Attempt 1: Treat as filesystem path */
+    char *canonical = NULL;
+    err = fs_canonicalize_path(file_path, &canonical);
+    if (!err) {
+        /* Successfully canonicalized - convert to storage path */
+        path_prefix_t prefix;
+        err = path_to_storage(canonical, &storage_path, &prefix);
+        free(canonical);
+        if (err) {
+            return error_wrap(err, "Failed to convert filesystem path '%s'\n"
+                           "Hint: Use storage path format (home/..., root/...)", file_path);
+        }
+    } else {
+        /* Attempt 2: Treat as storage path directly */
+        error_free(err);
+        err = NULL;
+
+        /* Validate it looks like a storage path (home/... or root/...) */
+        if (strncmp(file_path, "home/", 5) == 0 || strncmp(file_path, "root/", 5) == 0) {
+            storage_path = strdup(file_path);
+        } else {
+            return ERROR(ERR_INVALID_ARG,
+                        "Path '%s' is neither a valid filesystem path nor storage path\n"
+                        "Hint: Storage paths must start with 'home/' or 'root/'",
+                        file_path);
+        }
+    }
+
+    if (!storage_path) {
+        return ERROR(ERR_MEMORY, "Failed to allocate storage path");
+    }
+
+    /* Fast path: If profile specified, check only that profile */
     if (profile_hint) {
-        bool exists = false;
-        err = gitops_branch_exists(repo, profile_hint, &exists);
+        profile_t *profile = NULL;
+        err = profile_load(repo, profile_hint, &profile);
         if (err) {
-            return err;
-        }
-        if (!exists) {
-            return ERROR(ERR_NOT_FOUND, "Profile '%s' not found", profile_hint);
+            free(storage_path);
+            return error_wrap(err, "Failed to load profile '%s'", profile_hint);
         }
 
-        /* Load tree for this profile */
-        size_t ref_name_size = strlen("refs/heads/") + strlen(profile_hint) + 1;
-        char *ref_name = malloc(ref_name_size);
-        if (!ref_name) {
-            return ERROR(ERR_MEMORY, "Failed to allocate reference name");
-        }
-        snprintf(ref_name, ref_name_size, "refs/heads/%s", profile_hint);
-
-        git_tree *tree = NULL;
-        err = gitops_load_tree(repo, ref_name, &tree);
-        free(ref_name);
-
+        /* Load tree */
+        err = profile_load_tree(repo, profile);
         if (err) {
+            profile_free(profile);
+            free(storage_path);
             return error_wrap(err, "Failed to load tree for profile '%s'", profile_hint);
         }
 
-        /* Try to find file by exact path */
+        /* Check if file exists in tree */
         git_tree_entry *entry = NULL;
-        err = gitops_find_file_in_tree(repo, tree, file_path, &entry);
-        if (err) {
-            git_tree_free(tree);
-            return error_wrap(err, "File '%s' not found in profile '%s'",
-                            file_path, profile_hint);
+        int git_err = git_tree_entry_bypath(&entry, profile->tree, storage_path);
+        bool exists = (git_err == 0);
+
+        if (entry) {
+            git_tree_entry_free(entry);
+        }
+        profile_free(profile);
+
+        if (!exists) {
+            free(storage_path);
+            return ERROR(ERR_NOT_FOUND,
+                        "File '%s' not found in profile '%s'\n"
+                        "Hint: Use 'dotta list --profile %s' to see tracked files",
+                        storage_path, profile_hint, profile_hint);
         }
 
-        git_tree_entry_free(entry);
-        git_tree_free(tree);
-
         *out_profile = strdup(profile_hint);
-        *out_resolved_path = strdup(file_path);
+        *out_resolved_path = storage_path;
 
-        if (!*out_profile || !*out_resolved_path) {
-            free(*out_profile);
-            free(*out_resolved_path);
-            return ERROR(ERR_MEMORY, "Failed to allocate output strings");
+        if (!*out_profile) {
+            free(storage_path);
+            return ERROR(ERR_MEMORY, "Failed to allocate profile name");
         }
 
         return NULL;
     }
 
-    /* No profile specified - search across all configured profiles */
+    /* Search across active profiles using optimized index */
+    dotta_config_t *config = NULL;
     err = config_load(NULL, &config);
     if (err) {
+        free(storage_path);
         return error_wrap(err, "Failed to load config");
     }
 
-    err = profile_resolve(
-        repo,
-        NULL, 0,
-        config->strict_mode,
-        &profiles,
-        NULL);
-
+    profile_list_t *profiles = NULL;
+    err = profile_resolve(repo, NULL, 0, config->strict_mode, &profiles, NULL);
     if (err) {
         config_free(config);
-        return error_wrap(err, "Failed to load profiles");
+        free(storage_path);
+        return error_wrap(err, "Failed to resolve profiles");
     }
 
     if (profiles->count == 0) {
         config_free(config);
         profile_list_free(profiles);
-        return ERROR(ERR_NOT_FOUND, "No profiles found");
+        free(storage_path);
+        return ERROR(ERR_NOT_FOUND, "No active profiles found");
     }
 
-    /* Try to find file: first by exact path, then by basename */
-    const char *basename = get_basename(file_path);
-    bool use_basename_search = (strcmp(basename, file_path) == 0);
+    /* Build profile file index once - O(M×P) instead of O(M×GitOps) */
+    hashmap_t *profile_index = NULL;
+    err = profile_build_file_index(repo, NULL, &profile_index);
+    if (err) {
+        profile_list_free(profiles);
+        config_free(config);
+        free(storage_path);
+        return error_wrap(err, "Failed to build profile index");
+    }
 
-    file_match_t *matches = NULL;
-    size_t match_count = 0;
+    /* Lookup file in index - O(1) */
+    string_array_t *matching_profiles = hashmap_get(profile_index, storage_path);
 
-    /* Search all profiles */
-    for (size_t i = 0; i < profiles->count; i++) {
-        const char *profile_name = profiles->profiles[i].name;
-        git_tree *tree = NULL;
+    if (!matching_profiles || string_array_size(matching_profiles) == 0) {
+        /* Not found in any profile */
+        hashmap_free(profile_index, (void (*)(void *))string_array_free);
+        profile_list_free(profiles);
+        config_free(config);
+        free(storage_path);
+        return ERROR(ERR_NOT_FOUND,
+                    "File '%s' not found in any active profile\n"
+                    "Hint: Use 'dotta list' to see tracked files",
+                    storage_path);
+    }
 
-        size_t ref_name_size = strlen("refs/heads/") + strlen(profile_name) + 1;
-        char *ref_name = malloc(ref_name_size);
-        if (!ref_name) continue;
-        snprintf(ref_name, ref_name_size, "refs/heads/%s", profile_name);
+    if (string_array_size(matching_profiles) == 1) {
+        /* Found in exactly one profile */
+        const char *profile_name = string_array_get(matching_profiles, 0);
+        *out_profile = strdup(profile_name);
+        *out_resolved_path = storage_path;
 
-        if (gitops_load_tree(repo, ref_name, &tree) == NULL) {
-            if (use_basename_search) {
-                /* Search by basename */
-                char **paths = NULL;
-                size_t path_count = 0;
+        hashmap_free(profile_index, (void (*)(void *))string_array_free);
+        profile_list_free(profiles);
+        config_free(config);
 
-                if (gitops_find_files_by_basename_in_tree(repo, tree, basename, &paths, &path_count) == NULL) {
-                    for (size_t j = 0; j < path_count; j++) {
-                        matches = realloc(matches, (match_count + 1) * sizeof(file_match_t));
-                        if (matches) {
-                            matches[match_count].profile_name = strdup(profile_name);
-                            matches[match_count].file_path = paths[j];
-                            match_count++;
-                        } else {
-                            free(paths[j]);
-                        }
-                    }
-                    free(paths);
-                }
-            } else {
-                /* Try exact path */
-                git_tree_entry *entry = NULL;
-                if (gitops_find_file_in_tree(repo, tree, file_path, &entry) == NULL) {
-                    matches = realloc(matches, (match_count + 1) * sizeof(file_match_t));
-                    if (matches) {
-                        matches[match_count].profile_name = strdup(profile_name);
-                        matches[match_count].file_path = strdup(file_path);
-                        match_count++;
-                    }
-                    git_tree_entry_free(entry);
-                }
-            }
-            git_tree_free(tree);
+        if (!*out_profile) {
+            free(storage_path);
+            return ERROR(ERR_MEMORY, "Failed to allocate profile name");
         }
-        free(ref_name);
-    }
 
-    config_free(config);
-    profile_list_free(profiles);
-
-    if (match_count == 0) {
-        return ERROR(ERR_NOT_FOUND, "File '%s' not found in any profile", file_path);
-    }
-
-    if (match_count == 1) {
-        /* Found in one profile - use it */
-        *out_profile = matches[0].profile_name;
-        *out_resolved_path = matches[0].file_path;
-        free(matches);
         return NULL;
     }
 
-    /* Found in multiple profiles - show options and error */
-    fprintf(stderr, "File '%s' found in multiple profiles:\n", file_path);
-    for (size_t i = 0; i < match_count; i++) {
-        fprintf(stderr, "  %s: %s\n", matches[i].profile_name, matches[i].file_path);
-        free(matches[i].profile_name);
-        free(matches[i].file_path);
+    /* Found in multiple profiles - ambiguous */
+    fprintf(stderr, "File '%s' found in multiple profiles:\n", storage_path);
+    for (size_t i = 0; i < string_array_size(matching_profiles); i++) {
+        fprintf(stderr, "  • %s\n", string_array_get(matching_profiles, i));
     }
-    free(matches);
-    fprintf(stderr, "\nPlease specify --profile to disambiguate\n");
+    fprintf(stderr, "\nPlease specify --profile to disambiguate:\n");
+    fprintf(stderr, "  dotta revert --profile <name> %s\n", storage_path);
+
+    hashmap_free(profile_index, (void (*)(void *))string_array_free);
+    profile_list_free(profiles);
+    config_free(config);
+    free(storage_path);
 
     return ERROR(ERR_INVALID_ARG, "Ambiguous file reference");
 }

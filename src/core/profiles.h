@@ -32,9 +32,7 @@
 #include <git2.h>
 
 #include "types.h"
-
-/* Forward declarations */
-typedef struct hashmap hashmap_t;
+#include "utils/hashmap.h"
 
 /**
  * Profile structure

@@ -243,16 +243,36 @@ void print_status_help(const char *prog_name) {
 }
 
 void print_diff_help(const char *prog_name) {
-    printf("Usage: %s diff [options] [file]...\n\n", prog_name);
-    printf("Show differences between profiles and filesystem\n\n");
-    printf("Direction options:\n");
-    printf("  --upstream       Show repo → filesystem (what 'apply' would change) [default]\n");
-    printf("  --downstream     Show filesystem → repo (what 'update' would commit)\n");
-    printf("  -a, --all        Show both upstream and downstream with headers\n");
+    printf("Usage: %s diff [options] [<commit>] [<commit>] [<file>...]\n\n", prog_name);
+    printf("Show differences between commits, profiles, and filesystem\n\n");
+
+    printf("Modes:\n");
+    printf("  (no args)             Workspace diff (both directions)\n");
+    printf("  <commit>              Commit to workspace\n");
+    printf("  <commit> <commit>     Compare two commits\n");
+    printf("  [<file>...]           Workspace diff for specific files\n\n");
+
+    printf("Direction options (workspace mode only):\n");
+    printf("  --upstream            Show repo → filesystem (what 'apply' would change) [default]\n");
+    printf("  --downstream          Show filesystem → repo (what 'update' would commit)\n");
+    printf("  -a, --all             Show both upstream and downstream with headers\n");
+
     printf("\nOther options:\n");
-    printf("  -p, --profile <name>  Check specific profile\n");
-    printf("  --name-only           Only show file names, not diffs\n");
+    printf("  -p, --profile <name>  Specify profile(s) for operation\n");
+    printf("  --name-only           Show only file names, not diffs\n");
     printf("  -h, --help            Show this help message\n");
+
+    printf("\nExamples:\n");
+    printf("  %s diff                     # Full workspace diff\n", prog_name);
+    printf("  %s diff --upstream          # What apply would change\n", prog_name);
+    printf("  %s diff a4f2c8e             # Commit vs workspace\n", prog_name);
+    printf("  %s diff b3e1f9a a4f2c8e     # Compare commits\n", prog_name);
+    printf("  %s diff home/.bashrc        # Workspace diff for one file\n", prog_name);
+
+    printf("\nIntegration:\n");
+    printf("  %s list global home/.bashrc # See history\n", prog_name);
+    printf("  %s diff b3e1f9a a4f2c8e     # Compare those commits\n", prog_name);
+
     printf("\nConcepts:\n");
     printf("  Upstream:   Repository (source of truth for configuration)\n");
     printf("  Downstream: Filesystem (deployed state)\n");

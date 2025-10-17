@@ -20,7 +20,16 @@
 #include "types.h"
 
 /**
- * Diff direction
+ * Diff mode
+ */
+typedef enum {
+    DIFF_WORKSPACE,           /* Workspace diff: profile ↔ filesystem (default) */
+    DIFF_COMMIT_TO_COMMIT,    /* Compare two commits */
+    DIFF_COMMIT_TO_WORKSPACE  /* Compare commit to workspace */
+} diff_mode_t;
+
+/**
+ * Diff direction (for workspace mode only)
  */
 typedef enum {
     DIFF_UPSTREAM,      /* Show changes from repo to filesystem (default) */
@@ -32,13 +41,22 @@ typedef enum {
  * Command options
  */
 typedef struct {
+    diff_mode_t mode;           /* Diff mode */
+
+    /* For workspace diff (DIFF_WORKSPACE) */
     const char **files;         /* Specific files to diff (NULL = all) */
     size_t file_count;          /* Number of files */
+    diff_direction_t direction; /* Which direction to show */
+
+    /* For commit diff (DIFF_COMMIT_TO_COMMIT, DIFF_COMMIT_TO_WORKSPACE) */
+    const char *commit1;        /* First commit (old) */
+    const char *commit2;        /* Second commit (new, NULL = workspace) */
+
+    /* Common options */
     const char **profiles;      /* Profile names (NULL = use state/config) */
     size_t profile_count;       /* Number of profiles */
     bool name_only;             /* Only show file names, not diffs */
     bool all_changes;           /* Show all changed files (deprecated, use direction) */
-    diff_direction_t direction; /* Which direction to show */
 } cmd_diff_options_t;
 
 /**

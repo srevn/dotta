@@ -852,58 +852,105 @@ static int cmd_profile_main(int argc, char **argv) {
  */
 static int cmd_diff_main(int argc, char **argv) {
     cmd_diff_options_t opts = {
+        .mode = DIFF_WORKSPACE,
         .files = NULL,
         .file_count = 0,
+        .direction = DIFF_UPSTREAM,  /* Default: show repo → filesystem */
+        .commit1 = NULL,
+        .commit2 = NULL,
         .profiles = NULL,
         .profile_count = 0,
         .name_only = false,
-        .all_changes = false,
-        .direction = DIFF_UPSTREAM  /* Default: show repo → filesystem */
+        .all_changes = false
     };
 
-    /* Collect file arguments */
-    const char **files = malloc((size_t)argc * sizeof(char *));
-    if (!files) {
+    /* Collect positional arguments */
+    const char **positional = malloc((size_t)argc * sizeof(char *));
+    if (!positional) {
         fprintf(stderr, "Failed to allocate memory\n");
         return 1;
     }
-    size_t file_count = 0;
+    size_t positional_count = 0;
+    bool has_direction_flag = false;
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-            free(files);
+            free(positional);
             print_diff_help(argv[0]);
             return 0;
         } else if (strcmp(argv[i], "--name-only") == 0) {
             opts.name_only = true;
         } else if (strcmp(argv[i], "--upstream") == 0) {
             opts.direction = DIFF_UPSTREAM;
+            has_direction_flag = true;
         } else if (strcmp(argv[i], "--downstream") == 0) {
             opts.direction = DIFF_DOWNSTREAM;
+            has_direction_flag = true;
         } else if (strcmp(argv[i], "--all") == 0 || strcmp(argv[i], "-a") == 0) {
             opts.all_changes = true;
-            opts.direction = DIFF_BOTH;  /* --all shows both directions */
+            opts.direction = DIFF_BOTH;
+            has_direction_flag = true;
+        } else if (argv[i][0] != '-') {
+            /* Positional argument */
+            positional[positional_count++] = argv[i];
         } else {
-            files[file_count++] = argv[i];
+            fprintf(stderr, "Error: Unknown option '%s'\n", argv[i]);
+            free(positional);
+            return 1;
         }
     }
 
-    if (file_count > 0) {
-        opts.files = files;
-        opts.file_count = file_count;
+    /* Detect mode based on positional arguments */
+    if (has_direction_flag || positional_count == 0) {
+        /* Workspace diff (explicit direction or no args) */
+        opts.mode = DIFF_WORKSPACE;
+        opts.files = positional;
+        opts.file_count = positional_count;
+    } else if (positional_count == 1) {
+        const char *arg = positional[0];
+        if (str_looks_like_commit(arg)) {
+            /* Commit to workspace */
+            opts.mode = DIFF_COMMIT_TO_WORKSPACE;
+            opts.commit1 = arg;
+        } else {
+            /* File filter for workspace diff */
+            opts.mode = DIFF_WORKSPACE;
+            opts.files = positional;
+            opts.file_count = 1;
+        }
+    } else if (positional_count == 2) {
+        const char *arg1 = positional[0];
+        const char *arg2 = positional[1];
+
+        if (str_looks_like_commit(arg1) && str_looks_like_commit(arg2)) {
+            /* Commit to commit */
+            opts.mode = DIFF_COMMIT_TO_COMMIT;
+            opts.commit1 = arg1;
+            opts.commit2 = arg2;
+        } else {
+            /* File filters for workspace diff */
+            opts.mode = DIFF_WORKSPACE;
+            opts.files = positional;
+            opts.file_count = 2;
+        }
+    } else {
+        /* Multiple args - treat as file filters */
+        opts.mode = DIFF_WORKSPACE;
+        opts.files = positional;
+        opts.file_count = positional_count;
     }
 
     /* Open resolved repository */
     git_repository *repo = open_resolved_repo(NULL);
     if (!repo) {
-        free(files);
+        free(positional);
         return 1;
     }
 
     /* Execute command */
     error_t *err = cmd_diff(repo, &opts);
-    free(files);
+    free(positional);
     git_repository_free(repo);
 
     if (err) {

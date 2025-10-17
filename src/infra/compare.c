@@ -285,6 +285,7 @@ static error_t *generate_text_diff(
     const git_oid *blob_oid,
     const char *disk_path,
     const char *path_label,
+    compare_direction_t direction,
     char **diff_text
 ) {
     CHECK_NULL(repo);
@@ -293,12 +294,13 @@ static error_t *generate_text_diff(
     CHECK_NULL(diff_text);
 
     error_t *err = NULL;
-    git_blob *blob = NULL;
+    git_blob *repo_blob = NULL;
+    git_blob *disk_blob = NULL;
     buffer_t *disk_content = NULL;
     diff_callback_data_t callback_data = {0};
 
     /* Load blob from git */
-    int git_err = git_blob_lookup(&blob, repo, blob_oid);
+    int git_err = git_blob_lookup(&repo_blob, repo, blob_oid);
     if (git_err < 0) {
         return error_from_git(git_err);
     }
@@ -307,7 +309,7 @@ static error_t *generate_text_diff(
     if (fs_exists(disk_path)) {
         err = fs_read_file(disk_path, &disk_content);
         if (err) {
-            git_blob_free(blob);
+            git_blob_free(repo_blob);
             return error_wrap(err, "Failed to read disk file");
         }
     }
@@ -318,7 +320,7 @@ static error_t *generate_text_diff(
 
     if (!callback_data.output) {
         if (disk_content) buffer_free(disk_content);
-        git_blob_free(blob);
+        git_blob_free(repo_blob);
         return ERROR(ERR_MEMORY, "Failed to allocate diff buffer");
     }
 
@@ -328,26 +330,69 @@ static error_t *generate_text_diff(
     diff_opts.interhunk_lines = 0;
     diff_opts.flags = GIT_DIFF_NORMAL;
 
-    /* Generate diff using libgit2 */
-    const char *disk_data = disk_content ? (const char *)buffer_data(disk_content) : "";
-    size_t disk_size = disk_content ? buffer_size(disk_content) : 0;
+    /* Generate diff based on direction */
+    if (direction == CMP_DIR_UPSTREAM) {
+        /* Upstream: filesystem → repo (what apply would do) */
+        /* Need to create blob from disk content to diff disk→repo */
+        const char *disk_data = disk_content ? (const char *)buffer_data(disk_content) : "";
+        size_t disk_size = disk_content ? buffer_size(disk_content) : 0;
 
-    git_err = git_diff_blob_to_buffer(
-        blob,
-        path_label ? path_label : disk_path,
-        disk_data,
-        disk_size,
-        path_label ? path_label : disk_path,
-        &diff_opts,
-        NULL,  /* file callback */
-        NULL,  /* binary callback */
-        NULL,  /* hunk callback */
-        diff_line_callback,
-        &callback_data
-    );
+        /* Create temporary blob from disk content */
+        git_oid disk_oid;
+        git_err = git_blob_create_from_buffer(&disk_oid, repo, disk_data, disk_size);
+        if (git_err < 0) {
+            buffer_free(callback_data.output);
+            if (disk_content) buffer_free(disk_content);
+            git_blob_free(repo_blob);
+            return error_from_git(git_err);
+        }
+
+        git_err = git_blob_lookup(&disk_blob, repo, &disk_oid);
+        if (git_err < 0) {
+            buffer_free(callback_data.output);
+            if (disk_content) buffer_free(disk_content);
+            git_blob_free(repo_blob);
+            return error_from_git(git_err);
+        }
+
+        /* Diff: disk_blob (old) → repo_blob (new) */
+        git_err = git_diff_blobs(
+            disk_blob,
+            path_label ? path_label : disk_path,
+            repo_blob,
+            path_label ? path_label : disk_path,
+            &diff_opts,
+            NULL,  /* file callback */
+            NULL,  /* binary callback */
+            NULL,  /* hunk callback */
+            diff_line_callback,
+            &callback_data
+        );
+
+        git_blob_free(disk_blob);
+    } else {
+        /* Downstream: repo → filesystem (what update would commit) */
+        const char *disk_data = disk_content ? (const char *)buffer_data(disk_content) : "";
+        size_t disk_size = disk_content ? buffer_size(disk_content) : 0;
+
+        /* Diff: repo_blob (old) → disk_buffer (new) */
+        git_err = git_diff_blob_to_buffer(
+            repo_blob,
+            path_label ? path_label : disk_path,
+            disk_data,
+            disk_size,
+            path_label ? path_label : disk_path,
+            &diff_opts,
+            NULL,  /* file callback */
+            NULL,  /* binary callback */
+            NULL,  /* hunk callback */
+            diff_line_callback,
+            &callback_data
+        );
+    }
 
     if (disk_content) buffer_free(disk_content);
-    git_blob_free(blob);
+    git_blob_free(repo_blob);
 
     if (git_err < 0) {
         buffer_free(callback_data.output);
@@ -375,6 +420,7 @@ static error_t *generate_symlink_diff(
     git_repository *repo,
     const git_oid *blob_oid,
     const char *disk_path,
+    compare_direction_t direction,
     char **diff_text
 ) {
     CHECK_NULL(repo);
@@ -402,7 +448,7 @@ static error_t *generate_symlink_diff(
         }
     }
 
-    /* Format diff */
+    /* Format diff based on direction */
     buffer_t *buf = buffer_create();
     if (!buf) {
         free(disk_target);
@@ -411,15 +457,30 @@ static error_t *generate_symlink_diff(
     }
 
     buffer_append_string(buf, "Symlink target changed:\n");
-    buffer_append_string(buf, "- ");
-    buffer_append(buf, (const unsigned char *)blob_target, blob_target_len);
-    buffer_append_string(buf, "\n+ ");
-    if (disk_target) {
-        buffer_append_string(buf, disk_target);
+
+    if (direction == CMP_DIR_UPSTREAM) {
+        /* Upstream: show filesystem → repo (what apply would do) */
+        buffer_append_string(buf, "- ");
+        if (disk_target) {
+            buffer_append_string(buf, disk_target);
+        } else {
+            buffer_append_string(buf, "(not a symlink)");
+        }
+        buffer_append_string(buf, "\n+ ");
+        buffer_append(buf, (const unsigned char *)blob_target, blob_target_len);
+        buffer_append_string(buf, "\n");
     } else {
-        buffer_append_string(buf, "(not a symlink)");
+        /* Downstream: show repo → filesystem (what update would commit) */
+        buffer_append_string(buf, "- ");
+        buffer_append(buf, (const unsigned char *)blob_target, blob_target_len);
+        buffer_append_string(buf, "\n+ ");
+        if (disk_target) {
+            buffer_append_string(buf, disk_target);
+        } else {
+            buffer_append_string(buf, "(not a symlink)");
+        }
+        buffer_append_string(buf, "\n");
     }
-    buffer_append_string(buf, "\n");
 
     /* Transfer ownership from buffer to avoid copy */
     error_t *err = buffer_release_data(buf, diff_text);
@@ -441,6 +502,7 @@ error_t *compare_generate_diff(
     git_repository *repo,
     const git_tree_entry *entry,
     const char *disk_path,
+    compare_direction_t direction,
     file_diff_t **out
 ) {
     CHECK_NULL(repo);
@@ -498,10 +560,10 @@ error_t *compare_generate_diff(
 
         if (mode == GIT_FILEMODE_LINK) {
             /* Symlink diff */
-            err = generate_symlink_diff(repo, oid, disk_path, &diff->diff_text);
+            err = generate_symlink_diff(repo, oid, disk_path, direction, &diff->diff_text);
         } else {
             /* Regular file diff */
-            err = generate_text_diff(repo, oid, disk_path, entry_name, &diff->diff_text);
+            err = generate_text_diff(repo, oid, disk_path, entry_name, direction, &diff->diff_text);
         }
 
         if (err) {

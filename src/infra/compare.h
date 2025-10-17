@@ -72,11 +72,20 @@ error_t *compare_tree_entry_to_disk(
 );
 
 /**
+ * Diff direction (forward declaration from diff.h)
+ */
+typedef enum {
+    CMP_DIR_UPSTREAM,      /* Show filesystem → repo (what apply would do) */
+    CMP_DIR_DOWNSTREAM     /* Show repo → filesystem (what update would commit) */
+} compare_direction_t;
+
+/**
  * Generate diff between tree entry and disk file
  *
  * @param repo Repository (must not be NULL)
  * @param entry Tree entry (must not be NULL)
  * @param disk_path Disk file path (must not be NULL)
+ * @param direction Diff direction
  * @param out Diff information (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
@@ -84,6 +93,7 @@ error_t *compare_generate_diff(
     git_repository *repo,
     const git_tree_entry *entry,
     const char *disk_path,
+    compare_direction_t direction,
     file_diff_t **out
 );
 

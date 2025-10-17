@@ -420,14 +420,15 @@ void print_update_help(const char *prog_name) {
     printf("Syncs filesystem changes back into profile branches.\n");
     printf("This is the reverse of 'apply' (filesystem -> repo).\n\n");
     printf("Options:\n");
-    printf("  -m, --message <msg>    Custom commit message\n");
-    printf("  -p, --profile <name>   Only update files from this profile\n");
-    printf("  -n, --dry-run          Show what would be updated\n");
-    printf("  -i, --interactive      Prompt for confirmation\n");
-    printf("  -v, --verbose          Verbose output\n");
-    printf("  --include-new          Include new files from tracked directories\n");
-    printf("  --only-new             Only process new files (ignore modified)\n");
-    printf("  --help                 Show this help message\n");
+    printf("  -m, --message <msg>       Custom commit message\n");
+    printf("  -p, --profile <name>      Only update files from this profile\n");
+    printf("  -e, --exclude <pattern>   Exclude pattern (glob, can be repeated)\n");
+    printf("  -n, --dry-run             Show what would be updated\n");
+    printf("  -i, --interactive         Prompt for confirmation\n");
+    printf("  -v, --verbose             Verbose output\n");
+    printf("  --include-new             Include new files from tracked directories\n");
+    printf("  --only-new                Only process new files (ignore modified)\n");
+    printf("  --help                    Show this help message\n");
     printf("\nFile Detection:\n");
     printf("  By default, new files are auto-detected based on config settings:\n");
     printf("    - core.auto_detect_new_files controls automatic detection\n");
@@ -441,6 +442,7 @@ void print_update_help(const char *prog_name) {
     printf("  %s update --profile global       # Update only global profile\n", prog_name);
     printf("  %s update --dry-run              # Preview changes\n", prog_name);
     printf("  %s update -m \"Update shell config\"  # Custom message\n", prog_name);
+    printf("  %s update --exclude '*.log'      # Exclude log files from update\n", prog_name);
     printf("\n");
 }
 

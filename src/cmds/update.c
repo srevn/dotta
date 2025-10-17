@@ -5,6 +5,7 @@
 #include "update.h"
 
 #include <dirent.h>
+#include <fnmatch.h>
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -241,6 +242,41 @@ static bool file_matches_filter(
 }
 
 /**
+ * Check if path should be excluded by CLI patterns
+ *
+ * Simple pattern matching for temporary per-operation filtering
+ */
+static bool is_excluded(
+    const char *path,
+    const cmd_update_options_t *opts
+) {
+    if (!path || !opts->exclude_patterns || opts->exclude_count == 0) {
+        return false;
+    }
+
+    /* Extract basename for pattern matching */
+    const char *basename = strrchr(path, '/');
+    basename = basename ? basename + 1 : path;
+
+    /* Check each exclude pattern */
+    for (size_t i = 0; i < opts->exclude_count; i++) {
+        const char *pattern = opts->exclude_patterns[i];
+
+        /* Try matching against full path */
+        if (fnmatch(pattern, path, 0) == 0) {
+            return true;
+        }
+
+        /* Try matching against basename */
+        if (fnmatch(pattern, basename, 0) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
  * Find all modified and new files using workspace divergence analysis
  *
  * This function uses the workspace module to detect divergence between
@@ -256,12 +292,15 @@ static bool file_matches_filter(
  *
  * This single workspace load efficiently provides both modified and new files,
  * eliminating the need for separate scanning logic.
+ *
+ * The --exclude patterns are applied as a simple post-filter on the detected files.
  */
 static error_t *find_modified_and_new_files(
     git_repository *repo,
     profile_list_t *profiles,
     const dotta_config_t *config,
     const cmd_update_options_t *opts,
+    output_ctx_t *out,
     modified_file_list_t **modified_out,
     new_file_list_t **new_out
 ) {
@@ -319,6 +358,14 @@ static error_t *find_modified_and_new_files(
                 continue;
             }
 
+            /* Check exclude patterns */
+            if (is_excluded(file->filesystem_path, opts)) {
+                if (opts->verbose && out) {
+                    output_info(out, "Excluded: %s", file->filesystem_path);
+                }
+                continue;
+            }
+
             /* Find the profile for this file */
             profile_t *source_profile = NULL;
             for (size_t j = 0; j < profiles->count; j++) {
@@ -363,6 +410,14 @@ static error_t *find_modified_and_new_files(
 
         /* Apply file filter if specified */
         if (!file_matches_filter(file->filesystem_path, opts)) {
+            continue;
+        }
+
+        /* Check exclude patterns */
+        if (is_excluded(file->filesystem_path, opts)) {
+            if (opts->verbose && out) {
+                output_info(out, "Excluded: %s", file->filesystem_path);
+            }
             continue;
         }
 
@@ -1205,7 +1260,7 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     should_detect_new = opts->include_new || opts->only_new || config->auto_detect_new_files;
 
     /* Find diverged files (modified + new) using unified workspace analysis */
-    err = find_modified_and_new_files(repo, profiles, config, opts, &modified, &new_files);
+    err = find_modified_and_new_files(repo, profiles, config, opts, out, &modified, &new_files);
     if (err) {
         err = error_wrap(err, "Failed to analyze divergence");
         goto cleanup;

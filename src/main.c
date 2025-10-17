@@ -1009,6 +1009,8 @@ static int cmd_update_main(int argc, char **argv) {
         .profiles = NULL,
         .profile_count = 0,
         .message = NULL,
+        .exclude_patterns = NULL,
+        .exclude_count = 0,
         .dry_run = false,
         .interactive = false,
         .verbose = false,
@@ -1019,26 +1021,31 @@ static int cmd_update_main(int argc, char **argv) {
     /* Collect file arguments */
     const char **files = malloc((size_t)argc * sizeof(char *));
     const char **profiles = malloc((size_t)argc * sizeof(char *));
-    if (!files || !profiles) {
+    const char **excludes = malloc((size_t)argc * sizeof(char *));
+    if (!files || !profiles || !excludes) {
         fprintf(stderr, "Failed to allocate memory\n");
         free(files);
         free(profiles);
+        free(excludes);
         return 1;
     }
     size_t file_count = 0;
     size_t profile_count = 0;
+    size_t exclude_count = 0;
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0) {
             free(files);
             free(profiles);
+            free(excludes);
             print_update_help(argv[0]);
             return 0;
         } else if (strcmp(argv[i], "-m") == 0 || strcmp(argv[i], "--message") == 0) {
             if (i + 1 >= argc) {
                 free(files);
                 free(profiles);
+                free(excludes);
                 fprintf(stderr, "Error: --message requires an argument\n");
                 return 1;
             }
@@ -1047,10 +1054,20 @@ static int cmd_update_main(int argc, char **argv) {
             if (i + 1 >= argc) {
                 free(files);
                 free(profiles);
+                free(excludes);
                 fprintf(stderr, "Error: --profile requires an argument\n");
                 return 1;
             }
             profiles[profile_count++] = argv[++i];
+        } else if (strcmp(argv[i], "-e") == 0 || strcmp(argv[i], "--exclude") == 0) {
+            if (i + 1 >= argc) {
+                free(files);
+                free(profiles);
+                free(excludes);
+                fprintf(stderr, "Error: --exclude requires an argument\n");
+                return 1;
+            }
+            excludes[exclude_count++] = argv[++i];
         } else if (strcmp(argv[i], "-n") == 0 || strcmp(argv[i], "--dry-run") == 0) {
             opts.dry_run = true;
         } else if (strcmp(argv[i], "-i") == 0 || strcmp(argv[i], "--interactive") == 0) {
@@ -1076,11 +1093,17 @@ static int cmd_update_main(int argc, char **argv) {
         opts.profile_count = profile_count;
     }
 
+    if (exclude_count > 0) {
+        opts.exclude_patterns = excludes;
+        opts.exclude_count = exclude_count;
+    }
+
     /* Open resolved repository */
     git_repository *repo = open_resolved_repo(NULL);
     if (!repo) {
         free(files);
         free(profiles);
+        free(excludes);
         return 1;
     }
 
@@ -1088,6 +1111,7 @@ static int cmd_update_main(int argc, char **argv) {
     error_t *err = cmd_update(repo, &opts);
     free(files);
     free(profiles);
+    free(excludes);
     git_repository_free(repo);
 
     if (err) {

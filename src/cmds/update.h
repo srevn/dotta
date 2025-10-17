@@ -16,16 +16,18 @@
  * Update command options
  */
 typedef struct {
-    const char **files;          /* Specific files to update (NULL = all) */
-    size_t file_count;           /* Number of files */
-    const char **profiles;       /* Specific profiles (NULL = use state/config) */
-    size_t profile_count;        /* Number of profiles */
-    const char *message;         /* Custom commit message */
-    bool dry_run;                /* Don't commit, just show changes */
-    bool interactive;            /* Prompt for confirmation */
-    bool verbose;                /* Verbose output */
-    bool include_new;            /* Include new files from tracked directories */
-    bool only_new;               /* Only process new files (ignore modified) */
+    const char **files;             /* Specific files to update (NULL = all) */
+    size_t file_count;              /* Number of files */
+    const char **profiles;          /* Specific profiles (NULL = use state/config) */
+    size_t profile_count;           /* Number of profiles */
+    const char *message;            /* Custom commit message */
+    const char **exclude_patterns;  /* Exclude patterns (glob) */
+    size_t exclude_count;           /* Number of exclude patterns */
+    bool dry_run;                   /* Don't commit, just show changes */
+    bool interactive;               /* Prompt for confirmation */
+    bool verbose;                   /* Verbose output */
+    bool include_new;               /* Include new files from tracked directories */
+    bool only_new;                  /* Only process new files (ignore modified) */
 } cmd_update_options_t;
 
 /**

@@ -13,9 +13,7 @@
 
 #include "state.h"
 
-#include <errno.h>
 #include <git2.h>
-#include <limits.h>
 #include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>

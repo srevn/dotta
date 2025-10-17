@@ -11,7 +11,6 @@
 #include "base/error.h"
 #include "base/gitops.h"
 #include "utils/hashmap.h"
-#include "utils/string.h"
 
 /* Configuration constants */
 #define STATS_REFNAME_BUFFER_SIZE 256

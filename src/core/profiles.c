@@ -98,9 +98,12 @@ error_t *profile_load(
     CHECK_NULL(name);
     CHECK_NULL(out);
 
+    error_t *err = NULL;
+    profile_t *profile = NULL;
+
     /* Check if profile exists */
     bool exists;
-    error_t *err = gitops_branch_exists(repo, name, &exists);
+    err = gitops_branch_exists(repo, name, &exists);
     if (err) {
         return err;
     }
@@ -110,26 +113,30 @@ error_t *profile_load(
     }
 
     /* Allocate profile */
-    profile_t *profile = calloc(1, sizeof(profile_t));
+    profile = calloc(1, sizeof(profile_t));
     if (!profile) {
-        return ERROR(ERR_MEMORY, "Failed to allocate profile");
+        err = ERROR(ERR_MEMORY, "Failed to allocate profile");
+        goto cleanup;
     }
 
     profile->name = strdup(name);
     if (!profile->name) {
-        free(profile);
-        return ERROR(ERR_MEMORY, "Failed to allocate profile name");
+        err = ERROR(ERR_MEMORY, "Failed to allocate profile name");
+        goto cleanup;
     }
 
     /* Load reference */
     char refname[256];
-    snprintf(refname, sizeof(refname), "refs/heads/%s", name);
+    int ret = snprintf(refname, sizeof(refname), "refs/heads/%s", name);
+    if (ret < 0 || (size_t)ret >= sizeof(refname)) {
+        err = ERROR(ERR_INTERNAL, "Profile name too long: %s", name);
+        goto cleanup;
+    }
 
     err = gitops_lookup_reference(repo, refname, &profile->ref);
     if (err) {
-        free(profile->name);
-        free(profile);
-        return error_wrap(err, "Failed to load profile '%s'", name);
+        err = error_wrap(err, "Failed to load profile '%s'", name);
+        goto cleanup;
     }
 
     /* Tree will be loaded lazily */
@@ -138,6 +145,13 @@ error_t *profile_load(
 
     *out = profile;
     return NULL;
+
+cleanup:
+    if (profile) {
+        free(profile->name);
+        free(profile);
+    }
+    return err;
 }
 
 /**
@@ -152,7 +166,10 @@ error_t *profile_load_tree(git_repository *repo, profile_t *profile) {
     }
 
     char refname[256];
-    snprintf(refname, sizeof(refname), "refs/heads/%s", profile->name);
+    int ret = snprintf(refname, sizeof(refname), "refs/heads/%s", profile->name);
+    if (ret < 0 || (size_t)ret >= sizeof(refname)) {
+        return ERROR(ERR_INTERNAL, "Profile name too long: %s", profile->name);
+    }
 
     return gitops_load_tree(repo, refname, &profile->tree);
 }
@@ -192,31 +209,34 @@ static error_t *detect_host_profiles(
     CHECK_NULL(capacity);
 
     error_t *err = NULL;
+    string_array_t *branches = NULL;
+    string_array_t *base_profile = NULL;
+    string_array_t *sub_profiles = NULL;
+    const char **sub_array = NULL;
+    string_array_t *sorted_subs = NULL;
 
     /* Build host profile prefix */
     char host_prefix[256];
     int ret = snprintf(host_prefix, sizeof(host_prefix), "hosts/%s", hostname);
     if (ret < 0 || (size_t)ret >= sizeof(host_prefix)) {
-        return ERROR(ERR_INTERNAL, "Host prefix too long");
+        err = ERROR(ERR_INTERNAL, "Host prefix too long");
+        goto cleanup;
     }
     size_t prefix_len = strlen(host_prefix);
 
     /* Get all branches */
-    string_array_t *branches = NULL;
     err = gitops_list_branches(repo, &branches);
     if (err) {
-        return err;
+        goto cleanup;
     }
 
     /* Collect matching profiles: base + sub-profiles */
-    string_array_t *base_profile = string_array_create();
-    string_array_t *sub_profiles = string_array_create();
+    base_profile = string_array_create();
+    sub_profiles = string_array_create();
 
     if (!base_profile || !sub_profiles) {
-        string_array_free(base_profile);
-        string_array_free(sub_profiles);
-        string_array_free(branches);
-        return ERROR(ERR_MEMORY, "Failed to allocate profile arrays");
+        err = ERROR(ERR_MEMORY, "Failed to allocate profile arrays");
+        goto cleanup;
     }
 
     for (size_t i = 0; i < string_array_size(branches); i++) {
@@ -233,10 +253,7 @@ static error_t *detect_host_profiles(
         if (suffix[0] == '\0') {
             err = string_array_push(base_profile, branch);
             if (err) {
-                string_array_free(base_profile);
-                string_array_free(sub_profiles);
-                string_array_free(branches);
-                return err;
+                goto cleanup;
             }
         }
         /* Sub-profile: hosts/<hostname>/something */
@@ -246,16 +263,15 @@ static error_t *detect_host_profiles(
             if (strchr(after_slash, '/') == NULL && after_slash[0] != '\0') {
                 err = string_array_push(sub_profiles, branch);
                 if (err) {
-                    string_array_free(base_profile);
-                    string_array_free(sub_profiles);
-                    string_array_free(branches);
-                    return err;
+                    goto cleanup;
                 }
             }
         }
     }
 
+    /* Done with branches */
     string_array_free(branches);
+    branches = NULL;
 
     /* Calculate total profiles to add */
     size_t base_count = string_array_size(base_profile);
@@ -263,25 +279,32 @@ static error_t *detect_host_profiles(
     size_t total_to_add = base_count + sub_count;
 
     if (total_to_add == 0) {
-        /* No host profiles found */
-        string_array_free(base_profile);
-        string_array_free(sub_profiles);
-        return NULL;
+        /* No host profiles found - success with no changes */
+        goto cleanup;
     }
 
-    /* Ensure capacity */
+    /* Ensure capacity with overflow check */
     size_t needed_capacity = list->count + total_to_add;
     if (needed_capacity > *capacity) {
+        /* Check for overflow in doubling loop */
+        if (*capacity > SIZE_MAX / 2) {
+            err = ERROR(ERR_INTERNAL, "Profile capacity overflow");
+            goto cleanup;
+        }
+
         size_t new_capacity = *capacity * 2;
         while (new_capacity < needed_capacity) {
+            if (new_capacity > SIZE_MAX / 2) {
+                err = ERROR(ERR_INTERNAL, "Profile capacity overflow");
+                goto cleanup;
+            }
             new_capacity *= 2;
         }
 
         profile_t *new_profiles = realloc(list->profiles, new_capacity * sizeof(profile_t));
         if (!new_profiles) {
-            string_array_free(base_profile);
-            string_array_free(sub_profiles);
-            return ERROR(ERR_MEMORY, "Failed to grow profiles array");
+            err = ERROR(ERR_MEMORY, "Failed to grow profiles array");
+            goto cleanup;
         }
 
         list->profiles = new_profiles;
@@ -291,11 +314,10 @@ static error_t *detect_host_profiles(
     /* Sort sub-profiles alphabetically for deterministic ordering */
     if (sub_count > 1) {
         /* Get direct access to internal array for sorting */
-        const char **sub_array = malloc(sub_count * sizeof(char *));
+        sub_array = malloc(sub_count * sizeof(char *));
         if (!sub_array) {
-            string_array_free(base_profile);
-            string_array_free(sub_profiles);
-            return ERROR(ERR_MEMORY, "Failed to allocate sort array");
+            err = ERROR(ERR_MEMORY, "Failed to allocate sort array");
+            goto cleanup;
         }
 
         for (size_t i = 0; i < sub_count; i++) {
@@ -305,28 +327,25 @@ static error_t *detect_host_profiles(
         qsort(sub_array, sub_count, sizeof(char *), string_compare);
 
         /* Rebuild sorted array */
-        string_array_t *sorted_subs = string_array_create();
+        sorted_subs = string_array_create();
         if (!sorted_subs) {
-            free(sub_array);
-            string_array_free(base_profile);
-            string_array_free(sub_profiles);
-            return ERROR(ERR_MEMORY, "Failed to allocate sorted array");
+            err = ERROR(ERR_MEMORY, "Failed to allocate sorted array");
+            goto cleanup;
         }
 
         for (size_t i = 0; i < sub_count; i++) {
             err = string_array_push(sorted_subs, sub_array[i]);
             if (err) {
-                free(sub_array);
-                string_array_free(sorted_subs);
-                string_array_free(base_profile);
-                string_array_free(sub_profiles);
-                return err;
+                goto cleanup;
             }
         }
 
         free(sub_array);
+        sub_array = NULL;
+
         string_array_free(sub_profiles);
         sub_profiles = sorted_subs;
+        sorted_subs = NULL;
     }
 
     /* Add base profile first (if exists) */
@@ -335,9 +354,7 @@ static error_t *detect_host_profiles(
         profile_t *profile = NULL;
         err = profile_load(repo, profile_name, &profile);
         if (err) {
-            string_array_free(base_profile);
-            string_array_free(sub_profiles);
-            return err;
+            goto cleanup;
         }
 
         profile->auto_detected = true;
@@ -351,9 +368,7 @@ static error_t *detect_host_profiles(
         profile_t *profile = NULL;
         err = profile_load(repo, profile_name, &profile);
         if (err) {
-            string_array_free(base_profile);
-            string_array_free(sub_profiles);
-            return err;
+            goto cleanup;
         }
 
         profile->auto_detected = true;
@@ -361,10 +376,14 @@ static error_t *detect_host_profiles(
         free(profile);  /* Shallow copy of internals to list, only free struct */
     }
 
+cleanup:
+    string_array_free(branches);
     string_array_free(base_profile);
     string_array_free(sub_profiles);
+    string_array_free(sorted_subs);
+    free(sub_array);
 
-    return NULL;
+    return err;
 }
 
 /**
@@ -385,43 +404,40 @@ error_t *profile_detect_auto(
     CHECK_NULL(repo);
     CHECK_NULL(out);
 
-    profile_list_t *list = calloc(1, sizeof(profile_list_t));
+    error_t *err = NULL;
+    profile_list_t *list = NULL;
+    char *os_name = NULL;
+    char *hostname = NULL;
+
+    /* Allocate profile list */
+    list = calloc(1, sizeof(profile_list_t));
     if (!list) {
-        return ERROR(ERR_MEMORY, "Failed to allocate profile list");
+        err = ERROR(ERR_MEMORY, "Failed to allocate profile list");
+        goto cleanup;
     }
 
     /* Start with capacity for typical case: global + os + host + 2 sub-profiles */
     size_t capacity = 5;
     list->profiles = calloc(capacity, sizeof(profile_t));
     if (!list->profiles) {
-        free(list);
-        return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
+        err = ERROR(ERR_MEMORY, "Failed to allocate profiles array");
+        goto cleanup;
     }
     list->count = 0;
-
-    error_t *err = NULL;
 
     /* 1. Try "global" profile */
     if (profile_exists(repo, "global")) {
         profile_t *profile = NULL;
         err = profile_load(repo, "global", &profile);
         if (err) {
-            /* Defensive: ensure profile is freed if partially allocated */
-            if (profile) {
-                profile_free(profile);
-            }
-            free(list->profiles);
-            free(list);
-            return err;
+            goto cleanup;
         }
         profile->auto_detected = true;
         list->profiles[list->count++] = *profile;
         free(profile);  /* Shallow copy of internals to list, only free struct */
-        profile = NULL;  /* Prevent accidental reuse */
     }
 
     /* 2. Try OS profile */
-    char *os_name = NULL;
     err = profile_get_os_name(&os_name);
     if (!err && os_name) {
         if (profile_exists(repo, os_name)) {
@@ -432,35 +448,45 @@ error_t *profile_detect_auto(
                 list->profiles[list->count++] = *profile;
                 free(profile);
             } else {
+                /* Non-fatal: skip OS profile if it can't be loaded */
                 error_free(err);
                 err = NULL;
             }
         }
         free(os_name);
+        os_name = NULL;
     } else {
+        /* Non-fatal: unable to get OS name */
         error_free(err);
         err = NULL;
     }
 
     /* 3. Detect host profiles (base + sub-profiles, hierarchical) */
-    char *hostname = NULL;
     err = profile_get_hostname(&hostname);
     if (!err && hostname) {
         err = detect_host_profiles(repo, hostname, list, &capacity);
         if (err) {
-            free(hostname);
-            profile_list_free(list);
-            return err;
+            goto cleanup;
         }
         free(hostname);
+        hostname = NULL;
     } else {
         /* Non-fatal: unable to get hostname */
         error_free(err);
         err = NULL;
     }
 
+    /* Success */
     *out = list;
     return NULL;
+
+cleanup:
+    free(os_name);
+    free(hostname);
+    if (err) {
+        profile_list_free(list);
+    }
+    return err;
 }
 
 /**
@@ -477,29 +503,34 @@ error_t *profile_list_load(
     CHECK_NULL(names);
     CHECK_NULL(out);
 
-    profile_list_t *list = calloc(1, sizeof(profile_list_t));
+    error_t *err = NULL;
+    profile_list_t *list = NULL;
+
+    list = calloc(1, sizeof(profile_list_t));
     if (!list) {
-        return ERROR(ERR_MEMORY, "Failed to allocate profile list");
+        err = ERROR(ERR_MEMORY, "Failed to allocate profile list");
+        goto cleanup;
     }
 
     list->profiles = calloc(count, sizeof(profile_t));
     if (!list->profiles) {
-        free(list);
-        return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
+        err = ERROR(ERR_MEMORY, "Failed to allocate profiles array");
+        goto cleanup;
     }
     list->count = 0;
 
     for (size_t i = 0; i < count; i++) {
         profile_t *profile = NULL;
-        error_t *err = profile_load(repo, names[i], &profile);
+        err = profile_load(repo, names[i], &profile);
         if (err) {
             if (strict) {
                 /* In strict mode, fail on missing profiles */
-                profile_list_free(list);
-                return error_wrap(err, "Failed to load profile '%s'", names[i]);
+                err = error_wrap(err, "Failed to load profile '%s'", names[i]);
+                goto cleanup;
             } else {
                 /* In non-strict mode, skip missing profiles silently */
                 error_free(err);
+                err = NULL;
                 continue;
             }
         }
@@ -510,6 +541,12 @@ error_t *profile_list_load(
 
     *out = list;
     return NULL;
+
+cleanup:
+    if (err) {
+        profile_list_free(list);
+    }
+    return err;
 }
 
 /**
@@ -534,17 +571,21 @@ static error_t *validate_state_profiles(
     CHECK_NULL(state_profiles);
     CHECK_NULL(out_valid_profiles);
 
-    string_array_t *valid = string_array_create();
+    error_t *err = NULL;
+    string_array_t *valid = NULL;
+    string_array_t *missing = NULL;
+
+    valid = string_array_create();
     if (!valid) {
-        return ERROR(ERR_MEMORY, "Failed to allocate valid profiles array");
+        err = ERROR(ERR_MEMORY, "Failed to allocate valid profiles array");
+        goto cleanup;
     }
 
-    string_array_t *missing = NULL;
     if (out_missing_profiles) {
         missing = string_array_create();
         if (!missing) {
-            string_array_free(valid);
-            return ERROR(ERR_MEMORY, "Failed to allocate missing profiles array");
+            err = ERROR(ERR_MEMORY, "Failed to allocate missing profiles array");
+            goto cleanup;
         }
     }
 
@@ -553,31 +594,32 @@ static error_t *validate_state_profiles(
         const char *name = string_array_get(state_profiles, i);
 
         if (profile_exists(repo, name)) {
-            error_t *err = string_array_push(valid, name);
+            err = string_array_push(valid, name);
             if (err) {
-                if (missing) string_array_free(missing);
-                string_array_free(valid);
-                return err;
+                goto cleanup;
             }
         } else {
             /* Profile doesn't exist */
             if (missing) {
-                error_t *err = string_array_push(missing, name);
+                err = string_array_push(missing, name);
                 if (err) {
-                    string_array_free(missing);
-                    string_array_free(valid);
-                    return err;
+                    goto cleanup;
                 }
             }
         }
     }
 
+    /* Success */
     *out_valid_profiles = valid;
     if (out_missing_profiles) {
         *out_missing_profiles = missing;
     }
-
     return NULL;
+
+cleanup:
+    string_array_free(valid);
+    string_array_free(missing);
+    return err;
 }
 
 /**
@@ -599,91 +641,101 @@ error_t *profile_resolve(
     CHECK_NULL(repo);
     CHECK_NULL(out);
 
-    profile_source_t source;
+    error_t *err = NULL;
+    state_t *state = NULL;
+    string_array_t *state_profiles = NULL;
+    string_array_t *valid_profiles = NULL;
+    string_array_t *missing_profiles = NULL;
+    const char **names = NULL;
 
     /* Priority 1: Explicit CLI profiles (temporary override) */
     if (explicit_profiles && explicit_count > 0) {
-        source = PROFILE_SOURCE_EXPLICIT;
-        if (source_out) *source_out = source;
+        if (source_out) {
+            *source_out = PROFILE_SOURCE_EXPLICIT;
+        }
         return profile_list_load(repo, explicit_profiles, explicit_count, true, out);
     }
 
     /* Priority 2: State profiles (persistent selection) */
-    state_t *state = NULL;
-    error_t *err = state_load(repo, &state);
-
-    if (!err && state) {
-        string_array_t *state_profiles = NULL;
-        err = state_get_profiles(state, &state_profiles);
-
-        if (!err && state_profiles && string_array_size(state_profiles) > 0) {
-            /* State has active profiles - validate and use them */
-            string_array_t *valid_profiles = NULL;
-            string_array_t *missing_profiles = NULL;
-
-            err = validate_state_profiles(repo, state_profiles, &valid_profiles, &missing_profiles);
-
-            if (err) {
-                string_array_free(state_profiles);
-                state_free(state);
-                return error_wrap(err, "Failed to validate state profiles");
-            }
-
-            /* Warn about missing profiles (diagnostic message) */
-            if (missing_profiles && string_array_size(missing_profiles) > 0) {
-                fprintf(stderr, "Warning: State references non-existent profiles:\n");
-                for (size_t i = 0; i < string_array_size(missing_profiles); i++) {
-                    fprintf(stderr, "  • %s\n", string_array_get(missing_profiles, i));
-                }
-                fprintf(stderr, "\nHint: Run 'dotta profile validate' to fix state\n");
-                fprintf(stderr, "      or 'dotta profile select <name>' to update active profiles\n\n");
-            }
-            string_array_free(missing_profiles);
-
-            /* Use valid profiles if any exist */
-            if (string_array_size(valid_profiles) > 0) {
-                /* Convert string_array to const char** for profile_list_load */
-                size_t count = string_array_size(valid_profiles);
-                const char **names = malloc(count * sizeof(char *));
-                if (!names) {
-                    string_array_free(valid_profiles);
-                    string_array_free(state_profiles);
-                    state_free(state);
-                    return ERROR(ERR_MEMORY, "Failed to allocate profile names");
-                }
-
-                for (size_t i = 0; i < count; i++) {
-                    names[i] = string_array_get(valid_profiles, i);
-                }
-
-                err = profile_list_load(repo, names, count, strict_mode, out);
-                free(names);
-                string_array_free(valid_profiles);
-                string_array_free(state_profiles);
-                state_free(state);
-
-                if (!err) {
-                    source = PROFILE_SOURCE_STATE;
-                    if (source_out) *source_out = source;
-                }
-                return err;
-            }
-
-            /* No valid profiles in state - treat as no active profiles */
-            string_array_free(valid_profiles);
-        }
-
-        string_array_free(state_profiles);
-    } else if (err) {
-        /* Non-fatal: if state loading fails, fall through to error */
+    err = state_load(repo, &state);
+    if (err) {
+        /* Non-fatal: if state loading fails, fall through to "no profiles" error */
         error_free(err);
         err = NULL;
+        goto no_profiles;
     }
 
-    state_free(state);
+    if (!state) {
+        goto no_profiles;
+    }
 
+    err = state_get_profiles(state, &state_profiles);
+    if (err) {
+        error_free(err);
+        err = NULL;
+        goto no_profiles;
+    }
+
+    if (!state_profiles || string_array_size(state_profiles) == 0) {
+        goto no_profiles;
+    }
+
+    /* State has active profiles - validate and use them */
+    err = validate_state_profiles(repo, state_profiles, &valid_profiles, &missing_profiles);
+    if (err) {
+        err = error_wrap(err, "Failed to validate state profiles");
+        goto cleanup;
+    }
+
+    /* Warn about missing profiles (diagnostic message) */
+    if (missing_profiles && string_array_size(missing_profiles) > 0) {
+        fprintf(stderr, "Warning: State references non-existent profiles:\n");
+        for (size_t i = 0; i < string_array_size(missing_profiles); i++) {
+            fprintf(stderr, "  • %s\n", string_array_get(missing_profiles, i));
+        }
+        fprintf(stderr, "\nHint: Run 'dotta profile validate' to fix state\n");
+        fprintf(stderr, "      or 'dotta profile select <name>' to update active profiles\n\n");
+    }
+    string_array_free(missing_profiles);
+    missing_profiles = NULL;
+
+    /* Use valid profiles if any exist */
+    if (string_array_size(valid_profiles) == 0) {
+        goto no_profiles;
+    }
+
+    /* Convert string_array to const char** for profile_list_load */
+    size_t count = string_array_size(valid_profiles);
+    names = malloc(count * sizeof(char *));
+    if (!names) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate profile names");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        names[i] = string_array_get(valid_profiles, i);
+    }
+
+    err = profile_list_load(repo, names, count, strict_mode, out);
+    if (err) {
+        goto cleanup;
+    }
+
+    /* Success */
+    if (source_out) {
+        *source_out = PROFILE_SOURCE_STATE;
+    }
+
+    /* Cleanup and return success */
+    free(names);
+    string_array_free(valid_profiles);
+    string_array_free(state_profiles);
+    state_free(state);
+    return NULL;
+
+no_profiles:
     /* No profiles found from any source - return helpful error */
-    return ERROR(ERR_NOT_FOUND,
+    err = ERROR(ERR_NOT_FOUND,
                 "No active profiles found\n\n"
                 "To select profiles:\n"
                 "  dotta profile select <name>         # Select specific profile\n"
@@ -695,6 +747,14 @@ error_t *profile_resolve(
                 "To see available profiles:\n"
                 "  dotta profile list                  # List local profiles\n"
                 "  dotta profile list --remote         # List remote profiles");
+
+cleanup:
+    free(names);
+    string_array_free(valid_profiles);
+    string_array_free(missing_profiles);
+    string_array_free(state_profiles);
+    state_free(state);
+    return err;
 }
 
 /**
@@ -709,36 +769,42 @@ error_t *profile_list_all_local(
     CHECK_NULL(repo);
     CHECK_NULL(out);
 
-    profile_list_t *list = calloc(1, sizeof(profile_list_t));
+    error_t *err = NULL;
+    profile_list_t *list = NULL;
+    git_reference_iterator *iter = NULL;
+    git_reference *ref = NULL;
+
+    /* Allocate profile list */
+    list = calloc(1, sizeof(profile_list_t));
     if (!list) {
-        return ERROR(ERR_MEMORY, "Failed to allocate profile list");
+        err = ERROR(ERR_MEMORY, "Failed to allocate profile list");
+        goto cleanup;
     }
 
     /* Start with capacity for 16 profiles */
     size_t capacity = 16;
     list->profiles = calloc(capacity, sizeof(profile_t));
     if (!list->profiles) {
-        free(list);
-        return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
+        err = ERROR(ERR_MEMORY, "Failed to allocate profiles array");
+        goto cleanup;
     }
     list->count = 0;
 
-    /* Iterate over all local branches */
-    git_reference_iterator *iter = NULL;
+    /* Create git reference iterator */
     int git_err = git_reference_iterator_new(&iter, repo);
     if (git_err < 0) {
-        free(list->profiles);
-        free(list);
-        return error_from_git(git_err);
+        err = error_from_git(git_err);
+        goto cleanup;
     }
 
-    git_reference *ref = NULL;
+    /* Iterate over all local branches */
     while (git_reference_next(&ref, iter) == 0) {
         const char *refname = git_reference_name(ref);
 
         /* Only process local branches (refs/heads/...) */
         if (strncmp(refname, "refs/heads/", 11) != 0) {
             git_reference_free(ref);
+            ref = NULL;
             continue;
         }
 
@@ -748,42 +814,63 @@ error_t *profile_list_all_local(
         /* Skip dotta-worktree */
         if (strcmp(branch_name, "dotta-worktree") == 0) {
             git_reference_free(ref);
+            ref = NULL;
             continue;
         }
 
         /* Grow array if needed */
         if (list->count >= capacity) {
+            /* Check for overflow */
+            if (capacity > SIZE_MAX / 2) {
+                err = ERROR(ERR_INTERNAL, "Profile capacity overflow");
+                goto cleanup;
+            }
             capacity *= 2;
+
             profile_t *new_profiles = realloc(list->profiles, capacity * sizeof(profile_t));
             if (!new_profiles) {
-                git_reference_free(ref);
-                git_reference_iterator_free(iter);
-                profile_list_free(list);
-                return ERROR(ERR_MEMORY, "Failed to grow profiles array");
+                err = ERROR(ERR_MEMORY, "Failed to grow profiles array");
+                goto cleanup;
             }
             list->profiles = new_profiles;
         }
 
         /* Load this profile */
         profile_t *profile = NULL;
-        error_t *err = profile_load(repo, branch_name, &profile);
+        err = profile_load(repo, branch_name, &profile);
         if (err) {
-            /* Skip profiles we can't load */
+            /* Skip profiles we can't load (non-fatal) */
             error_free(err);
+            err = NULL;
             git_reference_free(ref);
+            ref = NULL;
             continue;
         }
 
         /* Add to list (shallow copy) */
         list->profiles[list->count++] = *profile;
         free(profile);  /* Don't free internals, they're copied */
+
         git_reference_free(ref);
+        ref = NULL;
     }
 
+    /* Success */
     git_reference_iterator_free(iter);
-
     *out = list;
     return NULL;
+
+cleanup:
+    if (ref) {
+        git_reference_free(ref);
+    }
+    if (iter) {
+        git_reference_iterator_free(iter);
+    }
+    if (err) {
+        profile_list_free(list);
+    }
+    return err;
 }
 
 /**
@@ -877,18 +964,27 @@ error_t *profile_build_manifest(
     CHECK_NULL(profiles);
     CHECK_NULL(out);
 
+    error_t *err = NULL;
+    manifest_t *manifest = NULL;
+    hashmap_t *path_map = NULL;
+    string_array_t *files = NULL;
+    char *filesystem_path = NULL;
+    git_tree_entry *entry = NULL;
+    char *dup_storage_path = NULL;
+
     /* Allocate manifest */
-    manifest_t *manifest = calloc(1, sizeof(manifest_t));
+    manifest = calloc(1, sizeof(manifest_t));
     if (!manifest) {
-        return ERROR(ERR_MEMORY, "Failed to allocate manifest");
+        err = ERROR(ERR_MEMORY, "Failed to allocate manifest");
+        goto cleanup;
     }
 
     /* Allocate entries array */
     size_t capacity = 64;
     manifest->entries = calloc(capacity, sizeof(file_entry_t));
     if (!manifest->entries) {
-        free(manifest);
-        return ERROR(ERR_MEMORY, "Failed to allocate manifest entries");
+        err = ERROR(ERR_MEMORY, "Failed to allocate manifest entries");
+        goto cleanup;
     }
     manifest->count = 0;
 
@@ -896,11 +992,10 @@ error_t *profile_build_manifest(
      * Create hash map for O(1) duplicate detection
      * Maps: filesystem_path -> index in entries array
      */
-    hashmap_t *path_map = hashmap_create(128);
+    path_map = hashmap_create(128);
     if (!path_map) {
-        free(manifest->entries);
-        free(manifest);
-        return ERROR(ERR_MEMORY, "Failed to create hashmap");
+        err = ERROR(ERR_MEMORY, "Failed to create hashmap");
+        goto cleanup;
     }
 
     /* Process each profile in order */
@@ -908,20 +1003,17 @@ error_t *profile_build_manifest(
         profile_t *profile = &profiles->profiles[i];
 
         /* Load tree */
-        error_t *err = profile_load_tree(repo, profile);
+        err = profile_load_tree(repo, profile);
         if (err) {
-            hashmap_free(path_map, NULL);
-            manifest_free(manifest);
-            return error_wrap(err, "Failed to load tree for profile '%s'", profile->name);
+            err = error_wrap(err, "Failed to load tree for profile '%s'", profile->name);
+            goto cleanup;
         }
 
         /* List files in profile */
-        string_array_t *files = NULL;
         err = profile_list_files(repo, profile, &files);
         if (err) {
-            hashmap_free(path_map, NULL);
-            manifest_free(manifest);
-            return error_wrap(err, "Failed to list files for profile '%s'", profile->name);
+            err = error_wrap(err, "Failed to list files for profile '%s'", profile->name);
+            goto cleanup;
         }
 
         /* Process each file */
@@ -939,24 +1031,19 @@ error_t *profile_build_manifest(
             }
 
             /* Convert to filesystem path */
-            char *filesystem_path = NULL;
+            filesystem_path = NULL;
             err = path_from_storage(storage_path, &filesystem_path);
             if (err) {
-                string_array_free(files);
-                hashmap_free(path_map, NULL);
-                manifest_free(manifest);
-                return error_wrap(err, "Failed to convert path '%s'", storage_path);
+                err = error_wrap(err, "Failed to convert path '%s'", storage_path);
+                goto cleanup;
             }
 
             /* Get tree entry */
-            git_tree_entry *entry = NULL;
+            entry = NULL;
             int git_err = git_tree_entry_bypath(&entry, profile->tree, storage_path);
             if (git_err != 0) {
-                free(filesystem_path);
-                string_array_free(files);
-                hashmap_free(path_map, NULL);
-                manifest_free(manifest);
-                return error_from_git(git_err);
+                err = error_from_git(git_err);
+                goto cleanup;
             }
 
             /* Check if file already in manifest using hashmap (O(1)) */
@@ -970,64 +1057,72 @@ error_t *profile_build_manifest(
                 if (!manifest->entries[existing_idx].all_profiles) {
                     manifest->entries[existing_idx].all_profiles = string_array_create();
                     if (!manifest->entries[existing_idx].all_profiles) {
-                        free(filesystem_path);
-                        git_tree_entry_free(entry);
-                        string_array_free(files);
-                        hashmap_free(path_map, NULL);
-                        manifest_free(manifest);
-                        return ERROR(ERR_MEMORY, "Failed to create all_profiles array");
+                        err = ERROR(ERR_MEMORY, "Failed to create all_profiles array");
+                        goto cleanup;
                     }
                     /* Add the original profile that was there first */
                     err = string_array_push(manifest->entries[existing_idx].all_profiles,
                                            manifest->entries[existing_idx].source_profile->name);
                     if (err) {
-                        free(filesystem_path);
-                        git_tree_entry_free(entry);
-                        string_array_free(files);
-                        hashmap_free(path_map, NULL);
-                        manifest_free(manifest);
-                        return err;
+                        goto cleanup;
                     }
                 }
 
                 /* Add current profile (the one with higher precedence) */
                 err = string_array_push(manifest->entries[existing_idx].all_profiles, profile->name);
                 if (err) {
-                    free(filesystem_path);
-                    git_tree_entry_free(entry);
-                    string_array_free(files);
-                    hashmap_free(path_map, NULL);
-                    manifest_free(manifest);
-                    return err;
+                    goto cleanup;
                 }
 
+                /* Duplicate storage path before freeing old one */
+                dup_storage_path = strdup(storage_path);
+                if (!dup_storage_path) {
+                    err = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
+                    goto cleanup;
+                }
+
+                /* Now safe to free old resources and update */
                 free(manifest->entries[existing_idx].storage_path);
                 free(manifest->entries[existing_idx].filesystem_path);
                 git_tree_entry_free(manifest->entries[existing_idx].entry);
 
-                manifest->entries[existing_idx].storage_path = strdup(storage_path);
+                manifest->entries[existing_idx].storage_path = dup_storage_path;
                 manifest->entries[existing_idx].filesystem_path = filesystem_path;
                 manifest->entries[existing_idx].entry = entry;
                 manifest->entries[existing_idx].source_profile = profile;
+
+                /* Clear temporary variables (ownership transferred) */
+                dup_storage_path = NULL;
+                filesystem_path = NULL;
+                entry = NULL;
             } else {
                 /* Add new entry */
                 if (manifest->count >= capacity) {
+                    /* Check for overflow before doubling */
+                    if (capacity > SIZE_MAX / 2) {
+                        err = ERROR(ERR_INTERNAL, "Manifest capacity overflow");
+                        goto cleanup;
+                    }
                     capacity *= 2;
+
                     file_entry_t *new_entries = realloc(manifest->entries,
                                                         capacity * sizeof(file_entry_t));
                     if (!new_entries) {
-                        free(filesystem_path);
-                        git_tree_entry_free(entry);
-                        string_array_free(files);
-                        hashmap_free(path_map, NULL);
-                        manifest_free(manifest);
-                        return ERROR(ERR_MEMORY, "Failed to grow manifest");
+                        err = ERROR(ERR_MEMORY, "Failed to grow manifest");
+                        goto cleanup;
                     }
                     manifest->entries = new_entries;
                 }
 
+                /* Duplicate storage path */
+                dup_storage_path = strdup(storage_path);
+                if (!dup_storage_path) {
+                    err = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
+                    goto cleanup;
+                }
+
                 /* Store in array */
-                manifest->entries[manifest->count].storage_path = strdup(storage_path);
+                manifest->entries[manifest->count].storage_path = dup_storage_path;
                 manifest->entries[manifest->count].filesystem_path = filesystem_path;
                 manifest->entries[manifest->count].entry = entry;
                 manifest->entries[manifest->count].source_profile = profile;
@@ -1037,24 +1132,44 @@ error_t *profile_build_manifest(
                 err = hashmap_set(path_map, filesystem_path,
                                 (void *)(uintptr_t)(manifest->count + 1));
                 if (err) {
-                    string_array_free(files);
-                    hashmap_free(path_map, NULL);
-                    manifest_free(manifest);
-                    return error_wrap(err, "Failed to update hashmap");
+                    err = error_wrap(err, "Failed to update hashmap");
+                    goto cleanup;
                 }
 
                 manifest->count++;
+
+                /* Clear temporary variables (ownership transferred) */
+                dup_storage_path = NULL;
+                filesystem_path = NULL;
+                entry = NULL;
             }
         }
 
         string_array_free(files);
+        files = NULL;
     }
 
-    /* Cleanup hashmap (don't free values, they're just indices) */
+    /* Success */
     hashmap_free(path_map, NULL);
-
     *out = manifest;
     return NULL;
+
+cleanup:
+    /* Clean up temporary per-iteration resources */
+    free(filesystem_path);
+    free(dup_storage_path);
+    if (entry) {
+        git_tree_entry_free(entry);
+    }
+    string_array_free(files);
+
+    /* Clean up main resources */
+    hashmap_free(path_map, NULL);
+    if (err) {
+        manifest_free(manifest);
+    }
+
+    return err;
 }
 
 /**
@@ -1076,19 +1191,22 @@ error_t *profile_build_file_index(
     CHECK_NULL(out_index);
 
     error_t *err = NULL;
+    hashmap_t *index = NULL;
+    string_array_t *all_branches = NULL;
+    string_array_t *files = NULL;
 
     /* Create index hashmap */
-    hashmap_t *index = hashmap_create(256);  /* Reasonable initial size */
+    index = hashmap_create(256);  /* Reasonable initial size */
     if (!index) {
-        return ERROR(ERR_MEMORY, "Failed to create profile file index");
+        err = ERROR(ERR_MEMORY, "Failed to create profile file index");
+        goto cleanup;
     }
 
     /* Get all branches */
-    string_array_t *all_branches = NULL;
     err = gitops_list_branches(repo, &all_branches);
     if (err) {
-        hashmap_free(index, NULL);
-        return error_wrap(err, "Failed to list branches");
+        err = error_wrap(err, "Failed to list branches");
+        goto cleanup;
     }
 
     /* Load each profile once and index its files */
@@ -1109,16 +1227,18 @@ error_t *profile_build_file_index(
         err = profile_load(repo, branch_name, &profile);
         if (err) {
             error_free(err);
+            err = NULL;
             continue;  /* Non-fatal: skip this profile */
         }
 
         /* Get list of all files in this profile */
-        string_array_t *files = NULL;
+        files = NULL;
         err = profile_list_files(repo, profile, &files);
         profile_free(profile);
 
         if (err) {
             error_free(err);
+            err = NULL;
             continue;  /* Non-fatal: skip this profile */
         }
 
@@ -1131,20 +1251,15 @@ error_t *profile_build_file_index(
             if (!profile_list) {
                 profile_list = string_array_create();
                 if (!profile_list) {
-                    string_array_free(files);
-                    string_array_free(all_branches);
-                    /* Free index and all its arrays */
-                    hashmap_free(index, (void (*)(void *))string_array_free);
-                    return ERROR(ERR_MEMORY, "Failed to create profile list for file");
+                    err = ERROR(ERR_MEMORY, "Failed to create profile list for file");
+                    goto cleanup;
                 }
 
                 err = hashmap_set(index, storage_path, profile_list);
                 if (err) {
                     string_array_free(profile_list);
-                    string_array_free(files);
-                    string_array_free(all_branches);
-                    hashmap_free(index, (void (*)(void *))string_array_free);
-                    return error_wrap(err, "Failed to index file");
+                    err = error_wrap(err, "Failed to index file");
+                    goto cleanup;
                 }
             }
 
@@ -1153,15 +1268,27 @@ error_t *profile_build_file_index(
             if (err) {
                 /* Non-fatal: continue without this entry */
                 error_free(err);
+                err = NULL;
             }
         }
 
         string_array_free(files);
+        files = NULL;
     }
 
+    /* Success */
     string_array_free(all_branches);
     *out_index = index;
     return NULL;
+
+cleanup:
+    string_array_free(files);
+    string_array_free(all_branches);
+    if (index) {
+        /* Free index and all its arrays */
+        hashmap_free(index, (void (*)(void *))string_array_free);
+    }
+    return err;
 }
 
 /**

@@ -86,7 +86,7 @@ void print_init_help(const char *prog_name) {
     printf("Initialize a new dotta repository\n\n");
     printf("Options:\n");
     printf("  -q, --quiet    Suppress output\n");
-    printf("  --help         Show this help message\n");
+    printf("  -h, --help     Show this help message\n");
     printf("\n");
 }
 
@@ -105,7 +105,7 @@ void print_clone_help(const char *prog_name) {
     printf("  -v, --verbose      Print verbose output\n");
     printf("  --bootstrap        Automatically run bootstrap scripts after clone\n");
     printf("  --no-bootstrap     Skip bootstrap execution entirely\n");
-    printf("  --help             Show this help message\n");
+    printf("  -h, --help         Show this help message\n");
     printf("\nProfile Behavior:\n");
     printf("  By default, clone auto-detects profiles relevant to the current system\n");
     printf("  (e.g., 'global', 'darwin', 'hosts/macbook') and fetches only those.\n");
@@ -142,7 +142,7 @@ void print_add_help(const char *prog_name) {
     printf("  -e, --exclude <pattern>   Exclude pattern (glob, can be repeated)\n");
     printf("  -f, --force               Overwrite existing files in profile\n");
     printf("  -v, --verbose             Print verbose output\n");
-    printf("  --help                    Show this help message\n");
+    printf("  -h, --help                Show this help message\n");
     printf("\nExclude Patterns:\n");
     printf("  Supports glob patterns: *, ?, [abc]\n");
     printf("  Examples:\n");
@@ -167,7 +167,7 @@ void print_remove_help(const char *prog_name) {
     printf("  -i, --interactive      Prompt for each file\n");
     printf("  -v, --verbose          Print verbose output\n");
     printf("  -q, --quiet            Minimal output\n");
-    printf("  --help                 Show this help message\n");
+    printf("  -h, --help             Show this help message\n");
     printf("\nExamples:\n");
     printf("  %s remove --profile global ~/.bashrc\n", prog_name);
     printf("      Remove ~/.bashrc from 'global' profile\n\n");
@@ -204,7 +204,7 @@ void print_apply_help(const char *prog_name) {
     printf("  --skip-existing        Skip files that already exist\n");
     printf("  --no-skip-unchanged    Disable smart skipping (default: enabled)\n");
     printf("  -v, --verbose          Print verbose output\n");
-    printf("  --help                 Show this help message\n");
+    printf("  -h, --help             Show this help message\n");
     printf("\n");
     printf("Smart Skipping:\n");
     printf("  By default, files that match profile content are skipped for efficiency.\n");
@@ -226,7 +226,7 @@ void print_status_help(const char *prog_name) {
     printf("  --no-fetch             Don't fetch before checking remote (faster, may be stale)\n");
     printf("  --all                  Show all local profiles, not just active ones\n");
     printf("\nHelp:\n");
-    printf("  --help                 Show this help message\n");
+    printf("  -h, --help             Show this help message\n");
     printf("\nRemote State Indicators:\n");
     printf("  =   up-to-date with remote\n");
     printf("  ↑n  n commits ahead of remote (ready to push)\n");
@@ -253,7 +253,7 @@ void print_diff_help(const char *prog_name) {
     printf("\nOther options:\n");
     printf("  -p, --profile <name>  Check specific profile\n");
     printf("  --name-only           Only show file names, not diffs\n");
-    printf("  --help                Show this help message\n");
+    printf("  -h, --help            Show this help message\n");
     printf("\nConcepts:\n");
     printf("  Upstream:   Repository (source of truth for configuration)\n");
     printf("  Downstream: Filesystem (deployed state)\n");
@@ -273,7 +273,7 @@ void print_list_help(const char *prog_name) {
     printf("  --remote                Show remote tracking state for profiles\n");
     printf("  --oneline               Show commits in one-line format (for --log)\n");
     printf("  -n <count>              Limit commits shown (for --log)\n");
-    printf("  --help                  Show this help message\n");
+    printf("  -h, --help              Show this help message\n");
     printf("\nRemote State Indicators (with --remote):\n");
     printf("  [=]   up-to-date with remote\n");
     printf("  [↑n]  n commits ahead of remote (run 'dotta sync' to push)\n");
@@ -322,7 +322,7 @@ void print_profile_help(const char *prog_name) {
     printf("  -v, --verbose            Show detailed validation checks\n");
     printf("\nCommon Options:\n");
     printf("  -q, --quiet              Suppress non-error output\n");
-    printf("  --help                   Show this help message\n");
+    printf("  -h, --help               Show this help message\n");
     printf("\nTypical Workflow:\n");
     printf("  1. Clone repo (profiles auto-selected based on system)\n");
     printf("  2. Check status:       %s profile list\n", prog_name);
@@ -352,7 +352,7 @@ void print_show_help(const char *prog_name) {
     printf("  -c, --commit <ref>    Show file from specific commit (requires --profile)\n");
     printf("                        Examples: HEAD, HEAD~3, abc123\n");
     printf("  --raw                 Show raw content without header\n");
-    printf("  --help                Show this help message\n");
+    printf("  -h, --help            Show this help message\n");
     printf("\nBehavior:\n");
     printf("  Without --profile: Searches for file by basename across all configured profiles\n");
     printf("  With --profile: Looks for exact file path in specified profile\n");
@@ -373,7 +373,7 @@ void print_revert_help(const char *prog_name) {
     printf("  -f, --force           Skip confirmation and override conflicts\n");
     printf("  --dry-run             Preview changes without modifying anything\n");
     printf("  -v, --verbose         Print verbose output\n");
-    printf("  --help                Show this help message\n");
+    printf("  -h, --help            Show this help message\n");
     printf("\nBehavior:\n");
     printf("  This command modifies the Git repository only. Run 'dotta apply' afterward\n");
     printf("  to deploy the reverted file to your filesystem.\n");
@@ -405,7 +405,7 @@ void print_remote_help(const char *prog_name) {
     printf("  show <name>              Show remote details\n");
     printf("\nOptions:\n");
     printf("  -v, --verbose    Show URLs (for list)\n");
-    printf("  --help           Show this help message\n");
+    printf("  -h, --help       Show this help message\n");
     printf("\nExamples:\n");
     printf("  %s remote\n", prog_name);
     printf("  %s remote -v\n", prog_name);
@@ -428,7 +428,7 @@ void print_update_help(const char *prog_name) {
     printf("  -v, --verbose             Verbose output\n");
     printf("  --include-new             Include new files from tracked directories\n");
     printf("  --only-new                Only process new files (ignore modified)\n");
-    printf("  --help                    Show this help message\n");
+    printf("  -h, --help                Show this help message\n");
     printf("\nFile Detection:\n");
     printf("  By default, new files are auto-detected based on config settings:\n");
     printf("    - core.auto_detect_new_files controls automatic detection\n");
@@ -461,7 +461,7 @@ void print_sync_help(const char *prog_name) {
     printf("  --diverged <strategy>      How to handle diverged branches:\n");
     printf("                             warn (default), rebase, merge, ours, theirs\n");
     printf("  -v, --verbose              Verbose output\n");
-    printf("  --help                     Show this help message\n");
+    printf("  -h, --help                 Show this help message\n");
     printf("\nWhat it does:\n");
     printf("  1. Validates workspace is clean (no uncommitted changes)\n");
     printf("  2. Fetches latest changes from remote for active profiles\n");
@@ -502,7 +502,7 @@ void print_ignore_help(const char *prog_name) {
     printf("  --remove <pattern>     Remove pattern from .dottaignore (can be used multiple times)\n");
     printf("  --test <path>          Test if path would be ignored by active profiles\n");
     printf("  -v, --verbose          Print verbose output (test mode: show all patterns)\n");
-    printf("  --help                 Show this help message\n");
+    printf("  -h, --help             Show this help message\n");
     printf("\nIgnore Pattern Layers (in precedence order):\n");
     printf("  1. CLI patterns (--exclude flags, highest priority)\n");
     printf("  2. Combined .dottaignore (baseline + profile)\n");
@@ -554,7 +554,7 @@ void print_bootstrap_help(const char *prog_name) {
     printf("  -n, --dry-run             Show what would be executed without running\n");
     printf("  -y, --yes, --no-confirm   Skip confirmation prompts\n");
     printf("  --continue-on-error       Continue if a bootstrap script fails\n");
-    printf("  --help                    Show this help message\n");
+    printf("  -h, --help                Show this help message\n");
     printf("\nExecution Order:\n");
     printf("  Bootstrap scripts execute in profile resolution order:\n");
     printf("    1. global/.dotta/bootstrap\n");

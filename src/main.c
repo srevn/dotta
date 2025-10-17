@@ -97,7 +97,7 @@ static int cmd_init_main(int argc, char **argv) {
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "--help") == 0) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_init_help(argv[0]);
             return 0;
         } else if (strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--quiet") == 0) {
@@ -147,7 +147,7 @@ static int cmd_add_main(int argc, char **argv) {
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "--help") == 0) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             free(files);
             free(excludes);
             print_add_help(argv[0]);
@@ -257,7 +257,7 @@ static int cmd_remove_main(int argc, char **argv) {
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "--help") == 0) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             free(paths);
             print_remove_help(argv[0]);
             return 0;
@@ -363,7 +363,7 @@ static int cmd_apply_main(int argc, char **argv) {
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "--help") == 0) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             free(profiles);
             print_apply_help(argv[0]);
             return 0;
@@ -451,7 +451,7 @@ static int cmd_status_main(int argc, char **argv) {
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "--help") == 0) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             free(profiles);
             print_status_help(argv[0]);
             return 0;
@@ -542,7 +542,7 @@ static int cmd_list_main(int argc, char **argv) {
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "--help") == 0) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_list_help(argv[0]);
             return 0;
         } else if (strcmp(argv[i], "--log") == 0) {
@@ -623,7 +623,7 @@ static int cmd_profile_main(int argc, char **argv) {
     if (argc < 3) {
         /* No subcommand - default to list */
         opts.subcommand = PROFILE_LIST;
-    } else if (strcmp(argv[2], "--help") == 0) {
+    } else if (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0) {
         print_profile_help(argv[0]);
         return 0;
     } else if (strcmp(argv[2], "list") == 0) {
@@ -631,7 +631,7 @@ static int cmd_profile_main(int argc, char **argv) {
 
         /* Parse list options */
         for (int i = 3; i < argc; i++) {
-            if (strcmp(argv[i], "--help") == 0) {
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
                 print_profile_help(argv[0]);
                 return 0;
             } else if (strcmp(argv[i], "--remote") == 0) {
@@ -661,7 +661,7 @@ static int cmd_profile_main(int argc, char **argv) {
 
         /* Parse fetch options */
         for (int i = 3; i < argc; i++) {
-            if (strcmp(argv[i], "--help") == 0) {
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
                 free(profiles);
                 print_profile_help(argv[0]);
                 return 0;
@@ -696,7 +696,7 @@ static int cmd_profile_main(int argc, char **argv) {
 
         /* Parse select options */
         for (int i = 3; i < argc; i++) {
-            if (strcmp(argv[i], "--help") == 0) {
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
                 free(profiles);
                 print_profile_help(argv[0]);
                 return 0;
@@ -731,7 +731,7 @@ static int cmd_profile_main(int argc, char **argv) {
 
         /* Parse unselect options */
         for (int i = 3; i < argc; i++) {
-            if (strcmp(argv[i], "--help") == 0) {
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
                 free(profiles);
                 print_profile_help(argv[0]);
                 return 0;
@@ -768,7 +768,7 @@ static int cmd_profile_main(int argc, char **argv) {
 
         /* Parse reorder options */
         for (int i = 3; i < argc; i++) {
-            if (strcmp(argv[i], "--help") == 0) {
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
                 free(profiles);
                 print_profile_help(argv[0]);
                 return 0;
@@ -793,7 +793,7 @@ static int cmd_profile_main(int argc, char **argv) {
 
         /* Parse validate options */
         for (int i = 3; i < argc; i++) {
-            if (strcmp(argv[i], "--help") == 0) {
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
                 print_profile_help(argv[0]);
                 return 0;
             } else if (strcmp(argv[i], "--fix") == 0) {
@@ -863,7 +863,7 @@ static int cmd_diff_main(int argc, char **argv) {
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "--help") == 0) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             free(files);
             print_diff_help(argv[0]);
             return 0;
@@ -933,7 +933,7 @@ static int cmd_clone_main(int argc, char **argv) {
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "--help") == 0) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             free(profiles);
             print_clone_help(argv[0]);
             return 0;
@@ -1035,7 +1035,7 @@ static int cmd_update_main(int argc, char **argv) {
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "--help") == 0) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             free(files);
             free(profiles);
             free(excludes);
@@ -1145,7 +1145,7 @@ static int cmd_ignore_main(int argc, char **argv) {
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "--help") == 0) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_ignore_help(argv[0]);
             return 0;
         } else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--profile") == 0) {
@@ -1281,7 +1281,7 @@ static int cmd_sync_main(int argc, char **argv) {
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "--help") == 0) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             free(profiles);
             print_sync_help(argv[0]);
             return 0;
@@ -1359,7 +1359,7 @@ static int cmd_remote_main(int argc, char **argv) {
     if (argc == 2) {
         /* No subcommand - list remotes */
         opts.subcommand = REMOTE_LIST;
-    } else if (strcmp(argv[2], "--help") == 0) {
+    } else if (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0) {
         print_remote_help(argv[0]);
         return 0;
     } else if (strcmp(argv[2], "-v") == 0 || strcmp(argv[2], "--verbose") == 0) {
@@ -1446,7 +1446,7 @@ static int cmd_show_main(int argc, char **argv) {
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "--help") == 0) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_show_help(argv[0]);
             return 0;
         } else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--profile") == 0) {
@@ -1515,7 +1515,7 @@ static int cmd_revert_main(int argc, char **argv) {
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "--help") == 0) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_revert_help(argv[0]);
             return 0;
         } else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--profile") == 0) {
@@ -1613,7 +1613,7 @@ static int cmd_bootstrap_main(int argc, char **argv) {
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "--help") == 0) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_bootstrap_help(argv[0]);
             free(profiles);
             return 0;

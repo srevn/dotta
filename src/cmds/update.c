@@ -19,6 +19,7 @@
 #include "infra/compare.h"
 #include "infra/worktree.h"
 #include "utils/array.h"
+#include "utils/buffer.h"
 #include "utils/commit.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
@@ -411,63 +412,72 @@ static error_t *copy_file_to_worktree(
     CHECK_NULL(filesystem_path);
     CHECK_NULL(storage_path);
 
+    /* Initialize all resources to NULL for goto cleanup */
+    char *dest_path = NULL;
+    char *parent = NULL;
+    char *target = NULL;
+    error_t *err = NULL;
+
     const char *wt_path = worktree_get_path(wt);
-    char *dest_path = str_format("%s/%s", wt_path, storage_path);
+    if (!wt_path) {
+        return ERROR(ERR_INTERNAL, "Worktree path is NULL");
+    }
+
+    dest_path = str_format("%s/%s", wt_path, storage_path);
     if (!dest_path) {
-        return ERROR(ERR_MEMORY, "Failed to allocate destination path");
+        err = ERROR(ERR_MEMORY, "Failed to allocate destination path");
+        goto cleanup;
     }
 
     /* Create parent directory */
-    char *parent = NULL;
-    error_t *err = fs_get_parent_dir(dest_path, &parent);
+    err = fs_get_parent_dir(dest_path, &parent);
     if (err) {
-        free(dest_path);
-        return err;
+        goto cleanup;
     }
 
     err = fs_create_dir(parent, true);
-    free(parent);
     if (err) {
-        free(dest_path);
-        return error_wrap(err, "Failed to create parent directory");
+        err = error_wrap(err, "Failed to create parent directory");
+        goto cleanup;
     }
 
     /* Remove existing file if present */
     if (fs_lexists(dest_path)) {
         err = fs_remove_file(dest_path);
         if (err) {
-            free(dest_path);
-            return error_wrap(err, "Failed to remove existing file");
+            err = error_wrap(err, "Failed to remove existing file");
+            goto cleanup;
         }
     }
 
     /* Copy file */
     if (fs_is_symlink(filesystem_path)) {
         /* Handle symlink */
-        char *target = NULL;
         err = fs_read_symlink(filesystem_path, &target);
         if (err) {
-            free(dest_path);
-            return error_wrap(err, "Failed to read symlink");
+            err = error_wrap(err, "Failed to read symlink");
+            goto cleanup;
         }
 
         err = fs_create_symlink(target, dest_path);
-        free(target);
         if (err) {
-            free(dest_path);
-            return error_wrap(err, "Failed to create symlink");
+            err = error_wrap(err, "Failed to create symlink");
+            goto cleanup;
         }
     } else {
         /* Handle regular file */
         err = fs_copy_file(filesystem_path, dest_path);
         if (err) {
-            free(dest_path);
-            return error_wrap(err, "Failed to copy file");
+            err = error_wrap(err, "Failed to copy file");
+            goto cleanup;
         }
     }
 
-    free(dest_path);
-    return NULL;
+cleanup:
+    if (target) free(target);
+    if (parent) free(parent);
+    if (dest_path) free(dest_path);
+    return err;
 }
 
 /**
@@ -598,10 +608,12 @@ static error_t *capture_and_save_metadata(
 
     int git_err = git_index_add_bypath(index, METADATA_FILE_PATH);
     if (git_err < 0) {
+        git_index_free(index);
         return error_from_git(git_err);
     }
 
     git_err = git_index_write(index);
+    git_index_free(index);
     if (git_err < 0) {
         return error_from_git(git_err);
     }
@@ -635,28 +647,34 @@ static error_t *update_profile(
         return NULL;
     }
 
+    /* Initialize all resources to NULL for goto cleanup */
     worktree_handle_t *wt = NULL;
+    git_index *index = NULL;
+    git_tree *tree = NULL;
+    const char **storage_paths = NULL;
+    char *message = NULL;
     error_t *err = NULL;
+    git_repository *wt_repo = NULL;
 
     /* Create temporary worktree */
     err = worktree_create_temp(repo, &wt);
     if (err) {
-        return error_wrap(err, "Failed to create temporary worktree");
+        err = error_wrap(err, "Failed to create temporary worktree");
+        goto cleanup;
     }
 
     /* Checkout profile branch */
     err = worktree_checkout_branch(wt, profile->name);
     if (err) {
-        worktree_cleanup(wt);
-        return error_wrap(err, "Failed to checkout profile '%s'", profile->name);
+        err = error_wrap(err, "Failed to checkout profile '%s'", profile->name);
+        goto cleanup;
     }
 
     /* Copy each modified file to worktree and stage */
-    git_index *index = NULL;
     err = worktree_get_index(wt, &index);
     if (err) {
-        worktree_cleanup(wt);
-        return error_wrap(err, "Failed to get worktree index");
+        err = error_wrap(err, "Failed to get worktree index");
+        goto cleanup;
     }
 
     for (size_t i = 0; i < file_count; i++) {
@@ -671,8 +689,8 @@ static error_t *update_profile(
             /* Remove from index (stage deletion) */
             int git_err = git_index_remove_bypath(index, file->storage_path);
             if (git_err < 0) {
-                worktree_cleanup(wt);
-                return error_from_git(git_err);
+                err = error_from_git(git_err);
+                goto cleanup;
             }
             continue;
         }
@@ -680,23 +698,23 @@ static error_t *update_profile(
         /* Copy to worktree */
         err = copy_file_to_worktree(wt, file->filesystem_path, file->storage_path);
         if (err) {
-            worktree_cleanup(wt);
-            return error_wrap(err, "Failed to copy '%s'", file->filesystem_path);
+            err = error_wrap(err, "Failed to copy '%s'", file->filesystem_path);
+            goto cleanup;
         }
 
         /* Stage file */
         int git_err = git_index_add_bypath(index, file->storage_path);
         if (git_err < 0) {
-            worktree_cleanup(wt);
-            return error_from_git(git_err);
+            err = error_from_git(git_err);
+            goto cleanup;
         }
     }
 
     /* Capture and save metadata for updated files */
     err = capture_and_save_metadata(wt, files, file_count, opts->verbose);
     if (err) {
-        worktree_cleanup(wt);
-        return error_wrap(err, "Failed to capture metadata");
+        err = error_wrap(err, "Failed to capture metadata");
+        goto cleanup;
     }
 
     /* Note: metadata capture function already wrote the index */
@@ -705,24 +723,22 @@ static error_t *update_profile(
     git_oid tree_oid;
     int git_err = git_index_write_tree(&tree_oid, index);
     if (git_err < 0) {
-        worktree_cleanup(wt);
-        return error_from_git(git_err);
+        err = error_from_git(git_err);
+        goto cleanup;
     }
 
-    git_repository *wt_repo = worktree_get_repo(wt);
-    git_tree *tree = NULL;
+    wt_repo = worktree_get_repo(wt);
     git_err = git_tree_lookup(&tree, wt_repo, &tree_oid);
     if (git_err < 0) {
-        worktree_cleanup(wt);
-        return error_from_git(git_err);
+        err = error_from_git(git_err);
+        goto cleanup;
     }
 
     /* Build array of storage paths for commit message */
-    const char **storage_paths = malloc(file_count * sizeof(char *));
+    storage_paths = malloc(file_count * sizeof(char *));
     if (!storage_paths) {
-        git_tree_free(tree);
-        worktree_cleanup(wt);
-        return ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
+        err = ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
+        goto cleanup;
     }
 
     for (size_t i = 0; i < file_count; i++) {
@@ -739,31 +755,29 @@ static error_t *update_profile(
         .target_commit = NULL
     };
 
-    char *message = build_commit_message(config, &ctx);
-    free(storage_paths);
-
+    message = build_commit_message(config, &ctx);
     if (!message) {
-        git_tree_free(tree);
-        worktree_cleanup(wt);
-        return ERROR(ERR_MEMORY, "Failed to build commit message");
+        err = ERROR(ERR_MEMORY, "Failed to build commit message");
+        goto cleanup;
     }
 
     /* Create commit */
     git_oid commit_oid;
     err = gitops_create_commit(wt_repo, profile->name, tree, message, &commit_oid);
-
-    free(message);
-    git_tree_free(tree);
-
     if (err) {
-        worktree_cleanup(wt);
-        return error_wrap(err, "Failed to create commit");
+        err = error_wrap(err, "Failed to create commit");
+        goto cleanup;
     }
 
-    /* Cleanup */
-    worktree_cleanup(wt);
+cleanup:
+    /* Free resources in reverse order */
+    if (message) free(message);
+    if (storage_paths) free(storage_paths);
+    if (tree) git_tree_free(tree);
+    if (index) git_index_free(index);
+    if (wt) worktree_cleanup(wt);
 
-    return NULL;
+    return err;
 }
 
 /**
@@ -820,30 +834,39 @@ static void update_display_summary(
             }
         }
 
-        char info[1024];
+        /* Build info string using dynamic buffer to avoid overflow */
+        buffer_t *info_buf = buffer_create();
+        if (!info_buf) {
+            string_array_free(other_profiles);
+            continue;  /* Skip this file on memory error */
+        }
+
         if (other_profiles && string_array_size(other_profiles) > 0) {
             /* File exists in multiple profiles - add warning indicator */
-            snprintf(info, sizeof(info), "%s (in %s) %s[also in:",
-                    file->filesystem_path, file->source_profile->name,
-                    output_color_code(out, OUTPUT_COLOR_DIM));
+            buffer_append_string(info_buf, file->filesystem_path);
+            buffer_append_string(info_buf, " (in ");
+            buffer_append_string(info_buf, file->source_profile->name);
+            buffer_append_string(info_buf, ") ");
+            buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_DIM));
+            buffer_append_string(info_buf, "[also in:");
 
             for (size_t j = 0; j < string_array_size(other_profiles); j++) {
-                char temp[1024];
-                snprintf(temp, sizeof(temp), "%s %s", info, string_array_get(other_profiles, j));
-                strncpy(info, temp, sizeof(info) - 1);
-                info[sizeof(info) - 1] = '\0';
+                buffer_append_string(info_buf, " ");
+                buffer_append_string(info_buf, string_array_get(other_profiles, j));
             }
 
-            char temp[1024];
-            snprintf(temp, sizeof(temp), "%s]%s", info, output_color_code(out, OUTPUT_COLOR_RESET));
-            strncpy(info, temp, sizeof(info) - 1);
-            info[sizeof(info) - 1] = '\0';
+            buffer_append_string(info_buf, "]");
+            buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_RESET));
 
             multi_profile_count++;
         } else {
-            snprintf(info, sizeof(info), "%s (in %s)",
-                    file->filesystem_path, file->source_profile->name);
+            buffer_append_string(info_buf, file->filesystem_path);
+            buffer_append_string(info_buf, " (in ");
+            buffer_append_string(info_buf, file->source_profile->name);
+            buffer_append_string(info_buf, ")");
         }
+
+        const char *info = (const char *)buffer_data(info_buf);
 
         const char *status_label = NULL;
         output_color_t color = OUTPUT_COLOR_YELLOW;
@@ -870,6 +893,7 @@ static void update_display_summary(
 
         output_item(out, status_label, color, info);
 
+        buffer_free(info_buf);
         string_array_free(other_profiles);
     }
 

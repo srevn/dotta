@@ -353,20 +353,53 @@ void print_profile_help(const char *prog_name) {
 }
 
 void print_show_help(const char *prog_name) {
-    printf("Usage: %s show [options] <file>\n\n", prog_name);
-    printf("Show file content from a profile\n\n");
-    printf("Arguments:\n");
-    printf("  <file>                File path or basename to search for\n");
+    printf("Usage: %s show [options] <target>\n\n", prog_name);
+    printf("Show file content or commit details with diff\n\n");
+
+    printf("Target Formats:\n");
+    printf("  <commit>                      Show commit with diff (e.g., a4f2c8e)\n");
+    printf("  <file>                        Show file from active profiles\n");
+    printf("  <profile>:<file>              Show file from specific profile\n");
+    printf("  <file>@<commit>               Show file at specific commit\n");
+    printf("  <profile>:<file>@<commit>     Full refspec with profile and commit\n");
+
     printf("\nOptions:\n");
-    printf("  -p, --profile <name>  Profile name (searches all configured profiles if omitted)\n");
-    printf("  -c, --commit <ref>    Show file from specific commit (requires --profile)\n");
-    printf("                        Examples: HEAD, HEAD~3, abc123\n");
-    printf("  --raw                 Show raw content without header\n");
+    printf("  -p, --profile <name>  Override profile (for commit search or file lookup)\n");
+    printf("  -c, --commit <ref>    Show file from specific commit (alternative to @ syntax)\n");
+    printf("  --raw                 Show raw content without formatting\n");
     printf("  -h, --help            Show this help message\n");
-    printf("\nBehavior:\n");
-    printf("  Without --profile: Searches for file by basename across all configured profiles\n");
-    printf("  With --profile: Looks for exact file path in specified profile\n");
-    printf("  With --commit: Shows file version from that commit in profile history\n");
+
+    printf("\nCommit Mode:\n");
+    printf("  When <target> looks like a commit SHA (7-40 hex chars), shows commit details:\n");
+    printf("    - Commit metadata (SHA, date, author, message)\n");
+    printf("    - File change statistics\n");
+    printf("    - Full unified diff (like 'git show')\n");
+    printf("  Searches active profiles for the commit (use -p to specify profile)\n");
+
+    printf("\nFile Mode:\n");
+    printf("  Shows file content from profile branches\n");
+    printf("  Without profile: searches active profiles for exact path match\n");
+    printf("  Filesystem paths (~/.bashrc) are automatically converted to storage paths\n");
+
+    printf("\nExamples:\n");
+    printf("  # Show commit with diff\n");
+    printf("  %s show a4f2c8e                        # From active profiles\n", prog_name);
+    printf("  %s show -p global a4f2c8e              # From specific profile\n", prog_name);
+    printf("\n");
+    printf("  # Show file (current version)\n");
+    printf("  %s show home/.bashrc                   # From active profiles\n", prog_name);
+    printf("  %s show -p global home/.bashrc         # From specific profile\n", prog_name);
+    printf("  %s show global:home/.bashrc            # Refspec syntax\n", prog_name);
+    printf("\n");
+    printf("  # Show file at specific commit\n");
+    printf("  %s show -p global -c a4f2c8e home/.bashrc\n", prog_name);
+    printf("  %s show home/.bashrc@a4f2c8e           # Refspec syntax (needs -p)\n", prog_name);
+    printf("  %s show global:home/.bashrc@a4f2c8e    # Full refspec\n", prog_name);
+    printf("\n");
+    printf("  # Integration with list command\n");
+    printf("  %s list global home/.bashrc            # See commit history\n", prog_name);
+    printf("  %s show a4f2c8e                        # Show that commit's changes\n", prog_name);
+    printf("  %s show global:home/.bashrc@a4f2c8e    # Show file at that commit\n", prog_name);
     printf("\n");
 }
 

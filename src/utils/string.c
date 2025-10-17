@@ -164,3 +164,25 @@ error_t *str_dup(const char *str, char **out) {
 
     return NULL;
 }
+
+bool str_looks_like_commit(const char *str) {
+    if (!str) {
+        return false;
+    }
+
+    size_t len = strlen(str);
+
+    /* Git commit SHAs: minimum 7 chars (short SHA), maximum 40 chars (full SHA) */
+    if (len < 7 || len > 40) {
+        return false;
+    }
+
+    /* All characters must be hexadecimal */
+    for (size_t i = 0; i < len; i++) {
+        if (!isxdigit((unsigned char)str[i])) {
+            return false;
+        }
+    }
+
+    return true;
+}

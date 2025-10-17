@@ -468,6 +468,47 @@ error_t *gitops_get_tree_from_commit(
 );
 
 /**
+ * Diff operations
+ */
+
+/**
+ * Generate diff between two trees
+ *
+ * Thin wrapper around git_diff_tree_to_tree with default options.
+ * NULL trees are allowed for "added/deleted" semantics.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param old_tree Old tree (can be NULL for "added from nothing")
+ * @param new_tree New tree (can be NULL for "deleted to nothing")
+ * @param out_diff Output diff object (must not be NULL, caller must free with git_diff_free)
+ * @return Error or NULL on success
+ */
+error_t *gitops_diff_trees(
+    git_repository *repo,
+    git_tree *old_tree,
+    git_tree *new_tree,
+    git_diff **out_diff
+);
+
+/**
+ * Get statistics from diff object
+ *
+ * Extracts files_changed, insertions, deletions counts.
+ *
+ * @param diff Diff object (must not be NULL)
+ * @param out_stats Stats object (must not be NULL, caller must free with git_diff_stats_free)
+ * @return Error or NULL on success
+ */
+error_t *gitops_diff_get_stats(
+    git_diff *diff,
+    git_diff_stats **out_stats
+);
+
+/**
+ * Merge/rebase operations
+ */
+
+/**
  * Find merge base between two commits
  *
  * Finds the best common ancestor for a three-way merge.

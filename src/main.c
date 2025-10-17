@@ -31,6 +31,7 @@
 #include "types.h"
 #include "utils/help.h"
 #include "utils/repo.h"
+#include "utils/string.h"
 
 /**
  * Helper: Open resolved repository
@@ -1445,11 +1446,15 @@ static int cmd_remote_main(int argc, char **argv) {
  */
 static int cmd_show_main(int argc, char **argv) {
     cmd_show_options_t opts = {
+        .mode = SHOW_FILE,  /* Default mode (may be changed) */
         .profile = NULL,
         .file_path = NULL,
         .commit = NULL,
         .raw = false
     };
+
+    const char *positional_arg = NULL;
+    bool commit_flag_used = false;
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
@@ -1468,10 +1473,15 @@ static int cmd_show_main(int argc, char **argv) {
                 return 1;
             }
             opts.commit = argv[++i];
+            commit_flag_used = true;
         } else if (strcmp(argv[i], "--raw") == 0) {
             opts.raw = true;
-        } else if (!opts.file_path) {
-            opts.file_path = argv[i];
+        } else if (argv[i][0] == '-') {
+            fprintf(stderr, "Error: Unknown option '%s'\n", argv[i]);
+            print_show_help(argv[0]);
+            return 1;
+        } else if (!positional_arg) {
+            positional_arg = argv[i];
         } else {
             fprintf(stderr, "Error: Unexpected argument '%s'\n", argv[i]);
             print_show_help(argv[0]);
@@ -1480,10 +1490,49 @@ static int cmd_show_main(int argc, char **argv) {
     }
 
     /* Validate required arguments */
-    if (!opts.file_path) {
-        fprintf(stderr, "Error: file path is required\n");
+    if (!positional_arg) {
+        fprintf(stderr, "Error: target argument is required (commit or file path)\n");
         print_show_help(argv[0]);
         return 1;
+    }
+
+    /* Mode detection and refspec parsing */
+    if (strchr(positional_arg, ':') || strchr(positional_arg, '@')) {
+        /* Refspec syntax: [profile:]<file>[@commit] */
+        opts.mode = SHOW_FILE;
+
+        char *refspec_profile = NULL;
+        char *refspec_file = NULL;
+        char *refspec_commit = NULL;
+
+        error_t *err = parse_refspec(positional_arg, &refspec_profile, &refspec_file, &refspec_commit);
+        if (err) {
+            fprintf(stderr, "Error parsing refspec: ");
+            error_print(err, stderr);
+            error_free(err);
+            return 1;
+        }
+
+        /* Refspec components override CLI flags */
+        if (refspec_profile) {
+            opts.profile = refspec_profile;
+        }
+        if (refspec_file) {
+            opts.file_path = refspec_file;
+        }
+        if (refspec_commit) {
+            opts.commit = refspec_commit;
+        }
+
+    } else if (str_looks_like_commit(positional_arg) && !commit_flag_used) {
+        /* Commit mode: dotta show a4f2c8e */
+        opts.mode = SHOW_COMMIT;
+        opts.commit = positional_arg;
+
+    } else {
+        /* File mode: dotta show home/.bashrc */
+        opts.mode = SHOW_FILE;
+        opts.file_path = positional_arg;
     }
 
     /* Open resolved repository */

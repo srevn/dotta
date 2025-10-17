@@ -1499,6 +1499,44 @@ error_t *gitops_update_branch_reference(
 }
 
 /**
+ * Diff operations
+ */
+
+error_t *gitops_diff_trees(
+    git_repository *repo,
+    git_tree *old_tree,
+    git_tree *new_tree,
+    git_diff **out_diff
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(out_diff);
+
+    /* Note: old_tree and new_tree can be NULL for added/deleted semantics */
+
+    int ret = git_diff_tree_to_tree(out_diff, repo, old_tree, new_tree, NULL);
+    if (ret < 0) {
+        return error_from_git(ret);
+    }
+
+    return NULL;
+}
+
+error_t *gitops_diff_get_stats(
+    git_diff *diff,
+    git_diff_stats **out_stats
+) {
+    CHECK_NULL(diff);
+    CHECK_NULL(out_stats);
+
+    int ret = git_diff_get_stats(out_stats, diff);
+    if (ret < 0) {
+        return error_from_git(ret);
+    }
+
+    return NULL;
+}
+
+/**
  * Check if path is a valid git repository
  */
 bool gitops_is_repository(const char *path) {

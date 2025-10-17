@@ -21,52 +21,6 @@
 #include "utils/hashmap.h"
 #include "utils/string.h"
 
-/**
- * Get OS name
- */
-error_t *profile_get_os_name(char **out) {
-    CHECK_NULL(out);
-
-    struct utsname uts;
-    if (uname(&uts) < 0) {
-        return ERROR(ERR_FS, "Failed to get OS name: %s", strerror(errno));
-    }
-
-    /* Convert to lowercase */
-    char *os_name = strdup(uts.sysname);
-    if (!os_name) {
-        return ERROR(ERR_MEMORY, "Failed to allocate OS name");
-    }
-
-    for (char *p = os_name; *p; p++) {
-        *p = tolower(*p);
-    }
-
-    *out = os_name;
-    return NULL;
-}
-
-/**
- * Get hostname
- */
-error_t *profile_get_hostname(char **out) {
-    CHECK_NULL(out);
-
-    char hostname[256];
-    if (gethostname(hostname, sizeof(hostname)) < 0) {
-        return ERROR(ERR_FS, "Failed to get hostname: %s", strerror(errno));
-    }
-
-    /* Null-terminate to be safe */
-    hostname[sizeof(hostname) - 1] = '\0';
-
-    *out = strdup(hostname);
-    if (!*out) {
-        return ERROR(ERR_MEMORY, "Failed to allocate hostname");
-    }
-
-    return NULL;
-}
 
 /**
  * Check if profile exists
@@ -184,31 +138,32 @@ static int string_compare(const void *a, const void *b) {
 }
 
 /**
- * Detect OS-specific profiles (base + sub-profiles)
+ * Detect hierarchical profiles (base + sub-profiles)
  *
- * Finds both base OS profile (<os>) and sub-profiles (<os>/<variant>)
- * for hierarchical configuration.
+ * Generic helper for detecting profiles with hierarchical structure.
+ * Finds both base profile matching the exact prefix and sub-profiles
+ * matching prefix/<variant> (one level deep only).
+ *
+ * Sub-profiles are sorted alphabetically for deterministic ordering.
  *
  * Examples:
- * - Base: darwin, linux, freebsd
- * - Sub-profiles: darwin/name, darwin/work, freebsd/services
- *
- * Sub-profiles are sorted alphabetically for deterministic ordering.
+ * - Prefix "darwin" finds: darwin, darwin/personal, darwin/work
+ * - Prefix "hosts/visavis" finds: hosts/visavis, hosts/visavis/github, hosts/visavis/work
  *
  * @param repo Repository (must not be NULL)
- * @param os_name OS name (must not be NULL)
+ * @param prefix Profile prefix to match (must not be NULL)
  * @param list Profile list to append to (must not be NULL)
  * @param capacity Current capacity of list->profiles array (must not be NULL, updated on realloc)
  * @return Error or NULL on success
  */
-static error_t *detect_os_profiles(
+static error_t *detect_hierarchical_profiles(
     git_repository *repo,
-    const char *os_name,
+    const char *prefix,
     profile_list_t *list,
     size_t *capacity
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(os_name);
+    CHECK_NULL(prefix);
     CHECK_NULL(list);
     CHECK_NULL(capacity);
 
@@ -219,7 +174,7 @@ static error_t *detect_os_profiles(
     const char **sub_array = NULL;
     string_array_t *sorted_subs = NULL;
 
-    size_t os_name_len = strlen(os_name);
+    size_t prefix_len = strlen(prefix);
 
     /* Get all branches */
     err = gitops_list_branches(repo, &branches);
@@ -239,227 +194,24 @@ static error_t *detect_os_profiles(
     for (size_t i = 0; i < string_array_size(branches); i++) {
         const char *branch = string_array_get(branches, i);
 
-        /* Check if branch starts with OS name */
-        if (strncmp(branch, os_name, os_name_len) != 0) {
-            continue;
-        }
-
-        const char *suffix = branch + os_name_len;
-
-        /* Exact match: darwin, freebsd, etc. */
-        if (suffix[0] == '\0') {
-            err = string_array_push(base_profile, branch);
-            if (err) {
-                goto cleanup;
-            }
-        }
-        /* Sub-profile: darwin/something, freebsd/something */
-        else if (suffix[0] == '/') {
-            /* Ensure only one level deep: no additional '/' after the first */
-            const char *after_slash = suffix + 1;
-            if (strchr(after_slash, '/') == NULL && after_slash[0] != '\0') {
-                err = string_array_push(sub_profiles, branch);
-                if (err) {
-                    goto cleanup;
-                }
-            }
-        }
-    }
-
-    /* Done with branches */
-    string_array_free(branches);
-    branches = NULL;
-
-    /* Calculate total profiles to add */
-    size_t base_count = string_array_size(base_profile);
-    size_t sub_count = string_array_size(sub_profiles);
-    size_t total_to_add = base_count + sub_count;
-
-    if (total_to_add == 0) {
-        /* No OS profiles found - success with no changes */
-        goto cleanup;
-    }
-
-    /* Ensure capacity with overflow check */
-    size_t needed_capacity = list->count + total_to_add;
-    if (needed_capacity > *capacity) {
-        /* Check for overflow in doubling loop */
-        if (*capacity > SIZE_MAX / 2) {
-            err = ERROR(ERR_INTERNAL, "Profile capacity overflow");
-            goto cleanup;
-        }
-
-        size_t new_capacity = *capacity * 2;
-        while (new_capacity < needed_capacity) {
-            if (new_capacity > SIZE_MAX / 2) {
-                err = ERROR(ERR_INTERNAL, "Profile capacity overflow");
-                goto cleanup;
-            }
-            new_capacity *= 2;
-        }
-
-        profile_t *new_profiles = realloc(list->profiles, new_capacity * sizeof(profile_t));
-        if (!new_profiles) {
-            err = ERROR(ERR_MEMORY, "Failed to grow profiles array");
-            goto cleanup;
-        }
-
-        list->profiles = new_profiles;
-        *capacity = new_capacity;
-    }
-
-    /* Sort sub-profiles alphabetically for deterministic ordering */
-    if (sub_count > 1) {
-        /* Get direct access to internal array for sorting */
-        sub_array = malloc(sub_count * sizeof(char *));
-        if (!sub_array) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate sort array");
-            goto cleanup;
-        }
-
-        for (size_t i = 0; i < sub_count; i++) {
-            sub_array[i] = string_array_get(sub_profiles, i);
-        }
-
-        qsort(sub_array, sub_count, sizeof(char *), string_compare);
-
-        /* Rebuild sorted array */
-        sorted_subs = string_array_create();
-        if (!sorted_subs) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate sorted array");
-            goto cleanup;
-        }
-
-        for (size_t i = 0; i < sub_count; i++) {
-            err = string_array_push(sorted_subs, sub_array[i]);
-            if (err) {
-                goto cleanup;
-            }
-        }
-
-        free(sub_array);
-        sub_array = NULL;
-
-        string_array_free(sub_profiles);
-        sub_profiles = sorted_subs;
-        sorted_subs = NULL;
-    }
-
-    /* Add base profile first (if exists) */
-    for (size_t i = 0; i < base_count; i++) {
-        const char *profile_name = string_array_get(base_profile, i);
-        profile_t *profile = NULL;
-        err = profile_load(repo, profile_name, &profile);
-        if (err) {
-            goto cleanup;
-        }
-
-        profile->auto_detected = true;
-        list->profiles[list->count++] = *profile;
-        free(profile);  /* Shallow copy of internals to list, only free struct */
-    }
-
-    /* Add sub-profiles (sorted alphabetically) */
-    for (size_t i = 0; i < sub_count; i++) {
-        const char *profile_name = string_array_get(sub_profiles, i);
-        profile_t *profile = NULL;
-        err = profile_load(repo, profile_name, &profile);
-        if (err) {
-            goto cleanup;
-        }
-
-        profile->auto_detected = true;
-        list->profiles[list->count++] = *profile;
-        free(profile);  /* Shallow copy of internals to list, only free struct */
-    }
-
-cleanup:
-    string_array_free(branches);
-    string_array_free(base_profile);
-    string_array_free(sub_profiles);
-    string_array_free(sorted_subs);
-    free(sub_array);
-
-    return err;
-}
-
-/**
- * Detect host-specific profiles (base + sub-profiles)
- *
- * Finds both base host profile (hosts/<hostname>) and sub-profiles
- * (hosts/<hostname>/<variant>) for hierarchical configuration.
- *
- * Sub-profiles are sorted alphabetically for deterministic ordering.
- *
- * @param repo Repository (must not be NULL)
- * @param hostname Hostname (must not be NULL)
- * @param list Profile list to append to (must not be NULL)
- * @param capacity Current capacity of list->profiles array (must not be NULL, updated on realloc)
- * @return Error or NULL on success
- */
-static error_t *detect_host_profiles(
-    git_repository *repo,
-    const char *hostname,
-    profile_list_t *list,
-    size_t *capacity
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(hostname);
-    CHECK_NULL(list);
-    CHECK_NULL(capacity);
-
-    error_t *err = NULL;
-    string_array_t *branches = NULL;
-    string_array_t *base_profile = NULL;
-    string_array_t *sub_profiles = NULL;
-    const char **sub_array = NULL;
-    string_array_t *sorted_subs = NULL;
-
-    /* Build host profile prefix */
-    char host_prefix[256];
-    int ret = snprintf(host_prefix, sizeof(host_prefix), "hosts/%s", hostname);
-    if (ret < 0 || (size_t)ret >= sizeof(host_prefix)) {
-        err = ERROR(ERR_INTERNAL, "Host prefix too long");
-        goto cleanup;
-    }
-    size_t prefix_len = strlen(host_prefix);
-
-    /* Get all branches */
-    err = gitops_list_branches(repo, &branches);
-    if (err) {
-        goto cleanup;
-    }
-
-    /* Collect matching profiles: base + sub-profiles */
-    base_profile = string_array_create();
-    sub_profiles = string_array_create();
-
-    if (!base_profile || !sub_profiles) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate profile arrays");
-        goto cleanup;
-    }
-
-    for (size_t i = 0; i < string_array_size(branches); i++) {
-        const char *branch = string_array_get(branches, i);
-
-        /* Check if branch starts with "hosts/<hostname>" */
-        if (strncmp(branch, host_prefix, prefix_len) != 0) {
+        /* Check if branch starts with prefix */
+        if (strncmp(branch, prefix, prefix_len) != 0) {
             continue;
         }
 
         const char *suffix = branch + prefix_len;
 
-        /* Exact match: hosts/<hostname> */
+        /* Exact match: prefix exactly matches branch name */
         if (suffix[0] == '\0') {
             err = string_array_push(base_profile, branch);
             if (err) {
                 goto cleanup;
             }
         }
-        /* Sub-profile: hosts/<hostname>/something */
+        /* Sub-profile: prefix/something (one level deep only) */
         else if (suffix[0] == '/') {
-            /* Ensure only one level deep: no additional '/' after the first */
             const char *after_slash = suffix + 1;
+            /* Ensure only one level deep: no additional '/' after the first */
             if (strchr(after_slash, '/') == NULL && after_slash[0] != '\0') {
                 err = string_array_push(sub_profiles, branch);
                 if (err) {
@@ -479,7 +231,7 @@ static error_t *detect_host_profiles(
     size_t total_to_add = base_count + sub_count;
 
     if (total_to_add == 0) {
-        /* No host profiles found - success with no changes */
+        /* No matching profiles found - success with no changes */
         goto cleanup;
     }
 
@@ -608,7 +360,7 @@ error_t *profile_detect_auto(
     error_t *err = NULL;
     profile_list_t *list = NULL;
     char *os_name = NULL;
-    char *hostname = NULL;
+    char host_prefix[256];
 
     /* Allocate profile list */
     list = calloc(1, sizeof(profile_list_t));
@@ -639,36 +391,50 @@ error_t *profile_detect_auto(
     }
 
     /* 2. Detect OS profiles (base + sub-profiles, hierarchical) */
-    err = profile_get_os_name(&os_name);
-    if (!err && os_name) {
-        err = detect_os_profiles(repo, os_name, list, &capacity);
+    struct utsname uts;
+    if (uname(&uts) == 0) {
+        /* Convert OS name to lowercase */
+        os_name = strdup(uts.sysname);
+        if (!os_name) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate OS name");
+            goto cleanup;
+        }
+
+        for (char *p = os_name; *p; p++) {
+            *p = tolower(*p);
+        }
+
+        err = detect_hierarchical_profiles(repo, os_name, list, &capacity);
         if (err) {
             /* Non-fatal: skip OS profiles if detection fails */
             error_free(err);
             err = NULL;
         }
+
         free(os_name);
         os_name = NULL;
-    } else {
-        /* Non-fatal: unable to get OS name */
-        error_free(err);
-        err = NULL;
     }
+    /* Non-fatal: continue if uname() fails */
 
     /* 3. Detect host profiles (base + sub-profiles, hierarchical) */
-    err = profile_get_hostname(&hostname);
-    if (!err && hostname) {
-        err = detect_host_profiles(repo, hostname, list, &capacity);
+    char hostname[256];
+    if (gethostname(hostname, sizeof(hostname)) == 0) {
+        /* Null-terminate to be safe */
+        hostname[sizeof(hostname) - 1] = '\0';
+
+        /* Build host prefix */
+        int ret = snprintf(host_prefix, sizeof(host_prefix), "hosts/%s", hostname);
+        if (ret < 0 || (size_t)ret >= sizeof(host_prefix)) {
+            err = ERROR(ERR_INTERNAL, "Host prefix too long");
+            goto cleanup;
+        }
+
+        err = detect_hierarchical_profiles(repo, host_prefix, list, &capacity);
         if (err) {
             goto cleanup;
         }
-        free(hostname);
-        hostname = NULL;
-    } else {
-        /* Non-fatal: unable to get hostname */
-        error_free(err);
-        err = NULL;
     }
+    /* Non-fatal: continue if gethostname() fails */
 
     /* Success */
     *out = list;
@@ -676,7 +442,6 @@ error_t *profile_detect_auto(
 
 cleanup:
     free(os_name);
-    free(hostname);
     if (err) {
         profile_list_free(list);
     }

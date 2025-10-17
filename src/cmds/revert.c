@@ -14,7 +14,6 @@
 #include "base/filesystem.h"
 #include "base/gitops.h"
 #include "core/profiles.h"
-#include "infra/compare.h"
 #include "infra/path.h"
 #include "utils/array.h"
 #include "utils/commit.h"

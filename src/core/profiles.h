@@ -274,22 +274,6 @@ void profile_list_free(profile_list_t *list);
 void manifest_free(manifest_t *manifest);
 
 /**
- * Get OS name for profile detection
- *
- * @param out OS name (must not be NULL, caller must free)
- * @return Error or NULL on success
- */
-error_t *profile_get_os_name(char **out);
-
-/**
- * Get hostname for profile detection
- *
- * @param out Hostname (must not be NULL, caller must free)
- * @return Error or NULL on success
- */
-error_t *profile_get_hostname(char **out);
-
-/**
  * Build inverted index of all files across profiles
  *
  * Creates a hashmap that maps storage paths to lists of profile names,

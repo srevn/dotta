@@ -222,21 +222,29 @@ static void display_divergence_section(
         return;
     }
 
-    /* Display section header with count */
+    /* Display section header with count and inline hint */
     output_newline(out);
     char header[256];
     snprintf(header, sizeof(header), "%s (%zu file%s)",
              section_title, total_count, total_count == 1 ? "" : "s");
-    output_section(out, header);
 
-    /* Display hint */
-    if (hint_message) {
-        char *colored_hint = output_colorize(out, OUTPUT_COLOR_DIM, hint_message);
-        if (colored_hint) {
-            output_printf(out, OUTPUT_NORMAL, "%s\n", colored_hint);
-            free(colored_hint);
+    /* Print header in bold, then hint in dim on same line */
+    if (output_colors_enabled(out)) {
+        const char *bold = output_color_code(out, OUTPUT_COLOR_BOLD);
+        const char *dim = output_color_code(out, OUTPUT_COLOR_DIM);
+        const char *reset = output_color_code(out, OUTPUT_COLOR_RESET);
+
+        if (hint_message) {
+            output_printf(out, OUTPUT_NORMAL, "%s%s%s %s%s%s\n",
+                         bold, header, reset, dim, hint_message, reset);
         } else {
-            output_info(out, "%s", hint_message);
+            output_printf(out, OUTPUT_NORMAL, "%s%s%s\n", bold, header, reset);
+        }
+    } else {
+        if (hint_message) {
+            output_printf(out, OUTPUT_NORMAL, "%s %s\n", header, hint_message);
+        } else {
+            output_printf(out, OUTPUT_NORMAL, "%s\n", header);
         }
     }
 

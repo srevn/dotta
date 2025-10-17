@@ -20,6 +20,7 @@
 #include "utils/buffer.h"
 #include "utils/hashmap.h"
 #include "utils/string.h"
+#include "utils/timeutil.h"
 
 #define INITIAL_CAPACITY 16
 
@@ -807,49 +808,6 @@ cleanup:
 }
 
 /**
- * Portable replacement for timegm() (which is not POSIX standard)
- *
- * Converts a struct tm in UTC to time_t. Uses mktime() with timezone manipulation
- * to achieve the same result as timegm() in a portable way.
- *
- * @param tm Time structure in UTC (must not be NULL)
- * @return time_t value, or (time_t)-1 on error
- */
-static time_t portable_timegm(struct tm *tm) {
-    if (!tm) {
-        return (time_t)-1;
-    }
-
-    /* Save original timezone */
-    char *tz = getenv("TZ");
-    char *tz_copy = NULL;
-    if (tz) {
-        tz_copy = strdup(tz);
-        if (!tz_copy) {
-            return (time_t)-1;  /* Memory allocation failed */
-        }
-    }
-
-    /* Set timezone to UTC */
-    setenv("TZ", "UTC", 1);
-    tzset();
-
-    /* Convert using mktime (now operating in UTC context) */
-    time_t result = mktime(tm);
-
-    /* Restore original timezone */
-    if (tz_copy) {
-        setenv("TZ", tz_copy, 1);
-        free(tz_copy);
-    } else {
-        unsetenv("TZ");
-    }
-    tzset();
-
-    return result;
-}
-
-/**
  * Parse metadata from JSON
  */
 static error_t *metadata_from_json(const char *json_str, metadata_t **out) {
@@ -1071,6 +1029,13 @@ static error_t *metadata_from_json(const char *json_str, metadata_t **out) {
 
 /**
  * Merge metadata from multiple sources
+ *
+ * Combines metadata collections according to precedence order.
+ * Later sources override earlier ones for conflicting entries.
+ * This implements profile layering (e.g., darwin overrides global).
+ *
+ * Merges BOTH file entries AND tracked directory entries.
+ * Directory entries from later profiles override earlier ones with same path.
  */
 error_t *metadata_merge(
     const metadata_t **sources,
@@ -1094,7 +1059,7 @@ error_t *metadata_merge(
             continue; /* Skip NULL sources */
         }
 
-        /* Copy all entries from this source */
+        /* Copy all file entries from this source */
         for (size_t j = 0; j < source->count; j++) {
             const metadata_entry_t *entry = &source->entries[j];
 
@@ -1104,6 +1069,28 @@ error_t *metadata_merge(
                 metadata_free(result);
                 return error_wrap(err, "Failed to merge metadata entry: %s",
                                 entry->storage_path);
+            }
+        }
+
+        /* Copy all tracked directory entries from this source */
+        for (size_t j = 0; j < source->directory_count; j++) {
+            const metadata_directory_entry_t *dir_entry = &source->directories[j];
+
+            /* Add/update tracked directory (later sources override earlier ones) */
+            err = metadata_add_tracked_directory(
+                result,
+                dir_entry->filesystem_path,
+                dir_entry->storage_prefix,
+                dir_entry->added_at,
+                dir_entry->mode,
+                dir_entry->owner,
+                dir_entry->group
+            );
+
+            if (err) {
+                metadata_free(result);
+                return error_wrap(err, "Failed to merge tracked directory: %s",
+                                dir_entry->filesystem_path);
             }
         }
     }
@@ -1690,17 +1677,35 @@ error_t *metadata_remove_tracked_directory(
     CHECK_NULL(metadata);
     CHECK_NULL(filesystem_path);
 
-    /* Find directory in array */
+    /* Use hashmap for O(1) lookup if available */
     ssize_t found_index = -1;
-    for (size_t i = 0; i < metadata->directory_count; i++) {
-        if (strcmp(metadata->directories[i].filesystem_path, filesystem_path) == 0) {
-            found_index = (ssize_t)i;
-            break;
-        }
-    }
 
-    if (found_index < 0) {
-        return ERROR(ERR_NOT_FOUND, "Directory not tracked: %s", filesystem_path);
+    if (metadata->directory_index) {
+        /* Fast O(1) lookup using hashmap */
+        metadata_directory_entry_t *entry = hashmap_get(metadata->directory_index, filesystem_path);
+        if (!entry) {
+            return ERROR(ERR_NOT_FOUND, "Directory not tracked: %s", filesystem_path);
+        }
+
+        /* Calculate index from pointer arithmetic */
+        found_index = (ssize_t)(entry - metadata->directories);
+
+        /* Sanity check: ensure index is valid */
+        if (found_index < 0 || (size_t)found_index >= metadata->directory_count) {
+            return ERROR(ERR_INTERNAL, "Invalid directory index from hashmap");
+        }
+    } else {
+        /* Fallback to linear search if no index (O(N)) */
+        for (size_t i = 0; i < metadata->directory_count; i++) {
+            if (strcmp(metadata->directories[i].filesystem_path, filesystem_path) == 0) {
+                found_index = (ssize_t)i;
+                break;
+            }
+        }
+
+        if (found_index < 0) {
+            return ERROR(ERR_NOT_FOUND, "Directory not tracked: %s", filesystem_path);
+        }
     }
 
     /* Remove from hashmap index */

@@ -97,10 +97,276 @@ static void display_active_profiles(
 }
 
 /**
+ * Format a diverged file entry for display
+ *
+ * Returns the label, color, and formatted info string for a file.
+ */
+static void format_diverged_file(
+    output_ctx_t *out,
+    const workspace_file_t *file,
+    const char **out_label,
+    output_color_t *out_color,
+    char *info_buffer,
+    size_t buffer_size
+) {
+    if (!out || !file || !out_label || !out_color || !info_buffer) {
+        return;
+    }
+
+    switch (file->type) {
+        case DIVERGENCE_UNDEPLOYED:
+            *out_label = "[undeployed]";
+            *out_color = OUTPUT_COLOR_CYAN;
+            snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
+                    file->filesystem_path,
+                    output_color_code(out, OUTPUT_COLOR_DIM),
+                    file->profile,
+                    output_color_code(out, OUTPUT_COLOR_RESET));
+            break;
+
+        case DIVERGENCE_MODIFIED:
+            *out_label = "[modified]";
+            *out_color = OUTPUT_COLOR_YELLOW;
+            snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
+                    file->filesystem_path,
+                    output_color_code(out, OUTPUT_COLOR_DIM),
+                    file->profile,
+                    output_color_code(out, OUTPUT_COLOR_RESET));
+            break;
+
+        case DIVERGENCE_DELETED:
+            *out_label = "[deleted]";
+            *out_color = OUTPUT_COLOR_RED;
+            snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
+                    file->filesystem_path,
+                    output_color_code(out, OUTPUT_COLOR_DIM),
+                    file->profile,
+                    output_color_code(out, OUTPUT_COLOR_RESET));
+            break;
+
+        case DIVERGENCE_UNTRACKED:
+            *out_label = "[new]";
+            *out_color = OUTPUT_COLOR_CYAN;
+            snprintf(info_buffer, buffer_size, "%s %s(in %s)%s",
+                    file->filesystem_path,
+                    output_color_code(out, OUTPUT_COLOR_DIM),
+                    file->profile,
+                    output_color_code(out, OUTPUT_COLOR_RESET));
+            break;
+
+        case DIVERGENCE_ORPHANED:
+            *out_label = "[orphaned]";
+            *out_color = OUTPUT_COLOR_RED;
+            snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
+                    file->filesystem_path,
+                    output_color_code(out, OUTPUT_COLOR_DIM),
+                    file->profile,
+                    output_color_code(out, OUTPUT_COLOR_RESET));
+            break;
+
+        case DIVERGENCE_MODE_DIFF:
+            *out_label = "[mode]";
+            *out_color = OUTPUT_COLOR_YELLOW;
+            snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
+                    file->filesystem_path,
+                    output_color_code(out, OUTPUT_COLOR_DIM),
+                    file->profile,
+                    output_color_code(out, OUTPUT_COLOR_RESET));
+            break;
+
+        case DIVERGENCE_TYPE_DIFF:
+            *out_label = "[type]";
+            *out_color = OUTPUT_COLOR_RED;
+            snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
+                    file->filesystem_path,
+                    output_color_code(out, OUTPUT_COLOR_DIM),
+                    file->profile,
+                    output_color_code(out, OUTPUT_COLOR_RESET));
+            break;
+
+        default:
+            *out_label = "[unknown]";
+            *out_color = OUTPUT_COLOR_DIM;
+            snprintf(info_buffer, buffer_size, "%s", file->filesystem_path);
+            break;
+    }
+}
+
+/**
+ * Display a divergence section with files of specific types
+ *
+ * Shows section header, hint, and files (in verbose mode).
+ * Only displays if count > 0.
+ */
+static void display_divergence_section(
+    output_ctx_t *out,
+    const workspace_t *ws,
+    const char *section_title,
+    const char *hint_message,
+    const divergence_type_t *types,
+    size_t type_count,
+    bool verbose
+) {
+    if (!out || !ws || !section_title || !types) {
+        return;
+    }
+
+    /* Count total files for these types */
+    size_t total_count = 0;
+    for (size_t t = 0; t < type_count; t++) {
+        total_count += workspace_count_divergence(ws, types[t]);
+    }
+
+    /* Skip section if no files */
+    if (total_count == 0) {
+        return;
+    }
+
+    /* Display section header with count */
+    output_newline(out);
+    char header[256];
+    snprintf(header, sizeof(header), "%s (%zu file%s)",
+             section_title, total_count, total_count == 1 ? "" : "s");
+    output_section(out, header);
+
+    /* Display hint */
+    if (hint_message) {
+        char *colored_hint = output_colorize(out, OUTPUT_COLOR_DIM, hint_message);
+        if (colored_hint) {
+            output_printf(out, OUTPUT_NORMAL, "%s\n", colored_hint);
+            free(colored_hint);
+        } else {
+            output_info(out, "%s", hint_message);
+        }
+    }
+
+    /* In verbose mode, display individual files */
+    if (verbose) {
+        output_newline(out);
+
+        for (size_t t = 0; t < type_count; t++) {
+            size_t count = 0;
+            const workspace_file_t **files = workspace_get_diverged(ws, types[t], &count);
+
+            if (files) {
+                for (size_t i = 0; i < count; i++) {
+                    const workspace_file_t *file = files[i];
+                    char info[1024];
+                    const char *label = NULL;
+                    output_color_t color = OUTPUT_COLOR_YELLOW;
+
+                    format_diverged_file(out, file, &label, &color, info, sizeof(info));
+                    output_item(out, label, color, info);
+                }
+
+                /* Free the allocated pointer array */
+                free(files);
+            }
+        }
+    }
+}
+
+/**
+ * Display smart hints based on workspace state
+ *
+ * Analyzes divergence patterns and provides context-aware guidance.
+ */
+static void display_smart_hints(
+    output_ctx_t *out,
+    const workspace_t *ws
+) {
+    if (!out || !ws) {
+        return;
+    }
+
+    /* Count divergence types for analysis */
+    size_t modified = workspace_count_divergence(ws, DIVERGENCE_MODIFIED);
+    size_t deleted = workspace_count_divergence(ws, DIVERGENCE_DELETED);
+    size_t mode_diff = workspace_count_divergence(ws, DIVERGENCE_MODE_DIFF);
+    size_t type_diff = workspace_count_divergence(ws, DIVERGENCE_TYPE_DIFF);
+    size_t undeployed = workspace_count_divergence(ws, DIVERGENCE_UNDEPLOYED);
+    size_t untracked = workspace_count_divergence(ws, DIVERGENCE_UNTRACKED);
+    size_t orphaned = workspace_count_divergence(ws, DIVERGENCE_ORPHANED);
+
+    size_t uncommitted_count = modified + deleted + mode_diff + type_diff;
+
+    output_newline(out);
+
+    /* Hint 1: Detect "only permission changes" pattern */
+    if (mode_diff > 0 && uncommitted_count == mode_diff) {
+        char *hint = output_colorize(out, OUTPUT_COLOR_DIM,
+                "Hint: Only permission changes detected - run 'dotta update' to commit them");
+        if (hint) {
+            output_printf(out, OUTPUT_NORMAL, "%s\n", hint);
+            free(hint);
+        } else {
+            output_info(out, "Hint: Only permission changes detected - run 'dotta update' to commit them");
+        }
+    }
+
+    /* Hint 2: Uncommitted changes before sync */
+    else if (uncommitted_count > 0) {
+        char *hint = output_colorize(out, OUTPUT_COLOR_DIM,
+                "Hint: Run 'dotta update' to commit changes before syncing");
+        if (hint) {
+            output_printf(out, OUTPUT_NORMAL, "%s\n", hint);
+            free(hint);
+        } else {
+            output_info(out, "Hint: Run 'dotta update' to commit changes before syncing");
+        }
+    }
+
+    /* Hint 3: Many untracked files - suggest ignore patterns */
+    if (untracked > 10) {
+        char *hint = output_colorize(out, OUTPUT_COLOR_DIM,
+                "Hint: Many untracked files detected - consider updating ignore patterns");
+        if (hint) {
+            output_printf(out, OUTPUT_NORMAL, "%s\n", hint);
+            free(hint);
+        } else {
+            output_info(out, "Hint: Many untracked files detected - consider updating ignore patterns");
+        }
+
+        char *hint2 = output_colorize(out, OUTPUT_COLOR_DIM,
+                "      Run 'dotta ignore edit' to manage ignore patterns");
+        if (hint2) {
+            output_printf(out, OUTPUT_NORMAL, "%s\n", hint2);
+            free(hint2);
+        } else {
+            output_info(out, "      Run 'dotta ignore edit' to manage ignore patterns");
+        }
+    }
+
+    /* Hint 4: Undeployed files */
+    if (undeployed > 0 && uncommitted_count == 0) {
+        char *hint = output_colorize(out, OUTPUT_COLOR_DIM,
+                "Hint: Run 'dotta apply' to deploy files from profiles");
+        if (hint) {
+            output_printf(out, OUTPUT_NORMAL, "%s\n", hint);
+            free(hint);
+        } else {
+            output_info(out, "Hint: Run 'dotta apply' to deploy files from profiles");
+        }
+    }
+
+    /* Hint 5: Orphaned state - suggest validation */
+    if (orphaned > 0) {
+        char *hint = output_colorize(out, OUTPUT_COLOR_DIM,
+                "Hint: Orphaned state detected - run 'dotta profile validate --fix' to resolve");
+        if (hint) {
+            output_printf(out, OUTPUT_NORMAL, "%s\n", hint);
+            free(hint);
+        } else {
+            output_info(out, "Hint: Orphaned state detected - run 'dotta profile validate --fix' to resolve");
+        }
+    }
+}
+
+/**
  * Display workspace status
  *
  * Shows the consistency between profile state, deployment state, and filesystem.
- * Displays counts and details for undeployed, modified, deleted, and orphaned files.
+ * Organized into actionable sections (Git-like structure).
  */
 static void display_workspace_status(
     git_repository *repo,
@@ -128,15 +394,6 @@ static void display_workspace_status(
     /* Get workspace status */
     workspace_status_t ws_status = workspace_get_status(ws);
 
-    /* Count divergence types */
-    size_t undeployed = workspace_count_divergence(ws, DIVERGENCE_UNDEPLOYED);
-    size_t modified = workspace_count_divergence(ws, DIVERGENCE_MODIFIED);
-    size_t deleted = workspace_count_divergence(ws, DIVERGENCE_DELETED);
-    size_t orphaned = workspace_count_divergence(ws, DIVERGENCE_ORPHANED);
-    size_t mode_diff = workspace_count_divergence(ws, DIVERGENCE_MODE_DIFF);
-    size_t type_diff = workspace_count_divergence(ws, DIVERGENCE_TYPE_DIFF);
-    size_t untracked = workspace_count_divergence(ws, DIVERGENCE_UNTRACKED);
-
     /* Only display section if there's something to report */
     if (ws_status != WORKSPACE_CLEAN || verbose) {
         output_newline(out);
@@ -149,176 +406,73 @@ static void display_workspace_status(
                 break;
 
             case WORKSPACE_DIRTY:
-                output_warning(out, "Dirty - has divergence");
-                if (undeployed > 0) {
-                    output_info(out, "  %zu undeployed file%s (in profile, never deployed)",
-                               undeployed, undeployed == 1 ? "" : "s");
-                }
-                if (modified > 0) {
-                    output_info(out, "  %zu modified file%s (deployed, changed on disk)",
-                               modified, modified == 1 ? "" : "s");
-                }
-                if (deleted > 0) {
-                    output_info(out, "  %zu deleted file%s (deployed, removed from disk)",
-                               deleted, deleted == 1 ? "" : "s");
-                }
-                if (untracked > 0) {
-                    output_info(out, "  %zu untracked file%s (new in tracked directories)",
-                               untracked, untracked == 1 ? "" : "s");
-                }
-                if (mode_diff > 0) {
-                    output_info(out, "  %zu file%s with mode differences",
-                               mode_diff, mode_diff == 1 ? "" : "s");
-                }
-                if (type_diff > 0) {
-                    output_info(out, "  %zu file%s with type differences",
-                               type_diff, type_diff == 1 ? "" : "s");
-                }
+                output_warning(out, "Dirty - workspace has divergence");
                 break;
 
             case WORKSPACE_INVALID:
-                output_error(out, "Invalid - has orphaned state entries");
-                if (orphaned > 0) {
-                    output_info(out, "  %zu orphaned state entr%s (state without profile file)",
-                               orphaned, orphaned == 1 ? "y" : "ies");
-                }
+                output_error(out, "Invalid - workspace has orphaned state entries");
                 break;
         }
 
-        /* In verbose mode, show affected files */
-        if (verbose && ws_status != WORKSPACE_CLEAN) {
-            output_newline(out);
-            output_info(out, "Affected files:");
-
-            size_t count = 0;
-            const workspace_file_t *diverged = workspace_get_all_diverged(ws, &count);
-            if (diverged) {
-                for (size_t i = 0; i < count; i++) {
-                    const workspace_file_t *file = &diverged[i];
-                    char info[1024];
-                    const char *label = NULL;
-                    output_color_t color = OUTPUT_COLOR_YELLOW;
-
-                    switch (file->type) {
-                        case DIVERGENCE_UNDEPLOYED:
-                            label = "[undeployed]";
-                            color = OUTPUT_COLOR_CYAN;
-                            snprintf(info, sizeof(info), "%s %s(from %s)%s",
-                                    file->filesystem_path,
-                                    output_color_code(out, OUTPUT_COLOR_DIM),
-                                    file->profile,
-                                    output_color_code(out, OUTPUT_COLOR_RESET));
-                            break;
-                        case DIVERGENCE_MODIFIED:
-                            label = "[modified]";
-                            color = OUTPUT_COLOR_YELLOW;
-                            snprintf(info, sizeof(info), "%s %s(from %s)%s",
-                                    file->filesystem_path,
-                                    output_color_code(out, OUTPUT_COLOR_DIM),
-                                    file->profile,
-                                    output_color_code(out, OUTPUT_COLOR_RESET));
-                            break;
-                        case DIVERGENCE_DELETED:
-                            label = "[deleted]";
-                            color = OUTPUT_COLOR_RED;
-                            snprintf(info, sizeof(info), "%s %s(from %s)%s",
-                                    file->filesystem_path,
-                                    output_color_code(out, OUTPUT_COLOR_DIM),
-                                    file->profile,
-                                    output_color_code(out, OUTPUT_COLOR_RESET));
-                            break;
-                        case DIVERGENCE_UNTRACKED:
-                            label = "[new]";
-                            color = OUTPUT_COLOR_CYAN;
-                            snprintf(info, sizeof(info), "%s %s(in %s)%s",
-                                    file->filesystem_path,
-                                    output_color_code(out, OUTPUT_COLOR_DIM),
-                                    file->profile,
-                                    output_color_code(out, OUTPUT_COLOR_RESET));
-                            break;
-                        case DIVERGENCE_ORPHANED:
-                            label = "[orphaned]";
-                            color = OUTPUT_COLOR_RED;
-                            snprintf(info, sizeof(info), "%s %s(from %s)%s",
-                                    file->filesystem_path,
-                                    output_color_code(out, OUTPUT_COLOR_DIM),
-                                    file->profile,
-                                    output_color_code(out, OUTPUT_COLOR_RESET));
-                            break;
-                        case DIVERGENCE_MODE_DIFF:
-                            label = "[mode]";
-                            color = OUTPUT_COLOR_YELLOW;
-                            snprintf(info, sizeof(info), "%s %s(from %s)%s",
-                                    file->filesystem_path,
-                                    output_color_code(out, OUTPUT_COLOR_DIM),
-                                    file->profile,
-                                    output_color_code(out, OUTPUT_COLOR_RESET));
-                            break;
-                        case DIVERGENCE_TYPE_DIFF:
-                            label = "[type]";
-                            color = OUTPUT_COLOR_RED;
-                            snprintf(info, sizeof(info), "%s %s(from %s)%s",
-                                    file->filesystem_path,
-                                    output_color_code(out, OUTPUT_COLOR_DIM),
-                                    file->profile,
-                                    output_color_code(out, OUTPUT_COLOR_RESET));
-                            break;
-                        default:
-                            continue;
-                    }
-
-                    output_item(out, label, color, info);
-                }
-            }
-        }
-
-        /* Show hints based on what's detected */
+        /* Show sectioned output for dirty/invalid workspace */
         if (ws_status != WORKSPACE_CLEAN) {
-            output_newline(out);
+            /* Section 1: Uncommitted Changes (what 'update' would commit) */
+            divergence_type_t uncommitted_types[] = {
+                DIVERGENCE_MODIFIED,
+                DIVERGENCE_DELETED,
+                DIVERGENCE_MODE_DIFF,
+                DIVERGENCE_TYPE_DIFF
+            };
+            display_divergence_section(
+                out, ws,
+                "Uncommitted changes",
+                "(use \"dotta update\" to commit these changes)",
+                uncommitted_types,
+                sizeof(uncommitted_types) / sizeof(uncommitted_types[0]),
+                verbose
+            );
 
-            if (undeployed > 0) {
-                char *hint = output_colorize(out, OUTPUT_COLOR_DIM,
-                        "Hint: Run 'dotta apply' to deploy undeployed files");
-                if (hint) {
-                    output_printf(out, OUTPUT_NORMAL, "%s\n", hint);
-                    free(hint);
-                } else {
-                    output_info(out, "Hint: Run 'dotta apply' to deploy undeployed files");
-                }
-            }
+            /* Section 2: Undeployed Files (what 'apply' would deploy) */
+            divergence_type_t undeployed_types[] = {
+                DIVERGENCE_UNDEPLOYED
+            };
+            display_divergence_section(
+                out, ws,
+                "Undeployed files",
+                "(use \"dotta apply\" to deploy these files)",
+                undeployed_types,
+                sizeof(undeployed_types) / sizeof(undeployed_types[0]),
+                verbose
+            );
 
-            if (modified > 0 || deleted > 0) {
-                char *hint = output_colorize(out, OUTPUT_COLOR_DIM,
-                        "Hint: Run 'dotta update' to commit local changes");
-                if (hint) {
-                    output_printf(out, OUTPUT_NORMAL, "%s\n", hint);
-                    free(hint);
-                } else {
-                    output_info(out, "Hint: Run 'dotta update' to commit local changes");
-                }
-            }
+            /* Section 3: New Files (in tracked directories) */
+            divergence_type_t new_file_types[] = {
+                DIVERGENCE_UNTRACKED
+            };
+            display_divergence_section(
+                out, ws,
+                "New files",
+                "(use \"dotta update --include-new\" to track these files)",
+                new_file_types,
+                sizeof(new_file_types) / sizeof(new_file_types[0]),
+                verbose
+            );
 
-            if (untracked > 0) {
-                char *hint = output_colorize(out, OUTPUT_COLOR_DIM,
-                        "Hint: Run 'dotta update --include-new' to add new files to profile");
-                if (hint) {
-                    output_printf(out, OUTPUT_NORMAL, "%s\n", hint);
-                    free(hint);
-                } else {
-                    output_info(out, "Hint: Run 'dotta update --include-new' to add new files to profile");
-                }
-            }
+            /* Section 4: Issues (orphaned state) */
+            divergence_type_t issue_types[] = {
+                DIVERGENCE_ORPHANED
+            };
+            display_divergence_section(
+                out, ws,
+                "Issues",
+                "(run \"dotta profile validate --fix\" to resolve)",
+                issue_types,
+                sizeof(issue_types) / sizeof(issue_types[0]),
+                verbose
+            );
 
-            if (orphaned > 0) {
-                char *hint = output_colorize(out, OUTPUT_COLOR_DIM,
-                        "Hint: Orphaned state entries indicate removed profile files");
-                if (hint) {
-                    output_printf(out, OUTPUT_NORMAL, "%s\n", hint);
-                    free(hint);
-                } else {
-                    output_info(out, "Hint: Orphaned state entries indicate removed profile files");
-                }
-            }
+            /* Show smart hints */
+            display_smart_hints(out, ws);
         }
     }
 

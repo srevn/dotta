@@ -99,21 +99,30 @@ workspace_status_t workspace_get_status(const workspace_t *ws);
 /**
  * Get diverged files by category
  *
- * Returns the full diverged array with count of matching entries.
- * The returned array is borrowed and valid until workspace is freed.
+ * Returns a dynamically allocated array of pointers to matching diverged files.
+ * The array contains only files of the specified type.
  *
- * IMPORTANT: The returned array contains ALL diverged files. The count
- * parameter indicates how many entries match the requested type.
- * Callers must filter by checking file->type == type when iterating.
- *
- * This design avoids allocation overhead while providing accurate counts.
+ * The returned pointers reference the workspace's internal data and remain
+ * valid until the workspace is freed. However, the array itself must be freed
+ * by the caller using free().
  *
  * @param ws Workspace (must not be NULL)
  * @param type Divergence type to query
  * @param count Output count of matching entries (must not be NULL)
- * @return Full diverged array (borrowed reference, do not free) or NULL if none match
+ * @return Allocated array of pointers to matching files, or NULL if none match or on error.
+ *         Caller must free() the array (but not the pointed-to entries).
+ *
+ * Example:
+ *   size_t count;
+ *   const workspace_file_t **modified = workspace_get_diverged(ws, DIVERGENCE_MODIFIED, &count);
+ *   if (modified) {
+ *       for (size_t i = 0; i < count; i++) {
+ *           printf("%s\n", modified[i]->filesystem_path);
+ *       }
+ *       free(modified);  // Free the pointer array only
+ *   }
  */
-const workspace_file_t *workspace_get_diverged(
+const workspace_file_t **workspace_get_diverged(
     const workspace_t *ws,
     divergence_type_t type,
     size_t *count

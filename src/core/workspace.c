@@ -43,6 +43,7 @@ struct workspace {
     workspace_file_t *diverged;    /* Array of diverged files */
     size_t diverged_count;
     size_t diverged_capacity;
+    hashmap_t *diverged_index;     /* Maps filesystem_path -> workspace_file_t* (for O(1) lookup) */
 
     /* Status cache */
     workspace_status_t status;
@@ -66,6 +67,13 @@ static error_t *workspace_create_empty(git_repository *repo, workspace_t **out) 
     if (!ws->manifest_index) {
         free(ws);
         return ERROR(ERR_MEMORY, "Failed to create manifest index");
+    }
+
+    ws->diverged_index = hashmap_create(256);  /* Initial capacity */
+    if (!ws->diverged_index) {
+        hashmap_free(ws->manifest_index, NULL);
+        free(ws);
+        return ERROR(ERR_MEMORY, "Failed to create diverged index");
     }
 
     ws->diverged = NULL;
@@ -127,6 +135,15 @@ static error_t *workspace_add_diverged(
         free(entry->storage_path);
         free(entry->profile);
         return ERROR(ERR_MEMORY, "Failed to allocate diverged entry");
+    }
+
+    /* Add to diverged index for O(1) lookup */
+    error_t *err = hashmap_set(ws->diverged_index, entry->filesystem_path, entry);
+    if (err) {
+        free(entry->filesystem_path);
+        free(entry->storage_path);
+        free(entry->profile);
+        return error_wrap(err, "Failed to index diverged entry");
     }
 
     ws->diverged_count++;
@@ -676,7 +693,7 @@ workspace_status_t workspace_get_status(const workspace_t *ws) {
 /**
  * Get diverged files by category
  */
-const workspace_file_t *workspace_get_diverged(
+const workspace_file_t **workspace_get_diverged(
     const workspace_t *ws,
     divergence_type_t type,
     size_t *count
@@ -692,25 +709,37 @@ const workspace_file_t *workspace_get_diverged(
         return NULL;
     }
 
-    /* Single pass: count matching entries */
-    *count = 0;
+    /* First pass: count matching entries */
+    size_t match_count = 0;
     for (size_t i = 0; i < ws->diverged_count; i++) {
         if (ws->diverged[i].type == type) {
-            (*count)++;
+            match_count++;
         }
     }
 
     /* If none found, return NULL */
-    if (*count == 0) {
+    if (match_count == 0) {
+        *count = 0;
         return NULL;
     }
 
-    /* Return full array with accurate count.
-     * NOTE: Caller must filter by checking file->type == type.
-     * This approach avoids allocation overhead and memory management complexity.
-     * The count returned is accurate for the number of matching entries.
-     */
-    return ws->diverged;
+    /* Allocate array of pointers */
+    const workspace_file_t **result = malloc(match_count * sizeof(workspace_file_t *));
+    if (!result) {
+        *count = 0;
+        return NULL;
+    }
+
+    /* Second pass: populate pointer array */
+    size_t idx = 0;
+    for (size_t i = 0; i < ws->diverged_count; i++) {
+        if (ws->diverged[i].type == type) {
+            result[idx++] = &ws->diverged[i];
+        }
+    }
+
+    *count = match_count;
+    return result;
 }
 
 /**
@@ -741,13 +770,14 @@ bool workspace_file_diverged(
         return false;
     }
 
-    for (size_t i = 0; i < ws->diverged_count; i++) {
-        if (strcmp(ws->diverged[i].filesystem_path, filesystem_path) == 0) {
-            if (type) {
-                *type = ws->diverged[i].type;
-            }
-            return true;
+    /* O(1) lookup via hashmap index */
+    workspace_file_t *entry = hashmap_get(ws->diverged_index, filesystem_path);
+
+    if (entry) {
+        if (type) {
+            *type = entry->type;
         }
+        return true;
     }
 
     if (type) {
@@ -834,8 +864,9 @@ void workspace_free(workspace_t *ws) {
     }
     free(ws->diverged);
 
-    /* Free manifest index (values are borrowed from manifest) */
+    /* Free indices (values are borrowed, so pass NULL for value free function) */
     hashmap_free(ws->manifest_index, NULL);
+    hashmap_free(ws->diverged_index, NULL);
 
     /* Free owned state */
     manifest_free(ws->manifest);

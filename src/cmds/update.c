@@ -290,23 +290,75 @@ static error_t *find_modified_and_new_files(
         return error_wrap(err, "Failed to load workspace");
     }
 
-    /* Get all diverged files from single source of truth */
-    size_t count = 0;
-    const workspace_file_t *diverged = workspace_get_all_diverged(ws, &count);
+    /* Process each category of divergence separately */
+    divergence_type_t modification_types[] = {
+        DIVERGENCE_MODIFIED,
+        DIVERGENCE_DELETED,
+        DIVERGENCE_MODE_DIFF,
+        DIVERGENCE_TYPE_DIFF
+    };
 
-    /* Process each diverged file */
-    for (size_t i = 0; i < count; i++) {
-        const workspace_file_t *file = &diverged[i];
+    compare_result_t cmp_results[] = {
+        CMP_DIFFERENT,
+        CMP_MISSING,
+        CMP_MODE_DIFF,
+        CMP_TYPE_DIFF
+    };
 
-        /* Skip undeployed files - these are not modifications */
-        if (file->type == DIVERGENCE_UNDEPLOYED) {
-            continue;
+    /* Process modified/deleted/mode/type changes */
+    for (size_t t = 0; t < 4; t++) {
+        size_t count = 0;
+        const workspace_file_t **files = workspace_get_diverged(ws, modification_types[t], &count);
+
+        for (size_t i = 0; i < count; i++) {
+            const workspace_file_t *file = files[i];
+
+            /* Apply file filter if specified */
+            if (!file_matches_filter(file->filesystem_path, opts)) {
+                continue;
+            }
+
+            /* Find the profile for this file */
+            profile_t *source_profile = NULL;
+            for (size_t j = 0; j < profiles->count; j++) {
+                if (strcmp(profiles->profiles[j].name, file->profile) == 0) {
+                    source_profile = &profiles->profiles[j];
+                    break;
+                }
+            }
+
+            if (!source_profile) {
+                /* Profile not in active set - skip */
+                continue;
+            }
+
+            /* Add to modified list */
+            err = modified_file_list_add(
+                modified,
+                file->filesystem_path,
+                file->storage_path,
+                source_profile,
+                cmp_results[t]
+            );
+
+            if (err) {
+                free(files);
+                workspace_free(ws);
+                modified_file_list_free(modified);
+                new_file_list_free(new_files);
+                return err;
+            }
         }
 
-        /* Skip orphaned files - these are state cleanup issues, not file updates */
-        if (file->type == DIVERGENCE_ORPHANED) {
-            continue;
-        }
+        free(files);  /* Free the allocated pointer array */
+    }
+
+    /* Process untracked (new) files */
+    size_t untracked_count = 0;
+    const workspace_file_t **untracked_files = workspace_get_diverged(ws, DIVERGENCE_UNTRACKED, &untracked_count);
+
+    for (size_t i = 0; i < untracked_count; i++) {
+        const workspace_file_t *file = untracked_files[i];
 
         /* Apply file filter if specified */
         if (!file_matches_filter(file->filesystem_path, opts)) {
@@ -327,54 +379,19 @@ static error_t *find_modified_and_new_files(
             continue;
         }
 
-        /* Handle new (untracked) files separately */
-        if (file->type == DIVERGENCE_UNTRACKED) {
-            err = new_file_list_add(new_files, file->filesystem_path,
-                                   file->storage_path, source_profile);
-            if (err) {
-                workspace_free(ws);
-                modified_file_list_free(modified);
-                new_file_list_free(new_files);
-                return err;
-            }
-            continue;
-        }
-
-        /* Map workspace divergence type to compare result type for compatibility */
-        compare_result_t cmp_result;
-        switch (file->type) {
-            case DIVERGENCE_MODIFIED:
-                cmp_result = CMP_DIFFERENT;
-                break;
-            case DIVERGENCE_DELETED:
-                cmp_result = CMP_MISSING;
-                break;
-            case DIVERGENCE_MODE_DIFF:
-                cmp_result = CMP_MODE_DIFF;
-                break;
-            case DIVERGENCE_TYPE_DIFF:
-                cmp_result = CMP_TYPE_DIFF;
-                break;
-            default:
-                continue;  /* Skip unknown types */
-        }
-
-        /* Add to modified list */
-        err = modified_file_list_add(
-            modified,
-            file->filesystem_path,
-            file->storage_path,
-            source_profile,
-            cmp_result
-        );
-
+        /* Add to new files list */
+        err = new_file_list_add(new_files, file->filesystem_path,
+                               file->storage_path, source_profile);
         if (err) {
+            free(untracked_files);
             workspace_free(ws);
             modified_file_list_free(modified);
             new_file_list_free(new_files);
             return err;
         }
     }
+
+    free(untracked_files);  /* Free the allocated pointer array */
 
     workspace_free(ws);
     *modified_out = modified;

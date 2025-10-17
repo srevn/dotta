@@ -173,7 +173,7 @@ error_t *metadata_add_entry(
 );
 
 /**
- * Get metadata entry for a file
+ * Get metadata entry for a file (const version)
  *
  * @param metadata Metadata collection (must not be NULL)
  * @param storage_path Path in profile (must not be NULL)
@@ -184,6 +184,23 @@ error_t *metadata_get_entry(
     const metadata_t *metadata,
     const char *storage_path,
     const metadata_entry_t **out
+);
+
+/**
+ * Get mutable metadata entry for a file
+ *
+ * Internal helper for modifying metadata entries. Should only be used when
+ * you own the metadata structure and need to modify the entry.
+ *
+ * @param metadata Metadata collection (must not be NULL)
+ * @param storage_path Path in profile (must not be NULL)
+ * @param out Entry pointer (must not be NULL, borrowed reference - do not free)
+ * @return Error or NULL on success (not found returns ERR_NOT_FOUND)
+ */
+error_t *metadata_get_entry_mut(
+    metadata_t *metadata,
+    const char *storage_path,
+    metadata_entry_t **out
 );
 
 /**

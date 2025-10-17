@@ -186,6 +186,77 @@ static ssize_t find_entry_index(const metadata_t *metadata, const char *storage_
 }
 
 /**
+ * Safely rebuild hashmap index after array reallocation
+ *
+ * After realloc, all pointers in the hashmap are invalid and must be updated.
+ * If rebuild fails, the hashmap is freed and set to NULL, causing fallback to
+ * linear search. This ensures the data structure remains consistent even if
+ * hashmap rebuild fails.
+ *
+ * @param metadata Metadata structure (must not be NULL)
+ * @param entries Array of entries to index
+ * @param count Number of entries
+ * @return Error or NULL on success (non-fatal - sets index to NULL on failure)
+ */
+static void rebuild_hashmap_index(metadata_t *metadata, metadata_entry_t *entries, size_t count) {
+    if (!metadata || !metadata->index) {
+        return;
+    }
+
+    /* Clear existing index (all pointers are stale after realloc) */
+    hashmap_clear(metadata->index, NULL);
+
+    /* Rebuild index with new pointers */
+    for (size_t i = 0; i < count; i++) {
+        error_t *err = hashmap_set(metadata->index,
+                                   entries[i].storage_path,
+                                   &entries[i]);
+        if (err) {
+            /* Rebuild failed - free hashmap and set to NULL
+             * This causes fallback to linear search (slower but correct) */
+            hashmap_free(metadata->index, NULL);
+            metadata->index = NULL;
+            error_free(err);
+            return;
+        }
+    }
+}
+
+/**
+ * Safely rebuild directory hashmap index after array reallocation
+ *
+ * Similar to rebuild_hashmap_index but for directory entries.
+ *
+ * @param metadata Metadata structure (must not be NULL)
+ * @param directories Array of directory entries to index
+ * @param count Number of directory entries
+ */
+static void rebuild_directory_hashmap_index(metadata_t *metadata,
+                                           metadata_directory_entry_t *directories,
+                                           size_t count) {
+    if (!metadata || !metadata->directory_index) {
+        return;
+    }
+
+    /* Clear existing index (all pointers are stale after realloc) */
+    hashmap_clear(metadata->directory_index, NULL);
+
+    /* Rebuild index with new pointers */
+    for (size_t i = 0; i < count; i++) {
+        error_t *err = hashmap_set(metadata->directory_index,
+                                   directories[i].filesystem_path,
+                                   &directories[i]);
+        if (err) {
+            /* Rebuild failed - free hashmap and set to NULL */
+            hashmap_free(metadata->directory_index, NULL);
+            metadata->directory_index = NULL;
+            error_free(err);
+            return;
+        }
+    }
+}
+
+/**
  * Grow metadata entries array if needed
  */
 static error_t *ensure_capacity(metadata_t *metadata) {
@@ -193,6 +264,11 @@ static error_t *ensure_capacity(metadata_t *metadata) {
 
     if (metadata->count < metadata->capacity) {
         return NULL; /* No need to grow */
+    }
+
+    /* Check for overflow before doubling capacity */
+    if (metadata->capacity > SIZE_MAX / 2) {
+        return ERROR(ERR_MEMORY, "Metadata capacity would overflow");
     }
 
     size_t new_capacity = metadata->capacity * 2;
@@ -208,21 +284,9 @@ static error_t *ensure_capacity(metadata_t *metadata) {
     metadata->entries = new_entries;
     metadata->capacity = new_capacity;
 
-    /* Rebuild hashmap index since array pointers changed after realloc */
-    if (metadata->index) {
-        hashmap_clear(metadata->index, NULL);
-        for (size_t i = 0; i < metadata->count; i++) {
-            error_t *err = hashmap_set(metadata->index,
-                                       metadata->entries[i].storage_path,
-                                       &metadata->entries[i]);
-            if (err) {
-                /* This is bad, but we must not leave the index corrupted.
-                 * The entries array was already reallocated, so we can't
-                 * fully recover, but we must propagate the error. */
-                return error_wrap(err, "Failed to rebuild metadata index after capacity change");
-            }
-        }
-    }
+    /* Rebuild hashmap index since array pointers changed after realloc
+     * Non-fatal: if rebuild fails, index is set to NULL and we fall back to linear search */
+    rebuild_hashmap_index(metadata, metadata->entries, metadata->count);
 
     return NULL;
 }
@@ -307,44 +371,86 @@ error_t *metadata_add_entry(
         return err;
     }
 
-    /* Now get the entry we just added/updated so we can set owner/group */
-    const metadata_entry_t *const_entry = NULL;
-    err = metadata_get_entry(metadata, source->storage_path, &const_entry);
+    /* Now get the entry we just added/updated so we can set owner/group
+     * Use mutable getter since we need to modify the entry */
+    metadata_entry_t *entry = NULL;
+    err = metadata_get_entry_mut(metadata, source->storage_path, &entry);
     if (err) {
         return error_wrap(err, "Failed to get metadata entry after adding");
     }
 
-    /* Cast away const - safe since we own the metadata */
-    metadata_entry_t *entry = (metadata_entry_t *)const_entry;
+    /* Allocate new owner/group strings FIRST (fail-fast before modifying entry)
+     * This prevents memory leaks on partial allocation failure */
+    char *new_owner = NULL;
+    char *new_group = NULL;
 
-    /* Copy owner if present */
     if (source->owner) {
-        free(entry->owner);  /* Free existing if any */
-        entry->owner = strdup(source->owner);
-        if (!entry->owner) {
+        new_owner = strdup(source->owner);
+        if (!new_owner) {
             return ERROR(ERR_MEMORY, "Failed to duplicate owner string");
         }
     }
 
-    /* Copy group if present */
     if (source->group) {
-        free(entry->group);  /* Free existing if any */
-        entry->group = strdup(source->group);
-        if (!entry->group) {
+        new_group = strdup(source->group);
+        if (!new_group) {
+            free(new_owner);  /* Clean up owner on failure */
             return ERROR(ERR_MEMORY, "Failed to duplicate group string");
         }
     }
+
+    /* All allocations succeeded - now update entry (no failure paths beyond here) */
+    free(entry->owner);
+    free(entry->group);
+    entry->owner = new_owner;
+    entry->group = new_group;
 
     return NULL;
 }
 
 /**
- * Get metadata entry
+ * Get metadata entry (const version)
  */
 error_t *metadata_get_entry(
     const metadata_t *metadata,
     const char *storage_path,
     const metadata_entry_t **out
+) {
+    CHECK_NULL(metadata);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(out);
+
+    /* Use hashmap for O(1) lookup */
+    if (metadata->index) {
+        metadata_entry_t *entry = hashmap_get(metadata->index, storage_path);
+        if (!entry) {
+            return ERROR(ERR_NOT_FOUND, "Metadata entry not found: %s", storage_path);
+        }
+        *out = entry;
+        return NULL;
+    }
+
+    /* Fallback to linear search if no index */
+    ssize_t index = find_entry_index(metadata, storage_path);
+
+    if (index < 0) {
+        return ERROR(ERR_NOT_FOUND, "Metadata entry not found: %s", storage_path);
+    }
+
+    *out = &metadata->entries[index];
+    return NULL;
+}
+
+/**
+ * Get mutable metadata entry
+ *
+ * Internal helper that returns a mutable pointer for modifying entries.
+ * Implements the same logic as metadata_get_entry but returns non-const.
+ */
+error_t *metadata_get_entry_mut(
+    metadata_t *metadata,
+    const char *storage_path,
+    metadata_entry_t **out
 ) {
     CHECK_NULL(metadata);
     CHECK_NULL(storage_path);
@@ -409,21 +515,9 @@ error_t *metadata_remove_entry(
 
     metadata->count--;
 
-    /* Rebuild hashmap index since pointers changed */
-    if (metadata->index) {
-        hashmap_clear(metadata->index, NULL);
-        for (size_t i = 0; i < metadata->count; i++) {
-            error_t *err = hashmap_set(metadata->index,
-                                       metadata->entries[i].storage_path,
-                                       &metadata->entries[i]);
-            if (err) {
-                /* This is bad, but we must not leave the index corrupted.
-                 * The entry was already removed from the array, so we can't
-                 * fully recover, but we must propagate the error. */
-                return error_wrap(err, "Failed to rebuild metadata index after removal");
-            }
-        }
-    }
+    /* Rebuild hashmap index since pointers changed after memmove
+     * Non-fatal: if rebuild fails, index is set to NULL and we fall back to linear search */
+    rebuild_hashmap_index(metadata, metadata->entries, metadata->count);
 
     return NULL;
 }
@@ -612,8 +706,24 @@ static error_t *metadata_to_json(const metadata_t *metadata, buffer_t **out) {
 
         /* Add added_at timestamp */
         char time_str[64];
-        struct tm *tm_info = gmtime(&dir_entry->added_at);
-        strftime(time_str, sizeof(time_str), "%Y-%m-%dT%H:%M:%SZ", tm_info);
+        struct tm tm_info;
+
+        /* Use thread-safe gmtime_r instead of gmtime */
+        if (gmtime_r(&dir_entry->added_at, &tm_info) == NULL) {
+            cJSON_Delete(dir_obj);
+            cJSON_Delete(tracked_dirs);
+            err = ERROR(ERR_INTERNAL, "Failed to convert timestamp to UTC");
+            goto cleanup;
+        }
+
+        /* Format timestamp - validate return value */
+        if (strftime(time_str, sizeof(time_str), "%Y-%m-%dT%H:%M:%SZ", &tm_info) == 0) {
+            cJSON_Delete(dir_obj);
+            cJSON_Delete(tracked_dirs);
+            err = ERROR(ERR_INTERNAL, "Failed to format timestamp");
+            goto cleanup;
+        }
+
         if (!cJSON_AddStringToObject(dir_obj, "added_at", time_str)) {
             cJSON_Delete(dir_obj);
             cJSON_Delete(tracked_dirs);
@@ -697,6 +807,49 @@ cleanup:
 }
 
 /**
+ * Portable replacement for timegm() (which is not POSIX standard)
+ *
+ * Converts a struct tm in UTC to time_t. Uses mktime() with timezone manipulation
+ * to achieve the same result as timegm() in a portable way.
+ *
+ * @param tm Time structure in UTC (must not be NULL)
+ * @return time_t value, or (time_t)-1 on error
+ */
+static time_t portable_timegm(struct tm *tm) {
+    if (!tm) {
+        return (time_t)-1;
+    }
+
+    /* Save original timezone */
+    char *tz = getenv("TZ");
+    char *tz_copy = NULL;
+    if (tz) {
+        tz_copy = strdup(tz);
+        if (!tz_copy) {
+            return (time_t)-1;  /* Memory allocation failed */
+        }
+    }
+
+    /* Set timezone to UTC */
+    setenv("TZ", "UTC", 1);
+    tzset();
+
+    /* Convert using mktime (now operating in UTC context) */
+    time_t result = mktime(tm);
+
+    /* Restore original timezone */
+    if (tz_copy) {
+        setenv("TZ", tz_copy, 1);
+        free(tz_copy);
+    } else {
+        unsetenv("TZ");
+    }
+    tzset();
+
+    return result;
+}
+
+/**
  * Parse metadata from JSON
  */
 static error_t *metadata_from_json(const char *json_str, metadata_t **out) {
@@ -777,17 +930,15 @@ static error_t *metadata_from_json(const char *json_str, metadata_t **out) {
             return error_wrap(err, "Failed to add metadata entry for: %s", storage_path);
         }
 
-        /* Get the entry we just added so we can set owner/group */
-        const metadata_entry_t *const_entry = NULL;
-        err = metadata_get_entry(metadata, storage_path, &const_entry);
+        /* Get the entry we just added so we can set owner/group
+         * Use mutable getter since we need to modify the entry */
+        metadata_entry_t *entry = NULL;
+        err = metadata_get_entry_mut(metadata, storage_path, &entry);
         if (err) {
             metadata_free(metadata);
             cJSON_Delete(root);
             return error_wrap(err, "Failed to get metadata entry for: %s", storage_path);
         }
-
-        /* Cast away const - safe since we own the metadata */
-        metadata_entry_t *entry = (metadata_entry_t *)const_entry;
 
         /* Parse optional owner (only present for root/ prefix files) */
         cJSON *owner_obj = cJSON_GetObjectItem(file_obj, "owner");
@@ -859,7 +1010,14 @@ static error_t *metadata_from_json(const char *json_str, metadata_t **out) {
             cJSON_Delete(root);
             return ERROR(ERR_INVALID_ARG, "Invalid timestamp format in directory entry");
         }
-        time_t added_at = timegm(&tm_info);
+
+        /* Convert UTC time to time_t using portable function */
+        time_t added_at = portable_timegm(&tm_info);
+        if (added_at == (time_t)-1) {
+            metadata_free(metadata);
+            cJSON_Delete(root);
+            return ERROR(ERR_INVALID_ARG, "Invalid timestamp value in directory entry");
+        }
 
         /* Parse mode (required in v2 with directory metadata) */
         cJSON *mode_obj = cJSON_GetObjectItem(dir_obj, "mode");
@@ -1443,6 +1601,11 @@ error_t *metadata_add_tracked_directory(
 
     /* Add new entry - grow array if needed */
     if (metadata->directory_count >= metadata->directory_capacity) {
+        /* Check for overflow before doubling capacity */
+        if (metadata->directory_capacity > SIZE_MAX / 2) {
+            return ERROR(ERR_MEMORY, "Directory capacity would overflow");
+        }
+
         size_t new_capacity = metadata->directory_capacity * 2;
         metadata_directory_entry_t *new_dirs = realloc(
             metadata->directories,
@@ -1456,18 +1619,9 @@ error_t *metadata_add_tracked_directory(
         metadata->directories = new_dirs;
         metadata->directory_capacity = new_capacity;
 
-        /* Rebuild hashmap index since array pointers changed after realloc */
-        if (metadata->directory_index) {
-            hashmap_clear(metadata->directory_index, NULL);
-            for (size_t i = 0; i < metadata->directory_count; i++) {
-                error_t *err = hashmap_set(metadata->directory_index,
-                                           metadata->directories[i].filesystem_path,
-                                           &metadata->directories[i]);
-                if (err) {
-                    return error_wrap(err, "Failed to rebuild directory index after capacity change");
-                }
-            }
-        }
+        /* Rebuild hashmap index since array pointers changed after realloc
+         * Non-fatal: if rebuild fails, index is set to NULL and we fall back to linear search */
+        rebuild_directory_hashmap_index(metadata, metadata->directories, metadata->directory_count);
     }
 
     /* Allocate and populate new entry */
@@ -1572,18 +1726,9 @@ error_t *metadata_remove_tracked_directory(
 
     metadata->directory_count--;
 
-    /* Rebuild hashmap index since pointers changed */
-    if (metadata->directory_index) {
-        hashmap_clear(metadata->directory_index, NULL);
-        for (size_t i = 0; i < metadata->directory_count; i++) {
-            error_t *err = hashmap_set(metadata->directory_index,
-                                       metadata->directories[i].filesystem_path,
-                                       &metadata->directories[i]);
-            if (err) {
-                return error_wrap(err, "Failed to rebuild directory index after removal");
-            }
-        }
-    }
+    /* Rebuild hashmap index since pointers changed after memmove
+     * Non-fatal: if rebuild fails, index is set to NULL and we fall back to linear search */
+    rebuild_directory_hashmap_index(metadata, metadata->directories, metadata->directory_count);
 
     return NULL;
 }

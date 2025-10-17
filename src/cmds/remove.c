@@ -71,7 +71,8 @@ static error_t *resolve_paths_to_remove(
     size_t path_count,
     string_array_t **storage_paths_out,
     string_array_t **filesystem_paths_out,
-    const cmd_remove_options_t *opts
+    const cmd_remove_options_t *opts,
+    output_ctx_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile_name);
@@ -80,56 +81,49 @@ static error_t *resolve_paths_to_remove(
     CHECK_NULL(filesystem_paths_out);
     CHECK_NULL(opts);
 
+    /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
+    string_array_t *storage_paths = NULL;
+    string_array_t *filesystem_paths = NULL;
+    profile_t *profile = NULL;
+    string_array_t *profile_files = NULL;
     hashmap_t *profile_files_map = NULL;
 
-    string_array_t *storage_paths = string_array_create();
-    string_array_t *filesystem_paths = string_array_create();
+    /* Allocate arrays */
+    storage_paths = string_array_create();
+    filesystem_paths = string_array_create();
     if (!storage_paths || !filesystem_paths) {
-        string_array_free(storage_paths);
-        string_array_free(filesystem_paths);
-        return ERROR(ERR_MEMORY, "Failed to allocate path arrays");
+        err = ERROR(ERR_MEMORY, "Failed to allocate path arrays");
+        goto cleanup;
     }
 
     /* Load profile to check file existence */
-    profile_t *profile = NULL;
     err = profile_load(repo, profile_name, &profile);
     if (err) {
-        string_array_free(storage_paths);
-        string_array_free(filesystem_paths);
-        return error_wrap(err, "Failed to load profile '%s'", profile_name);
+        err = error_wrap(err, "Failed to load profile '%s'", profile_name);
+        goto cleanup;
     }
 
     /* Get list of files in profile */
-    string_array_t *profile_files = NULL;
     err = profile_list_files(repo, profile, &profile_files);
     if (err) {
-        profile_free(profile);
-        string_array_free(storage_paths);
-        string_array_free(filesystem_paths);
-        return error_wrap(err, "Failed to list files in profile");
+        err = error_wrap(err, "Failed to list files in profile");
+        goto cleanup;
     }
 
     /* Build hashmap index for O(1) lookups */
     profile_files_map = hashmap_create(string_array_size(profile_files));
     if (!profile_files_map) {
-        string_array_free(profile_files);
-        profile_free(profile);
-        string_array_free(storage_paths);
-        string_array_free(filesystem_paths);
-        return ERROR(ERR_MEMORY, "Failed to create profile files index");
+        err = ERROR(ERR_MEMORY, "Failed to create profile files index");
+        goto cleanup;
     }
 
     for (size_t i = 0; i < string_array_size(profile_files); i++) {
         const char *file = string_array_get(profile_files, i);
         err = hashmap_set(profile_files_map, file, (void *)1);  /* Dummy value */
         if (err) {
-            hashmap_free(profile_files_map, NULL);
-            string_array_free(profile_files);
-            profile_free(profile);
-            string_array_free(storage_paths);
-            string_array_free(filesystem_paths);
-            return error_wrap(err, "Failed to index profile files");
+            err = error_wrap(err, "Failed to index profile files");
+            goto cleanup;
         }
     }
 
@@ -150,12 +144,8 @@ static error_t *resolve_paths_to_remove(
             err = path_to_storage(canonical, &storage_path, &prefix);
             if (err) {
                 free(canonical);
-                hashmap_free(profile_files_map, NULL);
-                string_array_free(profile_files);
-                profile_free(profile);
-                string_array_free(storage_paths);
-                string_array_free(filesystem_paths);
-                return error_wrap(err, "Failed to convert filesystem path '%s'", input_path);
+                err = error_wrap(err, "Failed to convert filesystem path '%s'", input_path);
+                goto cleanup;
             }
         } else {
             /* Attempt 2: Treat as storage path directly */
@@ -178,19 +168,15 @@ static error_t *resolve_paths_to_remove(
             } else {
                 /* Neither filesystem nor storage path */
                 if (!opts->force) {
-                    hashmap_free(profile_files_map, NULL);
-                    string_array_free(profile_files);
-                    profile_free(profile);
-                    string_array_free(storage_paths);
-                    string_array_free(filesystem_paths);
-                    return ERROR(ERR_INVALID_ARG,
+                    err = ERROR(ERR_INVALID_ARG,
                                 "Path '%s' is neither a valid filesystem path nor storage path\n"
                                 "Hint: Storage paths must start with 'home/' or 'root/'",
                                 input_path);
+                    goto cleanup;
                 }
                 /* With --force, skip this path */
-                if (opts->verbose) {
-                    fprintf(stderr, "Warning: Skipping invalid path '%s'\n", input_path);
+                if (opts->verbose && out) {
+                    output_warning(out, "Skipping invalid path '%s'", input_path);
                 }
                 continue;
             }
@@ -223,12 +209,8 @@ static error_t *resolve_paths_to_remove(
             if (err) {
                 free(storage_path);
                 free(canonical);
-                hashmap_free(profile_files_map, NULL);
-                string_array_free(profile_files);
-                profile_free(profile);
-                string_array_free(storage_paths);
-                string_array_free(filesystem_paths);
-                return error_wrap(err, "Failed to track path for removal");
+                err = error_wrap(err, "Failed to track path for removal");
+                goto cleanup;
             }
 
             matches_found++;
@@ -251,9 +233,9 @@ static error_t *resolve_paths_to_remove(
                     char *file_fs_path = NULL;
                     err = path_from_storage(profile_file, &file_fs_path);
                     if (err) {
-                        if (opts->verbose || !opts->force) {
-                            fprintf(stderr, "Warning: Failed to resolve filesystem path for '%s': %s\n",
-                                   profile_file, error_message(err));
+                        if ((opts->verbose || !opts->force) && out) {
+                            output_warning(out, "Failed to resolve filesystem path for '%s': %s",
+                                          profile_file, error_message(err));
                         }
                         error_free(err);
                         err = NULL;
@@ -270,12 +252,8 @@ static error_t *resolve_paths_to_remove(
                     if (err) {
                         free(storage_path);
                         free(canonical);
-                        hashmap_free(profile_files_map, NULL);
-                        string_array_free(profile_files);
-                        profile_free(profile);
-                        string_array_free(storage_paths);
-                        string_array_free(filesystem_paths);
-                        return error_wrap(err, "Failed to track path for removal");
+                        err = error_wrap(err, "Failed to track path for removal");
+                        goto cleanup;
                     }
 
                     matches_found++;
@@ -287,20 +265,15 @@ static error_t *resolve_paths_to_remove(
             if (!opts->force) {
                 free(storage_path);
                 free(canonical);
-                hashmap_free(profile_files_map, NULL);
-                string_array_free(profile_files);
-                profile_free(profile);
-                string_array_free(storage_paths);
-                string_array_free(filesystem_paths);
-                return ERROR(ERR_NOT_FOUND,
+                err = ERROR(ERR_NOT_FOUND,
                             "File '%s' not found in profile '%s'\n"
                             "Hint: Use 'dotta list --profile %s' to see tracked files",
                             storage_path, profile_name, profile_name);
+                goto cleanup;
             }
             /* With --force, warn and skip */
-            if (opts->verbose) {
-                fprintf(stderr, "Warning: File '%s' not found in profile, skipping\n",
-                       storage_path);
+            if (opts->verbose && out) {
+                output_warning(out, "File '%s' not found in profile, skipping", storage_path);
             }
         }
 
@@ -308,21 +281,28 @@ static error_t *resolve_paths_to_remove(
         free(canonical);
     }
 
-    hashmap_free(profile_files_map, NULL);
-    string_array_free(profile_files);
-    profile_free(profile);
-
     /* Check if we found any files */
     if (string_array_size(storage_paths) == 0) {
-        string_array_free(storage_paths);
-        string_array_free(filesystem_paths);
-        return ERROR(ERR_NOT_FOUND,
+        err = ERROR(ERR_NOT_FOUND,
                     "No files found to remove from profile '%s'", profile_name);
+        goto cleanup;
     }
 
+    /* Success - transfer ownership to caller */
     *storage_paths_out = storage_paths;
     *filesystem_paths_out = filesystem_paths;
-    return NULL;
+    storage_paths = NULL;      /* Prevent cleanup */
+    filesystem_paths = NULL;   /* Prevent cleanup */
+
+cleanup:
+    /* Free all resources */
+    if (profile_files_map) hashmap_free(profile_files_map, NULL);
+    if (profile_files) string_array_free(profile_files);
+    if (profile) profile_free(profile);
+    if (storage_paths) string_array_free(storage_paths);
+    if (filesystem_paths) string_array_free(filesystem_paths);
+
+    return err;
 }
 
 /**
@@ -331,7 +311,8 @@ static error_t *resolve_paths_to_remove(
 static error_t *remove_file_from_worktree(
     worktree_handle_t *wt,
     const char *storage_path,
-    const cmd_remove_options_t *opts
+    const cmd_remove_options_t *opts,
+    output_ctx_t *out
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(storage_path);
@@ -370,16 +351,18 @@ static error_t *remove_file_from_worktree(
 
     int git_err = git_index_remove_bypath(index, storage_path);
     if (git_err < 0) {
+        git_index_free(index);
         return error_from_git(git_err);
     }
 
     git_err = git_index_write(index);
+    git_index_free(index);
     if (git_err < 0) {
         return error_from_git(git_err);
     }
 
-    if (opts->verbose) {
-        printf("Removed: %s\n", storage_path);
+    if (opts->verbose && out) {
+        output_info(out, "Removed: %s", storage_path);
     }
 
     return NULL;
@@ -647,9 +630,12 @@ static bool confirm_profile_deletion(
     const char *profile_name,
     size_t file_count,
     bool is_auto_detected,
-    const cmd_remove_options_t *opts
+    const cmd_remove_options_t *opts,
+    const dotta_config_t *config,
+    output_ctx_t *out
 ) {
     CHECK_NULL(profile_name);
+    CHECK_NULL(out);
 
     /* Skip confirmation if --force */
     if (opts->force) {
@@ -658,17 +644,17 @@ static bool confirm_profile_deletion(
 
     /* Extra warning for auto-detected profiles */
     if (is_auto_detected) {
-        printf("WARNING: '%s' is an auto-detected profile.\n", profile_name);
+        output_warning(out, "'%s' is an auto-detected profile", profile_name);
     }
 
-    printf("WARNING: This will delete profile '%s' (%zu file%s).\n",
-           profile_name, file_count, file_count == 1 ? "" : "s");
-    printf("         Deployed files will remain on filesystem.\n");
-    printf("         Run 'dotta apply' to remove them.\n");
+    output_newline(out);
+    output_warning(out, "This will delete profile '%s' (%zu file%s)",
+                  profile_name, file_count, file_count == 1 ? "" : "s");
+    output_info(out, "         Deployed files will remain on filesystem.");
+    output_info(out, "         Run 'dotta apply' to remove them.");
+    output_newline(out);
 
-    output_ctx_t *out = output_create();
-    bool confirmed = output_confirm(out, "Continue?", false);
-    output_free(out);
+    bool confirmed = output_confirm_destructive(out, config, "Continue?", opts->force);
 
     return confirmed;
 }
@@ -702,6 +688,7 @@ static error_t *create_removal_commit(
 
     git_oid tree_oid;
     int git_err = git_index_write_tree(&tree_oid, index);
+    git_index_free(index);
     if (git_err < 0) {
         return error_from_git(git_err);
     }
@@ -757,7 +744,8 @@ static error_t *create_removal_commit(
 static error_t *cleanup_metadata(
     worktree_handle_t *wt,
     const string_array_t *removed_storage_paths,
-    bool verbose
+    const cmd_remove_options_t *opts,
+    output_ctx_t *out
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(removed_storage_paths);
@@ -803,8 +791,8 @@ static error_t *cleanup_metadata(
 
             removed_count++;
 
-            if (verbose) {
-                printf("Removed metadata: %s\n", storage_path);
+            if (opts->verbose && out) {
+                output_info(out, "Removed metadata: %s", storage_path);
             }
         }
     }
@@ -826,16 +814,18 @@ static error_t *cleanup_metadata(
 
     int git_err = git_index_add_bypath(index, METADATA_FILE_PATH);
     if (git_err < 0) {
+        git_index_free(index);
         return error_from_git(git_err);
     }
 
     git_err = git_index_write(index);
+    git_index_free(index);
     if (git_err < 0) {
         return error_from_git(git_err);
     }
 
-    if (verbose && removed_count > 0) {
-        printf("Cleaned up metadata for %zu file(s)\n", removed_count);
+    if (opts->verbose && out && removed_count > 0) {
+        output_info(out, "Cleaned up metadata for %zu file(s)", removed_count);
     }
 
     return NULL;
@@ -853,11 +843,21 @@ static error_t *remove_files_from_profile(
     CHECK_NULL(opts);
     CHECK_NULL(removed_count_out);
 
+    /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
+    dotta_config_t *config = NULL;
+    output_ctx_t *out = NULL;
+    string_array_t *storage_paths = NULL;
+    string_array_t *filesystem_paths = NULL;
+    string_array_t **other_profiles = NULL;
+    size_t multi_profile_count = 0;
+    char *repo_dir = NULL;
+    hook_context_t *hook_ctx = NULL;
+    worktree_handle_t *wt = NULL;
+
     *removed_count_out = 0;
 
     /* Load configuration */
-    dotta_config_t *config = NULL;
     err = config_load(NULL, &config);
     if (err) {
         /* Non-fatal: continue without config */
@@ -866,21 +866,27 @@ static error_t *remove_files_from_profile(
         config = config_create_default();
     }
 
+    /* Create output context from config */
+    out = output_create_from_config(config);
+    if (!out) {
+        err = ERROR(ERR_MEMORY, "Failed to create output context");
+        goto cleanup;
+    }
+
+    /* CLI flags override config */
+    if (opts->verbose) {
+        output_set_verbosity(out, OUTPUT_VERBOSE);
+    }
+
     /* Resolve paths */
-    string_array_t *storage_paths = NULL;
-    string_array_t *filesystem_paths = NULL;
     err = resolve_paths_to_remove(repo, opts->profile, opts->paths, opts->path_count,
-                                   &storage_paths, &filesystem_paths, opts);
+                                   &storage_paths, &filesystem_paths, opts, out);
     if (err) {
-        config_free(config);
-        return err;
+        goto cleanup;
     }
 
     /* Analyze multi-profile conflicts (critical safety check) */
-    string_array_t **other_profiles = NULL;
-    size_t multi_profile_count = 0;
     bool has_deployed_from_other = false;
-
     err = analyze_multi_profile_conflicts(
         repo,
         storage_paths,
@@ -892,14 +898,10 @@ static error_t *remove_files_from_profile(
     );
 
     if (err) {
-        string_array_free(storage_paths);
-        string_array_free(filesystem_paths);
-        config_free(config);
-        return err;
+        goto cleanup;
     }
 
     /* Display multi-profile warnings BEFORE any operation */
-    output_ctx_t *out = output_create_from_config(config);
     display_multi_profile_warnings(
         out,
         filesystem_paths,
@@ -912,50 +914,36 @@ static error_t *remove_files_from_profile(
 
     /* Dry run - just show what would be removed */
     if (opts->dry_run) {
-        printf("Would remove from profile '%s':\n", opts->profile);
+        output_printf(out, OUTPUT_NORMAL, "Would remove from profile '%s':\n", opts->profile);
         for (size_t i = 0; i < string_array_size(storage_paths); i++) {
-            printf("  - %s\n", string_array_get(storage_paths, i));
+            output_printf(out, OUTPUT_NORMAL, "  - %s\n", string_array_get(storage_paths, i));
         }
-        printf("\nTotal: %zu file%s would be removed from profile\n",
-               string_array_size(storage_paths),
-               string_array_size(storage_paths) == 1 ? "" : "s");
-        printf("(Filesystem files would remain until 'dotta apply')\n");
+        output_printf(out, OUTPUT_NORMAL, "\nTotal: %zu file%s would be removed from profile\n",
+                     string_array_size(storage_paths),
+                     string_array_size(storage_paths) == 1 ? "" : "s");
+        output_printf(out, OUTPUT_NORMAL, "(Filesystem files would remain until 'dotta apply')\n");
 
-        free_multi_profile_tracking(other_profiles, string_array_size(storage_paths));
-        string_array_free(storage_paths);
-        string_array_free(filesystem_paths);
-        config_free(config);
-        output_free(out);
-        return NULL;
+        goto cleanup;  /* err is NULL, will return success */
     }
 
     /* Confirm operation */
     if (!confirm_removal(storage_paths, opts, config)) {
-        printf("Cancelled\n");
-        free_multi_profile_tracking(other_profiles, string_array_size(storage_paths));
-        string_array_free(storage_paths);
-        string_array_free(filesystem_paths);
-        config_free(config);
-        output_free(out);
-        return NULL;
+        output_printf(out, OUTPUT_NORMAL, "Cancelled\n");
+        goto cleanup;  /* err is NULL, will return success */
     }
 
-    /* Cleanup multi-profile tracking and output context */
+    /* Cleanup multi-profile tracking - done with it */
     free_multi_profile_tracking(other_profiles, string_array_size(storage_paths));
-    output_free(out);
+    other_profiles = NULL;
 
     /* Get repository directory for hooks */
-    char *repo_dir = NULL;
     err = config_get_repo_dir(config, &repo_dir);
     if (err) {
-        string_array_free(storage_paths);
-        string_array_free(filesystem_paths);
-        config_free(config);
-        return err;
+        goto cleanup;
     }
 
     /* Execute pre-remove hook */
-    hook_context_t *hook_ctx = hook_context_create(repo_dir, "remove", opts->profile);
+    hook_ctx = hook_context_create(repo_dir, "remove", opts->profile);
     if (hook_ctx) {
         /* Add paths to hook context */
         hook_context_add_files(hook_ctx,
@@ -967,42 +955,28 @@ static error_t *remove_files_from_profile(
 
         if (err) {
             /* Hook failed - abort operation */
-            if (hook_result && hook_result->output && hook_result->output[0]) {
-                fprintf(stderr, "Hook output:\n%s\n", hook_result->output);
+            if (hook_result && hook_result->output && hook_result->output[0] && out) {
+                output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
             }
             hook_result_free(hook_result);
-            hook_context_free(hook_ctx);
-            free(repo_dir);
-            string_array_free(storage_paths);
-            string_array_free(filesystem_paths);
-            config_free(config);
-            return error_wrap(err, "Pre-remove hook failed");
+            err = error_wrap(err, "Pre-remove hook failed");
+            goto cleanup;
         }
         hook_result_free(hook_result);
     }
 
     /* Create temporary worktree */
-    worktree_handle_t *wt = NULL;
     err = worktree_create_temp(repo, &wt);
     if (err) {
-        hook_context_free(hook_ctx);
-        free(repo_dir);
-        string_array_free(storage_paths);
-        string_array_free(filesystem_paths);
-        config_free(config);
-        return error_wrap(err, "Failed to create temporary worktree");
+        err = error_wrap(err, "Failed to create temporary worktree");
+        goto cleanup;
     }
 
     /* Checkout profile branch */
     err = worktree_checkout_branch(wt, opts->profile);
     if (err) {
-        worktree_cleanup(wt);
-        hook_context_free(hook_ctx);
-        free(repo_dir);
-        string_array_free(storage_paths);
-        string_array_free(filesystem_paths);
-        config_free(config);
-        return error_wrap(err, "Failed to checkout profile '%s'", opts->profile);
+        err = error_wrap(err, "Failed to checkout profile '%s'", opts->profile);
+        goto cleanup;
     }
 
     /* Remove each file from worktree */
@@ -1012,6 +986,7 @@ static error_t *remove_files_from_profile(
 
         /* Interactive mode: prompt for each file */
         if (opts->interactive) {
+            /* Interactive prompts go to stdout (user expects them there) */
             printf("Remove %s? [y/N] ", storage_path);
             fflush(stdout);
 
@@ -1023,60 +998,46 @@ static error_t *remove_files_from_profile(
 
             if (response[0] != 'y' && response[0] != 'Y') {
                 /* User declined - skip this file */
-                if (opts->verbose) {
-                    printf("Skipped: %s\n", storage_path);
+                if (opts->verbose && out) {
+                    output_info(out, "Skipped: %s", storage_path);
                 }
                 continue;
             }
         }
 
-        err = remove_file_from_worktree(wt, storage_path, opts);
+        err = remove_file_from_worktree(wt, storage_path, opts, out);
         if (err) {
             /* If interactive or force, continue on error */
             if (opts->interactive || opts->force) {
-                fprintf(stderr, "Warning: %s\n", error_message(err));
+                if (out) {
+                    output_warning(out, "%s", error_message(err));
+                }
                 error_free(err);
                 err = NULL;
                 continue;
             }
             /* Otherwise, abort */
-            worktree_cleanup(wt);
-            hook_context_free(hook_ctx);
-            free(repo_dir);
-            string_array_free(storage_paths);
-            string_array_free(filesystem_paths);
-            config_free(config);
-            return err;
+            goto cleanup;
         }
         removed_count++;
     }
 
     /* Clean up metadata for removed files */
-    err = cleanup_metadata(wt, storage_paths, opts->verbose);
+    err = cleanup_metadata(wt, storage_paths, opts, out);
     if (err) {
-        worktree_cleanup(wt);
-        hook_context_free(hook_ctx);
-        free(repo_dir);
-        string_array_free(storage_paths);
-        string_array_free(filesystem_paths);
-        config_free(config);
-        return error_wrap(err, "Failed to clean up metadata");
+        err = error_wrap(err, "Failed to clean up metadata");
+        goto cleanup;
     }
 
     /* Create commit */
     err = create_removal_commit(repo, wt, opts, storage_paths, config);
     if (err) {
-        worktree_cleanup(wt);
-        hook_context_free(hook_ctx);
-        free(repo_dir);
-        string_array_free(storage_paths);
-        string_array_free(filesystem_paths);
-        config_free(config);
-        return err;
+        goto cleanup;
     }
 
     /* Cleanup worktree */
     worktree_cleanup(wt);
+    wt = NULL;
 
     /*
      * Architectural note: We do NOT delete files from the filesystem here.
@@ -1096,25 +1057,33 @@ static error_t *remove_files_from_profile(
 
         if (err) {
             /* Hook failed - warn but don't abort (files already removed) */
-            fprintf(stderr, "Warning: Post-remove hook failed: %s\n", error_message(err));
-            if (hook_result && hook_result->output && hook_result->output[0]) {
-                fprintf(stderr, "Hook output:\n%s\n", hook_result->output);
+            if (out) {
+                output_warning(out, "Post-remove hook failed: %s", error_message(err));
+                if (hook_result && hook_result->output && hook_result->output[0]) {
+                    output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
+                }
             }
             error_free(err);
             err = NULL;
         }
         hook_result_free(hook_result);
-        hook_context_free(hook_ctx);
     }
 
-    /* Cleanup */
-    free(repo_dir);
-    string_array_free(storage_paths);
-    string_array_free(filesystem_paths);
-    config_free(config);
-
+    /* Success - save removed count */
     *removed_count_out = removed_count;
-    return NULL;
+
+cleanup:
+    /* Free all resources in reverse order */
+    if (hook_ctx) hook_context_free(hook_ctx);
+    if (repo_dir) free(repo_dir);
+    if (wt) worktree_cleanup(wt);
+    if (other_profiles) free_multi_profile_tracking(other_profiles, multi_profile_count);
+    if (filesystem_paths) string_array_free(filesystem_paths);
+    if (storage_paths) string_array_free(storage_paths);
+    if (out) output_free(out);
+    if (config) config_free(config);
+
+    return err;
 }
 
 /**
@@ -1127,64 +1096,99 @@ static error_t *delete_profile_branch(
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
+    /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
+    dotta_config_t *config = NULL;
+    output_ctx_t *out = NULL;
+    char *remote_name = NULL;
+    upstream_info_t *upstream_info = NULL;
+    state_t *state = NULL;
+    char *repo_dir = NULL;
+    hook_context_t *hook_ctx = NULL;
+    profile_list_t *all_profiles = NULL;
+    profile_t *profile = NULL;
+    string_array_t *files = NULL;
+
+    /* Load config first */
+    err = config_load(NULL, &config);
+    if (err) {
+        /* Non-fatal */
+        error_free(err);
+        err = NULL;
+        config = config_create_default();
+    }
+
+    /* Create output context from config */
+    out = output_create_from_config(config);
+    if (!out) {
+        err = ERROR(ERR_MEMORY, "Failed to create output context");
+        goto cleanup;
+    }
+
+    /* CLI flags override config */
+    if (opts->verbose) {
+        output_set_verbosity(out, OUTPUT_VERBOSE);
+    }
 
     /* Check if profile exists */
     if (!profile_exists(repo, opts->profile)) {
         if (!opts->force) {
-            return ERROR(ERR_NOT_FOUND,
-                        "Profile '%s' does not exist\n"
-                        "Hint: Use 'dotta list' to see available profiles",
-                        opts->profile);
+            err = ERROR(ERR_NOT_FOUND,
+                       "Profile '%s' does not exist\n"
+                       "Hint: Use 'dotta list' to see available profiles",
+                       opts->profile);
+            goto cleanup;
         }
         /* With --force, just warn and exit */
         if (opts->verbose) {
-            fprintf(stderr, "Warning: Profile '%s' does not exist\n", opts->profile);
+            output_warning(out, "Profile '%s' does not exist", opts->profile);
         }
-        return NULL;
+        goto cleanup;  /* err is NULL, will return success */
     }
 
     /* SAFETY: Prevent deletion of last remaining profile */
-    profile_list_t *all_profiles = NULL;
     err = profile_list_all_local(repo, &all_profiles);
     if (err) {
-        return error_wrap(err, "Failed to list profiles");
+        err = error_wrap(err, "Failed to list profiles");
+        goto cleanup;
     }
 
     if (all_profiles->count <= 1) {
-        profile_list_free(all_profiles);
-        return ERROR(ERR_INVALID_ARG,
+        err = ERROR(ERR_INVALID_ARG,
                     "Cannot delete last remaining profile '%s'\n"
                     "Hint: A repository must have at least one profile",
                     opts->profile);
+        goto cleanup;
     }
     profile_list_free(all_profiles);
+    all_profiles = NULL;
 
     /* Load profile to count files */
-    profile_t *profile = NULL;
     err = profile_load(repo, opts->profile, &profile);
     if (err) {
-        return error_wrap(err, "Failed to load profile '%s'", opts->profile);
+        err = error_wrap(err, "Failed to load profile '%s'", opts->profile);
+        goto cleanup;
     }
 
-    string_array_t *files = NULL;
     err = profile_list_files(repo, profile, &files);
     if (err) {
-        profile_free(profile);
-        return error_wrap(err, "Failed to list files in profile");
+        err = error_wrap(err, "Failed to list files in profile");
+        goto cleanup;
     }
 
     size_t file_count = string_array_size(files);
     bool is_auto_detected = profile->auto_detected;
 
     string_array_free(files);
+    files = NULL;
     profile_free(profile);
+    profile = NULL;
 
     /* Dry run */
     if (opts->dry_run) {
-        printf("Would delete profile '%s' (%zu file%s)\n",
-               opts->profile, file_count, file_count == 1 ? "" : "s");
-        return NULL;
+        output_printf(out, OUTPUT_NORMAL, "Would delete profile '%s' (%zu file%s)\n",
+                     opts->profile, file_count, file_count == 1 ? "" : "s");
+        goto cleanup;  /* err is NULL, will return success */
     }
 
     /* Check for unpushed changes and detect remote
@@ -1192,8 +1196,6 @@ static error_t *delete_profile_branch(
      */
     bool has_unpushed = false;
     bool is_local_only = false;
-    char *remote_name = NULL;
-    upstream_info_t *upstream_info = NULL;
 
     err = upstream_detect_remote(repo, &remote_name);
     if (!err && remote_name) {
@@ -1223,12 +1225,14 @@ static error_t *delete_profile_branch(
 
     /* Warn about unpushed changes (only if profile has remote tracking) */
     if (has_unpushed && !opts->force) {
-        printf("\nWARNING: Profile '%s' has unpushed changes!\n", opts->profile);
-        printf("         Deleting now may result in data loss.\n");
-        printf("         Consider running 'dotta sync' first.\n\n");
+        output_newline(out);
+        output_warning(out, "Profile '%s' has unpushed changes!", opts->profile);
+        output_info(out, "         Deleting now may result in data loss.");
+        output_info(out, "         Consider running 'dotta sync' first.");
+        output_newline(out);
     } else if (is_local_only && opts->verbose) {
         /* Inform about local-only status in verbose mode (not a warning) */
-        printf("Note: Profile '%s' is local-only (not pushed to remote)\n", opts->profile);
+        output_info(out, "Note: Profile '%s' is local-only (not pushed to remote)", opts->profile);
     }
 
     /* Free upstream_info after we're done using is_local_only */
@@ -1238,7 +1242,6 @@ static error_t *delete_profile_branch(
     }
 
     /* Load state to check for deployed files (read-only, informational only) */
-    state_t *state = NULL;
     err = state_load(repo, &state);
     if (err) {
         /* Non-fatal */
@@ -1252,8 +1255,8 @@ static error_t *delete_profile_branch(
     if (state) {
         size_t state_file_count = 0;
         state_file_entry_t *state_files = NULL;
-        error_t *err = state_get_all_files(state, &state_files, &state_file_count);
-        if (!err && state_files) {
+        error_t *state_err = state_get_all_files(state, &state_files, &state_file_count);
+        if (!state_err && state_files) {
             for (size_t i = 0; i < state_file_count; i++) {
                 if (strcmp(state_files[i].profile, opts->profile) == 0) {
                     deployed_count++;
@@ -1261,16 +1264,18 @@ static error_t *delete_profile_branch(
             }
             state_free_all_files(state_files, state_file_count);
         }
-        if (err) {
-            error_free(err);
+        if (state_err) {
+            error_free(state_err);
         }
     }
 
     /* Inform about deployed files (informational, not a warning) */
     if (deployed_count > 0 && opts->verbose) {
-        printf("\nNote: Profile '%s' has %zu deployed file%s\n",
-               opts->profile, deployed_count, deployed_count == 1 ? "" : "s");
-        printf("      These will be removed when you run 'dotta apply'.\n\n");
+        output_newline(out);
+        output_info(out, "Note: Profile '%s' has %zu deployed file%s",
+                   opts->profile, deployed_count, deployed_count == 1 ? "" : "s");
+        output_info(out, "      These will be removed when you run 'dotta apply'.");
+        output_newline(out);
     }
 
     /* Free state (no longer needed - we don't modify it) */
@@ -1280,34 +1285,19 @@ static error_t *delete_profile_branch(
     }
 
     /* Confirm deletion */
-    if (!confirm_profile_deletion(opts->profile, file_count, is_auto_detected, opts)) {
-        printf("Cancelled\n");
-        free(remote_name);
-        return NULL;
-    }
-
-    /* Load config */
-    dotta_config_t *config = NULL;
-    err = config_load(NULL, &config);
-    if (err) {
-        /* Non-fatal */
-        error_free(err);
-        err = NULL;
-        config = config_create_default();
+    if (!confirm_profile_deletion(opts->profile, file_count, is_auto_detected, opts, config, out)) {
+        output_printf(out, OUTPUT_NORMAL, "Cancelled\n");
+        goto cleanup;  /* err is NULL, will return success */
     }
 
     /* Get repository directory for hooks */
-    char *repo_dir = NULL;
     err = config_get_repo_dir(config, &repo_dir);
     if (err) {
-        free(remote_name);
-        state_free(state);
-        config_free(config);
-        return err;
+        goto cleanup;
     }
 
     /* Execute pre-remove hook */
-    hook_context_t *hook_ctx = hook_context_create(repo_dir, "remove", opts->profile);
+    hook_ctx = hook_context_create(repo_dir, "remove", opts->profile);
     if (hook_ctx) {
         hook_result_t *hook_result = NULL;
         err = hook_execute(config, HOOK_PRE_REMOVE, hook_ctx, &hook_result);
@@ -1315,15 +1305,11 @@ static error_t *delete_profile_branch(
         if (err) {
             /* Hook failed - abort operation */
             if (hook_result && hook_result->output && hook_result->output[0]) {
-                fprintf(stderr, "Hook output:\n%s\n", hook_result->output);
+                output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
             }
             hook_result_free(hook_result);
-            hook_context_free(hook_ctx);
-            free(repo_dir);
-            free(remote_name);
-            state_free(state);
-            config_free(config);
-            return error_wrap(err, "Pre-remove hook failed");
+            err = error_wrap(err, "Pre-remove hook failed");
+            goto cleanup;
         }
         hook_result_free(hook_result);
     }
@@ -1337,10 +1323,8 @@ static error_t *delete_profile_branch(
     /* Delete local branch */
     err = gitops_delete_branch(repo, opts->profile);
     if (err) {
-        free(remote_name);
-        state_free(state);
-        config_free(config);
-        return error_wrap(err, "Failed to delete profile '%s'", opts->profile);
+        err = error_wrap(err, "Failed to delete profile '%s'", opts->profile);
+        goto cleanup;
     }
 
     /* Push deletion to remote if remote exists
@@ -1348,7 +1332,7 @@ static error_t *delete_profile_branch(
      */
     if (remote_name) {
         if (opts->verbose) {
-            printf("Pushing profile deletion to remote '%s'...\n", remote_name);
+            output_info(out, "Pushing profile deletion to remote '%s'...", remote_name);
         }
 
         /* We don't have a credential context here, but gitops_delete_remote_branch will handle NULL */
@@ -1357,14 +1341,14 @@ static error_t *delete_profile_branch(
             /* Non-fatal: warn but don't fail the whole operation
              * The local branch is already deleted, so this is just about syncing
              */
-            fprintf(stderr, "Warning: Failed to push deletion to remote: %s\n", error_message(err));
-            fprintf(stderr, "         The profile was deleted locally, but sync may not work correctly.\n");
-            fprintf(stderr, "         You can manually push the deletion with: git push %s :%s\n",
-                   remote_name, opts->profile);
+            output_warning(out, "Failed to push deletion to remote: %s", error_message(err));
+            output_info(out, "         The profile was deleted locally, but sync may not work correctly.");
+            output_info(out, "         You can manually push the deletion with: git push %s :%s",
+                       remote_name, opts->profile);
             error_free(err);
             err = NULL;
         } else if (opts->verbose) {
-            printf("Profile deletion pushed to remote\n");
+            output_info(out, "Profile deletion pushed to remote");
         }
 
         free(remote_name);
@@ -1388,21 +1372,30 @@ static error_t *delete_profile_branch(
 
         if (err) {
             /* Hook failed - warn but don't abort (profile already deleted) */
-            fprintf(stderr, "Warning: Post-remove hook failed: %s\n", error_message(err));
+            output_warning(out, "Post-remove hook failed: %s", error_message(err));
             if (hook_result && hook_result->output && hook_result->output[0]) {
-                fprintf(stderr, "Hook output:\n%s\n", hook_result->output);
+                output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
             }
             error_free(err);
             err = NULL;
         }
         hook_result_free(hook_result);
-        hook_context_free(hook_ctx);
     }
 
-    free(repo_dir);
-    config_free(config);
+cleanup:
+    /* Free all resources in reverse order of allocation */
+    if (hook_ctx) hook_context_free(hook_ctx);
+    if (repo_dir) free(repo_dir);
+    if (state) state_free(state);
+    if (upstream_info) upstream_info_free(upstream_info);
+    if (remote_name) free(remote_name);
+    if (out) output_free(out);
+    if (config) config_free(config);
+    if (files) string_array_free(files);
+    if (profile) profile_free(profile);
+    if (all_profiles) profile_list_free(all_profiles);
 
-    return NULL;
+    return err;
 }
 
 /**
@@ -1418,19 +1411,34 @@ error_t *cmd_remove(git_repository *repo, const cmd_remove_options_t *opts) {
         return err;
     }
 
+    /* Create output context for summary messages */
+    output_ctx_t *out = output_create();
+    if (!out) {
+        return ERROR(ERR_MEMORY, "Failed to create output context");
+    }
+
+    /* Apply CLI flags */
+    if (opts->verbose) {
+        output_set_verbosity(out, OUTPUT_VERBOSE);
+    } else if (opts->quiet) {
+        output_set_verbosity(out, OUTPUT_QUIET);
+    }
+
     /* Branch: Delete profile */
     if (opts->delete_profile) {
         err = delete_profile_branch(repo, opts);
         if (err) {
+            output_free(out);
             return err;
         }
 
         if (!opts->quiet && !opts->dry_run) {
-            printf("Profile '%s' deleted\n", opts->profile);
-            printf("Run 'dotta apply' to remove deployed files from filesystem\n");
-            printf("\n");
+            output_success(out, "Profile '%s' deleted", opts->profile);
+            output_info(out, "Run 'dotta apply' to remove deployed files from filesystem");
+            output_newline(out);
         }
 
+        output_free(out);
         return NULL;
     }
 
@@ -1438,16 +1446,18 @@ error_t *cmd_remove(git_repository *repo, const cmd_remove_options_t *opts) {
     size_t removed_count = 0;
     err = remove_files_from_profile(repo, opts, &removed_count);
     if (err) {
+        output_free(out);
         return err;
     }
 
     /* Display summary */
     if (!opts->quiet && !opts->dry_run) {
-        printf("Removed %zu file%s from profile '%s'\n",
-               removed_count, removed_count == 1 ? "" : "s", opts->profile);
-        printf("Run 'dotta apply' to remove files from filesystem\n");
-        printf("\n");
+        output_success(out, "Removed %zu file%s from profile '%s'",
+                      removed_count, removed_count == 1 ? "" : "s", opts->profile);
+        output_info(out, "Run 'dotta apply' to remove files from filesystem");
+        output_newline(out);
     }
 
+    output_free(out);
     return NULL;
 }

@@ -534,9 +534,8 @@ static int cmd_list_main(int argc, char **argv) {
     cmd_list_options_t opts = {
         .mode = LIST_PROFILES,
         .profile = NULL,
+        .file_path = NULL,
         .verbose = false,
-        .max_count = 0,
-        .oneline = false,
         .remote = false
     };
 
@@ -545,42 +544,50 @@ static int cmd_list_main(int argc, char **argv) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_list_help(argv[0]);
             return 0;
-        } else if (strcmp(argv[i], "--log") == 0) {
-            opts.mode = LIST_LOG;
         } else if (strcmp(argv[i], "--remote") == 0) {
             opts.remote = true;
-        } else if (strcmp(argv[i], "--oneline") == 0) {
-            opts.oneline = true;
-        } else if (strcmp(argv[i], "-n") == 0) {
-            if (i + 1 >= argc) {
-                fprintf(stderr, "Error: -n requires an argument\n");
-                return 1;
-            }
-            opts.max_count = (size_t)atoi(argv[++i]);
         } else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--profile") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: --profile requires an argument\n");
                 return 1;
             }
             opts.profile = argv[++i];
-            /* If mode wasn't explicitly set, default to FILES when profile specified */
-            if (opts.mode == LIST_PROFILES) {
-                opts.mode = LIST_FILES;
-            }
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             opts.verbose = true;
         } else if (argv[i][0] != '-') {
-            /* Positional argument - treat as profile name */
-            opts.profile = argv[i];
-            /* If mode wasn't explicitly set, default to FILES when profile specified */
-            if (opts.mode == LIST_PROFILES) {
-                opts.mode = LIST_FILES;
+            /* Positional argument */
+            if (!opts.profile) {
+                /* First positional arg: profile name */
+                opts.profile = argv[i];
+            } else if (!opts.file_path) {
+                /* Second positional arg: file path */
+                opts.file_path = argv[i];
+            } else {
+                fprintf(stderr, "Error: Unexpected argument '%s'\n", argv[i]);
+                print_list_help(argv[0]);
+                return 1;
             }
         } else {
             fprintf(stderr, "Error: Unknown argument '%s'\n", argv[i]);
             print_list_help(argv[0]);
             return 1;
         }
+    }
+
+    /* Determine mode from arguments */
+    if (opts.file_path) {
+        /* Profile + file path = file history */
+        if (!opts.profile) {
+            fprintf(stderr, "Error: File path requires a profile (-p or first argument)\n");
+            return 1;
+        }
+        opts.mode = LIST_FILE_HISTORY;
+    } else if (opts.profile) {
+        /* Profile only = list files */
+        opts.mode = LIST_FILES;
+    } else {
+        /* No arguments = list profiles */
+        opts.mode = LIST_PROFILES;
     }
 
     /* Open resolved repository */

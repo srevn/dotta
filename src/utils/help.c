@@ -261,19 +261,20 @@ void print_diff_help(const char *prog_name) {
 }
 
 void print_list_help(const char *prog_name) {
-    printf("Usage: %s list [options] [profile]\n\n", prog_name);
-    printf("List profiles, files, or commit history\n\n");
-    printf("Modes:\n");
-    printf("  (default)               List all profiles\n");
-    printf("  [profile]               List files in specified profile\n");
-    printf("  --log [profile]         Show commit history\n");
-    printf("\nOptions:\n");
+    printf("Usage: %s list [options] [profile] [file]\n\n", prog_name);
+    printf("Hierarchical listing interface with three levels:\n");
+    printf("  Level 1: Profiles       (default)\n");
+    printf("  Level 2: Files          (with profile name)\n");
+    printf("  Level 3: File history   (with profile name + file path)\n\n");
+    printf("Options:\n");
     printf("  -p, --profile <name>    Specify profile name\n");
-    printf("  -v, --verbose           Show verbose output (file counts for profiles)\n");
-    printf("  --remote                Show remote tracking state for profiles\n");
-    printf("  --oneline               Show commits in one-line format (for --log)\n");
-    printf("  -n <count>              Limit commits shown (for --log)\n");
+    printf("  -v, --verbose           Show detailed output\n");
+    printf("  --remote                Show remote tracking state (Level 1 only)\n");
     printf("  -h, --help              Show this help message\n");
+    printf("\nVerbose Mode Details:\n");
+    printf("  Level 1: Add file count, total size, and last commit\n");
+    printf("  Level 2: Add file sizes and per-file last commits\n");
+    printf("  Level 3: Show full commit messages instead of oneline format\n");
     printf("\nRemote State Indicators (with --remote):\n");
     printf("  [=]   up-to-date with remote\n");
     printf("  [↑n]  n commits ahead of remote (run 'dotta sync' to push)\n");
@@ -281,12 +282,22 @@ void print_list_help(const char *prog_name) {
     printf("  [↕]   diverged from remote (manual resolution needed)\n");
     printf("  [•]   no remote tracking branch (will be created on first sync)\n");
     printf("\nExamples:\n");
-    printf("  %s list                   # List all profiles\n", prog_name);
-    printf("  %s list --remote          # List profiles with remote state\n", prog_name);
-    printf("  %s list global            # List files in 'global' profile\n", prog_name);
-    printf("  %s list --log             # Show commit history for all profiles\n", prog_name);
-    printf("  %s list --log global      # Show commit history for 'global' profile\n", prog_name);
-    printf("  %s list --log --oneline -n 5  # Show last 5 commits, one per line\n", prog_name);
+    printf("  # Level 1: List profiles\n");
+    printf("  %s list                       # Simple: just names\n", prog_name);
+    printf("  %s list -v                    # Verbose: with stats\n", prog_name);
+    printf("  %s list --remote              # Show sync status\n", prog_name);
+    printf("  %s list -v --remote           # Full details + sync status\n\n", prog_name);
+    printf("  # Level 2: List files in profile\n");
+    printf("  %s list global                # Simple: just paths\n", prog_name);
+    printf("  %s list -p global             # Same using -p flag\n", prog_name);
+    printf("  %s list global -v             # Verbose: with sizes and commits\n\n", prog_name);
+    printf("  # Level 3: Show file history\n");
+    printf("  %s list global home/.bashrc   # Oneline commits\n", prog_name);
+    printf("  %s list global home/.bashrc -v  # Full commit messages\n", prog_name);
+    printf("\nIntegration with other commands:\n");
+    printf("  # Copy commit hash from list output, then:\n");
+    printf("  %s show a4f2c8e               # Show specific commit\n", prog_name);
+    printf("  %s diff b3e1f9a a4f2c8e       # Compare commits\n", prog_name);
     printf("\n");
 }
 

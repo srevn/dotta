@@ -1,5 +1,10 @@
 /**
  * list.c - List profiles, files, and commit history
+ *
+ * Hierarchical listing interface with three levels:
+ * 1. Profiles (default) - Show available profiles
+ * 2. Files (with -p) - Show files in a profile
+ * 3. File History (with -p <file>) - Show commits affecting a file
  */
 
 #include "list.h"
@@ -13,11 +18,35 @@
 #include "base/error.h"
 #include "base/gitops.h"
 #include "core/profiles.h"
+#include "core/stats.h"
 #include "core/upstream.h"
 #include "utils/array.h"
 #include "utils/config.h"
+#include "utils/hashmap.h"
 #include "utils/output.h"
 #include "utils/timeutil.h"
+
+/* Display configuration constants */
+#define LIST_SHORT_OID_SIZE 8
+#define LIST_TIMESTAMP_BUFFER_SIZE 64
+#define LIST_REFNAME_BUFFER_SIZE 256
+#define LIST_MESSAGE_BUFFER_SIZE 256
+#define LIST_HEADER_BUFFER_SIZE 512
+
+/**
+ * Format file size for display
+ */
+static void format_size(size_t bytes, char *buffer, size_t buffer_size) {
+    if (bytes < 1024) {
+        snprintf(buffer, buffer_size, "%zu B", bytes);
+    } else if (bytes < 1024 * 1024) {
+        snprintf(buffer, buffer_size, "%.1f KB", bytes / 1024.0);
+    } else if (bytes < 1024 * 1024 * 1024) {
+        snprintf(buffer, buffer_size, "%.1f MB", bytes / (1024.0 * 1024.0));
+    } else {
+        snprintf(buffer, buffer_size, "%.1f GB", bytes / (1024.0 * 1024.0 * 1024.0));
+    }
+}
 
 /**
  * Format upstream state for display
@@ -74,7 +103,11 @@ static void format_upstream_state(
 }
 
 /**
- * List all profiles with color support
+ * List profiles - Level 1
+ *
+ * Default: Just profile names
+ * Verbose: Add stats (file count, size, last commit)
+ * Remote:  Add tracking indicators
  */
 static error_t *list_profiles(
     git_repository *repo,
@@ -98,18 +131,12 @@ static error_t *list_profiles(
         return NULL;
     }
 
-    /* Auto-detect profiles */
-    profile_list_t *auto_profiles = NULL;
-    err = profile_detect_auto(repo, &auto_profiles);
-    bool has_auto = (err == NULL && auto_profiles && auto_profiles->count > 0);
-
     /* Detect remote if --remote flag is set */
     char *remote_name = NULL;
     bool show_remote = false;
     if (opts->remote) {
         err = upstream_detect_remote(repo, &remote_name);
         if (err) {
-            /* Non-fatal: just warn and continue without remote info */
             output_warning(out, "Could not detect remote: %s", error_message(err));
             error_free(err);
             err = NULL;
@@ -118,9 +145,10 @@ static error_t *list_profiles(
         }
     }
 
-    /* Print profiles */
+    /* Print header */
     output_section(out, "Available profiles");
 
+    /* List profiles */
     for (size_t i = 0; i < string_array_size(branches); i++) {
         const char *name = string_array_get(branches, i);
 
@@ -129,129 +157,113 @@ static error_t *list_profiles(
             continue;
         }
 
-        bool is_auto = false;
-        if (has_auto) {
-            for (size_t j = 0; j < auto_profiles->count; j++) {
-                if (strcmp(auto_profiles->profiles[j].name, name) == 0) {
-                    is_auto = true;
-                    break;
-                }
-            }
-        }
-
-        /* Get upstream state if requested */
-        char upstream_str[64] = "";
-        if (show_remote) {
-            upstream_info_t *info = NULL;
-            error_t *upstream_err = upstream_analyze_profile(repo, remote_name, name, &info);
-            if (!upstream_err && info) {
-                format_upstream_state(out, info, upstream_str, sizeof(upstream_str));
-                upstream_info_free(info);
-            } else {
-                error_free(upstream_err);
-            }
-        }
-
-        if (is_auto) {
+        /* Simple mode: Just name */
+        if (!opts->verbose && !show_remote) {
             if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s*%s %s%s%s %s\n",
-                        output_color_code(out, OUTPUT_COLOR_GREEN),
-                        output_color_code(out, OUTPUT_COLOR_RESET),
+                output_printf(out, OUTPUT_NORMAL, "  %s%s%s\n",
                         output_color_code(out, OUTPUT_COLOR_CYAN),
                         name,
-                        output_color_code(out, OUTPUT_COLOR_RESET),
-                        upstream_str);
+                        output_color_code(out, OUTPUT_COLOR_RESET));
             } else {
-                output_printf(out, OUTPUT_NORMAL, "  * %s %s\n", name, upstream_str);
+                output_printf(out, OUTPUT_NORMAL, "  %s\n", name);
             }
+            continue;
+        }
+
+        /* Verbose or remote mode: Get additional info */
+        profile_t *profile = NULL;
+        err = profile_load(repo, name, &profile);
+        if (err) {
+            error_free(err);
+            continue;
+        }
+
+        /* Start line with name */
+        if (output_colors_enabled(out)) {
+            output_printf(out, OUTPUT_NORMAL, "  %s%-20s%s",
+                    output_color_code(out, OUTPUT_COLOR_CYAN),
+                    name,
+                    output_color_code(out, OUTPUT_COLOR_RESET));
         } else {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "    %s%s%s %s\n",
-                        output_color_code(out, OUTPUT_COLOR_CYAN),
-                        name,
-                        output_color_code(out, OUTPUT_COLOR_RESET),
-                        upstream_str);
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "    %s %s\n", name, upstream_str);
-            }
+            output_printf(out, OUTPUT_NORMAL, "  %-20s", name);
         }
 
-        /* Show file count and last commit if verbose */
+        /* Verbose: Add stats */
         if (opts->verbose) {
-            profile_t *profile = NULL;
-            err = profile_load(repo, name, &profile);
-            if (err) {
-                error_free(err);
-                continue;
+            profile_stats_t stats = {0};
+            err = stats_get_profile_stats(repo, profile, &stats);
+            if (!err) {
+                char size_str[32];
+                format_size(stats.total_size, size_str, sizeof(size_str));
+                output_printf(out, OUTPUT_NORMAL, " %2zu file%s, %8s",
+                       stats.file_count,
+                       stats.file_count == 1 ? " " : "s",
+                       size_str);
             }
-
-            string_array_t *files = NULL;
-            err = profile_list_files(repo, profile, &files);
-            if (err) {
-                profile_free(profile);
-                error_free(err);
-                continue;
-            }
-
-            output_printf(out, OUTPUT_NORMAL, "      %zu file%s",
-                   string_array_size(files),
-                   string_array_size(files) == 1 ? "" : "s");
 
             /* Get last commit info */
-            char refname[256];
+            char refname[LIST_REFNAME_BUFFER_SIZE];
             snprintf(refname, sizeof(refname), "refs/heads/%s", name);
             git_commit *last_commit = NULL;
             error_t *commit_err = gitops_get_commit(repo, refname, &last_commit);
 
             if (!commit_err && last_commit) {
                 const git_oid *oid = git_commit_id(last_commit);
-                char oid_str[8];
+                char oid_str[LIST_SHORT_OID_SIZE];
                 git_oid_tostr(oid_str, sizeof(oid_str), oid);
+
+                const char *message = git_commit_message(last_commit);
+                const char *newline = strchr(message, '\n');
+                size_t msg_len = newline ? (size_t)(newline - message) : strlen(message);
+                if (msg_len > 40) {
+                    msg_len = 40;
+                }
 
                 const git_signature *author = git_commit_author(last_commit);
                 char time_str[64];
                 format_relative_time(author->when.time, time_str, sizeof(time_str));
 
                 if (output_colors_enabled(out)) {
-                    output_printf(out, OUTPUT_NORMAL, ", last: %s%s%s %s%s%s\n",
+                    output_printf(out, OUTPUT_NORMAL, "  %s%s%s %.*s %s(%s)%s",
                             output_color_code(out, OUTPUT_COLOR_YELLOW),
                             oid_str,
                             output_color_code(out, OUTPUT_COLOR_RESET),
+                            (int)msg_len, message,
                             output_color_code(out, OUTPUT_COLOR_DIM),
                             time_str,
                             output_color_code(out, OUTPUT_COLOR_RESET));
                 } else {
-                    output_printf(out, OUTPUT_NORMAL, ", last: %s %s\n", oid_str, time_str);
+                    output_printf(out, OUTPUT_NORMAL, "  %s %.*s (%s)",
+                            oid_str, (int)msg_len, message, time_str);
                 }
 
                 git_commit_free(last_commit);
-            } else {
-                output_newline(out);
             }
             error_free(commit_err);
-
-            string_array_free(files);
-            profile_free(profile);
         }
-    }
 
-    /* Print legend */
-    if (has_auto || show_remote) {
+        /* Remote: Add tracking state */
+        if (show_remote) {
+            upstream_info_t *info = NULL;
+            error_t *upstream_err = upstream_analyze_profile(repo, remote_name, name, &info);
+            if (!upstream_err && info) {
+                char upstream_str[64];
+                format_upstream_state(out, info, upstream_str, sizeof(upstream_str));
+                output_printf(out, OUTPUT_NORMAL, "  %s", upstream_str);
+                upstream_info_free(info);
+            } else {
+                error_free(upstream_err);
+            }
+        }
+
         output_newline(out);
+        profile_free(profile);
     }
 
-    if (has_auto) {
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "%s*%s = auto-detected for this system\n",
-                    output_color_code(out, OUTPUT_COLOR_GREEN),
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "* = auto-detected for this system\n");
-        }
-    }
-
+    /* Print remote legend if shown */
     if (show_remote) {
-        output_printf(out, OUTPUT_NORMAL, "\nRemote tracking (from %s):\n", remote_name);
+        output_newline(out);
+        output_printf(out, OUTPUT_NORMAL, "Remote tracking (from %s):\n", remote_name);
         if (output_colors_enabled(out)) {
             output_printf(out, OUTPUT_NORMAL, "  %s[=]%s  up-to-date    ",
                     output_color_code(out, OUTPUT_COLOR_GREEN),
@@ -277,81 +289,15 @@ static error_t *list_profiles(
     /* Cleanup */
     free(remote_name);
     string_array_free(branches);
-    if (auto_profiles) {
-        profile_list_free(auto_profiles);
-    }
 
     return NULL;
 }
 
 /**
- * Check if a file exists in other profiles
+ * List files - Level 2
  *
- * Helper to detect multi-profile files for list command.
- */
-static string_array_t *find_other_profiles_with_file(
-    git_repository *repo,
-    const char *storage_path,
-    const char *current_profile_name
-) {
-    string_array_t *other_profiles = string_array_create();
-    if (!other_profiles) {
-        return NULL;
-    }
-
-    /* Get all branches */
-    string_array_t *branches = NULL;
-    error_t *err = gitops_list_branches(repo, &branches);
-    if (err) {
-        error_free(err);
-        return other_profiles;
-    }
-
-    /* Check each profile */
-    for (size_t i = 0; i < string_array_size(branches); i++) {
-        const char *profile_name = string_array_get(branches, i);
-
-        /* Skip current profile and dotta-worktree */
-        if (strcmp(profile_name, current_profile_name) == 0 ||
-            strcmp(profile_name, "dotta-worktree") == 0) {
-            continue;
-        }
-
-        /* Load profile */
-        profile_t *profile = NULL;
-        err = profile_load(repo, profile_name, &profile);
-        if (err) {
-            error_free(err);
-            continue;
-        }
-
-        /* Load tree */
-        err = profile_load_tree(repo, profile);
-        if (err) {
-            profile_free(profile);
-            error_free(err);
-            continue;
-        }
-
-        /* Check if file exists in tree */
-        git_tree_entry *entry = NULL;
-        int git_err = git_tree_entry_bypath(&entry, profile->tree, storage_path);
-        if (git_err == 0) {
-            string_array_push(other_profiles, profile_name);
-            git_tree_entry_free(entry);
-        }
-
-        profile_free(profile);
-    }
-
-    string_array_free(branches);
-    return other_profiles;
-}
-
-/**
- * List files in a profile with color support
- *
- * Enhanced to show which files also exist in other profiles.
+ * Default: Just file paths
+ * Verbose: Add sizes and per-file last commit
  */
 static error_t *list_files(
     git_repository *repo,
@@ -379,28 +325,68 @@ static error_t *list_files(
     }
 
     if (string_array_size(files) == 0) {
-        char msg[256];
+        char msg[LIST_MESSAGE_BUFFER_SIZE];
         snprintf(msg, sizeof(msg), "No files in profile '%s'", opts->profile);
         output_info(out, "%s", msg);
-    } else {
-        char header[256];
-        snprintf(header, sizeof(header), "Files in profile '%s'", opts->profile);
-        output_section(out, header);
+        string_array_free(files);
+        profile_free(profile);
+        return NULL;
+    }
 
-        /* Sort for consistent output */
-        string_array_sort(files);
+    /* Print header */
+    char header[LIST_MESSAGE_BUFFER_SIZE];
+    snprintf(header, sizeof(header), "Files in profile '%s'", opts->profile);
+    output_section(out, header);
 
-        size_t multi_profile_count = 0;
+    /* Sort for consistent output */
+    string_array_sort(files);
 
+    /* Build file→commit index if verbose */
+    hashmap_t *commit_index = NULL;
+    if (opts->verbose) {
+        err = stats_build_file_commit_index(repo, opts->profile, &commit_index);
+        if (err) {
+            /* Non-fatal: continue without commit info */
+            output_warning(out, "Failed to load commit history: %s", error_message(err));
+            error_free(err);
+            err = NULL;
+        }
+    }
+
+    /* Calculate max path length for alignment (verbose mode only) */
+    size_t max_path_len = 0;
+    if (opts->verbose) {
         for (size_t i = 0; i < string_array_size(files); i++) {
-            const char *file_path = string_array_get(files, i);
-
-            /* In verbose mode, check if file exists in other profiles */
-            string_array_t *other_profiles = NULL;
-            if (opts->verbose) {
-                other_profiles = find_other_profiles_with_file(repo, file_path, opts->profile);
+            size_t len = strlen(string_array_get(files, i));
+            if (len > max_path_len) {
+                max_path_len = len;
             }
+        }
+        /* Cap at reasonable width to prevent excessive spacing */
+        if (max_path_len > 80) {
+            max_path_len = 80;
+        }
+    }
 
+    /* List files */
+    size_t total_size = 0;
+    for (size_t i = 0; i < string_array_size(files); i++) {
+        const char *file_path = string_array_get(files, i);
+
+        /* Print file path (with alignment in verbose mode) */
+        if (opts->verbose) {
+            /* Verbose: Left-align with padding for column alignment */
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "  %s%-*s%s",
+                        output_color_code(out, OUTPUT_COLOR_CYAN),
+                        (int)max_path_len,
+                        file_path,
+                        output_color_code(out, OUTPUT_COLOR_RESET));
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "  %-*s", (int)max_path_len, file_path);
+            }
+        } else {
+            /* Simple: No alignment needed */
             if (output_colors_enabled(out)) {
                 output_printf(out, OUTPUT_NORMAL, "  %s%s%s",
                         output_color_code(out, OUTPUT_COLOR_CYAN),
@@ -409,41 +395,76 @@ static error_t *list_files(
             } else {
                 output_printf(out, OUTPUT_NORMAL, "  %s", file_path);
             }
+        }
 
-            /* Show overlap indicator if file exists in other profiles */
-            if (other_profiles && string_array_size(other_profiles) > 0) {
-                multi_profile_count++;
-                if (output_colors_enabled(out)) {
-                    output_printf(out, OUTPUT_NORMAL, " %s[also in:",
-                            output_color_code(out, OUTPUT_COLOR_DIM));
-                    for (size_t j = 0; j < string_array_size(other_profiles); j++) {
-                        output_printf(out, OUTPUT_NORMAL, " %s", string_array_get(other_profiles, j));
-                    }
-                    output_printf(out, OUTPUT_NORMAL, "]%s",
-                            output_color_code(out, OUTPUT_COLOR_RESET));
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, " [also in:");
-                    for (size_t j = 0; j < string_array_size(other_profiles); j++) {
-                        output_printf(out, OUTPUT_NORMAL, " %s", string_array_get(other_profiles, j));
-                    }
-                    output_printf(out, OUTPUT_NORMAL, "]");
+        /* Verbose: Add size and last commit */
+        if (opts->verbose) {
+            /* Get file stats */
+            git_tree_entry *entry = NULL;
+            int git_err = git_tree_entry_bypath(&entry, profile->tree, file_path);
+            if (git_err == 0) {
+                file_stats_t stats = {0};
+                error_t *stats_err = stats_get_file_stats(repo, entry, &stats);
+                if (!stats_err) {
+                    char size_str[32];
+                    format_size(stats.size, size_str, sizeof(size_str));
+                    output_printf(out, OUTPUT_NORMAL, "  %8s", size_str);
+                    total_size += stats.size;
                 }
+                error_free(stats_err);
+
+                /* Get last commit for this file */
+                if (commit_index) {
+                    commit_info_t *commit_info = hashmap_get(commit_index, file_path);
+                    if (commit_info) {
+                        char oid_str[LIST_SHORT_OID_SIZE];
+                        git_oid_tostr(oid_str, sizeof(oid_str), &commit_info->oid);
+
+                        char time_str[64];
+                        format_relative_time(commit_info->timestamp, time_str, sizeof(time_str));
+
+                        if (output_colors_enabled(out)) {
+                            output_printf(out, OUTPUT_NORMAL, "  %s%s%s %s %s(%s)%s",
+                                    output_color_code(out, OUTPUT_COLOR_YELLOW),
+                                    oid_str,
+                                    output_color_code(out, OUTPUT_COLOR_RESET),
+                                    commit_info->message_summary,
+                                    output_color_code(out, OUTPUT_COLOR_DIM),
+                                    time_str,
+                                    output_color_code(out, OUTPUT_COLOR_RESET));
+                        } else {
+                            output_printf(out, OUTPUT_NORMAL, "  %s %s (%s)",
+                                    oid_str, commit_info->message_summary, time_str);
+                        }
+                    }
+                }
+
+                git_tree_entry_free(entry);
             }
-
-            output_newline(out);
-            string_array_free(other_profiles);
         }
 
-        output_printf(out, OUTPUT_NORMAL, "\nTotal: %zu file%s",
-               string_array_size(files),
-               string_array_size(files) == 1 ? "" : "s");
-
-        if (opts->verbose && multi_profile_count > 0) {
-            output_printf(out, OUTPUT_NORMAL, " (%zu in multiple profiles)", multi_profile_count);
-        }
         output_newline(out);
     }
 
+    /* Print summary */
+    output_newline(out);
+    if (opts->verbose) {
+        char size_str[32];
+        format_size(total_size, size_str, sizeof(size_str));
+        output_printf(out, OUTPUT_NORMAL, "Total: %zu file%s, %s\n",
+               string_array_size(files),
+               string_array_size(files) == 1 ? "" : "s",
+               size_str);
+    } else {
+        output_printf(out, OUTPUT_NORMAL, "Total: %zu file%s\n",
+               string_array_size(files),
+               string_array_size(files) == 1 ? "" : "s");
+    }
+
+    /* Cleanup */
+    if (commit_index) {
+        hashmap_free(commit_index, (void (*)(void *))stats_free_commit_info);
+    }
     string_array_free(files);
     profile_free(profile);
 
@@ -451,268 +472,137 @@ static error_t *list_files(
 }
 
 /**
- * Format timestamp as human-readable date
+ * Format timestamp as human-readable date (for verbose commit display)
  */
 static char *format_time(git_time_t timestamp) {
     time_t t = (time_t)timestamp;
     struct tm *tm_info = localtime(&t);
 
-    char *buf = malloc(64);
+    /* localtime can return NULL for invalid timestamps */
+    if (!tm_info) {
+        return NULL;
+    }
+
+    char *buf = malloc(LIST_TIMESTAMP_BUFFER_SIZE);
     if (!buf) {
         return NULL;
     }
 
-    strftime(buf, 64, "%a %b %d %H:%M:%S %Y", tm_info);
+    strftime(buf, LIST_TIMESTAMP_BUFFER_SIZE, "%a %b %d %H:%M:%S %Y", tm_info);
     return buf;
 }
 
 /**
- * Format commit in one-line format
+ * List file history - Level 3
+ *
+ * Default: Oneline format (hash, summary, time)
+ * Verbose: Full commit format
  */
-static void print_commit_oneline(
-    const output_ctx_t *out,
-    const git_commit *commit,
-    const char *profile_name
-) {
-    const git_oid *oid = git_commit_id(commit);
-    char oid_str[8];
-    git_oid_tostr(oid_str, sizeof(oid_str), oid);
-
-    const char *message = git_commit_message(commit);
-    /* Get first line of message */
-    const char *newline = strchr(message, '\n');
-    size_t msg_len = newline ? (size_t)(newline - message) : strlen(message);
-
-    char *msg_short = strndup(message, msg_len);
-    if (!msg_short) {
-        return;
-    }
-
-    /* Get relative time */
-    const git_signature *author = git_commit_author(commit);
-    char time_str[64];
-    format_relative_time(author->when.time, time_str, sizeof(time_str));
-
-    if (output_colors_enabled(out)) {
-        output_printf(out, OUTPUT_NORMAL, "  %s%s%s %s(%s)%s %s %s(%s)%s\n",
-                output_color_code(out, OUTPUT_COLOR_YELLOW),
-                oid_str,
-                output_color_code(out, OUTPUT_COLOR_RESET),
-                output_color_code(out, OUTPUT_COLOR_CYAN),
-                profile_name,
-                output_color_code(out, OUTPUT_COLOR_RESET),
-                msg_short,
-                output_color_code(out, OUTPUT_COLOR_DIM),
-                time_str,
-                output_color_code(out, OUTPUT_COLOR_RESET));
-    } else {
-        output_printf(out, OUTPUT_NORMAL, "  %s (%s) %s (%s)\n", oid_str, profile_name, msg_short, time_str);
-    }
-
-    free(msg_short);
-}
-
-/**
- * Print commit in detailed format
- */
-static void print_commit_detailed(
-    const output_ctx_t *out,
-    const git_commit *commit
-) {
-    const git_oid *oid = git_commit_id(commit);
-    char oid_str[GIT_OID_SHA1_HEXSIZE + 1];
-    git_oid_tostr(oid_str, sizeof(oid_str), oid);
-
-    const git_signature *author = git_commit_author(commit);
-    const char *message = git_commit_message(commit);
-
-    char *date_str = format_time(author->when.time);
-    char relative_str[64];
-    format_relative_time(author->when.time, relative_str, sizeof(relative_str));
-
-    if (output_colors_enabled(out)) {
-        output_printf(out, OUTPUT_NORMAL, "%scommit %s%s%s\n",
-                output_color_code(out, OUTPUT_COLOR_BOLD),
-                output_color_code(out, OUTPUT_COLOR_YELLOW),
-                oid_str,
-                output_color_code(out, OUTPUT_COLOR_RESET));
-    } else {
-        output_printf(out, OUTPUT_NORMAL, "commit %s\n", oid_str);
-    }
-
-    output_printf(out, OUTPUT_NORMAL, "Author: %s <%s>\n", author->name, author->email);
-    if (date_str) {
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "Date:   %s %s(%s)%s\n",
-                    date_str,
-                    output_color_code(out, OUTPUT_COLOR_DIM),
-                    relative_str,
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "Date:   %s (%s)\n", date_str, relative_str);
-        }
-        free(date_str);
-    }
-    output_printf(out, OUTPUT_NORMAL, "\n    %s\n", message);
-}
-
-/**
- * List commit log for profile(s)
- */
-static error_t *list_log(
+static error_t *list_file_history(
     git_repository *repo,
     const cmd_list_options_t *opts,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
+    CHECK_NULL(opts->profile);
+    CHECK_NULL(opts->file_path);
     CHECK_NULL(out);
 
-    error_t *err = NULL;
-    profile_list_t *profiles = NULL;
-
-    /* Load configuration */
-    dotta_config_t *config = NULL;
-    err = config_load(NULL, &config);
+    /* Get file history */
+    file_history_t *history = NULL;
+    error_t *err = stats_get_file_history(repo, opts->profile, opts->file_path, &history);
     if (err) {
-        config = config_create_default();
+        return error_wrap(err, "Failed to get history for '%s' in profile '%s'",
+                         opts->file_path, opts->profile);
     }
 
-    /* Load profiles */
-    if (opts->profile) {
-        /* Use specified single profile */
-        const char *names[] = { opts->profile };
-        err = profile_list_load(repo, names, 1, true, &profiles);
-        if (err) {
-            config_free(config);
-            return error_wrap(err, "Failed to load profile '%s'", opts->profile);
-        }
-    } else {
-        /* Use all active profiles from state */
-        err = profile_resolve(
-            repo,
-            NULL, 0,  /* No CLI profiles */
-            config->strict_mode,
-            &profiles,
-            NULL);
+    /* Print header */
+    char header[LIST_HEADER_BUFFER_SIZE];
+    snprintf(header, sizeof(header), "History of '%s' in profile '%s'",
+             opts->file_path, opts->profile);
+    output_section(out, header);
 
-        if (err) {
-            config_free(config);
-            return error_wrap(err, "Failed to load profiles");
-        }
-    }
-
-    if (profiles->count == 0) {
-        config_free(config);
-        profile_list_free(profiles);
-        output_info(out, "No profiles found");
-        return NULL;
-    }
-
-    /* Print overall header for --log mode */
-    if (profiles->count == 1) {
-        char header[256];
-        snprintf(header, sizeof(header), "Commit history for profile '%s'",
-                 profiles->profiles[0].name);
-        output_section(out, header);
-    } else if (opts->oneline) {
-        output_section(out, "Commit history (all profiles)");
-    }
-
-    /* Walk commits for each profile */
-    for (size_t i = 0; i < profiles->count; i++) {
-        const char *profile_name = profiles->profiles[i].name;
-
-        /* Build reference name */
-        char refname[256];
-        snprintf(refname, sizeof(refname), "refs/heads/%s", profile_name);
-
-        /* Show profile header for multiple profiles in detailed mode */
-        if (profiles->count > 1 && !opts->oneline) {
-            if (i > 0) {
-                output_newline(out);  /* Separator between profiles */
+    /* Calculate max message length for alignment (oneline mode only) */
+    size_t max_msg_len = 0;
+    if (!opts->verbose) {
+        for (size_t i = 0; i < history->count; i++) {
+            size_t len = strlen(history->commits[i].message_summary);
+            if (len > max_msg_len) {
+                max_msg_len = len;
             }
-            char section_header[256];
-            snprintf(section_header, sizeof(section_header), "Profile: %s", profile_name);
-            output_section(out, section_header);
         }
+    }
 
-        /* Get reference */
-        git_reference *ref = NULL;
-        err = gitops_lookup_reference(repo, refname, &ref);
-        if (err) {
-            profile_list_free(profiles);
-            config_free(config);
-            return error_wrap(err, "Failed to lookup reference '%s'", refname);
-        }
+    /* Print commits */
+    for (size_t i = 0; i < history->count; i++) {
+        commit_info_t *commit = &history->commits[i];
 
-        const git_oid *target_oid = git_reference_target(ref);
-        if (!target_oid) {
-            git_reference_free(ref);
-            output_warning(out, "Profile '%s' has no commits", profile_name);
-            continue;
-        }
+        if (opts->verbose) {
+            /* Verbose: Full commit format */
+            char oid_str[GIT_OID_SHA1_HEXSIZE + 1];
+            git_oid_tostr(oid_str, sizeof(oid_str), &commit->oid);
 
-        /* Create revwalk */
-        git_revwalk *walker = NULL;
-        int git_err = git_revwalk_new(&walker, repo);
-        if (git_err < 0) {
-            git_reference_free(ref);
-            profile_list_free(profiles);
-            config_free(config);
-            return error_from_git(git_err);
-        }
-
-        git_err = git_revwalk_push(walker, target_oid);
-        git_reference_free(ref);
-
-        if (git_err < 0) {
-            git_revwalk_free(walker);
-            profile_list_free(profiles);
-            config_free(config);
-            return error_from_git(git_err);
-        }
-
-        /* Set to topological order */
-        git_revwalk_sorting(walker, GIT_SORT_TOPOLOGICAL | GIT_SORT_TIME);
-
-        /* Walk commits */
-        size_t count = 0;
-        git_oid oid;
-        while (git_revwalk_next(&oid, walker) == 0) {
-            if (opts->max_count > 0 && count >= opts->max_count) {
-                break;
-            }
-
-            git_commit *commit = NULL;
-            git_err = git_commit_lookup(&commit, repo, &oid);
-            if (git_err < 0) {
-                git_revwalk_free(walker);
-                profile_list_free(profiles);
-                config_free(config);
-                return error_from_git(git_err);
-            }
-
-            /* Print commit */
-            if (opts->oneline) {
-                print_commit_oneline(out, commit, profile_name);
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "%scommit %s%s%s\n",
+                        output_color_code(out, OUTPUT_COLOR_BOLD),
+                        output_color_code(out, OUTPUT_COLOR_YELLOW),
+                        oid_str,
+                        output_color_code(out, OUTPUT_COLOR_RESET));
             } else {
-                print_commit_detailed(out, commit);
+                output_printf(out, OUTPUT_NORMAL, "commit %s\n", oid_str);
             }
 
-            git_commit_free(commit);
-            count++;
-        }
+            /* Display timestamp if valid */
+            char *date_str = format_time(commit->timestamp);
+            if (date_str) {
+                char relative_str[64];
+                format_relative_time(commit->timestamp, relative_str, sizeof(relative_str));
 
-        git_revwalk_free(walker);
+                if (output_colors_enabled(out)) {
+                    output_printf(out, OUTPUT_NORMAL, "Date:   %s %s(%s)%s\n",
+                            date_str,
+                            output_color_code(out, OUTPUT_COLOR_DIM),
+                            relative_str,
+                            output_color_code(out, OUTPUT_COLOR_RESET));
+                } else {
+                    output_printf(out, OUTPUT_NORMAL, "Date:   %s (%s)\n", date_str, relative_str);
+                }
+                free(date_str);
+            }
 
-        if (count == 0) {
-            output_info(out, "No commits in '%s'", profile_name);
+            output_printf(out, OUTPUT_NORMAL, "\n    %s\n", commit->message_summary);
+
+            if (i < history->count - 1) {
+                output_newline(out);
+            }
+        } else {
+            /* Default: Oneline format */
+            char oid_str[LIST_SHORT_OID_SIZE];
+            git_oid_tostr(oid_str, sizeof(oid_str), &commit->oid);
+
+            char time_str[64];
+            format_relative_time(commit->timestamp, time_str, sizeof(time_str));
+
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "  %s%s%s  %-*s %s(%s)%s\n",
+                        output_color_code(out, OUTPUT_COLOR_YELLOW),
+                        oid_str,
+                        output_color_code(out, OUTPUT_COLOR_RESET),
+                        (int)max_msg_len,
+                        commit->message_summary,
+                        output_color_code(out, OUTPUT_COLOR_DIM),
+                        time_str,
+                        output_color_code(out, OUTPUT_COLOR_RESET));
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "  %s  %-*s (%s)\n",
+                        oid_str, (int)max_msg_len, commit->message_summary, time_str);
+            }
         }
     }
 
-    profile_list_free(profiles);
-    config_free(config);
+    /* Cleanup */
+    stats_free_file_history(history);
 
     return NULL;
 }
@@ -729,6 +619,8 @@ error_t *cmd_list(git_repository *repo, const cmd_list_options_t *opts) {
     error_t *err = config_load(NULL, &config);
     if (err) {
         /* Non-fatal: continue with defaults */
+        error_free(err);
+        err = NULL;
         config = config_create_default();
     }
 
@@ -744,13 +636,13 @@ error_t *cmd_list(git_repository *repo, const cmd_list_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* Dispatch to appropriate list function */
+    /* Dispatch to appropriate list function based on mode */
     if (opts->mode == LIST_PROFILES) {
         err = list_profiles(repo, opts, out);
     } else if (opts->mode == LIST_FILES) {
         err = list_files(repo, opts, out);
-    } else if (opts->mode == LIST_LOG) {
-        err = list_log(repo, opts, out);
+    } else if (opts->mode == LIST_FILE_HISTORY) {
+        err = list_file_history(repo, opts, out);
     } else {
         err = ERROR(ERR_INVALID_ARG, "Invalid list mode");
     }

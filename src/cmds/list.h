@@ -1,7 +1,12 @@
 /**
- * list.h - List profiles and files
+ * list.h - List profiles, files, and history
  *
- * Shows available profiles and their contents.
+ * Hierarchical listing interface:
+ * - Level 1: Profiles (default)
+ * - Level 2: Files (with -p flag)
+ * - Level 3: File history (with -p flag + file path)
+ *
+ * The --verbose flag adds detail at each level.
  */
 
 #ifndef DOTTA_CMD_LIST_H
@@ -12,24 +17,23 @@
 #include "types.h"
 
 /**
- * List mode
+ * List mode (determined by arguments)
  */
 typedef enum {
-    LIST_PROFILES,   /* List all profiles */
-    LIST_FILES,      /* List files in profiles */
-    LIST_LOG         /* Show commit history */
+    LIST_PROFILES,       /* List all profiles */
+    LIST_FILES,          /* List files in profile */
+    LIST_FILE_HISTORY    /* Show history of specific file */
 } list_mode_t;
 
 /**
  * Command options
  */
 typedef struct {
-    list_mode_t mode;           /* What to list */
-    const char *profile;        /* Profile name (for LIST_FILES or LIST_LOG mode) */
-    bool verbose;               /* Print verbose output */
-    size_t max_count;           /* Max commits for log mode (0 = all) */
-    bool oneline;               /* Show commits in one-line format */
-    bool remote;                /* Fetch and show remote state */
+    list_mode_t mode;           /* What to list (auto-determined) */
+    const char *profile;        /* Profile name (for LIST_FILES or LIST_FILE_HISTORY) */
+    const char *file_path;      /* File path (for LIST_FILE_HISTORY) */
+    bool verbose;               /* Print detailed output */
+    bool remote;                /* Show remote tracking state */
 } cmd_list_options_t;
 
 /**

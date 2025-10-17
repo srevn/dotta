@@ -1044,7 +1044,7 @@ static error_t *update_confirm_operation(
         !opts->include_new && !opts->only_new &&
         config->auto_detect_new_files) {
 
-        printf("\nFound %zu new file%s. Add %s to profiles? [y/N] ",
+        printf("Found %zu new file%s. Add %s to profiles? [y/N] ",
                new_files->count, new_files->count == 1 ? "" : "s",
                new_files->count == 1 ? "it" : "them");
         fflush(stdout);

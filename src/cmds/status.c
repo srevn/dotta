@@ -275,102 +275,6 @@ static void display_divergence_section(
 }
 
 /**
- * Display smart hints based on workspace state
- *
- * Analyzes divergence patterns and provides context-aware guidance.
- */
-static void display_smart_hints(
-    output_ctx_t *out,
-    const workspace_t *ws
-) {
-    if (!out || !ws) {
-        return;
-    }
-
-    /* Count divergence types for analysis */
-    size_t modified = workspace_count_divergence(ws, DIVERGENCE_MODIFIED);
-    size_t deleted = workspace_count_divergence(ws, DIVERGENCE_DELETED);
-    size_t mode_diff = workspace_count_divergence(ws, DIVERGENCE_MODE_DIFF);
-    size_t type_diff = workspace_count_divergence(ws, DIVERGENCE_TYPE_DIFF);
-    size_t undeployed = workspace_count_divergence(ws, DIVERGENCE_UNDEPLOYED);
-    size_t untracked = workspace_count_divergence(ws, DIVERGENCE_UNTRACKED);
-    size_t orphaned = workspace_count_divergence(ws, DIVERGENCE_ORPHANED);
-
-    size_t uncommitted_count = modified + deleted + mode_diff + type_diff;
-
-    output_newline(out);
-
-    /* Hint 1: Detect "only permission changes" pattern */
-    if (mode_diff > 0 && uncommitted_count == mode_diff) {
-        char *hint = output_colorize(out, OUTPUT_COLOR_DIM,
-                "Hint: Only permission changes detected - run 'dotta update' to commit them");
-        if (hint) {
-            output_printf(out, OUTPUT_NORMAL, "%s\n", hint);
-            free(hint);
-        } else {
-            output_info(out, "Hint: Only permission changes detected - run 'dotta update' to commit them");
-        }
-    }
-
-    /* Hint 2: Uncommitted changes before sync */
-    else if (uncommitted_count > 0) {
-        char *hint = output_colorize(out, OUTPUT_COLOR_DIM,
-                "Hint: Run 'dotta update' to commit changes before syncing");
-        if (hint) {
-            output_printf(out, OUTPUT_NORMAL, "%s\n", hint);
-            free(hint);
-        } else {
-            output_info(out, "Hint: Run 'dotta update' to commit changes before syncing");
-        }
-    }
-
-    /* Hint 3: Many untracked files - suggest ignore patterns */
-    if (untracked > 10) {
-        char *hint = output_colorize(out, OUTPUT_COLOR_DIM,
-                "Hint: Many untracked files detected - consider updating ignore patterns");
-        if (hint) {
-            output_printf(out, OUTPUT_NORMAL, "%s\n", hint);
-            free(hint);
-        } else {
-            output_info(out, "Hint: Many untracked files detected - consider updating ignore patterns");
-        }
-
-        char *hint2 = output_colorize(out, OUTPUT_COLOR_DIM,
-                "      Run 'dotta ignore edit' to manage ignore patterns");
-        if (hint2) {
-            output_printf(out, OUTPUT_NORMAL, "%s\n", hint2);
-            free(hint2);
-        } else {
-            output_info(out, "      Run 'dotta ignore edit' to manage ignore patterns");
-        }
-    }
-
-    /* Hint 4: Undeployed files */
-    if (undeployed > 0 && uncommitted_count == 0) {
-        char *hint = output_colorize(out, OUTPUT_COLOR_DIM,
-                "Hint: Run 'dotta apply' to deploy files from profiles");
-        if (hint) {
-            output_printf(out, OUTPUT_NORMAL, "%s\n", hint);
-            free(hint);
-        } else {
-            output_info(out, "Hint: Run 'dotta apply' to deploy files from profiles");
-        }
-    }
-
-    /* Hint 5: Orphaned state - suggest validation */
-    if (orphaned > 0) {
-        char *hint = output_colorize(out, OUTPUT_COLOR_DIM,
-                "Hint: Orphaned state detected - run 'dotta profile validate --fix' to resolve");
-        if (hint) {
-            output_printf(out, OUTPUT_NORMAL, "%s\n", hint);
-            free(hint);
-        } else {
-            output_info(out, "Hint: Orphaned state detected - run 'dotta profile validate --fix' to resolve");
-        }
-    }
-}
-
-/**
  * Display workspace status
  *
  * Shows the consistency between profile state, deployment state, and filesystem.
@@ -478,9 +382,8 @@ static void display_workspace_status(
                 sizeof(issue_types) / sizeof(issue_types[0]),
                 verbose
             );
-
-            /* Show smart hints */
-            display_smart_hints(out, ws);
+            
+            output_newline(out);
         }
     }
 

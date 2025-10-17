@@ -5,11 +5,19 @@
  *
  * Profile precedence (lowest to highest):
  * 1. global
- * 2. <os> (darwin, linux, freebsd)
- * 3. hosts/<hostname> (base profile, if no sub-profiles)
- * 4. hosts/<hostname>/<variant> (sub-profiles, sorted alphabetically)
+ * 2. <os> (darwin, linux, freebsd) - base OS profile
+ * 3. <os>/<variant> (darwin/name, freebsd/services) - OS sub-profiles (sorted alphabetically)
+ * 4. hosts/<hostname> - host base profile
+ * 5. hosts/<hostname>/<variant> - host sub-profiles (sorted alphabetically)
  *
  * Later profiles override earlier ones for conflicting files.
+ *
+ * Hierarchical OS profiles:
+ * - Base profile: <os> (e.g., darwin, freebsd)
+ * - Sub-profiles: <os>/<variant> (e.g., darwin/name, freebsd/services)
+ * - Sub-profiles are limited to one level deep for safety
+ * - Multiple sub-profiles are applied in alphabetical order
+ * - Example: darwin → darwin/name → darwin/work (alphabetical)
  *
  * Hierarchical host profiles:
  * - Base profile: hosts/<hostname> (e.g., hosts/visavis)
@@ -78,18 +86,25 @@ typedef struct {
  *
  * Detects profiles in precedence order:
  * 1. global - Universal settings
- * 2. <os> - OS-specific (darwin, linux, freebsd)
- * 3. hosts/<hostname> - Host base profile (if no sub-profiles exist)
- * 4. hosts/<hostname>/<variant> - Host sub-profiles (one level deep, sorted alphabetically)
+ * 2. <os> - OS base profile (darwin, linux, freebsd)
+ * 3. <os>/<variant> - OS sub-profiles (darwin/name, one level deep, sorted alphabetically)
+ * 4. hosts/<hostname> - Host base profile
+ * 5. hosts/<hostname>/<variant> - Host sub-profiles (one level deep, sorted alphabetically)
  *
  * Only includes profiles that exist as branches.
  *
  * Examples:
+ * - OS "darwin" with profiles "darwin", "darwin/name", "darwin/work":
+ *   → global → darwin → darwin/name → darwin/work
+ *
  * - Hostname "visavis" with profile "hosts/visavis":
  *   → global → darwin → hosts/visavis
  *
  * - Hostname "visavis" with profiles "hosts/visavis/github" and "hosts/visavis/work":
  *   → global → darwin → hosts/visavis/github → hosts/visavis/work
+ *
+ * - Combined hierarchical profiles:
+ *   → global → darwin → darwin/name → hosts/visavis → hosts/visavis/work
  *
  * Note: Git refs don't allow both hosts/<hostname> and hosts/<hostname>/<variant>
  * to coexist. Use either a base profile OR sub-profiles, not both.

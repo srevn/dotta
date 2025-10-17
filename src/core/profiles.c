@@ -184,6 +184,206 @@ static int string_compare(const void *a, const void *b) {
 }
 
 /**
+ * Detect OS-specific profiles (base + sub-profiles)
+ *
+ * Finds both base OS profile (<os>) and sub-profiles (<os>/<variant>)
+ * for hierarchical configuration.
+ *
+ * Examples:
+ * - Base: darwin, linux, freebsd
+ * - Sub-profiles: darwin/name, darwin/work, freebsd/services
+ *
+ * Sub-profiles are sorted alphabetically for deterministic ordering.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param os_name OS name (must not be NULL)
+ * @param list Profile list to append to (must not be NULL)
+ * @param capacity Current capacity of list->profiles array (must not be NULL, updated on realloc)
+ * @return Error or NULL on success
+ */
+static error_t *detect_os_profiles(
+    git_repository *repo,
+    const char *os_name,
+    profile_list_t *list,
+    size_t *capacity
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(os_name);
+    CHECK_NULL(list);
+    CHECK_NULL(capacity);
+
+    error_t *err = NULL;
+    string_array_t *branches = NULL;
+    string_array_t *base_profile = NULL;
+    string_array_t *sub_profiles = NULL;
+    const char **sub_array = NULL;
+    string_array_t *sorted_subs = NULL;
+
+    size_t os_name_len = strlen(os_name);
+
+    /* Get all branches */
+    err = gitops_list_branches(repo, &branches);
+    if (err) {
+        goto cleanup;
+    }
+
+    /* Collect matching profiles: base + sub-profiles */
+    base_profile = string_array_create();
+    sub_profiles = string_array_create();
+
+    if (!base_profile || !sub_profiles) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate profile arrays");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < string_array_size(branches); i++) {
+        const char *branch = string_array_get(branches, i);
+
+        /* Check if branch starts with OS name */
+        if (strncmp(branch, os_name, os_name_len) != 0) {
+            continue;
+        }
+
+        const char *suffix = branch + os_name_len;
+
+        /* Exact match: darwin, freebsd, etc. */
+        if (suffix[0] == '\0') {
+            err = string_array_push(base_profile, branch);
+            if (err) {
+                goto cleanup;
+            }
+        }
+        /* Sub-profile: darwin/something, freebsd/something */
+        else if (suffix[0] == '/') {
+            /* Ensure only one level deep: no additional '/' after the first */
+            const char *after_slash = suffix + 1;
+            if (strchr(after_slash, '/') == NULL && after_slash[0] != '\0') {
+                err = string_array_push(sub_profiles, branch);
+                if (err) {
+                    goto cleanup;
+                }
+            }
+        }
+    }
+
+    /* Done with branches */
+    string_array_free(branches);
+    branches = NULL;
+
+    /* Calculate total profiles to add */
+    size_t base_count = string_array_size(base_profile);
+    size_t sub_count = string_array_size(sub_profiles);
+    size_t total_to_add = base_count + sub_count;
+
+    if (total_to_add == 0) {
+        /* No OS profiles found - success with no changes */
+        goto cleanup;
+    }
+
+    /* Ensure capacity with overflow check */
+    size_t needed_capacity = list->count + total_to_add;
+    if (needed_capacity > *capacity) {
+        /* Check for overflow in doubling loop */
+        if (*capacity > SIZE_MAX / 2) {
+            err = ERROR(ERR_INTERNAL, "Profile capacity overflow");
+            goto cleanup;
+        }
+
+        size_t new_capacity = *capacity * 2;
+        while (new_capacity < needed_capacity) {
+            if (new_capacity > SIZE_MAX / 2) {
+                err = ERROR(ERR_INTERNAL, "Profile capacity overflow");
+                goto cleanup;
+            }
+            new_capacity *= 2;
+        }
+
+        profile_t *new_profiles = realloc(list->profiles, new_capacity * sizeof(profile_t));
+        if (!new_profiles) {
+            err = ERROR(ERR_MEMORY, "Failed to grow profiles array");
+            goto cleanup;
+        }
+
+        list->profiles = new_profiles;
+        *capacity = new_capacity;
+    }
+
+    /* Sort sub-profiles alphabetically for deterministic ordering */
+    if (sub_count > 1) {
+        /* Get direct access to internal array for sorting */
+        sub_array = malloc(sub_count * sizeof(char *));
+        if (!sub_array) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate sort array");
+            goto cleanup;
+        }
+
+        for (size_t i = 0; i < sub_count; i++) {
+            sub_array[i] = string_array_get(sub_profiles, i);
+        }
+
+        qsort(sub_array, sub_count, sizeof(char *), string_compare);
+
+        /* Rebuild sorted array */
+        sorted_subs = string_array_create();
+        if (!sorted_subs) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate sorted array");
+            goto cleanup;
+        }
+
+        for (size_t i = 0; i < sub_count; i++) {
+            err = string_array_push(sorted_subs, sub_array[i]);
+            if (err) {
+                goto cleanup;
+            }
+        }
+
+        free(sub_array);
+        sub_array = NULL;
+
+        string_array_free(sub_profiles);
+        sub_profiles = sorted_subs;
+        sorted_subs = NULL;
+    }
+
+    /* Add base profile first (if exists) */
+    for (size_t i = 0; i < base_count; i++) {
+        const char *profile_name = string_array_get(base_profile, i);
+        profile_t *profile = NULL;
+        err = profile_load(repo, profile_name, &profile);
+        if (err) {
+            goto cleanup;
+        }
+
+        profile->auto_detected = true;
+        list->profiles[list->count++] = *profile;
+        free(profile);  /* Shallow copy of internals to list, only free struct */
+    }
+
+    /* Add sub-profiles (sorted alphabetically) */
+    for (size_t i = 0; i < sub_count; i++) {
+        const char *profile_name = string_array_get(sub_profiles, i);
+        profile_t *profile = NULL;
+        err = profile_load(repo, profile_name, &profile);
+        if (err) {
+            goto cleanup;
+        }
+
+        profile->auto_detected = true;
+        list->profiles[list->count++] = *profile;
+        free(profile);  /* Shallow copy of internals to list, only free struct */
+    }
+
+cleanup:
+    string_array_free(branches);
+    string_array_free(base_profile);
+    string_array_free(sub_profiles);
+    string_array_free(sorted_subs);
+    free(sub_array);
+
+    return err;
+}
+
+/**
  * Detect host-specific profiles (base + sub-profiles)
  *
  * Finds both base host profile (hosts/<hostname>) and sub-profiles
@@ -391,9 +591,10 @@ cleanup:
  *
  * Detection order (lower numbers = lower precedence):
  * 1. global - Universal settings
- * 2. <os> - OS-specific (darwin, linux, freebsd)
- * 3. hosts/<hostname> - Host base profile
- * 4. hosts/<hostname>/<variant> - Host sub-profiles (sorted alphabetically)
+ * 2. <os> - OS base profile (darwin, linux, freebsd)
+ * 3. <os>/<variant> - OS sub-profiles (darwin/name, sorted alphabetically)
+ * 4. hosts/<hostname> - Host base profile
+ * 5. hosts/<hostname>/<variant> - Host sub-profiles (sorted alphabetically)
  *
  * Later profiles override earlier ones for conflicting files.
  */
@@ -416,8 +617,8 @@ error_t *profile_detect_auto(
         goto cleanup;
     }
 
-    /* Start with capacity for typical case: global + os + host + 2 sub-profiles */
-    size_t capacity = 5;
+    /* Start with capacity for typical case: global + os + 2 os-subs + host + 2 host-subs */
+    size_t capacity = 8;
     list->profiles = calloc(capacity, sizeof(profile_t));
     if (!list->profiles) {
         err = ERROR(ERR_MEMORY, "Failed to allocate profiles array");
@@ -437,21 +638,14 @@ error_t *profile_detect_auto(
         free(profile);  /* Shallow copy of internals to list, only free struct */
     }
 
-    /* 2. Try OS profile */
+    /* 2. Detect OS profiles (base + sub-profiles, hierarchical) */
     err = profile_get_os_name(&os_name);
     if (!err && os_name) {
-        if (profile_exists(repo, os_name)) {
-            profile_t *profile = NULL;
-            err = profile_load(repo, os_name, &profile);
-            if (!err) {
-                profile->auto_detected = true;
-                list->profiles[list->count++] = *profile;
-                free(profile);
-            } else {
-                /* Non-fatal: skip OS profile if it can't be loaded */
-                error_free(err);
-                err = NULL;
-            }
+        err = detect_os_profiles(repo, os_name, list, &capacity);
+        if (err) {
+            /* Non-fatal: skip OS profiles if detection fails */
+            error_free(err);
+            err = NULL;
         }
         free(os_name);
         os_name = NULL;

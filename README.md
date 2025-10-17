@@ -18,19 +18,32 @@ Files are stored with **location prefixes** (`home/`, `root/`) in isolated profi
 Dotta organizes configurations into Git orphan branches (profiles):
 
 ```
-global           # Base configuration (all systems)
-darwin           # macOS-specific settings
-linux            # Linux-specific settings
-hosts/laptop     # Per-machine overrides
-hosts/server     # Server-specific configuration
+global              # Base configuration (all systems)
+darwin              # macOS base settings
+darwin/work         # macOS work-specific settings
+darwin/personal     # macOS personal overrides
+linux               # Linux base settings
+linux/server        # Linux server-specific settings
+hosts/laptop        # Per-machine overrides
+hosts/laptop/vpn    # Machine-specific variants
 ```
 
-Profiles are applied in **layered order**, with later profiles overriding earlier ones. This enables:
+Profiles support **hierarchical organization** for both OS-specific and host-specific configurations. Profiles are applied in **layered order**, with later profiles overriding earlier ones:
+
+1. `global` - Universal base configuration
+2. `<os>` - OS base profile (darwin, linux, freebsd)
+3. `<os>/<variant>` - OS sub-profiles (sorted alphabetically)
+4. `hosts/<hostname>` - Host base profile
+5. `hosts/<hostname>/<variant>` - Host sub-profiles (sorted alphabetically)
+
+This enables:
 
 - Shared base configuration across all machines
-- OS-specific customizations
-- Host-specific overrides
-- Custom profile variants for different contexts (work, personal, client projects)
+- OS-specific base settings with contextual variants
+- Host-specific overrides with role-based variants
+- Predictable layering with alphabetical sub-profile ordering
+
+**Note:** Due to Git ref namespace limitations, you cannot have both a base profile and sub-profiles with the same prefix (e.g., `darwin` and `darwin/work` cannot coexist). Use either the base profile OR sub-profiles, not both. The same limitation applies to host profiles.
 
 ### 2. Active Profile Management
 
@@ -52,7 +65,7 @@ dotta status  # Checks: global, darwin
 dotta sync    # Syncs: global, darwin
 ```
 
-**Clone automatically selects** detected profiles (global + OS + hostname).
+**Clone automatically selects** detected profiles: `global`, OS base and sub-profiles (`darwin`, `darwin/*`), and host base and sub-profiles (`hosts/<hostname>`, `hosts/<hostname>/*`).
 
 ### 3. Metadata Preservation
 
@@ -245,8 +258,16 @@ Profile resolution follows a strict priority order:
 
 Active profiles are managed exclusively through `dotta profile select/unselect/reorder` commands. The state file is the single source of truth for which profiles are active on each machine.
 
-When profiles are applied, later profiles override earlier ones:
-- `dotta apply` uses active profiles from state (e.g., global → darwin → hosts/laptop)
+When profiles are applied, later profiles override earlier ones following this precedence:
+
+1. `global` - Base configuration
+2. `<os>` - OS base profile (e.g., `darwin`)
+3. `<os>/<variant>` - OS sub-profiles (e.g., `darwin/work`, alphabetically sorted)
+4. `hosts/<hostname>` - Host base profile
+5. `hosts/<hostname>/<variant>` - Host sub-profiles (e.g., `hosts/laptop/vpn`, alphabetically sorted)
+
+Example layering for a macOS laptop with work and vpn configs:
+- `dotta apply` → `global` → `darwin` → `darwin/work` → `hosts/laptop` → `hosts/laptop/vpn`
 - Files from later profiles override files from earlier profiles
 
 ## Installation
@@ -262,7 +283,7 @@ When profiles are applied, later profiles override earlier ones:
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/dotta.git
+git clone https://github.com/srevn/dotta.git
 cd dotta
 
 # Check dependencies
@@ -297,17 +318,23 @@ make uninstall    # Remove installed files
 # Create and initialize repository
 dotta init
 
-# Add your first files
+# Add files to base profiles
 dotta add --profile global ~/.bashrc ~/.vimrc
+
+# Add OS-specific files (hierarchical)
 dotta add --profile darwin ~/.config/fish/config.fish
+dotta add --profile darwin/work ~/.ssh/work_config
+
+# Add host-specific files
+dotta add --profile hosts/$(hostname) ~/.local/machine_specific
 
 # Select active profiles for this machine
-dotta profile select global darwin
+dotta profile select global darwin darwin/work hosts/$(hostname)
 
 # View status
 dotta status
 
-# Apply configurations
+# Apply configurations (layers: global → darwin → darwin/work → hosts/hostname)
 dotta apply
 ```
 
@@ -318,9 +345,15 @@ dotta apply
 dotta clone git@github.com:username/dotfiles.git
 
 # Cloning automatically:
-# 1. Detects relevant profiles (global + OS + hostname)
+# 1. Detects relevant profiles:
+#    - global (if exists)
+#    - OS base and sub-profiles (darwin, darwin/work, darwin/personal)
+#    - Host base and sub-profiles (hosts/<hostname>, hosts/<hostname>/*)
 # 2. Fetches detected profiles
 # 3. Activates them in state
+
+# Example auto-detection on macOS "laptop" with profiles:
+# → Selects: global, darwin, darwin/work, hosts/laptop
 
 # Run bootstrap scripts if present (prompts for confirmation)
 dotta bootstrap
@@ -488,18 +521,33 @@ Each profile can extend or override baseline ignore patterns:
 .DS_Store            # Additional: ignore .DS_Store in darwin
 ```
 
-### Subprofile Organization
+### Hierarchical Profile Organization
 
-Organize profiles hierarchically:
+Organize profiles hierarchically for both OS-specific and host-specific configurations:
 
 ```
-hosts/
-├── laptop
-├── desktop
-└── servers/
-    ├── web01
-    └── db01
+# OS-specific hierarchical profiles
+darwin              # macOS base (or use sub-profiles only)
+darwin/work         # Work-specific macOS settings
+darwin/personal     # Personal macOS overrides
+
+linux               # Linux base (or use sub-profiles only)
+linux/desktop       # Desktop environment configs
+linux/server        # Server-specific settings
+
+# Host-specific hierarchical profiles
+hosts/laptop        # Laptop base (or use sub-profiles only)
+hosts/laptop/office # Office network configs
+hosts/laptop/vpn    # VPN-specific settings
+
+hosts/desktop       # Desktop base
+hosts/desktop/gaming # Gaming-specific configs
 ```
+
+**Hierarchical rules:**
+- Sub-profiles are limited to one level deep (`darwin/work` ✓, `darwin/work/client` ✗)
+- Multiple sub-profiles are applied in alphabetical order
+- Git limitation: Cannot have both base AND sub-profiles (see note above)
 
 ### Bootstrap Scripts
 

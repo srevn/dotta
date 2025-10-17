@@ -18,6 +18,11 @@
 #define GIT_PATH_MAX 4096
 #endif
 
+/* Input validation limits */
+#define MAX_DOTTAIGNORE_SIZE (1024 * 1024)   /* 1MB - reasonable limit for ignore files */
+#define MAX_PATTERN_LENGTH 4096              /* Maximum length for a single pattern */
+#define MAX_PATTERN_COUNT 10000              /* Maximum number of patterns */
+
 /**
  * Ignore context structure
  *
@@ -209,6 +214,13 @@ static error_t *load_baseline_dottaignore(
     const void *raw_content = git_blob_rawcontent(blob);
     size_t size = git_blob_rawsize(blob);
 
+    /* Validate size to prevent excessive memory allocation */
+    if (size > MAX_DOTTAIGNORE_SIZE) {
+        git_blob_free(blob);
+        git_tree_free(tree);
+        return ERROR(ERR_VALIDATION, "Baseline .dottaignore file too large (max 1MB)");
+    }
+
     if (size > 0) {
         *out_content = malloc(size + 1);
         if (!*out_content) {
@@ -308,6 +320,13 @@ static error_t *load_profile_dottaignore(
     const void *raw_content = git_blob_rawcontent(blob);
     size_t size = git_blob_rawsize(blob);
 
+    /* Validate size to prevent excessive memory allocation */
+    if (size > MAX_DOTTAIGNORE_SIZE) {
+        git_blob_free(blob);
+        git_tree_free(tree);
+        return ERROR(ERR_VALIDATION, "Profile .dottaignore file too large (max 1MB)");
+    }
+
     if (size > 0) {
         *out_content = malloc(size + 1);
         if (!*out_content) {
@@ -387,15 +406,20 @@ static error_t *matches_dottaignore(
         size_t len = strlen(path);
         if (len > 0 && path[len - 1] != '/') {
             check_path = str_format("%s/", path);
+            if (!check_path) {
+                return ERROR(ERR_MEMORY, "Failed to allocate path");
+            }
         } else {
             check_path = strdup(path);
+            if (!check_path) {
+                return ERROR(ERR_MEMORY, "Failed to allocate path");
+            }
         }
     } else {
         check_path = strdup(path);
-    }
-
-    if (!check_path) {
-        return ERROR(ERR_MEMORY, "Failed to allocate path");
+        if (!check_path) {
+            return ERROR(ERR_MEMORY, "Failed to allocate path");
+        }
     }
 
     /* Add rules to libgit2 ignore system */
@@ -544,6 +568,12 @@ error_t *ignore_context_create(
 
     /* Copy CLI patterns */
     if (cli_excludes && cli_exclude_count > 0) {
+        /* Validate pattern count to prevent overflow and DoS */
+        if (cli_exclude_count > MAX_PATTERN_COUNT) {
+            free(ctx);
+            return ERROR(ERR_VALIDATION, "Too many CLI exclude patterns (max 10000)");
+        }
+
         ctx->cli_patterns = malloc(cli_exclude_count * sizeof(char *));
         if (!ctx->cli_patterns) {
             free(ctx);
@@ -551,6 +581,17 @@ error_t *ignore_context_create(
         }
 
         for (size_t i = 0; i < cli_exclude_count; i++) {
+            /* Validate pattern length to prevent excessive memory use and DoS */
+            if (cli_excludes[i] && strlen(cli_excludes[i]) > MAX_PATTERN_LENGTH) {
+                /* Clean up already allocated patterns */
+                for (size_t j = 0; j < i; j++) {
+                    free(ctx->cli_patterns[j]);
+                }
+                free(ctx->cli_patterns);
+                free(ctx);
+                return ERROR(ERR_VALIDATION, "CLI exclude pattern too long (max 4096 chars)");
+            }
+
             ctx->cli_patterns[i] = strdup(cli_excludes[i]);
             if (!ctx->cli_patterns[i]) {
                 /* Clean up already allocated patterns */
@@ -585,6 +626,12 @@ error_t *ignore_context_create(
 
     /* Copy config patterns */
     if (config && config->ignore_patterns && config->ignore_pattern_count > 0) {
+        /* Validate pattern count to prevent overflow and DoS */
+        if (config->ignore_pattern_count > MAX_PATTERN_COUNT) {
+            ignore_context_free(ctx);
+            return ERROR(ERR_VALIDATION, "Too many config ignore patterns (max 10000)");
+        }
+
         ctx->config_patterns = malloc(config->ignore_pattern_count * sizeof(char *));
         if (!ctx->config_patterns) {
             ignore_context_free(ctx);
@@ -592,6 +639,17 @@ error_t *ignore_context_create(
         }
 
         for (size_t i = 0; i < config->ignore_pattern_count; i++) {
+            /* Validate pattern length to prevent excessive memory use and DoS */
+            if (config->ignore_patterns[i] && strlen(config->ignore_patterns[i]) > MAX_PATTERN_LENGTH) {
+                /* Clean up */
+                for (size_t j = 0; j < i; j++) {
+                    free(ctx->config_patterns[j]);
+                }
+                free(ctx->config_patterns);
+                ignore_context_free(ctx);
+                return ERROR(ERR_VALIDATION, "Config ignore pattern too long (max 4096 chars)");
+            }
+
             ctx->config_patterns[i] = strdup(config->ignore_patterns[i]);
             if (!ctx->config_patterns[i]) {
                 /* Clean up */
@@ -697,17 +755,16 @@ error_t *ignore_should_ignore(
                 ctx->baseline_dottaignore_content,
                 ctx->profile_dottaignore_content);
             if (!combined_content) {
-                /* Memory allocation failed - non-fatal */
-            } else {
-                err = matches_dottaignore(
-                    ctx->repo,
-                    combined_content,
-                    rel_path,
-                    is_directory,
-                    &matched
-                );
-                free(combined_content);
+                return ERROR(ERR_MEMORY, "Failed to combine .dottaignore patterns");
             }
+            err = matches_dottaignore(
+                ctx->repo,
+                combined_content,
+                rel_path,
+                is_directory,
+                &matched
+            );
+            free(combined_content);
         } else if (ctx->profile_dottaignore_content) {
             /* Only profile .dottaignore exists */
             err = matches_dottaignore(
@@ -826,19 +883,18 @@ error_t *ignore_test_path(
                 ctx->baseline_dottaignore_content,
                 ctx->profile_dottaignore_content);
             if (!combined_content) {
-                /* Memory allocation failed - non-fatal */
-            } else {
-                err = matches_dottaignore(
-                    ctx->repo,
-                    combined_content,
-                    rel_path,
-                    is_directory,
-                    &matched
-                );
-                free(combined_content);
-                /* When combined, attribute to profile (it has final say via negation) */
-                source = IGNORE_SOURCE_PROFILE_DOTTAIGNORE;
+                return ERROR(ERR_MEMORY, "Failed to combine .dottaignore patterns");
             }
+            err = matches_dottaignore(
+                ctx->repo,
+                combined_content,
+                rel_path,
+                is_directory,
+                &matched
+            );
+            free(combined_content);
+            /* When combined, attribute to profile (it has final say via negation) */
+            source = IGNORE_SOURCE_PROFILE_DOTTAIGNORE;
         } else if (ctx->profile_dottaignore_content) {
             /* Only profile .dottaignore exists */
             err = matches_dottaignore(

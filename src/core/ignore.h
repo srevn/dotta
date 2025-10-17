@@ -66,8 +66,24 @@ typedef struct {
  *
  * Initializes the ignore system with all configured rules.
  *
- * @param repo Repository (for accessing .dottaignore files)
- * @param config Configuration (for config patterns and settings)
+ * Lifetime Requirements:
+ *   - The repository pointer is borrowed (not owned). The caller MUST ensure
+ *     the repository remains valid for the entire lifetime of the ignore context.
+ *   - Freeing the repository before freeing the ignore context will result in
+ *     use-after-free errors.
+ *   - The config and profile_name are copied internally and can be freed after
+ *     this function returns.
+ *   - CLI exclude patterns are copied internally and can be freed after this
+ *     function returns.
+ *
+ * Input Validation:
+ *   - Maximum CLI patterns: 10,000 (returns ERR_VALIDATION if exceeded)
+ *   - Maximum config patterns: 10,000 (returns ERR_VALIDATION if exceeded)
+ *   - Maximum pattern length: 4,096 characters (returns ERR_VALIDATION if exceeded)
+ *   - Maximum .dottaignore file size: 1MB (returns ERR_VALIDATION if exceeded)
+ *
+ * @param repo Repository (for accessing .dottaignore files) - BORROWED, must outlive context
+ * @param config Configuration (for config patterns and settings, can be NULL)
  * @param profile_name Profile name (for profile-specific .dottaignore, can be NULL)
  * @param cli_excludes CLI --exclude patterns (can be NULL)
  * @param cli_exclude_count Number of CLI patterns

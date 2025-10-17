@@ -369,10 +369,14 @@ error_t *gitops_create_commit(
 
     git_reference *ref = NULL;
     if (git_reference_lookup(&ref, repo, refname) == 0) {
-        git_reference_name_to_id(&commit_oid, repo, refname);
+        err = git_reference_name_to_id(&commit_oid, repo, refname);
+        git_reference_free(ref);
+        if (err < 0) {
+            git_signature_free(sig);
+            return error_from_git(err);
+        }
         parent_oid = &commit_oid;
         err = git_commit_lookup(&parent, repo, parent_oid);
-        git_reference_free(ref);
         if (err < 0) {
             git_signature_free(sig);
             return error_from_git(err);
@@ -799,9 +803,17 @@ error_t *gitops_merge_ff_only(git_repository *repo, const char *branch_name) {
         return error_from_git(err);
     }
 
+    /* Get commit ID for fast-forward */
+    const git_oid *their_oid = git_annotated_commit_id(their_head);
+    if (!their_oid) {
+        git_reference_free(target_ref);
+        git_annotated_commit_free(their_head);
+        return ERROR(ERR_GIT, "Failed to get commit ID from annotated commit");
+    }
+
     git_reference *new_target_ref = NULL;
     err = git_reference_set_target(&new_target_ref, target_ref,
-                                   git_annotated_commit_id(their_head),
+                                   their_oid,
                                    "merge: Fast-forward");
     git_reference_free(target_ref);
     git_annotated_commit_free(their_head);
@@ -954,6 +966,11 @@ static int find_by_basename_callback(
 ) {
     basename_search_t *search = (basename_search_t *)payload;
     const char *entry_name = git_tree_entry_name(entry);
+
+    /* Defensive check - should never be NULL from valid tree entry */
+    if (!entry_name) {
+        return -1;
+    }
 
     /* Check if basename matches */
     if (strcmp(entry_name, search->target_basename) == 0) {

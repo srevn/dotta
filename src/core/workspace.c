@@ -1,15 +1,17 @@
 /**
  * workspace.c - Workspace abstraction implementation
  *
- * Manages three-state consistency: Profile (Git), Deployment (state.json), Filesystem (disk).
+ * Manages three-state consistency: Profile (git), Deployment (state.db), Filesystem (disk).
  * Detects and categorizes divergence to prevent data loss and enable safe operations.
  */
 
 #include "workspace.h"
 
 #include <dirent.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "base/error.h"
 #include "base/filesystem.h"
@@ -411,14 +413,16 @@ static error_t *scan_directory_for_untracked(
             return ERROR(ERR_MEMORY, "Failed to allocate path");
         }
 
-        /* Check if path exists (handle race conditions) */
-        if (!fs_lexists(full_path)) {
+        /* Check if path exists and get its type (single syscall, don't follow symlinks) */
+        struct stat st;
+        if (lstat(full_path, &st) != 0) {
+            /* Path might have been deleted (race condition) */
             free(full_path);
             continue;
         }
 
         /* Check if ignored */
-        bool is_dir = fs_is_directory(full_path);
+        bool is_dir = S_ISDIR(st.st_mode);
         if (ignore_ctx) {
             bool ignored = false;
             error_t *err = ignore_should_ignore(ignore_ctx, full_path, is_dir, &ignored);
@@ -456,7 +460,7 @@ static error_t *scan_directory_for_untracked(
             }
         } else {
             /* Check if this file is already in manifest */
-            file_entry_t *manifest_entry = hashmap_get((hashmap_t*)manifest_index, full_path);
+            file_entry_t *manifest_entry = hashmap_get(manifest_index, full_path);
 
             if (!manifest_entry) {
                 /* This is an untracked file! */
@@ -558,6 +562,8 @@ static error_t *analyze_untracked_files(workspace_t *ws, const dotta_config_t *c
 
             if (err) {
                 /* Non-fatal: continue without ignore filtering */
+                fprintf(stderr, "warning: failed to load ignore patterns for '%s' in profile '%s': %s\n",
+                        dir_entry->filesystem_path, profile_name, err->message);
                 error_free(err);
                 err = NULL;
                 ignore_ctx = NULL;
@@ -577,7 +583,9 @@ static error_t *analyze_untracked_files(workspace_t *ws, const dotta_config_t *c
             ignore_context_free(ignore_ctx);
 
             if (err) {
-                /* Log would go here, but for now just continue with other directories */
+                /* Non-fatal: continue with other directories */
+                fprintf(stderr, "warning: failed to scan directory '%s' in profile '%s': %s\n",
+                        dir_entry->filesystem_path, profile_name, err->message);
                 error_free(err);
                 err = NULL;
             }

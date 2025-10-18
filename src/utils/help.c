@@ -432,9 +432,7 @@ void print_revert_help(const char *prog_name) {
     printf("  [profile:]<file>@<commit>\n");
     printf("\n");
     printf("  profile              Optional profile name (e.g., global, darwin/work)\n");
-    printf("  file                 Path in either format:\n");
-    printf("                         • Filesystem: /path/to/file or ~/path/to/file\n");
-    printf("                         • Storage: home/path/to/file or root/path/to/file\n");
+    printf("  file                 Filesystem path or storage path (home/..., root/...)\n");
     printf("  commit               Required commit reference (e.g., HEAD~3, abc123)\n");
     printf("\nOptions:\n");
     printf("  -p, --profile <name>  Override refspec profile (required if file is ambiguous)\n");

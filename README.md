@@ -79,7 +79,7 @@ Dotta automatically preserves file metadata across machines:
 Example workflow:
 ```bash
 # On source machine (as root for system files)
-dotta add --profile global /etc/systemd/system/myservice.service
+dotta add --profile linux /etc/systemd/system/myservice.service
 
 # On target machine
 dotta apply  # Restores both content and permissions (0644, root:root)
@@ -322,14 +322,14 @@ dotta init
 dotta add --profile global ~/.bashrc ~/.vimrc
 
 # Add OS-specific files (hierarchical)
-dotta add --profile darwin ~/.config/fish/config.fish
+dotta add --profile darwin/base ~/.config/fish/config.fish
 dotta add --profile darwin/work ~/.ssh/work_config
 
 # Add host-specific files
 dotta add --profile hosts/$(hostname) ~/.local/machine_specific
 
 # Select active profiles for this machine
-dotta profile select global darwin darwin/work hosts/$(hostname)
+dotta profile select global darwin/base darwin/work hosts/$(hostname)
 
 # View status
 dotta status
@@ -354,6 +354,9 @@ dotta clone git@github.com:username/dotfiles.git
 
 # Example auto-detection on macOS "laptop" with profiles:
 # → Selects: global, darwin, darwin/work, hosts/laptop
+
+# If no profiles match, you can fetch manually
+dotta profile fetch work/project1 work/project2
 
 # Run bootstrap scripts if present (prompts for confirmation)
 dotta bootstrap
@@ -418,7 +421,7 @@ dotta sync                          # Intelligent two-way sync of active profile
 dotta status                        # Show deployment and sync status
 dotta list                          # List all profiles
 dotta list <profile>                # List files in profile
-dotta list --log [profile]          # Show commit history
+dotta list <profile> <file>         # Show commit history for a specific file
 dotta diff                          # Show differences
 dotta show <file>                   # Show file content from profile
 ```
@@ -540,7 +543,7 @@ hosts/laptop        # Laptop base (or use sub-profiles only)
 hosts/laptop/office # Office network configs
 hosts/laptop/vpn    # VPN-specific settings
 
-hosts/desktop       # Desktop base
+hosts/desktop        # Desktop base
 hosts/desktop/gaming # Gaming-specific configs
 ```
 
@@ -589,13 +592,13 @@ Revert individual files to previous versions:
 
 ```bash
 # Show file history
-dotta list --log global
+dotta list global <file>
 
 # Revert to specific commit
-dotta revert ~/.bashrc abc123
+dotta revert ~/.bashrc@abc123
 
 # Revert with commit
-dotta revert --commit -m "Fix config" ~/.bashrc HEAD~1
+dotta revert --commit -m "Fix config" ~/.bashrc@HEAD~1
 ```
 
 ## Performance

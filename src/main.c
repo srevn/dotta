@@ -30,6 +30,7 @@
 #include "cmds/update.h"
 #include "types.h"
 #include "utils/help.h"
+#include "utils/refspec.h"
 #include "utils/repo.h"
 #include "utils/string.h"
 
@@ -1616,6 +1617,9 @@ static int cmd_revert_main(int argc, char **argv) {
         .verbose = false
     };
 
+    const char *positional_arg = NULL;
+    const char *profile_from_cli = NULL;
+
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -1626,7 +1630,7 @@ static int cmd_revert_main(int argc, char **argv) {
                 fprintf(stderr, "Error: --profile requires an argument\n");
                 return 1;
             }
-            opts.profile = argv[++i];
+            profile_from_cli = argv[++i];
         } else if (strcmp(argv[i], "-m") == 0 || strcmp(argv[i], "--message") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: --message requires an argument\n");
@@ -1641,10 +1645,12 @@ static int cmd_revert_main(int argc, char **argv) {
             opts.dry_run = true;
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             opts.verbose = true;
-        } else if (!opts.file_path) {
-            opts.file_path = argv[i];
-        } else if (!opts.commit) {
-            opts.commit = argv[i];
+        } else if (argv[i][0] == '-') {
+            fprintf(stderr, "Error: Unknown option '%s'\n", argv[i]);
+            print_revert_help(argv[0]);
+            return 1;
+        } else if (!positional_arg) {
+            positional_arg = argv[i];
         } else {
             fprintf(stderr, "Error: Unexpected argument '%s'\n", argv[i]);
             print_revert_help(argv[0]);
@@ -1652,16 +1658,57 @@ static int cmd_revert_main(int argc, char **argv) {
         }
     }
 
-    /* Validate required arguments */
+    /* Validate required argument */
+    if (!positional_arg) {
+        fprintf(stderr, "Error: file refspec is required\n");
+        fprintf(stderr, "Usage: %s revert [options] <file@commit>\n", argv[0]);
+        fprintf(stderr, "Example: %s revert home/.bashrc@HEAD~1\n", argv[0]);
+        return 1;
+    }
+
+    /* Parse refspec: [profile:]<file>[@commit] */
+    char *refspec_profile = NULL;
+    char *refspec_file = NULL;
+    char *refspec_commit = NULL;
+
+    error_t *err = parse_refspec(positional_arg, &refspec_profile, &refspec_file, &refspec_commit);
+    if (err) {
+        fprintf(stderr, "Error parsing refspec: ");
+        error_print(err, stderr);
+        error_free(err);
+        return 1;
+    }
+
+    /* Apply CLI profile first (can be overridden by refspec) */
+    if (profile_from_cli) {
+        opts.profile = profile_from_cli;
+    }
+
+    /* Refspec components override CLI flags (refspec is more specific) */
+    if (refspec_profile) {
+        opts.profile = refspec_profile;
+    }
+    if (refspec_file) {
+        opts.file_path = refspec_file;
+    }
+    if (refspec_commit) {
+        opts.commit = refspec_commit;
+    }
+
+    /* Validate required fields */
     if (!opts.file_path) {
-        fprintf(stderr, "Error: file path is required\n");
-        print_revert_help(argv[0]);
+        fprintf(stderr, "Error: file path is required in refspec\n");
+        fprintf(stderr, "Usage: %s revert [options] <file@commit>\n", argv[0]);
         return 1;
     }
 
     if (!opts.commit) {
         fprintf(stderr, "Error: commit reference is required\n");
-        print_revert_help(argv[0]);
+        fprintf(stderr, "Usage: %s revert [options] <file@commit>\n", argv[0]);
+        fprintf(stderr, "Examples:\n");
+        fprintf(stderr, "  %s revert home/.bashrc@HEAD~1\n", argv[0]);
+        fprintf(stderr, "  %s revert global:home/.bashrc@a4f2c8e\n", argv[0]);
+        fprintf(stderr, "  %s revert -p darwin home/.bashrc@HEAD~1  # CLI flag overrides refspec\n", argv[0]);
         return 1;
     }
 
@@ -1678,7 +1725,7 @@ static int cmd_revert_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    error_t *err = cmd_revert(repo, &opts);
+    err = cmd_revert(repo, &opts);
     git_repository_free(repo);
 
     if (err) {

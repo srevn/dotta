@@ -33,24 +33,4 @@ typedef struct {
  */
 error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts);
 
-/**
- * Parse refspec: [profile:]<path>[@commit]
- *
- * Extracts profile, file path, and commit from refspec string.
- * All output parameters are set to NULL on error.
- * Caller must free all non-NULL output strings.
- *
- * @param input Refspec string (must not be NULL)
- * @param out_profile Profile name or NULL if not specified (caller must free)
- * @param out_file File path (always set if success, caller must free)
- * @param out_commit Commit ref or NULL if not specified (caller must free)
- * @return Error or NULL on success
- */
-error_t *parse_refspec(
-    const char *input,
-    char **out_profile,
-    char **out_file,
-    char **out_commit
-);
-
 #endif /* DOTTA_CMD_SHOW_H */

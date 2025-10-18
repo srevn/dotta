@@ -424,13 +424,16 @@ void print_show_help(const char *prog_name) {
 }
 
 void print_revert_help(const char *prog_name) {
-    printf("Usage: %s revert [options] <file> <commit>\n\n", prog_name);
+    printf("Usage: %s revert [options] <file@commit>\n\n", prog_name);
     printf("Revert a file in a profile to its state at a specific commit\n\n");
-    printf("Arguments:\n");
-    printf("  <file>                Filesystem path or storage path (home/..., root/...)\n");
-    printf("  <commit>              Target commit reference (e.g., HEAD~3, abc123)\n");
+    printf("Refspec Syntax:\n");
+    printf("  [profile:]<file>@<commit>\n");
+    printf("\n");
+    printf("  profile              Optional profile name (e.g., global, darwin/work)\n");
+    printf("  file                 Filesystem path or storage path (home/..., root/...)\n");
+    printf("  commit               Required commit reference (e.g., HEAD~3, abc123)\n");
     printf("\nOptions:\n");
-    printf("  -p, --profile <name>  Profile name (required if file exists in multiple profiles)\n");
+    printf("  -p, --profile <name>  Override refspec profile (required if file is ambiguous)\n");
     printf("  --commit              Create a commit with the reverted changes\n");
     printf("  -m, --message <msg>   Commit message (requires --commit)\n");
     printf("  -f, --force           Skip confirmation and override conflicts\n");
@@ -448,11 +451,17 @@ void print_revert_help(const char *prog_name) {
     printf("  5. Updates file in profile branch to target state\n");
     printf("  6. Optionally creates commit (with --commit)\n");
     printf("\nExamples:\n");
-    printf("  # Revert .bashrc to 3 commits ago, then deploy\n");
-    printf("  %s revert .bashrc HEAD~3\n", prog_name);
+    printf("  # Basic refspec syntax - revert to 3 commits ago\n");
+    printf("  %s revert home/.bashrc@HEAD~3\n", prog_name);
     printf("  %s apply\n\n", prog_name);
-    printf("  # Revert with commit message\n");
-    printf("  %s revert --commit -m \"Fix broken config\" .bashrc HEAD~1\n", prog_name);
+    printf("  # Specify profile in refspec\n");
+    printf("  %s revert global:home/.bashrc@a4f2c8e\n\n", prog_name);
+    printf("  # Override refspec profile with CLI flag (uses darwin, not global)\n");
+    printf("  %s revert -p darwin global:home/.bashrc@HEAD~1\n\n", prog_name);
+    printf("  # Create commit immediately\n");
+    printf("  %s revert --commit -m \"Fix broken config\" home/.bashrc@HEAD~1\n\n", prog_name);
+    printf("  # Preview changes without modifying\n");
+    printf("  %s revert --dry-run home/.config/nvim/init.lua@HEAD~2\n", prog_name);
     printf("\n");
 }
 

@@ -129,32 +129,53 @@ error_t *profile_load_tree(git_repository *repo, profile_t *profile) {
 }
 
 /**
- * Helper: Compare strings for qsort (case-sensitive alphabetical)
+ * Helper: Add profiles from array to list as auto-detected
  */
-static int string_compare(const void *a, const void *b) {
-    const char *str_a = *(const char **)a;
-    const char *str_b = *(const char **)b;
-    return strcmp(str_a, str_b);
+static error_t *add_profiles_to_list(
+    git_repository *repo,
+    const string_array_t *profile_names,
+    profile_list_t *list
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(profile_names);
+    CHECK_NULL(list);
+
+    for (size_t i = 0; i < string_array_size(profile_names); i++) {
+        const char *profile_name = string_array_get(profile_names, i);
+        profile_t *profile = NULL;
+        error_t *err = profile_load(repo, profile_name, &profile);
+        if (err) {
+            return err;
+        }
+
+        profile->auto_detected = true;
+        list->profiles[list->count++] = *profile;
+        free(profile);  /* Shallow copy of internals to list, only free struct */
+    }
+
+    return NULL;
 }
 
 /**
  * Detect hierarchical profiles (base + sub-profiles)
  *
  * Generic helper for detecting profiles with hierarchical structure.
- * Finds both base profile matching the exact prefix and sub-profiles
- * matching prefix/<variant> (one level deep only).
- *
- * Sub-profiles are sorted alphabetically for deterministic ordering.
+ * Finds both base profile (exact match) and sub-profiles (prefix/variant).
+ * Sub-profiles are limited to one level deep and sorted alphabetically.
  *
  * Examples:
- * - Prefix "darwin" finds: darwin, darwin/personal, darwin/work
- * - Prefix "hosts/visavis" finds: hosts/visavis, hosts/visavis/github, hosts/visavis/work
+ * - Prefix "darwin":
+ *   Finds: darwin, darwin/personal, darwin/work
+ *   Rejects: darwin/ (empty variant), darwin/work/nested (too deep)
+ *
+ * - Prefix "hosts/visavis":
+ *   Finds: hosts/visavis, hosts/visavis/github, hosts/visavis/work
  *
  * @param repo Repository (must not be NULL)
  * @param prefix Profile prefix to match (must not be NULL)
  * @param list Profile list to append to (must not be NULL)
  * @param capacity Current capacity of list->profiles array (must not be NULL, updated on realloc)
- * @return Error or NULL on success
+ * @return Error or NULL on success (no matches is not an error)
  */
 static error_t *detect_hierarchical_profiles(
     git_repository *repo,
@@ -171,8 +192,6 @@ static error_t *detect_hierarchical_profiles(
     string_array_t *branches = NULL;
     string_array_t *base_profile = NULL;
     string_array_t *sub_profiles = NULL;
-    const char **sub_array = NULL;
-    string_array_t *sorted_subs = NULL;
 
     size_t prefix_len = strlen(prefix);
 
@@ -195,7 +214,7 @@ static error_t *detect_hierarchical_profiles(
         const char *branch = string_array_get(branches, i);
 
         /* Check if branch starts with prefix */
-        if (strncmp(branch, prefix, prefix_len) != 0) {
+        if (!str_starts_with(branch, prefix)) {
             continue;
         }
 
@@ -208,11 +227,11 @@ static error_t *detect_hierarchical_profiles(
                 goto cleanup;
             }
         }
-        /* Sub-profile: prefix/something (one level deep only) */
+        /* Sub-profile: prefix/variant (one level deep only) */
         else if (suffix[0] == '/') {
-            const char *after_slash = suffix + 1;
-            /* Ensure only one level deep: no additional '/' after the first */
-            if (strchr(after_slash, '/') == NULL && after_slash[0] != '\0') {
+            const char *variant = suffix + 1;
+            /* Validate: variant must be non-empty and contain no '/' (one level deep) */
+            if (variant[0] != '\0' && strchr(variant, '/') == NULL) {
                 err = string_array_push(sub_profiles, branch);
                 if (err) {
                     goto cleanup;
@@ -265,90 +284,44 @@ static error_t *detect_hierarchical_profiles(
 
     /* Sort sub-profiles alphabetically for deterministic ordering */
     if (sub_count > 1) {
-        /* Get direct access to internal array for sorting */
-        sub_array = malloc(sub_count * sizeof(char *));
-        if (!sub_array) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate sort array");
-            goto cleanup;
-        }
-
-        for (size_t i = 0; i < sub_count; i++) {
-            sub_array[i] = string_array_get(sub_profiles, i);
-        }
-
-        qsort(sub_array, sub_count, sizeof(char *), string_compare);
-
-        /* Rebuild sorted array */
-        sorted_subs = string_array_create();
-        if (!sorted_subs) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate sorted array");
-            goto cleanup;
-        }
-
-        for (size_t i = 0; i < sub_count; i++) {
-            err = string_array_push(sorted_subs, sub_array[i]);
-            if (err) {
-                goto cleanup;
-            }
-        }
-
-        free(sub_array);
-        sub_array = NULL;
-
-        string_array_free(sub_profiles);
-        sub_profiles = sorted_subs;
-        sorted_subs = NULL;
+        string_array_sort(sub_profiles);
     }
 
     /* Add base profile first (if exists) */
-    for (size_t i = 0; i < base_count; i++) {
-        const char *profile_name = string_array_get(base_profile, i);
-        profile_t *profile = NULL;
-        err = profile_load(repo, profile_name, &profile);
-        if (err) {
-            goto cleanup;
-        }
-
-        profile->auto_detected = true;
-        list->profiles[list->count++] = *profile;
-        free(profile);  /* Shallow copy of internals to list, only free struct */
+    err = add_profiles_to_list(repo, base_profile, list);
+    if (err) {
+        goto cleanup;
     }
 
     /* Add sub-profiles (sorted alphabetically) */
-    for (size_t i = 0; i < sub_count; i++) {
-        const char *profile_name = string_array_get(sub_profiles, i);
-        profile_t *profile = NULL;
-        err = profile_load(repo, profile_name, &profile);
-        if (err) {
-            goto cleanup;
-        }
-
-        profile->auto_detected = true;
-        list->profiles[list->count++] = *profile;
-        free(profile);  /* Shallow copy of internals to list, only free struct */
+    err = add_profiles_to_list(repo, sub_profiles, list);
+    if (err) {
+        goto cleanup;
     }
 
 cleanup:
     string_array_free(branches);
     string_array_free(base_profile);
     string_array_free(sub_profiles);
-    string_array_free(sorted_subs);
-    free(sub_array);
-
     return err;
 }
 
 /**
- * Auto-detect profiles
+ * Auto-detect profiles based on system information
  *
- * Detection order (lower numbers = lower precedence):
- * 1. global - Universal settings
- * 2. <os> - OS base profile (darwin, linux, freebsd)
- * 3. <os>/<variant> - OS sub-profiles (darwin/name, sorted alphabetically)
- * 4. hosts/<hostname> - Host base profile
- * 5. hosts/<hostname>/<variant> - Host sub-profiles (sorted alphabetically)
+ * Detection order (precedence: later overrides earlier):
+ * 1. global             - Universal settings
+ * 2. <os>               - OS base profile (darwin, linux, freebsd)
+ * 3. <os>/<variant>     - OS sub-profiles (alphabetically sorted)
+ * 4. hosts/<hostname>   - Host base profile
+ * 5. hosts/<hostname>/<variant> - Host sub-profiles (alphabetically sorted)
  *
- * Later profiles override earlier ones for conflicting files.
+ * All detection steps are non-fatal. Missing profiles or system information
+ * failures are silently skipped to maximize compatibility.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param out Profile list (must not be NULL, caller must free)
+ * @return Error or NULL on success
  */
 error_t *profile_detect_auto(
     git_repository *repo,
@@ -369,7 +342,7 @@ error_t *profile_detect_auto(
         goto cleanup;
     }
 
-    /* Start with capacity for typical case: global + os + 2 os-subs + host + 2 host-subs */
+    /* Initial capacity for typical case (will grow if needed) */
     size_t capacity = 8;
     list->profiles = calloc(capacity, sizeof(profile_t));
     if (!list->profiles) {
@@ -390,10 +363,10 @@ error_t *profile_detect_auto(
         free(profile);  /* Shallow copy of internals to list, only free struct */
     }
 
-    /* 2. Detect OS profiles (base + sub-profiles, hierarchical) */
+    /* 2. Detect OS-specific profiles (e.g., darwin, darwin/work) */
     struct utsname uts;
     if (uname(&uts) == 0) {
-        /* Convert OS name to lowercase */
+        /* Convert OS name to lowercase (Darwin -> darwin, Linux -> linux) */
         os_name = strdup(uts.sysname);
         if (!os_name) {
             err = ERROR(ERR_MEMORY, "Failed to allocate OS name");
@@ -414,9 +387,9 @@ error_t *profile_detect_auto(
         free(os_name);
         os_name = NULL;
     }
-    /* Non-fatal: continue if uname() fails */
+    /* Non-fatal: skip OS profiles if uname() fails */
 
-    /* 3. Detect host profiles (base + sub-profiles, hierarchical) */
+    /* 3. Detect host-specific profiles (e.g., hosts/myhost, hosts/myhost/work) */
     char hostname[256];
     if (gethostname(hostname, sizeof(hostname)) == 0) {
         /* Null-terminate to be safe */
@@ -431,7 +404,9 @@ error_t *profile_detect_auto(
 
         err = detect_hierarchical_profiles(repo, host_prefix, list, &capacity);
         if (err) {
-            goto cleanup;
+            /* Non-fatal: skip host profiles if detection fails */
+            error_free(err);
+            err = NULL;
         }
     }
     /* Non-fatal: continue if gethostname() fails */
@@ -761,7 +736,7 @@ error_t *profile_list_all_local(
         const char *refname = git_reference_name(ref);
 
         /* Only process local branches (refs/heads/...) */
-        if (strncmp(refname, "refs/heads/", 11) != 0) {
+        if (!str_starts_with(refname, "refs/heads/")) {
             git_reference_free(ref);
             ref = NULL;
             continue;

@@ -4,6 +4,8 @@
 
 #include "buffer.h"
 
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -111,6 +113,47 @@ error_t *buffer_append_string(buffer_t *buf, const char *str) {
 
     size_t len = strlen(str);  /* Don't include null terminator in buffer */
     return buffer_append(buf, (const unsigned char *)str, len);
+}
+
+error_t *buffer_append_format(buffer_t *buf, const char *fmt, ...) {
+    CHECK_NULL(buf);
+    CHECK_NULL(fmt);
+
+    va_list args;
+    va_start(args, fmt);
+
+    /* Calculate required size */
+    va_list args_copy;
+    va_copy(args_copy, args);
+    int len = vsnprintf(NULL, 0, fmt, args_copy);
+    va_end(args_copy);
+
+    if (len < 0) {
+        va_end(args);
+        return ERROR(ERR_INVALID_ARG, "Invalid format string");
+    }
+
+    /* Ensure capacity */
+    size_t required = buf->size + (size_t)len;
+    if (required > buf->capacity) {
+        size_t new_capacity = buf->capacity == 0 ? INITIAL_CAPACITY : buf->capacity;
+        while (new_capacity < required) {
+            new_capacity *= 2;
+        }
+
+        error_t *err = buffer_reserve(buf, new_capacity);
+        if (err) {
+            va_end(args);
+            return err;
+        }
+    }
+
+    /* Format directly into buffer */
+    vsnprintf((char *)(buf->data + buf->size), len + 1, fmt, args);
+    buf->size += (size_t)len;
+
+    va_end(args);
+    return NULL;
 }
 
 void buffer_clear(buffer_t *buf) {

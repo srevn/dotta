@@ -145,7 +145,7 @@ static char **build_bootstrap_env(const bootstrap_context_t *context, size_t *en
     size_t env_var_count = 0;
     for (char **e = environ; *e; e++) {
         /* Skip DOTTA_* variables as we'll add our own */
-        if (strncmp(*e, "DOTTA_", 6) != 0) {
+        if (!str_starts_with(*e, "DOTTA_")) {
             env_var_count++;
         }
     }
@@ -199,7 +199,7 @@ static char **build_bootstrap_env(const bootstrap_context_t *context, size_t *en
     /* Copy existing environment variables (PATH, HOME, etc.) */
     for (char **e = environ; *e; e++) {
         /* Skip DOTTA_* variables to avoid conflicts */
-        if (strncmp(*e, "DOTTA_", 6) != 0) {
+        if (!str_starts_with(*e, "DOTTA_")) {
             env[count] = strdup(*e);
             if (!env[count]) {
                 goto cleanup_error;
@@ -470,22 +470,20 @@ error_t *bootstrap_run_for_profiles(
     }
 
     /* Build space-separated list of all profiles */
-    size_t all_profiles_len = 0;
-    for (size_t i = 0; i < plist->count; i++) {
-        all_profiles_len += strlen(plist->profiles[i].name) + 1;
+    const char **profile_names = malloc(plist->count * sizeof(char *));
+    if (!profile_names) {
+        return ERROR(ERR_MEMORY, "Failed to allocate profile names array");
     }
 
-    char *all_profiles_str = malloc(all_profiles_len + 1);
+    for (size_t i = 0; i < plist->count; i++) {
+        profile_names[i] = plist->profiles[i].name;
+    }
+
+    char *all_profiles_str = str_join(profile_names, plist->count, " ");
+    free(profile_names);
+
     if (!all_profiles_str) {
-        return ERROR(ERR_MEMORY, "Failed to allocate profiles string");
-    }
-
-    all_profiles_str[0] = '\0';
-    for (size_t i = 0; i < plist->count; i++) {
-        if (i > 0) {
-            strcat(all_profiles_str, " ");
-        }
-        strcat(all_profiles_str, plist->profiles[i].name);
+        return ERROR(ERR_MEMORY, "Failed to join profile names");
     }
 
     /* Execute scripts in order */

@@ -13,6 +13,7 @@
 #include "base/error.h"
 #include "base/gitops.h"
 #include "utils/array.h"
+#include "utils/string.h"
 
 /**
  * Analyze upstream state for a single profile
@@ -428,7 +429,7 @@ error_t *upstream_query_remote_branches(
         const char *refname = refs[i]->name;
 
         /* Only process branch refs */
-        if (strncmp(refname, heads_prefix, prefix_len) != 0) {
+        if (!str_starts_with(refname, heads_prefix)) {
             continue;
         }
 

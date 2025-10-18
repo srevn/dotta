@@ -1134,7 +1134,7 @@ error_t *metadata_capture_from_file(
     }
 
     /* Capture ownership ONLY for root/ prefix files when running as root */
-    bool is_root_prefix = (strncmp(storage_path, "root/", 5) == 0);
+    bool is_root_prefix = str_starts_with(storage_path, "root/");
     bool running_as_root = (getuid() == 0);
 
     if (is_root_prefix && running_as_root) {
@@ -1419,7 +1419,7 @@ error_t *metadata_capture_from_directory(
     entry->group = NULL;  /* Set below if applicable */
 
     /* Capture ownership ONLY for root/ prefix directories when running as root */
-    bool is_root_prefix = (strncmp(storage_prefix, "root/", 5) == 0);
+    bool is_root_prefix = str_starts_with(storage_prefix, "root/");
     bool running_as_root = (getuid() == 0);
 
     if (is_root_prefix && running_as_root) {

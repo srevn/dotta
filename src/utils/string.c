@@ -17,14 +17,8 @@ bool str_starts_with(const char *str, const char *prefix) {
         return false;
     }
 
-    size_t str_len = strlen(str);
-    size_t prefix_len = strlen(prefix);
-
-    if (prefix_len > str_len) {
-        return false;
-    }
-
-    return strncmp(str, prefix, prefix_len) == 0;
+    /* No need to check str length */
+    return strncmp(str, prefix, strlen(prefix)) == 0;
 }
 
 bool str_ends_with(const char *str, const char *suffix) {
@@ -83,15 +77,16 @@ char *str_join(const char **strings, size_t count, const char *delimiter) {
         delimiter = "";
     }
 
+    size_t delim_len = strlen(delimiter);
+    bool has_delimiter = (delim_len > 0);
+
     /* Calculate total length */
     size_t total_len = 0;
-    size_t delim_len = strlen(delimiter);
-
     for (size_t i = 0; i < count; i++) {
         if (strings[i]) {
             total_len += strlen(strings[i]);
         }
-        if (i < count - 1) {
+        if (i < count - 1 && has_delimiter) {
             total_len += delim_len;
         }
     }
@@ -111,7 +106,7 @@ char *str_join(const char **strings, size_t count, const char *delimiter) {
             ptr += len;
         }
 
-        if (i < count - 1 && delim_len > 0) {
+        if (i < count - 1 && has_delimiter) {
             memcpy(ptr, delimiter, delim_len);
             ptr += delim_len;
         }

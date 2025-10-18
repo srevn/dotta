@@ -51,13 +51,29 @@ void buffer_free(buffer_t *buf);
 error_t *buffer_append(buffer_t *buf, const unsigned char *data, size_t size);
 
 /**
- * Append string to buffer (including null terminator)
+ * Append string to buffer (excluding null terminator)
+ *
+ * The null terminator is not included in the buffer data. Use buffer_release_data()
+ * to get a null-terminated string when needed.
  *
  * @param buf Buffer
  * @param str String to append
  * @return Error or NULL on success
  */
 error_t *buffer_append_string(buffer_t *buf, const char *str);
+
+/**
+ * Append formatted string to buffer
+ *
+ * Like sprintf but appends to buffer. Does not include null terminator in buffer data.
+ *
+ * @param buf Buffer
+ * @param fmt Format string
+ * @param ... Format arguments
+ * @return Error or NULL on success
+ */
+error_t *buffer_append_format(buffer_t *buf, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
 
 /**
  * Clear buffer (reset size to 0, keep capacity)

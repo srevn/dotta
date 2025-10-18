@@ -27,6 +27,7 @@
 #include "utils/array.h"
 #include "utils/config.h"
 #include "utils/output.h"
+#include "utils/string.h"
 
 /* Default repository name when URL parsing fails */
 #define DEFAULT_REPO_NAME "dotta-repo"
@@ -214,7 +215,7 @@ static error_t *fetch_all_profiles(
         const char *refname = git_reference_name(ref);
 
         /* Only process remote tracking branches for our remote */
-        if (strncmp(refname, prefix, prefix_len) == 0) {
+        if (str_starts_with(refname, prefix)) {
             const char *branch_name = refname + prefix_len;
 
             /* Skip dotta-worktree and HEAD */

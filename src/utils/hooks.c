@@ -189,7 +189,7 @@ static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
     extern char **environ;
     for (char **e = environ; *e && count < 30; e++) {
         /* Skip DOTTA_* variables to avoid conflicts */
-        if (strncmp(*e, "DOTTA_", 6) != 0) {
+        if (!str_starts_with(*e, "DOTTA_")) {
             env[count++] = strdup(*e);
         }
     }

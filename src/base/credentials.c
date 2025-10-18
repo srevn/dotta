@@ -13,6 +13,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "utils/string.h"
+
 /* Maximum length for username and password */
 #define CRED_MAX_LEN 256
 
@@ -313,7 +315,7 @@ int credentials_callback(
     const char *username = username_from_url;
     if (!username) {
         /* For SSH, default to "git" */
-        if (strncmp(url, "git@", 4) == 0 || strstr(url, "ssh://") != NULL) {
+        if (str_starts_with(url, "git@") || strstr(url, "ssh://") != NULL) {
             username = "git";
         }
     }

@@ -101,6 +101,18 @@ void string_array_clear(string_array_t *arr);
 size_t string_array_size(const string_array_t *arr);
 
 /**
+ * Reserve capacity for array
+ *
+ * Ensures array can hold at least the specified number of elements
+ * without reallocation.
+ *
+ * @param arr Array
+ * @param capacity Desired minimum capacity
+ * @return Error or NULL on success
+ */
+error_t *string_array_reserve(string_array_t *arr, size_t capacity);
+
+/**
  * Sort array alphabetically
  *
  * @param arr Array

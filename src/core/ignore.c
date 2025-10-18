@@ -516,7 +516,7 @@ static error_t *matches_source_gitignore(
     size_t workdir_len = strlen(workdir);
 
     /* Remove workdir prefix if path starts with it */
-    if (strncmp(abs_path, workdir, workdir_len) == 0) {
+    if (str_starts_with(abs_path, workdir)) {
         rel_path = abs_path + workdir_len;
         /* Skip leading slashes */
         while (*rel_path == '/') {

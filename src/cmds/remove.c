@@ -193,7 +193,7 @@ static error_t *resolve_paths_to_remove(
             }
 
             /* Directory prefix match */
-            if (strncmp(profile_file, storage_path, storage_path_len) == 0) {
+            if (str_starts_with(profile_file, storage_path)) {
                 /* Ensure it's a directory boundary */
                 if (profile_file[storage_path_len] == '/') {
                     /* Reconstruct filesystem path for this file */

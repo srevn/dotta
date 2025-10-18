@@ -17,6 +17,7 @@
 #include "infra/compare.h"
 #include "utils/array.h"
 #include "utils/hashmap.h"
+#include "utils/string.h"
 
 /**
  * Run pre-flight checks
@@ -279,7 +280,7 @@ error_t *deploy_file(
     uid_t target_uid = -1;
     gid_t target_gid = -1;
 
-    bool is_home_prefix = (strncmp(entry->storage_path, "home/", 5) == 0);
+    bool is_home_prefix = str_starts_with(entry->storage_path, "home/");
 
     if (is_home_prefix && fs_is_running_as_root()) {
         /* Running as root, deploying home/ file - use actual user's credentials */
@@ -338,7 +339,7 @@ error_t *deploy_file(
     }
 
     /* Apply ownership ONLY for root/ prefix files */
-    bool is_root_prefix = (strncmp(entry->storage_path, "root/", 5) == 0);
+    bool is_root_prefix = str_starts_with(entry->storage_path, "root/");
     bool has_ownership = false;
 
     if (is_root_prefix && metadata && meta_entry && (meta_entry->owner || meta_entry->group)) {
@@ -445,8 +446,8 @@ static error_t *deploy_tracked_directories(
         }
 
         /* Apply ownership based on prefix and sudo status */
-        bool is_root_prefix = (strncmp(dir_entry->storage_prefix, "root/", 5) == 0);
-        bool is_home_prefix = (strncmp(dir_entry->storage_prefix, "home/", 5) == 0);
+        bool is_root_prefix = str_starts_with(dir_entry->storage_prefix, "root/");
+        bool is_home_prefix = str_starts_with(dir_entry->storage_prefix, "home/");
 
         if (is_root_prefix && dir_entry->owner && dir_entry->group) {
             /* For root/ prefix: apply ownership from metadata */

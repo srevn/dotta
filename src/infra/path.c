@@ -548,7 +548,7 @@ error_t *path_resolve_input(
             size_t home_len = strlen(home);
 
             /* Check if path is under $HOME */
-            if (strncmp(working_path, home, home_len) == 0 &&
+            if (str_starts_with(working_path, home) &&
                 (working_path[home_len] == '/' || working_path[home_len] == '\0')) {
                 /* Under home directory */
                 const char *rel = working_path + home_len;

@@ -17,6 +17,7 @@
 #include "error.h"
 #include "transfer.h"
 #include "utils/array.h"
+#include "utils/string.h"
 
 /**
  * Repository operations
@@ -1077,7 +1078,7 @@ error_t *gitops_resolve_commit_in_branch(
 
     /* Parse commit_ref relative to this branch */
     char *full_ref = NULL;
-    if (strncmp(commit_ref, "HEAD", 4) == 0) {
+    if (str_starts_with(commit_ref, "HEAD")) {
         /* HEAD~N or HEAD^N - resolve relative to branch HEAD */
         const git_oid *branch_oid = git_reference_target(branch_ref);
         if (!branch_oid) {
@@ -1099,13 +1100,11 @@ error_t *gitops_resolve_commit_in_branch(
             return NULL;
         } else {
             /* HEAD~N or HEAD^N */
-            size_t full_ref_size = strlen(branch_name) + strlen(commit_ref) + 10;
-            full_ref = malloc(full_ref_size);
+            full_ref = str_format("%s%s", branch_name, commit_ref + 4);
             if (!full_ref) {
                 git_reference_free(branch_ref);
                 return ERROR(ERR_MEMORY, "Failed to allocate ref string");
             }
-            snprintf(full_ref, full_ref_size, "%s%s", branch_name, commit_ref + 4);
         }
     } else {
         /* Assume it's a commit SHA or other ref */

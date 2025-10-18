@@ -4,6 +4,7 @@
 
 #include "array.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -51,20 +52,25 @@ void string_array_free(string_array_t *arr) {
  * Grow array capacity
  */
 static error_t *string_array_grow(string_array_t *arr) {
-    size_t new_capacity = arr->capacity == 0 ? INITIAL_CAPACITY : arr->capacity * 2;
-    char **new_items = realloc(arr->items, new_capacity * sizeof(char *));
+    size_t new_capacity;
 
+    if (arr->capacity == 0) {
+        new_capacity = INITIAL_CAPACITY;
+    } else {
+        /* Check for overflow before doubling */
+        if (arr->capacity > SIZE_MAX / 2) {
+            return error_create(ERR_MEMORY, "String array too large to grow");
+        }
+        new_capacity = arr->capacity * 2;
+    }
+
+    char **new_items = realloc(arr->items, new_capacity * sizeof(char *));
     if (!new_items) {
         return error_create(ERR_MEMORY, "Failed to grow string array");
     }
 
     arr->items = new_items;
     arr->capacity = new_capacity;
-
-    /* Zero new slots */
-    for (size_t i = arr->count; i < new_capacity; i++) {
-        arr->items[i] = NULL;
-    }
 
     return NULL;
 }
@@ -168,6 +174,26 @@ size_t string_array_size(const string_array_t *arr) {
         return 0;
     }
     return arr->count;
+}
+
+error_t *string_array_reserve(string_array_t *arr, size_t capacity) {
+    CHECK_NULL(arr);
+
+    /* Already have enough capacity */
+    if (capacity <= arr->capacity) {
+        return NULL;
+    }
+
+    /* Allocate new capacity */
+    char **new_items = realloc(arr->items, capacity * sizeof(char *));
+    if (!new_items) {
+        return error_create(ERR_MEMORY, "Failed to reserve array capacity");
+    }
+
+    arr->items = new_items;
+    arr->capacity = capacity;
+
+    return NULL;
 }
 
 /**

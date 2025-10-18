@@ -1742,32 +1742,11 @@ static int cmd_revert_main(int argc, char **argv) {
  * Parse interactive command
  */
 static int cmd_interactive_main(int argc, char **argv) {
-    interactive_options_t opts = {
-        .verbose = false,
-        .dry_run = false
-    };
-
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-            fprintf(stdout, "Usage: %s --interactive [options]\n\n", argv[0]);
-            fprintf(stdout, "Interactive profile selection and management.\n\n");
-            fprintf(stdout, "Options:\n");
-            fprintf(stdout, "  -v, --verbose    Verbose output after commands\n");
-            fprintf(stdout, "  -n, --dry-run    Dry-run mode for commands\n");
-            fprintf(stdout, "  -h, --help       Show this help\n\n");
-            fprintf(stdout, "Keybindings:\n");
-            fprintf(stdout, "  ↑↓, j/k         Navigate profiles\n");
-            fprintf(stdout, "  space, enter    Toggle profile selection\n");
-            fprintf(stdout, "  a               Apply selected profiles\n");
-            fprintf(stdout, "  u               Update selected profiles\n");
-            fprintf(stdout, "  s               Sync selected profiles\n");
-            fprintf(stdout, "  q, ESC          Quit\n");
+            print_interactive_help(argv[0]);
             return 0;
-        } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
-            opts.verbose = true;
-        } else if (strcmp(argv[i], "-n") == 0 || strcmp(argv[i], "--dry-run") == 0) {
-            opts.dry_run = true;
         } else {
             fprintf(stderr, "Error: Unknown argument '%s'\n", argv[i]);
             return 1;
@@ -1781,7 +1760,7 @@ static int cmd_interactive_main(int argc, char **argv) {
     }
 
     /* Run interactive mode */
-    error_t *err = interactive_run(repo, &opts);
+    error_t *err = interactive_run(repo);
     git_repository_free(repo);
 
     if (err) {

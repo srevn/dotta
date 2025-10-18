@@ -670,3 +670,18 @@ void print_bootstrap_help(const char *prog_name) {
     printf("    %s apply                          # Deploy configurations\n", prog_name);
     printf("\n");
 }
+
+void print_interactive_help(const char *prog_name) {
+    printf("Usage: %s --interactive\n\n", prog_name);
+    printf("Interactive profile selection and ordering.\n\n");
+    printf("Keybindings:\n");
+    printf("  ↑↓, j/k, g/G    Navigate profiles\n");
+    printf("  space, enter    Toggle profile selection\n");
+    printf("  J/K             Move profile up/down\n");
+    printf("  w               Save profile order\n");
+    printf("  q, ESC          Quit\n\n");
+    printf("Notes:\n");
+    printf("  - Selected profiles are saved to state in the displayed order\n");
+    printf("  - Profile order determines layering (later overrides earlier)\n");
+    printf("  - Use regular commands (apply, update, sync) after selecting profiles\n");
+}

@@ -97,4 +97,9 @@ void print_ignore_help(const char *prog_name);
  */
 void print_bootstrap_help(const char *prog_name);
 
+/**
+ * Print help for interactive mode
+ */
+void print_interactive_help(const char *prog_name);
+
 #endif /* DOTTA_HELP_H */

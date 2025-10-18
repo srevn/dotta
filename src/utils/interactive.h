@@ -1,20 +1,20 @@
 /**
- * interactive.h - Interactive TUI for profile selection
+ * interactive.h - Interactive TUI for profile selection and ordering
  *
- * Provides an inline, fzf-style interactive interface for profile
- * management with support for toggle, apply, update, and sync operations.
+ * Provides an inline, fzf-style interactive interface for profile management.
  *
  * Features:
  * - Profile list with hierarchical display
  * - Toggle selection (space)
  * - Navigate with arrow keys
- * - Execute commands (a=apply, u=update, s=sync)
+ * - Reorder profiles (J/K)
+ * - Save profile order to state (w)
  * - Clean inline rendering (preserves terminal state)
  *
  * Design principles:
  * - Built on terminal.h primitives
  * - No external TUI libraries
- * - Extensible command system
+ * - Single responsibility: profile selection and ordering
  * - Proper cleanup on exit
  */
 
@@ -28,14 +28,6 @@
 #include "utils/terminal.h"
 
 /**
- * Interactive mode options
- */
-typedef struct {
-    bool verbose;       /* Show verbose output after commands */
-    bool dry_run;       /* Dry-run mode for commands */
-} interactive_options_t;
-
-/**
  * Profile item in UI list
  *
  * Represents a single profile entry with selection state and metadata.
@@ -44,7 +36,6 @@ typedef struct {
     char *name;              /* Profile name */
     bool selected;           /* Selected for operations */
     bool exists_locally;     /* Exists as local branch */
-    bool exists_remotely;    /* Exists on remote (future) */
     int indent_level;        /* Indentation level (0=root, 1=sub-profile) */
     bool is_host_profile;    /* True for hosts/... profiles */
 } profile_item_t;
@@ -89,13 +80,9 @@ typedef enum {
  * - Must support ANSI escape sequences
  *
  * @param repo Repository (must not be NULL)
- * @param opts Options (can be NULL for defaults)
  * @return Error or NULL on success
  */
-error_t *interactive_run(
-    git_repository *repo,
-    const interactive_options_t *opts
-);
+error_t *interactive_run(git_repository *repo);
 
 /* ========================================================================
  * State Management (internal, exposed for testing)
@@ -165,14 +152,13 @@ size_t interactive_state_get_cursor(const interactive_state_t *state);
  *   ▶   hosts/macbook
  *       hosts/server
  *
- * ↑↓ navigate  space toggle  a apply  u update  s sync  q quit
+ * ↑↓ navigate  space toggle  J/K move  q quit
  * ```
  *
  * @param state State (must not be NULL)
- * @param start_row Starting row for rendering (1-based)
  * @return Number of lines rendered
  */
-int interactive_render(const interactive_state_t *state, int start_row);
+int interactive_render(const interactive_state_t *state);
 
 /**
  * Calculate required screen lines
@@ -194,7 +180,6 @@ int interactive_get_required_lines(const interactive_state_t *state);
  * @param state State (must not be NULL)
  * @param repo Repository (must not be NULL)
  * @param key Key code
- * @param opts Options (can be NULL)
  * @param term_ptr Terminal pointer (for restoring during commands, must not be NULL)
  * @return Command result
  */
@@ -202,54 +187,7 @@ interactive_result_t interactive_handle_key(
     interactive_state_t *state,
     git_repository *repo,
     int key,
-    const interactive_options_t *opts,
     terminal_t **term_ptr
-);
-
-/* ========================================================================
- * Commands (internal)
- * ======================================================================== */
-
-/**
- * Execute apply command on selected profiles
- *
- * @param repo Repository (must not be NULL)
- * @param state State (must not be NULL)
- * @param opts Options (can be NULL)
- * @return Error or NULL on success
- */
-error_t *interactive_cmd_apply(
-    git_repository *repo,
-    const interactive_state_t *state,
-    const interactive_options_t *opts
-);
-
-/**
- * Execute update command on selected profiles
- *
- * @param repo Repository (must not be NULL)
- * @param state State (must not be NULL)
- * @param opts Options (can be NULL)
- * @return Error or NULL on success
- */
-error_t *interactive_cmd_update(
-    git_repository *repo,
-    const interactive_state_t *state,
-    const interactive_options_t *opts
-);
-
-/**
- * Execute sync command on selected profiles
- *
- * @param repo Repository (must not be NULL)
- * @param state State (must not be NULL)
- * @param opts Options (can be NULL)
- * @return Error or NULL on success
- */
-error_t *interactive_cmd_sync(
-    git_repository *repo,
-    const interactive_state_t *state,
-    const interactive_options_t *opts
 );
 
 /* ========================================================================

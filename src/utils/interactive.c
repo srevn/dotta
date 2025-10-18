@@ -12,13 +12,9 @@
 #include <unistd.h>
 
 #include "base/error.h"
-#include "cmds/apply.h"
-#include "cmds/sync.h"
-#include "cmds/update.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "utils/array.h"
-#include "utils/output.h"
 #include "utils/terminal.h"
 
 /**
@@ -42,7 +38,6 @@ struct interactive_state {
     profile_item_t *items;         /* Profile items */
     size_t item_count;             /* Number of items */
     size_t cursor;                 /* Current cursor position */
-    int screen_start_row;          /* Starting row for rendering */
     bool order_modified;           /* True if profile order changed */
 };
 
@@ -184,7 +179,6 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
 
             state->items[item_idx].selected = true;
             state->items[item_idx].exists_locally = true;
-            state->items[item_idx].exists_remotely = false;  /* TODO: check remote */
             state->items[item_idx].indent_level = interactive_get_indent_level(profile_name);
             state->items[item_idx].is_host_profile = interactive_is_host_profile(profile_name);
             item_idx++;
@@ -214,7 +208,6 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
 
         state->items[item_idx].selected = false;
         state->items[item_idx].exists_locally = true;
-        state->items[item_idx].exists_remotely = false;  /* TODO: check remote */
         state->items[item_idx].indent_level = interactive_get_indent_level(p->name);
         state->items[item_idx].is_host_profile = interactive_is_host_profile(p->name);
         item_idx++;
@@ -390,12 +383,10 @@ int interactive_get_required_lines(const interactive_state_t *state) {
     return 1 + 1 + (int)state->item_count + 1 + 1;
 }
 
-int interactive_render(const interactive_state_t *state, int start_row) {
+int interactive_render(const interactive_state_t *state) {
     if (!state) {
         return 0;
     }
-
-    (void)start_row;  /* Not used in inline rendering */
 
     int lines_rendered = 0;
 
@@ -453,20 +444,17 @@ int interactive_render(const interactive_state_t *state, int start_row) {
     fprintf(stdout, "\r");
     terminal_clear_line();
     if (state->order_modified) {
-        /* Show reorder mode keys */
+        /* Show reorder mode keys with save highlighted */
         fprintf(stdout, "\033[2m↑↓\033[0m navigate  "
                         "\033[2mspace\033[0m toggle  "
                         "\033[2mJ/K\033[0m move  "
-                        "\033[1;33mw\033[0m \033[1;33msave order\033[0m  "
+                        "\033[1;33mw\033[0m \033[1;33msave\033[0m  "
                         "\033[2mq\033[0m quit");
     } else {
         /* Show normal mode keys */
         fprintf(stdout, "\033[2m↑↓\033[0m navigate  "
                         "\033[2mspace\033[0m toggle  "
                         "\033[2mJ/K\033[0m move  "
-                        "\033[2ma\033[0m apply  "
-                        "\033[2mu\033[0m update  "
-                        "\033[2ms\033[0m sync  "
                         "\033[2mq\033[0m quit");
     }
     lines_rendered++;
@@ -477,244 +465,13 @@ int interactive_render(const interactive_state_t *state, int start_row) {
 }
 
 /* ========================================================================
- * Commands
- * ======================================================================== */
-
-/**
- * Get selected profile names
- *
- * Builds an array of profile name pointers for currently selected profiles.
- *
- * MEMORY OWNERSHIP:
- * - Allocates and returns a new array via *out_profiles
- * - Caller MUST free this array with free() when done
- * - The profile name strings themselves are borrowed from state
- *   and MUST NOT be freed individually
- *
- * Example usage:
- *   const char **profiles = NULL;
- *   size_t count = 0;
- *   error_t *err = get_selected_profiles(state, &profiles, &count);
- *   if (!err) {
- *       // ... use profiles ...
- *       free(profiles);  // Free the array, not the strings
- *   }
- *
- * @param state State (must not be NULL)
- * @param out_profiles Profile array pointer (must not be NULL, caller frees)
- * @param out_count Profile count (must not be NULL)
- * @return Error or NULL on success
- */
-static error_t *get_selected_profiles(
-    const interactive_state_t *state,
-    const char ***out_profiles,
-    size_t *out_count
-) {
-    if (!state || !out_profiles || !out_count) {
-        return error_create(ERR_INVALID_ARG, "invalid arguments");
-    }
-
-    /* Count selected profiles */
-    size_t selected_count = 0;
-    for (size_t i = 0; i < state->item_count; i++) {
-        if (state->items[i].selected) {
-            selected_count++;
-        }
-    }
-
-    if (selected_count == 0) {
-        *out_profiles = NULL;
-        *out_count = 0;
-        return NULL;
-    }
-
-    /* Allocate profile name array */
-    const char **profiles = malloc(selected_count * sizeof(char *));
-    if (!profiles) {
-        return error_create(ERR_MEMORY, "failed to allocate profile array");
-    }
-
-    /* Fill array */
-    size_t idx = 0;
-    for (size_t i = 0; i < state->item_count; i++) {
-        if (state->items[i].selected) {
-            profiles[idx++] = state->items[i].name;
-        }
-    }
-
-    *out_profiles = profiles;
-    *out_count = selected_count;
-    return NULL;
-}
-
-error_t *interactive_cmd_apply(
-    git_repository *repo,
-    const interactive_state_t *state,
-    const interactive_options_t *opts
-) {
-    const char **profiles = NULL;
-    size_t profile_count = 0;
-
-    error_t *err = get_selected_profiles(state, &profiles, &profile_count);
-    if (err) {
-        return err;
-    }
-
-    if (profile_count == 0) {
-        return error_create(ERR_INVALID_ARG, "no profiles selected");
-    }
-
-    /* Build apply options */
-    cmd_apply_options_t apply_opts = {
-        .profiles = profiles,
-        .profile_count = profile_count,
-        .force = false,
-        .dry_run = opts ? opts->dry_run : false,
-        .keep_orphans = false,
-        .verbose = opts ? opts->verbose : false,
-        .skip_existing = false,
-        .skip_unchanged = true
-    };
-
-    err = cmd_apply(repo, &apply_opts);
-    free(profiles);
-    return err;
-}
-
-error_t *interactive_cmd_update(
-    git_repository *repo,
-    const interactive_state_t *state,
-    const interactive_options_t *opts
-) {
-    const char **profiles = NULL;
-    size_t profile_count = 0;
-
-    error_t *err = get_selected_profiles(state, &profiles, &profile_count);
-    if (err) {
-        return err;
-    }
-
-    if (profile_count == 0) {
-        return error_create(ERR_INVALID_ARG, "no profiles selected");
-    }
-
-    /* Build update options */
-    cmd_update_options_t update_opts = {
-        .files = NULL,
-        .file_count = 0,
-        .profiles = profiles,
-        .profile_count = profile_count,
-        .message = NULL,
-        .exclude_patterns = NULL,
-        .exclude_count = 0,
-        .dry_run = opts ? opts->dry_run : false,
-        .interactive = false,  /* Already in interactive mode */
-        .verbose = opts ? opts->verbose : false,
-        .include_new = false,
-        .only_new = false
-    };
-
-    err = cmd_update(repo, &update_opts);
-    free(profiles);
-    return err;
-}
-
-error_t *interactive_cmd_sync(
-    git_repository *repo,
-    const interactive_state_t *state,
-    const interactive_options_t *opts
-) {
-    const char **profiles = NULL;
-    size_t profile_count = 0;
-
-    error_t *err = get_selected_profiles(state, &profiles, &profile_count);
-    if (err) {
-        return err;
-    }
-
-    if (profile_count == 0) {
-        return error_create(ERR_INVALID_ARG, "no profiles selected");
-    }
-
-    /* Build sync options */
-    cmd_sync_options_t sync_opts = {
-        .profiles = profiles,
-        .profile_count = profile_count,
-        .dry_run = opts ? opts->dry_run : false,
-        .no_push = false,
-        .no_pull = false,
-        .verbose = opts ? opts->verbose : false,
-        .force = false,
-        .diverged = NULL
-    };
-
-    err = cmd_sync(repo, &sync_opts);
-    free(profiles);
-    return err;
-}
-
-/* ========================================================================
  * Input Handling
  * ======================================================================== */
-
-/**
- * Temporarily restore terminal and run command
- */
-static interactive_result_t run_command_with_normal_terminal(
-    terminal_t **term_ptr,
-    error_t *(*cmd_func)(git_repository *, const interactive_state_t *, const interactive_options_t *),
-    git_repository *repo,
-    const interactive_state_t *state,
-    const interactive_options_t *opts,
-    const char *cmd_name
-) {
-    /* Restore terminal to normal mode */
-    terminal_cursor_show();
-    terminal_restore(*term_ptr);
-
-    /* Run command - let it produce its normal output */
-    error_t *err = cmd_func(repo, state, opts);
-
-    /* Show result - only show errors, success is silent */
-    if (err) {
-        fprintf(stderr, "\n\033[1;31m%s failed:\033[0m ", cmd_name);
-        error_print(err, stderr);
-        error_free(err);
-        fprintf(stderr, "\n");
-    }
-    fflush(stdout);
-
-    /* Re-initialize raw mode */
-    terminal_t *new_term = NULL;
-    err = terminal_init(&new_term);
-    if (err) {
-        fprintf(stderr, "\nFailed to re-initialize terminal: ");
-        error_print(err, stderr);
-        error_free(err);
-        return INTERACTIVE_EXIT_ERROR;
-    }
-
-    /* Wait for keypress */
-    terminal_read_key();
-
-    /* Hide cursor again */
-    terminal_cursor_hide();
-
-    /* Update terminal pointer */
-    *term_ptr = new_term;
-
-    /* Don't try to clear output - just add a blank line for separation
-     * The UI will render inline at the current cursor position */
-    fprintf(stdout, "\n");
-
-    return INTERACTIVE_CONTINUE;
-}
 
 interactive_result_t interactive_handle_key(
     interactive_state_t *state,
     git_repository *repo,
     int key,
-    const interactive_options_t *opts,
     terminal_t **term_ptr
 ) {
     if (!state || !repo || !term_ptr) {
@@ -782,22 +539,6 @@ interactive_result_t interactive_handle_key(
             return INTERACTIVE_CONTINUE;
         }
 
-        /* Commands */
-        case 'a':
-        case 'A':
-            return run_command_with_normal_terminal(term_ptr,
-                interactive_cmd_apply, repo, state, opts, "Applying profiles");
-
-        case 'u':
-        case 'U':
-            return run_command_with_normal_terminal(term_ptr,
-                interactive_cmd_update, repo, state, opts, "Updating profiles");
-
-        case 's':
-        case 'S':
-            return run_command_with_normal_terminal(term_ptr,
-                interactive_cmd_sync, repo, state, opts, "Syncing profiles");
-
         /* Exit */
         case 'q':
         case 'Q':
@@ -816,7 +557,7 @@ interactive_result_t interactive_handle_key(
  * Main Entry Point
  * ======================================================================== */
 
-error_t *interactive_run(git_repository *repo, const interactive_options_t *opts) {
+error_t *interactive_run(git_repository *repo) {
     if (!repo) {
         return error_create(ERR_INVALID_ARG, "repo cannot be NULL");
     }
@@ -895,8 +636,7 @@ error_t *interactive_run(git_repository *repo, const interactive_options_t *opts
     terminal_cursor_hide();
 
     /* Render initial UI inline */
-    int lines_drawn = interactive_render(state, 0);
-    state->screen_start_row = 0;  /* Not used anymore */
+    int lines_drawn = interactive_render(state);
 
     /* Main loop */
     interactive_result_t result = INTERACTIVE_CONTINUE;
@@ -904,33 +644,17 @@ error_t *interactive_run(git_repository *repo, const interactive_options_t *opts
         /* Read key */
         int key = terminal_read_key();
 
-        /* Check if this is a command key - if so, clear UI first
-         * Note: 'w' is NOT a command - it's a silent save operation */
-        bool is_command = (key == 'a' || key == 'A' || key == 'u'
-                        || key == 'U' || key == 's' || key == 'S');
-        if (is_command) {
-            /* Clear current UI by moving up and clearing lines */
-            terminal_cursor_up(lines_drawn);
-            for (int i = 0; i < lines_drawn; i++) {
-                terminal_clear_line();
-                fprintf(stdout, "\r\n");
-            }
-            terminal_cursor_up(lines_drawn);
-        }
-
         /* Handle key */
-        result = interactive_handle_key(state, repo, key, opts, &term);
+        result = interactive_handle_key(state, repo, key, &term);
 
         /* Re-render: move cursor up, then redraw */
         if (result == INTERACTIVE_CONTINUE) {
-            if (!is_command) {
-                /* Move up to start of first line
-                 * We drew N lines, cursor is on line N, need to move up N-1 to get to line 1 */
-                if (lines_drawn > 0) {
-                    terminal_cursor_up(lines_drawn - 1);
-                }
+            /* Move up to start of first line
+             * We drew N lines, cursor is on line N, need to move up N-1 to get to line 1 */
+            if (lines_drawn > 0) {
+                terminal_cursor_up(lines_drawn - 1);
             }
-            lines_drawn = interactive_render(state, 0);
+            lines_drawn = interactive_render(state);
         }
     }
 

@@ -53,12 +53,9 @@ error_t *deploy_preflight_check(
     }
 
     /* Detect overlaps: files that appear in multiple profiles */
-    /* Use two hashmaps for O(N) complexity instead of O(N*M) */
+    /* Use single hashmap with state tracking: (void*)1 = seen once, (void*)2 = overlap recorded */
     hashmap_t *seen_paths = hashmap_create(manifest->count);
-    hashmap_t *recorded_overlaps = hashmap_create(manifest->count);
-    if (!seen_paths || !recorded_overlaps) {
-        hashmap_free(seen_paths, NULL);
-        hashmap_free(recorded_overlaps, NULL);
+    if (!seen_paths) {
         preflight_result_free(result);
         return ERROR(ERR_MEMORY, "Failed to create hashmap for overlap detection");
     }
@@ -66,90 +63,125 @@ error_t *deploy_preflight_check(
     for (size_t i = 0; i < manifest->count; i++) {
         const file_entry_t *entry = &manifest->entries[i];
 
-        /* Check if we've seen this path before */
-        if (hashmap_has(seen_paths, entry->filesystem_path)) {
-            /* This path appears in multiple profiles */
-            /* Check if we've already recorded it in overlaps array (O(1) lookup) */
-            if (!hashmap_has(recorded_overlaps, entry->filesystem_path)) {
-                string_array_push(result->overlaps, entry->filesystem_path);
-                error_t *err = hashmap_set(recorded_overlaps, entry->filesystem_path, (void *)1);
-                if (err) {
-                    hashmap_free(seen_paths, NULL);
-                    hashmap_free(recorded_overlaps, NULL);
-                    preflight_result_free(result);
-                    return error_wrap(err, "Failed to track recorded overlap");
-                }
-            }
-        } else {
-            /* First time seeing this path - record it */
+        /* Check occurrence state */
+        void *state = hashmap_get(seen_paths, entry->filesystem_path);
+
+        if (state == NULL) {
+            /* First occurrence - mark as seen */
             error_t *err = hashmap_set(seen_paths, entry->filesystem_path, (void *)1);
             if (err) {
                 hashmap_free(seen_paths, NULL);
-                hashmap_free(recorded_overlaps, NULL);
                 preflight_result_free(result);
                 return error_wrap(err, "Failed to track path in overlap detection");
             }
+        } else if (state == (void *)1) {
+            /* Second occurrence - this is an overlap, record it */
+            string_array_push(result->overlaps, entry->filesystem_path);
+            error_t *err = hashmap_set(seen_paths, entry->filesystem_path, (void *)2);
+            if (err) {
+                hashmap_free(seen_paths, NULL);
+                preflight_result_free(result);
+                return error_wrap(err, "Failed to record overlap");
+            }
         }
+        /* else: state == (void*)2, already recorded as overlap, skip */
     }
 
     hashmap_free(seen_paths, NULL);
-    hashmap_free(recorded_overlaps, NULL);
 
     /* Detect ownership changes: files deployed from one profile, now being deployed from another */
     if (state) {
-        /* Count ownership changes first */
+        /* Load all state entries once for O(1) lookups instead of O(N) database queries */
+        state_file_entry_t *state_entries = NULL;
+        size_t state_count = 0;
+        error_t *load_err = state_get_all_files(state, &state_entries, &state_count);
+        if (load_err) {
+            preflight_result_free(result);
+            return error_wrap(load_err, "Failed to load state for ownership detection");
+        }
+
+        /* Build hashmap for O(1) lookups */
+        hashmap_t *state_map = hashmap_create(state_count > 0 ? state_count : 16);
+        if (!state_map) {
+            state_free_all_files(state_entries, state_count);
+            preflight_result_free(result);
+            return ERROR(ERR_MEMORY, "Failed to create state lookup map");
+        }
+
+        for (size_t i = 0; i < state_count; i++) {
+            error_t *err = hashmap_set(state_map, state_entries[i].filesystem_path, &state_entries[i]);
+            if (err) {
+                hashmap_free(state_map, NULL);
+                state_free_all_files(state_entries, state_count);
+                preflight_result_free(result);
+                return error_wrap(err, "Failed to populate state lookup map");
+            }
+        }
+
+        /* Allocate ownership changes array */
         size_t ownership_change_capacity = 16;
         result->ownership_changes = calloc(ownership_change_capacity, sizeof(ownership_change_t));
         if (!result->ownership_changes) {
+            hashmap_free(state_map, NULL);
+            state_free_all_files(state_entries, state_count);
             preflight_result_free(result);
             return ERROR(ERR_MEMORY, "Failed to allocate ownership changes array");
         }
 
+        /* Detect ownership changes using hashmap lookups (O(1) per file) */
         for (size_t i = 0; i < manifest->count; i++) {
             const file_entry_t *entry = &manifest->entries[i];
 
-            /* Check if file exists in state */
-            if (state_file_exists(state, entry->filesystem_path)) {
-                state_file_entry_t *state_entry = NULL;
-                error_t *err = state_get_file(state, entry->filesystem_path, &state_entry);
+            /* Check if file exists in state (O(1) lookup) */
+            state_file_entry_t *state_entry = hashmap_get(state_map, entry->filesystem_path);
 
-                if (!err && state_entry) {
-                    /* Check if profile is changing */
-                    if (strcmp(state_entry->profile, entry->source_profile->name) != 0) {
-                        /* Ownership is changing - add to list */
-                        if (result->ownership_change_count >= ownership_change_capacity) {
-                            ownership_change_capacity *= 2;
-                            ownership_change_t *new_changes = realloc(result->ownership_changes,
-                                                                      ownership_change_capacity * sizeof(ownership_change_t));
-                            if (!new_changes) {
-                                preflight_result_free(result);
-                                return ERROR(ERR_MEMORY, "Failed to grow ownership changes array");
-                            }
-                            result->ownership_changes = new_changes;
-                        }
-
-                        ownership_change_t *change = &result->ownership_changes[result->ownership_change_count];
-                        change->filesystem_path = strdup(entry->filesystem_path);
-                        change->old_profile = strdup(state_entry->profile);
-                        change->new_profile = strdup(entry->source_profile->name);
-
-                        if (!change->filesystem_path || !change->old_profile || !change->new_profile) {
+            if (state_entry) {
+                /* Check if profile is changing */
+                if (strcmp(state_entry->profile, entry->source_profile->name) != 0) {
+                    /* Ownership is changing - add to list */
+                    if (result->ownership_change_count >= ownership_change_capacity) {
+                        ownership_change_capacity *= 2;
+                        ownership_change_t *new_changes = realloc(result->ownership_changes,
+                                                                  ownership_change_capacity * sizeof(ownership_change_t));
+                        if (!new_changes) {
+                            hashmap_free(state_map, NULL);
+                            state_free_all_files(state_entries, state_count);
                             preflight_result_free(result);
-                            return ERROR(ERR_MEMORY, "Failed to allocate ownership change entry");
+                            return ERROR(ERR_MEMORY, "Failed to grow ownership changes array");
                         }
-
-                        result->ownership_change_count++;
+                        result->ownership_changes = new_changes;
                     }
-                }
 
-                if (err) {
-                    error_free(err);
-                }
+                    ownership_change_t *change = &result->ownership_changes[result->ownership_change_count];
 
-                /* Free the entry (owned memory from SQLite) */
-                state_free_entry(state_entry);
+                    /* Allocate all strings first, so we can clean them up properly on error */
+                    char *fs_path = strdup(entry->filesystem_path);
+                    char *old_prof = strdup(state_entry->profile);
+                    char *new_prof = strdup(entry->source_profile->name);
+
+                    if (!fs_path || !old_prof || !new_prof) {
+                        /* Clean up partial allocations before freeing result */
+                        free(fs_path);
+                        free(old_prof);
+                        free(new_prof);
+                        hashmap_free(state_map, NULL);
+                        state_free_all_files(state_entries, state_count);
+                        preflight_result_free(result);
+                        return ERROR(ERR_MEMORY, "Failed to allocate ownership change entry");
+                    }
+
+                    /* All allocations succeeded - assign and increment count */
+                    change->filesystem_path = fs_path;
+                    change->old_profile = old_prof;
+                    change->new_profile = new_prof;
+                    result->ownership_change_count++;
+                }
             }
         }
+
+        /* Clean up state cache */
+        hashmap_free(state_map, NULL);
+        state_free_all_files(state_entries, state_count);
     }
 
     /* Check each file */
@@ -173,7 +205,7 @@ error_t *deploy_preflight_check(
             }
 
             /* If different and not forcing, it's a conflict */
-            if ((cmp_result == CMP_DIFFERENT || cmp_result == CMP_MODE_DIFF) && !opts->force) {
+            if ((cmp_result == CMP_DIFFERENT || cmp_result == CMP_MODE_DIFF || cmp_result == CMP_TYPE_DIFF) && !opts->force) {
                 string_array_push(result->conflicts, entry->filesystem_path);
                 result->has_errors = true;
             }
@@ -271,44 +303,7 @@ error_t *deploy_file(
     const void *content = git_blob_rawcontent(blob);
     git_object_size_t size = git_blob_rawsize(blob);
 
-    /* Determine ownership for the file based on prefix
-     *
-     * For home/ files when running as root: Use actual user's UID/GID
-     * For root/ files: Use -1 (preserve root ownership)
-     * When not running as root: Use -1 (preserve current user)
-     */
-    uid_t target_uid = -1;
-    gid_t target_gid = -1;
-
-    bool is_home_prefix = str_starts_with(entry->storage_path, "home/");
-
-    if (is_home_prefix && fs_is_running_as_root()) {
-        /* Running as root, deploying home/ file - use actual user's credentials */
-        error_t *owner_err = fs_get_actual_user(&target_uid, &target_gid);
-        if (owner_err) {
-            git_blob_free(blob);
-            return error_wrap(owner_err,
-                            "Failed to determine actual user for home/ file: %s",
-                            entry->filesystem_path);
-        }
-    }
-    /* For root/ files or when not running as root: leave uid/gid as -1 (no change) */
-
-    /* Write directly from git blob to filesystem */
-    error_t *derr = fs_write_file_raw(
-        entry->filesystem_path,
-        (const unsigned char *)content,
-        (size_t)size,
-        target_uid,
-        target_gid
-    );
-    git_blob_free(blob);
-
-    if (derr) {
-        return error_wrap(derr, "Failed to deploy file '%s'", entry->filesystem_path);
-    }
-
-    /* Set permissions - use metadata if available, otherwise fallback to git mode */
+    /* Determine permissions - use metadata if available, otherwise fallback to git mode */
     mode_t file_mode;
     bool used_metadata = false;
     const metadata_entry_t *meta_entry = NULL;  /* Declare at function level for later use */
@@ -333,9 +328,44 @@ error_t *deploy_file(
         file_mode = (mode == GIT_FILEMODE_BLOB_EXECUTABLE) ? 0755 : 0644;
     }
 
-    derr = fs_set_permissions(entry->filesystem_path, file_mode);
+    /* Determine ownership for the file based on prefix
+     *
+     * For home/ files when running as root: Use actual user's UID/GID
+     * For root/ files: Use -1 (preserve root ownership)
+     * When not running as root: Use -1 (preserve current user)
+     */
+    uid_t target_uid = -1;
+    gid_t target_gid = -1;
+
+    bool is_home_prefix = str_starts_with(entry->storage_path, "home/");
+
+    if (is_home_prefix && fs_is_running_as_root()) {
+        /* Running as root, deploying home/ file - use actual user's credentials */
+        error_t *owner_err = fs_get_actual_user(&target_uid, &target_gid);
+        if (owner_err) {
+            git_blob_free(blob);
+            return error_wrap(owner_err,
+                            "Failed to determine actual user for home/ file: %s",
+                            entry->filesystem_path);
+        }
+    }
+    /* For root/ files or when not running as root: leave uid/gid as -1 (no change) */
+
+    /* Write directly from git blob to filesystem with atomic permission setting
+     * SECURITY: fs_write_file_raw now sets permissions atomically via fchmod(),
+     * eliminating the window where the file has incorrect permissions */
+    error_t *derr = fs_write_file_raw(
+        entry->filesystem_path,
+        (const unsigned char *)content,
+        (size_t)size,
+        file_mode,
+        target_uid,
+        target_gid
+    );
+    git_blob_free(blob);
+
     if (derr) {
-        return error_wrap(derr, "Failed to set permissions on '%s'", entry->filesystem_path);
+        return error_wrap(derr, "Failed to deploy file '%s'", entry->filesystem_path);
     }
 
     /* Apply ownership ONLY for root/ prefix files */
@@ -536,6 +566,37 @@ error_t *deploy_execute(
         return error_wrap(err, "Failed to deploy tracked directories");
     }
 
+    /* Load state entries once for O(1) lookups during smart skip (avoid O(N) database queries) */
+    hashmap_t *state_map = NULL;
+    state_file_entry_t *state_entries = NULL;
+    size_t state_count = 0;
+
+    if (state && opts->skip_unchanged) {
+        error_t *load_err = state_get_all_files(state, &state_entries, &state_count);
+        if (load_err) {
+            deploy_result_free(result);
+            return error_wrap(load_err, "Failed to load state for smart skip");
+        }
+
+        /* Build hashmap for O(1) lookups */
+        state_map = hashmap_create(state_count > 0 ? state_count : 16);
+        if (!state_map) {
+            state_free_all_files(state_entries, state_count);
+            deploy_result_free(result);
+            return ERROR(ERR_MEMORY, "Failed to create state lookup map");
+        }
+
+        for (size_t i = 0; i < state_count; i++) {
+            error_t *map_err = hashmap_set(state_map, state_entries[i].filesystem_path, &state_entries[i]);
+            if (map_err) {
+                hashmap_free(state_map, NULL);
+                state_free_all_files(state_entries, state_count);
+                deploy_result_free(result);
+                return error_wrap(map_err, "Failed to populate state lookup map");
+            }
+        }
+    }
+
     /* Deploy each file */
     for (size_t i = 0; i < manifest->count; i++) {
         const file_entry_t *entry = &manifest->entries[i];
@@ -552,33 +613,59 @@ error_t *deploy_execute(
 
         /* Use Case 1: Smart skip - file already up-to-date AND tracked in state */
         if (!should_skip && opts->skip_unchanged && fs_exists(entry->filesystem_path)) {
-            /* Check if file is tracked in state - only skip if it is */
-            bool tracked_in_state = false;
-            if (state) {
-                state_file_entry_t *state_entry = NULL;
-                error_t *state_err = state_get_file(state, entry->filesystem_path, &state_entry);
-                if (!state_err && state_entry) {
-                    tracked_in_state = true;
-                }
-                error_free(state_err); /* Not found is not an error */
-                state_free_entry(state_entry); /* Free owned memory from SQLite */
+            /* Check if file is tracked in state - only skip if it is (O(1) lookup) */
+            state_file_entry_t *state_entry = NULL;
+            if (state_map) {
+                state_entry = hashmap_get(state_map, entry->filesystem_path);
             }
 
-            /* Only skip if tracked in state AND content matches */
-            if (tracked_in_state) {
-                compare_result_t cmp_result;
-                error_t *cmp_err = compare_tree_entry_to_disk(
-                    repo,
-                    entry->entry,
-                    entry->filesystem_path,
-                    &cmp_result
-                );
+            if (state_entry) {
+                /* File is tracked in state - check if we can skip deployment
+                 *
+                 * Optimization: Use git blob OID hash comparison to avoid expensive
+                 * filesystem comparisons when the profile version changed.
+                 *
+                 * Two cases:
+                 * 1. Profile changed (git OID differs from state)
+                 *    → Must deploy, skip filesystem comparison
+                 * 2. Profile unchanged (git OID matches state)
+                 *    → Still need to verify user didn't modify file (safe comparison)
+                 */
 
-                if (!cmp_err && cmp_result == CMP_EQUAL) {
-                    should_skip = true;
-                    skip_reason = "unchanged";
+                /* Get git blob OID from manifest entry */
+                const git_oid *manifest_oid = git_tree_entry_id(entry->entry);
+                char manifest_oid_str[GIT_OID_SHA1_HEXSIZE + 1];
+                git_oid_tostr(manifest_oid_str, sizeof(manifest_oid_str), manifest_oid);
+
+                /* Compare with state hash to detect profile changes */
+                bool profile_version_changed = true;
+                if (state_entry->hash) {
+                    profile_version_changed = (strcmp(state_entry->hash, manifest_oid_str) != 0);
                 }
-                error_free(cmp_err); /* Ignore comparison errors, proceed with deployment */
+
+                if (profile_version_changed) {
+                    /* Profile version changed since last deployment
+                     * → File MUST be deployed, no need for expensive filesystem comparison
+                     * This is the fast path that avoids syscalls when profiles are updated */
+                    should_skip = false;
+                } else {
+                    /* Profile version unchanged - but user might have modified the file locally
+                     * → Do full content comparison to verify (safe, reliable)
+                     * This catches user modifications while maintaining correctness */
+                    compare_result_t cmp_result;
+                    error_t *cmp_err = compare_tree_entry_to_disk(
+                        repo,
+                        entry->entry,
+                        entry->filesystem_path,
+                        &cmp_result
+                    );
+
+                    if (!cmp_err && cmp_result == CMP_EQUAL) {
+                        should_skip = true;
+                        skip_reason = "unchanged";
+                    }
+                    error_free(cmp_err); /* Ignore comparison errors, proceed with deployment */
+                }
             }
         }
 
@@ -600,6 +687,12 @@ error_t *deploy_execute(
             result->error_message = strdup(error_message(err));
             error_free(err);
 
+            /* Clean up state cache before fail-stop */
+            if (state_map) {
+                hashmap_free(state_map, NULL);
+                state_free_all_files(state_entries, state_count);
+            }
+
             /* Fail-stop: don't continue deployment */
             *out = result;
             return ERROR(ERR_INTERNAL,
@@ -609,6 +702,12 @@ error_t *deploy_execute(
         /* Record success */
         string_array_push(result->deployed, entry->filesystem_path);
         result->deployed_count++;
+    }
+
+    /* Clean up state cache */
+    if (state_map) {
+        hashmap_free(state_map, NULL);
+        state_free_all_files(state_entries, state_count);
     }
 
     *out = result;

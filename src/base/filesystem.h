@@ -41,15 +41,20 @@ error_t *fs_read_file(const char *path, buffer_t **out);
  * without the buffer_t abstraction. Useful for writing directly from
  * git blobs or other external data sources.
  *
+ * SECURITY: This function atomically sets permissions using fchmod() after
+ * creating the file and setting ownership, ensuring there is no window where
+ * the file has incorrect permissions (critical for sensitive files like SSH keys).
+ *
  * @param path File path (must not be NULL)
  * @param data Raw data bytes (can be NULL if size is 0)
  * @param size Number of bytes to write
+ * @param mode Permission mode (e.g., 0600, 0644, 0755)
  * @param uid Target UID for file ownership (use -1 to preserve current)
  * @param gid Target GID for file ownership (use -1 to preserve current)
  * @return Error or NULL on success
  */
 error_t *fs_write_file_raw(const char *path, const unsigned char *data, size_t size,
-                           uid_t uid, gid_t gid);
+                           mode_t mode, uid_t uid, gid_t gid);
 
 /**
  * Write buffer to file (overwrites if exists)

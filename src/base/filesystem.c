@@ -92,7 +92,7 @@ error_t *fs_read_file(const char *path, buffer_t **out) {
 }
 
 error_t *fs_write_file_raw(const char *path, const unsigned char *data, size_t size,
-                           uid_t uid, gid_t gid) {
+                           mode_t mode, uid_t uid, gid_t gid) {
     RETURN_IF_ERROR(validate_path(path));
     /* Note: data can be NULL if size is 0 (empty file) */
 
@@ -113,8 +113,9 @@ error_t *fs_write_file_raw(const char *path, const unsigned char *data, size_t s
         free(parent);
     }
 
-    /* Open file for writing (create if not exists, truncate if exists) */
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    /* Open file for writing (create if not exists, truncate if exists)
+     * Use provided mode as initial permissions (will be affected by umask) */
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, mode);
     if (fd < 0) {
         return ERROR(ERR_FS, "Failed to open '%s' for writing: %s",
                     path, strerror(errno));
@@ -136,7 +137,7 @@ error_t *fs_write_file_raw(const char *path, const unsigned char *data, size_t s
         written += n;
     }
 
-    /* Apply ownership if requested (before sync, while FD is open)
+    /* Apply ownership if requested (before permissions, while FD is open)
      * Use -1 to skip ownership change */
     if (uid != (uid_t)-1 || gid != (gid_t)-1) {
         if (fchown(fd, uid, gid) < 0) {
@@ -145,6 +146,16 @@ error_t *fs_write_file_raw(const char *path, const unsigned char *data, size_t s
             return ERROR(ERR_FS, "Failed to set ownership on '%s': %s",
                         path, strerror(saved_errno));
         }
+    }
+
+    /* Set exact permissions (not affected by umask)
+     * SECURITY: This ensures the file has exactly the requested permissions,
+     * with no window where sensitive files have incorrect permissions */
+    if (fchmod(fd, mode) < 0) {
+        int saved_errno = errno;
+        close(fd);
+        return ERROR(ERR_FS, "Failed to set permissions on '%s': %s",
+                    path, strerror(saved_errno));
     }
 
     /* Sync to disk */
@@ -163,7 +174,7 @@ error_t *fs_write_file(const char *path, const buffer_t *content) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(content);
 
-    return fs_write_file_raw(path, buffer_data(content), buffer_size(content), -1, -1);
+    return fs_write_file_raw(path, buffer_data(content), buffer_size(content), 0644, -1, -1);
 }
 
 error_t *fs_copy_file(const char *src, const char *dst) {

@@ -377,7 +377,7 @@ static void display_workspace_status(
             display_divergence_section(
                 out, ws,
                 "Issues",
-                "(run \"dotta profile validate --fix\" to resolve)",
+                "(run \"dotta apply\" to remove orphaned files)",
                 issue_types,
                 sizeof(issue_types) / sizeof(issue_types[0]),
                 verbose

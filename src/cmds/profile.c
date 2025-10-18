@@ -1032,6 +1032,8 @@ static error_t *profile_validate(
 
     /* State for reporting (not cleaned up) */
     bool has_issues = false;
+    bool fixed_active_profiles = false;  /* Track what we actually fixed */
+    bool has_orphaned_files = false;     /* Track issues we can't fix */
     size_t orphaned_files = 0;
 
     /* Load state (with locking if we're going to fix issues) */
@@ -1117,6 +1119,7 @@ static error_t *profile_validate(
             }
 
             output_success(out, "✓ Removed missing profiles from state\n");
+            fixed_active_profiles = true;
         } else {
             output_info(out, "Hint: Run 'dotta profile validate --fix' to remove them\n");
         }
@@ -1135,6 +1138,7 @@ static error_t *profile_validate(
         if (!profile_exists(repo, profile_name)) {
             orphaned_files++;
             has_issues = true;
+            has_orphaned_files = true;
         }
     }
 
@@ -1145,12 +1149,7 @@ static error_t *profile_validate(
                       orphaned_files,
                       orphaned_files == 1 ? "y" : "ies");
         output_info(out, "  These reference non-existent profiles");
-
-        if (opts->fix) {
-            output_info(out, "  Hint: Run 'dotta apply' to clean up\n");
-        } else {
-            output_info(out, "  Hint: Run 'dotta apply' to clean up\n");
-        }
+        output_info(out, "  Hint: Run 'dotta apply' to clean up\n");
     }
 
 cleanup:
@@ -1172,7 +1171,18 @@ cleanup:
         output_success(out, "Profile state is valid");
     } else {
         if (opts->fix) {
-            output_info(out, "Fixed profile state issues");
+            /* Be accurate about what was actually fixed */
+            if (fixed_active_profiles && !has_orphaned_files) {
+                output_success(out, "Fixed all profile state issues");
+            } else if (fixed_active_profiles && has_orphaned_files) {
+                output_info(out, "Fixed active profile list");
+                output_info(out, "Note: Orphaned files require 'dotta apply' to clean up");
+            } else if (!fixed_active_profiles && has_orphaned_files) {
+                output_warning(out, "Profile state has issues that require 'dotta apply'");
+            } else {
+                /* Shouldn't reach here, but handle gracefully */
+                output_warning(out, "Profile state has issues");
+            }
         } else {
             output_warning(out, "Profile state has issues");
             output_info(out, "Run 'dotta profile validate --fix' to fix automatically");

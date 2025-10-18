@@ -457,7 +457,7 @@ void output_item(
     const char *color = output_color_code(ctx, status_color);
     const char *reset = output_color_code(ctx, OUTPUT_COLOR_RESET);
 
-    fprintf(ctx->stream, "  %s%-10s%s %s\n", color, status, reset, text);
+    fprintf(ctx->stream, "  %s%-12s%s %s\n", color, status, reset, text);
 }
 
 void output_kv(

@@ -195,7 +195,7 @@ static void format_diverged_file(
 /**
  * Display a divergence section with files of specific types
  *
- * Shows section header, hint, and files (in verbose mode).
+ * Shows section header, hint, and individual files.
  * Only displays if count > 0.
  */
 static void display_divergence_section(
@@ -204,8 +204,7 @@ static void display_divergence_section(
     const char *section_title,
     const char *hint_message,
     const divergence_type_t *types,
-    size_t type_count,
-    bool verbose
+    size_t type_count
 ) {
     if (!out || !ws || !section_title || !types) {
         return;
@@ -248,28 +247,26 @@ static void display_divergence_section(
         }
     }
 
-    /* In verbose mode, display individual files */
-    if (verbose) {
-        output_newline(out);
+    /* Display individual files */
+    output_newline(out);
 
-        for (size_t t = 0; t < type_count; t++) {
-            size_t count = 0;
-            const workspace_file_t **files = workspace_get_diverged(ws, types[t], &count);
+    for (size_t t = 0; t < type_count; t++) {
+        size_t count = 0;
+        const workspace_file_t **files = workspace_get_diverged(ws, types[t], &count);
 
-            if (files) {
-                for (size_t i = 0; i < count; i++) {
-                    const workspace_file_t *file = files[i];
-                    char info[1024];
-                    const char *label = NULL;
-                    output_color_t color = OUTPUT_COLOR_YELLOW;
+        if (files) {
+            for (size_t i = 0; i < count; i++) {
+                const workspace_file_t *file = files[i];
+                char info[1024];
+                const char *label = NULL;
+                output_color_t color = OUTPUT_COLOR_YELLOW;
 
-                    format_diverged_file(out, file, &label, &color, info, sizeof(info));
-                    output_item(out, label, color, info);
-                }
-
-                /* Free the allocated pointer array */
-                free(files);
+                format_diverged_file(out, file, &label, &color, info, sizeof(info));
+                output_item(out, label, color, info);
             }
+
+            /* Free the allocated pointer array */
+            free(files);
         }
     }
 }
@@ -340,8 +337,7 @@ static void display_workspace_status(
                 "Uncommitted changes",
                 "(use \"dotta update\" to commit these changes)",
                 uncommitted_types,
-                sizeof(uncommitted_types) / sizeof(uncommitted_types[0]),
-                verbose
+                sizeof(uncommitted_types) / sizeof(uncommitted_types[0])
             );
 
             /* Section 2: Undeployed Files (what 'apply' would deploy) */
@@ -353,8 +349,7 @@ static void display_workspace_status(
                 "Undeployed files",
                 "(use \"dotta apply\" to deploy these files)",
                 undeployed_types,
-                sizeof(undeployed_types) / sizeof(undeployed_types[0]),
-                verbose
+                sizeof(undeployed_types) / sizeof(undeployed_types[0])
             );
 
             /* Section 3: New Files (in tracked directories) */
@@ -366,8 +361,7 @@ static void display_workspace_status(
                 "New files",
                 "(use \"dotta update --include-new\" to track these files)",
                 new_file_types,
-                sizeof(new_file_types) / sizeof(new_file_types[0]),
-                verbose
+                sizeof(new_file_types) / sizeof(new_file_types[0])
             );
 
             /* Section 4: Issues (orphaned state) */
@@ -379,8 +373,7 @@ static void display_workspace_status(
                 "Issues",
                 "(run \"dotta apply\" to remove orphaned files)",
                 issue_types,
-                sizeof(issue_types) / sizeof(issue_types[0]),
-                verbose
+                sizeof(issue_types) / sizeof(issue_types[0])
             );
             
             output_newline(out);

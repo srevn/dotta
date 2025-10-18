@@ -40,17 +40,14 @@ static void display_active_profiles(
     for (size_t i = 0; i < profiles->count; i++) {
         const profile_t *profile = &profiles->profiles[i];
 
-        /* Format profile name with marker */
+        /* Format profile name */
         char *colored_name = output_colorize(out, OUTPUT_COLOR_CYAN, profile->name);
-        char *auto_text = profile->auto_detected ? " (auto-detected)" : "";
 
         if (colored_name) {
-            output_printf(out, OUTPUT_NORMAL, "  %s %s%s",
-                         profile->auto_detected ? "*" : " ", colored_name, auto_text);
+            output_printf(out, OUTPUT_NORMAL, "  %s", colored_name);
             free(colored_name);
         } else {
-            output_printf(out, OUTPUT_NORMAL, "  %s %s%s",
-                         profile->auto_detected ? "*" : " ", profile->name, auto_text);
+            output_printf(out, OUTPUT_NORMAL, "  %s", profile->name);
         }
 
         /* Show per-profile last deployed timestamp */
@@ -88,7 +85,7 @@ static void display_active_profiles(
                     profile_file_count++;
                 }
             }
-            output_printf(out, OUTPUT_NORMAL, "\n      %zu file%s",
+            output_printf(out, OUTPUT_NORMAL, "\n    %zu file%s",
                          profile_file_count, profile_file_count == 1 ? "" : "s");
         }
 
@@ -309,18 +306,35 @@ static void display_workspace_status(
         output_section(out, "Workspace status");
 
         /* Display overall status with color */
+        const char *status_msg = NULL;
+        output_color_t status_color = OUTPUT_COLOR_GREEN;
+
         switch (ws_status) {
             case WORKSPACE_CLEAN:
-                output_success(out, "Clean - all states aligned");
+                status_msg = "Clean - all states aligned";
+                status_color = OUTPUT_COLOR_GREEN;
                 break;
 
             case WORKSPACE_DIRTY:
-                output_warning(out, "Dirty - workspace has divergence");
+                status_msg = "Dirty - workspace has divergence";
+                status_color = OUTPUT_COLOR_YELLOW;
                 break;
 
             case WORKSPACE_INVALID:
-                output_error(out, "Invalid - workspace has orphaned state entries");
+                status_msg = "Invalid - workspace has orphaned state entries";
+                status_color = OUTPUT_COLOR_RED;
                 break;
+        }
+
+        if (status_msg) {
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "  %s%s%s\n",
+                             output_color_code(out, status_color),
+                             status_msg,
+                             output_color_code(out, OUTPUT_COLOR_RESET));
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "  %s\n", status_msg);
+            }
         }
 
         /* Show sectioned output for dirty/invalid workspace */
@@ -540,11 +554,14 @@ static error_t *display_remote_status(
                 error_free(fetch_err);
             }
         }
-        output_newline(out);
+
+        /* Add spacing after fetch output in verbose mode */
+        if (verbose) {
+            output_newline(out);
+        }
     }
 
     /* Display remote sync status section */
-    output_newline(out);
     char section_title[256];
     snprintf(section_title, sizeof(section_title), "Remote sync status (%s)", remote_name);
     output_section(out, section_title);
@@ -674,17 +691,23 @@ static error_t *display_remote_status(
                 error_free(commit_err);
             }
         } else {
-            /* Compact mode: single line */
+            /* Compact mode: single line matching active profiles format */
+            char *colored_name = output_colorize(out, OUTPUT_COLOR_CYAN, profile_name);
+            if (colored_name) {
+                output_printf(out, OUTPUT_NORMAL, "  %s", colored_name);
+                free(colored_name);
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "  %s", profile_name);
+            }
+
+            /* Display status in dimmed parentheses */
             if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s%-12s%s  %s%s%s\n",
-                             output_color_code(out, OUTPUT_COLOR_CYAN),
-                             profile_name,
-                             output_color_code(out, OUTPUT_COLOR_RESET),
-                             output_color_code(out, color),
+                output_printf(out, OUTPUT_NORMAL, "  %s(%s)%s\n",
+                             output_color_code(out, OUTPUT_COLOR_DIM),
                              status_str,
                              output_color_code(out, OUTPUT_COLOR_RESET));
             } else {
-                output_printf(out, OUTPUT_NORMAL, "  %-12s  %s\n", profile_name, status_str);
+                output_printf(out, OUTPUT_NORMAL, "  (%s)\n", status_str);
             }
         }
 
@@ -693,23 +716,63 @@ static error_t *display_remote_status(
 
     output_newline(out);
 
-    /* Display summary */
+    /* Display summary section */
     output_section(out, "Sync summary");
+
     if (up_to_date > 0) {
-        output_info(out, "%zu up-to-date", up_to_date);
+        char *colored_count = output_colorize(out, OUTPUT_COLOR_CYAN, "%zu");
+        if (colored_count) {
+            char formatted[64];
+            snprintf(formatted, sizeof(formatted), colored_count, up_to_date);
+            output_printf(out, OUTPUT_NORMAL, "  %s up-to-date\n", formatted);
+            free(colored_count);
+        } else {
+            output_printf(out, OUTPUT_NORMAL, "  %zu up-to-date\n", up_to_date);
+        }
     }
     if (ahead > 0) {
-        output_info(out, "%zu ahead (ready to push)", ahead);
+        char *colored_count = output_colorize(out, OUTPUT_COLOR_CYAN, "%zu");
+        if (colored_count) {
+            char formatted[64];
+            snprintf(formatted, sizeof(formatted), colored_count, ahead);
+            output_printf(out, OUTPUT_NORMAL, "  %s ahead\n", formatted);
+            free(colored_count);
+        } else {
+            output_printf(out, OUTPUT_NORMAL, "  %zu ahead\n", ahead);
+        }
     }
     if (behind > 0) {
-        output_info(out, "%zu behind (run 'dotta sync' to pull)", behind);
+        char *colored_count = output_colorize(out, OUTPUT_COLOR_CYAN, "%zu");
+        if (colored_count) {
+            char formatted[64];
+            snprintf(formatted, sizeof(formatted), colored_count, behind);
+            output_printf(out, OUTPUT_NORMAL, "  %s behind\n", formatted);
+            free(colored_count);
+        } else {
+            output_printf(out, OUTPUT_NORMAL, "  %zu behind\n", behind);
+        }
     }
     if (diverged > 0) {
-        output_warning(out, "%zu diverged (needs resolution)", diverged);
-        output_info(out, "  Hint: Run 'dotta sync --diverged=rebase' or 'dotta sync --diverged=merge' to resolve");
+        char *colored_count = output_colorize(out, OUTPUT_COLOR_CYAN, "%zu");
+        if (colored_count) {
+            char formatted[64];
+            snprintf(formatted, sizeof(formatted), colored_count, diverged);
+            output_printf(out, OUTPUT_NORMAL, "  %s diverged\n", formatted);
+            free(colored_count);
+        } else {
+            output_printf(out, OUTPUT_NORMAL, "  %zu diverged\n", diverged);
+        }
     }
     if (no_remote > 0) {
-        output_info(out, "%zu without remote branch", no_remote);
+        char *colored_count = output_colorize(out, OUTPUT_COLOR_CYAN, "%zu");
+        if (colored_count) {
+            char formatted[64];
+            snprintf(formatted, sizeof(formatted), colored_count, no_remote);
+            output_printf(out, OUTPUT_NORMAL, "  %s no remote\n", formatted);
+            free(colored_count);
+        } else {
+            output_printf(out, OUTPUT_NORMAL, "  %zu no remote\n", no_remote);
+        }
     }
 
     /* Free profiles if we allocated them */

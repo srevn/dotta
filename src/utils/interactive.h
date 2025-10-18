@@ -36,8 +36,6 @@ typedef struct {
     char *name;              /* Profile name */
     bool selected;           /* Selected for operations */
     bool exists_locally;     /* Exists as local branch */
-    int indent_level;        /* Indentation level (0=root, 1=sub-profile) */
-    bool is_host_profile;    /* True for hosts/... profiles */
 } profile_item_t;
 
 /**
@@ -181,13 +179,15 @@ int interactive_get_required_lines(const interactive_state_t *state);
  * @param repo Repository (must not be NULL)
  * @param key Key code
  * @param term_ptr Terminal pointer (for restoring during commands, must not be NULL)
+ * @param out_err Error output (must not be NULL, set on INTERACTIVE_EXIT_ERROR)
  * @return Command result
  */
 interactive_result_t interactive_handle_key(
     interactive_state_t *state,
     git_repository *repo,
     int key,
-    terminal_t **term_ptr
+    terminal_t **term_ptr,
+    error_t **out_err
 );
 
 /* ========================================================================
@@ -200,28 +200,5 @@ interactive_result_t interactive_handle_key(
  * @param item Item to free (can be NULL)
  */
 void profile_item_free(profile_item_t *item);
-
-/**
- * Calculate indent level from profile name
- *
- * Examples:
- * - "global" -> 0
- * - "darwin" -> 0
- * - "darwin/work" -> 1
- * - "hosts/macbook" -> 0
- * - "hosts/macbook/personal" -> 1
- *
- * @param profile_name Profile name (must not be NULL)
- * @return Indent level
- */
-int interactive_get_indent_level(const char *profile_name);
-
-/**
- * Check if profile is host-based
- *
- * @param profile_name Profile name (must not be NULL)
- * @return true if starts with "hosts/"
- */
-bool interactive_is_host_profile(const char *profile_name);
 
 #endif /* DOTTA_INTERACTIVE_H */

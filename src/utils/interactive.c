@@ -15,20 +15,15 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "utils/array.h"
+#include "utils/hashmap.h"
 #include "utils/terminal.h"
 
 /**
- * Profile namespace prefixes
+ * ANSI escape codes
  *
- * Host profiles use a different depth mapping because they have an extra
- * namespace level. For example:
- * - OS profiles: "darwin" (base, depth 0), "darwin/work" (sub, depth 1)
- * - Host profiles: "hosts/macbook" (base, depth 1), "hosts/macbook/work" (sub, depth 2)
- *
- * We normalize indentation by treating "hosts/<name>" as depth 0 for display.
+ * Using these directly avoids excessive fflush() calls from terminal.h functions.
  */
-#define PROFILE_PREFIX_HOSTS "hosts/"
-#define PROFILE_PREFIX_HOSTS_LEN 6
+#define ANSI_CLEAR_LINE "\033[2K"
 
 /**
  * Interactive UI state
@@ -37,6 +32,7 @@ struct interactive_state {
     git_repository *repo;          /* Repository (borrowed) */
     profile_item_t *items;         /* Profile items */
     size_t item_count;             /* Number of items */
+    size_t selected_count;         /* Number of selected items (cached) */
     size_t cursor;                 /* Current cursor position */
     bool modified;                 /* True if there are unsaved changes */
 };
@@ -64,33 +60,6 @@ static void free_profile_items(profile_item_t *items, size_t count) {
     free(items);
 }
 
-int interactive_get_indent_level(const char *profile_name) {
-    if (!profile_name) {
-        return 0;
-    }
-
-    /* Count slashes to determine depth */
-    int depth = 0;
-    for (const char *p = profile_name; *p; p++) {
-        if (*p == '/') {
-            depth++;
-        }
-    }
-
-    /* For hosts profiles, depth 1 = "hosts/foo" (base), depth 2 = "hosts/foo/bar" (sub)
-     * Normalize by subtracting 1 from depth for display consistency */
-    if (strncmp(profile_name, PROFILE_PREFIX_HOSTS, PROFILE_PREFIX_HOSTS_LEN) == 0) {
-        return depth > 1 ? 1 : 0;
-    }
-
-    /* For OS profiles, depth 0 = "darwin" (base), depth 1 = "darwin/work" (sub) */
-    return depth;
-}
-
-bool interactive_is_host_profile(const char *profile_name) {
-    return profile_name && strncmp(profile_name, PROFILE_PREFIX_HOSTS, PROFILE_PREFIX_HOSTS_LEN) == 0;
-}
-
 /* ========================================================================
  * State Management
  * ======================================================================== */
@@ -105,6 +74,8 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
     profile_list_t *all_profiles = NULL;
     state_t *deploy_state = NULL;
     string_array_t *state_profiles = NULL;
+    hashmap_t *profile_map = NULL;
+    bool *used = NULL;
     size_t item_idx = 0;  /* Track number of items allocated for cleanup */
 
     /* Allocate state */
@@ -144,6 +115,29 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
         }
     }
 
+    /* Build hashmap for O(1) profile lookups: name -> (index + 1) in all_profiles
+     * We store (i + 1) instead of i because NULL (0) means "not found" */
+    profile_map = hashmap_create(0);
+    if (!profile_map) {
+        err = error_create(ERR_MEMORY, "failed to create profile hashmap");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < all_profiles->count; i++) {
+        /* Store (index + 1) to avoid NULL for index 0 */
+        err = hashmap_set(profile_map, all_profiles->profiles[i].name, (void*)(uintptr_t)(i + 1));
+        if (err) {
+            goto cleanup;
+        }
+    }
+
+    /* Allocate tracking array to mark used profiles */
+    used = calloc(all_profiles->count, sizeof(bool));
+    if (!used) {
+        err = error_create(ERR_MEMORY, "failed to allocate tracking array");
+        goto cleanup;
+    }
+
     /* Allocate items array (max size = all_profiles->count) */
     state->items = calloc(all_profiles->count, sizeof(profile_item_t));
     if (!state->items) {
@@ -156,19 +150,16 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
         for (size_t i = 0; i < state_profiles->count; i++) {
             const char *profile_name = state_profiles->items[i];
 
-            /* Find this profile in all_profiles to verify it still exists */
-            bool found = false;
-            for (size_t j = 0; j < all_profiles->count; j++) {
-                if (strcmp(all_profiles->profiles[j].name, profile_name) == 0) {
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found) {
+            /* O(1) lookup to verify profile still exists */
+            void *idx_ptr = hashmap_get(profile_map, profile_name);
+            if (!idx_ptr) {
                 /* Profile in state but doesn't exist locally anymore - skip */
                 continue;
             }
+
+            /* Subtract 1 to get actual index (we stored i + 1) */
+            size_t profile_idx = (size_t)(uintptr_t)idx_ptr - 1;
+            used[profile_idx] = true;
 
             /* Add to items */
             state->items[item_idx].name = strdup(profile_name);
@@ -179,25 +170,18 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
 
             state->items[item_idx].selected = true;
             state->items[item_idx].exists_locally = true;
-            state->items[item_idx].indent_level = interactive_get_indent_level(profile_name);
-            state->items[item_idx].is_host_profile = interactive_is_host_profile(profile_name);
             item_idx++;
         }
     }
 
     /* Second: Add remaining profiles not in state (unselected, at bottom) */
     for (size_t i = 0; i < all_profiles->count; i++) {
-        profile_t *p = &all_profiles->profiles[i];
-
-        /* Check if already added from state */
-        bool already_added = false;
-        if (state_profiles) {
-            already_added = string_array_contains(state_profiles, p->name);
-        }
-
-        if (already_added) {
+        /* O(1) check if already added */
+        if (used[i]) {
             continue;
         }
+
+        profile_t *p = &all_profiles->profiles[i];
 
         /* Add to items */
         state->items[item_idx].name = strdup(p->name);
@@ -208,12 +192,18 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
 
         state->items[item_idx].selected = false;
         state->items[item_idx].exists_locally = true;
-        state->items[item_idx].indent_level = interactive_get_indent_level(p->name);
-        state->items[item_idx].is_host_profile = interactive_is_host_profile(p->name);
         item_idx++;
     }
 
     state->item_count = item_idx;
+
+    /* Count selected items (all from state_profiles) */
+    state->selected_count = 0;
+    for (size_t i = 0; i < state->item_count; i++) {
+        if (state->items[i].selected) {
+            state->selected_count++;
+        }
+    }
 
     /* Success - cleanup temporary resources and return */
     if (state_profiles) {
@@ -221,6 +211,8 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
     }
     state_free(deploy_state);
     profile_list_free(all_profiles);
+    hashmap_free(profile_map, NULL);
+    free(used);
 
     *out = state;
     return NULL;
@@ -232,6 +224,8 @@ cleanup:
     }
     state_free(deploy_state);
     profile_list_free(all_profiles);
+    hashmap_free(profile_map, NULL);
+    free(used);
     if (state) {
         if (state->items) {
             /* Free any profile names that were allocated */
@@ -321,20 +315,13 @@ static error_t *interactive_save_profile_order(
         return error_create(ERR_INVALID_ARG, "invalid arguments");
     }
 
-    /* Count selected profiles */
-    size_t selected_count = 0;
-    for (size_t i = 0; i < state->item_count; i++) {
-        if (state->items[i].selected) {
-            selected_count++;
-        }
-    }
-
-    if (selected_count == 0) {
+    /* Check if any profiles selected (use cached count) */
+    if (state->selected_count == 0) {
         return error_create(ERR_INVALID_ARG, "no profiles selected");
     }
 
     /* Extract selected profile names in current display order */
-    const char **profile_names = malloc(selected_count * sizeof(char *));
+    const char **profile_names = malloc(state->selected_count * sizeof(char *));
     if (!profile_names) {
         return error_create(ERR_MEMORY, "failed to allocate profile names");
     }
@@ -355,7 +342,7 @@ static error_t *interactive_save_profile_order(
     }
 
     /* Set profiles in new order */
-    err = state_set_profiles(deploy_state, profile_names, selected_count);
+    err = state_set_profiles(deploy_state, profile_names, state->selected_count);
     if (!err) {
         err = state_save(repo, deploy_state);
     }
@@ -392,8 +379,7 @@ int interactive_render(const interactive_state_t *state) {
     int lines_rendered = 0;
 
     /* Header */
-    fprintf(stdout, "\r");
-    terminal_clear_line();
+    fprintf(stdout, "\r" ANSI_CLEAR_LINE);
     if (state->modified) {
         fprintf(stdout, "  \033[1mProfiles:\033[0m \033[33m(modified)\033[0m\r\n");
     } else {
@@ -402,17 +388,14 @@ int interactive_render(const interactive_state_t *state) {
     lines_rendered++;
 
     /* Blank line */
-    fprintf(stdout, "\r");
-    terminal_clear_line();
-    fprintf(stdout, "\r\n");
+    fprintf(stdout, "\r" ANSI_CLEAR_LINE "\r\n");
     lines_rendered++;
 
     /* Profile items */
     for (size_t i = 0; i < state->item_count; i++) {
         const profile_item_t *item = &state->items[i];
 
-        fprintf(stdout, "\r");
-        terminal_clear_line();
+        fprintf(stdout, "\r" ANSI_CLEAR_LINE);
 
         /* Cursor indicator */
         const char *cursor = (i == state->cursor) ? "\033[1;36m▶\033[0m" : " ";
@@ -420,30 +403,21 @@ int interactive_render(const interactive_state_t *state) {
         /* Selection checkbox */
         const char *checkbox = item->selected ? "\033[1;32m✓\033[0m" : " ";
 
-        /* Indentation */
-        const char *indent = "";
-        if (item->indent_level == 1) {
-            indent = "  ";  /* 2 spaces for sub-profiles */
-        }
-
-        /* Profile name (dim if not selected) */
+        /* Profile name (dim if not selected) - all aligned at same column */
         if (item->selected || i == state->cursor) {
-            fprintf(stdout, "  %s %s %s%s\r\n", cursor, checkbox, indent, item->name);
+            fprintf(stdout, "  %s %s %s\r\n", cursor, checkbox, item->name);
         } else {
-            fprintf(stdout, "  %s %s \033[2m%s%s\033[0m\r\n", cursor, checkbox, indent, item->name);
+            fprintf(stdout, "  %s %s \033[2m%s\033[0m\r\n", cursor, checkbox, item->name);
         }
         lines_rendered++;
     }
 
     /* Blank line */
-    fprintf(stdout, "\r");
-    terminal_clear_line();
-    fprintf(stdout, "\r\n");
+    fprintf(stdout, "\r" ANSI_CLEAR_LINE "\r\n");
     lines_rendered++;
 
     /* Footer / keybinding help - adapt based on state */
-    fprintf(stdout, "\r");
-    terminal_clear_line();
+    fprintf(stdout, "\r" ANSI_CLEAR_LINE);
     if (state->modified) {
         /* Show modified mode keys with save highlighted */
         fprintf(stdout, "\033[2m↑↓\033[0m navigate  "
@@ -460,6 +434,7 @@ int interactive_render(const interactive_state_t *state) {
     }
     lines_rendered++;
 
+    /* Single flush at end instead of after every line */
     fflush(stdout);
 
     return lines_rendered;
@@ -473,11 +448,14 @@ interactive_result_t interactive_handle_key(
     interactive_state_t *state,
     git_repository *repo,
     int key,
-    terminal_t **term_ptr
+    terminal_t **term_ptr,
+    error_t **out_err
 ) {
-    if (!state || !repo || !term_ptr) {
+    if (!state || !repo || !term_ptr || !out_err) {
         return INTERACTIVE_EXIT_ERROR;
     }
+
+    *out_err = NULL;
 
     switch (key) {
         /* Navigation */
@@ -507,10 +485,17 @@ interactive_result_t interactive_handle_key(
 
         /* Toggle selection */
         case TERM_KEY_SPACE:
-        case '\n':
-        case '\r':
             if (state->cursor < state->item_count) {
-                state->items[state->cursor].selected = !state->items[state->cursor].selected;
+                bool was_selected = state->items[state->cursor].selected;
+                state->items[state->cursor].selected = !was_selected;
+
+                /* Update cached count */
+                if (was_selected) {
+                    state->selected_count--;
+                } else {
+                    state->selected_count++;
+                }
+
                 state->modified = true;
             }
             return INTERACTIVE_CONTINUE;
@@ -535,8 +520,9 @@ interactive_result_t interactive_handle_key(
 
             error_t *err = interactive_save_profile_order(repo, state);
             if (err) {
-                /* Silently ignore errors for now - could add error indicator to UI */
-                error_free(err);
+                /* Exit and return error to caller */
+                *out_err = err;
+                return INTERACTIVE_EXIT_ERROR;
             }
             return INTERACTIVE_CONTINUE;
         }
@@ -642,12 +628,13 @@ error_t *interactive_run(git_repository *repo) {
 
     /* Main loop */
     interactive_result_t result = INTERACTIVE_CONTINUE;
+    error_t *loop_err = NULL;
     while (result == INTERACTIVE_CONTINUE) {
         /* Read key */
         int key = terminal_read_key();
 
         /* Handle key */
-        result = interactive_handle_key(state, repo, key, &term);
+        result = interactive_handle_key(state, repo, key, &term, &loop_err);
 
         /* Re-render: move cursor up, then redraw */
         if (result == INTERACTIVE_CONTINUE) {
@@ -671,7 +658,11 @@ error_t *interactive_run(git_repository *repo) {
     interactive_state_free(state);
     terminal_restore(term);
 
+    /* Return error if one occurred */
     if (result == INTERACTIVE_EXIT_ERROR) {
+        if (loop_err) {
+            return loop_err;
+        }
         return error_create(ERR_INTERNAL, "interactive mode exited with error");
     }
 

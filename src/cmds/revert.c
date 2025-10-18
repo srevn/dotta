@@ -11,7 +11,6 @@
 #include <time.h>
 
 #include "base/error.h"
-#include "base/filesystem.h"
 #include "base/gitops.h"
 #include "core/profiles.h"
 #include "infra/path.h"
@@ -28,9 +27,7 @@
  * Accepts filesystem paths or storage paths.
  * Uses profile_build_file_index()
  *
- * Pattern:
- * 1. Try as filesystem path → convert to storage path
- * 2. Try as storage path directly (home/.bashrc)
+ * Uses path_resolve_input() for unified path handling.
  */
 static error_t *discover_file(
     git_repository *repo,
@@ -47,38 +44,10 @@ static error_t *discover_file(
     error_t *err = NULL;
     char *storage_path = NULL;
 
-    /* Strategy: Try filesystem path first, then storage path */
-
-    /* Attempt 1: Treat as filesystem path */
-    char *canonical = NULL;
-    err = fs_canonicalize_path(file_path, &canonical);
-    if (!err) {
-        /* Successfully canonicalized - convert to storage path */
-        path_prefix_t prefix;
-        err = path_to_storage(canonical, &storage_path, &prefix);
-        free(canonical);
-        if (err) {
-            return error_wrap(err, "Failed to convert filesystem path '%s'\n"
-                           "Hint: Use storage path format (home/..., root/...)", file_path);
-        }
-    } else {
-        /* Attempt 2: Treat as storage path directly */
-        error_free(err);
-        err = NULL;
-
-        /* Validate it looks like a storage path (home/... or root/...) */
-        if (strncmp(file_path, "home/", 5) == 0 || strncmp(file_path, "root/", 5) == 0) {
-            storage_path = strdup(file_path);
-        } else {
-            return ERROR(ERR_INVALID_ARG,
-                        "Path '%s' is neither a valid filesystem path nor storage path\n"
-                        "Hint: Storage paths must start with 'home/' or 'root/'",
-                        file_path);
-        }
-    }
-
-    if (!storage_path) {
-        return ERROR(ERR_MEMORY, "Failed to allocate storage path");
+    /* Resolve input path to storage format (flexible mode - file need not exist) */
+    err = path_resolve_input(file_path, false, &storage_path);
+    if (err) {
+        return err;
     }
 
     /* Fast path: If profile specified, check only that profile */

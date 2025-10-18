@@ -129,4 +129,38 @@ error_t *path_make_relative(
  */
 error_t *path_get_home(char **out);
 
+/**
+ * Resolve flexible path input to canonical storage format
+ *
+ * Accepts two input formats:
+ *   1. Filesystem paths: /path/to/file, ~/path/to/file
+ *   2. Storage paths: home/path/to/file, root/path/to/file
+ *
+ * Behavior modes:
+ *   - require_exists=true: Filesystem paths MUST exist and will be canonicalized
+ *                          (resolves symlinks, verifies existence)
+ *                          Critical for add/update to track correct files
+ *
+ *   - require_exists=false: Filesystem paths converted by pattern only
+ *                           (file need not exist on disk)
+ *                           Used for show/revert/remove (operations on Git data)
+ *
+ * Examples:
+ *   ~/.bashrc (exists=true)     -> canonicalized to home/.bashrc
+ *   ~/.bashrc (exists=false)    -> pattern-converted to home/.bashrc
+ *   home/.bashrc (either mode)  -> validated and returned as home/.bashrc
+ *   /etc/hosts (exists=true)    -> canonicalized to root/etc/hosts
+ *   .bashrc (either mode)       -> ERROR: ambiguous/invalid path
+ *
+ * @param input User-provided path string (must not be NULL)
+ * @param require_exists Whether to canonicalize and verify existence
+ * @param out_storage_path Output in storage format (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+error_t *path_resolve_input(
+    const char *input,
+    bool require_exists,
+    char **out_storage_path
+);
+
 #endif /* DOTTA_PATH_H */

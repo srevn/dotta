@@ -614,13 +614,32 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     /* Process each input path */
     for (size_t i = 0; i < opts->file_count; i++) {
         const char *file = opts->files[i];
-
-        /* Canonicalize path */
         char *canonical = NULL;
-        err = fs_canonicalize_path(file, &canonical);
-        if (err) {
-            err = error_wrap(err, "Failed to resolve path '%s'", file);
-            goto cleanup;
+
+        /* Check if input is a storage path */
+        if (str_starts_with(file, "home/") || str_starts_with(file, "root/")) {
+            /* Convert storage path to filesystem path */
+            char *fs_path = NULL;
+            err = path_from_storage(file, &fs_path);
+            if (err) {
+                err = error_wrap(err, "Failed to convert storage path '%s'", file);
+                goto cleanup;
+            }
+
+            /* Canonicalize the filesystem path */
+            err = fs_canonicalize_path(fs_path, &canonical);
+            free(fs_path);
+            if (err) {
+                err = error_wrap(err, "Failed to resolve path '%s'", file);
+                goto cleanup;
+            }
+        } else {
+            /* Regular filesystem path - canonicalize directly */
+            err = fs_canonicalize_path(file, &canonical);
+            if (err) {
+                err = error_wrap(err, "Failed to resolve path '%s'", file);
+                goto cleanup;
+            }
         }
 
         /* Check path exists */

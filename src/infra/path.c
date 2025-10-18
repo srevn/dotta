@@ -453,3 +453,159 @@ cleanup:
 
     return err;
 }
+
+/**
+ * Resolve flexible path input to canonical storage format
+ *
+ * This is the unified path resolution function used by all commands.
+ * Handles both filesystem and storage path formats intelligently.
+ */
+error_t *path_resolve_input(
+    const char *input,
+    bool require_exists,
+    char **out_storage_path
+) {
+    CHECK_NULL(input);
+    CHECK_NULL(out_storage_path);
+
+    error_t *err = NULL;
+    char *storage_path = NULL;
+
+    if (input[0] == '\0') {
+        return ERROR(ERR_INVALID_ARG, "Path cannot be empty");
+    }
+
+    /* Detect path type and route to appropriate handler */
+
+    /* Case 1: Filesystem path (absolute or tilde-prefixed) */
+    if (input[0] == '/' || input[0] == '~') {
+        if (require_exists) {
+            /* Mode A: Strict canonicalization (for add, update) */
+            /* Expand tilde if needed */
+            char *expanded = NULL;
+            if (input[0] == '~') {
+                err = path_expand_home(input, &expanded);
+                if (err) {
+                    return error_wrap(err, "Failed to expand path '%s'", input);
+                }
+            } else {
+                expanded = strdup(input);
+                if (!expanded) {
+                    return ERROR(ERR_MEMORY, "Failed to allocate path");
+                }
+            }
+
+            /* Canonicalize: resolves symlinks and verifies existence */
+            char *canonical = NULL;
+            err = fs_canonicalize_path(expanded, &canonical);
+            free(expanded);
+            if (err) {
+                return error_wrap(err,
+                    "Failed to resolve path '%s'\n"
+                    "Hint: File must exist for this operation", input);
+            }
+
+            /* Convert to storage format */
+            path_prefix_t prefix;
+            err = path_to_storage(canonical, &storage_path, &prefix);
+            free(canonical);
+            if (err) {
+                return error_wrap(err, "Failed to convert path '%s'", input);
+            }
+        } else {
+            /* Mode B: Pattern-based conversion (for show, revert, remove) */
+            /* File need not exist - used for querying Git data */
+
+            /* Expand tilde if present */
+            char *working_path = NULL;
+            if (input[0] == '~') {
+                err = path_expand_home(input, &working_path);
+                if (err) {
+                    return error_wrap(err, "Failed to expand path '%s'", input);
+                }
+            } else {
+                working_path = strdup(input);
+                if (!working_path) {
+                    return ERROR(ERR_MEMORY, "Failed to allocate path");
+                }
+            }
+
+            /* Must be absolute path at this point */
+            if (working_path[0] != '/') {
+                free(working_path);
+                return ERROR(ERR_INVALID_ARG,
+                    "Path must be absolute after tilde expansion (got '%s')", input);
+            }
+
+            /* Get HOME directory for path classification */
+            char *home = NULL;
+            err = path_get_home(&home);
+            if (err) {
+                free(working_path);
+                return err;
+            }
+
+            size_t home_len = strlen(home);
+
+            /* Check if path is under $HOME */
+            if (strncmp(working_path, home, home_len) == 0 &&
+                (working_path[home_len] == '/' || working_path[home_len] == '\0')) {
+                /* Under home directory */
+                const char *rel = working_path + home_len;
+                if (rel[0] == '/') rel++;  /* Skip leading slash */
+
+                if (rel[0] == '\0') {
+                    free(working_path);
+                    free(home);
+                    return ERROR(ERR_INVALID_ARG,
+                        "Cannot specify HOME directory itself");
+                }
+
+                /* Build storage path: home/... */
+                storage_path = str_format("home/%s", rel);
+                if (!storage_path) {
+                    free(working_path);
+                    free(home);
+                    return ERROR(ERR_MEMORY, "Failed to format storage path");
+                }
+            } else {
+                /* Outside home - use root/ prefix */
+                storage_path = str_format("root%s", working_path);
+                if (!storage_path) {
+                    free(working_path);
+                    free(home);
+                    return ERROR(ERR_MEMORY, "Failed to format storage path");
+                }
+            }
+
+            free(working_path);
+            free(home);
+        }
+
+    /* Case 2: Storage path (home/... or root/...) */
+    } else if (str_starts_with(input, "home/") || str_starts_with(input, "root/")) {
+        /* Validate storage path format */
+        err = path_validate_storage(input);
+        if (err) {
+            return error_wrap(err, "Invalid storage path '%s'", input);
+        }
+
+        /* Already in storage format - duplicate and return */
+        storage_path = strdup(input);
+        if (!storage_path) {
+            return ERROR(ERR_MEMORY, "Failed to allocate storage path");
+        }
+
+    /* Case 3: Invalid/ambiguous path */
+    } else {
+        return ERROR(ERR_INVALID_ARG,
+            "Path '%s' is neither a valid filesystem path nor storage path\n"
+            "Hint: Filesystem paths must be absolute (/) or tilde (~) prefixed\n"
+            "      Storage paths must start with 'home/' or 'root/'",
+            input);
+    }
+
+    /* Success - transfer ownership */
+    *out_storage_path = storage_path;
+    return NULL;
+}

@@ -15,86 +15,7 @@
 #include "core/profiles.h"
 #include "infra/path.h"
 #include "utils/config.h"
-#include "utils/refspec.h"
 #include "utils/timeutil.h"
-
-/**
- * Convert filesystem-style path to storage path without requiring file to exist
- * This is a simplified version of path_to_storage for querying purposes
- */
-static error_t *convert_to_storage_path_query(const char *path, char **out) {
-    CHECK_NULL(path);
-    CHECK_NULL(out);
-
-    error_t *err = NULL;
-    char *expanded_path = NULL;
-    char *home = NULL;
-    char *result = NULL;
-    const char *working_path = path;
-
-    /* Expand ~ if present */
-    if (path[0] == '~') {
-        err = path_expand_home(path, &expanded_path);
-        if (err) {
-            goto cleanup;
-        }
-        working_path = expanded_path;
-    }
-
-    /* Must be absolute path at this point */
-    if (working_path[0] != '/') {
-        err = ERROR(ERR_INVALID_ARG, "Path must be absolute or start with ~");
-        goto cleanup;
-    }
-
-    /* Get HOME directory */
-    err = path_get_home(&home);
-    if (err) {
-        goto cleanup;
-    }
-
-    size_t home_len = strlen(home);
-
-    /* Check if path is under $HOME */
-    if (strncmp(working_path, home, home_len) == 0 &&
-        (working_path[home_len] == '/' || working_path[home_len] == '\0')) {
-        /* Under home directory */
-        const char *rel = working_path + home_len;
-        if (rel[0] == '/') rel++;
-
-        if (rel[0] == '\0') {
-            err = ERROR(ERR_INVALID_ARG, "Cannot query HOME directory itself");
-            goto cleanup;
-        }
-
-        size_t result_size = strlen("home/") + strlen(rel) + 1;
-        result = malloc(result_size);
-        if (!result) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate storage path");
-            goto cleanup;
-        }
-        snprintf(result, result_size, "home/%s", rel);
-    } else {
-        /* Outside home - use root/ prefix */
-        size_t result_size = strlen("root") + strlen(working_path) + 1;
-        result = malloc(result_size);
-        if (!result) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate storage path");
-            goto cleanup;
-        }
-        snprintf(result, result_size, "root%s", working_path);
-    }
-
-    /* Success - transfer ownership */
-    *out = result;
-    result = NULL;
-
-cleanup:
-    free(expanded_path);
-    free(home);
-    free(result);
-    return err;
-}
 
 /**
  * Print blob content
@@ -496,7 +417,7 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
         const char *search_path = opts->file_path;
         if (opts->file_path[0] == '/' || opts->file_path[0] == '~') {
             /* Looks like a filesystem path - try to convert */
-            error_t *conv_err = convert_to_storage_path_query(opts->file_path, &storage_path_converted);
+            error_t *conv_err = path_resolve_input(opts->file_path, false, &storage_path_converted);
             if (conv_err) {
                 error_free(conv_err);
                 /* Fall back to original path */
@@ -541,7 +462,7 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
     const char *search_path = opts->file_path;
     if (opts->file_path[0] == '/' || opts->file_path[0] == '~') {
         /* Looks like a filesystem path - try to convert */
-        error_t *conv_err = convert_to_storage_path_query(opts->file_path, &storage_path_converted);
+        error_t *conv_err = path_resolve_input(opts->file_path, false, &storage_path_converted);
         if (conv_err) {
             error_free(conv_err);
             /* Fall back to original path */

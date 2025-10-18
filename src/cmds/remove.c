@@ -132,54 +132,29 @@ static error_t *resolve_paths_to_remove(
         const char *input_path = input_paths[i];
         char *storage_path = NULL;
         char *canonical = NULL;
-        bool is_storage_path_format = false;
 
-        /* Strategy: Try filesystem path first, then storage path */
-
-        /* Attempt 1: Treat as filesystem path */
-        err = fs_canonicalize_path(input_path, &canonical);
-        if (!err) {
-            /* Successfully canonicalized - convert to storage path */
-            path_prefix_t prefix;
-            err = path_to_storage(canonical, &storage_path, &prefix);
-            if (err) {
-                free(canonical);
-                err = error_wrap(err, "Failed to convert filesystem path '%s'", input_path);
+        /* Resolve input path to storage format (flexible mode - file need not exist) */
+        err = path_resolve_input(input_path, false, &storage_path);
+        if (err) {
+            if (!opts->force) {
                 goto cleanup;
             }
-        } else {
-            /* Attempt 2: Treat as storage path directly */
+            /* With --force, skip this path */
+            if (opts->verbose && out) {
+                output_warning(out, "Skipping invalid path '%s': %s",
+                              input_path, error_message(err));
+            }
             error_free(err);
             err = NULL;
+            continue;
+        }
 
-            /* Validate it looks like a storage path (home/... or root/...) */
-            if (strncmp(input_path, "home/", 5) == 0 || strncmp(input_path, "root/", 5) == 0) {
-                storage_path = strdup(input_path);
-                is_storage_path_format = true;
-
-                /* Try to reconstruct filesystem path for output */
-                err = path_from_storage(storage_path, &canonical);
-                if (err) {
-                    /* Non-fatal: we can still work with storage path only */
-                    error_free(err);
-                    err = NULL;
-                    canonical = NULL;
-                }
-            } else {
-                /* Neither filesystem nor storage path */
-                if (!opts->force) {
-                    err = ERROR(ERR_INVALID_ARG,
-                                "Path '%s' is neither a valid filesystem path nor storage path\n"
-                                "Hint: Storage paths must start with 'home/' or 'root/'",
-                                input_path);
-                    goto cleanup;
-                }
-                /* With --force, skip this path */
-                if (opts->verbose && out) {
-                    output_warning(out, "Skipping invalid path '%s'", input_path);
-                }
-                continue;
-            }
+        /* Try to get filesystem path for output (non-fatal if it fails) */
+        error_t *conv_err = path_from_storage(storage_path, &canonical);
+        if (conv_err) {
+            /* Can still work with storage path only */
+            error_free(conv_err);
+            canonical = NULL;
         }
 
         /* Find all files that match this path (exact match or directory prefix) */
@@ -190,14 +165,6 @@ static error_t *resolve_paths_to_remove(
         if (hashmap_has(profile_files_map, storage_path)) {
             /* Exact file match found */
             char *fs_path = canonical ? strdup(canonical) : NULL;
-            if (!fs_path && !is_storage_path_format) {
-                /* Try to reconstruct from storage path */
-                err = path_from_storage(storage_path, &fs_path);
-                if (err) {
-                    error_free(err);
-                    err = NULL;
-                }
-            }
 
             err = string_array_push(storage_paths, storage_path);
             if (!err) {

@@ -399,7 +399,9 @@ void print_show_help(const char *prog_name) {
     printf("\nFile Mode:\n");
     printf("  Shows file content from profile branches\n");
     printf("  Without profile: searches active profiles for exact path match\n");
-    printf("  Filesystem paths (~/.bashrc) are automatically converted to storage paths\n");
+    printf("  Accepts paths in either format (filesystem or storage):\n");
+    printf("    • Filesystem: /etc/hosts, ~/.bashrc\n");
+    printf("    • Storage: root/etc/hosts, home/.bashrc\n");
 
     printf("\nExamples:\n");
     printf("  # Show commit with diff\n");
@@ -430,7 +432,9 @@ void print_revert_help(const char *prog_name) {
     printf("  [profile:]<file>@<commit>\n");
     printf("\n");
     printf("  profile              Optional profile name (e.g., global, darwin/work)\n");
-    printf("  file                 Filesystem path or storage path (home/..., root/...)\n");
+    printf("  file                 Path in either format:\n");
+    printf("                         • Filesystem: /path/to/file or ~/path/to/file\n");
+    printf("                         • Storage: home/path/to/file or root/path/to/file\n");
     printf("  commit               Required commit reference (e.g., HEAD~3, abc123)\n");
     printf("\nOptions:\n");
     printf("  -p, --profile <name>  Override refspec profile (required if file is ambiguous)\n");

@@ -25,7 +25,7 @@ time_t portable_timegm(struct tm *tm) {
         return (time_t)-1;
     }
 
-    /* Validate input ranges */
+    /* Validate input ranges. This implementation does not normalize out-of-range values. */
     if (tm->tm_mon < 0 || tm->tm_mon > 11 ||
         tm->tm_mday < 1 || tm->tm_mday > 31 ||
         tm->tm_hour < 0 || tm->tm_hour > 23 ||
@@ -44,14 +44,14 @@ time_t portable_timegm(struct tm *tm) {
     /* Days from complete years since 1970 (not including leap days yet) */
     long long days = (long long)(year - 1970) * 365;
 
-    /* Add leap days: count leap years from 1970 to (year-1)
-     * A year is a leap year if divisible by 4, except century years
-     * which must be divisible by 400 */
-    for (int y = 1970; y < year; y++) {
-        if (is_leap_year(y)) {
-            days++;
-        }
-    }
+    /* Add leap days between 1970 and 'year'. This is done by calculating the
+     * number of leap years up to 'year-1' and subtracting the number of leap
+     * years up to 1969. The formula for leap years up to year Y is
+     * (Y/4 - Y/100 + Y/400). This avoids loops and handles years before 1970.
+     */
+    int leap_years_until_year = (year - 1) / 4 - (year - 1) / 100 + (year - 1) / 400;
+    int leap_years_until_1970 = 1969 / 4 - 1969 / 100 + 1969 / 400;
+    days += leap_years_until_year - leap_years_until_1970;
 
     /* Days in each month (for non-leap year) */
     static const int days_in_month[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};

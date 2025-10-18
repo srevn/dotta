@@ -38,7 +38,7 @@ struct interactive_state {
     profile_item_t *items;         /* Profile items */
     size_t item_count;             /* Number of items */
     size_t cursor;                 /* Current cursor position */
-    bool order_modified;           /* True if profile order changed */
+    bool modified;                 /* True if there are unsaved changes */
 };
 
 /* ========================================================================
@@ -116,7 +116,7 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
 
     state->repo = repo;
     state->cursor = 0;
-    state->order_modified = false;
+    state->modified = false;
 
     /* Load all available profiles */
     err = profile_list_all_local(repo, &all_profiles);
@@ -291,7 +291,7 @@ static void interactive_move_profile_up(interactive_state_t *state) {
 
     swap_profile_items(state->items, state->cursor, state->cursor - 1);
     state->cursor--;
-    state->order_modified = true;
+    state->modified = true;
 }
 
 /**
@@ -304,13 +304,14 @@ static void interactive_move_profile_down(interactive_state_t *state) {
 
     swap_profile_items(state->items, state->cursor, state->cursor + 1);
     state->cursor++;
-    state->order_modified = true;
+    state->modified = true;
 }
 
 /**
- * Save current profile order to state
+ * Save current profile selection and order to state
  *
- * This is a silent operation that doesn't require terminal restoration.
+ * Saves which profiles are selected and their display order. This is a silent
+ * operation that doesn't require terminal restoration.
  */
 static error_t *interactive_save_profile_order(
     git_repository *repo,
@@ -364,7 +365,7 @@ static error_t *interactive_save_profile_order(
 
     /* Update state on success */
     if (!err) {
-        state->order_modified = false;
+        state->modified = false;
     }
 
     return err;
@@ -393,7 +394,7 @@ int interactive_render(const interactive_state_t *state) {
     /* Header */
     fprintf(stdout, "\r");
     terminal_clear_line();
-    if (state->order_modified) {
+    if (state->modified) {
         fprintf(stdout, "  \033[1mProfiles:\033[0m \033[33m(modified)\033[0m\r\n");
     } else {
         fprintf(stdout, "  \033[1mProfiles:\033[0m\r\n");
@@ -443,8 +444,8 @@ int interactive_render(const interactive_state_t *state) {
     /* Footer / keybinding help - adapt based on state */
     fprintf(stdout, "\r");
     terminal_clear_line();
-    if (state->order_modified) {
-        /* Show reorder mode keys with save highlighted */
+    if (state->modified) {
+        /* Show modified mode keys with save highlighted */
         fprintf(stdout, "\033[2m↑↓\033[0m navigate  "
                         "\033[2mspace\033[0m toggle  "
                         "\033[2mJ/K\033[0m move  "
@@ -510,6 +511,7 @@ interactive_result_t interactive_handle_key(
         case '\r':
             if (state->cursor < state->item_count) {
                 state->items[state->cursor].selected = !state->items[state->cursor].selected;
+                state->modified = true;
             }
             return INTERACTIVE_CONTINUE;
 
@@ -523,10 +525,10 @@ interactive_result_t interactive_handle_key(
             interactive_move_profile_down(state);
             return INTERACTIVE_CONTINUE;
 
-        /* Save profile order - silent operation, no terminal restoration needed */
+        /* Save changes - silent operation, no terminal restoration needed */
         case 'w':
         case 'W': {
-            if (!state->order_modified) {
+            if (!state->modified) {
                 /* Nothing to save */
                 return INTERACTIVE_CONTINUE;
             }

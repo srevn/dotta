@@ -8,7 +8,7 @@
  * - Toggle selection (space)
  * - Navigate with arrow keys
  * - Reorder profiles (J/K)
- * - Save profile order to state (w)
+ * - Save profile selection and order to state (w)
  * - Clean inline rendering (preserves terminal state)
  *
  * Design principles:

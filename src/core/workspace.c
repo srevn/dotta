@@ -20,7 +20,6 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/compare.h"
-#include "utils/array.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
 #include "utils/string.h"
@@ -37,7 +36,9 @@ struct workspace {
     /* State data */
     manifest_t *manifest;          /* Profile state (owned) */
     state_t *state;                /* Deployment state (owned) */
+    profile_list_t *profiles;      /* Active profiles for this workspace (borrowed) */
     hashmap_t *manifest_index;     /* Maps filesystem_path -> file_entry_t* */
+    hashmap_t *profile_index;      /* Maps profile_name -> profile_t* (for O(1) lookup) */
 
     /* Divergence tracking */
     workspace_file_t *diverged;    /* Array of diverged files */
@@ -53,8 +54,13 @@ struct workspace {
 /**
  * Create empty workspace
  */
-static error_t *workspace_create_empty(git_repository *repo, workspace_t **out) {
+static error_t *workspace_create_empty(
+    git_repository *repo,
+    profile_list_t *profiles,
+    workspace_t **out
+) {
     CHECK_NULL(repo);
+    CHECK_NULL(profiles);
     CHECK_NULL(out);
 
     workspace_t *ws = calloc(1, sizeof(workspace_t));
@@ -63,17 +69,40 @@ static error_t *workspace_create_empty(git_repository *repo, workspace_t **out) 
     }
 
     ws->repo = repo;
+    ws->profiles = profiles;  /* Borrowed reference */
+
     ws->manifest_index = hashmap_create(256);  /* Initial capacity */
     if (!ws->manifest_index) {
         free(ws);
         return ERROR(ERR_MEMORY, "Failed to create manifest index");
     }
 
+    ws->profile_index = hashmap_create(32);  /* Initial capacity for profiles */
+    if (!ws->profile_index) {
+        hashmap_free(ws->manifest_index, NULL);
+        free(ws);
+        return ERROR(ERR_MEMORY, "Failed to create profile index");
+    }
+
     ws->diverged_index = hashmap_create(256);  /* Initial capacity */
     if (!ws->diverged_index) {
+        hashmap_free(ws->profile_index, NULL);
         hashmap_free(ws->manifest_index, NULL);
         free(ws);
         return ERROR(ERR_MEMORY, "Failed to create diverged index");
+    }
+
+    /* Build profile index for O(1) profile lookup */
+    for (size_t i = 0; i < profiles->count; i++) {
+        profile_t *profile = &profiles->profiles[i];
+        error_t *err = hashmap_set(ws->profile_index, profile->name, profile);
+        if (err) {
+            hashmap_free(ws->diverged_index, NULL);
+            hashmap_free(ws->profile_index, NULL);
+            hashmap_free(ws->manifest_index, NULL);
+            free(ws);
+            return error_wrap(err, "Failed to index profile");
+        }
     }
 
     ws->diverged = NULL;
@@ -252,10 +281,17 @@ static error_t *analyze_file_divergence(
 
 /**
  * Analyze state for orphaned entries
+ *
+ * An entry is orphaned if:
+ * 1. Its profile is in our active profile list (in scope), AND
+ * 2. The file no longer exists in that profile's branch
+ *
+ * State entries from profiles NOT in our active list are ignored (out of scope).
  */
 static error_t *analyze_orphaned_state(workspace_t *ws) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->state);
+    CHECK_NULL(ws->profile_index);
 
     /* Get all files in state */
     size_t state_file_count = 0;
@@ -269,12 +305,18 @@ static error_t *analyze_orphaned_state(workspace_t *ws) {
     for (size_t i = 0; i < state_file_count; i++) {
         const state_file_entry_t *state_entry = &state_files[i];
         const char *fs_path = state_entry->filesystem_path;
+        const char *entry_profile = state_entry->profile;
+
+        /* Skip if this state entry's profile is not in our active profile list */
+        if (!hashmap_get(ws->profile_index, entry_profile)) {
+            continue;  /* Out of scope - ignore */
+        }
 
         /* Check if this file exists in manifest (profile state) */
         file_entry_t *manifest_entry = hashmap_get(ws->manifest_index, fs_path);
 
         if (!manifest_entry) {
-            /* Orphaned: In state but not in any profile */
+            /* Orphaned: In state, profile is active, but not in profile branch */
             bool on_filesystem = fs_lexists(fs_path);
 
             error_t *err = workspace_add_diverged(
@@ -519,28 +561,23 @@ static error_t *scan_directory_for_untracked(
 
 /**
  * Analyze tracked directories for untracked files
+ *
+ * Only scans tracked directories for profiles in the active profile list.
  */
 static error_t *analyze_untracked_files(workspace_t *ws, const dotta_config_t *config) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->state);
+    CHECK_NULL(ws->profiles);
 
     error_t *err = NULL;
 
-    /* Get active profiles from state */
-    string_array_t *active_profiles = NULL;
-    err = state_get_profiles(ws->state, &active_profiles);
-    if (err) {
-        return error_wrap(err, "Failed to get active profiles");
+    if (ws->profiles->count == 0) {
+        return NULL;  /* No profiles to analyze */
     }
 
-    if (!active_profiles || string_array_size(active_profiles) == 0) {
-        string_array_free(active_profiles);
-        return NULL;  /* No active profiles */
-    }
-
-    /* Scan tracked directories from each profile's metadata */
-    for (size_t p = 0; p < string_array_size(active_profiles); p++) {
-        const char *profile_name = string_array_get(active_profiles, p);
+    /* Scan tracked directories from each active profile's metadata */
+    for (size_t p = 0; p < ws->profiles->count; p++) {
+        const char *profile_name = ws->profiles->profiles[p].name;
 
         /* Load metadata for this profile */
         metadata_t *metadata = NULL;
@@ -611,7 +648,6 @@ static error_t *analyze_untracked_files(workspace_t *ws, const dotta_config_t *c
         metadata_free(metadata);
     }
 
-    string_array_free(active_profiles);
     return NULL;
 }
 
@@ -632,7 +668,7 @@ error_t *workspace_load(
     error_t *err = NULL;
 
     /* Create empty workspace */
-    err = workspace_create_empty(repo, &ws);
+    err = workspace_create_empty(repo, profiles, &ws);
     if (err) {
         return err;
     }
@@ -866,6 +902,7 @@ void workspace_free(workspace_t *ws) {
 
     /* Free indices (values are borrowed, so pass NULL for value free function) */
     hashmap_free(ws->manifest_index, NULL);
+    hashmap_free(ws->profile_index, NULL);
     hashmap_free(ws->diverged_index, NULL);
 
     /* Free owned state */

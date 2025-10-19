@@ -70,6 +70,11 @@ typedef enum {
  * Additionally scans tracked directories for untracked files (new files
  * that appeared in directories previously added via 'dotta add').
  *
+ * The workspace is scoped to the provided profiles. State entries
+ * and tracked directories from profiles NOT in the list are ignored. This ensures
+ * that operations like `dotta status -p global` only report divergence for the
+ * specified profile, not the entire repository.
+ *
  * @param repo Git repository (must not be NULL)
  * @param profiles Profile list to analyze (must not be NULL)
  * @param config Configuration (for ignore patterns, can be NULL)

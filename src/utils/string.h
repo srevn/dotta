@@ -67,15 +67,20 @@ char *str_format(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 error_t *str_dup(const char *str, char **out);
 
 /**
- * Check if string looks like a Git commit SHA
+ * Check if string looks like a Git reference
  *
- * Validates format: 7-40 hexadecimal characters.
- * Note: Does not verify commit exists in repository.
+ * Recognizes:
+ * - Commit SHAs (7-40 hex chars)
+ * - HEAD and variations (HEAD~1, HEAD^, HEAD~3^2)
+ * - SHA with modifiers (abc123^, def456~2)
+ * - @ symbol (current commit shorthand)
+ *
+ * Note: Does not verify ref exists in repository.
  *
  * @param str String to check (can be NULL)
- * @return true if str looks like a commit reference
+ * @return true if str looks like a git reference
  */
-bool str_looks_like_commit(const char *str);
+bool str_looks_like_git_ref(const char *str);
 
 /**
  * RAII cleanup for strings

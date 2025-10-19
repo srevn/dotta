@@ -938,7 +938,7 @@ static int cmd_diff_main(int argc, char **argv) {
         opts.file_count = positional_count;
     } else if (positional_count == 1) {
         const char *arg = positional[0];
-        if (str_looks_like_commit(arg)) {
+        if (str_looks_like_git_ref(arg)) {
             /* Commit to workspace */
             opts.mode = DIFF_COMMIT_TO_WORKSPACE;
             opts.commit1 = arg;
@@ -952,7 +952,7 @@ static int cmd_diff_main(int argc, char **argv) {
         const char *arg1 = positional[0];
         const char *arg2 = positional[1];
 
-        if (str_looks_like_commit(arg1) && str_looks_like_commit(arg2)) {
+        if (str_looks_like_git_ref(arg1) && str_looks_like_git_ref(arg2)) {
             /* Commit to commit */
             opts.mode = DIFF_COMMIT_TO_COMMIT;
             opts.commit1 = arg1;
@@ -1541,8 +1541,9 @@ static int cmd_show_main(int argc, char **argv) {
         .raw = false
     };
 
-    const char *positional_arg = NULL;
-    bool commit_flag_used = false;
+    /* Collect positional arguments */
+    const char *positional_args[3] = {NULL};
+    size_t positional_count = 0;
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
@@ -1555,72 +1556,103 @@ static int cmd_show_main(int argc, char **argv) {
                 return 1;
             }
             opts.profile = argv[++i];
-        } else if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--commit") == 0) {
-            if (i + 1 >= argc) {
-                fprintf(stderr, "Error: --commit requires an argument\n");
-                return 1;
-            }
-            opts.commit = argv[++i];
-            commit_flag_used = true;
         } else if (strcmp(argv[i], "--raw") == 0) {
             opts.raw = true;
         } else if (argv[i][0] == '-') {
             fprintf(stderr, "Error: Unknown option '%s'\n", argv[i]);
             print_show_help(argv[0]);
             return 1;
-        } else if (!positional_arg) {
-            positional_arg = argv[i];
+        } else if (positional_count < 3) {
+            positional_args[positional_count++] = argv[i];
         } else {
-            fprintf(stderr, "Error: Unexpected argument '%s'\n", argv[i]);
+            fprintf(stderr, "Error: Too many arguments\n");
             print_show_help(argv[0]);
             return 1;
         }
     }
 
     /* Validate required arguments */
-    if (!positional_arg) {
-        fprintf(stderr, "Error: target argument is required (commit or file path)\n");
+    if (positional_count == 0) {
+        fprintf(stderr, "Error: target argument is required (profile, file, or commit)\n");
         print_show_help(argv[0]);
         return 1;
     }
 
-    /* Mode detection and refspec parsing */
-    if (strchr(positional_arg, ':') || strchr(positional_arg, '@')) {
-        /* Refspec syntax: [profile:]<file>[@commit] */
+    error_t *err = NULL;
+
+    /* Parse positional arguments based on count */
+    if (positional_count == 1) {
+        const char *arg = positional_args[0];
+
+        /* Check if it looks like a pure commit (no path separators) */
+        if (str_looks_like_git_ref(arg) && !strchr(arg, '/') && !strchr(arg, '.')) {
+            /* Commit mode: dotta show a4f2c8e */
+            opts.mode = SHOW_COMMIT;
+            opts.commit = arg;
+        } else {
+            /* File mode: dotta show home/.bashrc[@commit] */
+            opts.mode = SHOW_FILE;
+
+            /* Parse [profile:]file[@commit] */
+            char *profile = NULL;
+            char *file = NULL;
+            char *commit = NULL;
+            err = parse_refspec(arg, &profile, &file, &commit);
+            if (err) {
+                fprintf(stderr, "Error parsing file specification: ");
+                error_print(err, stderr);
+                error_free(err);
+                return 1;
+            }
+
+            if (profile) {
+                opts.profile = profile;
+            }
+            opts.file_path = file;
+            if (commit) {
+                opts.commit = commit;
+            }
+        }
+    } else if (positional_count == 2) {
+        /* 2 args: either <file> <commit> or <profile> <file[@commit]> */
+
+        if (str_looks_like_git_ref(positional_args[1])) {
+            /* Second arg is a git ref → <file> <commit> */
+            opts.mode = SHOW_FILE;
+            opts.file_path = positional_args[0];
+            opts.commit = positional_args[1];
+        } else {
+            /* Second arg is file → <profile> <file[@commit]> */
+            opts.mode = SHOW_FILE;
+            opts.profile = positional_args[0];
+
+            /* Parse [profile:]file[@commit] */
+            char *profile = NULL;
+            char *file = NULL;
+            char *commit = NULL;
+            err = parse_refspec(positional_args[1], &profile, &file, &commit);
+            if (err) {
+                fprintf(stderr, "Error parsing file specification: ");
+                error_print(err, stderr);
+                error_free(err);
+                return 1;
+            }
+
+            /* Profile from refspec overrides positional if present */
+            if (profile) {
+                opts.profile = profile;
+            }
+            opts.file_path = file;
+            if (commit) {
+                opts.commit = commit;
+            }
+        }
+    } else if (positional_count == 3) {
+        /* 3 args: <profile> <file> <commit> */
         opts.mode = SHOW_FILE;
-
-        char *refspec_profile = NULL;
-        char *refspec_file = NULL;
-        char *refspec_commit = NULL;
-
-        error_t *err = parse_refspec(positional_arg, &refspec_profile, &refspec_file, &refspec_commit);
-        if (err) {
-            fprintf(stderr, "Error parsing refspec: ");
-            error_print(err, stderr);
-            error_free(err);
-            return 1;
-        }
-
-        /* Refspec components override CLI flags */
-        if (refspec_profile) {
-            opts.profile = refspec_profile;
-        }
-        if (refspec_file) {
-            opts.file_path = refspec_file;
-        }
-        if (refspec_commit) {
-            opts.commit = refspec_commit;
-        }
-
-    } else if (str_looks_like_commit(positional_arg) && !commit_flag_used) {
-        /* Commit mode: dotta show a4f2c8e */
-        opts.mode = SHOW_COMMIT;
-        opts.commit = positional_arg;
-
-    } else {
-        /* File mode: dotta show home/.bashrc */
-        opts.mode = SHOW_FILE;
-        opts.file_path = positional_arg;
+        opts.profile = positional_args[0];
+        opts.file_path = positional_args[1];
+        opts.commit = positional_args[2];
     }
 
     /* Open resolved repository */
@@ -1630,7 +1662,7 @@ static int cmd_show_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    error_t *err = cmd_show(repo, &opts);
+    err = cmd_show(repo, &opts);
     git_repository_free(repo);
 
     if (err) {
@@ -1657,8 +1689,9 @@ static int cmd_revert_main(int argc, char **argv) {
         .verbose = false
     };
 
-    const char *positional_arg = NULL;
-    const char *profile_from_cli = NULL;
+    /* Collect positional arguments */
+    const char *positional_args[3] = {NULL};
+    size_t positional_count = 0;
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
@@ -1670,7 +1703,7 @@ static int cmd_revert_main(int argc, char **argv) {
                 fprintf(stderr, "Error: --profile requires an argument\n");
                 return 1;
             }
-            profile_from_cli = argv[++i];
+            opts.profile = argv[++i];
         } else if (strcmp(argv[i], "-m") == 0 || strcmp(argv[i], "--message") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: --message requires an argument\n");
@@ -1689,66 +1722,104 @@ static int cmd_revert_main(int argc, char **argv) {
             fprintf(stderr, "Error: Unknown option '%s'\n", argv[i]);
             print_revert_help(argv[0]);
             return 1;
-        } else if (!positional_arg) {
-            positional_arg = argv[i];
+        } else if (positional_count < 3) {
+            positional_args[positional_count++] = argv[i];
         } else {
-            fprintf(stderr, "Error: Unexpected argument '%s'\n", argv[i]);
+            fprintf(stderr, "Error: Too many arguments\n");
             print_revert_help(argv[0]);
             return 1;
         }
     }
 
-    /* Validate required argument */
-    if (!positional_arg) {
-        fprintf(stderr, "Error: file refspec is required\n");
+    /* Validate required arguments */
+    if (positional_count == 0) {
+        fprintf(stderr, "Error: file specification is required\n");
         fprintf(stderr, "Usage: %s revert [options] <file@commit>\n", argv[0]);
+        fprintf(stderr, "   or: %s revert [options] <file> <commit>\n", argv[0]);
+        fprintf(stderr, "   or: %s revert [options] <profile> <file@commit>\n", argv[0]);
+        fprintf(stderr, "   or: %s revert [options] <profile> <file> <commit>\n", argv[0]);
         fprintf(stderr, "Example: %s revert home/.bashrc@HEAD~1\n", argv[0]);
         return 1;
     }
 
-    /* Parse refspec: [profile:]<file>[@commit] */
-    char *refspec_profile = NULL;
-    char *refspec_file = NULL;
-    char *refspec_commit = NULL;
+    error_t *err = NULL;
 
-    error_t *err = parse_refspec(positional_arg, &refspec_profile, &refspec_file, &refspec_commit);
-    if (err) {
-        fprintf(stderr, "Error parsing refspec: ");
-        error_print(err, stderr);
-        error_free(err);
-        return 1;
-    }
+    /* Parse positional arguments based on count */
+    if (positional_count == 1) {
+        /* 1 arg: [profile:]<file@commit> */
+        char *profile = NULL;
+        char *file = NULL;
+        char *commit = NULL;
+        err = parse_refspec(positional_args[0], &profile, &file, &commit);
+        if (err) {
+            fprintf(stderr, "Error parsing file specification: ");
+            error_print(err, stderr);
+            error_free(err);
+            return 1;
+        }
 
-    /* Apply CLI profile first (can be overridden by refspec) */
-    if (profile_from_cli) {
-        opts.profile = profile_from_cli;
-    }
+        if (profile) {
+            opts.profile = profile;
+        }
+        opts.file_path = file;
+        opts.commit = commit;
 
-    /* Refspec components override CLI flags (refspec is more specific) */
-    if (refspec_profile) {
-        opts.profile = refspec_profile;
-    }
-    if (refspec_file) {
-        opts.file_path = refspec_file;
-    }
-    if (refspec_commit) {
-        opts.commit = refspec_commit;
+    } else if (positional_count == 2) {
+        /* 2 args: either <file> <commit> or <profile> <file@commit> */
+
+        if (str_looks_like_git_ref(positional_args[1])) {
+            /* Second arg is a git ref → <file> <commit> */
+            opts.file_path = positional_args[0];
+            opts.commit = positional_args[1];
+        } else {
+            /* Second arg is file → <profile> <file[@commit]> */
+            opts.profile = positional_args[0];
+
+            /* Parse [profile:]file[@commit] */
+            char *profile = NULL;
+            char *file = NULL;
+            char *commit = NULL;
+            err = parse_refspec(positional_args[1], &profile, &file, &commit);
+            if (err) {
+                fprintf(stderr, "Error parsing file specification: ");
+                error_print(err, stderr);
+                error_free(err);
+                return 1;
+            }
+
+            /* Profile from refspec overrides positional if present */
+            if (profile) {
+                opts.profile = profile;
+            }
+            opts.file_path = file;
+            if (commit) {
+                opts.commit = commit;
+            }
+        }
+
+    } else if (positional_count == 3) {
+        /* 3 args: <profile> <file> <commit> */
+        opts.profile = positional_args[0];
+        opts.file_path = positional_args[1];
+        opts.commit = positional_args[2];
     }
 
     /* Validate required fields */
     if (!opts.file_path) {
-        fprintf(stderr, "Error: file path is required in refspec\n");
-        fprintf(stderr, "Usage: %s revert [options] <file@commit>\n", argv[0]);
+        fprintf(stderr, "Error: file path is required\n");
         return 1;
     }
 
     if (!opts.commit) {
         fprintf(stderr, "Error: commit reference is required\n");
-        fprintf(stderr, "Usage: %s revert [options] <file@commit>\n", argv[0]);
+        fprintf(stderr, "Usage: %s revert <file@commit>\n", argv[0]);
+        fprintf(stderr, "   or: %s revert <file> <commit>\n", argv[0]);
+        fprintf(stderr, "   or: %s revert <profile> <file@commit>\n", argv[0]);
+        fprintf(stderr, "   or: %s revert <profile> <file> <commit>\n", argv[0]);
         fprintf(stderr, "Examples:\n");
         fprintf(stderr, "  %s revert home/.bashrc@HEAD~1\n", argv[0]);
-        fprintf(stderr, "  %s revert global:home/.bashrc@a4f2c8e\n", argv[0]);
-        fprintf(stderr, "  %s revert -p darwin home/.bashrc@HEAD~1  # CLI flag overrides refspec\n", argv[0]);
+        fprintf(stderr, "  %s revert darwin home/.bashrc@a4f2c8e\n", argv[0]);
+        fprintf(stderr, "  %s revert darwin home/.bashrc HEAD~1\n", argv[0]);
         return 1;
     }
 

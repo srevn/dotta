@@ -160,24 +160,51 @@ error_t *str_dup(const char *str, char **out) {
     return NULL;
 }
 
-bool str_looks_like_commit(const char *str) {
-    if (!str) {
+bool str_looks_like_git_ref(const char *str) {
+    if (!str || !*str) {
         return false;
     }
 
+    /* Check for @ (current commit shorthand) */
+    if (strcmp(str, "@") == 0) {
+        return true;
+    }
+
+    /* Check for HEAD and its variations */
+    if (strncmp(str, "HEAD", 4) == 0) {
+        /* Could be HEAD, HEAD~1, HEAD^, HEAD~3^2, etc. */
+        return true;
+    }
+
+    /* Check for pure commit SHA (7-40 hex chars) */
     size_t len = strlen(str);
-
-    /* Git commit SHAs: minimum 7 chars (short SHA), maximum 40 chars (full SHA) */
-    if (len < 7 || len > 40) {
-        return false;
-    }
-
-    /* All characters must be hexadecimal */
-    for (size_t i = 0; i < len; i++) {
-        if (!isxdigit((unsigned char)str[i])) {
-            return false;
+    if (len >= 7 && len <= 40) {
+        bool all_hex = true;
+        for (size_t i = 0; i < len; i++) {
+            if (!isxdigit((unsigned char)str[i])) {
+                all_hex = false;
+                break;
+            }
+        }
+        if (all_hex) {
+            return true;
         }
     }
 
-    return true;
+    /* Check for SHA with modifiers (abc123^, def456~2, etc.) */
+    const char *p = str;
+    size_t hex_count = 0;
+
+    /* Count leading hex chars */
+    while (*p && isxdigit((unsigned char)*p)) {
+        hex_count++;
+        p++;
+    }
+
+    /* If we have 7+ hex chars followed by ~ or ^, it's a ref */
+    if (hex_count >= 7 && (*p == '~' || *p == '^')) {
+        return true;
+    }
+
+    return false;
 }

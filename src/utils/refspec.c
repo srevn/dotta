@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "base/error.h"
+#include "utils/string.h"
 
 /**
  * Parse refspec: [profile:]<path>[@commit]
@@ -58,34 +59,39 @@ error_t *parse_refspec(
     /* Step 2: Find LAST '@' for commit (handles '@' in filenames) */
     const char *at = strrchr(remainder, '@');
 
-    if (at) {
-        /* Extract file path */
-        size_t file_len = at - remainder;
-        if (file_len == 0) {
-            err = ERROR(ERR_INVALID_ARG, "Empty file path in refspec");
-            goto cleanup;
-        }
+    if (at && at[1] != '\0') {
+        /* Check if what follows '@' looks like a git reference */
+        const char *potential_ref = at + 1;
 
-        file = strndup(remainder, file_len);
-        if (!file) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate file path");
-            goto cleanup;
-        }
+        if (str_looks_like_git_ref(potential_ref)) {
+            /* Valid git ref after @ - split into file and commit */
+            size_t file_len = at - remainder;
+            if (file_len == 0) {
+                err = ERROR(ERR_INVALID_ARG, "Empty file path in refspec");
+                goto cleanup;
+            }
 
-        /* Extract commit */
-        const char *commit_str = at + 1;
-        if (strlen(commit_str) == 0) {
-            err = ERROR(ERR_INVALID_ARG, "Empty commit in refspec");
-            goto cleanup;
-        }
+            file = strndup(remainder, file_len);
+            if (!file) {
+                err = ERROR(ERR_MEMORY, "Failed to allocate file path");
+                goto cleanup;
+            }
 
-        commit = strdup(commit_str);
-        if (!commit) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate commit");
-            goto cleanup;
+            commit = strdup(potential_ref);
+            if (!commit) {
+                err = ERROR(ERR_MEMORY, "Failed to allocate commit reference");
+                goto cleanup;
+            }
+        } else {
+            /* Not a git ref - treat entire remainder as filename */
+            file = strdup(remainder);
+            if (!file) {
+                err = ERROR(ERR_MEMORY, "Failed to allocate file path");
+                goto cleanup;
+            }
         }
     } else {
-        /* No commit, just file */
+        /* No @ or nothing after @ - entire remainder is filename */
         file = strdup(remainder);
         if (!file) {
             err = ERROR(ERR_MEMORY, "Failed to allocate file path");

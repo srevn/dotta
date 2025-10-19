@@ -257,34 +257,29 @@ void print_status_help(const char *prog_name) {
 void print_diff_help(const char *prog_name) {
     printf("Usage: %s diff [options] [<commit>] [<commit>] [<file>...]\n\n", prog_name);
     printf("Show differences between commits, profiles, and filesystem\n\n");
-
     printf("Modes:\n");
     printf("  (no args)             Workspace diff (both directions)\n");
     printf("  <commit>              Commit to workspace\n");
     printf("  <commit> <commit>     Compare two commits\n");
     printf("  [<file>...]           Workspace diff for specific files\n\n");
-
     printf("Direction options (workspace mode only):\n");
     printf("  --upstream            Show repo → filesystem (what 'apply' would change) [default]\n");
     printf("  --downstream          Show filesystem → repo (what 'update' would commit)\n");
     printf("  -a, --all             Show both upstream and downstream with headers\n");
-
     printf("\nOther options:\n");
     printf("  -p, --profile <name>  Specify profile(s) for operation\n");
     printf("  --name-only           Show only file names, not diffs\n");
     printf("  -h, --help            Show this help message\n");
-
     printf("\nExamples:\n");
     printf("  %s diff                     # Full workspace diff\n", prog_name);
     printf("  %s diff --upstream          # What apply would change\n", prog_name);
     printf("  %s diff a4f2c8e             # Commit vs workspace\n", prog_name);
+    printf("  %s diff HEAD~1              # Previous commit vs workspace\n", prog_name);
     printf("  %s diff b3e1f9a a4f2c8e     # Compare commits\n", prog_name);
     printf("  %s diff home/.bashrc        # Workspace diff for one file\n", prog_name);
-
     printf("\nIntegration:\n");
     printf("  %s list global home/.bashrc # See history\n", prog_name);
     printf("  %s diff b3e1f9a a4f2c8e     # Compare those commits\n", prog_name);
-
     printf("\nConcepts:\n");
     printf("  Upstream:   Repository (source of truth for configuration)\n");
     printf("  Downstream: Filesystem (deployed state)\n");
@@ -385,36 +380,34 @@ void print_profile_help(const char *prog_name) {
 }
 
 void print_show_help(const char *prog_name) {
-    printf("Usage: %s show [options] <target>\n\n", prog_name);
+    printf("Usage: %s show [options] <target>\n", prog_name);
+    printf("   or: %s show [options] <profile> <file> [<commit>]\n\n", prog_name);
     printf("Show file content or commit details with diff\n\n");
 
-    printf("Target Formats:\n");
-    printf("  <commit>                      Show commit with diff (e.g., a4f2c8e)\n");
-    printf("  <file>                        Show file from active profiles\n");
-    printf("  <profile>:<file>              Show file from specific profile\n");
-    printf("  <file>@<commit>               Show file at specific commit\n");
-    printf("  <profile>:<file>@<commit>     Full refspec with profile and commit\n");
-
+    printf("Syntax:\n");
+    printf("  <commit>                      Show commit with diff\n");
+    printf("  <file>                        Show file from active profiles (HEAD)\n");
+    printf("  <file> <commit>               Show file at specific commit\n");
+    printf("  <profile> <file>              Show file from profile (HEAD)\n");
+    printf("  <profile> <file> <commit>     Show file from profile at commit\n");
+    printf("  <file>@<commit>               Compact: file at commit\n");
+    printf("  <profile>:<file>@<commit>     Compact: profile, file, and commit\n");
     printf("\nOptions:\n");
-    printf("  -p, --profile <name>  Override profile (for commit search or file lookup)\n");
-    printf("  -c, --commit <ref>    Show file from specific commit (alternative to @ syntax)\n");
+    printf("  -p, --profile <name>  Override profile for file lookup or commit search\n");
     printf("  --raw                 Show raw content without formatting\n");
     printf("  -h, --help            Show this help message\n");
-
     printf("\nCommit Mode:\n");
-    printf("  When <target> looks like a commit SHA (7-40 hex chars), shows commit details:\n");
+    printf("  When argument looks like a git ref (SHA, HEAD, HEAD~1), shows commit:\n");
     printf("    - Commit metadata (SHA, date, author, message)\n");
     printf("    - File change statistics\n");
     printf("    - Full unified diff (like 'git show')\n");
-    printf("  Searches active profiles for the commit (use -p to specify profile)\n");
-
+    printf("  Searches active profiles (use -p to specify profile)\n");
     printf("\nFile Mode:\n");
     printf("  Shows file content from profile branches\n");
     printf("  Without profile: searches active profiles for exact path match\n");
     printf("  Accepts paths in either format (filesystem or storage):\n");
     printf("    • Filesystem: /etc/hosts, ~/.bashrc\n");
     printf("    • Storage: root/etc/hosts, home/.bashrc\n");
-
     printf("\nExamples:\n");
     printf("  # Show commit with diff\n");
     printf("  %s show a4f2c8e                        # From active profiles\n", prog_name);
@@ -426,28 +419,30 @@ void print_show_help(const char *prog_name) {
     printf("  %s show global:home/.bashrc            # Refspec syntax\n", prog_name);
     printf("\n");
     printf("  # Show file at specific commit\n");
-    printf("  %s show -p global -c a4f2c8e home/.bashrc\n", prog_name);
+    printf("  %s show darwin home/.bashrc a4f2c8e\n", prog_name);
     printf("  %s show home/.bashrc@a4f2c8e           # Refspec syntax (needs -p)\n", prog_name);
     printf("  %s show global:home/.bashrc@a4f2c8e    # Full refspec\n", prog_name);
-    printf("\n");
-    printf("  # Integration with list command\n");
-    printf("  %s list global home/.bashrc            # See commit history\n", prog_name);
-    printf("  %s show a4f2c8e                        # Show that commit's changes\n", prog_name);
-    printf("  %s show global:home/.bashrc@a4f2c8e    # Show file at that commit\n", prog_name);
     printf("\n");
 }
 
 void print_revert_help(const char *prog_name) {
-    printf("Usage: %s revert [options] <file@commit>\n\n", prog_name);
+    printf("Usage: %s revert [options] <file@commit>\n", prog_name);
+    printf("   or: %s revert [options] <file> <commit>\n", prog_name);
+    printf("   or: %s revert [options] <profile> <file@commit>\n", prog_name);
+    printf("   or: %s revert [options] <profile> <file> <commit>\n\n", prog_name);
     printf("Revert a file in a profile to its state at a specific commit\n\n");
-    printf("Refspec Syntax:\n");
-    printf("  [profile:]<file>@<commit>\n");
+    printf("Syntax:\n");
+    printf("  <file> <commit>               Revert file to commit (discover profile)\n");
+    printf("  <profile> <file> <commit>     Revert file in profile to commit\n");
+    printf("  <file>@<commit>               Compact: file at commit\n");
+    printf("  <profile>:<file>@<commit>     Compact: profile, file, and commit\n");
     printf("\n");
-    printf("  profile              Optional profile name (e.g., global, darwin/work)\n");
-    printf("  file                 Filesystem path or storage path (home/..., root/...)\n");
-    printf("  commit               Required commit reference (e.g., HEAD~3, abc123)\n");
+    printf("Arguments:\n");
+    printf("  profile                       Profile name (e.g., global, darwin/work)\n");
+    printf("  file                          Filesystem or storage path (home/..., root/...)\n");
+    printf("  commit                        Required commit ref (e.g., HEAD~3, abc123)\n");
     printf("\nOptions:\n");
-    printf("  -p, --profile <name>  Override refspec profile (required if file is ambiguous)\n");
+    printf("  -p, --profile <name>  Override profile (required if file is ambiguous)\n");
     printf("  --commit              Create a commit with the reverted changes\n");
     printf("  -m, --message <msg>   Commit message (requires --commit)\n");
     printf("  -f, --force           Skip confirmation and override conflicts\n");
@@ -465,17 +460,11 @@ void print_revert_help(const char *prog_name) {
     printf("  5. Updates file in profile branch to target state\n");
     printf("  6. Optionally creates commit (with --commit)\n");
     printf("\nExamples:\n");
-    printf("  # Basic refspec syntax - revert to 3 commits ago\n");
-    printf("  %s revert home/.bashrc@HEAD~3\n", prog_name);
-    printf("  %s apply\n\n", prog_name);
-    printf("  # Specify profile in refspec\n");
-    printf("  %s revert global:home/.bashrc@a4f2c8e\n\n", prog_name);
-    printf("  # Override refspec profile with CLI flag (uses darwin, not global)\n");
-    printf("  %s revert -p darwin global:home/.bashrc@HEAD~1\n\n", prog_name);
-    printf("  # Create commit immediately\n");
-    printf("  %s revert --commit -m \"Fix broken config\" home/.bashrc@HEAD~1\n\n", prog_name);
-    printf("  # Preview changes without modifying\n");
-    printf("  %s revert --dry-run home/.config/nvim/init.lua@HEAD~2\n", prog_name);
+    printf("  %s revert home/.bashrc HEAD~3\n", prog_name);
+    printf("  %s revert darwin home/.bashrc a4f2c8e\n", prog_name);
+    printf("  %s revert darwin:home/.bashrc@a4f2c8e\n", prog_name);
+    printf("  %s revert --commit -m \"Fix config\" home/.bashrc HEAD~1\n", prog_name);
+    printf("  %s revert --dry-run darwin home/.config/nvim/init.lua HEAD~2\n", prog_name);
     printf("\n");
 }
 

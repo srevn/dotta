@@ -92,8 +92,21 @@ const char *upstream_state_symbol(upstream_state_t state);
 /**
  * Discover remote branches that don't exist locally
  *
- * Scans remote tracking branches and identifies those without
- * corresponding local branches.
+ * Scans LOCAL remote tracking refs (refs/remotes/<remote>/...) and identifies
+ * branches that don't have corresponding local branches yet.
+ *
+ * **LOCAL OPERATION** - Does NOT contact the remote server.
+ *
+ * This function is useful after a fetch/clone when remote tracking refs exist
+ * and you want to see what's available to create local branches from.
+ *
+ * **Limitation**: If a remote was just added without fetching, this returns
+ * empty because no remote tracking refs exist yet. Use upstream_query_remote_branches()
+ * instead to query the actual server.
+ *
+ * **Use cases:**
+ * - After git clone, to show unfetched profiles
+ * - After git fetch, to see what new branches are available
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin")
@@ -109,12 +122,21 @@ error_t *upstream_discover_branches(
 /**
  * Query remote server for available branches
  *
- * Performs a network operation to query the remote server for all
- * available branches. This is more comprehensive than upstream_discover_branches
- * which only looks at local remote tracking refs.
+ * **NETWORK OPERATION** - Connects to the remote server to query ALL branches
+ * that exist on the server, regardless of local state.
  *
- * Use this when you need to validate branch existence on the server before
- * attempting operations like fetch.
+ * This is the authoritative source for what's on the remote, unlike
+ * upstream_discover_branches() which only looks at cached local metadata.
+ *
+ * **Use cases:**
+ * - Listing remote profiles without fetching (profile list --remote)
+ * - Fetching all profiles (profile fetch --all)
+ * - Validating branch existence before operations
+ * - When remote was just added and no tracking refs exist yet
+ *
+ * **Requirements:**
+ * - Network connectivity
+ * - Credentials if repository requires authentication
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin")

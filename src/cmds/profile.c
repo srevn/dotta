@@ -20,6 +20,7 @@
 #include "core/upstream.h"
 #include "utils/array.h"
 #include "utils/config.h"
+#include "utils/hashmap.h"
 #include "utils/output.h"
 
 /**
@@ -74,7 +75,11 @@ static error_t *profile_list(
     string_array_t *all_branches = NULL;
     string_array_t *available = NULL;
     char *remote_name = NULL;
+    char *remote_url = NULL;
+    git_remote *remote_obj = NULL;
+    transfer_context_t *xfer = NULL;
     string_array_t *remote_branches = NULL;
+    string_array_t *remote_only = NULL;
     error_t *err = NULL;
 
     /* Load state to get active profiles */
@@ -122,7 +127,11 @@ static error_t *profile_list(
         }
 
         if (!is_active) {
-            string_array_push(available, name);
+            err = string_array_push(available, name);
+            if (err) {
+                err = error_wrap(err, "Failed to add profile to available list");
+                goto cleanup;
+            }
         }
     }
 
@@ -176,23 +185,93 @@ static error_t *profile_list(
             output_warning(out, "Could not detect remote: %s", error_message(remote_err));
             error_free(remote_err);
         } else {
-            remote_err = upstream_discover_branches(repo, remote_name, &remote_branches);
-            if (!remote_err && string_array_size(remote_branches) > 0) {
-                output_section(out, "Remote (not fetched)");
-                for (size_t i = 0; i < string_array_size(remote_branches); i++) {
-                    output_printf(out, OUTPUT_NORMAL, "  • %s\n", string_array_get(remote_branches, i));
+            /* Get remote URL for credential handling */
+            if (git_remote_lookup(&remote_obj, repo, remote_name) == 0) {
+                const char *url = git_remote_url(remote_obj);
+                if (url) {
+                    remote_url = strdup(url);
                 }
-                output_newline(out);
+                git_remote_free(remote_obj);
+                remote_obj = NULL;
             }
-            if (remote_err) {
-                error_free(remote_err);
+
+            /* Create transfer context for credentials */
+            xfer = transfer_context_create(out, remote_url);
+            if (!xfer) {
+                output_warning(out, "Failed to create transfer context");
+            } else {
+                /*
+                 * Query remote server for available branches (network operation)
+                 * This contacts the remote server to get the current list of profiles,
+                 * ensuring we see newly added profiles that haven't been fetched yet.
+                 */
+                remote_err = upstream_query_remote_branches(repo, remote_name, xfer->cred, &remote_branches);
+                if (remote_err) {
+                    output_warning(out, "Could not query remote: %s", error_message(remote_err));
+                    error_free(remote_err);
+                } else if (string_array_size(remote_branches) > 0) {
+                    /*
+                     * Filter out branches that already exist locally
+                     * Use hashmap for O(1) lookups instead of O(n*m) nested loops
+                     * This changes complexity from O(n*m) to O(n+m)
+                     */
+                    remote_only = string_array_create();
+                    if (!remote_only) {
+                        output_warning(out, "Failed to allocate remote profiles list");
+                    } else {
+                        /* Build hashmap of local branches for O(1) lookups */
+                        hashmap_t *local_map = hashmap_create(string_array_size(all_branches));
+                        if (!local_map) {
+                            output_warning(out, "Failed to create local branch index");
+                            string_array_free(remote_only);
+                            remote_only = NULL;
+                        } else {
+                            /* Populate hashmap with local branch names */
+                            error_t *map_err = NULL;
+                            for (size_t j = 0; j < string_array_size(all_branches); j++) {
+                                map_err = hashmap_set(local_map, string_array_get(all_branches, j), (void*)1);
+                                if (map_err) {
+                                    error_free(map_err);
+                                    /* Continue on error - partial index is okay */
+                                }
+                            }
+
+                            /* Filter remote branches using O(1) lookups */
+                            for (size_t i = 0; i < string_array_size(remote_branches); i++) {
+                                const char *branch_name = string_array_get(remote_branches, i);
+
+                                /* O(1) lookup instead of O(m) linear search */
+                                if (!hashmap_has(local_map, branch_name)) {
+                                    error_t *push_err = string_array_push(remote_only, branch_name);
+                                    if (push_err) {
+                                        /* Non-fatal: skip this entry on OOM */
+                                        error_free(push_err);
+                                    }
+                                }
+                            }
+
+                            hashmap_free(local_map, NULL);
+                        }
+                    }
+
+                    if (remote_only && string_array_size(remote_only) > 0) {
+                        output_section(out, "Remote (not fetched)");
+                        for (size_t i = 0; i < string_array_size(remote_only); i++) {
+                            output_printf(out, OUTPUT_NORMAL, "  • %s\n", string_array_get(remote_only, i));
+                        }
+                        output_newline(out);
+                    }
+                }
             }
         }
     }
 
 cleanup:
     /* Cleanup all resources */
+    string_array_free(remote_only);
     string_array_free(remote_branches);
+    transfer_context_free(xfer);
+    free(remote_url);
     free(remote_name);
     string_array_free(available);
     string_array_free(all_branches);
@@ -254,10 +333,10 @@ static error_t *profile_fetch(
     output_section(out, "Fetching profiles");
 
     if (opts->fetch_all) {
-        /* Fetch all remote branches */
-        err = upstream_discover_branches(repo, remote_name, &remote_branches);
+        /* Query remote server for all available branches */
+        err = upstream_query_remote_branches(repo, remote_name, xfer ? xfer->cred : NULL, &remote_branches);
         if (err) {
-            err = error_wrap(err, "Failed to discover remote branches");
+            err = error_wrap(err, "Failed to query remote branches");
             goto cleanup;
         }
 
@@ -491,7 +570,11 @@ static error_t *profile_select(
         for (size_t i = 0; i < string_array_size(all_branches); i++) {
             const char *name = string_array_get(all_branches, i);
             if (strcmp(name, "dotta-worktree") != 0) {
-                string_array_push(to_select, name);
+                err = string_array_push(to_select, name);
+                if (err) {
+                    err = error_wrap(err, "Failed to add profile to selection list");
+                    goto cleanup;
+                }
             }
         }
     } else {
@@ -504,7 +587,11 @@ static error_t *profile_select(
         }
 
         for (size_t i = 0; i < opts->profile_count; i++) {
-            string_array_push(to_select, opts->profiles[i]);
+            err = string_array_push(to_select, opts->profiles[i]);
+            if (err) {
+                err = error_wrap(err, "Failed to add profile to selection list");
+                goto cleanup;
+            }
         }
     }
 
@@ -538,7 +625,11 @@ static error_t *profile_select(
         }
 
         /* Add to active list */
-        string_array_push(active, profile_name);
+        err = string_array_push(active, profile_name);
+        if (err) {
+            err = error_wrap(err, "Failed to add profile to active list");
+            goto cleanup;
+        }
         selected_count++;
 
         if (opts->verbose) {
@@ -670,7 +761,11 @@ static error_t *profile_unselect(
     if (opts->all_profiles) {
         /* Unselect all */
         for (size_t i = 0; i < string_array_size(active); i++) {
-            string_array_push(to_unselect, string_array_get(active, i));
+            err = string_array_push(to_unselect, string_array_get(active, i));
+            if (err) {
+                err = error_wrap(err, "Failed to add profile to unselect list");
+                goto cleanup;
+            }
         }
     } else {
         /* Unselect specified profiles */
@@ -682,7 +777,11 @@ static error_t *profile_unselect(
         }
 
         for (size_t i = 0; i < opts->profile_count; i++) {
-            string_array_push(to_unselect, opts->profiles[i]);
+            err = string_array_push(to_unselect, opts->profiles[i]);
+            if (err) {
+                err = error_wrap(err, "Failed to add profile to unselect list");
+                goto cleanup;
+            }
         }
     }
 
@@ -712,7 +811,11 @@ static error_t *profile_unselect(
                 output_success(out, "  ✓ Unselected %s", profile_name);
             }
         } else {
-            string_array_push(new_active, profile_name);
+            err = string_array_push(new_active, profile_name);
+            if (err) {
+                err = error_wrap(err, "Failed to add profile to new active list");
+                goto cleanup;
+            }
         }
     }
 
@@ -974,7 +1077,7 @@ static error_t *profile_reorder(
         for (size_t i = 0; i < opts->profile_count; i++) {
             output_printf(out, OUTPUT_NORMAL, " %s", opts->profiles[i]);
         }
-        output_newline(out); output_newline(out);
+        output_newline(out);
     }
 
     /* Update state with new order */
@@ -1067,7 +1170,11 @@ static error_t *profile_validate(
         const char *profile_name = string_array_get(active, i);
 
         if (!profile_exists(repo, profile_name)) {
-            string_array_push(missing, profile_name);
+            err = string_array_push(missing, profile_name);
+            if (err) {
+                err = error_wrap(err, "Failed to add profile to missing list");
+                goto cleanup;
+            }
             has_issues = true;
         }
     }
@@ -1092,7 +1199,11 @@ static error_t *profile_validate(
             for (size_t i = 0; i < string_array_size(active); i++) {
                 const char *name = string_array_get(active, i);
                 if (profile_exists(repo, name)) {
-                    string_array_push(valid, name);
+                    err = string_array_push(valid, name);
+                    if (err) {
+                        err = error_wrap(err, "Failed to add profile to valid list");
+                        goto cleanup;
+                    }
                 }
             }
 
@@ -1257,4 +1368,3 @@ error_t *cmd_profile(git_repository *repo, const cmd_profile_options_t *opts) {
     config_free(config);
     return result;
 }
-

@@ -344,6 +344,7 @@ void print_profile_help(const char *prog_name) {
     printf("\nOptions (list):\n");
     printf("  --remote                 Show remote profiles not yet fetched\n");
     printf("  --available              Show available (inactive) profiles\n");
+    printf("  --all                    Show both available and remote profiles\n");
     printf("  -v, --verbose            Show file counts per profile\n");
     printf("\nOptions (fetch/select):\n");
     printf("  --all                    Operate on all profiles\n");
@@ -368,6 +369,7 @@ void print_profile_help(const char *prog_name) {
     printf("  5. Use in commands:    %s apply, %s status, etc.\n", prog_name, prog_name);
     printf("\nExamples:\n");
     printf("  %s profile list                       # Show active vs available\n", prog_name);
+    printf("  %s profile list --all                 # Show local and remote\n", prog_name);
     printf("  %s profile list --remote -v           # Show remote + file counts\n", prog_name);
     printf("  %s profile fetch darwin linux         # Download specific profiles\n", prog_name);
     printf("  %s profile fetch --all                # Download all remote profiles\n", prog_name);

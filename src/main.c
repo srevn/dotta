@@ -675,6 +675,9 @@ static int cmd_profile_main(int argc, char **argv) {
                 opts.show_remote = true;
             } else if (strcmp(argv[i], "--available") == 0) {
                 opts.show_available = true;
+            } else if (strcmp(argv[i], "--all") == 0) {
+                opts.show_available = true;
+                opts.show_remote = true;
             } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
                 opts.verbose = true;
             } else if (strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--quiet") == 0) {

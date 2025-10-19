@@ -829,11 +829,20 @@ static int tree_walk_callback(const char *root, const git_tree_entry *entry, voi
     /* Build full path */
     const char *name = git_tree_entry_name(entry);
     char full_path[1024];
+    int ret;
 
     if (root && root[0] != '\0') {
-        snprintf(full_path, sizeof(full_path), "%s%s", root, name);
+        ret = snprintf(full_path, sizeof(full_path), "%s%s", root, name);
     } else {
-        snprintf(full_path, sizeof(full_path), "%s", name);
+        ret = snprintf(full_path, sizeof(full_path), "%s", name);
+    }
+
+    /* Check for truncation */
+    if (ret < 0 || (size_t)ret >= sizeof(full_path)) {
+        data->error = ERROR(ERR_INTERNAL,
+                           "Path exceeds maximum length: %s%s",
+                           root ? root : "", name);
+        return -1;
     }
 
     /* Add to array */

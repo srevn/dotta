@@ -68,10 +68,6 @@ typedef struct {
     bool color_enabled;  /* Computed from color_mode */
 } output_ctx_t;
 
-/* ========================================================================
- * Context Management
- * ======================================================================== */
-
 /**
  * Create output context with defaults
  */
@@ -115,10 +111,6 @@ void output_set_verbosity(output_ctx_t *ctx, output_verbosity_t verbosity);
  */
 void output_set_color_mode(output_ctx_t *ctx, output_color_mode_t mode);
 
-/* ========================================================================
- * Color Support
- * ======================================================================== */
-
 /**
  * Check if colors are enabled for the given context
  */
@@ -137,10 +129,6 @@ char *output_colorize(
     output_color_t color,
     const char *text
 );
-
-/* ========================================================================
- * Formatted Output
- * ======================================================================== */
 
 /**
  * Print with verbosity check
@@ -206,10 +194,6 @@ void output_printf(
     ...
 ) __attribute__((format(printf, 3, 4)));
 
-/* ========================================================================
- * Structured Output (for status-like displays)
- * ======================================================================== */
-
 /**
  * Print section header
  *
@@ -254,10 +238,6 @@ void output_progress(
     size_t total,
     const char *item
 );
-
-/* ========================================================================
- * JSON Output Helpers
- * ======================================================================== */
 
 /**
  * Begin JSON output
@@ -308,10 +288,6 @@ void output_json_array_begin(const output_ctx_t *ctx, const char *key);
  * End JSON array
  */
 void output_json_array_end(const output_ctx_t *ctx, bool last);
-
-/* ========================================================================
- * User Confirmation Prompts
- * ======================================================================== */
 
 /**
  * Prompt user for confirmation

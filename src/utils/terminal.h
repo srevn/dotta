@@ -21,6 +21,22 @@
 #include "types.h"
 
 /**
+ * ANSI escape codes
+ */
+#define ANSI_CURSOR_HIDE "\033[?25l"
+#define ANSI_CURSOR_SHOW "\033[?25h"
+#define ANSI_CURSOR_POSITION "\033[%d;%dH"
+#define ANSI_CURSOR_UP "\033[%dA"
+#define ANSI_CURSOR_DOWN "\033[%dB"
+#define ANSI_CURSOR_TO_START "\033[1G"
+#define ANSI_CURSOR_SAVE "\033[s"
+#define ANSI_CURSOR_RESTORE "\033[u"
+#define ANSI_CLEAR_SCREEN "\033[2J"
+#define ANSI_CLEAR_TO_END "\033[0J"
+#define ANSI_CLEAR_LINE "\033[2K"
+#define ANSI_CLEAR_LINE_TO_END "\033[0K"
+
+/**
  * Terminal state (opaque)
  *
  * Stores original terminal settings for restoration on cleanup.
@@ -61,10 +77,6 @@ typedef enum {
     TERM_KEY_CTRL_D = 4
 } term_key_t;
 
-/* ========================================================================
- * Terminal Initialization & Cleanup
- * ======================================================================== */
-
 /**
  * Initialize terminal for raw mode
  *
@@ -91,10 +103,6 @@ error_t *terminal_init(terminal_t **out);
  */
 void terminal_restore(terminal_t *term);
 
-/* ========================================================================
- * Terminal Capabilities
- * ======================================================================== */
-
 /**
  * Get terminal size
  *
@@ -111,10 +119,6 @@ error_t *terminal_get_size(terminal_size_t *out);
  * @return true if stdin is connected to a terminal
  */
 bool terminal_is_tty(void);
-
-/* ========================================================================
- * Cursor Control
- * ======================================================================== */
 
 /**
  * Hide cursor
@@ -163,10 +167,6 @@ void terminal_cursor_save(void);
  */
 void terminal_cursor_restore(void);
 
-/* ========================================================================
- * Screen Control
- * ======================================================================== */
-
 /**
  * Clear entire screen
  */
@@ -186,10 +186,6 @@ void terminal_clear_line(void);
  * Clear from cursor to end of line
  */
 void terminal_clear_line_to_end(void);
-
-/* ========================================================================
- * Input Reading
- * ======================================================================== */
 
 /**
  * Read single key press
@@ -214,10 +210,6 @@ int terminal_read_key(void);
  * @return true if data available on stdin
  */
 bool terminal_has_input(void);
-
-/* ========================================================================
- * RAII Cleanup Helper
- * ======================================================================== */
 
 /**
  * Cleanup function for __attribute__((cleanup))

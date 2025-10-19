@@ -68,9 +68,7 @@ static bool should_enable_colors(output_color_mode_t mode, FILE *stream) {
     }
 }
 
-/* ========================================================================
- * Context Management
- * ======================================================================== */
+/* Context Management */
 
 output_ctx_t *output_create(void) {
     return output_create_with(
@@ -203,9 +201,7 @@ output_ctx_t *output_create_from_config(const dotta_config_t *config) {
     return output_create_with(stdout, format, verbosity, color_mode);
 }
 
-/* ========================================================================
- * Color Support
- * ======================================================================== */
+/* Color Support */
 
 bool output_colors_enabled(const output_ctx_t *ctx) {
     return ctx ? ctx->color_enabled : false;
@@ -257,9 +253,7 @@ char *output_colorize(
     return result;
 }
 
-/* ========================================================================
- * Formatted Output
- * ======================================================================== */
+/* Formatted Output */
 
 void output_print(
     const output_ctx_t *ctx,
@@ -420,9 +414,7 @@ void output_printf(
     va_end(args);
 }
 
-/* ========================================================================
- * Structured Output
- * ======================================================================== */
+/* Structured Output */
 
 void output_section(const output_ctx_t *ctx, const char *title) {
     if (!ctx || !title) {
@@ -508,9 +500,7 @@ void output_progress(
     }
 }
 
-/* ========================================================================
- * JSON Output Helpers
- * ======================================================================== */
+/* JSON Output Helpers */
 
 void output_json_begin(const output_ctx_t *ctx) {
     if (!ctx) {
@@ -587,9 +577,7 @@ void output_json_array_end(const output_ctx_t *ctx, bool last) {
     fprintf(ctx->stream, "  ]%s\n", last ? "" : ",");
 }
 
-/* ========================================================================
- * User Confirmation Prompts
- * ======================================================================== */
+/* User Confirmation Prompts */
 
 /**
  * Clear stdin buffer to prevent input pollution

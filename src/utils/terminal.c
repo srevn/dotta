@@ -4,7 +4,7 @@
  * Provides POSIX-compliant terminal control for building inline TUIs.
  */
 
-#include "utils/terminal.h"
+#include "terminal.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -17,6 +17,8 @@
 
 #include "base/error.h"
 
+/* Terminal Initialization & Cleanup  */
+
 /**
  * Terminal state structure
  */
@@ -24,30 +26,6 @@ struct terminal {
     struct termios orig_termios;  /* Original terminal settings */
     bool raw_mode_enabled;        /* Track if raw mode is active */
 };
-
-/* ========================================================================
- * ANSI Escape Sequences
- * ======================================================================== */
-
-/* Cursor control */
-#define ANSI_CURSOR_HIDE "\033[?25l"
-#define ANSI_CURSOR_SHOW "\033[?25h"
-#define ANSI_CURSOR_UP "\033[%dA"
-#define ANSI_CURSOR_DOWN "\033[%dB"
-#define ANSI_CURSOR_TO_START "\r"
-#define ANSI_CURSOR_SAVE "\033[s"
-#define ANSI_CURSOR_RESTORE "\033[u"
-#define ANSI_CURSOR_POSITION "\033[%d;%dH"
-
-/* Screen control */
-#define ANSI_CLEAR_SCREEN "\033[2J"
-#define ANSI_CLEAR_TO_END "\033[0J"
-#define ANSI_CLEAR_LINE "\033[2K"
-#define ANSI_CLEAR_LINE_TO_END "\033[0K"
-
-/* ========================================================================
- * Terminal Initialization & Cleanup
- * ======================================================================== */
 
 error_t *terminal_init(terminal_t **out) {
     if (!out) {
@@ -138,9 +116,7 @@ void terminal_restore(terminal_t *term) {
     free(term);
 }
 
-/* ========================================================================
- * Terminal Capabilities
- * ======================================================================== */
+/* Terminal Capabilities */
 
 error_t *terminal_get_size(terminal_size_t *out) {
     if (!out) {
@@ -168,9 +144,7 @@ bool terminal_is_tty(void) {
     return isatty(STDIN_FILENO);
 }
 
-/* ========================================================================
- * Cursor Control
- * ======================================================================== */
+/* Cursor Control */
 
 void terminal_cursor_hide(void) {
     fprintf(stdout, ANSI_CURSOR_HIDE);
@@ -216,9 +190,7 @@ void terminal_cursor_restore(void) {
     fflush(stdout);
 }
 
-/* ========================================================================
- * Screen Control
- * ======================================================================== */
+/* Screen Control */
 
 void terminal_clear_screen(void) {
     fprintf(stdout, ANSI_CLEAR_SCREEN);
@@ -241,9 +213,7 @@ void terminal_clear_line_to_end(void) {
     fflush(stdout);
 }
 
-/* ========================================================================
- * Input Reading
- * ======================================================================== */
+/* Input Reading */
 
 /**
  * Read single byte from stdin
@@ -258,9 +228,9 @@ static int read_byte(void) {
     ssize_t n = read(STDIN_FILENO, &c, 1);
 
     if (n < 0) {
-        return -2;  /* Error */
+        return -2; /* Error */
     } else if (n == 0) {
-        return -1;  /* EOF */
+        return -1; /* EOF */
     }
 
     return c;
@@ -280,9 +250,6 @@ static int read_byte(void) {
  * - ESC [ H -> Home
  * - ESC [ F -> End
  * - ESC [ 3 ~ -> Delete
- *
- * IMPORTANT: Uses non-blocking check to avoid hanging if ESC is pressed
- * without subsequent characters (standalone ESC key press).
  */
 static int read_escape_sequence(void) {
     /* Check if more input is available without blocking.
@@ -293,7 +260,7 @@ static int read_escape_sequence(void) {
 
     int c1 = read_byte();
     if (c1 < 0) {
-        return TERM_KEY_ESCAPE;  /* Just ESC */
+        return TERM_KEY_ESCAPE; /* Just ESC */
     }
 
     /* Check for CSI sequence (ESC [) */
@@ -309,12 +276,18 @@ static int read_escape_sequence(void) {
 
     /* Single character sequences */
     switch (c2) {
-        case 'A': return TERM_KEY_UP;
-        case 'B': return TERM_KEY_DOWN;
-        case 'C': return TERM_KEY_RIGHT;
-        case 'D': return TERM_KEY_LEFT;
-        case 'H': return TERM_KEY_HOME;
-        case 'F': return TERM_KEY_END;
+        case 'A':
+            return TERM_KEY_UP;
+        case 'B':
+            return TERM_KEY_DOWN;
+        case 'C':
+            return TERM_KEY_RIGHT;
+        case 'D':
+            return TERM_KEY_LEFT;
+        case 'H':
+            return TERM_KEY_HOME;
+        case 'F':
+            return TERM_KEY_END;
     }
 
     /* Multi-character sequences (e.g., ESC [ 3 ~) */
@@ -322,13 +295,20 @@ static int read_escape_sequence(void) {
         int c3 = read_byte();
         if (c3 == '~') {
             switch (c2) {
-                case '1': return TERM_KEY_HOME;
-                case '3': return TERM_KEY_DELETE;
-                case '4': return TERM_KEY_END;
-                case '5': return TERM_KEY_PAGE_UP;
-                case '6': return TERM_KEY_PAGE_DOWN;
-                case '7': return TERM_KEY_HOME;
-                case '8': return TERM_KEY_END;
+                case '1':
+                    return TERM_KEY_HOME;
+                case '3':
+                    return TERM_KEY_DELETE;
+                case '4':
+                    return TERM_KEY_END;
+                case '5':
+                    return TERM_KEY_PAGE_UP;
+                case '6':
+                    return TERM_KEY_PAGE_DOWN;
+                case '7':
+                    return TERM_KEY_HOME;
+                case '8':
+                    return TERM_KEY_END;
             }
         }
     }
@@ -340,7 +320,7 @@ int terminal_read_key(void) {
     int c = read_byte();
 
     if (c < 0) {
-        return c;  /* EOF or error */
+        return c; /* EOF or error */
     }
 
     /* Handle escape sequences */
@@ -350,12 +330,12 @@ int terminal_read_key(void) {
 
     /* Map special keys */
     switch (c) {
-        case 127:    /* Backspace (sometimes DEL) */
-        case '\b':   /* Backspace (sometimes ^H) */
+        case 127:  /* Backspace (sometimes DEL) */
+        case '\b': /* Backspace (sometimes ^H) */
             return TERM_KEY_BACKSPACE;
 
-        case '\r':   /* Enter */
-        case '\n':   /* Newline */
+        case '\r': /* Enter */
+        case '\n': /* Newline */
             return TERM_KEY_ENTER;
 
         default:

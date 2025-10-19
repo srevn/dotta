@@ -1,7 +1,7 @@
 /**
  * interactive.h - Interactive TUI for profile selection and ordering
  *
- * Provides an inline, fzf-style interactive interface for profile management.
+ * Provides an inline, interactive interface for profile management.
  *
  * Features:
  * - Profile list with hierarchical display
@@ -54,15 +54,11 @@ typedef enum {
     INTERACTIVE_EXIT_ERROR   /* Exit with error */
 } interactive_result_t;
 
-/* ========================================================================
- * Interactive Mode Entry Point
- * ======================================================================== */
-
 /**
  * Run interactive profile selector
  *
  * Main entry point for `dotta --interactive`. Displays profile list,
- * handles user input, and executes commands.
+ * handles user input, and manages profile order.
  *
  * Workflow:
  * 1. Load available profiles from repository
@@ -70,7 +66,7 @@ typedef enum {
  * 3. Enter interactive loop:
  *    - Render UI
  *    - Read user input
- *    - Update state or execute command
+ *    - Update state
  * 4. Clean up and exit
  *
  * Terminal requirements:
@@ -81,10 +77,6 @@ typedef enum {
  * @return Error or NULL on success
  */
 error_t *interactive_run(git_repository *repo);
-
-/* ========================================================================
- * State Management (internal, exposed for testing)
- * ======================================================================== */
 
 /**
  * Create interactive state
@@ -130,10 +122,6 @@ void interactive_state_get_items(
  */
 size_t interactive_state_get_cursor(const interactive_state_t *state);
 
-/* ========================================================================
- * UI Rendering (internal)
- * ======================================================================== */
-
 /**
  * Render UI
  *
@@ -166,10 +154,6 @@ int interactive_render(const interactive_state_t *state);
  */
 int interactive_get_required_lines(const interactive_state_t *state);
 
-/* ========================================================================
- * Input Handling (internal)
- * ======================================================================== */
-
 /**
  * Handle key press
  *
@@ -189,10 +173,6 @@ interactive_result_t interactive_handle_key(
     terminal_t **term_ptr,
     error_t **out_err
 );
-
-/* ========================================================================
- * Profile Item Utilities
- * ======================================================================== */
 
 /**
  * Free profile item

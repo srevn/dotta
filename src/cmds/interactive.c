@@ -1,10 +1,10 @@
 /**
  * interactive.c - Interactive TUI implementation
  *
- * Inline, fzf-style interface for profile selection and management.
+ * Inline interface for profile selection and management.
  */
 
-#include "utils/interactive.h"
+#include "interactive.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,13 +19,6 @@
 #include "utils/terminal.h"
 
 /**
- * ANSI escape codes
- *
- * Using these directly avoids excessive fflush() calls from terminal.h functions.
- */
-#define ANSI_CLEAR_LINE "\033[2K"
-
-/**
  * Interactive UI state
  */
 struct interactive_state {
@@ -37,9 +30,7 @@ struct interactive_state {
     bool modified;                 /* True if there are unsaved changes */
 };
 
-/* ========================================================================
- * Profile Item Utilities
- * ======================================================================== */
+/* Profile Item Utilities */
 
 void profile_item_free(profile_item_t *item) {
     if (!item) {
@@ -60,9 +51,7 @@ static void free_profile_items(profile_item_t *items, size_t count) {
     free(items);
 }
 
-/* ========================================================================
- * State Management
- * ======================================================================== */
+/* State Management */
 
 error_t *interactive_state_create(git_repository *repo, interactive_state_t **out) {
     if (!repo || !out) {
@@ -262,9 +251,7 @@ size_t interactive_state_get_cursor(const interactive_state_t *state) {
     return state ? state->cursor : 0;
 }
 
-/* ========================================================================
- * Profile Reordering
- * ======================================================================== */
+/* Profile Reordering */
 
 /**
  * Swap two profile items
@@ -358,9 +345,7 @@ static error_t *interactive_save_profile_order(
     return err;
 }
 
-/* ========================================================================
- * UI Rendering
- * ======================================================================== */
+/* UI Rendering */
 
 int interactive_get_required_lines(const interactive_state_t *state) {
     if (!state) {
@@ -440,9 +425,7 @@ int interactive_render(const interactive_state_t *state) {
     return lines_rendered;
 }
 
-/* ========================================================================
- * Input Handling
- * ======================================================================== */
+/* Input Handling */
 
 interactive_result_t interactive_handle_key(
     interactive_state_t *state,
@@ -541,9 +524,7 @@ interactive_result_t interactive_handle_key(
     }
 }
 
-/* ========================================================================
- * Main Entry Point
- * ======================================================================== */
+/* Main Entry Point */
 
 error_t *interactive_run(git_repository *repo) {
     if (!repo) {

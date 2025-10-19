@@ -125,18 +125,22 @@ void print_clone_help(const char *prog_name) {
     printf("  %s clone <url> --bootstrap\n", prog_name);
     printf("      Clone and automatically run bootstrap scripts\n");
     printf("\nAfter cloning:\n");
-    printf("  %s profile list                         # View active profiles\n", prog_name);
-    printf("  %s profile select <name>                # Select additional profiles\n", prog_name);
-    printf("  %s bootstrap                            # Run bootstrap manually\n", prog_name);
-    printf("  %s apply                                # Apply profiles\n", prog_name);
+    printf("  %s profile list                 # View active profiles\n", prog_name);
+    printf("  %s profile select <name>        # Select additional profiles\n", prog_name);
+    printf("  %s bootstrap                    # Run bootstrap manually\n", prog_name);
+    printf("  %s apply                        # Apply profiles\n", prog_name);
     printf("\n");
 }
 
 void print_add_help(const char *prog_name) {
-    printf("Usage: %s add [options] --profile <name> <file|dir>...\n\n", prog_name);
+    printf("Usage: %s add <profile> <file|dir>...\n", prog_name);
+    printf("   or: %s add [options] --profile <name> <file|dir>...\n\n", prog_name);
     printf("Add files to a profile\n\n");
-    printf("Options:\n");
-    printf("  -p, --profile <name>      Profile name (required)\n");
+    printf("Arguments:\n");
+    printf("  <profile>                 Profile name (first argument, or use -p)\n");
+    printf("  <file|dir>...             Files or directories to add\n");
+    printf("\nOptions:\n");
+    printf("  -p, --profile <name>      Profile name\n");
     printf("  -m, --message <msg>       Commit message\n");
     printf("  -e, --exclude <pattern>   Exclude pattern (glob, can be repeated)\n");
     printf("  -f, --force               Overwrite existing files in profile\n");
@@ -150,15 +154,23 @@ void print_add_help(const char *prog_name) {
     printf("    --exclude '*.tmp'       Exclude temporary files\n");
     printf("  Multiple patterns:\n");
     printf("    --exclude '*.log' --exclude '*.tmp'\n");
+    printf("\nExamples:\n");
+    printf("  %s add global ~/.bashrc\n", prog_name);
+    printf("  %s add darwin ~/.config/nvim\n", prog_name);
+    printf("  %s add global ~/.ssh/config --exclude '*.pub'\n", prog_name);
     printf("\n");
 }
 
 void print_remove_help(const char *prog_name) {
-    printf("Usage: %s remove [options] --profile <name> <file|dir>...\n", prog_name);
-    printf("       %s remove [options] --profile <name> --delete-profile\n\n", prog_name);
+    printf("Usage: %s remove <profile> <file|dir>...\n", prog_name);
+    printf("   or: %s remove <profile> --delete-profile\n", prog_name);
+    printf("   or: %s remove [options] --profile <name> <file|dir>...\n\n", prog_name);
     printf("Remove files from a profile or delete entire profile\n\n");
-    printf("Options:\n");
-    printf("  -p, --profile <name>   Profile name (required)\n");
+    printf("Arguments:\n");
+    printf("  <profile>              Profile name (first argument, or use -p)\n");
+    printf("  <file|dir>...          Files or directories to remove\n");
+    printf("\nOptions:\n");
+    printf("  -p, --profile <name>   Profile name\n");
     printf("  --delete-profile       Delete entire profile branch\n");
     printf("  -m, --message <msg>    Custom commit message\n");
     printf("  -n, --dry-run          Show what would be removed without doing it\n");
@@ -168,13 +180,13 @@ void print_remove_help(const char *prog_name) {
     printf("  -q, --quiet            Minimal output\n");
     printf("  -h, --help             Show this help message\n");
     printf("\nExamples:\n");
-    printf("  %s remove --profile global ~/.bashrc\n", prog_name);
+    printf("  %s remove global ~/.bashrc\n", prog_name);
     printf("      Remove ~/.bashrc from 'global' profile\n\n");
-    printf("  %s remove --profile global ~/.config/nvim\n", prog_name);
+    printf("  %s remove global ~/.config/nvim\n", prog_name);
     printf("      Remove entire directory from profile\n\n");
-    printf("  %s remove --profile test --delete-profile\n", prog_name);
+    printf("  %s remove test --delete-profile\n", prog_name);
     printf("      Delete entire 'test' profile branch\n\n");
-    printf("  %s remove --profile global ~/.bashrc --dry-run\n", prog_name);
+    printf("  %s remove global ~/.bashrc --dry-run\n", prog_name);
     printf("      Preview what would be removed from profile\n");
     printf("\nWorkflow:\n");
     printf("  1. Remove files from profile (modifies Git repository only)\n");
@@ -521,13 +533,16 @@ void print_update_help(const char *prog_name) {
 }
 
 void print_sync_help(const char *prog_name) {
-    printf("Usage: %s sync [options]\n\n", prog_name);
+    printf("Usage: %s sync [profile]...\n", prog_name);
+    printf("   or: %s sync [options]\n\n", prog_name);
     printf("Synchronize local repository with remote repository\n\n");
     printf("Fetches from remote, analyzes branch states, and pushes/pulls as needed.\n");
     printf("Requires clean workspace - run 'dotta update' first to commit local changes.\n");
     printf("Operates only on active profiles (use 'dotta profile' to manage).\n\n");
-    printf("Options:\n");
-    printf("  -p, --profile <name>       Only sync specific profile (doesn't change state)\n");
+    printf("Arguments:\n");
+    printf("  [profile]...           Optional profile(s) to sync (default: all active)\n");
+    printf("\nOptions:\n");
+    printf("  -p, --profile <name>       Sync specific profile\n");
     printf("  -n, --dry-run              Show what would happen\n");
     printf("  --no-push                  Fetch and analyze only, skip push\n");
     printf("  --no-pull                  Skip pulling remote changes (push-only)\n");
@@ -552,8 +567,9 @@ void print_sync_help(const char *prog_name) {
     printf("    auto_pull = true\n");
     printf("    diverged_strategy = \"warn\"\n");
     printf("\nExamples:\n");
-    printf("  %s sync                    # Sync active profiles with remote\n", prog_name);
-    printf("  %s sync --profile global   # Sync only specific profile\n", prog_name);
+    printf("  %s sync                    # Sync all active profiles with remote\n", prog_name);
+    printf("  %s sync global             # Sync only specific profile\n", prog_name);
+    printf("  %s sync global darwin      # Sync multiple specific profiles\n", prog_name);
     printf("  %s sync --dry-run          # Preview sync actions\n", prog_name);
     printf("  %s sync --force            # Sync even with uncommitted changes\n", prog_name);
     printf("  %s sync --no-pull          # Push only, skip pulling\n", prog_name);
@@ -562,16 +578,19 @@ void print_sync_help(const char *prog_name) {
 }
 
 void print_ignore_help(const char *prog_name) {
-    printf("Usage: %s ignore [options]\n\n", prog_name);
+    printf("Usage: %s ignore [profile]\n", prog_name);
+    printf("   or: %s ignore [options] [profile]\n\n", prog_name);
     printf("Manage ignore patterns for dotfile tracking\n\n");
-    printf("Modes:\n");
-    printf("  Edit mode (default):  Opens .dottaignore in your editor\n");
-    printf("  Add/Remove mode:      Add or remove patterns programmatically\n");
-    printf("  Test mode (--test):   Check if a path would be ignored\n\n");
+    printf("Arguments:\n");
+    printf("  [profile]              Optional profile name (first argument, or use -p)\n");
+    printf("                         Without profile: edit baseline .dottaignore\n");
+    printf("                         With profile: edit profile-specific .dottaignore\n");
+    printf("\nModes:\n");
+    printf("  Edit mode (default):   Opens .dottaignore in your editor\n");
+    printf("  Add/Remove mode:       Add or remove patterns programmatically\n");
+    printf("  Test mode (--test):    Check if a path would be ignored\n\n");
     printf("Options:\n");
-    printf("  -p, --profile <name>   Profile name (edit: edit profile .dottaignore,\n");
-    printf("                         test: test against specific profile only,\n");
-    printf("                         add/remove: modify profile .dottaignore)\n");
+    printf("  -p, --profile <name>   Profile name\n");
     printf("  --add <pattern>        Add pattern to .dottaignore (can be used multiple times)\n");
     printf("  --remove <pattern>     Remove pattern from .dottaignore (can be used multiple times)\n");
     printf("  --test <path>          Test if path would be ignored by active profiles\n");
@@ -599,28 +618,31 @@ void print_ignore_help(const char *prog_name) {
     printf("  # Edit baseline .dottaignore\n");
     printf("  %s ignore\n\n", prog_name);
     printf("  # Edit global profile .dottaignore\n");
-    printf("  %s ignore --profile global\n\n", prog_name);
+    printf("  %s ignore global\n\n", prog_name);
     printf("  # Add patterns to baseline .dottaignore\n");
     printf("  %s ignore --add '*.tmp' --add '*.log'\n\n", prog_name);
-    printf("  # Remove pattern from profile .dottaignore\n");
-    printf("  %s ignore --profile global --remove '.DS_Store'\n\n", prog_name);
+    printf("  # Remove pattern from global profile .dottaignore\n");
+    printf("  %s ignore global --remove '.DS_Store'\n\n", prog_name);
     printf("  # Add and remove patterns in one command\n");
     printf("  %s ignore --add 'newpattern' --remove 'oldpattern'\n\n", prog_name);
     printf("  # Test if path is ignored (checks all active profiles)\n");
     printf("  %s ignore --test ~/.config/nvim/node_modules\n\n", prog_name);
     printf("  # Test against specific profile only\n");
-    printf("  %s ignore --test ~/.bashrc --profile global\n", prog_name);
+    printf("  %s ignore global --test ~/.bashrc\n", prog_name);
     printf("\n");
 }
 
 void print_bootstrap_help(const char *prog_name) {
-    printf("Usage: %s bootstrap [options]\n\n", prog_name);
+    printf("Usage: %s bootstrap [profile]...\n", prog_name);
+    printf("   or: %s bootstrap [options]\n\n", prog_name);
     printf("Execute bootstrap scripts for profile setup\n\n");
     printf("Bootstrap scripts are per-profile shell scripts stored in .dotta/bootstrap\n");
     printf("within each profile branch. They run during initial setup to install\n");
     printf("dependencies, configure system settings, and prepare the environment.\n\n");
-    printf("Options:\n");
-    printf("  -p, --profile <name>      Specify profile(s) to bootstrap (can be repeated)\n");
+    printf("Arguments:\n");
+    printf("  [profile]...              Optional profile(s) to bootstrap (default: auto-detect)\n");
+    printf("\nOptions:\n");
+    printf("  -p, --profile <name>      Specify profile(s) to bootstrap\n");
     printf("  --all                     Bootstrap all available profiles\n");
     printf("  -e, --edit                Edit bootstrap script (requires --profile)\n");
     printf("  --show                    Show bootstrap script content (requires --profile)\n");
@@ -649,13 +671,15 @@ void print_bootstrap_help(const char *prog_name) {
     printf("  # Run bootstrap for auto-detected profiles\n");
     printf("  %s bootstrap\n\n", prog_name);
     printf("  # Run for specific profile\n");
-    printf("  %s bootstrap --profile darwin\n\n", prog_name);
+    printf("  %s bootstrap darwin\n\n", prog_name);
+    printf("  # Run for multiple profiles\n");
+    printf("  %s bootstrap darwin global\n\n", prog_name);
     printf("  # Create/edit bootstrap script for darwin profile\n");
-    printf("  %s bootstrap --profile darwin --edit\n\n", prog_name);
+    printf("  %s bootstrap darwin --edit\n\n", prog_name);
     printf("  # List all bootstrap scripts\n");
     printf("  %s bootstrap --list\n\n", prog_name);
     printf("  # Show darwin bootstrap script\n");
-    printf("  %s bootstrap --profile darwin --show\n\n", prog_name);
+    printf("  %s bootstrap darwin --show\n\n", prog_name);
     printf("  # Dry-run (show what would execute)\n");
     printf("  %s bootstrap --dry-run\n\n", prog_name);
     printf("  # Run without prompts\n");

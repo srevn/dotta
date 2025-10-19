@@ -183,8 +183,21 @@ static int cmd_add_main(int argc, char **argv) {
             opts.force = true;
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             opts.verbose = true;
+        } else if (argv[i][0] != '-') {
+            /* Positional argument */
+            if (!opts.profile) {
+                /* First positional arg: profile name */
+                opts.profile = argv[i];
+            } else {
+                /* Remaining positional args: file paths */
+                files[file_count++] = argv[i];
+            }
         } else {
-            files[file_count++] = argv[i];
+            free(files);
+            free(excludes);
+            fprintf(stderr, "Error: Unknown option '%s'\n", argv[i]);
+            print_add_help(argv[0]);
+            return 1;
         }
     }
 
@@ -197,8 +210,9 @@ static int cmd_add_main(int argc, char **argv) {
     if (!opts.profile) {
         free(files);
         free(excludes);
-        fprintf(stderr, "Error: --profile is required\n");
-        print_add_help(argv[0]);
+        fprintf(stderr, "Error: profile name is required\n");
+        fprintf(stderr, "Usage: %s add <profile> <file>...\n", argv[0]);
+        fprintf(stderr, "   or: %s add --profile <profile> <file>...\n", argv[0]);
         return 1;
     }
 
@@ -290,8 +304,20 @@ static int cmd_remove_main(int argc, char **argv) {
             opts.verbose = true;
         } else if (strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--quiet") == 0) {
             opts.quiet = true;
+        } else if (argv[i][0] != '-') {
+            /* Positional argument */
+            if (!opts.profile) {
+                /* First positional arg: profile name */
+                opts.profile = argv[i];
+            } else {
+                /* Remaining positional args: file/dir paths */
+                paths[path_count++] = argv[i];
+            }
         } else {
-            paths[path_count++] = argv[i];
+            free(paths);
+            fprintf(stderr, "Error: Unknown option '%s'\n", argv[i]);
+            print_remove_help(argv[0]);
+            return 1;
         }
     }
 
@@ -301,8 +327,9 @@ static int cmd_remove_main(int argc, char **argv) {
     /* Validate */
     if (!opts.profile) {
         free(paths);
-        fprintf(stderr, "Error: --profile is required\n");
-        print_remove_help(argv[0]);
+        fprintf(stderr, "Error: profile name is required\n");
+        fprintf(stderr, "Usage: %s remove <profile> [<path>...]\n", argv[0]);
+        fprintf(stderr, "   or: %s remove --profile <profile> [<path>...]\n", argv[0]);
         return 1;
     }
 
@@ -1239,8 +1266,17 @@ static int cmd_ignore_main(int argc, char **argv) {
                 return 1;
             }
             remove_patterns_temp[remove_count++] = argv[++i];
+        } else if (argv[i][0] != '-') {
+            /* Positional argument: profile name */
+            if (!opts.profile) {
+                opts.profile = argv[i];
+            } else {
+                fprintf(stderr, "Error: Unexpected argument '%s'\n", argv[i]);
+                print_ignore_help(argv[0]);
+                return 1;
+            }
         } else {
-            fprintf(stderr, "Error: Unknown argument '%s'\n", argv[i]);
+            fprintf(stderr, "Error: Unknown option '%s'\n", argv[i]);
             print_ignore_help(argv[0]);
             return 1;
         }
@@ -1366,9 +1402,12 @@ static int cmd_sync_main(int argc, char **argv) {
             opts.diverged = argv[++i];
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             opts.verbose = true;
+        } else if (argv[i][0] != '-') {
+            /* Positional argument - treat as profile name */
+            profiles[profile_count++] = argv[i];
         } else {
             free(profiles);
-            fprintf(stderr, "Error: Unknown argument '%s'\n", argv[i]);
+            fprintf(stderr, "Error: Unknown option '%s'\n", argv[i]);
             print_sync_help(argv[0]);
             return 1;
         }
@@ -1823,8 +1862,11 @@ static int cmd_bootstrap_main(int argc, char **argv) {
             opts.yes = true;
         } else if (strcmp(argv[i], "--continue-on-error") == 0) {
             opts.continue_on_error = true;
+        } else if (argv[i][0] != '-') {
+            /* Positional argument - treat as profile name */
+            profiles[profile_count++] = argv[i];
         } else {
-            fprintf(stderr, "Error: Unknown argument '%s'\n", argv[i]);
+            fprintf(stderr, "Error: Unknown option '%s'\n", argv[i]);
             free(profiles);
             return 1;
         }

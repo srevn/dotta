@@ -14,6 +14,7 @@
 #include "core/deploy.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
+#include "core/safety.h"
 #include "core/state.h"
 #include "utils/array.h"
 #include "utils/config.h"
@@ -119,6 +120,120 @@ static void print_preflight_results(const output_ctx_t *out, const preflight_res
 }
 
 /**
+ * Report orphaned file conflicts and provide resolution guidance
+ *
+ * @param out Output context (must not be NULL)
+ * @param result Safety result with violations (must not be NULL)
+ */
+static void report_orphaned_conflicts(
+    output_ctx_t *out,
+    const safety_result_t *result
+) {
+    if (!out || !result) {
+        return;
+    }
+
+    output_section(out, "Modified orphaned files detected");
+    output_newline(out);
+
+    if (result->count > 0) {
+        output_warning(out, "The following files cannot be safely removed:");
+
+        for (size_t i = 0; i < result->count; i++) {
+            const safety_violation_t *v = &result->violations[i];
+
+            /* Format reason for display */
+            const char *reason_display = NULL;
+            const char *icon = "•";
+
+            if (strcmp(v->reason, "modified") == 0) {
+                reason_display = "modified";
+                icon = "✗";
+            } else if (strcmp(v->reason, "mode_changed") == 0) {
+                reason_display = "permissions changed";
+                icon = "⚠";
+            } else if (strcmp(v->reason, "type_changed") == 0) {
+                reason_display = "type changed";
+                icon = "⚠";
+            } else if (strcmp(v->reason, "profile_deleted") == 0) {
+                reason_display = "profile branch deleted";
+                icon = "!";
+            } else if (strcmp(v->reason, "file_removed") == 0) {
+                reason_display = "removed from profile";
+                icon = "!";
+            } else if (strcmp(v->reason, "cannot_verify") == 0) {
+                reason_display = "cannot verify";
+                icon = "?";
+            } else {
+                reason_display = v->reason;
+            }
+
+            if (output_colors_enabled(out)) {
+                const char *reason_color = v->content_modified ?
+                    output_color_code(out, OUTPUT_COLOR_RED) :
+                    output_color_code(out, OUTPUT_COLOR_YELLOW);
+
+                output_printf(out, OUTPUT_NORMAL, "  %s%s%s %s %s(%s",
+                       reason_color,
+                       icon,
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       v->filesystem_path,
+                       reason_color,
+                       reason_display);
+
+                if (v->source_profile) {
+                    output_printf(out, OUTPUT_NORMAL, " from %s%s%s",
+                           output_color_code(out, OUTPUT_COLOR_CYAN),
+                           v->source_profile,
+                           reason_color);
+                }
+
+                output_printf(out, OUTPUT_NORMAL, ")%s\n",
+                       output_color_code(out, OUTPUT_COLOR_RESET));
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "  %s %s (%s",
+                       icon, v->filesystem_path, reason_display);
+
+                if (v->source_profile) {
+                    output_printf(out, OUTPUT_NORMAL, " from %s", v->source_profile);
+                }
+
+                output_printf(out, OUTPUT_NORMAL, ")\n");
+            }
+        }
+        output_newline(out);
+    }
+
+    output_info(out, "These files are from unselected profiles but have uncommitted changes.");
+    output_info(out, "To prevent data loss, commit changes before removing:");
+    output_newline(out);
+    output_info(out, "Options:");
+    output_info(out, "  1. Commit changes to the profile:");
+
+    /* Get first violation's profile for example commands */
+    const char *example_profile = NULL;
+    if (result->count > 0 && result->violations[0].source_profile) {
+        example_profile = result->violations[0].source_profile;
+    }
+
+    if (example_profile) {
+        output_info(out, "     dotta update -p %s <files>", example_profile);
+        output_info(out, "     dotta apply");
+    } else {
+        output_info(out, "     dotta update <files>");
+        output_info(out, "     dotta apply");
+    }
+
+    output_info(out, "  2. Force removal (discards changes):");
+    output_info(out, "     dotta apply --force");
+    output_info(out, "  3. Keep the profile selected:");
+
+    if (example_profile) {
+        output_info(out, "     dotta profile select %s", example_profile);
+    }
+}
+
+/**
  * Print deployment results
  */
 static void print_deploy_results(const output_ctx_t *out, const deploy_result_t *result, bool verbose) {
@@ -212,11 +327,15 @@ static void print_deploy_results(const output_ctx_t *out, const deploy_result_t 
  * are handled separately by apply_update_and_save_state(), which rebuilds
  * the entire state from the manifest atomically.
  *
+ * Safety: Checks for uncommitted filesystem changes before removing orphaned files.
+ * This prevents data loss when profiles are unselected.
+ *
  * @param repo Repository (must not be NULL)
  * @param state State (must not be NULL, read-only - used to identify orphaned files)
  * @param manifest Current manifest (must not be NULL)
  * @param out Output context (must not be NULL)
  * @param verbose Print detailed output
+ * @param force Skip safety checks and force removal
  * @return Error or NULL on success
  */
 static error_t *apply_prune_orphaned_files(
@@ -224,7 +343,8 @@ static error_t *apply_prune_orphaned_files(
     state_t *state,
     const manifest_t *manifest,
     output_ctx_t *out,
-    bool verbose
+    bool verbose,
+    bool force
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -277,6 +397,36 @@ static error_t *apply_prune_orphaned_files(
         if (!hashmap_has(manifest_paths, state_entry->filesystem_path)) {
             string_array_push(to_remove, state_entry->filesystem_path);
         }
+    }
+
+    /* Safety check: detect modified orphaned files before removal */
+    if (string_array_size(to_remove) > 0) {
+        safety_result_t *safety_result = NULL;
+
+        /* Pass orphaned paths directly - eliminates redundant detection */
+        error_t *safety_err = safety_check_orphaned(
+            repo,
+            (const char **)to_remove->items,  /* Direct access to internal array */
+            to_remove->count,                 /* Number of orphaned files */
+            state_files,
+            state_file_count,
+            force,
+            &safety_result
+        );
+
+        if (safety_err && !force) {
+            /* Report violations with resolution guidance */
+            report_orphaned_conflicts(out, safety_result);
+
+            /* Clean up and propagate error */
+            safety_result_free(safety_result);
+            err = safety_err;
+            goto cleanup;
+        }
+
+        /* Safety check passed or --force specified - clean up and proceed */
+        safety_result_free(safety_result);
+        error_free(safety_err);
     }
 
     /* Remove orphaned files */
@@ -798,7 +948,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
          * The --keep-orphans flag allows opting out of automatic cleanup for advanced workflows.
          */
         if (!opts->keep_orphans) {
-            err = apply_prune_orphaned_files(repo, state, manifest, out, opts->verbose);
+            err = apply_prune_orphaned_files(repo, state, manifest, out, opts->verbose, opts->force);
             if (err) {
                 goto cleanup;
             }

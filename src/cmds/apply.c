@@ -425,12 +425,15 @@ static error_t *apply_prune_orphaned_files(
             /* Report violations with resolution guidance */
             report_orphaned_conflicts(out, safety_result);
 
+            /* Save count before freeing (use-after-free prevention) */
+            size_t violation_count = safety_result->count;
+
             /* Clean up and return error */
             safety_result_free(safety_result);
             err = ERROR(ERR_CONFLICT,
                        "Cannot remove %zu orphaned file%s with uncommitted changes",
-                       safety_result->count,
-                       safety_result->count == 1 ? "" : "s");
+                       violation_count,
+                       violation_count == 1 ? "" : "s");
             goto cleanup;
         }
 

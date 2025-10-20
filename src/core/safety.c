@@ -429,8 +429,20 @@ error_t *safety_check_removal(
         return error_wrap(err, "Failed to load state for safety check");
     }
 
-    /* Adaptive lookup strategy: hashmap for large batches, linear for small */
-    bool use_hashmap = (path_count >= HASHMAP_THRESHOLD);
+    /* Adaptive lookup strategy: hashmap for large batches, linear for small
+     *
+     * Use hashmap when:
+     * 1. Many paths to check (path_count >= HASHMAP_THRESHOLD), OR
+     * 2. Linear search cost exceeds hashmap overhead (path_count * state_count >= threshold²)
+     *
+     * This prevents O(n*m) blowup when checking few paths against many state entries.
+     * Example: 19 paths × 10,000 state entries = 190,000 comparisons → use hashmap
+     *
+     * Note: Overflow is not a concern here since HASHMAP_THRESHOLD² = 400, and the
+     * multiplication is short-circuited by condition 1 when path_count >= 20.
+     */
+    bool use_hashmap = (path_count >= HASHMAP_THRESHOLD) ||
+                       (path_count * state_count >= HASHMAP_THRESHOLD * HASHMAP_THRESHOLD);
 
     if (use_hashmap) {
         /* Build hashmap for O(1) state lookups */
@@ -475,7 +487,11 @@ error_t *safety_check_removal(
         }
 
         if (!state_entry) {
-            /* File not in state - shouldn't happen for orphaned files, but skip */
+            /* File not in state - this indicates caller passed a path that isn't
+             * tracked in the deployment state. This shouldn't happen for orphaned
+             * files (which by definition are in state), but we handle it gracefully
+             * by skipping. This could indicate a bug in the caller's logic.
+             */
             continue;
         }
 
@@ -542,22 +558,9 @@ error_t *safety_check_removal(
 }
 
 /**
- * Free safety violation
- */
-void safety_violation_free(safety_violation_t *violation) {
-    if (!violation) {
-        return;
-    }
-
-    free(violation->filesystem_path);
-    free(violation->storage_path);
-    free(violation->source_profile);
-    free(violation->reason);
-    free(violation);
-}
-
-/**
  * Free safety result
+ *
+ * Frees all violations (inline in array) and the result structure itself.
  */
 void safety_result_free(safety_result_t *result) {
     if (!result) {

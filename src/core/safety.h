@@ -81,7 +81,7 @@ typedef struct {
  *
  * Algorithm:
  *   For each file:
- *     1. Lookup state entry (O(1) with hashmap for large batches, O(n) linear for small)
+ *     1. Lookup state entry (adaptive: hashmap or linear search)
  *     2. If file doesn't exist on disk: SAFE (already deleted)
  *     3. If state->hash available: Try fast path (compare_blob_to_disk)
  *     4. If fast path fails: Load profile tree and compare via tree entry
@@ -91,7 +91,8 @@ typedef struct {
  *   - Best case (fast path succeeds): O(n) where n = number of files
  *   - Worst case (all fallback): O(n + p*log(t)) where p = profiles, t = tree size
  *   - Typical: Fast path succeeds 99% of time (profile active, hash available)
- *   - Adaptive strategy: Linear search for < 20 files, hashmap for >= 20 files
+ *   - Adaptive strategy: Uses hashmap when path_count >= 20 OR path_count * state_count >= 400
+ *     This prevents O(n*m) blowup (e.g., 19 paths × 10K state = 190K comparisons → hashmap)
  *
  * Edge Cases Handled:
  *   - Profile branch deleted → Explicit "profile_deleted" violation
@@ -107,22 +108,6 @@ typedef struct {
  * @param force If true, skip all checks and return empty result
  * @param out_result Safety result (must not be NULL, caller must free with safety_result_free)
  * @return NULL on success (check result->count for violations), error on fatal issues
- *
- * Example:
- *   safety_result_t *result = NULL;
- *   error_t *err = safety_check_removal(repo, state, orphaned_paths, count, force, &result);
- *   if (err) {
- *       return err;  // Fatal error (memory, I/O)
- *   }
- *
- *   if (result->count > 0 && !force) {
- *       report_violations(out, result);  // Show violations to user
- *       safety_result_free(result);
- *       return ERROR(ERR_CONFLICT, "Cannot remove %zu modified files", result->count);
- *   }
- *
- *   safety_result_free(result);
- *   // Safe to proceed with removal
  */
 error_t *safety_check_removal(
     git_repository *repo,
@@ -134,16 +119,12 @@ error_t *safety_check_removal(
 );
 
 /**
- * Free safety violation
- *
- * @param violation Violation to free (can be NULL)
- */
-void safety_violation_free(safety_violation_t *violation);
-
-/**
  * Free safety result
  *
  * Frees all contained violations and the result structure itself.
+ *
+ * Note: Individual violations are stored inline in the result array and
+ * cannot be freed separately. This function handles all cleanup.
  *
  * @param result Result to free (can be NULL)
  */

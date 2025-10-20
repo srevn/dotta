@@ -912,6 +912,8 @@ static error_t *remove_files_from_profile(
     /* Execute pre-remove hook */
     hook_ctx = hook_context_create(repo_dir, "remove", opts->profile);
     if (hook_ctx) {
+        hook_ctx->dry_run = opts->dry_run;
+
         /* Add paths to hook context */
         hook_context_add_files(hook_ctx,
                               (const char **)filesystem_paths->items,
@@ -1018,7 +1020,7 @@ static error_t *remove_files_from_profile(
      */
 
     /* Execute post-remove hook */
-    if (hook_ctx) {
+    if (hook_ctx && !opts->dry_run) {
         hook_result_t *hook_result = NULL;
         err = hook_execute(config, HOOK_POST_REMOVE, hook_ctx, &hook_result);
 
@@ -1266,6 +1268,8 @@ static error_t *delete_profile_branch(
     /* Execute pre-remove hook */
     hook_ctx = hook_context_create(repo_dir, "remove", opts->profile);
     if (hook_ctx) {
+        hook_ctx->dry_run = opts->dry_run;
+
         hook_result_t *hook_result = NULL;
         err = hook_execute(config, HOOK_PRE_REMOVE, hook_ctx, &hook_result);
 
@@ -1333,7 +1337,7 @@ static error_t *delete_profile_branch(
      */
 
     /* Execute post-remove hook */
-    if (hook_ctx) {
+    if (hook_ctx && !opts->dry_run) {
         hook_result_t *hook_result = NULL;
         err = hook_execute(config, HOOK_POST_REMOVE, hook_ctx, &hook_result);
 

@@ -1186,6 +1186,7 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     new_file_list_t *new_files = NULL;
     hook_context_t *hook_ctx = NULL;
     char *repo_dir = NULL;
+    char *profiles_str = NULL;
     bool should_detect_new = false;
     bool skip_new_files = false;
     size_t total_updated = 0;
@@ -1236,24 +1237,39 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     }
 
     /* Execute pre-update hook */
-    hook_ctx = hook_context_create(repo_dir, "update", NULL);
-    if (hook_ctx) {
-        hook_ctx->dry_run = opts->dry_run;
-        hook_context_add_files(hook_ctx, opts->files, opts->file_count);
-
-        hook_result_t *hook_result = NULL;
-        err = hook_execute(config, HOOK_PRE_UPDATE, hook_ctx, &hook_result);
-
-        if (err) {
-            /* Hook failed - abort operation */
-            if (hook_result && hook_result->output && hook_result->output[0]) {
-                fprintf(stderr, "Hook output:\n%s\n", hook_result->output);
+    if (config && repo_dir) {
+        /* Build array of profile names and join with spaces */
+        const char **profile_names_array = malloc(profiles->count * sizeof(char *));
+        if (profile_names_array) {
+            for (size_t i = 0; i < profiles->count; i++) {
+                profile_names_array[i] = profiles->profiles[i].name;
             }
-            hook_result_free(hook_result);
-            err = error_wrap(err, "Pre-update hook failed");
-            goto cleanup;
+            profiles_str = str_join(profile_names_array, profiles->count, " ");
+            free(profile_names_array);
         }
-        hook_result_free(hook_result);
+
+        if (profiles_str) {
+            /* Create hook context with all profiles */
+            hook_ctx = hook_context_create(repo_dir, "update", profiles_str);
+            if (hook_ctx) {
+                hook_ctx->dry_run = opts->dry_run;
+                hook_context_add_files(hook_ctx, opts->files, opts->file_count);
+
+                hook_result_t *hook_result = NULL;
+                err = hook_execute(config, HOOK_PRE_UPDATE, hook_ctx, &hook_result);
+
+                if (err) {
+                    /* Hook failed - abort operation */
+                    if (hook_result && hook_result->output && hook_result->output[0]) {
+                        output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
+                    }
+                    hook_result_free(hook_result);
+                    err = error_wrap(err, "Pre-update hook failed");
+                    goto cleanup;
+                }
+                hook_result_free(hook_result);
+            }
+        }
     }
 
     /* Determine if we should detect new files */
@@ -1343,15 +1359,15 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     /* Execute post-update hook */
     if (hook_ctx && !opts->dry_run) {
         hook_result_t *hook_result = NULL;
-        error_t *temp_err = hook_execute(config, HOOK_POST_UPDATE, hook_ctx, &hook_result);
+        error_t *hook_err = hook_execute(config, HOOK_POST_UPDATE, hook_ctx, &hook_result);
 
-        if (temp_err) {
+        if (hook_err) {
             /* Hook failed - warn but don't abort (files already updated) */
-            fprintf(stderr, "Warning: Post-update hook failed: %s\n", error_message(temp_err));
+            output_warning(out, "Post-update hook failed: %s", error_message(hook_err));
             if (hook_result && hook_result->output && hook_result->output[0]) {
-                fprintf(stderr, "Hook output:\n%s\n", hook_result->output);
+                output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
             }
-            error_free(temp_err);
+            error_free(hook_err);
         }
         hook_result_free(hook_result);
     }
@@ -1364,6 +1380,7 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
 
 cleanup:
     /* Free all resources in reverse order */
+    if (profiles_str) free(profiles_str);
     if (hook_ctx) hook_context_free(hook_ctx);
     if (repo_dir) free(repo_dir);
     if (new_files) new_file_list_free(new_files);

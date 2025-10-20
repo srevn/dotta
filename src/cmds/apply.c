@@ -884,7 +884,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                 if (err) {
                     /* Hook failed - abort operation */
                     if (hook_result && hook_result->output && hook_result->output[0]) {
-                        fprintf(stderr, "Hook output:\n%s\n", hook_result->output);
+                        output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
                     }
                     hook_result_free(hook_result);
                     err = error_wrap(err, "Pre-apply hook failed");
@@ -962,7 +962,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     }
 
     /* Execute post-apply hook */
-    if (config && hook_ctx && !opts->dry_run) {
+    if (hook_ctx && !opts->dry_run) {
         hook_result_t *hook_result = NULL;
         error_t *hook_err = hook_execute(config, HOOK_POST_APPLY, hook_ctx, &hook_result);
 
@@ -970,7 +970,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             /* Hook failed - warn but don't abort (already deployed) */
             output_warning(out, "Post-apply hook failed: %s", error_message(hook_err));
             if (hook_result && hook_result->output && hook_result->output[0]) {
-                fprintf(stderr, "Hook output:\n%s\n", hook_result->output);
+                output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
             }
             error_free(hook_err);
         }

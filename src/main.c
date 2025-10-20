@@ -1091,7 +1091,7 @@ static int cmd_update_main(int argc, char **argv) {
         .only_new = false
     };
 
-    /* Collect file arguments */
+    /* Collect file and profile arguments */
     const char **files = malloc((size_t)argc * sizeof(char *));
     const char **profiles = malloc((size_t)argc * sizeof(char *));
     const char **excludes = malloc((size_t)argc * sizeof(char *));
@@ -1151,8 +1151,28 @@ static int cmd_update_main(int argc, char **argv) {
             opts.include_new = true;
         } else if (strcmp(argv[i], "--only-new") == 0) {
             opts.only_new = true;
+        } else if (argv[i][0] != '-') {
+            /* Positional argument */
+            if (profile_count == 0 && file_count == 0) {
+                /* Heuristic: if it contains path separators, treat as file */
+                if (strchr(argv[i], '/') || argv[i][0] == '~' || argv[i][0] == '.') {
+                    /* Looks like a path - treat as file */
+                    files[file_count++] = argv[i];
+                } else {
+                    /* Looks like a profile name */
+                    profiles[profile_count++] = argv[i];
+                }
+            } else {
+                /* Remaining positional args: file paths */
+                files[file_count++] = argv[i];
+            }
         } else {
-            files[file_count++] = argv[i];
+            free(files);
+            free(profiles);
+            free(excludes);
+            fprintf(stderr, "Error: Unknown option '%s'\n", argv[i]);
+            print_update_help(argv[0]);
+            return 1;
         }
     }
 

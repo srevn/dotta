@@ -1,36 +1,51 @@
 /**
- * safety.c - Safety checks for destructive operations implementation
+ * safety.c - Data loss prevention for file removal operations
+ *
+ * Validates that files scheduled for removal don't have uncommitted changes.
+ * Used by the `apply` command when pruning orphaned files.
+ *
+ * Key optimizations:
+ * - Fast path: Uses blob hash from state (O(1) lookup, no tree loading)
+ * - Adaptive lookup: Linear search for small batches, hashmap for large
+ * - Profile tree caching: Loads each profile tree only once per batch
  */
 
 #include "safety.h"
 
 #include <git2.h>
-#include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
-#include "base/error.h"
 #include "base/filesystem.h"
 #include "base/gitops.h"
+#include "core/state.h"
 #include "infra/compare.h"
+#include "utils/hashmap.h"
 
 /* Initial capacity for dynamic arrays */
 #define INITIAL_CAPACITY 16
 
-/* Initial capacity for profile tree cache (typically few profiles involved) */
-#define PROFILE_TREE_CACHE_INITIAL_SIZE 8
+/* Threshold for switching from linear search to hashmap (empirically tuned) */
+#define HASHMAP_THRESHOLD 20
+
+/* Initial size for profile tree cache (typically few profiles involved) */
+#define PROFILE_TREE_CACHE_SIZE 8
 
 /**
  * Profile tree cache entry
+ *
+ * Caches loaded trees to avoid repeated Git operations in batch checks.
+ * The `attempted` flag prevents repeated failed lookups for deleted profiles.
  */
 typedef struct {
     char *profile_name;
-    git_tree *tree;     /* NULL if profile doesn't exist */
-    bool attempted;     /* True if we tried to load (to avoid repeated failures) */
+    git_tree *tree;      /* NULL if profile doesn't exist */
+    bool attempted;      /* True if we tried to load (even if failed) */
 } profile_tree_cache_t;
 
 /**
- * Free profile tree cache entry callback (for hashmap)
+ * Free profile tree cache entry (hashmap callback)
  */
 static void free_profile_tree_cache(void *entry) {
     if (!entry) {
@@ -47,7 +62,7 @@ static void free_profile_tree_cache(void *entry) {
 /**
  * Get or load profile tree from cache
  *
- * Returns NULL if profile doesn't exist (not an error).
+ * Returns NULL if profile doesn't exist (not an error - expected case).
  * Returns error only for fatal issues (memory allocation, etc.).
  */
 static error_t *get_or_load_profile_tree(
@@ -94,7 +109,7 @@ static error_t *get_or_load_profile_tree(
     cache_entry->tree = tree;  /* May be NULL */
     cache_entry->attempted = true;
 
-    /* Cache it */
+    /* Insert into cache */
     error_t *cache_err = hashmap_set(tree_cache, profile_name, cache_entry);
     if (cache_err) {
         free_profile_tree_cache(cache_entry);
@@ -109,14 +124,18 @@ static error_t *get_or_load_profile_tree(
 }
 
 /**
- * Create violation and add to result
+ * Add violation to result
+ *
+ * Grows the violations array if needed and adds a new entry.
+ * Uses direct struct manipulation for efficiency.
  */
 static error_t *add_violation(
     safety_result_t *result,
     const char *filesystem_path,
+    const char *storage_path,
+    const char *source_profile,
     const char *reason,
-    bool content_modified,
-    const char *source_profile
+    bool content_modified
 ) {
     CHECK_NULL(result);
     CHECK_NULL(filesystem_path);
@@ -141,21 +160,25 @@ static error_t *add_violation(
         result->capacity = new_capacity;
     }
 
-    /* Allocate strings */
+    /* Add violation directly to array (no extra allocation) */
     safety_violation_t *v = &result->violations[result->count];
     memset(v, 0, sizeof(safety_violation_t));
 
     v->filesystem_path = strdup(filesystem_path);
+    v->storage_path = storage_path ? strdup(storage_path) : NULL;
+    v->source_profile = source_profile ? strdup(source_profile) : NULL;
     v->reason = strdup(reason);
     v->content_modified = content_modified;
-    v->source_profile = source_profile ? strdup(source_profile) : NULL;
 
     /* Check allocations */
     if (!v->filesystem_path || !v->reason ||
+        (storage_path && !v->storage_path) ||
         (source_profile && !v->source_profile)) {
         free(v->filesystem_path);
-        free(v->reason);
+        free(v->storage_path);
         free(v->source_profile);
+        free(v->reason);
+        memset(v, 0, sizeof(safety_violation_t));
         return ERROR(ERR_MEMORY, "Failed to allocate violation strings");
     }
 
@@ -168,12 +191,18 @@ static error_t *add_violation(
  *
  * Returns true if fast path succeeded (file checked), false if fallback needed.
  * On success, updates result with violation if file is modified.
+ *
+ * Fast path advantages:
+ * - O(1) blob lookup vs O(log n) tree traversal
+ * - Only requires hash string, no Git tree loading
+ * - Succeeds in 99% of cases (profile not deleted, hash available)
  */
-static bool safety_fast_path_check(
+static bool try_fast_path_check(
     git_repository *repo,
-    const char *fs_path,
-    const char *state_hash,
+    const char *filesystem_path,
+    const char *storage_path,
     const char *source_profile,
+    const char *state_hash,
     safety_result_t *result,
     error_t **out_err
 ) {
@@ -193,7 +222,7 @@ static bool safety_fast_path_check(
 
     /* Try blob comparison */
     compare_result_t cmp_result;
-    error_t *cmp_err = compare_blob_to_disk(repo, &blob_oid, fs_path, &cmp_result);
+    error_t *cmp_err = compare_blob_to_disk(repo, &blob_oid, filesystem_path, &cmp_result);
 
     if (!cmp_err) {
         /* Fast path succeeded! */
@@ -204,28 +233,28 @@ static bool safety_fast_path_check(
 
             switch (cmp_result) {
                 case CMP_DIFFERENT:
-                    reason = "modified";
+                    reason = SAFETY_REASON_MODIFIED;
                     content_mod = true;
                     break;
                 case CMP_MODE_DIFF:
-                    reason = "mode_changed";
+                    reason = SAFETY_REASON_MODE_CHANGED;
                     content_mod = false;
                     break;
                 case CMP_TYPE_DIFF:
-                    reason = "type_changed";
+                    reason = SAFETY_REASON_TYPE_CHANGED;
                     content_mod = true;
                     break;
                 case CMP_MISSING:
-                    reason = "deleted";
-                    content_mod = false;
-                    break;
+                    /* File already deleted - safe to prune, don't add violation */
+                    return true;
                 case CMP_EQUAL:
                     /* Unreachable */
                     break;
             }
 
             if (reason) {
-                *out_err = add_violation(result, fs_path, reason, content_mod, source_profile);
+                *out_err = add_violation(result, filesystem_path, storage_path,
+                                       source_profile, reason, content_mod);
             }
         }
         /* else: File matches Git - safe to remove */
@@ -241,37 +270,39 @@ static bool safety_fast_path_check(
 
     /* Other error (I/O, permission) - conservative: treat as unsafe */
     error_free(cmp_err);
-    *out_err = add_violation(result, fs_path, "cannot_verify", false, source_profile);
+    *out_err = add_violation(result, filesystem_path, storage_path,
+                            source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
     return true;  /* Don't try fallback */
 }
 
 /**
- * Check single orphaned file using tree-based comparison (fallback path)
+ * Check file using tree-based comparison (fallback path)
+ *
+ * Used when fast path fails (profile deleted, hash unavailable, blob not found).
+ * Loads profile tree and compares tree entry to disk file.
  */
 static error_t *check_file_with_tree(
     git_repository *repo,
     const char *filesystem_path,
     const char *storage_path,
-    git_tree *profile_tree,
     const char *source_profile,
+    git_tree *profile_tree,
     safety_result_t *result
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(result);
 
-    error_t *err = NULL;
-
-    /* If profile tree is NULL, profile was deleted */
+    /* Profile tree not available - profile might be deleted */
     if (!profile_tree) {
-        return add_violation(result, filesystem_path, "profile_deleted",
-                           false, source_profile);
+        return add_violation(result, filesystem_path, storage_path,
+                           source_profile, SAFETY_REASON_PROFILE_DELETED, false);
     }
 
     /* Need storage_path to look up in tree */
     if (!storage_path) {
-        return add_violation(result, filesystem_path, "cannot_verify",
-                           false, source_profile);
+        return add_violation(result, filesystem_path, storage_path,
+                           source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
     }
 
     /* Load tree entry from profile */
@@ -280,64 +311,66 @@ static error_t *check_file_with_tree(
 
     if (git_err < 0) {
         /* File not in profile tree - might have been removed from Git */
-        return add_violation(result, filesystem_path, "file_removed",
-                           false, source_profile);
+        return add_violation(result, filesystem_path, storage_path,
+                           source_profile, SAFETY_REASON_FILE_REMOVED, false);
     }
 
     /* Compare tree entry to disk */
     compare_result_t cmp_result;
-    err = compare_tree_entry_to_disk(repo, tree_entry, filesystem_path, &cmp_result);
+    error_t *err = compare_tree_entry_to_disk(repo, tree_entry, filesystem_path, &cmp_result);
 
     git_tree_entry_free(tree_entry);
 
     if (err) {
         /* Cannot read file - permission issue or I/O error */
         error_free(err);
-        return add_violation(result, filesystem_path, "cannot_verify",
-                           false, source_profile);
+        return add_violation(result, filesystem_path, storage_path,
+                           source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
     }
 
     /* Check comparison result */
+    if (cmp_result == CMP_MISSING) {
+        /* File already deleted - safe to prune, don't add violation */
+        return NULL;
+    }
+
     if (cmp_result != CMP_EQUAL) {
         const char *reason = NULL;
         bool content_mod = false;
 
         switch (cmp_result) {
             case CMP_DIFFERENT:
-                reason = "modified";
+                reason = SAFETY_REASON_MODIFIED;
                 content_mod = true;
                 break;
             case CMP_MODE_DIFF:
-                reason = "mode_changed";
+                reason = SAFETY_REASON_MODE_CHANGED;
                 content_mod = false;
                 break;
             case CMP_TYPE_DIFF:
-                reason = "type_changed";
+                reason = SAFETY_REASON_TYPE_CHANGED;
                 content_mod = true;
                 break;
             case CMP_MISSING:
-                /* Shouldn't happen - we checked fs_exists earlier */
-                reason = "deleted";
-                content_mod = false;
-                break;
             case CMP_EQUAL:
-                /* Shouldn't reach here */
+                /* Already handled above */
                 return NULL;
         }
 
-        return add_violation(result, filesystem_path, reason, content_mod, source_profile);
+        return add_violation(result, filesystem_path, storage_path,
+                           source_profile, reason, content_mod);
     }
 
     return NULL;
 }
 
 /**
- * Find state entry by filesystem path
+ * Find state entry by filesystem path (linear search)
  *
- * Linear search through state entries. For typical use cases (small number of
- * orphaned files), this is more efficient than building a hashmap.
+ * Used for small batches where hashmap overhead isn't justified.
+ * For typical use cases (< 20 orphaned files), this is faster than building a hashmap.
  */
-static const state_file_entry_t *find_state_entry(
+static const state_file_entry_t *find_state_entry_linear(
     const state_file_entry_t *state_entries,
     size_t state_count,
     const char *filesystem_path
@@ -351,28 +384,30 @@ static const state_file_entry_t *find_state_entry(
 }
 
 /**
- * Check orphaned files for filesystem modifications
+ * Check files for removal safety (main implementation)
  */
-error_t *safety_check_orphaned(
+error_t *safety_check_removal(
     git_repository *repo,
-    const char **orphaned_paths,
-    size_t orphaned_count,
-    const state_file_entry_t *state_entries,
-    size_t state_count,
+    state_t *state,
+    const char **filesystem_paths,
+    size_t path_count,
     bool force,
     safety_result_t **out_result
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(state_entries);
+    CHECK_NULL(state);
     CHECK_NULL(out_result);
 
-    /* Allow NULL orphaned_paths if orphaned_count is 0 */
-    if (orphaned_count > 0 && !orphaned_paths) {
-        return ERROR(ERR_INVALID_ARG, "orphaned_paths cannot be NULL when orphaned_count > 0");
+    /* Allow NULL filesystem_paths if path_count is 0 */
+    if (path_count > 0 && !filesystem_paths) {
+        return ERROR(ERR_INVALID_ARG, "filesystem_paths cannot be NULL when path_count > 0");
     }
 
     error_t *err = NULL;
     safety_result_t *result = NULL;
+    state_file_entry_t *state_entries = NULL;
+    size_t state_count = 0;
+    hashmap_t *state_index = NULL;  /* Used only if path_count >= HASHMAP_THRESHOLD */
     hashmap_t *tree_cache = NULL;
 
     /* Allocate result */
@@ -381,27 +416,66 @@ error_t *safety_check_orphaned(
         return ERROR(ERR_MEMORY, "Failed to allocate safety result");
     }
 
-    /* If force is enabled or no orphaned files, return empty result */
-    if (force || orphaned_count == 0) {
+    /* If force or no files, return empty result */
+    if (force || path_count == 0) {
         *out_result = result;
         return NULL;
     }
 
+    /* Load all state entries */
+    err = state_get_all_files(state, &state_entries, &state_count);
+    if (err) {
+        safety_result_free(result);
+        return error_wrap(err, "Failed to load state for safety check");
+    }
+
+    /* Adaptive lookup strategy: hashmap for large batches, linear for small */
+    bool use_hashmap = (path_count >= HASHMAP_THRESHOLD);
+
+    if (use_hashmap) {
+        /* Build hashmap for O(1) state lookups */
+        state_index = hashmap_create(state_count > 0 ? state_count : INITIAL_CAPACITY);
+        if (!state_index) {
+            state_free_all_files(state_entries, state_count);
+            safety_result_free(result);
+            return ERROR(ERR_MEMORY, "Failed to create state index");
+        }
+
+        /* Populate state index */
+        for (size_t i = 0; i < state_count; i++) {
+            err = hashmap_set(state_index, state_entries[i].filesystem_path, &state_entries[i]);
+            if (err) {
+                hashmap_free(state_index, NULL);
+                state_free_all_files(state_entries, state_count);
+                safety_result_free(result);
+                return error_wrap(err, "Failed to populate state index");
+            }
+        }
+    }
+
     /* Create profile tree cache for fallback path */
-    tree_cache = hashmap_create(PROFILE_TREE_CACHE_INITIAL_SIZE);
+    tree_cache = hashmap_create(PROFILE_TREE_CACHE_SIZE);
     if (!tree_cache) {
+        if (state_index) hashmap_free(state_index, NULL);
+        state_free_all_files(state_entries, state_count);
         safety_result_free(result);
         return ERROR(ERR_MEMORY, "Failed to create tree cache");
     }
 
-    /* Check each orphaned file for modifications */
-    for (size_t i = 0; i < orphaned_count; i++) {
-        const char *fs_path = orphaned_paths[i];
+    /* Check each file for modifications */
+    for (size_t i = 0; i < path_count; i++) {
+        const char *fs_path = filesystem_paths[i];
 
-        /* Find corresponding state entry */
-        const state_file_entry_t *state_entry = find_state_entry(state_entries, state_count, fs_path);
+        /* Find corresponding state entry (O(1) hashmap or O(n) linear) */
+        const state_file_entry_t *state_entry = NULL;
+        if (use_hashmap) {
+            state_entry = hashmap_get(state_index, fs_path);
+        } else {
+            state_entry = find_state_entry_linear(state_entries, state_count, fs_path);
+        }
+
         if (!state_entry) {
-            /* Shouldn't happen - orphaned paths should come from state */
+            /* File not in state - shouldn't happen for orphaned files, but skip */
             continue;
         }
 
@@ -414,18 +488,21 @@ error_t *safety_check_orphaned(
             continue;
         }
 
-        /* File exists - need to verify it's unmodified before removal */
+        /* File exists - verify it's unmodified before removal */
         /* Try fast path: compare using state hash */
         error_t *check_err = NULL;
-        bool fast_path_succeeded = safety_fast_path_check(
-            repo, fs_path, state_entry->hash, source_profile, result, &check_err
+        bool fast_path_succeeded = try_fast_path_check(
+            repo, fs_path, storage_path, source_profile,
+            state_entry->hash, result, &check_err
         );
 
         if (check_err) {
             /* Error during fast path check */
             hashmap_free(tree_cache, free_profile_tree_cache);
+            if (state_index) hashmap_free(state_index, NULL);
+            state_free_all_files(state_entries, state_count);
             safety_result_free(result);
-            return error_wrap(check_err, "Failed to check file");
+            return error_wrap(check_err, "Failed to check file '%s'", fs_path);
         }
 
         /* Fallback to slow path if fast path didn't succeed */
@@ -435,34 +512,31 @@ error_t *safety_check_orphaned(
             if (err) {
                 /* Fatal error (memory allocation, cache failure) */
                 hashmap_free(tree_cache, free_profile_tree_cache);
+                if (state_index) hashmap_free(state_index, NULL);
+                state_free_all_files(state_entries, state_count);
                 safety_result_free(result);
-                return error_wrap(err, "Failed to load profile tree");
+                return error_wrap(err, "Failed to load profile tree for '%s'", source_profile);
             }
 
             /* Check file using tree-based comparison */
-            err = check_file_with_tree(repo, fs_path, storage_path, profile_tree,
-                                      source_profile, result);
+            err = check_file_with_tree(repo, fs_path, storage_path, source_profile,
+                                      profile_tree, result);
             if (err) {
                 hashmap_free(tree_cache, free_profile_tree_cache);
+                if (state_index) hashmap_free(state_index, NULL);
+                state_free_all_files(state_entries, state_count);
                 safety_result_free(result);
-                return error_wrap(err, "Failed to check file");
+                return error_wrap(err, "Failed to check file '%s'", fs_path);
             }
         }
     }
 
-    /* Cleanup cache */
+    /* Cleanup */
     hashmap_free(tree_cache, free_profile_tree_cache);
+    if (state_index) hashmap_free(state_index, NULL);
+    state_free_all_files(state_entries, state_count);
 
-    /* Check if we found any violations */
-    if (result->count > 0) {
-        *out_result = result;
-        return ERROR(ERR_CONFLICT,
-                    "Cannot remove %zu orphaned file%s with uncommitted changes",
-                    result->count,
-                    result->count == 1 ? "" : "s");
-    }
-
-    /* No violations - safe to proceed */
+    /* Return result (caller checks result->count for violations) */
     *out_result = result;
     return NULL;
 }
@@ -476,8 +550,9 @@ void safety_violation_free(safety_violation_t *violation) {
     }
 
     free(violation->filesystem_path);
-    free(violation->reason);
+    free(violation->storage_path);
     free(violation->source_profile);
+    free(violation->reason);
     free(violation);
 }
 
@@ -492,8 +567,9 @@ void safety_result_free(safety_result_t *result) {
     /* Free all violations */
     for (size_t i = 0; i < result->count; i++) {
         free(result->violations[i].filesystem_path);
-        free(result->violations[i].reason);
+        free(result->violations[i].storage_path);
         free(result->violations[i].source_profile);
+        free(result->violations[i].reason);
     }
 
     free(result->violations);

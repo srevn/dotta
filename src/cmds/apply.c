@@ -404,29 +404,38 @@ static error_t *apply_prune_orphaned_files(
         safety_result_t *safety_result = NULL;
 
         /* Pass orphaned paths directly - eliminates redundant detection */
-        error_t *safety_err = safety_check_orphaned(
+        error_t *safety_err = safety_check_removal(
             repo,
+            state,                            /* State object (queries internally) */
             (const char **)to_remove->items,  /* Direct access to internal array */
             to_remove->count,                 /* Number of orphaned files */
-            state_files,
-            state_file_count,
             force,
             &safety_result
         );
 
-        if (safety_err && !force) {
-            /* Report violations with resolution guidance */
-            report_orphaned_conflicts(out, safety_result);
-
-            /* Clean up and propagate error */
+        if (safety_err) {
+            /* Fatal error during safety check */
             safety_result_free(safety_result);
             err = safety_err;
             goto cleanup;
         }
 
+        /* Check if violations found */
+        if (safety_result->count > 0 && !force) {
+            /* Report violations with resolution guidance */
+            report_orphaned_conflicts(out, safety_result);
+
+            /* Clean up and return error */
+            safety_result_free(safety_result);
+            err = ERROR(ERR_CONFLICT,
+                       "Cannot remove %zu orphaned file%s with uncommitted changes",
+                       safety_result->count,
+                       safety_result->count == 1 ? "" : "s");
+            goto cleanup;
+        }
+
         /* Safety check passed or --force specified - clean up and proceed */
         safety_result_free(safety_result);
-        error_free(safety_err);
     }
 
     /* Remove orphaned files */

@@ -20,7 +20,6 @@
 #include "core/upstream.h"
 #include "utils/array.h"
 #include "utils/config.h"
-#include "utils/hashmap.h"
 #include "utils/output.h"
 
 /**
@@ -212,46 +211,12 @@ static error_t *profile_list(
                 } else if (string_array_size(remote_branches) > 0) {
                     /*
                      * Filter out branches that already exist locally
-                     * Use hashmap for O(1) lookups instead of O(n*m) nested loops
-                     * This changes complexity from O(n*m) to O(n+m)
+                     * Uses string_array_difference() for O(n+m) set difference
                      */
-                    remote_only = string_array_create();
-                    if (!remote_only) {
-                        output_warning(out, "Failed to allocate remote profiles list");
-                    } else {
-                        /* Build hashmap of local branches for O(1) lookups */
-                        hashmap_t *local_map = hashmap_create(string_array_size(all_branches));
-                        if (!local_map) {
-                            output_warning(out, "Failed to create local branch index");
-                            string_array_free(remote_only);
-                            remote_only = NULL;
-                        } else {
-                            /* Populate hashmap with local branch names */
-                            error_t *map_err = NULL;
-                            for (size_t j = 0; j < string_array_size(all_branches); j++) {
-                                map_err = hashmap_set(local_map, string_array_get(all_branches, j), (void*)1);
-                                if (map_err) {
-                                    error_free(map_err);
-                                    /* Continue on error - partial index is okay */
-                                }
-                            }
-
-                            /* Filter remote branches using O(1) lookups */
-                            for (size_t i = 0; i < string_array_size(remote_branches); i++) {
-                                const char *branch_name = string_array_get(remote_branches, i);
-
-                                /* O(1) lookup instead of O(m) linear search */
-                                if (!hashmap_has(local_map, branch_name)) {
-                                    error_t *push_err = string_array_push(remote_only, branch_name);
-                                    if (push_err) {
-                                        /* Non-fatal: skip this entry on OOM */
-                                        error_free(push_err);
-                                    }
-                                }
-                            }
-
-                            hashmap_free(local_map, NULL);
-                        }
+                    error_t *diff_err = string_array_difference(remote_branches, all_branches, &remote_only);
+                    if (diff_err) {
+                        output_warning(out, "Failed to filter remote branches: %s", error_message(diff_err));
+                        error_free(diff_err);
                     }
 
                     if (remote_only && string_array_size(remote_only) > 0) {

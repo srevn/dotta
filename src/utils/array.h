@@ -120,6 +120,32 @@ error_t *string_array_reserve(string_array_t *arr, size_t capacity);
 void string_array_sort(string_array_t *arr);
 
 /**
+ * Compute set difference (A - B)
+ *
+ * Returns all elements in set_a that are NOT in set_b.
+ * Uses hashmap internally for efficient O(n+m) performance.
+ *
+ * Duplicates in either set are handled naturally - each occurrence
+ * in set_a is checked independently against set_b.
+ *
+ * Examples:
+ *   A = ["a", "b", "c"], B = ["b", "d"] → Result = ["a", "c"]
+ *   A = ["x", "y"], B = [] → Result = ["x", "y"]
+ *   A = [], B = ["a"] → Result = []
+ *   A = ["a", "a"], B = ["a"] → Result = []
+ *
+ * @param set_a Elements to filter (must not be NULL)
+ * @param set_b Elements to exclude (must not be NULL)
+ * @param out_difference Result array (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+error_t *string_array_difference(
+    const string_array_t *set_a,
+    const string_array_t *set_b,
+    string_array_t **out_difference
+);
+
+/**
  * RAII cleanup attribute helper
  */
 static inline void cleanup_string_array(string_array_t **arr) {

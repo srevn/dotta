@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "base/error.h"
+#include "hashmap.h"
 
 #define INITIAL_CAPACITY 8
 
@@ -211,4 +212,80 @@ void string_array_sort(string_array_t *arr) {
     }
 
     qsort(arr->items, arr->count, sizeof(char *), compare_strings);
+}
+
+error_t *string_array_difference(
+    const string_array_t *set_a,
+    const string_array_t *set_b,
+    string_array_t **out_difference
+) {
+    CHECK_NULL(set_a);
+    CHECK_NULL(set_b);
+    CHECK_NULL(out_difference);
+
+    /* Resource tracking for cleanup */
+    hashmap_t *exclude_set = NULL;
+    string_array_t *result = NULL;
+    error_t *err = NULL;
+
+    /* Create result array with capacity hint based on set_a size */
+    result = string_array_create_with_capacity(string_array_size(set_a));
+    if (!result) {
+        return ERROR(ERR_MEMORY, "Failed to create result array");
+    }
+
+    /* Edge case: if set_b is empty, all of set_a is in the difference */
+    if (string_array_size(set_b) == 0) {
+        for (size_t i = 0; i < string_array_size(set_a); i++) {
+            err = string_array_push(result, string_array_get(set_a, i));
+            if (err) {
+                string_array_free(result);
+                return error_wrap(err, "Failed to copy element to result");
+            }
+        }
+        *out_difference = result;
+        return NULL;
+    }
+
+    /* Build exclusion set from set_b using hashmap for O(1) lookups */
+    exclude_set = hashmap_create(string_array_size(set_b));
+    if (!exclude_set) {
+        string_array_free(result);
+        return ERROR(ERR_MEMORY, "Failed to create exclusion index");
+    }
+
+    /* Populate exclusion set - map values are just (void*)1 as existence markers */
+    for (size_t i = 0; i < string_array_size(set_b); i++) {
+        const char *item = string_array_get(set_b, i);
+        err = hashmap_set(exclude_set, item, (void*)1);
+        if (err) {
+            err = error_wrap(err, "Failed to build exclusion index");
+            goto cleanup;
+        }
+    }
+
+    /* Filter set_a: add items not in exclusion set to result */
+    for (size_t i = 0; i < string_array_size(set_a); i++) {
+        const char *item = string_array_get(set_a, i);
+
+        /* O(1) lookup in hashmap */
+        if (!hashmap_has(exclude_set, item)) {
+            err = string_array_push(result, item);
+            if (err) {
+                err = error_wrap(err, "Failed to add element to result");
+                goto cleanup;
+            }
+        }
+    }
+
+    /* Success - cleanup and return */
+    hashmap_free(exclude_set, NULL);
+    *out_difference = result;
+    return NULL;
+
+cleanup:
+    /* Error path cleanup */
+    hashmap_free(exclude_set, NULL);
+    string_array_free(result);
+    return err;
 }

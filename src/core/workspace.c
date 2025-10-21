@@ -44,7 +44,10 @@ struct workspace {
     workspace_file_t *diverged;    /* Array of diverged files */
     size_t diverged_count;
     size_t diverged_capacity;
-    hashmap_t *diverged_index;     /* Maps filesystem_path -> workspace_file_t* (for O(1) lookup) */
+    hashmap_t *diverged_index;     /* Maps filesystem_path -> workspace_file_t */
+
+    /* Divergence count cache */
+    size_t divergence_counts[8];   /* Cached counts for O(1) access */
 
     /* Status cache */
     workspace_status_t status;
@@ -108,6 +111,12 @@ static error_t *workspace_create_empty(
     ws->diverged = NULL;
     ws->diverged_count = 0;
     ws->diverged_capacity = 0;
+
+    /* Initialize divergence count cache */
+    for (size_t i = 0; i < 8; i++) {
+        ws->divergence_counts[i] = 0;
+    }
+
     ws->status = WORKSPACE_CLEAN;
     ws->status_computed = false;
 
@@ -176,6 +185,12 @@ static error_t *workspace_add_diverged(
     }
 
     ws->diverged_count++;
+
+    /* Update divergence count cache */
+    if (type < 8) {  /* Bounds check */
+        ws->divergence_counts[type]++;
+    }
+
     return NULL;
 }
 
@@ -564,7 +579,10 @@ static error_t *scan_directory_for_untracked(
  *
  * Only scans tracked directories for profiles in the active profile list.
  */
-static error_t *analyze_untracked_files(workspace_t *ws, const dotta_config_t *config) {
+static error_t *analyze_untracked_files(
+    workspace_t *ws,
+    const dotta_config_t *config
+) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->state);
     CHECK_NULL(ws->profiles);
@@ -858,6 +876,10 @@ error_t *workspace_validate(
 
 /**
  * Get divergence count by type
+ *
+ * Returns cached count computed during workspace load.
+ * This is O(1) instead of O(n), significantly improving performance
+ * when multiple counts are queried (e.g., in cmd_sync).
  */
 size_t workspace_count_divergence(
     const workspace_t *ws,
@@ -867,14 +889,13 @@ size_t workspace_count_divergence(
         return 0;
     }
 
-    size_t count = 0;
-    for (size_t i = 0; i < ws->diverged_count; i++) {
-        if (ws->diverged[i].type == type) {
-            count++;
-        }
+    /* Return cached count for O(1) access */
+    if (type < 8) {
+        return ws->divergence_counts[type];
     }
 
-    return count;
+    /* Fallback for invalid type (should never happen) */
+    return 0;
 }
 
 /**

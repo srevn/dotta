@@ -624,10 +624,13 @@ static error_t *sync_push_phase(
                                 err = divergence_rollback(&ctx);
                                 if (err) {
                                     output_error(out, "   ✗ CRITICAL: Rollback failed: %s", error_message(err));
-                                    free(result->error_message);
-                                    result->error_message = strdup("Verification failed and rollback failed"
-                                                                   " - repository may be inconsistent");
-                                    error_free(err);
+                                    output_newline(out);
+                                    error_t *rollback_err = error_wrap(err,
+                                        "Failed to rollback branch '%s' after rebase verification failure.\n"
+                                        "Repository may be in an inconsistent state.\n"
+                                        "Manual intervention required: git reset --hard origin/%s",
+                                        result->profile_name, result->profile_name);
+                                    return rollback_err;
                                 } else {
                                     output_info(out, "   ↺ Rolled back to original state");
                                 }
@@ -648,10 +651,13 @@ static error_t *sync_push_phase(
                                     err = divergence_rollback(&ctx);
                                     if (err) {
                                         output_error(out, "   ✗ CRITICAL: Rollback failed: %s", error_message(err));
-                                        free(result->error_message);
-                                        result->error_message = strdup("Push failed and rollback failed"
-                                                                       " - repository may be inconsistent");
-                                        error_free(err);
+                                        output_newline(out);
+                                        error_t *rollback_err = error_wrap(err,
+                                            "Failed to rollback branch '%s' after push failure.\n"
+                                            "Repository may be in an inconsistent state.\n"
+                                            "Manual intervention required: git reset --hard origin/%s",
+                                            result->profile_name, result->profile_name);
+                                        return rollback_err;
                                     } else {
                                         output_success(out, "   Rolled back to original state");
                                     }
@@ -702,10 +708,13 @@ static error_t *sync_push_phase(
                                 err = divergence_rollback(&ctx);
                                 if (err) {
                                     output_error(out, "   ✗ CRITICAL: Rollback failed: %s", error_message(err));
-                                    free(result->error_message);
-                                    result->error_message = strdup("Verification failed and rollback failed"
-                                                                   " - repository may be inconsistent");
-                                    error_free(err);
+                                    output_newline(out);
+                                    error_t *rollback_err = error_wrap(err,
+                                        "Failed to rollback branch '%s' after merge verification failure.\n"
+                                        "Repository may be in an inconsistent state.\n"
+                                        "Manual intervention required: git reset --hard origin/%s",
+                                        result->profile_name, result->profile_name);
+                                    return rollback_err;
                                 } else {
                                     output_info(out, "   ↺ Rolled back to original state");
                                 }
@@ -726,10 +735,13 @@ static error_t *sync_push_phase(
                                     err = divergence_rollback(&ctx);
                                     if (err) {
                                         output_error(out, "   ✗ CRITICAL: Rollback failed: %s", error_message(err));
-                                        free(result->error_message);
-                                        result->error_message = strdup("Push failed and rollback failed"
-                                                                       " - repository may be inconsistent");
-                                        error_free(err);
+                                        output_newline(out);
+                                        error_t *rollback_err = error_wrap(err,
+                                            "Failed to rollback branch '%s' after push failure.\n"
+                                            "Repository may be in an inconsistent state.\n"
+                                            "Manual intervention required: git reset --hard origin/%s",
+                                            result->profile_name, result->profile_name);
+                                        return rollback_err;
                                     } else {
                                         output_success(out, "   Rolled back to original state");
                                     }

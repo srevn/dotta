@@ -11,26 +11,26 @@
 #include "version.h"
 
 void print_usage(const char *prog_name) {
-    printf("dotta - Dotfile Manager\n\n");
+    printf("dotta - dotfile manager\n\n");
     printf("Usage: %s <command> [options]\n\n", prog_name);
     printf("Commands:\n");
     printf("  init         Initialize a new dotta repository\n");
     printf("  clone        Clone a dotta repository\n");
-    printf("  add          Add files to a profile\n");
+    printf("  add          Add new files or directories to a profile\n");
     printf("  remove       Remove files from a profile or delete profile\n");
-    printf("  apply        Apply profiles to filesystem\n");
-    printf("  status       Show status of managed files\n");
-    printf("  diff         Show differences between profiles and filesystem\n");
+    printf("  apply        Deploy enabled profiles to the filesystem\n");
+    printf("  status       Show the status of tracked files in the workspace\n");
+    printf("  diff         Show differences between profile and workspace files\n");
     printf("  list         List profiles, files, and commit history\n");
-    printf("  profile      Manage which profiles are enabled and their order\n");
+    printf("  profile      Profile management and layering\n");
     printf("  show         Show file content from profile\n");
     printf("  revert       Revert file to previous commit state\n");
     printf("  remote       Manage remote repositories\n");
     printf("  update       Update profiles with modified files\n");
-    printf("  sync         Intelligently sync with remote\n");
+    printf("  sync         Synchronize profiles with a remote repository\n");
     printf("  ignore       Manage ignore patterns\n");
     printf("  bootstrap    Execute profile bootstrap scripts\n");
-    printf("  git          Execute git commands in repository\n");
+    printf("  git          Execute git commands within repository\n");
     printf("\nRun '%s <command> --help' for more information on a command.\n", prog_name);
 }
 
@@ -517,47 +517,46 @@ void print_update_help(const char *prog_name) {
 }
 
 void print_sync_help(const char *prog_name) {
-    printf("Usage: %s sync [profile]...\n", prog_name);
-    printf("   or: %s sync [options]\n\n", prog_name);
-    printf("Synchronize local repository with remote repository\n\n");
-    printf("Fetches from remote, analyzes branch states, and pushes/pulls as needed.\n");
-    printf("Requires clean workspace - run 'dotta update' first to commit local changes.\n");
-    printf("Operates only on enabled profiles (use 'dotta profile' to manage).\n\n");
+    printf("Usage: %s sync [profile]... [options]\n\n", prog_name);
+    printf("Synchronize local profiles with a remote repository\n\n");
+    printf("Fetches from the remote, analyzes branch states, and pushes or pulls changes\n");
+    printf("By default, this command operates on all enabled profiles and requires a clean workspace\n");
+    printf("Use 'dotta update' to commit local changes before syncing\n\n");
     printf("Arguments:\n");
-    printf("  [profile]...           Optional profile(s) to sync (default: all enabled)\n");
+    printf("  [profile]...           Optional list of profiles to sync (default: all enabled)\n");
     printf("\nOptions:\n");
-    printf("  -p, --profile <name>       Sync specific profile\n");
-    printf("  -n, --dry-run              Show what would happen\n");
-    printf("  --no-push                  Fetch and analyze only, skip push\n");
-    printf("  --no-pull                  Skip pulling remote changes (push-only)\n");
-    printf("  -f, --force                Force sync even with uncommitted changes\n");
-    printf("  --diverged <strategy>      How to handle diverged branches:\n");
-    printf("                             warn (default), rebase, merge, ours, theirs\n");
-    printf("  -v, --verbose              Verbose output\n");
-    printf("  -h, --help                 Show this help message\n");
+    printf("  -p, --profile <name>   Specify a profile to sync (can be used multiple times)\n");
+    printf("  -n, --dry-run          Show what would happen without making changes\n");
+    printf("  --no-push              Fetch and analyze only; do not push local changes\n");
+    printf("  --no-pull              Push local changes only; do not pull remote changes\n");
+    printf("  -f, --force            Force sync even with uncommitted local changes\n");
+    printf("  --diverged <strategy>  Specify how to handle diverged branches:\n");
+    printf("                         warn (default), rebase, merge, ours, theirs\n");
+    printf("  -v, --verbose          Show detailed, step-by-step output\n");
+    printf("  -h, --help             Show this help message\n");
     printf("\nWhat it does:\n");
-    printf("  1. Validates workspace is clean (no uncommitted changes)\n");
-    printf("  2. Fetches latest changes from remote for enabled profiles\n");
-    printf("  3. Analyzes each enabled profile (ahead/behind/diverged)\n");
-    printf("  4. Auto-pulls when remote is ahead (fast-forward only)\n");
-    printf("  5. Auto-pushes when local is ahead\n");
-    printf("  6. Resolves diverged branches using configured strategy\n");
+    printf("  1. Validates that the workspace is clean (no uncommitted changes)\n");
+    printf("  2. Fetches the latest changes from the remote for the specified profiles\n");
+    printf("  3. Analyzes each profile to determine its state (ahead, behind, or diverged)\n");
+    printf("  4. Pulls changes if the remote is ahead (fast-forward only)\n");
+    printf("  5. Pushes changes if the local is ahead\n");
+    printf("  6. Resolves diverged branches using the configured strategy\n");
     printf("\nTypical Workflow:\n");
-    printf("  %s update                  # Commit local changes to profiles\n", prog_name);
-    printf("  %s sync                    # Synchronize with remote\n", prog_name);
+    printf("  %s update                  # Commit local changes to one or more profiles\n", prog_name);
+    printf("  %s sync                    # Synchronize all enabled profiles with the remote\n", prog_name);
     printf("\nConfiguration:\n");
     printf("  Set defaults in ~/.config/dotta/config.toml:\n");
     printf("    [sync]\n");
     printf("    auto_pull = true\n");
     printf("    diverged_strategy = \"warn\"\n");
     printf("\nExamples:\n");
-    printf("  %s sync                    # Sync all enabled profiles with remote\n", prog_name);
-    printf("  %s sync global             # Sync only specific profile\n", prog_name);
+    printf("  %s sync                    # Sync all enabled profiles with the remote\n", prog_name);
+    printf("  %s sync global             # Sync only the 'global' profile\n", prog_name);
     printf("  %s sync global darwin      # Sync multiple specific profiles\n", prog_name);
-    printf("  %s sync --dry-run          # Preview sync actions\n", prog_name);
+    printf("  %s sync --dry-run          # Preview the actions sync would take\n", prog_name);
     printf("  %s sync --force            # Sync even with uncommitted changes\n", prog_name);
-    printf("  %s sync --no-pull          # Push only, skip pulling\n", prog_name);
-    printf("  %s sync --diverged rebase  # Rebase on divergence\n", prog_name);
+    printf("  %s sync --no-pull          # Push local changes only, skipping remote pulls\n", prog_name);
+    printf("  %s sync --diverged rebase  # Use the 'rebase' strategy for diverged branches\n", prog_name);
     printf("\n");
 }
 
@@ -684,9 +683,9 @@ void print_interactive_help(const char *prog_name) {
     printf("Interactive profile management and ordering.\n\n");
     printf("Keybindings:\n");
     printf("  ↑↓, j/k, g/G    Navigate profiles\n");
-    printf("  space, enter    Toggle profile enabled/disabled\n");
+    printf("  space           Enable/disable profiles\n");
     printf("  J/K             Move profile up/down\n");
-    printf("  w               Save profile order\n");
+    printf("  w               Save profile order and choice\n");
     printf("  q, ESC          Quit\n\n");
     printf("Notes:\n");
     printf("  - Enabled profiles are saved to state in the displayed order\n");

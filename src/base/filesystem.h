@@ -142,10 +142,11 @@ bool fs_is_directory(const char *path);
  * Check if directory is empty
  *
  * A directory is considered empty if it contains only "." and ".." entries.
- * Non-existent directories are also considered empty.
+ * Returns false if the directory cannot be opened (doesn't exist, not a directory,
+ * permission denied, or read error) for safety (don't delete what we can't verify).
  *
- * @param path Directory path to check (must not be NULL)
- * @return true if directory is empty or doesn't exist, false otherwise
+ * @param path Directory path to check (can be NULL, treated as empty)
+ * @return true if directory is empty and readable, false otherwise
  */
 bool fs_is_directory_empty(const char *path);
 

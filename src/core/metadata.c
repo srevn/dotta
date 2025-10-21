@@ -1357,8 +1357,10 @@ error_t *metadata_load_from_profiles(
                 continue;
             } else {
                 /* Real error - clean up and propagate */
-                for (size_t j = 0; j < loaded_count; j++) {
-                    metadata_free((metadata_t *)profile_metadata[j]);
+                for (size_t j = 0; j < i; j++) {
+                    if (profile_metadata[j]) {
+                        metadata_free((metadata_t *)profile_metadata[j]);
+                    }
                 }
                 free(profile_metadata);
                 return error_wrap(load_err,

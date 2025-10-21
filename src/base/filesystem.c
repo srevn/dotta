@@ -403,18 +403,21 @@ bool fs_is_directory(const char *path) {
 }
 
 bool fs_is_directory_empty(const char *path) {
-    if (!path || !fs_is_directory(path)) {
-        return true;  /* Non-existent directory is considered "empty" */
+    if (!path) {
+        return true;  /* NULL path is considered "empty" */
     }
 
-    /* Direct directory reading with early exit */
+    /* Try to open directory (no need for separate stat - opendir checks internally) */
     DIR *dir = opendir(path);
     if (!dir) {
-        /* Can't determine, assume not empty to be safe */
+        /* Can't open (doesn't exist, not a dir, or permission denied).
+         * For safety (don't delete what we can't verify), return false.
+         * Non-existent directories handled gracefully by caller (fs_exists check).
+         */
         return false;
     }
 
-    /* Check if directory only contains . and .. */
+    /* Check if directory only contains . and .. entries */
     bool is_empty = true;
     struct dirent *entry;
     errno = 0;
@@ -428,6 +431,12 @@ bool fs_is_directory_empty(const char *path) {
         /* Found a real entry - directory is not empty */
         is_empty = false;
         break;
+    }
+
+    /* Check for readdir() errors (readdir returns NULL on both EOF and error) */
+    if (errno != 0) {
+        /* Read error occurred - assume not empty for safety */
+        is_empty = false;
     }
 
     closedir(dir);

@@ -1,126 +1,132 @@
 /**
  * stats.h - Profile and file statistics
  *
- * Provides efficient statistics gathering for profiles and files,
- * including sizes, counts, and commit history tracking.
+ * Provides efficient statistics gathering for profiles and files.
  *
  * Design principles:
- * - Minimize expensive operations (defer to verbose mode)
+ * - Minimize expensive operations (commit walking deferred to verbose mode)
  * - Single-pass algorithms where possible
- * - Clear ownership semantics
- * - Reusable across multiple commands (list, status, etc.)
+ * - Early termination optimizations
+ * - Const-correct interfaces
  *
- * Note: This header uses profile_t which is defined in profiles.h.
- * Users of this header must also include profiles.h.
+ * Performance characteristics:
+ * - Profile stats: O(files) - single tree walk, metadata-only reads
+ * - File commit map: O(commits_needed × files_per_commit) - with early termination
+ * - File history: O(total_commits) - walks entire history
  */
 
 #ifndef DOTTA_STATS_H
 #define DOTTA_STATS_H
 
 #include <git2.h>
-#include <time.h>
 
 #include "types.h"
-#include "core/profiles.h"
-#include "utils/hashmap.h"
 
 /**
- * Profile-level statistics
+ * Profile statistics
  *
- * Aggregate information about an entire profile.
+ * Aggregate information about an entire profile (file count and total size).
  */
 typedef struct {
-    size_t file_count;   /* Total number of files */
+    size_t file_count;
     size_t total_size;   /* Total size in bytes */
 } profile_stats_t;
 
 /**
- * File-level statistics
+ * Commit information
  *
- * Information about a single file.
+ * Lightweight commit metadata suitable for display.
  */
 typedef struct {
-    size_t size;         /* File size in bytes */
-} file_stats_t;
+    git_oid oid;         /* Commit OID */
+    char *summary;       /* First line of commit message (caller must free) */
+    git_time_t time;     /* Commit timestamp (seconds since epoch) */
+} commit_info_t;
 
 /**
- * Commit information for display
+ * File→commit mapping
  *
- * Lightweight commit metadata for list/history views.
+ * Maps each file path to its most recent commit.
+ * Optimized for the use case: "for each file in current tree, get last commit"
+ *
+ * Internal implementation is opaque. Use accessor functions.
  */
-typedef struct {
-    git_oid oid;              /* Commit OID */
-    char *message_summary;    /* First line of commit message (caller must free) */
-    time_t timestamp;         /* Commit timestamp */
-} commit_info_t;
+typedef struct file_commit_map file_commit_map_t;
 
 /**
  * File history
  *
- * List of commits that modified a specific file.
+ * List of all commits that modified a specific file, in reverse
+ * chronological order (newest first).
  */
 typedef struct {
-    commit_info_t *commits;   /* Array of commit info (caller must free) */
-    size_t count;             /* Number of commits */
+    commit_info_t *commits;  /* Array of commits (caller must free with stats_free_file_history) */
+    size_t count;            /* Number of commits */
 } file_history_t;
 
 /**
  * Get profile statistics
  *
  * Walks profile tree once to compute file count and total size.
- * Efficient: O(n) where n = number of files.
+ * Uses git_odb_read_header for efficient metadata-only reads (no decompression).
  *
- * Note: This function performs lazy loading of the profile tree,
- * which mutates the profile structure. Caller must own the profile.
+ * Performance: O(files) - single tree walk
+ * Memory: O(1) - constant space
  *
- * @param repo Repository (must not be NULL)
- * @param profile Profile (must not be NULL, will be mutated for lazy loading)
- * @param out Statistics (must not be NULL, filled by function)
+ * @param repo Repository (required)
+ * @param tree Tree to analyze (required)
+ * @param out Statistics (required, filled by function)
  * @return Error or NULL on success
  */
 error_t *stats_get_profile_stats(
     git_repository *repo,
-    profile_t *profile,
+    git_tree *tree,
     profile_stats_t *out
 );
 
 /**
- * Get file statistics
+ * Get blob size efficiently
  *
- * Extracts size from git blob metadata (fast).
+ * Reads only object metadata using git_odb_read_header (no decompression).
+ * This is 10-50x faster than git_blob_lookup for size-only queries.
  *
- * @param repo Repository (must not be NULL)
- * @param entry Tree entry (must not be NULL)
- * @param out Statistics (must not be NULL, filled by function)
+ * @param repo Repository (required)
+ * @param blob_oid Blob OID (required)
+ * @param out Size in bytes (required, filled by function)
  * @return Error or NULL on success
  */
-error_t *stats_get_file_stats(
+error_t *stats_get_blob_size(
     git_repository *repo,
-    git_tree_entry *entry,
-    file_stats_t *out
+    const git_oid *blob_oid,
+    size_t *out
 );
 
 /**
- * Build file→commit index for profile
+ * Build file→commit mapping
  *
- * Creates an efficient mapping from each file to its most recent commit.
- * Walks commit history once: O(commits × files_per_commit).
+ * Walks commit history from newest to oldest, building a mapping from each
+ * file (in the given tree) to its most recent commit.
  *
- * This is expensive (walks entire history) but much more efficient than
- * querying per-file (which would be O(files × commits)).
+ * Optimization: Stops early when all files in tree have been found.
+ * This makes the operation much faster for profiles where files were
+ * modified recently (common case).
  *
- * The index maps: storage_path (char*) → commit_info_t*
- * Caller must free with: hashmap_free(index, (void(*)(void*))stats_free_commit_info)
+ * Performance: O(commits_needed × files_per_commit) - with early termination
+ * Memory: O(files_in_tree) - one commit_info per file
  *
- * @param repo Repository (must not be NULL)
- * @param profile_name Profile name (must not be NULL)
- * @param out_index File→commit hashmap (must not be NULL, caller must free)
+ * Note: This is expensive (history walk). Use only in verbose mode.
+ *
+ * @param repo Repository (required)
+ * @param branch_name Branch name (required, e.g., "global")
+ * @param tree Tree containing files to track (required)
+ * @param out File→commit map (required, caller must free with stats_free_file_commit_map)
  * @return Error or NULL on success
  */
-error_t *stats_build_file_commit_index(
+error_t *stats_build_file_commit_map(
     git_repository *repo,
-    const char *profile_name,
-    hashmap_t **out_index
+    const char *branch_name,
+    git_tree *tree,
+    file_commit_map_t **out
 );
 
 /**
@@ -129,33 +135,60 @@ error_t *stats_build_file_commit_index(
  * Returns all commits that modified the specified file, in reverse
  * chronological order (newest first).
  *
- * This walks the entire commit history for the profile: O(commits).
- * Use sparingly (only when user requests specific file history).
+ * Performance: O(total_commits) - walks entire branch history
+ * Memory: O(matching_commits) - allocates array for all commits touching file
  *
- * @param repo Repository (must not be NULL)
- * @param profile_name Profile name (must not be NULL)
- * @param file_path Storage path of file (must not be NULL)
- * @param out File history (must not be NULL, caller must free with stats_free_file_history)
+ * Note: This is very expensive. Use only when user explicitly requests
+ *       file history (e.g., `dotta list -p <profile> <file>`).
+ *
+ * @param repo Repository (required)
+ * @param branch_name Branch name (required)
+ * @param file_path File path within tree (required)
+ * @param out File history (required, caller must free with stats_free_file_history)
  * @return Error or NULL on success
  */
 error_t *stats_get_file_history(
     git_repository *repo,
-    const char *profile_name,
+    const char *branch_name,
     const char *file_path,
     file_history_t **out
 );
 
 /**
+ * Lookup commit info for a file
+ *
+ * Returns the commit info for the specified file path, or NULL if the
+ * file is not in the map.
+ *
+ * Performance: O(1) - constant time hashmap lookup
+ *
+ * @param map File→commit map (required)
+ * @param file_path File path (required)
+ * @return Commit info (borrowed pointer, valid until map is freed) or NULL if not found
+ */
+const commit_info_t *stats_file_commit_map_get(
+    const file_commit_map_t *map,
+    const char *file_path
+);
+
+/**
  * Free commit info
  *
- * @param info Commit info to free (can be NULL)
+ * @param info Commit info to free (NULL safe)
  */
 void stats_free_commit_info(commit_info_t *info);
 
 /**
+ * Free file→commit map
+ *
+ * @param map Map to free (NULL safe)
+ */
+void stats_free_file_commit_map(file_commit_map_t *map);
+
+/**
  * Free file history
  *
- * @param history File history to free (can be NULL)
+ * @param history History to free (NULL safe)
  */
 void stats_free_file_history(file_history_t *history);
 

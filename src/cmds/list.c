@@ -191,7 +191,7 @@ static error_t *list_profiles(
         /* Verbose: Add stats */
         if (opts->verbose) {
             profile_stats_t stats = {0};
-            err = stats_get_profile_stats(repo, profile, &stats);
+            err = stats_get_profile_stats(repo, profile->tree, &stats);
             if (!err) {
                 char size_str[32];
                 format_size(stats.total_size, size_str, sizeof(size_str));
@@ -341,10 +341,10 @@ static error_t *list_files(
     /* Sort for consistent output */
     string_array_sort(files);
 
-    /* Build file→commit index if verbose */
-    hashmap_t *commit_index = NULL;
+    /* Build file→commit map if verbose */
+    file_commit_map_t *commit_map = NULL;
     if (opts->verbose) {
-        err = stats_build_file_commit_index(repo, opts->profile, &commit_index);
+        err = stats_build_file_commit_map(repo, opts->profile, profile->tree, &commit_map);
         if (err) {
             /* Non-fatal: continue without commit info */
             output_warning(out, "Failed to load commit history: %s", error_message(err));
@@ -403,38 +403,39 @@ static error_t *list_files(
             git_tree_entry *entry = NULL;
             int git_err = git_tree_entry_bypath(&entry, profile->tree, file_path);
             if (git_err == 0) {
-                file_stats_t stats = {0};
-                error_t *stats_err = stats_get_file_stats(repo, entry, &stats);
+                /* Get blob size efficiently */
+                size_t size;
+                error_t *stats_err = stats_get_blob_size(repo, git_tree_entry_id(entry), &size);
                 if (!stats_err) {
                     char size_str[32];
-                    format_size(stats.size, size_str, sizeof(size_str));
+                    format_size(size, size_str, sizeof(size_str));
                     output_printf(out, OUTPUT_NORMAL, "  %8s", size_str);
-                    total_size += stats.size;
+                    total_size += size;
                 }
                 error_free(stats_err);
 
                 /* Get last commit for this file */
-                if (commit_index) {
-                    commit_info_t *commit_info = hashmap_get(commit_index, file_path);
+                if (commit_map) {
+                    const commit_info_t *commit_info = stats_file_commit_map_get(commit_map, file_path);
                     if (commit_info) {
                         char oid_str[LIST_SHORT_OID_SIZE];
                         git_oid_tostr(oid_str, sizeof(oid_str), &commit_info->oid);
 
                         char time_str[64];
-                        format_relative_time(commit_info->timestamp, time_str, sizeof(time_str));
+                        format_relative_time(commit_info->time, time_str, sizeof(time_str));
 
                         if (output_colors_enabled(out)) {
                             output_printf(out, OUTPUT_NORMAL, "  %s%s%s %s %s(%s)%s",
                                     output_color_code(out, OUTPUT_COLOR_YELLOW),
                                     oid_str,
                                     output_color_code(out, OUTPUT_COLOR_RESET),
-                                    commit_info->message_summary,
+                                    commit_info->summary,
                                     output_color_code(out, OUTPUT_COLOR_DIM),
                                     time_str,
                                     output_color_code(out, OUTPUT_COLOR_RESET));
                         } else {
                             output_printf(out, OUTPUT_NORMAL, "  %s %s (%s)",
-                                    oid_str, commit_info->message_summary, time_str);
+                                    oid_str, commit_info->summary, time_str);
                         }
                     }
                 }
@@ -462,8 +463,8 @@ static error_t *list_files(
     }
 
     /* Cleanup */
-    if (commit_index) {
-        hashmap_free(commit_index, (void (*)(void *))stats_free_commit_info);
+    if (commit_map) {
+        stats_free_file_commit_map(commit_map);
     }
     string_array_free(files);
     profile_free(profile);
@@ -527,7 +528,7 @@ static error_t *list_file_history(
     size_t max_msg_len = 0;
     if (!opts->verbose) {
         for (size_t i = 0; i < history->count; i++) {
-            size_t len = strlen(history->commits[i].message_summary);
+            size_t len = strlen(history->commits[i].summary);
             if (len > max_msg_len) {
                 max_msg_len = len;
             }
@@ -554,10 +555,10 @@ static error_t *list_file_history(
             }
 
             /* Display timestamp if valid */
-            char *date_str = format_time(commit->timestamp);
+            char *date_str = format_time(commit->time);
             if (date_str) {
                 char relative_str[64];
-                format_relative_time(commit->timestamp, relative_str, sizeof(relative_str));
+                format_relative_time(commit->time, relative_str, sizeof(relative_str));
 
                 if (output_colors_enabled(out)) {
                     output_printf(out, OUTPUT_NORMAL, "Date:   %s %s(%s)%s\n",
@@ -571,7 +572,7 @@ static error_t *list_file_history(
                 free(date_str);
             }
 
-            output_printf(out, OUTPUT_NORMAL, "\n    %s\n", commit->message_summary);
+            output_printf(out, OUTPUT_NORMAL, "\n    %s\n", commit->summary);
 
             if (i < history->count - 1) {
                 output_newline(out);
@@ -582,7 +583,7 @@ static error_t *list_file_history(
             git_oid_tostr(oid_str, sizeof(oid_str), &commit->oid);
 
             char time_str[64];
-            format_relative_time(commit->timestamp, time_str, sizeof(time_str));
+            format_relative_time(commit->time, time_str, sizeof(time_str));
 
             if (output_colors_enabled(out)) {
                 output_printf(out, OUTPUT_NORMAL, "  %s%s%s  %-*s %s(%s)%s\n",
@@ -590,13 +591,13 @@ static error_t *list_file_history(
                         oid_str,
                         output_color_code(out, OUTPUT_COLOR_RESET),
                         (int)max_msg_len,
-                        commit->message_summary,
+                        commit->summary,
                         output_color_code(out, OUTPUT_COLOR_DIM),
                         time_str,
                         output_color_code(out, OUTPUT_COLOR_RESET));
             } else {
                 output_printf(out, OUTPUT_NORMAL, "  %s  %-*s (%s)\n",
-                        oid_str, (int)max_msg_len, commit->message_summary, time_str);
+                        oid_str, (int)max_msg_len, commit->summary, time_str);
             }
         }
     }

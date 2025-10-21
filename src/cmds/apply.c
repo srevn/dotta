@@ -10,7 +10,7 @@
 #include <string.h>
 
 #include "base/error.h"
-#include "base/filesystem.h"
+#include "core/cleanup.h"
 #include "core/deploy.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
@@ -120,120 +120,6 @@ static void print_preflight_results(const output_ctx_t *out, const preflight_res
 }
 
 /**
- * Report orphaned file conflicts and provide resolution guidance
- *
- * @param out Output context (must not be NULL)
- * @param result Safety result with violations (must not be NULL)
- */
-static void report_orphaned_conflicts(
-    output_ctx_t *out,
-    const safety_result_t *result
-) {
-    if (!out || !result) {
-        return;
-    }
-
-    output_section(out, "Modified orphaned files detected");
-    output_newline(out);
-
-    if (result->count > 0) {
-        output_warning(out, "The following files cannot be safely removed:");
-
-        for (size_t i = 0; i < result->count; i++) {
-            const safety_violation_t *v = &result->violations[i];
-
-            /* Format reason for display */
-            const char *reason_display = NULL;
-            const char *icon = "•";
-
-            if (strcmp(v->reason, "modified") == 0) {
-                reason_display = "modified";
-                icon = "✗";
-            } else if (strcmp(v->reason, "mode_changed") == 0) {
-                reason_display = "permissions changed";
-                icon = "⚠";
-            } else if (strcmp(v->reason, "type_changed") == 0) {
-                reason_display = "type changed";
-                icon = "⚠";
-            } else if (strcmp(v->reason, "profile_deleted") == 0) {
-                reason_display = "profile branch deleted";
-                icon = "!";
-            } else if (strcmp(v->reason, "file_removed") == 0) {
-                reason_display = "removed from profile";
-                icon = "!";
-            } else if (strcmp(v->reason, "cannot_verify") == 0) {
-                reason_display = "cannot verify";
-                icon = "?";
-            } else {
-                reason_display = v->reason;
-            }
-
-            if (output_colors_enabled(out)) {
-                const char *reason_color = v->content_modified ?
-                    output_color_code(out, OUTPUT_COLOR_RED) :
-                    output_color_code(out, OUTPUT_COLOR_YELLOW);
-
-                output_printf(out, OUTPUT_NORMAL, "  %s%s%s %s %s(%s",
-                       reason_color,
-                       icon,
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       v->filesystem_path,
-                       reason_color,
-                       reason_display);
-
-                if (v->source_profile) {
-                    output_printf(out, OUTPUT_NORMAL, " from %s%s%s",
-                           output_color_code(out, OUTPUT_COLOR_CYAN),
-                           v->source_profile,
-                           reason_color);
-                }
-
-                output_printf(out, OUTPUT_NORMAL, ")%s\n",
-                       output_color_code(out, OUTPUT_COLOR_RESET));
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  %s %s (%s",
-                       icon, v->filesystem_path, reason_display);
-
-                if (v->source_profile) {
-                    output_printf(out, OUTPUT_NORMAL, " from %s", v->source_profile);
-                }
-
-                output_printf(out, OUTPUT_NORMAL, ")\n");
-            }
-        }
-        output_newline(out);
-    }
-
-    output_info(out, "These files are from unselected profiles but have uncommitted changes.");
-    output_info(out, "To prevent data loss, commit changes before removing:");
-    output_newline(out);
-    output_info(out, "Options:");
-    output_info(out, "  1. Commit changes to the profile:");
-
-    /* Get first violation's profile for example commands */
-    const char *example_profile = NULL;
-    if (result->count > 0 && result->violations[0].source_profile) {
-        example_profile = result->violations[0].source_profile;
-    }
-
-    if (example_profile) {
-        output_info(out, "     dotta update -p %s <files>", example_profile);
-        output_info(out, "     dotta apply");
-    } else {
-        output_info(out, "     dotta update <files>");
-        output_info(out, "     dotta apply");
-    }
-
-    output_info(out, "  2. Force removal (discards changes):");
-    output_info(out, "     dotta apply --force");
-    output_info(out, "  3. Keep the profile selected:");
-
-    if (example_profile) {
-        output_info(out, "     dotta profile select %s", example_profile);
-    }
-}
-
-/**
  * Print deployment results
  */
 static void print_deploy_results(const output_ctx_t *out, const deploy_result_t *result, bool verbose) {
@@ -315,357 +201,6 @@ static void print_deploy_results(const output_ctx_t *out, const deploy_result_t 
             }
         }
     }
-}
-
-/**
- * Prune empty tracked directories
- *
- * Removes directories that are:
- * 1. Tracked in metadata (explicitly added via `dotta add`)
- * 2. Now empty (contain no files or subdirectories)
- *
- * This completes the cleanup after orphaned files are removed,
- * ensuring that empty directory structures don't clutter the filesystem.
- *
- * Individual removal failures are non-fatal and reported in summary.
- *
- * @param metadata Merged metadata containing tracked directories (can be NULL)
- * @param out Output context (must not be NULL)
- * @param verbose Print detailed output
- */
-static void prune_empty_tracked_directories(
-    const metadata_t *metadata,
-    output_ctx_t *out,
-    bool verbose
-) {
-    if (!metadata) {
-        return;  /* No metadata, nothing to prune */
-    }
-
-    /* Get all tracked directories */
-    size_t dir_count = 0;
-    const metadata_directory_entry_t *directories =
-        metadata_get_all_tracked_directories(metadata, &dir_count);
-
-    if (dir_count == 0) {
-        return;  /* No tracked directories */
-    }
-
-    size_t total_removed = 0;
-    size_t total_failed = 0;
-    bool header_printed = false;
-    bool made_progress = true;
-
-    /* Iteratively remove empty directories until no more can be removed
-     *
-     * This handles nested directories without needing to sort by depth:
-     * - First pass: removes deepest empty directories
-     * - Second pass: parent directories may now be empty, remove them
-     * - Repeat until stable (no directories removed in a pass)
-     */
-    while (made_progress) {
-        made_progress = false;
-
-        for (size_t i = 0; i < dir_count; i++) {
-            const char *dir_path = directories[i].filesystem_path;
-
-            /* Skip if directory doesn't exist (already removed in previous iteration) */
-            if (!fs_exists(dir_path)) {
-                continue;
-            }
-
-            /* Check if directory is empty */
-            if (!fs_is_directory_empty(dir_path)) {
-                continue;
-            }
-
-            /* Print header on first removal attempt */
-            if (!header_printed && verbose) {
-                output_section(out, "Pruning empty tracked directories");
-                header_printed = true;
-            }
-
-            /* Remove empty directory */
-            error_t *err = fs_remove_dir(dir_path, false);
-            if (err) {
-                /* Non-fatal: track failure and continue */
-                total_failed++;
-                if (verbose) {
-                    if (output_colors_enabled(out)) {
-                        fprintf(stderr, "  %s[fail]%s %s: %s\n",
-                               output_color_code(out, OUTPUT_COLOR_RED),
-                               output_color_code(out, OUTPUT_COLOR_RESET),
-                               dir_path, error_message(err));
-                    } else {
-                        fprintf(stderr, "  [fail] %s: %s\n", dir_path, error_message(err));
-                    }
-                }
-                error_free(err);
-            } else {
-                total_removed++;
-                made_progress = true;
-                if (verbose) {
-                    if (output_colors_enabled(out)) {
-                        output_printf(out, OUTPUT_NORMAL, "  %s[removed]%s %s\n",
-                               output_color_code(out, OUTPUT_COLOR_GREEN),
-                               output_color_code(out, OUTPUT_COLOR_RESET),
-                               dir_path);
-                    } else {
-                        output_printf(out, OUTPUT_NORMAL, "  [removed] %s\n", dir_path);
-                    }
-                }
-            }
-        }
-    }
-
-    /* Print summary if not verbose */
-    if (!verbose) {
-        if (total_removed > 0) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "Pruned %s%zu%s empty director%s\n",
-                       output_color_code(out, OUTPUT_COLOR_YELLOW),
-                       total_removed,
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       total_removed == 1 ? "y" : "ies");
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "Pruned %zu empty director%s\n",
-                       total_removed,
-                       total_removed == 1 ? "y" : "ies");
-            }
-        }
-        if (total_failed > 0) {
-            output_warning(out, "Failed to prune %zu director%s",
-                   total_failed,
-                   total_failed == 1 ? "y" : "ies");
-        }
-    }
-}
-
-/**
- * Prune orphaned files from filesystem
- *
- * Removes files that are tracked in state but not in the current manifest.
- * This happens when files are removed from profiles or when profiles are deactivated.
- *
- * This function ONLY handles filesystem operations. State modifications
- * are handled separately by apply_update_and_save_state(), which rebuilds
- * the entire state from the manifest atomically.
- *
- * Safety: Checks for uncommitted filesystem changes before removing orphaned files.
- * This prevents data loss when profiles are unselected.
- *
- * After removing orphaned files, this function also removes empty tracked
- * directories (directories that were explicitly added to profiles). It loads
- * metadata from ALL profiles in state (not just active profiles) to ensure
- * directories from deactivated profiles are also checked for cleanup.
- *
- * @param repo Repository (must not be NULL)
- * @param state State (must not be NULL, read-only - used to identify orphaned files)
- * @param manifest Current manifest (must not be NULL)
- * @param out Output context (must not be NULL)
- * @param verbose Print detailed output
- * @param force Skip safety checks and force removal
- * @return Error or NULL on success
- */
-static error_t *apply_prune_orphaned_files(
-    git_repository *repo,
-    state_t *state,
-    const manifest_t *manifest,
-    output_ctx_t *out,
-    bool verbose,
-    bool force
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(manifest);
-    CHECK_NULL(out);
-
-    error_t *err = NULL;
-    string_array_t *to_remove = NULL;
-    hashmap_t *manifest_paths = NULL;
-
-    /* Get all files tracked in state */
-    size_t state_file_count = 0;
-    state_file_entry_t *state_files = NULL;
-    err = state_get_all_files(state, &state_files, &state_file_count);
-    if (err) {
-        return err;
-    }
-
-    to_remove = string_array_create();
-    if (!to_remove) {
-        state_free_all_files(state_files, state_file_count);
-        return ERROR(ERR_MEMORY, "Failed to allocate removal list");
-    }
-
-    /*
-     * Build hashmap of manifest paths for O(1) lookups
-     * This changes complexity from O(n*m) to O(n)
-     */
-    manifest_paths = hashmap_create(manifest->count);
-    if (!manifest_paths) {
-        string_array_free(to_remove);
-        return ERROR(ERR_MEMORY, "Failed to create hashmap for pruning");
-    }
-
-    /* Populate hashmap with manifest paths */
-    for (size_t j = 0; j < manifest->count; j++) {
-        err = hashmap_set(manifest_paths, manifest->entries[j].filesystem_path,
-                        (void *)1); /* dummy value, we only care about key existence */
-        if (err) {
-            err = error_wrap(err, "Failed to populate hashmap for pruning");
-            goto cleanup;
-        }
-    }
-
-    /* Check each state file using O(1) hashmap lookup */
-    for (size_t i = 0; i < state_file_count; i++) {
-        const state_file_entry_t *state_entry = &state_files[i];
-
-        /* O(1) lookup instead of O(m) linear search */
-        if (!hashmap_has(manifest_paths, state_entry->filesystem_path)) {
-            string_array_push(to_remove, state_entry->filesystem_path);
-        }
-    }
-
-    /* Safety check: detect modified orphaned files before removal */
-    if (string_array_size(to_remove) > 0) {
-        safety_result_t *safety_result = NULL;
-
-        /* Pass orphaned paths directly - eliminates redundant detection */
-        error_t *safety_err = safety_check_removal(
-            repo,
-            state,                            /* State object (queries internally) */
-            (const char **)to_remove->items,  /* Direct access to internal array */
-            to_remove->count,                 /* Number of orphaned files */
-            force,
-            &safety_result
-        );
-
-        if (safety_err) {
-            /* Fatal error during safety check */
-            safety_result_free(safety_result);
-            err = safety_err;
-            goto cleanup;
-        }
-
-        /* Check if violations found */
-        if (safety_result->count > 0 && !force) {
-            /* Report violations with resolution guidance */
-            report_orphaned_conflicts(out, safety_result);
-
-            /* Save count before freeing (use-after-free prevention) */
-            size_t violation_count = safety_result->count;
-
-            /* Clean up and return error */
-            safety_result_free(safety_result);
-            err = ERROR(ERR_CONFLICT,
-                       "Cannot remove %zu orphaned file%s with uncommitted changes",
-                       violation_count,
-                       violation_count == 1 ? "" : "s");
-            goto cleanup;
-        }
-
-        /* Safety check passed or --force specified - clean up and proceed */
-        safety_result_free(safety_result);
-    }
-
-    /* Remove orphaned files */
-    if (string_array_size(to_remove) > 0) {
-        if (verbose) {
-            char header[128];
-            snprintf(header, sizeof(header), "Pruning %zu orphaned file%s",
-                    string_array_size(to_remove),
-                    string_array_size(to_remove) == 1 ? "" : "s");
-            output_section(out, header);
-        }
-
-        size_t removed_count = 0;
-
-        for (size_t i = 0; i < string_array_size(to_remove); i++) {
-            const char *path = string_array_get(to_remove, i);
-
-            if (fs_exists(path)) {
-                error_t *removal_err = fs_remove_file(path);
-                if (removal_err) {
-                    if (verbose) {
-                        if (output_colors_enabled(out)) {
-                            fprintf(stderr, "  %s[fail]%s %s: %s\n",
-                                   output_color_code(out, OUTPUT_COLOR_RED),
-                                   output_color_code(out, OUTPUT_COLOR_RESET),
-                                   path, error_message(removal_err));
-                        } else {
-                            fprintf(stderr, "  [fail] %s: %s\n", path, error_message(removal_err));
-                        }
-                    }
-                    error_free(removal_err);
-                } else {
-                    /* File removed successfully from filesystem */
-                    removed_count++;
-                    if (verbose) {
-                        if (output_colors_enabled(out)) {
-                            output_printf(out, OUTPUT_NORMAL, "  %s[removed]%s %s\n",
-                                   output_color_code(out, OUTPUT_COLOR_GREEN),
-                                   output_color_code(out, OUTPUT_COLOR_RESET),
-                                   path);
-                        } else {
-                            output_printf(out, OUTPUT_NORMAL, "  [removed] %s\n", path);
-                        }
-                    }
-                }
-            }
-        }
-
-        if (!verbose && removed_count > 0) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "Pruned %s%zu%s orphaned file%s\n",
-                       output_color_code(out, OUTPUT_COLOR_YELLOW),
-                       removed_count,
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       removed_count == 1 ? "" : "s");
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "Pruned %zu orphaned file%s\n",
-                       removed_count,
-                       removed_count == 1 ? "" : "s");
-            }
-        }
-    }
-
-    /* Prune empty tracked directories after removing files
-     *
-     * Now that orphaned files are removed, check if any tracked directories
-     * (directories explicitly added via `dotta add`) are now empty.
-     *
-     * Load metadata from ALL profiles in state (not just active profiles)
-     * to ensure directories from deactivated profiles are also checked.
-     */
-    string_array_t *deployed_profiles = NULL;
-    metadata_t *complete_metadata = NULL;
-
-    error_t *meta_err = state_get_deployed_profiles(state, &deployed_profiles);
-    if (!meta_err && deployed_profiles && string_array_size(deployed_profiles) > 0) {
-        /* Load and merge metadata from all deployed profiles */
-        meta_err = metadata_load_from_profiles(repo, deployed_profiles, &complete_metadata);
-        if (!meta_err && complete_metadata) {
-            /* Prune directories using complete metadata */
-            prune_empty_tracked_directories(complete_metadata, out, verbose);
-        }
-
-        /* Clean up metadata errors (non-fatal - just skip directory pruning) */
-        if (meta_err) {
-            error_free(meta_err);
-        }
-    }
-
-    /* Clean up resources */
-    if (complete_metadata) metadata_free(complete_metadata);
-    if (deployed_profiles) string_array_free(deployed_profiles);
-
-cleanup:
-    if (manifest_paths) hashmap_free(manifest_paths, NULL);
-    if (to_remove) string_array_free(to_remove);
-    state_free_all_files(state_files, state_file_count);
-    return err;
 }
 
 /**
@@ -1119,10 +654,37 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
          * The --keep-orphans flag allows opting out of automatic cleanup for advanced workflows.
          */
         if (!opts->keep_orphans) {
-            err = apply_prune_orphaned_files(repo, state, manifest, out, opts->verbose, opts->force);
+            /* Execute cleanup: remove orphaned files and prune empty directories */
+            cleanup_result_t *cleanup_res = NULL;
+            cleanup_options_t cleanup_opts = {
+                .active_metadata = merged_metadata,
+                .active_profiles = profiles,
+                .out = out,
+                .verbose = opts->verbose,
+                .dry_run = false,  /* Dry-run handled at deployment level */
+                .force = opts->force
+            };
+
+            err = cleanup_execute(repo, state, manifest, &cleanup_opts, &cleanup_res);
             if (err) {
+                cleanup_result_free(cleanup_res);
                 goto cleanup;
             }
+
+            /* Check if cleanup was blocked by safety violations */
+            if (cleanup_res && cleanup_res->safety_violations &&
+                cleanup_res->safety_violations->count > 0 && !opts->force) {
+                /* Safety violations were reported by cleanup module */
+                size_t violation_count = cleanup_res->safety_violations->count;
+                cleanup_result_free(cleanup_res);
+                err = ERROR(ERR_CONFLICT,
+                           "Cannot remove %zu orphaned file%s with uncommitted changes",
+                           violation_count,
+                           violation_count == 1 ? "" : "s");
+                goto cleanup;
+            }
+
+            cleanup_result_free(cleanup_res);
         }
 
         /* Now update state with the new manifest */

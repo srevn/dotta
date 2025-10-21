@@ -465,7 +465,7 @@ error_t *bootstrap_run_for_profiles(
     }
 
     if (script_count == 0) {
-        printf("No bootstrap scripts found in selected profiles.\n");
+        printf("No bootstrap scripts found in enabled profiles.\n");
         return NULL;
     }
 

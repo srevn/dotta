@@ -15,7 +15,7 @@
  *
  * Optimization Strategy:
  * ─────────────────────
- * - Metadata: Only load from deployed-but-not-selected profiles (no duplication)
+ * - Metadata: Only load from deployed-but-not-enabled profiles (no duplication)
  * - Directory pruning: State tracking to avoid redundant filesystem checks
  * - Parent awareness: Reset parent directory state when child removed
  *
@@ -48,8 +48,8 @@
  */
 typedef struct {
     /* Pre-loaded data */
-    const metadata_t *active_metadata;      /* Metadata from selected profiles (can be NULL) */
-    const profile_list_t *active_profiles;  /* Currently selected profiles (can be NULL) */
+    const metadata_t *enabled_metadata;      /* Metadata from enabled profiles (can be NULL) */
+    const profile_list_t *enabled_profiles;  /* Currently enabled profiles (can be NULL) */
 
     /* Control flags */
     bool verbose;                           /* Kept for consistency (unused in module) */
@@ -108,13 +108,13 @@ typedef struct {
  *
  * Metadata Loading Optimization:
  * ──────────────────────────────
- * If opts->active_metadata is provided, only loads metadata from profiles
- * that are deployed but not currently selected. This eliminates duplicate
+ * If opts->enabled_metadata is provided, only loads metadata from profiles
+ * that are deployed but not currently enabled. This eliminates duplicate
  * metadata loading when called from apply command.
  *
  * Example:
- *   Selected profiles: {base, linux}
- *   Deployed profiles: {base, linux, work}  (work was previously selected)
+ *   Enabled profiles: {base, linux}
+ *   Deployed profiles: {base, linux, work}  (work was previously enabled)
  *   → Only loads metadata from {work}
  *
  * Safety Integration:

@@ -67,11 +67,11 @@ typedef enum {
  *
  * Priority order (highest to lowest):
  *   EXPLICIT - CLI flags (-p/--profile), temporary override
- *   STATE    - State file profiles array, persistent selection
+ *   STATE    - State file profiles array, persistent management
  */
 typedef enum {
     PROFILE_SOURCE_EXPLICIT,   /* CLI -p flag (temporary override) */
-    PROFILE_SOURCE_STATE       /* State file (persistent selection) */
+    PROFILE_SOURCE_STATE       /* State file (persistent management) */
 } profile_source_t;
 
 /**

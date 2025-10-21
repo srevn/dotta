@@ -2,7 +2,7 @@
  * profile.c - Profile lifecycle management
  *
  * Explicit profile management commands for controlling which profiles
- * are selected vs merely available on this machine.
+ * are enabled vs merely available on this machine.
  */
 
 #include "profile.h"
@@ -57,7 +57,7 @@ static error_t *count_profile_files(git_repository *repo, const char *profile_na
 /**
  * Profile list subcommand
  *
- * Shows selected vs available profiles with clear visual distinction.
+ * Shows enabled vs available profiles with clear visual distinction.
  */
 static error_t *profile_list(
     git_repository *repo,
@@ -70,7 +70,7 @@ static error_t *profile_list(
 
     /* Resource tracking for cleanup */
     state_t *state = NULL;
-    string_array_t *active_profiles = NULL;
+    string_array_t *enabled_profiles = NULL;
     string_array_t *all_branches = NULL;
     string_array_t *available = NULL;
     char *remote_name = NULL;
@@ -81,16 +81,16 @@ static error_t *profile_list(
     string_array_t *remote_only = NULL;
     error_t *err = NULL;
 
-    /* Load state to get selected profiles */
+    /* Load state to get enabled profiles */
     err = state_load(repo, &state);
     if (err) {
         err = error_wrap(err, "Failed to load state");
         goto cleanup;
     }
 
-    err = state_get_profiles(state, &active_profiles);
+    err = state_get_profiles(state, &enabled_profiles);
     if (err) {
-        err = error_wrap(err, "Failed to get selected profiles");
+        err = error_wrap(err, "Failed to get enabled profiles");
         goto cleanup;
     }
 
@@ -101,7 +101,7 @@ static error_t *profile_list(
         goto cleanup;
     }
 
-    /* Separate into selected and available */
+    /* Separate into enabled and available */
     available = string_array_create();
     if (!available) {
         err = ERROR(ERR_MEMORY, "Failed to create array");
@@ -116,16 +116,16 @@ static error_t *profile_list(
             continue;
         }
 
-        /* Check if active */
-        bool is_active = false;
-        for (size_t j = 0; j < string_array_size(active_profiles); j++) {
-            if (strcmp(string_array_get(active_profiles, j), name) == 0) {
-                is_active = true;
+        /* Check if enabled */
+        bool is_enabled = false;
+        for (size_t j = 0; j < string_array_size(enabled_profiles); j++) {
+            if (strcmp(string_array_get(enabled_profiles, j), name) == 0) {
+                is_enabled = true;
                 break;
             }
         }
 
-        if (!is_active) {
+        if (!is_enabled) {
             err = string_array_push(available, name);
             if (err) {
                 err = error_wrap(err, "Failed to add profile to available list");
@@ -134,11 +134,11 @@ static error_t *profile_list(
         }
     }
 
-    /* Print selected profiles */
-    if (string_array_size(active_profiles) > 0) {
-        output_section(out, "Selected profiles (in layering order)");
-        for (size_t i = 0; i < string_array_size(active_profiles); i++) {
-            const char *name = string_array_get(active_profiles, i);
+    /* Print enabled profiles */
+    if (string_array_size(enabled_profiles) > 0) {
+        output_section(out, "Enabled profiles (in layering order)");
+        for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
+            const char *name = string_array_get(enabled_profiles, i);
             size_t file_count = 0;
             error_t *count_err = count_profile_files(repo, name, &file_count);
 
@@ -153,13 +153,13 @@ static error_t *profile_list(
         }
         output_newline(out);
     } else {
-        output_info(out, "No selected profiles");
-        output_info(out, "Hint: Run 'dotta profile select <name>' to select a profile\n");
+        output_info(out, "No enabled profiles");
+        output_info(out, "Hint: Run 'dotta profile enable <name>' to enable a profile\n");
     }
 
-    /* Print available (inactive) profiles */
+    /* Print available (disabled) profiles */
     if (string_array_size(available) > 0 && opts->show_available) {
-        output_section(out, "Available (inactive)");
+        output_section(out, "Available (disabled)");
         for (size_t i = 0; i < string_array_size(available); i++) {
             const char *name = string_array_get(available, i);
             size_t file_count = 0;
@@ -240,7 +240,7 @@ cleanup:
     free(remote_name);
     string_array_free(available);
     string_array_free(all_branches);
-    string_array_free(active_profiles);
+    string_array_free(enabled_profiles);
     state_free(state);
 
     return err;
@@ -249,7 +249,7 @@ cleanup:
 /**
  * Profile fetch subcommand
  *
- * Downloads profiles without activating them.
+ * Downloads profiles without enabling them.
  */
 static error_t *profile_fetch(
     git_repository *repo,
@@ -477,11 +477,11 @@ cleanup:
 }
 
 /**
- * Profile select subcommand
+ * Profile enable subcommand
  *
- * Adds profiles to the selected set in state.
+ * Adds profiles to the enabled set in state.
  */
-static error_t *profile_select(
+static error_t *profile_enable(
     git_repository *repo,
     const cmd_profile_options_t *opts,
     output_ctx_t *out
@@ -492,15 +492,15 @@ static error_t *profile_select(
 
     /* Resource tracking for cleanup */
     state_t *state = NULL;
-    string_array_t *active = NULL;
-    string_array_t *to_select = NULL;
+    string_array_t *enabled = NULL;
+    string_array_t *to_enable = NULL;
     string_array_t *all_branches = NULL;
     const char **profile_names = NULL;
     error_t *err = NULL;
 
     /* Counters for summary (not cleaned up) */
-    size_t selected_count = 0;
-    size_t already_active = 0;
+    size_t enabled_count = 0;
+    size_t already_enabled = 0;
     size_t not_found = 0;
 
     /* Load state (with locking for write transaction) */
@@ -510,22 +510,22 @@ static error_t *profile_select(
         goto cleanup;
     }
 
-    /* Get current selected profiles */
-    err = state_get_profiles(state, &active);
+    /* Get current enabled profiles */
+    err = state_get_profiles(state, &enabled);
     if (err) {
-        err = error_wrap(err, "Failed to get selected profiles");
+        err = error_wrap(err, "Failed to get enabled profiles");
         goto cleanup;
     }
 
-    /* Determine which profiles to select */
-    to_select = string_array_create();
-    if (!to_select) {
+    /* Determine which profiles to enable */
+    to_enable = string_array_create();
+    if (!to_enable) {
         err = ERROR(ERR_MEMORY, "Failed to create array");
         goto cleanup;
     }
 
     if (opts->all_profiles) {
-        /* Select all local profiles */
+        /* Enable all local profiles */
         err = gitops_list_branches(repo, &all_branches);
         if (err) {
             err = error_wrap(err, "Failed to list branches");
@@ -535,49 +535,49 @@ static error_t *profile_select(
         for (size_t i = 0; i < string_array_size(all_branches); i++) {
             const char *name = string_array_get(all_branches, i);
             if (strcmp(name, "dotta-worktree") != 0) {
-                err = string_array_push(to_select, name);
+                err = string_array_push(to_enable, name);
                 if (err) {
-                    err = error_wrap(err, "Failed to add profile to selection list");
+                    err = error_wrap(err, "Failed to add profile to enable list");
                     goto cleanup;
                 }
             }
         }
     } else {
-        /* Select specified profiles */
+        /* Enable specified profiles */
         if (opts->profile_count == 0) {
             err = ERROR(ERR_INVALID_ARG,
                        "No profiles specified\n"
-                       "Hint: Use 'dotta profile select <name>' or '--all'");
+                       "Hint: Use 'dotta profile enable <name>' or '--all'");
             goto cleanup;
         }
 
         for (size_t i = 0; i < opts->profile_count; i++) {
-            err = string_array_push(to_select, opts->profiles[i]);
+            err = string_array_push(to_enable, opts->profiles[i]);
             if (err) {
-                err = error_wrap(err, "Failed to add profile to selection list");
+                err = error_wrap(err, "Failed to add profile to enable list");
                 goto cleanup;
             }
         }
     }
 
     /* Process each profile */
-    for (size_t i = 0; i < string_array_size(to_select); i++) {
-        const char *profile_name = string_array_get(to_select, i);
+    for (size_t i = 0; i < string_array_size(to_enable); i++) {
+        const char *profile_name = string_array_get(to_enable, i);
 
-        /* Check if already active */
-        bool is_active = false;
-        for (size_t j = 0; j < string_array_size(active); j++) {
-            if (strcmp(string_array_get(active, j), profile_name) == 0) {
-                is_active = true;
+        /* Check if already enabled */
+        bool is_enabled = false;
+        for (size_t j = 0; j < string_array_size(enabled); j++) {
+            if (strcmp(string_array_get(enabled, j), profile_name) == 0) {
+                is_enabled = true;
                 break;
             }
         }
 
-        if (is_active) {
+        if (is_enabled) {
             if (opts->verbose) {
-                output_info(out, "  %s already active", profile_name);
+                output_info(out, "  %s already enabled", profile_name);
             }
-            already_active++;
+            already_enabled++;
             continue;
         }
 
@@ -589,41 +589,41 @@ static error_t *profile_select(
             continue;
         }
 
-        /* Add to active list */
-        err = string_array_push(active, profile_name);
+        /* Add to enabled list */
+        err = string_array_push(enabled, profile_name);
         if (err) {
-            err = error_wrap(err, "Failed to add profile to active list");
+            err = error_wrap(err, "Failed to add profile to enabled list");
             goto cleanup;
         }
-        selected_count++;
+        enabled_count++;
 
         if (opts->verbose) {
             size_t file_count = 0;
             error_t *count_err = count_profile_files(repo, profile_name, &file_count);
 
             if (count_err) {
-                output_success(out, "  ✓ Selected %s", profile_name);
+                output_success(out, "  ✓ Enabled %s", profile_name);
                 error_free(count_err);
             } else {
-                output_success(out, "  ✓ Selected %s (%zu file%s)",
+                output_success(out, "  ✓ Enabled %s (%zu file%s)",
                               profile_name, file_count, file_count == 1 ? "" : "s");
             }
         }
     }
 
-    /* Update state with new selected profiles */
-    if (selected_count > 0) {
-        profile_names = malloc(string_array_size(active) * sizeof(char *));
+    /* Update state with new enabled profiles */
+    if (enabled_count > 0) {
+        profile_names = malloc(string_array_size(enabled) * sizeof(char *));
         if (!profile_names) {
             err = ERROR(ERR_MEMORY, "Failed to allocate profile names");
             goto cleanup;
         }
 
-        for (size_t i = 0; i < string_array_size(active); i++) {
-            profile_names[i] = string_array_get(active, i);
+        for (size_t i = 0; i < string_array_size(enabled); i++) {
+            profile_names[i] = string_array_get(enabled, i);
         }
 
-        err = state_set_profiles(state, profile_names, string_array_size(active));
+        err = state_set_profiles(state, profile_names, string_array_size(enabled));
         if (err) {
             err = error_wrap(err, "Failed to update state");
             goto cleanup;
@@ -641,8 +641,8 @@ cleanup:
     /* Cleanup all resources */
     free(profile_names);
     string_array_free(all_branches);
-    string_array_free(to_select);
-    string_array_free(active);
+    string_array_free(to_enable);
+    string_array_free(enabled);
     state_free(state);
 
     /* If there's an error, return it now */
@@ -655,33 +655,33 @@ cleanup:
         output_newline(out);
     }
 
-    if (selected_count > 0) {
-        output_success(out, "Selected %zu profile%s",
-                      selected_count, selected_count == 1 ? "" : "s");
+    if (enabled_count > 0) {
+        output_success(out, "Enabled %zu profile%s",
+                      enabled_count, enabled_count == 1 ? "" : "s");
         output_info(out, "Run 'dotta apply' to deploy these profiles to your filesystem");
     }
-    if (already_active > 0 && !opts->quiet) {
-        output_info(out, "%zu profile%s already selected",
-                   already_active, already_active == 1 ? "" : "s");
+    if (already_enabled > 0 && !opts->quiet) {
+        output_info(out, "%zu profile%s already enabled",
+                   already_enabled, already_enabled == 1 ? "" : "s");
     }
     if (not_found > 0) {
         output_warning(out, "%zu profile%s not found",
                       not_found, not_found == 1 ? "" : "s");
     }
 
-    if (selected_count == 0 && not_found > 0) {
-        return ERROR(ERR_NOT_FOUND, "No profiles were selected");
+    if (enabled_count == 0 && not_found > 0) {
+        return ERROR(ERR_NOT_FOUND, "No profiles were enabled");
     }
 
     return NULL;
 }
 
 /**
- * Profile unselect subcommand
+ * Profile disable subcommand
  *
- * Removes profiles from the selected set.
+ * Removes profiles from the enabled set.
  */
-static error_t *profile_unselect(
+static error_t *profile_disable(
     git_repository *repo,
     const cmd_profile_options_t *opts,
     output_ctx_t *out
@@ -692,15 +692,15 @@ static error_t *profile_unselect(
 
     /* Resource tracking for cleanup */
     state_t *state = NULL;
-    string_array_t *active = NULL;
-    string_array_t *to_unselect = NULL;
-    string_array_t *new_active = NULL;
+    string_array_t *enabled = NULL;
+    string_array_t *to_disable = NULL;
+    string_array_t *new_enabled = NULL;
     const char **profile_names = NULL;
     error_t *err = NULL;
 
     /* Counters for summary (not cleaned up) */
-    size_t unselected_count = 0;
-    size_t not_active = 0;
+    size_t disabled_count = 0;
+    size_t not_enabled = 0;
 
     /* Load state (with locking for write transaction) */
     err = state_load_for_update(repo, &state);
@@ -709,118 +709,118 @@ static error_t *profile_unselect(
         goto cleanup;
     }
 
-    /* Get current selected profiles */
-    err = state_get_profiles(state, &active);
+    /* Get current enabled profiles */
+    err = state_get_profiles(state, &enabled);
     if (err) {
-        err = error_wrap(err, "Failed to get selected profiles");
+        err = error_wrap(err, "Failed to get enabled profiles");
         goto cleanup;
     }
 
-    /* Determine which profiles to unselect */
-    to_unselect = string_array_create();
-    if (!to_unselect) {
+    /* Determine which profiles to disable */
+    to_disable = string_array_create();
+    if (!to_disable) {
         err = ERROR(ERR_MEMORY, "Failed to create array");
         goto cleanup;
     }
 
     if (opts->all_profiles) {
-        /* Unselect all */
-        for (size_t i = 0; i < string_array_size(active); i++) {
-            err = string_array_push(to_unselect, string_array_get(active, i));
+        /* Disable all */
+        for (size_t i = 0; i < string_array_size(enabled); i++) {
+            err = string_array_push(to_disable, string_array_get(enabled, i));
             if (err) {
-                err = error_wrap(err, "Failed to add profile to unselect list");
+                err = error_wrap(err, "Failed to add profile to disable list");
                 goto cleanup;
             }
         }
     } else {
-        /* Unselect specified profiles */
+        /* Disable specified profiles */
         if (opts->profile_count == 0) {
             err = ERROR(ERR_INVALID_ARG,
                        "No profiles specified\n"
-                       "Hint: Use 'dotta profile unselect <name>' or '--all'");
+                       "Hint: Use 'dotta profile disable <name>' or '--all'");
             goto cleanup;
         }
 
         for (size_t i = 0; i < opts->profile_count; i++) {
-            err = string_array_push(to_unselect, opts->profiles[i]);
+            err = string_array_push(to_disable, opts->profiles[i]);
             if (err) {
-                err = error_wrap(err, "Failed to add profile to unselect list");
+                err = error_wrap(err, "Failed to add profile to disable list");
                 goto cleanup;
             }
         }
     }
 
-    /* Build new selected list (excluding unselected) */
-    new_active = string_array_create();
-    if (!new_active) {
+    /* Build new enabled list (excluding disabled) */
+    new_enabled = string_array_create();
+    if (!new_enabled) {
         err = ERROR(ERR_MEMORY, "Failed to create array");
         goto cleanup;
     }
 
-    /* Build new selected list and count profiles */
-    for (size_t i = 0; i < string_array_size(active); i++) {
-        const char *profile_name = string_array_get(active, i);
+    /* Build new enabled list and count profiles */
+    for (size_t i = 0; i < string_array_size(enabled); i++) {
+        const char *profile_name = string_array_get(enabled, i);
 
-        /* Check if should be unselected */
-        bool should_unselect = false;
-        for (size_t j = 0; j < string_array_size(to_unselect); j++) {
-            if (strcmp(string_array_get(to_unselect, j), profile_name) == 0) {
-                should_unselect = true;
+        /* Check if should be disabled */
+        bool should_disable = false;
+        for (size_t j = 0; j < string_array_size(to_disable); j++) {
+            if (strcmp(string_array_get(to_disable, j), profile_name) == 0) {
+                should_disable = true;
                 break;
             }
         }
 
-        if (should_unselect) {
-            unselected_count++;
+        if (should_disable) {
+            disabled_count++;
             if (opts->verbose) {
-                output_success(out, "  ✓ Unselected %s", profile_name);
+                output_success(out, "  ✓ Disabled %s", profile_name);
             }
         } else {
-            err = string_array_push(new_active, profile_name);
+            err = string_array_push(new_enabled, profile_name);
             if (err) {
-                err = error_wrap(err, "Failed to add profile to new selected list");
+                err = error_wrap(err, "Failed to add profile to new enabled list");
                 goto cleanup;
             }
         }
     }
 
-    /* Check for profiles that weren't active */
-    for (size_t i = 0; i < string_array_size(to_unselect); i++) {
-        const char *profile_name = string_array_get(to_unselect, i);
+    /* Check for profiles that weren't enabled */
+    for (size_t i = 0; i < string_array_size(to_disable); i++) {
+        const char *profile_name = string_array_get(to_disable, i);
 
-        bool was_active = false;
-        for (size_t j = 0; j < string_array_size(active); j++) {
-            if (strcmp(string_array_get(active, j), profile_name) == 0) {
-                was_active = true;
+        bool was_enabled = false;
+        for (size_t j = 0; j < string_array_size(enabled); j++) {
+            if (strcmp(string_array_get(enabled, j), profile_name) == 0) {
+                was_enabled = true;
                 break;
             }
         }
 
-        if (!was_active) {
+        if (!was_enabled) {
             if (opts->verbose) {
-                output_info(out, "  %s was not active", profile_name);
+                output_info(out, "  %s was not enabled", profile_name);
             }
-            not_active++;
+            not_enabled++;
         }
     }
 
     /* Dry-run mode: show what would happen and exit */
     if (opts->dry_run) {
-        if (unselected_count > 0) {
+        if (disabled_count > 0) {
             output_newline(out);
-            output_info(out, "Would unselect %zu profile%s:",
-                       unselected_count, unselected_count == 1 ? "" : "s");
-            for (size_t i = 0; i < string_array_size(to_unselect); i++) {
-                const char *profile_name = string_array_get(to_unselect, i);
-                /* Check if it was actually active */
-                bool was_active = false;
-                for (size_t j = 0; j < string_array_size(active); j++) {
-                    if (strcmp(string_array_get(active, j), profile_name) == 0) {
-                        was_active = true;
+            output_info(out, "Would disable %zu profile%s:",
+                       disabled_count, disabled_count == 1 ? "" : "s");
+            for (size_t i = 0; i < string_array_size(to_disable); i++) {
+                const char *profile_name = string_array_get(to_disable, i);
+                /* Check if it was actually enabled */
+                bool was_enabled = false;
+                for (size_t j = 0; j < string_array_size(enabled); j++) {
+                    if (strcmp(string_array_get(enabled, j), profile_name) == 0) {
+                        was_enabled = true;
                         break;
                     }
                 }
-                if (was_active) {
+                if (was_enabled) {
                     output_printf(out, OUTPUT_NORMAL, "  - %s\n", profile_name);
                 }
             }
@@ -830,25 +830,25 @@ static error_t *profile_unselect(
         goto cleanup;
     }
 
-    /* Update state with new selected profiles */
-    if (unselected_count > 0) {
-        profile_names = malloc(string_array_size(new_active) * sizeof(char *));
+    /* Update state with new enabled profiles */
+    if (disabled_count > 0) {
+        profile_names = malloc(string_array_size(new_enabled) * sizeof(char *));
         if (!profile_names) {
             err = ERROR(ERR_MEMORY, "Failed to allocate profile names");
             goto cleanup;
         }
 
-        for (size_t i = 0; i < string_array_size(new_active); i++) {
-            profile_names[i] = string_array_get(new_active, i);
+        for (size_t i = 0; i < string_array_size(new_enabled); i++) {
+            profile_names[i] = string_array_get(new_enabled, i);
         }
 
-        err = state_set_profiles(state, profile_names, string_array_size(new_active));
+        err = state_set_profiles(state, profile_names, string_array_size(new_enabled));
         if (err) {
             err = error_wrap(err, "Failed to update state");
             goto cleanup;
         }
 
-        /* Save state (profile unselection only - filesystem cleanup via 'apply') */
+        /* Save state (profile disabling only - filesystem cleanup via 'apply') */
         err = state_save(repo, state);
         if (err) {
             err = error_wrap(err, "Failed to save state");
@@ -859,9 +859,9 @@ static error_t *profile_unselect(
 cleanup:
     /* Cleanup all resources */
     free(profile_names);
-    string_array_free(new_active);
-    string_array_free(to_unselect);
-    string_array_free(active);
+    string_array_free(new_enabled);
+    string_array_free(to_disable);
+    string_array_free(enabled);
     state_free(state);
 
     /* If there's an error, return it now */
@@ -874,24 +874,24 @@ cleanup:
         output_newline(out);
     }
 
-    if (unselected_count > 0) {
-        output_success(out, "Unselected %zu profile%s",
-                      unselected_count, unselected_count == 1 ? "" : "s");
+    if (disabled_count > 0) {
+        output_success(out, "Disabled %zu profile%s",
+                      disabled_count, disabled_count == 1 ? "" : "s");
         output_info(out, "Run 'dotta apply' to remove deployed files from filesystem");
     }
-    if (not_active > 0 && !opts->quiet) {
-        output_info(out, "%zu profile%s were not selected",
-                   not_active, not_active == 1 ? "" : "s");
+    if (not_enabled > 0 && !opts->quiet) {
+        output_info(out, "%zu profile%s were not enabled",
+                   not_enabled, not_enabled == 1 ? "" : "s");
     }
 
-    /* Return success if profiles were already inactive (idempotent) */
-    if (unselected_count == 0 && not_active > 0) {
+    /* Return success if profiles were already disabled (idempotent) */
+    if (disabled_count == 0 && not_enabled > 0) {
         return NULL;
     }
 
     /* Only error if nothing was specified or found */
-    if (unselected_count == 0) {
-        return ERROR(ERR_NOT_FOUND, "No specified profiles were selected or found");
+    if (disabled_count == 0) {
+        return ERROR(ERR_NOT_FOUND, "No specified profiles were enabled or found");
     }
 
     return NULL;
@@ -900,7 +900,7 @@ cleanup:
 /**
  * Profile reorder subcommand
  *
- * Changes the order of selected profiles, which affects layering precedence.
+ * Changes the order of enabled profiles, which affects layering precedence.
  */
 static error_t *profile_reorder(
     git_repository *repo,
@@ -913,7 +913,7 @@ static error_t *profile_reorder(
 
     /* Resource tracking for cleanup */
     state_t *state = NULL;
-    string_array_t *current_active = NULL;
+    string_array_t *current_enabled = NULL;
     error_t *err = NULL;
 
     /* Validation: at least one profile specified */
@@ -931,25 +931,25 @@ static error_t *profile_reorder(
         goto cleanup;
     }
 
-    /* Get current selected profiles */
-    err = state_get_profiles(state, &current_active);
+    /* Get current enabled profiles */
+    err = state_get_profiles(state, &current_enabled);
     if (err) {
-        err = error_wrap(err, "Failed to get selected profiles");
+        err = error_wrap(err, "Failed to get enabled profiles");
         goto cleanup;
     }
 
-    /* Edge case: no selected profiles */
-    if (string_array_size(current_active) == 0) {
+    /* Edge case: no enabled profiles */
+    if (string_array_size(current_enabled) == 0) {
         err = ERROR(ERR_VALIDATION,
-                   "No selected profiles to reorder\n"
-                   "Hint: Run 'dotta profile select <name>' first");
+                   "No enabled profiles to reorder\n"
+                   "Hint: Run 'dotta profile enable <name>' first");
         goto cleanup;
     }
 
     /* Edge case: single profile */
-    if (string_array_size(current_active) == 1) {
+    if (string_array_size(current_enabled) == 1) {
         if (!opts->quiet) {
-            output_info(out, "Only one selected profile, nothing to reorder");
+            output_info(out, "Only one enabled profile, nothing to reorder");
         }
         goto cleanup;  /* Success, but no-op */
     }
@@ -966,49 +966,49 @@ static error_t *profile_reorder(
         }
     }
 
-    /* Validation 2: All provided profiles must be currently active */
+    /* Validation 2: All provided profiles must be currently enabled */
     for (size_t i = 0; i < opts->profile_count; i++) {
-        bool is_active = false;
-        for (size_t j = 0; j < string_array_size(current_active); j++) {
-            if (strcmp(opts->profiles[i], string_array_get(current_active, j)) == 0) {
-                is_active = true;
+        bool is_enabled = false;
+        for (size_t j = 0; j < string_array_size(current_enabled); j++) {
+            if (strcmp(opts->profiles[i], string_array_get(current_enabled, j)) == 0) {
+                is_enabled = true;
                 break;
             }
         }
-        if (!is_active) {
+        if (!is_enabled) {
             err = ERROR(ERR_VALIDATION,
-                       "Profile '%s' is not selected\n"
-                       "Hint: Only selected profiles can be reordered. Run 'dotta profile list' to see selected profiles",
+                       "Profile '%s' is not enabled\n"
+                       "Hint: Only enabled profiles can be reordered. Run 'dotta profile list' to see enabled profiles",
                        opts->profiles[i]);
             goto cleanup;
         }
     }
 
     /* Validation 3: Profile count must match */
-    if (opts->profile_count != string_array_size(current_active)) {
+    if (opts->profile_count != string_array_size(current_enabled)) {
         err = ERROR(ERR_VALIDATION,
-                   "Profile count mismatch: %zu selected, %zu provided\n"
-                   "Hint: All selected profiles must be included in reorder",
-                   string_array_size(current_active),
+                   "Profile count mismatch: %zu enabled, %zu provided\n"
+                   "Hint: All enabled profiles must be included in reorder",
+                   string_array_size(current_enabled),
                    opts->profile_count);
         goto cleanup;
     }
 
-    /* Validation 4: All currently selected profiles must be included */
-    for (size_t i = 0; i < string_array_size(current_active); i++) {
-        const char *active_profile = string_array_get(current_active, i);
+    /* Validation 4: All currently enabled profiles must be included */
+    for (size_t i = 0; i < string_array_size(current_enabled); i++) {
+        const char *enabled_profile = string_array_get(current_enabled, i);
         bool found = false;
         for (size_t j = 0; j < opts->profile_count; j++) {
-            if (strcmp(opts->profiles[j], active_profile) == 0) {
+            if (strcmp(opts->profiles[j], enabled_profile) == 0) {
                 found = true;
                 break;
             }
         }
         if (!found) {
             err = ERROR(ERR_VALIDATION,
-                       "Missing selected profile '%s' from reorder list\n"
-                       "Hint: All selected profiles must be included",
-                       active_profile);
+                       "Missing enabled profile '%s' from reorder list\n"
+                       "Hint: All enabled profiles must be included",
+                       enabled_profile);
             goto cleanup;
         }
     }
@@ -1016,7 +1016,7 @@ static error_t *profile_reorder(
     /* Check if order actually changed (idempotency) */
     bool order_changed = false;
     for (size_t i = 0; i < opts->profile_count; i++) {
-        if (strcmp(opts->profiles[i], string_array_get(current_active, i)) != 0) {
+        if (strcmp(opts->profiles[i], string_array_get(current_enabled, i)) != 0) {
             order_changed = true;
             break;
         }
@@ -1033,8 +1033,8 @@ static error_t *profile_reorder(
     if (opts->verbose) {
         output_section(out, "Profile order change");
         output_printf(out, OUTPUT_NORMAL, "  Before:");
-        for (size_t i = 0; i < string_array_size(current_active); i++) {
-            output_printf(out, OUTPUT_NORMAL, " %s", string_array_get(current_active, i));
+        for (size_t i = 0; i < string_array_size(current_enabled); i++) {
+            output_printf(out, OUTPUT_NORMAL, " %s", string_array_get(current_enabled, i));
         }
         output_newline(out);
 
@@ -1070,7 +1070,7 @@ static error_t *profile_reorder(
 
 cleanup:
     /* Cleanup all resources */
-    string_array_free(current_active);
+    string_array_free(current_enabled);
     state_free(state);
 
     return err;
@@ -1092,7 +1092,7 @@ static error_t *profile_validate(
 
     /* Resource tracking for cleanup */
     state_t *state = NULL;
-    string_array_t *active = NULL;
+    string_array_t *enabled = NULL;
     string_array_t *missing = NULL;
     string_array_t *valid = NULL;
     const char **profile_names = NULL;
@@ -1100,8 +1100,8 @@ static error_t *profile_validate(
 
     /* State for reporting (not cleaned up) */
     bool has_issues = false;
-    bool fixed_active_profiles = false;  /* Track what we actually fixed */
-    bool has_orphaned_files = false;     /* Track issues we can't fix */
+    bool fixed_enabled_profiles = false;  /* Track what we actually fixed */
+    bool has_orphaned_files = false;      /* Track issues we can't fix */
     size_t orphaned_files = 0;
 
     /* Load state (with locking if we're going to fix issues) */
@@ -1115,24 +1115,24 @@ static error_t *profile_validate(
         goto cleanup;
     }
 
-    /* Get selected profiles from state */
-    err = state_get_profiles(state, &active);
+    /* Get enabled profiles from state */
+    err = state_get_profiles(state, &enabled);
     if (err) {
-        err = error_wrap(err, "Failed to get selected profiles");
+        err = error_wrap(err, "Failed to get enabled profiles");
         goto cleanup;
     }
 
     output_section(out, "Validating profile state");
 
-    /* Check 1: Selected profiles exist as branches */
+    /* Check 1: Enabled profiles exist as branches */
     missing = string_array_create();
     if (!missing) {
         err = ERROR(ERR_MEMORY, "Failed to create array");
         goto cleanup;
     }
 
-    for (size_t i = 0; i < string_array_size(active); i++) {
-        const char *profile_name = string_array_get(active, i);
+    for (size_t i = 0; i < string_array_size(enabled); i++) {
+        const char *profile_name = string_array_get(enabled, i);
 
         if (!profile_exists(repo, profile_name)) {
             err = string_array_push(missing, profile_name);
@@ -1161,8 +1161,8 @@ static error_t *profile_validate(
                 goto cleanup;
             }
 
-            for (size_t i = 0; i < string_array_size(active); i++) {
-                const char *name = string_array_get(active, i);
+            for (size_t i = 0; i < string_array_size(enabled); i++) {
+                const char *name = string_array_get(enabled, i);
                 if (profile_exists(repo, name)) {
                     err = string_array_push(valid, name);
                     if (err) {
@@ -1195,7 +1195,7 @@ static error_t *profile_validate(
             }
 
             output_success(out, "✓ Removed missing profiles from state\n");
-            fixed_active_profiles = true;
+            fixed_enabled_profiles = true;
         } else {
             output_info(out, "Hint: Run 'dotta profile validate --fix' to remove them\n");
         }
@@ -1233,7 +1233,7 @@ cleanup:
     free(profile_names);
     string_array_free(valid);
     string_array_free(missing);
-    string_array_free(active);
+    string_array_free(enabled);
     state_free(state);
 
     /* If there's an error, return it now */
@@ -1248,12 +1248,12 @@ cleanup:
     } else {
         if (opts->fix) {
             /* Be accurate about what was actually fixed */
-            if (fixed_active_profiles && !has_orphaned_files) {
+            if (fixed_enabled_profiles && !has_orphaned_files) {
                 output_success(out, "Fixed all profile state issues");
-            } else if (fixed_active_profiles && has_orphaned_files) {
-                output_info(out, "Fixed selected profile list");
+            } else if (fixed_enabled_profiles && has_orphaned_files) {
+                output_info(out, "Fixed enabled profile list");
                 output_info(out, "Note: Orphaned files require 'dotta apply' to clean up");
-            } else if (!fixed_active_profiles && has_orphaned_files) {
+            } else if (!fixed_enabled_profiles && has_orphaned_files) {
                 output_warning(out, "Profile state has issues that require 'dotta apply'");
             } else {
                 /* Shouldn't reach here, but handle gracefully */
@@ -1308,12 +1308,12 @@ error_t *cmd_profile(git_repository *repo, const cmd_profile_options_t *opts) {
             result = profile_fetch(repo, opts, out);
             break;
 
-        case PROFILE_SELECT:
-            result = profile_select(repo, opts, out);
+        case PROFILE_ENABLE:
+            result = profile_enable(repo, opts, out);
             break;
 
-        case PROFILE_UNSELECT:
-            result = profile_unselect(repo, opts, out);
+        case PROFILE_DISABLE:
+            result = profile_disable(repo, opts, out);
             break;
 
         case PROFILE_REORDER:

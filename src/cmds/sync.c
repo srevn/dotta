@@ -270,9 +270,9 @@ static error_t *pull_branch_ff(
 }
 
 /**
- * Phase 1: Fetch selected profiles from remote
+ * Phase 1: Fetch enabled profiles from remote
  */
-static error_t *sync_fetch_active_profiles(
+static error_t *sync_fetch_enabled_profiles(
     git_repository *repo,
     const char *remote_name,
     profile_list_t *profiles,
@@ -301,7 +301,7 @@ static error_t *sync_fetch_active_profiles(
     git_remote_free(remote);
 
     char section_title[DOTTA_MESSAGE_MAX];
-    snprintf(section_title, sizeof(section_title), "Fetching selected profiles from '%s'", remote_name);
+    snprintf(section_title, sizeof(section_title), "Fetching enabled profiles from '%s'", remote_name);
     output_section(out, section_title);
 
     /* Build array of branch names for batched fetch */
@@ -345,7 +345,7 @@ static error_t *sync_fetch_active_profiles(
     }
 
     if (verbose) {
-        output_success(out, "Fetched %zu selected profile%s",
+        output_success(out, "Fetched %zu enabled profile%s",
                       profiles->count,
                       profiles->count == 1 ? "" : "s");
     }
@@ -934,8 +934,8 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* Load selected profiles using standard profile resolution
-     * Priority: CLI -p (temporary) > state (persistent selection)
+    /* Load enabled profiles using standard profile resolution
+     * Priority: CLI -p (temporary) > state (persistent management)
      */
     profile_source_t source;
     err = profile_resolve(repo, opts->profiles, opts->profile_count,
@@ -943,17 +943,17 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     if (err) {
         config_free(config);
         output_free(out);
-        return error_wrap(err, "Failed to resolve selected profiles");
+        return error_wrap(err, "Failed to resolve enabled profiles");
     }
 
-    /* Provide helpful error when no selected profiles */
+    /* Provide helpful error when no enabled profiles */
     if (profiles->count == 0) {
         profile_list_free(profiles);
         config_free(config);
         output_free(out);
         return ERROR(ERR_NOT_FOUND,
-                    "No selected profiles to sync\n"
-                    "Hint: Run 'dotta profile select <name>' to select profiles\n"
+                    "No enabled profiles to sync\n"
+                    "Hint: Run 'dotta profile enable <name>' to enable profiles\n"
                     "      Or run 'dotta profile list --remote' to see available profiles");
     }
 
@@ -1107,8 +1107,8 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         out
     );
 
-    /* Phase 1: Fetch selected profiles from remote */
-    err = sync_fetch_active_profiles(repo, remote_name, profiles, results, out, opts->verbose, xfer);
+    /* Phase 1: Fetch enabled profiles from remote */
+    err = sync_fetch_enabled_profiles(repo, remote_name, profiles, results, out, opts->verbose, xfer);
     if (err) {
         transfer_context_free(xfer);
         free(remote_name);

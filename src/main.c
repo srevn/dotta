@@ -464,7 +464,7 @@ static int cmd_status_main(int argc, char **argv) {
         .show_local = true,   /* Default: show filesystem status */
         .show_remote = true,  /* Default: show remote status */
         .no_fetch = false,    /* Default: fetch before remote check */
-        .all_profiles = false /* Default: show only selected profiles */
+        .all_profiles = false /* Default: show only enabled profiles */
     };
 
     /* Collect profile arguments */
@@ -713,8 +713,8 @@ static int cmd_profile_main(int argc, char **argv) {
 
         opts.profiles = profiles;
         opts.profile_count = profile_count;
-    } else if (strcmp(argv[2], "select") == 0) {
-        opts.subcommand = PROFILE_SELECT;
+    } else if (strcmp(argv[2], "enable") == 0) {
+        opts.subcommand = PROFILE_ENABLE;
 
         /* Collect profile arguments */
         const char **profiles = malloc((size_t)argc * sizeof(char *));
@@ -724,7 +724,7 @@ static int cmd_profile_main(int argc, char **argv) {
         }
         size_t profile_count = 0;
 
-        /* Parse select options */
+        /* Parse enable options */
         for (int i = 3; i < argc; i++) {
             if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
                 free(profiles);
@@ -748,8 +748,8 @@ static int cmd_profile_main(int argc, char **argv) {
 
         opts.profiles = profiles;
         opts.profile_count = profile_count;
-    } else if (strcmp(argv[2], "unselect") == 0) {
-        opts.subcommand = PROFILE_UNSELECT;
+    } else if (strcmp(argv[2], "disable") == 0) {
+        opts.subcommand = PROFILE_DISABLE;
 
         /* Collect profile arguments */
         const char **profiles = malloc((size_t)argc * sizeof(char *));
@@ -759,7 +759,7 @@ static int cmd_profile_main(int argc, char **argv) {
         }
         size_t profile_count = 0;
 
-        /* Parse unselect options */
+        /* Parse disable options */
         for (int i = 3; i < argc; i++) {
             if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
                 free(profiles);

@@ -1,11 +1,11 @@
 /**
- * interactive.h - Interactive TUI for profile selection and ordering
+ * interactive.h - Interactive TUI for profile management and ordering
  *
  * Provides an inline, interactive interface for profile management.
  *
  * Features:
  * - Profile list with hierarchical display
- * - Toggle selection (space)
+ * - Toggle enabled/disabled (space)
  * - Navigate with arrow keys
  * - Reorder profiles (J/K)
  * - Save profile selection and order to state (w)
@@ -30,18 +30,18 @@
 /**
  * Profile item in UI list
  *
- * Represents a single profile entry with selection state and metadata.
+ * Represents a single profile entry with enabled state and metadata.
  */
 typedef struct {
     char *name;              /* Profile name */
-    bool selected;           /* Selected for operations */
+    bool enabled;            /* Enabled for operations */
     bool exists_locally;     /* Exists as local branch */
 } profile_item_t;
 
 /**
  * Interactive UI state (opaque)
  *
- * Tracks cursor position, profile list, selections, etc.
+ * Tracks cursor position, profile list, enabled state, etc.
  */
 typedef struct interactive_state interactive_state_t;
 
@@ -62,7 +62,7 @@ typedef enum {
  *
  * Workflow:
  * 1. Load available profiles from repository
- * 2. Load current state to determine selected profiles
+ * 2. Load current state to determine enabled profiles
  * 3. Enter interactive loop:
  *    - Render UI
  *    - Read user input
@@ -81,7 +81,7 @@ error_t *interactive_run(git_repository *repo);
 /**
  * Create interactive state
  *
- * Loads all profiles and current selections.
+ * Loads all profiles and current enabled state.
  *
  * @param repo Repository (must not be NULL)
  * @param out State (must not be NULL, caller must free)

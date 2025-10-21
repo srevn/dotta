@@ -328,9 +328,9 @@ static error_t *show_diffs_for_direction(
 }
 
 /**
- * Resolve commit reference across selected profiles
+ * Resolve commit reference across enabled profiles
  *
- * Searches for the commit in selected profiles in order.
+ * Searches for the commit in enabled profiles in order.
  * Returns the first match found.
  *
  * @param repo Repository (must not be NULL)
@@ -396,11 +396,11 @@ static error_t *resolve_commit_in_profiles(
     /* Not found in any profile */
     if (last_err) {
         error_t *wrapped = error_wrap(last_err,
-            "Commit '%s' not found in any selected profile", commit_ref);
+            "Commit '%s' not found in any enabled profile", commit_ref);
         return wrapped;
     }
 
-    return ERROR(ERR_NOT_FOUND, "Commit '%s' not found in any selected profile", commit_ref);
+    return ERROR(ERR_NOT_FOUND, "Commit '%s' not found in any enabled profile", commit_ref);
 }
 
 /**

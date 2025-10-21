@@ -21,9 +21,9 @@
 #include "utils/timeutil.h"
 
 /**
- * Display selected profiles and last deployment info
+ * Display enabled profiles and last deployment info
  */
-static void display_active_profiles(
+static void display_enabled_profiles(
     output_ctx_t *out,
     const profile_list_t *profiles,
     const manifest_t *manifest,
@@ -34,8 +34,8 @@ static void display_active_profiles(
         return;
     }
 
-    /* Show selected profiles */
-    output_section(out, "Selected profiles");
+    /* Show enabled profiles */
+    output_section(out, "Enabled profiles");
 
     for (size_t i = 0; i < profiles->count; i++) {
         const profile_t *profile = &profiles->profiles[i];
@@ -486,19 +486,19 @@ static void display_multi_profile_files(
 /**
  * Display remote sync status for profiles
  *
- * By default shows only selected profiles for consistency with workspace status.
+ * By default shows only enabled profiles for consistency with workspace status.
  * Use show_all_profiles to report on every branch in the repository.
  */
 static error_t *display_remote_status(
     git_repository *repo,
-    const profile_list_t *active_profiles,
+    const profile_list_t *enabled_profiles,
     output_ctx_t *out,
     bool show_all_profiles,
     bool verbose,
     bool no_fetch
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(active_profiles);
+    CHECK_NULL(enabled_profiles);
     CHECK_NULL(out);
 
     /* Detect remote */
@@ -523,8 +523,8 @@ static error_t *display_remote_status(
         }
         should_free_profiles = true;
     } else {
-        /* Default: show only selected profiles (consistent with workspace status) */
-        profiles_to_check = (profile_list_t*)active_profiles;  /* Borrowed reference */
+        /* Default: show only enabled profiles (consistent with workspace status) */
+        profiles_to_check = (profile_list_t*)enabled_profiles;  /* Borrowed reference */
     }
 
     if (profiles_to_check->count == 0) {
@@ -692,7 +692,7 @@ static error_t *display_remote_status(
                 error_free(commit_err);
             }
         } else {
-            /* Compact mode: single line matching selected profiles format */
+            /* Compact mode: single line matching enabled profiles format */
             char *colored_name = output_colorize(out, OUTPUT_COLOR_CYAN, profile_name);
             if (colored_name) {
                 output_printf(out, OUTPUT_NORMAL, "  %s", colored_name);
@@ -853,8 +853,8 @@ error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
         goto cleanup;
     }
 
-    /* Display selected profiles and last deployment info */
-    display_active_profiles(out, profiles, manifest, state, opts->verbose);
+    /* Display enabled profiles and last deployment info */
+    display_enabled_profiles(out, profiles, manifest, state, opts->verbose);
 
     /* Display workspace status */
     display_workspace_status(repo, profiles, config, out, opts->verbose);

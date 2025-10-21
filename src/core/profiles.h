@@ -158,10 +158,10 @@ error_t *profile_list_load(
  *
  * Resolution priority (highest to lowest):
  * 1. Explicit profiles (CLI -p/--profile) - Temporary override
- * 2. State file profiles - Persistent selection (via 'dotta profile select')
+ * 2. State file profiles - Persistent management (via 'dotta profile enable')
  *
  * If no profiles are found from any source, returns an error. Profiles must be
- * explicitly selected using 'dotta profile select' or specified via CLI.
+ * explicitly enabled using 'dotta profile enable' or specified via CLI.
  *
  * @param repo Repository (must not be NULL)
  * @param explicit_profiles CLI profiles (can be NULL)

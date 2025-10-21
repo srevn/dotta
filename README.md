@@ -45,27 +45,27 @@ This enables:
 
 **Note:** Due to Git ref namespace limitations, you cannot have both a base profile and sub-profiles with the same prefix (e.g., `darwin` and `darwin/work` cannot coexist). Use either the base profile OR sub-profiles, not both. The same limitation applies to host profiles.
 
-### 2. Active Profile Management
+### 2. Profile Management
 
-Dotta uses **explicit active profile management** to provide safe, predictable control over which configurations are deployed on each machine:
+Dotta uses **explicit profile management** to provide safe, predictable control over which configurations are deployed on each machine:
 
 - **Available Profiles**: Exist as local Git branches - can be inspected, not automatically deployed
-- **Active Profiles**: Tracked in `.git/dotta.db` - participate in all operations (apply, update, sync, status)
+- **Enabled Profiles**: Tracked in `.git/dotta.db` - participate in all operations (apply, update, sync, status)
 
 ```bash
-# Select active profiles for this machine
-dotta profile select global darwin
+# Enable profiles for this machine
+dotta profile enable global darwin
 
-# View active vs available profiles
+# View enabled vs available profiles
 dotta profile list
 
-# Operations use active profiles
+# Operations use enabled profiles
 dotta apply   # Deploys: global, darwin
 dotta status  # Checks: global, darwin
 dotta sync    # Syncs: global, darwin
 ```
 
-**Clone automatically selects** detected profiles: `global`, OS base and sub-profiles (`darwin`, `darwin/*`), and host base and sub-profiles (`hosts/<hostname>`, `hosts/<hostname>/*`).
+**Clone automatically enables** detected profiles: `global`, OS base and sub-profiles (`darwin`, `darwin/*`), and host base and sub-profiles (`hosts/<hostname>`, `hosts/<hostname>/*`).
 
 ### 3. Metadata Preservation
 
@@ -112,7 +112,7 @@ dotta apply --keep-orphans
 
 ### 6. Bidirectional Sync
 
-Unlike many dotfile managers that only deploy *from* repository *to* filesystem, Dotta supports the reverse:
+Unlike many dotfile managers that only deploy *from* repository *to* filesystem, dotta supports the reverse:
 
 ```bash
 # Update profiles with modified files from filesystem
@@ -254,9 +254,9 @@ The repository's main worktree always points to `dotta-worktree` (an empty branc
 Profile resolution follows a strict priority order:
 
 1. **Explicit CLI** (`-p/--profile flags`) - Temporary override for testing
-2. **State file** (`profiles` array in `.git/dotta.db`) - Persistent selection via `dotta profile select`
+2. **State file** (`profiles` array in `.git/dotta.db`) - Persistent management via `dotta profile enable`
 
-Selected profiles are managed exclusively through `dotta profile select/unselect/reorder` commands. The state file is the single source of truth for which profiles are selected on each machine.
+Enabled profiles are managed exclusively through `dotta profile enable/disable/reorder` commands. The state file is the single source of truth for which profiles are enabled on each machine.
 
 When profiles are applied, later profiles override earlier ones following this precedence:
 
@@ -267,7 +267,7 @@ When profiles are applied, later profiles override earlier ones following this p
 5. `hosts/<hostname>/<variant>` - Host sub-profiles (e.g., `hosts/laptop/vpn`, alphabetically sorted)
 
 Example layering for a macOS laptop with work and vpn configs:
-- `dotta apply` → `global` → `darwin` → `darwin/work` → `hosts/laptop` → `hosts/laptop/vpn`
+- `dotta apply` → `global` → `darwin/base` → `darwin/work` → `hosts/laptop/vpn`
 - Files from later profiles override files from earlier profiles
 
 ## Installation
@@ -328,8 +328,8 @@ dotta add --profile darwin/work ~/.ssh/work_config
 # Add host-specific files
 dotta add --profile hosts/$(hostname) ~/.local/machine_specific
 
-# Select active profiles for this machine
-dotta profile select global darwin/base darwin/work hosts/$(hostname)
+# Enable profiles for this machine
+dotta profile enable global darwin/base darwin/work hosts/$(hostname)
 
 # View status
 dotta status
@@ -341,7 +341,7 @@ dotta apply
 ### Clone an Existing Repository
 
 ```bash
-# Clone dotfiles repository (auto-detects and activates profiles)
+# Clone dotfiles repository (auto-detects and enables profiles)
 dotta clone git@github.com:username/dotfiles.git
 
 # Cloning automatically:
@@ -350,7 +350,7 @@ dotta clone git@github.com:username/dotfiles.git
 #    - OS base and sub-profiles (darwin, darwin/work, darwin/personal)
 #    - Host base and sub-profiles (hosts/<hostname>, hosts/<hostname>/*)
 # 2. Fetches detected profiles
-# 3. Activates them in state
+# 3. Enables them in state
 
 # Example auto-detection on macOS "laptop" with profiles:
 # → Selects: global, darwin, darwin/work, hosts/laptop
@@ -397,11 +397,11 @@ dotta remote add origin <url>       # Add remote
 ### Profile Management
 
 ```bash
-dotta profile list                  # Show active vs available profiles
+dotta profile list                  # Show enabled vs available profiles
 dotta profile list --remote         # Show remote profiles
-dotta profile fetch <name>          # Download profile without activating
-dotta profile select <name>         # Selects profile for this machine
-dotta profile unselect <name>       # Deselects profile
+dotta profile fetch <name>          # Download profile without enabling
+dotta profile enable <name>         # Enables profile for this machine
+dotta profile disable <name>        # Disables profile
 dotta profile validate              # Check state consistency
 ```
 
@@ -409,10 +409,10 @@ dotta profile validate              # Check state consistency
 
 ```bash
 dotta add --profile <name> <file>   # Add files to profile
-dotta apply [profile]...            # Deploy active profiles (or specified)
+dotta apply [profile]...            # Deploy enabled profiles (or specified)
 dotta apply                         # Deploy and remove orphaned files
-dotta update                        # Update active profiles with modified files
-dotta sync                          # Intelligent two-way sync of active profiles
+dotta update                        # Update enabled profiles with modified files
+dotta sync                          # Intelligent two-way sync of enabled profiles
 ```
 
 ### Information & Inspection
@@ -506,7 +506,7 @@ Track which profiles exist on remote without downloading:
 ```bash
 dotta profile list --remote      # Show available remote profiles
 dotta profile fetch linux        # Download without activating
-dotta profile select linux       # Make it active
+dotta profile enable linux       # Enable it
 dotta status --remote            # Check sync state
 ```
 

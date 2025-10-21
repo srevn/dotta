@@ -1312,7 +1312,7 @@ static error_t *test_path_ignore(
         return NULL;
     }
 
-    /* Test against all selected profiles */
+    /* Test against all enabled profiles */
     profile_list_t *profiles = NULL;
     error_t *err = profile_resolve(
         repo,
@@ -1327,7 +1327,7 @@ static error_t *test_path_ignore(
 
     if (!profiles || profiles->count == 0) {
         profile_list_free(profiles);
-        output_info(out, "No selected profiles found");
+        output_info(out, "No enabled profiles found");
         output_info(out, "Testing against baseline .dottaignore only");
 
         /* Test with no profile */
@@ -1355,9 +1355,9 @@ static error_t *test_path_ignore(
         return NULL;
     }
 
-    /* Test against each selected profile */
+    /* Test against each enabled profile */
     output_info(out, "Testing path: %s", test_path);
-    output_info(out, "Selected profiles: %zu", profiles->count);
+    output_info(out, "Enabled profiles: %zu", profiles->count);
     output_newline(out);
 
     bool any_ignored = false;

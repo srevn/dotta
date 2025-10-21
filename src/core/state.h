@@ -8,7 +8,7 @@
  *
  * Schema:
  *   - schema_meta: Schema versioning
- *   - active_profiles: User's profile selection (authority: profile commands)
+ *   - enabled_profiles: User's profile management (authority: profile commands)
  *   - deployed_files: Deployed file manifest (authority: apply/revert)
  *
  * Design principles:
@@ -19,7 +19,7 @@
  * - Separate tables enforce authority model at storage level
  *
  * Performance targets:
- * - Profile select: < 10ms (even with 10,000 deployed files)
+ * - Profile enable: < 10ms (even with 10,000 deployed files)
  * - File existence check: < 0.1ms
  * - Apply 1000 files: < 200ms
  */
@@ -200,10 +200,10 @@ error_t *state_get_all_files(
 void state_free_all_files(state_file_entry_t *entries, size_t count);
 
 /**
- * Set selected profiles
+ * Set enabled profiles
  *
  * Hot path - must be fast even with 10,000 deployed files.
- * Only modifies selected_profiles table (deployed_files table untouched).
+ * Only modifies enabled_profiles table (deployed_files table untouched).
  *
  * @param state State (must not be NULL)
  * @param profiles Array of profile names (must not be NULL)
@@ -217,7 +217,7 @@ error_t *state_set_profiles(
 );
 
 /**
- * Get selected profiles
+ * Get enabled profiles
  *
  * Returns copy that caller must free.
  *
@@ -232,7 +232,7 @@ error_t *state_get_profiles(const state_t *state, string_array_t **out);
  *
  * Extracts all unique profile names from the deployed_files table.
  * This represents "all profiles we've ever applied on this machine",
- * including both selected and unselected profiles.
+ * including both enabled and disabled profiles.
  *
  * Returns copy that caller must free with string_array_free().
  * Returns empty array if no files are deployed (not an error).

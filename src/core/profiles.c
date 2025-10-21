@@ -561,7 +561,7 @@ cleanup:
  *
  * Priority order (highest to lowest):
  * 1. Explicit CLI profiles (-p flag) - Temporary override
- * 2. State profiles - Persistent selection (set via 'dotta profile select')
+ * 2. State profiles - Persistent management (set via 'dotta profile enable')
  * 3. Error - No profiles found
  */
 error_t *profile_resolve(
@@ -590,7 +590,7 @@ error_t *profile_resolve(
         return profile_list_load(repo, explicit_profiles, explicit_count, true, out);
     }
 
-    /* Priority 2: State profiles (persistent selection) */
+    /* Priority 2: State profiles (persistent management) */
     err = state_load(repo, &state);
     if (err) {
         /* Non-fatal: if state loading fails, fall through to "no profiles" error */
@@ -614,7 +614,7 @@ error_t *profile_resolve(
         goto no_profiles;
     }
 
-    /* State has selected profiles - validate and use them */
+    /* State has enabled profiles - validate and use them */
     err = validate_state_profiles(repo, state_profiles, &valid_profiles, &missing_profiles);
     if (err) {
         err = error_wrap(err, "Failed to validate state profiles");
@@ -628,7 +628,7 @@ error_t *profile_resolve(
             fprintf(stderr, "  • %s\n", string_array_get(missing_profiles, i));
         }
         fprintf(stderr, "\nHint: Run 'dotta profile validate' to fix state\n");
-        fprintf(stderr, "      or 'dotta profile select <name>' to update selected profiles\n\n");
+        fprintf(stderr, "      or 'dotta profile enable <name>' to enable profiles\n\n");
     }
     string_array_free(missing_profiles);
     missing_profiles = NULL;
@@ -670,13 +670,13 @@ error_t *profile_resolve(
 no_profiles:
     /* No profiles found from any source - return helpful error */
     err = ERROR(ERR_NOT_FOUND,
-                "No selected profiles found\n\n"
-                "To select profiles:\n"
-                "  dotta profile select <name>         # Select specific profile\n"
-                "  dotta profile select --all          # Select all local profiles\n\n"
-                "To create and select a new profile:\n"
-                "  dotta add -p <name> <file>          # Automatically selects new profiles\n\n"
-                "To use profiles without selecting:\n"
+                "No enabled profiles found\n\n"
+                "To enable profiles:\n"
+                "  dotta profile enable <name>         # Enable specific profile\n"
+                "  dotta profile enable --all          # Enable all local profiles\n\n"
+                "To create and enable a new profile:\n"
+                "  dotta add -p <name> <file>          # Automatically enables new profiles\n\n"
+                "To use profiles without enabling:\n"
                 "  dotta status -p <name>              # Use -p flag for any command\n\n"
                 "To see available profiles:\n"
                 "  dotta profile list                  # List local profiles\n"

@@ -283,7 +283,7 @@ static void print_safety_violations(
     }
     output_newline(out);
 
-    output_info(out, "These files are from unselected profiles but have uncommitted changes.");
+    output_info(out, "These files are from disabled profiles but have uncommitted changes.");
     output_info(out, "To prevent data loss, commit changes before removing:");
     output_newline(out);
     output_info(out, "Options:");
@@ -305,10 +305,10 @@ static void print_safety_violations(
 
     output_info(out, "  2. Force removal (discards changes):");
     output_info(out, "     dotta apply --force");
-    output_info(out, "  3. Keep the profile selected:");
+    output_info(out, "  3. Keep the profile enabled:");
 
     if (example_profile) {
-        output_info(out, "     dotta profile select %s", example_profile);
+        output_info(out, "     dotta profile enable %s", example_profile);
     }
 }
 
@@ -448,16 +448,16 @@ static void print_cleanup_results(
 /**
  * Update state with deployed files and save to disk
  *
- * This function does NOT modify the selected profile list in state.
- * Selected profiles are managed exclusively by 'dotta profile select/unselect'
+ * This function does NOT modify the enabled profile list in state.
+ * Enabled profiles are managed exclusively by 'dotta profile enable/disable'
  * commands. Apply only deploys files and updates the file tracking list.
  *
  * The state file tracks:
- * - Selected profiles - Modified ONLY by 'dotta profile' commands
+ * - Enabled profiles - Modified ONLY by 'dotta profile' commands
  * - Deployed files - Modified by 'dotta apply' and 'dotta revert'
  *
  * This separation ensures:
- * - User's explicit profile selections are never overwritten
+ * - User's explicit profile management is never overwritten
  * - Temporary CLI overrides (-p flag) don't persist to state
  * - Profile management is predictable and intentional
  *
@@ -636,7 +636,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     /*
      * Resolve profiles using priority hierarchy:
      * 1. CLI -p flag (temporary override)
-     * 2. State active_profiles (persistent selection via 'dotta profile select')
+     * 2. State enabled_profiles (persistent management via 'dotta profile enable')
      */
     profile_source_t profile_source;  /* For informational purposes only */
     err = profile_resolve(repo, opts->profiles, opts->profile_count,
@@ -902,8 +902,8 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             /* Execute cleanup: remove orphaned files and prune empty directories */
             cleanup_result_t *cleanup_res = NULL;
             cleanup_options_t cleanup_opts = {
-                .active_metadata = merged_metadata,
-                .active_profiles = profiles,
+                .enabled_metadata = merged_metadata,
+                .enabled_profiles = profiles,
                 .verbose = opts->verbose,
                 .dry_run = false,  /* Dry-run handled at deployment level */
                 .force = opts->force

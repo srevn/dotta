@@ -93,35 +93,35 @@ void cleanup_result_free(cleanup_result_t *result) {
 }
 
 /**
- * Load metadata from deployed-but-not-selected profiles
+ * Load metadata from deployed-but-not-enabled profiles
  *
  * Optimization: Only loads metadata from profiles that are deployed (have files
- * in state) but not currently selected. This avoids duplicate loading when the
- * caller already has metadata from selected profiles.
+ * in state) but not currently enabled. This avoids duplicate loading when the
+ * caller already has metadata from enabled profiles.
  *
  * Algorithm:
  * 1. Get all deployed profiles from state
- * 2. Compute set difference: deployed - selected
- * 3. Load metadata only from unselected profiles
- * 4. If active_metadata provided, merge with unselected metadata
+ * 2. Compute set difference: deployed - enabled
+ * 3. Load metadata only from disabled profiles
+ * 4. If enabled_metadata provided, merge with disabled metadata
  *
  * Edge Cases:
  * - No deployed profiles → Returns empty metadata
- * - No selected profiles → Loads from all deployed profiles
- * - All deployed profiles are selected → Returns empty metadata (or clones selected)
+ * - No enabled profiles → Loads from all deployed profiles
+ * - All deployed profiles are enabled → Returns empty metadata (or clones enabled)
  *
  * @param repo Repository (must not be NULL)
  * @param state State for deployed profile lookup (must not be NULL)
- * @param active_metadata Pre-loaded metadata from selected profiles (can be NULL)
- * @param active_profiles Currently selected profiles (can be NULL)
+ * @param enabled_metadata Pre-loaded metadata from enabled profiles (can be NULL)
+ * @param enabled_profiles Currently enabled profiles (can be NULL)
  * @param out_metadata Merged metadata (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
 static error_t *load_complete_metadata(
     git_repository *repo,
     const state_t *state,
-    const metadata_t *active_metadata,
-    const profile_list_t *active_profiles,
+    const metadata_t *enabled_metadata,
+    const profile_list_t *enabled_profiles,
     metadata_t **out_metadata
 ) {
     CHECK_NULL(repo);
@@ -130,8 +130,8 @@ static error_t *load_complete_metadata(
 
     error_t *err = NULL;
     string_array_t *deployed_profiles = NULL;
-    string_array_t *inactive_profiles = NULL;
-    metadata_t *inactive_metadata = NULL;
+    string_array_t *disabled_profiles = NULL;
+    metadata_t *disabled_metadata = NULL;
     metadata_t *complete_metadata = NULL;
 
     /* Get all deployed profiles from state */
@@ -147,89 +147,89 @@ static error_t *load_complete_metadata(
         return metadata_create_empty(out_metadata);
     }
 
-    /* Compute set difference: deployed - selected */
-    inactive_profiles = string_array_create();
-    if (!inactive_profiles) {
+    /* Compute set difference: deployed - enabled */
+    disabled_profiles = string_array_create();
+    if (!disabled_profiles) {
         string_array_free(deployed_profiles);
-        return ERROR(ERR_MEMORY, "Failed to allocate inactive profiles array");
+        return ERROR(ERR_MEMORY, "Failed to allocate disabled profiles array");
     }
 
     for (size_t i = 0; i < string_array_size(deployed_profiles); i++) {
         const char *deployed_name = string_array_get(deployed_profiles, i);
-        bool is_active = false;
+        bool is_enabled = false;
 
-        /* Check if this deployed profile is also selected */
-        if (active_profiles) {
-            for (size_t j = 0; j < active_profiles->count; j++) {
-                if (strcmp(deployed_name, active_profiles->profiles[j].name) == 0) {
-                    is_active = true;
+        /* Check if this deployed profile is also enabled */
+        if (enabled_profiles) {
+            for (size_t j = 0; j < enabled_profiles->count; j++) {
+                if (strcmp(deployed_name, enabled_profiles->profiles[j].name) == 0) {
+                    is_enabled = true;
                     break;
                 }
             }
         }
 
-        /* Add to inactive list if not selected */
-        if (!is_active) {
-            err = string_array_push(inactive_profiles, deployed_name);
+        /* Add to disabled list if not enabled */
+        if (!is_enabled) {
+            err = string_array_push(disabled_profiles, deployed_name);
             if (err) {
                 string_array_free(deployed_profiles);
-                string_array_free(inactive_profiles);
-                return error_wrap(err, "Failed to add inactive profile");
+                string_array_free(disabled_profiles);
+                return error_wrap(err, "Failed to add disabled profile");
             }
         }
     }
 
-    /* Load metadata from inactive profiles */
-    if (string_array_size(inactive_profiles) > 0) {
-        err = metadata_load_from_profiles(repo, inactive_profiles, &inactive_metadata);
+    /* Load metadata from disabled profiles */
+    if (string_array_size(disabled_profiles) > 0) {
+        err = metadata_load_from_profiles(repo, disabled_profiles, &disabled_metadata);
         if (err) {
             /* Non-fatal if metadata doesn't exist, but fatal on other errors */
             if (err->code != ERR_NOT_FOUND) {
                 string_array_free(deployed_profiles);
-                string_array_free(inactive_profiles);
-                return error_wrap(err, "Failed to load metadata from inactive profiles");
+                string_array_free(disabled_profiles);
+                return error_wrap(err, "Failed to load metadata from disabled profiles");
             }
             /* Metadata not found - treat as empty */
             error_free(err);
-            err = metadata_create_empty(&inactive_metadata);
+            err = metadata_create_empty(&disabled_metadata);
             if (err) {
                 string_array_free(deployed_profiles);
-                string_array_free(inactive_profiles);
+                string_array_free(disabled_profiles);
                 return err;
             }
         }
     } else {
-        /* No inactive profiles - create empty metadata */
-        err = metadata_create_empty(&inactive_metadata);
+        /* No disabled profiles - create empty metadata */
+        err = metadata_create_empty(&disabled_metadata);
         if (err) {
             string_array_free(deployed_profiles);
-            string_array_free(inactive_profiles);
+            string_array_free(disabled_profiles);
             return err;
         }
     }
 
-    /* Merge selected and unselected metadata */
-    if (active_metadata) {
-        /* Both selected and unselected metadata available - merge them */
-        const metadata_t *to_merge[] = {active_metadata, inactive_metadata};
+    /* Merge enabled and disabled metadata */
+    if (enabled_metadata) {
+        /* Both enabled and disabled metadata available - merge them */
+        const metadata_t *to_merge[] = {enabled_metadata, disabled_metadata};
         err = metadata_merge(to_merge, 2, &complete_metadata);
         if (err) {
-            metadata_free(inactive_metadata);
+            metadata_free(disabled_metadata);
             string_array_free(deployed_profiles);
-            string_array_free(inactive_profiles);
-            return error_wrap(err, "Failed to merge selected and unselected metadata");
+            string_array_free(disabled_profiles);
+            return error_wrap(err, "Failed to merge enabled and disabled metadata");
         }
-        /* Transfer ownership to result, free inactive */
-        metadata_free(inactive_metadata);
+        /* Transfer ownership to result, free disabled */
+        metadata_free(disabled_metadata);
     } else {
-        /* Only unselected metadata available - use it directly */
-        complete_metadata = inactive_metadata;
-        inactive_metadata = NULL;  /* Transfer ownership */
+        /* Only disabled metadata available - use it directly */
+        complete_metadata = disabled_metadata;
+        disabled_metadata = NULL;  /* Transfer ownership */
     }
 
     /* Clean up temporary arrays */
     string_array_free(deployed_profiles);
-    string_array_free(inactive_profiles);
+    string_array_free(disabled_profiles);
 
     *out_metadata = complete_metadata;
     return NULL;
@@ -658,12 +658,12 @@ error_t *cleanup_execute(
         return error_wrap(err, "Failed to remove orphaned files");
     }
 
-    /* Step 2: Load complete metadata (optimized for deployed-but-not-selected profiles) */
+    /* Step 2: Load complete metadata (optimized for deployed-but-not-enabled profiles) */
     err = load_complete_metadata(
         repo,
         state,
-        opts->active_metadata,
-        opts->active_profiles,
+        opts->enabled_metadata,
+        opts->enabled_profiles,
         &complete_metadata
     );
     if (err) {

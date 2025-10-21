@@ -1,7 +1,7 @@
 /**
  * interactive.c - Interactive TUI implementation
  *
- * Inline interface for profile selection and management.
+ * Inline interface for profile management and ordering.
  */
 
 #include "interactive.h"
@@ -25,7 +25,7 @@ struct interactive_state {
     git_repository *repo;          /* Repository (borrowed) */
     profile_item_t *items;         /* Profile items */
     size_t item_count;             /* Number of items */
-    size_t selected_count;         /* Number of selected items (cached) */
+    size_t enabled_count;          /* Number of enabled items (cached) */
     size_t cursor;                 /* Current cursor position */
     bool modified;                 /* True if there are unsaved changes */
 };
@@ -89,7 +89,7 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
         goto cleanup;
     }
 
-    /* Load current selections from state */
+    /* Load current enabled profiles from state */
     err = state_load(repo, &deploy_state);
     if (err) {
         /* State load failure is not fatal - might be first run */
@@ -134,7 +134,7 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
         goto cleanup;
     }
 
-    /* First: Add profiles from state in their saved order (selected) */
+    /* First: Add profiles from state in their saved order (enabled) */
     if (state_profiles) {
         for (size_t i = 0; i < state_profiles->count; i++) {
             const char *profile_name = state_profiles->items[i];
@@ -157,13 +157,13 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
                 goto cleanup;
             }
 
-            state->items[item_idx].selected = true;
+            state->items[item_idx].enabled = true;
             state->items[item_idx].exists_locally = true;
             item_idx++;
         }
     }
 
-    /* Second: Add remaining profiles not in state (unselected, at bottom) */
+    /* Second: Add remaining profiles not in state (disabled, at bottom) */
     for (size_t i = 0; i < all_profiles->count; i++) {
         /* O(1) check if already added */
         if (used[i]) {
@@ -179,18 +179,18 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
             goto cleanup;
         }
 
-        state->items[item_idx].selected = false;
+        state->items[item_idx].enabled = false;
         state->items[item_idx].exists_locally = true;
         item_idx++;
     }
 
     state->item_count = item_idx;
 
-    /* Count selected items (all from state_profiles) */
-    state->selected_count = 0;
+    /* Count enabled items (all from state_profiles) */
+    state->enabled_count = 0;
     for (size_t i = 0; i < state->item_count; i++) {
-        if (state->items[i].selected) {
-            state->selected_count++;
+        if (state->items[i].enabled) {
+            state->enabled_count++;
         }
     }
 
@@ -289,9 +289,9 @@ static void interactive_move_profile_down(interactive_state_t *state) {
 }
 
 /**
- * Save current profile selection and order to state
+ * Save current profile management and order to state
  *
- * Saves which profiles are selected and their display order. This is a silent
+ * Saves which profiles are enabled and their display order. This is a silent
  * operation that doesn't require terminal restoration.
  */
 static error_t *interactive_save_profile_order(
@@ -302,20 +302,20 @@ static error_t *interactive_save_profile_order(
         return error_create(ERR_INVALID_ARG, "invalid arguments");
     }
 
-    /* Check if any profiles selected (use cached count) */
-    if (state->selected_count == 0) {
-        return error_create(ERR_INVALID_ARG, "no profiles selected");
+    /* Check if any profiles enabled (use cached count) */
+    if (state->enabled_count == 0) {
+        return error_create(ERR_INVALID_ARG, "no profiles enabled");
     }
 
-    /* Extract selected profile names in current display order */
-    const char **profile_names = malloc(state->selected_count * sizeof(char *));
+    /* Extract enabled profile names in current display order */
+    const char **profile_names = malloc(state->enabled_count * sizeof(char *));
     if (!profile_names) {
         return error_create(ERR_MEMORY, "failed to allocate profile names");
     }
 
     size_t idx = 0;
     for (size_t i = 0; i < state->item_count; i++) {
-        if (state->items[i].selected) {
+        if (state->items[i].enabled) {
             profile_names[idx++] = state->items[i].name;
         }
     }
@@ -329,7 +329,7 @@ static error_t *interactive_save_profile_order(
     }
 
     /* Set profiles in new order */
-    err = state_set_profiles(deploy_state, profile_names, state->selected_count);
+    err = state_set_profiles(deploy_state, profile_names, state->enabled_count);
     if (!err) {
         err = state_save(repo, deploy_state);
     }
@@ -386,10 +386,10 @@ int interactive_render(const interactive_state_t *state) {
         const char *cursor = (i == state->cursor) ? "\033[1;36m▶\033[0m" : " ";
 
         /* Selection checkbox */
-        const char *checkbox = item->selected ? "\033[1;32m✓\033[0m" : " ";
+        const char *checkbox = item->enabled ? "\033[1;32m✓\033[0m" : " ";
 
         /* Profile name (dim if not selected) - all aligned at same column */
-        if (item->selected || i == state->cursor) {
+        if (item->enabled || i == state->cursor) {
             fprintf(stdout, "  %s %s %s\r\n", cursor, checkbox, item->name);
         } else {
             fprintf(stdout, "  %s %s \033[2m%s\033[0m\r\n", cursor, checkbox, item->name);
@@ -466,17 +466,17 @@ interactive_result_t interactive_handle_key(
             state->cursor = state->item_count - 1;
             return INTERACTIVE_CONTINUE;
 
-        /* Toggle selection */
+        /* Toggle enabled state */
         case TERM_KEY_SPACE:
             if (state->cursor < state->item_count) {
-                bool was_selected = state->items[state->cursor].selected;
-                state->items[state->cursor].selected = !was_selected;
+                bool was_enabled = state->items[state->cursor].enabled;
+                state->items[state->cursor].enabled = !was_enabled;
 
                 /* Update cached count */
-                if (was_selected) {
-                    state->selected_count--;
+                if (was_enabled) {
+                    state->enabled_count--;
                 } else {
-                    state->selected_count++;
+                    state->enabled_count++;
                 }
 
                 state->modified = true;

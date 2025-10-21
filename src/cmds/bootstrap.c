@@ -593,7 +593,7 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
     }
 
     if (script_count == 0) {
-        output_info(out, "No bootstrap scripts found in selected profiles.");
+        output_info(out, "No bootstrap scripts found in enabled profiles.");
         output_newline(out);
         output_section(out, "Profiles checked");
         for (size_t i = 0; i < profiles->count; i++) {

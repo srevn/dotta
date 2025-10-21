@@ -7,7 +7,7 @@
  * Primary Use Case:
  * ─────────────────
  * The `apply` command uses this module to check orphaned files before pruning them.
- * When a profile is unselected, its files become orphaned. Before removing these files,
+ * When a profile is disabled, its files become orphaned. Before removing these files,
  * we verify they haven't been modified on the filesystem to prevent data loss.
  *
  * Design Principles:
@@ -90,7 +90,7 @@ typedef struct {
  * Performance:
  *   - Best case (fast path succeeds): O(n) where n = number of files
  *   - Worst case (all fallback): O(n + p*log(t)) where p = profiles, t = tree size
- *   - Typical: Fast path succeeds 99% of time (profile active, hash available)
+ *   - Typical: Fast path succeeds 99% of time (profile enabled, hash available)
  *   - Adaptive strategy: Uses hashmap when path_count >= 20 OR path_count * state_count >= 400
  *     This prevents O(n*m) blowup (e.g., 19 paths × 10K state = 190K comparisons → hashmap)
  *

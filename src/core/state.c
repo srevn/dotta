@@ -47,7 +47,7 @@ struct state {
     /* Transaction state */
     bool in_transaction;     /* BEGIN IMMEDIATE executed */
 
-    /* Cached selected profiles (loaded lazily) */
+    /* Cached enabled profiles (loaded lazily) */
     string_array_t *profiles;
     bool profiles_loaded;
 
@@ -56,7 +56,7 @@ struct state {
     sqlite3_stmt *stmt_remove_file;     /* DELETE FROM deployed_files */
     sqlite3_stmt *stmt_file_exists;     /* SELECT 1 FROM deployed_files */
     sqlite3_stmt *stmt_get_file;        /* SELECT * FROM deployed_files */
-    sqlite3_stmt *stmt_insert_profile;  /* INSERT INTO selected_profiles */
+    sqlite3_stmt *stmt_insert_profile;  /* INSERT INTO enabled_profiles */
 };
 
 /**
@@ -102,7 +102,7 @@ static error_t *sqlite_error(sqlite3 *db, const char *context) {
  *
  * Creates tables if they don't exist:
  * - schema_meta: Schema versioning
- * - selected_profiles: User's profile selection (with indexes)
+ * - enabled_profiles: User's profile management (with indexes)
  * - deployed_files: Deployed file manifest (with indexes)
  *
  * @param db Database connection (must not be NULL)
@@ -126,16 +126,16 @@ static error_t *initialize_schema(sqlite3 *db) {
         "INSERT OR IGNORE INTO schema_meta (key, value) "
         "VALUES ('version', '" STATE_SCHEMA_VERSION "');"
 
-        /* Selected profiles table (authority: profile commands) */
-        "CREATE TABLE IF NOT EXISTS selected_profiles ("
+        /* Enabled profiles table (authority: profile commands) */
+        "CREATE TABLE IF NOT EXISTS enabled_profiles ("
         "    position INTEGER PRIMARY KEY,"
         "    name TEXT NOT NULL UNIQUE,"
-        "    selected_at INTEGER NOT NULL"
+        "    enabled_at INTEGER NOT NULL"
         ");"
 
         /* Index for existence checks */
-        "CREATE INDEX IF NOT EXISTS idx_selected_name "
-        "ON selected_profiles(name);"
+        "CREATE INDEX IF NOT EXISTS idx_enabled_name "
+        "ON enabled_profiles(name);"
 
         /* Deployed files table (authority: apply/revert) */
         "CREATE TABLE IF NOT EXISTS deployed_files ("
@@ -425,9 +425,9 @@ static error_t *prepare_statements(state_t *state) {
         return sqlite_error(state->db, "Failed to prepare remove statement");
     }
 
-    /* Insert profile (used in profile select) */
+    /* Insert profile (used in profile enable) */
     const char *sql_profile =
-        "INSERT INTO selected_profiles (position, name, selected_at) "
+        "INSERT INTO enabled_profiles (position, name, enabled_at) "
         "VALUES (?, ?, ?);";
 
     rc = sqlite3_prepare_v2(state->db, sql_profile, -1,
@@ -507,7 +507,7 @@ static error_t *load_profiles(state_t *state) {
     }
 
     /* Query profiles ordered by position */
-    const char *sql = "SELECT name FROM selected_profiles ORDER BY position ASC;";
+    const char *sql = "SELECT name FROM enabled_profiles ORDER BY position ASC;";
     sqlite3_stmt *stmt = NULL;
 
     int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
@@ -540,7 +540,7 @@ static error_t *load_profiles(state_t *state) {
 }
 
 /**
- * Get selected profiles
+ * Get enabled profiles
  *
  * Returns copy that caller must free.
  * Profiles are cached on first access.
@@ -638,10 +638,10 @@ error_t *state_get_deployed_profiles(const state_t *state, string_array_t **out)
 }
 
 /**
- * Set selected profiles
+ * Set enabled profiles
  *
  * Hot path - must be fast even with 10,000 deployed files.
- * Only modifies selected_profiles table (deployed_files untouched).
+ * Only modifies enabled_profiles table (deployed_files untouched).
  *
  * @param state State (must not be NULL)
  * @param profiles Array of profile names (must not be NULL)
@@ -659,7 +659,7 @@ error_t *state_set_profiles(
 
     /* Delete all existing profiles */
     char *errmsg = NULL;
-    int rc = sqlite3_exec(state->db, "DELETE FROM selected_profiles;",
+    int rc = sqlite3_exec(state->db, "DELETE FROM enabled_profiles;",
                          NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
         error_t *err = ERROR(ERR_STATE_INVALID,

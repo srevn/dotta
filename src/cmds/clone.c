@@ -327,7 +327,7 @@ static error_t *handle_no_profiles_detected(
             }
         } else {
             output_info(out, "No 'global' profile found.");
-            output_info(out, "Run 'dotta profile select <name>' after setup");
+            output_info(out, "Run 'dotta profile enable <name>' after setup");
         }
     }
 
@@ -339,7 +339,7 @@ static error_t *handle_no_profiles_detected(
  * Initialize state with fetched profiles
  *
  * @param repo Repository
- * @param profile_names Profile names to set as active
+ * @param profile_names Profile names to set as enabled
  * @param count Number of profiles
  * @param out Output context
  * @return Error or NULL on success
@@ -361,7 +361,7 @@ static error_t *initialize_state(
         return error_wrap(err, "Failed to initialize state database");
     }
 
-    /* Set selected profiles (if any) */
+    /* Set enabled profiles (if any) */
     if (count > 0) {
         err = state_set_profiles(state, profile_names, count);
         if (err) {
@@ -380,7 +380,7 @@ static error_t *initialize_state(
     state_free(state);
 
     if (output_colors_enabled(out)) {
-        output_success(out, "Initialized selected profiles: ");
+        output_success(out, "Initialized enabled profiles: ");
         for (size_t i = 0; i < count; i++) {
             output_printf(out, OUTPUT_NORMAL, "%s%s",
                    profile_names[i],
@@ -487,7 +487,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     }
 
     if (opts->profiles && opts->profile_count > 0) {
-        /* Explicit profile selection */
+        /* Explicit profile management */
         output_section(out, "Fetching specified profiles");
 
         size_t fetched_count = 0;
@@ -714,7 +714,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     if (!run_bootstrap && bootstrap_available) {
         output_info(out, "  dotta bootstrap        # Run bootstrap scripts");
     }
-    output_info(out, "  dotta profile list     # View selected profiles");
+    output_info(out, "  dotta profile list     # View enabled profiles");
     output_info(out, "  dotta apply            # Apply profiles to your system");
     output_info(out, "  dotta status           # View current state");
     output_newline(out);

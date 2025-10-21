@@ -96,7 +96,7 @@ static error_t *discover_file(
         return NULL;
     }
 
-    /* Search across active profiles using optimized index */
+    /* Search across selected profiles using optimized index */
     dotta_config_t *config = NULL;
     err = config_load(NULL, &config);
     if (err) {
@@ -116,7 +116,7 @@ static error_t *discover_file(
         config_free(config);
         profile_list_free(profiles);
         free(storage_path);
-        return ERROR(ERR_NOT_FOUND, "No active profiles found");
+        return ERROR(ERR_NOT_FOUND, "No selected profiles found");
     }
 
     /* Build profile file index once - O(M×P) instead of O(M×GitOps) */
@@ -139,7 +139,7 @@ static error_t *discover_file(
         config_free(config);
         free(storage_path);
         return ERROR(ERR_NOT_FOUND,
-                    "File '%s' not found in any active profile\n"
+                    "File '%s' not found in any selected profile\n"
                     "Hint: Use 'dotta list' to see tracked files",
                     storage_path);
     }

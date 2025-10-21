@@ -93,27 +93,27 @@ void cleanup_result_free(cleanup_result_t *result) {
 }
 
 /**
- * Load metadata from deployed-but-not-active profiles
+ * Load metadata from deployed-but-not-selected profiles
  *
  * Optimization: Only loads metadata from profiles that are deployed (have files
- * in state) but not currently active. This avoids duplicate loading when the
- * caller already has metadata from active profiles.
+ * in state) but not currently selected. This avoids duplicate loading when the
+ * caller already has metadata from selected profiles.
  *
  * Algorithm:
  * 1. Get all deployed profiles from state
- * 2. Compute set difference: deployed - active
- * 3. Load metadata only from inactive profiles
- * 4. If active_metadata provided, merge with inactive metadata
+ * 2. Compute set difference: deployed - selected
+ * 3. Load metadata only from unselected profiles
+ * 4. If active_metadata provided, merge with unselected metadata
  *
  * Edge Cases:
  * - No deployed profiles → Returns empty metadata
- * - No active profiles → Loads from all deployed profiles
- * - All deployed profiles are active → Returns empty metadata (or clones active)
+ * - No selected profiles → Loads from all deployed profiles
+ * - All deployed profiles are selected → Returns empty metadata (or clones selected)
  *
  * @param repo Repository (must not be NULL)
  * @param state State for deployed profile lookup (must not be NULL)
- * @param active_metadata Pre-loaded metadata from active profiles (can be NULL)
- * @param active_profiles Currently active profiles (can be NULL)
+ * @param active_metadata Pre-loaded metadata from selected profiles (can be NULL)
+ * @param active_profiles Currently selected profiles (can be NULL)
  * @param out_metadata Merged metadata (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
@@ -147,7 +147,7 @@ static error_t *load_complete_metadata(
         return metadata_create_empty(out_metadata);
     }
 
-    /* Compute set difference: deployed - active */
+    /* Compute set difference: deployed - selected */
     inactive_profiles = string_array_create();
     if (!inactive_profiles) {
         string_array_free(deployed_profiles);
@@ -158,7 +158,7 @@ static error_t *load_complete_metadata(
         const char *deployed_name = string_array_get(deployed_profiles, i);
         bool is_active = false;
 
-        /* Check if this deployed profile is also active */
+        /* Check if this deployed profile is also selected */
         if (active_profiles) {
             for (size_t j = 0; j < active_profiles->count; j++) {
                 if (strcmp(deployed_name, active_profiles->profiles[j].name) == 0) {
@@ -168,7 +168,7 @@ static error_t *load_complete_metadata(
             }
         }
 
-        /* Add to inactive list if not active */
+        /* Add to inactive list if not selected */
         if (!is_active) {
             err = string_array_push(inactive_profiles, deployed_name);
             if (err) {
@@ -208,21 +208,21 @@ static error_t *load_complete_metadata(
         }
     }
 
-    /* Merge active and inactive metadata */
+    /* Merge selected and unselected metadata */
     if (active_metadata) {
-        /* Both active and inactive metadata available - merge them */
+        /* Both selected and unselected metadata available - merge them */
         const metadata_t *to_merge[] = {active_metadata, inactive_metadata};
         err = metadata_merge(to_merge, 2, &complete_metadata);
         if (err) {
             metadata_free(inactive_metadata);
             string_array_free(deployed_profiles);
             string_array_free(inactive_profiles);
-            return error_wrap(err, "Failed to merge active and inactive metadata");
+            return error_wrap(err, "Failed to merge selected and unselected metadata");
         }
         /* Transfer ownership to result, free inactive */
         metadata_free(inactive_metadata);
     } else {
-        /* Only inactive metadata available - use it directly */
+        /* Only unselected metadata available - use it directly */
         complete_metadata = inactive_metadata;
         inactive_metadata = NULL;  /* Transfer ownership */
     }
@@ -658,7 +658,7 @@ error_t *cleanup_execute(
         return error_wrap(err, "Failed to remove orphaned files");
     }
 
-    /* Step 2: Load complete metadata (optimized for deployed-but-not-active profiles) */
+    /* Step 2: Load complete metadata (optimized for deployed-but-not-selected profiles) */
     err = load_complete_metadata(
         repo,
         state,

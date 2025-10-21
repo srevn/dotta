@@ -22,7 +22,7 @@ typedef enum {
  */
 typedef struct {
     show_mode_t mode;        /* Display mode */
-    const char *profile;     /* Profile name (NULL = use active profiles) */
+    const char *profile;     /* Profile name (NULL = use selected profiles) */
     const char *file_path;   /* File path within profile (for SHOW_FILE mode) */
     const char *commit;      /* Commit reference (NULL = HEAD) */
     bool raw;                /* Show raw content without formatting */

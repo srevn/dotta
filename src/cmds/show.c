@@ -342,7 +342,7 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
         const char *profile_name = opts->profile;
 
         if (!profile_name) {
-            /* No profile specified - use active profiles */
+            /* No profile specified - use selected profiles */
             err = config_load(NULL, &config);
             if (err) {
                 err = error_wrap(err, "Failed to load config");
@@ -356,11 +356,11 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
             }
 
             if (profiles->count == 0) {
-                err = ERROR(ERR_NOT_FOUND, "No active profiles found");
+                err = ERROR(ERR_NOT_FOUND, "No selected profiles found");
                 goto cleanup;
             }
 
-            /* Try to find commit in active profiles (in order) */
+            /* Try to find commit in selected profiles (in order) */
             for (size_t i = 0; i < profiles->count; i++) {
                 profile_name = profiles->profiles[i].name;
                 error_t *try_err = show_commit(repo, opts->commit, profile_name, opts->raw);
@@ -379,7 +379,7 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
                 error_free(try_err);
             }
 
-            err = ERROR(ERR_NOT_FOUND, "Commit '%s' not found in active profiles", opts->commit);
+            err = ERROR(ERR_NOT_FOUND, "Commit '%s' not found in selected profiles", opts->commit);
             goto cleanup;
         }
 
@@ -431,7 +431,7 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
         goto cleanup;
     }
 
-    /* No profile specified - search across active profiles (exact path only) */
+    /* No profile specified - search across selected profiles (exact path only) */
 
     /* If commit is specified without profile, require profile to be specified */
     if (opts->commit) {
@@ -506,7 +506,7 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
     }
 
     if (!found_profile) {
-        err = ERROR(ERR_NOT_FOUND, "File '%s' not found in active profiles", opts->file_path);
+        err = ERROR(ERR_NOT_FOUND, "File '%s' not found in selected profiles", opts->file_path);
         goto cleanup;
     }
 

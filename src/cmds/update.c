@@ -376,7 +376,7 @@ static error_t *find_modified_and_new_files(
             }
 
             if (!source_profile) {
-                /* Profile not in active set - skip */
+                /* Profile not in selected set - skip */
                 continue;
             }
 

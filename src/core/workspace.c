@@ -36,7 +36,7 @@ struct workspace {
     /* State data */
     manifest_t *manifest;          /* Profile state (owned) */
     state_t *state;                /* Deployment state (owned) */
-    profile_list_t *profiles;      /* Active profiles for this workspace (borrowed) */
+    profile_list_t *profiles;      /* Selected profiles for this workspace (borrowed) */
     hashmap_t *manifest_index;     /* Maps filesystem_path -> file_entry_t* */
     hashmap_t *profile_index;      /* Maps profile_name -> profile_t* (for O(1) lookup) */
 
@@ -298,10 +298,10 @@ static error_t *analyze_file_divergence(
  * Analyze state for orphaned entries
  *
  * An entry is orphaned if:
- * 1. Its profile is in our active profile list (in scope), AND
+ * 1. Its profile is in our selected profile list (in scope), AND
  * 2. The file no longer exists in that profile's branch
  *
- * State entries from profiles NOT in our active list are ignored (out of scope).
+ * State entries from profiles NOT in our selected list are ignored (out of scope).
  */
 static error_t *analyze_orphaned_state(workspace_t *ws) {
     CHECK_NULL(ws);
@@ -322,7 +322,7 @@ static error_t *analyze_orphaned_state(workspace_t *ws) {
         const char *fs_path = state_entry->filesystem_path;
         const char *entry_profile = state_entry->profile;
 
-        /* Skip if this state entry's profile is not in our active profile list */
+        /* Skip if this state entry's profile is not in our selected profile list */
         if (!hashmap_get(ws->profile_index, entry_profile)) {
             continue;  /* Out of scope - ignore */
         }
@@ -331,7 +331,7 @@ static error_t *analyze_orphaned_state(workspace_t *ws) {
         file_entry_t *manifest_entry = hashmap_get(ws->manifest_index, fs_path);
 
         if (!manifest_entry) {
-            /* Orphaned: In state, profile is active, but not in profile branch */
+            /* Orphaned: In state, profile is selected, but not in profile branch */
             bool on_filesystem = fs_lexists(fs_path);
 
             error_t *err = workspace_add_diverged(
@@ -577,7 +577,7 @@ static error_t *scan_directory_for_untracked(
 /**
  * Analyze tracked directories for untracked files
  *
- * Only scans tracked directories for profiles in the active profile list.
+ * Only scans tracked directories for profiles in the selected profile list.
  */
 static error_t *analyze_untracked_files(
     workspace_t *ws,
@@ -593,7 +593,7 @@ static error_t *analyze_untracked_files(
         return NULL;  /* No profiles to analyze */
     }
 
-    /* Scan tracked directories from each active profile's metadata */
+    /* Scan tracked directories from each selected profile's metadata */
     for (size_t p = 0; p < ws->profiles->count; p++) {
         const char *profile_name = ws->profiles->profiles[p].name;
 

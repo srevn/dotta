@@ -448,12 +448,12 @@ static void print_cleanup_results(
 /**
  * Update state with deployed files and save to disk
  *
- * This function does NOT modify the active profile list in state.
- * Active profiles are managed exclusively by 'dotta profile select/unselect'
+ * This function does NOT modify the selected profile list in state.
+ * Selected profiles are managed exclusively by 'dotta profile select/unselect'
  * commands. Apply only deploys files and updates the file tracking list.
  *
  * The state file tracks:
- * - Active profiles - Modified ONLY by 'dotta profile' commands
+ * - Selected profiles - Modified ONLY by 'dotta profile' commands
  * - Deployed files - Modified by 'dotta apply' and 'dotta revert'
  *
  * This separation ensures:

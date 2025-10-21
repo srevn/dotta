@@ -2,7 +2,7 @@
  * profile.c - Profile lifecycle management
  *
  * Explicit profile management commands for controlling which profiles
- * are active vs merely available on this machine.
+ * are selected vs merely available on this machine.
  */
 
 #include "profile.h"
@@ -57,7 +57,7 @@ static error_t *count_profile_files(git_repository *repo, const char *profile_na
 /**
  * Profile list subcommand
  *
- * Shows active vs available profiles with clear visual distinction.
+ * Shows selected vs available profiles with clear visual distinction.
  */
 static error_t *profile_list(
     git_repository *repo,
@@ -81,7 +81,7 @@ static error_t *profile_list(
     string_array_t *remote_only = NULL;
     error_t *err = NULL;
 
-    /* Load state to get active profiles */
+    /* Load state to get selected profiles */
     err = state_load(repo, &state);
     if (err) {
         err = error_wrap(err, "Failed to load state");
@@ -90,7 +90,7 @@ static error_t *profile_list(
 
     err = state_get_profiles(state, &active_profiles);
     if (err) {
-        err = error_wrap(err, "Failed to get active profiles");
+        err = error_wrap(err, "Failed to get selected profiles");
         goto cleanup;
     }
 
@@ -101,7 +101,7 @@ static error_t *profile_list(
         goto cleanup;
     }
 
-    /* Separate into active and available */
+    /* Separate into selected and available */
     available = string_array_create();
     if (!available) {
         err = ERROR(ERR_MEMORY, "Failed to create array");
@@ -134,9 +134,9 @@ static error_t *profile_list(
         }
     }
 
-    /* Print active profiles */
+    /* Print selected profiles */
     if (string_array_size(active_profiles) > 0) {
-        output_section(out, "Active profiles (in layering order)");
+        output_section(out, "Selected profiles (in layering order)");
         for (size_t i = 0; i < string_array_size(active_profiles); i++) {
             const char *name = string_array_get(active_profiles, i);
             size_t file_count = 0;
@@ -153,7 +153,7 @@ static error_t *profile_list(
         }
         output_newline(out);
     } else {
-        output_info(out, "No active profiles");
+        output_info(out, "No selected profiles");
         output_info(out, "Hint: Run 'dotta profile select <name>' to select a profile\n");
     }
 
@@ -479,7 +479,7 @@ cleanup:
 /**
  * Profile select subcommand
  *
- * Adds profiles to the active set in state.
+ * Adds profiles to the selected set in state.
  */
 static error_t *profile_select(
     git_repository *repo,
@@ -510,10 +510,10 @@ static error_t *profile_select(
         goto cleanup;
     }
 
-    /* Get current active profiles */
+    /* Get current selected profiles */
     err = state_get_profiles(state, &active);
     if (err) {
-        err = error_wrap(err, "Failed to get active profiles");
+        err = error_wrap(err, "Failed to get selected profiles");
         goto cleanup;
     }
 
@@ -611,7 +611,7 @@ static error_t *profile_select(
         }
     }
 
-    /* Update state with new active profiles */
+    /* Update state with new selected profiles */
     if (selected_count > 0) {
         profile_names = malloc(string_array_size(active) * sizeof(char *));
         if (!profile_names) {
@@ -679,7 +679,7 @@ cleanup:
 /**
  * Profile unselect subcommand
  *
- * Removes profiles from the active set.
+ * Removes profiles from the selected set.
  */
 static error_t *profile_unselect(
     git_repository *repo,
@@ -709,10 +709,10 @@ static error_t *profile_unselect(
         goto cleanup;
     }
 
-    /* Get current active profiles */
+    /* Get current selected profiles */
     err = state_get_profiles(state, &active);
     if (err) {
-        err = error_wrap(err, "Failed to get active profiles");
+        err = error_wrap(err, "Failed to get selected profiles");
         goto cleanup;
     }
 
@@ -750,14 +750,14 @@ static error_t *profile_unselect(
         }
     }
 
-    /* Build new active list (excluding unselected) */
+    /* Build new selected list (excluding unselected) */
     new_active = string_array_create();
     if (!new_active) {
         err = ERROR(ERR_MEMORY, "Failed to create array");
         goto cleanup;
     }
 
-    /* Build new active list and count profiles */
+    /* Build new selected list and count profiles */
     for (size_t i = 0; i < string_array_size(active); i++) {
         const char *profile_name = string_array_get(active, i);
 
@@ -778,7 +778,7 @@ static error_t *profile_unselect(
         } else {
             err = string_array_push(new_active, profile_name);
             if (err) {
-                err = error_wrap(err, "Failed to add profile to new active list");
+                err = error_wrap(err, "Failed to add profile to new selected list");
                 goto cleanup;
             }
         }
@@ -830,7 +830,7 @@ static error_t *profile_unselect(
         goto cleanup;
     }
 
-    /* Update state with new active profiles */
+    /* Update state with new selected profiles */
     if (unselected_count > 0) {
         profile_names = malloc(string_array_size(new_active) * sizeof(char *));
         if (!profile_names) {
@@ -900,7 +900,7 @@ cleanup:
 /**
  * Profile reorder subcommand
  *
- * Changes the order of active profiles, which affects layering precedence.
+ * Changes the order of selected profiles, which affects layering precedence.
  */
 static error_t *profile_reorder(
     git_repository *repo,
@@ -931,17 +931,17 @@ static error_t *profile_reorder(
         goto cleanup;
     }
 
-    /* Get current active profiles */
+    /* Get current selected profiles */
     err = state_get_profiles(state, &current_active);
     if (err) {
-        err = error_wrap(err, "Failed to get active profiles");
+        err = error_wrap(err, "Failed to get selected profiles");
         goto cleanup;
     }
 
-    /* Edge case: no active profiles */
+    /* Edge case: no selected profiles */
     if (string_array_size(current_active) == 0) {
         err = ERROR(ERR_VALIDATION,
-                   "No active profiles to reorder\n"
+                   "No selected profiles to reorder\n"
                    "Hint: Run 'dotta profile select <name>' first");
         goto cleanup;
     }
@@ -949,7 +949,7 @@ static error_t *profile_reorder(
     /* Edge case: single profile */
     if (string_array_size(current_active) == 1) {
         if (!opts->quiet) {
-            output_info(out, "Only one active profile, nothing to reorder");
+            output_info(out, "Only one selected profile, nothing to reorder");
         }
         goto cleanup;  /* Success, but no-op */
     }
@@ -977,8 +977,8 @@ static error_t *profile_reorder(
         }
         if (!is_active) {
             err = ERROR(ERR_VALIDATION,
-                       "Profile '%s' is not active\n"
-                       "Hint: Only active profiles can be reordered. Run 'dotta profile list' to see active profiles",
+                       "Profile '%s' is not selected\n"
+                       "Hint: Only selected profiles can be reordered. Run 'dotta profile list' to see selected profiles",
                        opts->profiles[i]);
             goto cleanup;
         }
@@ -987,14 +987,14 @@ static error_t *profile_reorder(
     /* Validation 3: Profile count must match */
     if (opts->profile_count != string_array_size(current_active)) {
         err = ERROR(ERR_VALIDATION,
-                   "Profile count mismatch: %zu active, %zu provided\n"
-                   "Hint: All active profiles must be included in reorder",
+                   "Profile count mismatch: %zu selected, %zu provided\n"
+                   "Hint: All selected profiles must be included in reorder",
                    string_array_size(current_active),
                    opts->profile_count);
         goto cleanup;
     }
 
-    /* Validation 4: All currently active profiles must be included */
+    /* Validation 4: All currently selected profiles must be included */
     for (size_t i = 0; i < string_array_size(current_active); i++) {
         const char *active_profile = string_array_get(current_active, i);
         bool found = false;
@@ -1006,8 +1006,8 @@ static error_t *profile_reorder(
         }
         if (!found) {
             err = ERROR(ERR_VALIDATION,
-                       "Missing active profile '%s' from reorder list\n"
-                       "Hint: All active profiles must be included",
+                       "Missing selected profile '%s' from reorder list\n"
+                       "Hint: All selected profiles must be included",
                        active_profile);
             goto cleanup;
         }
@@ -1115,16 +1115,16 @@ static error_t *profile_validate(
         goto cleanup;
     }
 
-    /* Get active profiles from state */
+    /* Get selected profiles from state */
     err = state_get_profiles(state, &active);
     if (err) {
-        err = error_wrap(err, "Failed to get active profiles");
+        err = error_wrap(err, "Failed to get selected profiles");
         goto cleanup;
     }
 
     output_section(out, "Validating profile state");
 
-    /* Check 1: Active profiles exist as branches */
+    /* Check 1: Selected profiles exist as branches */
     missing = string_array_create();
     if (!missing) {
         err = ERROR(ERR_MEMORY, "Failed to create array");
@@ -1251,7 +1251,7 @@ cleanup:
             if (fixed_active_profiles && !has_orphaned_files) {
                 output_success(out, "Fixed all profile state issues");
             } else if (fixed_active_profiles && has_orphaned_files) {
-                output_info(out, "Fixed active profile list");
+                output_info(out, "Fixed selected profile list");
                 output_info(out, "Note: Orphaned files require 'dotta apply' to clean up");
             } else if (!fixed_active_profiles && has_orphaned_files) {
                 output_warning(out, "Profile state has issues that require 'dotta apply'");

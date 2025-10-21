@@ -614,7 +614,7 @@ error_t *profile_resolve(
         goto no_profiles;
     }
 
-    /* State has active profiles - validate and use them */
+    /* State has selected profiles - validate and use them */
     err = validate_state_profiles(repo, state_profiles, &valid_profiles, &missing_profiles);
     if (err) {
         err = error_wrap(err, "Failed to validate state profiles");
@@ -628,7 +628,7 @@ error_t *profile_resolve(
             fprintf(stderr, "  • %s\n", string_array_get(missing_profiles, i));
         }
         fprintf(stderr, "\nHint: Run 'dotta profile validate' to fix state\n");
-        fprintf(stderr, "      or 'dotta profile select <name>' to update active profiles\n\n");
+        fprintf(stderr, "      or 'dotta profile select <name>' to update selected profiles\n\n");
     }
     string_array_free(missing_profiles);
     missing_profiles = NULL;
@@ -670,7 +670,7 @@ error_t *profile_resolve(
 no_profiles:
     /* No profiles found from any source - return helpful error */
     err = ERROR(ERR_NOT_FOUND,
-                "No active profiles found\n\n"
+                "No selected profiles found\n\n"
                 "To select profiles:\n"
                 "  dotta profile select <name>         # Select specific profile\n"
                 "  dotta profile select --all          # Select all local profiles\n\n"

@@ -200,10 +200,10 @@ error_t *state_get_all_files(
 void state_free_all_files(state_file_entry_t *entries, size_t count);
 
 /**
- * Set active profiles
+ * Set selected profiles
  *
  * Hot path - must be fast even with 10,000 deployed files.
- * Only modifies active_profiles table (deployed_files table untouched).
+ * Only modifies selected_profiles table (deployed_files table untouched).
  *
  * @param state State (must not be NULL)
  * @param profiles Array of profile names (must not be NULL)
@@ -217,7 +217,7 @@ error_t *state_set_profiles(
 );
 
 /**
- * Get active profiles
+ * Get selected profiles
  *
  * Returns copy that caller must free.
  *
@@ -232,7 +232,7 @@ error_t *state_get_profiles(const state_t *state, string_array_t **out);
  *
  * Extracts all unique profile names from the deployed_files table.
  * This represents "all profiles we've ever applied on this machine",
- * including both active and inactive profiles.
+ * including both selected and unselected profiles.
  *
  * Returns copy that caller must free with string_array_free().
  * Returns empty array if no files are deployed (not an error).

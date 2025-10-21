@@ -256,7 +256,7 @@ Profile resolution follows a strict priority order:
 1. **Explicit CLI** (`-p/--profile flags`) - Temporary override for testing
 2. **State file** (`profiles` array in `.git/dotta.db`) - Persistent selection via `dotta profile select`
 
-Active profiles are managed exclusively through `dotta profile select/unselect/reorder` commands. The state file is the single source of truth for which profiles are active on each machine.
+Selected profiles are managed exclusively through `dotta profile select/unselect/reorder` commands. The state file is the single source of truth for which profiles are selected on each machine.
 
 When profiles are applied, later profiles override earlier ones following this precedence:
 

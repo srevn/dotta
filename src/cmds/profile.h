@@ -17,11 +17,11 @@
  * Profile command subcommands
  */
 typedef enum {
-    PROFILE_LIST,        /* List profiles (active vs available) */
+    PROFILE_LIST,        /* List profiles (selected vs available) */
     PROFILE_FETCH,       /* Fetch profiles without selecting */
-    PROFILE_SELECT,      /* Add profiles to active set */
-    PROFILE_UNSELECT,    /* Remove profiles from active set */
-    PROFILE_REORDER,     /* Reorder active profiles */
+    PROFILE_SELECT,      /* Add profiles to selected set */
+    PROFILE_UNSELECT,    /* Remove profiles from selected set */
+    PROFILE_REORDER,     /* Reorder selected profiles */
     PROFILE_VALIDATE     /* Validate and fix state consistency */
 } profile_subcommand_t;
 
@@ -37,7 +37,7 @@ typedef struct {
 
     /* List options */
     bool show_remote;       /* Show remote profiles */
-    bool show_available;    /* Show available (non-active) profiles */
+    bool show_available;    /* Show available (non-selected) profiles */
 
     /* Fetch options */
     bool fetch_all;         /* Fetch all remote profiles */

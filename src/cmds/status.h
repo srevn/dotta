@@ -21,7 +21,7 @@ typedef struct {
     bool show_local;            /* Show filesystem status (default: true) */
     bool show_remote;           /* Show remote sync status (default: true) */
     bool no_fetch;              /* Skip fetch before remote status check */
-    bool all_profiles;          /* Show all profiles, not just active ones */
+    bool all_profiles;          /* Show all profiles, not just selected ones */
 } cmd_status_options_t;
 
 /**

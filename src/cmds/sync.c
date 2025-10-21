@@ -270,7 +270,7 @@ static error_t *pull_branch_ff(
 }
 
 /**
- * Phase 1: Fetch active profiles from remote
+ * Phase 1: Fetch selected profiles from remote
  */
 static error_t *sync_fetch_active_profiles(
     git_repository *repo,
@@ -301,7 +301,7 @@ static error_t *sync_fetch_active_profiles(
     git_remote_free(remote);
 
     char section_title[DOTTA_MESSAGE_MAX];
-    snprintf(section_title, sizeof(section_title), "Fetching active profiles from '%s'", remote_name);
+    snprintf(section_title, sizeof(section_title), "Fetching selected profiles from '%s'", remote_name);
     output_section(out, section_title);
 
     /* Build array of branch names for batched fetch */
@@ -345,7 +345,7 @@ static error_t *sync_fetch_active_profiles(
     }
 
     if (verbose) {
-        output_success(out, "Fetched %zu active profile%s",
+        output_success(out, "Fetched %zu selected profile%s",
                       profiles->count,
                       profiles->count == 1 ? "" : "s");
     }
@@ -934,7 +934,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* Load active profiles using standard profile resolution
+    /* Load selected profiles using standard profile resolution
      * Priority: CLI -p (temporary) > state (persistent selection)
      */
     profile_source_t source;
@@ -943,16 +943,16 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     if (err) {
         config_free(config);
         output_free(out);
-        return error_wrap(err, "Failed to resolve active profiles");
+        return error_wrap(err, "Failed to resolve selected profiles");
     }
 
-    /* Provide helpful error when no active profiles */
+    /* Provide helpful error when no selected profiles */
     if (profiles->count == 0) {
         profile_list_free(profiles);
         config_free(config);
         output_free(out);
         return ERROR(ERR_NOT_FOUND,
-                    "No active profiles to sync\n"
+                    "No selected profiles to sync\n"
                     "Hint: Run 'dotta profile select <name>' to select profiles\n"
                     "      Or run 'dotta profile list --remote' to see available profiles");
     }
@@ -1107,7 +1107,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         out
     );
 
-    /* Phase 1: Fetch active profiles from remote */
+    /* Phase 1: Fetch selected profiles from remote */
     err = sync_fetch_active_profiles(repo, remote_name, profiles, results, out, opts->verbose, xfer);
     if (err) {
         transfer_context_free(xfer);

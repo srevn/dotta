@@ -328,13 +328,13 @@ static error_t *show_diffs_for_direction(
 }
 
 /**
- * Resolve commit reference across active profiles
+ * Resolve commit reference across selected profiles
  *
- * Searches for the commit in active profiles in order.
+ * Searches for the commit in selected profiles in order.
  * Returns the first match found.
  *
  * @param repo Repository (must not be NULL)
- * @param profiles Active profiles to search (must not be NULL)
+ * @param profiles Selected profiles to search (must not be NULL)
  * @param commit_ref Commit reference (must not be NULL)
  * @param out_oid Resolved commit OID (must not be NULL)
  * @param out_commit Resolved commit object (can be NULL, caller must free)
@@ -396,11 +396,11 @@ static error_t *resolve_commit_in_profiles(
     /* Not found in any profile */
     if (last_err) {
         error_t *wrapped = error_wrap(last_err,
-            "Commit '%s' not found in any active profile", commit_ref);
+            "Commit '%s' not found in any selected profile", commit_ref);
         return wrapped;
     }
 
-    return ERROR(ERR_NOT_FOUND, "Commit '%s' not found in any active profile", commit_ref);
+    return ERROR(ERR_NOT_FOUND, "Commit '%s' not found in any selected profile", commit_ref);
 }
 
 /**

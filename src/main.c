@@ -464,7 +464,7 @@ static int cmd_status_main(int argc, char **argv) {
         .show_local = true,   /* Default: show filesystem status */
         .show_remote = true,  /* Default: show remote status */
         .no_fetch = false,    /* Default: fetch before remote check */
-        .all_profiles = false /* Default: show only active profiles */
+        .all_profiles = false /* Default: show only selected profiles */
     };
 
     /* Collect profile arguments */

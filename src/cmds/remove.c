@@ -1014,7 +1014,7 @@ static error_t *remove_files_from_profile(
      * - `remove` modifies the Git repository (profile branches)
      * - `apply` synchronizes the filesystem (prunes orphaned files by default)
      *
-     * This ensures `apply` has global context from all active profiles to
+     * This ensures `apply` has global context from all selected profiles to
      * correctly determine if a file should be removed (avoiding premature
      * deletion of files still needed by higher-priority profiles).
      */

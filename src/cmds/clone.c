@@ -361,7 +361,7 @@ static error_t *initialize_state(
         return error_wrap(err, "Failed to initialize state database");
     }
 
-    /* Set active profiles (if any) */
+    /* Set selected profiles (if any) */
     if (count > 0) {
         err = state_set_profiles(state, profile_names, count);
         if (err) {
@@ -380,7 +380,7 @@ static error_t *initialize_state(
     state_free(state);
 
     if (output_colors_enabled(out)) {
-        output_success(out, "Initialized active profiles: ");
+        output_success(out, "Initialized selected profiles: ");
         for (size_t i = 0; i < count; i++) {
             output_printf(out, OUTPUT_NORMAL, "%s%s",
                    profile_names[i],
@@ -714,7 +714,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     if (!run_bootstrap && bootstrap_available) {
         output_info(out, "  dotta bootstrap        # Run bootstrap scripts");
     }
-    output_info(out, "  dotta profile list     # View active profiles");
+    output_info(out, "  dotta profile list     # View selected profiles");
     output_info(out, "  dotta apply            # Apply profiles to your system");
     output_info(out, "  dotta status           # View current state");
     output_newline(out);

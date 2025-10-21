@@ -225,46 +225,102 @@ static void report_safety_violations(
         return;
     }
 
-    output_section(out, "Safety violations detected");
-    output_warning(out,
-        "The following %zu file%s %s uncommitted changes:",
-        safety_result->count,
-        safety_result->count == 1 ? "" : "s",
-        safety_result->count == 1 ? "has" : "have");
+    output_section(out, "Modified orphaned files detected");
+    output_newline(out);
+
+    output_warning(out, "The following files cannot be safely removed:");
 
     for (size_t i = 0; i < safety_result->count; i++) {
         const safety_violation_t *v = &safety_result->violations[i];
 
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "  %s✗%s %s",
-                   output_color_code(out, OUTPUT_COLOR_RED),
-                   output_color_code(out, OUTPUT_COLOR_RESET),
-                   v->filesystem_path);
+        /* Format reason for display */
+        const char *reason_display = NULL;
+        const char *icon = "•";
+
+        if (strcmp(v->reason, SAFETY_REASON_MODIFIED) == 0) {
+            reason_display = "modified";
+            icon = "✗";
+        } else if (strcmp(v->reason, SAFETY_REASON_MODE_CHANGED) == 0) {
+            reason_display = "permissions changed";
+            icon = "⚠";
+        } else if (strcmp(v->reason, SAFETY_REASON_TYPE_CHANGED) == 0) {
+            reason_display = "type changed";
+            icon = "⚠";
+        } else if (strcmp(v->reason, SAFETY_REASON_PROFILE_DELETED) == 0) {
+            reason_display = "profile branch deleted";
+            icon = "!";
+        } else if (strcmp(v->reason, SAFETY_REASON_FILE_REMOVED) == 0) {
+            reason_display = "removed from profile";
+            icon = "!";
+        } else if (strcmp(v->reason, SAFETY_REASON_CANNOT_VERIFY) == 0) {
+            reason_display = "cannot verify";
+            icon = "?";
         } else {
-            output_printf(out, OUTPUT_NORMAL, "  ✗ %s", v->filesystem_path);
+            reason_display = v->reason;
         }
 
-        /* Add reason detail if available */
-        if (v->reason) {
-            if (strcmp(v->reason, SAFETY_REASON_MODIFIED) == 0) {
-                output_printf(out, OUTPUT_NORMAL, " (content modified)\n");
-            } else if (strcmp(v->reason, SAFETY_REASON_MODE_CHANGED) == 0) {
-                output_printf(out, OUTPUT_NORMAL, " (permissions changed)\n");
-            } else if (strcmp(v->reason, SAFETY_REASON_PROFILE_DELETED) == 0) {
-                output_printf(out, OUTPUT_NORMAL, " (profile deleted, cannot verify)\n");
-            } else {
-                output_printf(out, OUTPUT_NORMAL, " (%s)\n", v->reason);
+        if (output_colors_enabled(out)) {
+            const char *reason_color = v->content_modified ?
+                output_color_code(out, OUTPUT_COLOR_RED) :
+                output_color_code(out, OUTPUT_COLOR_YELLOW);
+
+            output_printf(out, OUTPUT_NORMAL, "  %s%s%s %s %s(%s",
+                   reason_color,
+                   icon,
+                   output_color_code(out, OUTPUT_COLOR_RESET),
+                   v->filesystem_path,
+                   reason_color,
+                   reason_display);
+
+            if (v->source_profile) {
+                output_printf(out, OUTPUT_NORMAL, " from %s%s%s",
+                       output_color_code(out, OUTPUT_COLOR_CYAN),
+                       v->source_profile,
+                       reason_color);
             }
+
+            output_printf(out, OUTPUT_NORMAL, ")%s\n",
+                   output_color_code(out, OUTPUT_COLOR_RESET));
         } else {
-            output_printf(out, OUTPUT_NORMAL, "\n");
+            output_printf(out, OUTPUT_NORMAL, "  %s %s (%s",
+                   icon, v->filesystem_path, reason_display);
+
+            if (v->source_profile) {
+                output_printf(out, OUTPUT_NORMAL, " from %s", v->source_profile);
+            }
+
+            output_printf(out, OUTPUT_NORMAL, ")\n");
         }
     }
+    output_newline(out);
 
-    output_info(out, "\nTo proceed, either:");
-    output_printf(out, OUTPUT_NORMAL, "  1. Commit changes: dotta update %s\n",
-           safety_result->violations[0].source_profile ?
-           safety_result->violations[0].source_profile : "<profile>");
-    output_printf(out, OUTPUT_NORMAL, "  2. Force removal: dotta apply --force\n");
+    output_info(out, "These files are from unselected profiles but have uncommitted changes.");
+    output_info(out, "To prevent data loss, commit changes before removing:");
+    output_newline(out);
+    output_info(out, "Options:");
+    output_info(out, "  1. Commit changes to the profile:");
+
+    /* Get first violation's profile for example commands */
+    const char *example_profile = NULL;
+    if (safety_result->count > 0 && safety_result->violations[0].source_profile) {
+        example_profile = safety_result->violations[0].source_profile;
+    }
+
+    if (example_profile) {
+        output_info(out, "     dotta update -p %s <files>", example_profile);
+        output_info(out, "     dotta apply");
+    } else {
+        output_info(out, "     dotta update <files>");
+        output_info(out, "     dotta apply");
+    }
+
+    output_info(out, "  2. Force removal (discards changes):");
+    output_info(out, "     dotta apply --force");
+    output_info(out, "  3. Keep the profile selected:");
+
+    if (example_profile) {
+        output_info(out, "     dotta profile select %s", example_profile);
+    }
 }
 
 /**
@@ -286,7 +342,7 @@ static void report_safety_violations(
  * @param opts Cleanup options (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *remove_orphaned_files(
+static error_t *prune_orphaned_files(
     git_repository *repo,
     const state_t *state,
     const manifest_t *manifest,
@@ -406,7 +462,11 @@ static error_t *remove_orphaned_files(
 
     /* Remove orphaned files */
     if (verbose) {
-        output_section(out, "Removing orphaned files");
+        char header[128];
+        snprintf(header, sizeof(header), "Pruning %zu orphaned file%s",
+                string_array_size(to_remove),
+                string_array_size(to_remove) == 1 ? "" : "s");
+        output_section(out, header);
     }
 
     for (size_t i = 0; i < string_array_size(to_remove); i++) {
@@ -484,13 +544,13 @@ static error_t *remove_orphaned_files(
     /* Print summary if not verbose */
     if (!verbose && result->orphaned_files_removed > 0) {
         if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "Removed %s%zu%s orphaned file%s\n",
+            output_printf(out, OUTPUT_NORMAL, "Pruned %s%zu%s orphaned file%s\n",
                    output_color_code(out, OUTPUT_COLOR_YELLOW),
                    result->orphaned_files_removed,
                    output_color_code(out, OUTPUT_COLOR_RESET),
                    result->orphaned_files_removed == 1 ? "" : "s");
         } else {
-            output_printf(out, OUTPUT_NORMAL, "Removed %zu orphaned file%s\n",
+            output_printf(out, OUTPUT_NORMAL, "Pruned %zu orphaned file%s\n",
                    result->orphaned_files_removed,
                    result->orphaned_files_removed == 1 ? "" : "s");
         }
@@ -778,7 +838,7 @@ error_t *cleanup_execute(
     }
 
     /* Step 1: Remove orphaned files with safety validation */
-    err = remove_orphaned_files(repo, state, manifest, result, opts);
+    err = prune_orphaned_files(repo, state, manifest, result, opts);
     if (err) {
         cleanup_result_free(result);
         return error_wrap(err, "Failed to remove orphaned files");

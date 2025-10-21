@@ -76,7 +76,7 @@ typedef struct {
     size_t directories_removed;      /* Successfully removed */
     size_t directories_failed;       /* Failed to remove (I/O errors) */
 
-    /* Safety violation details (owned by this structure) */
+    /* Safety violation details */
     safety_result_t *safety_violations;  /* NULL if no violations or force=true */
 } cleanup_result_t;
 

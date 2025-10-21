@@ -402,6 +402,38 @@ bool fs_is_directory(const char *path) {
     return S_ISDIR(st.st_mode);
 }
 
+bool fs_is_directory_empty(const char *path) {
+    if (!path || !fs_is_directory(path)) {
+        return true;  /* Non-existent directory is considered "empty" */
+    }
+
+    /* Direct directory reading with early exit */
+    DIR *dir = opendir(path);
+    if (!dir) {
+        /* Can't determine, assume not empty to be safe */
+        return false;
+    }
+
+    /* Check if directory only contains . and .. */
+    bool is_empty = true;
+    struct dirent *entry;
+    errno = 0;
+
+    while ((entry = readdir(dir)) != NULL) {
+        /* Skip . and .. entries */
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        /* Found a real entry - directory is not empty */
+        is_empty = false;
+        break;
+    }
+
+    closedir(dir);
+    return is_empty;
+}
+
 error_t *fs_list_dir(const char *path, string_array_t **out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);

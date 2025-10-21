@@ -318,6 +318,130 @@ static void print_deploy_results(const output_ctx_t *out, const deploy_result_t 
 }
 
 /**
+ * Prune empty tracked directories
+ *
+ * Removes directories that are:
+ * 1. Tracked in metadata (explicitly added via `dotta add`)
+ * 2. Now empty (contain no files or subdirectories)
+ *
+ * This completes the cleanup after orphaned files are removed,
+ * ensuring that empty directory structures don't clutter the filesystem.
+ *
+ * Individual removal failures are non-fatal and reported in summary.
+ *
+ * @param metadata Merged metadata containing tracked directories (can be NULL)
+ * @param out Output context (must not be NULL)
+ * @param verbose Print detailed output
+ */
+static void prune_empty_tracked_directories(
+    const metadata_t *metadata,
+    output_ctx_t *out,
+    bool verbose
+) {
+    if (!metadata) {
+        return;  /* No metadata, nothing to prune */
+    }
+
+    /* Get all tracked directories */
+    size_t dir_count = 0;
+    const metadata_directory_entry_t *directories =
+        metadata_get_all_tracked_directories(metadata, &dir_count);
+
+    if (dir_count == 0) {
+        return;  /* No tracked directories */
+    }
+
+    size_t total_removed = 0;
+    size_t total_failed = 0;
+    bool header_printed = false;
+    bool made_progress = true;
+
+    /* Iteratively remove empty directories until no more can be removed
+     *
+     * This handles nested directories without needing to sort by depth:
+     * - First pass: removes deepest empty directories
+     * - Second pass: parent directories may now be empty, remove them
+     * - Repeat until stable (no directories removed in a pass)
+     */
+    while (made_progress) {
+        made_progress = false;
+
+        for (size_t i = 0; i < dir_count; i++) {
+            const char *dir_path = directories[i].filesystem_path;
+
+            /* Skip if directory doesn't exist (already removed in previous iteration) */
+            if (!fs_exists(dir_path)) {
+                continue;
+            }
+
+            /* Check if directory is empty */
+            if (!fs_is_directory_empty(dir_path)) {
+                continue;
+            }
+
+            /* Print header on first removal attempt */
+            if (!header_printed && verbose) {
+                output_section(out, "Pruning empty tracked directories");
+                header_printed = true;
+            }
+
+            /* Remove empty directory */
+            error_t *err = fs_remove_dir(dir_path, false);
+            if (err) {
+                /* Non-fatal: track failure and continue */
+                total_failed++;
+                if (verbose) {
+                    if (output_colors_enabled(out)) {
+                        fprintf(stderr, "  %s[fail]%s %s: %s\n",
+                               output_color_code(out, OUTPUT_COLOR_RED),
+                               output_color_code(out, OUTPUT_COLOR_RESET),
+                               dir_path, error_message(err));
+                    } else {
+                        fprintf(stderr, "  [fail] %s: %s\n", dir_path, error_message(err));
+                    }
+                }
+                error_free(err);
+            } else {
+                total_removed++;
+                made_progress = true;
+                if (verbose) {
+                    if (output_colors_enabled(out)) {
+                        output_printf(out, OUTPUT_NORMAL, "  %s[removed]%s %s\n",
+                               output_color_code(out, OUTPUT_COLOR_GREEN),
+                               output_color_code(out, OUTPUT_COLOR_RESET),
+                               dir_path);
+                    } else {
+                        output_printf(out, OUTPUT_NORMAL, "  [removed] %s\n", dir_path);
+                    }
+                }
+            }
+        }
+    }
+
+    /* Print summary if not verbose */
+    if (!verbose) {
+        if (total_removed > 0) {
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "Pruned %s%zu%s empty director%s\n",
+                       output_color_code(out, OUTPUT_COLOR_YELLOW),
+                       total_removed,
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       total_removed == 1 ? "y" : "ies");
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "Pruned %zu empty director%s\n",
+                       total_removed,
+                       total_removed == 1 ? "y" : "ies");
+            }
+        }
+        if (total_failed > 0) {
+            output_warning(out, "Failed to prune %zu director%s",
+                   total_failed,
+                   total_failed == 1 ? "y" : "ies");
+        }
+    }
+}
+
+/**
  * Prune orphaned files from filesystem
  *
  * Removes files that are tracked in state but not in the current manifest.
@@ -330,9 +454,13 @@ static void print_deploy_results(const output_ctx_t *out, const deploy_result_t 
  * Safety: Checks for uncommitted filesystem changes before removing orphaned files.
  * This prevents data loss when profiles are unselected.
  *
+ * After removing orphaned files, this function also removes empty tracked
+ * directories (directories that were explicitly added to profiles).
+ *
  * @param repo Repository (must not be NULL)
  * @param state State (must not be NULL, read-only - used to identify orphaned files)
  * @param manifest Current manifest (must not be NULL)
+ * @param metadata Merged metadata containing tracked directories (can be NULL)
  * @param out Output context (must not be NULL)
  * @param verbose Print detailed output
  * @param force Skip safety checks and force removal
@@ -342,6 +470,7 @@ static error_t *apply_prune_orphaned_files(
     git_repository *repo,
     state_t *state,
     const manifest_t *manifest,
+    const metadata_t *metadata,
     output_ctx_t *out,
     bool verbose,
     bool force
@@ -501,6 +630,14 @@ static error_t *apply_prune_orphaned_files(
             }
         }
     }
+
+    /* Prune empty tracked directories after removing files
+     *
+     * Now that orphaned files are removed, check if any tracked directories
+     * (directories explicitly added via `dotta add`) are now empty.
+     * This completes the cleanup by removing empty directory structures.
+     */
+    prune_empty_tracked_directories(metadata, out, verbose);
 
 cleanup:
     if (manifest_paths) hashmap_free(manifest_paths, NULL);
@@ -960,7 +1097,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
          * The --keep-orphans flag allows opting out of automatic cleanup for advanced workflows.
          */
         if (!opts->keep_orphans) {
-            err = apply_prune_orphaned_files(repo, state, manifest, out, opts->verbose, opts->force);
+            err = apply_prune_orphaned_files(repo, state, manifest, merged_metadata, out, opts->verbose, opts->force);
             if (err) {
                 goto cleanup;
             }

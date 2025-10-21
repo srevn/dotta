@@ -139,6 +139,17 @@ error_t *fs_remove_dir(const char *path, bool recursive);
 bool fs_is_directory(const char *path);
 
 /**
+ * Check if directory is empty
+ *
+ * A directory is considered empty if it contains only "." and ".." entries.
+ * Non-existent directories are also considered empty.
+ *
+ * @param path Directory path to check (must not be NULL)
+ * @return true if directory is empty or doesn't exist, false otherwise
+ */
+bool fs_is_directory_empty(const char *path);
+
+/**
  * List directory contents
  *
  * @param path Directory path (must not be NULL)

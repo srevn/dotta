@@ -444,7 +444,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
 
     {
         /* Allocate array to hold metadata from each profile */
-        const metadata_t **profile_metadata = calloc(profiles->count, sizeof(metadata_t *));
+        metadata_t **profile_metadata = calloc(profiles->count, sizeof(metadata_t *));
         if (!profile_metadata) {
             err = ERROR(ERR_MEMORY, "Failed to allocate profile metadata array");
             goto cleanup;
@@ -469,7 +469,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                 } else {
                     /* Real error - clean up and propagate */
                     for (size_t j = 0; j < loaded_count; j++) {
-                        metadata_free((metadata_t *)profile_metadata[j]);
+                        metadata_free(profile_metadata[j]);
                     }
                     free(profile_metadata);
                     err = error_wrap(meta_err, "Failed to load metadata from profile '%s'",
@@ -490,12 +490,12 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
 
         /* Merge metadata according to profile precedence */
         if (loaded_count > 0) {
-            err = metadata_merge(profile_metadata, profiles->count, &merged_metadata);
+            err = metadata_merge((const metadata_t **)profile_metadata, profiles->count, &merged_metadata);
 
             /* Free individual profile metadata */
             for (size_t i = 0; i < profiles->count; i++) {
                 if (profile_metadata[i]) {
-                    metadata_free((metadata_t *)profile_metadata[i]);
+                    metadata_free(profile_metadata[i]);
                 }
             }
 
@@ -567,37 +567,40 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
 
         profiles_str = malloc(total_len + 1);
-        if (profiles_str) {
-            char *p = profiles_str;
-            for (size_t i = 0; i < profiles->count; i++) {
-                const char *name = profiles->profiles[i].name;
-                strcpy(p, name);
-                p += strlen(name);
-                if (i < profiles->count - 1) {
-                    *p++ = ' ';
-                }
+        if (!profiles_str) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate profile names string");
+            goto cleanup;
+        }
+
+        char *p = profiles_str;
+        for (size_t i = 0; i < profiles->count; i++) {
+            const char *name = profiles->profiles[i].name;
+            strcpy(p, name);
+            p += strlen(name);
+            if (i < profiles->count - 1) {
+                *p++ = ' ';
             }
-            *p = '\0';
+        }
+        *p = '\0';
 
-            /* Create hook context with all profiles */
-            hook_ctx = hook_context_create(repo_dir, "apply", profiles_str);
-            if (hook_ctx) {
-                hook_ctx->dry_run = opts->dry_run;
+        /* Create hook context with all profiles */
+        hook_ctx = hook_context_create(repo_dir, "apply", profiles_str);
+        if (hook_ctx) {
+            hook_ctx->dry_run = opts->dry_run;
 
-                hook_result_t *hook_result = NULL;
-                err = hook_execute(config, HOOK_PRE_APPLY, hook_ctx, &hook_result);
+            hook_result_t *hook_result = NULL;
+            err = hook_execute(config, HOOK_PRE_APPLY, hook_ctx, &hook_result);
 
-                if (err) {
-                    /* Hook failed - abort operation */
-                    if (hook_result && hook_result->output && hook_result->output[0]) {
-                        output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
-                    }
-                    hook_result_free(hook_result);
-                    err = error_wrap(err, "Pre-apply hook failed");
-                    goto cleanup;
+            if (err) {
+                /* Hook failed - abort operation */
+                if (hook_result && hook_result->output && hook_result->output[0]) {
+                    output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
                 }
                 hook_result_free(hook_result);
+                err = error_wrap(err, "Pre-apply hook failed");
+                goto cleanup;
             }
+            hook_result_free(hook_result);
         }
     }
 

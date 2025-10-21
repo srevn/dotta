@@ -388,7 +388,7 @@ static const state_file_entry_t *find_state_entry_linear(
  */
 error_t *safety_check_removal(
     git_repository *repo,
-    state_t *state,
+    const state_t *state,
     const char **filesystem_paths,
     size_t path_count,
     bool force,

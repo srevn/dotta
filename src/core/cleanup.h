@@ -141,7 +141,7 @@ typedef struct {
  */
 error_t *cleanup_execute(
     git_repository *repo,
-    state_t *state,
+    const state_t *state,
     const manifest_t *manifest,
     const cleanup_options_t *opts,
     cleanup_result_t **out_result

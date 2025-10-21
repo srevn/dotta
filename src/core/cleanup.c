@@ -288,7 +288,7 @@ static void report_safety_violations(
  */
 static error_t *remove_orphaned_files(
     git_repository *repo,
-    state_t *state,
+    const state_t *state,
     const manifest_t *manifest,
     cleanup_result_t *result,
     const cleanup_options_t *opts
@@ -617,9 +617,10 @@ static error_t *prune_empty_directories(
     /* Allocate state tracking array */
     directory_state_t *states = calloc(dir_count, sizeof(directory_state_t));
     if (!states) {
-        /* Non-fatal: fall back to unoptimized approach without state tracking */
-        /* For simplicity in this error case, we'll just return early */
-        output_warning(out, "Failed to allocate directory state tracking (skipping optimization)");
+        /* Non-fatal: allocation failure skips directory pruning entirely.
+         * This is safer than attempting unoptimized pruning, which could
+         * be prohibitively expensive for large directory hierarchies. */
+        output_warning(out, "Failed to allocate directory state tracking, skipping directory pruning");
         return NULL;
     }
 
@@ -754,7 +755,7 @@ static error_t *prune_empty_directories(
  */
 error_t *cleanup_execute(
     git_repository *repo,
-    state_t *state,
+    const state_t *state,
     const manifest_t *manifest,
     const cleanup_options_t *opts,
     cleanup_result_t **out_result

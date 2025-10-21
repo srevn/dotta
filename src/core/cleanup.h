@@ -39,21 +39,20 @@
 #include "core/profiles.h"
 #include "core/safety.h"
 #include "core/state.h"
-#include "utils/output.h"
 
 /**
  * Cleanup operation options
  *
  * Configures cleanup behavior and provides pre-loaded data to avoid duplication.
+ * No presentation concerns, pure business logic flags.
  */
 typedef struct {
     /* Pre-loaded data */
     const metadata_t *active_metadata;      /* Metadata from active profiles (can be NULL) */
     const profile_list_t *active_profiles;  /* Currently active profiles (can be NULL) */
 
-    /* Output and control flags */
-    output_ctx_t *out;                      /* Output context (must not be NULL) */
-    bool verbose;                           /* Print detailed progress */
+    /* Control flags */
+    bool verbose;                           /* Kept for consistency (unused in module) */
     bool dry_run;                           /* Don't actually remove anything */
     bool force;                             /* Skip safety checks (dangerous) */
 } cleanup_options_t;
@@ -66,18 +65,27 @@ typedef struct {
  */
 typedef struct {
     /* Orphaned file statistics */
-    size_t orphaned_files_found;     /* Total orphaned files detected */
-    size_t orphaned_files_removed;   /* Successfully removed */
-    size_t orphaned_files_failed;    /* Failed to remove (I/O errors) */
-    size_t orphaned_files_skipped;   /* Skipped due to safety violations */
+    size_t orphaned_files_found;         /* Total orphaned files detected */
+    size_t orphaned_files_removed;       /* Successfully removed */
+    size_t orphaned_files_failed;        /* Failed to remove (I/O errors) */
+    size_t orphaned_files_skipped;       /* Skipped due to safety violations */
 
     /* Empty directory statistics */
-    size_t directories_checked;      /* Total directories examined */
-    size_t directories_removed;      /* Successfully removed */
-    size_t directories_failed;       /* Failed to remove (I/O errors) */
+    size_t directories_checked;          /* Total directories examined */
+    size_t directories_removed;          /* Successfully removed */
+    size_t directories_failed;           /* Failed to remove (I/O errors) */
 
     /* Safety violation details */
     safety_result_t *safety_violations;  /* NULL if no violations or force=true */
+
+    /* Detailed file lists */
+    string_array_t *removed_files;       /* Successfully removed file paths */
+    string_array_t *skipped_files;       /* Skipped file paths (safety violations) */
+    string_array_t *failed_files;        /* Failed file paths (with errors) */
+
+    /* Detailed directory lists */
+    string_array_t *removed_dirs;        /* Successfully removed directory paths */
+    string_array_t *failed_dirs;         /* Failed directory paths (with errors) */
 } cleanup_result_t;
 
 /**

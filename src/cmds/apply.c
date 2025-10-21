@@ -204,6 +204,248 @@ static void print_deploy_results(const output_ctx_t *out, const deploy_result_t 
 }
 
 /**
+ * Print safety violations
+ */
+static void print_safety_violations(
+    const output_ctx_t *out,
+    const safety_result_t *safety_result
+) {
+    if (!safety_result || safety_result->count == 0) {
+        return;
+    }
+
+    output_section(out, "Modified orphaned files detected");
+    output_newline(out);
+
+    output_warning(out, "The following files cannot be safely removed:");
+
+    for (size_t i = 0; i < safety_result->count; i++) {
+        const safety_violation_t *v = &safety_result->violations[i];
+
+        /* Format reason for display */
+        const char *reason_display = NULL;
+        const char *icon = "•";
+
+        if (strcmp(v->reason, SAFETY_REASON_MODIFIED) == 0) {
+            reason_display = "modified";
+            icon = "✗";
+        } else if (strcmp(v->reason, SAFETY_REASON_MODE_CHANGED) == 0) {
+            reason_display = "permissions changed";
+            icon = "⚠";
+        } else if (strcmp(v->reason, SAFETY_REASON_TYPE_CHANGED) == 0) {
+            reason_display = "type changed";
+            icon = "⚠";
+        } else if (strcmp(v->reason, SAFETY_REASON_PROFILE_DELETED) == 0) {
+            reason_display = "profile branch deleted";
+            icon = "!";
+        } else if (strcmp(v->reason, SAFETY_REASON_FILE_REMOVED) == 0) {
+            reason_display = "removed from profile";
+            icon = "!";
+        } else if (strcmp(v->reason, SAFETY_REASON_CANNOT_VERIFY) == 0) {
+            reason_display = "cannot verify";
+            icon = "?";
+        } else {
+            reason_display = v->reason;
+        }
+
+        if (output_colors_enabled(out)) {
+            const char *reason_color = v->content_modified ?
+                output_color_code(out, OUTPUT_COLOR_RED) :
+                output_color_code(out, OUTPUT_COLOR_YELLOW);
+
+            output_printf(out, OUTPUT_NORMAL, "  %s%s%s %s %s(%s",
+                   reason_color,
+                   icon,
+                   output_color_code(out, OUTPUT_COLOR_RESET),
+                   v->filesystem_path,
+                   reason_color,
+                   reason_display);
+
+            if (v->source_profile) {
+                output_printf(out, OUTPUT_NORMAL, " from %s%s%s",
+                       output_color_code(out, OUTPUT_COLOR_CYAN),
+                       v->source_profile,
+                       reason_color);
+            }
+
+            output_printf(out, OUTPUT_NORMAL, ")%s\n",
+                   output_color_code(out, OUTPUT_COLOR_RESET));
+        } else {
+            output_printf(out, OUTPUT_NORMAL, "  %s %s (%s",
+                   icon, v->filesystem_path, reason_display);
+
+            if (v->source_profile) {
+                output_printf(out, OUTPUT_NORMAL, " from %s", v->source_profile);
+            }
+
+            output_printf(out, OUTPUT_NORMAL, ")\n");
+        }
+    }
+    output_newline(out);
+
+    output_info(out, "These files are from unselected profiles but have uncommitted changes.");
+    output_info(out, "To prevent data loss, commit changes before removing:");
+    output_newline(out);
+    output_info(out, "Options:");
+    output_info(out, "  1. Commit changes to the profile:");
+
+    /* Get first violation's profile for example commands */
+    const char *example_profile = NULL;
+    if (safety_result->count > 0 && safety_result->violations[0].source_profile) {
+        example_profile = safety_result->violations[0].source_profile;
+    }
+
+    if (example_profile) {
+        output_info(out, "     dotta update -p %s <files>", example_profile);
+        output_info(out, "     dotta apply");
+    } else {
+        output_info(out, "     dotta update <files>");
+        output_info(out, "     dotta apply");
+    }
+
+    output_info(out, "  2. Force removal (discards changes):");
+    output_info(out, "     dotta apply --force");
+    output_info(out, "  3. Keep the profile selected:");
+
+    if (example_profile) {
+        output_info(out, "     dotta profile select %s", example_profile);
+    }
+}
+
+/**
+ * Print cleanup results
+ */
+static void print_cleanup_results(
+    const output_ctx_t *out,
+    const cleanup_result_t *result,
+    bool verbose
+) {
+    if (!result) {
+        return;
+    }
+
+    /* Display safety violations first (most important) */
+    if (result->safety_violations) {
+        print_safety_violations(out, result->safety_violations);
+    }
+
+    /* Display orphaned files */
+    if (verbose && result->removed_files && string_array_size(result->removed_files) > 0) {
+        output_section(out, "Pruned orphaned files");
+        for (size_t i = 0; i < string_array_size(result->removed_files); i++) {
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "  %s[removed]%s %s\n",
+                       output_color_code(out, OUTPUT_COLOR_GREEN),
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       string_array_get(result->removed_files, i));
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "  [removed] %s\n",
+                       string_array_get(result->removed_files, i));
+            }
+        }
+    }
+
+    if (verbose && result->skipped_files && string_array_size(result->skipped_files) > 0) {
+        output_section(out, "Skipped orphaned files");
+        for (size_t i = 0; i < string_array_size(result->skipped_files); i++) {
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "  %s[skipped]%s %s (safety violation)\n",
+                       output_color_code(out, OUTPUT_COLOR_YELLOW),
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       string_array_get(result->skipped_files, i));
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "  [skipped] %s (safety violation)\n",
+                       string_array_get(result->skipped_files, i));
+            }
+        }
+    }
+
+    if (verbose && result->failed_files && string_array_size(result->failed_files) > 0) {
+        output_section(out, "Failed to remove orphaned files");
+        for (size_t i = 0; i < string_array_size(result->failed_files); i++) {
+            if (output_colors_enabled(out)) {
+                fprintf(stderr, "  %s[fail]%s %s\n",
+                       output_color_code(out, OUTPUT_COLOR_RED),
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       string_array_get(result->failed_files, i));
+            } else {
+                fprintf(stderr, "  [fail] %s\n",
+                       string_array_get(result->failed_files, i));
+            }
+        }
+    }
+
+    /* Display empty directories */
+    if (verbose && result->removed_dirs && string_array_size(result->removed_dirs) > 0) {
+        output_section(out, "Pruned empty tracked directories");
+        for (size_t i = 0; i < string_array_size(result->removed_dirs); i++) {
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "  %s[removed]%s %s\n",
+                       output_color_code(out, OUTPUT_COLOR_GREEN),
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       string_array_get(result->removed_dirs, i));
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "  [removed] %s\n",
+                       string_array_get(result->removed_dirs, i));
+            }
+        }
+    }
+
+    if (verbose && result->failed_dirs && string_array_size(result->failed_dirs) > 0) {
+        output_section(out, "Failed to remove empty directories");
+        for (size_t i = 0; i < string_array_size(result->failed_dirs); i++) {
+            if (output_colors_enabled(out)) {
+                fprintf(stderr, "  %s[fail]%s %s\n",
+                       output_color_code(out, OUTPUT_COLOR_RED),
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       string_array_get(result->failed_dirs, i));
+            } else {
+                fprintf(stderr, "  [fail] %s\n",
+                       string_array_get(result->failed_dirs, i));
+            }
+        }
+    }
+
+    /* Print summaries if not verbose */
+    if (!verbose) {
+        if (result->orphaned_files_removed > 0) {
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "Pruned %s%zu%s orphaned file%s\n",
+                       output_color_code(out, OUTPUT_COLOR_YELLOW),
+                       result->orphaned_files_removed,
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       result->orphaned_files_removed == 1 ? "" : "s");
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "Pruned %zu orphaned file%s\n",
+                       result->orphaned_files_removed,
+                       result->orphaned_files_removed == 1 ? "" : "s");
+            }
+        }
+
+        if (result->directories_removed > 0) {
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "Pruned %s%zu%s empty director%s\n",
+                       output_color_code(out, OUTPUT_COLOR_YELLOW),
+                       result->directories_removed,
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       result->directories_removed == 1 ? "y" : "ies");
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "Pruned %zu empty director%s\n",
+                       result->directories_removed,
+                       result->directories_removed == 1 ? "y" : "ies");
+            }
+        }
+
+        if (result->orphaned_files_failed > 0 || result->directories_failed > 0) {
+            size_t total_failed = result->orphaned_files_failed + result->directories_failed;
+            output_warning(out, "Failed to prune %zu item%s",
+                   total_failed,
+                   total_failed == 1 ? "" : "s");
+        }
+    }
+}
+
+/**
  * Update state with deployed files and save to disk
  *
  * This function does NOT modify the active profile list in state.
@@ -662,7 +904,6 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             cleanup_options_t cleanup_opts = {
                 .active_metadata = merged_metadata,
                 .active_profiles = profiles,
-                .out = out,
                 .verbose = opts->verbose,
                 .dry_run = false,  /* Dry-run handled at deployment level */
                 .force = opts->force
@@ -670,14 +911,21 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
 
             err = cleanup_execute(repo, state, manifest, &cleanup_opts, &cleanup_res);
             if (err) {
+                /* Display partial results before propagating error */
+                if (cleanup_res) {
+                    print_cleanup_results(out, cleanup_res, opts->verbose);
+                }
                 cleanup_result_free(cleanup_res);
                 goto cleanup;
             }
 
+            /* Display cleanup results */
+            print_cleanup_results(out, cleanup_res, opts->verbose);
+
             /* Check if cleanup was blocked by safety violations */
             if (cleanup_res && cleanup_res->safety_violations &&
                 cleanup_res->safety_violations->count > 0 && !opts->force) {
-                /* Safety violations were reported by cleanup module */
+                /* Safety violations detected and displayed by print_cleanup_results() */
                 size_t violation_count = cleanup_res->safety_violations->count;
                 cleanup_result_free(cleanup_res);
                 err = ERROR(ERR_CONFLICT,

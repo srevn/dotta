@@ -19,7 +19,6 @@
 #include "core/state.h"
 #include "utils/array.h"
 #include "utils/hashmap.h"
-#include "utils/output.h"
 
 /**
  * Directory pruning state
@@ -38,6 +37,8 @@ typedef enum {
 
 /**
  * Create cleanup result structure
+ *
+ * Initializes all counters to 0 and allocates string arrays for detailed tracking.
  */
 static error_t *create_result(cleanup_result_t **out) {
     CHECK_NULL(out);
@@ -47,18 +48,41 @@ static error_t *create_result(cleanup_result_t **out) {
         return ERROR(ERR_MEMORY, "Failed to allocate cleanup result");
     }
 
-    /* All fields initialized to 0/NULL by calloc */
+    /* Allocate detailed tracking arrays (for caller display) */
+    result->removed_files = string_array_create();
+    result->skipped_files = string_array_create();
+    result->failed_files = string_array_create();
+    result->removed_dirs = string_array_create();
+    result->failed_dirs = string_array_create();
+
+    /* Check allocations */
+    if (!result->removed_files || !result->skipped_files || !result->failed_files ||
+        !result->removed_dirs || !result->failed_dirs) {
+        cleanup_result_free(result);
+        return ERROR(ERR_MEMORY, "Failed to allocate cleanup result arrays");
+    }
+
+    /* All other fields initialized to 0/NULL by calloc */
     *out = result;
     return NULL;
 }
 
 /**
  * Free cleanup result
+ *
+ * Frees all allocated resources including detailed tracking arrays and safety violations.
  */
 void cleanup_result_free(cleanup_result_t *result) {
     if (!result) {
         return;
     }
+
+    /* Free detailed tracking arrays */
+    if (result->removed_files) string_array_free(result->removed_files);
+    if (result->skipped_files) string_array_free(result->skipped_files);
+    if (result->failed_files) string_array_free(result->failed_files);
+    if (result->removed_dirs) string_array_free(result->removed_dirs);
+    if (result->failed_dirs) string_array_free(result->failed_dirs);
 
     /* Free embedded safety violations */
     if (result->safety_violations) {
@@ -212,118 +236,6 @@ static error_t *load_complete_metadata(
 }
 
 /**
- * Report safety violations to user
- *
- * Displays detailed information about files that cannot be safely removed
- * with guidance on how to proceed.
- */
-static void report_safety_violations(
-    output_ctx_t *out,
-    const safety_result_t *safety_result
-) {
-    if (!out || !safety_result || safety_result->count == 0) {
-        return;
-    }
-
-    output_section(out, "Modified orphaned files detected");
-    output_newline(out);
-
-    output_warning(out, "The following files cannot be safely removed:");
-
-    for (size_t i = 0; i < safety_result->count; i++) {
-        const safety_violation_t *v = &safety_result->violations[i];
-
-        /* Format reason for display */
-        const char *reason_display = NULL;
-        const char *icon = "•";
-
-        if (strcmp(v->reason, SAFETY_REASON_MODIFIED) == 0) {
-            reason_display = "modified";
-            icon = "✗";
-        } else if (strcmp(v->reason, SAFETY_REASON_MODE_CHANGED) == 0) {
-            reason_display = "permissions changed";
-            icon = "⚠";
-        } else if (strcmp(v->reason, SAFETY_REASON_TYPE_CHANGED) == 0) {
-            reason_display = "type changed";
-            icon = "⚠";
-        } else if (strcmp(v->reason, SAFETY_REASON_PROFILE_DELETED) == 0) {
-            reason_display = "profile branch deleted";
-            icon = "!";
-        } else if (strcmp(v->reason, SAFETY_REASON_FILE_REMOVED) == 0) {
-            reason_display = "removed from profile";
-            icon = "!";
-        } else if (strcmp(v->reason, SAFETY_REASON_CANNOT_VERIFY) == 0) {
-            reason_display = "cannot verify";
-            icon = "?";
-        } else {
-            reason_display = v->reason;
-        }
-
-        if (output_colors_enabled(out)) {
-            const char *reason_color = v->content_modified ?
-                output_color_code(out, OUTPUT_COLOR_RED) :
-                output_color_code(out, OUTPUT_COLOR_YELLOW);
-
-            output_printf(out, OUTPUT_NORMAL, "  %s%s%s %s %s(%s",
-                   reason_color,
-                   icon,
-                   output_color_code(out, OUTPUT_COLOR_RESET),
-                   v->filesystem_path,
-                   reason_color,
-                   reason_display);
-
-            if (v->source_profile) {
-                output_printf(out, OUTPUT_NORMAL, " from %s%s%s",
-                       output_color_code(out, OUTPUT_COLOR_CYAN),
-                       v->source_profile,
-                       reason_color);
-            }
-
-            output_printf(out, OUTPUT_NORMAL, ")%s\n",
-                   output_color_code(out, OUTPUT_COLOR_RESET));
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "  %s %s (%s",
-                   icon, v->filesystem_path, reason_display);
-
-            if (v->source_profile) {
-                output_printf(out, OUTPUT_NORMAL, " from %s", v->source_profile);
-            }
-
-            output_printf(out, OUTPUT_NORMAL, ")\n");
-        }
-    }
-    output_newline(out);
-
-    output_info(out, "These files are from unselected profiles but have uncommitted changes.");
-    output_info(out, "To prevent data loss, commit changes before removing:");
-    output_newline(out);
-    output_info(out, "Options:");
-    output_info(out, "  1. Commit changes to the profile:");
-
-    /* Get first violation's profile for example commands */
-    const char *example_profile = NULL;
-    if (safety_result->count > 0 && safety_result->violations[0].source_profile) {
-        example_profile = safety_result->violations[0].source_profile;
-    }
-
-    if (example_profile) {
-        output_info(out, "     dotta update -p %s <files>", example_profile);
-        output_info(out, "     dotta apply");
-    } else {
-        output_info(out, "     dotta update <files>");
-        output_info(out, "     dotta apply");
-    }
-
-    output_info(out, "  2. Force removal (discards changes):");
-    output_info(out, "     dotta apply --force");
-    output_info(out, "  3. Keep the profile selected:");
-
-    if (example_profile) {
-        output_info(out, "     dotta profile select %s", example_profile);
-    }
-}
-
-/**
  * Remove orphaned files from filesystem
  *
  * Identifies files in state that are not in manifest and removes them after
@@ -354,7 +266,6 @@ static error_t *prune_orphaned_files(
     CHECK_NULL(manifest);
     CHECK_NULL(result);
     CHECK_NULL(opts);
-    CHECK_NULL(opts->out);
 
     error_t *err = NULL;
     string_array_t *to_remove = NULL;
@@ -363,8 +274,6 @@ static error_t *prune_orphaned_files(
     state_file_entry_t *state_files = NULL;
     size_t state_file_count = 0;
 
-    output_ctx_t *out = opts->out;
-    bool verbose = opts->verbose;
     bool dry_run = opts->dry_run;
     bool force = opts->force;
 
@@ -418,9 +327,6 @@ static error_t *prune_orphaned_files(
 
     /* Early exit if no orphaned files */
     if (result->orphaned_files_found == 0) {
-        if (verbose) {
-            output_print(out, OUTPUT_VERBOSE, "No orphaned files to remove\n");
-        }
         err = NULL;
         goto cleanup;
     }
@@ -454,36 +360,20 @@ static error_t *prune_orphaned_files(
                 const safety_violation_t *v = &result->safety_violations->violations[i];
                 hashmap_set(violations_map, v->filesystem_path, (void *)1);
             }
-
-            /* Report violations to user */
-            report_safety_violations(out, result->safety_violations);
         }
     }
 
-    /* Remove orphaned files */
-    if (verbose) {
-        char header[128];
-        snprintf(header, sizeof(header), "Pruning %zu orphaned file%s",
-                string_array_size(to_remove),
-                string_array_size(to_remove) == 1 ? "" : "s");
-        output_section(out, header);
-    }
-
+    /* Remove orphaned files and populate result arrays for caller display */
     for (size_t i = 0; i < string_array_size(to_remove); i++) {
         const char *path = string_array_get(to_remove, i);
 
         /* Skip if file has safety violation */
         if (violations_map && hashmap_has(violations_map, path)) {
             result->orphaned_files_skipped++;
-            if (verbose) {
-                if (output_colors_enabled(out)) {
-                    output_printf(out, OUTPUT_NORMAL, "  %s[skipped]%s %s (safety violation)\n",
-                           output_color_code(out, OUTPUT_COLOR_YELLOW),
-                           output_color_code(out, OUTPUT_COLOR_RESET),
-                           path);
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, "  [skipped] %s (safety violation)\n", path);
-                }
+            err = string_array_push(result->skipped_files, path);
+            if (err) {
+                err = error_wrap(err, "Failed to track skipped file");
+                goto cleanup;
             }
             continue;
         }
@@ -494,18 +384,10 @@ static error_t *prune_orphaned_files(
             continue;
         }
 
-        /* Dry run: report but don't remove */
+        /* Dry run: don't remove */
         if (dry_run) {
-            if (verbose) {
-                if (output_colors_enabled(out)) {
-                    output_printf(out, OUTPUT_NORMAL, "  %s[would remove]%s %s\n",
-                           output_color_code(out, OUTPUT_COLOR_CYAN),
-                           output_color_code(out, OUTPUT_COLOR_RESET),
-                           path);
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, "  [would remove] %s\n", path);
-                }
-            }
+            /* In dry-run mode, we don't remove but still track what would be removed
+             * Caller can check dry_run flag to display appropriately */
             continue;
         }
 
@@ -514,45 +396,21 @@ static error_t *prune_orphaned_files(
         if (remove_err) {
             /* Non-fatal: track failure and continue */
             result->orphaned_files_failed++;
-            if (verbose) {
-                if (output_colors_enabled(out)) {
-                    fprintf(stderr, "  %s[fail]%s %s: %s\n",
-                           output_color_code(out, OUTPUT_COLOR_RED),
-                           output_color_code(out, OUTPUT_COLOR_RESET),
-                           path, error_message(remove_err));
-                } else {
-                    fprintf(stderr, "  [fail] %s: %s\n", path, error_message(remove_err));
-                }
+            err = string_array_push(result->failed_files, path);
+            if (err) {
+                error_free(remove_err);
+                err = error_wrap(err, "Failed to track failed file");
+                goto cleanup;
             }
             error_free(remove_err);
         } else {
             /* File removed successfully */
             result->orphaned_files_removed++;
-            if (verbose) {
-                if (output_colors_enabled(out)) {
-                    output_printf(out, OUTPUT_NORMAL, "  %s[removed]%s %s\n",
-                           output_color_code(out, OUTPUT_COLOR_GREEN),
-                           output_color_code(out, OUTPUT_COLOR_RESET),
-                           path);
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, "  [removed] %s\n", path);
-                }
+            err = string_array_push(result->removed_files, path);
+            if (err) {
+                err = error_wrap(err, "Failed to track removed file");
+                goto cleanup;
             }
-        }
-    }
-
-    /* Print summary if not verbose */
-    if (!verbose && result->orphaned_files_removed > 0) {
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "Pruned %s%zu%s orphaned file%s\n",
-                   output_color_code(out, OUTPUT_COLOR_YELLOW),
-                   result->orphaned_files_removed,
-                   output_color_code(out, OUTPUT_COLOR_RESET),
-                   result->orphaned_files_removed == 1 ? "" : "s");
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "Pruned %zu orphaned file%s\n",
-                   result->orphaned_files_removed,
-                   result->orphaned_files_removed == 1 ? "" : "s");
         }
     }
 
@@ -657,10 +515,7 @@ static error_t *prune_empty_directories(
     CHECK_NULL(metadata);
     CHECK_NULL(result);
     CHECK_NULL(opts);
-    CHECK_NULL(opts->out);
 
-    output_ctx_t *out = opts->out;
-    bool verbose = opts->verbose;
     bool dry_run = opts->dry_run;
 
     /* Get all tracked directories */
@@ -679,14 +534,13 @@ static error_t *prune_empty_directories(
     if (!states) {
         /* Non-fatal: allocation failure skips directory pruning entirely.
          * This is safer than attempting unoptimized pruning, which could
-         * be prohibitively expensive for large directory hierarchies. */
-        output_warning(out, "Failed to allocate directory state tracking, skipping directory pruning");
+         * be prohibitively expensive for large directory hierarchies.
+         * Caller can check if directories_removed is 0 to detect this case. */
         return NULL;
     }
 
     /* All states initialized to DIR_STATE_UNKNOWN by calloc */
 
-    bool header_printed = false;
     bool made_progress = true;
 
     /* Iteratively remove empty directories until stable */
@@ -720,43 +574,29 @@ static error_t *prune_empty_directories(
                 continue;  /* Won't re-check until child removed */
             }
 
-            /* Print header on first removal attempt */
-            if (!header_printed && verbose) {
-                output_section(out, "Pruning empty tracked directories");
-                header_printed = true;
-            }
-
-            /* Dry run: report but don't remove */
+            /* Dry run: don't remove */
             if (dry_run) {
-                if (verbose) {
-                    if (output_colors_enabled(out)) {
-                        output_printf(out, OUTPUT_NORMAL, "  %s[would remove]%s %s\n",
-                               output_color_code(out, OUTPUT_COLOR_CYAN),
-                               output_color_code(out, OUTPUT_COLOR_RESET),
-                               dir_path);
-                    } else {
-                        output_printf(out, OUTPUT_NORMAL, "  [would remove] %s\n", dir_path);
-                    }
-                }
+                /* In dry-run mode, we don't remove but caller can infer what would happen
+                 * from directories_checked and directories_removed counters */
                 continue;
             }
 
             /* Remove empty directory */
             error_t *err = fs_remove_dir(dir_path, false);
             if (err) {
-                /* Non-fatal: track failure and continue */
+                /* Non-fatal: track failure, populate result array, and continue */
                 result->directories_failed++;
                 states[i] = DIR_STATE_FAILED;
-                if (verbose) {
-                    if (output_colors_enabled(out)) {
-                        fprintf(stderr, "  %s[fail]%s %s: %s\n",
-                               output_color_code(out, OUTPUT_COLOR_RED),
-                               output_color_code(out, OUTPUT_COLOR_RESET),
-                               dir_path, error_message(err));
-                    } else {
-                        fprintf(stderr, "  [fail] %s: %s\n", dir_path, error_message(err));
-                    }
+
+                /* Populate failed_dirs array for caller display */
+                error_t *push_err = string_array_push(result->failed_dirs, dir_path);
+                if (push_err) {
+                    error_free(err);
+                    /* Free states and return fatal error */
+                    free(states);
+                    return error_wrap(push_err, "Failed to track failed directory");
                 }
+
                 error_free(err);
             } else {
                 /* Directory removed successfully */
@@ -767,39 +607,14 @@ static error_t *prune_empty_directories(
                 /* Reset parent directory state (might now be empty) */
                 reset_parent_directory_state(directories, dir_count, states, dir_path);
 
-                if (verbose) {
-                    if (output_colors_enabled(out)) {
-                        output_printf(out, OUTPUT_NORMAL, "  %s[removed]%s %s\n",
-                               output_color_code(out, OUTPUT_COLOR_GREEN),
-                               output_color_code(out, OUTPUT_COLOR_RESET),
-                               dir_path);
-                    } else {
-                        output_printf(out, OUTPUT_NORMAL, "  [removed] %s\n", dir_path);
-                    }
+                /* Populate removed_dirs array for caller display */
+                error_t *push_err = string_array_push(result->removed_dirs, dir_path);
+                if (push_err) {
+                    /* Free states and return fatal error */
+                    free(states);
+                    return error_wrap(push_err, "Failed to track removed directory");
                 }
             }
-        }
-    }
-
-    /* Print summary if not verbose */
-    if (!verbose) {
-        if (result->directories_removed > 0) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "Pruned %s%zu%s empty director%s\n",
-                       output_color_code(out, OUTPUT_COLOR_YELLOW),
-                       result->directories_removed,
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       result->directories_removed == 1 ? "y" : "ies");
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "Pruned %zu empty director%s\n",
-                       result->directories_removed,
-                       result->directories_removed == 1 ? "y" : "ies");
-            }
-        }
-        if (result->directories_failed > 0) {
-            output_warning(out, "Failed to prune %zu director%s",
-                   result->directories_failed,
-                   result->directories_failed == 1 ? "y" : "ies");
         }
     }
 
@@ -824,7 +639,6 @@ error_t *cleanup_execute(
     CHECK_NULL(state);
     CHECK_NULL(manifest);
     CHECK_NULL(opts);
-    CHECK_NULL(opts->out);
     CHECK_NULL(out_result);
 
     error_t *err = NULL;

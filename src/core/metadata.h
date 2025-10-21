@@ -306,6 +306,36 @@ error_t *metadata_load_from_file(
 );
 
 /**
+ * Load and merge metadata from multiple profiles
+ *
+ * Convenience function that loads .dotta/metadata.json from each profile
+ * branch and merges them according to array order (later profiles override
+ * earlier ones).
+ *
+ * Gracefully handles missing profiles and missing metadata files:
+ * - Profile branch doesn't exist: skipped (non-fatal)
+ * - Metadata file doesn't exist in profile: skipped (non-fatal)
+ * - Returns empty metadata if no profiles have metadata files
+ *
+ * This is useful for operations that need metadata from multiple profiles
+ * without knowing which profiles actually have metadata files.
+ *
+ * Use cases:
+ * - Loading metadata from all deployed profiles for cleanup operations
+ * - Bulk metadata loading for multi-profile operations
+ *
+ * @param repo Repository (must not be NULL)
+ * @param profile_names Array of profile names to load (must not be NULL)
+ * @param out Merged metadata (must not be NULL, caller must free with metadata_free)
+ * @return Error or NULL on success (empty metadata if no profiles have metadata)
+ */
+error_t *metadata_load_from_profiles(
+    git_repository *repo,
+    const string_array_t *profile_names,
+    metadata_t **out
+);
+
+/**
  * Save metadata to worktree
  *
  * Writes .dotta/metadata.json to a worktree directory.

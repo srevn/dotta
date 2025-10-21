@@ -228,6 +228,27 @@ error_t *state_set_profiles(
 error_t *state_get_profiles(const state_t *state, string_array_t **out);
 
 /**
+ * Get unique profiles that have deployed files
+ *
+ * Extracts all unique profile names from the deployed_files table.
+ * This represents "all profiles we've ever applied on this machine",
+ * including both active and inactive profiles.
+ *
+ * Returns copy that caller must free with string_array_free().
+ * Returns empty array if no files are deployed (not an error).
+ *
+ * Use cases:
+ * - Determining which profiles' metadata to load for cleanup operations
+ * - Identifying profiles that need to be synced
+ * - Auditing deployment history
+ *
+ * @param state State (must not be NULL)
+ * @param out Profile names (must not be NULL, caller must free with string_array_free)
+ * @return Error or NULL on success (empty array if no deployed files)
+ */
+error_t *state_get_deployed_profiles(const state_t *state, string_array_t **out);
+
+/**
  * Get last deployed timestamp for a profile
  *
  * Returns the most recent deployment timestamp for files from the specified profile.

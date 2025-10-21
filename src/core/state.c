@@ -576,6 +576,68 @@ error_t *state_get_profiles(const state_t *state, string_array_t **out) {
 }
 
 /**
+ * Get unique profiles that have deployed files
+ *
+ * Extracts all unique profile names from the deployed_files table.
+ * Uses SQL DISTINCT for efficient deduplication at database level.
+ */
+error_t *state_get_deployed_profiles(const state_t *state, string_array_t **out) {
+    CHECK_NULL(state);
+    CHECK_NULL(out);
+    CHECK_NULL(state->db);
+
+    *out = NULL;
+
+    /* Create output array */
+    string_array_t *profiles = string_array_create();
+    if (!profiles) {
+        return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
+    }
+
+    /* Query for unique profile names (DISTINCT ensures deduplication) */
+    const char *sql =
+        "SELECT DISTINCT profile FROM deployed_files ORDER BY profile;";
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        string_array_free(profiles);
+        return sqlite_error(state->db, "Failed to prepare deployed profiles query");
+    }
+
+    /* Collect profile names */
+    error_t *err = NULL;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        const char *profile_name = (const char *)sqlite3_column_text(stmt, 0);
+
+        if (!profile_name) {
+            /* NULL profile name should never happen (NOT NULL constraint) */
+            sqlite3_finalize(stmt);
+            string_array_free(profiles);
+            return ERROR(ERR_STATE_INVALID, "NULL profile name in deployed_files");
+        }
+
+        err = string_array_push(profiles, profile_name);
+        if (err) {
+            sqlite3_finalize(stmt);
+            string_array_free(profiles);
+            return error_wrap(err, "Failed to add profile to array");
+        }
+    }
+
+    sqlite3_finalize(stmt);
+
+    /* Check for query errors */
+    if (rc != SQLITE_DONE) {
+        string_array_free(profiles);
+        return sqlite_error(state->db, "Failed to fetch deployed profiles");
+    }
+
+    *out = profiles;
+    return NULL;
+}
+
+/**
  * Set active profiles
  *
  * Hot path - must be fast even with 10,000 deployed files.

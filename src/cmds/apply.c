@@ -445,7 +445,7 @@ static void prune_empty_tracked_directories(
  * Prune orphaned files from filesystem
  *
  * Removes files that are tracked in state but not in the current manifest.
- * This happens when files are removed from profiles.
+ * This happens when files are removed from profiles or when profiles are deactivated.
  *
  * This function ONLY handles filesystem operations. State modifications
  * are handled separately by apply_update_and_save_state(), which rebuilds
@@ -455,12 +455,13 @@ static void prune_empty_tracked_directories(
  * This prevents data loss when profiles are unselected.
  *
  * After removing orphaned files, this function also removes empty tracked
- * directories (directories that were explicitly added to profiles).
+ * directories (directories that were explicitly added to profiles). It loads
+ * metadata from ALL profiles in state (not just active profiles) to ensure
+ * directories from deactivated profiles are also checked for cleanup.
  *
  * @param repo Repository (must not be NULL)
  * @param state State (must not be NULL, read-only - used to identify orphaned files)
  * @param manifest Current manifest (must not be NULL)
- * @param metadata Merged metadata containing tracked directories (can be NULL)
  * @param out Output context (must not be NULL)
  * @param verbose Print detailed output
  * @param force Skip safety checks and force removal
@@ -470,7 +471,6 @@ static error_t *apply_prune_orphaned_files(
     git_repository *repo,
     state_t *state,
     const manifest_t *manifest,
-    const metadata_t *metadata,
     output_ctx_t *out,
     bool verbose,
     bool force
@@ -635,9 +635,31 @@ static error_t *apply_prune_orphaned_files(
      *
      * Now that orphaned files are removed, check if any tracked directories
      * (directories explicitly added via `dotta add`) are now empty.
-     * This completes the cleanup by removing empty directory structures.
+     *
+     * Load metadata from ALL profiles in state (not just active profiles)
+     * to ensure directories from deactivated profiles are also checked.
      */
-    prune_empty_tracked_directories(metadata, out, verbose);
+    string_array_t *deployed_profiles = NULL;
+    metadata_t *complete_metadata = NULL;
+
+    error_t *meta_err = state_get_deployed_profiles(state, &deployed_profiles);
+    if (!meta_err && deployed_profiles && string_array_size(deployed_profiles) > 0) {
+        /* Load and merge metadata from all deployed profiles */
+        meta_err = metadata_load_from_profiles(repo, deployed_profiles, &complete_metadata);
+        if (!meta_err && complete_metadata) {
+            /* Prune directories using complete metadata */
+            prune_empty_tracked_directories(complete_metadata, out, verbose);
+        }
+
+        /* Clean up metadata errors (non-fatal - just skip directory pruning) */
+        if (meta_err) {
+            error_free(meta_err);
+        }
+    }
+
+    /* Clean up resources */
+    if (complete_metadata) metadata_free(complete_metadata);
+    if (deployed_profiles) string_array_free(deployed_profiles);
 
 cleanup:
     if (manifest_paths) hashmap_free(manifest_paths, NULL);
@@ -1097,7 +1119,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
          * The --keep-orphans flag allows opting out of automatic cleanup for advanced workflows.
          */
         if (!opts->keep_orphans) {
-            err = apply_prune_orphaned_files(repo, state, manifest, merged_metadata, out, opts->verbose, opts->force);
+            err = apply_prune_orphaned_files(repo, state, manifest, out, opts->verbose, opts->force);
             if (err) {
                 goto cleanup;
             }

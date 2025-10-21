@@ -17,6 +17,7 @@
 
 #include "base/error.h"
 #include "base/filesystem.h"
+#include "utils/array.h"
 #include "utils/buffer.h"
 #include "utils/hashmap.h"
 #include "utils/string.h"
@@ -1308,6 +1309,92 @@ error_t *metadata_load_from_file(
     }
 
     *out = metadata;
+    return NULL;
+}
+
+/**
+ * Load and merge metadata from multiple profiles
+ *
+ * Loads metadata from each profile and merges them according to precedence.
+ * Gracefully handles missing profiles and missing metadata files.
+ */
+error_t *metadata_load_from_profiles(
+    git_repository *repo,
+    const string_array_t *profile_names,
+    metadata_t **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(profile_names);
+    CHECK_NULL(out);
+
+    error_t *err = NULL;
+    size_t profile_count = string_array_size(profile_names);
+
+    /* Handle empty profile list */
+    if (profile_count == 0) {
+        /* Return empty metadata (not an error) */
+        return metadata_create_empty(out);
+    }
+
+    /* Allocate array to hold metadata from each profile */
+    const metadata_t **profile_metadata = calloc(profile_count, sizeof(metadata_t *));
+    if (!profile_metadata) {
+        return ERROR(ERR_MEMORY, "Failed to allocate profile metadata array");
+    }
+
+    size_t loaded_count = 0;
+
+    /* Load metadata from each profile (in order for proper layering) */
+    for (size_t i = 0; i < profile_count; i++) {
+        const char *profile_name = string_array_get(profile_names, i);
+        metadata_t *meta = NULL;
+
+        error_t *load_err = metadata_load_from_branch(repo, profile_name, &meta);
+        if (load_err) {
+            if (load_err->code == ERR_NOT_FOUND) {
+                /* Profile or metadata file doesn't exist - skip gracefully */
+                error_free(load_err);
+                continue;
+            } else {
+                /* Real error - clean up and propagate */
+                for (size_t j = 0; j < loaded_count; j++) {
+                    metadata_free((metadata_t *)profile_metadata[j]);
+                }
+                free(profile_metadata);
+                return error_wrap(load_err,
+                    "Failed to load metadata from profile '%s'", profile_name);
+            }
+        }
+
+        /* Successfully loaded */
+        profile_metadata[i] = meta;
+        loaded_count++;
+    }
+
+    /* Merge metadata according to profile precedence */
+    if (loaded_count > 0) {
+        err = metadata_merge(profile_metadata, profile_count, out);
+
+        /* Free individual profile metadata */
+        for (size_t i = 0; i < profile_count; i++) {
+            if (profile_metadata[i]) {
+                metadata_free((metadata_t *)profile_metadata[i]);
+            }
+        }
+        free(profile_metadata);
+
+        if (err) {
+            return error_wrap(err, "Failed to merge metadata from profiles");
+        }
+    } else {
+        /* No metadata found in any profile - return empty metadata */
+        free(profile_metadata);
+        err = metadata_create_empty(out);
+        if (err) {
+            return error_wrap(err, "Failed to create empty metadata");
+        }
+    }
+
     return NULL;
 }
 

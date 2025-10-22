@@ -30,6 +30,7 @@ void print_usage(const char *prog_name) {
     printf("  sync         Synchronize profiles with a remote repository\n");
     printf("  ignore       Manage ignore patterns\n");
     printf("  bootstrap    Execute profile bootstrap scripts\n");
+    printf("  key          Manage encryption keys and passphrases\n");
     printf("  git          Execute git commands within repository\n");
     printf("\nRun '%s <command> --help' for more information on a command.\n", prog_name);
 }
@@ -691,4 +692,64 @@ void print_interactive_help(const char *prog_name) {
     printf("  - Enabled profiles are saved to state in the displayed order\n");
     printf("  - Profile order determines layering (later overrides earlier)\n");
     printf("  - Use regular commands (apply, update, sync) after enabling profiles\n");
+}
+
+void print_key_help(const char *prog_name) {
+    printf("Usage: %s key <set|clear|status> [options]\n\n", prog_name);
+    printf("Manage encryption keys and passphrases\n\n");
+    printf("Subcommands:\n");
+    printf("  set       Set/cache encryption passphrase for the current session\n");
+    printf("  clear     Clear cached passphrase from memory\n");
+    printf("  status    Show encryption configuration and key cache status\n");
+    printf("\nOptions:\n");
+    printf("  -v, --verbose    Show detailed information\n");
+    printf("  -h, --help       Show this help message\n");
+    printf("\nKey Management:\n");
+    printf("  The encryption passphrase is used to derive a master key for encrypting\n");
+    printf("  and decrypting files in all profiles. The key can be cached in memory\n");
+    printf("  for a configurable timeout (default: 1 hour) to avoid repeated prompts.\n\n");
+    printf("Subcommand Details:\n\n");
+    printf("  %s key set\n", prog_name);
+    printf("    Prompts for your encryption passphrase and caches the derived key in\n");
+    printf("    memory. The cache expires after the configured session timeout.\n");
+    printf("    Use this to pre-authenticate before running multiple commands.\n\n");
+    printf("  %s key clear\n", prog_name);
+    printf("    Immediately clears the cached key from memory. You will be prompted\n");
+    printf("    for your passphrase on the next encryption/decryption operation.\n");
+    printf("    Use this for security when stepping away from your terminal.\n\n");
+    printf("  %s key status\n", prog_name);
+    printf("    Displays:\n");
+    printf("      - Whether encryption is enabled in configuration\n");
+    printf("      - KDF parameters (opslimit, memlimit, threads)\n");
+    printf("      - Session timeout setting\n");
+    printf("      - Whether a key is currently cached\n");
+    printf("      - Time until cache expiration\n");
+    printf("      - Number of encrypted files in current profiles\n");
+    printf("      - Auto-encrypt patterns (with -v)\n\n");
+    printf("Configuration:\n");
+    printf("  Encryption is configured in the [encryption] section of config.toml:\n\n");
+    printf("    [encryption]\n");
+    printf("    enabled = true\n");
+    printf("    session_timeout = 3600      # 1 hour\n");
+    printf("    opslimit = 10000            # CPU cost\n");
+    printf("    memlimit = 67108864         # 64 MB memory\n");
+    printf("    threads = 1                 # Parallelization\n\n");
+    printf("Security Notes:\n");
+    printf("  - The passphrase is never stored on disk\n");
+    printf("  - The derived key is cached in process memory only\n");
+    printf("  - Keys are securely cleared from memory on timeout or clear\n");
+    printf("  - If you forget your passphrase, encrypted files cannot be recovered\n\n");
+    printf("Examples:\n");
+    printf("  # Set passphrase for session\n");
+    printf("  %s key set\n\n", prog_name);
+    printf("  # Check encryption status and cache expiration\n");
+    printf("  %s key status\n\n", prog_name);
+    printf("  # View detailed encryption configuration\n");
+    printf("  %s key status -v\n\n", prog_name);
+    printf("  # Clear cached key (e.g., before leaving terminal)\n");
+    printf("  %s key clear\n\n", prog_name);
+    printf("See also:\n");
+    printf("  %s add --encrypt       # Encrypt files when adding\n", prog_name);
+    printf("  %s apply               # Decrypt files when deploying\n", prog_name);
+    printf("\n");
 }

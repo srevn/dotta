@@ -102,4 +102,9 @@ void print_bootstrap_help(const char *prog_name);
  */
 void print_interactive_help(const char *prog_name);
 
+/**
+ * Print help for key command
+ */
+void print_key_help(const char *prog_name);
+
 #endif /* DOTTA_HELP_H */

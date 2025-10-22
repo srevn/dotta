@@ -117,6 +117,15 @@ dotta_config_t *config_create_default(void) {
     config->auto_pull = true;  /* Default: auto-pull when remote ahead */
     config->diverged_strategy = strdup("warn");  /* Default: warn on divergence */
 
+    /* [encryption] defaults */
+    config->encryption_enabled = false;           /* Default: disabled (opt-in) */
+    config->auto_encrypt_patterns = NULL;
+    config->auto_encrypt_pattern_count = 0;
+    config->encryption_opslimit = 10000;          /* Moderate security */
+    config->encryption_memlimit = 67108864;       /* 64 MB */
+    config->encryption_threads = 1;               /* Portable default */
+    config->session_timeout = 3600;               /* 1 hour */
+
     return config;
 }
 
@@ -146,6 +155,14 @@ void config_free(dotta_config_t *config) {
     free(config->commit_body);
 
     free(config->diverged_strategy);
+
+    /* Free encryption patterns */
+    if (config->auto_encrypt_patterns) {
+        for (size_t i = 0; i < config->auto_encrypt_pattern_count; i++) {
+            free(config->auto_encrypt_patterns[i]);
+        }
+        free(config->auto_encrypt_patterns);
+    }
 
     free(config);
 }
@@ -377,6 +394,51 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
         if (diverged_strategy.type == TOML_STRING) {
             free(config->diverged_strategy);
             config->diverged_strategy = strdup(diverged_strategy.u.s);
+        }
+    }
+
+    /* Extract [encryption] section */
+    toml_datum_t encryption = toml_get(result.toptab, "encryption");
+    if (encryption.type == TOML_TABLE) {
+        toml_datum_t enabled = toml_get(encryption, "enabled");
+        if (enabled.type == TOML_BOOLEAN) {
+            config->encryption_enabled = enabled.u.boolean;
+        }
+
+        /* Parse auto_encrypt patterns */
+        toml_datum_t auto_encrypt = toml_get(encryption, "auto_encrypt");
+        if (auto_encrypt.type == TOML_ARRAY) {
+            /* Free existing patterns if any */
+            if (config->auto_encrypt_patterns) {
+                for (size_t i = 0; i < config->auto_encrypt_pattern_count; i++) {
+                    free(config->auto_encrypt_patterns[i]);
+                }
+                free(config->auto_encrypt_patterns);
+            }
+
+            extract_string_array(auto_encrypt,
+                                &config->auto_encrypt_patterns,
+                                &config->auto_encrypt_pattern_count);
+        }
+
+        toml_datum_t opslimit = toml_get(encryption, "opslimit");
+        if (opslimit.type == TOML_INT64) {
+            config->encryption_opslimit = (uint64_t)opslimit.u.int64;
+        }
+
+        toml_datum_t memlimit = toml_get(encryption, "memlimit");
+        if (memlimit.type == TOML_INT64) {
+            config->encryption_memlimit = (size_t)memlimit.u.int64;
+        }
+
+        toml_datum_t threads = toml_get(encryption, "threads");
+        if (threads.type == TOML_INT64) {
+            config->encryption_threads = (uint8_t)threads.u.int64;
+        }
+
+        toml_datum_t session_timeout = toml_get(encryption, "session_timeout");
+        if (session_timeout.type == TOML_INT64) {
+            config->session_timeout = (int32_t)session_timeout.u.int64;
         }
     }
 

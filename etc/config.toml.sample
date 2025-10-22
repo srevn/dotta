@@ -371,6 +371,77 @@ Files: {count}
 
 
 # ============================================================================
+# [encryption] - File Encryption Settings
+# ============================================================================
+#
+# Enable encryption for sensitive files (SSH keys, credentials, etc.)
+# Files are encrypted at rest in Git and decrypted during deployment.
+#
+# Security Properties:
+#   - Authenticated encryption (integrity + confidentiality)
+#   - Per-profile key isolation
+#   - Passphrase-based key derivation (no key files to manage)
+#
+# ⚠️  WARNING: ENCRYPTION KEY LOSS MEANS DATA LOSS
+#     If you forget your passphrase, encrypted files CANNOT be recovered.
+#     Store your passphrase securely (password manager recommended).
+#
+# ============================================================================
+
+[encryption]
+
+# Enable Encryption Feature
+# Set to true to enable encryption support
+# Default: false (opt-in for security)
+enabled = false
+
+# Auto-Encrypt Patterns
+# Files matching these patterns are automatically encrypted when added
+# Uses gitignore-style syntax: wildcards (*, ?, [abc]), directory matching
+#
+# Common sensitive file patterns:
+auto_encrypt = [
+    ".ssh/id_*",           # SSH private keys (id_rsa, id_ed25519, etc.)
+    ".ssh/*.pem",          # PEM certificates
+    ".gnupg/*",            # GPG keyring and keys
+    "*.key",               # Generic key files
+    ".aws/credentials",    # AWS credentials
+    ".netrc",              # Network credentials (HTTP, FTP, etc.)
+    ".npmrc",              # NPM authentication token
+    ".pypirc",             # PyPI credentials
+    ".config/gh/hosts.yml", # GitHub CLI credentials
+]
+
+# Password Hashing Parameters
+# Controls the computational cost of deriving encryption keys from passphrase
+# Higher values = more secure against brute force, but slower unlock times
+#
+# Recommended values:
+#   - opslimit:  10000-50000   (moderate: 10000, high: 50000+)
+#   - memlimit:  64MB-256MB    (64MB = 67108864 bytes)
+#   - threads:   1 (portable), 2-4 (faster on multi-core CPUs)
+#
+# Default: opslimit=10000, memlimit=67108864 (64MB), threads=1
+opslimit = 10000
+memlimit = 67108864
+threads = 1
+
+# Session Timeout
+# How long (in seconds) to cache the encryption key in memory
+# After this time, you'll be prompted for your passphrase again
+#
+# Options:
+#   0     - Always prompt for passphrase (most secure)
+#   1800  - 30 minutes
+#   3600  - 1 hour (default)
+#   7200  - 2 hours
+#   -1    - Never expire (cache until dotta exits)
+#
+# Default: 3600 (1 hour)
+session_timeout = 3600
+
+
+# ============================================================================
 # Environment Variables
 # ============================================================================
 #

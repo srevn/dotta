@@ -5,10 +5,12 @@
  */
 
 #include <git2.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/encryption.h"
 #include "base/error.h"
 #include "base/gitops.h"
 #include "cmds/add.h"
@@ -20,6 +22,7 @@
 #include "cmds/ignore.h"
 #include "cmds/init.h"
 #include "cmds/interactive.h"
+#include "cmds/key.h"
 #include "cmds/list.h"
 #include "cmds/profile.h"
 #include "cmds/remote.h"
@@ -31,6 +34,7 @@
 #include "cmds/update.h"
 #include "types.h"
 #include "utils/help.h"
+#include "utils/keymanager.h"
 #include "utils/refspec.h"
 #include "utils/repo.h"
 #include "utils/string.h"
@@ -133,7 +137,9 @@ static int cmd_add_main(int argc, char **argv) {
         .exclude_patterns = NULL,
         .exclude_count = 0,
         .force = false,
-        .verbose = false
+        .verbose = false,
+        .encrypt = false,
+        .no_encrypt = false
     };
 
     /* Collect file and exclude pattern arguments */
@@ -183,6 +189,10 @@ static int cmd_add_main(int argc, char **argv) {
             opts.force = true;
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             opts.verbose = true;
+        } else if (strcmp(argv[i], "--encrypt") == 0) {
+            opts.encrypt = true;
+        } else if (strcmp(argv[i], "--no-encrypt") == 0) {
+            opts.no_encrypt = true;
         } else if (argv[i][0] != '-') {
             /* Positional argument */
             if (!opts.profile) {
@@ -1970,12 +1980,114 @@ static int cmd_bootstrap_main(int argc, char **argv) {
     return 0;
 }
 
+/**
+ * Parse key command
+ */
+static int cmd_key_main(int argc, char **argv) {
+    /* Check for help flag first (before requiring action) */
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            print_key_help(argv[0]);
+            return 0;
+        }
+    }
+
+    if (argc < 3) {
+        print_key_help(argv[0]);
+        return 1;
+    }
+
+    const char *action_str = argv[2];
+    key_action_t action;
+
+    if (strcmp(action_str, "set") == 0) {
+        action = KEY_ACTION_SET;
+    } else if (strcmp(action_str, "clear") == 0) {
+        action = KEY_ACTION_CLEAR;
+    } else if (strcmp(action_str, "status") == 0) {
+        action = KEY_ACTION_STATUS;
+    } else {
+        fprintf(stderr, "Error: Unknown key action '%s'\n", action_str);
+        fprintf(stderr, "Valid actions: set, clear, status\n");
+        return 1;
+    }
+
+    cmd_key_options_t opts = {
+        .action = action,
+        .verbose = false
+    };
+
+    /* Parse options */
+    for (int i = 3; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            /* Show full help (subcommand details included) */
+            print_key_help(argv[0]);
+            return 0;
+        } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
+            opts.verbose = true;
+        } else {
+            fprintf(stderr, "Error: Unknown option '%s'\n", argv[i]);
+            return 1;
+        }
+    }
+
+    /* Open repository */
+    git_repository *repo = open_resolved_repo(NULL);
+    if (!repo) {
+        return 1;
+    }
+
+    /* Execute command */
+    error_t *err = cmd_key(repo, &opts);
+
+    int ret = 0;
+    if (err) {
+        fprintf(stderr, "Error: %s\n", error_message(err));
+        error_free(err);
+        ret = 1;
+    }
+
+    git_repository_free(repo);
+    return ret;
+}
+
+/**
+ * Signal handler for cleanup on SIGINT/SIGTERM
+ *
+ * Ensures that the global keymanager is properly cleaned up (master key
+ * zeroed in memory) when the user interrupts the program with Ctrl+C
+ * or when the process receives a termination signal.
+ */
+static void signal_cleanup_handler(int signum) {
+    /* Clean up global keymanager (securely zero master key) */
+    keymanager_cleanup_global();
+
+    /* Re-raise signal with default handler to ensure proper exit */
+    signal(signum, SIG_DFL);
+    raise(signum);
+}
+
 int main(int argc, char **argv) {
     /* Initialize libgit2 */
     if (git_libgit2_init() < 0) {
         fprintf(stderr, "Failed to initialize libgit2\n");
         return 1;
     }
+
+    /* Initialize libhydrogen */
+    error_t *init_err = encryption_init();
+    if (init_err) {
+        fprintf(stderr, "Failed to initialize encryption: %s\n", error_message(init_err));
+        error_free(init_err);
+        git_libgit2_shutdown();
+        return 1;
+    }
+
+    /* Register cleanup handlers for graceful shutdown
+     * This ensures encryption keys are cleared from memory on exit */
+    atexit(keymanager_cleanup_global);
+    signal(SIGINT, signal_cleanup_handler);   /* Ctrl+C */
+    signal(SIGTERM, signal_cleanup_handler);  /* kill command */
 
     /* Parse command */
     if (argc < 2) {
@@ -2025,6 +2137,8 @@ int main(int argc, char **argv) {
         ret = cmd_ignore_main(argc, argv);
     } else if (strcmp(command, "bootstrap") == 0) {
         ret = cmd_bootstrap_main(argc, argv);
+    } else if (strcmp(command, "key") == 0) {
+        ret = cmd_key_main(argc, argv);
     } else if (strcmp(command, "git") == 0) {
         ret = cmd_git_main(argc, argv);
     } else {

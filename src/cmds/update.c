@@ -10,7 +10,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "hydrogen.h"
 
+#include "base/encryption.h"
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "base/gitops.h"
@@ -25,7 +27,9 @@
 #include "utils/config.h"
 #include "utils/hashmap.h"
 #include "utils/hooks.h"
+#include "utils/keymanager.h"
 #include "utils/output.h"
+#include "utils/pattern.h"
 #include "utils/string.h"
 
 /**
@@ -456,21 +460,27 @@ static error_t *find_modified_and_new_files(
 }
 
 /**
- * Copy file from filesystem to worktree
+ * Copy file from filesystem to worktree (with optional encryption)
  */
 static error_t *copy_file_to_worktree(
     worktree_handle_t *wt,
     const char *filesystem_path,
-    const char *storage_path
+    const char *storage_path,
+    const char *profile_name,
+    const dotta_config_t *config,
+    const metadata_t *metadata
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(storage_path);
+    CHECK_NULL(profile_name);
 
     /* Initialize all resources to NULL for goto cleanup */
     char *dest_path = NULL;
     char *parent = NULL;
     char *target = NULL;
+    buffer_t *plaintext = NULL;
+    buffer_t *ciphertext = NULL;
     error_t *err = NULL;
 
     const char *wt_path = worktree_get_path(wt);
@@ -505,9 +515,9 @@ static error_t *copy_file_to_worktree(
         }
     }
 
-    /* Copy file */
+    /* Copy file (with optional encryption) */
     if (fs_is_symlink(filesystem_path)) {
-        /* Handle symlink */
+        /* Handle symlink - no encryption for symlinks */
         err = fs_read_symlink(filesystem_path, &target);
         if (err) {
             err = error_wrap(err, "Failed to read symlink");
@@ -520,15 +530,114 @@ static error_t *copy_file_to_worktree(
             goto cleanup;
         }
     } else {
-        /* Handle regular file */
-        err = fs_copy_file(filesystem_path, dest_path);
-        if (err) {
-            err = error_wrap(err, "Failed to copy file");
-            goto cleanup;
+        /* Handle regular file - check if should encrypt */
+        bool should_encrypt = false;
+
+        /* Check if file was previously encrypted OR should be auto-encrypted */
+        if (config && config->encryption_enabled) {
+            /* First check if file was already encrypted */
+            if (metadata) {
+                const metadata_entry_t *existing = NULL;
+                error_t *lookup_err = metadata_get_entry(metadata, storage_path, &existing);
+                if (lookup_err == NULL && existing && existing->encrypted) {
+                    /* File was previously encrypted - maintain encryption */
+                    should_encrypt = true;
+                }
+                if (lookup_err && lookup_err->code != ERR_NOT_FOUND) {
+                    /* Real error - propagate */
+                    err = lookup_err;
+                    goto cleanup;
+                }
+                if (lookup_err) {
+                    error_free(lookup_err);
+                }
+            }
+
+            /* If not already encrypted, check auto-encrypt patterns */
+            if (!should_encrypt) {
+                err = encrypt_should_auto_encrypt(config, storage_path, &should_encrypt);
+                if (err) {
+                    /* Log warning and continue without encryption */
+                    error_free(err);
+                    err = NULL;
+                    should_encrypt = false;
+                }
+            }
+        }
+
+        if (should_encrypt) {
+            /* ENCRYPTION PATH */
+
+            /* Read file content */
+            err = fs_read_file(filesystem_path, &plaintext);
+            if (err) {
+                err = error_wrap(err, "Failed to read file for encryption");
+                goto cleanup;
+            }
+
+            /* Get key manager */
+            keymanager_t *key_mgr = keymanager_get_global(config);
+            if (!key_mgr) {
+                err = ERROR(ERR_INTERNAL, "Failed to get encryption key manager");
+                goto cleanup;
+            }
+
+            /* Get master key (prompts if needed) */
+            uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE];
+            err = keymanager_get_key(key_mgr, master_key);
+            if (err) {
+                err = error_wrap(err, "Failed to get encryption key");
+                goto cleanup;
+            }
+
+            /* Derive profile key */
+            uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
+            err = encryption_derive_profile_key(master_key, profile_name, profile_key);
+
+            /* Clear master key immediately after derivation */
+            hydro_memzero(master_key, sizeof(master_key));
+
+            if (err) {
+                err = error_wrap(err, "Failed to derive profile encryption key");
+                goto cleanup;
+            }
+
+            /* Encrypt file content with content-addressed nonce */
+            err = encryption_encrypt(
+                buffer_data(plaintext),
+                buffer_size(plaintext),
+                profile_key,
+                storage_path,  /* Nonce derived from path + content */
+                &ciphertext
+            );
+
+            /* Securely clear keys */
+            hydro_memzero(profile_key, sizeof(profile_key));
+
+            if (err) {
+                err = error_wrap(err, "Failed to encrypt file");
+                goto cleanup;
+            }
+
+            /* Write encrypted content to worktree */
+            err = fs_write_file(dest_path, ciphertext);
+            if (err) {
+                err = error_wrap(err, "Failed to write encrypted file");
+                goto cleanup;
+            }
+        } else {
+            /* PLAINTEXT PATH - normal copy */
+            err = fs_copy_file(filesystem_path, dest_path);
+            if (err) {
+                err = error_wrap(err, "Failed to copy file");
+                goto cleanup;
+            }
         }
     }
 
 cleanup:
+    if (ciphertext) buffer_free(ciphertext);
+    if (plaintext) buffer_free(plaintext);
     if (target) free(target);
     if (parent) free(parent);
     if (dest_path) free(dest_path);
@@ -612,12 +721,52 @@ static error_t *capture_and_save_metadata(
 
         /* entry will be NULL for symlinks - skip them */
         if (entry) {
+            /* Check if file in worktree is encrypted (by reading the encrypted file header) */
+            char *worktree_file_path = str_format("%s/%s", worktree_path, file->storage_path);
+            if (worktree_file_path) {
+                /* Read the file in worktree to check if encrypted */
+                buffer_t *worktree_content = NULL;
+                error_t *read_err = fs_read_file(worktree_file_path, &worktree_content);
+
+                if (read_err == NULL) {
+                    /* Check if content is encrypted */
+                    bool is_encrypted = encryption_is_encrypted(
+                        buffer_data(worktree_content),
+                        buffer_size(worktree_content)
+                    );
+
+                    if (is_encrypted) {
+                        /* File is encrypted */
+                        entry->encrypted = true;
+                    } else {
+                        /* File is plaintext */
+                        entry->encrypted = false;
+                    }
+
+                    buffer_free(worktree_content);
+                } else {
+                    /* CRITICAL: Cannot determine encryption status
+                     * If we can't read the file to check if it's encrypted, we must fail
+                     * rather than guess. Silently ignoring this error could lead to lost
+                     * encryption metadata on next apply. */
+                    free(worktree_file_path);
+                    metadata_entry_free(entry);
+                    metadata_free(metadata);
+                    return error_wrap(read_err,
+                        "Failed to read %s to determine encryption status",
+                        file->storage_path);
+                }
+
+                free(worktree_file_path);
+            }
+
             /* Save metadata before adding (for verbose output) */
             mode_t mode = entry->mode;
             char *owner = entry->owner ? strdup(entry->owner) : NULL;
             char *group = entry->group ? strdup(entry->group) : NULL;
+            bool is_encrypted = entry->encrypted;
 
-            /* Add to metadata collection (copies all fields including owner/group) */
+            /* Add to metadata collection (copies all fields including owner/group and encryption) */
             err = metadata_add_entry(metadata, entry);
             metadata_entry_free(entry);
 
@@ -632,13 +781,15 @@ static error_t *capture_and_save_metadata(
 
             if (verbose) {
                 if (owner || group) {
-                    printf("Captured metadata: %s (mode: %04o, owner: %s:%s)\n",
+                    printf("Captured metadata: %s (mode: %04o, owner: %s:%s%s)\n",
                           file->filesystem_path, mode,
                           owner ? owner : "?",
-                          group ? group : "?");
+                          group ? group : "?",
+                          is_encrypted ? ", encrypted" : "");
                 } else {
-                    printf("Captured metadata: %s (mode: %04o)\n",
-                          file->filesystem_path, mode);
+                    printf("Captured metadata: %s (mode: %04o%s)\n",
+                          file->filesystem_path, mode,
+                          is_encrypted ? ", encrypted" : "");
                 }
             }
             free(owner);
@@ -710,6 +861,23 @@ static error_t *update_profile(
     char *message = NULL;
     error_t *err = NULL;
     git_repository *wt_repo = NULL;
+    metadata_t *existing_metadata = NULL;
+
+    /* Load existing metadata from profile branch (for encryption status) */
+    err = metadata_load_from_branch(repo, profile->name, &existing_metadata);
+    if (err) {
+        if (err->code == ERR_NOT_FOUND) {
+            /* No existing metadata - that's OK, create empty */
+            error_free(err);
+            err = metadata_create_empty(&existing_metadata);
+            if (err) {
+                return error_wrap(err, "Failed to create empty metadata");
+            }
+        } else {
+            /* Real error */
+            return error_wrap(err, "Failed to load metadata from profile '%s'", profile->name);
+        }
+    }
 
     /* Create temporary worktree */
     err = worktree_create_temp(repo, &wt);
@@ -750,8 +918,15 @@ static error_t *update_profile(
             continue;
         }
 
-        /* Copy to worktree */
-        err = copy_file_to_worktree(wt, file->filesystem_path, file->storage_path);
+        /* Copy to worktree (with optional encryption) */
+        err = copy_file_to_worktree(
+            wt,
+            file->filesystem_path,
+            file->storage_path,
+            profile->name,
+            config,
+            existing_metadata
+        );
         if (err) {
             err = error_wrap(err, "Failed to copy '%s'", file->filesystem_path);
             goto cleanup;
@@ -831,6 +1006,7 @@ cleanup:
     if (tree) git_tree_free(tree);
     if (index) git_index_free(index);
     if (wt) worktree_cleanup(wt);
+    if (existing_metadata) metadata_free(existing_metadata);
 
     return err;
 }

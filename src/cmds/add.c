@@ -11,7 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include "hydrogen.h"
 
+#include "base/encryption.h"
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "base/gitops.h"
@@ -24,7 +26,9 @@
 #include "utils/commit.h"
 #include "utils/config.h"
 #include "utils/hooks.h"
+#include "utils/keymanager.h"
 #include "utils/output.h"
+#include "utils/pattern.h"
 #include "utils/string.h"
 
 /**
@@ -172,6 +176,8 @@ static error_t *collect_files_from_dir(
  * @param filesystem_path Source path on filesystem
  * @param storage_path Pre-computed storage path (e.g., "home/.bashrc")
  * @param opts Command options
+ * @param config Configuration (for encryption settings, can be NULL)
+ * @param entry Metadata entry (updated with encryption status, can be NULL for symlinks)
  * @param out Output context
  * @return Error or NULL on success
  */
@@ -180,6 +186,8 @@ static error_t *add_file_to_worktree(
     const char *filesystem_path,
     const char *storage_path,
     const cmd_add_options_t *opts,
+    const dotta_config_t *config,
+    metadata_entry_t *entry,
     output_ctx_t *out
 ) {
     CHECK_NULL(wt);
@@ -245,11 +253,120 @@ static error_t *add_file_to_worktree(
             return error_wrap(err, "Failed to create symlink in worktree");
         }
     } else {
-        /* Handle regular file */
-        err = fs_copy_file(filesystem_path, dest_path);
-        if (err) {
-            free(dest_path);
-            return error_wrap(err, "Failed to copy file to worktree");
+        /* Handle regular file - with optional encryption */
+
+        /* Determine if should encrypt */
+        bool should_encrypt = false;
+
+        if (config && config->encryption_enabled) {
+            /* Check explicit flags first */
+            if (opts->encrypt) {
+                should_encrypt = true;
+            } else if (!opts->no_encrypt) {
+                /* Check auto-encrypt patterns */
+                err = encrypt_should_auto_encrypt(config, storage_path, &should_encrypt);
+                if (err) {
+                    /* Log warning and continue without encryption */
+                    if (opts->verbose && out) {
+                        output_warning(out, "Failed to check auto-encrypt patterns: %s",
+                                      error_message(err));
+                    }
+                    error_free(err);
+                    err = NULL;
+                    should_encrypt = false;
+                }
+            }
+        }
+
+        if (should_encrypt) {
+            /* ENCRYPTION PATH */
+
+            /* Read file content */
+            buffer_t *plaintext = NULL;
+            err = fs_read_file(filesystem_path, &plaintext);
+            if (err) {
+                free(dest_path);
+                return error_wrap(err, "Failed to read file for encryption");
+            }
+
+            /* Get global keymanager */
+            keymanager_t *key_mgr = keymanager_get_global(config);
+            if (!key_mgr) {
+                buffer_free(plaintext);
+                free(dest_path);
+                return ERROR(ERR_INTERNAL, "Failed to get encryption key manager");
+            }
+
+            /* Get master key (prompts if needed) */
+            uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE];
+            err = keymanager_get_key(key_mgr, master_key);
+            if (err) {
+                buffer_free(plaintext);
+                free(dest_path);
+                return error_wrap(err, "Failed to get encryption key");
+            }
+
+            /* Derive profile key */
+            uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
+            err = encryption_derive_profile_key(master_key, opts->profile, profile_key);
+
+            /* Clear master key immediately after derivation */
+            hydro_memzero(master_key, sizeof(master_key));
+
+            if (err) {
+                buffer_free(plaintext);
+                free(dest_path);
+                return error_wrap(err, "Failed to derive profile encryption key");
+            }
+
+            /* Encrypt file content with content-addressed nonce */
+            buffer_t *ciphertext = NULL;
+            err = encryption_encrypt(
+                buffer_data(plaintext),
+                buffer_size(plaintext),
+                profile_key,
+                storage_path,  /* Nonce derived from path + content */
+                &ciphertext
+            );
+
+            /* Securely clear keys */
+            hydro_memzero(profile_key, sizeof(profile_key));
+            buffer_free(plaintext);
+
+            if (err) {
+                free(dest_path);
+                return error_wrap(err, "Failed to encrypt file");
+            }
+
+            /* Write ciphertext to worktree */
+            err = fs_write_file(dest_path, ciphertext);
+            buffer_free(ciphertext);
+
+            if (err) {
+                free(dest_path);
+                return error_wrap(err, "Failed to write encrypted file to worktree");
+            }
+
+            /* Update metadata entry with encryption status */
+            if (entry) {
+                entry->encrypted = true;
+            }
+
+            if (opts->verbose && out) {
+                output_info(out, "Encrypted: %s -> %s", filesystem_path, storage_path);
+            }
+        } else {
+            /* NORMAL PATH - no encryption */
+            err = fs_copy_file(filesystem_path, dest_path);
+            if (err) {
+                free(dest_path);
+                return error_wrap(err, "Failed to copy file to worktree");
+            }
+
+            /* Mark as not encrypted in metadata */
+            if (entry) {
+                entry->encrypted = false;
+            }
         }
     }
 
@@ -787,7 +904,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         }
 
         /* Add file to worktree (with pre-computed storage_path) */
-        err = add_file_to_worktree(wt, file_path, storage_path, opts, out);
+        err = add_file_to_worktree(wt, file_path, storage_path, opts, config, entry, out);
         if (err) {
             if (entry) {
                 metadata_entry_free(entry);

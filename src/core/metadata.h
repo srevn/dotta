@@ -16,9 +16,10 @@
  *
  * JSON Schema:
  * {
- *   "version": 2,
+ *   "version": 3,
  *   "files": {
  *     "home/.ssh/config": {"mode": "0600"},
+ *     "home/.ssh/id_rsa": {"mode": "0600", "encrypted": true},
  *     "home/.local/bin/backup.sh": {"mode": "0755"},
  *     "root/home/user/script.sh": {"mode": "0755", "owner": "user", "group": "user"},
  *     "root/etc/nginx.conf": {"mode": "0644", "owner": "root", "group": "wheel"}
@@ -42,7 +43,7 @@
 #include "types.h"
 
 #define METADATA_FILE_PATH ".dotta/metadata.json"
-#define METADATA_VERSION 2
+#define METADATA_VERSION 3
 
 /**
  * Metadata entry for a single file
@@ -52,6 +53,9 @@ typedef struct {
     mode_t mode;           /* Permission mode (e.g., 0600, 0644, 0755) */
     char *owner;           /* Owner username (optional, only for root/ prefix) */
     char *group;           /* Group name (optional, only for root/ prefix) */
+
+    /* Encryption field */
+    bool encrypted;        /* Is file encrypted in Git? */
 } metadata_entry_t;
 
 /**

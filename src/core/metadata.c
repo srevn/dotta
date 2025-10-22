@@ -147,8 +147,9 @@ error_t *metadata_entry_create(
     }
 
     entry->mode = mode;
-    entry->owner = NULL;  /* Optional, set by caller if needed */
-    entry->group = NULL;  /* Optional, set by caller if needed */
+    entry->owner = NULL;      /* Optional, set by caller if needed */
+    entry->group = NULL;      /* Optional, set by caller if needed */
+    entry->encrypted = false; /* Optional, set by caller if needed */
 
     *out = entry;
     return NULL;
@@ -339,8 +340,9 @@ error_t *metadata_set_entry(
     }
 
     metadata->entries[metadata->count].mode = mode;
-    metadata->entries[metadata->count].owner = NULL;  /* Optional, set by caller if needed */
-    metadata->entries[metadata->count].group = NULL;  /* Optional, set by caller if needed */
+    metadata->entries[metadata->count].owner = NULL;      /* Optional, set by caller if needed */
+    metadata->entries[metadata->count].group = NULL;      /* Optional, set by caller if needed */
+    metadata->entries[metadata->count].encrypted = false; /* Optional, set by caller if needed */
 
     /* Add to hashmap index (points to entry in array) */
     if (metadata->index) {
@@ -406,6 +408,9 @@ error_t *metadata_add_entry(
     free(entry->group);
     entry->owner = new_owner;
     entry->group = new_group;
+
+    /* Copy encryption field */
+    entry->encrypted = source->encrypted;
 
     return NULL;
 }
@@ -660,6 +665,15 @@ static error_t *metadata_to_json(const metadata_t *metadata, buffer_t **out) {
             if (!cJSON_AddStringToObject(file_obj, "group", entry->group)) {
                 cJSON_Delete(file_obj);
                 err = ERROR(ERR_MEMORY, "Failed to add group to file object");
+                goto cleanup;
+            }
+        }
+
+        /* Add encryption field if file is encrypted */
+        if (entry->encrypted) {
+            if (!cJSON_AddBoolToObject(file_obj, "encrypted", true)) {
+                cJSON_Delete(file_obj);
+                err = ERROR(ERR_MEMORY, "Failed to add encrypted flag to file object");
                 goto cleanup;
             }
         }
@@ -919,6 +933,14 @@ static error_t *metadata_from_json(const char *json_str, metadata_t **out) {
                 cJSON_Delete(root);
                 return ERROR(ERR_MEMORY, "Failed to duplicate group string");
             }
+        }
+
+        /* Parse optional encryption fields */
+        cJSON *encrypted_obj = cJSON_GetObjectItem(file_obj, "encrypted");
+        if (encrypted_obj && cJSON_IsBool(encrypted_obj)) {
+            entry->encrypted = cJSON_IsTrue(encrypted_obj);
+        } else {
+            entry->encrypted = false;
         }
     }
 

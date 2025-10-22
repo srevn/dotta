@@ -23,6 +23,8 @@ typedef struct {
     size_t exclude_count;       /* Number of exclude patterns */
     bool force;                 /* Overwrite existing files in profile */
     bool verbose;               /* Print verbose output */
+    bool encrypt;               /* Force encryption (--encrypt flag) */
+    bool no_encrypt;            /* Force no encryption (--no-encrypt flag) */
 } cmd_add_options_t;
 
 /**

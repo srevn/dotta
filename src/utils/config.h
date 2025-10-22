@@ -54,6 +54,15 @@ typedef struct dotta_config {
     /* [sync] */
     bool auto_pull;               /* Auto-pull when remote is ahead (default: true) */
     char *diverged_strategy;      /* Strategy for diverged branches: warn, rebase, merge, ours, theirs */
+
+    /* [encryption] */
+    bool encryption_enabled;      /* Enable encryption feature (default: false) */
+    char **auto_encrypt_patterns; /* Auto-encrypt patterns (gitignore-style) */
+    size_t auto_encrypt_pattern_count;
+    uint64_t encryption_opslimit; /* CPU cost for password hashing (default: 10000) */
+    size_t encryption_memlimit;   /* Memory usage for password hashing (default: 64MB) */
+    uint8_t encryption_threads;   /* Thread count for password hashing (default: 1) */
+    int32_t session_timeout;      /* Key cache timeout in seconds (default: 3600, 0 = always prompt, -1 = never expire) */
 } dotta_config_t;
 
 /**

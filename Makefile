@@ -19,7 +19,8 @@ CC_VERSION := $(shell $(CC) --version | head -n1)
 LIB_DIR := lib
 CJSON_SRC := $(LIB_DIR)/cjson/cJSON.c
 TOML_SRC := $(LIB_DIR)/toml/tomlc17.c
-LIB_INCLUDES := -I$(LIB_DIR)/cjson -I$(LIB_DIR)/toml
+HYDROGEN_SRC := $(LIB_DIR)/hydrogen/hydrogen.c
+LIB_INCLUDES := -I$(LIB_DIR)/cjson -I$(LIB_DIR)/toml -I$(LIB_DIR)/hydrogen
 
 # Include paths
 INCLUDES := -Iinclude -Isrc $(LIB_INCLUDES)
@@ -71,10 +72,11 @@ UTILS_SRC := $(wildcard $(SRC_DIR)/utils/*.c)
 # Library objects
 CJSON_OBJ := $(BUILD_DIR)/lib/cJSON.o
 TOML_OBJ := $(BUILD_DIR)/lib/tomlc17.o
+HYDROGEN_OBJ := $(BUILD_DIR)/lib/hydrogen.o
 
 # All source files (excluding main.c for library)
 LIB_SRC := $(BASE_SRC) $(INFRA_SRC) $(CORE_SRC) $(CMDS_SRC) $(UTILS_SRC)
-LIB_OBJ := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(LIB_SRC)) $(CJSON_OBJ) $(TOML_OBJ)
+LIB_OBJ := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(LIB_SRC)) $(CJSON_OBJ) $(TOML_OBJ) $(HYDROGEN_OBJ)
 
 # Main executable
 MAIN_SRC := $(SRC_DIR)/main.c
@@ -103,6 +105,10 @@ $(BUILD_DIR)/lib/cJSON.o: $(CJSON_SRC) | $(BUILD_DIR)/lib
 	@$(CC) $(CFLAGS) $(LIB_INCLUDES) -c $< -o $@
 
 $(BUILD_DIR)/lib/tomlc17.o: $(TOML_SRC) | $(BUILD_DIR)/lib
+	@echo "CC $<"
+	@$(CC) $(CFLAGS) $(LIB_INCLUDES) -c $< -o $@
+
+$(BUILD_DIR)/lib/hydrogen.o: $(HYDROGEN_SRC) | $(BUILD_DIR)/lib
 	@echo "CC $<"
 	@$(CC) $(CFLAGS) $(LIB_INCLUDES) -c $< -o $@
 

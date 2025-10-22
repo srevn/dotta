@@ -6,17 +6,21 @@
 
 #include <errno.h>
 #include <git2.h>
+#include <hydrogen.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "base/encryption.h"
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "core/metadata.h"
 #include "infra/compare.h"
 #include "utils/array.h"
+#include "utils/buffer.h"
 #include "utils/hashmap.h"
+#include "utils/keymanager.h"
 #include "utils/string.h"
 
 /**
@@ -303,6 +307,9 @@ error_t *deploy_file(
     const void *content = git_blob_rawcontent(blob);
     git_object_size_t size = git_blob_rawsize(blob);
 
+    /* Track if we allocated a buffer for decrypted content (need to free later) */
+    buffer_t *decrypted_buffer = NULL;
+
     /* Determine permissions - use metadata if available, otherwise fallback to git mode */
     mode_t file_mode;
     bool used_metadata = false;
@@ -328,6 +335,82 @@ error_t *deploy_file(
         file_mode = (mode == GIT_FILEMODE_BLOB_EXECUTABLE) ? 0755 : 0644;
     }
 
+    /* =====================================================================
+     * DECRYPTION: If file is encrypted in metadata, decrypt before deployment
+     * ===================================================================== */
+    if (meta_entry && meta_entry->encrypted) {
+        /* Verify file is actually encrypted */
+        if (!encryption_is_encrypted((const unsigned char *)content, (size_t)size)) {
+            git_blob_free(blob);
+            return ERROR(ERR_STATE_INVALID,
+                        "Metadata indicates file is encrypted, but content is not encrypted: %s",
+                        entry->storage_path);
+        }
+
+        /* Get global keymanager */
+        keymanager_t *key_mgr = keymanager_get_global(NULL);
+        if (!key_mgr) {
+            git_blob_free(blob);
+            return ERROR(ERR_INTERNAL, "Failed to get global keymanager");
+        }
+
+        /* Get master key (may prompt user for passphrase) */
+        uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE];
+        error_t *key_err = keymanager_get_key(key_mgr, master_key);
+        if (key_err) {
+            git_blob_free(blob);
+            return error_wrap(key_err, "Failed to get encryption key for: %s", entry->storage_path);
+        }
+
+        /* Derive profile-specific key */
+        uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
+
+        /* CRITICAL: source_profile must not be NULL for encrypted files
+         * Using a fallback like "unknown" would violate per-profile key isolation
+         * and cause decryption failures or incorrect key derivation */
+        if (!entry->source_profile || !entry->source_profile->name) {
+            git_blob_free(blob);
+            return ERROR(ERR_INTERNAL, "Cannot decrypt %s: source profile is NULL (this is a bug)",
+                        entry->storage_path);
+        }
+
+        const char *profile_name = entry->source_profile->name;
+        error_t *derive_err = encryption_derive_profile_key(master_key, profile_name, profile_key);
+
+        /* Clear master key immediately after derivation */
+        hydro_memzero(master_key, sizeof(master_key));
+
+        if (derive_err) {
+            git_blob_free(blob);
+            return error_wrap(derive_err, "Failed to derive profile key for: %s", entry->storage_path);
+        }
+
+        /* Decrypt content */
+        error_t *decrypt_err = encryption_decrypt(
+            (const unsigned char *)content,
+            (size_t)size,
+            profile_key,
+            &decrypted_buffer
+        );
+
+        /* Clear sensitive key material immediately */
+        hydro_memzero(profile_key, sizeof(profile_key));
+
+        if (decrypt_err) {
+            git_blob_free(blob);
+            return error_wrap(decrypt_err, "Failed to decrypt %s (wrong passphrase or corrupted file?)",
+                            entry->storage_path);
+        }
+
+        /* Update content pointer and size to use decrypted data */
+        content = buffer_data(decrypted_buffer);
+        size = buffer_size(decrypted_buffer);
+
+        if (opts->verbose) {
+            printf("Decrypted: %s\n", entry->storage_path);
+        }
+    }
+
     /* Determine ownership for the file based on prefix
      *
      * For home/ files when running as root: Use actual user's UID/GID
@@ -343,6 +426,9 @@ error_t *deploy_file(
         /* Running as root, deploying home/ file - use actual user's credentials */
         error_t *owner_err = fs_get_actual_user(&target_uid, &target_gid);
         if (owner_err) {
+            if (decrypted_buffer) {
+                buffer_free(decrypted_buffer);
+            }
             git_blob_free(blob);
             return error_wrap(owner_err,
                             "Failed to determine actual user for home/ file: %s",
@@ -362,6 +448,11 @@ error_t *deploy_file(
         target_uid,
         target_gid
     );
+
+    /* Clean up resources */
+    if (decrypted_buffer) {
+        buffer_free(decrypted_buffer);
+    }
     git_blob_free(blob);
 
     if (derr) {

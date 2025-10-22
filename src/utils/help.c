@@ -146,6 +146,8 @@ void print_add_help(const char *prog_name) {
     printf("  -e, --exclude <pattern>   Exclude pattern (glob, can be repeated)\n");
     printf("  -f, --force               Overwrite existing files in profile\n");
     printf("  -v, --verbose             Print verbose output\n");
+    printf("  --encrypt                 Force encryption for specified files\n");
+    printf("  --no-encrypt              Disable auto-encryption (override patterns)\n");
     printf("  -h, --help                Show this help message\n");
     printf("\nExclude Patterns:\n");
     printf("  Supports glob patterns: *, ?, [abc]\n");
@@ -155,10 +157,19 @@ void print_add_help(const char *prog_name) {
     printf("    --exclude '*.tmp'       Exclude temporary files\n");
     printf("  Multiple patterns:\n");
     printf("    --exclude '*.log' --exclude '*.tmp'\n");
+    printf("\nEncryption:\n");
+    printf("  Files can be encrypted at rest in Git using authenticated encryption.\n");
+    printf("  Encryption is enabled via config (encryption.enabled = true) and uses:\n");
+    printf("    1. Explicit --encrypt flag (force encryption for specified files)\n");
+    printf("    2. Auto-encrypt patterns in config (e.g., .ssh/id_*, *.key)\n");
+    printf("    3. --no-encrypt flag overrides auto-encryption patterns\n");
+    printf("  See 'dotta key --help' for passphrase management.\n");
     printf("\nExamples:\n");
     printf("  %s add global ~/.bashrc\n", prog_name);
     printf("  %s add darwin ~/.config/nvim\n", prog_name);
     printf("  %s add global ~/.ssh/config --exclude '*.pub'\n", prog_name);
+    printf("  %s add global ~/.ssh/id_rsa --encrypt\n", prog_name);
+    printf("  %s add global ~/.aws/credentials --no-encrypt\n", prog_name);
     printf("\n");
 }
 

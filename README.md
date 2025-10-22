@@ -159,7 +159,47 @@ dotta ignore --profile darwin --add 'somefile'
 dotta ignore --test ~/.config/nvim/node_modules
 ```
 
-### 9. Bootstrap System
+### 9. File Encryption
+
+Encrypt sensitive files at rest in Git using authenticated encryption:
+
+```bash
+# Enable encryption in config
+[encryption]
+enabled = true
+auto_encrypt = [".ssh/id_*", ".gnupg/*", "*.key"]
+
+# Explicitly encrypt specific files
+dotta add --profile global ~/.ssh/id_rsa --encrypt
+
+# Auto-encrypt based on patterns (config)
+dotta add --profile global ~/.ssh/id_ed25519  # Encrypted automatically
+
+# Override auto-encryption
+dotta add --profile global ~/.aws/config --no-encrypt
+
+# Manage encryption keys
+dotta key set      # Set/cache passphrase for session
+dotta key status   # Check encryption status and key cache
+dotta key clear    # Clear cached passphrase
+```
+
+**Security Features:**
+- **Deterministic AEAD** - SIV (Synthetic IV) construction for Git-friendly encryption
+- **Path-bound encryption** - Files tied to specific storage paths (authenticated associated data)
+- **Per-profile key isolation** - Each profile uses a derived encryption key
+- **Passphrase-based key derivation** - No key files to manage (PBKDF2-based)
+- **Session key caching** - Configurable timeout (default: 1 hour)
+- **Automatic decryption** - Transparent during `apply` and `show` operations
+
+**Encryption Modes:**
+1. **Explicit** - Use `--encrypt` flag to force encryption
+2. **Auto-encrypt** - Configure patterns in `[encryption] auto_encrypt` (e.g., `"*.key"`, `".ssh/id_*"`)
+3. **Override** - Use `--no-encrypt` to skip auto-encryption for specific files
+
+Encrypted files are stored in Git with a magic header (`DOTTA`) and decrypted transparently during deployment. The passphrase is never stored on disk - only cached in memory for the session timeout duration.
+
+### 10. Bootstrap System
 
 Automate system setup with per-profile bootstrap scripts that run during initial configuration:
 
@@ -275,6 +315,7 @@ Example layering for a macOS laptop with work and vpn configs:
 ### Prerequisites
 
 - libgit2 1.5+
+- libhydrogen (bundled) - For file encryption
 - sqlite3 3.40+
 - C11-compliant compiler (clang recommended)
 - POSIX system (macOS, Linux, FreeBSD)
@@ -441,6 +482,8 @@ dotta bootstrap [--profile <name>]  # Run bootstrap scripts
 dotta bootstrap --edit              # Create/edit bootstrap script
 dotta ignore                        # Edit .dottaignore
 dotta ignore --test <path>          # Test if path would be ignored
+dotta key set                       # Set encryption passphrase
+dotta key status                    # Check encryption status
 dotta git <command>                 # Run git commands in repository
 ```
 
@@ -468,6 +511,18 @@ patterns = [                              # Personal ignore patterns
     ".DS_Store",
     "*.local",
 ]
+
+[encryption]
+enabled = false                           # Enable encryption feature (opt-in)
+auto_encrypt = [                          # Patterns for automatic encryption
+    ".ssh/id_*",                          # SSH private keys
+    ".gnupg/*",                           # GPG keys
+    "*.key",                              # Generic key files
+    ".aws/credentials",                   # AWS credentials
+]
+session_timeout = 3600                    # Key cache timeout (seconds)
+opslimit = 10000                          # KDF CPU cost
+memlimit = 67108864                       # KDF memory cost (64MB)
 ```
 
 ### Environment Variables

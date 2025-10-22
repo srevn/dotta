@@ -38,10 +38,19 @@ error_t *deploy_preflight_check(
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
+    /* Declare all resources at top, initialized to NULL */
+    error_t *err = NULL;
+    preflight_result_t *result = NULL;
+    hashmap_t *seen_paths = NULL;
+    state_file_entry_t *state_entries = NULL;
+    size_t state_count = 0;
+    hashmap_t *state_map = NULL;
+
     /* Allocate result */
-    preflight_result_t *result = calloc(1, sizeof(preflight_result_t));
+    result = calloc(1, sizeof(preflight_result_t));
     if (!result) {
-        return ERROR(ERR_MEMORY, "Failed to allocate preflight result");
+        err = ERROR(ERR_MEMORY, "Failed to allocate preflight result");
+        goto cleanup;
     }
 
     result->conflicts = string_array_create();
@@ -52,73 +61,68 @@ error_t *deploy_preflight_check(
     result->has_errors = false;
 
     if (!result->conflicts || !result->permission_errors || !result->overlaps) {
-        preflight_result_free(result);
-        return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
+        err = ERROR(ERR_MEMORY, "Failed to allocate result arrays");
+        goto cleanup;
     }
 
     /* Detect overlaps: files that appear in multiple profiles */
     /* Use single hashmap with state tracking: (void*)1 = seen once, (void*)2 = overlap recorded */
-    hashmap_t *seen_paths = hashmap_create(manifest->count);
+    seen_paths = hashmap_create(manifest->count);
     if (!seen_paths) {
-        preflight_result_free(result);
-        return ERROR(ERR_MEMORY, "Failed to create hashmap for overlap detection");
+        err = ERROR(ERR_MEMORY, "Failed to create hashmap for overlap detection");
+        goto cleanup;
     }
 
     for (size_t i = 0; i < manifest->count; i++) {
         const file_entry_t *entry = &manifest->entries[i];
 
         /* Check occurrence state */
-        void *state = hashmap_get(seen_paths, entry->filesystem_path);
+        void *state_val = hashmap_get(seen_paths, entry->filesystem_path);
 
-        if (state == NULL) {
+        if (state_val == NULL) {
             /* First occurrence - mark as seen */
-            error_t *err = hashmap_set(seen_paths, entry->filesystem_path, (void *)1);
+            err = hashmap_set(seen_paths, entry->filesystem_path, (void *)1);
             if (err) {
-                hashmap_free(seen_paths, NULL);
-                preflight_result_free(result);
-                return error_wrap(err, "Failed to track path in overlap detection");
+                err = error_wrap(err, "Failed to track path in overlap detection");
+                goto cleanup;
             }
-        } else if (state == (void *)1) {
+        } else if (state_val == (void *)1) {
             /* Second occurrence - this is an overlap, record it */
             string_array_push(result->overlaps, entry->filesystem_path);
-            error_t *err = hashmap_set(seen_paths, entry->filesystem_path, (void *)2);
+            err = hashmap_set(seen_paths, entry->filesystem_path, (void *)2);
             if (err) {
-                hashmap_free(seen_paths, NULL);
-                preflight_result_free(result);
-                return error_wrap(err, "Failed to record overlap");
+                err = error_wrap(err, "Failed to record overlap");
+                goto cleanup;
             }
         }
-        /* else: state == (void*)2, already recorded as overlap, skip */
+        /* else: state_val == (void*)2, already recorded as overlap, skip */
     }
 
+    /* Done with seen_paths, free it now */
     hashmap_free(seen_paths, NULL);
+    seen_paths = NULL;
 
     /* Detect ownership changes: files deployed from one profile, now being deployed from another */
     if (state) {
         /* Load all state entries once for O(1) lookups instead of O(N) database queries */
-        state_file_entry_t *state_entries = NULL;
-        size_t state_count = 0;
-        error_t *load_err = state_get_all_files(state, &state_entries, &state_count);
-        if (load_err) {
-            preflight_result_free(result);
-            return error_wrap(load_err, "Failed to load state for ownership detection");
+        err = state_get_all_files(state, &state_entries, &state_count);
+        if (err) {
+            err = error_wrap(err, "Failed to load state for ownership detection");
+            goto cleanup;
         }
 
         /* Build hashmap for O(1) lookups */
-        hashmap_t *state_map = hashmap_create(state_count > 0 ? state_count : 16);
+        state_map = hashmap_create(state_count > 0 ? state_count : 16);
         if (!state_map) {
-            state_free_all_files(state_entries, state_count);
-            preflight_result_free(result);
-            return ERROR(ERR_MEMORY, "Failed to create state lookup map");
+            err = ERROR(ERR_MEMORY, "Failed to create state lookup map");
+            goto cleanup;
         }
 
         for (size_t i = 0; i < state_count; i++) {
-            error_t *err = hashmap_set(state_map, state_entries[i].filesystem_path, &state_entries[i]);
+            err = hashmap_set(state_map, state_entries[i].filesystem_path, &state_entries[i]);
             if (err) {
-                hashmap_free(state_map, NULL);
-                state_free_all_files(state_entries, state_count);
-                preflight_result_free(result);
-                return error_wrap(err, "Failed to populate state lookup map");
+                err = error_wrap(err, "Failed to populate state lookup map");
+                goto cleanup;
             }
         }
 
@@ -126,10 +130,8 @@ error_t *deploy_preflight_check(
         size_t ownership_change_capacity = 16;
         result->ownership_changes = calloc(ownership_change_capacity, sizeof(ownership_change_t));
         if (!result->ownership_changes) {
-            hashmap_free(state_map, NULL);
-            state_free_all_files(state_entries, state_count);
-            preflight_result_free(result);
-            return ERROR(ERR_MEMORY, "Failed to allocate ownership changes array");
+            err = ERROR(ERR_MEMORY, "Failed to allocate ownership changes array");
+            goto cleanup;
         }
 
         /* Detect ownership changes using hashmap lookups (O(1) per file) */
@@ -148,10 +150,8 @@ error_t *deploy_preflight_check(
                         ownership_change_t *new_changes = realloc(result->ownership_changes,
                                                                   ownership_change_capacity * sizeof(ownership_change_t));
                         if (!new_changes) {
-                            hashmap_free(state_map, NULL);
-                            state_free_all_files(state_entries, state_count);
-                            preflight_result_free(result);
-                            return ERROR(ERR_MEMORY, "Failed to grow ownership changes array");
+                            err = ERROR(ERR_MEMORY, "Failed to grow ownership changes array");
+                            goto cleanup;
                         }
                         result->ownership_changes = new_changes;
                     }
@@ -164,14 +164,12 @@ error_t *deploy_preflight_check(
                     char *new_prof = strdup(entry->source_profile->name);
 
                     if (!fs_path || !old_prof || !new_prof) {
-                        /* Clean up partial allocations before freeing result */
+                        /* Clean up partial allocations before goto cleanup */
                         free(fs_path);
                         free(old_prof);
                         free(new_prof);
-                        hashmap_free(state_map, NULL);
-                        state_free_all_files(state_entries, state_count);
-                        preflight_result_free(result);
-                        return ERROR(ERR_MEMORY, "Failed to allocate ownership change entry");
+                        err = ERROR(ERR_MEMORY, "Failed to allocate ownership change entry");
+                        goto cleanup;
                     }
 
                     /* All allocations succeeded - assign and increment count */
@@ -183,9 +181,11 @@ error_t *deploy_preflight_check(
             }
         }
 
-        /* Clean up state cache */
+        /* Clean up state cache - done with it */
         hashmap_free(state_map, NULL);
+        state_map = NULL;
         state_free_all_files(state_entries, state_count);
+        state_entries = NULL;
     }
 
     /* Check each file */
@@ -196,7 +196,7 @@ error_t *deploy_preflight_check(
         if (fs_exists(entry->filesystem_path)) {
             /* Compare with git */
             compare_result_t cmp_result;
-            error_t *err = compare_tree_entry_to_disk(
+            err = compare_tree_entry_to_disk(
                 repo,
                 entry->entry,
                 entry->filesystem_path,
@@ -204,8 +204,8 @@ error_t *deploy_preflight_check(
             );
 
             if (err) {
-                preflight_result_free(result);
-                return error_wrap(err, "Failed to compare '%s'", entry->filesystem_path);
+                err = error_wrap(err, "Failed to compare '%s'", entry->filesystem_path);
+                goto cleanup;
             }
 
             /* If different and not forcing, it's a conflict */
@@ -222,8 +222,19 @@ error_t *deploy_preflight_check(
         }
     }
 
+    /* Success - set output and prevent cleanup from freeing result */
     *out = result;
-    return NULL;
+    result = NULL;
+    err = NULL;
+
+cleanup:
+    /* Free resources in reverse order of allocation */
+    if (state_map) hashmap_free(state_map, NULL);
+    if (state_entries) state_free_all_files(state_entries, state_count);
+    if (seen_paths) hashmap_free(seen_paths, NULL);
+    if (result) preflight_result_free(result);
+
+    return err;
 }
 
 /**
@@ -239,6 +250,13 @@ error_t *deploy_file(
     CHECK_NULL(entry);
     CHECK_NULL(opts);
 
+    /* Declare all resources at top, initialized to NULL */
+    error_t *err = NULL;
+    git_blob *blob = NULL;
+    char *target_str = NULL;
+    buffer_t *decrypted_buffer = NULL;
+    const metadata_entry_t *meta_entry = NULL;
+
     if (opts->dry_run) {
         /* Dry-run mode - just print */
         if (opts->verbose) {
@@ -252,16 +270,17 @@ error_t *deploy_file(
     git_object_t type = git_tree_entry_type(entry->entry);
 
     if (type != GIT_OBJECT_BLOB) {
-        return ERROR(ERR_INTERNAL,
+        err = ERROR(ERR_INTERNAL,
                     "Unsupported object type for '%s'", entry->storage_path);
+        goto cleanup;
     }
 
     /* Get blob */
     const git_oid *oid = git_tree_entry_id(entry->entry);
-    git_blob *blob = NULL;
-    int err = git_blob_lookup(&blob, repo, oid);
-    if (err < 0) {
-        return error_from_git(err);
+    int git_err = git_blob_lookup(&blob, repo, oid);
+    if (git_err < 0) {
+        err = error_from_git(git_err);
+        goto cleanup;
     }
 
     /* Handle symlinks */
@@ -270,50 +289,45 @@ error_t *deploy_file(
         size_t target_len = git_blob_rawsize(blob);
 
         /* Null-terminate target */
-        char *target_str = malloc(target_len + 1);
+        target_str = malloc(target_len + 1);
         if (!target_str) {
-            git_blob_free(blob);
-            return ERROR(ERR_MEMORY, "Failed to allocate symlink target");
+            err = ERROR(ERR_MEMORY, "Failed to allocate symlink target");
+            goto cleanup;
         }
         memcpy(target_str, target, target_len);
         target_str[target_len] = '\0';
 
         /* Remove existing file/symlink */
         if (fs_exists(entry->filesystem_path)) {
-            error_t *derr = fs_remove_file(entry->filesystem_path);
-            if (derr) {
-                free(target_str);
-                git_blob_free(blob);
-                return derr;
+            err = fs_remove_file(entry->filesystem_path);
+            if (err) {
+                goto cleanup;
             }
         }
 
         /* Create symlink */
-        error_t *derr = fs_create_symlink(target_str, entry->filesystem_path);
-        free(target_str);
-        git_blob_free(blob);
-
-        if (derr) {
-            return error_wrap(derr, "Failed to deploy symlink '%s'", entry->filesystem_path);
+        err = fs_create_symlink(target_str, entry->filesystem_path);
+        if (err) {
+            err = error_wrap(err, "Failed to deploy symlink '%s'", entry->filesystem_path);
+            goto cleanup;
         }
 
         if (opts->verbose) {
             printf("Deployed symlink: %s\n", entry->filesystem_path);
         }
-        return NULL;
+
+        /* Success for symlink - goto cleanup will handle freeing */
+        err = NULL;
+        goto cleanup;
     }
 
     /* Handle regular files */
     const void *content = git_blob_rawcontent(blob);
     git_object_size_t size = git_blob_rawsize(blob);
 
-    /* Track if we allocated a buffer for decrypted content (need to free later) */
-    buffer_t *decrypted_buffer = NULL;
-
     /* Determine permissions - use metadata if available, otherwise fallback to git mode */
     mode_t file_mode;
     bool used_metadata = false;
-    const metadata_entry_t *meta_entry = NULL;  /* Declare at function level for later use */
 
     if (metadata) {
         error_t *meta_err = metadata_get_entry(metadata, entry->storage_path, &meta_entry);
@@ -341,25 +355,25 @@ error_t *deploy_file(
     if (meta_entry && meta_entry->encrypted) {
         /* Verify file is actually encrypted */
         if (!encryption_is_encrypted((const unsigned char *)content, (size_t)size)) {
-            git_blob_free(blob);
-            return ERROR(ERR_STATE_INVALID,
+            err = ERROR(ERR_STATE_INVALID,
                         "Metadata indicates file is encrypted, but content is not encrypted: %s",
                         entry->storage_path);
+            goto cleanup;
         }
 
         /* Get global keymanager */
         keymanager_t *key_mgr = keymanager_get_global(NULL);
         if (!key_mgr) {
-            git_blob_free(blob);
-            return ERROR(ERR_INTERNAL, "Failed to get global keymanager");
+            err = ERROR(ERR_INTERNAL, "Failed to get global keymanager");
+            goto cleanup;
         }
 
         /* Get master key (may prompt user for passphrase) */
         uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE];
-        error_t *key_err = keymanager_get_key(key_mgr, master_key);
-        if (key_err) {
-            git_blob_free(blob);
-            return error_wrap(key_err, "Failed to get encryption key for: %s", entry->storage_path);
+        err = keymanager_get_key(key_mgr, master_key);
+        if (err) {
+            err = error_wrap(err, "Failed to get encryption key for: %s", entry->storage_path);
+            goto cleanup;
         }
 
         /* Derive profile-specific key */
@@ -369,24 +383,24 @@ error_t *deploy_file(
          * Using a fallback like "unknown" would violate per-profile key isolation
          * and cause decryption failures or incorrect key derivation */
         if (!entry->source_profile || !entry->source_profile->name) {
-            git_blob_free(blob);
-            return ERROR(ERR_INTERNAL, "Cannot decrypt %s: source profile is NULL (this is a bug)",
+            err = ERROR(ERR_INTERNAL, "Cannot decrypt %s: source profile is NULL (this is a bug)",
                         entry->storage_path);
+            goto cleanup;
         }
 
         const char *profile_name = entry->source_profile->name;
-        error_t *derive_err = encryption_derive_profile_key(master_key, profile_name, profile_key);
+        err = encryption_derive_profile_key(master_key, profile_name, profile_key);
 
         /* Clear master key immediately after derivation */
         hydro_memzero(master_key, sizeof(master_key));
 
-        if (derive_err) {
-            git_blob_free(blob);
-            return error_wrap(derive_err, "Failed to derive profile key for: %s", entry->storage_path);
+        if (err) {
+            err = error_wrap(err, "Failed to derive profile key for: %s", entry->storage_path);
+            goto cleanup;
         }
 
         /* Decrypt content */
-        error_t *decrypt_err = encryption_decrypt(
+        err = encryption_decrypt(
             (const unsigned char *)content,
             (size_t)size,
             profile_key,
@@ -396,10 +410,10 @@ error_t *deploy_file(
         /* Clear sensitive key material immediately */
         hydro_memzero(profile_key, sizeof(profile_key));
 
-        if (decrypt_err) {
-            git_blob_free(blob);
-            return error_wrap(decrypt_err, "Failed to decrypt %s (wrong passphrase or corrupted file?)",
+        if (err) {
+            err = error_wrap(err, "Failed to decrypt %s (wrong passphrase or corrupted file?)",
                             entry->storage_path);
+            goto cleanup;
         }
 
         /* Update content pointer and size to use decrypted data */
@@ -424,15 +438,12 @@ error_t *deploy_file(
 
     if (is_home_prefix && fs_is_running_as_root()) {
         /* Running as root, deploying home/ file - use actual user's credentials */
-        error_t *owner_err = fs_get_actual_user(&target_uid, &target_gid);
-        if (owner_err) {
-            if (decrypted_buffer) {
-                buffer_free(decrypted_buffer);
-            }
-            git_blob_free(blob);
-            return error_wrap(owner_err,
+        err = fs_get_actual_user(&target_uid, &target_gid);
+        if (err) {
+            err = error_wrap(err,
                             "Failed to determine actual user for home/ file: %s",
                             entry->filesystem_path);
+            goto cleanup;
         }
     }
     /* For root/ files or when not running as root: leave uid/gid as -1 (no change) */
@@ -440,7 +451,7 @@ error_t *deploy_file(
     /* Write directly from git blob to filesystem with atomic permission setting
      * SECURITY: fs_write_file_raw now sets permissions atomically via fchmod(),
      * eliminating the window where the file has incorrect permissions */
-    error_t *derr = fs_write_file_raw(
+    err = fs_write_file_raw(
         entry->filesystem_path,
         (const unsigned char *)content,
         (size_t)size,
@@ -449,14 +460,9 @@ error_t *deploy_file(
         target_gid
     );
 
-    /* Clean up resources */
-    if (decrypted_buffer) {
-        buffer_free(decrypted_buffer);
-    }
-    git_blob_free(blob);
-
-    if (derr) {
-        return error_wrap(derr, "Failed to deploy file '%s'", entry->filesystem_path);
+    if (err) {
+        err = error_wrap(err, "Failed to deploy file '%s'", entry->filesystem_path);
+        goto cleanup;
     }
 
     /* Apply ownership ONLY for root/ prefix files */
@@ -490,7 +496,16 @@ error_t *deploy_file(
         }
     }
 
-    return NULL;
+    /* Success */
+    err = NULL;
+
+cleanup:
+    /* Free resources in reverse order */
+    if (decrypted_buffer) buffer_free(decrypted_buffer);
+    if (target_str) free(target_str);
+    if (blob) git_blob_free(blob);
+
+    return err;
 }
 
 /**
@@ -632,10 +647,18 @@ error_t *deploy_execute(
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
+    /* Declare all resources at top, initialized to NULL */
+    error_t *err = NULL;
+    deploy_result_t *result = NULL;
+    hashmap_t *state_map = NULL;
+    state_file_entry_t *state_entries = NULL;
+    size_t state_count = 0;
+
     /* Allocate result */
-    deploy_result_t *result = calloc(1, sizeof(deploy_result_t));
+    result = calloc(1, sizeof(deploy_result_t));
     if (!result) {
-        return ERROR(ERR_MEMORY, "Failed to allocate deploy result");
+        err = ERROR(ERR_MEMORY, "Failed to allocate deploy result");
+        goto cleanup;
     }
 
     result->deployed = string_array_create();
@@ -646,44 +669,37 @@ error_t *deploy_execute(
     result->error_message = NULL;
 
     if (!result->deployed || !result->skipped || !result->failed) {
-        deploy_result_free(result);
-        return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
+        err = ERROR(ERR_MEMORY, "Failed to allocate result arrays");
+        goto cleanup;
     }
 
     /* Deploy tracked directories with metadata first */
-    error_t *err = deploy_tracked_directories(metadata, opts);
+    err = deploy_tracked_directories(metadata, opts);
     if (err) {
-        deploy_result_free(result);
-        return error_wrap(err, "Failed to deploy tracked directories");
+        err = error_wrap(err, "Failed to deploy tracked directories");
+        goto cleanup;
     }
 
     /* Load state entries once for O(1) lookups during smart skip (avoid O(N) database queries) */
-    hashmap_t *state_map = NULL;
-    state_file_entry_t *state_entries = NULL;
-    size_t state_count = 0;
-
     if (state && opts->skip_unchanged) {
-        error_t *load_err = state_get_all_files(state, &state_entries, &state_count);
-        if (load_err) {
-            deploy_result_free(result);
-            return error_wrap(load_err, "Failed to load state for smart skip");
+        err = state_get_all_files(state, &state_entries, &state_count);
+        if (err) {
+            err = error_wrap(err, "Failed to load state for smart skip");
+            goto cleanup;
         }
 
         /* Build hashmap for O(1) lookups */
         state_map = hashmap_create(state_count > 0 ? state_count : 16);
         if (!state_map) {
-            state_free_all_files(state_entries, state_count);
-            deploy_result_free(result);
-            return ERROR(ERR_MEMORY, "Failed to create state lookup map");
+            err = ERROR(ERR_MEMORY, "Failed to create state lookup map");
+            goto cleanup;
         }
 
         for (size_t i = 0; i < state_count; i++) {
-            error_t *map_err = hashmap_set(state_map, state_entries[i].filesystem_path, &state_entries[i]);
-            if (map_err) {
-                hashmap_free(state_map, NULL);
-                state_free_all_files(state_entries, state_count);
-                deploy_result_free(result);
-                return error_wrap(map_err, "Failed to populate state lookup map");
+            err = hashmap_set(state_map, state_entries[i].filesystem_path, &state_entries[i]);
+            if (err) {
+                err = error_wrap(err, "Failed to populate state lookup map");
+                goto cleanup;
             }
         }
     }
@@ -771,23 +787,18 @@ error_t *deploy_execute(
         }
 
         /* Deploy the file */
-        error_t *err = deploy_file(repo, entry, metadata, opts);
+        err = deploy_file(repo, entry, metadata, opts);
         if (err) {
             /* Record failure */
             string_array_push(result->failed, entry->filesystem_path);
             result->error_message = strdup(error_message(err));
-            error_free(err);
 
-            /* Clean up state cache before fail-stop */
-            if (state_map) {
-                hashmap_free(state_map, NULL);
-                state_free_all_files(state_entries, state_count);
-            }
-
-            /* Fail-stop: don't continue deployment */
+            /* Fail-stop: set output and goto cleanup */
             *out = result;
-            return ERROR(ERR_INTERNAL,
-                        "Deployment failed at '%s'", entry->filesystem_path);
+            result = NULL;  /* Prevent cleanup from freeing result */
+
+            err = ERROR(ERR_INTERNAL, "Deployment failed at '%s'", entry->filesystem_path);
+            goto cleanup;
         }
 
         /* Record success */
@@ -795,14 +806,18 @@ error_t *deploy_execute(
         result->deployed_count++;
     }
 
-    /* Clean up state cache */
-    if (state_map) {
-        hashmap_free(state_map, NULL);
-        state_free_all_files(state_entries, state_count);
-    }
-
+    /* Success - set output and prevent cleanup from freeing result */
     *out = result;
-    return NULL;
+    result = NULL;
+    err = NULL;
+
+cleanup:
+    /* Free resources in reverse order of allocation */
+    if (state_map) hashmap_free(state_map, NULL);
+    if (state_entries) state_free_all_files(state_entries, state_count);
+    if (result) deploy_result_free(result);
+
+    return err;
 }
 
 /**

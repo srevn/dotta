@@ -846,11 +846,34 @@ static error_t *update_profile(
         }
     }
 
-    /* Derive profile key once for all files in this profile
+    /* Derive profile key once if encryption is needed
      * This optimization hoists key derivation to command level, avoiding
-     * redundant derivations for each file that needs encryption */
+     * redundant derivations for each file that needs encryption.
+     *
+     * Derive key if EITHER:
+     *   1. Profile has encrypted files (need to re-encrypt when updating)
+     *   2. Auto-encrypt patterns configured (files may match patterns)
+     */
+    bool needs_encryption_key = false;
+
+    /* Check if any existing files are encrypted */
+    if (existing_metadata && config && config->encryption_enabled) {
+        for (size_t i = 0; i < existing_metadata->count; i++) {
+            if (existing_metadata->entries[i].encrypted) {
+                needs_encryption_key = true;
+                break;
+            }
+        }
+    }
+
+    /* Check if auto-encrypt patterns are configured */
+    if (!needs_encryption_key && config && config->encryption_enabled &&
+        config->auto_encrypt_patterns && config->auto_encrypt_pattern_count > 0) {
+        needs_encryption_key = true;
+    }
+
     uint8_t *profile_key = NULL;
-    if (config && config->encryption_enabled) {
+    if (needs_encryption_key && config && config->encryption_enabled) {
         /* Get global keymanager */
         keymanager_t *key_mgr = keymanager_get_global(config);
         if (!key_mgr) {

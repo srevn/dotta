@@ -37,9 +37,7 @@
 #include <stdbool.h>
 
 #include "types.h"
-
-/* Forward declarations */
-typedef struct dotta_config dotta_config_t;
+#include "config.h"
 
 /**
  * Check if path matches pattern using gitignore-style semantics

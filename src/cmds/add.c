@@ -255,10 +255,19 @@ static error_t *add_file_to_worktree(
             return error_wrap(err, "Failed to create symlink in worktree");
         }
     } else {
-        /* Determine if should encrypt based on profile_key presence and auto-encrypt patterns */
-        bool should_encrypt = (profile_key != NULL);
+        /* Determine if should encrypt based on explicit flag or auto-encrypt patterns
+         *
+         * Encryption happens if:
+         *   1. --encrypt flag was used (opts->encrypt)
+         *   2. OR file matches auto_encrypt patterns (checked below)
+         *
+         * Note: profile_key availability doesn't imply encryption - it's derived
+         * eagerly when auto-encrypt is configured, but we still need explicit
+         * opt-in (flag or pattern match) to actually encrypt each file.
+         */
+        bool should_encrypt = opts->encrypt;
 
-        /* If no explicit encryption but auto-encrypt is enabled, check patterns */
+        /* If not explicitly encrypted, check auto-encrypt patterns */
         if (!should_encrypt && config && config->encryption_enabled && !opts->no_encrypt) {
             err = encrypt_should_auto_encrypt(config, storage_path, &should_encrypt);
             if (err) {
@@ -836,10 +845,20 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         }
     }
 
-    /* Derive profile key once if encryption is explicitly requested
+    /* Derive profile key once if encryption is needed
      * This optimization hoists key derivation to command level, avoiding
-     * redundant derivations for each file */
-    if (opts->encrypt && config && config->encryption_enabled) {
+     * redundant derivations for each file.
+     *
+     * Derive key if EITHER:
+     *   1. Explicit encryption requested (--encrypt flag)
+     *   2. Auto-encrypt patterns configured (files may match patterns)
+     */
+    bool needs_encryption_key = opts->encrypt ||
+                                (config && config->encryption_enabled &&
+                                 config->auto_encrypt_patterns &&
+                                 config->auto_encrypt_pattern_count > 0);
+
+    if (needs_encryption_key && config && config->encryption_enabled) {
         /* Get global keymanager */
         keymanager_t *key_mgr = keymanager_get_global(config);
         if (!key_mgr) {

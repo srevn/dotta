@@ -176,7 +176,8 @@ static error_t *collect_files_from_dir(
  * @param filesystem_path Source path on filesystem
  * @param storage_path Pre-computed storage path (e.g., "home/.bashrc")
  * @param opts Command options
- * @param config Configuration (for encryption settings, can be NULL)
+ * @param profile_key Pre-derived profile encryption key (NULL if no encryption)
+ * @param config Configuration (for auto-encrypt patterns only, can be NULL)
  * @param entry Metadata entry (updated with encryption status, can be NULL for symlinks)
  * @param out Output context
  * @return Error or NULL on success
@@ -186,6 +187,7 @@ static error_t *add_file_to_worktree(
     const char *filesystem_path,
     const char *storage_path,
     const cmd_add_options_t *opts,
+    const uint8_t *profile_key,
     const dotta_config_t *config,
     metadata_entry_t *entry,
     output_ctx_t *out
@@ -253,70 +255,31 @@ static error_t *add_file_to_worktree(
             return error_wrap(err, "Failed to create symlink in worktree");
         }
     } else {
-        /* Handle regular file - with optional encryption */
+        /* Determine if should encrypt based on profile_key presence and auto-encrypt patterns */
+        bool should_encrypt = (profile_key != NULL);
 
-        /* Determine if should encrypt */
-        bool should_encrypt = false;
-
-        if (config && config->encryption_enabled) {
-            /* Check explicit flags first */
-            if (opts->encrypt) {
-                should_encrypt = true;
-            } else if (!opts->no_encrypt) {
-                /* Check auto-encrypt patterns */
-                err = encrypt_should_auto_encrypt(config, storage_path, &should_encrypt);
-                if (err) {
-                    /* Log warning and continue without encryption */
-                    if (opts->verbose && out) {
-                        output_warning(out, "Failed to check auto-encrypt patterns: %s",
-                                      error_message(err));
-                    }
-                    error_free(err);
-                    err = NULL;
-                    should_encrypt = false;
+        /* If no explicit encryption but auto-encrypt is enabled, check patterns */
+        if (!should_encrypt && config && config->encryption_enabled && !opts->no_encrypt) {
+            err = encrypt_should_auto_encrypt(config, storage_path, &should_encrypt);
+            if (err) {
+                /* Log warning and continue without encryption */
+                if (opts->verbose && out) {
+                    output_warning(out, "Failed to check auto-encrypt patterns: %s",
+                                  error_message(err));
                 }
+                error_free(err);
+                err = NULL;
+                should_encrypt = false;
             }
         }
 
-        if (should_encrypt) {
-            /* ENCRYPTION PATH */
-
-            /* Read file content */
+        if (should_encrypt && profile_key) {
+            /* ENCRYPTION PATH - Read file content */
             buffer_t *plaintext = NULL;
             err = fs_read_file(filesystem_path, &plaintext);
             if (err) {
                 free(dest_path);
                 return error_wrap(err, "Failed to read file for encryption");
-            }
-
-            /* Get global keymanager */
-            keymanager_t *key_mgr = keymanager_get_global(config);
-            if (!key_mgr) {
-                buffer_free(plaintext);
-                free(dest_path);
-                return ERROR(ERR_INTERNAL, "Failed to get encryption key manager");
-            }
-
-            /* Get master key (prompts if needed) */
-            uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE];
-            err = keymanager_get_key(key_mgr, master_key);
-            if (err) {
-                buffer_free(plaintext);
-                free(dest_path);
-                return error_wrap(err, "Failed to get encryption key");
-            }
-
-            /* Derive profile key */
-            uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
-            err = encryption_derive_profile_key(master_key, opts->profile, profile_key);
-
-            /* Clear master key immediately after derivation */
-            hydro_memzero(master_key, sizeof(master_key));
-
-            if (err) {
-                buffer_free(plaintext);
-                free(dest_path);
-                return error_wrap(err, "Failed to derive profile encryption key");
             }
 
             /* Encrypt file content with content-addressed nonce */
@@ -329,8 +292,6 @@ static error_t *add_file_to_worktree(
                 &ciphertext
             );
 
-            /* Securely clear keys */
-            hydro_memzero(profile_key, sizeof(profile_key));
             buffer_free(plaintext);
 
             if (err) {
@@ -618,6 +579,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     size_t metadata_count = 0;
     bool profile_was_new = false;
     metadata_t *metadata = NULL;
+    uint8_t *profile_key = NULL;
 
     /* Load configuration for hooks and ignore patterns */
     err = config_load(NULL, &config);
@@ -874,6 +836,48 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         }
     }
 
+    /* Derive profile key once if encryption is explicitly requested
+     * This optimization hoists key derivation to command level, avoiding
+     * redundant derivations for each file */
+    if (opts->encrypt && config && config->encryption_enabled) {
+        /* Get global keymanager */
+        keymanager_t *key_mgr = keymanager_get_global(config);
+        if (!key_mgr) {
+            err = ERROR(ERR_INTERNAL, "Failed to get encryption key manager");
+            goto cleanup;
+        }
+
+        /* Get master key (prompts if needed) */
+        uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE];
+        err = keymanager_get_key(key_mgr, master_key);
+        if (err) {
+            err = error_wrap(err, "Failed to get encryption key");
+            goto cleanup;
+        }
+
+        /* Allocate profile key */
+        profile_key = malloc(ENCRYPTION_PROFILE_KEY_SIZE);
+        if (!profile_key) {
+            hydro_memzero(master_key, sizeof(master_key));
+            err = ERROR(ERR_MEMORY, "Failed to allocate profile key");
+            goto cleanup;
+        }
+
+        /* Derive profile key once for all files */
+        err = encryption_derive_profile_key(master_key, opts->profile, profile_key);
+
+        /* Clear master key immediately after derivation */
+        hydro_memzero(master_key, sizeof(master_key));
+
+        if (err) {
+            hydro_memzero(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
+            free(profile_key);
+            profile_key = NULL;
+            err = error_wrap(err, "Failed to derive profile encryption key");
+            goto cleanup;
+        }
+    }
+
     /* Single-pass: add files and capture metadata inline */
     for (size_t i = 0; i < string_array_size(all_files); i++) {
         const char *file_path = string_array_get(all_files, i);
@@ -903,8 +907,8 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             goto cleanup;
         }
 
-        /* Add file to worktree (with pre-computed storage_path) */
-        err = add_file_to_worktree(wt, file_path, storage_path, opts, config, entry, out);
+        /* Add file to worktree (with pre-computed storage_path and profile_key) */
+        err = add_file_to_worktree(wt, file_path, storage_path, opts, profile_key, config, entry, out);
         if (err) {
             if (entry) {
                 metadata_entry_free(entry);
@@ -1106,6 +1110,12 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     }
 
 cleanup:
+    /* Securely clear profile key before freeing */
+    if (profile_key) {
+        hydro_memzero(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
+        free(profile_key);
+    }
+
     /* Free tracked directories */
     if (tracked_dirs) {
         for (size_t i = 0; i < tracked_dir_count; i++) {

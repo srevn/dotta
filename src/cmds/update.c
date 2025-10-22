@@ -466,14 +466,13 @@ static error_t *copy_file_to_worktree(
     worktree_handle_t *wt,
     const char *filesystem_path,
     const char *storage_path,
-    const char *profile_name,
+    const uint8_t *profile_key,
     const dotta_config_t *config,
     const metadata_t *metadata
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(storage_path);
-    CHECK_NULL(profile_name);
 
     /* Initialize all resources to NULL for goto cleanup */
     char *dest_path = NULL;
@@ -565,40 +564,11 @@ static error_t *copy_file_to_worktree(
             }
         }
 
-        if (should_encrypt) {
-            /* ENCRYPTION PATH */
-
-            /* Read file content */
+        if (should_encrypt && profile_key) {
+            /* ENCRYPTION PATH - Read file content */
             err = fs_read_file(filesystem_path, &plaintext);
             if (err) {
                 err = error_wrap(err, "Failed to read file for encryption");
-                goto cleanup;
-            }
-
-            /* Get key manager */
-            keymanager_t *key_mgr = keymanager_get_global(config);
-            if (!key_mgr) {
-                err = ERROR(ERR_INTERNAL, "Failed to get encryption key manager");
-                goto cleanup;
-            }
-
-            /* Get master key (prompts if needed) */
-            uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE];
-            err = keymanager_get_key(key_mgr, master_key);
-            if (err) {
-                err = error_wrap(err, "Failed to get encryption key");
-                goto cleanup;
-            }
-
-            /* Derive profile key */
-            uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
-            err = encryption_derive_profile_key(master_key, profile_name, profile_key);
-
-            /* Clear master key immediately after derivation */
-            hydro_memzero(master_key, sizeof(master_key));
-
-            if (err) {
-                err = error_wrap(err, "Failed to derive profile encryption key");
                 goto cleanup;
             }
 
@@ -610,9 +580,6 @@ static error_t *copy_file_to_worktree(
                 storage_path,  /* Nonce derived from path + content */
                 &ciphertext
             );
-
-            /* Securely clear keys */
-            hydro_memzero(profile_key, sizeof(profile_key));
 
             if (err) {
                 err = error_wrap(err, "Failed to encrypt file");
@@ -879,6 +846,48 @@ static error_t *update_profile(
         }
     }
 
+    /* Derive profile key once for all files in this profile
+     * This optimization hoists key derivation to command level, avoiding
+     * redundant derivations for each file that needs encryption */
+    uint8_t *profile_key = NULL;
+    if (config && config->encryption_enabled) {
+        /* Get global keymanager */
+        keymanager_t *key_mgr = keymanager_get_global(config);
+        if (!key_mgr) {
+            if (existing_metadata) metadata_free(existing_metadata);
+            return ERROR(ERR_INTERNAL, "Failed to get encryption key manager");
+        }
+
+        /* Get master key (prompts if needed) */
+        uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE];
+        err = keymanager_get_key(key_mgr, master_key);
+        if (err) {
+            if (existing_metadata) metadata_free(existing_metadata);
+            return error_wrap(err, "Failed to get encryption key");
+        }
+
+        /* Allocate profile key */
+        profile_key = malloc(ENCRYPTION_PROFILE_KEY_SIZE);
+        if (!profile_key) {
+            hydro_memzero(master_key, sizeof(master_key));
+            if (existing_metadata) metadata_free(existing_metadata);
+            return ERROR(ERR_MEMORY, "Failed to allocate profile key");
+        }
+
+        /* Derive profile key once for all files */
+        err = encryption_derive_profile_key(master_key, profile->name, profile_key);
+
+        /* Clear master key immediately after derivation */
+        hydro_memzero(master_key, sizeof(master_key));
+
+        if (err) {
+            hydro_memzero(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
+            free(profile_key);
+            if (existing_metadata) metadata_free(existing_metadata);
+            return error_wrap(err, "Failed to derive profile encryption key");
+        }
+    }
+
     /* Create temporary worktree */
     err = worktree_create_temp(repo, &wt);
     if (err) {
@@ -923,7 +932,7 @@ static error_t *update_profile(
             wt,
             file->filesystem_path,
             file->storage_path,
-            profile->name,
+            profile_key,
             config,
             existing_metadata
         );
@@ -1000,6 +1009,12 @@ static error_t *update_profile(
     }
 
 cleanup:
+    /* Securely clear profile key before freeing */
+    if (profile_key) {
+        hydro_memzero(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
+        free(profile_key);
+    }
+
     /* Free resources in reverse order */
     if (message) free(message);
     if (storage_paths) free(storage_paths);

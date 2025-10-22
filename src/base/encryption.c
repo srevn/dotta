@@ -19,56 +19,111 @@ static const unsigned char MAGIC_HEADER[8] = {
 };
 
 /**
- * Derive deterministic nonce from content (internal helper)
+ * Derive subkeys for SIV construction (internal helper)
  *
- * Uses keyed BLAKE2b hashing to derive a 64-bit nonce from:
- *   nonce = HMAC(profile_key, storage_path || plaintext)[0:8]
+ * Derives two independent subkeys from the profile key using KDF:
+ *   mac_key = KDF(profile_key, subkey_id=1, context="dottasiv")
+ *   ctr_key = KDF(profile_key, subkey_id=2, context="dottasiv")
  *
- * This ensures:
- * - Same (key, path, content) → same nonce (idempotent)
- * - Different content → different nonce (collision-resistant)
- * - Including path prevents identical files from having identical ciphertexts
- *
- * Context string "dottanon" (8 bytes) = "dotta" + "non"ce
+ * This ensures cryptographic independence between the MAC and stream cipher keys,
+ * a critical security requirement for SIV constructions.
  *
  * @param profile_key Profile encryption key (32 bytes)
- * @param storage_path File path in profile (e.g., "home/.bashrc")
- * @param plaintext Content to encrypt
- * @param plaintext_len Content length
- * @param out_nonce Derived 64-bit nonce
+ * @param out_mac_key Output buffer for MAC key (32 bytes)
+ * @param out_ctr_key Output buffer for CTR key (32 bytes)
  * @return Error or NULL on success
  */
-static error_t *derive_nonce_from_content(
+static error_t *derive_siv_subkeys(
     const uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE],
-    const char *storage_path,
-    const unsigned char *plaintext,
-    size_t plaintext_len,
-    uint64_t *out_nonce
+    uint8_t out_mac_key[32],
+    uint8_t out_ctr_key[32]
 ) {
-    /* Initialize keyed hash with profile key */
-    hydro_hash_state state;
-    uint8_t hash[32];  /* BLAKE2b-256 output */
-
-    if (hydro_hash_init(&state, "dottanon", profile_key) != 0) {
-        return ERROR(ERR_CRYPTO, "Failed to initialize hash for nonce derivation");
+    /* Derive MAC key (subkey_id=1) */
+    if (hydro_kdf_derive_from_key(out_mac_key, 32, 1,
+                                   ENCRYPTION_CTX_SIV_KDF, profile_key) != 0) {
+        return ERROR(ERR_CRYPTO, "Failed to derive MAC key");
     }
 
-    /* Hash: storage_path || plaintext */
-    hydro_hash_update(&state, (const uint8_t *)storage_path, strlen(storage_path));
-    hydro_hash_update(&state, plaintext, plaintext_len);
-    hydro_hash_final(&state, hash, sizeof(hash));
-
-    /* Extract first 64 bits as nonce (little-endian) */
-    uint64_t nonce = 0;
-    for (int i = 0; i < 8; i++) {
-        nonce |= ((uint64_t)hash[i]) << (i * 8);
+    /* Derive CTR key (subkey_id=2) */
+    if (hydro_kdf_derive_from_key(out_ctr_key, 32, 2,
+                                   ENCRYPTION_CTX_SIV_KDF, profile_key) != 0) {
+        hydro_memzero(out_mac_key, 32);
+        return ERROR(ERR_CRYPTO, "Failed to derive CTR key");
     }
 
-    /* Securely clear sensitive data */
-    hydro_memzero(hash, sizeof(hash));
-    hydro_memzero(&state, sizeof(state));
+    return NULL;
+}
 
-    *out_nonce = nonce;
+/**
+ * Derive deterministic stream seed from path (internal helper)
+ *
+ * Derives a deterministic seed for the stream cipher from the CTR key and storage path:
+ *   stream_seed = HMAC(ctr_key, storage_path, context="dottactr")
+ *
+ * This binds the keystream to the specific file path, ensuring different files
+ * (even with identical content) use different keystreams.
+ *
+ * @param ctr_key CTR subkey (32 bytes)
+ * @param storage_path File path in profile (e.g., "home/.bashrc")
+ * @param out_seed Output buffer for stream seed (32 bytes)
+ * @return Error or NULL on success
+ */
+static error_t *derive_stream_seed(
+    const uint8_t ctr_key[32],
+    const char *storage_path,
+    uint8_t out_seed[32]
+) {
+    if (hydro_hash_hash(out_seed, 32,
+                        (const uint8_t *)storage_path, strlen(storage_path),
+                        ENCRYPTION_CTX_SIV_CTR, ctr_key) != 0) {
+        return ERROR(ERR_CRYPTO, "Failed to derive stream seed");
+    }
+
+    return NULL;
+}
+
+/**
+ * Compute SIV/MAC over associated data and ciphertext (internal helper)
+ *
+ * Computes the SIV (Synthetic IV) as a MAC over:
+ *   siv = HMAC(mac_key, storage_path || ciphertext, context="dottamac")
+ *
+ * The storage_path is authenticated as associated data, binding the ciphertext
+ * to its intended location.
+ *
+ * @param mac_key MAC subkey (32 bytes)
+ * @param storage_path File path in profile (authenticated associated data)
+ * @param ciphertext Encrypted data
+ * @param ciphertext_len Ciphertext length
+ * @param out_siv Output buffer for SIV/MAC (32 bytes)
+ * @return Error or NULL on success
+ */
+static error_t *compute_siv(
+    const uint8_t mac_key[32],
+    const char *storage_path,
+    const unsigned char *ciphertext,
+    size_t ciphertext_len,
+    uint8_t out_siv[32]
+) {
+    hydro_hash_state mac_state;
+
+    /* Initialize MAC with mac_key */
+    if (hydro_hash_init(&mac_state, ENCRYPTION_CTX_SIV_MAC, mac_key) != 0) {
+        return ERROR(ERR_CRYPTO, "Failed to initialize MAC computation");
+    }
+
+    /* Authenticate storage_path (associated data) */
+    hydro_hash_update(&mac_state, (const uint8_t *)storage_path, strlen(storage_path));
+
+    /* Authenticate ciphertext */
+    hydro_hash_update(&mac_state, ciphertext, ciphertext_len);
+
+    /* Finalize to get SIV */
+    hydro_hash_final(&mac_state, out_siv, 32);
+
+    /* Clear MAC state */
+    hydro_memzero(&mac_state, sizeof(mac_state));
+
     return NULL;
 }
 
@@ -94,7 +149,12 @@ error_t *encryption_derive_master_key(
         return ERROR(ERR_INVALID_ARG, "Passphrase cannot be empty");
     }
 
-    /* Use zero master key for hydro_pwhash (we derive everything from passphrase) */
+    /* Use zero master key for hydro_pwhash (we derive everything from passphrase)
+     *
+     * Note: Zero master key is correct here because we're doing direct key
+     * derivation, not password storage. The master key parameter is only
+     * needed when creating encrypted password representatives for storage.
+     * See libhydrogen Password-hashing.md for details. */
     static const uint8_t zero_master[hydro_pwhash_MASTERKEYBYTES] = {0};
 
     int result = hydro_pwhash_deterministic(
@@ -173,117 +233,148 @@ error_t *encryption_encrypt(
     CHECK_NULL(storage_path);
     CHECK_NULL(out_ciphertext);
 
-    /* Derive deterministic nonce from content */
-    uint64_t nonce = 0;
-    error_t *err = derive_nonce_from_content(
-        profile_key,
-        storage_path,
-        plaintext,
-        plaintext_len,
-        &nonce
-    );
-    if (err) {
-        return error_wrap(err, "Failed to derive nonce from content");
-    }
+    error_t *err = NULL;
+    uint8_t mac_key[32] = {0};
+    uint8_t ctr_key[32] = {0};
+    uint8_t stream_seed[32] = {0};
+    uint8_t *keystream = NULL;
+    unsigned char *ciphertext = NULL;
+    buffer_t *output = NULL;
 
-    /* Calculate output size with overflow detection
-     * We need to ensure that secretbox_len and total_len don't overflow.
-     * This prevents allocating a small buffer when plaintext_len is huge. */
-
-    /* Check: secretbox_len = HEADERBYTES + plaintext_len */
-    if (plaintext_len > SIZE_MAX - hydro_secretbox_HEADERBYTES) {
+    /* Calculate output size with overflow detection */
+    if (plaintext_len > SIZE_MAX - ENCRYPTION_OVERHEAD) {
         return ERROR(ERR_INVALID_ARG,
                     "Plaintext too large (size_t overflow): %zu bytes",
                     plaintext_len);
     }
-    size_t secretbox_len = hydro_secretbox_HEADERBYTES + plaintext_len;
+    size_t total_len = ENCRYPTION_HEADER_SIZE + ENCRYPTION_SIV_SIZE + plaintext_len;
 
-    /* Check: total_len = HEADER_SIZE + secretbox_len */
-    if (secretbox_len > SIZE_MAX - ENCRYPTION_HEADER_SIZE) {
-        return ERROR(ERR_INVALID_ARG,
-                    "Ciphertext size overflow: %zu bytes",
-                    secretbox_len);
+    /* Step 1: Derive MAC and CTR subkeys from profile key */
+    err = derive_siv_subkeys(profile_key, mac_key, ctr_key);
+    if (err) {
+        goto cleanup;
     }
-    size_t total_len = ENCRYPTION_HEADER_SIZE + secretbox_len;
 
-    /* Create output buffer */
-    buffer_t *output = buffer_create_with_capacity(total_len);
+    /* Step 2: Derive deterministic stream seed from CTR key and path */
+    err = derive_stream_seed(ctr_key, storage_path, stream_seed);
+    if (err) {
+        goto cleanup;
+    }
+
+    /* Step 3: Generate deterministic keystream */
+    keystream = malloc(plaintext_len);
+    if (!keystream && plaintext_len > 0) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate keystream buffer");
+        goto cleanup;
+    }
+
+    if (plaintext_len > 0) {
+        hydro_random_buf_deterministic(keystream, plaintext_len, stream_seed);
+    }
+
+    /* Step 4: Encrypt plaintext by XORing with keystream */
+    ciphertext = malloc(plaintext_len);
+    if (!ciphertext && plaintext_len > 0) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate ciphertext buffer");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < plaintext_len; i++) {
+        ciphertext[i] = plaintext[i] ^ keystream[i];
+    }
+
+    /* Step 5: Compute SIV/MAC over storage_path || ciphertext */
+    uint8_t siv[ENCRYPTION_SIV_SIZE];
+    err = compute_siv(mac_key, storage_path, ciphertext, plaintext_len, siv);
+    if (err) {
+        goto cleanup;
+    }
+
+    /* Step 6: Assemble output: [Magic Header][SIV][Ciphertext] */
+    output = buffer_create_with_capacity(total_len);
     if (!output) {
-        return ERROR(ERR_MEMORY, "Failed to allocate encryption buffer");
+        err = ERROR(ERR_MEMORY, "Failed to allocate encryption buffer");
+        goto cleanup;
     }
 
     /* Write magic header */
     err = buffer_append(output, MAGIC_HEADER, sizeof(MAGIC_HEADER));
     if (err) {
-        buffer_free(output);
-        return error_wrap(err, "Failed to write magic header");
+        err = error_wrap(err, "Failed to write magic header");
+        goto cleanup;
     }
 
-    /* Write nonce (little-endian uint64_t) */
-    uint8_t nonce_bytes[8];
-    for (int i = 0; i < 8; i++) {
-        nonce_bytes[i] = (nonce >> (i * 8)) & 0xFF;
-    }
-    err = buffer_append(output, nonce_bytes, sizeof(nonce_bytes));
+    /* Write SIV */
+    err = buffer_append(output, siv, sizeof(siv));
     if (err) {
-        buffer_free(output);
-        return error_wrap(err, "Failed to write nonce");
+        err = error_wrap(err, "Failed to write SIV");
+        goto cleanup;
     }
 
-    /* Allocate space for secretbox output */
-    unsigned char *secretbox_output = malloc(secretbox_len);
-    if (!secretbox_output) {
-        buffer_free(output);
-        return ERROR(ERR_MEMORY, "Failed to allocate secretbox buffer");
-    }
-
-    /* Encrypt with libhydrogen using derived nonce */
-    int result = hydro_secretbox_encrypt(
-        secretbox_output,
-        plaintext,
-        plaintext_len,
-        nonce,
-        ENCRYPTION_CTX_SECRETBOX,
-        profile_key
-    );
-
-    if (result != 0) {
-        free(secretbox_output);
-        buffer_free(output);
-        return ERROR(ERR_CRYPTO, "Failed to encrypt data");
-    }
-
-    /* Append secretbox output to buffer */
-    err = buffer_append(output, secretbox_output, secretbox_len);
-    free(secretbox_output);
-
-    if (err) {
-        buffer_free(output);
-        return error_wrap(err, "Failed to append ciphertext");
+    /* Write ciphertext */
+    if (plaintext_len > 0) {
+        err = buffer_append(output, ciphertext, plaintext_len);
+        if (err) {
+            err = error_wrap(err, "Failed to write ciphertext");
+            goto cleanup;
+        }
     }
 
     *out_ciphertext = output;
-    return NULL;
+    output = NULL;  /* Transfer ownership, don't free */
+
+cleanup:
+    /* Securely clear sensitive data */
+    hydro_memzero(mac_key, sizeof(mac_key));
+    hydro_memzero(ctr_key, sizeof(ctr_key));
+    hydro_memzero(stream_seed, sizeof(stream_seed));
+    hydro_memzero(siv, sizeof(siv));
+
+    if (keystream) {
+        hydro_memzero(keystream, plaintext_len);
+        free(keystream);
+    }
+
+    if (ciphertext) {
+        hydro_memzero(ciphertext, plaintext_len);
+        free(ciphertext);
+    }
+
+    if (output) {
+        buffer_free(output);
+    }
+
+    return err;
 }
 
 error_t *encryption_decrypt(
     const unsigned char *ciphertext,
     size_t ciphertext_len,
     const uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE],
+    const char *storage_path,
     buffer_t **out_plaintext
 ) {
     CHECK_NULL(ciphertext);
     CHECK_NULL(profile_key);
+    CHECK_NULL(storage_path);
     CHECK_NULL(out_plaintext);
 
-    /* Validate minimum size */
+    error_t *err = NULL;
+    uint8_t mac_key[32] = {0};
+    uint8_t ctr_key[32] = {0};
+    uint8_t stream_seed[32] = {0};
+    uint8_t *keystream = NULL;
+    unsigned char *plaintext_data = NULL;
+    buffer_t *output = NULL;
+
+    /* Step 1: Validate minimum size */
     if (ciphertext_len < ENCRYPTION_OVERHEAD) {
         return ERROR(ERR_CRYPTO,
                     "Invalid ciphertext: too small (expected >= %d, got %zu)",
                     ENCRYPTION_OVERHEAD, ciphertext_len);
     }
 
-    /* Verify magic header */
+    /* Step 2: Verify magic header */
     if (memcmp(ciphertext, MAGIC_HEADER, sizeof(MAGIC_HEADER)) != 0) {
         return ERROR(ERR_CRYPTO, "Invalid magic header (not a dotta encrypted file)");
     }
@@ -295,54 +386,91 @@ error_t *encryption_decrypt(
                     ciphertext[5], ENCRYPTION_VERSION);
     }
 
-    /* Extract nonce (little-endian uint64_t) */
-    uint64_t nonce = 0;
-    for (int i = 0; i < 8; i++) {
-        nonce |= ((uint64_t)ciphertext[8 + i]) << (i * 8);
+    /* Step 3: Extract SIV and ciphertext body */
+    const unsigned char *siv_received = ciphertext + ENCRYPTION_HEADER_SIZE;
+    const unsigned char *ciphertext_body = ciphertext + ENCRYPTION_HEADER_SIZE + ENCRYPTION_SIV_SIZE;
+    size_t plaintext_len = ciphertext_len - ENCRYPTION_OVERHEAD;
+
+    /* Step 4: Derive MAC and CTR subkeys from profile key */
+    err = derive_siv_subkeys(profile_key, mac_key, ctr_key);
+    if (err) {
+        goto cleanup;
     }
 
-    /* Extract secretbox ciphertext */
-    const unsigned char *secretbox_input = ciphertext + ENCRYPTION_HEADER_SIZE;
-    size_t secretbox_len = ciphertext_len - ENCRYPTION_HEADER_SIZE;
-
-    /* Calculate plaintext size */
-    if (secretbox_len < hydro_secretbox_HEADERBYTES) {
-        return ERROR(ERR_CRYPTO, "Invalid secretbox size");
-    }
-    size_t plaintext_len = secretbox_len - hydro_secretbox_HEADERBYTES;
-
-    /* Allocate plaintext buffer */
-    unsigned char *plaintext = malloc(plaintext_len);
-    if (!plaintext) {
-        return ERROR(ERR_MEMORY, "Failed to allocate decryption buffer");
+    /* Step 5: Re-compute SIV over storage_path || ciphertext */
+    uint8_t siv_computed[ENCRYPTION_SIV_SIZE];
+    err = compute_siv(mac_key, storage_path, ciphertext_body, plaintext_len, siv_computed);
+    if (err) {
+        goto cleanup;
     }
 
-    /* Decrypt with libhydrogen using extracted nonce */
-    int result = hydro_secretbox_decrypt(
-        plaintext,
-        secretbox_input,
-        secretbox_len,
-        nonce,
-        ENCRYPTION_CTX_SECRETBOX,
-        profile_key
-    );
-
-    if (result != 0) {
-        free(plaintext);
-        return ERROR(ERR_CRYPTO,
-                    "Authentication failed - wrong passphrase or corrupted file");
+    /* Step 6: Verify SIV using constant-time comparison */
+    if (!hydro_equal(siv_computed, siv_received, ENCRYPTION_SIV_SIZE)) {
+        err = ERROR(ERR_CRYPTO,
+                   "Authentication failed - wrong passphrase, corrupted file, or incorrect path");
+        goto cleanup;
     }
 
-    /* Create buffer from plaintext */
-    buffer_t *output = buffer_create_from_data(plaintext, plaintext_len);
-    free(plaintext);
+    /* Step 7: Derive deterministic stream seed from CTR key and path */
+    err = derive_stream_seed(ctr_key, storage_path, stream_seed);
+    if (err) {
+        goto cleanup;
+    }
 
+    /* Step 8: Generate deterministic keystream */
+    keystream = malloc(plaintext_len);
+    if (!keystream && plaintext_len > 0) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate keystream buffer");
+        goto cleanup;
+    }
+
+    if (plaintext_len > 0) {
+        hydro_random_buf_deterministic(keystream, plaintext_len, stream_seed);
+    }
+
+    /* Step 9: Decrypt ciphertext by XORing with keystream */
+    plaintext_data = malloc(plaintext_len);
+    if (!plaintext_data && plaintext_len > 0) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate plaintext buffer");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < plaintext_len; i++) {
+        plaintext_data[i] = ciphertext_body[i] ^ keystream[i];
+    }
+
+    /* Step 10: Create output buffer */
+    output = buffer_create_from_data(plaintext_data, plaintext_len);
     if (!output) {
-        return ERROR(ERR_MEMORY, "Failed to create output buffer");
+        err = ERROR(ERR_MEMORY, "Failed to create output buffer");
+        goto cleanup;
     }
 
     *out_plaintext = output;
-    return NULL;
+    output = NULL;  /* Transfer ownership, don't free */
+
+cleanup:
+    /* Securely clear sensitive data */
+    hydro_memzero(mac_key, sizeof(mac_key));
+    hydro_memzero(ctr_key, sizeof(ctr_key));
+    hydro_memzero(stream_seed, sizeof(stream_seed));
+    hydro_memzero(siv_computed, sizeof(siv_computed));
+
+    if (keystream) {
+        hydro_memzero(keystream, plaintext_len);
+        free(keystream);
+    }
+
+    if (plaintext_data) {
+        hydro_memzero(plaintext_data, plaintext_len);
+        free(plaintext_data);
+    }
+
+    if (output) {
+        buffer_free(output);
+    }
+
+    return err;
 }
 
 bool encryption_is_encrypted(const unsigned char *data, size_t data_len) {

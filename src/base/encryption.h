@@ -1,29 +1,41 @@
 /**
  * encryption.h - Cryptographic primitives for file encryption
  *
- * Provides authenticated encryption for sensitive dotfiles using libhydrogen.
+ * Provides deterministic authenticated encryption for sensitive dotfiles using
+ * a SIV (Synthetic IV) construction built on libhydrogen primitives.
  * Files are encrypted at rest in Git and decrypted during deployment.
  *
  * Key hierarchy:
  *   User Passphrase
  *     → Master Key (via hydro_pwhash_deterministic)
- *     → Profile Key (via hydro_kdf_derive_from_key)
- *     → Encrypted File (via hydro_secretbox_encrypt)
+ *     → Profile Key (via hydro_hash_hash with profile name)
+ *     → Per-file MAC Key + CTR Key (via hydro_kdf_derive_from_key)
  *
- * Nonce derivation (Version 2):
- *   Nonces are derived deterministically from file content using keyed hashing:
- *     nonce = HMAC(profile_key, storage_path || plaintext)[0:8]
+ * SIV Construction (Version 2):
+ *   This implements deterministic AEAD using the SIV (Synthetic IV) pattern:
  *
- *   This ensures:
- *   - Same content → same nonce → same ciphertext (idempotent)
- *   - Different content → different nonce (collision-resistant)
- *   - No state tracking required (crash-safe)
- *   - Including path prevents identical files from having identical ciphertexts
+ *   1. Derive subkeys:
+ *      mac_key = KDF(profile_key, subkey_id=1, context="dottasiv")
+ *      ctr_key = KDF(profile_key, subkey_id=2, context="dottasiv")
+ *
+ *   2. Derive deterministic stream seed:
+ *      stream_seed = HMAC(ctr_key, storage_path, context="dottactr")
+ *
+ *   3. Encrypt using deterministic stream cipher:
+ *      keystream = DeterministicPRNG(stream_seed, length=plaintext_len)
+ *      ciphertext = plaintext XOR keystream
+ *
+ *   4. Compute SIV (MAC over associated data + ciphertext):
+ *      siv = HMAC(mac_key, storage_path || ciphertext, context="dottamac")
+ *
+ *   File format: [Magic 8B][SIV 32B][Ciphertext N B]
  *
  * Security properties:
- * - Authenticated encryption (confidentiality + integrity)
- * - Per-profile key isolation
- * - Content-addressed nonce uniqueness (deterministic encryption)
+ * - Deterministic: Same (path, content, key) → same ciphertext (Git-friendly)
+ * - Authenticated: Tamper detection via SIV verification
+ * - Path-bound: Files tied to specific storage paths (AAD)
+ * - Nonce-misuse resistant: No nonce management required
+ * - Key isolation: Independent MAC and CTR keys via KDF
  * - Secure memory clearing after use
  */
 
@@ -39,15 +51,18 @@
 /* Magic header for encrypted files */
 #define ENCRYPTION_MAGIC "DOTTA"
 #define ENCRYPTION_MAGIC_BYTES 5        /* "DOTTA" magic string length */
-#define ENCRYPTION_VERSION 2            /* Version 2: content-addressed nonces */
+#define ENCRYPTION_VERSION 2            /* Version 2: SIV-based deterministic encryption */
 #define ENCRYPTION_MAGIC_HEADER_SIZE 8  /* Magic (5 bytes) + version (1 byte) + padding (2 bytes) */
-#define ENCRYPTION_HEADER_SIZE 16       /* Magic header (8 bytes) + nonce (8 bytes) */
-#define ENCRYPTION_OVERHEAD 52          /* Header (16) + secretbox (36) */
+#define ENCRYPTION_HEADER_SIZE 8        /* Magic header (8 bytes) */
+#define ENCRYPTION_SIV_SIZE 32          /* SIV/MAC tag (32 bytes) */
+#define ENCRYPTION_OVERHEAD 40          /* Header (8) + SIV (32) */
 
 /* Context strings (MUST be exactly 8 bytes) */
-#define ENCRYPTION_CTX_SECRETBOX "dottaenc"
 #define ENCRYPTION_CTX_PWHASH    "dotta/v1"
 #define ENCRYPTION_CTX_KDF       "profile "  /* Note: 8 chars with trailing space */
+#define ENCRYPTION_CTX_SIV_KDF   "dottasiv"  /* For deriving MAC/CTR subkeys */
+#define ENCRYPTION_CTX_SIV_MAC   "dottamac"  /* For computing SIV/MAC */
+#define ENCRYPTION_CTX_SIV_CTR   "dottactr"  /* For deriving stream seed */
 
 /* Key sizes (from libhydrogen) */
 #define ENCRYPTION_MASTER_KEY_SIZE 32       /* hydro_pwhash output */
@@ -112,18 +127,26 @@ error_t *encryption_derive_profile_key(
 );
 
 /**
- * Encrypt file content
+ * Encrypt file content using SIV construction
  *
- * Encrypts plaintext using hydro_secretbox_encrypt with deterministic nonce.
- * The nonce is derived from content using keyed hashing (see header comment).
+ * Encrypts plaintext using deterministic AEAD (SIV pattern). The encryption is
+ * deterministic: same (storage_path, plaintext, profile_key) always produces
+ * the same ciphertext, enabling Git deduplication and idempotency.
+ *
+ * Construction:
+ *   1. Derive mac_key and ctr_key from profile_key via KDF
+ *   2. Derive stream seed from ctr_key and storage_path
+ *   3. Generate deterministic keystream and XOR with plaintext
+ *   4. Compute SIV/MAC over storage_path || ciphertext
  *
  * Output format:
  *   [Magic: "DOTTA\x02\x00\x00" (8 bytes)]
- *   [nonce: uint64_t little-endian (8 bytes)]
- *   [secretbox output: header + ciphertext (36 + plaintext_len bytes)]
+ *   [SIV: MAC tag (32 bytes)]
+ *   [Ciphertext: encrypted data (plaintext_len bytes)]
  *
- * Encryption is deterministic: same (storage_path, plaintext) always produces
- * the same ciphertext. This provides idempotency for crash recovery.
+ * The storage_path is used as authenticated associated data (AAD), binding
+ * the ciphertext to its intended location. A file encrypted for one path
+ * cannot be successfully decrypted for a different path.
  *
  * @param plaintext Input data (must not be NULL)
  * @param plaintext_len Input length in bytes
@@ -141,18 +164,29 @@ error_t *encryption_encrypt(
 );
 
 /**
- * Decrypt file content
+ * Decrypt file content using SIV construction
  *
- * Verifies dotta header, extracts nonce, and decrypts using hydro_secretbox_decrypt.
+ * Verifies dotta header, validates SIV/MAC, and decrypts ciphertext.
+ *
+ * Process:
+ *   1. Parse header and extract SIV
+ *   2. Derive mac_key and ctr_key from profile_key
+ *   3. Re-compute SIV over storage_path || ciphertext
+ *   4. Verify SIV matches (constant-time comparison)
+ *   5. If valid, derive keystream and decrypt
+ *
+ * The storage_path must match the path used during encryption. This is
+ * authenticated via the SIV - any mismatch will cause verification to fail.
  *
  * Returns ERR_CRYPTO if:
- * - Authentication fails (wrong key or tampered ciphertext)
+ * - Authentication fails (SIV mismatch - wrong key, tampered data, or wrong path)
  * - Invalid header format
  * - Unsupported version
  *
  * @param ciphertext Encrypted input (must not be NULL, must include dotta header)
  * @param ciphertext_len Input length in bytes (must be >= ENCRYPTION_OVERHEAD)
  * @param profile_key Profile-specific decryption key (32 bytes, must not be NULL)
+ * @param storage_path File path in profile (must match encryption path, must not be NULL)
  * @param out_plaintext Output buffer (caller must free with buffer_free)
  * @return Error or NULL on success (ERR_CRYPTO on authentication failure)
  */
@@ -160,6 +194,7 @@ error_t *encryption_decrypt(
     const unsigned char *ciphertext,
     size_t ciphertext_len,
     const uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE],
+    const char *storage_path,
     buffer_t **out_plaintext
 );
 

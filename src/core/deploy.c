@@ -385,11 +385,12 @@ error_t *deploy_file(
             goto cleanup;
         }
 
-        /* Decrypt content using pre-derived key */
+        /* Decrypt content using pre-derived key and storage path */
         err = encryption_decrypt(
             (const unsigned char *)content,
             (size_t)size,
             profile_key,
+            entry->storage_path,
             &decrypted_buffer
         );
 

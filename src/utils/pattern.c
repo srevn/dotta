@@ -1,15 +1,110 @@
 /**
- * pattern.c - Auto-encrypt pattern matching implementation
+ * pattern.c - Pattern matching utilities
+ *
+ * Provides gitignore-style glob pattern matching using fnmatch().
+ * Used for auto-encrypt patterns and can be reused for other pattern matching needs.
  */
 
 #include "utils/pattern.h"
 
-#include <git2.h>
+#include <fnmatch.h>
 #include <string.h>
 
 #include "base/error.h"
 #include "utils/config.h"
 #include "utils/string.h"
+
+/**
+ * Check if path matches pattern using gitignore-style semantics
+ *
+ * Pattern matching rules (simplified gitignore):
+ * - Pattern without '/': Matches basename at any depth
+ *   Example: "*.key" matches "api.key" and "dir/api.key"
+ *
+ * - Pattern with '/': Matches full path from root (anchored)
+ *   Example: ".ssh/id_*" matches ".ssh/id_rsa" but not "backup/.ssh/id_rsa"
+ *
+ * - Leading '/' in pattern: Stripped (paths are relative to home/root)
+ *   Example: "/.ssh/id_*" treated same as ".ssh/id_*"
+ *
+ * Implementation uses fnmatch() with FNM_PATHNAME for full path matching
+ * and falls back to basename matching (matching ignore system semantics).
+ *
+ * @param pattern Glob pattern (must not be NULL)
+ * @param path Path to test (must not be NULL)
+ * @return true if path matches pattern, false otherwise
+ */
+bool pattern_matches(const char *pattern, const char *path) {
+    if (!pattern || !path) {
+        return false;
+    }
+
+    /* Empty pattern never matches */
+    if (pattern[0] == '\0') {
+        return false;
+    }
+
+    /* Strip leading '/' from pattern (paths are already relative) */
+    if (pattern[0] == '/') {
+        pattern++;
+        /* After stripping, empty pattern never matches */
+        if (pattern[0] == '\0') {
+            return false;
+        }
+    }
+
+    /* Extract basename from path for fallback matching */
+    const char *basename = strrchr(path, '/');
+    if (basename) {
+        basename++; /* Skip the '/' */
+    } else {
+        basename = path;
+    }
+
+    /* Try matching full path with FNM_PATHNAME
+     * FNM_PATHNAME prevents wildcards from matching '/' */
+    if (fnmatch(pattern, path, FNM_PATHNAME) == 0) {
+        return true;
+    }
+
+    /* Try matching basename without FNM_PATHNAME
+     * This handles patterns like "*.key" matching "dir/file.key" */
+    if (fnmatch(pattern, basename, 0) == 0) {
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * Check if path matches any pattern in array
+ *
+ * Tests path against all patterns, returns true if ANY pattern matches.
+ * Uses gitignore-style semantics via pattern_matches().
+ *
+ * @param patterns Array of patterns (can be NULL if count is 0)
+ * @param pattern_count Number of patterns
+ * @param path Path to test (must not be NULL)
+ * @return true if path matches any pattern, false otherwise
+ */
+bool pattern_matches_any(
+    char **patterns,
+    size_t pattern_count,
+    const char *path
+) {
+    if (!path || !patterns || pattern_count == 0) {
+        return false;
+    }
+
+    /* Test each pattern */
+    for (size_t i = 0; i < pattern_count; i++) {
+        if (pattern_matches(patterns[i], path)) {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 error_t *encrypt_should_auto_encrypt(
     const dotta_config_t *config,
@@ -44,29 +139,12 @@ error_t *encrypt_should_auto_encrypt(
         path_for_matching = storage_path + 5;  /* Skip "root/" */
     }
 
-    /* Create pathspec from patterns */
-    git_strarray pathspec_array = {
-        .strings = (char **)config->auto_encrypt_patterns,
-        .count = config->auto_encrypt_pattern_count
-    };
-
-    git_pathspec *pathspec = NULL;
-    int git_err = git_pathspec_new(&pathspec, &pathspec_array);
-    if (git_err < 0) {
-        const git_error *err = git_error_last();
-        return ERROR(ERR_GIT, "Failed to create pathspec from patterns: %s",
-                     err ? err->message : "unknown error");
-    }
-
-    /* Test if path matches any pattern using gitignore semantics */
-    int match_result = git_pathspec_matches_path(
-        pathspec,
-        GIT_PATHSPEC_DEFAULT,
+    /* Check if path matches any auto-encrypt pattern */
+    *out_matches = pattern_matches_any(
+        config->auto_encrypt_patterns,
+        config->auto_encrypt_pattern_count,
         path_for_matching
     );
 
-    git_pathspec_free(pathspec);
-
-    *out_matches = (match_result == 1);
     return NULL;
 }

@@ -397,7 +397,15 @@ enabled = false
 
 # Auto-Encrypt Patterns
 # Files matching these patterns are automatically encrypted when added
-# Uses gitignore-style syntax: wildcards (*, ?, [abc]), directory matching
+# Uses gitignore-style glob syntax:
+#
+#   Pattern WITHOUT '/': Matches basename at ANY depth
+#     Example: "*.key" matches api.key, dir/api.key, deep/nested/file.key
+#
+#   Pattern WITH '/': Matches full path from root (anchored)
+#     Example: ".ssh/id_*" matches ONLY .ssh/id_rsa (not backup/.ssh/id_rsa)
+#
+# Wildcards: * (any chars), ? (single char), [abc] (character class)
 #
 # Common sensitive file patterns:
 auto_encrypt = [

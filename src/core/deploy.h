@@ -21,6 +21,9 @@
 #include "state.h"
 #include "types.h"
 
+/* Forward declaration */
+typedef struct hashmap hashmap_t;
+
 /**
  * Ownership change entry
  *
@@ -120,13 +123,15 @@ error_t *deploy_execute(
  * @param entry File entry to deploy (must not be NULL)
  * @param metadata Metadata for permission restoration (can be NULL)
  * @param opts Deployment options (must not be NULL)
+ * @param profile_keys Pre-derived profile keys (profile_name -> uint8_t[32]) (can be NULL if no encryption)
  * @return Error or NULL on success
  */
 error_t *deploy_file(
     git_repository *repo,
     const file_entry_t *entry,
     const metadata_t *metadata,
-    const deploy_options_t *opts
+    const deploy_options_t *opts,
+    const hashmap_t *profile_keys
 );
 
 /**

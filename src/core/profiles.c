@@ -373,8 +373,9 @@ error_t *profile_detect_auto(
             goto cleanup;
         }
 
+        /* Safe tolower: cast to unsigned char to avoid UB with negative values */
         for (char *p = os_name; *p; p++) {
-            *p = tolower(*p);
+            *p = (char)tolower((unsigned char)*p);
         }
 
         err = detect_hierarchical_profiles(repo, os_name, list, &capacity);
@@ -622,12 +623,17 @@ error_t *profile_resolve(
     }
 
     /* Warn about missing profiles (diagnostic message) */
+    /*
+     * Note: We use fprintf(stderr) here because this is a low-level core module
+     * without access to an output_ctx_t. This is consistent with other core
+     * modules (deploy.c, workspace.c) that also write diagnostic warnings to stderr.
+     */
     if (missing_profiles && string_array_size(missing_profiles) > 0) {
         fprintf(stderr, "Warning: State references non-existent profiles:\n");
         for (size_t i = 0; i < string_array_size(missing_profiles); i++) {
             fprintf(stderr, "  • %s\n", string_array_get(missing_profiles, i));
         }
-        fprintf(stderr, "\nHint: Run 'dotta profile validate' to fix state\n");
+        fprintf(stderr, "\nHint: Run 'dotta profile validate' to fix state,\n");
         fprintf(stderr, "      or 'dotta profile enable <name>' to enable profiles\n\n");
     }
     string_array_free(missing_profiles);
@@ -715,8 +721,8 @@ error_t *profile_list_all_local(
         goto cleanup;
     }
 
-    /* Start with capacity for 16 profiles */
-    size_t capacity = 16;
+    /* Start with capacity for 32 profiles to reduce reallocations */
+    size_t capacity = 32;
     list->profiles = calloc(capacity, sizeof(profile_t));
     if (!list->profiles) {
         err = ERROR(ERR_MEMORY, "Failed to allocate profiles array");
@@ -860,16 +866,15 @@ static int tree_walk_callback(const char *root, const git_tree_entry *entry, voi
  */
 error_t *profile_list_files(
     git_repository *repo,
-    const profile_t *profile,
+    profile_t *profile,
     string_array_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile);
     CHECK_NULL(out);
 
-    /* Load tree if not loaded */
-    profile_t *mutable_profile = (profile_t *)profile;
-    error_t *err = profile_load_tree(repo, mutable_profile);
+    /* Load tree if not loaded (lazy loading) */
+    error_t *err = profile_load_tree(repo, profile);
     if (err) {
         return err;
     }
@@ -994,6 +999,12 @@ error_t *profile_build_manifest(
 
             if (idx_ptr) {
                 /* Override existing entry (profile with higher precedence) */
+                /*
+                 * Convert pointer back to index. We offset by 1 when storing to
+                 * distinguish NULL (not found) from index 0.
+                 * Safe because: indices are always << SIZE_MAX, uintptr_t can hold
+                 * any valid pointer value, and we never store actual pointers here.
+                 */
                 size_t existing_idx = (size_t)(uintptr_t)idx_ptr - 1;
 
                 /* Add current profile to all_profiles list (for overlap tracking) */
@@ -1071,7 +1082,14 @@ error_t *profile_build_manifest(
                 manifest->entries[manifest->count].source_profile = profile;
                 manifest->entries[manifest->count].all_profiles = NULL;  /* Initialize to NULL (single profile) */
 
-                /* Store index in hashmap (offset by 1 to distinguish from NULL) */
+                /*
+                 * Store index in hashmap (offset by 1 to distinguish from NULL).
+                 * We cast the index through uintptr_t to store it as a void pointer.
+                 * This is safe because:
+                 * 1. Array indices are always much smaller than SIZE_MAX
+                 * 2. uintptr_t can hold any pointer value (by definition)
+                 * 3. We never dereference these "pointers" - they're just tagged integers
+                 */
                 err = hashmap_set(path_map, filesystem_path,
                                 (void *)(uintptr_t)(manifest->count + 1));
                 if (err) {

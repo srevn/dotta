@@ -223,13 +223,13 @@ error_t *profile_load_tree(
  * List files in profile
  *
  * @param repo Repository (must not be NULL)
- * @param profile Profile (must not be NULL)
+ * @param profile Profile (must not be NULL, may load tree lazily)
  * @param out String array of storage paths (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
 error_t *profile_list_files(
     git_repository *repo,
-    const profile_t *profile,
+    profile_t *profile,
     string_array_t **out
 );
 

@@ -25,11 +25,6 @@ struct content_cache {
     git_repository *repo;     /* Borrowed reference */
     keymanager_t *km;         /* Borrowed reference (can be NULL) */
     hashmap_t *cache_map;     /* OID hex → buffer_t* (owned) */
-
-    /* Statistics (for debugging and optimization) */
-    size_t hits;              /* Cache hits */
-    size_t misses;            /* Cache misses */
-    size_t decryptions;       /* Number of decryptions performed */
 };
 
 /**
@@ -68,6 +63,7 @@ static error_t *get_plaintext_from_blob(
     CHECK_NULL(blob);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile_name);
+    CHECK_NULL(metadata);
     CHECK_NULL(out_content);
 
     const unsigned char *blob_data = git_blob_rawcontent(blob);
@@ -185,6 +181,7 @@ error_t *content_get_from_blob_oid(
     CHECK_NULL(blob_oid);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile_name);
+    CHECK_NULL(metadata);
     CHECK_NULL(out_content);
 
     /* Load blob from repository */
@@ -217,6 +214,7 @@ error_t *content_get_from_tree_entry(
     CHECK_NULL(entry);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile_name);
+    CHECK_NULL(metadata);
     CHECK_NULL(out_content);
 
     /* Get OID from tree entry */
@@ -255,10 +253,6 @@ content_cache_t *content_cache_create(
         return NULL;
     }
 
-    cache->hits = 0;
-    cache->misses = 0;
-    cache->decryptions = 0;
-
     return cache;
 }
 
@@ -274,6 +268,7 @@ error_t *content_cache_get_from_blob_oid(
     CHECK_NULL(blob_oid);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile_name);
+    CHECK_NULL(metadata);
     CHECK_NULL(out_content);
 
     /* Convert OID to hex string (cache key) */
@@ -284,13 +279,11 @@ error_t *content_cache_get_from_blob_oid(
     buffer_t *cached_content = hashmap_get(cache->cache_map, oid_str);
     if (cached_content) {
         /* Cache hit! */
-        cache->hits++;
         *out_content = cached_content;
         return NULL;
     }
 
     /* Cache miss - load blob and decrypt if needed */
-    cache->misses++;
 
     /* Load blob from repository */
     git_blob *blob = NULL;
@@ -299,23 +292,17 @@ error_t *content_cache_get_from_blob_oid(
         return ERROR(ERR_NOT_FOUND, "Failed to load blob: %s", git_error_last()->message);
     }
 
-    /* Get plaintext content with encryption tracking */
+    /* Get plaintext content */
     buffer_t *content = NULL;
-    bool was_encrypted = false;
     error_t *err = get_plaintext_from_blob(
         cache->repo, blob, storage_path, profile_name, metadata, cache->km,
-        &content, &was_encrypted
+        &content, NULL  /* Don't track encryption status */
     );
 
     git_blob_free(blob);
 
     if (err) {
         return err;
-    }
-
-    /* Update decryption stats if file was encrypted */
-    if (was_encrypted) {
-        cache->decryptions++;
     }
 
     /* Store in cache (cache takes ownership) */
@@ -343,6 +330,7 @@ error_t *content_cache_get_from_tree_entry(
     CHECK_NULL(entry);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile_name);
+    CHECK_NULL(metadata);
     CHECK_NULL(out_content);
 
     /* Get OID from tree entry */

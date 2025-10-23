@@ -783,8 +783,9 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
         err = metadata_load_from_branch(repo, profile_name, &metadata);
         if (err) {
             /* Graceful fallback: create empty metadata if loading fails */
-            metadata = metadata_create();
-            if (!metadata) {
+            error_t *create_err = metadata_create_empty(&metadata);
+            if (create_err) {
+                error_free(create_err);
                 err = ERROR(ERR_MEMORY, "Failed to create metadata");
                 goto cleanup;
             }

@@ -83,7 +83,7 @@ typedef struct content_cache content_cache_t;
  * @param entry Tree entry to read (must not be NULL)
  * @param storage_path Path in profile (e.g., "home/.bashrc", must not be NULL)
  * @param profile_name Profile name for key derivation (must not be NULL)
- * @param metadata Optional metadata for validation (can be NULL)
+ * @param metadata Metadata for validation (must not be NULL)
  * @param km Key manager (can be NULL if file is known to be plaintext)
  * @param out_content Output buffer (CALLER OWNS - must free with buffer_free)
  * @return Error or NULL on success
@@ -93,6 +93,7 @@ typedef struct content_cache content_cache_t;
  * - ERR_CRYPTO: Decryption failed (wrong key, corruption)
  * - ERR_STATE_INVALID: Magic header and metadata disagree
  * - ERR_NOT_FOUND: Blob not found
+ * - ERR_INVALID_ARG: Required arguments are NULL
  */
 error_t *content_get_from_tree_entry(
     git_repository *repo,
@@ -114,7 +115,7 @@ error_t *content_get_from_tree_entry(
  * @param blob_oid Blob OID (must not be NULL)
  * @param storage_path Path in profile (must not be NULL)
  * @param profile_name Profile name for key derivation (must not be NULL)
- * @param metadata Optional metadata for validation (can be NULL)
+ * @param metadata Metadata for validation (must not be NULL)
  * @param km Key manager (can be NULL if file is known to be plaintext)
  * @param out_content Output buffer (CALLER OWNS - must free with buffer_free)
  * @return Error or NULL on success
@@ -162,7 +163,7 @@ content_cache_t *content_cache_create(
  * @param entry Tree entry to read (must not be NULL)
  * @param storage_path Path in profile (must not be NULL)
  * @param profile_name Profile name (must not be NULL)
- * @param metadata Optional metadata (can be NULL)
+ * @param metadata Metadata for validation (must not be NULL)
  * @param out_content Output buffer (BORROWED - cache owns, don't free)
  * @return Error or NULL on success
  */
@@ -184,7 +185,7 @@ error_t *content_cache_get_from_tree_entry(
  * @param blob_oid Blob OID (must not be NULL)
  * @param storage_path Path in profile (must not be NULL)
  * @param profile_name Profile name (must not be NULL)
- * @param metadata Optional metadata (can be NULL)
+ * @param metadata Metadata for validation (must not be NULL)
  * @param out_content Output buffer (BORROWED - cache owns, don't free)
  * @return Error or NULL on success
  */

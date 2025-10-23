@@ -12,6 +12,7 @@
 
 #include "base/error.h"
 #include "base/gitops.h"
+#include "core/metadata.h"
 #include "core/profiles.h"
 #include "infra/content.h"
 #include "infra/path.h"
@@ -31,6 +32,7 @@ static error_t *print_blob_content(
     const git_oid *blob_oid,
     const char *storage_path,
     const char *profile_name,
+    const metadata_t *metadata,
     keymanager_t *km,
     bool raw
 ) {
@@ -38,6 +40,7 @@ static error_t *print_blob_content(
     CHECK_NULL(blob_oid);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile_name);
+    CHECK_NULL(metadata);
 
     /* Get plaintext content (handles encryption transparently) */
     buffer_t *content = NULL;
@@ -46,7 +49,7 @@ static error_t *print_blob_content(
         blob_oid,
         storage_path,
         profile_name,
-        NULL,  /* No metadata in show command */
+        metadata,
         km,    /* Prompt for password only if file is encrypted */
         &content
     );
@@ -91,6 +94,7 @@ static error_t *show_file(
     git_commit *commit = NULL;
     char *ref_name = NULL;
     git_oid commit_oid;
+    metadata_t *metadata = NULL;
 
     /*
      * Get global keymanager for decryption (if needed)
@@ -100,6 +104,21 @@ static error_t *show_file(
      * keymanager_get_key().
      */
     keymanager_t *km = keymanager_get_global(NULL);
+
+    /* Load metadata for encryption state validation */
+    err = metadata_load_from_branch(repo, profile_name, &metadata);
+    if (err) {
+        /* Non-fatal: metadata file might not exist yet (new profile) */
+        /* Create empty metadata for validation (won't have file entries) */
+        error_t *create_err = metadata_create_empty(&metadata);
+        if (create_err) {
+            error_free(create_err);
+            err = ERROR(ERR_MEMORY, "Failed to create metadata");
+            goto cleanup;
+        }
+        error_free(err);
+        err = NULL;
+    }
 
     /* Load tree from profile */
     if (commit_ref) {
@@ -172,9 +191,10 @@ static error_t *show_file(
          *
          * file_path is the storage_path (e.g., "home/.bashrc")
          * profile_name is used for key derivation
+         * metadata is used for encryption state validation
          * km will prompt for password only if file is encrypted
          */
-        err = print_blob_content(repo, entry_oid, file_path, profile_name, km, raw);
+        err = print_blob_content(repo, entry_oid, file_path, profile_name, metadata, km, raw);
     } else if (entry_type == GIT_OBJECT_TREE) {
         err = ERROR(ERR_INVALID_ARG, "'%s' is a directory", file_path);
     } else {
@@ -182,6 +202,9 @@ static error_t *show_file(
     }
 
 cleanup:
+    if (metadata) {
+        metadata_free(metadata);
+    }
     if (entry) {
         git_tree_entry_free(entry);
     }

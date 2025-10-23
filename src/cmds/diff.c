@@ -12,6 +12,7 @@
 
 #include "base/error.h"
 #include "base/gitops.h"
+#include "core/metadata.h"
 #include "core/profiles.h"
 #include "infra/compare.h"
 #include "infra/content.h"
@@ -132,18 +133,33 @@ static error_t *show_file_diff(
     /* Get keymanager for decryption (if needed) */
     keymanager_t *km = keymanager_get_global(NULL);
 
+    /* Load metadata for encryption state validation */
+    metadata_t *metadata = NULL;
+    error_t *err = metadata_load_from_branch(repo, entry->source_profile->name, &metadata);
+    if (err) {
+        /* Graceful fallback: create empty metadata if loading fails */
+        error_t *create_err = metadata_create_empty(&metadata);
+        if (create_err) {
+            error_free(create_err);
+            return ERROR(ERR_MEMORY, "Failed to create metadata");
+        }
+        error_free(err);
+        err = NULL;
+    }
+
     /* Get plaintext content (handles encryption transparently) */
     buffer_t *content = NULL;
-    error_t *err = content_get_from_tree_entry(
+    err = content_get_from_tree_entry(
         repo,
         entry->entry,
         entry->storage_path,
         entry->source_profile->name,
-        NULL,  /* No metadata validation in diff command */
+        metadata,
         km,
         &content
     );
     if (err) {
+        metadata_free(metadata);
         return error_wrap(err, "Failed to get content for '%s'", entry->filesystem_path);
     }
 
@@ -154,18 +170,21 @@ static error_t *show_file_diff(
 
     if (err) {
         buffer_free(content);
+        metadata_free(metadata);
         return error_wrap(err, "Failed to compare '%s'", entry->filesystem_path);
     }
 
     /* Only show if different */
     if (cmp_result == CMP_EQUAL) {
         buffer_free(content);
+        metadata_free(metadata);
         return NULL;
     }
 
     if (opts->name_only) {
         output_printf(out, OUTPUT_NORMAL, "%s\n", entry->filesystem_path);
         buffer_free(content);
+        metadata_free(metadata);
         return NULL;
     }
 
@@ -237,12 +256,14 @@ static error_t *show_file_diff(
     /* For missing files, no diff to show */
     if (cmp_result == CMP_MISSING || cmp_result == CMP_TYPE_DIFF) {
         buffer_free(content);
+        metadata_free(metadata);
         return NULL;
     }
 
     /* For mode-only changes, no content diff */
     if (cmp_result == CMP_MODE_DIFF) {
         buffer_free(content);
+        metadata_free(metadata);
         return NULL;
     }
 
@@ -265,6 +286,7 @@ static error_t *show_file_diff(
     buffer_free(content);
 
     if (err) {
+        metadata_free(metadata);
         return error_wrap(err, "Failed to generate diff for '%s'", entry->filesystem_path);
     }
 
@@ -305,6 +327,7 @@ static error_t *show_file_diff(
     }
 
     compare_free_diff(diff);
+    metadata_free(metadata);
 
     return NULL;
 }
@@ -335,6 +358,20 @@ static error_t *show_diffs_for_direction(
     for (size_t i = 0; i < manifest->count; i++) {
         const file_entry_t *entry = &manifest->entries[i];
 
+        /* Load metadata for encryption state validation */
+        metadata_t *metadata = NULL;
+        err = metadata_load_from_branch(repo, entry->source_profile->name, &metadata);
+        if (err) {
+            /* Graceful fallback: create empty metadata if loading fails */
+            error_t *create_err = metadata_create_empty(&metadata);
+            if (create_err) {
+                error_free(create_err);
+                return ERROR(ERR_MEMORY, "Failed to create metadata");
+            }
+            error_free(err);
+            err = NULL;
+        }
+
         /* Get plaintext content (handles encryption transparently) */
         buffer_t *content = NULL;
         err = content_get_from_tree_entry(
@@ -342,11 +379,12 @@ static error_t *show_diffs_for_direction(
             entry->entry,
             entry->storage_path,
             entry->source_profile->name,
-            NULL,  /* No metadata validation in diff command */
+            metadata,
             km,
             &content
         );
         if (err) {
+            metadata_free(metadata);
             return error_wrap(err, "Failed to get content for '%s'", entry->filesystem_path);
         }
 
@@ -357,11 +395,13 @@ static error_t *show_diffs_for_direction(
 
         if (err) {
             buffer_free(content);
+            metadata_free(metadata);
             return error_wrap(err, "Failed to compare '%s'", entry->filesystem_path);
         }
 
-        /* Done with content for now - show_file_diff will decrypt again if needed */
+        /* Done with content and metadata for now - show_file_diff will reload if needed */
         buffer_free(content);
+        metadata_free(metadata);
 
         /* Check if we should diff this file */
         if (!should_diff_file(entry->filesystem_path, cmp_result, opts)) {

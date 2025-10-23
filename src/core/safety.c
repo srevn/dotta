@@ -19,6 +19,7 @@
 
 #include "base/filesystem.h"
 #include "base/gitops.h"
+#include "core/metadata.h"
 #include "core/state.h"
 #include "infra/compare.h"
 #include "infra/content.h"
@@ -327,14 +328,31 @@ static error_t *check_file_with_tree(
      * Error handling: Any failure (decryption, I/O) is treated as "cannot verify"
      * to err on the side of caution (prevents removal of potentially modified files).
      */
+
+    /* Load metadata for encryption state validation */
+    metadata_t *metadata = NULL;
+    error_t *err = metadata_load_from_branch(repo, source_profile, &metadata);
+    if (err) {
+        /* Graceful fallback: create empty metadata if loading fails */
+        error_t *create_err = metadata_create_empty(&metadata);
+        if (create_err) {
+            error_free(create_err);
+            git_tree_entry_free(tree_entry);
+            return add_violation(result, filesystem_path, storage_path,
+                               source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
+        }
+        error_free(err);
+        err = NULL;
+    }
+
     buffer_t *content = NULL;
     git_filemode_t mode = git_tree_entry_filemode(tree_entry);
-    error_t *err = content_get_from_tree_entry(
+    err = content_get_from_tree_entry(
         repo,
         tree_entry,
         storage_path,
         source_profile,
-        NULL,  /* No metadata available in safety checks */
+        metadata,
         keymanager_get_global(NULL),  /* Use global keymanager for decryption */
         &content
     );
@@ -350,6 +368,7 @@ static error_t *check_file_with_tree(
          * Conservative approach: Block removal to prevent potential data loss.
          */
         error_free(err);
+        metadata_free(metadata);
         git_tree_entry_free(tree_entry);
         return add_violation(result, filesystem_path, storage_path,
                            source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
@@ -366,6 +385,7 @@ static error_t *check_file_with_tree(
     if (err) {
         /* Cannot read file - permission issue or I/O error */
         error_free(err);
+        metadata_free(metadata);
         return add_violation(result, filesystem_path, storage_path,
                            source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
     }
@@ -373,6 +393,7 @@ static error_t *check_file_with_tree(
     /* Check comparison result */
     if (cmp_result == CMP_MISSING) {
         /* File already deleted - safe to prune, don't add violation */
+        metadata_free(metadata);
         return NULL;
     }
 
@@ -396,13 +417,16 @@ static error_t *check_file_with_tree(
             case CMP_MISSING:
             case CMP_EQUAL:
                 /* Already handled above */
+                metadata_free(metadata);
                 return NULL;
         }
 
+        metadata_free(metadata);
         return add_violation(result, filesystem_path, storage_path,
                            source_profile, reason, content_mod);
     }
 
+    metadata_free(metadata);
     return NULL;
 }
 

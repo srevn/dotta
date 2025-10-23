@@ -198,11 +198,16 @@ static error_t *add_violation(
  * Returns true if fast path succeeded (file checked), false if fallback needed.
  * On success, updates result with violation if file is modified.
  *
+ * Architecture:
+ * - Unified content layer: Both encrypted and plaintext files use same code path
+ * - Cache optimization: Reuses cached content when available (avoids redundant I/O)
+ * - Transparent handling: Content layer automatically detects and decrypts encrypted files
+ * - Mode accuracy: Gets file mode from metadata for precise permission comparison
+ *
  * Fast path advantages:
  * - O(1) blob lookup vs O(log n) tree traversal
  * - Only requires hash string, no Git tree loading
- * - Works for both encrypted and plaintext files (checks metadata)
- * - Reuses content cache if available (avoids re-decryption)
+ * - Cache benefits for ALL file types (not just encrypted)
  * - Succeeds in 99% of cases (profile not deleted, hash available)
  */
 static bool try_fast_path_check(
@@ -231,40 +236,31 @@ static bool try_fast_path_check(
         return false;
     }
 
-    /* Check if file is encrypted (via metadata) */
-    bool is_encrypted = false;
-    git_filemode_t expected_mode = GIT_FILEMODE_BLOB;
-
-    if (metadata && storage_path) {
-        const metadata_entry_t *meta_entry = NULL;
-        error_t *lookup_err = metadata_get_entry(metadata, storage_path, &meta_entry);
-        if (!lookup_err && meta_entry) {
-            is_encrypted = meta_entry->encrypted;
-            /* Get mode for accurate comparison */
-            if (meta_entry->mode & S_IXUSR) {
-                expected_mode = GIT_FILEMODE_BLOB_EXECUTABLE;
-            }
-        }
-        error_free(lookup_err);  /* Non-fatal if not found */
-    }
-
     compare_result_t cmp_result;
     error_t *err = NULL;
 
-    if (is_encrypted) {
-        /* === ENCRYPTED FILE PATH === */
+    if (metadata && storage_path) {
+        /* Get mode from metadata for accurate comparison */
+        git_filemode_t expected_mode = GIT_FILEMODE_BLOB;
+        const metadata_entry_t *meta_entry = NULL;
+        error_t *mode_err = metadata_get_entry(metadata, storage_path, &meta_entry);
+        if (!mode_err && meta_entry && (meta_entry->mode & S_IXUSR)) {
+            expected_mode = GIT_FILEMODE_BLOB_EXECUTABLE;
+        }
+        error_free(mode_err);  /* Non-fatal if not found */
 
+        /* Get plaintext content via content layer (handles encryption transparently) */
         const buffer_t *plaintext = NULL;
         bool owns_buffer = false;
 
-        if (cache && metadata) {
-            /* Optimal: Use content cache (avoids re-decryption) */
+        if (cache) {
+            /* Optimal: Use cache (avoids re-decryption for encrypted, avoids re-load for plaintext) */
             err = content_cache_get_from_blob_oid(
                 cache, &blob_oid, storage_path, source_profile,
                 metadata, &plaintext
             );
         } else {
-            /* Fallback: Decrypt directly (no cache available) */
+            /* Fallback: Load/decrypt directly (content layer handles both types) */
             buffer_t *temp = NULL;
             keymanager_t *km = keymanager ? keymanager : keymanager_get_global(NULL);
             err = content_get_from_blob_oid(
@@ -276,7 +272,7 @@ static bool try_fast_path_check(
         }
 
         if (err) {
-            /* Decryption failed - conservative: cannot verify */
+            /* Loading/decryption failed - conservative: cannot verify */
             error_free(err);
             *out_err = add_violation(result, filesystem_path, storage_path,
                                     source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
@@ -299,25 +295,9 @@ static bool try_fast_path_check(
             return true;
         }
     } else {
-        /* === PLAINTEXT FILE PATH (existing logic) === */
-
-        err = compare_blob_to_disk(repo, &blob_oid, filesystem_path, &cmp_result);
-
-        if (err) {
-            if (err->code == ERR_NOT_FOUND || err->code == ERR_GIT) {
-                /* Blob not found - use slow path */
-                error_free(err);
-                return false;
-            }
-            /* Other error - conservative */
-            error_free(err);
-            *out_err = add_violation(result, filesystem_path, storage_path,
-                                    source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
-            return true;
-        }
+        /* No metadata or storage_path - cannot use fast path, fall back to slow path */
+        return false;
     }
-
-    /* === SHARED RESULT HANDLING === */
 
     if (cmp_result == CMP_MISSING) {
         /* File already deleted - safe to prune */

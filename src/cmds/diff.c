@@ -14,8 +14,11 @@
 #include "base/gitops.h"
 #include "core/profiles.h"
 #include "infra/compare.h"
+#include "infra/content.h"
 #include "utils/array.h"
+#include "utils/buffer.h"
 #include "utils/config.h"
+#include "utils/keymanager.h"
 #include "utils/output.h"
 #include "utils/timeutil.h"
 
@@ -126,26 +129,43 @@ static error_t *show_file_diff(
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
-    /* Compare with disk */
-    compare_result_t cmp_result;
-    error_t *err = compare_tree_entry_to_disk(
+    /* Get keymanager for decryption (if needed) */
+    keymanager_t *km = keymanager_get_global(NULL);
+
+    /* Get plaintext content (handles encryption transparently) */
+    buffer_t *content = NULL;
+    error_t *err = content_get_from_tree_entry(
         repo,
         entry->entry,
-        entry->filesystem_path,
-        &cmp_result
+        entry->storage_path,
+        entry->source_profile->name,
+        NULL,  /* No metadata validation in diff command */
+        km,
+        &content
     );
+    if (err) {
+        return error_wrap(err, "Failed to get content for '%s'", entry->filesystem_path);
+    }
+
+    /* Compare buffer to disk (works with decrypted content) */
+    git_filemode_t mode = git_tree_entry_filemode(entry->entry);
+    compare_result_t cmp_result;
+    err = compare_buffer_to_disk(content, entry->filesystem_path, mode, &cmp_result);
 
     if (err) {
+        buffer_free(content);
         return error_wrap(err, "Failed to compare '%s'", entry->filesystem_path);
     }
 
     /* Only show if different */
     if (cmp_result == CMP_EQUAL) {
+        buffer_free(content);
         return NULL;
     }
 
     if (opts->name_only) {
         output_printf(out, OUTPUT_NORMAL, "%s\n", entry->filesystem_path);
+        buffer_free(content);
         return NULL;
     }
 
@@ -216,20 +236,34 @@ static error_t *show_file_diff(
 
     /* For missing files, no diff to show */
     if (cmp_result == CMP_MISSING || cmp_result == CMP_TYPE_DIFF) {
+        buffer_free(content);
         return NULL;
     }
 
     /* For mode-only changes, no content diff */
     if (cmp_result == CMP_MODE_DIFF) {
+        buffer_free(content);
         return NULL;
     }
 
-    /* Generate actual diff */
+    /* Generate actual diff from decrypted buffer */
     file_diff_t *diff = NULL;
     /* Convert diff direction to compare direction */
     compare_direction_t cmp_dir = (direction == DIFF_UPSTREAM) ?
                                    CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM;
-    err = compare_generate_diff(repo, entry->entry, entry->filesystem_path, cmp_dir, &diff);
+    err = compare_generate_diff_from_buffer(
+        repo,
+        content,
+        entry->filesystem_path,
+        entry->storage_path,  /* Use storage_path as label for consistent diff output */
+        mode,
+        cmp_dir,
+        &diff
+    );
+
+    /* Done with content buffer - free it before checking error */
+    buffer_free(content);
+
     if (err) {
         return error_wrap(err, "Failed to generate diff for '%s'", entry->filesystem_path);
     }
@@ -295,21 +329,39 @@ static error_t *show_diffs_for_direction(
     error_t *err = NULL;
     *diff_count = 0;
 
+    /* Get keymanager once for all files (caches password prompt) */
+    keymanager_t *km = keymanager_get_global(NULL);
+
     for (size_t i = 0; i < manifest->count; i++) {
         const file_entry_t *entry = &manifest->entries[i];
 
-        /* First compare to get result */
-        compare_result_t cmp_result;
-        err = compare_tree_entry_to_disk(
+        /* Get plaintext content (handles encryption transparently) */
+        buffer_t *content = NULL;
+        err = content_get_from_tree_entry(
             repo,
             entry->entry,
-            entry->filesystem_path,
-            &cmp_result
+            entry->storage_path,
+            entry->source_profile->name,
+            NULL,  /* No metadata validation in diff command */
+            km,
+            &content
         );
+        if (err) {
+            return error_wrap(err, "Failed to get content for '%s'", entry->filesystem_path);
+        }
+
+        /* Compare buffer to disk (works with decrypted content) */
+        git_filemode_t mode = git_tree_entry_filemode(entry->entry);
+        compare_result_t cmp_result;
+        err = compare_buffer_to_disk(content, entry->filesystem_path, mode, &cmp_result);
 
         if (err) {
+            buffer_free(content);
             return error_wrap(err, "Failed to compare '%s'", entry->filesystem_path);
         }
+
+        /* Done with content for now - show_file_diff will decrypt again if needed */
+        buffer_free(content);
 
         /* Check if we should diff this file */
         if (!should_diff_file(entry->filesystem_path, cmp_result, opts)) {

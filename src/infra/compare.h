@@ -126,6 +126,36 @@ error_t *compare_generate_diff(
 );
 
 /**
+ * Generate diff from buffer content to disk file
+ *
+ * Buffer-based variant for use with decrypted content from the content layer.
+ * This function creates temporary git blobs from the buffer to leverage
+ * libgit2's diff generation capabilities.
+ *
+ * Use case: Encrypted files that have been decrypted by the content layer
+ * can use this function instead of compare_generate_diff() to generate
+ * diffs without exposing encrypted content.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param content Content buffer (e.g., decrypted content, must not be NULL)
+ * @param disk_path Disk file path (must not be NULL)
+ * @param path_label Label for diff output (can be NULL, defaults to disk_path)
+ * @param mode Expected git filemode (for type/mode checking)
+ * @param direction Diff direction
+ * @param out Diff information (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+error_t *compare_generate_diff_from_buffer(
+    git_repository *repo,
+    const buffer_t *content,
+    const char *disk_path,
+    const char *path_label,
+    git_filemode_t mode,
+    compare_direction_t direction,
+    file_diff_t **out
+);
+
+/**
  * Free diff structure
  *
  * @param diff Diff to free (can be NULL)

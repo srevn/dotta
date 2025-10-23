@@ -129,8 +129,6 @@ error_t *content_get_from_blob_oid(
     buffer_t **out_content
 );
 
-/* ========== Cached API (Batch Operations) ========== */
-
 /**
  * Create content cache
  *

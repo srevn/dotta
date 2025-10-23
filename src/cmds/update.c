@@ -10,7 +10,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "hydrogen.h"
 
 #include "base/encryption.h"
 #include "base/error.h"
@@ -20,16 +19,17 @@
 #include "core/profiles.h"
 #include "core/workspace.h"
 #include "infra/compare.h"
+#include "infra/content.h"
 #include "infra/worktree.h"
 #include "utils/array.h"
 #include "utils/buffer.h"
 #include "utils/commit.h"
 #include "utils/config.h"
+#include "utils/encryption_policy.h"
 #include "utils/hashmap.h"
 #include "utils/hooks.h"
 #include "utils/keymanager.h"
 #include "utils/output.h"
-#include "utils/pattern.h"
 #include "utils/string.h"
 
 /**
@@ -466,7 +466,8 @@ static error_t *copy_file_to_worktree(
     worktree_handle_t *wt,
     const char *filesystem_path,
     const char *storage_path,
-    const uint8_t *profile_key,
+    const char *profile_name,
+    keymanager_t *km,
     const dotta_config_t *config,
     const metadata_t *metadata
 ) {
@@ -478,8 +479,6 @@ static error_t *copy_file_to_worktree(
     char *dest_path = NULL;
     char *parent = NULL;
     char *target = NULL;
-    buffer_t *plaintext = NULL;
-    buffer_t *ciphertext = NULL;
     error_t *err = NULL;
 
     const char *wt_path = worktree_get_path(wt);
@@ -529,82 +528,41 @@ static error_t *copy_file_to_worktree(
             goto cleanup;
         }
     } else {
-        /* Handle regular file - check if should encrypt */
+        /* Handle regular file - determine encryption policy using centralized logic
+         *
+         * The policy function handles the critical "maintain encryption" logic:
+         * If file was previously encrypted, it stays encrypted (security-critical).
+         */
         bool should_encrypt = false;
-
-        /* Check if file was previously encrypted OR should be auto-encrypted */
-        if (config && config->encryption_enabled) {
-            /* First check if file was already encrypted */
-            if (metadata) {
-                const metadata_entry_t *existing = NULL;
-                error_t *lookup_err = metadata_get_entry(metadata, storage_path, &existing);
-                if (lookup_err == NULL && existing && existing->encrypted) {
-                    /* File was previously encrypted - maintain encryption */
-                    should_encrypt = true;
-                }
-                if (lookup_err && lookup_err->code != ERR_NOT_FOUND) {
-                    /* Real error - propagate */
-                    err = lookup_err;
-                    goto cleanup;
-                }
-                if (lookup_err) {
-                    error_free(lookup_err);
-                }
-            }
-
-            /* If not already encrypted, check auto-encrypt patterns */
-            if (!should_encrypt) {
-                err = encrypt_should_auto_encrypt(config, storage_path, &should_encrypt);
-                if (err) {
-                    /* Log warning and continue without encryption */
-                    error_free(err);
-                    err = NULL;
-                    should_encrypt = false;
-                }
-            }
+        err = encryption_policy_should_encrypt(
+            config,
+            storage_path,
+            false,           /* No explicit --encrypt flag in update.c */
+            false,           /* No explicit --no-encrypt flag in update.c */
+            metadata,        /* Critical: checks previous encryption state */
+            &should_encrypt
+        );
+        if (err) {
+            err = error_wrap(err, "Failed to determine encryption policy for '%s'", storage_path);
+            goto cleanup;
         }
 
-        if (should_encrypt && profile_key) {
-            /* ENCRYPTION PATH - Read file content */
-            err = fs_read_file(filesystem_path, &plaintext);
-            if (err) {
-                err = error_wrap(err, "Failed to read file for encryption");
-                goto cleanup;
-            }
-
-            /* Encrypt file content with content-addressed nonce */
-            err = encryption_encrypt(
-                buffer_data(plaintext),
-                buffer_size(plaintext),
-                profile_key,
-                storage_path,  /* Nonce derived from path + content */
-                &ciphertext
-            );
-
-            if (err) {
-                err = error_wrap(err, "Failed to encrypt file");
-                goto cleanup;
-            }
-
-            /* Write encrypted content to worktree */
-            err = fs_write_file(dest_path, ciphertext);
-            if (err) {
-                err = error_wrap(err, "Failed to write encrypted file");
-                goto cleanup;
-            }
-        } else {
-            /* PLAINTEXT PATH - normal copy */
-            err = fs_copy_file(filesystem_path, dest_path);
-            if (err) {
-                err = error_wrap(err, "Failed to copy file");
-                goto cleanup;
-            }
+        /* Store file to worktree with optional encryption (handles read → encrypt → write) */
+        err = content_store_file_to_worktree(
+            filesystem_path,
+            dest_path,
+            storage_path,
+            profile_name,
+            km,
+            should_encrypt
+        );
+        if (err) {
+            err = error_wrap(err, "Failed to store file to worktree");
+            goto cleanup;
         }
     }
 
 cleanup:
-    if (ciphertext) buffer_free(ciphertext);
-    if (plaintext) buffer_free(plaintext);
     if (target) free(target);
     if (parent) free(parent);
     if (dest_path) free(dest_path);
@@ -829,6 +787,7 @@ static error_t *update_profile(
     error_t *err = NULL;
     git_repository *wt_repo = NULL;
     metadata_t *existing_metadata = NULL;
+    keymanager_t *key_mgr = NULL;
 
     /* Load existing metadata from profile branch (for encryption status) */
     err = metadata_load_from_branch(repo, profile->name, &existing_metadata);
@@ -846,68 +805,38 @@ static error_t *update_profile(
         }
     }
 
-    /* Derive profile key once if encryption is needed
-     * This optimization hoists key derivation to command level, avoiding
-     * redundant derivations for each file that needs encryption.
+    /* Get keymanager if encryption may be needed
      *
-     * Derive key if EITHER:
-     *   1. Profile has encrypted files (need to re-encrypt when updating)
+     * Keymanager handles profile key caching internally, so files will reuse
+     * the same derived key without redundant derivations (O(1) after first derivation).
+     *
+     * Get keymanager if EITHER:
+     *   1. Profile has encrypted files (need to maintain encryption when updating)
      *   2. Auto-encrypt patterns configured (files may match patterns)
      */
-    bool needs_encryption_key = false;
+    bool needs_encryption = false;
 
     /* Check if any existing files are encrypted */
     if (existing_metadata && config && config->encryption_enabled) {
         for (size_t i = 0; i < existing_metadata->count; i++) {
             if (existing_metadata->entries[i].encrypted) {
-                needs_encryption_key = true;
+                needs_encryption = true;
                 break;
             }
         }
     }
 
     /* Check if auto-encrypt patterns are configured */
-    if (!needs_encryption_key && config && config->encryption_enabled &&
+    if (!needs_encryption && config && config->encryption_enabled &&
         config->auto_encrypt_patterns && config->auto_encrypt_pattern_count > 0) {
-        needs_encryption_key = true;
+        needs_encryption = true;
     }
 
-    uint8_t *profile_key = NULL;
-    if (needs_encryption_key && config && config->encryption_enabled) {
-        /* Get global keymanager */
-        keymanager_t *key_mgr = keymanager_get_global(config);
+    if (needs_encryption && config && config->encryption_enabled) {
+        key_mgr = keymanager_get_global(config);
         if (!key_mgr) {
             if (existing_metadata) metadata_free(existing_metadata);
             return ERROR(ERR_INTERNAL, "Failed to get encryption key manager");
-        }
-
-        /* Get master key (prompts if needed) */
-        uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE];
-        err = keymanager_get_key(key_mgr, master_key);
-        if (err) {
-            if (existing_metadata) metadata_free(existing_metadata);
-            return error_wrap(err, "Failed to get encryption key");
-        }
-
-        /* Allocate profile key */
-        profile_key = malloc(ENCRYPTION_PROFILE_KEY_SIZE);
-        if (!profile_key) {
-            hydro_memzero(master_key, sizeof(master_key));
-            if (existing_metadata) metadata_free(existing_metadata);
-            return ERROR(ERR_MEMORY, "Failed to allocate profile key");
-        }
-
-        /* Derive profile key once for all files */
-        err = encryption_derive_profile_key(master_key, profile->name, profile_key);
-
-        /* Clear master key immediately after derivation */
-        hydro_memzero(master_key, sizeof(master_key));
-
-        if (err) {
-            hydro_memzero(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
-            free(profile_key);
-            if (existing_metadata) metadata_free(existing_metadata);
-            return error_wrap(err, "Failed to derive profile encryption key");
         }
     }
 
@@ -950,12 +879,13 @@ static error_t *update_profile(
             continue;
         }
 
-        /* Copy to worktree (with optional encryption) */
+        /* Copy to worktree (encryption handled transparently by content layer) */
         err = copy_file_to_worktree(
             wt,
             file->filesystem_path,
             file->storage_path,
-            profile_key,
+            profile->name,
+            key_mgr,
             config,
             existing_metadata
         );
@@ -1032,12 +962,6 @@ static error_t *update_profile(
     }
 
 cleanup:
-    /* Securely clear profile key before freeing */
-    if (profile_key) {
-        hydro_memzero(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
-        free(profile_key);
-    }
-
     /* Free resources in reverse order */
     if (message) free(message);
     if (storage_paths) free(storage_paths);

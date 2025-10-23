@@ -226,6 +226,20 @@ error_t *keymanager_set_passphrase(
         return ERROR(ERR_INVALID_ARG, "Passphrase cannot be empty");
     }
 
+    /* Clear profile keys cache before deriving new master key
+     *
+     * CRITICAL: When the master key changes (e.g., session timeout + new passphrase),
+     * all cached profile keys become invalid since they were derived from the OLD
+     * master key. Failing to clear them causes decryption failures with confusing
+     * "Authentication failed" errors.
+     *
+     * This is safe even if the same passphrase is entered - profile keys will simply
+     * be re-derived on next use (negligible cost compared to master key derivation).
+     */
+    if (mgr->profile_keys) {
+        hashmap_clear(mgr->profile_keys, secure_free_profile_key);
+    }
+
     /* Derive master key from passphrase */
     error_t *err = encryption_derive_master_key(
         passphrase,

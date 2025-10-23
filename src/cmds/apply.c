@@ -793,7 +793,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         .skip_unchanged = opts->skip_unchanged
     };
 
-    err = deploy_preflight_check(repo, manifest, state, &deploy_opts, cache, merged_metadata, &preflight);
+    err = deploy_preflight_check(repo, manifest, state, &deploy_opts, km, cache, merged_metadata, &preflight);
     if (err) {
         err = error_wrap(err, "Pre-flight checks failed");
         goto cleanup;
@@ -886,7 +886,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         output_print(out, OUTPUT_VERBOSE, "\nDeploying files...\n");
     }
 
-    err = deploy_execute(repo, manifest, state, merged_metadata, &deploy_opts, cache, &deploy_res);
+    err = deploy_execute(repo, manifest, state, merged_metadata, &deploy_opts, km, cache, &deploy_res);
     if (err) {
         if (deploy_res) {
             print_deploy_results(out, deploy_res, opts->verbose);

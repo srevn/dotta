@@ -733,11 +733,8 @@ error_t *workspace_load(
     }
 
     /* Initialize encryption infrastructure */
+    /* Note: keymanager can be NULL if encryption is not configured - this is valid */
     ws->keymanager = keymanager_get_global(config);
-    if (!ws->keymanager) {
-        workspace_free(ws);
-        return ERROR(ERR_INTERNAL, "Failed to get global keymanager");
-    }
 
     ws->content_cache = content_cache_create(ws->repo, ws->keymanager);
     if (!ws->content_cache) {

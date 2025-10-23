@@ -501,7 +501,8 @@ static error_t *generate_text_diff(
         return error_from_git(git_err);
     }
 
-    /* Extract result - transfer ownership from buffer to avoid copy */
+    /* Extract result - transfer ownership and free buffer structure */
+    /* buffer_release_data() gives ownership of data to caller and frees the buffer_t */
     if (buffer_size(callback_data.output) > 0) {
         error_t *err = buffer_release_data(callback_data.output, diff_text);
         if (err) {
@@ -584,7 +585,8 @@ static error_t *generate_symlink_diff(
         buffer_append_string(buf, "\n");
     }
 
-    /* Transfer ownership from buffer to avoid copy */
+    /* Transfer ownership and free buffer structure */
+    /* buffer_release_data() gives ownership of data to caller and frees the buffer_t */
     error_t *err = buffer_release_data(buf, diff_text);
 
     free(disk_target);

@@ -50,6 +50,7 @@ struct content_cache {
  * @param metadata Optional metadata for validation
  * @param km Key manager (can be NULL for plaintext files)
  * @param out_content Output buffer (caller owns)
+ * @param out_was_encrypted Optional flag - set to true if file was encrypted (can be NULL)
  * @return Error or NULL on success
  */
 static error_t *get_plaintext_from_blob(
@@ -59,7 +60,8 @@ static error_t *get_plaintext_from_blob(
     const char *profile_name,
     const metadata_t *metadata,
     keymanager_t *km,
-    buffer_t **out_content
+    buffer_t **out_content,
+    bool *out_was_encrypted
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(blob);
@@ -72,6 +74,11 @@ static error_t *get_plaintext_from_blob(
 
     /* Step 1: Check magic header for encryption (source of truth) */
     bool is_encrypted = encryption_is_encrypted(blob_data, blob_size);
+
+    /* Set output flag if caller wants it */
+    if (out_was_encrypted) {
+        *out_was_encrypted = is_encrypted;
+    }
 
     /* Step 2: Validate with metadata (if provided) */
     if (metadata) {
@@ -97,7 +104,8 @@ static error_t *get_plaintext_from_blob(
         }
 
         if (err) {
-            error_free(err);  /* Not found is OK */
+            /* Entry not found in metadata is OK - magic header is source of truth */
+            error_free(err);
         }
     }
 
@@ -198,7 +206,8 @@ error_t *content_get_from_blob_oid(
 
     /* Get plaintext content */
     error_t *err = get_plaintext_from_blob(
-        repo, blob, storage_path, profile_name, metadata, km, out_content
+        repo, blob, storage_path, profile_name, metadata, km, out_content,
+        NULL  /* Don't track encryption status in simple API */
     );
 
     git_blob_free(blob);
@@ -290,37 +299,42 @@ error_t *content_cache_get_from_blob_oid(
         return NULL;
     }
 
-    /* Cache miss - load and decrypt */
+    /* Cache miss - load blob and decrypt if needed */
     cache->misses++;
 
+    /* Load blob from repository */
+    git_blob *blob = NULL;
+    int git_err = git_blob_lookup(&blob, cache->repo, blob_oid);
+    if (git_err != 0) {
+        return ERROR(ERR_NOT_FOUND, "Failed to load blob: %s", git_error_last()->message);
+    }
+
+    /* Get plaintext content with encryption tracking */
     buffer_t *content = NULL;
-    error_t *err = content_get_from_blob_oid(
-        cache->repo, blob_oid, storage_path, profile_name, metadata, cache->km, &content
+    bool was_encrypted = false;
+    error_t *err = get_plaintext_from_blob(
+        cache->repo, blob, storage_path, profile_name, metadata, cache->km,
+        &content, &was_encrypted
     );
+
+    git_blob_free(blob);
 
     if (err) {
         return err;
     }
 
-    /* Track if we performed a decryption (for stats) */
-    git_blob *blob = NULL;
-    if (git_blob_lookup(&blob, cache->repo, blob_oid) == 0) {
-        const unsigned char *blob_data = git_blob_rawcontent(blob);
-        size_t blob_size = (size_t)git_blob_rawsize(blob);
-        if (encryption_is_encrypted(blob_data, blob_size)) {
-            cache->decryptions++;
-        }
-        git_blob_free(blob);
+    /* Update decryption stats if file was encrypted */
+    if (was_encrypted) {
+        cache->decryptions++;
     }
 
     /* Store in cache (cache takes ownership) */
     err = hashmap_set(cache->cache_map, oid_str, content);
     if (err) {
-        /* Non-fatal - we can still return the content */
-        error_free(err);
-        /* But we need to let the caller own it now */
-        /* This is awkward - we need to return borrowed ref but can't cache */
-        /* Best we can do is cache it anyway and ignore the error */
+        /* Fatal - cannot return borrowed reference if caching fails */
+        /* Ownership contract requires cache to own the buffer */
+        buffer_free(content);
+        return error_wrap(err, "Failed to cache content for blob");
     }
 
     *out_content = content;

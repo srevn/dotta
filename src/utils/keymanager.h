@@ -77,6 +77,36 @@ error_t *keymanager_get_key(
 );
 
 /**
+ * Get derived profile key (with caching)
+ *
+ * Returns cached profile key if available, otherwise derives it from
+ * the master key and caches it for future use.
+ *
+ * This function provides transparent profile key caching, eliminating
+ * the expensive key derivation overhead for batch operations. The cache
+ * lifetime is tied to the master key cache.
+ *
+ * Process:
+ * 1. Check profile_keys cache for cached key
+ * 2. If cache miss: get master key and derive profile key
+ * 3. Cache derived key for future use
+ * 4. Copy key to output buffer
+ *
+ * Performance: O(1) for cache hit, O(expensive) for cache miss
+ * Cache lifetime: Same as master key (cleared when master key expires/cleared)
+ *
+ * @param mgr Key manager (must not be NULL)
+ * @param profile_name Profile name (must not be NULL)
+ * @param out_profile_key Output buffer for 32-byte profile key (must be pre-allocated)
+ * @return Error or NULL on success
+ */
+error_t *keymanager_get_profile_key(
+    keymanager_t *mgr,
+    const char *profile_name,
+    uint8_t out_profile_key[32]
+);
+
+/**
  * Explicitly set passphrase
  *
  * Derives key from passphrase and caches it. Used by `dotta key set`.

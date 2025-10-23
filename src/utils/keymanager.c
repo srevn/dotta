@@ -16,6 +16,7 @@
 #include "base/error.h"
 #include "hydrogen.h"
 #include "utils/config.h"
+#include "utils/hashmap.h"
 
 /**
  * Key manager structure
@@ -32,6 +33,9 @@ struct keymanager {
     bool has_key;          /* Is master key cached? */
     time_t cached_at;      /* When was key cached? (0 if not cached) */
     bool mlocked;          /* Is memory locked with mlock()? */
+
+    /* Profile key cache (profile_name → uint8_t[32]) */
+    hashmap_t *profile_keys;  /* Owned - each value is malloc'd ENCRYPTION_PROFILE_KEY_SIZE */
 };
 
 error_t *keymanager_create(
@@ -56,6 +60,7 @@ error_t *keymanager_create(
     mgr->has_key = false;
     mgr->cached_at = 0;
     mgr->mlocked = false;
+    mgr->profile_keys = NULL;  /* Created lazily on first profile key request */
     hydro_memzero(mgr->master_key, sizeof(mgr->master_key));
 
     /* Attempt to lock memory to prevent swapping to disk
@@ -76,6 +81,21 @@ error_t *keymanager_create(
     return NULL;
 }
 
+/**
+ * Secure destructor for profile keys
+ *
+ * Zeros memory before freeing to prevent key leakage.
+ * Used as callback for hashmap_free() and hashmap_clear().
+ *
+ * @param key_ptr Pointer to malloc'd profile key (uint8_t[32])
+ */
+static void secure_free_profile_key(void *key_ptr) {
+    if (key_ptr) {
+        hydro_memzero(key_ptr, ENCRYPTION_PROFILE_KEY_SIZE);
+        free(key_ptr);
+    }
+}
+
 void keymanager_free(keymanager_t *mgr) {
     if (!mgr) {
         return;
@@ -85,6 +105,12 @@ void keymanager_free(keymanager_t *mgr) {
     hydro_memzero(mgr->master_key, sizeof(mgr->master_key));
     mgr->has_key = false;
     mgr->cached_at = 0;
+
+    /* Securely clear and free profile key cache */
+    if (mgr->profile_keys) {
+        hashmap_free(mgr->profile_keys, secure_free_profile_key);
+        mgr->profile_keys = NULL;
+    }
 
     /* Unlock memory if it was locked */
     if (mgr->mlocked) {
@@ -179,6 +205,13 @@ void keymanager_clear(keymanager_t *mgr) {
     hydro_memzero(mgr->master_key, sizeof(mgr->master_key));
     mgr->has_key = false;
     mgr->cached_at = 0;
+
+    /* Clear profile key cache (keys derived from master key, must be cleared too) */
+    if (mgr->profile_keys) {
+        hashmap_clear(mgr->profile_keys, secure_free_profile_key);
+        /* Note: hashmap_clear clears entries but keeps the map structure.
+         * This is intentional - we keep the map for future use. */
+    }
 }
 
 error_t *keymanager_set_passphrase(
@@ -412,6 +445,90 @@ error_t *keymanager_get_key(
 
     /* Copy to output */
     memcpy(out_master_key, mgr->master_key, ENCRYPTION_MASTER_KEY_SIZE);
+
+    return NULL;
+}
+
+error_t *keymanager_get_profile_key(
+    keymanager_t *mgr,
+    const char *profile_name,
+    uint8_t out_profile_key[ENCRYPTION_PROFILE_KEY_SIZE]
+) {
+    CHECK_NULL(mgr);
+    CHECK_NULL(profile_name);
+    CHECK_NULL(out_profile_key);
+
+    /* Check cache first */
+    if (mgr->profile_keys) {
+        uint8_t *cached_key = hashmap_get(mgr->profile_keys, profile_name);
+        if (cached_key) {
+            /* Cache hit - copy and return */
+            memcpy(out_profile_key, cached_key, ENCRYPTION_PROFILE_KEY_SIZE);
+            return NULL;
+        }
+    }
+
+    /* Cache miss - need to derive profile key */
+
+    /* Get master key (may prompt for passphrase) */
+    uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE];
+    error_t *err = keymanager_get_key(mgr, master_key);
+    if (err) {
+        return error_wrap(err, "Failed to get master key");
+    }
+
+    /* Allocate memory for profile key (will be owned by cache) */
+    uint8_t *profile_key = malloc(ENCRYPTION_PROFILE_KEY_SIZE);
+    if (!profile_key) {
+        hydro_memzero(master_key, sizeof(master_key));
+        return ERROR(ERR_MEMORY, "Failed to allocate profile key");
+    }
+
+    /* Derive profile key from master key */
+    err = encryption_derive_profile_key(master_key, profile_name, profile_key);
+
+    /* Clear master key immediately */
+    hydro_memzero(master_key, sizeof(master_key));
+
+    if (err) {
+        hydro_memzero(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
+        free(profile_key);
+        return error_wrap(err, "Failed to derive profile key for '%s'", profile_name);
+    }
+
+    /* Create cache hashmap if it doesn't exist yet (lazy initialization) */
+    if (!mgr->profile_keys) {
+        mgr->profile_keys = hashmap_create(8);  /* Initial capacity: 8 profiles */
+        if (!mgr->profile_keys) {
+            /* Non-fatal: continue without caching */
+            fprintf(stderr, "Warning: Failed to create profile key cache\n");
+            fprintf(stderr, "         Performance may be degraded for batch operations\n");
+
+            /* Copy key to output and return (no caching) */
+            memcpy(out_profile_key, profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
+            hydro_memzero(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
+            free(profile_key);
+            return NULL;
+        }
+    }
+
+    /* Store in cache */
+    err = hashmap_set(mgr->profile_keys, profile_name, profile_key);
+    if (err) {
+        /* Non-fatal: continue without caching */
+        fprintf(stderr, "Warning: Failed to cache profile key for '%s': %s\n",
+                profile_name, error_message(err));
+        error_free(err);
+
+        /* Copy key to output and return (no caching) */
+        memcpy(out_profile_key, profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
+        hydro_memzero(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
+        free(profile_key);
+        return NULL;
+    }
+
+    /* Successfully cached - copy to output */
+    memcpy(out_profile_key, profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
 
     return NULL;
 }

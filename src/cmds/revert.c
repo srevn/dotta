@@ -12,12 +12,16 @@
 
 #include "base/error.h"
 #include "base/gitops.h"
+#include "core/metadata.h"
 #include "core/profiles.h"
+#include "infra/content.h"
 #include "infra/path.h"
 #include "utils/array.h"
+#include "utils/buffer.h"
 #include "utils/commit.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
+#include "utils/keymanager.h"
 #include "utils/output.h"
 
 /**
@@ -180,16 +184,24 @@ static error_t *discover_file(
 
 /**
  * Show diff preview between two blobs
+ *
+ * Uses content layer to transparently decrypt encrypted files before diffing,
+ * so users see readable plaintext diffs instead of encrypted gibberish.
  */
 static error_t *show_diff_preview(
     git_repository *repo,
     const char *file_path,
+    const char *profile_name,
+    const metadata_t *metadata,
+    keymanager_t *km,
     const git_oid *current_oid,
     const git_oid *target_oid,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(file_path);
+    CHECK_NULL(profile_name);
+    CHECK_NULL(metadata);
     CHECK_NULL(current_oid);
     CHECK_NULL(target_oid);
     CHECK_NULL(out);
@@ -200,15 +212,76 @@ static error_t *show_diff_preview(
         return NULL;
     }
 
-    /* Lookup blobs */
+    /* Get decrypted plaintext content from both blobs
+     *
+     * This transparently decrypts encrypted files so we can show readable diffs.
+     * For plaintext files, this just returns the raw content.
+     */
+    buffer_t *current_plaintext = NULL;
+    error_t *err = content_get_from_blob_oid(
+        repo,
+        current_oid,
+        file_path,
+        profile_name,
+        metadata,
+        km,
+        &current_plaintext
+    );
+    if (err) {
+        return error_wrap(err, "Failed to get current file content");
+    }
+
+    buffer_t *target_plaintext = NULL;
+    err = content_get_from_blob_oid(
+        repo,
+        target_oid,
+        file_path,
+        profile_name,
+        metadata,
+        km,
+        &target_plaintext
+    );
+    if (err) {
+        buffer_free(current_plaintext);
+        return error_wrap(err, "Failed to get target file content");
+    }
+
+    /* Create temporary blobs from plaintext for diffing
+     *
+     * We need git_blob objects to use libgit2's patch API, so we create
+     * temporary blobs in the Git ODB from our decrypted buffers.
+     */
+    git_oid tmp_current_oid, tmp_target_oid;
     git_blob *current_blob = NULL;
     git_blob *target_blob = NULL;
-    int ret = git_blob_lookup(&current_blob, repo, current_oid);
+
+    int ret = git_blob_create_from_buffer(&tmp_current_oid, repo,
+        buffer_data(current_plaintext), buffer_size(current_plaintext));
+    if (ret < 0) {
+        buffer_free(current_plaintext);
+        buffer_free(target_plaintext);
+        return error_from_git(ret);
+    }
+
+    ret = git_blob_create_from_buffer(&tmp_target_oid, repo,
+        buffer_data(target_plaintext), buffer_size(target_plaintext));
+    if (ret < 0) {
+        buffer_free(current_plaintext);
+        buffer_free(target_plaintext);
+        return error_from_git(ret);
+    }
+
+    /* Free plaintext buffers - no longer needed */
+    buffer_free(current_plaintext);
+    buffer_free(target_plaintext);
+
+    /* Lookup the temporary blobs we just created */
+    ret = git_blob_lookup(&current_blob, repo, &tmp_current_oid);
     if (ret < 0) {
         return error_from_git(ret);
     }
 
-    ret = git_blob_lookup(&target_blob, repo, target_oid);
+    ret = git_blob_lookup(&target_blob, repo, &tmp_target_oid);
     if (ret < 0) {
         git_blob_free(current_blob);
         return error_from_git(ret);
@@ -604,6 +677,8 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     git_tree_entry *current_entry = NULL;
     git_tree_entry *target_entry = NULL;
     output_ctx_t *out = NULL;
+    metadata_t *metadata = NULL;
+    keymanager_t *km = NULL;
     bool user_aborted = false;
 
     /* Load configuration */
@@ -704,6 +779,21 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
 
     /* Step 7: Show preview */
     if (!opts->dry_run) {
+        /* Load metadata and keymanager for decryption */
+        err = metadata_load_from_branch(repo, profile_name, &metadata);
+        if (err) {
+            /* Graceful fallback: create empty metadata if loading fails */
+            metadata = metadata_create();
+            if (!metadata) {
+                err = ERROR(ERR_MEMORY, "Failed to create metadata");
+                goto cleanup;
+            }
+            error_free(err);
+            err = NULL;
+        }
+
+        km = keymanager_get_global(NULL);
+
         /* Show commit metadata */
         if (output_colors_enabled(out)) {
             output_printf(out, OUTPUT_NORMAL, "\n%sRevert preview:%s\n",
@@ -735,8 +825,9 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
             output_printf(out, OUTPUT_NORMAL, "  Target commit: %s (%s)\n", oid_str, time_buf);
         }
 
-        /* Show diff preview */
-        err = show_diff_preview(repo, resolved_path, current_blob_oid, target_blob_oid, out);
+        /* Show diff preview with decryption support */
+        err = show_diff_preview(repo, resolved_path, profile_name, metadata, km,
+                               current_blob_oid, target_blob_oid, out);
         if (err) {
             err = error_wrap(err, "Failed to show diff preview");
             goto cleanup;
@@ -809,6 +900,7 @@ cleanup:
     if (target_tree) git_tree_free(target_tree);
     if (current_commit) git_commit_free(current_commit);
     if (target_commit) git_commit_free(target_commit);
+    if (metadata) metadata_free(metadata);
     if (profile_name) free(profile_name);
     if (resolved_path) free(resolved_path);
 

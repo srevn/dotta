@@ -5,7 +5,9 @@
  * Used by the `apply` command when pruning orphaned files.
  *
  * Key optimizations:
- * - Fast path: Uses blob hash from state (O(1) lookup, no tree loading)
+ * - Fast path: Works for both encrypted and plaintext files
+ * - Content cache reuse: Avoids re-decryption of files from preflight checks
+ * - Metadata pass-through: Avoids repeated Git operations
  * - Adaptive lookup: Linear search for small batches, hashmap for large
  * - Profile tree caching: Loads each profile tree only once per batch
  */
@@ -199,6 +201,8 @@ static error_t *add_violation(
  * Fast path advantages:
  * - O(1) blob lookup vs O(log n) tree traversal
  * - Only requires hash string, no Git tree loading
+ * - Works for both encrypted and plaintext files (checks metadata)
+ * - Reuses content cache if available (avoids re-decryption)
  * - Succeeds in 99% of cases (profile not deleted, hash available)
  */
 static bool try_fast_path_check(
@@ -207,6 +211,9 @@ static bool try_fast_path_check(
     const char *storage_path,
     const char *source_profile,
     const char *state_hash,
+    const metadata_t *metadata,
+    keymanager_t *keymanager,
+    content_cache_t *cache,
     safety_result_t *result,
     error_t **out_err
 ) {
@@ -217,66 +224,138 @@ static bool try_fast_path_check(
         return false;
     }
 
-    /* Parse hash */
+    /* Parse blob OID from hash */
     git_oid blob_oid;
     if (git_oid_fromstr(&blob_oid, state_hash) != 0) {
         /* Invalid hash - use slow path */
         return false;
     }
 
-    /* Try blob comparison */
-    compare_result_t cmp_result;
-    error_t *cmp_err = compare_blob_to_disk(repo, &blob_oid, filesystem_path, &cmp_result);
+    /* Check if file is encrypted (via metadata) */
+    bool is_encrypted = false;
+    git_filemode_t expected_mode = GIT_FILEMODE_BLOB;
 
-    if (!cmp_err) {
-        /* Fast path succeeded! */
-        if (cmp_result != CMP_EQUAL) {
-            /* File is modified - add violation */
-            const char *reason = NULL;
-            bool content_mod = false;
-
-            switch (cmp_result) {
-                case CMP_DIFFERENT:
-                    reason = SAFETY_REASON_MODIFIED;
-                    content_mod = true;
-                    break;
-                case CMP_MODE_DIFF:
-                    reason = SAFETY_REASON_MODE_CHANGED;
-                    content_mod = false;
-                    break;
-                case CMP_TYPE_DIFF:
-                    reason = SAFETY_REASON_TYPE_CHANGED;
-                    content_mod = true;
-                    break;
-                case CMP_MISSING:
-                    /* File already deleted - safe to prune, don't add violation */
-                    return true;
-                case CMP_EQUAL:
-                    /* Unreachable */
-                    break;
-            }
-
-            if (reason) {
-                *out_err = add_violation(result, filesystem_path, storage_path,
-                                       source_profile, reason, content_mod);
+    if (metadata && storage_path) {
+        const metadata_entry_t *meta_entry = NULL;
+        error_t *lookup_err = metadata_get_entry(metadata, storage_path, &meta_entry);
+        if (!lookup_err && meta_entry) {
+            is_encrypted = meta_entry->encrypted;
+            /* Get mode for accurate comparison */
+            if (meta_entry->mode & S_IXUSR) {
+                expected_mode = GIT_FILEMODE_BLOB_EXECUTABLE;
             }
         }
-        /* else: File matches Git - safe to remove */
+        error_free(lookup_err);  /* Non-fatal if not found */
+    }
+
+    compare_result_t cmp_result;
+    error_t *err = NULL;
+
+    if (is_encrypted) {
+        /* === ENCRYPTED FILE PATH === */
+
+        const buffer_t *plaintext = NULL;
+        bool owns_buffer = false;
+
+        if (cache && metadata) {
+            /* Optimal: Use content cache (avoids re-decryption) */
+            err = content_cache_get_from_blob_oid(
+                cache, &blob_oid, storage_path, source_profile,
+                metadata, &plaintext
+            );
+        } else {
+            /* Fallback: Decrypt directly (no cache available) */
+            buffer_t *temp = NULL;
+            keymanager_t *km = keymanager ? keymanager : keymanager_get_global(NULL);
+            err = content_get_from_blob_oid(
+                repo, &blob_oid, storage_path, source_profile,
+                metadata, km, &temp
+            );
+            plaintext = temp;
+            owns_buffer = (err == NULL);  /* Only own if successful */
+        }
+
+        if (err) {
+            /* Decryption failed - conservative: cannot verify */
+            error_free(err);
+            *out_err = add_violation(result, filesystem_path, storage_path,
+                                    source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
+            return true;  /* Handled (don't try slow path) */
+        }
+
+        /* Compare plaintext to disk */
+        err = compare_buffer_to_disk(plaintext, filesystem_path, expected_mode, &cmp_result);
+
+        /* Free owned buffer if we allocated it */
+        if (owns_buffer) {
+            buffer_free((buffer_t *)plaintext);
+        }
+
+        if (err) {
+            /* Comparison failed - conservative */
+            error_free(err);
+            *out_err = add_violation(result, filesystem_path, storage_path,
+                                    source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
+            return true;
+        }
+    } else {
+        /* === PLAINTEXT FILE PATH (existing logic) === */
+
+        err = compare_blob_to_disk(repo, &blob_oid, filesystem_path, &cmp_result);
+
+        if (err) {
+            if (err->code == ERR_NOT_FOUND || err->code == ERR_GIT) {
+                /* Blob not found - use slow path */
+                error_free(err);
+                return false;
+            }
+            /* Other error - conservative */
+            error_free(err);
+            *out_err = add_violation(result, filesystem_path, storage_path,
+                                    source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
+            return true;
+        }
+    }
+
+    /* === SHARED RESULT HANDLING === */
+
+    if (cmp_result == CMP_MISSING) {
+        /* File already deleted - safe to prune */
         return true;
     }
 
-    /* Fast path failed - check error type */
-    if (cmp_err->code == ERR_NOT_FOUND || cmp_err->code == ERR_GIT) {
-        /* Blob not found - likely profile deleted, use slow path */
-        error_free(cmp_err);
-        return false;
+    if (cmp_result != CMP_EQUAL) {
+        /* File is modified - add violation */
+        const char *reason = NULL;
+        bool content_mod = false;
+
+        switch (cmp_result) {
+            case CMP_DIFFERENT:
+                reason = SAFETY_REASON_MODIFIED;
+                content_mod = true;
+                break;
+            case CMP_MODE_DIFF:
+                reason = SAFETY_REASON_MODE_CHANGED;
+                content_mod = false;
+                break;
+            case CMP_TYPE_DIFF:
+                reason = SAFETY_REASON_TYPE_CHANGED;
+                content_mod = true;
+                break;
+            case CMP_MISSING:
+            case CMP_EQUAL:
+                /* Already handled above */
+                break;
+        }
+
+        if (reason) {
+            *out_err = add_violation(result, filesystem_path, storage_path,
+                                   source_profile, reason, content_mod);
+        }
     }
 
-    /* Other error (I/O, permission) - conservative: treat as unsafe */
-    error_free(cmp_err);
-    *out_err = add_violation(result, filesystem_path, storage_path,
-                            source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
-    return true;  /* Don't try fallback */
+    /* Fast path succeeded! */
+    return true;
 }
 
 /**
@@ -284,6 +363,7 @@ static bool try_fast_path_check(
  *
  * Used when fast path fails (profile deleted, hash unavailable, blob not found).
  * Loads profile tree and compares tree entry to disk file.
+ * Uses passed-in metadata/keymanager if available, loads as fallback if NULL.
  */
 static error_t *check_file_with_tree(
     git_repository *repo,
@@ -291,6 +371,8 @@ static error_t *check_file_with_tree(
     const char *storage_path,
     const char *source_profile,
     git_tree *profile_tree,
+    const metadata_t *metadata,
+    keymanager_t *keymanager,
     safety_result_t *result
 ) {
     CHECK_NULL(repo);
@@ -329,31 +411,42 @@ static error_t *check_file_with_tree(
      * to err on the side of caution (prevents removal of potentially modified files).
      */
 
-    /* Load metadata for encryption state validation */
-    metadata_t *metadata = NULL;
-    error_t *err = metadata_load_from_branch(repo, source_profile, &metadata);
-    if (err) {
-        /* Graceful fallback: create empty metadata if loading fails */
-        error_t *create_err = metadata_create_empty(&metadata);
-        if (create_err) {
-            error_free(create_err);
-            git_tree_entry_free(tree_entry);
-            return add_violation(result, filesystem_path, storage_path,
-                               source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
+    /* Use passed-in metadata OR load as fallback */
+    metadata_t *fallback_metadata = NULL;
+    const metadata_t *meta_to_use = metadata;  /* Prefer passed-in */
+
+    if (!meta_to_use) {
+        /* Fallback: load metadata (for tests or standalone usage) */
+        error_t *err = metadata_load_from_branch(repo, source_profile, &fallback_metadata);
+        if (err) {
+            /* Graceful fallback: create empty metadata if loading fails */
+            error_t *create_err = metadata_create_empty(&fallback_metadata);
+            if (create_err) {
+                error_free(create_err);
+                error_free(err);
+                git_tree_entry_free(tree_entry);
+                return add_violation(result, filesystem_path, storage_path,
+                                   source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
+            }
+            error_free(err);
         }
-        error_free(err);
-        err = NULL;
+        meta_to_use = fallback_metadata;
     }
 
+    /* Get content via content layer (transparent encryption handling) */
     buffer_t *content = NULL;
     git_filemode_t mode = git_tree_entry_filemode(tree_entry);
-    err = content_get_from_tree_entry(
+
+    /* Use passed-in keymanager OR global as fallback */
+    keymanager_t *km_to_use = keymanager ? keymanager : keymanager_get_global(NULL);
+
+    error_t *err = content_get_from_tree_entry(
         repo,
         tree_entry,
         storage_path,
         source_profile,
-        metadata,
-        keymanager_get_global(NULL),  /* Use global keymanager for decryption */
+        meta_to_use,
+        km_to_use,
         &content
     );
 
@@ -368,7 +461,7 @@ static error_t *check_file_with_tree(
          * Conservative approach: Block removal to prevent potential data loss.
          */
         error_free(err);
-        metadata_free(metadata);
+        if (fallback_metadata) metadata_free(fallback_metadata);
         git_tree_entry_free(tree_entry);
         return add_violation(result, filesystem_path, storage_path,
                            source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
@@ -385,7 +478,7 @@ static error_t *check_file_with_tree(
     if (err) {
         /* Cannot read file - permission issue or I/O error */
         error_free(err);
-        metadata_free(metadata);
+        if (fallback_metadata) metadata_free(fallback_metadata);
         return add_violation(result, filesystem_path, storage_path,
                            source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
     }
@@ -393,7 +486,7 @@ static error_t *check_file_with_tree(
     /* Check comparison result */
     if (cmp_result == CMP_MISSING) {
         /* File already deleted - safe to prune, don't add violation */
-        metadata_free(metadata);
+        if (fallback_metadata) metadata_free(fallback_metadata);
         return NULL;
     }
 
@@ -417,16 +510,16 @@ static error_t *check_file_with_tree(
             case CMP_MISSING:
             case CMP_EQUAL:
                 /* Already handled above */
-                metadata_free(metadata);
+                if (fallback_metadata) metadata_free(fallback_metadata);
                 return NULL;
         }
 
-        metadata_free(metadata);
+        if (fallback_metadata) metadata_free(fallback_metadata);
         return add_violation(result, filesystem_path, storage_path,
                            source_profile, reason, content_mod);
     }
 
-    metadata_free(metadata);
+    if (fallback_metadata) metadata_free(fallback_metadata);
     return NULL;
 }
 
@@ -458,6 +551,9 @@ error_t *safety_check_removal(
     const char **filesystem_paths,
     size_t path_count,
     bool force,
+    const metadata_t *metadata,
+    keymanager_t *keymanager,
+    content_cache_t *cache,
     safety_result_t **out_result
 ) {
     CHECK_NULL(repo);
@@ -571,11 +667,15 @@ error_t *safety_check_removal(
         }
 
         /* File exists - verify it's unmodified before removal */
-        /* Try fast path: compare using state hash */
+        /* Try fast path WITH metadata and cache */
         error_t *check_err = NULL;
         bool fast_path_succeeded = try_fast_path_check(
             repo, fs_path, storage_path, source_profile,
-            state_entry->hash, result, &check_err
+            state_entry->hash,
+            metadata,   /* Pass metadata for encryption detection */
+            keymanager, /* Pass keymanager for decryption */
+            cache,      /* Pass cache for performance */
+            result, &check_err
         );
 
         if (check_err) {
@@ -600,9 +700,12 @@ error_t *safety_check_removal(
                 return error_wrap(err, "Failed to load profile tree for '%s'", source_profile);
             }
 
-            /* Check file using tree-based comparison */
+            /* Check file using tree-based comparison WITH metadata and keymanager */
             err = check_file_with_tree(repo, fs_path, storage_path, source_profile,
-                                      profile_tree, result);
+                                      profile_tree,
+                                      metadata,   /* Pass metadata (avoids reload) */
+                                      keymanager, /* Pass keymanager */
+                                      result);
             if (err) {
                 hashmap_free(tree_cache, free_profile_tree_cache);
                 if (state_index) hashmap_free(state_index, NULL);

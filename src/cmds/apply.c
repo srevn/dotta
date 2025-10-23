@@ -924,6 +924,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             cleanup_options_t cleanup_opts = {
                 .enabled_metadata = merged_metadata,
                 .enabled_profiles = profiles,
+                .cache = cache,    /* Pass cache for performance (avoids re-decryption) */
                 .verbose = opts->verbose,
                 .dry_run = false,  /* Dry-run handled at deployment level */
                 .force = opts->force

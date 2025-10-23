@@ -19,10 +19,13 @@
  *
  * Architecture:
  * ─────────────
- * 1. Fast Path: Use state->hash + compare_blob_to_disk() [O(1) per file]
- * 2. Fallback: Load profile trees + compare_tree_entry_to_disk() [O(profiles)]
+ * 1. Fast Path: Use state->hash + metadata + content cache
+ *    - Check metadata for encryption status
+ *    - Encrypted: Reuse cached plaintext OR decrypt on demand
+ *    - Plaintext: Direct blob comparison
+ * 2. Fallback: Load profile trees + compare via content layer [O(profiles)]
  * 3. Adaptive: Linear search for small batches (< 20), hashmap for large batches
- * 4. Caching: Profile trees cached during batch operations to avoid redundant Git ops
+ * 4. Caching: Profile trees cached, metadata passed in, content cache optional
  */
 
 #ifndef DOTTA_SAFETY_H
@@ -33,6 +36,11 @@
 
 #include "base/error.h"
 #include "core/state.h"
+
+/* Forward declarations */
+typedef struct metadata metadata_t;
+typedef struct keymanager keymanager_t;
+typedef struct content_cache content_cache_t;
 
 /**
  * Safety violation details
@@ -83,29 +91,45 @@ typedef struct {
  *   For each file:
  *     1. Lookup state entry (adaptive: hashmap or linear search)
  *     2. If file doesn't exist on disk: SAFE (already deleted)
- *     3. If state->hash available: Try fast path (compare_blob_to_disk)
+ *     3. If state->hash available: Try fast path
+ *        - Check metadata for encryption status
+ *        - If encrypted: Use content cache (if available) or decrypt on demand
+ *        - Compare plaintext to plaintext (correct!)
  *     4. If fast path fails: Load profile tree and compare via tree entry
  *     5. If modified: Add violation with detailed reason
  *
  * Performance:
- *   - Best case (fast path succeeds): O(n) where n = number of files
+ *   - Best case (fast path + cache): O(n) where n = number of files
+ *   - With cache: Encrypted files use cached plaintext (no re-decryption)
+ *   - Without cache: Encrypted files decrypt on demand (slower but correct)
  *   - Worst case (all fallback): O(n + p*log(t)) where p = profiles, t = tree size
- *   - Typical: Fast path succeeds 99% of time (profile enabled, hash available)
+ *   - Typical: Fast path succeeds 99% of time (works for both encrypted and plaintext)
  *   - Adaptive strategy: Uses hashmap when path_count >= 20 OR path_count * state_count >= 400
  *     This prevents O(n*m) blowup (e.g., 19 paths × 10K state = 190K comparisons → hashmap)
  *
+ * Optimization Parameters:
+ *   - metadata: Pre-loaded metadata (avoids repeated Git operations). Can be NULL (graceful fallback).
+ *   - keymanager: Key manager for decryption. Can be NULL (uses global as fallback).
+ *   - cache: Content cache populated by preflight checks. Can be NULL (decrypts on demand).
+ *
  * Edge Cases Handled:
+ *   - Encrypted files: Transparently handled via content layer
  *   - Profile branch deleted → Explicit "profile_deleted" violation
  *   - Blob not found in repo → Falls back to tree loading
+ *   - Decryption failure → Conservative "cannot_verify" violation
  *   - Cannot read file → Conservative "cannot_verify" violation (blocks removal)
  *   - File already deleted → Skipped (safe to prune from state)
  *   - Permission denied → Treated as potentially modified (safe default)
+ *   - NULL optimization params → Graceful degradation (loads/decrypts as needed)
  *
  * @param repo Repository (must not be NULL)
  * @param state State for profile/storage_path lookups (must not be NULL)
  * @param filesystem_paths Array of filesystem paths to check (must not be NULL if path_count > 0)
  * @param path_count Number of paths to check
  * @param force If true, skip all checks and return empty result
+ * @param metadata Pre-loaded metadata for encryption detection (can be NULL)
+ * @param keymanager Key manager for decryption (can be NULL, uses global if needed)
+ * @param cache Content cache for performance (can be NULL, decrypts on demand)
  * @param out_result Safety result (must not be NULL, caller must free with safety_result_free)
  * @return NULL on success (check result->count for violations), error on fatal issues
  */
@@ -115,6 +139,9 @@ error_t *safety_check_removal(
     const char **filesystem_paths,
     size_t path_count,
     bool force,
+    const metadata_t *metadata,
+    keymanager_t *keymanager,
+    content_cache_t *cache,
     safety_result_t **out_result
 );
 

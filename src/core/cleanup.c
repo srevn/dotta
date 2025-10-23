@@ -19,6 +19,7 @@
 #include "core/state.h"
 #include "utils/array.h"
 #include "utils/hashmap.h"
+#include "utils/keymanager.h"
 
 /**
  * Directory pruning state
@@ -333,12 +334,18 @@ static error_t *prune_orphaned_files(
 
     /* Safety check: detect modified orphaned files */
     if (!force) {
+        /* Get keymanager for decryption (if needed) */
+        keymanager_t *keymanager = keymanager_get_global(NULL);
+
         err = safety_check_removal(
             repo,
             state,
             (const char **)to_remove->items,
             to_remove->count,
             force,
+            opts->enabled_metadata,  /* Pass pre-loaded metadata */
+            keymanager,              /* Pass keymanager for decryption */
+            opts->cache,             /* Pass content cache for performance */
             &result->safety_violations
         );
 

@@ -16,6 +16,7 @@
  * Optimization Strategy:
  * ─────────────────────
  * - Metadata: Only load from deployed-but-not-enabled profiles (no duplication)
+ * - Content cache: Reuse decrypted content from preflight checks (avoid re-decryption)
  * - Directory pruning: State tracking to avoid redundant filesystem checks
  * - Parent awareness: Reset parent directory state when child removed
  *
@@ -40,6 +41,9 @@
 #include "core/safety.h"
 #include "core/state.h"
 
+/* Forward declarations */
+typedef struct content_cache content_cache_t;
+
 /**
  * Cleanup operation options
  *
@@ -50,6 +54,7 @@ typedef struct {
     /* Pre-loaded data */
     const metadata_t *enabled_metadata;      /* Metadata from enabled profiles (can be NULL) */
     const profile_list_t *enabled_profiles;  /* Currently enabled profiles (can be NULL) */
+    content_cache_t *cache;                  /* Content cache for performance (can be NULL) */
 
     /* Control flags */
     bool verbose;                           /* Kept for consistency (unused in module) */

@@ -286,29 +286,65 @@ error_t *compare_buffer_to_disk(
             return NULL;
         }
 
-        /* Load disk file */
-        buffer_t *disk_content = NULL;
-        error_t *err = fs_read_file(disk_path, &disk_content);
-        if (err) {
-            return error_wrap(err, "Failed to read '%s'", disk_path);
+        /* Open disk file for optimized comparison */
+        int fd = open(disk_path, O_RDONLY);
+        if (fd < 0) {
+            return ERROR(ERR_FS, "Failed to open '%s': %s", disk_path, strerror(errno));
         }
 
-        /* Compare sizes (fast path) */
-        if (buffer_size(content) != buffer_size(disk_content)) {
+        /* Get disk file size */
+        struct stat st;
+        if (fstat(fd, &st) < 0) {
+            int saved_errno = errno;
+            close(fd);
+            return ERROR(ERR_FS, "Failed to stat '%s': %s", disk_path, strerror(saved_errno));
+        }
+
+        /* Compare sizes first - fast path */
+        if (buffer_size(content) != (size_t)st.st_size) {
             *result = CMP_DIFFERENT;
-            buffer_free(disk_content);
+            close(fd);
             return NULL;
         }
 
-        /* Compare content */
-        int cmp = memcmp(buffer_data(content), buffer_data(disk_content),
-                        buffer_size(content));
+        /* For non-empty files, compare content */
+        if (st.st_size > 0) {
+            /* Memory-map the disk file for efficient comparison */
+            void *disk_data = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+            if (disk_data == MAP_FAILED) {
+                /* mmap failed - fall back to buffered reading */
+                close(fd);
 
-        buffer_free(disk_content);
+                buffer_t *disk_content = NULL;
+                error_t *err = fs_read_file(disk_path, &disk_content);
+                if (err) {
+                    return error_wrap(err, "Failed to read '%s'", disk_path);
+                }
 
-        if (cmp != 0) {
-            *result = CMP_DIFFERENT;
-            return NULL;
+                int cmp = memcmp(buffer_data(content), buffer_data(disk_content),
+                                buffer_size(content));
+                buffer_free(disk_content);
+
+                if (cmp != 0) {
+                    *result = CMP_DIFFERENT;
+                    return NULL;
+                }
+            } else {
+                /* Compare content using memory-mapped data */
+                int cmp = memcmp(buffer_data(content), disk_data, buffer_size(content));
+
+                /* Cleanup */
+                munmap(disk_data, st.st_size);
+                close(fd);
+
+                if (cmp != 0) {
+                    *result = CMP_DIFFERENT;
+                    return NULL;
+                }
+            }
+        } else {
+            /* Empty files - content trivially equal */
+            close(fd);
         }
 
         /* Content equal - check executable bit */

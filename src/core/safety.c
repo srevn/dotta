@@ -21,7 +21,10 @@
 #include "base/gitops.h"
 #include "core/state.h"
 #include "infra/compare.h"
+#include "infra/content.h"
+#include "utils/buffer.h"
 #include "utils/hashmap.h"
+#include "utils/keymanager.h"
 
 /* Initial capacity for dynamic arrays */
 #define INITIAL_CAPACITY 16
@@ -315,10 +318,49 @@ static error_t *check_file_with_tree(
                            source_profile, SAFETY_REASON_FILE_REMOVED, false);
     }
 
-    /* Compare tree entry to disk */
-    compare_result_t cmp_result;
-    error_t *err = compare_tree_entry_to_disk(repo, tree_entry, filesystem_path, &cmp_result);
+    /* Get decrypted content from tree entry
+     *
+     * For encrypted files, this transparently decrypts the content so we can
+     * correctly compare it to the plaintext file deployed on the filesystem.
+     * For plaintext files, this simply returns the raw content.
+     *
+     * Error handling: Any failure (decryption, I/O) is treated as "cannot verify"
+     * to err on the side of caution (prevents removal of potentially modified files).
+     */
+    buffer_t *content = NULL;
+    git_filemode_t mode = git_tree_entry_filemode(tree_entry);
+    error_t *err = content_get_from_tree_entry(
+        repo,
+        tree_entry,
+        storage_path,
+        source_profile,
+        NULL,  /* No metadata available in safety checks */
+        keymanager_get_global(NULL),  /* Use global keymanager for decryption */
+        &content
+    );
 
+    if (err) {
+        /* Failed to get content - treat as "cannot verify"
+         *
+         * Possible causes:
+         * - Encrypted file but no passphrase available
+         * - Decryption failed (wrong passphrase, corrupted file)
+         * - I/O error reading blob from git
+         *
+         * Conservative approach: Block removal to prevent potential data loss.
+         */
+        error_free(err);
+        git_tree_entry_free(tree_entry);
+        return add_violation(result, filesystem_path, storage_path,
+                           source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
+    }
+
+    /* Compare decrypted content to disk file */
+    compare_result_t cmp_result;
+    err = compare_buffer_to_disk(content, filesystem_path, mode, &cmp_result);
+
+    /* Free resources immediately */
+    buffer_free(content);
     git_tree_entry_free(tree_entry);
 
     if (err) {

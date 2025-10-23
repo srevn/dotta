@@ -976,7 +976,14 @@ error_t *compare_generate_diff_from_buffer(
             err = generate_symlink_diff_from_buffer(content, disk_path, direction, &diff->diff_text);
         } else {
             /* Regular file diff - create temp blobs and use libgit2 */
-            err = generate_text_diff_from_buffer(repo, content, disk_path, path_label, direction, &diff->diff_text);
+            err = generate_text_diff_from_buffer(
+                repo,
+                content,
+                disk_path,
+                path_label,
+                direction,
+                &diff->diff_text
+            );
         }
 
         if (err) {

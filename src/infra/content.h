@@ -198,21 +198,6 @@ error_t *content_cache_get_from_blob_oid(
 );
 
 /**
- * Get cache statistics (for debugging)
- *
- * @param cache Content cache (must not be NULL)
- * @param out_hits Number of cache hits (optional, can be NULL)
- * @param out_misses Number of cache misses (optional, can be NULL)
- * @param out_decryptions Number of decryptions performed (optional, can be NULL)
- */
-void content_cache_get_stats(
-    const content_cache_t *cache,
-    size_t *out_hits,
-    size_t *out_misses,
-    size_t *out_decryptions
-);
-
-/**
  * Free content cache
  *
  * Frees cache and all cached buffers.

@@ -16,10 +16,12 @@
 #include "core/profiles.h"
 #include "core/safety.h"
 #include "core/state.h"
+#include "infra/content.h"
 #include "utils/array.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
 #include "utils/hooks.h"
+#include "utils/keymanager.h"
 #include "utils/output.h"
 
 /**
@@ -586,6 +588,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     profile_list_t *profiles = NULL;
     manifest_t *manifest = NULL;
     metadata_t *merged_metadata = NULL;
+    content_cache_t *cache = NULL;
     preflight_result_t *preflight = NULL;
     hook_context_t *hook_ctx = NULL;
     char *profiles_str = NULL;
@@ -762,6 +765,23 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         free(profile_metadata);
     }
 
+    /* Create content cache for batch operations (reused across preflight and deployment)
+     *
+     * Architecture: The cache is created once and shared between preflight and deploy phases.
+     * This provides significant performance benefits:
+     * - Preflight decrypts files for comparison (cache miss - populates cache)
+     * - Smart skip reuses cached content (cache hit - O(1) lookup)
+     * - Deploy reuses cached content (cache hit - O(1) lookup)
+     *
+     * Result: Each blob is decrypted at most once, saving 2-3x redundant decryptions.
+     */
+    keymanager_t *km = keymanager_get_global(NULL);
+    cache = content_cache_create(repo, km);
+    if (!cache) {
+        err = ERROR(ERR_MEMORY, "Failed to create content cache for deployment");
+        goto cleanup;
+    }
+
     /* Run pre-flight checks */
     output_print(out, OUTPUT_VERBOSE, "\nRunning pre-flight checks...\n");
 
@@ -773,7 +793,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         .skip_unchanged = opts->skip_unchanged
     };
 
-    err = deploy_preflight_check(repo, manifest, state, &deploy_opts, &preflight);
+    err = deploy_preflight_check(repo, manifest, state, &deploy_opts, cache, merged_metadata, &preflight);
     if (err) {
         err = error_wrap(err, "Pre-flight checks failed");
         goto cleanup;
@@ -866,7 +886,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         output_print(out, OUTPUT_VERBOSE, "\nDeploying files...\n");
     }
 
-    err = deploy_execute(repo, manifest, state, merged_metadata, &deploy_opts, &deploy_res);
+    err = deploy_execute(repo, manifest, state, merged_metadata, &deploy_opts, cache, &deploy_res);
     if (err) {
         if (deploy_res) {
             print_deploy_results(out, deploy_res, opts->verbose);
@@ -970,6 +990,7 @@ cleanup:
     if (preflight) preflight_result_free(preflight);
     if (profiles_str) free(profiles_str);
     if (hook_ctx) hook_context_free(hook_ctx);
+    if (cache) content_cache_free(cache);
     if (merged_metadata) metadata_free(merged_metadata);
     if (manifest) manifest_free(manifest);
     if (profiles) profile_list_free(profiles);

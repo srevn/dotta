@@ -357,27 +357,6 @@ error_t *content_cache_get_from_tree_entry(
     );
 }
 
-void content_cache_get_stats(
-    const content_cache_t *cache,
-    size_t *out_hits,
-    size_t *out_misses,
-    size_t *out_decryptions
-) {
-    if (!cache) {
-        return;
-    }
-
-    if (out_hits) {
-        *out_hits = cache->hits;
-    }
-    if (out_misses) {
-        *out_misses = cache->misses;
-    }
-    if (out_decryptions) {
-        *out_decryptions = cache->decryptions;
-    }
-}
-
 void content_cache_free(content_cache_t *cache) {
     if (!cache) {
         return;

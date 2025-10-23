@@ -6,7 +6,6 @@
 
 #include <errno.h>
 #include <git2.h>
-#include <hydrogen.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -20,7 +19,6 @@
 #include "utils/array.h"
 #include "utils/buffer.h"
 #include "utils/hashmap.h"
-#include "utils/keymanager.h"
 #include "utils/string.h"
 
 /**
@@ -31,11 +29,14 @@ error_t *deploy_preflight_check(
     const manifest_t *manifest,
     const state_t *state,
     const deploy_options_t *opts,
+    content_cache_t *cache,
+    const metadata_t *metadata,
     preflight_result_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(manifest);
     CHECK_NULL(opts);
+    CHECK_NULL(cache);
     CHECK_NULL(out);
 
     /* Declare all resources at top, initialized to NULL */
@@ -194,14 +195,32 @@ error_t *deploy_preflight_check(
 
         /* Check if file exists and is modified */
         if (fs_exists(entry->filesystem_path)) {
-            /* Compare with git */
-            compare_result_t cmp_result;
-            err = compare_tree_entry_to_disk(
-                repo,
+            /* Get decrypted content from cache for comparison
+             *
+             * This approach:
+             * 1. Gets plaintext content via cache (transparently decrypts if needed)
+             * 2. Compares plaintext to plaintext (correct comparison)
+             * 3. Populates cache for reuse by deploy phase (performance)
+             */
+            const buffer_t *content;
+            err = content_cache_get_from_tree_entry(
+                cache,
                 entry->entry,
-                entry->filesystem_path,
-                &cmp_result
+                entry->storage_path,
+                entry->source_profile->name,
+                metadata,
+                &content
             );
+
+            if (err) {
+                err = error_wrap(err, "Failed to get content for '%s'", entry->filesystem_path);
+                goto cleanup;
+            }
+
+            /* Compare decrypted content to disk file */
+            compare_result_t cmp_result;
+            git_filemode_t mode = git_tree_entry_filemode(entry->entry);
+            err = compare_buffer_to_disk(content, entry->filesystem_path, mode, &cmp_result);
 
             if (err) {
                 err = error_wrap(err, "Failed to compare '%s'", entry->filesystem_path);
@@ -242,17 +261,19 @@ cleanup:
  */
 error_t *deploy_file(
     git_repository *repo,
+    content_cache_t *cache,
     const file_entry_t *entry,
     const metadata_t *metadata,
     const deploy_options_t *opts
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(cache);
     CHECK_NULL(entry);
     CHECK_NULL(opts);
 
     /* Declare all resources at top, initialized to NULL */
     error_t *err = NULL;
-    buffer_t *content_buffer = NULL;
+    const buffer_t *content_buffer = NULL;  /* Borrowed from cache (const) */
     char *target_str = NULL;
     const metadata_entry_t *meta_entry = NULL;
 
@@ -325,19 +346,13 @@ error_t *deploy_file(
         goto cleanup;
     }
 
-    /* Handle regular files - use content layer for transparent decryption */
-
-    /* Get global keymanager for decryption (if needed) */
-    keymanager_t *km = keymanager_get_global(NULL);
-
-    /* Get content with transparent decryption via content layer */
-    err = content_get_from_tree_entry(
-        repo,
+    /* Handle regular files - get content from cache with transparent decryption */
+    err = content_cache_get_from_tree_entry(
+        cache,
         entry->entry,
         entry->storage_path,
         entry->source_profile ? entry->source_profile->name : "unknown",
         metadata,
-        km,
         &content_buffer
     );
 
@@ -450,7 +465,6 @@ error_t *deploy_file(
 
 cleanup:
     /* Free resources in reverse order */
-    if (content_buffer) buffer_free(content_buffer);
     if (target_str) free(target_str);
 
     return err;
@@ -588,11 +602,13 @@ error_t *deploy_execute(
     const state_t *state,
     const metadata_t *metadata,
     const deploy_options_t *opts,
+    content_cache_t *cache,
     deploy_result_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(manifest);
     CHECK_NULL(opts);
+    CHECK_NULL(cache);
     CHECK_NULL(out);
 
     /* Declare all resources at top, initialized to NULL */
@@ -705,19 +721,31 @@ error_t *deploy_execute(
                     should_skip = false;
                 } else {
                     /* Profile version unchanged - but user might have modified the file locally
-                     * → Do full content comparison to verify (safe, reliable)
-                     * This catches user modifications while maintaining correctness */
-                    compare_result_t cmp_result;
-                    error_t *cmp_err = compare_tree_entry_to_disk(
-                        repo,
+                     * Do full content comparison to verify (safe, reliable)
+                     * This catches user modifications while maintaining correctness
+                     *
+                     * Architecture: Use content cache for comparison to handle encrypted files.
+                     * Cache may already contain this content from preflight (cache hit = O(1)).
+                     */
+                    const buffer_t *content;
+                    error_t *cmp_err = content_cache_get_from_tree_entry(
+                        cache,
                         entry->entry,
-                        entry->filesystem_path,
-                        &cmp_result
+                        entry->storage_path,
+                        entry->source_profile->name,
+                        metadata,
+                        &content
                     );
 
-                    if (!cmp_err && cmp_result == CMP_EQUAL) {
-                        should_skip = true;
-                        skip_reason = "unchanged";
+                    if (!cmp_err) {
+                        compare_result_t cmp_result;
+                        git_filemode_t mode = git_tree_entry_filemode(entry->entry);
+                        cmp_err = compare_buffer_to_disk(content, entry->filesystem_path, mode, &cmp_result);
+
+                        if (!cmp_err && cmp_result == CMP_EQUAL) {
+                            should_skip = true;
+                            skip_reason = "unchanged";
+                        }
                     }
                     error_free(cmp_err); /* Ignore comparison errors, proceed with deployment */
                 }
@@ -735,7 +763,7 @@ error_t *deploy_execute(
         }
 
         /* Deploy the file */
-        err = deploy_file(repo, entry, metadata, opts);
+        err = deploy_file(repo, cache, entry, metadata, opts);
         if (err) {
             /* Record failure */
             string_array_push(result->failed, entry->filesystem_path);

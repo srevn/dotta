@@ -21,8 +21,9 @@
 #include "state.h"
 #include "types.h"
 
-/* Forward declaration */
+/* Forward declarations */
 typedef struct hashmap hashmap_t;
+typedef struct content_cache content_cache_t;
 
 /**
  * Ownership change entry
@@ -78,10 +79,16 @@ typedef struct {
  * - Permission issues
  * - Path validity
  *
+ * Uses content cache for transparent decryption when comparing encrypted files.
+ * This ensures preflight checks work correctly with encrypted content and
+ * populates the cache for subsequent deployment operations.
+ *
  * @param repo Repository (must not be NULL)
  * @param manifest Manifest to check (must not be NULL)
  * @param state Current state (can be NULL)
  * @param opts Deployment options (must not be NULL)
+ * @param cache Content cache for batch operations (must not be NULL)
+ * @param metadata Merged metadata for encryption detection (can be NULL)
  * @param out Pre-flight results (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
@@ -90,6 +97,8 @@ error_t *deploy_preflight_check(
     const manifest_t *manifest,
     const state_t *state,
     const deploy_options_t *opts,
+    content_cache_t *cache,
+    const metadata_t *metadata,
     preflight_result_t **out
 );
 
@@ -99,11 +108,15 @@ error_t *deploy_preflight_check(
  * Deploys all files in manifest to filesystem.
  * Updates state on success.
  *
+ * Uses content cache for smart skip optimization and transparent decryption.
+ * Cache reuse from preflight phase provides significant performance benefits.
+ *
  * @param repo Repository (must not be NULL)
  * @param manifest Manifest to deploy (must not be NULL)
  * @param state Current state for tracking deployed files (can be NULL)
  * @param metadata Merged metadata for permission restoration (can be NULL)
  * @param opts Deployment options (must not be NULL)
+ * @param cache Content cache for batch operations (must not be NULL)
  * @param out Deployment results (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
@@ -113,6 +126,7 @@ error_t *deploy_execute(
     const state_t *state,
     const metadata_t *metadata,
     const deploy_options_t *opts,
+    content_cache_t *cache,
     deploy_result_t **out
 );
 
@@ -120,10 +134,11 @@ error_t *deploy_execute(
  * Deploy single file
  *
  * Deploys a single file from the manifest to its target location.
- * Encryption is handled transparently by the content layer, which uses
- * the keymanager's profile key cache for performance.
+ * Encryption is handled transparently by the content cache, which reuses
+ * previously decrypted content from preflight/smart-skip for performance.
  *
  * @param repo Repository (must not be NULL)
+ * @param cache Content cache for batch operations (must not be NULL)
  * @param entry File entry to deploy (must not be NULL)
  * @param metadata Metadata for permission restoration (can be NULL)
  * @param opts Deployment options (must not be NULL)
@@ -131,6 +146,7 @@ error_t *deploy_execute(
  */
 error_t *deploy_file(
     git_repository *repo,
+    content_cache_t *cache,
     const file_entry_t *entry,
     const metadata_t *metadata,
     const deploy_options_t *opts

@@ -19,11 +19,11 @@
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
+#include "crypto/keymanager.h"
 #include "infra/compare.h"
 #include "infra/content.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
-#include "utils/keymanager.h"
 #include "utils/string.h"
 
 /**

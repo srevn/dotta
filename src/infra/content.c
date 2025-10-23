@@ -7,16 +7,16 @@
 #include "content.h"
 
 #include <git2.h>
+#include <hydrogen.h>
 #include <string.h>
 
-#include "base/encryption.h"
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "core/metadata.h"
-#include "hydrogen.h"
+#include "crypto/encryption.h"
+#include "crypto/keymanager.h"
 #include "utils/buffer.h"
 #include "utils/hashmap.h"
-#include "utils/keymanager.h"
 
 /**
  * Content cache structure
@@ -166,8 +166,6 @@ static error_t *get_plaintext_from_blob(
     return NULL;
 }
 
-/* ========== Simple API Implementation ========== */
-
 error_t *content_get_from_blob_oid(
     git_repository *repo,
     const git_oid *blob_oid,
@@ -228,8 +226,6 @@ error_t *content_get_from_tree_entry(
         repo, blob_oid, storage_path, profile_name, metadata, km, out_content
     );
 }
-
-/* ========== Cached API Implementation ========== */
 
 content_cache_t *content_cache_create(
     git_repository *repo,

@@ -14,12 +14,12 @@
 #include "base/gitops.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
+#include "crypto/keymanager.h"
 #include "infra/compare.h"
 #include "infra/content.h"
 #include "utils/array.h"
 #include "utils/buffer.h"
 #include "utils/config.h"
-#include "utils/keymanager.h"
 #include "utils/output.h"
 #include "utils/timeutil.h"
 

@@ -16,12 +16,12 @@
 #include "core/profiles.h"
 #include "core/safety.h"
 #include "core/state.h"
+#include "crypto/keymanager.h"
 #include "infra/content.h"
 #include "utils/array.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
 #include "utils/hooks.h"
-#include "utils/keymanager.h"
 #include "utils/output.h"
 
 /**

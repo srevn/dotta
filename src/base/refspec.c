@@ -2,7 +2,7 @@
  * refspec.c - Refspec parsing utilities
  */
 
-#include "refspec.h"
+#include "base/refspec.h"
 
 #include <stdlib.h>
 #include <string.h>

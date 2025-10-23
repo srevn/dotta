@@ -17,6 +17,8 @@
 #include "base/gitops.h"
 #include "core/ignore.h"
 #include "core/metadata.h"
+#include "crypto/keymanager.h"
+#include "crypto/policy.h"
 #include "infra/content.h"
 #include "infra/path.h"
 #include "infra/worktree.h"
@@ -24,9 +26,7 @@
 #include "utils/buffer.h"
 #include "utils/commit.h"
 #include "utils/config.h"
-#include "utils/encryption_policy.h"
 #include "utils/hooks.h"
-#include "utils/keymanager.h"
 #include "utils/output.h"
 #include "utils/string.h"
 

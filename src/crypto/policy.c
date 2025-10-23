@@ -1,16 +1,16 @@
 /**
- * encryption_policy.c - Centralized encryption policy decision logic
+ * policy.c - Centralized encryption policy decision logic
  *
  * Implements the single source of truth for encryption decisions.
  * Consolidates logic previously scattered across add.c, update.c, etc.
  */
 
-#include "utils/encryption_policy.h"
+#include "crypto/policy.h"
 
 #include "base/error.h"
 #include "core/metadata.h"
+#include "crypto/pattern.h"
 #include "utils/config.h"
-#include "utils/pattern.h"
 
 error_t *encryption_policy_should_encrypt(
     const dotta_config_t *config,

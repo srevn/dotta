@@ -2,9 +2,10 @@
  * keymanager.c - Encryption key management implementation
  */
 
-#include "utils/keymanager.h"
+#include "crypto/keymanager.h"
 
 #include <errno.h>
+#include <hydrogen.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,9 +13,8 @@
 #include <termios.h>
 #include <unistd.h>
 
-#include "base/encryption.h"
 #include "base/error.h"
-#include "hydrogen.h"
+#include "crypto/encryption.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
 

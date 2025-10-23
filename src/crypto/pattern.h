@@ -37,7 +37,7 @@
 #include <stdbool.h>
 
 #include "types.h"
-#include "config.h"
+#include "utils/config.h"
 
 /**
  * Check if path matches pattern using gitignore-style semantics

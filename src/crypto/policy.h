@@ -1,5 +1,5 @@
 /**
- * encryption_policy.h - Centralized encryption policy decision logic
+ * policy.h - Centralized encryption policy decision logic
  *
  * Single source of truth for determining whether a file should be encrypted.
  * Consolidates decision logic from add, update, and other commands to ensure
@@ -28,8 +28,8 @@
  *   // Now use should_encrypt to decide encryption...
  */
 
-#ifndef DOTTA_UTILS_ENCRYPTION_POLICY_H
-#define DOTTA_UTILS_ENCRYPTION_POLICY_H
+#ifndef DOTTA_CRYPTO_POLICY_H
+#define DOTTA_CRYPTO_POLICY_H
 
 #include <stdbool.h>
 
@@ -90,4 +90,4 @@ error_t *encryption_policy_should_encrypt(
     bool *out_should_encrypt
 );
 
-#endif /* DOTTA_UTILS_ENCRYPTION_POLICY_H */
+#endif /* DOTTA_CRYPTO_POLICY_H */

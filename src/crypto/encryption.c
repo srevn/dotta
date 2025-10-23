@@ -2,12 +2,12 @@
  * encryption.c - Cryptographic primitives implementation
  */
 
-#include "base/encryption.h"
+#include "crypto/encryption.h"
 
+#include <hydrogen.h>
 #include <string.h>
 
 #include "base/error.h"
-#include "hydrogen.h"
 #include "utils/buffer.h"
 #include "utils/hashmap.h"
 

@@ -10,9 +10,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "base/encryption.h"
 #include "base/error.h"
 #include "base/gitops.h"
+#include "base/refspec.h"
 #include "cmds/add.h"
 #include "cmds/apply.h"
 #include "cmds/bootstrap.h"
@@ -32,10 +32,10 @@
 #include "cmds/status.h"
 #include "cmds/sync.h"
 #include "cmds/update.h"
+#include "crypto/encryption.h"
+#include "crypto/keymanager.h"
 #include "types.h"
 #include "utils/help.h"
-#include "utils/keymanager.h"
-#include "utils/refspec.h"
 #include "utils/repo.h"
 #include "utils/string.h"
 

@@ -23,11 +23,11 @@
 #include "base/gitops.h"
 #include "core/metadata.h"
 #include "core/state.h"
+#include "crypto/keymanager.h"
 #include "infra/compare.h"
 #include "infra/content.h"
 #include "utils/buffer.h"
 #include "utils/hashmap.h"
-#include "utils/keymanager.h"
 
 /* Initial capacity for dynamic arrays */
 #define INITIAL_CAPACITY 16

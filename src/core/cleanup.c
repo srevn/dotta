@@ -17,9 +17,9 @@
 #include "core/profiles.h"
 #include "core/safety.h"
 #include "core/state.h"
+#include "crypto/keymanager.h"
 #include "utils/array.h"
 #include "utils/hashmap.h"
-#include "utils/keymanager.h"
 
 /**
  * Directory pruning state

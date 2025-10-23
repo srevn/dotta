@@ -5,7 +5,7 @@
  * Used for auto-encrypt patterns and can be reused for other pattern matching needs.
  */
 
-#include "utils/pattern.h"
+#include "crypto/pattern.h"
 
 #include <fnmatch.h>
 #include <string.h>

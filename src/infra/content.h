@@ -223,4 +223,90 @@ void content_cache_get_stats(
  */
 void content_cache_free(content_cache_t *cache);
 
+/**
+ * Store buffer to git blob with optional encryption
+ *
+ * This is the WRITE counterpart to content_get_from_blob_oid().
+ * Pure infrastructure function - caller decides policy (should_encrypt).
+ *
+ * Process:
+ * 1. If should_encrypt=true:
+ *    a. Get profile key from keymanager (uses cache for performance)
+ *    b. Encrypt buffer using profile key
+ *    c. Create git blob from encrypted data
+ * 2. If should_encrypt=false:
+ *    a. Create git blob from plaintext data directly
+ * 3. Return blob OID
+ *
+ * This function is PURE MECHANISM - it doesn't make policy decisions.
+ * The caller must use encryption_policy_should_encrypt() to determine
+ * the should_encrypt parameter.
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param plaintext Plaintext buffer to store (must not be NULL)
+ * @param storage_path Storage path (used as AAD for encryption, must not be NULL)
+ * @param profile_name Profile name (for key derivation, must not be NULL)
+ * @param km Key manager (for profile key derivation, can be NULL if should_encrypt=false)
+ * @param should_encrypt Policy decision from caller (true = encrypt, false = plaintext)
+ * @param out_oid Output OID of created blob (must not be NULL)
+ * @return Error or NULL on success
+ *
+ * Errors:
+ * - ERR_CRYPTO: Encryption requested but keymanager unavailable
+ * - ERR_CRYPTO: Encryption failed
+ * - ERR_GIT: Git blob creation failed
+ * - ERR_INVALID_ARG: Required arguments are NULL
+ */
+error_t *content_store_to_blob(
+    git_repository *repo,
+    const buffer_t *plaintext,
+    const char *storage_path,
+    const char *profile_name,
+    keymanager_t *km,
+    bool should_encrypt,
+    git_oid *out_oid
+);
+
+/**
+ * Store file to worktree with optional encryption
+ *
+ * High-level helper that combines: read file → encrypt (if needed) → write to worktree
+ * This encapsulates the common pattern used in add/update commands.
+ *
+ * Process:
+ * 1. Read file from filesystem
+ * 2. If should_encrypt=true:
+ *    a. Get profile key from keymanager
+ *    b. Encrypt content
+ *    c. Write encrypted content to worktree path
+ * 3. If should_encrypt=false:
+ *    a. Write plaintext content to worktree path
+ *
+ * This is a convenience wrapper - caller still decides policy via should_encrypt.
+ * Use encryption_policy_should_encrypt() to determine the should_encrypt parameter.
+ *
+ * @param filesystem_path Path to source file on filesystem (must not be NULL)
+ * @param worktree_path Destination path in worktree (must not be NULL)
+ * @param storage_path Storage path in profile (for encryption AAD, must not be NULL)
+ * @param profile_name Profile name (for key derivation, must not be NULL)
+ * @param km Key manager (can be NULL if should_encrypt=false)
+ * @param should_encrypt Policy decision from caller (true = encrypt, false = plaintext)
+ * @return Error or NULL on success
+ *
+ * Errors:
+ * - ERR_IO: Failed to read source file
+ * - ERR_CRYPTO: Encryption requested but keymanager unavailable
+ * - ERR_CRYPTO: Encryption failed
+ * - ERR_IO: Failed to write worktree file
+ * - ERR_INVALID_ARG: Required arguments are NULL
+ */
+error_t *content_store_file_to_worktree(
+    const char *filesystem_path,
+    const char *worktree_path,
+    const char *storage_path,
+    const char *profile_name,
+    keymanager_t *km,
+    bool should_encrypt
+);
+
 #endif /* DOTTA_INFRA_CONTENT_H */

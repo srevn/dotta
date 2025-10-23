@@ -11,6 +11,7 @@
 
 #include "base/encryption.h"
 #include "base/error.h"
+#include "base/filesystem.h"
 #include "core/metadata.h"
 #include "hydrogen.h"
 #include "utils/buffer.h"
@@ -399,4 +400,145 @@ void content_cache_free(content_cache_t *cache) {
     }
 
     free(cache);
+}
+
+error_t *content_store_to_blob(
+    git_repository *repo,
+    const buffer_t *plaintext,
+    const char *storage_path,
+    const char *profile_name,
+    keymanager_t *km,
+    bool should_encrypt,
+    git_oid *out_oid
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(plaintext);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(profile_name);
+    CHECK_NULL(out_oid);
+
+    const uint8_t *data = buffer_data(plaintext);
+    size_t size = buffer_size(plaintext);
+    buffer_t *ciphertext = NULL;
+
+    /* Handle encryption if requested */
+    if (should_encrypt) {
+        if (!km) {
+            return ERROR(ERR_CRYPTO,
+                "Encryption requested but no keymanager provided");
+        }
+
+        /* Get profile key (cached in keymanager for performance) */
+        uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
+        error_t *err = keymanager_get_profile_key(km, profile_name, profile_key);
+        if (err) {
+            return error_wrap(err, "Failed to get profile key for '%s'", profile_name);
+        }
+
+        /* Encrypt */
+        err = encryption_encrypt(data, size, profile_key, storage_path, &ciphertext);
+
+        /* Clear profile key immediately (defense in depth) */
+        hydro_memzero(profile_key, sizeof(profile_key));
+
+        if (err) {
+            return error_wrap(err, "Failed to encrypt '%s'", storage_path);
+        }
+
+        /* Use encrypted data */
+        data = buffer_data(ciphertext);
+        size = buffer_size(ciphertext);
+    }
+
+    /* Create git blob */
+    int ret = git_blob_create_from_buffer(out_oid, repo, data, size);
+
+    /* Free ciphertext if we allocated it */
+    if (ciphertext) {
+        buffer_free(ciphertext);
+    }
+
+    if (ret < 0) {
+        const git_error *git_err = git_error_last();
+        return ERROR(ERR_GIT, "Failed to create git blob: %s",
+                    git_err ? git_err->message : "unknown error");
+    }
+
+    return NULL;
+}
+
+error_t *content_store_file_to_worktree(
+    const char *filesystem_path,
+    const char *worktree_path,
+    const char *storage_path,
+    const char *profile_name,
+    keymanager_t *km,
+    bool should_encrypt
+) {
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(worktree_path);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(profile_name);
+
+    /* Step 1: Read file from filesystem */
+    buffer_t *content = NULL;
+    error_t *err = fs_read_file(filesystem_path, &content);
+    if (err) {
+        return error_wrap(err, "Failed to read file '%s'", filesystem_path);
+    }
+
+    /* Step 2: Encrypt if requested */
+    buffer_t *data_to_write = content;  /* Default: write plaintext */
+    buffer_t *ciphertext = NULL;
+
+    if (should_encrypt) {
+        if (!km) {
+            buffer_free(content);
+            return ERROR(ERR_CRYPTO,
+                "Encryption requested but no keymanager provided");
+        }
+
+        /* Get profile key (cached in keymanager) */
+        uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
+        err = keymanager_get_profile_key(km, profile_name, profile_key);
+        if (err) {
+            buffer_free(content);
+            return error_wrap(err, "Failed to get profile key for '%s'", profile_name);
+        }
+
+        /* Encrypt */
+        err = encryption_encrypt(
+            buffer_data(content),
+            buffer_size(content),
+            profile_key,
+            storage_path,
+            &ciphertext
+        );
+
+        /* Clear profile key immediately */
+        hydro_memzero(profile_key, sizeof(profile_key));
+
+        if (err) {
+            buffer_free(content);
+            return error_wrap(err, "Failed to encrypt '%s'", storage_path);
+        }
+
+        /* Use encrypted data for writing */
+        data_to_write = ciphertext;
+    }
+
+    /* Step 3: Write to worktree */
+    err = fs_write_file(worktree_path, data_to_write);
+
+    /* Cleanup */
+    buffer_free(content);
+    if (ciphertext) {
+        buffer_free(ciphertext);
+    }
+
+    if (err) {
+        return error_wrap(err, "Failed to write to worktree '%s'", worktree_path);
+    }
+
+    return NULL;
 }

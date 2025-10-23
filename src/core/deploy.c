@@ -12,11 +12,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "base/encryption.h"
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "core/metadata.h"
 #include "infra/compare.h"
+#include "infra/content.h"
 #include "utils/array.h"
 #include "utils/buffer.h"
 #include "utils/hashmap.h"
@@ -244,8 +244,7 @@ error_t *deploy_file(
     git_repository *repo,
     const file_entry_t *entry,
     const metadata_t *metadata,
-    const deploy_options_t *opts,
-    const hashmap_t *profile_keys
+    const deploy_options_t *opts
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(entry);
@@ -253,9 +252,8 @@ error_t *deploy_file(
 
     /* Declare all resources at top, initialized to NULL */
     error_t *err = NULL;
-    git_blob *blob = NULL;
+    buffer_t *content_buffer = NULL;
     char *target_str = NULL;
-    buffer_t *decrypted_buffer = NULL;
     const metadata_entry_t *meta_entry = NULL;
 
     if (opts->dry_run) {
@@ -276,27 +274,32 @@ error_t *deploy_file(
         goto cleanup;
     }
 
-    /* Get blob */
-    const git_oid *oid = git_tree_entry_id(entry->entry);
-    int git_err = git_blob_lookup(&blob, repo, oid);
-    if (git_err < 0) {
-        err = error_from_git(git_err);
-        goto cleanup;
-    }
-
-    /* Handle symlinks */
+    /* Handle symlinks - these are never encrypted, so handle separately */
     if (mode == GIT_FILEMODE_LINK) {
+        /* For symlinks, we need to load the blob directly since content layer
+         * is designed for regular files with potential encryption */
+        git_blob *blob = NULL;
+        const git_oid *oid = git_tree_entry_id(entry->entry);
+        int git_err = git_blob_lookup(&blob, repo, oid);
+        if (git_err < 0) {
+            err = error_from_git(git_err);
+            goto cleanup;
+        }
+
         const char *target = (const char *)git_blob_rawcontent(blob);
         size_t target_len = git_blob_rawsize(blob);
 
         /* Null-terminate target */
         target_str = malloc(target_len + 1);
         if (!target_str) {
+            git_blob_free(blob);
             err = ERROR(ERR_MEMORY, "Failed to allocate symlink target");
             goto cleanup;
         }
         memcpy(target_str, target, target_len);
         target_str[target_len] = '\0';
+
+        git_blob_free(blob);
 
         /* Remove existing file/symlink */
         if (fs_exists(entry->filesystem_path)) {
@@ -322,9 +325,30 @@ error_t *deploy_file(
         goto cleanup;
     }
 
-    /* Handle regular files */
-    const void *content = git_blob_rawcontent(blob);
-    git_object_size_t size = git_blob_rawsize(blob);
+    /* Handle regular files - use content layer for transparent decryption */
+
+    /* Get global keymanager for decryption (if needed) */
+    keymanager_t *km = keymanager_get_global(NULL);
+
+    /* Get content with transparent decryption via content layer */
+    err = content_get_from_tree_entry(
+        repo,
+        entry->entry,
+        entry->storage_path,
+        entry->source_profile ? entry->source_profile->name : "unknown",
+        metadata,
+        km,
+        &content_buffer
+    );
+
+    if (err) {
+        err = error_wrap(err, "Failed to get content for '%s'", entry->storage_path);
+        goto cleanup;
+    }
+
+    /* Get content pointer and size from buffer */
+    const unsigned char *content = buffer_data(content_buffer);
+    size_t size = buffer_size(content_buffer);
 
     /* Determine permissions - use metadata if available, otherwise fallback to git mode */
     mode_t file_mode;
@@ -348,65 +372,6 @@ error_t *deploy_file(
     } else {
         /* No metadata available - use git mode */
         file_mode = (mode == GIT_FILEMODE_BLOB_EXECUTABLE) ? 0755 : 0644;
-    }
-
-    /* DECRYPTION: If file is encrypted in metadata, decrypt before deployment */
-    if (meta_entry && meta_entry->encrypted) {
-        /* Verify file is actually encrypted */
-        if (!encryption_is_encrypted((const unsigned char *)content, (size_t)size)) {
-            err = ERROR(ERR_STATE_INVALID,
-                        "Metadata indicates file is encrypted, but content is not encrypted: %s",
-                        entry->storage_path);
-            goto cleanup;
-        }
-
-        /* CRITICAL: source_profile must not be NULL for encrypted files
-         * Using a fallback like "unknown" would violate per-profile key isolation
-         * and cause decryption failures or incorrect key derivation */
-        if (!entry->source_profile || !entry->source_profile->name) {
-            err = ERROR(ERR_INTERNAL, "Cannot decrypt %s: source profile is NULL (this is a bug)",
-                        entry->storage_path);
-            goto cleanup;
-        }
-
-        /* Look up pre-derived profile key from hashmap */
-        const char *profile_name = entry->source_profile->name;
-        const uint8_t *profile_key = NULL;
-
-        if (profile_keys) {
-            profile_key = (const uint8_t *)hashmap_get(profile_keys, profile_name);
-        }
-
-        if (!profile_key) {
-            err = ERROR(ERR_INTERNAL,
-                        "No profile key found for encrypted file %s (profile: %s). "
-                        "This is a bug - key should have been pre-derived.",
-                        entry->storage_path, profile_name);
-            goto cleanup;
-        }
-
-        /* Decrypt content using pre-derived key and storage path */
-        err = encryption_decrypt(
-            (const unsigned char *)content,
-            (size_t)size,
-            profile_key,
-            entry->storage_path,
-            &decrypted_buffer
-        );
-
-        if (err) {
-            err = error_wrap(err, "Failed to decrypt %s (wrong passphrase or corrupted file?)",
-                            entry->storage_path);
-            goto cleanup;
-        }
-
-        /* Update content pointer and size to use decrypted data */
-        content = buffer_data(decrypted_buffer);
-        size = buffer_size(decrypted_buffer);
-
-        if (opts->verbose) {
-            printf("Decrypted: %s\n", entry->storage_path);
-        }
     }
 
     /* Determine ownership for the file based on prefix
@@ -485,25 +450,10 @@ error_t *deploy_file(
 
 cleanup:
     /* Free resources in reverse order */
-    if (decrypted_buffer) buffer_free(decrypted_buffer);
+    if (content_buffer) buffer_free(content_buffer);
     if (target_str) free(target_str);
-    if (blob) git_blob_free(blob);
 
     return err;
-}
-
-/**
- * Cleanup callback for securely clearing profile keys from hashmap
- */
-static bool cleanup_profile_key(const char *key, void *value, void *user_data) {
-    (void)key;         /* unused */
-    (void)user_data;   /* unused */
-
-    if (value) {
-        hydro_memzero(value, ENCRYPTION_PROFILE_KEY_SIZE);
-        free(value);
-    }
-    return true;  /* continue iteration */
 }
 
 /**
@@ -651,8 +601,6 @@ error_t *deploy_execute(
     hashmap_t *state_map = NULL;
     state_file_entry_t *state_entries = NULL;
     size_t state_count = 0;
-    hashmap_t *profile_keys = NULL;
-    string_array_t *unique_profiles = NULL;
 
     /* Allocate result */
     result = calloc(1, sizeof(deploy_result_t));
@@ -679,105 +627,6 @@ error_t *deploy_execute(
         err = error_wrap(err, "Failed to deploy tracked directories");
         goto cleanup;
     }
-
-    /* PRE-DERIVE PROFILE KEYS: Collect unique profiles and derive keys once
-     * This optimization avoids redundant key derivation per encrypted file */
-    unique_profiles = string_array_create();
-    if (!unique_profiles) {
-        err = ERROR(ERR_MEMORY, "Failed to create unique profiles array");
-        goto cleanup;
-    }
-
-    /* Collect unique profiles from encrypted files */
-    for (size_t i = 0; i < manifest->count; i++) {
-        const file_entry_t *entry = &manifest->entries[i];
-
-        /* Check if file is encrypted via metadata */
-        const metadata_entry_t *meta_entry = NULL;
-        if (metadata) {
-            error_t *meta_err = metadata_get_entry(metadata, entry->storage_path, &meta_entry);
-            if (meta_err) {
-                error_free(meta_err);
-                meta_entry = NULL;
-            }
-        }
-
-        /* Only process encrypted files */
-        if (meta_entry && meta_entry->encrypted) {
-            const char *profile = entry->source_profile ? entry->source_profile->name : NULL;
-            if (profile && !string_array_contains(unique_profiles, profile)) {
-                err = string_array_push(unique_profiles, profile);
-                if (err) {
-                    err = error_wrap(err, "Failed to track unique profile");
-                    goto cleanup;
-                }
-            }
-        }
-    }
-
-    /* Derive keys for each unique profile */
-    if (string_array_size(unique_profiles) > 0) {
-        profile_keys = hashmap_create(string_array_size(unique_profiles));
-        if (!profile_keys) {
-            err = ERROR(ERR_MEMORY, "Failed to create profile keys map");
-            goto cleanup;
-        }
-
-        /* Get master key once */
-        keymanager_t *key_mgr = keymanager_get_global(NULL);
-        if (!key_mgr) {
-            err = ERROR(ERR_INTERNAL, "Failed to get encryption key manager");
-            goto cleanup;
-        }
-
-        uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE];
-        err = keymanager_get_key(key_mgr, master_key);
-        if (err) {
-            hydro_memzero(master_key, sizeof(master_key));
-            err = error_wrap(err, "Failed to get encryption key");
-            goto cleanup;
-        }
-
-        /* Derive key for each unique profile */
-        for (size_t i = 0; i < string_array_size(unique_profiles); i++) {
-            const char *profile = string_array_get(unique_profiles, i);
-
-            /* Allocate profile key on heap for hashmap storage */
-            uint8_t *profile_key = malloc(ENCRYPTION_PROFILE_KEY_SIZE);
-            if (!profile_key) {
-                hydro_memzero(master_key, sizeof(master_key));
-                err = ERROR(ERR_MEMORY, "Failed to allocate profile key");
-                goto cleanup;
-            }
-
-            /* Derive profile key */
-            err = encryption_derive_profile_key(master_key, profile, profile_key);
-            if (err) {
-                hydro_memzero(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
-                free(profile_key);
-                hydro_memzero(master_key, sizeof(master_key));
-                err = error_wrap(err, "Failed to derive profile key for: %s", profile);
-                goto cleanup;
-            }
-
-            /* Store in hashmap */
-            err = hashmap_set(profile_keys, profile, profile_key);
-            if (err) {
-                hydro_memzero(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
-                free(profile_key);
-                hydro_memzero(master_key, sizeof(master_key));
-                err = error_wrap(err, "Failed to store profile key");
-                goto cleanup;
-            }
-        }
-
-        /* Clear master key immediately after all derivations */
-        hydro_memzero(master_key, sizeof(master_key));
-    }
-
-    /* Free unique profiles array - no longer needed */
-    string_array_free(unique_profiles);
-    unique_profiles = NULL;
 
     /* Load state entries once for O(1) lookups during smart skip (avoid O(N) database queries) */
     if (state && opts->skip_unchanged) {
@@ -886,7 +735,7 @@ error_t *deploy_execute(
         }
 
         /* Deploy the file */
-        err = deploy_file(repo, entry, metadata, opts, profile_keys);
+        err = deploy_file(repo, entry, metadata, opts);
         if (err) {
             /* Record failure */
             string_array_push(result->failed, entry->filesystem_path);
@@ -912,18 +761,6 @@ error_t *deploy_execute(
 
 cleanup:
     /* Free resources in reverse order of allocation */
-
-    /* Securely clear and free profile keys */
-    if (profile_keys) {
-        hashmap_foreach(profile_keys, cleanup_profile_key, NULL);
-        hashmap_free(profile_keys, NULL);  /* NULL because we already freed values */
-    }
-
-    /* Free unique profiles array if still allocated */
-    if (unique_profiles) {
-        string_array_free(unique_profiles);
-    }
-
     if (state_map) hashmap_free(state_map, NULL);
     if (state_entries) state_free_all_files(state_entries, state_count);
     if (result) deploy_result_free(result);

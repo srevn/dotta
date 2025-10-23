@@ -119,19 +119,21 @@ error_t *deploy_execute(
 /**
  * Deploy single file
  *
+ * Deploys a single file from the manifest to its target location.
+ * Encryption is handled transparently by the content layer, which uses
+ * the keymanager's profile key cache for performance.
+ *
  * @param repo Repository (must not be NULL)
  * @param entry File entry to deploy (must not be NULL)
  * @param metadata Metadata for permission restoration (can be NULL)
  * @param opts Deployment options (must not be NULL)
- * @param profile_keys Pre-derived profile keys (profile_name -> uint8_t[32]) (can be NULL if no encryption)
  * @return Error or NULL on success
  */
 error_t *deploy_file(
     git_repository *repo,
     const file_entry_t *entry,
     const metadata_t *metadata,
-    const deploy_options_t *opts,
-    const hashmap_t *profile_keys
+    const deploy_options_t *opts
 );
 
 /**

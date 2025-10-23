@@ -11,7 +11,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "base/encryption.h"
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "base/gitops.h"

@@ -123,22 +123,11 @@ static error_t *get_plaintext_from_blob(
                 storage_path);
         }
 
-        /* Get master key */
-        uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE];
-        error_t *err = keymanager_get_key(km, master_key);
-        if (err) {
-            return error_wrap(err, "Failed to get encryption key");
-        }
-
-        /* Derive profile key */
+        /* Get profile key */
         uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
-        err = encryption_derive_profile_key(master_key, profile_name, profile_key);
-
-        /* Clear master key immediately (security) */
-        hydro_memzero(master_key, sizeof(master_key));
-
+        error_t *err = keymanager_get_profile_key(km, profile_name, profile_key);
         if (err) {
-            return error_wrap(err, "Failed to derive profile key for '%s'", profile_name);
+            return error_wrap(err, "Failed to get profile key for '%s'", profile_name);
         }
 
         /* Decrypt */

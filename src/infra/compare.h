@@ -1,13 +1,19 @@
 /**
  * compare.h - File comparison engine
  *
- * Compares git objects (blobs, trees) with filesystem state.
+ * Compares buffer content with filesystem state.
+ *
+ * This module works exclusively with plaintext buffers provided by the
+ * content layer (src/infra/content.h), which handles transparent decryption
+ * of encrypted files. The compare module has no knowledge of encryption
+ * or git internals - it simply compares buffers to disk files.
  *
  * Design principles:
- * - Efficient comparison (use checksums when possible)
+ * - Pure buffer-based operations
  * - Handle all file types (regular, symlink)
- * - Compare permissions accurately
+ * - Compare permissions accurately (executable bit)
  * - Clear comparison results
+ * - Integration with content layer for encrypted files
  */
 
 #ifndef DOTTA_COMPARE_H
@@ -36,40 +42,6 @@ typedef struct {
     compare_result_t status; /* Comparison status */
     char *diff_text;         /* Diff output (can be NULL) */
 } file_diff_t;
-
-/**
- * Compare blob content with disk file
- *
- * @param repo Repository (must not be NULL)
- * @param blob_id Blob OID (must not be NULL)
- * @param disk_path Disk file path (must not be NULL)
- * @param result Comparison result (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *compare_blob_to_disk(
-    git_repository *repo,
-    const git_oid *blob_id,
-    const char *disk_path,
-    compare_result_t *result
-);
-
-/**
- * Compare tree entry with disk file
- *
- * Handles all file types and permissions.
- *
- * @param repo Repository (must not be NULL)
- * @param entry Tree entry (must not be NULL)
- * @param disk_path Disk file path (must not be NULL)
- * @param result Comparison result (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *compare_tree_entry_to_disk(
-    git_repository *repo,
-    const git_tree_entry *entry,
-    const char *disk_path,
-    compare_result_t *result
-);
 
 /**
  * Compare buffer content to disk file
@@ -108,33 +80,14 @@ typedef enum {
 } compare_direction_t;
 
 /**
- * Generate diff between tree entry and disk file
- *
- * @param repo Repository (must not be NULL)
- * @param entry Tree entry (must not be NULL)
- * @param disk_path Disk file path (must not be NULL)
- * @param direction Diff direction
- * @param out Diff information (must not be NULL, caller must free)
- * @return Error or NULL on success
- */
-error_t *compare_generate_diff(
-    git_repository *repo,
-    const git_tree_entry *entry,
-    const char *disk_path,
-    compare_direction_t direction,
-    file_diff_t **out
-);
-
-/**
  * Generate diff from buffer content to disk file
  *
- * Buffer-based variant for use with decrypted content from the content layer.
- * This function creates temporary git blobs from the buffer to leverage
+ * Works with decrypted content from the content layer.
+ * Creates temporary git blobs from the buffer to leverage
  * libgit2's diff generation capabilities.
  *
- * Use case: Encrypted files that have been decrypted by the content layer
- * can use this function instead of compare_generate_diff() to generate
- * diffs without exposing encrypted content.
+ * This function is designed for use with the content layer, which
+ * transparently handles encryption/decryption of file content.
  *
  * @param repo Repository (must not be NULL)
  * @param content Content buffer (e.g., decrypted content, must not be NULL)
@@ -145,7 +98,7 @@ error_t *compare_generate_diff(
  * @param out Diff information (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *compare_generate_diff_from_buffer(
+error_t *compare_generate_diff(
     git_repository *repo,
     const buffer_t *content,
     const char *disk_path,

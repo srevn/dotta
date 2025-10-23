@@ -272,7 +272,7 @@ static error_t *show_file_diff(
     /* Convert diff direction to compare direction */
     compare_direction_t cmp_dir = (direction == DIFF_UPSTREAM) ?
                                    CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM;
-    err = compare_generate_diff_from_buffer(
+    err = compare_generate_diff(
         repo,
         content,
         entry->filesystem_path,

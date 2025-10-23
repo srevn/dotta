@@ -72,6 +72,34 @@ error_t *compare_tree_entry_to_disk(
 );
 
 /**
+ * Compare buffer content to disk file
+ *
+ * Pure function with zero git/encryption knowledge.
+ * Compares plaintext buffer to file on disk.
+ *
+ * Tests:
+ * 1. File exists on disk
+ * 2. File type matches (regular/symlink)
+ * 3. Content matches
+ * 4. Mode matches (executable bit)
+ *
+ * This function is designed to work with decrypted content from the
+ * content layer, enabling transparent comparison of encrypted files.
+ *
+ * @param content Buffer containing expected content (must not be NULL)
+ * @param disk_path Path to file on disk (must not be NULL)
+ * @param expected_mode Expected git filemode (for type/mode checking)
+ * @param result Comparison result (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *compare_buffer_to_disk(
+    const buffer_t *content,
+    const char *disk_path,
+    git_filemode_t expected_mode,
+    compare_result_t *result
+);
+
+/**
  * Diff direction (forward declaration from diff.h)
  */
 typedef enum {

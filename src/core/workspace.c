@@ -20,8 +20,10 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/compare.h"
+#include "infra/content.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
+#include "utils/keymanager.h"
 #include "utils/string.h"
 
 /**
@@ -40,6 +42,11 @@ struct workspace {
     hashmap_t *manifest_index;     /* Maps filesystem_path -> file_entry_t* */
     hashmap_t *profile_index;      /* Maps profile_name -> profile_t* (for O(1) lookup) */
 
+    /* Encryption and caching infrastructure */
+    keymanager_t *keymanager;      /* Borrowed from global */
+    content_cache_t *content_cache; /* Owned - caches decrypted content */
+    hashmap_t *metadata_cache;     /* Owned - maps profile_name -> metadata_t* */
+
     /* Divergence tracking */
     workspace_file_t *diverged;    /* Array of diverged files */
     size_t diverged_count;
@@ -53,6 +60,26 @@ struct workspace {
     workspace_status_t status;
     bool status_computed;
 };
+
+/**
+ * Get cached metadata for profile
+ *
+ * Helper function to retrieve metadata from the workspace cache.
+ * Returns NULL if profile has no metadata (non-fatal).
+ *
+ * @param ws Workspace (must not be NULL)
+ * @param profile_name Profile name (must not be NULL)
+ * @return Metadata or NULL if not available
+ */
+static const metadata_t *ws_get_metadata(
+    const workspace_t *ws,
+    const char *profile_name
+) {
+    if (!ws || !ws->metadata_cache || !profile_name) {
+        return NULL;
+    }
+    return hashmap_get(ws->metadata_cache, profile_name);
+}
 
 /**
  * Create empty workspace
@@ -245,17 +272,31 @@ static error_t *analyze_file_divergence(
     }
     /* Case 3: File deployed and exists - check for modifications */
     else if (in_state && on_filesystem) {
-        compare_result_t cmp_result;
-        error_t *err = compare_tree_entry_to_disk(
-            ws->repo,
+        /* Get plaintext content (cached, automatic decryption) */
+        const buffer_t *content = NULL;
+        error_t *err = content_cache_get_from_tree_entry(
+            ws->content_cache,
             manifest_entry->entry,
-            fs_path,
-            &cmp_result
+            manifest_entry->storage_path,
+            manifest_entry->source_profile->name,
+            ws_get_metadata(ws, manifest_entry->source_profile->name),
+            &content
         );
+
+        if (err) {
+            return error_wrap(err, "Failed to get content for '%s'", fs_path);
+        }
+
+        /* Compare buffer to disk (pure function) */
+        git_filemode_t mode = git_tree_entry_filemode(manifest_entry->entry);
+        compare_result_t cmp_result;
+        err = compare_buffer_to_disk(content, fs_path, mode, &cmp_result);
 
         if (err) {
             return error_wrap(err, "Failed to compare '%s'", fs_path);
         }
+
+        /* Don't free content - cache owns it! */
 
         switch (cmp_result) {
             case CMP_EQUAL:
@@ -691,6 +732,45 @@ error_t *workspace_load(
         return err;
     }
 
+    /* Initialize encryption infrastructure */
+    ws->keymanager = keymanager_get_global(config);
+    if (!ws->keymanager) {
+        workspace_free(ws);
+        return ERROR(ERR_INTERNAL, "Failed to get global keymanager");
+    }
+
+    ws->content_cache = content_cache_create(ws->repo, ws->keymanager);
+    if (!ws->content_cache) {
+        workspace_free(ws);
+        return ERROR(ERR_MEMORY, "Failed to create content cache");
+    }
+
+    ws->metadata_cache = hashmap_create(16);
+    if (!ws->metadata_cache) {
+        workspace_free(ws);
+        return ERROR(ERR_MEMORY, "Failed to create metadata cache");
+    }
+
+    /* Pre-load metadata for all profiles (performance optimization) */
+    for (size_t i = 0; i < profiles->count; i++) {
+        const char *profile_name = profiles->profiles[i].name;
+        metadata_t *metadata = NULL;
+
+        error_t *meta_err = metadata_load_from_branch(repo, profile_name, &metadata);
+        if (meta_err) {
+            /* Non-fatal - profile may not have metadata yet */
+            error_free(meta_err);
+            continue;
+        }
+
+        error_t *set_err = hashmap_set(ws->metadata_cache, profile_name, metadata);
+        if (set_err) {
+            metadata_free(metadata);
+            error_free(set_err);
+            /* Non-fatal - continue without caching this metadata */
+        }
+    }
+
     /* Load profile state (manifest) */
     err = profile_build_manifest(repo, profiles, &ws->manifest);
     if (err) {
@@ -925,6 +1005,13 @@ void workspace_free(workspace_t *ws) {
     hashmap_free(ws->manifest_index, NULL);
     hashmap_free(ws->profile_index, NULL);
     hashmap_free(ws->diverged_index, NULL);
+
+    /* Free encryption infrastructure */
+    if (ws->metadata_cache) {
+        hashmap_free(ws->metadata_cache, (void (*)(void *))metadata_free);
+    }
+    content_cache_free(ws->content_cache);
+    /* Don't free keymanager - it's global */
 
     /* Free owned state */
     manifest_free(ws->manifest);

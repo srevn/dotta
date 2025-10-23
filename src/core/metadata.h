@@ -89,7 +89,7 @@ typedef struct hashmap hashmap_t;
  * Uses both array (for iteration/serialization) and hashmap (for O(1) lookups).
  * The hashmap values point to entries in the array (no separate allocation).
  */
-typedef struct {
+typedef struct metadata {
     /* File metadata */
     metadata_entry_t *entries;
     size_t count;

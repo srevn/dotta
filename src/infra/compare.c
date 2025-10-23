@@ -227,6 +227,108 @@ error_t *compare_tree_entry_to_disk(
 }
 
 /**
+ * Compare buffer content to disk file
+ *
+ * Pure function with zero git/encryption knowledge.
+ * Designed for use with decrypted content from the content layer.
+ */
+error_t *compare_buffer_to_disk(
+    const buffer_t *content,
+    const char *disk_path,
+    git_filemode_t expected_mode,
+    compare_result_t *result
+) {
+    CHECK_NULL(content);
+    CHECK_NULL(disk_path);
+    CHECK_NULL(result);
+
+    /* Check file exists */
+    if (!fs_exists(disk_path)) {
+        *result = CMP_MISSING;
+        return NULL;
+    }
+
+    /* Handle symlinks */
+    if (expected_mode == GIT_FILEMODE_LINK) {
+        if (!fs_is_symlink(disk_path)) {
+            *result = CMP_TYPE_DIFF;
+            return NULL;
+        }
+
+        /* Compare symlink targets */
+        char *disk_target = NULL;
+        error_t *err = fs_read_symlink(disk_path, &disk_target);
+        if (err) {
+            return error_wrap(err, "Failed to read symlink '%s'", disk_path);
+        }
+
+        size_t expected_len = buffer_size(content);
+        bool targets_equal = (strlen(disk_target) == expected_len) &&
+                            (memcmp(buffer_data(content), disk_target, expected_len) == 0);
+
+        free(disk_target);
+        *result = targets_equal ? CMP_EQUAL : CMP_DIFFERENT;
+        return NULL;
+    }
+
+    /* Handle regular files */
+    if (expected_mode == GIT_FILEMODE_BLOB ||
+        expected_mode == GIT_FILEMODE_BLOB_EXECUTABLE) {
+
+        /* Check disk is also regular file */
+        if (fs_is_symlink(disk_path)) {
+            *result = CMP_TYPE_DIFF;
+            return NULL;
+        }
+
+        if (!fs_file_exists(disk_path)) {
+            *result = CMP_TYPE_DIFF;
+            return NULL;
+        }
+
+        /* Load disk file */
+        buffer_t *disk_content = NULL;
+        error_t *err = fs_read_file(disk_path, &disk_content);
+        if (err) {
+            return error_wrap(err, "Failed to read '%s'", disk_path);
+        }
+
+        /* Compare sizes (fast path) */
+        if (buffer_size(content) != buffer_size(disk_content)) {
+            *result = CMP_DIFFERENT;
+            buffer_free(disk_content);
+            return NULL;
+        }
+
+        /* Compare content */
+        int cmp = memcmp(buffer_data(content), buffer_data(disk_content),
+                        buffer_size(content));
+
+        buffer_free(disk_content);
+
+        if (cmp != 0) {
+            *result = CMP_DIFFERENT;
+            return NULL;
+        }
+
+        /* Content equal - check executable bit */
+        bool expect_exec = (expected_mode == GIT_FILEMODE_BLOB_EXECUTABLE);
+        bool is_exec = fs_is_executable(disk_path);
+
+        if (expect_exec != is_exec) {
+            *result = CMP_MODE_DIFF;
+        } else {
+            *result = CMP_EQUAL;
+        }
+
+        return NULL;
+    }
+
+    /* Unsupported mode */
+    return ERROR(ERR_INTERNAL, "Unsupported git filemode: %d", expected_mode);
+}
+
+/**
  * Diff line callback - accumulates diff output
  */
 typedef struct {

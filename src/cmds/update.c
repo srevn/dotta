@@ -461,6 +461,8 @@ static error_t *find_modified_and_new_files(
 
 /**
  * Copy file from filesystem to worktree (with optional encryption)
+ *
+ * @param out_was_encrypted Optional output - set to true if file was encrypted (can be NULL)
  */
 static error_t *copy_file_to_worktree(
     worktree_handle_t *wt,
@@ -469,7 +471,8 @@ static error_t *copy_file_to_worktree(
     const char *profile_name,
     keymanager_t *km,
     const dotta_config_t *config,
-    const metadata_t *metadata
+    const metadata_t *metadata,
+    bool *out_was_encrypted
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(filesystem_path);
@@ -527,6 +530,11 @@ static error_t *copy_file_to_worktree(
             err = error_wrap(err, "Failed to create symlink");
             goto cleanup;
         }
+
+        /* Symlinks are never encrypted */
+        if (out_was_encrypted) {
+            *out_was_encrypted = false;
+        }
     } else {
         /* Handle regular file - determine encryption policy using centralized logic
          *
@@ -560,6 +568,11 @@ static error_t *copy_file_to_worktree(
             err = error_wrap(err, "Failed to store file to worktree");
             goto cleanup;
         }
+
+        /* Propagate encryption status to caller */
+        if (out_was_encrypted) {
+            *out_was_encrypted = should_encrypt;
+        }
     }
 
 cleanup:
@@ -571,11 +584,14 @@ cleanup:
 
 /**
  * Capture and save metadata for updated files
+ *
+ * @param encryption_status Encryption status for each file (can be NULL)
  */
 static error_t *capture_and_save_metadata(
     worktree_handle_t *wt,
     modified_file_t *files,
     size_t file_count,
+    const bool *encryption_status,
     bool verbose
 ) {
     CHECK_NULL(wt);
@@ -646,43 +662,12 @@ static error_t *capture_and_save_metadata(
 
         /* entry will be NULL for symlinks - skip them */
         if (entry) {
-            /* Check if file in worktree is encrypted (by reading the encrypted file header) */
-            char *worktree_file_path = str_format("%s/%s", worktree_path, file->storage_path);
-            if (worktree_file_path) {
-                /* Read the file in worktree to check if encrypted */
-                buffer_t *worktree_content = NULL;
-                error_t *read_err = fs_read_file(worktree_file_path, &worktree_content);
-
-                if (read_err == NULL) {
-                    /* Check if content is encrypted */
-                    bool is_encrypted = encryption_is_encrypted(
-                        buffer_data(worktree_content),
-                        buffer_size(worktree_content)
-                    );
-
-                    if (is_encrypted) {
-                        /* File is encrypted */
-                        entry->encrypted = true;
-                    } else {
-                        /* File is plaintext */
-                        entry->encrypted = false;
-                    }
-
-                    buffer_free(worktree_content);
-                } else {
-                    /* CRITICAL: Cannot determine encryption status
-                     * If we can't read the file to check if it's encrypted, we must fail
-                     * rather than guess. Silently ignoring this error could lead to lost
-                     * encryption metadata on next apply. */
-                    free(worktree_file_path);
-                    metadata_entry_free(entry);
-                    metadata_free(metadata);
-                    return error_wrap(read_err,
-                        "Failed to read %s to determine encryption status",
-                        file->storage_path);
-                }
-
-                free(worktree_file_path);
+            /* Use tracked encryption status from copy_file_to_worktree() */
+            if (encryption_status) {
+                entry->encrypted = encryption_status[i];
+            } else {
+                /* Fallback: assume plaintext if no tracked status */
+                entry->encrypted = false;
             }
 
             /* Save metadata before adding (for verbose output) */
@@ -788,6 +773,7 @@ static error_t *update_profile(
     git_repository *wt_repo = NULL;
     metadata_t *existing_metadata = NULL;
     keymanager_t *key_mgr = NULL;
+    bool *encryption_status = NULL;
 
     /* Load existing metadata from profile branch (for encryption status) */
     err = metadata_load_from_branch(repo, profile->name, &existing_metadata);
@@ -854,6 +840,13 @@ static error_t *update_profile(
         goto cleanup;
     }
 
+    /* Allocate encryption status tracking array */
+    encryption_status = calloc(file_count, sizeof(bool));
+    if (!encryption_status) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate encryption status array");
+        goto cleanup;
+    }
+
     /* Copy each modified file to worktree and stage */
     err = worktree_get_index(wt, &index);
     if (err) {
@@ -887,7 +880,8 @@ static error_t *update_profile(
             profile->name,
             key_mgr,
             config,
-            existing_metadata
+            existing_metadata,
+            &encryption_status[i]
         );
         if (err) {
             err = error_wrap(err, "Failed to copy '%s'", file->filesystem_path);
@@ -903,7 +897,7 @@ static error_t *update_profile(
     }
 
     /* Capture and save metadata for updated files */
-    err = capture_and_save_metadata(wt, files, file_count, opts->verbose);
+    err = capture_and_save_metadata(wt, files, file_count, encryption_status, opts->verbose);
     if (err) {
         err = error_wrap(err, "Failed to capture metadata");
         goto cleanup;
@@ -969,6 +963,7 @@ cleanup:
     if (index) git_index_free(index);
     if (wt) worktree_cleanup(wt);
     if (existing_metadata) metadata_free(existing_metadata);
+    if (encryption_status) free(encryption_status);
 
     return err;
 }

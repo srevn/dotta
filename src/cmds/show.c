@@ -13,57 +13,66 @@
 #include "base/error.h"
 #include "base/gitops.h"
 #include "core/profiles.h"
+#include "infra/content.h"
 #include "infra/path.h"
+#include "utils/buffer.h"
 #include "utils/config.h"
+#include "utils/keymanager.h"
 #include "utils/timeutil.h"
 
 /**
  * Print blob content
+ *
+ * Uses content layer for transparent decryption. Password prompt only
+ * happens if file is encrypted and key is not cached.
  */
 static error_t *print_blob_content(
     git_repository *repo,
     const git_oid *blob_oid,
+    const char *storage_path,
+    const char *profile_name,
+    keymanager_t *km,
     bool raw
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(blob_oid);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(profile_name);
 
-    error_t *err = NULL;
-    git_blob *blob = NULL;
-
-    int ret = git_blob_lookup(&blob, repo, blob_oid);
-    if (ret < 0) {
-        err = error_from_git(ret);
-        goto cleanup;
+    /* Get plaintext content (handles encryption transparently) */
+    buffer_t *content = NULL;
+    error_t *err = content_get_from_blob_oid(
+        repo,
+        blob_oid,
+        storage_path,
+        profile_name,
+        NULL,  /* No metadata in show command */
+        km,    /* Prompt for password only if file is encrypted */
+        &content
+    );
+    if (err) {
+        return error_wrap(err, "Failed to get file content");
     }
-
-    const void *content = git_blob_rawcontent(blob);
-    git_object_size_t size = git_blob_rawsize(blob);
 
     if (!raw) {
         /* Add header showing size */
-        printf("Content-Length: %lld bytes\n", (long long)size);
+        printf("Content-Length: %zu bytes\n", buffer_size(content));
         printf("---\n");
     }
 
     /* Write content to stdout */
-    if (content && size > 0) {
-        fwrite(content, 1, (size_t)size, stdout);
+    if (buffer_size(content) > 0) {
+        fwrite(buffer_data(content), 1, buffer_size(content), stdout);
 
-        /* Ensure newline at end if not present - defensive check */
-        if (content != NULL) {
-            const char *last_char = (const char *)content + size - 1;
-            if (*last_char != '\n') {
-                printf("\n");
-            }
+        /* Ensure newline at end if not present */
+        const char *data = (const char *)buffer_data(content);
+        if (data[buffer_size(content) - 1] != '\n') {
+            printf("\n");
         }
     }
 
-cleanup:
-    if (blob) {
-        git_blob_free(blob);
-    }
-    return err;
+    buffer_free(content);
+    return NULL;
 }
 
 /**
@@ -82,6 +91,15 @@ static error_t *show_file(
     git_commit *commit = NULL;
     char *ref_name = NULL;
     git_oid commit_oid;
+
+    /*
+     * Get global keymanager for decryption (if needed)
+     *
+     * This does NOT prompt for password yet. Password prompt only happens
+     * if file is encrypted and key is not cached, when content layer calls
+     * keymanager_get_key().
+     */
+    keymanager_t *km = keymanager_get_global(NULL);
 
     /* Load tree from profile */
     if (commit_ref) {
@@ -149,7 +167,14 @@ static error_t *show_file(
     const git_oid *entry_oid = git_tree_entry_id(entry);
 
     if (entry_type == GIT_OBJECT_BLOB) {
-        err = print_blob_content(repo, entry_oid, raw);
+        /*
+         * Print file content with transparent decryption
+         *
+         * file_path is the storage_path (e.g., "home/.bashrc")
+         * profile_name is used for key derivation
+         * km will prompt for password only if file is encrypted
+         */
+        err = print_blob_content(repo, entry_oid, file_path, profile_name, km, raw);
     } else if (entry_type == GIT_OBJECT_TREE) {
         err = ERROR(ERR_INVALID_ARG, "'%s' is a directory", file_path);
     } else {

@@ -200,17 +200,15 @@ error_t *fs_copy_file(const char *src, const char *dst) {
         return error_wrap(err, "Failed to copy '%s' to '%s'", src, dst);
     }
 
-    /* Write destination */
-    err = fs_write_file(dst, content);
+    /* Write destination with source permissions atomically
+     * SECURITY: Use fs_write_file_raw() to set permissions atomically via fchmod(),
+     * eliminating the security window where sensitive files (e.g., SSH keys)
+     * would have incorrect permissions (0644 instead of 0600). */
+    err = fs_write_file_raw(dst, buffer_data(content), buffer_size(content),
+                           mode, -1, -1);
     buffer_free(content);
     if (err) {
         return error_wrap(err, "Failed to copy '%s' to '%s'", src, dst);
-    }
-
-    /* Set permissions */
-    err = fs_set_permissions(dst, mode);
-    if (err) {
-        return error_wrap(err, "Failed to set permissions on '%s'", dst);
     }
 
     return NULL;

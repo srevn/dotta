@@ -438,7 +438,15 @@ error_t *content_store_file_to_worktree(
         return error_wrap(err, "Failed to read file '%s'", filesystem_path);
     }
 
-    /* Step 2: Encrypt if requested */
+    /* Step 2: Get source file's mode (preserve permissions in worktree → git) */
+    mode_t mode;
+    err = fs_get_permissions(filesystem_path, &mode);
+    if (err) {
+        buffer_free(content);
+        return error_wrap(err, "Failed to get permissions from '%s'", filesystem_path);
+    }
+
+    /* Step 3: Encrypt if requested */
     buffer_t *data_to_write = content;  /* Default: write plaintext */
     buffer_t *ciphertext = NULL;
 
@@ -478,8 +486,17 @@ error_t *content_store_file_to_worktree(
         data_to_write = ciphertext;
     }
 
-    /* Step 3: Write to worktree */
-    err = fs_write_file(worktree_path, data_to_write);
+    /* Step 4: Write to worktree with original mode
+     * CRITICAL: Use source file's mode so git commits with correct permissions.
+     * This ensures git mode matches metadata mode, preventing spurious MODE diffs. */
+    err = fs_write_file_raw(
+        worktree_path,
+        buffer_data(data_to_write),
+        buffer_size(data_to_write),
+        mode,  /* Preserve source mode */
+        -1,    /* Don't change ownership */
+        -1     /* Don't change ownership */
+    );
 
     /* Cleanup */
     buffer_free(content);

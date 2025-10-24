@@ -68,7 +68,7 @@ struct keymanager {
     /* Cached master key */
     uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE];
     bool has_key;          /* Is master key cached? */
-    time_t cached_at;      /* When was key cached? (0 if not cached) */
+    time_t cached_at;      /* When was key cached (monotonic time, 0 if not cached) */
     bool mlocked;          /* Is memory locked with mlock()? */
 
     /* Profile key cache (profile_name → uint8_t[32]) */
@@ -503,6 +503,30 @@ static void session_cache_clear(void) {
     free(cache_path);
 }
 
+/**
+ * Get monotonic timestamp in seconds
+ *
+ * Returns seconds since an arbitrary epoch (typically system boot time).
+ * Unlike time(NULL), this is not affected by system clock changes, NTP
+ * adjustments, or timezone modifications.
+ *
+ * This is used for in-memory cache expiry calculations to prevent cache
+ * lifetime manipulation via clock changes. The file-based cache still uses
+ * wall-clock time (as monotonic time resets on reboot).
+ *
+ * @return Monotonic timestamp in seconds, or wall-clock time if unavailable
+ */
+static time_t get_monotonic_time(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        /* Fallback to wall-clock time if CLOCK_MONOTONIC unavailable
+         * This should never happen on modern POSIX systems, but provides
+         * graceful degradation if it does. */
+        return time(NULL);
+    }
+    return ts.tv_sec;
+}
+
 error_t *keymanager_create(
     const dotta_config_t *config,
     keymanager_t **out
@@ -549,13 +573,15 @@ error_t *keymanager_create(
 /**
  * Secure destructor for profile keys
  *
- * Zeros memory before freeing to prevent key leakage.
+ * Unlocks, zeros, and frees memory to prevent key leakage.
  * Used as callback for hashmap_free() and hashmap_clear().
  *
  * @param key_ptr Pointer to malloc'd profile key (uint8_t[32])
  */
 static void secure_free_profile_key(void *key_ptr) {
     if (key_ptr) {
+        /* Best-effort memory unlock (harmless if not locked) */
+        munlock(key_ptr, ENCRYPTION_PROFILE_KEY_SIZE);
         hydro_memzero(key_ptr, ENCRYPTION_PROFILE_KEY_SIZE);
         free(key_ptr);
     }
@@ -589,6 +615,9 @@ void keymanager_free(keymanager_t *mgr) {
 /**
  * Check if cached key is expired
  *
+ * Uses monotonic clock to prevent cache lifetime manipulation via
+ * system clock changes.
+ *
  * @param mgr Key manager (must not be NULL)
  * @return true if key is cached and not expired
  */
@@ -607,8 +636,8 @@ static bool is_key_valid(const keymanager_t *mgr) {
         return true;
     }
 
-    /* Check if expired (positive timeout) */
-    time_t now = time(NULL);
+    /* Check if expired (positive timeout) using monotonic clock */
+    time_t now = get_monotonic_time();
     time_t elapsed = now - mgr->cached_at;
 
     return elapsed < mgr->session_timeout;
@@ -644,21 +673,29 @@ int64_t keymanager_time_until_expiry(
     /* Timeout of 0 = always prompt (key never valid, always expired) */
     if (mgr->session_timeout == 0) {
         if (out_expires_at) {
-            *out_expires_at = mgr->cached_at;  /* Expired immediately */
+            *out_expires_at = time(NULL);  /* Already expired */
         }
         return 0;
     }
 
-    /* Positive timeout = calculate remaining time */
-    time_t now = time(NULL);
-    time_t expires_at = mgr->cached_at + mgr->session_timeout;
+    /* Positive timeout = calculate remaining time using monotonic clock
+     * This prevents cache lifetime manipulation via clock changes */
+    time_t now_monotonic = get_monotonic_time();
+    time_t elapsed = now_monotonic - mgr->cached_at;
+    int64_t remaining = (int64_t)(mgr->session_timeout - elapsed);
 
-    if (out_expires_at) {
-        *out_expires_at = expires_at;
+    if (remaining < 0) {
+        remaining = 0;
     }
 
-    int64_t remaining = (int64_t)(expires_at - now);
-    return remaining > 0 ? remaining : 0;
+    if (out_expires_at) {
+        /* For display purposes, compute wall-clock expiry as current_time + remaining.
+         * This is more accurate than using the original cached_at (which is monotonic)
+         * and handles clock drift gracefully. */
+        *out_expires_at = time(NULL) + remaining;
+    }
+
+    return remaining;
 }
 
 void keymanager_clear(keymanager_t *mgr) {
@@ -725,9 +762,9 @@ error_t *keymanager_set_passphrase(
         return error_wrap(err, "Failed to derive encryption key");
     }
 
-    /* Mark key as cached */
+    /* Mark key as cached (using monotonic time for expiry checks) */
     mgr->has_key = true;
-    mgr->cached_at = time(NULL);
+    mgr->cached_at = get_monotonic_time();
 
     /* Save to file cache (non-fatal if fails) */
     if (mgr->session_timeout != 0) {
@@ -791,6 +828,12 @@ error_t *keymanager_prompt_passphrase(
         return ERROR(ERR_MEMORY, "Failed to allocate passphrase buffer");
     }
 
+    /* Lock memory to prevent passphrase from being swapped to disk */
+    if (mlock(passphrase, MAX_PASSPHRASE_LENGTH + 1) != 0) {
+        /* Best-effort: mlock failure is non-fatal but reduces security.
+         * Common on systems with tight RLIMIT_MEMLOCK or without privileges. */
+    }
+
     /* Read with size limit and EINTR retry
      * Signals (e.g., SIGWINCH on terminal resize) can interrupt fgets(),
      * so we retry on EINTR to avoid forcing the user to re-enter */
@@ -808,6 +851,7 @@ error_t *keymanager_prompt_passphrase(
 
     /* Check read result */
     if (result == NULL) {
+        munlock(passphrase, MAX_PASSPHRASE_LENGTH + 1);
         hydro_memzero(passphrase, MAX_PASSPHRASE_LENGTH + 1);
         free(passphrase);
         return ERROR(ERR_FS, "Failed to read passphrase");
@@ -821,6 +865,7 @@ error_t *keymanager_prompt_passphrase(
      * chars WITHOUT a newline, the input was truncated. */
     bool has_newline = (len > 0 && passphrase[len - 1] == '\n');
     if (len == MAX_PASSPHRASE_LENGTH && !has_newline) {
+        munlock(passphrase, MAX_PASSPHRASE_LENGTH + 1);
         hydro_memzero(passphrase, MAX_PASSPHRASE_LENGTH + 1);
         free(passphrase);
         return ERROR(ERR_INVALID_ARG,
@@ -836,6 +881,7 @@ error_t *keymanager_prompt_passphrase(
 
     /* Check for empty passphrase */
     if (len == 0) {
+        munlock(passphrase, MAX_PASSPHRASE_LENGTH + 1);
         hydro_memzero(passphrase, MAX_PASSPHRASE_LENGTH + 1);
         free(passphrase);
         return ERROR(ERR_INVALID_ARG, "Passphrase cannot be empty");
@@ -875,6 +921,11 @@ static error_t *get_passphrase_from_env(
         return ERROR(ERR_MEMORY, "Failed to allocate passphrase buffer");
     }
 
+    /* Lock memory to prevent swapping (best-effort) */
+    if (mlock(passphrase, len + 1) != 0) {
+        /* Non-fatal - passphrase still protected by process isolation */
+    }
+
     memcpy(passphrase, env_passphrase, len + 1);
 
     *out_passphrase = passphrase;
@@ -899,9 +950,11 @@ error_t *keymanager_get_key(
     if (mgr->session_timeout != 0) {
         error_t *err = session_cache_load(mgr->master_key);
         if (!err) {
-            /* Cache hit! Update in-memory state */
+            /* Cache hit! Update in-memory state with current monotonic time.
+             * File cache has its own wall-clock expiry check - once loaded,
+             * we switch to monotonic time for in-memory expiry. */
             mgr->has_key = true;
-            mgr->cached_at = time(NULL);
+            mgr->cached_at = get_monotonic_time();
             memcpy(out_master_key, mgr->master_key, ENCRYPTION_MASTER_KEY_SIZE);
             return NULL;
         }
@@ -950,7 +1003,8 @@ error_t *keymanager_get_key(
     /* Derive master key */
     err = keymanager_set_passphrase(mgr, passphrase, passphrase_len);
 
-    /* Securely zero passphrase */
+    /* Securely zero and free passphrase */
+    munlock(passphrase, passphrase_len);
     hydro_memzero(passphrase, passphrase_len);
     free(passphrase);
 
@@ -999,6 +1053,12 @@ error_t *keymanager_get_profile_key(
         return ERROR(ERR_MEMORY, "Failed to allocate profile key");
     }
 
+    /* Lock memory to prevent swapping to disk (best-effort, non-fatal if fails) */
+    if (mlock(profile_key, ENCRYPTION_PROFILE_KEY_SIZE) != 0) {
+        /* mlock failure is non-fatal - common reasons: insufficient privileges,
+         * RLIMIT_MEMLOCK exceeded. Key still protected by file permissions. */
+    }
+
     /* Derive profile key from master key */
     err = encryption_derive_profile_key(master_key, profile_name, profile_key);
 
@@ -1006,6 +1066,7 @@ error_t *keymanager_get_profile_key(
     hydro_memzero(master_key, sizeof(master_key));
 
     if (err) {
+        munlock(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
         hydro_memzero(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
         free(profile_key);
         return error_wrap(err, "Failed to derive profile key for '%s'", profile_name);
@@ -1021,6 +1082,7 @@ error_t *keymanager_get_profile_key(
 
             /* Copy key to output and return (no caching) */
             memcpy(out_profile_key, profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
+            munlock(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
             hydro_memzero(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
             free(profile_key);
             return NULL;
@@ -1037,6 +1099,7 @@ error_t *keymanager_get_profile_key(
 
         /* Copy key to output and return (no caching) */
         memcpy(out_profile_key, profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
+        munlock(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
         hydro_memzero(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
         free(profile_key);
         return NULL;

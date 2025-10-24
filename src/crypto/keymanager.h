@@ -3,20 +3,27 @@
  *
  * Manages the encryption master key lifecycle with session-based caching.
  * Prompts for passphrase when needed and caches the derived master key
- * in memory for a configurable timeout period.
+ * both in memory and on disk for a configurable timeout period.
  *
  * Design principles:
  * - Single passphrase for all profiles (UX-friendly)
  * - Session-based caching (balance security vs UX)
+ * - Persistent disk cache across command invocations (~/.cache/dotta/session)
  * - Configurable timeout (default: 1 hour)
  * - Secure memory clearing (hydro_memzero)
  * - Memory locking to prevent swap (mlock on POSIX systems)
+ * - Monotonic clock for cache expiry (immune to clock manipulation)
  * - Environment variable fallback for automation
  *
  * Security considerations:
- * - Master key stored in process memory (vulnerable to dumps)
- * - mlock() protection prevents swapping to disk (best-effort)
+ * - Master key stored in process memory and on disk (vulnerable to dumps/theft)
+ * - Disk cache encrypted and machine-bound (verified via MAC)
+ * - mlock() protection prevents swapping to disk (best-effort):
+ *   * Master key in keymanager struct
+ *   * Profile keys in hashmap cache
+ *   * Passphrase buffers during input/derivation
  * - Graceful degradation if mlock fails (logs warning)
+ * - In-memory cache uses monotonic time (prevents lifetime manipulation)
  * - Cleared on timeout, explicit clear, or process exit
  * - Signal handlers recommended for cleanup on SIGINT/SIGTERM
  */

@@ -316,13 +316,22 @@ error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
         }
     }
 
-    /* Create target directory with specified mode */
+    /* Create target directory with specified mode
+     * NOTE: mkdir() mode is affected by umask, so we need to fix it with chmod() */
     if (mkdir(path, mode) < 0) {
         if (errno == EEXIST && fs_is_directory(path)) {
             return NULL;  /* Race condition - another process created it */
         }
         return ERROR(ERR_FS, "Failed to create directory '%s' with mode %04o: %s",
                     path, mode, strerror(errno));
+    }
+
+    /* Enforce exact permissions with chmod() (not affected by umask)
+     * CRITICAL: This ensures security-sensitive directories (e.g., ~/.ssh/ with 0700)
+     * get EXACT permissions from metadata, preventing world-readable private dirs. */
+    if (chmod(path, mode) < 0) {
+        return ERROR(ERR_FS, "Failed to set permissions on directory '%s': %s",
+                    path, strerror(errno));
     }
 
     return NULL;

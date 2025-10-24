@@ -82,14 +82,15 @@ typedef enum {
  * (.git/dotta.db), and filesystem state (actual files).
  */
 typedef enum {
-    DIVERGENCE_CLEAN,       /* All states aligned */
-    DIVERGENCE_UNDEPLOYED,  /* In profile, not in deployment state */
-    DIVERGENCE_MODIFIED,    /* Deployed, content changed on filesystem */
-    DIVERGENCE_DELETED,     /* Deployed, removed from filesystem */
-    DIVERGENCE_ORPHANED,    /* In deployment state, not in profile */
-    DIVERGENCE_MODE_DIFF,   /* Deployed, mode changed on filesystem */
-    DIVERGENCE_TYPE_DIFF,   /* Deployed, type changed on filesystem */
-    DIVERGENCE_UNTRACKED    /* On filesystem in tracked directory, not in manifest */
+    DIVERGENCE_CLEAN,              /* All states aligned */
+    DIVERGENCE_UNDEPLOYED,         /* In profile, not in deployment state */
+    DIVERGENCE_MODIFIED,           /* Deployed, content changed on filesystem */
+    DIVERGENCE_DELETED,            /* Deployed, removed from filesystem */
+    DIVERGENCE_ORPHANED,           /* In deployment state, not in profile */
+    DIVERGENCE_MODE_DIFF,          /* Deployed, mode changed on filesystem */
+    DIVERGENCE_TYPE_DIFF,          /* Deployed, type changed on filesystem */
+    DIVERGENCE_UNTRACKED,          /* On filesystem in tracked directory, not in manifest */
+    DIVERGENCE_ENCRYPTION          /* File encryption state doesn't match policy */
 } divergence_type_t;
 
 #endif /* DOTTA_TYPES_H */

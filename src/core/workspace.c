@@ -20,6 +20,7 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "crypto/keymanager.h"
+#include "crypto/pattern.h"
 #include "infra/compare.h"
 #include "infra/content.h"
 #include "utils/config.h"
@@ -54,7 +55,7 @@ struct workspace {
     hashmap_t *diverged_index;     /* Maps filesystem_path -> workspace_file_t */
 
     /* Divergence count cache */
-    size_t divergence_counts[8];   /* Cached counts for O(1) access */
+    size_t divergence_counts[9];   /* Cached counts for O(1) access */
 
     /* Status cache */
     workspace_status_t status;
@@ -140,7 +141,7 @@ static error_t *workspace_create_empty(
     ws->diverged_capacity = 0;
 
     /* Initialize divergence count cache */
-    for (size_t i = 0; i < 8; i++) {
+    for (size_t i = 0; i < 9; i++) {
         ws->divergence_counts[i] = 0;
     }
 
@@ -214,7 +215,7 @@ static error_t *workspace_add_diverged(
     ws->diverged_count++;
 
     /* Update divergence count cache */
-    if (type < 8) {  /* Bounds check */
+    if (type < 9) {  /* Bounds check */
         ws->divergence_counts[type]++;
     }
 
@@ -473,6 +474,7 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
             case DIVERGENCE_MODE_DIFF:
             case DIVERGENCE_TYPE_DIFF:
             case DIVERGENCE_UNTRACKED:
+            case DIVERGENCE_ENCRYPTION:
                 has_warnings = true;
                 break;
 
@@ -711,6 +713,97 @@ static error_t *analyze_untracked_files(
 }
 
 /**
+ * Analyze encryption policy mismatches
+ *
+ * Detects files that should be encrypted (per auto-encrypt patterns)
+ * but are stored as plaintext in the profile.
+ *
+ * Only checks if:
+ * - Encryption is globally enabled
+ * - Auto-encrypt patterns are configured
+ *
+ * This is a security-focused check: files matching sensitive patterns
+ * (e.g., "*.key", ".ssh/id_*") should be encrypted.
+ */
+static error_t *analyze_encryption_policy_mismatch(
+    workspace_t *ws,
+    const dotta_config_t *config
+) {
+    CHECK_NULL(ws);
+    CHECK_NULL(ws->manifest);
+
+    /* Skip if encryption disabled globally */
+    if (!config || !config->encryption_enabled) {
+        return NULL;
+    }
+
+    /* Skip if no auto-encrypt patterns configured */
+    if (!config->auto_encrypt_patterns || config->auto_encrypt_pattern_count == 0) {
+        return NULL;
+    }
+
+    /* Check each file in manifest */
+    for (size_t i = 0; i < ws->manifest->count; i++) {
+        const file_entry_t *manifest_entry = &ws->manifest->entries[i];
+        const char *storage_path = manifest_entry->storage_path;
+        const char *profile_name = manifest_entry->source_profile->name;
+
+        /* Check if file should be auto-encrypted */
+        bool should_auto_encrypt = false;
+        error_t *err = encrypt_should_auto_encrypt(config, storage_path, &should_auto_encrypt);
+        if (err) {
+            /* Non-fatal: pattern matching errors shouldn't block status */
+            error_free(err);
+            continue;
+        }
+
+        /* If file doesn't match patterns, no mismatch */
+        if (!should_auto_encrypt) {
+            continue;
+        }
+
+        /* Get metadata to check actual encryption state */
+        const metadata_t *metadata = ws_get_metadata(ws, profile_name);
+        bool is_encrypted = false;
+
+        if (metadata) {
+            const metadata_entry_t *meta_entry = NULL;
+            error_t *lookup_err = metadata_get_entry(metadata, storage_path, &meta_entry);
+
+            if (lookup_err == NULL && meta_entry) {
+                is_encrypted = meta_entry->encrypted;
+            }
+
+            /* Clean up lookup error if any */
+            if (lookup_err) {
+                error_free(lookup_err);
+            }
+        }
+
+        /* Policy mismatch: should be encrypted but isn't */
+        if (should_auto_encrypt && !is_encrypted) {
+            err = workspace_add_diverged(
+                ws,
+                manifest_entry->filesystem_path,
+                storage_path,
+                profile_name,
+                DIVERGENCE_ENCRYPTION,
+                true,  /* in profile */
+                false, /* in_state (not relevant for policy mismatch) */
+                false, /* on_filesystem (not relevant for policy mismatch) */
+                false  /* content_differs (not relevant for policy mismatch) */
+            );
+
+            if (err) {
+                return err;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+/**
  * Load workspace from repository
  */
 error_t *workspace_load(
@@ -801,6 +894,13 @@ error_t *workspace_load(
     if (err) {
         workspace_free(ws);
         return error_wrap(err, "Failed to analyze untracked files");
+    }
+
+    /* Analyze encryption policy mismatches */
+    err = analyze_encryption_policy_mismatch(ws, config);
+    if (err) {
+        workspace_free(ws);
+        return error_wrap(err, "Failed to analyze encryption policy");
     }
 
     /* Compute status */
@@ -967,7 +1067,7 @@ size_t workspace_count_divergence(
     }
 
     /* Return cached count for O(1) access */
-    if (type < 8) {
+    if (type < 9) {
         return ws->divergence_counts[type];
     }
 

@@ -182,6 +182,16 @@ static void format_diverged_file(
                     output_color_code(out, OUTPUT_COLOR_RESET));
             break;
 
+        case DIVERGENCE_ENCRYPTION:
+            *out_label = "[unencrypted]";
+            *out_color = OUTPUT_COLOR_MAGENTA;
+            snprintf(info_buffer, buffer_size, "%s %s(should be encrypted, from %s)%s",
+                    file->filesystem_path,
+                    output_color_code(out, OUTPUT_COLOR_DIM),
+                    file->profile,
+                    output_color_code(out, OUTPUT_COLOR_RESET));
+            break;
+
         default:
             *out_label = "[unknown]";
             *out_color = OUTPUT_COLOR_DIM;
@@ -345,7 +355,8 @@ static void display_workspace_status(
                 DIVERGENCE_MODIFIED,
                 DIVERGENCE_DELETED,
                 DIVERGENCE_MODE_DIFF,
-                DIVERGENCE_TYPE_DIFF
+                DIVERGENCE_TYPE_DIFF,
+                DIVERGENCE_ENCRYPTION
             };
             display_divergence_section(
                 out, ws,
@@ -787,95 +798,6 @@ static error_t *display_remote_status(
 }
 
 /**
- * Display encrypted files from all profiles
- */
-static void display_encrypted_files(
-    git_repository *repo,
-    profile_list_t *profiles,
-    const dotta_config_t *config,
-    output_ctx_t *out,
-    bool verbose
-) {
-    if (!repo || !profiles || !out) {
-        return;
-    }
-
-    /* Only show if encryption is enabled */
-    if (!config || !config->encryption_enabled) {
-        return;
-    }
-
-    /* Load metadata from all profiles */
-    metadata_t *merged_metadata = NULL;
-    string_array_t *profile_names = string_array_create();
-    if (!profile_names) {
-        return;
-    }
-
-    for (size_t i = 0; i < profiles->count; i++) {
-        string_array_push(profile_names, profiles->profiles[i].name);
-    }
-
-    error_t *err = metadata_load_from_profiles(repo, profile_names, &merged_metadata);
-    string_array_free(profile_names);
-
-    if (err) {
-        /* Non-fatal: if metadata fails to load, skip this section */
-        if (verbose) {
-            output_warning(out, "Failed to load metadata: %s", error_message(err));
-        }
-        error_free(err);
-        return;
-    }
-
-    /* Count encrypted files */
-    size_t encrypted_count = 0;
-    for (size_t i = 0; i < merged_metadata->count; i++) {
-        if (merged_metadata->entries[i].encrypted) {
-            encrypted_count++;
-        }
-    }
-
-    /* Only display section if there are encrypted files */
-    if (encrypted_count > 0) {
-        output_newline(out);
-        output_section(out, "Encrypted files");
-
-        char count_msg[128];
-        snprintf(count_msg, sizeof(count_msg), "  %zu file%s encrypted",
-                encrypted_count, encrypted_count == 1 ? "" : "s");
-
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "%s%s%s\n",
-                         output_color_code(out, OUTPUT_COLOR_DIM),
-                         count_msg,
-                         output_color_code(out, OUTPUT_COLOR_RESET));
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "%s\n", count_msg);
-        }
-
-        /* List encrypted files in verbose mode */
-        if (verbose) {
-            output_newline(out);
-            for (size_t i = 0; i < merged_metadata->count; i++) {
-                const metadata_entry_t *entry = &merged_metadata->entries[i];
-                if (entry->encrypted) {
-                    char info[512];
-                    snprintf(info, sizeof(info), "%s %s(mode: %04o)%s",
-                            entry->storage_path,
-                            output_color_code(out, OUTPUT_COLOR_DIM),
-                            entry->mode,
-                            output_color_code(out, OUTPUT_COLOR_RESET));
-                    output_item(out, "[encrypted]", OUTPUT_COLOR_MAGENTA, info);
-                }
-            }
-        }
-    }
-
-    metadata_free(merged_metadata);
-}
-
-/**
  * Status command implementation
  */
 error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
@@ -948,9 +870,6 @@ error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
 
     /* Display workspace status */
     display_workspace_status(repo, profiles, config, out, opts->verbose);
-
-    /* Display encrypted files (if encryption enabled and there are any) */
-    display_encrypted_files(repo, profiles, config, out, opts->verbose);
 
     /* Display multi-profile files (if verbose mode or if there are any) */
     display_multi_profile_files(repo, profiles, manifest, out);

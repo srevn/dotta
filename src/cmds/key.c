@@ -138,22 +138,21 @@ static error_t *cmd_key_clear(
         return ERROR(ERR_INTERNAL, "Failed to initialize key manager");
     }
 
-    /* Check if key is cached */
-    if (!keymanager_has_key(key_mgr)) {
-        if (opts->verbose) {
-            printf("No encryption key is currently cached.\n");
-        }
-        config_free(config);
-        return NULL;
-    }
+    /* Check if key is cached in memory */
+    bool had_key = keymanager_has_key(key_mgr);
 
-    /* Clear the cached key */
+    /* Always clear both memory and file cache (even if no in-memory key) */
     keymanager_clear(key_mgr);
 
     /* Display success message */
-    printf("✓ Encryption key cleared from memory\n");
+    if (had_key) {
+        printf("✓ Encryption key cleared from memory and disk cache\n");
+    } else {
+        printf("✓ Disk cache cleared (no key was cached in memory)\n");
+    }
 
     if (opts->verbose) {
+        printf("\nCache location: ~/.cache/dotta/session\n");
         printf("\nYou will be prompted for your passphrase on the next\n");
         printf("operation that requires encryption or decryption.\n");
     }

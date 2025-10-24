@@ -435,15 +435,22 @@ memlimit = 67108864
 threads = 1
 
 # Session Timeout
-# How long (in seconds) to cache the encryption key in memory
+# How long (in seconds) to cache the encryption key
 # After this time, you'll be prompted for your passphrase again
 #
+# Cache behavior:
+#   - In-memory: Key cached for the lifetime of a single command
+#   - File cache: Key persists across commands until timeout
+#   - Location: ~/.cache/dotta/session (machine-bound, auto-expires)
+#
 # Options:
-#   0     - Always prompt for passphrase (most secure)
+#   0     - No caching (always prompt, most secure)
 #   1800  - 30 minutes
 #   3600  - 1 hour (default)
 #   7200  - 2 hours
-#   -1    - Never expire (cache until dotta exits)
+#   -1    - Never expire (cache until manual clear)
+#
+# Manual clear: dotta key clear
 #
 # Default: 3600 (1 hour)
 session_timeout = 3600

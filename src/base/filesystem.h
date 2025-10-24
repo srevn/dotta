@@ -108,16 +108,32 @@ bool fs_file_exists(const char *path);
 error_t *fs_create_dir(const char *path, bool parents);
 
 /**
- * Create directory with specific mode
+ * Create directory with specific mode (idempotent)
  *
- * Creates a directory with the specified permissions. If parents is true,
- * parent directories are created with default mode (0755), while the target
- * directory is created with the specified mode.
+ * Ensures a directory exists with the exact specified permissions.
+ * This function is idempotent - it can be safely called multiple times
+ * and will ensure the directory has the correct permissions each time.
+ *
+ * Behavior:
+ * - If directory doesn't exist: creates it with exact mode
+ * - If directory already exists: updates its mode to match (useful with --force)
+ * - Uses chmod() to enforce exact mode (not affected by umask)
+ *
+ * If parents is true, parent directories are created with default mode (0755),
+ * while the target directory is ensured to have the specified mode.
+ *
+ * Consistency: Matches file behavior where fs_write_file_raw() always
+ * sets exact permissions regardless of whether file exists.
  *
  * @param path Directory path (must not be NULL)
  * @param mode Permission mode for the target directory (e.g., 0700, 0755)
  * @param parents Create parent directories if true
  * @return Error or NULL on success
+ *
+ * Errors:
+ * - ERR_FS: Failed to create directory (permission denied, etc.)
+ * - ERR_FS: Failed to set permissions (not owner, etc.)
+ * - ERR_INVALID_ARG: Invalid mode (> 0777)
  */
 error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents);
 

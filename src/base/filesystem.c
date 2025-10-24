@@ -316,22 +316,37 @@ error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
         }
     }
 
-    /* Create target directory with specified mode
-     * NOTE: mkdir() mode is affected by umask, so we need to fix it with chmod() */
+    /* Try to create directory with specified mode */
+    bool existed = false;
     if (mkdir(path, mode) < 0) {
         if (errno == EEXIST && fs_is_directory(path)) {
-            return NULL;  /* Race condition - another process created it */
+            /* Directory already exists - will ensure correct mode below */
+            existed = true;
+        } else {
+            return ERROR(ERR_FS, "Failed to create directory '%s' with mode %04o: %s",
+                        path, mode, strerror(errno));
         }
-        return ERROR(ERR_FS, "Failed to create directory '%s' with mode %04o: %s",
-                    path, mode, strerror(errno));
     }
 
-    /* Enforce exact permissions with chmod() (not affected by umask)
-     * CRITICAL: This ensures security-sensitive directories (e.g., ~/.ssh/ with 0700)
-     * get EXACT permissions from metadata, preventing world-readable private dirs. */
+    /* Ensure exact permissions with chmod() (idempotent operation)
+     *
+     * Why chmod() is needed in BOTH cases:
+     *
+     * 1. New directory: mkdir() mode is affected by umask
+     *    Example: mkdir(path, 0700) with umask 022 creates 0755
+     *    chmod() enforces exact mode regardless of umask
+     *
+     * 2. Existing directory: May have wrong permissions
+     *    Example: User runs `dotta apply --force` to fix ~/.ssh/ from 0755 to 0700
+     *    deploy.c only calls this function when --force is set for existing dirs
+     *    chmod() updates mode to match metadata (security fix!)
+     *
+     * This makes the function idempotent: "ensure directory exists with exact mode"
+     * Matches file behavior (fs_write_file_raw always sets exact mode)
+     */
     if (chmod(path, mode) < 0) {
-        return ERROR(ERR_FS, "Failed to set permissions on directory '%s': %s",
-                    path, strerror(errno));
+        return ERROR(ERR_FS, "Failed to set permissions on directory '%s'%s: %s",
+                    path, existed ? " (already existed)" : "", strerror(errno));
     }
 
     return NULL;

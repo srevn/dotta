@@ -40,7 +40,6 @@
 #define DOTTA_INFRA_CONTENT_H
 
 #include <git2.h>
-#include <stddef.h>
 
 #include "types.h"
 

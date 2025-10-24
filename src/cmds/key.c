@@ -6,9 +6,7 @@
 
 #include <git2.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #include "base/error.h"
 #include "core/metadata.h"

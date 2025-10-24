@@ -19,7 +19,6 @@
 #include "core/upstream.h"
 #include "core/workspace.h"
 #include "utils/config.h"
-#include "utils/hashmap.h"
 #include "utils/output.h"
 
 /**

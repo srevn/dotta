@@ -20,7 +20,6 @@
 #include "infra/content.h"
 #include "utils/array.h"
 #include "utils/config.h"
-#include "utils/hashmap.h"
 #include "utils/hooks.h"
 #include "utils/output.h"
 

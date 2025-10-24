@@ -13,7 +13,6 @@
 #include "base/error.h"
 #include "buffer.h"
 #include "config.h"
-#include "string.h"
 
 /* Maximum length for hostname and username */
 #define MAX_HOSTNAME 256

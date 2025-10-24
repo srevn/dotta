@@ -24,7 +24,6 @@
 #include "crypto/encryption.h"
 #include "utils/array.h"
 #include "utils/config.h"
-#include "utils/hashmap.h"
 #include "utils/output.h"
 #include "utils/timeutil.h"
 

@@ -5,12 +5,10 @@
 #include "add.h"
 
 #include <dirent.h>
-#include <fnmatch.h>
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "base/error.h"
 #include "base/filesystem.h"

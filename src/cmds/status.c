@@ -6,12 +6,10 @@
 
 #include <git2.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "base/error.h"
 #include "base/gitops.h"
-#include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "core/upstream.h"

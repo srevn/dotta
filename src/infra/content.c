@@ -8,7 +8,6 @@
 
 #include <git2.h>
 #include <hydrogen.h>
-#include <string.h>
 
 #include "base/error.h"
 #include "base/filesystem.h"

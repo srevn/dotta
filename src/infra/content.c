@@ -6,8 +6,11 @@
 
 #include "content.h"
 
+#include <errno.h>
 #include <git2.h>
 #include <hydrogen.h>
+#include <string.h>
+#include <sys/stat.h>
 
 #include "base/error.h"
 #include "base/filesystem.h"
@@ -16,6 +19,19 @@
 #include "crypto/keymanager.h"
 #include "utils/buffer.h"
 #include "utils/hashmap.h"
+
+/**
+ * Maximum file size for encryption (100MB)
+ *
+ * This limit prevents:
+ * - Memory exhaustion from huge files
+ * - Disk exhaustion in worktrees
+ * - DoS via resource consumption
+ *
+ * Rationale: Dotfiles should be small configuration files.
+ * If you need to encrypt 100MB+ files, reconsider your approach.
+ */
+#define MAX_ENCRYPTED_FILE_SIZE (100 * 1024 * 1024)
 
 /**
  * Content cache structure
@@ -27,14 +43,43 @@ struct content_cache {
 };
 
 /**
+ * Securely free buffer (zero memory before release)
+ *
+ * SECURITY: This function zeros the buffer's memory before freeing it.
+ * Critical for preventing memory disclosure of decrypted sensitive data
+ * (SSH keys, API tokens, passwords, etc.) via:
+ * - Swap files (if memory is paged to disk)
+ * - Core dumps (crash analysis)
+ * - Memory inspection tools
+ * - Memory reuse by other processes
+ *
+ * Used by content cache to ensure plaintext doesn't linger in memory.
+ *
+ * @param buf_ptr Buffer to free (cast from void* for hashmap_free compatibility)
+ */
+static void buffer_free_secure(void *buf_ptr) {
+    buffer_t *buf = (buffer_t *)buf_ptr;
+    if (!buf) {
+        return;
+    }
+
+    /* Zero sensitive plaintext data before freeing (defense in depth) */
+    if (buffer_data(buf) && buffer_size(buf) > 0) {
+        hydro_memzero((void *)buffer_data(buf), buffer_size(buf));
+    }
+
+    buffer_free(buf);
+}
+
+/**
  * Get plaintext from blob (internal workhorse)
  *
  * This function handles the core logic of loading a blob and
  * transparently decrypting it if needed.
  *
  * Process:
- * 1. Check magic header for encryption
- * 2. Validate with metadata (if provided)
+ * 1. Check magic header for encryption (source of truth)
+ * 2. Validate consistency with metadata (defense in depth)
  * 3. Decrypt if needed
  * 4. Return plaintext buffer
  *
@@ -42,7 +87,7 @@ struct content_cache {
  * @param blob Loaded git blob (must not be NULL)
  * @param storage_path File path in profile
  * @param profile_name Profile name
- * @param metadata Optional metadata for validation
+ * @param metadata Metadata for validation (must not be NULL)
  * @param km Key manager (can be NULL for plaintext files)
  * @param out_content Output buffer (caller owns)
  * @param out_was_encrypted Optional flag - set to true if file was encrypted (can be NULL)
@@ -76,33 +121,52 @@ static error_t *get_plaintext_from_blob(
         *out_was_encrypted = is_encrypted;
     }
 
-    /* Step 2: Validate with metadata (if provided) */
-    if (metadata) {
-        const metadata_entry_t *meta_entry = NULL;
-        error_t *err = metadata_get_entry(metadata, storage_path, &meta_entry);
+    /* Step 2: Validate consistency with metadata (defense in depth)
+     * SECURITY: Metadata must contain entry for this file. Missing entries indicate:
+     * - Metadata corruption (desync between git and metadata)
+     * - File added to git without using dotta add/update (manual tampering)
+     * - Serious bug in add/update/remove commands
+     *
+     * We require metadata entry to detect these error conditions.
+     * Magic header alone is not sufficient for integrity verification.
+     */
+    const metadata_entry_t *meta_entry = NULL;
+    error_t *err = metadata_get_entry(metadata, storage_path, &meta_entry);
 
-        if (!err && meta_entry) {
-            /* Metadata exists - cross-check with magic header */
-            if (is_encrypted && !meta_entry->encrypted) {
-                return ERROR(ERR_STATE_INVALID,
-                    "File '%s' is encrypted in git but metadata says plaintext.\n"
-                    "This indicates metadata corruption.\n"
-                    "To fix, run: dotta update -p %s '%s'",
-                    storage_path, profile_name, storage_path);
-            }
-            if (!is_encrypted && meta_entry->encrypted) {
-                return ERROR(ERR_STATE_INVALID,
-                    "File '%s' is marked as encrypted in metadata but stored as plaintext in git.\n"
-                    "This indicates metadata corruption.\n"
-                    "To fix, run: dotta update -p %s '%s'",
-                    storage_path, profile_name, storage_path);
-            }
-        }
+    if (err) {
+        /* Entry not found - this is now an error (metadata corruption) */
+        error_free(err);
+        return ERROR(ERR_STATE_INVALID,
+            "File '%s' exists in git but not in metadata.\n"
+            "This indicates metadata corruption or manual git manipulation.\n"
+            "\n"
+            "To fix:\n"
+            "  1. If this is a legitimate file: dotta update -p %s '%s'\n"
+            "  2. If this is corruption: inspect git history and restore metadata",
+            storage_path, profile_name, storage_path);
+    }
 
-        if (err) {
-            /* Entry not found in metadata is OK - magic header is source of truth */
-            error_free(err);
-        }
+    if (!meta_entry) {
+        /* Should never happen - metadata_get_entry returns error if not found */
+        return ERROR(ERR_INTERNAL,
+            "metadata_get_entry returned NULL without error for '%s'",
+            storage_path);
+    }
+
+    /* Cross-validate magic header against metadata encryption flag */
+    if (is_encrypted && !meta_entry->encrypted) {
+        return ERROR(ERR_STATE_INVALID,
+            "File '%s' is encrypted in git but metadata says plaintext.\n"
+            "This indicates metadata corruption.\n"
+            "To fix, run: dotta update -p %s '%s'",
+            storage_path, profile_name, storage_path);
+    }
+    if (!is_encrypted && meta_entry->encrypted) {
+        return ERROR(ERR_STATE_INVALID,
+            "File '%s' is marked as encrypted in metadata but stored as plaintext in git.\n"
+            "This indicates metadata corruption.\n"
+            "To fix, run: dotta update -p %s '%s'",
+            storage_path, profile_name, storage_path);
     }
 
     /* Step 3: Handle encrypted files */
@@ -345,9 +409,11 @@ void content_cache_free(content_cache_t *cache) {
         return;
     }
 
-    /* Free all cached buffers */
+    /* Free all cached buffers with secure cleanup
+     * SECURITY: Use buffer_free_secure() to zero plaintext memory before freeing.
+     * The cache contains decrypted sensitive data that must not linger in memory. */
     if (cache->cache_map) {
-        hashmap_free(cache->cache_map, (void (*)(void *))buffer_free);
+        hashmap_free(cache->cache_map, buffer_free_secure);
     }
 
     free(cache);
@@ -370,6 +436,18 @@ error_t *content_store_to_blob(
 
     const uint8_t *data = buffer_data(plaintext);
     size_t size = buffer_size(plaintext);
+
+    /* Validate file size (security: prevent DoS via huge files) */
+    if (size > MAX_ENCRYPTED_FILE_SIZE) {
+        return ERROR(ERR_INVALID_ARG,
+            "Content too large: %zu bytes (max %d bytes).\n"
+            "\n"
+            "Rationale: Dotfiles should be small configuration files.\n"
+            "If you need to manage files larger than 100MB, consider whether\n"
+            "they belong in a dotfile manager or should use a different tool.",
+            size, MAX_ENCRYPTED_FILE_SIZE);
+    }
+
     buffer_t *ciphertext = NULL;
 
     /* Handle encryption if requested */
@@ -431,22 +509,52 @@ error_t *content_store_file_to_worktree(
     CHECK_NULL(storage_path);
     CHECK_NULL(profile_name);
 
-    /* Step 1: Read file from filesystem */
+    /* Step 1: Validate file type (security: prevent symlink/special file confusion) */
+    struct stat st;
+    if (lstat(filesystem_path, &st) < 0) {
+        return ERROR(ERR_FS, "Failed to stat '%s': %s",
+                    filesystem_path, strerror(errno));
+    }
+
+    if (!S_ISREG(st.st_mode)) {
+        const char *type = S_ISLNK(st.st_mode) ? "symlink" :
+                           S_ISDIR(st.st_mode) ? "directory" :
+                           S_ISFIFO(st.st_mode) ? "FIFO" :
+                           S_ISSOCK(st.st_mode) ? "socket" :
+                           S_ISCHR(st.st_mode) ? "character device" :
+                           S_ISBLK(st.st_mode) ? "block device" : "special file";
+        return ERROR(ERR_INVALID_ARG,
+            "Cannot store '%s': it is a %s, not a regular file.\n"
+            "\n"
+            "Dotta only manages regular configuration files.\n"
+            "Symlinks and special files are not supported.",
+            filesystem_path, type);
+    }
+
+    /* Step 2: Read file from filesystem */
     buffer_t *content = NULL;
     error_t *err = fs_read_file(filesystem_path, &content);
     if (err) {
         return error_wrap(err, "Failed to read file '%s'", filesystem_path);
     }
 
-    /* Step 2: Get source file's mode (preserve permissions in worktree → git) */
-    mode_t mode;
-    err = fs_get_permissions(filesystem_path, &mode);
-    if (err) {
+    /* Step 3: Validate file size (security: prevent DoS via huge files) */
+    size_t file_size = buffer_size(content);
+    if (file_size > MAX_ENCRYPTED_FILE_SIZE) {
         buffer_free(content);
-        return error_wrap(err, "Failed to get permissions from '%s'", filesystem_path);
+        return ERROR(ERR_INVALID_ARG,
+            "File '%s' is too large: %zu bytes (max %d bytes).\n"
+            "\n"
+            "Rationale: Dotfiles should be small configuration files.\n"
+            "If you need to manage files larger than 100MB, consider whether\n"
+            "they belong in a dotfile manager or should use a different tool.",
+            filesystem_path, file_size, MAX_ENCRYPTED_FILE_SIZE);
     }
 
-    /* Step 3: Encrypt if requested */
+    /* Step 4: Get source file's mode (preserve permissions in worktree → git) */
+    mode_t mode = st.st_mode;  /* Reuse mode from stat() above */
+
+    /* Step 5: Encrypt if requested */
     buffer_t *data_to_write = content;  /* Default: write plaintext */
     buffer_t *ciphertext = NULL;
 
@@ -486,7 +594,7 @@ error_t *content_store_file_to_worktree(
         data_to_write = ciphertext;
     }
 
-    /* Step 4: Write to worktree with original mode
+    /* Step 6: Write to worktree with original mode
      * CRITICAL: Use source file's mode so git commits with correct permissions.
      * This ensures git mode matches metadata mode, preventing spurious MODE diffs. */
     err = fs_write_file_raw(

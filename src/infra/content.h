@@ -81,6 +81,8 @@ typedef struct content_cache content_cache_t;
  * @param repo Git repository (must not be NULL)
  * @param entry Tree entry to read (must not be NULL)
  * @param storage_path Path in profile (e.g., "home/.bashrc", must not be NULL)
+ *                     SECURITY: Used as AAD in encryption. Must be actual Git tree path
+ *                     (from tree traversal). Wrong path causes decrypt failure (by design).
  * @param profile_name Profile name for key derivation (must not be NULL)
  * @param metadata Metadata for validation (must not be NULL)
  * @param km Key manager (can be NULL if file is known to be plaintext)
@@ -89,7 +91,7 @@ typedef struct content_cache content_cache_t;
  *
  * Errors:
  * - ERR_CRYPTO: File is encrypted but no keymanager provided
- * - ERR_CRYPTO: Decryption failed (wrong key, corruption)
+ * - ERR_CRYPTO: Decryption failed (wrong key, corruption, or path mismatch)
  * - ERR_STATE_INVALID: Magic header and metadata disagree
  * - ERR_NOT_FOUND: Blob not found
  * - ERR_INVALID_ARG: Required arguments are NULL
@@ -113,6 +115,7 @@ error_t *content_get_from_tree_entry(
  * @param repo Git repository (must not be NULL)
  * @param blob_oid Blob OID (must not be NULL)
  * @param storage_path Path in profile (must not be NULL)
+ *                     SECURITY: Used as AAD in encryption. Must match Git tree path.
  * @param profile_name Profile name for key derivation (must not be NULL)
  * @param metadata Metadata for validation (must not be NULL)
  * @param km Key manager (can be NULL if file is known to be plaintext)
@@ -160,7 +163,7 @@ content_cache_t *content_cache_create(
  *
  * @param cache Content cache (must not be NULL)
  * @param entry Tree entry to read (must not be NULL)
- * @param storage_path Path in profile (must not be NULL)
+ * @param storage_path Path in profile (must not be NULL, used as AAD for encryption)
  * @param profile_name Profile name (must not be NULL)
  * @param metadata Metadata for validation (must not be NULL)
  * @param out_content Output buffer (BORROWED - cache owns, don't free)
@@ -182,7 +185,7 @@ error_t *content_cache_get_from_tree_entry(
  *
  * @param cache Content cache (must not be NULL)
  * @param blob_oid Blob OID (must not be NULL)
- * @param storage_path Path in profile (must not be NULL)
+ * @param storage_path Path in profile (must not be NULL, used as AAD for encryption)
  * @param profile_name Profile name (must not be NULL)
  * @param metadata Metadata for validation (must not be NULL)
  * @param out_content Output buffer (BORROWED - cache owns, don't free)
@@ -229,7 +232,8 @@ void content_cache_free(content_cache_t *cache);
  *
  * @param repo Git repository (must not be NULL)
  * @param plaintext Plaintext buffer to store (must not be NULL)
- * @param storage_path Storage path (used as AAD for encryption, must not be NULL)
+ * @param storage_path Storage path (must not be NULL)
+ *                     SECURITY: Used as AAD in encryption. Must match Git tree path.
  * @param profile_name Profile name (for key derivation, must not be NULL)
  * @param km Key manager (for profile key derivation, can be NULL if should_encrypt=false)
  * @param should_encrypt Policy decision from caller (true = encrypt, false = plaintext)
@@ -272,7 +276,7 @@ error_t *content_store_to_blob(
  *
  * @param filesystem_path Path to source file on filesystem (must not be NULL)
  * @param worktree_path Destination path in worktree (must not be NULL)
- * @param storage_path Storage path in profile (for encryption AAD, must not be NULL)
+ * @param storage_path Storage path in profile (must not be NULL, used as AAD for encryption)
  * @param profile_name Profile name (for key derivation, must not be NULL)
  * @param km Key manager (can be NULL if should_encrypt=false)
  * @param should_encrypt Policy decision from caller (true = encrypt, false = plaintext)

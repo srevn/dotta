@@ -246,58 +246,22 @@ static error_t *show_diff_preview(
         return error_wrap(err, "Failed to get target file content");
     }
 
-    /* Create temporary blobs from plaintext for diffing
+    /* Create patch directly from plaintext buffers using in-memory API
      *
-     * We need git_blob objects to use libgit2's patch API, so we create
-     * temporary blobs in the Git ODB from our decrypted buffers.
+     * This uses libgit2's buffer-based patch API to avoid creating temporary
+     * blobs in the Git ODB that would persist until gc.
      */
-    git_oid tmp_current_oid, tmp_target_oid;
-    git_blob *current_blob = NULL;
-    git_blob *target_blob = NULL;
-
-    int ret = git_blob_create_from_buffer(&tmp_current_oid, repo,
-        buffer_data(current_plaintext), buffer_size(current_plaintext));
-    if (ret < 0) {
-        buffer_free(current_plaintext);
-        buffer_free(target_plaintext);
-        return error_from_git(ret);
-    }
-
-    ret = git_blob_create_from_buffer(&tmp_target_oid, repo,
-        buffer_data(target_plaintext), buffer_size(target_plaintext));
-    if (ret < 0) {
-        buffer_free(current_plaintext);
-        buffer_free(target_plaintext);
-        return error_from_git(ret);
-    }
-
-    /* Free plaintext buffers - no longer needed */
-    buffer_free(current_plaintext);
-    buffer_free(target_plaintext);
-
-    /* Lookup the temporary blobs we just created */
-    ret = git_blob_lookup(&current_blob, repo, &tmp_current_oid);
-    if (ret < 0) {
-        return error_from_git(ret);
-    }
-
-    ret = git_blob_lookup(&target_blob, repo, &tmp_target_oid);
-    if (ret < 0) {
-        git_blob_free(current_blob);
-        return error_from_git(ret);
-    }
-
-    /* Create patch between blobs */
     git_patch *patch = NULL;
-    ret = git_patch_from_blobs(
+    int ret = git_patch_from_buffers(
         &patch,
-        current_blob, file_path,  /* old */
-        target_blob, file_path,   /* new */
+        buffer_data(current_plaintext), buffer_size(current_plaintext), file_path,  /* old */
+        buffer_data(target_plaintext), buffer_size(target_plaintext), file_path,    /* new */
         NULL  /* options */
     );
 
-    git_blob_free(current_blob);
-    git_blob_free(target_blob);
+    /* Free plaintext buffers - no longer needed after patch creation */
+    buffer_free(current_plaintext);
+    buffer_free(target_plaintext);
 
     if (ret < 0) {
         return error_from_git(ret);

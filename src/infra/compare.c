@@ -292,84 +292,43 @@ static error_t *generate_symlink_diff(
  * Generate text diff from buffer
  *
  * Helper for compare_generate_diff().
- * Creates temporary git blobs to leverage libgit2's diff functionality.
+ * Uses in-memory buffers with libgit2's buffer-based diff API.
  */
 static error_t *generate_text_diff(
-    git_repository *repo,
     const buffer_t *content,
     const char *disk_path,
     const char *path_label,
     compare_direction_t direction,
     char **diff_text
 ) {
-    CHECK_NULL(repo);
     CHECK_NULL(content);
     CHECK_NULL(disk_path);
     CHECK_NULL(diff_text);
 
     error_t *err = NULL;
-    git_oid repo_oid, disk_oid;
-    git_blob *repo_blob = NULL;
-    git_blob *disk_blob = NULL;
     buffer_t *disk_content = NULL;
     diff_callback_data_t callback_data = {0};
 
-    /* Create temporary blob from repo content (e.g., decrypted content) */
-    int git_err = git_blob_create_from_buffer(
-        &repo_oid,
-        repo,
-        buffer_data(content),
-        buffer_size(content)
-    );
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    /* Get repo buffer pointers (from input parameter - decrypted content) */
+    const void *repo_data = buffer_data(content);
+    size_t repo_size = buffer_size(content);
 
-    git_err = git_blob_lookup(&repo_blob, repo, &repo_oid);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
+    /* Read disk file content */
+    const void *disk_data = NULL;
+    size_t disk_size = 0;
 
-    /* Read disk file and create temporary blob */
     if (fs_exists(disk_path)) {
         err = fs_read_file(disk_path, &disk_content);
         if (err) {
-            git_blob_free(repo_blob);
             return error_wrap(err, "Failed to read disk file");
         }
-
-        git_err = git_blob_create_from_buffer(
-            &disk_oid,
-            repo,
-            buffer_data(disk_content),
-            buffer_size(disk_content)
-        );
-        if (git_err < 0) {
-            buffer_free(disk_content);
-            git_blob_free(repo_blob);
-            return error_from_git(git_err);
-        }
-
-        git_err = git_blob_lookup(&disk_blob, repo, &disk_oid);
-        if (git_err < 0) {
-            buffer_free(disk_content);
-            git_blob_free(repo_blob);
-            return error_from_git(git_err);
-        }
+        disk_data = buffer_data(disk_content);
+        disk_size = buffer_size(disk_content);
     } else {
-        /* File doesn't exist on disk - create empty blob */
+        /* File doesn't exist on disk - use empty buffer */
         static const char empty[] = "";
-        git_err = git_blob_create_from_buffer(&disk_oid, repo, empty, 0);
-        if (git_err < 0) {
-            git_blob_free(repo_blob);
-            return error_from_git(git_err);
-        }
-
-        git_err = git_blob_lookup(&disk_blob, repo, &disk_oid);
-        if (git_err < 0) {
-            git_blob_free(repo_blob);
-            return error_from_git(git_err);
-        }
+        disk_data = empty;
+        disk_size = 0;
     }
 
     /* Prepare callback data */
@@ -378,8 +337,6 @@ static error_t *generate_text_diff(
 
     if (!callback_data.output) {
         if (disk_content) buffer_free(disk_content);
-        if (disk_blob) git_blob_free(disk_blob);
-        git_blob_free(repo_blob);
         return ERROR(ERR_MEMORY, "Failed to allocate diff buffer");
     }
 
@@ -389,14 +346,15 @@ static error_t *generate_text_diff(
     diff_opts.interhunk_lines = 0;
     diff_opts.flags = GIT_DIFF_NORMAL;
 
-    /* Generate diff based on direction using blob-to-blob diff */
+    /* Generate diff based on direction using buffer-to-buffer diff */
+    int git_err;
     if (direction == CMP_DIR_UPSTREAM) {
         /* Upstream: filesystem → repo (what apply would do) */
         /* Show diff: disk (old) → repo (new) */
-        git_err = git_diff_blobs(
-            disk_blob,
+        git_err = git_diff_buffers(
+            disk_data, disk_size,
             path_label ? path_label : disk_path,
-            repo_blob,
+            repo_data, repo_size,
             path_label ? path_label : disk_path,
             &diff_opts,
             NULL,  /* file callback */
@@ -408,10 +366,10 @@ static error_t *generate_text_diff(
     } else {
         /* Downstream: repo → filesystem (what update would commit) */
         /* Show diff: repo (old) → disk (new) */
-        git_err = git_diff_blobs(
-            repo_blob,
+        git_err = git_diff_buffers(
+            repo_data, repo_size,
             path_label ? path_label : disk_path,
-            disk_blob,
+            disk_data, disk_size,
             path_label ? path_label : disk_path,
             &diff_opts,
             NULL,  /* file callback */
@@ -422,10 +380,8 @@ static error_t *generate_text_diff(
         );
     }
 
-    /* Cleanup blobs and disk content */
+    /* Cleanup disk content buffer */
     if (disk_content) buffer_free(disk_content);
-    if (disk_blob) git_blob_free(disk_blob);
-    git_blob_free(repo_blob);
 
     if (git_err < 0) {
         buffer_free(callback_data.output);
@@ -510,9 +466,8 @@ error_t *compare_generate_diff(
             /* Symlink diff - use buffer directly */
             err = generate_symlink_diff(content, disk_path, direction, &diff->diff_text);
         } else {
-            /* Regular file diff - create temp blobs and use libgit2 */
+            /* Regular file diff - use in-memory buffer diff */
             err = generate_text_diff(
-                repo,
                 content,
                 disk_path,
                 path_label,

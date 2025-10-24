@@ -189,7 +189,7 @@ dotta key clear    # Clear cached passphrase
 - **Path-bound encryption** - Files tied to specific storage paths (authenticated associated data)
 - **Per-profile key isolation** - Each profile uses a derived encryption key
 - **Passphrase-based key derivation** - No key files to manage (PBKDF2-based)
-- **Session key caching** - Configurable timeout (default: 1 hour)
+- **Persistent key caching** - Cache persists across commands (default: 1 hour, machine-bound)
 - **Automatic decryption** - Transparent during `apply` and `show` operations
 
 **Encryption Modes:**
@@ -197,7 +197,7 @@ dotta key clear    # Clear cached passphrase
 2. **Auto-encrypt** - Configure patterns in `[encryption] auto_encrypt` (e.g., `"*.key"`, `".ssh/id_*"`)
 3. **Override** - Use `--no-encrypt` to skip auto-encryption for specific files
 
-Encrypted files are stored in Git with a magic header (`DOTTA`) and decrypted transparently during deployment. The passphrase is never stored on disk - only cached in memory for the session timeout duration.
+Encrypted files are stored in Git with a magic header (`DOTTA`) and decrypted transparently during deployment. Master keys are cached at `~/.cache/dotta/session` (machine-bound, auto-expires) for seamless multi-command workflows.
 
 ### 10. Bootstrap System
 
@@ -520,7 +520,7 @@ auto_encrypt = [                          # Patterns for automatic encryption
     "*.key",                              # Generic key files
     ".aws/credentials",                   # AWS credentials
 ]
-session_timeout = 3600                    # Key cache timeout (seconds)
+session_timeout = 3600                    # Cache timeout in seconds (0=always prompt, -1=never expire)
 opslimit = 10000                          # KDF CPU cost
 memlimit = 67108864                       # KDF memory cost (64MB)
 ```

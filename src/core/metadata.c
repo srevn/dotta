@@ -1320,11 +1320,16 @@ error_t *metadata_load_from_file(
         return error_wrap(err, "Failed to read metadata file");
     }
 
-    /* Parse JSON */
-    const char *json_str = (const char *)buffer_data(content);
+    /* Parse JSON - release buffer as null-terminated string */
+    char *json_str = NULL;
+    err = buffer_release_data(content, &json_str);
+    if (err) {
+        return error_wrap(err, "Failed to release buffer");
+    }
+
     metadata_t *metadata = NULL;
     err = metadata_from_json(json_str, &metadata);
-    buffer_free(content);
+    free(json_str);
 
     if (err) {
         return error_wrap(err, "Failed to parse metadata from file: %s", file_path);

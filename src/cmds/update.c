@@ -1053,7 +1053,14 @@ static void update_display_summary(
             buffer_append_string(info_buf, ")");
         }
 
-        const char *info = (const char *)buffer_data(info_buf);
+        /* Release buffer as null-terminated string */
+        char *info = NULL;
+        error_t *release_err = buffer_release_data(info_buf, &info);
+        if (release_err) {
+            error_free(release_err);
+            string_array_free(other_profiles);
+            continue;  /* Skip this file on error */
+        }
 
         const char *status_label = NULL;
         output_color_t color = OUTPUT_COLOR_YELLOW;
@@ -1080,7 +1087,7 @@ static void update_display_summary(
 
         output_item(out, status_label, color, info);
 
-        buffer_free(info_buf);
+        free(info);
         string_array_free(other_profiles);
     }
 

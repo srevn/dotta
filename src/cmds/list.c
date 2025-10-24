@@ -17,9 +17,11 @@
 
 #include "base/error.h"
 #include "base/gitops.h"
+#include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/stats.h"
 #include "core/upstream.h"
+#include "crypto/encryption.h"
 #include "utils/array.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
@@ -46,6 +48,55 @@ static void format_size(size_t bytes, char *buffer, size_t buffer_size) {
     } else {
         snprintf(buffer, buffer_size, "%.1f GB", bytes / (1024.0 * 1024.0 * 1024.0));
     }
+}
+
+/**
+ * Check if file is encrypted
+ *
+ * Strategy:
+ * 1. Check metadata first (fast O(1) lookup if available)
+ * 2. Fall back to blob magic header check if metadata unavailable
+ *
+ * @param metadata Metadata (can be NULL)
+ * @param repo Repository (must not be NULL)
+ * @param entry Tree entry (must not be NULL)
+ * @param storage_path Storage path (must not be NULL)
+ * @return true if file is encrypted, false otherwise
+ */
+static bool is_file_encrypted(
+    const metadata_t *metadata,
+    git_repository *repo,
+    const git_tree_entry *entry,
+    const char *storage_path
+) {
+    /* Fast path: Check metadata if available */
+    if (metadata) {
+        const metadata_entry_t *meta_entry = NULL;
+        error_t *err = metadata_get_entry(metadata, storage_path, &meta_entry);
+        if (!err && meta_entry) {
+            return meta_entry->encrypted;
+        }
+        error_free(err);  /* Not found or error - fall through to blob check */
+    }
+
+    /* Fallback: Check blob magic header */
+    const git_oid *blob_oid = git_tree_entry_id(entry);
+    if (!blob_oid) {
+        return false;
+    }
+
+    git_blob *blob = NULL;
+    int git_err = git_blob_lookup(&blob, repo, blob_oid);
+    if (git_err != 0) {
+        return false;  /* Can't load blob - assume not encrypted */
+    }
+
+    const unsigned char *data = (const unsigned char *)git_blob_rawcontent(blob);
+    size_t size = git_blob_rawsize(blob);
+    bool encrypted = encryption_is_encrypted(data, size);
+
+    git_blob_free(blob);
+    return encrypted;
 }
 
 /**
@@ -353,6 +404,18 @@ static error_t *list_files(
         }
     }
 
+    /* Load metadata for encryption status (verbose mode only) */
+    metadata_t *metadata = NULL;
+    if (opts->verbose) {
+        err = metadata_load_from_branch(repo, opts->profile, &metadata);
+        if (err) {
+            /* Non-fatal: continue without encryption indicators */
+            /* Don't warn - metadata may not exist yet (perfectly normal) */
+            error_free(err);
+            err = NULL;
+        }
+    }
+
     /* Calculate max path length for alignment (verbose mode only) */
     size_t max_path_len = 0;
     if (opts->verbose) {
@@ -403,13 +466,28 @@ static error_t *list_files(
             git_tree_entry *entry = NULL;
             int git_err = git_tree_entry_bypath(&entry, profile->tree, file_path);
             if (git_err == 0) {
+                /* Check encryption status and display indicator */
+                bool encrypted = is_file_encrypted(metadata, repo, entry, file_path);
+                if (encrypted) {
+                    if (output_colors_enabled(out)) {
+                        output_printf(out, OUTPUT_NORMAL, "  %s[E]%s ",
+                                output_color_code(out, OUTPUT_COLOR_YELLOW),
+                                output_color_code(out, OUTPUT_COLOR_RESET));
+                    } else {
+                        output_printf(out, OUTPUT_NORMAL, "  [E] ");
+                    }
+                } else {
+                    /* Space padding to maintain alignment */
+                    output_printf(out, OUTPUT_NORMAL, "      ");
+                }
+
                 /* Get blob size efficiently */
                 size_t size;
                 error_t *stats_err = stats_get_blob_size(repo, git_tree_entry_id(entry), &size);
                 if (!stats_err) {
                     char size_str[32];
                     format_size(size, size_str, sizeof(size_str));
-                    output_printf(out, OUTPUT_NORMAL, "  %8s", size_str);
+                    output_printf(out, OUTPUT_NORMAL, " %8s", size_str);
                     total_size += size;
                 }
                 error_free(stats_err);
@@ -465,6 +543,9 @@ static error_t *list_files(
     /* Cleanup */
     if (commit_map) {
         stats_free_file_commit_map(commit_map);
+    }
+    if (metadata) {
+        metadata_free(metadata);
     }
     string_array_free(files);
     profile_free(profile);

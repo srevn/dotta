@@ -848,16 +848,25 @@ error_t *workspace_load(
 
         error_t *meta_err = metadata_load_from_branch(repo, profile_name, &metadata);
         if (meta_err) {
-            /* Non-fatal - profile may not have metadata yet */
+            /* Graceful fallback: create empty metadata if loading fails.
+             * This ensures content layer always has metadata for validation.
+             * Empty metadata will cause "file not in metadata" errors during
+             * divergence analysis, which is the correct behavior for profiles
+             * without metadata (new profiles or corrupted metadata files). */
             error_free(meta_err);
-            continue;
+            error_t *create_err = metadata_create_empty(&metadata);
+            if (create_err) {
+                workspace_free(ws);
+                return error_wrap(create_err,
+                    "Failed to create metadata for profile '%s'", profile_name);
+            }
         }
 
         error_t *set_err = hashmap_set(ws->metadata_cache, profile_name, metadata);
         if (set_err) {
             metadata_free(metadata);
-            error_free(set_err);
-            /* Non-fatal - continue without caching this metadata */
+            workspace_free(ws);
+            return error_wrap(set_err, "Failed to cache metadata for profile '%s'", profile_name);
         }
     }
 

@@ -11,6 +11,7 @@
 #include <git2.h>
 #include <git2/errors.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "credentials.h"
@@ -85,6 +86,7 @@ error_t *gitops_branch_exists(git_repository *repo, const char *name, bool *exis
     CHECK_NULL(repo);
     CHECK_NULL(name);
     CHECK_NULL(exists);
+    CHECK_ARG(name[0] != '\0', "Branch name cannot be empty");
 
     git_reference *ref = NULL;
     char refname[256];
@@ -111,6 +113,7 @@ error_t *gitops_branch_exists(git_repository *repo, const char *name, bool *exis
 error_t *gitops_create_orphan_branch(git_repository *repo, const char *name) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
+    CHECK_ARG(name[0] != '\0', "Branch name cannot be empty");
 
     /* Create empty tree */
     git_treebuilder *tb = NULL;
@@ -119,20 +122,23 @@ error_t *gitops_create_orphan_branch(git_repository *repo, const char *name) {
 
     err = git_treebuilder_new(&tb, repo, NULL);
     if (err < 0) {
-        return error_from_git(err);
+        return error_wrap(error_from_git(err),
+                "Failed to create tree builder for orphan branch '%s'", name);
     }
 
     err = git_treebuilder_write(&tree_oid, tb);
     git_treebuilder_free(tb);
     if (err < 0) {
-        return error_from_git(err);
+        return error_wrap(error_from_git(err),
+                "Failed to write empty tree for orphan branch '%s'", name);
     }
 
     /* Get tree object */
     git_tree *tree = NULL;
     err = git_tree_lookup(&tree, repo, &tree_oid);
     if (err < 0) {
-        return error_from_git(err);
+        return error_wrap(error_from_git(err),
+                "Failed to lookup tree for orphan branch '%s'", name);
     }
 
     /* Get default signature */
@@ -140,7 +146,8 @@ error_t *gitops_create_orphan_branch(git_repository *repo, const char *name) {
     err = git_signature_default(&sig, repo);
     if (err < 0) {
         git_tree_free(tree);
-        return error_from_git(err);
+        return error_wrap(error_from_git(err),
+                "Failed to get signature for orphan branch '%s'", name);
     }
 
     /* Create orphan commit (no parents) */
@@ -170,7 +177,8 @@ error_t *gitops_create_orphan_branch(git_repository *repo, const char *name) {
     git_tree_free(tree);
 
     if (err < 0) {
-        return error_from_git(err);
+        return error_wrap(error_from_git(err),
+                "Failed to create orphan commit for branch '%s'", name);
     }
 
     return NULL;
@@ -183,7 +191,7 @@ error_t *gitops_list_branches(git_repository *repo, string_array_t **out) {
     git_branch_iterator *iter = NULL;
     int err = git_branch_iterator_new(&iter, repo, GIT_BRANCH_LOCAL);
     if (err < 0) {
-        return error_from_git(err);
+        return error_wrap(error_from_git(err), "Failed to create branch iterator");
     }
 
     string_array_t *branches = string_array_create();
@@ -202,7 +210,7 @@ error_t *gitops_list_branches(git_repository *repo, string_array_t **out) {
             git_reference_free(ref);
             git_branch_iterator_free(iter);
             string_array_free(branches);
-            return error_from_git(err);
+            return error_wrap(error_from_git(err), "Failed to get branch name");
         }
 
         error_t *derr = string_array_push(branches, name);
@@ -222,6 +230,7 @@ error_t *gitops_list_branches(git_repository *repo, string_array_t **out) {
 error_t *gitops_delete_branch(git_repository *repo, const char *name) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
+    CHECK_ARG(name[0] != '\0', "Branch name cannot be empty");
 
     git_reference *ref = NULL;
     char refname[256];
@@ -232,13 +241,13 @@ error_t *gitops_delete_branch(git_repository *repo, const char *name) {
 
     int err = git_reference_lookup(&ref, repo, refname);
     if (err < 0) {
-        return error_from_git(err);
+        return error_wrap(error_from_git(err), "Failed to lookup branch '%s'", name);
     }
 
     err = git_branch_delete(ref);
     git_reference_free(ref);
     if (err < 0) {
-        return error_from_git(err);
+        return error_wrap(error_from_git(err), "Failed to delete branch '%s'", name);
     }
 
     return NULL;
@@ -279,6 +288,7 @@ error_t *gitops_load_tree(git_repository *repo, const char *ref_name, git_tree *
     CHECK_NULL(repo);
     CHECK_NULL(ref_name);
     CHECK_NULL(out);
+    CHECK_ARG(ref_name[0] != '\0', "Reference name cannot be empty");
 
     /* Get reference */
     git_reference *ref = NULL;
@@ -299,7 +309,9 @@ error_t *gitops_load_tree(git_repository *repo, const char *ref_name, git_tree *
     git_object_t obj_type = git_object_type(obj);
 
     if (obj_type == GIT_OBJECT_COMMIT) {
-        /* Normal branch pointing to commit - get tree from commit */
+        /* Normal branch pointing to commit - get tree from commit
+         * SAFETY: We verified obj_type == GIT_OBJECT_COMMIT, so this cast is safe
+         */
         git_commit *commit = (git_commit *)obj;
         err = git_commit_tree(out, commit);
         git_object_free(obj);
@@ -307,7 +319,9 @@ error_t *gitops_load_tree(git_repository *repo, const char *ref_name, git_tree *
             return error_from_git(err);
         }
     } else if (obj_type == GIT_OBJECT_TREE) {
-        /* Orphan branch pointing directly to tree */
+        /* Orphan branch pointing directly to tree
+         * SAFETY: We verified obj_type == GIT_OBJECT_TREE, so this cast is safe
+         */
         *out = (git_tree *)obj;
         /* Don't free obj - we're transferring ownership to caller */
     } else {
@@ -493,6 +507,8 @@ error_t *gitops_fetch_branch(
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(branch_name);
+    CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
+    CHECK_ARG(branch_name[0] != '\0', "Branch name cannot be empty");
 
     git_remote *remote = NULL;
     int err = git_remote_lookup(&remote, repo, remote_name);
@@ -649,6 +665,8 @@ error_t *gitops_push_branch(
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(branch_name);
+    CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
+    CHECK_ARG(branch_name[0] != '\0', "Branch name cannot be empty");
 
     git_remote *remote = NULL;
     int err = git_remote_lookup(&remote, repo, remote_name);
@@ -928,11 +946,16 @@ error_t *gitops_find_file_in_tree(
     CHECK_NULL(tree);
     CHECK_NULL(path);
     CHECK_NULL(out);
+    CHECK_ARG(path[0] != '\0', "Path cannot be empty");
 
     /* Normalize path (remove leading slash if present) */
     const char *normalized_path = path;
     if (path[0] == '/') {
         normalized_path = path + 1;
+        /* After removing slash, check if we're left with empty string */
+        if (normalized_path[0] == '\0') {
+            return ERROR(ERR_INVALID_ARG, "Path cannot be just '/'");
+        }
     }
 
     /* Lookup entry in tree */
@@ -975,9 +998,16 @@ static int find_by_basename_callback(
 
     /* Check if basename matches */
     if (strcmp(entry_name, search->target_basename) == 0) {
-        /* Build full path */
+        /* Build full path with overflow protection */
         size_t root_len = strlen(root);
-        size_t path_len = root_len + strlen(entry_name) + 1;
+        size_t name_len = strlen(entry_name);
+
+        /* Check for size_t overflow before allocation */
+        if (root_len > SIZE_MAX - name_len - 1) {
+            return -1;  /* Path too long, would overflow */
+        }
+
+        size_t path_len = root_len + name_len + 1;
         char *full_path = malloc(path_len);
         if (!full_path) {
             return -1;  /* Memory allocation failed */
@@ -989,16 +1019,22 @@ static int find_by_basename_callback(
             snprintf(full_path, path_len, "%s", entry_name);
         }
 
-        /* Add to results */
+        /* Add to results with capacity doubling */
         if (search->count >= search->capacity) {
-            search->capacity = search->capacity == 0 ? 4 : search->capacity * 2;
-            char **new_paths = realloc(search->matching_paths,
-                                      search->capacity * sizeof(char *));
+            /* Check for capacity overflow before doubling */
+            size_t new_capacity = search->capacity == 0 ? 4 : search->capacity * 2;
+            if (new_capacity < search->capacity || new_capacity > SIZE_MAX / sizeof(char *)) {
+                free(full_path);
+                return -1;  /* Capacity would overflow */
+            }
+
+            char **new_paths = realloc(search->matching_paths, new_capacity * sizeof(char *));
             if (!new_paths) {
                 free(full_path);
                 return -1;  /* Memory allocation failed */
             }
             search->matching_paths = new_paths;
+            search->capacity = new_capacity;
         }
 
         search->matching_paths[search->count++] = full_path;
@@ -1022,6 +1058,7 @@ error_t *gitops_find_files_by_basename_in_tree(
     CHECK_NULL(basename);
     CHECK_NULL(out_paths);
     CHECK_NULL(out_count);
+    CHECK_ARG(basename[0] != '\0', "Basename cannot be empty");
 
     basename_search_t search = {
         .target_basename = basename,
@@ -1360,6 +1397,7 @@ error_t *gitops_rebase_inmemory_safe(
     git_annotated_commit *branch_commit = NULL;
     git_annotated_commit *onto_commit = NULL;
     git_rebase *rebase = NULL;
+    git_signature *sig = NULL;
     error_t *err = NULL;
     int git_err;
 
@@ -1389,6 +1427,15 @@ error_t *gitops_rebase_inmemory_safe(
         return error_from_git(git_err);
     }
 
+    /* Get signature once for all rebase operations */
+    git_err = git_signature_default(&sig, repo);
+    if (git_err < 0) {
+        err = error_from_git(git_err);
+        git_rebase_abort(rebase);
+        git_rebase_free(rebase);
+        return error_wrap(err, "Failed to get signature for rebase");
+    }
+
     /* Process each rebase operation
      * Initialize commit_oid to onto_oid - if there are no operations to rebase
      * (branch is already up-to-date or behind), we return onto_oid which is
@@ -1399,23 +1446,13 @@ error_t *gitops_rebase_inmemory_safe(
     git_oid_cpy(&commit_oid, onto_oid);
 
     while ((git_err = git_rebase_next(&op, rebase)) == 0) {
-        /* Get signature */
-        git_signature *sig = NULL;
-        git_err = git_signature_default(&sig, repo);
-        if (git_err < 0) {
-            err = error_from_git(git_err);
-            git_rebase_abort(rebase);
-            git_rebase_free(rebase);
-            return error_wrap(err, "Failed to get signature during rebase");
-        }
-
         /* Commit the rebased operation
          * In inmemory mode, this doesn't touch HEAD or working directory
          */
         git_err = git_rebase_commit(&commit_oid, rebase, NULL, sig, NULL, NULL);
-        git_signature_free(sig);
 
         if (git_err < 0) {
+            git_signature_free(sig);
             git_rebase_abort(rebase);
             git_rebase_free(rebase);
 
@@ -1432,6 +1469,9 @@ error_t *gitops_rebase_inmemory_safe(
             return error_wrap(err, "Failed to commit during rebase");
         }
     }
+
+    /* Free signature now that we're done with all commits */
+    git_signature_free(sig);
 
     /* Check if rebase completed successfully */
     if (git_err != GIT_ITEROVER) {
@@ -1539,7 +1579,7 @@ error_t *gitops_diff_get_stats(
  * Check if path is a valid git repository
  */
 bool gitops_is_repository(const char *path) {
-    if (!path) {
+    if (!path || path[0] == '\0') {
         return false;
     }
 

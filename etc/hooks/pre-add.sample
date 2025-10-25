@@ -9,9 +9,13 @@
 #
 # Environment variables provided by dotta:
 #   DOTTA_REPO_DIR    - Path to dotta repository
-#   DOTTA_OPERATION   - Operation being performed ("add")
+#   DOTTA_COMMAND     - Command being executed ("add")
 #   DOTTA_PROFILE     - Profile name being modified
-#   DOTTA_FILES       - Newline-separated list of files being added
+#   DOTTA_FILES       - Space-separated list of files being added
+#   DOTTA_FILE_COUNT  - Number of files
+#   DOTTA_DRY_RUN     - "1" if dry-run, "0" otherwise
+#
+# Note: Files with spaces in their names will not be properly separated in DOTTA_FILES.
 #
 
 set -euo pipefail
@@ -22,10 +26,8 @@ echo "Pre-add: Validating files before adding to profile '$DOTTA_PROFILE'..."
 echo "Checking for potential secrets..."
 secrets_found=0
 
-# Read files line by line
-while IFS= read -r file; do
-    [[ -z "$file" ]] && continue
-
+# Iterate through files (space-separated)
+for file in $DOTTA_FILES; do
     if [[ -f "$file" ]]; then
         # Check for common secret patterns
         if grep -qiE '(password|secret|api[_-]?key|token|private[_-]?key)' "$file" 2>/dev/null; then
@@ -47,7 +49,7 @@ while IFS= read -r file; do
             exit 1
         fi
     fi
-done <<< "$DOTTA_FILES"
+done
 
 if [[ $secrets_found -gt 0 ]]; then
     echo ""
@@ -57,9 +59,7 @@ fi
 
 # Example: Validate file sizes
 echo "Checking file sizes..."
-while IFS= read -r file; do
-    [[ -z "$file" ]] && continue
-
+for file in $DOTTA_FILES; do
     if [[ -f "$file" ]]; then
         size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo 0)
         # Warn if file is larger than 1MB
@@ -68,7 +68,7 @@ while IFS= read -r file; do
             echo "  Consider using git-lfs or ignoring this file." >&2
         fi
     fi
-done <<< "$DOTTA_FILES"
+done
 
 echo "Pre-add validation passed!"
 exit 0

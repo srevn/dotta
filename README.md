@@ -1,15 +1,21 @@
 # dotta
 
-A declarative, profile-based dotfile manager built on Git that uses orphan branches to manage configurations across multiple machines and operating systems.
+Declarative, Git-based configuration management for heterogeneous Unix estates.
 
-### Core Principle
+## Overview
 
-Files are stored with **location prefixes** (`home/`, `root/`) in isolated profile branches, then deployed to their actual filesystem locations on demand. This provides:
+Manage a single repository with independent, versioned profiles across laptops, servers, workstations and containers. Deploy actual files with correct ownership and atomic rollbacks, optional transparent encryption, and a bidirectional workflow that lets you edit in place.
 
-- **Clean separation** between different configurations
-- **No Git pollution** in your home directory
-- **Profile layering** for shared and machine-specific settings
-- **Predictable deployment** with strong safety guarantees
+### How It Works
+
+Files are stored with **location prefixes** (`home/`, `root/`) in **isolated Git orphan branches** (one per profile), then **deployed** to their filesystem locations on demand. Each profile maintains independent version history.
+
+This provides:
+
+- **Multi-machine flexibility** - Profiles version independently; no forced synchronization
+- **System-level configs** - Root-owned files deployed with correct ownership/permissions
+- **Security by default** - Pattern-based transparent encryption for secrets
+- **Strong safety guarantees** - Atomic deployments with state tracking prevent data loss
 
 ## Key Features
 

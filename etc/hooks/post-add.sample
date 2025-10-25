@@ -7,18 +7,21 @@
 #
 # Environment variables provided by dotta:
 #   DOTTA_REPO_DIR    - Path to dotta repository
-#   DOTTA_OPERATION   - Operation being performed ("add")
+#   DOTTA_COMMAND     - Command being executed ("add")
 #   DOTTA_PROFILE     - Profile name that was modified
-#   DOTTA_FILES       - Newline-separated list of files that were added
+#   DOTTA_FILES       - Space-separated list of files that were added
+#   DOTTA_FILE_COUNT  - Number of files
+#   DOTTA_DRY_RUN     - "1" if dry-run, "0" otherwise
+#
+# Note: Files with spaces in their names will not be properly separated in DOTTA_FILES.
 #
 
 set -euo pipefail
 
 echo "Post-add: Processing files added to profile '$DOTTA_PROFILE'..."
 
-# Count files added
-file_count=$(echo "$DOTTA_FILES" | grep -c . || echo 0)
-echo "Added $file_count file(s) to profile."
+# File count is provided by dotta
+echo "Added $DOTTA_FILE_COUNT file(s) to profile."
 
 # Example: Auto-commit to git (if repo_dir is a git repo)
 if [[ -d "$DOTTA_REPO_DIR/.git" ]]; then

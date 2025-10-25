@@ -543,10 +543,6 @@ static error_t *matches_source_gitignore(
     return NULL;
 }
 
-/* ========================================================================
- * Public API
- * ======================================================================== */
-
 error_t *ignore_context_create(
     git_repository *repo,
     const dotta_config_t *config,

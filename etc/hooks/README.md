@@ -40,8 +40,9 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 **Environment Variables:**
 - `DOTTA_REPO_DIR` - Path to dotta repository
-- `DOTTA_OPERATION` - Always "apply"
-- `DOTTA_PROFILES` - Space-separated list of profiles
+- `DOTTA_COMMAND` - Always "apply"
+- `DOTTA_PROFILE` - Comma-separated list of profiles being applied
+- `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
 
 **Exit Behavior:**
 - Exit 0: Continue with apply
@@ -61,8 +62,9 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 **Environment Variables:**
 - `DOTTA_REPO_DIR` - Path to dotta repository
-- `DOTTA_OPERATION` - Always "apply"
-- `DOTTA_PROFILES` - Space-separated list of profiles
+- `DOTTA_COMMAND` - Always "apply"
+- `DOTTA_PROFILE` - Comma-separated list of profiles being applied
+- `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
 
 **Exit Behavior:**
 - Exit 0 or non-zero: Apply already completed, exit code logged only
@@ -81,9 +83,13 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 **Environment Variables:**
 - `DOTTA_REPO_DIR` - Path to dotta repository
-- `DOTTA_OPERATION` - Always "add"
+- `DOTTA_COMMAND` - Always "add"
 - `DOTTA_PROFILE` - Profile name being modified
-- `DOTTA_FILES` - Newline-separated list of files
+- `DOTTA_FILES` - Space-separated list of files
+- `DOTTA_FILE_COUNT` - Number of files
+- `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
+
+**Note:** Files with spaces in their names will not be properly separated. Consider using `DOTTA_FILE_COUNT` to iterate or avoid spaces in tracked filenames.
 
 **Exit Behavior:**
 - Exit 0: Continue with add
@@ -104,9 +110,13 @@ Hooks allow you to run custom scripts before and after dotta operations.
 
 **Environment Variables:**
 - `DOTTA_REPO_DIR` - Path to dotta repository
-- `DOTTA_OPERATION` - Always "add"
+- `DOTTA_COMMAND` - Always "add"
 - `DOTTA_PROFILE` - Profile name that was modified
-- `DOTTA_FILES` - Newline-separated list of files
+- `DOTTA_FILES` - Space-separated list of files
+- `DOTTA_FILE_COUNT` - Number of files
+- `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
+
+**Note:** Files with spaces in their names will not be properly separated. Consider using `DOTTA_FILE_COUNT` to iterate or avoid spaces in tracked filenames.
 
 **Exit Behavior:**
 - Exit 0 or non-zero: Add already completed, exit code logged only
@@ -162,8 +172,9 @@ exit 0
 1. **Never hardcode secrets** in hook scripts
 2. **Use environment variables** for sensitive data
 3. **Validate inputs:** Don't trust `DOTTA_FILES` blindly
-4. **Be careful with auto-push:** Could expose sensitive data
-5. **Limit permissions:** Hooks should only modify what they need
+4. **Handle spaces in filenames:** Files with spaces will not be properly separated in `DOTTA_FILES`
+5. **Be careful with auto-push:** Could expose sensitive data
+6. **Limit permissions:** Hooks should only modify what they need
 
 ### Debugging Hooks
 
@@ -178,9 +189,11 @@ Test hooks manually:
 ```bash
 # Set up environment
 export DOTTA_REPO_DIR=~/.local/share/dotta/repo
-export DOTTA_OPERATION=add
+export DOTTA_COMMAND=add
 export DOTTA_PROFILE=test
-export DOTTA_FILES=$'file1.txt\nfile2.txt'
+export DOTTA_FILES="file1.txt file2.txt"
+export DOTTA_FILE_COUNT=2
+export DOTTA_DRY_RUN=0
 
 # Run hook
 ~/.config/dotta/hooks/pre-add
@@ -215,7 +228,7 @@ cd "$DOTTA_REPO_DIR"
 
 if ! git diff --quiet; then
     git add -A
-    git commit -m "Add to $DOTTA_PROFILE: $(echo "$DOTTA_FILES" | wc -l) files"
+    git commit -m "Add to $DOTTA_PROFILE: $DOTTA_FILE_COUNT files"
     git push origin main
 fi
 ```
@@ -227,14 +240,19 @@ fi
 #!/usr/bin/env bash
 set -euo pipefail
 
-while IFS= read -r file; do
-    [[ -z "$file" ]] && continue
-
+for file in $DOTTA_FILES; do
     if grep -qiE '(api[_-]?key|password|secret|token)' "$file"; then
         echo "ERROR: Potential secret in $file" >&2
         exit 1
     fi
-done <<< "$DOTTA_FILES"
+done
+
+# Alternative: Use array for safer handling (including files with spaces in names)
+# Note: This won't work with the current space-separated format if filenames have spaces
+# IFS=' ' read -ra FILES <<< "$DOTTA_FILES"
+# for file in "${FILES[@]}"; do
+#     # ... validation ...
+# done
 ```
 
 ### Workflow 4: Service Reload

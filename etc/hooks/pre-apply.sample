@@ -9,8 +9,9 @@
 #
 # Environment variables provided by dotta:
 #   DOTTA_REPO_DIR    - Path to dotta repository
-#   DOTTA_OPERATION   - Operation being performed ("apply")
-#   DOTTA_PROFILES    - Space-separated list of profiles being applied
+#   DOTTA_COMMAND     - Command being executed ("apply")
+#   DOTTA_PROFILE     - Comma-separated list of profiles being applied
+#   DOTTA_DRY_RUN     - "1" if dry-run, "0" otherwise
 #
 
 set -euo pipefail

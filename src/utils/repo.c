@@ -84,5 +84,3 @@ error_t *resolve_repo_path(char **out) {
     *out = repo_dir;
     return NULL;
 }
-
-

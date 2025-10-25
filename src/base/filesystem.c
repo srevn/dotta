@@ -113,15 +113,66 @@ error_t *fs_write_file_raw(const char *path, const unsigned char *data, size_t s
         free(parent);
     }
 
-    /* Open file for writing (create if not exists, truncate if exists)
-     * Use provided mode as initial permissions (will be affected by umask) */
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, mode);
+    /* SECURITY: Open with restrictive mode 0600 initially
+     *
+     * Rationale: We must set ownership and permissions BEFORE writing any data
+     * to prevent security windows. Using 0600 ensures that even if the process
+     * is killed after open() but before fchmod(), the file remains protected.
+     *
+     * The umask cannot make this less restrictive (can only clear bits, not set them),
+     * so 0600 is safe regardless of the process umask setting.
+     */
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {
         return ERROR(ERR_FS, "Failed to open '%s' for writing: %s",
                     path, strerror(errno));
     }
 
-    /* Write data (handle zero-length writes) */
+    /* SECURITY CRITICAL: Apply ownership BEFORE writing data
+     *
+     * This ensures that if the file contains sensitive data (e.g., SSH keys,
+     * API tokens, passwords), it has the correct owner from the moment data
+     * is written, preventing unauthorized access.
+     *
+     * Use -1 to skip ownership change (preserve current user ownership).
+     */
+    if (uid != (uid_t)-1 || gid != (gid_t)-1) {
+        if (fchown(fd, uid, gid) < 0) {
+            int saved_errno = errno;
+            close(fd);
+            return ERROR(ERR_FS, "Failed to set ownership on '%s': %s",
+                        path, strerror(saved_errno));
+        }
+    }
+
+    /* SECURITY CRITICAL: Set exact permissions BEFORE writing data
+     *
+     * At this point, the file has correct ownership and is about to receive
+     * correct permissions. It's still empty, so even if the process crashes
+     * here, no sensitive data has been exposed.
+     *
+     * Using fchmod() on the file descriptor (not chmod() on path) ensures:
+     * 1. Atomicity: No TOCTOU race with file replacement
+     * 2. Not affected by umask: Exact mode is applied
+     * 3. Works even if file was just created
+     */
+    if (fchmod(fd, mode) < 0) {
+        int saved_errno = errno;
+        close(fd);
+        return ERROR(ERR_FS, "Failed to set permissions on '%s': %s",
+                    path, strerror(saved_errno));
+    }
+
+    /* Write data - SAFE: File now has correct ownership + permissions
+     *
+     * At this point:
+     * - File is owned by the correct user (if uid != -1)
+     * - File has exact permissions requested (mode)
+     * - File is still empty (no data exposure risk)
+     *
+     * Now it's safe to write sensitive data. If the process crashes during
+     * write, we have an incomplete file with correct metadata (acceptable).
+     */
     size_t written = 0;
     while (written < size) {
         ssize_t n = write(fd, data + written, size - written);
@@ -135,27 +186,6 @@ error_t *fs_write_file_raw(const char *path, const unsigned char *data, size_t s
                         path, strerror(saved_errno));
         }
         written += n;
-    }
-
-    /* Apply ownership if requested (before permissions, while FD is open)
-     * Use -1 to skip ownership change */
-    if (uid != (uid_t)-1 || gid != (gid_t)-1) {
-        if (fchown(fd, uid, gid) < 0) {
-            int saved_errno = errno;
-            close(fd);
-            return ERROR(ERR_FS, "Failed to set ownership on '%s': %s",
-                        path, strerror(saved_errno));
-        }
-    }
-
-    /* Set exact permissions (not affected by umask)
-     * SECURITY: This ensures the file has exactly the requested permissions,
-     * with no window where sensitive files have incorrect permissions */
-    if (fchmod(fd, mode) < 0) {
-        int saved_errno = errno;
-        close(fd);
-        return ERROR(ERR_FS, "Failed to set permissions on '%s': %s",
-                    path, strerror(saved_errno));
     }
 
     /* Sync to disk */
@@ -349,6 +379,105 @@ error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
                     path, existed ? " (already existed)" : "", strerror(errno));
     }
 
+    return NULL;
+}
+
+error_t *fs_create_dir_with_ownership(
+    const char *path,
+    mode_t mode,
+    uid_t uid,
+    gid_t gid,
+    bool parents
+) {
+    RETURN_IF_ERROR(validate_path(path));
+
+    /* Validate mode */
+    if (mode > 0777) {
+        return ERROR(ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)", mode);
+    }
+
+    /* Try to open existing directory first (eliminates TOCTOU race)
+     * SECURITY: This open-first pattern prevents race conditions where
+     * a directory is checked, then deleted/replaced before we operate on it.
+     * By attempting to open first, we either get a valid fd or a clear error. */
+    int dirfd = open(path, O_RDONLY | O_DIRECTORY);
+    if (dirfd >= 0) {
+        /* Directory exists - update ownership and mode atomically */
+        goto apply_metadata;
+    }
+
+    /* Directory doesn't exist - verify it's actually missing */
+    if (errno != ENOENT && errno != ENOTDIR) {
+        /* Unexpected error (permission denied, etc.) */
+        return ERROR(ERR_FS, "Failed to open directory '%s': %s",
+                    path, strerror(errno));
+    }
+
+    /* Create parent directories if requested */
+    if (parents) {
+        char *parent = NULL;
+        error_t *err = fs_get_parent_dir(path, &parent);
+        if (err) {
+            return err;
+        }
+
+        if (parent && !fs_is_directory(parent)) {
+            /* Use default 0755 for parent directories */
+            err = fs_create_dir(parent, true);
+            free(parent);
+            if (err) {
+                return err;
+            }
+        } else {
+            free(parent);
+        }
+    }
+
+    /* Create directory with restrictive initial mode for security
+     * SECURITY: Start with 0700 to prevent unauthorized access during setup,
+     * then atomically set final mode via fchmod() on the file descriptor. */
+    if (mkdir(path, 0700) < 0) {
+        if (errno == EEXIST) {
+            /* Race condition: directory created concurrently, retry via open path */
+            return fs_create_dir_with_ownership(path, mode, uid, gid, false);
+        }
+        return ERROR(ERR_FS, "Failed to create directory '%s': %s",
+                    path, strerror(errno));
+    }
+
+    /* Open newly created directory for atomic operations */
+    dirfd = open(path, O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0) {
+        return ERROR(ERR_FS, "Failed to open newly created directory '%s': %s",
+                    path, strerror(errno));
+    }
+
+apply_metadata:
+    /* Apply ownership atomically via file descriptor
+     * SECURITY: Using fchown() on the file descriptor ensures atomicity.
+     * The ownership is applied to the directory we have open, not to whatever
+     * might be at 'path' if a race condition occurred. */
+    if (uid != (uid_t)-1 || gid != (gid_t)-1) {
+        if (fchown(dirfd, uid, gid) < 0) {
+            int saved_errno = errno;
+            close(dirfd);
+            return ERROR(ERR_FS, "Failed to set ownership on '%s': %s",
+                        path, strerror(saved_errno));
+        }
+    }
+
+    /* Apply final mode atomically via file descriptor
+     * SECURITY: fchmod() ensures the mode is set on the directory we have open.
+     * This is the final step - after this completes, the directory has the
+     * exact ownership and permissions requested, with no security windows. */
+    if (fchmod(dirfd, mode) < 0) {
+        int saved_errno = errno;
+        close(dirfd);
+        return ERROR(ERR_FS, "Failed to set mode on '%s': %s",
+                    path, strerror(saved_errno));
+    }
+
+    close(dirfd);
     return NULL;
 }
 

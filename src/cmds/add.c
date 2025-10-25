@@ -5,10 +5,12 @@
 #include "add.h"
 
 #include <dirent.h>
+#include <errno.h>
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "base/error.h"
 #include "base/filesystem.h"
@@ -167,7 +169,10 @@ static error_t *collect_files_from_dir(
 }
 
 /**
- * Add single file to worktree
+ * Add single file to worktree and capture metadata
+ *
+ * Handles file storage, encryption, and metadata capture in a single operation.
+ * Uses stat data from content layer to eliminate race conditions.
  *
  * @param wt Worktree handle
  * @param filesystem_path Source path on filesystem
@@ -175,7 +180,7 @@ static error_t *collect_files_from_dir(
  * @param opts Command options
  * @param km Key manager (for encryption, can be NULL if encryption disabled)
  * @param config Configuration (for auto-encrypt patterns only, can be NULL)
- * @param entry Metadata entry (updated with encryption status, can be NULL for symlinks)
+ * @param metadata Metadata collection (captured entry will be added here)
  * @param out Output context
  * @return Error or NULL on success
  */
@@ -186,15 +191,18 @@ static error_t *add_file_to_worktree(
     const cmd_add_options_t *opts,
     keymanager_t *km,
     const dotta_config_t *config,
-    metadata_entry_t *entry,
+    metadata_t *metadata,
     output_ctx_t *out
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(storage_path);
     CHECK_NULL(opts);
+    CHECK_NULL(metadata);
 
     error_t *err = NULL;
+    metadata_entry_t *entry = NULL;  /* Will be created from captured metadata */
+    struct stat file_stat;           /* Captured from content layer */
 
     /* Build destination path in worktree */
     const char *wt_path = worktree_get_path(wt);
@@ -267,18 +275,28 @@ static error_t *add_file_to_worktree(
             return error_wrap(err, "Failed to determine encryption policy for '%s'", storage_path);
         }
 
-        /* Store file to worktree with optional encryption (handles read → encrypt → write) */
+        /* Store file to worktree with optional encryption (handles read → encrypt → write)
+         * IMPORTANT: This captures stat data to share with metadata layer (eliminates race condition) */
         err = content_store_file_to_worktree(
             filesystem_path,
             dest_path,
             storage_path,
             opts->profile,
             km,
-            should_encrypt
+            should_encrypt,
+            &file_stat  /* Capture stat data */
         );
         if (err) {
             free(dest_path);
             return error_wrap(err, "Failed to store file to worktree");
+        }
+
+        /* Capture metadata from file using stat data from content layer
+         * SECURITY: Single stat() call eliminates race condition between content and metadata */
+        err = metadata_capture_from_file(filesystem_path, storage_path, &file_stat, &entry);
+        if (err) {
+            free(dest_path);
+            return error_wrap(err, "Failed to capture metadata for '%s'", filesystem_path);
         }
 
         /* Update metadata entry with encryption status */
@@ -314,10 +332,37 @@ static error_t *add_file_to_worktree(
     git_index_free(index);
     if (git_err < 0) {
         free(dest_path);
+        if (entry) {
+            metadata_entry_free(entry);
+        }
         return error_from_git(git_err);
     }
 
     free(dest_path);
+
+    /* Add metadata entry to collection (entry will be NULL for symlinks - that's ok) */
+    if (entry) {
+        /* Verbose output for metadata capture */
+        if (opts->verbose && out) {
+            if (entry->owner || entry->group) {
+                output_info(out, "Captured metadata: %s (mode: %04o, owner: %s:%s)",
+                           filesystem_path, entry->mode,
+                           entry->owner ? entry->owner : "?",
+                           entry->group ? entry->group : "?");
+            } else {
+                output_info(out, "Captured metadata: %s (mode: %04o)",
+                           filesystem_path, entry->mode);
+            }
+        }
+
+        err = metadata_add_entry(metadata, entry);
+        metadata_entry_free(entry);
+
+        if (err) {
+            return error_wrap(err, "Failed to add metadata entry for '%s'", filesystem_path);
+        }
+    }
+
     return NULL;
 }
 
@@ -837,51 +882,14 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             goto cleanup;
         }
 
-        /* Capture metadata FIRST (fail early before copying file) */
-        metadata_entry_t *entry = NULL;
-        err = metadata_capture_from_file(file_path, storage_path, &entry);
+        /* Add file to worktree and capture metadata
+         * ARCHITECTURE: add_file_to_worktree now handles both operations atomically,
+         * sharing stat() data between content and metadata layers to eliminate race conditions */
+        err = add_file_to_worktree(wt, file_path, storage_path, opts, key_mgr, config, metadata, out);
         if (err) {
-            free(storage_path);
-            err = error_wrap(err, "Failed to capture metadata for: %s", file_path);
-            goto cleanup;
-        }
-
-        /* Add file to worktree (encryption handled transparently by content layer) */
-        err = add_file_to_worktree(wt, file_path, storage_path, opts, key_mgr, config, entry, out);
-        if (err) {
-            if (entry) {
-                metadata_entry_free(entry);
-            }
             free(storage_path);
             err = error_wrap(err, "Failed to add file '%s'", file_path);
             goto cleanup;
-        }
-
-        /* Add metadata entry to collection (entry will be NULL for symlinks - that's ok) */
-        if (entry) {
-            /* Verbose output for metadata capture */
-            if (opts->verbose && out) {
-                if (entry->owner || entry->group) {
-                    output_info(out, "Captured metadata: %s (mode: %04o, owner: %s:%s)",
-                               file_path, entry->mode,
-                               entry->owner ? entry->owner : "?",
-                               entry->group ? entry->group : "?");
-                } else {
-                    output_info(out, "Captured metadata: %s (mode: %04o)",
-                               file_path, entry->mode);
-                }
-            }
-
-            err = metadata_add_entry(metadata, entry);
-            metadata_entry_free(entry);
-
-            if (err) {
-                free(storage_path);
-                err = error_wrap(err, "Failed to add metadata entry");
-                goto cleanup;
-            }
-
-            metadata_count++;
         }
 
         free(storage_path);
@@ -893,11 +901,23 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     for (size_t i = 0; i < tracked_dir_count; i++) {
         const tracked_dir_t *dir = &tracked_dirs[i];
 
-        /* Capture directory metadata */
+        /* Stat directory first to capture metadata */
+        struct stat dir_stat;
+        if (stat(dir->filesystem_path, &dir_stat) != 0) {
+            /* Non-fatal: log warning and continue */
+            if (opts->verbose && out) {
+                output_warning(out, "Failed to stat directory '%s': %s",
+                              dir->filesystem_path, strerror(errno));
+            }
+            continue;
+        }
+
+        /* Capture directory metadata using stat data */
         metadata_directory_entry_t *dir_entry = NULL;
         err = metadata_capture_from_directory(
             dir->filesystem_path,
             dir->storage_prefix,
+            &dir_stat,
             &dir_entry
         );
 

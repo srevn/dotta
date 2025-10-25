@@ -138,6 +138,48 @@ error_t *fs_create_dir(const char *path, bool parents);
 error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents);
 
 /**
+ * Create directory with specific mode and ownership (atomic, idempotent)
+ *
+ * Ensures a directory exists with exact permissions and ownership.
+ * This function atomically sets ownership and mode using file descriptor
+ * operations (fchown + fchmod), eliminating any security window where
+ * the directory has incorrect attributes.
+ *
+ * Atomic sequence:
+ * 1. Create directory with restrictive mode (0700) or open existing
+ * 2. Open directory to obtain file descriptor
+ * 3. fchown(fd, uid, gid) - atomic ownership change
+ * 4. fchmod(fd, mode) - atomic permission change
+ * 5. Close file descriptor
+ *
+ * Behavior:
+ * - If directory doesn't exist: creates with atomic ownership + mode
+ * - If directory exists: updates ownership + mode atomically
+ * - Use uid=-1 or gid=-1 to skip ownership change
+ * - Parent directories created with default ownership (0755)
+ *
+ * @param path Directory path (must not be NULL)
+ * @param mode Permission mode for target directory (e.g., 0700, 0755)
+ * @param uid Target UID for directory ownership (use -1 to preserve)
+ * @param gid Target GID for directory ownership (use -1 to preserve)
+ * @param parents Create parent directories if true
+ * @return Error or NULL on success
+ *
+ * Errors:
+ * - ERR_INVALID_ARG: Invalid mode (> 0777)
+ * - ERR_FS: Failed to create directory
+ * - ERR_FS: Failed to set ownership (not running as root)
+ * - ERR_FS: Failed to set permissions
+ */
+error_t *fs_create_dir_with_ownership(
+    const char *path,
+    mode_t mode,
+    uid_t uid,
+    gid_t gid,
+    bool parents
+);
+
+/**
  * Remove directory
  *
  * @param path Directory path (must not be NULL)

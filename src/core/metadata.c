@@ -1123,31 +1123,84 @@ error_t *metadata_merge(
 }
 
 /**
+ * Resolve ownership from metadata entry
+ */
+error_t *metadata_resolve_ownership(
+    const char *owner,
+    const char *group,
+    uid_t *out_uid,
+    gid_t *out_gid
+) {
+    CHECK_NULL(out_uid);
+    CHECK_NULL(out_gid);
+
+    /* Initialize to "no change" */
+    *out_uid = (uid_t)-1;
+    *out_gid = (gid_t)-1;
+
+    /* Skip if no ownership specified */
+    if (!owner && !group) {
+        return NULL;
+    }
+
+    /* Only works when running as root */
+    if (getuid() != 0) {
+        return ERROR(ERR_PERMISSION,
+                    "Cannot resolve ownership (not running as root)");
+    }
+
+    /* Resolve owner to UID */
+    if (owner) {
+        struct passwd *pwd = getpwnam(owner);
+        if (!pwd) {
+            return ERROR(ERR_NOT_FOUND,
+                        "User '%s' does not exist on this system",
+                        owner);
+        }
+        *out_uid = pwd->pw_uid;
+
+        /* If no group specified, use user's primary group */
+        if (!group) {
+            *out_gid = pwd->pw_gid;
+        }
+    }
+
+    /* Resolve group to GID (if specified and not already set from user) */
+    if (group && *out_gid == (gid_t)-1) {
+        struct group *grp = getgrnam(group);
+        if (!grp) {
+            return ERROR(ERR_NOT_FOUND,
+                        "Group '%s' does not exist on this system",
+                        group);
+        }
+        *out_gid = grp->gr_gid;
+    }
+
+    return NULL;
+}
+
+/**
  * Capture metadata from filesystem file
  */
 error_t *metadata_capture_from_file(
     const char *filesystem_path,
     const char *storage_path,
+    const struct stat *st,
     metadata_entry_t **out
 ) {
     CHECK_NULL(filesystem_path);
     CHECK_NULL(storage_path);
+    CHECK_NULL(st);
     CHECK_NULL(out);
 
     /* Check if file is a symlink - skip metadata for symlinks */
-    if (fs_is_symlink(filesystem_path)) {
+    if (S_ISLNK(st->st_mode)) {
         *out = NULL; /* Not an error, just skip */
         return NULL;
     }
 
-    /* Get file stats */
-    struct stat st;
-    if (stat(filesystem_path, &st) != 0) {
-        return ERROR(ERR_FS, "Failed to stat file: %s", filesystem_path);
-    }
-
     /* Extract mode (permissions only, not file type bits) */
-    mode_t mode = st.st_mode & 0777;
+    mode_t mode = st->st_mode & 0777;
 
     /* Create entry */
     metadata_entry_t *entry = NULL;
@@ -1162,7 +1215,7 @@ error_t *metadata_capture_from_file(
 
     if (is_root_prefix && running_as_root) {
         /* Resolve UID to username */
-        struct passwd *pwd = getpwuid(st.st_uid);
+        struct passwd *pwd = getpwuid(st->st_uid);
         if (pwd && pwd->pw_name) {
             entry->owner = strdup(pwd->pw_name);
             if (!entry->owner) {
@@ -1172,7 +1225,7 @@ error_t *metadata_capture_from_file(
         }
 
         /* Resolve GID to groupname */
-        struct group *grp = getgrgid(st.st_gid);
+        struct group *grp = getgrgid(st->st_gid);
         if (grp && grp->gr_name) {
             entry->group = strdup(grp->gr_name);
             if (!entry->group) {
@@ -1427,67 +1480,6 @@ error_t *metadata_load_from_profiles(
     return NULL;
 }
 
-/**
- * Apply ownership to a file
- */
-error_t *metadata_apply_ownership(
-    const metadata_entry_t *entry,
-    const char *filesystem_path
-) {
-    CHECK_NULL(entry);
-    CHECK_NULL(filesystem_path);
-
-    /* Skip if no ownership metadata */
-    if (!entry->owner && !entry->group) {
-        return NULL;  /* Nothing to do */
-    }
-
-    /* Only works when running as root */
-    if (getuid() != 0) {
-        return ERROR(ERR_PERMISSION,
-                    "Cannot set ownership (not running as root): %s",
-                    filesystem_path);
-    }
-
-    uid_t uid = (uid_t)-1;  /* -1 means don't change */
-    gid_t gid = (gid_t)-1;  /* -1 means don't change */
-
-    /* Resolve owner to UID */
-    if (entry->owner) {
-        struct passwd *pwd = getpwnam(entry->owner);
-        if (!pwd) {
-            return ERROR(ERR_NOT_FOUND,
-                        "User '%s' does not exist on this system (for %s)",
-                        entry->owner, filesystem_path);
-        }
-        uid = pwd->pw_uid;
-
-        /* If no group specified, use user's primary group */
-        if (!entry->group) {
-            gid = pwd->pw_gid;
-        }
-    }
-
-    /* Resolve group to GID (if specified and not already set from user) */
-    if (entry->group && gid == (gid_t)-1) {
-        struct group *grp = getgrnam(entry->group);
-        if (!grp) {
-            return ERROR(ERR_NOT_FOUND,
-                        "Group '%s' does not exist on this system (for %s)",
-                        entry->group, filesystem_path);
-        }
-        gid = grp->gr_gid;
-    }
-
-    /* Apply ownership */
-    if (chown(filesystem_path, uid, gid) != 0) {
-        return ERROR(ERR_FS,
-                    "Failed to set ownership on %s: %s",
-                    filesystem_path, strerror(errno));
-    }
-
-    return NULL;
-}
 
 /**
  * Capture metadata from filesystem directory
@@ -1495,25 +1487,21 @@ error_t *metadata_apply_ownership(
 error_t *metadata_capture_from_directory(
     const char *filesystem_path,
     const char *storage_prefix,
+    const struct stat *st,
     metadata_directory_entry_t **out
 ) {
     CHECK_NULL(filesystem_path);
     CHECK_NULL(storage_prefix);
+    CHECK_NULL(st);
     CHECK_NULL(out);
 
-    /* Get directory stats */
-    struct stat st;
-    if (stat(filesystem_path, &st) != 0) {
-        return ERROR(ERR_FS, "Failed to stat directory: %s", filesystem_path);
-    }
-
     /* Verify it's actually a directory */
-    if (!S_ISDIR(st.st_mode)) {
+    if (!S_ISDIR(st->st_mode)) {
         return ERROR(ERR_INVALID_ARG, "Path is not a directory: %s", filesystem_path);
     }
 
     /* Extract mode (permissions only, not file type bits) */
-    mode_t mode = st.st_mode & 0777;
+    mode_t mode = st->st_mode & 0777;
 
     /* Allocate entry */
     metadata_directory_entry_t *entry = calloc(1, sizeof(metadata_directory_entry_t));
@@ -1540,7 +1528,7 @@ error_t *metadata_capture_from_directory(
 
     if (is_root_prefix && running_as_root) {
         /* Resolve UID to username */
-        struct passwd *pwd = getpwuid(st.st_uid);
+        struct passwd *pwd = getpwuid(st->st_uid);
         if (pwd && pwd->pw_name) {
             entry->owner = strdup(pwd->pw_name);
             if (!entry->owner) {
@@ -1550,7 +1538,7 @@ error_t *metadata_capture_from_directory(
         }
 
         /* Resolve GID to groupname */
-        struct group *grp = getgrgid(st.st_gid);
+        struct group *grp = getgrgid(st->st_gid);
         if (grp && grp->gr_name) {
             entry->group = strdup(grp->gr_name);
             if (!entry->group) {
@@ -1580,67 +1568,6 @@ void metadata_directory_entry_free(metadata_directory_entry_t *entry) {
     free(entry);
 }
 
-/**
- * Apply ownership to a directory
- */
-error_t *metadata_apply_directory_ownership(
-    const metadata_directory_entry_t *entry,
-    const char *filesystem_path
-) {
-    CHECK_NULL(entry);
-    CHECK_NULL(filesystem_path);
-
-    /* Skip if no ownership metadata */
-    if (!entry->owner && !entry->group) {
-        return NULL;  /* Nothing to do */
-    }
-
-    /* Only works when running as root */
-    if (getuid() != 0) {
-        return ERROR(ERR_PERMISSION,
-                    "Cannot set directory ownership (not running as root): %s",
-                    filesystem_path);
-    }
-
-    uid_t uid = (uid_t)-1;  /* -1 means don't change */
-    gid_t gid = (gid_t)-1;  /* -1 means don't change */
-
-    /* Resolve owner to UID */
-    if (entry->owner) {
-        struct passwd *pwd = getpwnam(entry->owner);
-        if (!pwd) {
-            return ERROR(ERR_NOT_FOUND,
-                        "User '%s' does not exist on this system (for %s)",
-                        entry->owner, filesystem_path);
-        }
-        uid = pwd->pw_uid;
-
-        /* If no group specified, use user's primary group */
-        if (!entry->group) {
-            gid = pwd->pw_gid;
-        }
-    }
-
-    /* Resolve group to GID (if specified and not already set from user) */
-    if (entry->group && gid == (gid_t)-1) {
-        struct group *grp = getgrnam(entry->group);
-        if (!grp) {
-            return ERROR(ERR_NOT_FOUND,
-                        "Group '%s' does not exist on this system (for %s)",
-                        entry->group, filesystem_path);
-        }
-        gid = grp->gr_gid;
-    }
-
-    /* Apply ownership */
-    if (chown(filesystem_path, uid, gid) != 0) {
-        return ERROR(ERR_FS,
-                    "Failed to set directory ownership on %s: %s",
-                    filesystem_path, strerror(errno));
-    }
-
-    return NULL;
-}
 
 /**
  * Add tracked directory to metadata

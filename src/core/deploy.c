@@ -235,7 +235,9 @@ error_t *deploy_preflight_check(
             }
 
             /* If different and not forcing, it's a conflict */
-            if ((cmp_result == CMP_DIFFERENT || cmp_result == CMP_MODE_DIFF || cmp_result == CMP_TYPE_DIFF) && !opts->force) {
+            if ((cmp_result == CMP_DIFFERENT ||
+                 cmp_result == CMP_MODE_DIFF ||
+                 cmp_result == CMP_TYPE_DIFF) && !opts->force) {
                 string_array_push(result->conflicts, entry->filesystem_path);
                 result->has_errors = true;
             }
@@ -261,6 +263,78 @@ cleanup:
     if (result) preflight_result_free(result);
 
     return err;
+}
+
+/**
+ * Resolve deployment ownership for a path
+ *
+ * Unified ownership resolution logic for both files and directories.
+ * Handles home/ vs root/ prefix logic and sudo detection.
+ *
+ * Resolution rules:
+ * - home/ prefix when running as root (sudo): Use actual user's UID/GID
+ * - root/ prefix with owner/group metadata: Resolve names to UID/GID
+ * - All other cases: Return -1 (no ownership change)
+ *
+ * @param storage_path Path in profile (e.g., "home/.bashrc", "root/etc/nginx.conf")
+ * @param owner Owner username from metadata (can be NULL)
+ * @param group Group name from metadata (can be NULL)
+ * @param out_uid Resolved UID or -1 for no change (must not be NULL)
+ * @param out_gid Resolved GID or -1 for no change (must not be NULL)
+ * @param verbose Enable verbose warning messages
+ * @return Error on fatal failures, NULL on success (non-fatal errors logged and suppressed)
+ */
+static error_t *resolve_deployment_ownership(
+    const char *storage_path,
+    const char *owner,
+    const char *group,
+    uid_t *out_uid,
+    gid_t *out_gid,
+    bool verbose
+) {
+    CHECK_NULL(storage_path);
+    CHECK_NULL(out_uid);
+    CHECK_NULL(out_gid);
+
+    /* Initialize to "no change" */
+    *out_uid = (uid_t)-1;
+    *out_gid = (gid_t)-1;
+
+    /* Determine prefix type */
+    bool is_home_prefix = str_starts_with(storage_path, "home/");
+    bool is_root_prefix = str_starts_with(storage_path, "root/");
+
+    /* Case 1: home/ prefix when running as root → use actual user (sudo handling) */
+    if (is_home_prefix && fs_is_running_as_root()) {
+        error_t *err = fs_get_actual_user(out_uid, out_gid);
+        if (err) {
+            return error_wrap(err,
+                "Failed to determine actual user for home/ path: %s", storage_path);
+        }
+        return NULL;
+    }
+
+    /* Case 2: root/ prefix with ownership metadata → resolve to UID/GID */
+    if (is_root_prefix && (owner || group)) {
+        error_t *err = metadata_resolve_ownership(owner, group, out_uid, out_gid);
+        if (err) {
+            /* Non-fatal: Log warning and continue with default ownership
+             * This allows deployment to proceed even if the user/group doesn't
+             * exist on this machine (e.g., deploying admin files as non-root) */
+            if (verbose || err->code != ERR_PERMISSION) {
+                fprintf(stderr, "Warning: Could not resolve ownership for %s: %s\n",
+                        storage_path, error_message(err));
+            }
+            error_free(err);
+            /* Reset to "no change" */
+            *out_uid = (uid_t)-1;
+            *out_gid = (gid_t)-1;
+        }
+        return NULL;
+    }
+
+    /* Case 3: All other cases → no ownership change */
+    return NULL;
 }
 
 /**
@@ -396,32 +470,35 @@ error_t *deploy_file(
         file_mode = (mode == GIT_FILEMODE_BLOB_EXECUTABLE) ? 0755 : 0644;
     }
 
-    /* Determine ownership for the file based on prefix
+    /* Resolve ownership for the file based on prefix - RESOLVED BEFORE WRITING
      *
-     * For home/ files when running as root: Use actual user's UID/GID
-     * For root/ files: Use -1 (preserve root ownership)
-     * When not running as root: Use -1 (preserve current user)
+     * SECURITY: Ownership resolution happens BEFORE file creation to enable
+     * atomic ownership via fchown() on the file descriptor. This eliminates
+     * the security window where files exist with incorrect ownership.
+     *
+     * Uses unified helper that handles:
+     * - home/ files when running as root: Use actual user's UID/GID (sudo handling)
+     * - root/ files with metadata: Resolve owner/group → UID/GID
+     * - All other cases: Return -1 (preserve current user/root ownership)
      */
-    uid_t target_uid = -1;
-    gid_t target_gid = -1;
-
-    bool is_home_prefix = str_starts_with(entry->storage_path, "home/");
-
-    if (is_home_prefix && fs_is_running_as_root()) {
-        /* Running as root, deploying home/ file - use actual user's credentials */
-        err = fs_get_actual_user(&target_uid, &target_gid);
-        if (err) {
-            err = error_wrap(err,
-                            "Failed to determine actual user for home/ file: %s",
-                            entry->filesystem_path);
-            goto cleanup;
-        }
+    uid_t target_uid, target_gid;
+    err = resolve_deployment_ownership(
+        entry->storage_path,
+        meta_entry ? meta_entry->owner : NULL,
+        meta_entry ? meta_entry->group : NULL,
+        &target_uid,
+        &target_gid,
+        opts->verbose
+    );
+    if (err) {
+        err = error_wrap(err, "Failed to resolve ownership for '%s'", entry->filesystem_path);
+        goto cleanup;
     }
-    /* For root/ files or when not running as root: leave uid/gid as -1 (no change) */
 
-    /* Write directly from git blob to filesystem with atomic permission setting
-     * SECURITY: fs_write_file_raw now sets permissions atomically via fchmod(),
-     * eliminating the window where the file has incorrect permissions */
+    /* Write directly from git blob to filesystem with atomic ownership and permissions
+     * SECURITY: fs_write_file_raw atomically sets BOTH ownership and permissions via
+     * fchown() and fchmod() on the file descriptor, eliminating any security window.
+     * This is the ONLY place where ownership is applied - metadata layer only resolves. */
     err = fs_write_file_raw(
         entry->filesystem_path,
         (const unsigned char *)content,
@@ -436,25 +513,11 @@ error_t *deploy_file(
         goto cleanup;
     }
 
-    /* Apply ownership ONLY for root/ prefix files */
-    bool is_root_prefix = str_starts_with(entry->storage_path, "root/");
-    bool has_ownership = false;
-
-    if (is_root_prefix && metadata && meta_entry && (meta_entry->owner || meta_entry->group)) {
-        error_t *ownership_err = metadata_apply_ownership(meta_entry, entry->filesystem_path);
-        if (ownership_err) {
-            /* Non-fatal: warn and continue */
-            if (opts->verbose || ownership_err->code != ERR_PERMISSION) {
-                fprintf(stderr, "Warning: Could not set ownership on %s: %s\n",
-                        entry->filesystem_path, error_message(ownership_err));
-            }
-            error_free(ownership_err);
-        } else {
-            has_ownership = true;
-        }
-    }
-
+    /* Verbose output */
     if (opts->verbose) {
+        bool has_ownership = (meta_entry && (meta_entry->owner || meta_entry->group) &&
+                             target_uid != (uid_t)-1);  /* Check if we actually resolved ownership */
+
         if (used_metadata && has_ownership) {
             printf("Deployed: %s (mode: %04o, owner: %s:%s)\n",
                    entry->filesystem_path, file_mode,
@@ -538,10 +601,36 @@ static error_t *deploy_tracked_directories(
             continue;
         }
 
-        /* Create directory with proper mode */
-        error_t *err = fs_create_dir_with_mode(
+        /* Resolve ownership BEFORE creating directory - SECURITY: enables atomic ownership
+         *
+         * ARCHITECTURE: Ownership resolution happens upfront so fs_create_dir_with_ownership
+         * can atomically apply ownership via fchown() on the directory file descriptor.
+         * This eliminates the security window where directories exist with incorrect ownership.
+         *
+         * Uses unified helper that handles home/, root/, and default cases.
+         */
+        uid_t target_uid, target_gid;
+        error_t *err = resolve_deployment_ownership(
+            dir_entry->storage_prefix,
+            dir_entry->owner,
+            dir_entry->group,
+            &target_uid,
+            &target_gid,
+            opts->verbose
+        );
+        if (err) {
+            return error_wrap(err,
+                "Failed to resolve ownership for directory: %s", dir_entry->filesystem_path);
+        }
+
+        /* Create directory with ATOMIC ownership and permissions
+         * SECURITY: fs_create_dir_with_ownership uses fchown() and fchmod() on the
+         * directory fd, ensuring no security window exists */
+        err = fs_create_dir_with_ownership(
             dir_entry->filesystem_path,
             dir_entry->mode,
+            target_uid,
+            target_gid,
             true  /* create parents */
         );
 
@@ -550,47 +639,19 @@ static error_t *deploy_tracked_directories(
                             dir_entry->filesystem_path);
         }
 
-        /* Apply ownership based on prefix and sudo status */
-        bool is_root_prefix = str_starts_with(dir_entry->storage_prefix, "root/");
-        bool is_home_prefix = str_starts_with(dir_entry->storage_prefix, "home/");
+        /* Verbose output */
+        if (opts->verbose) {
+            bool has_ownership = (target_uid != (uid_t)-1 || target_gid != (gid_t)-1);
 
-        if (is_root_prefix && dir_entry->owner && dir_entry->group) {
-            /* For root/ prefix: apply ownership from metadata */
-            err = metadata_apply_directory_ownership(dir_entry, dir_entry->filesystem_path);
-            if (err) {
-                /* Non-fatal: warn and continue */
-                if (opts->verbose || err->code != ERR_PERMISSION) {
-                    fprintf(stderr, "Warning: Could not set directory ownership on %s: %s\n",
-                            dir_entry->filesystem_path, error_message(err));
-                }
-                error_free(err);
-            }
-        } else if (is_home_prefix && fs_is_running_as_root()) {
-            /* For home/ prefix when running as root: use actual user (sudo handling) */
-            uid_t target_uid;
-            gid_t target_gid;
-
-            err = fs_get_actual_user(&target_uid, &target_gid);
-            if (err) {
-                return error_wrap(err,
-                                "Failed to determine actual user for home/ directory: %s",
-                                dir_entry->filesystem_path);
-            }
-
-            /* Apply ownership */
-            if (chown(dir_entry->filesystem_path, target_uid, target_gid) != 0) {
-                return ERROR(ERR_FS,
-                            "Failed to set directory ownership on %s: %s",
-                            dir_entry->filesystem_path, strerror(errno));
-            }
-
-            if (opts->verbose) {
+            if (has_ownership && dir_entry->owner) {
+                printf("  Created: %s (mode: %04o, owner: %s:%s)\n",
+                      dir_entry->filesystem_path, dir_entry->mode,
+                      dir_entry->owner ? dir_entry->owner : "?",
+                      dir_entry->group ? dir_entry->group : "?");
+            } else if (has_ownership) {
                 printf("  Created: %s (mode: %04o, owner: actual user)\n",
                       dir_entry->filesystem_path, dir_entry->mode);
-            }
-        } else {
-            /* Normal case: directory created with current user ownership */
-            if (opts->verbose) {
+            } else {
                 printf("  Created: %s (mode: %04o)\n",
                       dir_entry->filesystem_path, dir_entry->mode);
             }

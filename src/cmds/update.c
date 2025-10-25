@@ -562,7 +562,8 @@ static error_t *copy_file_to_worktree(
             storage_path,
             profile_name,
             km,
-            should_encrypt
+            should_encrypt,
+            NULL  /* Don't need stat data here - metadata captured separately */
         );
         if (err) {
             err = error_wrap(err, "Failed to store file to worktree");
@@ -651,9 +652,17 @@ static error_t *capture_and_save_metadata(
             continue;
         }
 
-        /* Capture metadata from filesystem */
+        /* Stat file to capture metadata
+         * ARCHITECTURE: Single stat() call shared with metadata capture to eliminate race conditions */
+        struct stat file_stat;
+        if (stat(file->filesystem_path, &file_stat) != 0) {
+            metadata_free(metadata);
+            return ERROR(ERR_FS, "Failed to stat file: %s", file->filesystem_path);
+        }
+
+        /* Capture metadata from filesystem using stat data */
         metadata_entry_t *entry = NULL;
-        err = metadata_capture_from_file(file->filesystem_path, file->storage_path, &entry);
+        err = metadata_capture_from_file(file->filesystem_path, file->storage_path, &file_stat, &entry);
 
         if (err) {
             metadata_free(metadata);

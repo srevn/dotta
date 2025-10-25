@@ -38,6 +38,7 @@
 #define DOTTA_METADATA_H
 
 #include <git2.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 
 #include "types.h"
@@ -257,7 +258,7 @@ error_t *metadata_merge(
 /**
  * Capture metadata from filesystem file
  *
- * Reads file permissions from the filesystem and creates a metadata entry.
+ * Creates a metadata entry from file stat data.
  * Symlinks are skipped (returns NULL with no error - caller should check *out).
  *
  * Ownership capture (user/group):
@@ -265,8 +266,9 @@ error_t *metadata_merge(
  * - home/ prefix files: ownership never captured (always current user)
  * - Regular users: ownership never captured (can't chown anyway)
  *
- * @param filesystem_path Path to file on disk (must not be NULL)
+ * @param filesystem_path Path to file on disk (must not be NULL, for error messages)
  * @param storage_path Path in profile (must not be NULL)
+ * @param st File stat data (must not be NULL)
  * @param out Entry (must not be NULL, caller must free with metadata_entry_free)
  *            Set to NULL if file is a symlink (not an error)
  * @return Error or NULL on success
@@ -274,6 +276,7 @@ error_t *metadata_merge(
 error_t *metadata_capture_from_file(
     const char *filesystem_path,
     const char *storage_path,
+    const struct stat *st,
     metadata_entry_t **out
 );
 
@@ -379,27 +382,45 @@ error_t *metadata_parse_mode(const char *mode_str, mode_t *out);
 error_t *metadata_format_mode(mode_t mode, char **out);
 
 /**
- * Apply ownership to a file
+ * Resolve ownership from owner/group strings to UID/GID
  *
- * Sets file ownership based on metadata entry. This function:
- * - Only works when running as root (UID 0)
- * - Validates that the user/group exist on the system
- * - Returns non-fatal warnings if user doesn't exist
- * - Should only be called for root/ prefix files
+ * Converts owner and group names to UID/GID values.
+ * This is pure data transformation - no filesystem operations.
  *
- * @param entry Metadata entry with owner/group (must not be NULL)
- * @param filesystem_path Path to file on disk (must not be NULL)
- * @return Error or NULL on success (ERR_NOT_FOUND if user doesn't exist)
+ * Rules:
+ * - Only works when running as root (returns ERR_PERMISSION otherwise)
+ * - Validates that user/group exist on the system
+ * - If owner is set but group is not, uses owner's primary group
+ * - Returns uid=-1 or gid=-1 to indicate "don't change ownership"
+ *
+ * The caller is responsible for applying the resolved ownership
+ * using fchown() or similar system calls.
+ *
+ * This function works with raw strings, making it usable for both
+ * file entries (metadata_entry_t) and directory entries
+ * (metadata_directory_entry_t) without requiring temporary structs.
+ *
+ * @param owner Owner username (can be NULL if no owner change desired)
+ * @param group Group name (can be NULL if no group change desired)
+ * @param out_uid Resolved UID or -1 if no ownership change (must not be NULL)
+ * @param out_gid Resolved GID or -1 if no ownership change (must not be NULL)
+ * @return Error or NULL on success
+ *
+ * Errors:
+ * - ERR_PERMISSION: Not running as root
+ * - ERR_NOT_FOUND: User or group doesn't exist on this system
  */
-error_t *metadata_apply_ownership(
-    const metadata_entry_t *entry,
-    const char *filesystem_path
+error_t *metadata_resolve_ownership(
+    const char *owner,
+    const char *group,
+    uid_t *out_uid,
+    gid_t *out_gid
 );
 
 /**
  * Capture metadata from filesystem directory
  *
- * Reads directory permissions from the filesystem and creates a metadata entry.
+ * Creates a directory metadata entry from stat data.
  * Follows the same rules as file metadata capture.
  *
  * Ownership capture (user/group):
@@ -407,14 +428,16 @@ error_t *metadata_apply_ownership(
  * - home/ prefix directories: ownership never captured (always current user)
  * - Regular users: ownership never captured (can't chown anyway)
  *
- * @param filesystem_path Path to directory on disk (must not be NULL)
+ * @param filesystem_path Path to directory on disk (must not be NULL, for error messages)
  * @param storage_prefix Storage prefix in profile (must not be NULL)
+ * @param st Directory stat data (must not be NULL)
  * @param out Entry (must not be NULL, caller must free with metadata_directory_entry_free)
  * @return Error or NULL on success
  */
 error_t *metadata_capture_from_directory(
     const char *filesystem_path,
     const char *storage_prefix,
+    const struct stat *st,
     metadata_directory_entry_t **out
 );
 
@@ -424,24 +447,6 @@ error_t *metadata_capture_from_directory(
  * @param entry Entry to free (can be NULL)
  */
 void metadata_directory_entry_free(metadata_directory_entry_t *entry);
-
-/**
- * Apply ownership to a directory
- *
- * Sets directory ownership based on metadata entry. This function:
- * - Only works when running as root (UID 0)
- * - Validates that the user/group exist on the system
- * - Returns non-fatal warnings if user doesn't exist
- * - Should only be called for root/ prefix directories
- *
- * @param entry Directory metadata entry with owner/group (must not be NULL)
- * @param filesystem_path Path to directory on disk (must not be NULL)
- * @return Error or NULL on success (ERR_NOT_FOUND if user doesn't exist)
- */
-error_t *metadata_apply_directory_ownership(
-    const metadata_directory_entry_t *entry,
-    const char *filesystem_path
-);
 
 /**
  * Add tracked directory to metadata

@@ -502,7 +502,8 @@ error_t *content_store_file_to_worktree(
     const char *storage_path,
     const char *profile_name,
     keymanager_t *km,
-    bool should_encrypt
+    bool should_encrypt,
+    struct stat *out_stat
 ) {
     CHECK_NULL(filesystem_path);
     CHECK_NULL(worktree_path);
@@ -514,6 +515,11 @@ error_t *content_store_file_to_worktree(
     if (lstat(filesystem_path, &st) < 0) {
         return ERROR(ERR_FS, "Failed to stat '%s': %s",
                     filesystem_path, strerror(errno));
+    }
+
+    /* Return stat data to caller if requested (before error checks) */
+    if (out_stat) {
+        memcpy(out_stat, &st, sizeof(struct stat));
     }
 
     if (!S_ISREG(st.st_mode)) {

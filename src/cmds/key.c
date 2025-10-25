@@ -11,7 +11,6 @@
 #include "base/error.h"
 #include "core/metadata.h"
 #include "core/state.h"
-#include "crypto/encryption.h"
 #include "crypto/keymanager.h"
 #include "utils/array.h"
 #include "utils/config.h"

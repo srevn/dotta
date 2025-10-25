@@ -40,6 +40,7 @@
 #define DOTTA_INFRA_CONTENT_H
 
 #include <git2.h>
+#include <sys/stat.h>
 
 #include "types.h"
 
@@ -263,7 +264,7 @@ error_t *content_store_to_blob(
  * This encapsulates the common pattern used in add/update commands.
  *
  * Process:
- * 1. Read file from filesystem
+ * 1. Read file from filesystem and capture stat data
  * 2. If should_encrypt=true:
  *    a. Get profile key from keymanager
  *    b. Encrypt content
@@ -280,6 +281,7 @@ error_t *content_store_to_blob(
  * @param profile_name Profile name (for key derivation, must not be NULL)
  * @param km Key manager (can be NULL if should_encrypt=false)
  * @param should_encrypt Policy decision from caller (true = encrypt, false = plaintext)
+ * @param out_stat Output stat data from source file (optional, can be NULL)
  * @return Error or NULL on success
  *
  * Errors:
@@ -295,7 +297,8 @@ error_t *content_store_file_to_worktree(
     const char *storage_path,
     const char *profile_name,
     keymanager_t *km,
-    bool should_encrypt
+    bool should_encrypt,
+    struct stat *out_stat
 );
 
 #endif /* DOTTA_INFRA_CONTENT_H */

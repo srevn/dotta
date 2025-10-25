@@ -10,7 +10,7 @@
  * - Transparent decryption (callers always get plaintext)
  * - Caching for batch operations (avoid redundant decryption)
  * - Type-safe ownership (const for borrowed references)
- * - Optional metadata validation (cross-check magic header)
+ * - Metadata validation (cross-check magic header for defense in depth)
  * - Magic header as source of truth for encryption detection
  *
  * Two-tier API:
@@ -72,12 +72,12 @@ typedef struct content_cache content_cache_t;
  * Process:
  * 1. Load blob from tree entry
  * 2. Check magic header for encryption
- * 3. If encrypted:
- *    a. Validate with metadata (if provided)
- *    b. Get master key from keymanager
- *    c. Derive profile key
- *    d. Decrypt blob
- * 4. If plaintext: return blob content
+ * 3. Validate consistency with metadata
+ * 4. If encrypted:
+ *    a. Get master key from keymanager
+ *    b. Derive profile key
+ *    c. Decrypt blob
+ * 5. If plaintext: return blob content
  *
  * @param repo Git repository (must not be NULL)
  * @param entry Tree entry to read (must not be NULL)

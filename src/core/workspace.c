@@ -19,6 +19,7 @@
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
+#include "crypto/encryption.h"
 #include "crypto/keymanager.h"
 #include "crypto/policy.h"
 #include "infra/compare.h"
@@ -34,28 +35,28 @@
  * Uses hashmaps for O(1) lookups during analysis.
  */
 struct workspace {
-    git_repository *repo;          /* Borrowed reference */
+    git_repository *repo;            /* Borrowed reference */
 
     /* State data */
-    manifest_t *manifest;          /* Profile state (owned) */
-    state_t *state;                /* Deployment state (owned) */
-    profile_list_t *profiles;      /* Selected profiles for this workspace (borrowed) */
-    hashmap_t *manifest_index;     /* Maps filesystem_path -> file_entry_t* */
-    hashmap_t *profile_index;      /* Maps profile_name -> profile_t* (for O(1) lookup) */
+    manifest_t *manifest;            /* Profile state (owned) */
+    state_t *state;                  /* Deployment state (owned) */
+    profile_list_t *profiles;        /* Selected profiles for this workspace (borrowed) */
+    hashmap_t *manifest_index;       /* Maps filesystem_path -> file_entry_t* */
+    hashmap_t *profile_index;        /* Maps profile_name -> profile_t* (for O(1) lookup) */
 
     /* Encryption and caching infrastructure */
-    keymanager_t *keymanager;      /* Borrowed from global */
-    content_cache_t *content_cache; /* Owned - caches decrypted content */
-    hashmap_t *metadata_cache;     /* Owned - maps profile_name -> metadata_t* */
+    keymanager_t *keymanager;        /* Borrowed from global */
+    content_cache_t *content_cache;  /* Owned - caches decrypted content */
+    hashmap_t *metadata_cache;       /* Owned - maps profile_name -> metadata_t* */
 
     /* Divergence tracking */
-    workspace_file_t *diverged;    /* Array of diverged files */
+    workspace_file_t *diverged;      /* Array of diverged files */
     size_t diverged_count;
     size_t diverged_capacity;
-    hashmap_t *diverged_index;     /* Maps filesystem_path -> workspace_file_t */
+    hashmap_t *diverged_index;       /* Maps filesystem_path -> workspace_file_t */
 
     /* Divergence count cache */
-    size_t divergence_counts[9];   /* Cached counts for O(1) access */
+    size_t divergence_counts[9];     /* Cached counts for O(1) access */
 
     /* Status cache */
     workspace_status_t status;
@@ -273,6 +274,14 @@ static error_t *analyze_file_divergence(
     }
     /* Case 3: File deployed and exists - check for modifications */
     else if (in_state && on_filesystem) {
+        /* Get metadata for validation (should always exist) */
+        const metadata_t *metadata = ws_get_metadata(ws, manifest_entry->source_profile->name);
+        if (!metadata) {
+            return ERROR(ERR_INTERNAL,
+                "Metadata cache missing entry for profile '%s' (invariant violation)",
+                manifest_entry->source_profile->name);
+        }
+
         /* Get plaintext content (cached, automatic decryption) */
         const buffer_t *content = NULL;
         error_t *err = content_cache_get_from_tree_entry(
@@ -280,7 +289,7 @@ static error_t *analyze_file_divergence(
             manifest_entry->entry,
             manifest_entry->storage_path,
             manifest_entry->source_profile->name,
-            ws_get_metadata(ws, manifest_entry->source_profile->name),
+            metadata,
             &content
         );
 
@@ -718,9 +727,22 @@ static error_t *analyze_untracked_files(
  * Detects files that should be encrypted (per auto-encrypt patterns)
  * but are stored as plaintext in the profile.
  *
+ * Uses two-tier validation to determine actual encryption state:
+ * - Tier 1 (Source of Truth): Checks magic header in git blob
+ * - Tier 2 (Defense in Depth): Cross-validates with metadata
+ *
+ * If magic header and metadata disagree, warns about corruption but
+ * uses magic header truth for policy enforcement. This ensures policy
+ * violations are always detected even with corrupted metadata.
+ *
  * Only checks if:
  * - Encryption is globally enabled
  * - Auto-encrypt patterns are configured
+ *
+ * Error handling:
+ * - Git read errors: Non-fatal, warns and skips file
+ * - Metadata corruption: Non-fatal, warns and uses magic header
+ * - Pattern match errors: Non-fatal, skips file
  *
  * This is a security-focused check: files matching sensitive patterns
  * (e.g., "*.key", ".ssh/id_*") should be encrypted.
@@ -766,23 +788,52 @@ static error_t *analyze_encryption_policy_mismatch(
             continue;
         }
 
-        /* Get metadata to check actual encryption state */
-        const metadata_t *metadata = ws_get_metadata(ws, profile_name);
+        /* Validate actual encryption state using two-tier validation */
         bool is_encrypted = false;
 
+        /* Tier 1: Check magic header in blob (source of truth) */
+        const git_oid *blob_oid = git_tree_entry_id(manifest_entry->entry);
+        git_blob *blob = NULL;
+        int git_err = git_blob_lookup(&blob, ws->repo, blob_oid);
+
+        if (git_err != 0) {
+            /* Non-fatal: can't read blob - skip this file */
+            fprintf(stderr, "warning: failed to read blob for '%s' in profile '%s': %s\n",
+                    storage_path, profile_name,
+                    git_error_last() ? git_error_last()->message : "unknown error");
+            continue;
+        }
+
+        const unsigned char *blob_data = git_blob_rawcontent(blob);
+        size_t blob_size = (size_t)git_blob_rawsize(blob);
+        is_encrypted = encryption_is_encrypted(blob_data, blob_size);
+
+        /* Tier 2: Cross-validate with metadata (defense in depth) */
+        const metadata_t *metadata = ws_get_metadata(ws, profile_name);
         if (metadata) {
             const metadata_entry_t *meta_entry = NULL;
             error_t *lookup_err = metadata_get_entry(metadata, storage_path, &meta_entry);
 
             if (lookup_err == NULL && meta_entry) {
-                is_encrypted = meta_entry->encrypted;
+                /* Detect mismatch between magic header and metadata */
+                if (is_encrypted != meta_entry->encrypted) {
+                    fprintf(stderr,
+                        "warning: metadata corruption detected for '%s' in profile '%s'\n"
+                        "  Magic header says: %s\n"
+                        "  Metadata says: %s\n"
+                        "  Using actual state from magic header. To fix, run:\n"
+                        "    dotta update -p %s '%s'\n",
+                        storage_path, profile_name,
+                        is_encrypted ? "encrypted" : "plaintext",
+                        is_encrypted ? "plaintext" : "encrypted",
+                        profile_name, storage_path);
+                }
             }
 
-            /* Clean up lookup error if any */
-            if (lookup_err) {
-                error_free(lookup_err);
-            }
+            error_free(lookup_err);
         }
+
+        git_blob_free(blob);
 
         /* Policy mismatch: should be encrypted but isn't */
         if (should_auto_encrypt && !is_encrypted) {

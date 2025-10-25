@@ -17,6 +17,7 @@
 #include "base/gitops.h"
 #include "core/bootstrap.h"
 #include "core/profiles.h"
+#include "utils/buffer.h"
 #include "utils/config.h"
 #include "utils/editor.h"
 #include "utils/output.h"
@@ -326,10 +327,52 @@ static error_t *bootstrap_edit(
 
     /* Launch editor - priority: DOTTA_EDITOR, VISUAL, EDITOR, nano */
     err = editor_launch_with_env(script_path, "nano");
+    if (err) {
+        free(script_path);
+        return error_wrap(err, "Failed to edit bootstrap script");
+    }
+
+    /* Read edited content back from disk */
+    buffer_t *content_buf = NULL;
+    err = fs_read_file(script_path, &content_buf);
     free(script_path);
+    if (err) {
+        return error_wrap(err, "Failed to read edited bootstrap script");
+    }
+
+    /* Auto-commit the changes */
+    char *commit_msg = str_format("Update bootstrap script for %s profile", profile_name);
+    if (!commit_msg) {
+        buffer_free(content_buf);
+        return ERROR(ERR_MEMORY, "Failed to allocate commit message");
+    }
+
+    bool was_modified = false;
+    err = gitops_update_file(
+        repo,
+        profile_name,
+        ".dotta/bootstrap",  /* file path within branch */
+        (const char *)buffer_data(content_buf),
+        buffer_size(content_buf),
+        commit_msg,
+        GIT_FILEMODE_BLOB_EXECUTABLE,
+        &was_modified
+    );
+
+    buffer_free(content_buf);
+    free(commit_msg);
 
     if (err) {
-        return error_wrap(err, "Failed to edit bootstrap script");
+        return error_wrap(err, "Failed to commit bootstrap script");
+    }
+
+    /* Inform user */
+    if (out) {
+        if (was_modified) {
+            output_success(out, "Updated and committed bootstrap script for profile '%s'", profile_name);
+        } else {
+            output_info(out, "No changes made to bootstrap script");
+        }
     }
 
     return NULL;

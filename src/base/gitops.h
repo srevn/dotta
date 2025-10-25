@@ -258,6 +258,48 @@ error_t *gitops_resolve_commit_in_branch(
 );
 
 /**
+ * Update or create a file in a Git branch with atomic commit
+ *
+ * This function provides atomic file updates to Git branches:
+ * 1. Creates a blob from the provided content
+ * 2. Updates the branch tree to reference the new blob
+ * 3. Creates a commit with the specified message
+ *
+ * If the file already exists with identical content, no commit is created (no-op).
+ * This avoids cluttering history with empty commits when nothing has changed.
+ *
+ * Subdirectory support:
+ * - Supports files at root level (e.g., "README.md")
+ * - Supports files in one subdirectory (e.g., ".dotta/bootstrap")
+ * - Creates intermediate directories as needed
+ * - Does NOT support deeper nesting (e.g., "a/b/c/file")
+ *
+ * File modes:
+ * - GIT_FILEMODE_BLOB (0100644): Regular file
+ * - GIT_FILEMODE_BLOB_EXECUTABLE (0100755): Executable file
+ *
+ * @param repo Repository (must not be NULL)
+ * @param branch_name Branch name (must not be NULL)
+ * @param file_path File path within branch (e.g., ".dottaignore" or ".dotta/bootstrap")
+ * @param content File content (must not be NULL)
+ * @param content_size Size of content in bytes
+ * @param commit_message Commit message (must not be NULL)
+ * @param file_mode Git file mode (GIT_FILEMODE_BLOB or GIT_FILEMODE_BLOB_EXECUTABLE)
+ * @param was_modified Optional output: set to true if file was modified, false if no-op (can be NULL)
+ * @return Error or NULL on success
+ */
+error_t *gitops_update_file(
+    git_repository *repo,
+    const char *branch_name,
+    const char *file_path,
+    const char *content,
+    size_t content_size,
+    const char *commit_message,
+    git_filemode_t file_mode,
+    bool *was_modified
+);
+
+/**
  * Remote operations
  */
 

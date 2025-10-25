@@ -20,233 +20,6 @@
 #include "utils/string.h"
 
 /**
- * Update a file in a branch
- *
- * Creates a new commit with the updated file content.
- * Supports both root-level files and files in subdirectories.
- *
- * @param repo Repository (must not be NULL)
- * @param branch_name Branch name (must not be NULL)
- * @param file_path File path relative to repo root (can include subdirs, e.g., ".dotta/script")
- * @param content File content (must not be NULL)
- * @param content_size Content size in bytes
- * @param commit_message Commit message (must not be NULL)
- * @param file_mode File mode (GIT_FILEMODE_BLOB or GIT_FILEMODE_BLOB_EXECUTABLE)
- * @return Error or NULL on success
- */
-static error_t *update_file_in_branch(
-    git_repository *repo,
-    const char *branch_name,
-    const char *file_path,
-    const char *content,
-    size_t content_size,
-    const char *commit_message,
-    git_filemode_t file_mode
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(branch_name);
-    CHECK_NULL(file_path);
-    CHECK_NULL(content);
-    CHECK_NULL(commit_message);
-
-    /* Validate file mode */
-    if (file_mode != GIT_FILEMODE_BLOB && file_mode != GIT_FILEMODE_BLOB_EXECUTABLE) {
-        file_mode = GIT_FILEMODE_BLOB;
-    }
-
-    /* Create blob from content */
-    git_oid blob_oid;
-    int git_err = git_blob_create_from_buffer(&blob_oid, repo, content, content_size);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    /* Load current tree from branch */
-    char *ref_name = str_format("refs/heads/%s", branch_name);
-    if (!ref_name) {
-        return ERROR(ERR_MEMORY, "Failed to allocate ref name");
-    }
-
-    git_tree *current_tree = NULL;
-    error_t *err = gitops_load_tree(repo, ref_name, &current_tree);
-    if (err) {
-        free(ref_name);
-        return error_wrap(err, "Failed to load tree from branch '%s'", branch_name);
-    }
-
-    /* Check if file path contains subdirectories */
-    const char *slash = strchr(file_path, '/');
-
-    if (!slash) {
-        /* Simple case: root-level file */
-        git_treebuilder *builder = NULL;
-        git_err = git_treebuilder_new(&builder, repo, current_tree);
-        git_tree_free(current_tree);
-
-        if (git_err < 0) {
-            free(ref_name);
-            return error_from_git(git_err);
-        }
-
-        /* Insert/update the file */
-        git_err = git_treebuilder_insert(NULL, builder, file_path, &blob_oid, file_mode);
-        if (git_err < 0) {
-            git_treebuilder_free(builder);
-            free(ref_name);
-            return error_from_git(git_err);
-        }
-
-        /* Write the new tree */
-        git_oid tree_oid;
-        git_err = git_treebuilder_write(&tree_oid, builder);
-        git_treebuilder_free(builder);
-
-        if (git_err < 0) {
-            free(ref_name);
-            return error_from_git(git_err);
-        }
-
-        /* Load the new tree */
-        git_tree *new_tree = NULL;
-        git_err = git_tree_lookup(&new_tree, repo, &tree_oid);
-        if (git_err < 0) {
-            free(ref_name);
-            return error_from_git(git_err);
-        }
-
-        /* Create commit */
-        err = gitops_create_commit(
-            repo,
-            branch_name,
-            new_tree,
-            commit_message,
-            NULL
-        );
-
-        git_tree_free(new_tree);
-        free(ref_name);
-
-        return err;
-    }
-
-    /* Complex case: file in subdirectory
-     * Extract directory name and filename */
-    size_t dir_len = (size_t)(slash - file_path);
-    char *dir_name = malloc(dir_len + 1);
-    if (!dir_name) {
-        git_tree_free(current_tree);
-        free(ref_name);
-        return ERROR(ERR_MEMORY, "Failed to allocate directory name");
-    }
-    memcpy(dir_name, file_path, dir_len);
-    dir_name[dir_len] = '\0';
-
-    const char *file_name = slash + 1;
-
-    /* Check if directory exists in the tree */
-    const git_tree_entry *dir_entry = git_tree_entry_byname(current_tree, dir_name);
-    git_tree *dir_tree = NULL;
-    git_treebuilder *dir_builder = NULL;
-
-    if (dir_entry && git_tree_entry_type(dir_entry) == GIT_OBJECT_TREE) {
-        /* Load existing subdirectory tree */
-        const git_oid *dir_oid = git_tree_entry_id(dir_entry);
-        git_err = git_tree_lookup(&dir_tree, repo, dir_oid);
-        if (git_err < 0) {
-            free(dir_name);
-            git_tree_free(current_tree);
-            free(ref_name);
-            return error_from_git(git_err);
-        }
-
-        /* Create builder from existing subdirectory tree */
-        git_err = git_treebuilder_new(&dir_builder, repo, dir_tree);
-        git_tree_free(dir_tree);
-    } else {
-        /* Create new subdirectory */
-        git_err = git_treebuilder_new(&dir_builder, repo, NULL);
-    }
-
-    if (git_err < 0) {
-        free(dir_name);
-        git_tree_free(current_tree);
-        free(ref_name);
-        return error_from_git(git_err);
-    }
-
-    /* Insert file into subdirectory tree */
-    git_err = git_treebuilder_insert(NULL, dir_builder, file_name, &blob_oid, file_mode);
-    if (git_err < 0) {
-        git_treebuilder_free(dir_builder);
-        free(dir_name);
-        git_tree_free(current_tree);
-        free(ref_name);
-        return error_from_git(git_err);
-    }
-
-    /* Write the subdirectory tree */
-    git_oid dir_tree_oid;
-    git_err = git_treebuilder_write(&dir_tree_oid, dir_builder);
-    git_treebuilder_free(dir_builder);
-    if (git_err < 0) {
-        free(dir_name);
-        git_tree_free(current_tree);
-        free(ref_name);
-        return error_from_git(git_err);
-    }
-
-    /* Create root tree builder */
-    git_treebuilder *root_builder = NULL;
-    git_err = git_treebuilder_new(&root_builder, repo, current_tree);
-    git_tree_free(current_tree);
-    if (git_err < 0) {
-        free(dir_name);
-        free(ref_name);
-        return error_from_git(git_err);
-    }
-
-    /* Insert/update subdirectory in root tree */
-    git_err = git_treebuilder_insert(NULL, root_builder, dir_name, &dir_tree_oid, GIT_FILEMODE_TREE);
-    free(dir_name);
-    if (git_err < 0) {
-        git_treebuilder_free(root_builder);
-        free(ref_name);
-        return error_from_git(git_err);
-    }
-
-    /* Write the root tree */
-    git_oid tree_oid;
-    git_err = git_treebuilder_write(&tree_oid, root_builder);
-    git_treebuilder_free(root_builder);
-    if (git_err < 0) {
-        free(ref_name);
-        return error_from_git(git_err);
-    }
-
-    /* Load the new tree */
-    git_tree *new_tree = NULL;
-    git_err = git_tree_lookup(&new_tree, repo, &tree_oid);
-    if (git_err < 0) {
-        free(ref_name);
-        return error_from_git(git_err);
-    }
-
-    /* Create commit */
-    err = gitops_create_commit(
-        repo,
-        branch_name,
-        new_tree,
-        commit_message,
-        NULL
-    );
-
-    git_tree_free(new_tree);
-    free(ref_name);
-
-    return err;
-}
-
-/**
  * Check if a pattern already exists in content
  */
 static bool pattern_exists(const char *content, const char *pattern) {
@@ -660,14 +433,15 @@ static error_t *edit_baseline_dottaignore(
     free(tmpfile);
 
     /* Update .dottaignore in dotta-worktree branch */
-    err = update_file_in_branch(
+    err = gitops_update_file(
         repo,
         "dotta-worktree",
         ".dottaignore",
         new_content,
         read_size,
         "Update baseline .dottaignore",
-        GIT_FILEMODE_BLOB
+        GIT_FILEMODE_BLOB,
+        NULL  /* Don't need modification flag */
     );
 
     free(new_content);
@@ -830,14 +604,15 @@ static error_t *edit_profile_dottaignore(
         return ERROR(ERR_MEMORY, "Failed to allocate commit message");
     }
 
-    err = update_file_in_branch(
+    err = gitops_update_file(
         repo,
         profile_name,
         ".dottaignore",
         new_content,
         read_size,
         commit_msg,
-        GIT_FILEMODE_BLOB
+        GIT_FILEMODE_BLOB,
+        NULL  /* Don't need modification flag */
     );
 
     free(commit_msg);
@@ -1009,14 +784,15 @@ static error_t *modify_baseline_dottaignore(
     }
 
     /* Update .dottaignore in dotta-worktree branch */
-    err = update_file_in_branch(
+    err = gitops_update_file(
         repo,
         "dotta-worktree",
         ".dottaignore",
         new_content,
         strlen(new_content),
         commit_msg,
-        GIT_FILEMODE_BLOB
+        GIT_FILEMODE_BLOB,
+        NULL  /* Don't need modification flag */
     );
 
     free(commit_msg);
@@ -1214,14 +990,15 @@ static error_t *modify_profile_dottaignore(
     }
 
     /* Update .dottaignore in profile branch */
-    err = update_file_in_branch(
+    err = gitops_update_file(
         repo,
         profile_name,
         ".dottaignore",
         new_content,
         strlen(new_content),
         commit_msg,
-        GIT_FILEMODE_BLOB
+        GIT_FILEMODE_BLOB,
+        NULL  /* Don't need modification flag */
     );
 
     free(commit_msg);

@@ -470,7 +470,7 @@ error_t *bootstrap_run_for_profiles(
     }
 
     /* Build space-separated list of all profiles */
-    const char **profile_names = malloc(plist->count * sizeof(char *));
+    char **profile_names = malloc(plist->count * sizeof(char *));
     if (!profile_names) {
         return ERROR(ERR_MEMORY, "Failed to allocate profile names array");
     }

@@ -44,7 +44,7 @@ typedef struct {
     diff_mode_t mode;           /* Diff mode */
 
     /* For workspace diff (DIFF_WORKSPACE) */
-    const char **files;         /* Specific files to diff (NULL = all) */
+    char **files;               /* Specific files to diff (NULL = all) */
     size_t file_count;          /* Number of files */
     diff_direction_t direction; /* Which direction to show */
 
@@ -53,7 +53,7 @@ typedef struct {
     const char *commit2;        /* Second commit (new, NULL = workspace) */
 
     /* Common options */
-    const char **profiles;      /* Profile names (NULL = use state/config) */
+    char **profiles;            /* Profile names (NULL = use state/config) */
     size_t profile_count;       /* Number of profiles */
     bool name_only;             /* Only show file names, not diffs */
     bool all_changes;           /* Show all changed files (deprecated, use direction) */

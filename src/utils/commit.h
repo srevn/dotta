@@ -28,7 +28,7 @@ typedef enum {
 typedef struct {
     commit_action_t action;   /* Action being performed */
     const char *profile;      /* Profile name (required) */
-    const char **files;       /* Array of file storage paths */
+    char **files;             /* Array of file storage paths */
     size_t file_count;        /* Number of files */
     const char *custom_msg;   /* Custom message from -m flag (NULL = use template) */
     const char *target_commit; /* Target commit SHA (for revert operations, NULL otherwise) */

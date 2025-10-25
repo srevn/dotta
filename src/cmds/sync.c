@@ -304,7 +304,7 @@ static error_t *sync_fetch_enabled_profiles(
     output_section(out, section_title);
 
     /* Build array of branch names for batched fetch */
-    const char **branch_names = malloc(profiles->count * sizeof(char *));
+    char **branch_names = malloc(profiles->count * sizeof(char *));
     if (!branch_names) {
         return ERROR(ERR_MEMORY, "Failed to allocate branch names array");
     }

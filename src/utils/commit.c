@@ -112,7 +112,7 @@ const char *commit_action_name_past(commit_action_t action) {
  * Format file list as bullet points with truncation
  * Returns allocated string or NULL on error
  */
-static char *format_file_list(const char **files, size_t count) {
+static char *format_file_list(char **files, size_t count) {
     if (count == 0) {
         return strdup("  (no files)");
     }

@@ -144,7 +144,7 @@ error_t *profile_load(
  */
 error_t *profile_list_load(
     git_repository *repo,
-    const char **names,
+    char **names,
     size_t count,
     bool strict,
     profile_list_t **out
@@ -173,7 +173,7 @@ error_t *profile_list_load(
  */
 error_t *profile_resolve(
     git_repository *repo,
-    const char **explicit_profiles,
+    char **explicit_profiles,
     size_t explicit_count,
     bool strict_mode,
     profile_list_t **out,

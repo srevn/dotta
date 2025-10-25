@@ -32,7 +32,7 @@ typedef struct {
     profile_subcommand_t subcommand;
 
     /* Profile names (for enable/disable/fetch) */
-    const char **profiles;
+    char **profiles;
     size_t profile_count;
 
     /* List options */

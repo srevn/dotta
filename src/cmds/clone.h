@@ -18,7 +18,7 @@ typedef struct {
     bool bootstrap;           /* Auto-run bootstrap scripts after clone */
     bool no_bootstrap;        /* Skip bootstrap execution entirely */
     bool fetch_all;           /* Fetch all remote profiles (hub mode) */
-    const char **profiles;    /* Explicit profiles to fetch (NULL = auto-detect) */
+    char **profiles;          /* Explicit profiles to fetch (NULL = auto-detect) */
     size_t profile_count;     /* Number of explicit profiles */
 } cmd_clone_options_t;
 

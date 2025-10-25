@@ -16,7 +16,7 @@
  */
 typedef struct {
     const char *profile;        /* Profile name (required) */
-    const char **files;         /* Array of file paths (required) */
+    char **files;               /* Array of file paths (required) */
     size_t file_count;          /* Number of files */
     const char *message;        /* Commit message (optional) */
     char **exclude_patterns;    /* Exclude patterns (glob) - read-only */

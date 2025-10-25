@@ -650,7 +650,7 @@ error_t *state_get_deployed_profiles(const state_t *state, string_array_t **out)
  */
 error_t *state_set_profiles(
     state_t *state,
-    const char **profiles,
+    char **profiles,
     size_t count
 ) {
     CHECK_NULL(state);
@@ -1286,7 +1286,7 @@ error_t *state_save(git_repository *repo, state_t *state) {
 
         /* Write profiles if any */
         if (state->profiles && string_array_size(state->profiles) > 0) {
-            const char **profile_names = calloc(string_array_size(state->profiles), sizeof(char*));
+            char **profile_names = calloc(string_array_size(state->profiles), sizeof(char*));
             if (!profile_names) {
                 sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
                 finalize_statements(state);
@@ -1296,7 +1296,7 @@ error_t *state_save(git_repository *repo, state_t *state) {
             }
 
             for (size_t i = 0; i < string_array_size(state->profiles); i++) {
-                profile_names[i] = string_array_get(state->profiles, i);
+                profile_names[i] = (char *)string_array_get(state->profiles, i);
             }
 
             err = state_set_profiles(state, profile_names, string_array_size(state->profiles));

@@ -425,7 +425,7 @@ hook_context_t *hook_context_create(
  */
 error_t *hook_context_add_files(
     hook_context_t *ctx,
-    const char **files,
+    char **files,
     size_t count
 ) {
     CHECK_NULL(ctx);

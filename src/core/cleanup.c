@@ -340,7 +340,7 @@ static error_t *prune_orphaned_files(
         err = safety_check_removal(
             repo,
             state,
-            (const char **)to_remove->items,
+            to_remove->items,
             to_remove->count,
             force,
             opts->enabled_metadata,  /* Pass pre-loaded metadata */

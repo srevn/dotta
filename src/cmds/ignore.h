@@ -18,9 +18,9 @@ typedef struct {
     const char *profile;        /* Profile name (NULL for baseline or all profiles) */
     const char *test_path;      /* Path to test (NULL for edit mode) */
     bool verbose;               /* Print verbose output */
-    const char **add_patterns;  /* Patterns to add (NULL for none) */
+    char **add_patterns;        /* Patterns to add (NULL for none) */
     size_t add_count;           /* Number of patterns to add */
-    const char **remove_patterns; /* Patterns to remove (NULL for none) */
+    char **remove_patterns;     /* Patterns to remove (NULL for none) */
     size_t remove_count;        /* Number of patterns to remove */
 } cmd_ignore_options_t;
 

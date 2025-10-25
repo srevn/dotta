@@ -104,7 +104,7 @@ static char *extract_repo_name(const char *url) {
 static error_t *fetch_profiles(
     git_repository *repo,
     const char *remote_name,
-    const char **profile_names,
+    char **profile_names,
     size_t count,
     output_ctx_t *out,
     transfer_context_t *xfer,
@@ -240,7 +240,7 @@ static error_t *fetch_all_profiles(
     /* Fetch and create local branches */
     size_t fetched_count = 0;
     error_t *err = fetch_profiles(repo, remote_name,
-                                  (const char **)all_branches->items,
+                                  all_branches->items,
                                   all_branches->count,
                                   out, xfer, &fetched_count, successful);
 
@@ -308,7 +308,7 @@ static error_t *handle_no_profiles_detected(
             output_info(out, "Fetching 'global' profile as fallback...");
 
             /* Fetch global */
-            const char *global_name = "global";
+            char *global_name = "global";
             *fallback_profiles = string_array_create();
             if (!*fallback_profiles) {
                 string_array_free(remote_branches);
@@ -346,7 +346,7 @@ static error_t *handle_no_profiles_detected(
  */
 static error_t *initialize_state(
     git_repository *repo,
-    const char **profile_names,
+    char **profile_names,
     size_t count,
     output_ctx_t *out
 ) {
@@ -537,7 +537,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             output_newline(out);
 
             /* Build profile names array */
-            const char **profile_names = malloc(detected_profiles->count * sizeof(char *));
+            char **profile_names = malloc(detected_profiles->count * sizeof(char *));
             if (!profile_names) {
                 final_err = ERROR(ERR_MEMORY, "Failed to allocate profile names");
                 goto cleanup;
@@ -580,7 +580,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
 
     /* Initialize state with fetched profiles */
     if (string_array_size(fetched_profiles) > 0) {
-        const char **profile_names = (const char **)fetched_profiles->items;
+        char **profile_names = fetched_profiles->items;
         size_t profile_count = string_array_size(fetched_profiles);
 
         err = initialize_state(repo, profile_names, profile_count, out);
@@ -678,7 +678,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         /* Load profiles for bootstrap execution */
         profile_list_t *bootstrap_profiles = NULL;
         err = profile_list_load(repo,
-                               (const char **)fetched_profiles->items,
+                               fetched_profiles->items,
                                string_array_size(fetched_profiles),
                                false, /* non-strict: skip non-existent */
                                &bootstrap_profiles);

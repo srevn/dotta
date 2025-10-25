@@ -429,7 +429,7 @@ cleanup:
  */
 error_t *profile_list_load(
     git_repository *repo,
-    const char **names,
+    char **names,
     size_t count,
     bool strict,
     profile_list_t **out
@@ -567,7 +567,7 @@ cleanup:
  */
 error_t *profile_resolve(
     git_repository *repo,
-    const char **explicit_profiles,
+    char **explicit_profiles,
     size_t explicit_count,
     bool strict_mode,
     profile_list_t **out,
@@ -581,7 +581,7 @@ error_t *profile_resolve(
     string_array_t *state_profiles = NULL;
     string_array_t *valid_profiles = NULL;
     string_array_t *missing_profiles = NULL;
-    const char **names = NULL;
+    char **names = NULL;
 
     /* Priority 1: Explicit CLI profiles (temporary override) */
     if (explicit_profiles && explicit_count > 0) {
@@ -653,7 +653,7 @@ error_t *profile_resolve(
     }
 
     for (size_t i = 0; i < count; i++) {
-        names[i] = string_array_get(valid_profiles, i);
+        names[i] = (char *)string_array_get(valid_profiles, i);
     }
 
     err = profile_list_load(repo, names, count, strict_mode, out);

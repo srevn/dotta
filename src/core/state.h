@@ -212,7 +212,7 @@ void state_free_all_files(state_file_entry_t *entries, size_t count);
  */
 error_t *state_set_profiles(
     state_t *state,
-    const char **profiles,
+    char **profiles,
     size_t count
 );
 

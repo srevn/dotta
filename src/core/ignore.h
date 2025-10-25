@@ -94,7 +94,7 @@ error_t *ignore_context_create(
     git_repository *repo,
     const dotta_config_t *config,
     const char *profile_name,
-    const char **cli_excludes,
+    char **cli_excludes,
     size_t cli_exclude_count,
     ignore_context_t **out
 );

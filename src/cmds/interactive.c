@@ -308,7 +308,7 @@ static error_t *interactive_save_profile_order(
     }
 
     /* Extract enabled profile names in current display order */
-    const char **profile_names = malloc(state->enabled_count * sizeof(char *));
+    char **profile_names = malloc(state->enabled_count * sizeof(char *));
     if (!profile_names) {
         return error_create(ERR_MEMORY, "failed to allocate profile names");
     }

@@ -15,7 +15,7 @@
  * Command options
  */
 typedef struct {
-    const char **profiles;      /* Profile names (NULL = use state/config) */
+    char **profiles;            /* Profile names (NULL = use state/config) */
     size_t profile_count;       /* Number of profiles */
     bool force;                 /* Overwrite modified files */
     bool dry_run;               /* Don't actually deploy */

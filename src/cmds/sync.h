@@ -35,7 +35,7 @@ typedef enum {
  * Sync command options
  */
 typedef struct {
-    const char **profiles;       /* Specific profiles (NULL = use state/config) */
+    char **profiles;             /* Specific profiles (NULL = use state/config) */
     size_t profile_count;        /* Number of profiles */
     bool dry_run;                /* Preview only */
     bool no_push;                /* Don't push (fetch and analyze only) */

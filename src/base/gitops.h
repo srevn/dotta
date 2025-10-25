@@ -312,7 +312,7 @@ error_t *gitops_fetch_branch(
 error_t *gitops_fetch_branches(
     git_repository *repo,
     const char *remote_name,
-    const char **branch_names,
+    char **branch_names,
     size_t branch_count,
     transfer_context_t *xfer
 );

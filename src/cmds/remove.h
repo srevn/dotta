@@ -23,7 +23,7 @@
  */
 typedef struct {
     const char *profile;        /* Profile name (required) */
-    const char **paths;         /* Paths to remove (can be NULL for --delete-profile) */
+    char **paths;               /* Paths to remove (can be NULL for --delete-profile) */
     size_t path_count;          /* Number of paths */
 
     /* Operation modes */

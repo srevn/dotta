@@ -34,7 +34,7 @@ typedef struct {
     const char *repo_dir;        /* Repository directory */
     const char *command;         /* Command being executed */
     const char *profile;         /* Profile name (if applicable) */
-    const char **files;          /* Array of file paths (if applicable) */
+    char **files;                /* Array of file paths (if applicable) */
     size_t file_count;           /* Number of files */
     bool dry_run;                /* Is this a dry-run? */
 } hook_context_t;
@@ -110,7 +110,7 @@ hook_context_t *hook_context_create(
  */
 error_t *hook_context_add_files(
     hook_context_t *ctx,
-    const char **files,
+    char **files,
     size_t count
 );
 

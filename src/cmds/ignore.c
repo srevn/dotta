@@ -312,7 +312,7 @@ static bool pattern_exists(const char *content, const char *pattern) {
  */
 static error_t *add_patterns_to_content(
     const char *existing_content,
-    const char **patterns,
+    char **patterns,
     size_t pattern_count,
     char **new_content,
     size_t *added_count
@@ -412,7 +412,7 @@ static error_t *add_patterns_to_content(
  */
 static error_t *remove_patterns_from_content(
     const char *existing_content,
-    const char **patterns,
+    char **patterns,
     size_t pattern_count,
     char **new_content,
     size_t *removed_count,
@@ -856,9 +856,9 @@ static error_t *edit_profile_dottaignore(
  */
 static error_t *modify_baseline_dottaignore(
     git_repository *repo,
-    const char **add_patterns,
+    char **add_patterns,
     size_t add_count,
-    const char **remove_patterns,
+    char **remove_patterns,
     size_t remove_count,
     output_ctx_t *out
 ) {
@@ -1052,9 +1052,9 @@ static error_t *modify_baseline_dottaignore(
 static error_t *modify_profile_dottaignore(
     git_repository *repo,
     const char *profile_name,
-    const char **add_patterns,
+    char **add_patterns,
     size_t add_count,
-    const char **remove_patterns,
+    char **remove_patterns,
     size_t remove_count,
     output_ctx_t *out
 ) {

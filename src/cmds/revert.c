@@ -565,7 +565,7 @@ static error_t *revert_file_in_branch(
         git_oid_tostr(oid_str, sizeof(oid_str), target_commit_oid);
 
         /* Build context for commit message */
-        const char *files[] = {file_path};
+        char *files[] = {(char *)file_path};
         commit_message_context_t ctx = {
             .action = COMMIT_ACTION_REVERT,
             .profile = profile_name,

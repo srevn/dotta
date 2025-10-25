@@ -67,7 +67,7 @@ char *str_trim(char *str) {
     return str;
 }
 
-char *str_join(const char **strings, size_t count, const char *delimiter) {
+char *str_join(char **strings, size_t count, const char *delimiter) {
     if (!strings || count == 0) {
         return strdup("");
     }

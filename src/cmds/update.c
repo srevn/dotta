@@ -767,7 +767,7 @@ static error_t *update_profile(
     worktree_handle_t *wt = NULL;
     git_index *index = NULL;
     git_tree *tree = NULL;
-    const char **storage_paths = NULL;
+    char **storage_paths = NULL;
     char *message = NULL;
     error_t *err = NULL;
     git_repository *wt_repo = NULL;
@@ -1379,7 +1379,7 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     /* Execute pre-update hook */
     if (config && repo_dir) {
         /* Build array of profile names and join with spaces */
-        const char **profile_names_array = malloc(profiles->count * sizeof(char *));
+        char **profile_names_array = malloc(profiles->count * sizeof(char *));
         if (profile_names_array) {
             for (size_t i = 0; i < profiles->count; i++) {
                 profile_names_array[i] = profiles->profiles[i].name;

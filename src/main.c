@@ -143,7 +143,7 @@ static int cmd_add_main(int argc, char **argv) {
     };
 
     /* Collect file and exclude pattern arguments */
-    const char **files = malloc((size_t)argc * sizeof(char *));
+    char **files = malloc((size_t)argc * sizeof(char *));
     char **excludes = malloc((size_t)argc * sizeof(char *));
     if (!files || !excludes) {
         fprintf(stderr, "Failed to allocate memory\n");
@@ -275,7 +275,7 @@ static int cmd_remove_main(int argc, char **argv) {
     };
 
     /* Collect path arguments */
-    const char **paths = malloc((size_t)argc * sizeof(char *));
+    char **paths = malloc((size_t)argc * sizeof(char *));
     if (!paths) {
         fprintf(stderr, "Failed to allocate memory\n");
         return 1;
@@ -394,7 +394,7 @@ static int cmd_apply_main(int argc, char **argv) {
     };
 
     /* Collect profile arguments */
-    const char **profiles = malloc((size_t)argc * sizeof(char *));
+    char **profiles = malloc((size_t)argc * sizeof(char *));
     if (!profiles) {
         fprintf(stderr, "Failed to allocate memory\n");
         return 1;
@@ -478,7 +478,7 @@ static int cmd_status_main(int argc, char **argv) {
     };
 
     /* Collect profile arguments */
-    const char **profiles = malloc((size_t)argc * sizeof(char *));
+    char **profiles = malloc((size_t)argc * sizeof(char *));
     if (!profiles) {
         fprintf(stderr, "Failed to allocate memory\n");
         return 1;
@@ -694,7 +694,7 @@ static int cmd_profile_main(int argc, char **argv) {
         opts.subcommand = PROFILE_FETCH;
 
         /* Collect profile arguments */
-        const char **profiles = malloc((size_t)argc * sizeof(char *));
+        char **profiles = malloc((size_t)argc * sizeof(char *));
         if (!profiles) {
             fprintf(stderr, "Failed to allocate memory\n");
             return 1;
@@ -727,7 +727,7 @@ static int cmd_profile_main(int argc, char **argv) {
         opts.subcommand = PROFILE_ENABLE;
 
         /* Collect profile arguments */
-        const char **profiles = malloc((size_t)argc * sizeof(char *));
+        char **profiles = malloc((size_t)argc * sizeof(char *));
         if (!profiles) {
             fprintf(stderr, "Failed to allocate memory\n");
             return 1;
@@ -762,7 +762,7 @@ static int cmd_profile_main(int argc, char **argv) {
         opts.subcommand = PROFILE_DISABLE;
 
         /* Collect profile arguments */
-        const char **profiles = malloc((size_t)argc * sizeof(char *));
+        char **profiles = malloc((size_t)argc * sizeof(char *));
         if (!profiles) {
             fprintf(stderr, "Failed to allocate memory\n");
             return 1;
@@ -799,7 +799,7 @@ static int cmd_profile_main(int argc, char **argv) {
         opts.subcommand = PROFILE_REORDER;
 
         /* Collect profile arguments */
-        const char **profiles = malloc((size_t)argc * sizeof(char *));
+        char **profiles = malloc((size_t)argc * sizeof(char *));
         if (!profiles) {
             fprintf(stderr, "Failed to allocate memory\n");
             return 1;
@@ -893,7 +893,7 @@ static int cmd_diff_main(int argc, char **argv) {
     };
 
     /* Collect positional arguments */
-    const char **positional = malloc((size_t)argc * sizeof(char *));
+    char **positional = malloc((size_t)argc * sizeof(char *));
     if (!positional) {
         fprintf(stderr, "Failed to allocate memory\n");
         return 1;
@@ -1007,7 +1007,7 @@ static int cmd_clone_main(int argc, char **argv) {
     };
 
     /* Collect explicit profiles */
-    const char **profiles = malloc((size_t)argc * sizeof(char *));
+    char **profiles = malloc((size_t)argc * sizeof(char *));
     if (!profiles) {
         fprintf(stderr, "Failed to allocate memory\n");
         return 1;
@@ -1102,8 +1102,8 @@ static int cmd_update_main(int argc, char **argv) {
     };
 
     /* Collect file and profile arguments */
-    const char **files = malloc((size_t)argc * sizeof(char *));
-    const char **profiles = malloc((size_t)argc * sizeof(char *));
+    char **files = malloc((size_t)argc * sizeof(char *));
+    char **profiles = malloc((size_t)argc * sizeof(char *));
     char **excludes = malloc((size_t)argc * sizeof(char *));
     if (!files || !profiles || !excludes) {
         fprintf(stderr, "Failed to allocate memory\n");
@@ -1231,8 +1231,8 @@ static int cmd_update_main(int argc, char **argv) {
  */
 static int cmd_ignore_main(int argc, char **argv) {
     /* Temporary storage for patterns (max 100 each) */
-    const char *add_patterns_temp[100];
-    const char *remove_patterns_temp[100];
+    char *add_patterns_temp[100];
+    char *remove_patterns_temp[100];
     size_t add_count = 0;
     size_t remove_count = 0;
 
@@ -1384,7 +1384,7 @@ static int cmd_sync_main(int argc, char **argv) {
     };
 
     /* Collect profile arguments */
-    const char **profiles = malloc((size_t)argc * sizeof(char *));
+    char **profiles = malloc((size_t)argc * sizeof(char *));
     if (!profiles) {
         fprintf(stderr, "Failed to allocate memory\n");
         return 1;
@@ -1906,7 +1906,7 @@ static int cmd_interactive_main(int argc, char **argv) {
  */
 static int cmd_bootstrap_main(int argc, char **argv) {
     /* Collect profile arguments */
-    const char **profiles = malloc((size_t)argc * sizeof(char *));
+    char **profiles = malloc((size_t)argc * sizeof(char *));
     if (!profiles) {
         fprintf(stderr, "Failed to allocate memory\n");
         return 1;

@@ -67,7 +67,7 @@ static error_t *validate_options(const cmd_remove_options_t *opts) {
 static error_t *resolve_paths_to_remove(
     git_repository *repo,
     const char *profile_name,
-    const char **input_paths,
+    char **input_paths,
     size_t path_count,
     string_array_t **storage_paths_out,
     string_array_t **filesystem_paths_out,
@@ -670,7 +670,7 @@ static error_t *create_removal_commit(
     commit_message_context_t ctx = {
         .action = COMMIT_ACTION_REMOVE,
         .profile = opts->profile,
-        .files = (const char **)removed_paths->items,
+        .files = removed_paths->items,
         .file_count = removed_paths->count,
         .custom_msg = opts->message,
         .target_commit = NULL
@@ -916,7 +916,7 @@ static error_t *remove_files_from_profile(
 
         /* Add paths to hook context */
         hook_context_add_files(hook_ctx,
-                              (const char **)filesystem_paths->items,
+                              filesystem_paths->items,
                               filesystem_paths->count);
 
         hook_result_t *hook_result = NULL;

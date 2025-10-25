@@ -479,7 +479,7 @@ static error_t *create_commit(
     commit_message_context_t ctx = {
         .action = COMMIT_ACTION_ADD,
         .profile = opts->profile,
-        .files = (const char **)storage_paths->items,
+        .files = storage_paths->items,
         .file_count = storage_paths->count,
         .custom_msg = opts->message,
         .target_commit = NULL
@@ -563,12 +563,11 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     }
 
     /* Create ignore context */
-    const char **cli_patterns = (const char **)opts->exclude_patterns;
     err = ignore_context_create(
         repo,
         config,
         opts->profile,
-        cli_patterns,
+        opts->exclude_patterns,
         opts->exclude_count,
         &ignore_ctx
     );

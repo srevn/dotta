@@ -16,9 +16,9 @@
  * Update command options
  */
 typedef struct {
-    const char **files;             /* Specific files to update (NULL = all) */
+    char **files;                   /* Specific files to update (NULL = all) */
     size_t file_count;              /* Number of files */
-    const char **profiles;          /* Specific profiles (NULL = use state/config) */
+    char **profiles;                /* Specific profiles (NULL = use state/config) */
     size_t profile_count;           /* Number of profiles */
     const char *message;            /* Custom commit message */
     char **exclude_patterns;        /* Exclude patterns (glob) - read-only */

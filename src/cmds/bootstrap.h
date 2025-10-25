@@ -15,7 +15,7 @@
  * Bootstrap command options
  */
 typedef struct {
-    const char **profiles;      /* Specific profiles to bootstrap (NULL = auto-detect) */
+    char **profiles;            /* Specific profiles to bootstrap (NULL = auto-detect) */
     size_t profile_count;       /* Number of profiles */
     bool all_profiles;          /* Bootstrap all available profiles */
     bool edit;                  /* Edit bootstrap script */

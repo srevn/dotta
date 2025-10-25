@@ -495,7 +495,7 @@ static error_t *profile_enable(
     string_array_t *enabled = NULL;
     string_array_t *to_enable = NULL;
     string_array_t *all_branches = NULL;
-    const char **profile_names = NULL;
+    char **profile_names = NULL;
     error_t *err = NULL;
 
     /* Counters for summary (not cleaned up) */
@@ -620,7 +620,7 @@ static error_t *profile_enable(
         }
 
         for (size_t i = 0; i < string_array_size(enabled); i++) {
-            profile_names[i] = string_array_get(enabled, i);
+            profile_names[i] = (char *)string_array_get(enabled, i);
         }
 
         err = state_set_profiles(state, profile_names, string_array_size(enabled));
@@ -695,7 +695,7 @@ static error_t *profile_disable(
     string_array_t *enabled = NULL;
     string_array_t *to_disable = NULL;
     string_array_t *new_enabled = NULL;
-    const char **profile_names = NULL;
+    char **profile_names = NULL;
     error_t *err = NULL;
 
     /* Counters for summary (not cleaned up) */
@@ -839,7 +839,7 @@ static error_t *profile_disable(
         }
 
         for (size_t i = 0; i < string_array_size(new_enabled); i++) {
-            profile_names[i] = string_array_get(new_enabled, i);
+            profile_names[i] = (char *)string_array_get(new_enabled, i);
         }
 
         err = state_set_profiles(state, profile_names, string_array_size(new_enabled));
@@ -1095,7 +1095,7 @@ static error_t *profile_validate(
     string_array_t *enabled = NULL;
     string_array_t *missing = NULL;
     string_array_t *valid = NULL;
-    const char **profile_names = NULL;
+    char **profile_names = NULL;
     error_t *err = NULL;
 
     /* State for reporting (not cleaned up) */
@@ -1179,7 +1179,7 @@ static error_t *profile_validate(
             }
 
             for (size_t i = 0; i < string_array_size(valid); i++) {
-                profile_names[i] = string_array_get(valid, i);
+                profile_names[i] = (char *)string_array_get(valid, i);
             }
 
             err = state_set_profiles(state, profile_names, string_array_size(valid));

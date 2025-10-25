@@ -4,12 +4,12 @@
 
 #include "ignore.h"
 
-#include <fnmatch.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "base/error.h"
 #include "base/gitops.h"
+#include "utils/match.h"
 #include "utils/string.h"
 
 /* Maximum path length for git repository discovery */
@@ -343,7 +343,15 @@ static error_t *load_profile_dottaignore(
 }
 
 /**
- * Check if path matches any CLI patterns using fnmatch
+ * Check if path matches any CLI patterns using gitignore-style matching
+ *
+ * Uses the centralized match module for consistent pattern semantics.
+ *
+ * Supported patterns:
+ *   - Basename patterns: *.log matches at any depth
+ *   - Anchored patterns: .ssh/id_* matches from root only
+ *   - Recursive globs: double-star patterns match at all depths
+ *   - Directory prefix: .cache matches .cache and everything under it
  */
 static bool matches_cli_patterns(
     const char *path,
@@ -354,29 +362,20 @@ static bool matches_cli_patterns(
         return false;
     }
 
-    /* Extract basename for matching */
-    const char *basename = strrchr(path, '/');
-    if (basename) {
-        basename++; /* Skip the '/' */
-    } else {
-        basename = path;
-    }
-
-    for (size_t i = 0; i < pattern_count; i++) {
-        const char *pattern = patterns[i];
-
-        /* Try matching full path */
-        if (fnmatch(pattern, path, FNM_PATHNAME) == 0) {
-            return true;
-        }
-
-        /* Try matching basename */
-        if (fnmatch(pattern, basename, 0) == 0) {
-            return true;
-        }
-    }
-
-    return false;
+    /* Use match module for gitignore-style pattern matching
+     *
+     * Benefits over manual fnmatch:
+     * - Supports ** recursive globs
+     * - Gitignore-style directory prefix matching
+     * - Automatic basename vs anchored pattern detection
+     * - Consistent with pattern matching across codebase
+     */
+    return match_any(
+        patterns,
+        pattern_count,
+        path,
+        MATCH_DOUBLESTAR  /* Enable ** support */
+    );
 }
 
 /**
@@ -452,7 +451,7 @@ static bool matches_config_patterns(
     char **patterns,
     size_t pattern_count
 ) {
-    /* Same logic as CLI patterns - uses fnmatch */
+    /* Same logic as CLI patterns - uses match module for gitignore-style matching */
     return matches_cli_patterns(path, patterns, pattern_count);
 }
 

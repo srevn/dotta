@@ -19,7 +19,7 @@ typedef struct {
     const char **files;         /* Array of file paths (required) */
     size_t file_count;          /* Number of files */
     const char *message;        /* Commit message (optional) */
-    const char **exclude_patterns;  /* Exclude patterns (glob) */
+    char **exclude_patterns;    /* Exclude patterns (glob) - read-only */
     size_t exclude_count;       /* Number of exclude patterns */
     bool force;                 /* Overwrite existing files in profile */
     bool verbose;               /* Print verbose output */

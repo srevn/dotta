@@ -21,7 +21,7 @@ typedef struct {
     const char **profiles;          /* Specific profiles (NULL = use state/config) */
     size_t profile_count;           /* Number of profiles */
     const char *message;            /* Custom commit message */
-    const char **exclude_patterns;  /* Exclude patterns (glob) */
+    char **exclude_patterns;        /* Exclude patterns (glob) - read-only */
     size_t exclude_count;           /* Number of exclude patterns */
     bool dry_run;                   /* Don't commit, just show changes */
     bool interactive;               /* Prompt for confirmation */

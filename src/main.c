@@ -144,7 +144,7 @@ static int cmd_add_main(int argc, char **argv) {
 
     /* Collect file and exclude pattern arguments */
     const char **files = malloc((size_t)argc * sizeof(char *));
-    const char **excludes = malloc((size_t)argc * sizeof(char *));
+    char **excludes = malloc((size_t)argc * sizeof(char *));
     if (!files || !excludes) {
         fprintf(stderr, "Failed to allocate memory\n");
         free(files);
@@ -1104,7 +1104,7 @@ static int cmd_update_main(int argc, char **argv) {
     /* Collect file and profile arguments */
     const char **files = malloc((size_t)argc * sizeof(char *));
     const char **profiles = malloc((size_t)argc * sizeof(char *));
-    const char **excludes = malloc((size_t)argc * sizeof(char *));
+    char **excludes = malloc((size_t)argc * sizeof(char *));
     if (!files || !profiles || !excludes) {
         fprintf(stderr, "Failed to allocate memory\n");
         free(files);

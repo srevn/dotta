@@ -90,4 +90,52 @@ error_t *encryption_policy_should_encrypt(
     bool *out_should_encrypt
 );
 
+/**
+ * Check if file path matches auto-encrypt patterns
+ *
+ * Tests storage path against auto_encrypt patterns from config.
+ * Returns true if ANY pattern matches (logical OR).
+ *
+ * This is a helper function used by encryption_policy_should_encrypt()
+ * and also exposed publicly for validation/diagnostic purposes (e.g.,
+ * workspace divergence analysis).
+ *
+ * Pattern matching:
+ * - Uses gitignore-style glob matching with double-star support
+ * - Patterns are matched against path with "home/" or "root/" prefix stripped
+ * - Example: storage_path "home/.ssh/id_rsa" is matched against ".ssh/id_rsa"
+ * - Supports recursive globs: double-star patterns match at any depth
+ *
+ * Pattern examples:
+ *   Pattern: ".ssh/id_*"
+ *   Matches: "home/.ssh/id_rsa", "root/.ssh/id_ed25519"
+ *   No match: "home/backup/.ssh/id_rsa" (pattern is anchored)
+ *
+ *   Pattern: "*.key"
+ *   Matches: "home/api.key", "home/dir/secret.key" (basename match)
+ *
+ *   Pattern: "secrets" followed by recursive glob
+ *   Matches: "home/secrets/api.key", "home/proj/secrets/data/file.txt"
+ *
+ * Behavior:
+ * - If encryption disabled in config: returns false (no auto-encrypt)
+ * - If no patterns configured: returns false (no auto-encrypt)
+ * - If config is NULL: returns false (no configuration)
+ * - Empty patterns never match
+ * - Pattern matching uses new match module with full double-star support
+ *
+ * @param config Configuration (for auto_encrypt patterns, can be NULL)
+ * @param storage_path File path in profile (e.g., "home/.bashrc", must not be NULL)
+ * @param out_matches Output: true if path matches any pattern (must not be NULL)
+ * @return Always returns NULL (no errors possible from pattern matching)
+ *
+ * Note: This function never fails. Pattern matching is purely computational
+ * and does not perform I/O or allocations that could fail.
+ */
+error_t *encryption_policy_matches_auto_patterns(
+    const dotta_config_t *config,
+    const char *storage_path,
+    bool *out_matches
+);
+
 #endif /* DOTTA_CRYPTO_POLICY_H */

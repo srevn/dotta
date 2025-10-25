@@ -5,7 +5,6 @@
 #include "update.h"
 
 #include <dirent.h>
-#include <fnmatch.h>
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,6 +27,7 @@
 #include "utils/config.h"
 #include "utils/hashmap.h"
 #include "utils/hooks.h"
+#include "utils/match.h"
 #include "utils/output.h"
 #include "utils/string.h"
 
@@ -247,7 +247,14 @@ static bool file_matches_filter(
 /**
  * Check if path should be excluded by CLI patterns
  *
- * Simple pattern matching for temporary per-operation filtering
+ * Uses the centralized match module for consistent gitignore-style
+ * pattern matching across the codebase.
+ *
+ * Supported patterns:
+ *   - Basename patterns: *.tmp matches at any depth
+ *   - Anchored patterns: .cache/foo matches from root
+ *   - Recursive globs: double-star patterns match at all depths
+ *   - Directory prefix: .cache matches .cache/file
  */
 static bool is_excluded(
     const char *path,
@@ -257,26 +264,20 @@ static bool is_excluded(
         return false;
     }
 
-    /* Extract basename for pattern matching */
-    const char *basename = strrchr(path, '/');
-    basename = basename ? basename + 1 : path;
-
-    /* Check each exclude pattern */
-    for (size_t i = 0; i < opts->exclude_count; i++) {
-        const char *pattern = opts->exclude_patterns[i];
-
-        /* Try matching against full path */
-        if (fnmatch(pattern, path, 0) == 0) {
-            return true;
-        }
-
-        /* Try matching against basename */
-        if (fnmatch(pattern, basename, 0) == 0) {
-            return true;
-        }
-    }
-
-    return false;
+    /* Use match module for gitignore-style pattern matching
+     *
+     * This provides correct pattern semantics with:
+     * - FNM_PATHNAME for wildcards (prevents * matching /)
+     * - Double-star support for recursive matching
+     * - Automatic basename vs anchored pattern detection
+     * - Directory prefix matching (gitignore-style)
+     */
+    return match_any(
+        opts->exclude_patterns,
+        opts->exclude_count,
+        path,
+        MATCH_DOUBLESTAR  /* Enable ** support */
+    );
 }
 
 /**

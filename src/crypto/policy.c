@@ -9,8 +9,9 @@
 
 #include "base/error.h"
 #include "core/metadata.h"
-#include "crypto/pattern.h"
 #include "utils/config.h"
+#include "utils/match.h"
+#include "utils/string.h"
 
 error_t *encryption_policy_should_encrypt(
     const dotta_config_t *config,
@@ -75,12 +76,20 @@ error_t *encryption_policy_should_encrypt(
      */
     if (config && config->encryption_enabled) {
         bool matches_pattern = false;
-        error_t *err = encrypt_should_auto_encrypt(config, storage_path, &matches_pattern);
+        error_t *err = encryption_policy_matches_auto_patterns(
+            config,
+            storage_path,
+            &matches_pattern
+        );
 
         if (err) {
             /* Non-fatal: Pattern matching errors shouldn't block operations.
              * Log warning and default to plaintext (safer than blocking).
              * The caller can choose to log this if verbose mode is enabled.
+             *
+             * Note: Current implementation never returns errors (pattern
+             * matching is pure computation), but we keep error handling
+             * for future robustness.
              */
             error_free(err);
             *out_should_encrypt = false;
@@ -97,5 +106,66 @@ error_t *encryption_policy_should_encrypt(
      * Encryption is opt-in, not opt-out (safer default).
      */
     *out_should_encrypt = false;
+    return NULL;
+}
+
+error_t *encryption_policy_matches_auto_patterns(
+    const dotta_config_t *config,
+    const char *storage_path,
+    bool *out_matches
+) {
+    CHECK_NULL(storage_path);
+    CHECK_NULL(out_matches);
+
+    /* Default: no match */
+    *out_matches = false;
+
+    /* If config is NULL, no patterns to match */
+    if (!config) {
+        return NULL;
+    }
+
+    /* If encryption disabled, never auto-encrypt */
+    if (!config->encryption_enabled) {
+        return NULL;
+    }
+
+    /* If no patterns configured, never auto-encrypt */
+    if (!config->auto_encrypt_patterns || config->auto_encrypt_pattern_count == 0) {
+        return NULL;
+    }
+
+    /* Strip "home/" or "root/" prefix for pattern matching
+     *
+     * This allows patterns like ".ssh/id_*" to match "home/.ssh/id_rsa"
+     * without requiring users to write "home/.ssh/id_*" in their config.
+     *
+     * Both prefixes are exactly 5 characters ("home/" and "root/").
+     */
+    const char *path_for_matching = storage_path;
+
+    if (str_starts_with(storage_path, "home/")) {
+        path_for_matching = storage_path + 5;  /* Skip "home/" */
+    } else if (str_starts_with(storage_path, "root/")) {
+        path_for_matching = storage_path + 5;  /* Skip "root/" */
+    }
+
+    /* Check if path matches any auto-encrypt pattern
+     *
+     * Uses new match module with MATCH_DOUBLESTAR flag for full gitignore
+     * semantics including double-star recursive glob support.
+     *
+     * Examples:
+     *   Pattern: ".ssh/id_*" matches ".ssh/id_rsa"
+     *   Pattern: "*.key" matches "api.key" and "dir/api.key"
+     *   Pattern: "secrets" with recursive glob matches "proj/secrets/file.txt"
+     */
+    *out_matches = match_any(
+        config->auto_encrypt_patterns,
+        config->auto_encrypt_pattern_count,
+        path_for_matching,
+        MATCH_DOUBLESTAR  /* Enable ** support */
+    );
+
     return NULL;
 }

@@ -20,7 +20,7 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "crypto/keymanager.h"
-#include "crypto/pattern.h"
+#include "crypto/policy.h"
 #include "infra/compare.h"
 #include "infra/content.h"
 #include "utils/config.h"
@@ -750,7 +750,11 @@ static error_t *analyze_encryption_policy_mismatch(
 
         /* Check if file should be auto-encrypted */
         bool should_auto_encrypt = false;
-        error_t *err = encrypt_should_auto_encrypt(config, storage_path, &should_auto_encrypt);
+        error_t *err = encryption_policy_matches_auto_patterns(
+            config,
+            storage_path,
+            &should_auto_encrypt
+        );
         if (err) {
             /* Non-fatal: pattern matching errors shouldn't block status */
             error_free(err);

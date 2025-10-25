@@ -420,19 +420,17 @@ auto_encrypt = [
     ".config/gh/hosts.yml", # GitHub CLI credentials
 ]
 
-# Password Hashing Parameters
-# Controls the computational cost of deriving encryption keys from passphrase
-# Higher values = more secure against brute force, but slower unlock times
+# Password Hashing Cost (opslimit)
+# Controls the computational cost of deriving encryption keys from your passphrase.
+# Higher values = more secure against brute force, but slower unlock times.
 #
 # Recommended values:
-#   - opslimit:  10000-50000   (moderate: 10000, high: 50000+)
-#   - memlimit:  64MB-256MB    (64MB = 67108864 bytes)
-#   - threads:   1 (portable), 2-4 (faster on multi-core CPUs)
+#   -  10000 = ~1 second   (moderate security, good for frequent use)
+#   -  50000 = ~5 seconds  (high security, reasonable for important data)
+#   - 100000 = ~10 seconds (very high security, for maximum protection)
 #
-# Default: opslimit=10000, memlimit=67108864 (64MB), threads=1
+# Default: 10000
 opslimit = 10000
-memlimit = 67108864
-threads = 1
 
 # Session Timeout
 # How long (in seconds) to cache the encryption key

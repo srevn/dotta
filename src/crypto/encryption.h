@@ -67,6 +67,10 @@
 #define ENCRYPTION_MASTER_KEY_SIZE 32       /* hydro_pwhash output */
 #define ENCRYPTION_PROFILE_KEY_SIZE 32      /* hydro_kdf output */
 
+/* Password hashing parameters */
+#define ENCRYPTION_PWHASH_MEMLIMIT 0
+#define ENCRYPTION_PWHASH_THREADS 1
+
 /**
  * Initialize libhydrogen
  *
@@ -84,15 +88,13 @@ error_t *encryption_init(void);
  * a user passphrase. The same passphrase always produces the same key
  * (deterministic derivation).
  *
- * This is a computationally expensive operation (controlled by opslimit
- * and memlimit). Higher values provide better protection against brute
- * force attacks but take longer.
+ * This is a computationally expensive operation (controlled by opslimit).
+ * Higher opslimit provides better protection against brute force attacks
+ * but takes longer to compute.
  *
  * @param passphrase User passphrase (must not be NULL)
  * @param passphrase_len Length of passphrase in bytes
- * @param opslimit CPU cost parameter (recommended: 10000+)
- * @param memlimit Memory usage in bytes (recommended: 64MB+)
- * @param threads Number of threads for parallelization (1 = portable)
+ * @param opslimit CPU cost parameter (recommended: 10000+, higher = more secure but slower)
  * @param out_master_key Output buffer for 32-byte master key (must be pre-allocated)
  * @return Error or NULL on success
  */
@@ -100,8 +102,6 @@ error_t *encryption_derive_master_key(
     const char *passphrase,
     size_t passphrase_len,
     uint64_t opslimit,
-    size_t memlimit,
-    uint8_t threads,
     uint8_t out_master_key[ENCRYPTION_MASTER_KEY_SIZE]
 );
 

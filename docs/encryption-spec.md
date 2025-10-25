@@ -60,11 +60,11 @@ Profile Key (32 bytes, one per profile)
 hydro_pwhash_deterministic(
     master_key,           // Output: 32 bytes
     passphrase,           // Input: user passphrase
-    "dotta/v1",          // Context: version tag
+    "dotta/v1",           // Context: version tag
     zero_master,          // Master: zeros (direct derivation mode)
     opslimit=10000,       // CPU cost (configurable)
     memlimit=0,           // Memory (fixed)
-    threads=1             // Single-threaded
+    threads=1             // Single-threaded (fixed)
 )
 ```
 
@@ -531,12 +531,6 @@ enabled = true
 # Recommended: 10000+ for interactive use
 opslimit = 10000
 
-# Memory limit (currently unused by libhydrogen)
-memlimit = 0
-
-# Thread count (currently unused by libhydrogen)
-threads = 1
-
 # Session timeout in seconds (-1 = never, 0 = always prompt, N = expire after N seconds)
 session_timeout = 3600  # 1 hour
 
@@ -638,7 +632,7 @@ static const uint8_t zero_master[hydro_pwhash_MASTERKEYBYTES] = {0};
 
 hydro_pwhash_deterministic(
     out_master_key, 32, passphrase, passphrase_len,
-    "dotta/v1", zero_master, opslimit, memlimit, threads
+    "dotta/v1", zero_master, opslimit, 0, 1
 );
 ```
 

@@ -138,8 +138,6 @@ error_t *encryption_derive_master_key(
     const char *passphrase,
     size_t passphrase_len,
     uint64_t opslimit,
-    size_t memlimit,
-    uint8_t threads,
     uint8_t out_master_key[ENCRYPTION_MASTER_KEY_SIZE]
 ) {
     CHECK_NULL(passphrase);
@@ -165,8 +163,8 @@ error_t *encryption_derive_master_key(
         ENCRYPTION_CTX_PWHASH,
         zero_master,
         opslimit,
-        memlimit,
-        threads
+        ENCRYPTION_PWHASH_MEMLIMIT,
+        ENCRYPTION_PWHASH_THREADS
     );
 
     if (result != 0) {

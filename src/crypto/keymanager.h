@@ -54,7 +54,7 @@ typedef struct keymanager keymanager_t;
  * Does not prompt for passphrase immediately - passphrase is
  * requested on first key access (lazy initialization).
  *
- * @param config Configuration (for opslimit, memlimit, timeout, etc.)
+ * @param config Configuration (for opslimit and session_timeout)
  * @param out Key manager (caller must free with keymanager_free)
  * @return Error or NULL on success
  */

@@ -121,8 +121,6 @@ dotta_config_t *config_create_default(void) {
     config->auto_encrypt_patterns = NULL;
     config->auto_encrypt_pattern_count = 0;
     config->encryption_opslimit = 10000;          /* Moderate security */
-    config->encryption_memlimit = 67108864;       /* 64 MB */
-    config->encryption_threads = 1;               /* Portable default */
     config->session_timeout = 3600;               /* 1 hour */
 
     return config;
@@ -423,16 +421,6 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
         toml_datum_t opslimit = toml_get(encryption, "opslimit");
         if (opslimit.type == TOML_INT64) {
             config->encryption_opslimit = (uint64_t)opslimit.u.int64;
-        }
-
-        toml_datum_t memlimit = toml_get(encryption, "memlimit");
-        if (memlimit.type == TOML_INT64) {
-            config->encryption_memlimit = (size_t)memlimit.u.int64;
-        }
-
-        toml_datum_t threads = toml_get(encryption, "threads");
-        if (threads.type == TOML_INT64) {
-            config->encryption_threads = (uint8_t)threads.u.int64;
         }
 
         toml_datum_t session_timeout = toml_get(encryption, "session_timeout");

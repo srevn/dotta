@@ -11,6 +11,7 @@
 #include "base/error.h"
 #include "core/metadata.h"
 #include "core/state.h"
+#include "crypto/encryption.h"
 #include "crypto/keymanager.h"
 #include "utils/array.h"
 #include "utils/config.h"
@@ -270,11 +271,6 @@ static error_t *cmd_key_status(
         if (opts->verbose) {
             output_printf(out, OUTPUT_NORMAL, "  KDF opslimit: %lu\n",
                          (unsigned long)config->encryption_opslimit);
-            output_printf(out, OUTPUT_NORMAL, "  KDF memlimit: %zu bytes (%zu MB)\n",
-                         config->encryption_memlimit,
-                         config->encryption_memlimit / (1024 * 1024));
-            output_printf(out, OUTPUT_NORMAL, "  KDF threads: %u\n",
-                         (unsigned int)config->encryption_threads);
         }
 
         /* Show session timeout */

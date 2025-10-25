@@ -522,7 +522,6 @@ auto_encrypt = [                          # Patterns for automatic encryption
 ]
 session_timeout = 3600                    # Cache timeout in seconds (0=always prompt, -1=never expire)
 opslimit = 10000                          # KDF CPU cost
-memlimit = 67108864                       # KDF memory cost (64MB)
 ```
 
 ### Environment Variables

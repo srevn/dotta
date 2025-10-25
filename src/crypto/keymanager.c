@@ -60,9 +60,7 @@ struct session_cache_file {
  */
 struct keymanager {
     /* Configuration */
-    uint64_t opslimit;
-    size_t memlimit;
-    uint8_t threads;
+    uint64_t opslimit;        /* CPU cost for password hashing (only tunable parameter) */
     int32_t session_timeout;  /* Timeout in seconds (0 = always prompt, -1 = never expire) */
 
     /* Cached master key */
@@ -541,8 +539,6 @@ error_t *keymanager_create(
 
     /* Copy configuration */
     mgr->opslimit = config->encryption_opslimit;
-    mgr->memlimit = config->encryption_memlimit;
-    mgr->threads = config->encryption_threads;
     mgr->session_timeout = config->session_timeout;
 
     /* Initialize key state */
@@ -750,8 +746,6 @@ error_t *keymanager_set_passphrase(
         passphrase,
         passphrase_len,
         mgr->opslimit,
-        mgr->memlimit,
-        mgr->threads,
         mgr->master_key
     );
 

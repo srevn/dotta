@@ -656,7 +656,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             for (size_t i = 0; i < string_array_size(fetched_profiles); i++) {
                 const char *profile_name = string_array_get(fetched_profiles, i);
                 if (bootstrap_exists(repo, profile_name, NULL)) {
-                    output_info(out, "  ✓ %s/.dotta/bootstrap", profile_name);
+                    output_info(out, "  ✓ %s/.bootstrap", profile_name);
                 }
             }
             output_newline(out);

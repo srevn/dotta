@@ -58,32 +58,10 @@ bool bootstrap_exists(
         return false;
     }
 
-    /* Look for .dotta directory */
-    const git_tree_entry *dotta_entry = git_tree_entry_byname(tree, ".dotta");
-    if (!dotta_entry) {
-        git_tree_free(tree);
-        return false;
-    }
-
-    /* .dotta must be a directory */
-    if (git_tree_entry_type(dotta_entry) != GIT_OBJECT_TREE) {
-        git_tree_free(tree);
-        return false;
-    }
-
-    /* Load .dotta subtree */
-    const git_oid *dotta_oid = git_tree_entry_id(dotta_entry);
-    git_tree *dotta_tree = NULL;
-    if (git_tree_lookup(&dotta_tree, repo, dotta_oid) < 0) {
-        git_tree_free(tree);
-        return false;
-    }
-
-    /* Look for bootstrap script */
-    const git_tree_entry *bootstrap_entry = git_tree_entry_byname(dotta_tree, script_name);
+    /* Look for .bootstrap file directly in root */
+    const git_tree_entry *bootstrap_entry = git_tree_entry_byname(tree, script_name);
     bool found = (bootstrap_entry != NULL);
 
-    git_tree_free(dotta_tree);
     git_tree_free(tree);
 
     return found;
@@ -106,23 +84,16 @@ error_t *bootstrap_get_path(
         script_name = BOOTSTRAP_DEFAULT_SCRIPT_NAME;
     }
 
-    /* Build path: <repo_dir>/<profile>/.dotta/<script_name> */
+    /* Build path: <repo_dir>/<profile>/<script_name> */
     char *profile_path = NULL;
     error_t *err = fs_path_join(repo_dir, profile_name, &profile_path);
     if (err) {
         return error_wrap(err, "Failed to build profile path");
     }
 
-    char *dotta_path = NULL;
-    err = fs_path_join(profile_path, ".dotta", &dotta_path);
-    free(profile_path);
-    if (err) {
-        return error_wrap(err, "Failed to build .dotta path");
-    }
-
     char *script_path = NULL;
-    err = fs_path_join(dotta_path, script_name, &script_path);
-    free(dotta_path);
+    err = fs_path_join(profile_path, script_name, &script_path);
+    free(profile_path);
     if (err) {
         return error_wrap(err, "Failed to build bootstrap script path");
     }
@@ -513,7 +484,7 @@ error_t *bootstrap_run_for_profiles(
             continue;
         }
 
-        printf("\n[%zu/%zu] Running %s/.dotta/%s...\n",
+        printf("\n[%zu/%zu] Running %s/%s...\n",
                executed, script_count, profile->name, script_name);
 
         if (dry_run) {

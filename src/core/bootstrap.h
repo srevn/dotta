@@ -2,7 +2,7 @@
  * bootstrap.h - Bootstrap script execution system
  *
  * Provides per-profile bootstrap script execution for system setup.
- * Bootstrap scripts live in .dotta/bootstrap within each profile branch.
+ * Bootstrap scripts live in .bootstrap within each profile branch.
  *
  * Design principles:
  * - On-demand creation (not auto-created with profiles)
@@ -25,7 +25,7 @@ struct profile_list;
 /**
  * Default bootstrap script name
  */
-#define BOOTSTRAP_DEFAULT_SCRIPT_NAME "bootstrap"
+#define BOOTSTRAP_DEFAULT_SCRIPT_NAME ".bootstrap"
 
 /**
  * Bootstrap execution context
@@ -54,7 +54,7 @@ typedef struct {
  * @param repo Repository (must not be NULL)
  * @param profile_name Profile name (must not be NULL)
  * @param script_name Bootstrap script filename (default: "bootstrap")
- * @return true if bootstrap script exists in profile's .dotta/ directory
+ * @return true if bootstrap script exists in profile's root directory
  */
 bool bootstrap_exists(
     git_repository *repo,
@@ -66,7 +66,7 @@ bool bootstrap_exists(
  * Get path to bootstrap script for a profile
  *
  * Returns path to the bootstrap script within the profile's worktree.
- * Path format: <repo_dir>/<profile>/.dotta/<script_name>
+ * Path format: <repo_dir>/<profile>/<script_name>
  *
  * @param repo_dir Repository directory (must not be NULL)
  * @param profile_name Profile name (must not be NULL)

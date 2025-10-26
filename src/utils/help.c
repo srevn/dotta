@@ -631,7 +631,7 @@ void print_bootstrap_help(const char *prog_name) {
     printf("Usage: %s bootstrap [profile]...\n", prog_name);
     printf("   or: %s bootstrap [options]\n\n", prog_name);
     printf("Execute bootstrap scripts for profile setup\n\n");
-    printf("Bootstrap scripts are per-profile shell scripts stored in .dotta/bootstrap\n");
+    printf("Bootstrap scripts are per-profile shell scripts stored in .bootstrap\n");
     printf("within each profile branch. They run during initial setup to install\n");
     printf("dependencies, configure system settings, and prepare the environment.\n\n");
     printf("Arguments:\n");
@@ -648,9 +648,9 @@ void print_bootstrap_help(const char *prog_name) {
     printf("  -h, --help                Show this help message\n");
     printf("\nExecution Order:\n");
     printf("  Bootstrap scripts execute in profile resolution order:\n");
-    printf("    1. global/.dotta/bootstrap\n");
-    printf("    2. <os>/.dotta/bootstrap (darwin, linux, freebsd)\n");
-    printf("    3. hosts/<hostname>/.dotta/bootstrap\n");
+    printf("    1. global/.bootstrap\n");
+    printf("    2. <os>/.bootstrap (darwin, linux, freebsd)\n");
+    printf("    3. hosts/<hostname>/.bootstrap\n");
     printf("\nEnvironment Variables:\n");
     printf("  Scripts receive these environment variables:\n");
     printf("    DOTTA_REPO_DIR   - Path to dotta repository\n");
@@ -658,7 +658,7 @@ void print_bootstrap_help(const char *prog_name) {
     printf("    DOTTA_PROFILES   - Space-separated list of all profiles\n");
     printf("    HOME             - User home directory\n");
     printf("\nBootstrap Script Location:\n");
-    printf("  Scripts are stored in: <repo>/<profile>/.dotta/bootstrap\n");
+    printf("  Scripts are stored in: <repo>/<profile>/.bootstrap\n");
     printf("  They are version-controlled and travel with your dotfiles.\n");
     printf("\nEditor Selection (for --edit):\n");
     printf("  $DOTTA_EDITOR → $VISUAL → $EDITOR → nano\n");

@@ -269,8 +269,8 @@ error_t *gitops_resolve_commit_in_branch(
  * This avoids cluttering history with empty commits when nothing has changed.
  *
  * Subdirectory support:
- * - Supports files at root level (e.g., "README.md")
- * - Supports files in one subdirectory (e.g., ".dotta/bootstrap")
+ * - Supports files at root level (e.g., "README.md", ".bootstrap")
+ * - Supports files in one subdirectory (e.g., ".dotta/metadata.json")
  * - Creates intermediate directories as needed
  * - Does NOT support deeper nesting (e.g., "a/b/c/file")
  *
@@ -280,7 +280,7 @@ error_t *gitops_resolve_commit_in_branch(
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
- * @param file_path File path within branch (e.g., ".dottaignore" or ".dotta/bootstrap")
+ * @param file_path File path within branch (e.g., ".dottaignore" or ".bootstrap")
  * @param content File content (must not be NULL)
  * @param content_size Size of content in bytes
  * @param commit_message Commit message (must not be NULL)

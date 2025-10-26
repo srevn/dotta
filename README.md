@@ -229,7 +229,7 @@ dotta bootstrap --dry-run
 dotta bootstrap --continue-on-error
 ```
 
-**Bootstrap scripts** are stored in `.dotta/bootstrap` within each profile branch and receive environment context:
+**Bootstrap scripts** are stored in `.bootstrap` within each profile branch and receive environment context:
 
 - `DOTTA_REPO_DIR` - Path to dotta repository
 - `DOTTA_PROFILE` - Current profile being bootstrapped
@@ -614,7 +614,7 @@ hosts/desktop/gaming # Gaming-specific configs
 
 ### Bootstrap Scripts
 
-Bootstrap scripts automate system setup when cloning configurations to a new machine. Each profile can have its own bootstrap script in `.dotta/bootstrap`:
+Bootstrap scripts automate system setup when cloning configurations to a new machine. Each profile can have its own bootstrap script in `.bootstrap`:
 
 ```bash
 #!/usr/bin/env bash

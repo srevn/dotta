@@ -103,33 +103,6 @@ static error_t *bootstrap_create_template(
         return ERROR(ERR_EXISTS, "Bootstrap script already exists for profile '%s'", profile_name);
     }
 
-    /* Create .dotta directory if it doesn't exist */
-    char *profile_path = NULL;
-    err = fs_path_join(repo_dir, profile_name, &profile_path);
-    if (err) {
-        free(script_path);
-        return error_wrap(err, "Failed to build profile path");
-    }
-
-    char *dotta_path = NULL;
-    err = fs_path_join(profile_path, ".dotta", &dotta_path);
-    free(profile_path);
-    if (err) {
-        free(script_path);
-        return error_wrap(err, "Failed to build .dotta path");
-    }
-
-    /* Create .dotta directory */
-    if (!fs_is_directory(dotta_path)) {
-        err = fs_create_dir(dotta_path, true);
-        if (err) {
-            free(dotta_path);
-            free(script_path);
-            return error_wrap(err, "Failed to create .dotta directory");
-        }
-    }
-    free(dotta_path);
-
     /* Generate template content */
     char *content = str_format(BOOTSTRAP_TEMPLATE,
                               profile_name,
@@ -183,54 +156,6 @@ static error_t *bootstrap_create_template(
         return error_wrap(err, "Failed to load tree from profile '%s'", profile_name);
     }
 
-    /* Check if .dotta directory exists in the tree */
-    const git_tree_entry *dotta_entry = git_tree_entry_byname(current_tree, ".dotta");
-    git_tree *dotta_tree = NULL;
-    git_treebuilder *dotta_builder = NULL;
-
-    if (dotta_entry && git_tree_entry_type(dotta_entry) == GIT_OBJECT_TREE) {
-        /* Load existing .dotta subtree */
-        const git_oid *dotta_oid = git_tree_entry_id(dotta_entry);
-        git_err = git_tree_lookup(&dotta_tree, repo, dotta_oid);
-        if (git_err < 0) {
-            git_tree_free(current_tree);
-            free(ref_name);
-            return error_from_git(git_err);
-        }
-
-        /* Create builder from existing .dotta tree */
-        git_err = git_treebuilder_new(&dotta_builder, repo, dotta_tree);
-        git_tree_free(dotta_tree);
-    } else {
-        /* Create new .dotta directory */
-        git_err = git_treebuilder_new(&dotta_builder, repo, NULL);
-    }
-
-    if (git_err < 0) {
-        git_tree_free(current_tree);
-        free(ref_name);
-        return error_from_git(git_err);
-    }
-
-    /* Insert bootstrap script into .dotta tree */
-    git_err = git_treebuilder_insert(NULL, dotta_builder, script_name, &blob_oid, GIT_FILEMODE_BLOB_EXECUTABLE);
-    if (git_err < 0) {
-        git_treebuilder_free(dotta_builder);
-        git_tree_free(current_tree);
-        free(ref_name);
-        return error_from_git(git_err);
-    }
-
-    /* Write the .dotta tree */
-    git_oid dotta_tree_oid;
-    git_err = git_treebuilder_write(&dotta_tree_oid, dotta_builder);
-    git_treebuilder_free(dotta_builder);
-    if (git_err < 0) {
-        git_tree_free(current_tree);
-        free(ref_name);
-        return error_from_git(git_err);
-    }
-
     /* Create root tree builder */
     git_treebuilder *root_builder = NULL;
     git_err = git_treebuilder_new(&root_builder, repo, current_tree);
@@ -240,8 +165,8 @@ static error_t *bootstrap_create_template(
         return error_from_git(git_err);
     }
 
-    /* Insert/update .dotta directory in root tree */
-    git_err = git_treebuilder_insert(NULL, root_builder, ".dotta", &dotta_tree_oid, GIT_FILEMODE_TREE);
+    /* Insert bootstrap script directly into root tree */
+    git_err = git_treebuilder_insert(NULL, root_builder, script_name, &blob_oid, GIT_FILEMODE_BLOB_EXECUTABLE);
     if (git_err < 0) {
         git_treebuilder_free(root_builder);
         free(ref_name);
@@ -351,7 +276,7 @@ static error_t *bootstrap_edit(
     err = gitops_update_file(
         repo,
         profile_name,
-        ".dotta/bootstrap",  /* file path within branch */
+        ".bootstrap",  /* file path within branch */
         (const char *)buffer_data(content_buf),
         buffer_size(content_buf),
         commit_msg,
@@ -661,7 +586,7 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
     output_section(out, "Found bootstrap scripts");
     for (size_t i = 0; i < profiles->count; i++) {
         if (bootstrap_exists(repo, profiles->profiles[i].name, NULL)) {
-            output_printf(out, OUTPUT_NORMAL, "  ✓ %s/.dotta/bootstrap\n", profiles->profiles[i].name);
+            output_printf(out, OUTPUT_NORMAL, "  ✓ %s/.bootstrap\n", profiles->profiles[i].name);
         }
     }
     output_newline(out);

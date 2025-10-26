@@ -459,7 +459,7 @@ error_t *gitops_get_commit(
  *
  * Returns true if the file exists and its blob OID matches target_oid.
  * Returns false if file doesn't exist or OID doesn't match.
- * Supports one level of subdirectory nesting (e.g., ".dotta/bootstrap").
+ * Supports one level of subdirectory nesting (e.g., ".dotta/metadata.json").
  */
 static bool file_matches_oid(
     git_repository *repo,

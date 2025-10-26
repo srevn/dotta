@@ -4,6 +4,7 @@
 
 #include "bootstrap.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,11 +14,142 @@
 #include <unistd.h>
 
 #include "base/error.h"
-#include "base/filesystem.h"
 #include "base/gitops.h"
 #include "core/profiles.h"
 #include "utils/buffer.h"
 #include "utils/string.h"
+
+/* Bootstrap execution timeout (10 minutes) */
+#define BOOTSTRAP_TIMEOUT_SECONDS 600
+
+/* Maximum output buffer size (10MB to prevent memory exhaustion) */
+#define MAX_OUTPUT_SIZE (10 * 1024 * 1024)
+
+/**
+ * Validate script name to prevent path traversal
+ *
+ * @param script_name Script name to validate
+ * @return Error or NULL if valid
+ */
+static error_t *validate_script_name(const char *script_name) {
+    if (!script_name || *script_name == '\0') {
+        return ERROR(ERR_INVALID_ARG, "Script name cannot be empty");
+    }
+
+    /* Check for path separators to prevent directory traversal */
+    if (strchr(script_name, '/') || strchr(script_name, '\\')) {
+        return ERROR(ERR_INVALID_ARG,
+                    "Script name cannot contain path separators: %s", script_name);
+    }
+
+    /* Check for parent directory references */
+    if (strcmp(script_name, ".") == 0 || strcmp(script_name, "..") == 0) {
+        return ERROR(ERR_INVALID_ARG,
+                    "Script name cannot be '.' or '..': %s", script_name);
+    }
+
+    /* Check for null bytes (security) */
+    size_t len = strlen(script_name);
+    for (size_t i = 0; i < len; i++) {
+        if (script_name[i] == '\0') {
+            return ERROR(ERR_INVALID_ARG, "Script name contains null byte");
+        }
+    }
+
+    return NULL;
+}
+
+/**
+ * Validate profile name for safe use in git refs
+ *
+ * @param profile_name Profile name to validate
+ * @return Error or NULL if valid
+ */
+static error_t *validate_profile_name(const char *profile_name) {
+    if (!profile_name || *profile_name == '\0') {
+        return ERROR(ERR_INVALID_ARG, "Profile name cannot be empty");
+    }
+
+    /* Git ref name rules - simplified validation */
+    const char *p = profile_name;
+    while (*p) {
+        /* Check for dangerous characters */
+        if (*p == '\n' || *p == '\r' || *p == '\0') {
+            return ERROR(ERR_INVALID_ARG,
+                        "Profile name contains invalid characters");
+        }
+        /* Disallow control characters */
+        if (iscntrl((unsigned char)*p)) {
+            return ERROR(ERR_INVALID_ARG,
+                        "Profile name contains control characters");
+        }
+        /* Check for problematic sequences */
+        if (p[0] == '.' && p[1] == '.') {
+            return ERROR(ERR_INVALID_ARG,
+                        "Profile name cannot contain '..'");
+        }
+        p++;
+    }
+
+    /* Check for leading/trailing dots or slashes */
+    if (profile_name[0] == '.' || profile_name[strlen(profile_name) - 1] == '.') {
+        return ERROR(ERR_INVALID_ARG,
+                    "Profile name cannot start or end with '.'");
+    }
+
+    return NULL;
+}
+
+/**
+ * Validate shebang line
+ *
+ * @param content Script content
+ * @param size Content size
+ * @return Error or NULL if valid
+ */
+static error_t *validate_shebang(const unsigned char *content, size_t size) {
+    if (size < 3) {
+        return ERROR(ERR_INVALID_ARG,
+                    "Bootstrap script too small (must have shebang line)");
+    }
+
+    /* Check shebang start */
+    if (content[0] != '#' || content[1] != '!') {
+        return ERROR(ERR_INVALID_ARG,
+                    "Bootstrap script must start with shebang (#!)");
+    }
+
+    /* Find end of shebang line */
+    size_t shebang_end = 2;
+    while (shebang_end < size && content[shebang_end] != '\n') {
+        shebang_end++;
+    }
+
+    /* Validate shebang has interpreter path */
+    if (shebang_end == 2) {
+        return ERROR(ERR_INVALID_ARG,
+                    "Shebang line must specify interpreter path");
+    }
+
+    /* Extract interpreter path (skip #! and whitespace) */
+    size_t path_start = 2;
+    while (path_start < shebang_end && isspace(content[path_start])) {
+        path_start++;
+    }
+
+    if (path_start >= shebang_end) {
+        return ERROR(ERR_INVALID_ARG,
+                    "Shebang line must specify interpreter path");
+    }
+
+    /* Verify it looks like an absolute path */
+    if (content[path_start] != '/') {
+        return ERROR(ERR_INVALID_ARG,
+                    "Shebang interpreter must be an absolute path (start with /)");
+    }
+
+    return NULL;
+}
 
 /**
  * Check if bootstrap script exists for profile
@@ -35,9 +167,22 @@ bool bootstrap_exists(
         script_name = BOOTSTRAP_DEFAULT_SCRIPT_NAME;
     }
 
+    /* Validate inputs */
+    error_t *err = validate_profile_name(profile_name);
+    if (err) {
+        error_free(err);
+        return false;
+    }
+
+    err = validate_script_name(script_name);
+    if (err) {
+        error_free(err);
+        return false;
+    }
+
     /* Check if profile branch exists */
     bool exists = false;
-    error_t *err = gitops_branch_exists(repo, profile_name, &exists);
+    err = gitops_branch_exists(repo, profile_name, &exists);
     if (err || !exists) {
         if (err) error_free(err);
         return false;
@@ -94,6 +239,17 @@ error_t *bootstrap_extract_to_temp(
         script_name = BOOTSTRAP_DEFAULT_SCRIPT_NAME;
     }
 
+    /* Validate inputs */
+    error_t *err_validate = validate_profile_name(profile_name);
+    if (err_validate) {
+        return err_validate;
+    }
+
+    err_validate = validate_script_name(script_name);
+    if (err_validate) {
+        return err_validate;
+    }
+
     /* Declare resources for cleanup */
     error_t *err = NULL;
     git_tree *tree = NULL;
@@ -135,9 +291,10 @@ error_t *bootstrap_extract_to_temp(
     size_t size = git_blob_rawsize(blob);
 
     /* Validate shebang */
-    if (size < 2 || content[0] != '#' || content[1] != '!') {
-        err = ERROR(ERR_INVALID_ARG,
-                   "Bootstrap script must start with shebang (#!): %s", script_name);
+    err = validate_shebang(content, size);
+    if (err) {
+        err = error_wrap(err, "Invalid bootstrap script '%s' in profile '%s'",
+                        script_name, profile_name);
         goto cleanup;
     }
 
@@ -214,6 +371,17 @@ error_t *bootstrap_read_content(
 
     if (!script_name) {
         script_name = BOOTSTRAP_DEFAULT_SCRIPT_NAME;
+    }
+
+    /* Validate inputs */
+    error_t *err_validate = validate_profile_name(profile_name);
+    if (err_validate) {
+        return err_validate;
+    }
+
+    err_validate = validate_script_name(script_name);
+    if (err_validate) {
+        return err_validate;
     }
 
     /* Declare resources for cleanup */
@@ -353,10 +521,12 @@ static char **build_bootstrap_env(const bootstrap_context_t *context, size_t *en
     for (char **e = environ; *e; e++) {
         /* Skip DOTTA_* variables to avoid conflicts */
         if (!str_starts_with(*e, "DOTTA_")) {
-            env[count] = strdup(*e);
-            if (!env[count]) {
+            char *env_copy = strdup(*e);
+            if (!env_copy) {
+                /* strdup failed - cleanup and return NULL */
                 goto cleanup_error;
             }
+            env[count] = env_copy;
             count++;
         }
     }
@@ -370,7 +540,9 @@ static char **build_bootstrap_env(const bootstrap_context_t *context, size_t *en
 cleanup_error:
     /* Free all allocated strings on error */
     for (size_t i = 0; i < count; i++) {
-        free(env[i]);
+        if (env[i]) {
+            free(env[i]);
+        }
     }
     free(env);
     *env_count = 0;
@@ -457,16 +629,22 @@ error_t *bootstrap_execute(
          * user environment, and create directories - operations that naturally
          * assume $HOME as the starting point. If $HOME is unavailable (rare
          * edge case: daemon context, broken environment), fall back to repo
-         * root for maximum robustness. If both fail, continue in current
-         * directory (graceful degradation - most bootstrap operations are
-         * location-independent). */
+         * root for maximum robustness. */
         const char *home = getenv("HOME");
+
         if (home && chdir(home) == 0) {
             /* Working from HOME - natural for bootstrap operations */
         } else if (work_dir && chdir(work_dir) == 0) {
             /* Fallback to repo root - guaranteed to exist */
+            /* Inform script about fallback by printing to stderr */
+            const char *msg = "Warning: HOME unavailable, using repository directory\n";
+            (void)write(STDERR_FILENO, msg, strlen(msg));
+        } else {
+            /* Critical: both HOME and repo_dir failed */
+            const char *msg = "Error: Failed to change to working directory\n";
+            (void)write(STDERR_FILENO, msg, strlen(msg));
+            _exit(126);  /* Exit code 126: command invoked cannot execute */
         }
-        /* If both fail, stay in current directory (graceful degradation) */
 
         /* Execute bootstrap with environment */
         char *args[] = { (char *)script_path, NULL };
@@ -500,7 +678,8 @@ error_t *bootstrap_execute(
             if (errno == EINTR) {
                 continue;
             }
-            /* Real error - stop reading */
+            /* Real error - log and stop reading */
+            fprintf(stderr, "Warning: Error reading bootstrap output: %s\n", strerror(errno));
             break;
         }
         if (n == 0) {
@@ -509,33 +688,59 @@ error_t *bootstrap_execute(
         }
 
         /* Print output in real-time */
-        write(STDOUT_FILENO, buf, (size_t)n);
+        (void)write(STDOUT_FILENO, buf, (size_t)n);
 
-        /* Also save to buffer */
-        if (output_size + (size_t)n >= output_capacity) {
-            output_capacity *= 2;
-            char *new_output = realloc(output, output_capacity);
+        /* Check if we're approaching the size limit */
+        if (output_size + (size_t)n > MAX_OUTPUT_SIZE) {
+            fprintf(stderr, "Warning: Bootstrap output exceeds maximum size (%d MB), truncating\n",
+                   MAX_OUTPUT_SIZE / (1024 * 1024));
+            break;
+        }
+
+        /* Also save to buffer - ensure sufficient capacity */
+        size_t required_capacity = output_size + (size_t)n + 1;  /* +1 for null terminator */
+        if (required_capacity > output_capacity) {
+            /* Grow to at least required size, or double current capacity, whichever is larger */
+            size_t new_capacity = output_capacity * 2;
+            if (new_capacity < required_capacity) {
+                new_capacity = required_capacity;
+            }
+
+            char *new_output = realloc(output, new_capacity);
             if (!new_output) {
+                /* Memory allocation failed - continue without buffering */
+                fprintf(stderr, "Warning: Failed to resize output buffer, continuing without capture\n");
                 free(output);
-                close(pipefd[0]);
-                free_bootstrap_env(env, env_count);
-                return ERROR(ERR_MEMORY, "Failed to resize bootstrap output buffer");
+                output = NULL;
+                output_size = 0;
+                output_capacity = 0;
+                continue;
             }
             output = new_output;
+            output_capacity = new_capacity;
         }
-        memcpy(output + output_size, buf, (size_t)n);
-        output_size += (size_t)n;
+
+        if (output) {
+            memcpy(output + output_size, buf, (size_t)n);
+            output_size += (size_t)n;
+        }
     }
     close(pipefd[0]);
 
     /* Null-terminate output */
-    if (output_size < output_capacity) {
-        output[output_size] = '\0';
-    } else {
-        char *new_output = realloc(output, output_size + 1);
-        if (new_output) {
-            output = new_output;
+    if (output) {
+        if (output_size < output_capacity) {
             output[output_size] = '\0';
+        } else {
+            char *new_output = realloc(output, output_size + 1);
+            if (new_output) {
+                output = new_output;
+                output[output_size] = '\0';
+                output_capacity = output_size + 1;
+            } else {
+                /* Can't null-terminate, but continue */
+                fprintf(stderr, "Warning: Failed to null-terminate output buffer\n");
+            }
         }
     }
 
@@ -547,8 +752,23 @@ error_t *bootstrap_execute(
         return ERROR(ERR_FS, "Failed to wait for bootstrap process");
     }
 
-    /* Check exit status */
-    int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+    /* Check exit status - handle both normal exit and signal termination */
+    int exit_code;
+    bool was_signaled = false;
+    int signal_num = 0;
+
+    if (WIFEXITED(status)) {
+        /* Normal exit */
+        exit_code = WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+        /* Terminated by signal */
+        was_signaled = true;
+        signal_num = WTERMSIG(status);
+        exit_code = 128 + signal_num;  /* Standard convention */
+    } else {
+        /* Unknown termination */
+        exit_code = 1;
+    }
 
     /* Create result if requested */
     if (result) {
@@ -570,8 +790,13 @@ error_t *bootstrap_execute(
 
     /* Return error if bootstrap failed */
     if (exit_code != 0) {
-        return ERROR(ERR_INTERNAL,
-                    "Bootstrap script failed with exit code %d", exit_code);
+        if (was_signaled) {
+            return ERROR(ERR_INTERNAL,
+                        "Bootstrap script terminated by signal %d", signal_num);
+        } else {
+            return ERROR(ERR_INTERNAL,
+                        "Bootstrap script failed with exit code %d", exit_code);
+        }
     }
 
     return NULL;
@@ -626,7 +851,12 @@ error_t *bootstrap_run_for_profiles(
 
     /* Execute scripts in order */
     size_t executed = 0;
-    error_t *last_error = NULL;
+    size_t failed_count = 0;
+    char **failed_profiles = malloc(script_count * sizeof(char *));
+    if (!failed_profiles) {
+        free(all_profiles_str);
+        return ERROR(ERR_MEMORY, "Failed to allocate failed profiles array");
+    }
 
     for (size_t i = 0; i < plist->count; i++) {
         profile_t *profile = &plist->profiles[i];
@@ -641,8 +871,27 @@ error_t *bootstrap_run_for_profiles(
         printf("[%zu/%zu] Running %s/%s...\n",
                executed, script_count, profile->name, script_name);
 
+        /* In dry-run mode, validate the script but don't execute */
         if (dry_run) {
-            printf("  (dry-run) Would execute bootstrap for profile '%s'\n", profile->name);
+            /* Extract and validate script even in dry-run */
+            char *temp_path = NULL;
+            error_t *err = bootstrap_extract_to_temp(repo, profile->name, script_name, &temp_path);
+            if (err) {
+                printf("  ✗ (dry-run) Validation failed: %s\n", error_message(err));
+                error_free(err);
+                if (stop_on_error) {
+                    free(all_profiles_str);
+                    free(failed_profiles);
+                    return ERROR(ERR_INVALID_ARG, "Bootstrap script validation failed for %s", profile->name);
+                }
+                failed_profiles[failed_count++] = profile->name;
+            } else {
+                printf("  ✓ (dry-run) Would execute bootstrap for profile '%s'\n", profile->name);
+                if (temp_path) {
+                    unlink(temp_path);
+                    free(temp_path);
+                }
+            }
             continue;
         }
 
@@ -650,13 +899,14 @@ error_t *bootstrap_run_for_profiles(
         char *temp_path = NULL;
         error_t *err = bootstrap_extract_to_temp(repo, profile->name, script_name, &temp_path);
         if (err) {
+            printf("  ✗ Failed to extract: %s\n", error_message(err));
             if (stop_on_error) {
                 free(all_profiles_str);
+                free(failed_profiles);
                 return error_wrap(err, "Failed to extract bootstrap script for %s", profile->name);
             }
-            fprintf(stderr, "Warning: Failed to extract bootstrap for %s: %s\n",
-                    profile->name, error_message(err));
             error_free(err);
+            failed_profiles[failed_count++] = profile->name;
             continue;
         }
 
@@ -679,7 +929,7 @@ error_t *bootstrap_run_for_profiles(
         }
 
         if (err) {
-            printf("✗ Failed");
+            printf("  ✗ Failed");
 
             /* Show exit code if available from result */
             if (result && result->exit_code != 0) {
@@ -688,7 +938,7 @@ error_t *bootstrap_run_for_profiles(
             printf("\n");
 
             /* Show error details */
-            fprintf(stderr, "Error: %s\n", error_message(err));
+            fprintf(stderr, "  Error: %s\n", error_message(err));
 
             if (result) {
                 bootstrap_result_free(result);
@@ -696,19 +946,17 @@ error_t *bootstrap_run_for_profiles(
 
             if (stop_on_error) {
                 free(all_profiles_str);
+                free(failed_profiles);
                 return error_wrap(err, "Bootstrap failed for profile %s", profile->name);
             }
 
-            fprintf(stderr, "Warning: Continuing despite failure in profile '%s'\n", profile->name);
-            /* Free previous error and save current error for later */
-            if (last_error) {
-                error_free(last_error);
-            }
-            last_error = err;  /* Transfer ownership - don't free err */
+            /* Track failed profile */
+            failed_profiles[failed_count++] = profile->name;
+            error_free(err);
             continue;
         }
 
-        printf("✓ Complete\n");
+        printf("  ✓ Complete\n");
 
         if (result) {
             bootstrap_result_free(result);
@@ -717,10 +965,17 @@ error_t *bootstrap_run_for_profiles(
 
     free(all_profiles_str);
 
-    if (last_error && !stop_on_error) {
-        printf("\nWarning: Some bootstrap scripts failed\n");
-        error_free(last_error);
+    /* Report failures if any occurred */
+    if (failed_count > 0 && !stop_on_error) {
+        printf("\n");
+        fprintf(stderr, "Warning: %zu bootstrap script%s failed:\n",
+               failed_count, failed_count == 1 ? "" : "s");
+        for (size_t i = 0; i < failed_count; i++) {
+            fprintf(stderr, "  - %s\n", failed_profiles[i]);
+        }
     }
+
+    free(failed_profiles);
 
     return NULL;
 }

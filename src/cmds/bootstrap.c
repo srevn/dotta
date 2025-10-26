@@ -33,6 +33,9 @@ static const char *BOOTSTRAP_TEMPLATE =
     "# This script runs after cloning the repository and before applying profiles.\n"
     "# Use it to install dependencies, set up package managers, or configure the system.\n"
     "#\n"
+    "# Working directory: $HOME (your home directory)\n"
+    "#   Access the dotta repository via: $DOTTA_REPO_DIR\n"
+    "#\n"
     "# Environment variables:\n"
     "#   DOTTA_REPO_DIR    - Path to dotta repository\n"
     "#   DOTTA_PROFILE     - Current profile name\n"
@@ -64,15 +67,15 @@ static const char *BOOTSTRAP_TEMPLATE =
 
 /**
  * Create bootstrap script from template
+ *
+ * Creates a bootstrap script directly in the Git tree without writing to filesystem.
  */
 static error_t *bootstrap_create_template(
     git_repository *repo,
-    const char *repo_dir,
     const char *profile_name,
     const char *script_name
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(repo_dir);
     CHECK_NULL(profile_name);
 
     if (!script_name) {
@@ -90,16 +93,8 @@ static error_t *bootstrap_create_template(
         return ERROR(ERR_NOT_FOUND, "Profile '%s' does not exist", profile_name);
     }
 
-    /* Get script path */
-    char *script_path = NULL;
-    err = bootstrap_get_path(repo_dir, profile_name, script_name, &script_path);
-    if (err) {
-        return error_wrap(err, "Failed to get bootstrap script path");
-    }
-
-    /* Check if script already exists */
-    if (fs_file_exists(script_path)) {
-        free(script_path);
+    /* Check if script already exists in Git */
+    if (bootstrap_exists(repo, profile_name, script_name)) {
         return ERROR(ERR_EXISTS, "Bootstrap script already exists for profile '%s'", profile_name);
     }
 
@@ -109,39 +104,17 @@ static error_t *bootstrap_create_template(
                               profile_name,
                               profile_name);
     if (!content) {
-        free(script_path);
         return ERROR(ERR_MEMORY, "Failed to generate bootstrap template");
     }
 
-    /* Create blob from in-memory content first (before writing to file) */
+    /* Create blob from template content */
     git_oid blob_oid;
     size_t content_len = strlen(content);
     int git_err = git_blob_create_from_buffer(&blob_oid, repo, content, content_len);
+    free(content);
     if (git_err < 0) {
-        free(content);
-        free(script_path);
         return error_from_git(git_err);
     }
-
-    /* Now write the same content to file */
-    FILE *fp = fopen(script_path, "w");
-    if (!fp) {
-        free(content);
-        free(script_path);
-        return ERROR(ERR_FS, "Failed to create bootstrap script: %s", script_path);
-    }
-
-    fprintf(fp, "%s", content);
-    fclose(fp);
-    free(content);
-
-    /* Make script executable */
-    if (chmod(script_path, 0755) != 0) {
-        free(script_path);
-        return ERROR(ERR_FS, "Failed to make bootstrap script executable");
-    }
-
-    free(script_path);  /* Done with script_path */
 
     /* Load current tree from profile branch */
     char *ref_name = str_format("refs/heads/%s", profile_name);
@@ -219,22 +192,27 @@ static error_t *bootstrap_create_template(
 
 /**
  * Edit bootstrap script
+ *
+ * Extracts the bootstrap script to a temporary file, opens it in an editor,
+ * then commits the changes back to Git.
  */
 static error_t *bootstrap_edit(
     git_repository *repo,
-    const char *repo_dir,
     const char *profile_name,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(repo_dir);
     CHECK_NULL(profile_name);
 
     const char *script_name = BOOTSTRAP_DEFAULT_SCRIPT_NAME;
+    error_t *err = NULL;
+    char *temp_path = NULL;
+    buffer_t *content_buf = NULL;
+    char *commit_msg = NULL;
 
     /* Create script if it doesn't exist */
     if (!bootstrap_exists(repo, profile_name, script_name)) {
-        error_t *err = bootstrap_create_template(repo, repo_dir, profile_name, script_name);
+        err = bootstrap_create_template(repo, profile_name, script_name);
         if (err) {
             return error_wrap(err, "Failed to create bootstrap template");
         }
@@ -243,33 +221,31 @@ static error_t *bootstrap_edit(
         }
     }
 
-    /* Get script path */
-    char *script_path = NULL;
-    error_t *err = bootstrap_get_path(repo_dir, profile_name, script_name, &script_path);
+    /* Extract script to temporary file for editing */
+    err = bootstrap_extract_to_temp(repo, profile_name, script_name, &temp_path);
     if (err) {
-        return error_wrap(err, "Failed to get bootstrap script path");
+        return error_wrap(err, "Failed to extract bootstrap script");
     }
 
     /* Launch editor - priority: DOTTA_EDITOR, VISUAL, EDITOR, nano */
-    err = editor_launch_with_env(script_path, "nano");
+    err = editor_launch_with_env(temp_path, "nano");
     if (err) {
-        free(script_path);
-        return error_wrap(err, "Failed to edit bootstrap script");
+        err = error_wrap(err, "Failed to edit bootstrap script");
+        goto cleanup;
     }
 
-    /* Read edited content back from disk */
-    buffer_t *content_buf = NULL;
-    err = fs_read_file(script_path, &content_buf);
-    free(script_path);
+    /* Read edited content back from temp file */
+    err = fs_read_file(temp_path, &content_buf);
     if (err) {
-        return error_wrap(err, "Failed to read edited bootstrap script");
+        err = error_wrap(err, "Failed to read edited bootstrap script");
+        goto cleanup;
     }
 
     /* Auto-commit the changes */
-    char *commit_msg = str_format("Update bootstrap script for %s profile", profile_name);
+    commit_msg = str_format("Update bootstrap script for %s profile", profile_name);
     if (!commit_msg) {
-        buffer_free(content_buf);
-        return ERROR(ERR_MEMORY, "Failed to allocate commit message");
+        err = ERROR(ERR_MEMORY, "Failed to allocate commit message");
+        goto cleanup;
     }
 
     bool was_modified = false;
@@ -284,11 +260,9 @@ static error_t *bootstrap_edit(
         &was_modified
     );
 
-    buffer_free(content_buf);
-    free(commit_msg);
-
     if (err) {
-        return error_wrap(err, "Failed to commit bootstrap script");
+        err = error_wrap(err, "Failed to commit bootstrap script");
+        goto cleanup;
     }
 
     /* Inform user */
@@ -300,21 +274,31 @@ static error_t *bootstrap_edit(
         }
     }
 
-    return NULL;
+    err = NULL;
+
+cleanup:
+    if (temp_path) {
+        unlink(temp_path);
+        free(temp_path);
+    }
+    if (content_buf) buffer_free(content_buf);
+    if (commit_msg) free(commit_msg);
+
+    return err;
 }
 
 /**
  * Show bootstrap script content
+ *
+ * Reads and displays the bootstrap script content from Git.
  */
 static error_t *bootstrap_show(
     git_repository *repo,
-    const char *repo_dir,
     const char *profile_name,
     const char *script_name,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(repo_dir);
     CHECK_NULL(profile_name);
 
     if (!script_name) {
@@ -327,29 +311,22 @@ static error_t *bootstrap_show(
                     "No bootstrap script found for profile '%s'", profile_name);
     }
 
-    /* Get script path */
-    char *script_path = NULL;
-    error_t *err = bootstrap_get_path(repo_dir, profile_name, script_name, &script_path);
+    /* Read content from Git blob */
+    buffer_t *content = NULL;
+    error_t *err = bootstrap_read_content(repo, profile_name, script_name, &content);
     if (err) {
-        return error_wrap(err, "Failed to get bootstrap script path");
+        return error_wrap(err, "Failed to read bootstrap script");
     }
 
-    /* Read and display file */
-    FILE *fp = fopen(script_path, "r");
-    if (!fp) {
-        free(script_path);
-        return ERROR(ERR_FS, "Failed to open bootstrap script");
+    /* Display content */
+    if (out && buffer_size(content) > 0) {
+        /* Write content as a single block (includes newlines) */
+        output_printf(out, OUTPUT_NORMAL, "%.*s",
+                     (int)buffer_size(content),
+                     (const char *)buffer_data(content));
     }
 
-    char buf[1024];
-    while (fgets(buf, sizeof(buf), fp)) {
-        if (out) {
-            output_printf(out, OUTPUT_NORMAL, "%s", buf);
-        }
-    }
-
-    fclose(fp);
-    free(script_path);
+    buffer_free(content);
     return NULL;
 }
 
@@ -358,13 +335,11 @@ static error_t *bootstrap_show(
  */
 static error_t *bootstrap_list(
     git_repository *repo,
-    const char *repo_dir,
     struct profile_list *profiles,
     const char *script_name,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(repo_dir);
     CHECK_NULL(profiles);
 
     if (!script_name) {
@@ -381,17 +356,11 @@ static error_t *bootstrap_list(
             bool exists = bootstrap_exists(repo, profile->name, script_name);
 
             if (exists) {
-                char *script_path = NULL;
-                error_t *err = bootstrap_get_path(repo_dir, profile->name, script_name, &script_path);
-                if (err) {
-                    error_free(err);
-                    output_printf(out, OUTPUT_NORMAL, "  ✓ %-15s (path error)\n", profile->name);
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, "  ✓ %-15s %s\n", profile->name, script_path);
-                    free(script_path);
-                }
+                output_printf(out, OUTPUT_NORMAL, "  ✓ %-15s %s/%s\n",
+                             profile->name, profile->name, script_name);
             } else {
-                output_printf(out, OUTPUT_NORMAL, "  ✗ %-15s (no bootstrap script)\n", profile->name);
+                output_printf(out, OUTPUT_NORMAL, "  ✗ %-15s (no bootstrap script)\n",
+                             profile->name);
             }
         }
 
@@ -475,7 +444,7 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
         const char *profile_to_edit = (opts->profile_count == 0) ? "global" : opts->profiles[0];
 
         /* Edit the bootstrap script */
-        err = bootstrap_edit(repo, repo_path, profile_to_edit, out);
+        err = bootstrap_edit(repo, profile_to_edit, out);
         if (err) {
             err = error_wrap(err, "Failed to edit bootstrap script");
         }
@@ -526,7 +495,7 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
 
     /* Handle --list flag */
     if (opts->list) {
-        err = bootstrap_list(repo, repo_path, (struct profile_list *)profiles, NULL, out);
+        err = bootstrap_list(repo, (struct profile_list *)profiles, NULL, out);
         if (err) {
             err = error_wrap(err, "Failed to list bootstrap scripts");
         }
@@ -545,7 +514,7 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
         const char *profile_to_show = (opts->profile_count == 0) ? "global" : opts->profiles[0];
 
         /* Show the bootstrap script */
-        err = bootstrap_show(repo, repo_path, profile_to_show, NULL, out);
+        err = bootstrap_show(repo, profile_to_show, NULL, out);
         if (err) {
             err = error_wrap(err, "Failed to show bootstrap script");
         }

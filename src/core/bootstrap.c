@@ -16,6 +16,7 @@
 #include "base/filesystem.h"
 #include "base/gitops.h"
 #include "core/profiles.h"
+#include "utils/buffer.h"
 #include "utils/string.h"
 
 /**
@@ -68,38 +69,219 @@ bool bootstrap_exists(
 }
 
 /**
- * Get path to bootstrap script for a profile
+ * Extract bootstrap script from Git blob to temporary file
+ *
+ * Creates a secure temporary file with executable permissions and writes
+ * the bootstrap script content from the profile's Git tree.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param profile_name Profile name (must not be NULL)
+ * @param script_name Script filename (default: ".bootstrap")
+ * @param out_temp_path Output: path to temporary file (caller must free and unlink)
+ * @return Error or NULL on success
  */
-error_t *bootstrap_get_path(
-    const char *repo_dir,
+error_t *bootstrap_extract_to_temp(
+    git_repository *repo,
     const char *profile_name,
     const char *script_name,
-    char **out
+    char **out_temp_path
 ) {
-    CHECK_NULL(repo_dir);
+    CHECK_NULL(repo);
     CHECK_NULL(profile_name);
-    CHECK_NULL(out);
+    CHECK_NULL(out_temp_path);
 
     if (!script_name) {
         script_name = BOOTSTRAP_DEFAULT_SCRIPT_NAME;
     }
 
-    /* Build path: <repo_dir>/<profile>/<script_name> */
-    char *profile_path = NULL;
-    error_t *err = fs_path_join(repo_dir, profile_name, &profile_path);
-    if (err) {
-        return error_wrap(err, "Failed to build profile path");
+    /* Declare resources for cleanup */
+    error_t *err = NULL;
+    git_tree *tree = NULL;
+    git_blob *blob = NULL;
+    char *ref_name = NULL;
+    char *temp_path = NULL;
+    int fd = -1;
+
+    /* Build ref name */
+    ref_name = str_format("refs/heads/%s", profile_name);
+    if (!ref_name) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate ref name");
+        goto cleanup;
     }
 
-    char *script_path = NULL;
-    err = fs_path_join(profile_path, script_name, &script_path);
-    free(profile_path);
+    /* Load tree from profile branch */
+    err = gitops_load_tree(repo, ref_name, &tree);
     if (err) {
-        return error_wrap(err, "Failed to build bootstrap script path");
+        err = error_wrap(err, "Failed to load tree from profile '%s'", profile_name);
+        goto cleanup;
     }
 
-    *out = script_path;
-    return NULL;
+    /* Find bootstrap script in tree */
+    const git_tree_entry *entry = git_tree_entry_byname(tree, script_name);
+    if (!entry) {
+        err = ERROR(ERR_NOT_FOUND, "Bootstrap script not found in profile '%s'", profile_name);
+        goto cleanup;
+    }
+
+    /* Load blob */
+    const git_oid *oid = git_tree_entry_id(entry);
+    int git_err = git_blob_lookup(&blob, repo, oid);
+    if (git_err < 0) {
+        err = error_from_git(git_err);
+        goto cleanup;
+    }
+
+    const unsigned char *content = git_blob_rawcontent(blob);
+    size_t size = git_blob_rawsize(blob);
+
+    /* Validate shebang */
+    if (size < 2 || content[0] != '#' || content[1] != '!') {
+        err = ERROR(ERR_INVALID_ARG,
+                   "Bootstrap script must start with shebang (#!): %s", script_name);
+        goto cleanup;
+    }
+
+    /* Create secure temporary file */
+    const char *tmpdir = getenv("TMPDIR");
+    if (!tmpdir) {
+        tmpdir = "/tmp";
+    }
+
+    temp_path = str_format("%s/dotta-bootstrap-XXXXXX", tmpdir);
+    if (!temp_path) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate temporary file path");
+        goto cleanup;
+    }
+
+    fd = mkstemp(temp_path);
+    if (fd < 0) {
+        err = ERROR(ERR_FS, "Failed to create temporary file");
+        goto cleanup;
+    }
+
+    /* Write blob content to temp file */
+    ssize_t written = write(fd, content, size);
+    if (written < 0 || (size_t)written != size) {
+        err = ERROR(ERR_FS, "Failed to write bootstrap script to temporary file");
+        goto cleanup;
+    }
+
+    /* Set executable permissions (owner only) */
+    if (fchmod(fd, 0700) != 0) {
+        err = ERROR(ERR_FS, "Failed to set executable permissions on bootstrap script");
+        goto cleanup;
+    }
+
+    close(fd);
+    fd = -1;
+
+    /* Success - transfer ownership of temp_path to caller */
+    *out_temp_path = temp_path;
+    temp_path = NULL;
+    err = NULL;
+
+cleanup:
+    if (fd >= 0) close(fd);
+    if (temp_path) {
+        unlink(temp_path);
+        free(temp_path);
+    }
+    if (blob) git_blob_free(blob);
+    if (tree) git_tree_free(tree);
+    if (ref_name) free(ref_name);
+
+    return err;
+}
+
+/**
+ * Read bootstrap script content from Git blob
+ *
+ * @param repo Repository (must not be NULL)
+ * @param profile_name Profile name (must not be NULL)
+ * @param script_name Script filename (default: ".bootstrap")
+ * @param out_content Output: buffer containing script content (caller must free)
+ * @return Error or NULL on success
+ */
+error_t *bootstrap_read_content(
+    git_repository *repo,
+    const char *profile_name,
+    const char *script_name,
+    buffer_t **out_content
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(profile_name);
+    CHECK_NULL(out_content);
+
+    if (!script_name) {
+        script_name = BOOTSTRAP_DEFAULT_SCRIPT_NAME;
+    }
+
+    /* Declare resources for cleanup */
+    error_t *err = NULL;
+    git_tree *tree = NULL;
+    git_blob *blob = NULL;
+    char *ref_name = NULL;
+    buffer_t *content_buf = NULL;
+
+    /* Build ref name */
+    ref_name = str_format("refs/heads/%s", profile_name);
+    if (!ref_name) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate ref name");
+        goto cleanup;
+    }
+
+    /* Load tree from profile branch */
+    err = gitops_load_tree(repo, ref_name, &tree);
+    if (err) {
+        err = error_wrap(err, "Failed to load tree from profile '%s'", profile_name);
+        goto cleanup;
+    }
+
+    /* Find bootstrap script in tree */
+    const git_tree_entry *entry = git_tree_entry_byname(tree, script_name);
+    if (!entry) {
+        err = ERROR(ERR_NOT_FOUND, "Bootstrap script not found in profile '%s'", profile_name);
+        goto cleanup;
+    }
+
+    /* Load blob */
+    const git_oid *oid = git_tree_entry_id(entry);
+    int git_err = git_blob_lookup(&blob, repo, oid);
+    if (git_err < 0) {
+        err = error_from_git(git_err);
+        goto cleanup;
+    }
+
+    const unsigned char *content = git_blob_rawcontent(blob);
+    size_t size = git_blob_rawsize(blob);
+
+    /* Allocate buffer and copy content */
+    content_buf = buffer_create();
+    if (!content_buf) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate buffer for bootstrap content");
+        goto cleanup;
+    }
+
+    if (size > 0) {
+        err = buffer_append(content_buf, content, size);
+        if (err) {
+            err = error_wrap(err, "Failed to append content to buffer");
+            goto cleanup;
+        }
+    }
+
+    /* Success - transfer ownership to caller */
+    *out_content = content_buf;
+    content_buf = NULL;
+    err = NULL;
+
+cleanup:
+    if (content_buf) buffer_free(content_buf);
+    if (blob) git_blob_free(blob);
+    if (tree) git_tree_free(tree);
+    if (ref_name) free(ref_name);
+
+    return err;
 }
 
 /**
@@ -211,6 +393,20 @@ static void free_bootstrap_env(char **env, size_t count) {
 
 /**
  * Execute bootstrap script with environment
+ *
+ * Executes a bootstrap script from a temporary file. The script is expected
+ * to have already been extracted and validated by bootstrap_extract_to_temp().
+ *
+ * Working directory: $HOME if accessible, otherwise repository root (repo_dir).
+ * This provides a natural context for bootstrap operations (package installation,
+ * user environment setup) while ensuring robustness in edge cases.
+ *
+ * Environment: DOTTA_REPO_DIR, DOTTA_PROFILE, DOTTA_PROFILES, DOTTA_DRY_RUN
+ *
+ * @param script_path Path to bootstrap script (must not be NULL)
+ * @param context Execution context (must not be NULL)
+ * @param result Optional result struct (can be NULL)
+ * @return Error or NULL on success
  */
 error_t *bootstrap_execute(
     const char *script_path,
@@ -219,32 +415,6 @@ error_t *bootstrap_execute(
 ) {
     CHECK_NULL(script_path);
     CHECK_NULL(context);
-
-    /* Check if script exists */
-    if (!fs_file_exists(script_path)) {
-        return ERROR(ERR_NOT_FOUND, "Bootstrap script not found: %s", script_path);
-    }
-
-    /* Check if script is executable */
-    if (!fs_is_executable(script_path)) {
-        return ERROR(ERR_PERMISSION,
-                    "Bootstrap script is not executable: %s", script_path);
-    }
-
-    /* Validate shebang */
-    FILE *fp = fopen(script_path, "r");
-    if (!fp) {
-        return ERROR(ERR_FS, "Failed to open bootstrap script for validation: %s", script_path);
-    }
-
-    char shebang[3] = {0};
-    size_t read_bytes = fread(shebang, 1, 2, fp);
-    fclose(fp);
-
-    if (read_bytes < 2 || shebang[0] != '#' || shebang[1] != '!') {
-        return ERROR(ERR_INVALID_ARG,
-                    "Bootstrap script must start with shebang (#!): %s", script_path);
-    }
 
     /* Build environment */
     size_t env_count = 0;
@@ -260,17 +430,8 @@ error_t *bootstrap_execute(
         return ERROR(ERR_FS, "Failed to create pipe for bootstrap output");
     }
 
-    /* Get working directory (profile directory) */
-    char *work_dir = NULL;
-    if (context->repo_dir && context->profile_name) {
-        error_t *err = fs_path_join(context->repo_dir, context->profile_name, &work_dir);
-        if (err) {
-            close(pipefd[0]);
-            close(pipefd[1]);
-            free_bootstrap_env(env, env_count);
-            return error_wrap(err, "Failed to build working directory");
-        }
-    }
+    /* Working directory is repo root (not profile subdirectory) */
+    const char *work_dir = context->repo_dir;
 
     /* Fork and execute bootstrap */
     pid_t pid = fork();
@@ -278,7 +439,6 @@ error_t *bootstrap_execute(
         close(pipefd[0]);
         close(pipefd[1]);
         free_bootstrap_env(env, env_count);
-        free(work_dir);
         return ERROR(ERR_FS, "Failed to fork for bootstrap execution");
     }
 
@@ -291,14 +451,22 @@ error_t *bootstrap_execute(
         dup2(pipefd[1], STDERR_FILENO);
         close(pipefd[1]);
 
-        /* Change to working directory if specified */
-        if (work_dir) {
-            if (chdir(work_dir) != 0) {
-                fprintf(stderr, "Error: Failed to change to directory '%s': %s\n",
-                        work_dir, strerror(errno));
-                _exit(126);  /* Exit with error code 126 (cannot execute) */
-            }
+        /* Change to working directory: HOME (preferred) or repo root (fallback)
+         *
+         * Rationale: Bootstrap scripts typically install packages, configure
+         * user environment, and create directories - operations that naturally
+         * assume $HOME as the starting point. If $HOME is unavailable (rare
+         * edge case: daemon context, broken environment), fall back to repo
+         * root for maximum robustness. If both fail, continue in current
+         * directory (graceful degradation - most bootstrap operations are
+         * location-independent). */
+        const char *home = getenv("HOME");
+        if (home && chdir(home) == 0) {
+            /* Working from HOME - natural for bootstrap operations */
+        } else if (work_dir && chdir(work_dir) == 0) {
+            /* Fallback to repo root - guaranteed to exist */
         }
+        /* If both fail, stay in current directory (graceful degradation) */
 
         /* Execute bootstrap with environment */
         char *args[] = { (char *)script_path, NULL };
@@ -310,7 +478,6 @@ error_t *bootstrap_execute(
 
     /* Parent process */
     close(pipefd[1]); /* Close write end */
-    free(work_dir);
 
     /* Read output from pipe */
     char *output = NULL;
@@ -471,25 +638,25 @@ error_t *bootstrap_run_for_profiles(
 
         executed++;
 
-        /* Get script path */
-        char *script_path = NULL;
-        error_t *err = bootstrap_get_path(repo_dir, profile->name, script_name, &script_path);
-        if (err) {
-            if (stop_on_error) {
-                free(all_profiles_str);
-                return error_wrap(err, "Failed to get bootstrap script path for %s", profile->name);
-            }
-            fprintf(stderr, "Warning: Failed to get bootstrap path for %s\n", profile->name);
-            error_free(err);
-            continue;
-        }
-
-        printf("\n[%zu/%zu] Running %s/%s...\n",
+        printf("[%zu/%zu] Running %s/%s...\n",
                executed, script_count, profile->name, script_name);
 
         if (dry_run) {
-            printf("  (dry-run) Would execute: %s\n", script_path);
-            free(script_path);
+            printf("  (dry-run) Would execute bootstrap for profile '%s'\n", profile->name);
+            continue;
+        }
+
+        /* Extract script to temporary file */
+        char *temp_path = NULL;
+        error_t *err = bootstrap_extract_to_temp(repo, profile->name, script_name, &temp_path);
+        if (err) {
+            if (stop_on_error) {
+                free(all_profiles_str);
+                return error_wrap(err, "Failed to extract bootstrap script for %s", profile->name);
+            }
+            fprintf(stderr, "Warning: Failed to extract bootstrap for %s: %s\n",
+                    profile->name, error_message(err));
+            error_free(err);
             continue;
         }
 
@@ -503,8 +670,13 @@ error_t *bootstrap_run_for_profiles(
 
         /* Execute bootstrap */
         bootstrap_result_t *result = NULL;
-        err = bootstrap_execute(script_path, &ctx, &result);
-        free(script_path);
+        err = bootstrap_execute(temp_path, &ctx, &result);
+
+        /* Clean up temporary file */
+        if (temp_path) {
+            unlink(temp_path);
+            free(temp_path);
+        }
 
         if (err) {
             printf("✗ Failed");

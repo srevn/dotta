@@ -19,7 +19,7 @@
 
 #include "types.h"
 
-/* Forward declaration */
+/* Forward declarations */
 struct profile_list;
 
 /**
@@ -63,34 +63,55 @@ bool bootstrap_exists(
 );
 
 /**
- * Get path to bootstrap script for a profile
+ * Extract bootstrap script from Git blob to temporary file
  *
- * Returns path to the bootstrap script within the profile's worktree.
- * Path format: <repo_dir>/<profile>/<script_name>
+ * Creates a secure temporary file with executable permissions and writes
+ * the bootstrap script content from the profile's Git tree.
  *
- * @param repo_dir Repository directory (must not be NULL)
+ * @param repo Repository (must not be NULL)
  * @param profile_name Profile name (must not be NULL)
- * @param script_name Bootstrap script filename (default: "bootstrap")
- * @param out Bootstrap script path (must not be NULL, caller must free)
+ * @param script_name Script filename (default: ".bootstrap")
+ * @param out_temp_path Output: path to temporary file (caller must free and unlink)
  * @return Error or NULL on success
  */
-error_t *bootstrap_get_path(
-    const char *repo_dir,
+error_t *bootstrap_extract_to_temp(
+    git_repository *repo,
     const char *profile_name,
     const char *script_name,
-    char **out
+    char **out_temp_path
+);
+
+/**
+ * Read bootstrap script content from Git blob
+ *
+ * @param repo Repository (must not be NULL)
+ * @param profile_name Profile name (must not be NULL)
+ * @param script_name Script filename (default: ".bootstrap")
+ * @param out_content Output: buffer containing script content (caller must free)
+ * @return Error or NULL on success
+ */
+error_t *bootstrap_read_content(
+    git_repository *repo,
+    const char *profile_name,
+    const char *script_name,
+    buffer_t **out_content
 );
 
 /**
  * Execute bootstrap script with environment
  *
- * Runs the bootstrap script in the profile's directory with proper environment.
- * Sets working directory to <repo_dir>/<profile>/ before execution.
+ * Runs the bootstrap script with proper environment variables.
+ *
+ * Working directory: $HOME if accessible, otherwise repository root.
+ * This provides a natural context for bootstrap operations (installing
+ * packages, creating directories, configuring user environment) while
+ * ensuring robustness in edge cases where $HOME is unavailable.
  *
  * Environment variables set:
- * - DOTTA_REPO_DIR: Repository directory
+ * - DOTTA_REPO_DIR: Repository directory (repository root)
  * - DOTTA_PROFILE: Current profile name
  * - DOTTA_PROFILES: Space-separated list of all profiles
+ * - DOTTA_DRY_RUN: "1" if dry-run, "0" otherwise
  * - HOME: User home directory (inherited)
  *
  * @param script_path Path to bootstrap script (must not be NULL)

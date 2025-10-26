@@ -41,10 +41,12 @@ typedef struct {
 
 /**
  * Bootstrap execution result
+ *
+ * Note: Output is printed directly to stdout/stderr in real-time during
+ * execution. This struct only captures the exit status for programmatic use.
  */
 typedef struct {
     int exit_code;                  /* Exit code from bootstrap script */
-    char *output;                   /* Captured stdout/stderr */
     bool failed;                    /* Whether bootstrap failed */
 } bootstrap_result_t;
 
@@ -152,28 +154,5 @@ error_t *bootstrap_run_for_profiles(
  * @param result Result to free (can be NULL)
  */
 void bootstrap_result_free(bootstrap_result_t *result);
-
-/**
- * Create bootstrap context
- *
- * Helper function to create a bootstrap context.
- *
- * @param repo_dir Repository directory
- * @param profile_name Profile name
- * @param all_profiles Space-separated list of all profiles
- * @return Bootstrap context (caller must free)
- */
-bootstrap_context_t *bootstrap_context_create(
-    const char *repo_dir,
-    const char *profile_name,
-    const char *all_profiles
-);
-
-/**
- * Free bootstrap context
- *
- * @param ctx Context to free (can be NULL)
- */
-void bootstrap_context_free(bootstrap_context_t *ctx);
 
 #endif /* DOTTA_BOOTSTRAP_H */

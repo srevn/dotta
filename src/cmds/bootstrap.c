@@ -252,7 +252,7 @@ static error_t *bootstrap_edit(
     err = gitops_update_file(
         repo,
         profile_name,
-        ".bootstrap",  /* file path within branch */
+        script_name,
         (const char *)buffer_data(content_buf),
         buffer_size(content_buf),
         commit_msg,

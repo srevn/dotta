@@ -23,14 +23,16 @@
 #include "utils/buffer.h"
 #include "utils/string.h"
 
+/* Exit codes for bootstrap script execution */
+#define EXIT_CODE_TIMEOUT 124              /* Standard timeout exit code */
+#define EXIT_CODE_CANNOT_EXECUTE 126       /* Command invoked cannot execute */
+#define EXIT_CODE_NOT_FOUND 127            /* Command not found */
+
 /* Bootstrap execution timeout (10 minutes) */
 #define BOOTSTRAP_TIMEOUT_SECONDS 600
 
 /* Poll interval for timeout checks (500ms) */
 #define TIMEOUT_POLL_INTERVAL_MS 500
-
-/* Maximum output buffer size (10MB to prevent memory exhaustion) */
-#define MAX_OUTPUT_SIZE (10 * 1024 * 1024)
 
 /**
  * Validate script name to prevent path traversal
@@ -53,14 +55,6 @@ static error_t *validate_script_name(const char *script_name) {
     if (strcmp(script_name, ".") == 0 || strcmp(script_name, "..") == 0) {
         return ERROR(ERR_INVALID_ARG,
                     "Script name cannot be '.' or '..': %s", script_name);
-    }
-
-    /* Check for null bytes (security) */
-    size_t len = strlen(script_name);
-    for (size_t i = 0; i < len; i++) {
-        if (script_name[i] == '\0') {
-            return ERROR(ERR_INVALID_ARG, "Script name contains null byte");
-        }
     }
 
     return NULL;
@@ -323,11 +317,20 @@ error_t *bootstrap_extract_to_temp(
         goto cleanup;
     }
 
-    /* Write blob content to temp file */
-    ssize_t written = write(fd, content, size);
-    if (written < 0 || (size_t)written != size) {
-        err = ERROR(ERR_FS, "Failed to write bootstrap script to temporary file");
-        goto cleanup;
+    /* Write blob content to temp file
+     * Note: write() may return less than requested (partial write) or be
+     * interrupted by signals (EINTR). Loop until all bytes are written. */
+    size_t bytes_written = 0;
+    while (bytes_written < size) {
+        ssize_t n = write(fd, content + bytes_written, size - bytes_written);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;  /* Interrupted by signal, retry */
+            }
+            err = ERROR(ERR_FS, "Failed to write bootstrap script: %s", strerror(errno));
+            goto cleanup;
+        }
+        bytes_written += (size_t)n;
     }
 
     /* Set executable permissions (owner only) */
@@ -626,8 +629,14 @@ error_t *bootstrap_execute(
         close(pipefd[0]); /* Close read end */
 
         /* Redirect stdout and stderr to pipe */
-        dup2(pipefd[1], STDOUT_FILENO);
-        dup2(pipefd[1], STDERR_FILENO);
+        if (dup2(pipefd[1], STDOUT_FILENO) < 0 ||
+            dup2(pipefd[1], STDERR_FILENO) < 0) {
+            /* Cannot use ERROR() here - we're in child process.
+             * Write directly to stderr before it's potentially redirected. */
+            const char *msg = "Error: Failed to redirect output\n";
+            (void)write(STDERR_FILENO, msg, strlen(msg));
+            _exit(EXIT_CODE_CANNOT_EXECUTE);
+        }
         close(pipefd[1]);
 
         /* Change to working directory: HOME (preferred) or repo root (fallback)
@@ -650,7 +659,7 @@ error_t *bootstrap_execute(
             /* Critical: both HOME and repo_dir failed */
             const char *msg = "Error: Failed to change to working directory\n";
             (void)write(STDERR_FILENO, msg, strlen(msg));
-            _exit(126);  /* Exit code 126: command invoked cannot execute */
+            _exit(EXIT_CODE_CANNOT_EXECUTE);
         }
 
         /* Execute bootstrap with environment */
@@ -658,22 +667,11 @@ error_t *bootstrap_execute(
         execve(script_path, args, env);
 
         /* If execve returns, it failed */
-        _exit(127);
+        _exit(EXIT_CODE_NOT_FOUND);
     }
 
     /* Parent process */
     close(pipefd[1]); /* Close write end */
-
-    /* Read output from pipe with timeout */
-    char *output = NULL;
-    size_t output_size = 0;
-    size_t output_capacity = 4096;
-    output = malloc(output_capacity);
-    if (!output) {
-        close(pipefd[0]);
-        free_bootstrap_env(env, env_count);
-        return ERROR(ERR_MEMORY, "Failed to allocate buffer for bootstrap output");
-    }
 
     /* Set pipe to non-blocking mode for timeout support */
     int flags = fcntl(pipefd[0], F_GETFL, 0);
@@ -773,61 +771,8 @@ error_t *bootstrap_execute(
 
         /* Print output in real-time */
         (void)write(STDOUT_FILENO, buf, (size_t)n);
-
-        /* Check if we're approaching the size limit */
-        if (output_size + (size_t)n > MAX_OUTPUT_SIZE) {
-            fprintf(stderr, "\nWarning: Bootstrap output exceeds maximum size (%d MB), truncating\n",
-                   MAX_OUTPUT_SIZE / (1024 * 1024));
-            /* Continue reading to drain pipe but stop saving */
-            continue;
-        }
-
-        /* Save to buffer - ensure sufficient capacity */
-        if (output) {
-            size_t required_capacity = output_size + (size_t)n + 1;
-            if (required_capacity > output_capacity) {
-                size_t new_capacity = output_capacity * 2;
-                if (new_capacity < required_capacity) {
-                    new_capacity = required_capacity;
-                }
-
-                char *new_output = realloc(output, new_capacity);
-                if (!new_output) {
-                    fprintf(stderr, "Warning: Failed to resize output buffer, continuing without capture\n");
-                    free(output);
-                    output = NULL;
-                    output_size = 0;
-                    output_capacity = 0;
-                } else {
-                    output = new_output;
-                    output_capacity = new_capacity;
-                }
-            }
-
-            if (output) {
-                memcpy(output + output_size, buf, (size_t)n);
-                output_size += (size_t)n;
-            }
-        }
     }
     close(pipefd[0]);
-
-    /* Null-terminate output */
-    if (output) {
-        if (output_size < output_capacity) {
-            output[output_size] = '\0';
-        } else {
-            char *new_output = realloc(output, output_size + 1);
-            if (new_output) {
-                output = new_output;
-                output[output_size] = '\0';
-                output_capacity = output_size + 1;
-            } else {
-                /* Can't null-terminate, but continue */
-                fprintf(stderr, "Warning: Failed to null-terminate output buffer\n");
-            }
-        }
-    }
 
     /* Wait for child process to fully terminate */
     int status = 0;
@@ -839,25 +784,22 @@ error_t *bootstrap_execute(
         /* Process was killed due to timeout - wait for it to terminate */
         int wait_result = waitpid(pid, &status, 0);
         if (wait_result == -1) {
-            free(output);
             free_bootstrap_env(env, env_count);
             return ERROR(ERR_FS, "Bootstrap script timed out and failed to terminate");
         }
         /* Mark as timeout error */
-        exit_code = 124;  /* Standard timeout exit code */
+        exit_code = EXIT_CODE_TIMEOUT;
     } else if (process_exited) {
         /* Process already exited - status was collected in WNOHANG call */
         /* Need to do final blocking wait to reap zombie */
         int wait_result = waitpid(pid, &status, 0);
         if (wait_result == -1 && errno != ECHILD) {
-            free(output);
             free_bootstrap_env(env, env_count);
             return ERROR(ERR_FS, "Failed to wait for bootstrap process");
         }
     } else {
         /* Normal case - process hasn't exited yet, do blocking wait */
         if (waitpid(pid, &status, 0) == -1) {
-            free(output);
             free_bootstrap_env(env, env_count);
             return ERROR(ERR_FS, "Failed to wait for bootstrap process");
         }
@@ -884,14 +826,9 @@ error_t *bootstrap_execute(
         bootstrap_result_t *res = calloc(1, sizeof(bootstrap_result_t));
         if (res) {
             res->exit_code = exit_code;
-            res->output = output;
             res->failed = (exit_code != 0);
             *result = res;
-        } else {
-            free(output);
         }
-    } else {
-        free(output);
     }
 
     /* Cleanup */
@@ -1102,44 +1039,6 @@ void bootstrap_result_free(bootstrap_result_t *result) {
         return;
     }
 
-    free(result->output);
     free(result);
 }
 
-/**
- * Create bootstrap context
- */
-bootstrap_context_t *bootstrap_context_create(
-    const char *repo_dir,
-    const char *profile_name,
-    const char *all_profiles
-) {
-    /* Validate required parameters */
-    if (!repo_dir || !profile_name) {
-        return NULL;
-    }
-
-    bootstrap_context_t *ctx = calloc(1, sizeof(bootstrap_context_t));
-    if (!ctx) {
-        return NULL;
-    }
-
-    ctx->repo_dir = repo_dir;
-    ctx->profile_name = profile_name;
-    ctx->all_profiles = all_profiles;  /* Optional - can be NULL */
-    ctx->dry_run = false;
-
-    return ctx;
-}
-
-/**
- * Free bootstrap context
- */
-void bootstrap_context_free(bootstrap_context_t *ctx) {
-    if (!ctx) {
-        return;
-    }
-
-    /* Note: We don't free the strings themselves as they're not owned by the context */
-    free(ctx);
-}

@@ -10,6 +10,7 @@
  * concerns improves testability and maintainability.
  *
  * Policy hierarchy (priority order):
+ * 0. Meta-file protection → PLAINTEXT or ERROR (system integrity)
  * 1. Explicit --encrypt flag → ENCRYPT (highest priority)
  * 2. Explicit --no-encrypt flag → PLAINTEXT (override auto-encrypt)
  * 3. File previously encrypted (metadata) → ENCRYPT (maintain state)
@@ -47,6 +48,11 @@ typedef struct metadata metadata_t;
  * one testable, maintainable function.
  *
  * Policy hierarchy (priority order):
+ * 0. If path is a protected meta-file → PLAINTEXT or ERROR (system integrity)
+ *    Example: .bootstrap, .dottaignore, .dotta/metadata.json
+ *    Behavior: If explicit --encrypt → ERROR; otherwise → PLAINTEXT
+ *    Rationale: System files must be readable/executable by dotta
+ *
  * 1. If explicit_encrypt=true → ENCRYPT (highest priority)
  *    Example: User ran `dotta add --encrypt file`
  *

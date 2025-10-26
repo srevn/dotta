@@ -6,10 +6,14 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -21,6 +25,9 @@
 
 /* Bootstrap execution timeout (10 minutes) */
 #define BOOTSTRAP_TIMEOUT_SECONDS 600
+
+/* Poll interval for timeout checks (500ms) */
+#define TIMEOUT_POLL_INTERVAL_MS 500
 
 /* Maximum output buffer size (10MB to prevent memory exhaustion) */
 #define MAX_OUTPUT_SIZE (10 * 1024 * 1024)
@@ -657,7 +664,7 @@ error_t *bootstrap_execute(
     /* Parent process */
     close(pipefd[1]); /* Close write end */
 
-    /* Read output from pipe */
+    /* Read output from pipe with timeout */
     char *output = NULL;
     size_t output_size = 0;
     size_t output_capacity = 4096;
@@ -668,20 +675,97 @@ error_t *bootstrap_execute(
         return ERROR(ERR_MEMORY, "Failed to allocate buffer for bootstrap output");
     }
 
+    /* Set pipe to non-blocking mode for timeout support */
+    int flags = fcntl(pipefd[0], F_GETFL, 0);
+    if (flags >= 0) {
+        fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
+    }
+
+    /* Track elapsed time for timeout */
+    struct timeval start_time, current_time;
+    gettimeofday(&start_time, NULL);
+
     ssize_t n;
     char buf[1024];
-    while (1) {
-        /* Read from pipe with EINTR handling */
+    bool timed_out = false;
+    bool process_exited = false;
+
+    while (!process_exited) {
+        /* Check for timeout */
+        gettimeofday(&current_time, NULL);
+        long elapsed_seconds = current_time.tv_sec - start_time.tv_sec;
+
+        if (elapsed_seconds >= BOOTSTRAP_TIMEOUT_SECONDS) {
+            timed_out = true;
+            fprintf(stderr, "\nWarning: Bootstrap script exceeded timeout (%d seconds)\n",
+                   BOOTSTRAP_TIMEOUT_SECONDS);
+
+            /* Try graceful termination first */
+            kill(pid, SIGTERM);
+            sleep(2);
+
+            /* Check if process terminated */
+            int status;
+            pid_t result = waitpid(pid, &status, WNOHANG);
+            if (result == 0) {
+                /* Still running - force kill */
+                fprintf(stderr, "Warning: Forcefully terminating bootstrap script\n");
+                kill(pid, SIGKILL);
+            }
+            break;
+        }
+
+        /* Use select() to wait for data with timeout */
+        fd_set read_fds;
+        FD_ZERO(&read_fds);
+        FD_SET(pipefd[0], &read_fds);
+
+        struct timeval timeout;
+        timeout.tv_sec = 0;
+        timeout.tv_usec = TIMEOUT_POLL_INTERVAL_MS * 1000;
+
+        int select_result = select(pipefd[0] + 1, &read_fds, NULL, NULL, &timeout);
+
+        if (select_result < 0) {
+            if (errno == EINTR) {
+                continue;  /* Interrupted by signal, retry */
+            }
+            /* Real error */
+            fprintf(stderr, "Warning: select() failed: %s\n", strerror(errno));
+            break;
+        }
+
+        if (select_result == 0) {
+            /* Timeout - check if process is still running */
+            int status;
+            pid_t result = waitpid(pid, &status, WNOHANG);
+            if (result == pid) {
+                /* Process exited */
+                process_exited = true;
+                break;
+            } else if (result < 0) {
+                /* waitpid error */
+                break;
+            }
+            /* Otherwise, continue waiting */
+            continue;
+        }
+
+        /* Data available - read it */
         n = read(pipefd[0], buf, sizeof(buf));
         if (n < 0) {
-            /* Retry on signal interruption */
-            if (errno == EINTR) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                /* No data available right now */
                 continue;
             }
-            /* Real error - log and stop reading */
+            if (errno == EINTR) {
+                continue;  /* Interrupted, retry */
+            }
+            /* Real error */
             fprintf(stderr, "Warning: Error reading bootstrap output: %s\n", strerror(errno));
             break;
         }
+
         if (n == 0) {
             /* EOF - child process closed the pipe */
             break;
@@ -692,37 +776,38 @@ error_t *bootstrap_execute(
 
         /* Check if we're approaching the size limit */
         if (output_size + (size_t)n > MAX_OUTPUT_SIZE) {
-            fprintf(stderr, "Warning: Bootstrap output exceeds maximum size (%d MB), truncating\n",
+            fprintf(stderr, "\nWarning: Bootstrap output exceeds maximum size (%d MB), truncating\n",
                    MAX_OUTPUT_SIZE / (1024 * 1024));
-            break;
+            /* Continue reading to drain pipe but stop saving */
+            continue;
         }
 
-        /* Also save to buffer - ensure sufficient capacity */
-        size_t required_capacity = output_size + (size_t)n + 1;  /* +1 for null terminator */
-        if (required_capacity > output_capacity) {
-            /* Grow to at least required size, or double current capacity, whichever is larger */
-            size_t new_capacity = output_capacity * 2;
-            if (new_capacity < required_capacity) {
-                new_capacity = required_capacity;
-            }
-
-            char *new_output = realloc(output, new_capacity);
-            if (!new_output) {
-                /* Memory allocation failed - continue without buffering */
-                fprintf(stderr, "Warning: Failed to resize output buffer, continuing without capture\n");
-                free(output);
-                output = NULL;
-                output_size = 0;
-                output_capacity = 0;
-                continue;
-            }
-            output = new_output;
-            output_capacity = new_capacity;
-        }
-
+        /* Save to buffer - ensure sufficient capacity */
         if (output) {
-            memcpy(output + output_size, buf, (size_t)n);
-            output_size += (size_t)n;
+            size_t required_capacity = output_size + (size_t)n + 1;
+            if (required_capacity > output_capacity) {
+                size_t new_capacity = output_capacity * 2;
+                if (new_capacity < required_capacity) {
+                    new_capacity = required_capacity;
+                }
+
+                char *new_output = realloc(output, new_capacity);
+                if (!new_output) {
+                    fprintf(stderr, "Warning: Failed to resize output buffer, continuing without capture\n");
+                    free(output);
+                    output = NULL;
+                    output_size = 0;
+                    output_capacity = 0;
+                } else {
+                    output = new_output;
+                    output_capacity = new_capacity;
+                }
+            }
+
+            if (output) {
+                memcpy(output + output_size, buf, (size_t)n);
+                output_size += (size_t)n;
+            }
         }
     }
     close(pipefd[0]);
@@ -744,30 +829,54 @@ error_t *bootstrap_execute(
         }
     }
 
-    /* Wait for child process */
-    int status;
-    if (waitpid(pid, &status, 0) == -1) {
-        free(output);
-        free_bootstrap_env(env, env_count);
-        return ERROR(ERR_FS, "Failed to wait for bootstrap process");
-    }
-
-    /* Check exit status - handle both normal exit and signal termination */
-    int exit_code;
+    /* Wait for child process to fully terminate */
+    int status = 0;
+    int exit_code = 0;
     bool was_signaled = false;
     int signal_num = 0;
 
-    if (WIFEXITED(status)) {
-        /* Normal exit */
-        exit_code = WEXITSTATUS(status);
-    } else if (WIFSIGNALED(status)) {
-        /* Terminated by signal */
-        was_signaled = true;
-        signal_num = WTERMSIG(status);
-        exit_code = 128 + signal_num;  /* Standard convention */
+    if (timed_out) {
+        /* Process was killed due to timeout - wait for it to terminate */
+        int wait_result = waitpid(pid, &status, 0);
+        if (wait_result == -1) {
+            free(output);
+            free_bootstrap_env(env, env_count);
+            return ERROR(ERR_FS, "Bootstrap script timed out and failed to terminate");
+        }
+        /* Mark as timeout error */
+        exit_code = 124;  /* Standard timeout exit code */
+    } else if (process_exited) {
+        /* Process already exited - status was collected in WNOHANG call */
+        /* Need to do final blocking wait to reap zombie */
+        int wait_result = waitpid(pid, &status, 0);
+        if (wait_result == -1 && errno != ECHILD) {
+            free(output);
+            free_bootstrap_env(env, env_count);
+            return ERROR(ERR_FS, "Failed to wait for bootstrap process");
+        }
     } else {
-        /* Unknown termination */
-        exit_code = 1;
+        /* Normal case - process hasn't exited yet, do blocking wait */
+        if (waitpid(pid, &status, 0) == -1) {
+            free(output);
+            free_bootstrap_env(env, env_count);
+            return ERROR(ERR_FS, "Failed to wait for bootstrap process");
+        }
+    }
+
+    /* Check exit status - handle both normal exit and signal termination */
+    if (!timed_out) {
+        if (WIFEXITED(status)) {
+            /* Normal exit */
+            exit_code = WEXITSTATUS(status);
+        } else if (WIFSIGNALED(status)) {
+            /* Terminated by signal */
+            was_signaled = true;
+            signal_num = WTERMSIG(status);
+            exit_code = 128 + signal_num;  /* Standard convention */
+        } else {
+            /* Unknown termination */
+            exit_code = 1;
+        }
     }
 
     /* Create result if requested */
@@ -790,7 +899,11 @@ error_t *bootstrap_execute(
 
     /* Return error if bootstrap failed */
     if (exit_code != 0) {
-        if (was_signaled) {
+        if (timed_out) {
+            return ERROR(ERR_INTERNAL,
+                        "Bootstrap script exceeded timeout (%d seconds)",
+                        BOOTSTRAP_TIMEOUT_SECONDS);
+        } else if (was_signaled) {
             return ERROR(ERR_INTERNAL,
                         "Bootstrap script terminated by signal %d", signal_num);
         } else {
@@ -882,7 +995,8 @@ error_t *bootstrap_run_for_profiles(
                 if (stop_on_error) {
                     free(all_profiles_str);
                     free(failed_profiles);
-                    return ERROR(ERR_INVALID_ARG, "Bootstrap script validation failed for %s", profile->name);
+                    return ERROR(ERR_INVALID_ARG,
+                                "Bootstrap script validation failed for %s", profile->name);
                 }
                 failed_profiles[failed_count++] = profile->name;
             } else {

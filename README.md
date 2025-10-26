@@ -663,13 +663,17 @@ dotta revert --commit -m "Fix config" ~/.bashrc@HEAD~1
 
 ## Performance
 
-Dotta is designed for efficiency:
+Dotta is designed for efficiency and scalability:
 
-- **O(1) lookups** - Hashmaps for state, metadata, and manifest operations
-- **Smart skipping** - Avoids rewriting unchanged files (enabled by default)
-- **Streaming tree walks** - Doesn't load all files into memory
-- **Efficient blob comparison** - Short-circuit on size mismatch
-- **Incremental operations** - Only processes changed files during update
+- **Streaming tree walks** - Uses callback-based iteration; never loads entire repository into memory
+- **Size-first blob comparison** - Checks file size before content (short-circuits on mismatch, uses mmap when needed)
+- **Three-tier deployment optimization** - OID hash comparison → profile version check → content comparison (only if needed)
+- **Incremental operations** - `update` processes only diverged files; `apply` uses smart skip with O(1) hashmap lookups
+- **Content caching** - Preflight safety checks populate cache reused during deployment (avoids redundant decryption)
+- **O(1) lookups** - Hashmaps throughout for state, metadata, manifest, and file index operations
+- **Load-once, query-many** - State and metadata loaded once per operation, queried via hashmap
+
+Operations scale linearly with tracked files, not repository history depth.
 
 ## License
 

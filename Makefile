@@ -3,7 +3,26 @@
 
 # Compiler and flags
 CC := clang
-CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror -O2 -Wno-missing-field-initializers -D_DEFAULT_SOURCE
+
+# Version information
+BUILD_OS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
+
+# Platform-specific feature test macros
+ifeq ($(BUILD_OS),linux)
+    # Linux: POSIX + default BSD/SVID extensions
+    FEATURE_MACROS := -D_XOPEN_SOURCE=700 -D_DEFAULT_SOURCE
+else ifeq ($(BUILD_OS),darwin)
+    # macOS: POSIX + Darwin extensions
+    FEATURE_MACROS := -D_XOPEN_SOURCE=700 -D_DARWIN_C_SOURCE
+else ifeq ($(BUILD_OS),freebsd)
+    # FreeBSD: POSIX + BSD extensions
+    FEATURE_MACROS := -D_XOPEN_SOURCE=700 -D__BSD_VISIBLE
+else
+    # Fallback for other POSIX systems
+    FEATURE_MACROS := -D_XOPEN_SOURCE=700 -D_DEFAULT_SOURCE
+endif
+
+CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror -O2 -Wno-missing-field-initializers $(FEATURE_MACROS)
 DEBUG_FLAGS := -g -O0 -fsanitize=address,undefined -DDEBUG
 
 # Version information (captured at build time)
@@ -11,7 +30,6 @@ GIT_COMMIT := $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo "unknown"
 GIT_COMMIT_FULL := $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 GIT_DIRTY := $(shell git diff-index --quiet HEAD -- 2>/dev/null || echo "-dirty")
 GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-BUILD_OS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
 BUILD_ARCH := $(shell uname -m)
 CC_VERSION := $(shell $(CC) --version | head -n1)
 

@@ -479,6 +479,12 @@ static error_t *find_modified_and_new_files(
         for (size_t i = 0; i < count; i++) {
             const workspace_item_t *item = items[i];
 
+            /* Skip directories - they are handled separately in the directory loop below
+             * Directories have in_state==false (never in deployment state) */
+            if (!item->in_state) {
+                continue;  /* This is a directory, not a file */
+            }
+
             /* Apply filter if specified */
             if (!file_matches_filter(item->filesystem_path, opts)) {
                 continue;

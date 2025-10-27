@@ -94,6 +94,32 @@ void cleanup_result_free(cleanup_result_t *result) {
 }
 
 /**
+ * Free cleanup preflight result
+ *
+ * Frees all allocated resources including string arrays and safety violations.
+ */
+void cleanup_preflight_result_free(cleanup_preflight_result_t *result) {
+    if (!result) {
+        return;
+    }
+
+    /* Free string arrays */
+    if (result->orphaned_files) {
+        string_array_free(result->orphaned_files);
+    }
+    if (result->directories) {
+        string_array_free(result->directories);
+    }
+
+    /* Free embedded safety violations */
+    if (result->safety_violations) {
+        safety_result_free(result->safety_violations);
+    }
+
+    free(result);
+}
+
+/**
  * Load metadata from deployed-but-not-enabled profiles
  *
  * Optimization: Only loads metadata from profiles that are deployed (have files
@@ -332,8 +358,8 @@ static error_t *prune_orphaned_files(
         goto cleanup;
     }
 
-    /* Safety check: detect modified orphaned files */
-    if (!force) {
+    /* Safety check: detect modified orphaned files (unless already done in preflight) */
+    if (!force && !opts->skip_safety_check) {
         /* Get keymanager for decryption (if needed) */
         keymanager_t *keymanager = keymanager_get_global(NULL);
 
@@ -627,6 +653,213 @@ static error_t *prune_empty_directories(
 
     free(states);
     return NULL;
+}
+
+/**
+ * Run cleanup preflight checks
+ *
+ * Analyzes what cleanup will do WITHOUT modifying filesystem.
+ * Enables informed user consent by revealing orphan removal impact.
+ */
+error_t *cleanup_preflight_check(
+    git_repository *repo,
+    const state_t *state,
+    const manifest_t *manifest,
+    const cleanup_options_t *opts,
+    cleanup_preflight_result_t **out_result
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(state);
+    CHECK_NULL(manifest);
+    CHECK_NULL(opts);
+    CHECK_NULL(out_result);
+
+    /* Declare all resources at top, initialized to NULL */
+    error_t *err = NULL;
+    cleanup_preflight_result_t *result = NULL;
+    hashmap_t *manifest_paths = NULL;
+    state_file_entry_t *state_files = NULL;
+    size_t state_file_count = 0;
+    string_array_t *orphaned_files = NULL;
+    metadata_t *complete_metadata = NULL;
+
+    /* Allocate result structure */
+    result = calloc(1, sizeof(cleanup_preflight_result_t));
+    if (!result) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate cleanup preflight result");
+        goto cleanup;
+    }
+
+    /* Initialize all fields */
+    result->orphaned_files_count = 0;
+    result->orphaned_files = NULL;
+    result->safety_violations = NULL;
+    result->directories_count = 0;
+    result->directories = NULL;
+    result->has_blocking_violations = false;
+    result->will_prune_orphans = false;
+    result->will_prune_directories = false;
+
+    /* Get all files tracked in state */
+    err = state_get_all_files(state, &state_files, &state_file_count);
+    if (err) {
+        err = error_wrap(err, "Failed to get state files");
+        goto cleanup;
+    }
+
+    /* Early exit: no files in state */
+    if (state_file_count == 0) {
+        /* Success - empty result */
+        *out_result = result;
+        result = NULL;
+        err = NULL;
+        goto cleanup;
+    }
+
+    /* Build hashmap of manifest paths for O(1) orphan detection */
+    manifest_paths = hashmap_create(manifest->count);
+    if (!manifest_paths) {
+        err = ERROR(ERR_MEMORY, "Failed to create manifest paths hashmap");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < manifest->count; i++) {
+        err = hashmap_set(manifest_paths, manifest->entries[i].filesystem_path, (void *)1);
+        if (err) {
+            err = error_wrap(err, "Failed to populate manifest paths hashmap");
+            goto cleanup;
+        }
+    }
+
+    /* Identify orphaned files (in state, not in manifest) */
+    orphaned_files = string_array_create();
+    if (!orphaned_files) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate orphan list");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < state_file_count; i++) {
+        const state_file_entry_t *state_entry = &state_files[i];
+
+        /* Check if file exists in manifest (O(1) lookup) */
+        if (!hashmap_has(manifest_paths, state_entry->filesystem_path)) {
+            /* Orphaned file - add to list */
+            err = string_array_push(orphaned_files, state_entry->filesystem_path);
+            if (err) {
+                err = error_wrap(err, "Failed to add orphaned file to list");
+                goto cleanup;
+            }
+        }
+    }
+
+    result->orphaned_files_count = string_array_size(orphaned_files);
+    result->will_prune_orphans = (result->orphaned_files_count > 0);
+
+    /* Early exit: no orphaned files */
+    if (result->orphaned_files_count == 0) {
+        /* Success - no orphans to check */
+        *out_result = result;
+        result = NULL;
+        err = NULL;
+        goto cleanup;
+    }
+
+    /* Transfer ownership of orphaned_files array to result */
+    result->orphaned_files = orphaned_files;
+    orphaned_files = NULL;  /* Prevent double-free */
+
+    /* Run safety checks (unless force=true) */
+    if (!opts->force) {
+        /* Get keymanager for decryption (if needed) */
+        keymanager_t *keymanager = keymanager_get_global(NULL);
+
+        err = safety_check_removal(
+            repo,
+            state,
+            result->orphaned_files->items,
+            result->orphaned_files->count,
+            opts->force,
+            opts->enabled_metadata,
+            keymanager,
+            opts->cache,
+            &result->safety_violations
+        );
+
+        if (err) {
+            err = error_wrap(err, "Safety check failed");
+            goto cleanup;
+        }
+
+        /* Set blocking flag if violations found */
+        if (result->safety_violations && result->safety_violations->count > 0) {
+            result->has_blocking_violations = true;
+        }
+    }
+
+    /* Preview empty directories (if metadata available) */
+    if (opts->enabled_metadata) {
+        /* Load complete metadata for directory detection */
+        err = load_complete_metadata(
+            repo,
+            state,
+            opts->enabled_metadata,
+            opts->enabled_profiles,
+            &complete_metadata
+        );
+
+        if (err) {
+            /* Non-fatal: continue without directory preview */
+            error_free(err);
+            err = NULL;
+        } else {
+            /* Get tracked directories */
+            size_t dir_count = 0;
+            const metadata_directory_entry_t *directories =
+                metadata_get_all_tracked_directories(complete_metadata, &dir_count);
+
+            if (dir_count > 0) {
+                /* Allocate directory array for preview */
+                result->directories = string_array_create();
+                if (!result->directories) {
+                    /* Non-fatal: continue without directory preview */
+                } else {
+                    /* Check which directories are empty (read-only preview) */
+                    for (size_t i = 0; i < dir_count; i++) {
+                        const char *dir_path = directories[i].filesystem_path;
+
+                        /* Check if directory exists and is empty */
+                        if (fs_exists(dir_path) && fs_is_directory_empty(dir_path)) {
+                            err = string_array_push(result->directories, dir_path);
+                            if (err) {
+                                /* Non-fatal: best-effort directory preview */
+                                error_free(err);
+                                err = NULL;
+                                break;
+                            }
+                        }
+                    }
+
+                    result->directories_count = string_array_size(result->directories);
+                    result->will_prune_directories = (result->directories_count > 0);
+                }
+            }
+        }
+    }
+
+    /* Success - set output and prevent cleanup from freeing result */
+    *out_result = result;
+    result = NULL;
+    err = NULL;
+
+cleanup:
+    /* Free resources in reverse order of allocation */
+    if (complete_metadata) metadata_free(complete_metadata);
+    if (orphaned_files) string_array_free(orphaned_files);
+    if (manifest_paths) hashmap_free(manifest_paths, NULL);
+    if (state_files) state_free_all_files(state_files, state_file_count);
+    if (result) cleanup_preflight_result_free(result);
+
+    return err;
 }
 
 /**

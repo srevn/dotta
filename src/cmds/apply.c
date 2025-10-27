@@ -447,6 +447,104 @@ static void print_cleanup_results(
 }
 
 /**
+ * Print cleanup preflight results
+ *
+ * Shows what cleanup will do BEFORE user confirmation.
+ * This enables informed consent by revealing the full impact of orphan cleanup.
+ */
+static void print_cleanup_preflight_results(
+    const output_ctx_t *out,
+    const cleanup_preflight_result_t *result,
+    bool verbose
+) {
+    if (!result) {
+        return;
+    }
+
+    /* Case 1: No orphans and no directories - nothing to display */
+    if (!result->will_prune_orphans && !result->will_prune_directories) {
+        if (verbose) {
+            output_print(out, OUTPUT_VERBOSE, "No orphaned files or directories to prune\n");
+        }
+        return;
+    }
+
+    /* Case 2: Orphaned files found - always show summary */
+    if (result->will_prune_orphans) {
+        output_section(out, "Orphaned files");
+
+        if (output_colors_enabled(out)) {
+            output_printf(out, OUTPUT_NORMAL, "  %s%zu%s file%s will be removed (no longer in any profile)\n",
+                   output_color_code(out, OUTPUT_COLOR_YELLOW),
+                   result->orphaned_files_count,
+                   output_color_code(out, OUTPUT_COLOR_RESET),
+                   result->orphaned_files_count == 1 ? "" : "s");
+        } else {
+            output_printf(out, OUTPUT_NORMAL, "  %zu file%s will be removed (no longer in any profile)\n",
+                   result->orphaned_files_count,
+                   result->orphaned_files_count == 1 ? "" : "s");
+        }
+
+        /* Show individual paths in verbose mode */
+        if (verbose && result->orphaned_files && result->orphaned_files_count > 0) {
+            size_t display_limit = 20;  /* Don't flood the terminal */
+            size_t display_count = result->orphaned_files_count < display_limit ?
+                                  result->orphaned_files_count : display_limit;
+
+            for (size_t i = 0; i < display_count; i++) {
+                if (output_colors_enabled(out)) {
+                    output_printf(out, OUTPUT_NORMAL, "    %s•%s %s\n",
+                           output_color_code(out, OUTPUT_COLOR_CYAN),
+                           output_color_code(out, OUTPUT_COLOR_RESET),
+                           string_array_get(result->orphaned_files, i));
+                } else {
+                    output_printf(out, OUTPUT_NORMAL, "    • %s\n",
+                           string_array_get(result->orphaned_files, i));
+                }
+            }
+
+            if (result->orphaned_files_count > display_limit) {
+                size_t remaining = result->orphaned_files_count - display_limit;
+                output_printf(out, OUTPUT_NORMAL, "    ... and %zu more\n", remaining);
+            }
+        }
+    }
+
+    /* Case 3: Safety violations - ALWAYS show (blocking) */
+    if (result->has_blocking_violations) {
+        output_newline(out);  /* Add spacing before safety violations */
+        print_safety_violations(out, result->safety_violations);
+    }
+
+    /* Case 4: Empty directories - only in verbose mode */
+    if (verbose && result->will_prune_directories) {
+        output_section(out, "Empty directories");
+
+        if (output_colors_enabled(out)) {
+            output_printf(out, OUTPUT_NORMAL, "  %s%zu%s empty director%s will be pruned\n",
+                   output_color_code(out, OUTPUT_COLOR_CYAN),
+                   result->directories_count,
+                   output_color_code(out, OUTPUT_COLOR_RESET),
+                   result->directories_count == 1 ? "y" : "ies");
+        } else {
+            output_printf(out, OUTPUT_NORMAL, "  %zu empty director%s will be pruned\n",
+                   result->directories_count,
+                   result->directories_count == 1 ? "y" : "ies");
+        }
+
+        /* Show directory paths if not too many */
+        if (result->directories && result->directories_count <= 10) {
+            for (size_t i = 0; i < result->directories_count; i++) {
+                output_printf(out, OUTPUT_NORMAL, "    • %s\n",
+                       string_array_get(result->directories, i));
+            }
+        }
+    }
+
+    output_newline(out);
+}
+
+/**
  * Update state with deployed files and save to disk
  *
  * This function does NOT modify the enabled profile list in state.
@@ -589,6 +687,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     metadata_t *merged_metadata = NULL;
     content_cache_t *cache = NULL;
     preflight_result_t *preflight = NULL;
+    cleanup_preflight_result_t *cleanup_preflight = NULL;
     hook_context_t *hook_ctx = NULL;
     char *profiles_str = NULL;
     deploy_result_t *deploy_res = NULL;
@@ -816,6 +915,39 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     preflight_result_free(preflight);
     preflight = NULL;
 
+    /* Run cleanup preflight checks (unless --keep-orphans) */
+    if (!opts->keep_orphans) {
+        output_print(out, OUTPUT_VERBOSE, "\nChecking orphaned files...\n");
+
+        cleanup_options_t cleanup_opts = {
+            .enabled_metadata = merged_metadata,
+            .enabled_profiles = profiles,
+            .cache = cache,
+            .verbose = opts->verbose,
+            .dry_run = false,  /* Preflight is always read-only */
+            .force = opts->force,
+            .skip_safety_check = false  /* Run safety check in preflight */
+        };
+
+        err = cleanup_preflight_check(repo, state, manifest, &cleanup_opts, &cleanup_preflight);
+        if (err) {
+            err = error_wrap(err, "Cleanup preflight checks failed");
+            goto cleanup;
+        }
+
+        /* Display cleanup preflight results (will be added in Phase 5) */
+        print_cleanup_preflight_results(out, cleanup_preflight, opts->verbose);
+
+        /* Block if safety violations (unless --force) */
+        if (cleanup_preflight->has_blocking_violations && !opts->force) {
+            err = ERROR(ERR_CONFLICT,
+                       "Cannot remove %zu orphaned file%s with uncommitted changes",
+                       cleanup_preflight->safety_violations->count,
+                       cleanup_preflight->safety_violations->count == 1 ? "" : "s");
+            goto cleanup;
+        }
+    }
+
     /* Execute pre-apply hook */
     if (config && repo_dir) {
         /* Join all profile names into a space-separated string */
@@ -867,9 +999,21 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
 
     /* Confirm before deployment if configured (unless --force or --dry-run) */
     if (config->confirm_destructive && !opts->force && !opts->dry_run) {
-        char prompt[256];
-        snprintf(prompt, sizeof(prompt), "Deploy %zu file%s to filesystem?",
-                manifest->count, manifest->count == 1 ? "" : "s");
+        char prompt[512];  /* Larger buffer for enhanced prompt */
+
+        /* Build comprehensive prompt that includes cleanup information */
+        if (cleanup_preflight && cleanup_preflight->will_prune_orphans) {
+            /* Enhanced prompt: mentions both deployment and orphan removal */
+            snprintf(prompt, sizeof(prompt),
+                    "Deploy %zu file%s and remove %zu orphaned file%s?",
+                    manifest->count, manifest->count == 1 ? "" : "s",
+                    cleanup_preflight->orphaned_files_count,
+                    cleanup_preflight->orphaned_files_count == 1 ? "" : "s");
+        } else {
+            /* Standard prompt: only deployment */
+            snprintf(prompt, sizeof(prompt), "Deploy %zu file%s to filesystem?",
+                    manifest->count, manifest->count == 1 ? "" : "s");
+        }
 
         if (!output_confirm(out, prompt, false)) {
             output_info(out, "Cancelled");
@@ -880,9 +1024,9 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
 
     /* Execute deployment */
     if (opts->dry_run) {
-        output_print(out, OUTPUT_VERBOSE, "\nDry-run mode - no files will be modified\n");
+        output_print(out, OUTPUT_VERBOSE, "Dry-run mode - no files will be modified\n");
     } else {
-        output_print(out, OUTPUT_VERBOSE, "\nDeploying files...\n");
+        output_print(out, OUTPUT_VERBOSE, "Deploying files...\n");
     }
 
     err = deploy_execute(repo, manifest, state, merged_metadata, &deploy_opts, km, cache, &deploy_res);
@@ -926,7 +1070,8 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                 .cache = cache,    /* Pass cache for performance (avoids re-decryption) */
                 .verbose = opts->verbose,
                 .dry_run = false,  /* Dry-run handled at deployment level */
-                .force = opts->force
+                .force = opts->force,
+                .skip_safety_check = (cleanup_preflight != NULL)  /* Skip if preflight already checked */
             };
 
             err = cleanup_execute(repo, state, manifest, &cleanup_opts, &cleanup_res);
@@ -987,6 +1132,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
 cleanup:
     /* Free resources in reverse order of allocation */
     if (deploy_res) deploy_result_free(deploy_res);
+    if (cleanup_preflight) cleanup_preflight_result_free(cleanup_preflight);
     if (preflight) preflight_result_free(preflight);
     if (hook_ctx) hook_context_free(hook_ctx);
     if (profiles_str) free(profiles_str);

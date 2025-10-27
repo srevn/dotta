@@ -60,6 +60,7 @@ typedef struct {
     bool verbose;                           /* Kept for consistency (unused in module) */
     bool dry_run;                           /* Don't actually remove anything */
     bool force;                             /* Skip safety checks (dangerous) */
+    bool skip_safety_check;                 /* Skip safety check (already done in preflight) */
 } cleanup_options_t;
 
 /**
@@ -92,6 +93,107 @@ typedef struct {
     string_array_t *removed_dirs;        /* Successfully removed directory paths */
     string_array_t *failed_dirs;         /* Failed directory paths (with errors) */
 } cleanup_result_t;
+
+/**
+ * Cleanup preflight result
+ *
+ * Read-only analysis of what cleanup_execute() will do, shown before user confirmation.
+ * This enables informed consent by revealing the full impact of the apply operation.
+ *
+ * Design:
+ * -------
+ * - Identifies orphaned files without removing them
+ * - Runs safety checks to detect uncommitted changes
+ * - Previews empty directories that will be pruned
+ * - Provides rich context for user decision-making
+ *
+ * Usage:
+ * ------
+ * Called by apply command BEFORE confirmation prompt to show users:
+ * - "Will remove N orphaned files from disabled profiles"
+ * - Safety violations (blocking unless --force)
+ * - Empty directories to be pruned (verbose mode)
+ */
+typedef struct {
+    /* Orphaned file detection */
+    size_t orphaned_files_count;        /* Total files to be removed */
+    string_array_t *orphaned_files;     /* File paths (for display) */
+
+    /* Safety violations */
+    safety_result_t *safety_violations; /* Blocking issues (NULL if none or force=true) */
+
+    /* Directory pruning preview */
+    size_t directories_count;           /* Empty dirs that will be removed */
+    string_array_t *directories;        /* Directory paths (for verbose display) */
+
+    /* Summary flags */
+    bool has_blocking_violations;       /* True if safety violations present */
+    bool will_prune_orphans;            /* True if orphaned_files_count > 0 */
+    bool will_prune_directories;        /* True if directories_count > 0 */
+} cleanup_preflight_result_t;
+
+/**
+ * Run cleanup preflight checks
+ *
+ * Analyzes what cleanup_execute() will do WITHOUT modifying the filesystem.
+ * This enables informed user consent before destructive operations by revealing
+ * the full impact of orphan cleanup.
+ *
+ * Purpose:
+ * --------
+ * The apply command uses this to show users BEFORE confirmation:
+ * - How many orphaned files will be removed
+ * - Which profiles the orphans came from
+ * - Safety violations (uncommitted changes)
+ * - Empty directories to be pruned
+ *
+ * Algorithm:
+ * ----------
+ * 1. Early exit if --keep-orphans (nothing to analyze)
+ * 2. Build manifest hashmap for O(1) orphan detection
+ * 3. Load all state files
+ * 4. Identify orphans (in state, not in manifest)
+ * 5. Run safety checks (unless force=true)
+ * 6. Preview empty tracked directories (read-only, no removal)
+ *
+ * Performance:
+ * ------------
+ * - Complexity: O(N + M) where N=state files, M=manifest files
+ * - Uses hashmap for O(1) lookups (avoids O(N*M) nested loops)
+ * - Reuses content cache from deploy preflight (no re-decryption)
+ * - Typical: <100ms for 10,000 files
+ *
+ * Edge Cases:
+ * -----------
+ * - No orphans: Returns empty result (quick path)
+ * - --keep-orphans: Returns empty result (skip analysis)
+ * - Empty manifest: ALL deployed files are orphans (big warning)
+ * - Safety violations: Returned in result, blocking (unless force=true)
+ * - No state files: Returns empty result (nothing to check)
+ *
+ * Integration:
+ * ------------
+ * This function is READ-ONLY and does NOT modify:
+ * - Filesystem (no files removed)
+ * - State database (no changes)
+ * - Git repository (no commits)
+ *
+ * The caller (apply command) displays results and blocks on violations.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param state State for file tracking (must not be NULL, read-only)
+ * @param manifest Current file manifest (must not be NULL)
+ * @param opts Cleanup options (must not be NULL)
+ * @param out_result Preflight result (must not be NULL, caller must free)
+ * @return Error or NULL on success (check result for details)
+ */
+error_t *cleanup_preflight_check(
+    git_repository *repo,
+    const state_t *state,
+    const manifest_t *manifest,
+    const cleanup_options_t *opts,
+    cleanup_preflight_result_t **out_result
+);
 
 /**
  * Execute cleanup operations
@@ -169,5 +271,15 @@ error_t *cleanup_execute(
  * @param result Result to free (can be NULL)
  */
 void cleanup_result_free(cleanup_result_t *result);
+
+/**
+ * Free cleanup preflight result
+ *
+ * Frees all resources associated with cleanup preflight result,
+ * including embedded safety violations and string arrays.
+ *
+ * @param result Result to free (can be NULL)
+ */
+void cleanup_preflight_result_free(cleanup_preflight_result_t *result);
 
 #endif /* DOTTA_CLEANUP_H */

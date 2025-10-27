@@ -45,6 +45,35 @@
 typedef struct content_cache content_cache_t;
 
 /**
+ * Orphan entry - minimal information for cleanup operations
+ *
+ * Stores both filesystem path (where file is deployed) and storage path
+ * (how file is stored in Git) to enable both privilege checking and removal
+ * without expensive state lookups.
+ *
+ * Lifecycle: Owned by orphan_list_t, freed together with the list.
+ */
+typedef struct {
+    char *filesystem_path;  /* Deployed location (e.g., /home/user/.bashrc) */
+    char *storage_path;     /* Git storage path (e.g., home/.bashrc) */
+} orphan_entry_t;
+
+/**
+ * Orphan list - dynamic array of orphan entries
+ *
+ * Self-contained structure representing files that are in deployment state
+ * but not in the target manifest (i.e., orphaned files to be removed).
+ *
+ * Memory management: All strings are owned by the list and freed together.
+ * Use orphan_list_free() to release all resources.
+ */
+typedef struct {
+    orphan_entry_t *entries;  /* Array of orphan entries (owns memory) */
+    size_t count;              /* Number of orphans */
+    size_t capacity;           /* Allocated capacity (internal use) */
+} orphan_list_t;
+
+/**
  * Cleanup operation options
  *
  * Configures cleanup behavior and provides pre-loaded data to avoid duplication.
@@ -55,6 +84,21 @@ typedef struct {
     const metadata_t *enabled_metadata;      /* Metadata from enabled profiles (can be NULL) */
     const profile_list_t *enabled_profiles;  /* Currently enabled profiles (can be NULL) */
     content_cache_t *cache;                  /* Content cache for performance (can be NULL) */
+
+    /**
+     * Pre-computed orphan list (REQUIRED)
+     *
+     * Must be computed by caller using cleanup_identify_orphans().
+     * Treated as borrowed reference (cleanup does not free).
+     *
+     * Rationale: Avoids triple computation in apply flow:
+     * - Once for privilege checking (needs storage paths)
+     * - Once for preflight display (show user what will be removed)
+     * - Once for actual removal (filesystem paths)
+     *
+     * Performance: Eliminates O(2N+2M) redundant state/manifest comparisons.
+     */
+    const orphan_list_t *orphaned_files;     /* Pre-computed orphans (must not be NULL) */
 
     /* Control flags */
     bool verbose;                           /* Kept for consistency (unused in module) */
@@ -131,6 +175,63 @@ typedef struct {
     bool will_prune_orphans;            /* True if orphaned_files_count > 0 */
     bool will_prune_directories;        /* True if directories_count > 0 */
 } cleanup_preflight_result_t;
+
+/**
+ * Identify orphaned files
+ *
+ * Returns list of files in deployment state that are not present in target
+ * manifest. Each orphan entry includes both filesystem path (for removal)
+ * and storage path (for privilege checking), avoiding expensive lookups.
+ *
+ * Purpose:
+ * --------
+ * This is the foundation API for orphan cleanup. The apply command uses it
+ * to compute orphans once, then reuses the list for:
+ * 1. Privilege checking (filter root/ paths)
+ * 2. Preflight display (show user what will be removed)
+ * 3. Actual removal (pass to cleanup_execute)
+ *
+ * Algorithm:
+ * ----------
+ * 1. Build hashmap of manifest filesystem paths for O(1) lookup
+ * 2. Iterate all state entries
+ * 3. For each entry not in manifest: add to orphan list
+ * 4. Return self-contained orphan_list_t structure
+ *
+ * Complexity: O(N + M) where N = state files, M = manifest files
+ *
+ * Edge Cases:
+ * -----------
+ * - No state files: Returns empty list (count=0)
+ * - Empty manifest: ALL state files are orphans
+ * - No orphans: Returns empty list (count=0)
+ * - Large state: Efficient hashmap-based lookup
+ *
+ * Memory:
+ * -------
+ * Allocates ~200 bytes per orphan (2 string pointers + overhead).
+ * Caller must free result with orphan_list_free().
+ *
+ * @param state Deployment state (must not be NULL, read-only)
+ * @param manifest Target file manifest (must not be NULL, read-only)
+ * @param out_orphans Orphan list (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+error_t *cleanup_identify_orphans(
+    const state_t *state,
+    const manifest_t *manifest,
+    orphan_list_t **out_orphans
+);
+
+/**
+ * Free orphan list
+ *
+ * Frees all orphan entries (including their strings) and the list structure.
+ * Safe to call with NULL.
+ *
+ * @param list Orphan list to free (can be NULL)
+ */
+void orphan_list_free(orphan_list_t *list);
 
 /**
  * Run cleanup preflight checks

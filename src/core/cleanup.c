@@ -120,6 +120,132 @@ void cleanup_preflight_result_free(cleanup_preflight_result_t *result) {
 }
 
 /**
+ * Identify orphaned files
+ *
+ * Returns list of files in deployment state that are not present in target
+ * manifest, with both filesystem and storage paths included to avoid lookups.
+ */
+error_t *cleanup_identify_orphans(
+    const state_t *state,
+    const manifest_t *manifest,
+    orphan_list_t **out_orphans
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(manifest);
+    CHECK_NULL(out_orphans);
+
+    error_t *err = NULL;
+    orphan_list_t *list = NULL;
+    hashmap_t *manifest_index = NULL;
+    state_file_entry_t *state_files = NULL;
+    size_t state_count = 0;
+
+    /* Allocate orphan list */
+    list = calloc(1, sizeof(orphan_list_t));
+    if (!list) {
+        return ERROR(ERR_MEMORY, "Failed to allocate orphan list");
+    }
+
+    /* Get all state files */
+    err = state_get_all_files(state, &state_files, &state_count);
+    if (err) {
+        free(list);
+        return error_wrap(err, "Failed to get state files");
+    }
+
+    /* Early exit: no files in state means no orphans */
+    if (state_count == 0) {
+        state_free_all_files(state_files, state_count);
+        *out_orphans = list;
+        return NULL;
+    }
+
+    /* Build manifest index for O(1) lookups */
+    manifest_index = hashmap_create(manifest->count > 0 ? manifest->count : 16);
+    if (!manifest_index) {
+        state_free_all_files(state_files, state_count);
+        free(list);
+        return ERROR(ERR_MEMORY, "Failed to create manifest index");
+    }
+
+    for (size_t i = 0; i < manifest->count; i++) {
+        err = hashmap_set(manifest_index,
+                         manifest->entries[i].filesystem_path,
+                         (void *)1);
+        if (err) {
+            hashmap_free(manifest_index, NULL);
+            state_free_all_files(state_files, state_count);
+            free(list);
+            return error_wrap(err, "Failed to build manifest index");
+        }
+    }
+
+    /* Identify orphans (in state, not in manifest) */
+    for (size_t i = 0; i < state_count; i++) {
+        const state_file_entry_t *entry = &state_files[i];
+
+        /* Check if file exists in manifest (O(1) lookup) */
+        if (!hashmap_has(manifest_index, entry->filesystem_path)) {
+            /* Orphaned - grow array if needed */
+            if (list->count >= list->capacity) {
+                size_t new_cap = list->capacity == 0 ? 16 : list->capacity * 2;
+                orphan_entry_t *new_entries = realloc(list->entries,
+                                                      new_cap * sizeof(orphan_entry_t));
+                if (!new_entries) {
+                    orphan_list_free(list);
+                    hashmap_free(manifest_index, NULL);
+                    state_free_all_files(state_files, state_count);
+                    return ERROR(ERR_MEMORY, "Failed to grow orphan list");
+                }
+                list->entries = new_entries;
+                list->capacity = new_cap;
+            }
+
+            /* Add orphan entry with both paths */
+            orphan_entry_t *orphan = &list->entries[list->count];
+            orphan->filesystem_path = strdup(entry->filesystem_path);
+            orphan->storage_path = strdup(entry->storage_path);
+
+            if (!orphan->filesystem_path || !orphan->storage_path) {
+                free(orphan->filesystem_path);
+                free(orphan->storage_path);
+                orphan_list_free(list);
+                hashmap_free(manifest_index, NULL);
+                state_free_all_files(state_files, state_count);
+                return ERROR(ERR_MEMORY, "Failed to allocate orphan paths");
+            }
+
+            list->count++;
+        }
+    }
+
+    /* Cleanup */
+    hashmap_free(manifest_index, NULL);
+    state_free_all_files(state_files, state_count);
+
+    *out_orphans = list;
+    return NULL;
+}
+
+/**
+ * Free orphan list
+ *
+ * Frees all orphan entries (including their strings) and the list structure.
+ */
+void orphan_list_free(orphan_list_t *list) {
+    if (!list) {
+        return;
+    }
+
+    for (size_t i = 0; i < list->count; i++) {
+        free(list->entries[i].filesystem_path);
+        free(list->entries[i].storage_path);
+    }
+    free(list->entries);
+    free(list);
+}
+
+/**
  * Load metadata from deployed-but-not-enabled profiles
  *
  * Optimization: Only loads metadata from profiles that are deployed (have files
@@ -265,20 +391,20 @@ static error_t *load_complete_metadata(
 /**
  * Remove orphaned files from filesystem
  *
- * Identifies files in state that are not in manifest and removes them after
- * safety validation. Integrates with safety module to prevent data loss.
+ * Uses pre-computed orphan list from opts->orphaned_files to remove files
+ * after safety validation. Integrates with safety module to prevent data loss.
  *
  * Algorithm:
- * 1. Build hashmap of manifest paths for O(1) lookup
- * 2. Identify orphaned files (in state, not in manifest)
- * 3. Run safety checks (unless force=true)
+ * 1. Use pre-computed orphan list (must not be NULL)
+ * 2. Extract filesystem paths for safety check
+ * 3. Run safety checks (unless force=true or skip_safety_check=true)
  * 4. Remove safe files, skip violated files, track failures
  *
  * @param repo Repository (must not be NULL)
- * @param state State for file tracking (must not be NULL)
- * @param manifest Current manifest (must not be NULL)
+ * @param state State for safety check lookups (must not be NULL)
+ * @param manifest Current manifest (unused, kept for API consistency)
  * @param result Cleanup result to update (must not be NULL)
- * @param opts Cleanup options (must not be NULL)
+ * @param opts Cleanup options (must not be NULL, orphaned_files must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *prune_orphaned_files(
@@ -293,69 +419,31 @@ static error_t *prune_orphaned_files(
     CHECK_NULL(manifest);
     CHECK_NULL(result);
     CHECK_NULL(opts);
+    CHECK_NULL(opts->orphaned_files);
 
     error_t *err = NULL;
-    string_array_t *to_remove = NULL;
-    hashmap_t *manifest_paths = NULL;
+    char **filesystem_paths = NULL;
     hashmap_t *violations_map = NULL;
-    state_file_entry_t *state_files = NULL;
-    size_t state_file_count = 0;
 
     bool dry_run = opts->dry_run;
     bool force = opts->force;
 
-    /* Get all files tracked in state */
-    err = state_get_all_files(state, &state_files, &state_file_count);
-    if (err) {
-        return error_wrap(err, "Failed to get state files");
-    }
-
-    /* Handle case: no files in state */
-    if (state_file_count == 0) {
-        state_free_all_files(state_files, state_file_count);
-        return NULL;  /* Nothing to do */
-    }
-
-    /* Build hashmap of manifest paths for O(1) lookup */
-    manifest_paths = hashmap_create(manifest->count);
-    if (!manifest_paths) {
-        state_free_all_files(state_files, state_file_count);
-        return ERROR(ERR_MEMORY, "Failed to create manifest paths hashmap");
-    }
-
-    for (size_t i = 0; i < manifest->count; i++) {
-        err = hashmap_set(manifest_paths, manifest->entries[i].filesystem_path, (void *)1);
-        if (err) {
-            err = error_wrap(err, "Failed to populate manifest paths hashmap");
-            goto cleanup;
-        }
-    }
-
-    /* Identify orphaned files (in state, not in manifest) */
-    to_remove = string_array_create();
-    if (!to_remove) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate orphan list");
-        goto cleanup;
-    }
-
-    for (size_t i = 0; i < state_file_count; i++) {
-        const state_file_entry_t *state_entry = &state_files[i];
-
-        if (!hashmap_has(manifest_paths, state_entry->filesystem_path)) {
-            err = string_array_push(to_remove, state_entry->filesystem_path);
-            if (err) {
-                err = error_wrap(err, "Failed to add orphaned file to list");
-                goto cleanup;
-            }
-        }
-    }
-
-    result->orphaned_files_found = string_array_size(to_remove);
+    const orphan_list_t *orphans = opts->orphaned_files;
+    result->orphaned_files_found = orphans->count;
 
     /* Early exit if no orphaned files */
-    if (result->orphaned_files_found == 0) {
-        err = NULL;
-        goto cleanup;
+    if (orphans->count == 0) {
+        return NULL;
+    }
+
+    /* Extract filesystem paths for safety check */
+    filesystem_paths = calloc(orphans->count, sizeof(char *));
+    if (!filesystem_paths) {
+        return ERROR(ERR_MEMORY, "Failed to allocate filesystem paths array");
+    }
+
+    for (size_t i = 0; i < orphans->count; i++) {
+        filesystem_paths[i] = orphans->entries[i].filesystem_path;
     }
 
     /* Safety check: detect modified orphaned files (unless already done in preflight) */
@@ -366,8 +454,8 @@ static error_t *prune_orphaned_files(
         err = safety_check_removal(
             repo,
             state,
-            to_remove->items,
-            to_remove->count,
+            filesystem_paths,
+            orphans->count,
             force,
             opts->enabled_metadata,  /* Pass pre-loaded metadata */
             keymanager,              /* Pass keymanager for decryption */
@@ -377,16 +465,16 @@ static error_t *prune_orphaned_files(
 
         if (err) {
             /* Fatal error during safety check */
-            err = error_wrap(err, "Safety check failed");
-            goto cleanup;
+            free(filesystem_paths);
+            return error_wrap(err, "Safety check failed");
         }
 
         /* Build violations map for O(1) lookup during removal */
         if (result->safety_violations && result->safety_violations->count > 0) {
             violations_map = hashmap_create(result->safety_violations->count);
             if (!violations_map) {
-                err = ERROR(ERR_MEMORY, "Failed to create violations hashmap");
-                goto cleanup;
+                free(filesystem_paths);
+                return ERROR(ERR_MEMORY, "Failed to create violations hashmap");
             }
 
             for (size_t i = 0; i < result->safety_violations->count; i++) {
@@ -397,8 +485,8 @@ static error_t *prune_orphaned_files(
     }
 
     /* Remove orphaned files and populate result arrays for caller display */
-    for (size_t i = 0; i < string_array_size(to_remove); i++) {
-        const char *path = string_array_get(to_remove, i);
+    for (size_t i = 0; i < orphans->count; i++) {
+        const char *path = orphans->entries[i].filesystem_path;
 
         /* Skip if file has safety violation */
         if (violations_map && hashmap_has(violations_map, path)) {
@@ -406,7 +494,9 @@ static error_t *prune_orphaned_files(
             err = string_array_push(result->skipped_files, path);
             if (err) {
                 err = error_wrap(err, "Failed to track skipped file");
-                goto cleanup;
+                if (violations_map) hashmap_free(violations_map, NULL);
+                free(filesystem_paths);
+                return err;
             }
             continue;
         }
@@ -433,7 +523,9 @@ static error_t *prune_orphaned_files(
             if (err) {
                 error_free(remove_err);
                 err = error_wrap(err, "Failed to track failed file");
-                goto cleanup;
+                if (violations_map) hashmap_free(violations_map, NULL);
+                free(filesystem_paths);
+                return err;
             }
             error_free(remove_err);
         } else {
@@ -442,19 +534,17 @@ static error_t *prune_orphaned_files(
             err = string_array_push(result->removed_files, path);
             if (err) {
                 err = error_wrap(err, "Failed to track removed file");
-                goto cleanup;
+                if (violations_map) hashmap_free(violations_map, NULL);
+                free(filesystem_paths);
+                return err;
             }
         }
     }
 
-    err = NULL;
-
-cleanup:
+    /* Cleanup */
     if (violations_map) hashmap_free(violations_map, NULL);
-    if (manifest_paths) hashmap_free(manifest_paths, NULL);
-    if (to_remove) string_array_free(to_remove);
-    state_free_all_files(state_files, state_file_count);
-    return err;
+    free(filesystem_paths);
+    return NULL;
 }
 
 /**
@@ -659,6 +749,7 @@ static error_t *prune_empty_directories(
  * Run cleanup preflight checks
  *
  * Analyzes what cleanup will do WITHOUT modifying filesystem.
+ * Uses pre-computed orphan list from opts->orphaned_files.
  * Enables informed user consent by revealing orphan removal impact.
  */
 error_t *cleanup_preflight_check(
@@ -672,16 +763,17 @@ error_t *cleanup_preflight_check(
     CHECK_NULL(state);
     CHECK_NULL(manifest);
     CHECK_NULL(opts);
+    CHECK_NULL(opts->orphaned_files);
     CHECK_NULL(out_result);
 
     /* Declare all resources at top, initialized to NULL */
     error_t *err = NULL;
     cleanup_preflight_result_t *result = NULL;
-    hashmap_t *manifest_paths = NULL;
-    state_file_entry_t *state_files = NULL;
-    size_t state_file_count = 0;
     string_array_t *orphaned_files = NULL;
     metadata_t *complete_metadata = NULL;
+    char **filesystem_paths = NULL;
+
+    const orphan_list_t *orphans = opts->orphaned_files;
 
     /* Allocate result structure */
     result = calloc(1, sizeof(cleanup_preflight_result_t));
@@ -691,72 +783,17 @@ error_t *cleanup_preflight_check(
     }
 
     /* Initialize all fields */
-    result->orphaned_files_count = 0;
+    result->orphaned_files_count = orphans->count;
     result->orphaned_files = NULL;
     result->safety_violations = NULL;
     result->directories_count = 0;
     result->directories = NULL;
     result->has_blocking_violations = false;
-    result->will_prune_orphans = false;
+    result->will_prune_orphans = (orphans->count > 0);
     result->will_prune_directories = false;
 
-    /* Get all files tracked in state */
-    err = state_get_all_files(state, &state_files, &state_file_count);
-    if (err) {
-        err = error_wrap(err, "Failed to get state files");
-        goto cleanup;
-    }
-
-    /* Early exit: no files in state */
-    if (state_file_count == 0) {
-        /* Success - empty result */
-        *out_result = result;
-        result = NULL;
-        err = NULL;
-        goto cleanup;
-    }
-
-    /* Build hashmap of manifest paths for O(1) orphan detection */
-    manifest_paths = hashmap_create(manifest->count);
-    if (!manifest_paths) {
-        err = ERROR(ERR_MEMORY, "Failed to create manifest paths hashmap");
-        goto cleanup;
-    }
-
-    for (size_t i = 0; i < manifest->count; i++) {
-        err = hashmap_set(manifest_paths, manifest->entries[i].filesystem_path, (void *)1);
-        if (err) {
-            err = error_wrap(err, "Failed to populate manifest paths hashmap");
-            goto cleanup;
-        }
-    }
-
-    /* Identify orphaned files (in state, not in manifest) */
-    orphaned_files = string_array_create();
-    if (!orphaned_files) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate orphan list");
-        goto cleanup;
-    }
-
-    for (size_t i = 0; i < state_file_count; i++) {
-        const state_file_entry_t *state_entry = &state_files[i];
-
-        /* Check if file exists in manifest (O(1) lookup) */
-        if (!hashmap_has(manifest_paths, state_entry->filesystem_path)) {
-            /* Orphaned file - add to list */
-            err = string_array_push(orphaned_files, state_entry->filesystem_path);
-            if (err) {
-                err = error_wrap(err, "Failed to add orphaned file to list");
-                goto cleanup;
-            }
-        }
-    }
-
-    result->orphaned_files_count = string_array_size(orphaned_files);
-    result->will_prune_orphans = (result->orphaned_files_count > 0);
-
     /* Early exit: no orphaned files */
-    if (result->orphaned_files_count == 0) {
+    if (orphans->count == 0) {
         /* Success - no orphans to check */
         *out_result = result;
         result = NULL;
@@ -764,20 +801,46 @@ error_t *cleanup_preflight_check(
         goto cleanup;
     }
 
-    /* Transfer ownership of orphaned_files array to result */
+    /* Convert orphan_list_t to string_array_t for result (display purposes) */
+    orphaned_files = string_array_create();
+    if (!orphaned_files) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate orphan list for display");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < orphans->count; i++) {
+        err = string_array_push(orphaned_files, orphans->entries[i].filesystem_path);
+        if (err) {
+            err = error_wrap(err, "Failed to add orphaned file to display list");
+            goto cleanup;
+        }
+    }
+
+    /* Transfer ownership to result */
     result->orphaned_files = orphaned_files;
     orphaned_files = NULL;  /* Prevent double-free */
 
     /* Run safety checks (unless force=true) */
     if (!opts->force) {
+        /* Extract filesystem paths for safety check */
+        filesystem_paths = calloc(orphans->count, sizeof(char *));
+        if (!filesystem_paths) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate filesystem paths array");
+            goto cleanup;
+        }
+
+        for (size_t i = 0; i < orphans->count; i++) {
+            filesystem_paths[i] = orphans->entries[i].filesystem_path;
+        }
+
         /* Get keymanager for decryption (if needed) */
         keymanager_t *keymanager = keymanager_get_global(NULL);
 
         err = safety_check_removal(
             repo,
             state,
-            result->orphaned_files->items,
-            result->orphaned_files->count,
+            filesystem_paths,
+            orphans->count,
             opts->force,
             opts->enabled_metadata,
             keymanager,
@@ -855,8 +918,7 @@ cleanup:
     /* Free resources in reverse order of allocation */
     if (complete_metadata) metadata_free(complete_metadata);
     if (orphaned_files) string_array_free(orphaned_files);
-    if (manifest_paths) hashmap_free(manifest_paths, NULL);
-    if (state_files) state_free_all_files(state_files, state_file_count);
+    if (filesystem_paths) free(filesystem_paths);
     if (result) cleanup_preflight_result_free(result);
 
     return err;

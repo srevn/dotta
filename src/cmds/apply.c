@@ -672,6 +672,84 @@ static error_t *apply_update_and_save_state(
 }
 
 /**
+ * Check privileges for complete apply operation
+ *
+ * Examines BOTH manifest (files being deployed) and orphans (files being removed)
+ * for root/ paths. This ensures we have required privileges BEFORE attempting
+ * any filesystem modifications.
+ *
+ * The privilege gap this fixes:
+ * - Before: Only checked manifest → missed orphaned root/ files → cleanup failed silently
+ * - After: Checks both manifest + orphans → prompts for elevation → cleanup succeeds
+ *
+ * @param manifest Files being deployed (must not be NULL)
+ * @param orphans Files being removed (can be NULL if --keep-orphans)
+ * @param opts Apply command options (must not be NULL)
+ * @param out Output context for messages (must not be NULL)
+ * @return NULL if OK to proceed, error otherwise (or does not return if re-exec with sudo)
+ */
+static error_t *ensure_complete_apply_privileges(
+    const manifest_t *manifest,
+    const orphan_list_t *orphans,
+    const cmd_apply_options_t *opts,
+    output_ctx_t *out
+) {
+    CHECK_NULL(manifest);
+    CHECK_NULL(opts);
+    CHECK_NULL(out);
+
+    if (opts->dry_run) {
+        return NULL;  /* Read-only operation, no privileges needed */
+    }
+
+    string_array_t *root_paths = string_array_create();
+    if (!root_paths) {
+        return ERROR(ERR_MEMORY, "Failed to allocate root paths list");
+    }
+
+    /* 1. Collect root/ paths from manifest (files being deployed) */
+    for (size_t i = 0; i < manifest->count; i++) {
+        if (privilege_path_requires_root(manifest->entries[i].storage_path)) {
+            error_t *err = string_array_push(root_paths, manifest->entries[i].storage_path);
+            if (err) {
+                string_array_free(root_paths);
+                return error_wrap(err, "Failed to add manifest root path");
+            }
+        }
+    }
+
+    /* 2. Collect root/ paths from orphans (files being removed) */
+    if (orphans) {
+        for (size_t i = 0; i < orphans->count; i++) {
+            if (privilege_path_requires_root(orphans->entries[i].storage_path)) {
+                error_t *err = string_array_push(root_paths, orphans->entries[i].storage_path);
+                if (err) {
+                    string_array_free(root_paths);
+                    return error_wrap(err, "Failed to add orphan root path");
+                }
+            }
+        }
+    }
+
+    /* 3. Check privileges if any root/ paths found */
+    error_t *err = NULL;
+    if (string_array_size(root_paths) > 0) {
+        err = privilege_ensure_for_operation(
+            (const char**)root_paths->items,
+            root_paths->count,
+            "apply",
+            true,  /* interactive: prompt user if elevation needed */
+            opts->argc,
+            opts->argv,
+            out
+        );
+    }
+
+    string_array_free(root_paths);
+    return err;
+}
+
+/**
  * Apply command implementation
  */
 error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
@@ -686,6 +764,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     state_t *state = NULL;
     profile_list_t *profiles = NULL;
     manifest_t *manifest = NULL;
+    orphan_list_t *orphans = NULL;
     metadata_t *merged_metadata = NULL;
     content_cache_t *cache = NULL;
     preflight_result_t *preflight = NULL;
@@ -784,6 +863,34 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                     manifest->count, manifest->count == 1 ? "" : "s");
     }
 
+    /* Identify orphaned files (unless --keep-orphans)
+     *
+     * Architecture: Orphan identification is expensive O(N+M). We compute once here,
+     * then reuse the result for:
+     * 1. Privilege checking (filter root/ paths) - line ~948
+     * 2. Preflight display (show user what will be removed) - line ~1048
+     * 3. Actual removal (pass to cleanup) - line ~1193
+     *
+     * This eliminates 2×-3× redundant computation and fixes the privilege gap
+     * (before: only checked manifest, missed orphaned root/ files).
+     */
+    if (!opts->keep_orphans) {
+        output_print(out, OUTPUT_VERBOSE, "\nIdentifying orphaned files...\n");
+
+        err = cleanup_identify_orphans(state, manifest, &orphans);
+        if (err) {
+            err = error_wrap(err, "Failed to identify orphaned files");
+            goto cleanup;
+        }
+
+        if (opts->verbose && orphans && orphans->count > 0) {
+            output_print(out, OUTPUT_VERBOSE,
+                        "Found %zu orphaned file%s\n",
+                        orphans->count,
+                        orphans->count == 1 ? "" : "s");
+        }
+    }
+
     /* Load and merge metadata from profiles */
     output_print(out, OUTPUT_VERBOSE, "\nLoading metadata...\n");
 
@@ -869,7 +976,8 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
      *
      * This ensures we have required privileges upfront, preventing partial
      * deployments and cryptic mid-operation failures. Checks occur AFTER
-     * manifest building (know all files) but BEFORE any filesystem modifications.
+     * manifest building AND orphan identification (know all files) but BEFORE
+     * any filesystem modifications.
      *
      * Skip check if dry-run (read-only operation, no privileges needed).
      *
@@ -879,34 +987,9 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     if (!opts->dry_run) {
         output_print(out, OUTPUT_VERBOSE, "\nChecking privilege requirements...\n");
 
-        /* Collect storage paths from manifest for privilege check */
-        const char **storage_paths = malloc(manifest->count * sizeof(char *));
-        if (!storage_paths) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate storage paths for privilege check");
-            goto cleanup;
-        }
-
-        for (size_t i = 0; i < manifest->count; i++) {
-            storage_paths[i] = manifest->entries[i].storage_path;
-        }
-
-        /* Check if any root/ files require elevation.
-         * If not elevated, prompts user and re-execs with sudo.
-         * If already elevated or no root/ files, returns immediately. */
-        err = privilege_ensure_for_operation(
-            storage_paths,
-            manifest->count,
-            "apply",
-            true,        /* interactive: prompt user if elevation needed */
-            opts->argc,
-            opts->argv,
-            out
-        );
-
-        free(storage_paths);
-
+        err = ensure_complete_apply_privileges(manifest, orphans, opts, out);
         if (err) {
-            err = error_wrap(err, "Insufficient privileges for deployment");
+            err = error_wrap(err, "Insufficient privileges for operation");
             goto cleanup;
         }
     }
@@ -971,6 +1054,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             .enabled_metadata = merged_metadata,
             .enabled_profiles = profiles,
             .cache = cache,
+            .orphaned_files = orphans,  /* Pass pre-computed orphans */
             .verbose = opts->verbose,
             .dry_run = false,  /* Preflight is always read-only */
             .force = opts->force,
@@ -1115,7 +1199,8 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             cleanup_options_t cleanup_opts = {
                 .enabled_metadata = merged_metadata,
                 .enabled_profiles = profiles,
-                .cache = cache,    /* Pass cache for performance (avoids re-decryption) */
+                .cache = cache,             /* Pass cache for performance (avoids re-decryption) */
+                .orphaned_files = orphans,  /* Pass pre-computed orphans */
                 .verbose = opts->verbose,
                 .dry_run = false,  /* Dry-run handled at deployment level */
                 .force = opts->force,
@@ -1186,6 +1271,7 @@ cleanup:
     if (profiles_str) free(profiles_str);
     if (cache) content_cache_free(cache);
     if (merged_metadata) metadata_free(merged_metadata);
+    if (orphans) orphan_list_free(orphans);
     if (manifest) manifest_free(manifest);
     if (profiles) profile_list_free(profiles);
     if (state) state_free(state);

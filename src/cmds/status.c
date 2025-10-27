@@ -17,6 +17,7 @@
 #include "utils/array.h"
 #include "utils/config.h"
 #include "utils/output.h"
+#include "utils/privilege.h"
 #include "utils/timeutil.h"
 
 /**
@@ -190,6 +191,16 @@ static void format_diverged_file(
                     output_color_code(out, OUTPUT_COLOR_RESET));
             break;
 
+        case DIVERGENCE_OWNERSHIP:
+            *out_label = "[ownership]";
+            *out_color = OUTPUT_COLOR_YELLOW;
+            snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
+                    file->filesystem_path,
+                    output_color_code(out, OUTPUT_COLOR_DIM),
+                    file->profile,
+                    output_color_code(out, OUTPUT_COLOR_RESET));
+            break;
+
         default:
             *out_label = "[unknown]";
             *out_color = OUTPUT_COLOR_DIM;
@@ -353,6 +364,7 @@ static void display_workspace_status(
                 DIVERGENCE_MODIFIED,
                 DIVERGENCE_DELETED,
                 DIVERGENCE_MODE_DIFF,
+                DIVERGENCE_OWNERSHIP,
                 DIVERGENCE_TYPE_DIFF,
                 DIVERGENCE_ENCRYPTION
             };
@@ -796,6 +808,46 @@ static error_t *display_remote_status(
 }
 
 /**
+ * Extract storage paths from manifest for privilege checking
+ *
+ * Allocates array of storage path pointers. Caller must free the array
+ * (but not the strings, which are borrowed from manifest).
+ *
+ * @param manifest Manifest (must not be NULL)
+ * @param paths_out Output array of paths (must not be NULL)
+ * @param count_out Output count (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *extract_storage_paths_from_manifest(
+    const manifest_t *manifest,
+    const char ***paths_out,
+    size_t *count_out
+) {
+    CHECK_NULL(manifest);
+    CHECK_NULL(paths_out);
+    CHECK_NULL(count_out);
+
+    if (manifest->count == 0) {
+        *paths_out = NULL;
+        *count_out = 0;
+        return NULL;
+    }
+
+    const char **paths = calloc(manifest->count, sizeof(char *));
+    if (!paths) {
+        return ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
+    }
+
+    for (size_t i = 0; i < manifest->count; i++) {
+        paths[i] = manifest->entries[i].storage_path;
+    }
+
+    *paths_out = paths;
+    *count_out = manifest->count;
+    return NULL;
+}
+
+/**
  * Status command implementation
  */
 error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
@@ -861,6 +913,47 @@ error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
     if (err) {
         err = error_wrap(err, "Failed to build manifest");
         goto cleanup;
+    }
+
+    /* Check privileges for complete status (may re-exec with sudo) */
+    if (!opts->no_sudo && manifest && manifest->count > 0) {
+        /* Extract storage paths from manifest */
+        const char **storage_paths = NULL;
+        size_t path_count = 0;
+
+        error_t *extract_err = extract_storage_paths_from_manifest(
+            manifest, &storage_paths, &path_count);
+
+        if (!extract_err && path_count > 0) {
+            /* Check if privileges needed (may re-exec) */
+            error_t *priv_err = privilege_ensure_for_operation(
+                storage_paths,
+                path_count,
+                "status",
+                true,  /* interactive mode (prompt allowed) */
+                opts->argc,
+                opts->argv,
+                out
+            );
+
+            free((void *)storage_paths);
+
+            if (priv_err) {
+                /* User declined elevation or non-interactive mode */
+                output_newline(out);
+                output_warning(out, "Status check will be INCOMPLETE:\n");
+                output_printf(out, OUTPUT_NORMAL, "  ✓ Content changes will be detected\n");
+                output_printf(out, OUTPUT_NORMAL, "  ✓ Permission mode changes will be detected\n");
+                output_printf(out, OUTPUT_NORMAL, "  ✗ Ownership changes will NOT be detected\n");
+                output_newline(out);
+
+                error_free(priv_err);
+                /* Continue with partial status */
+            }
+        } else {
+            /* Extraction failed - non-fatal, continue without privilege check */
+            error_free(extract_err);
+        }
     }
 
     /* Display enabled profiles and last deployment info */

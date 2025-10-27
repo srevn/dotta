@@ -90,7 +90,8 @@ typedef enum {
     DIVERGENCE_MODE_DIFF,          /* Deployed, mode changed on filesystem */
     DIVERGENCE_TYPE_DIFF,          /* Deployed, type changed on filesystem */
     DIVERGENCE_UNTRACKED,          /* On filesystem in tracked directory, not in manifest */
-    DIVERGENCE_ENCRYPTION          /* File encryption state doesn't match policy */
+    DIVERGENCE_ENCRYPTION,         /* File encryption state doesn't match policy */
+    DIVERGENCE_OWNERSHIP           /* Deployed, owner/group changed on filesystem (requires root) */
 } divergence_type_t;
 
 #endif /* DOTTA_TYPES_H */

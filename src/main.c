@@ -476,7 +476,10 @@ static int cmd_status_main(int argc, char **argv) {
         .show_local = true,   /* Default: show filesystem status */
         .show_remote = true,  /* Default: show remote status */
         .no_fetch = false,    /* Default: fetch before remote check */
-        .all_profiles = false /* Default: show only enabled profiles */
+        .all_profiles = false,/* Default: show only enabled profiles */
+        .no_sudo = false,     /* Default: prompt for sudo if needed */
+        .argc = argc,         /* For privilege re-exec */
+        .argv = argv          /* For privilege re-exec */
     };
 
     /* Collect profile arguments */
@@ -507,6 +510,8 @@ static int cmd_status_main(int argc, char **argv) {
             opts.no_fetch = true;
         } else if (strcmp(argv[i], "--all") == 0) {
             opts.all_profiles = true;
+        } else if (strcmp(argv[i], "--no-sudo") == 0) {
+            opts.no_sudo = true;
         } else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--profile") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: --profile requires an argument\n");

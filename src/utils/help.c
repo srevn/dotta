@@ -248,8 +248,17 @@ void print_status_help(const char *prog_name) {
     printf("\nRemote options:\n");
     printf("  --no-fetch             Don't fetch before checking remote (faster, may be stale)\n");
     printf("  --all                  Show all local profiles, not just enabled ones\n");
+    printf("\nPrivilege options:\n");
+    printf("  --no-sudo              Skip privilege elevation (ownership checks disabled)\n");
     printf("\nHelp:\n");
     printf("  -h, --help             Show this help message\n");
+    printf("\nPrivilege Requirements:\n");
+    printf("  Status checks require root privileges when workspace contains root/ prefix\n");
+    printf("  files with ownership metadata. If not running as root, dotta will prompt\n");
+    printf("  for sudo authentication to perform complete ownership checks.\n");
+    printf("\n");
+    printf("  Use --no-sudo to disable this prompt and see partial status (ownership\n");
+    printf("  changes will not be detected).\n");
     printf("\nRemote State Indicators:\n");
     printf("  =   up-to-date with remote\n");
     printf("  ↑n  n commits ahead of remote (ready to push)\n");

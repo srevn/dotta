@@ -22,6 +22,9 @@ typedef struct {
     bool show_remote;           /* Show remote sync status (default: true) */
     bool no_fetch;              /* Skip fetch before remote status check */
     bool all_profiles;          /* Show all profiles, not just enabled ones */
+    bool no_sudo;               /* Skip privilege elevation (ownership checks disabled) */
+    int argc;                   /* Original argc (for privilege re-exec) */
+    char **argv;                /* Original argv (for privilege re-exec) */
 } cmd_status_options_t;
 
 /**

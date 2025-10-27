@@ -14,6 +14,7 @@
 
 #include "base/error.h"
 #include "base/filesystem.h"
+#include "core/bootstrap.h"
 #include "core/metadata.h"
 #include "crypto/encryption.h"
 #include "crypto/keymanager.h"
@@ -121,52 +122,64 @@ static error_t *get_plaintext_from_blob(
         *out_was_encrypted = is_encrypted;
     }
 
-    /* Step 2: Validate consistency with metadata (defense in depth)
-     * SECURITY: Metadata must contain entry for this file. Missing entries indicate:
-     * - Metadata corruption (desync between git and metadata)
-     * - File added to git without using dotta add/update (manual tampering)
-     * - Serious bug in add/update/remove commands
-     *
-     * We require metadata entry to detect these error conditions.
-     * Magic header alone is not sufficient for integrity verification.
+    /* Skip metadata validation for special system files that don't track themselves
+     * These files are critical for dotta operations and live at profile root:
+     * - .bootstrap (executable script for profile setup)
+     * - .dottaignore (ignore patterns for the profile)
+     * - .dotta/metadata.json (file permissions and encryption state)
      */
-    const metadata_entry_t *meta_entry = NULL;
-    error_t *err = metadata_get_entry(metadata, storage_path, &meta_entry);
+    bool is_special_file = (strcmp(storage_path, BOOTSTRAP_DEFAULT_SCRIPT_NAME) == 0 ||
+                            strcmp(storage_path, METADATA_FILE_PATH) == 0 ||
+                            strcmp(storage_path, ".dottaignore") == 0);
 
-    if (err) {
-        /* Entry not found - this is now an error (metadata corruption) */
-        error_free(err);
-        return ERROR(ERR_STATE_INVALID,
-            "File '%s' exists in git but not in metadata.\n"
-            "This indicates metadata corruption or manual git manipulation.\n"
-            "\n"
-            "To fix:\n"
-            "  1. If this is a legitimate file: dotta update -p %s '%s'\n"
-            "  2. If this is corruption: inspect git history and restore metadata",
-            storage_path, profile_name, storage_path);
-    }
+    if (!is_special_file) {
+        /* Step 2: Validate consistency with metadata (defense in depth)
+         * SECURITY: Metadata must contain entry for this file. Missing entries indicate:
+         * - Metadata corruption (desync between git and metadata)
+         * - File added to git without using dotta add/update (manual tampering)
+         * - Serious bug in add/update/remove commands
+         *
+         * We require metadata entry to detect these error conditions.
+         * Magic header alone is not sufficient for integrity verification.
+         */
+        const metadata_entry_t *meta_entry = NULL;
+        error_t *err = metadata_get_entry(metadata, storage_path, &meta_entry);
 
-    if (!meta_entry) {
-        /* Should never happen - metadata_get_entry returns error if not found */
-        return ERROR(ERR_INTERNAL,
-            "metadata_get_entry returned NULL without error for '%s'",
-            storage_path);
-    }
+        if (err) {
+            /* Entry not found - this is now an error (metadata corruption) */
+            error_free(err);
+            return ERROR(ERR_STATE_INVALID,
+                "File '%s' exists in git but not in metadata.\n"
+                "This indicates metadata corruption or manual git manipulation.\n"
+                "\n"
+                "To fix:\n"
+                "  1. If this is a legitimate file: dotta update -p %s '%s'\n"
+                "  2. If this is corruption: inspect git history and restore metadata",
+                storage_path, profile_name, storage_path);
+        }
 
-    /* Cross-validate magic header against metadata encryption flag */
-    if (is_encrypted && !meta_entry->encrypted) {
-        return ERROR(ERR_STATE_INVALID,
-            "File '%s' is encrypted in git but metadata says plaintext.\n"
-            "This indicates metadata corruption.\n"
-            "To fix, run: dotta update -p %s '%s'",
-            storage_path, profile_name, storage_path);
-    }
-    if (!is_encrypted && meta_entry->encrypted) {
-        return ERROR(ERR_STATE_INVALID,
-            "File '%s' is marked as encrypted in metadata but stored as plaintext in git.\n"
-            "This indicates metadata corruption.\n"
-            "To fix, run: dotta update -p %s '%s'",
-            storage_path, profile_name, storage_path);
+        if (!meta_entry) {
+            /* Should never happen - metadata_get_entry returns error if not found */
+            return ERROR(ERR_INTERNAL,
+                "metadata_get_entry returned NULL without error for '%s'",
+                storage_path);
+        }
+
+        /* Cross-validate magic header against metadata encryption flag */
+        if (is_encrypted && !meta_entry->encrypted) {
+            return ERROR(ERR_STATE_INVALID,
+                "File '%s' is encrypted in git but metadata says plaintext.\n"
+                "This indicates metadata corruption.\n"
+                "To fix, run: dotta update -p %s '%s'",
+                storage_path, profile_name, storage_path);
+        }
+        if (!is_encrypted && meta_entry->encrypted) {
+            return ERROR(ERR_STATE_INVALID,
+                "File '%s' is marked as encrypted in metadata but stored as plaintext in git.\n"
+                "This indicates metadata corruption.\n"
+                "To fix, run: dotta update -p %s '%s'",
+                storage_path, profile_name, storage_path);
+        }
     }
 
     /* Step 3: Handle encrypted files */

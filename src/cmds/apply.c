@@ -988,8 +988,8 @@ cleanup:
     /* Free resources in reverse order of allocation */
     if (deploy_res) deploy_result_free(deploy_res);
     if (preflight) preflight_result_free(preflight);
-    if (profiles_str) free(profiles_str);
     if (hook_ctx) hook_context_free(hook_ctx);
+    if (profiles_str) free(profiles_str);
     if (cache) content_cache_free(cache);
     if (merged_metadata) metadata_free(merged_metadata);
     if (manifest) manifest_free(manifest);

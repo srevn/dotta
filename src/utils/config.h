@@ -23,6 +23,7 @@ typedef struct dotta_config {
 
     /* [hooks] */
     char *hooks_dir;
+    int32_t hook_timeout;         /* Hook execution timeout in seconds (default: 30, 0 = no timeout) */
     bool pre_apply;
     bool post_apply;
     bool pre_add;

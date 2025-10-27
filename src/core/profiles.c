@@ -970,6 +970,7 @@ error_t *profile_build_manifest(
 
             /* Skip repository metadata files */
             if (strcmp(storage_path, ".dottaignore") == 0 ||
+                strcmp(storage_path, ".bootstrap") == 0 ||
                 strcmp(storage_path, ".gitignore") == 0 ||
                 strcmp(storage_path, "README.md") == 0 ||
                 strcmp(storage_path, "README") == 0 ||

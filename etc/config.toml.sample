@@ -62,6 +62,12 @@ auto_detect_new_files = true
 # Default: ~/.config/dotta/hooks
 hooks_dir = "~/.config/dotta/hooks"
 
+# Hook Timeout
+# Maximum time (in seconds) a hook script can run before being killed
+# Set to 0 to disable timeout (not recommended)
+# Default: 30
+timeout = 30
+
 # Enable/Disable Specific Hooks
 # You can selectively enable or disable hooks
 # Default: pre_apply=true, post_apply=true, pre_add=false, post_add=false, pre_update=false, post_update=false

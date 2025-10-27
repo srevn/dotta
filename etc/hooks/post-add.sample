@@ -9,11 +9,11 @@
 #   DOTTA_REPO_DIR    - Path to dotta repository
 #   DOTTA_COMMAND     - Command being executed ("add")
 #   DOTTA_PROFILE     - Profile name that was modified
-#   DOTTA_FILES       - Space-separated list of files that were added
 #   DOTTA_FILE_COUNT  - Number of files
+#   DOTTA_FILE_0      - First file path (0-indexed)
+#   DOTTA_FILE_1      - Second file path
+#   DOTTA_FILE_N      - Nth file path (where N = 0 to COUNT-1)
 #   DOTTA_DRY_RUN     - "1" if dry-run, "0" otherwise
-#
-# Note: Files with spaces in their names will not be properly separated in DOTTA_FILES.
 #
 
 set -euo pipefail
@@ -32,12 +32,18 @@ if [[ -d "$DOTTA_REPO_DIR/.git" ]]; then
     if ! git diff --quiet || ! git diff --cached --quiet; then
         git add -A
 
+        # Build file list for commit message
+        file_list=""
+        for ((i=0; i<DOTTA_FILE_COUNT; i++)); do
+            var_name="DOTTA_FILE_$i"
+            file_list+="  - ${!var_name}"$'\n'
+        done
+
         # Create commit message
         commit_msg="Add files to $DOTTA_PROFILE profile
 
 Added files:
-$DOTTA_FILES
-
+$file_list
 Auto-committed by dotta post-add hook"
 
         git commit -m "$commit_msg"

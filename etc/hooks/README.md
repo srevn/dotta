@@ -85,11 +85,9 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - `DOTTA_REPO_DIR` - Path to dotta repository
 - `DOTTA_COMMAND` - Always "add"
 - `DOTTA_PROFILE` - Profile name being modified
-- `DOTTA_FILES` - Space-separated list of files
 - `DOTTA_FILE_COUNT` - Number of files
+- `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... - Individual file paths (0-indexed)
 - `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
-
-**Note:** Files with spaces in their names will not be properly separated. Consider using `DOTTA_FILE_COUNT` to iterate or avoid spaces in tracked filenames.
 
 **Exit Behavior:**
 - Exit 0: Continue with add
@@ -112,11 +110,9 @@ Hooks allow you to run custom scripts before and after dotta operations.
 - `DOTTA_REPO_DIR` - Path to dotta repository
 - `DOTTA_COMMAND` - Always "add"
 - `DOTTA_PROFILE` - Profile name that was modified
-- `DOTTA_FILES` - Space-separated list of files
 - `DOTTA_FILE_COUNT` - Number of files
+- `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... - Individual file paths (0-indexed)
 - `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
-
-**Note:** Files with spaces in their names will not be properly separated. Consider using `DOTTA_FILE_COUNT` to iterate or avoid spaces in tracked filenames.
 
 **Exit Behavior:**
 - Exit 0 or non-zero: Add already completed, exit code logged only
@@ -171,8 +167,8 @@ exit 0
 
 1. **Never hardcode secrets** in hook scripts
 2. **Use environment variables** for sensitive data
-3. **Validate inputs:** Don't trust `DOTTA_FILES` blindly
-4. **Handle spaces in filenames:** Files with spaces will not be properly separated in `DOTTA_FILES`
+3. **Validate inputs:** Always validate file paths from `DOTTA_FILE_N` variables
+4. **Use indexed variables:** Iterate via `DOTTA_FILE_COUNT` and `DOTTA_FILE_N` for safe file handling
 5. **Be careful with auto-push:** Could expose sensitive data
 6. **Limit permissions:** Hooks should only modify what they need
 
@@ -191,8 +187,9 @@ Test hooks manually:
 export DOTTA_REPO_DIR=~/.local/share/dotta/repo
 export DOTTA_COMMAND=add
 export DOTTA_PROFILE=test
-export DOTTA_FILES="file1.txt file2.txt"
 export DOTTA_FILE_COUNT=2
+export DOTTA_FILE_0="file1.txt"
+export DOTTA_FILE_1="file2.txt"
 export DOTTA_DRY_RUN=0
 
 # Run hook
@@ -240,19 +237,16 @@ fi
 #!/usr/bin/env bash
 set -euo pipefail
 
-for file in $DOTTA_FILES; do
+# Iterate through all files using indexed variables
+for ((i=0; i<DOTTA_FILE_COUNT; i++)); do
+    var_name="DOTTA_FILE_$i"
+    file="${!var_name}"
+
     if grep -qiE '(api[_-]?key|password|secret|token)' "$file"; then
         echo "ERROR: Potential secret in $file" >&2
         exit 1
     fi
 done
-
-# Alternative: Use array for safer handling (including files with spaces in names)
-# Note: This won't work with the current space-separated format if filenames have spaces
-# IFS=' ' read -ra FILES <<< "$DOTTA_FILES"
-# for file in "${FILES[@]}"; do
-#     # ... validation ...
-# done
 ```
 
 ### Workflow 4: Service Reload

@@ -77,6 +77,7 @@ dotta_config_t *config_create_default(void) {
     config->auto_detect_new_files = true;  /* Default: detect new files */
 
     config->hooks_dir = strdup(DEFAULT_HOOKS_DIR);
+    config->hook_timeout = 30;  /* Default: 30 seconds */
     config->pre_apply = true;
     config->post_apply = true;
     config->pre_add = false;
@@ -257,6 +258,11 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
         if (hooks_dir.type == TOML_STRING) {
             free(config->hooks_dir);
             config->hooks_dir = strdup(hooks_dir.u.s);
+        }
+
+        toml_datum_t hook_timeout = toml_get(hooks, "timeout");
+        if (hook_timeout.type == TOML_INT64) {
+            config->hook_timeout = (int32_t)hook_timeout.u.int64;
         }
 
         toml_datum_t pre_apply = toml_get(hooks, "pre_apply");
@@ -513,6 +519,19 @@ error_t *config_validate(const dotta_config_t *config) {
                         "Invalid diverged_strategy: %s (must be warn/rebase/merge/ours/theirs)",
                         config->diverged_strategy);
         }
+    }
+
+    /* Validate hook_timeout */
+    if (config->hook_timeout < 0) {
+        return ERROR(ERR_INVALID_ARG,
+                    "Invalid hook_timeout: %d (must be >= 0, where 0 means no timeout)",
+                    config->hook_timeout);
+    }
+
+    /* Validate hooks_dir */
+    if (config->hooks_dir && config->hooks_dir[0] == '\0') {
+        return ERROR(ERR_INVALID_ARG,
+                    "Invalid hooks_dir: empty string (must be a valid path or omitted for default)");
     }
 
     return NULL;

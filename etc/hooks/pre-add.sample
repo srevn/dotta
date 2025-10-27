@@ -11,11 +11,11 @@
 #   DOTTA_REPO_DIR    - Path to dotta repository
 #   DOTTA_COMMAND     - Command being executed ("add")
 #   DOTTA_PROFILE     - Profile name being modified
-#   DOTTA_FILES       - Space-separated list of files being added
 #   DOTTA_FILE_COUNT  - Number of files
+#   DOTTA_FILE_0      - First file path (0-indexed)
+#   DOTTA_FILE_1      - Second file path
+#   DOTTA_FILE_N      - Nth file path (where N = 0 to COUNT-1)
 #   DOTTA_DRY_RUN     - "1" if dry-run, "0" otherwise
-#
-# Note: Files with spaces in their names will not be properly separated in DOTTA_FILES.
 #
 
 set -euo pipefail
@@ -26,8 +26,12 @@ echo "Pre-add: Validating files before adding to profile '$DOTTA_PROFILE'..."
 echo "Checking for potential secrets..."
 secrets_found=0
 
-# Iterate through files (space-separated)
-for file in $DOTTA_FILES; do
+# Iterate through files using indexed variables (handles spaces correctly)
+for ((i=0; i<DOTTA_FILE_COUNT; i++)); do
+    # Get file path from indexed variable
+    var_name="DOTTA_FILE_$i"
+    file="${!var_name}"
+
     if [[ -f "$file" ]]; then
         # Check for common secret patterns
         if grep -qiE '(password|secret|api[_-]?key|token|private[_-]?key)' "$file" 2>/dev/null; then
@@ -59,7 +63,10 @@ fi
 
 # Example: Validate file sizes
 echo "Checking file sizes..."
-for file in $DOTTA_FILES; do
+for ((i=0; i<DOTTA_FILE_COUNT; i++)); do
+    var_name="DOTTA_FILE_$i"
+    file="${!var_name}"
+
     if [[ -f "$file" ]]; then
         size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo 0)
         # Warn if file is larger than 1MB

@@ -1529,8 +1529,8 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
 
 cleanup:
     /* Free all resources in reverse order */
-    if (profiles_str) free(profiles_str);
     if (hook_ctx) hook_context_free(hook_ctx);
+    if (profiles_str) free(profiles_str);
     if (repo_dir) free(repo_dir);
     if (new_files) new_file_list_free(new_files);
     if (modified) modified_file_list_free(modified);

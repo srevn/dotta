@@ -199,8 +199,10 @@ static error_t *check_metadata_divergence(
         return NULL;
     }
 
-    /* Check ownership (only when running as root AND metadata has ownership) */
-    bool running_as_root = (getuid() == 0);
+    /* Check ownership (only when running as root AND metadata has ownership)
+     * Use effective UID (geteuid) to check privilege, not real UID (getuid).
+     * This correctly detects whether we have the capability to read ownership. */
+    bool running_as_root = (geteuid() == 0);
     bool has_ownership = (metadata->owner != NULL || metadata->group != NULL);
 
     if (!running_as_root || !has_ownership || current_div != DIVERGENCE_CLEAN) {

@@ -1143,8 +1143,10 @@ error_t *metadata_resolve_ownership(
         return NULL;
     }
 
-    /* Only works when running as root */
-    if (getuid() != 0) {
+    /* Only works when running as root
+     * Use effective UID (geteuid) to check privilege level, not real UID (getuid).
+     * This correctly handles both sudo (real=0, effective=0) and setuid scenarios. */
+    if (geteuid() != 0) {
         return ERROR(ERR_PERMISSION,
                     "Cannot resolve ownership (not running as root)");
     }
@@ -1209,9 +1211,11 @@ error_t *metadata_capture_from_file(
         return err;
     }
 
-    /* Capture ownership ONLY for root/ prefix files when running as root */
+    /* Capture ownership ONLY for root/ prefix files when running as root
+     * Use effective UID (geteuid) to check privilege, not real UID (getuid).
+     * This ensures correct behavior for both sudo and setuid binaries. */
     bool is_root_prefix = str_starts_with(storage_path, "root/");
-    bool running_as_root = (getuid() == 0);
+    bool running_as_root = (geteuid() == 0);
 
     if (is_root_prefix && running_as_root) {
         /* Resolve UID to username */
@@ -1522,9 +1526,11 @@ error_t *metadata_capture_from_directory(
     entry->owner = NULL;  /* Set below if applicable */
     entry->group = NULL;  /* Set below if applicable */
 
-    /* Capture ownership ONLY for root/ prefix directories when running as root */
+    /* Capture ownership ONLY for root/ prefix directories when running as root
+     * Use effective UID (geteuid) to check privilege, not real UID (getuid).
+     * This ensures correct behavior for both sudo and setuid binaries. */
     bool is_root_prefix = str_starts_with(storage_prefix, "root/");
-    bool running_as_root = (getuid() == 0);
+    bool running_as_root = (geteuid() == 0);
 
     if (is_root_prefix && running_as_root) {
         /* Resolve UID to username */

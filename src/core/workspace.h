@@ -26,9 +26,17 @@
 #include "utils/config.h"
 
 /**
- * Diverged file entry
+ * Diverged item entry
  *
- * Represents a single file with divergence between the three states.
+ * Represents a single item (file or directory) with divergence between states.
+ *
+ * Items can be:
+ * - Files: Tracked in profile, deployment state, and filesystem
+ * - Directories: Tracked in profile metadata only (in_state is always false)
+ *
+ * Use in_state flag to distinguish:
+ * - Files: in_state can be true (when deployed)
+ * - Directories: in_state is always false (never in deployment state)
  */
 typedef struct {
     char *filesystem_path;      /* Target path on filesystem */
@@ -38,10 +46,10 @@ typedef struct {
 
     /* State flags */
     bool in_profile;            /* Exists in profile branch */
-    bool in_state;              /* Exists in deployment state */
+    bool in_state;              /* Exists in deployment state (files only, never true for directories) */
     bool on_filesystem;         /* Exists on actual filesystem */
     bool content_differs;       /* Content changed (if on filesystem) */
-} workspace_file_t;
+} workspace_item_t;
 
 /**
  * Workspace structure (opaque)
@@ -93,7 +101,7 @@ error_t *workspace_load(
  *
  * Returns overall cleanliness assessment:
  * - WORKSPACE_CLEAN: No divergence detected
- * - WORKSPACE_DIRTY: Has warnings (undeployed, modified, deleted files)
+ * - WORKSPACE_DIRTY: Has warnings (undeployed, modified, deleted items)
  * - WORKSPACE_INVALID: Has errors (orphaned state entries)
  *
  * @param ws Workspace (must not be NULL)
@@ -102,10 +110,10 @@ error_t *workspace_load(
 workspace_status_t workspace_get_status(const workspace_t *ws);
 
 /**
- * Get diverged files by category
+ * Get diverged items by category
  *
- * Returns a dynamically allocated array of pointers to matching diverged files.
- * The array contains only files of the specified type.
+ * Returns a dynamically allocated array of pointers to matching diverged items.
+ * The array contains only items (files or directories) of the specified type.
  *
  * The returned pointers reference the workspace's internal data and remain
  * valid until the workspace is freed. However, the array itself must be freed
@@ -114,12 +122,12 @@ workspace_status_t workspace_get_status(const workspace_t *ws);
  * @param ws Workspace (must not be NULL)
  * @param type Divergence type to query
  * @param count Output count of matching entries (must not be NULL)
- * @return Allocated array of pointers to matching files, or NULL if none match or on error.
+ * @return Allocated array of pointers to matching items, or NULL if none match or on error.
  *         Caller must free() the array (but not the pointed-to entries).
  *
  * Example:
  *   size_t count;
- *   const workspace_file_t **modified = workspace_get_diverged(ws, DIVERGENCE_MODIFIED, &count);
+ *   const workspace_item_t **modified = workspace_get_diverged(ws, DIVERGENCE_MODIFIED, &count);
  *   if (modified) {
  *       for (size_t i = 0; i < count; i++) {
  *           printf("%s\n", modified[i]->filesystem_path);
@@ -127,37 +135,37 @@ workspace_status_t workspace_get_status(const workspace_t *ws);
  *       free(modified);  // Free the pointer array only
  *   }
  */
-const workspace_file_t **workspace_get_diverged(
+const workspace_item_t **workspace_get_diverged(
     const workspace_t *ws,
     divergence_type_t type,
     size_t *count
 );
 
 /**
- * Get all diverged files
+ * Get all diverged items
  *
- * Returns array of all files with any divergence.
+ * Returns array of all items (files and directories) with any divergence.
  *
  * @param ws Workspace (must not be NULL)
  * @param count Output count (must not be NULL)
- * @return Array of files (borrowed reference, do not free)
+ * @return Array of items (borrowed reference, do not free)
  */
-const workspace_file_t *workspace_get_all_diverged(
+const workspace_item_t *workspace_get_all_diverged(
     const workspace_t *ws,
     size_t *count
 );
 
 /**
- * Check if file has divergence
+ * Check if item has divergence
  *
- * Checks if a specific file has any divergence.
+ * Checks if a specific item (file or directory) has any divergence.
  *
  * @param ws Workspace (must not be NULL)
- * @param filesystem_path File to check (must not be NULL)
+ * @param filesystem_path Item path to check (must not be NULL)
  * @param type Output divergence type (can be NULL)
  * @return true if diverged
  */
-bool workspace_file_diverged(
+bool workspace_item_diverged(
     const workspace_t *ws,
     const char *filesystem_path,
     divergence_type_t *type
@@ -188,11 +196,11 @@ error_t *workspace_validate(
 /**
  * Get divergence count by type
  *
- * Returns count of files with specified divergence.
+ * Returns count of items (files and directories) with specified divergence.
  *
  * @param ws Workspace (must not be NULL)
  * @param type Divergence type
- * @return Count of files
+ * @return Count of items
  */
 size_t workspace_count_divergence(
     const workspace_t *ws,

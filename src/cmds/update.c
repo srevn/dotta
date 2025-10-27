@@ -353,10 +353,10 @@ static error_t *find_modified_and_new_files(
     /* Process modified/deleted/mode/type changes */
     for (size_t t = 0; t < 4; t++) {
         size_t count = 0;
-        const workspace_file_t **files = workspace_get_diverged(ws, modification_types[t], &count);
+        const workspace_item_t **files = workspace_get_diverged(ws, modification_types[t], &count);
 
         for (size_t i = 0; i < count; i++) {
-            const workspace_file_t *file = files[i];
+            const workspace_item_t *file = files[i];
 
             /* Apply file filter if specified */
             if (!file_matches_filter(file->filesystem_path, opts)) {
@@ -408,10 +408,10 @@ static error_t *find_modified_and_new_files(
 
     /* Process untracked (new) files */
     size_t untracked_count = 0;
-    const workspace_file_t **untracked_files = workspace_get_diverged(ws, DIVERGENCE_UNTRACKED, &untracked_count);
+    const workspace_item_t **untracked_files = workspace_get_diverged(ws, DIVERGENCE_UNTRACKED, &untracked_count);
 
     for (size_t i = 0; i < untracked_count; i++) {
-        const workspace_file_t *file = untracked_files[i];
+        const workspace_item_t *file = untracked_files[i];
 
         /* Apply file filter if specified */
         if (!file_matches_filter(file->filesystem_path, opts)) {

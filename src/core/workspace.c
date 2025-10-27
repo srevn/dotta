@@ -53,10 +53,10 @@ struct workspace {
     hashmap_t *metadata_cache;       /* Owned - maps profile_name -> metadata_t* */
 
     /* Divergence tracking */
-    workspace_file_t *diverged;      /* Array of diverged files */
+    workspace_item_t *diverged;      /* Array of diverged items (files and directories) */
     size_t diverged_count;
     size_t diverged_capacity;
-    hashmap_t *diverged_index;       /* Maps filesystem_path -> workspace_file_t */
+    hashmap_t *diverged_index;       /* Maps filesystem_path -> workspace_item_t* */
 
     /* Divergence count cache */
     size_t divergence_counts[9];     /* Cached counts for O(1) access */
@@ -259,8 +259,8 @@ static error_t *workspace_add_diverged(
     /* Grow array if needed */
     if (ws->diverged_count >= ws->diverged_capacity) {
         size_t new_capacity = ws->diverged_capacity == 0 ? 32 : ws->diverged_capacity * 2;
-        workspace_file_t *new_diverged = realloc(ws->diverged,
-                                                  new_capacity * sizeof(workspace_file_t));
+        workspace_item_t *new_diverged = realloc(ws->diverged,
+                                                  new_capacity * sizeof(workspace_item_t));
         if (!new_diverged) {
             return ERROR(ERR_MEMORY, "Failed to grow diverged array");
         }
@@ -269,8 +269,8 @@ static error_t *workspace_add_diverged(
     }
 
     /* Add entry */
-    workspace_file_t *entry = &ws->diverged[ws->diverged_count];
-    memset(entry, 0, sizeof(workspace_file_t));
+    workspace_item_t *entry = &ws->diverged[ws->diverged_count];
+    memset(entry, 0, sizeof(workspace_item_t));
 
     entry->filesystem_path = strdup(filesystem_path);
     entry->storage_path = storage_path ? strdup(storage_path) : NULL;
@@ -596,9 +596,9 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
     bool has_warnings = false;
 
     for (size_t i = 0; i < ws->diverged_count; i++) {
-        const workspace_file_t *file = &ws->diverged[i];
+        const workspace_item_t *item = &ws->diverged[i];
 
-        switch (file->type) {
+        switch (item->type) {
             case DIVERGENCE_ORPHANED:
                 has_orphaned = true;
                 break;
@@ -1113,9 +1113,9 @@ workspace_status_t workspace_get_status(const workspace_t *ws) {
 }
 
 /**
- * Get diverged files by category
+ * Get diverged items by category
  */
-const workspace_file_t **workspace_get_diverged(
+const workspace_item_t **workspace_get_diverged(
     const workspace_t *ws,
     divergence_type_t type,
     size_t *count
@@ -1146,7 +1146,7 @@ const workspace_file_t **workspace_get_diverged(
     }
 
     /* Allocate array of pointers */
-    const workspace_file_t **result = malloc(match_count * sizeof(workspace_file_t *));
+    const workspace_item_t **result = malloc(match_count * sizeof(workspace_item_t *));
     if (!result) {
         *count = 0;
         return NULL;
@@ -1165,9 +1165,9 @@ const workspace_file_t **workspace_get_diverged(
 }
 
 /**
- * Get all diverged files
+ * Get all diverged items
  */
-const workspace_file_t *workspace_get_all_diverged(
+const workspace_item_t *workspace_get_all_diverged(
     const workspace_t *ws,
     size_t *count
 ) {
@@ -1181,9 +1181,9 @@ const workspace_file_t *workspace_get_all_diverged(
 }
 
 /**
- * Check if file has divergence
+ * Check if item has divergence
  */
-bool workspace_file_diverged(
+bool workspace_item_diverged(
     const workspace_t *ws,
     const char *filesystem_path,
     divergence_type_t *type
@@ -1193,7 +1193,7 @@ bool workspace_file_diverged(
     }
 
     /* O(1) lookup via hashmap index */
-    workspace_file_t *entry = hashmap_get(ws->diverged_index, filesystem_path);
+    workspace_item_t *entry = hashmap_get(ws->diverged_index, filesystem_path);
 
     if (entry) {
         if (type) {

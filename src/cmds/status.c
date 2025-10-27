@@ -100,7 +100,7 @@ static void display_enabled_profiles(
  */
 static void format_diverged_file(
     output_ctx_t *out,
-    const workspace_file_t *file,
+    const workspace_item_t *file,
     const char **out_label,
     output_color_t *out_color,
     char *info_buffer,
@@ -269,11 +269,11 @@ static void display_divergence_section(
 
     for (size_t t = 0; t < type_count; t++) {
         size_t count = 0;
-        const workspace_file_t **files = workspace_get_diverged(ws, types[t], &count);
+        const workspace_item_t **files = workspace_get_diverged(ws, types[t], &count);
 
         if (files) {
             for (size_t i = 0; i < count; i++) {
-                const workspace_file_t *file = files[i];
+                const workspace_item_t *file = files[i];
                 char info[1024];
                 const char *label = NULL;
                 output_color_t color = OUTPUT_COLOR_YELLOW;

@@ -383,11 +383,18 @@ static bool is_excluded(
 }
 
 /**
- * Find all modified and new files, plus modified directories
+ * Find all diverged items (files and directories)
  *
  * This function uses the workspace module to detect divergence between
- * profile state, deployment state, and filesystem state. It correctly
- * distinguishes between:
+ * profile state, deployment state, and filesystem state.
+ *
+ * Detects:
+ * - Modified files: Content, permissions, type, or ownership changes
+ * - Deleted files: Files deployed but removed from filesystem
+ * - New files: Untracked files in tracked directories
+ * - Modified directories: Permission or ownership metadata changes
+ *
+ * Divergence classification:
  * - MODIFIED: Files deployed and changed on disk (modified files)
  * - DELETED: Files deployed and removed from disk (modified files)
  * - MODE_DIFF: Files/directories with permission changes (modified files/directories)
@@ -397,19 +404,30 @@ static bool is_excluded(
  * - UNDEPLOYED: Files in profile but never deployed (skip - not a modification)
  * - ORPHANED: State cleanup issues (skip - not file updates)
  *
- * Directories are distinguished from files using the in_state flag:
- * - Files: in_state can be true (when deployed)
- * - Directories: in_state is always false (never in deployment state)
+ * Items are distinguished using workspace_item_kind_t (explicit discrimination):
+ * - WORKSPACE_ITEM_FILE: Regular file, symlink, or executable
+ * - WORKSPACE_ITEM_DIRECTORY: Directory (metadata-only, never in deployment state)
  *
- * This single workspace load efficiently provides modified files, new files, and
- * modified directories, eliminating the need for separate scanning logic.
+ * This single workspace load efficiently provides all diverged items,
+ * eliminating the need for separate scanning logic.
  *
  * The --exclude patterns are applied as a simple post-filter on the detected items.
  *
  * IMPORTANT: The workspace is returned to the caller for metadata cache reuse.
  * The caller is responsible for freeing the workspace with workspace_free().
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param profiles Resolved profile list (must not be NULL)
+ * @param config Configuration (for ignore patterns, can be NULL)
+ * @param opts Update command options (must not be NULL)
+ * @param out Output context (can be NULL)
+ * @param modified_out Modified file list (must not be NULL)
+ * @param new_out New file list (must not be NULL)
+ * @param modified_dirs_out Modified directory list (must not be NULL)
+ * @param workspace_out Workspace for cache reuse (must not be NULL)
+ * @return Error or NULL on success
  */
-static error_t *find_modified_and_new_files(
+static error_t *find_diverged_items(
     git_repository *repo,
     profile_list_t *profiles,
     const dotta_config_t *config,
@@ -1398,12 +1416,17 @@ cleanup:
 }
 
 /**
- * Display summary of files to be updated
+ * Display summary of items to be updated
+ *
+ * Shows modified files, new files, and modified directories with
+ * appropriate labels and colors. Provides complete transparency
+ * before user confirmation.
  */
 static void update_display_summary(
     output_ctx_t *out,
     const modified_file_list_t *modified,
     const new_file_list_t *new_files,
+    const modified_directory_list_t *modified_dirs,
     git_repository *repo
 ) {
     if (!out || !modified) {
@@ -1549,6 +1572,51 @@ static void update_display_summary(
         }
     }
 
+    /* Show modified directories if any */
+    if (modified_dirs && modified_dirs->count > 0) {
+        output_section(out, "Modified directories");
+
+        for (size_t i = 0; i < modified_dirs->count; i++) {
+            const modified_directory_t *dir = &modified_dirs->dirs[i];
+
+            /* Determine label and color based on divergence type */
+            const char *label = NULL;
+            output_color_t color = OUTPUT_COLOR_YELLOW;
+
+            switch (dir->status) {
+                case DIVERGENCE_MODE_DIFF:
+                    label = "[mode]";
+                    color = OUTPUT_COLOR_YELLOW;
+                    break;
+
+                case DIVERGENCE_OWNERSHIP:
+                    label = "[ownership]";
+                    color = OUTPUT_COLOR_MAGENTA;  /* More prominent - requires privilege */
+                    break;
+
+                case DIVERGENCE_DELETED:
+                    label = "[deleted]";
+                    color = OUTPUT_COLOR_RED;
+                    break;
+
+                default:
+                    label = "[metadata]";
+                    color = OUTPUT_COLOR_YELLOW;
+                    break;
+            }
+
+            /* Build info string with profile context and trailing slash */
+            char info[1024];
+            snprintf(info, sizeof(info), "%s/ %s(directory in %s)%s",
+                    dir->filesystem_path,
+                    output_color_code(out, OUTPUT_COLOR_DIM),
+                    dir->source_profile->name,
+                    output_color_code(out, OUTPUT_COLOR_RESET));
+
+            output_item(out, label, color, info);
+        }
+    }
+
     output_newline(out);
 }
 
@@ -1573,6 +1641,7 @@ static error_t *update_confirm_operation(
     const cmd_update_options_t *opts,
     const modified_file_list_t *modified,
     const new_file_list_t *new_files,
+    const modified_directory_list_t *modified_dirs,
     const dotta_config_t *config,
     confirm_result_t *result
 ) {
@@ -1586,16 +1655,26 @@ static error_t *update_confirm_operation(
     /* Dry run - just show and exit */
     if (opts->dry_run) {
         size_t new_count = new_files ? new_files->count : 0;
-        output_info(out, "Dry run: would update %zu modified file%s and add %zu new file%s",
-                   modified->count, modified->count == 1 ? "" : "s",
-                   new_count, new_count == 1 ? "" : "s");
+        size_t dir_count = modified_dirs ? modified_dirs->count : 0;
+
+        /* Build comprehensive dry-run message */
+        if (dir_count > 0) {
+            output_info(out, "Dry run: would update %zu file%s, %zu director%s, and add %zu new file%s",
+                       modified->count, modified->count == 1 ? "" : "s",
+                       dir_count, dir_count == 1 ? "y" : "ies",
+                       new_count, new_count == 1 ? "" : "s");
+        } else {
+            output_info(out, "Dry run: would update %zu modified file%s and add %zu new file%s",
+                       modified->count, modified->count == 1 ? "" : "s",
+                       new_count, new_count == 1 ? "" : "s");
+        }
         *result = CONFIRM_DRY_RUN;
         return NULL;
     }
 
     /* Interactive confirmation */
     if (opts->interactive) {
-        printf("Update these files? [y/N] ");
+        printf("Update these items? [y/N] ");
         fflush(stdout);
 
         char response[10];
@@ -1635,6 +1714,7 @@ static error_t *update_confirm_operation(
  * Execute profile updates for all profiles
  *
  * @param ws Workspace for metadata cache access (can be NULL)
+ * @param total_updated Output: total items (files + directories) updated across all profiles (must not be NULL)
  */
 static error_t *update_execute_for_all_profiles(
     git_repository *repo,
@@ -1764,12 +1844,13 @@ static error_t *update_execute_for_all_profiles(
             return error_wrap(err, "Failed to update profile '%s'", profile->name);
         }
 
-        *total_updated += total_file_count;
+        /* Count all items (files + directories) */
+        size_t profile_total = total_file_count + profile_dir_count;
+        *total_updated += profile_total;
 
         if (!opts->verbose) {
-            size_t total_items = total_file_count + profile_dir_count;
             output_success(out, "  Updated %zu item%s",
-                          total_items, total_items == 1 ? "" : "s");
+                          profile_total, profile_total == 1 ? "" : "s");
         }
     }
 
@@ -1883,9 +1964,9 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     /* Determine if we should detect new files */
     should_detect_new = opts->include_new || opts->only_new || config->auto_detect_new_files;
 
-    /* Find diverged files and directories using unified workspace analysis
+    /* Find all diverged items (files and directories) using unified workspace analysis
      * Returns workspace for metadata cache reuse during profile updates */
-    err = find_modified_and_new_files(repo, profiles, config, opts, out, &modified, &new_files, &modified_dirs, &ws);
+    err = find_diverged_items(repo, profiles, config, opts, out, &modified, &new_files, &modified_dirs, &ws);
     if (err) {
         err = error_wrap(err, "Failed to analyze divergence");
         goto cleanup;
@@ -1974,12 +2055,12 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
         /* If we reach here, privileges are OK - proceed with operation */
     }
 
-    /* Display summary of files to update */
-    update_display_summary(out, modified, new_files, repo);
+    /* Display summary of items to update */
+    update_display_summary(out, modified, new_files, modified_dirs, repo);
 
     /* Handle user confirmations */
     confirm_result_t confirm_result;
-    err = update_confirm_operation(out, opts, modified, new_files, config, &confirm_result);
+    err = update_confirm_operation(out, opts, modified, new_files, modified_dirs, config, &confirm_result);
     if (err) {
         goto cleanup;
     }
@@ -2036,7 +2117,7 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
 
     /* Summary */
     output_newline(out);
-    output_success(out, "Updated %zu file%s across %zu profile%s",
+    output_success(out, "Updated %zu item%s across %zu profile%s",
                    total_updated, total_updated == 1 ? "" : "s",
                    profiles->count, profiles->count == 1 ? "" : "s");
 

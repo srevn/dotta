@@ -26,7 +26,7 @@
 #include "utils/array.h"
 
 /* Schema version - must match database */
-#define STATE_SCHEMA_VERSION "1"
+#define STATE_SCHEMA_VERSION "2"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -57,6 +57,11 @@ struct state {
     sqlite3_stmt *stmt_file_exists;     /* SELECT 1 FROM deployed_files */
     sqlite3_stmt *stmt_get_file;        /* SELECT * FROM deployed_files */
     sqlite3_stmt *stmt_insert_profile;  /* INSERT INTO enabled_profiles */
+
+    /* Directory prepared statements */
+    sqlite3_stmt *stmt_insert_directory;           /* INSERT OR REPLACE tracked_directories */
+    sqlite3_stmt *stmt_get_all_directories;        /* SELECT * FROM tracked_directories */
+    sqlite3_stmt *stmt_get_directories_by_profile; /* SELECT * WHERE profile = ? */
 };
 
 /**
@@ -153,7 +158,22 @@ static error_t *initialize_schema(sqlite3 *db) {
         "ON deployed_files(profile);"
 
         "CREATE INDEX IF NOT EXISTS idx_deployed_storage "
-        "ON deployed_files(storage_path);";
+        "ON deployed_files(storage_path);"
+
+        /* Tracked directories table */
+        "CREATE TABLE IF NOT EXISTS tracked_directories ("
+        "    directory_path TEXT PRIMARY KEY,"
+        "    storage_prefix TEXT NOT NULL,"
+        "    profile TEXT NOT NULL,"
+        "    added_at INTEGER NOT NULL,"
+        "    mode TEXT,"
+        "    owner TEXT,"
+        "    \"group\" TEXT,"
+        "    deployed_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))"
+        ") STRICT;"
+
+        "CREATE INDEX IF NOT EXISTS idx_tracked_directories_profile "
+        "ON tracked_directories(profile);";
 
     /* Execute schema SQL */
     rc = sqlite3_exec(db, schema_sql, NULL, NULL, &errmsg);
@@ -476,6 +496,22 @@ static void finalize_statements(state_t *state) {
     if (state->stmt_insert_profile) {
         sqlite3_finalize(state->stmt_insert_profile);
         state->stmt_insert_profile = NULL;
+    }
+
+    /* Directory statements */
+    if (state->stmt_insert_directory) {
+        sqlite3_finalize(state->stmt_insert_directory);
+        state->stmt_insert_directory = NULL;
+    }
+
+    if (state->stmt_get_all_directories) {
+        sqlite3_finalize(state->stmt_get_all_directories);
+        state->stmt_get_all_directories = NULL;
+    }
+
+    if (state->stmt_get_directories_by_profile) {
+        sqlite3_finalize(state->stmt_get_directories_by_profile);
+        state->stmt_get_directories_by_profile = NULL;
     }
 }
 
@@ -1073,6 +1109,367 @@ error_t *state_clear_files(state_t *state) {
     }
 
     return NULL;
+}
+
+/**
+ * Create state directory entry from metadata item
+ *
+ * Converts metadata representation to state representation.
+ * Copies all fields and adds profile association.
+ *
+ * @param meta_item Metadata item (must not be NULL, must be DIRECTORY kind)
+ * @param profile_name Source profile name (must not be NULL)
+ * @param out State directory entry (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+error_t *state_directory_entry_create_from_metadata(
+    const metadata_item_t *meta_item,
+    const char *profile_name,
+    state_directory_entry_t **out
+) {
+    CHECK_NULL(meta_item);
+    CHECK_NULL(profile_name);
+    CHECK_NULL(out);
+
+    /* Validate that this is a directory item */
+    if (meta_item->kind != METADATA_ITEM_DIRECTORY) {
+        return ERROR(ERR_INVALID_ARG, "Expected DIRECTORY metadata item, got %s",
+                     meta_item->kind == METADATA_ITEM_FILE ? "FILE" : "UNKNOWN");
+    }
+
+    state_directory_entry_t *entry = calloc(1, sizeof(state_directory_entry_t));
+    if (!entry) {
+        return ERROR(ERR_MEMORY, "Failed to allocate state directory entry");
+    }
+
+    /* Copy filesystem path (stored in key for directories) */
+    entry->directory_path = strdup(meta_item->key);
+    if (!entry->directory_path) {
+        free(entry);
+        return ERROR(ERR_MEMORY, "Failed to copy directory path");
+    }
+
+    /* Copy storage prefix (from union) */
+    entry->storage_prefix = strdup(meta_item->directory.storage_prefix);
+    if (!entry->storage_prefix) {
+        free(entry->directory_path);
+        free(entry);
+        return ERROR(ERR_MEMORY, "Failed to copy storage prefix");
+    }
+
+    /* Copy profile name */
+    entry->profile = strdup(profile_name);
+    if (!entry->profile) {
+        free(entry->storage_prefix);
+        free(entry->directory_path);
+        free(entry);
+        return ERROR(ERR_MEMORY, "Failed to copy profile name");
+    }
+
+    /* Copy metadata fields (from union and top-level) */
+    entry->added_at = meta_item->directory.added_at;
+    entry->mode = meta_item->mode;
+
+    /* Copy owner (optional) */
+    if (meta_item->owner) {
+        entry->owner = strdup(meta_item->owner);
+        if (!entry->owner) {
+            free(entry->profile);
+            free(entry->storage_prefix);
+            free(entry->directory_path);
+            free(entry);
+            return ERROR(ERR_MEMORY, "Failed to copy owner");
+        }
+    }
+
+    /* Copy group (optional) */
+    if (meta_item->group) {
+        entry->group = strdup(meta_item->group);
+        if (!entry->group) {
+            free(entry->owner);
+            free(entry->profile);
+            free(entry->storage_prefix);
+            free(entry->directory_path);
+            free(entry);
+            return ERROR(ERR_MEMORY, "Failed to copy group");
+        }
+    }
+
+    *out = entry;
+    return NULL;
+}
+
+/**
+ * Add directory entry to state
+ *
+ * Uses prepared statement for performance.
+ * Replaces existing entry if directory_path already exists.
+ *
+ * @param state State (must not be NULL)
+ * @param entry Directory entry (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_add_directory(state_t *state, const state_directory_entry_t *entry) {
+    CHECK_NULL(state);
+    CHECK_NULL(entry);
+    CHECK_NULL(entry->directory_path);
+    CHECK_NULL(entry->storage_prefix);
+    CHECK_NULL(entry->profile);
+
+    /* Prepare statement if not already prepared */
+    if (!state->stmt_insert_directory) {
+        const char *sql =
+            "INSERT OR REPLACE INTO tracked_directories "
+            "(directory_path, storage_prefix, profile, added_at, mode, owner, \"group\") "
+            "VALUES (?, ?, ?, ?, ?, ?, ?);";
+
+        int rc = sqlite3_prepare_v2(state->db, sql, -1, &state->stmt_insert_directory, NULL);
+        if (rc != SQLITE_OK) {
+            return sqlite_error(state->db, "Failed to prepare insert directory statement");
+        }
+    }
+
+    sqlite3_stmt *stmt = state->stmt_insert_directory;
+
+    /* Bind parameters */
+    sqlite3_bind_text(stmt, 1, entry->directory_path, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, entry->storage_prefix, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 3, entry->profile, -1, SQLITE_STATIC);
+    sqlite3_bind_int64(stmt, 4, entry->added_at);
+
+    /* Mode (optional) */
+    if (entry->mode != 0) {
+        char mode_str[5];
+        snprintf(mode_str, sizeof(mode_str), "%04o", (unsigned int)(entry->mode & 0777));
+        sqlite3_bind_text(stmt, 5, mode_str, -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(stmt, 5);
+    }
+
+    /* Owner (optional) */
+    if (entry->owner) {
+        sqlite3_bind_text(stmt, 6, entry->owner, -1, SQLITE_STATIC);
+    } else {
+        sqlite3_bind_null(stmt, 6);
+    }
+
+    /* Group (optional) */
+    if (entry->group) {
+        sqlite3_bind_text(stmt, 7, entry->group, -1, SQLITE_STATIC);
+    } else {
+        sqlite3_bind_null(stmt, 7);
+    }
+
+    /* Execute */
+    int rc = sqlite3_step(stmt);
+    sqlite3_reset(stmt);
+
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to insert directory");
+    }
+
+    return NULL;
+}
+
+/**
+ * Get all tracked directories
+ *
+ * Returns allocated array that caller must free with state_free_all_directories().
+ *
+ * @param state State (must not be NULL)
+ * @param out Output array (must not be NULL)
+ * @param count Output count (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_get_all_directories(
+    const state_t *state,
+    state_directory_entry_t **out,
+    size_t *count
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(out);
+    CHECK_NULL(count);
+
+    *out = NULL;
+    *count = 0;
+
+    /* Prepare statement if needed (const cast is safe for read-only ops) */
+    state_t *mutable_state = (state_t *)state;
+    if (!mutable_state->stmt_get_all_directories) {
+        const char *sql =
+            "SELECT directory_path, storage_prefix, profile, added_at, mode, owner, \"group\" "
+            "FROM tracked_directories "
+            "ORDER BY directory_path;";
+
+        int rc = sqlite3_prepare_v2(mutable_state->db, sql, -1,
+                                     &mutable_state->stmt_get_all_directories, NULL);
+        if (rc != SQLITE_OK) {
+            return sqlite_error(mutable_state->db,
+                "Failed to prepare get all directories statement");
+        }
+    }
+
+    sqlite3_stmt *stmt = mutable_state->stmt_get_all_directories;
+
+    /* Dynamic array for results */
+    size_t capacity = 16;
+    state_directory_entry_t *entries = malloc(capacity * sizeof(state_directory_entry_t));
+    if (!entries) {
+        sqlite3_reset(stmt);
+        return ERROR(ERR_MEMORY, "Failed to allocate directories array");
+    }
+
+    size_t entry_count = 0;
+
+    /* Iterate rows */
+    while (true) {
+        int rc = sqlite3_step(stmt);
+        if (rc == SQLITE_DONE) {
+            break;
+        }
+        if (rc != SQLITE_ROW) {
+            /* Cleanup on error */
+            for (size_t i = 0; i < entry_count; i++) {
+                free(entries[i].directory_path);
+                free(entries[i].storage_prefix);
+                free(entries[i].profile);
+                free(entries[i].owner);
+                free(entries[i].group);
+            }
+            free(entries);
+            sqlite3_reset(stmt);
+            return sqlite_error(mutable_state->db, "Failed to query directories");
+        }
+
+        /* Grow array if needed */
+        if (entry_count >= capacity) {
+            capacity *= 2;
+            state_directory_entry_t *new_entries = realloc(entries,
+                                                            capacity * sizeof(state_directory_entry_t));
+            if (!new_entries) {
+                /* Cleanup on error */
+                for (size_t i = 0; i < entry_count; i++) {
+                    free(entries[i].directory_path);
+                    free(entries[i].storage_prefix);
+                    free(entries[i].profile);
+                    free(entries[i].owner);
+                    free(entries[i].group);
+                }
+                free(entries);
+                sqlite3_reset(stmt);
+                return ERROR(ERR_MEMORY, "Failed to grow directories array");
+            }
+            entries = new_entries;
+        }
+
+        /* Parse row */
+        state_directory_entry_t *entry = &entries[entry_count];
+        memset(entry, 0, sizeof(state_directory_entry_t));
+
+        /* directory_path (column 0) */
+        const char *dir_path = (const char *)sqlite3_column_text(stmt, 0);
+        entry->directory_path = strdup(dir_path ? dir_path : "");
+
+        /* storage_prefix (column 1) */
+        const char *storage = (const char *)sqlite3_column_text(stmt, 1);
+        entry->storage_prefix = strdup(storage ? storage : "");
+
+        /* profile (column 2) */
+        const char *profile = (const char *)sqlite3_column_text(stmt, 2);
+        entry->profile = strdup(profile ? profile : "");
+
+        /* added_at (column 3) */
+        entry->added_at = sqlite3_column_int64(stmt, 3);
+
+        /* mode (column 4, optional) */
+        const char *mode_str = (const char *)sqlite3_column_text(stmt, 4);
+        if (mode_str) {
+            unsigned int mode_val;
+            if (sscanf(mode_str, "%o", &mode_val) == 1) {
+                entry->mode = (mode_t)(mode_val & 0777);
+            }
+        }
+
+        /* owner (column 5, optional) */
+        const char *owner = (const char *)sqlite3_column_text(stmt, 5);
+        if (owner) {
+            entry->owner = strdup(owner);
+        }
+
+        /* group (column 6, optional) */
+        const char *group = (const char *)sqlite3_column_text(stmt, 6);
+        if (group) {
+            entry->group = strdup(group);
+        }
+
+        entry_count++;
+    }
+
+    sqlite3_reset(stmt);
+
+    *out = entries;
+    *count = entry_count;
+    return NULL;
+}
+
+/**
+ * Clear all directory entries
+ *
+ * Efficiently truncates tracked_directories table.
+ *
+ * @param state State (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_clear_directories(state_t *state) {
+    CHECK_NULL(state);
+    CHECK_NULL(state->db);
+
+    char *errmsg = NULL;
+    int rc = sqlite3_exec(state->db, "DELETE FROM tracked_directories;", NULL, NULL, &errmsg);
+    if (rc != SQLITE_OK) {
+        error_t *err = ERROR(ERR_STATE_INVALID,
+            "Failed to clear tracked directories: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc));
+        sqlite3_free(errmsg);
+        return err;
+    }
+
+    return NULL;
+}
+
+/**
+ * Free single directory entry
+ */
+void state_free_directory_entry(state_directory_entry_t *entry) {
+    if (!entry) {
+        return;
+    }
+
+    free(entry->directory_path);
+    free(entry->storage_prefix);
+    free(entry->profile);
+    free(entry->owner);
+    free(entry->group);
+    free(entry);
+}
+
+/**
+ * Free array of directory entries
+ */
+void state_free_all_directories(state_directory_entry_t *entries, size_t count) {
+    if (!entries) {
+        return;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        free(entries[i].directory_path);
+        free(entries[i].storage_prefix);
+        free(entries[i].profile);
+        free(entries[i].owner);
+        free(entries[i].group);
+    }
+
+    free(entries);
 }
 
 /**

@@ -30,6 +30,7 @@
 #include <git2.h>
 #include <time.h>
 
+#include "metadata.h"
 #include "types.h"
 
 /**
@@ -52,6 +53,19 @@ typedef struct {
     char *hash;              /* Content hash (sha256:...) */
     char *mode;              /* Permission mode (e.g., "0644") */
 } state_file_entry_t;
+
+/**
+ * State directory entry
+ */
+typedef struct {
+    char *directory_path;     /* Filesystem path */
+    char *storage_prefix;     /* Storage prefix */
+    char *profile;            /* Source profile */
+    time_t added_at;          /* When added (from metadata) */
+    mode_t mode;              /* Permissions */
+    char *owner;              /* Owner (optional) */
+    char *group;              /* Group (optional) */
+} state_directory_entry_t;
 
 /**
  * State structure (opaque)
@@ -297,5 +311,73 @@ error_t *state_create_entry(
  * @param entry Entry to free (can be NULL)
  */
 void state_free_entry(state_file_entry_t *entry);
+
+/**
+ * Create state directory entry from metadata item
+ *
+ * @param meta_item Metadata item (must not be NULL, must be DIRECTORY kind)
+ * @param profile_name Source profile name (must not be NULL)
+ * @param out State directory entry (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+error_t *state_directory_entry_create_from_metadata(
+    const metadata_item_t *meta_item,
+    const char *profile_name,
+    state_directory_entry_t **out
+);
+
+/**
+ * Add directory entry to state
+ *
+ * @param state State (must not be NULL)
+ * @param entry Directory entry (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_add_directory(
+    state_t *state,
+    const state_directory_entry_t *entry
+);
+
+/**
+ * Get all tracked directories
+ *
+ * Returns allocated array that caller must free with state_free_all_directories().
+ *
+ * @param state State (must not be NULL)
+ * @param out Output array (must not be NULL)
+ * @param count Output count (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_get_all_directories(
+    const state_t *state,
+    state_directory_entry_t **out,
+    size_t *count
+);
+
+/**
+ * Clear all tracked directories
+ *
+ * @param state State (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_clear_directories(state_t *state);
+
+/**
+ * Free single directory entry
+ *
+ * @param entry Entry to free (can be NULL)
+ */
+void state_free_directory_entry(state_directory_entry_t *entry);
+
+/**
+ * Free array of directory entries
+ *
+ * @param entries Array to free (can be NULL)
+ * @param count Number of entries in array
+ */
+void state_free_all_directories(
+    state_directory_entry_t *entries,
+    size_t count
+);
 
 #endif /* DOTTA_STATE_H */

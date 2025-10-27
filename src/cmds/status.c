@@ -97,6 +97,7 @@ static void display_enabled_profiles(
  * Format a diverged item entry for display
  *
  * Returns the label, color, and formatted info string for an item (file or directory).
+ * Supports composite labels showing multiple metadata divergences (e.g., "[mode] [ownership]").
  */
 static void format_diverged_item(
     output_ctx_t *out,
@@ -110,9 +111,14 @@ static void format_diverged_item(
         return;
     }
 
+    /* Static buffer for composite label (reused across calls, safe for single-threaded CLI) */
+    static char label_buffer[256];
+    size_t offset = 0;
+
+    /* Build primary divergence label */
     switch (item->type) {
         case DIVERGENCE_UNDEPLOYED:
-            *out_label = "[undeployed]";
+            offset += snprintf(label_buffer + offset, sizeof(label_buffer) - offset, "[undeployed]");
             *out_color = OUTPUT_COLOR_CYAN;
             snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
                     item->filesystem_path,
@@ -122,7 +128,7 @@ static void format_diverged_item(
             break;
 
         case DIVERGENCE_MODIFIED:
-            *out_label = "[modified]";
+            offset += snprintf(label_buffer + offset, sizeof(label_buffer) - offset, "[modified]");
             *out_color = OUTPUT_COLOR_YELLOW;
             snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
                     item->filesystem_path,
@@ -132,7 +138,7 @@ static void format_diverged_item(
             break;
 
         case DIVERGENCE_DELETED:
-            *out_label = "[deleted]";
+            offset += snprintf(label_buffer + offset, sizeof(label_buffer) - offset, "[deleted]");
             *out_color = OUTPUT_COLOR_RED;
             snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
                     item->filesystem_path,
@@ -142,7 +148,7 @@ static void format_diverged_item(
             break;
 
         case DIVERGENCE_UNTRACKED:
-            *out_label = "[new]";
+            offset += snprintf(label_buffer + offset, sizeof(label_buffer) - offset, "[new]");
             *out_color = OUTPUT_COLOR_CYAN;
             snprintf(info_buffer, buffer_size, "%s %s(in %s)%s",
                     item->filesystem_path,
@@ -152,7 +158,7 @@ static void format_diverged_item(
             break;
 
         case DIVERGENCE_ORPHANED:
-            *out_label = "[orphaned]";
+            offset += snprintf(label_buffer + offset, sizeof(label_buffer) - offset, "[orphaned]");
             *out_color = OUTPUT_COLOR_RED;
             snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
                     item->filesystem_path,
@@ -162,7 +168,7 @@ static void format_diverged_item(
             break;
 
         case DIVERGENCE_MODE_DIFF:
-            *out_label = "[mode]";
+            offset += snprintf(label_buffer + offset, sizeof(label_buffer) - offset, "[mode]");
             *out_color = OUTPUT_COLOR_YELLOW;
             snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
                     item->filesystem_path,
@@ -172,7 +178,7 @@ static void format_diverged_item(
             break;
 
         case DIVERGENCE_TYPE_DIFF:
-            *out_label = "[type]";
+            offset += snprintf(label_buffer + offset, sizeof(label_buffer) - offset, "[type]");
             *out_color = OUTPUT_COLOR_RED;
             snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
                     item->filesystem_path,
@@ -182,7 +188,7 @@ static void format_diverged_item(
             break;
 
         case DIVERGENCE_ENCRYPTION:
-            *out_label = "[unencrypted]";
+            offset += snprintf(label_buffer + offset, sizeof(label_buffer) - offset, "[unencrypted]");
             *out_color = OUTPUT_COLOR_MAGENTA;
             snprintf(info_buffer, buffer_size, "%s %s(should be encrypted, from %s)%s",
                     item->filesystem_path,
@@ -192,7 +198,7 @@ static void format_diverged_item(
             break;
 
         case DIVERGENCE_OWNERSHIP:
-            *out_label = "[ownership]";
+            offset += snprintf(label_buffer + offset, sizeof(label_buffer) - offset, "[ownership]");
             *out_color = OUTPUT_COLOR_YELLOW;
             snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
                     item->filesystem_path,
@@ -202,11 +208,22 @@ static void format_diverged_item(
             break;
 
         default:
-            *out_label = "[unknown]";
+            offset += snprintf(label_buffer + offset, sizeof(label_buffer) - offset, "[unknown]");
             *out_color = OUTPUT_COLOR_DIM;
             snprintf(info_buffer, buffer_size, "%s", item->filesystem_path);
             break;
     }
+
+    /* Add secondary metadata labels if not already shown as primary */
+    if (item->mode_differs && item->type != DIVERGENCE_MODE_DIFF && offset < sizeof(label_buffer)) {
+        offset += snprintf(label_buffer + offset, sizeof(label_buffer) - offset, " [mode]");
+    }
+    if (item->ownership_differs && item->type != DIVERGENCE_OWNERSHIP && offset < sizeof(label_buffer)) {
+        offset += snprintf(label_buffer + offset, sizeof(label_buffer) - offset, " [ownership]");
+    }
+
+    /* Point out_label to the composite buffer */
+    *out_label = label_buffer;
 }
 
 /**

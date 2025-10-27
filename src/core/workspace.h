@@ -54,6 +54,10 @@ typedef struct {
     bool in_state;              /* Exists in deployment state (only meaningful for FILES) */
     bool on_filesystem;         /* Exists on actual filesystem */
     bool content_differs;       /* Content changed (only meaningful for FILES) */
+
+    /* Secondary metadata divergences (can both be true simultaneously) */
+    bool mode_differs;          /* Permissions/mode changed from metadata */
+    bool ownership_differs;     /* Owner/group changed from metadata (requires root) */
 } workspace_item_t;
 
 /**

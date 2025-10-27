@@ -60,7 +60,7 @@ struct workspace {
     hashmap_t *diverged_index;       /* Maps filesystem_path -> workspace_item_t* */
 
     /* Divergence count cache */
-    size_t divergence_counts[9];     /* Cached counts for O(1) access */
+    size_t divergence_counts[10];    /* Cached counts for O(1) access (enum has values 0-9) */
 
     /* Status cache */
     workspace_status_t status;
@@ -145,8 +145,8 @@ static error_t *workspace_create_empty(
     ws->diverged_count = 0;
     ws->diverged_capacity = 0;
 
-    /* Initialize divergence count cache */
-    for (size_t i = 0; i < 9; i++) {
+    /* Initialize divergence count cache (10 divergence types: 0-9) */
+    for (size_t i = 0; i < 10; i++) {
         ws->divergence_counts[i] = 0;
     }
 
@@ -161,14 +161,17 @@ static error_t *workspace_create_empty(
  * Check for metadata (mode and ownership) divergence (optimized with stat propagation)
  *
  * Compares filesystem metadata with stored metadata to detect changes in
- * permissions (mode) and ownership (user/group). Ownership checks only run
- * when executing as root and metadata contains ownership information.
+ * permissions (mode) and ownership (user/group). Always checks both mode and
+ * ownership independently, setting flags for each. Only updates the primary
+ * divergence type if starting from DIVERGENCE_CLEAN.
  *
  * @param metadata Metadata entry for the file (must not be NULL)
  * @param fs_path Filesystem path to check (must not be NULL)
  * @param st File stat data (must not be NULL, pre-captured by caller)
- * @param current_div Current divergence type (may be overridden)
+ * @param current_div Current divergence type (may be overridden if CLEAN)
  * @param out_div Output divergence type (must not be NULL)
+ * @param out_mode_differs Output flag for mode divergence (must not be NULL)
+ * @param out_ownership_differs Output flag for ownership divergence (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *check_metadata_divergence(
@@ -176,65 +179,73 @@ static error_t *check_metadata_divergence(
     const char *fs_path,
     const struct stat *st,
     divergence_type_t current_div,
-    divergence_type_t *out_div
+    divergence_type_t *out_div,
+    bool *out_mode_differs,
+    bool *out_ownership_differs
 ) {
     CHECK_NULL(metadata);
     CHECK_NULL(fs_path);
     CHECK_NULL(st);
     CHECK_NULL(out_div);
+    CHECK_NULL(out_mode_differs);
+    CHECK_NULL(out_ownership_differs);
 
-    /* Start with current divergence */
+    /* Start with current divergence and clear flags */
     *out_div = current_div;
+    *out_mode_differs = false;
+    *out_ownership_differs = false;
 
     /* Use provided stat (no syscall - caller already stat'd via compare) */
     mode_t actual_mode = st->st_mode & 0777;
 
     /* Check full mode (all permission bits, not just executable) */
     if (actual_mode != metadata->mode) {
-        *out_div = DIVERGENCE_MODE_DIFF;
-        /* Don't check ownership if mode differs (priority: mode > ownership) */
-        return NULL;
+        *out_mode_differs = true;
+        /* Only update primary divergence if currently CLEAN */
+        if (current_div == DIVERGENCE_CLEAN) {
+            *out_div = DIVERGENCE_MODE_DIFF;
+        }
     }
 
-    /* Check ownership (only when running as root AND metadata has ownership)
+    /* Check ownership (always check, no early return)
+     * Only when running as root AND metadata has ownership.
      * Use effective UID (geteuid) to check privilege, not real UID (getuid).
      * This correctly detects whether we have the capability to read ownership. */
     bool running_as_root = (geteuid() == 0);
     bool has_ownership = (metadata->owner != NULL || metadata->group != NULL);
 
-    if (!running_as_root || !has_ownership || current_div != DIVERGENCE_CLEAN) {
-        /* Skip ownership check if:
-         * - Not running as root (can't access ownership reliably)
-         * - No ownership in metadata (nothing to compare)
-         * - Already have a divergence (don't override) */
-        return NULL;
-    }
+    if (running_as_root && has_ownership) {
+        bool ownership_differs = false;
 
-    /* Check owner if metadata has it */
-    bool ownership_differs = false;
-    if (metadata->owner) {
-        struct passwd *pwd = getpwuid(st->st_uid);
-        if (pwd && pwd->pw_name) {
-            if (strcmp(metadata->owner, pwd->pw_name) != 0) {
-                ownership_differs = true;
+        /* Check owner if metadata has it */
+        if (metadata->owner) {
+            struct passwd *pwd = getpwuid(st->st_uid);
+            if (pwd && pwd->pw_name) {
+                if (strcmp(metadata->owner, pwd->pw_name) != 0) {
+                    ownership_differs = true;
+                }
+            }
+            /* If getpwuid fails, skip check (graceful degradation) */
+        }
+
+        /* Check group if metadata has it (check even if owner differs) */
+        if (metadata->group && !ownership_differs) {
+            struct group *grp = getgrgid(st->st_gid);
+            if (grp && grp->gr_name) {
+                if (strcmp(metadata->group, grp->gr_name) != 0) {
+                    ownership_differs = true;
+                }
+            }
+            /* If getgrgid fails, skip check (graceful degradation) */
+        }
+
+        if (ownership_differs) {
+            *out_ownership_differs = true;
+            /* Only update primary divergence if currently CLEAN and mode didn't change */
+            if (current_div == DIVERGENCE_CLEAN && !(*out_mode_differs)) {
+                *out_div = DIVERGENCE_OWNERSHIP;
             }
         }
-        /* If getpwuid fails, skip check (graceful degradation) */
-    }
-
-    /* Check group if metadata has it and owner check didn't fail */
-    if (metadata->group && !ownership_differs) {
-        struct group *grp = getgrgid(st->st_gid);
-        if (grp && grp->gr_name) {
-            if (strcmp(metadata->group, grp->gr_name) != 0) {
-                ownership_differs = true;
-            }
-        }
-        /* If getgrgid fails, skip check (graceful degradation) */
-    }
-
-    if (ownership_differs) {
-        *out_div = DIVERGENCE_OWNERSHIP;
     }
 
     return NULL;
@@ -247,6 +258,8 @@ static error_t *check_metadata_divergence(
  *
  * @param item_kind Explicit type (FILE or DIRECTORY)
  * @param in_state Must be false for directories (invariant enforced)
+ * @param mode_differs Flag indicating mode/permissions divergence
+ * @param ownership_differs Flag indicating ownership divergence
  */
 static error_t *workspace_add_diverged(
     workspace_t *ws,
@@ -258,7 +271,9 @@ static error_t *workspace_add_diverged(
     bool in_profile,
     bool in_state,
     bool on_filesystem,
-    bool content_differs
+    bool content_differs,
+    bool mode_differs,
+    bool ownership_differs
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(filesystem_path);
@@ -295,6 +310,8 @@ static error_t *workspace_add_diverged(
     entry->in_state = in_state;
     entry->on_filesystem = on_filesystem;
     entry->content_differs = content_differs;
+    entry->mode_differs = mode_differs;
+    entry->ownership_differs = ownership_differs;
 
     if (!entry->filesystem_path ||
         (storage_path && !entry->storage_path) ||
@@ -316,8 +333,8 @@ static error_t *workspace_add_diverged(
 
     ws->diverged_count++;
 
-    /* Update divergence count cache */
-    if (type < 9) {  /* Bounds check */
+    /* Update divergence count cache (valid range: 0-9) */
+    if (type <= DIVERGENCE_OWNERSHIP) {
         ws->divergence_counts[type]++;
     }
 
@@ -413,46 +430,48 @@ static error_t *analyze_file_divergence(
         /* Determine base divergence from content comparison */
         switch (cmp_result) {
             case CMP_EQUAL:
-                /* Content equal - check metadata before declaring clean */
+                /* Content equal - will check metadata below */
                 div_type = DIVERGENCE_CLEAN;
                 content_differs = false;
                 break;
 
             case CMP_DIFFERENT:
-                /* Content differs - high priority, return immediately */
+                /* Content differs - still check metadata below for complete picture */
                 div_type = DIVERGENCE_MODIFIED;
                 content_differs = true;
-                return workspace_add_diverged(ws, fs_path, storage_path, profile,
-                                             div_type, WORKSPACE_ITEM_FILE,
-                                             in_profile, in_state,
-                                             on_filesystem, content_differs);
+                break;
 
             case CMP_MODE_DIFF:
-                /* Executable bit differs - check full mode below */
-                div_type = DIVERGENCE_MODE_DIFF;
+                /* Executable bit differs - full metadata check below will detect this */
+                div_type = DIVERGENCE_CLEAN;
                 content_differs = false;
                 break;
 
             case CMP_TYPE_DIFF:
-                /* Type differs - high priority, return immediately */
+                /* Type differs - metadata irrelevant, return immediately */
                 div_type = DIVERGENCE_TYPE_DIFF;
                 content_differs = true;
                 return workspace_add_diverged(ws, fs_path, storage_path, profile,
                                              div_type, WORKSPACE_ITEM_FILE,
                                              in_profile, in_state,
-                                             on_filesystem, content_differs);
+                                             on_filesystem, content_differs,
+                                             false, false);  /* No metadata check for type change */
 
             case CMP_MISSING:
-                /* File missing - high priority, return immediately */
+                /* File missing - can't check metadata, return immediately */
                 div_type = DIVERGENCE_DELETED;
                 content_differs = false;
                 return workspace_add_diverged(ws, fs_path, storage_path, profile,
                                              div_type, WORKSPACE_ITEM_FILE,
                                              in_profile, in_state,
-                                             on_filesystem, content_differs);
+                                             on_filesystem, content_differs,
+                                             false, false);  /* No metadata check for missing file */
         }
 
-        /* Content is equal or only executable bit differs - check full metadata */
+        /* Check metadata for all cases that reach here (including content modifications) */
+        bool mode_differs = false;
+        bool ownership_differs = false;
+
         if (metadata) {
             const metadata_entry_t *meta_entry = NULL;
             error_t *meta_err = metadata_get_entry(metadata, storage_path, &meta_entry);
@@ -461,7 +480,8 @@ static error_t *analyze_file_divergence(
                 /* Check for mode and ownership divergence using captured stat */
                 divergence_type_t checked_div = div_type;
                 error_t *check_err = check_metadata_divergence(
-                    meta_entry, fs_path, &file_stat, div_type, &checked_div);
+                    meta_entry, fs_path, &file_stat, div_type, &checked_div,
+                    &mode_differs, &ownership_differs);
 
                 if (check_err) {
                     error_free(meta_err);
@@ -469,22 +489,43 @@ static error_t *analyze_file_divergence(
                         "Failed to check metadata divergence for '%s'", fs_path);
                 }
 
-                div_type = checked_div;
-                if (div_type != DIVERGENCE_CLEAN) {
-                    content_differs = false;
+                /* Update primary divergence only if content doesn't differ */
+                if (!content_differs) {
+                    div_type = checked_div;
                 }
+                /* If content differs, keep div_type = MODIFIED (higher priority) */
+                /* But still record mode_differs and ownership_differs flags for display */
             }
 
             error_free(meta_err);
         }
+
+        /* Add divergence if anything differs */
+        if (div_type != DIVERGENCE_CLEAN || mode_differs || ownership_differs) {
+            return workspace_add_diverged(ws, fs_path, storage_path, profile,
+                                         div_type, WORKSPACE_ITEM_FILE,
+                                         in_profile, in_state,
+                                         on_filesystem, content_differs,
+                                         mode_differs, ownership_differs);
+        }
     }
 
-    /* Add divergence if anything differs, or return NULL if clean */
-    if (div_type != DIVERGENCE_CLEAN) {
+    /* Case 4: File not deployed and doesn't exist - add as undeployed */
+    if (div_type == DIVERGENCE_UNDEPLOYED) {
         return workspace_add_diverged(ws, fs_path, storage_path, profile,
                                      div_type, WORKSPACE_ITEM_FILE,
                                      in_profile, in_state,
-                                     on_filesystem, content_differs);
+                                     on_filesystem, false,
+                                     false, false);
+    }
+
+    /* Case 5: File deleted from filesystem */
+    if (div_type == DIVERGENCE_DELETED) {
+        return workspace_add_diverged(ws, fs_path, storage_path, profile,
+                                     div_type, WORKSPACE_ITEM_FILE,
+                                     in_profile, in_state,
+                                     on_filesystem, false,
+                                     false, false);
     }
 
     return NULL;
@@ -540,7 +581,9 @@ static error_t *analyze_orphaned_state(workspace_t *ws) {
                 false,     /* not in profile */
                 true,      /* in state */
                 on_filesystem,
-                false      /* content_differs N/A */
+                false,     /* content_differs N/A */
+                false,     /* mode_differs N/A (orphaned file) */
+                false      /* ownership_differs N/A (orphaned file) */
             );
 
             if (err) {
@@ -754,7 +797,9 @@ static error_t *scan_directory_for_untracked(
                     false,  /* not in profile */
                     false,  /* not in state */
                     true,   /* on filesystem */
-                    false   /* content_differs N/A */
+                    false,  /* content_differs N/A */
+                    false,  /* mode_differs N/A (untracked file) */
+                    false   /* ownership_differs N/A (untracked file) */
                 );
 
                 free(storage_path);
@@ -926,7 +971,9 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                     true,   /* in_profile (tracked in metadata) */
                     false,  /* in_state (directories never in deployment state) */
                     false,  /* on_filesystem (deleted) */
-                    false   /* content_differs (N/A for deleted directories) */
+                    false,  /* content_differs (N/A for deleted directories) */
+                    false,  /* mode_differs N/A (deleted) */
+                    false   /* ownership_differs N/A (deleted) */
                 );
 
                 if (err) {
@@ -957,38 +1004,17 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
             mode_t actual_mode = dir_stat.st_mode & 0777;
 
             /* Check for mode divergence */
-            if (actual_mode != dir_entry->mode) {
-                err = workspace_add_diverged(
-                    ws,
-                    dir_entry->filesystem_path,
-                    dir_entry->storage_prefix,
-                    profile_name,
-                    DIVERGENCE_MODE_DIFF,
-                    WORKSPACE_ITEM_DIRECTORY,
-                    true,   /* in_profile */
-                    false,  /* in_state */
-                    true,   /* on_filesystem */
-                    true    /* content_differs (mode changed) */
-                );
+            bool mode_differs = (actual_mode != dir_entry->mode);
 
-                if (err) {
-                    return error_wrap(err, "Failed to record directory mode divergence for '%s'",
-                                     dir_entry->filesystem_path);
-                }
-
-                /* Skip ownership check if mode differs (priority: mode > ownership) */
-                continue;
-            }
-
-            /* Check for ownership divergence (only when running as root AND metadata has ownership)
+            /* Check for ownership divergence (always check, no early exit)
+             * Only when running as root AND metadata has ownership.
              * Use effective UID (geteuid) to check privilege, not real UID (getuid).
              * This correctly detects whether we have the capability to read ownership. */
+            bool ownership_differs = false;
             bool running_as_root = (geteuid() == 0);
             bool has_ownership = (dir_entry->owner != NULL || dir_entry->group != NULL);
 
             if (running_as_root && has_ownership) {
-                bool ownership_differs = false;
-
                 /* Check owner if metadata has it */
                 if (dir_entry->owner) {
                     struct passwd *pwd = getpwuid(dir_stat.st_uid);
@@ -1000,7 +1026,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                     /* If getpwuid fails, skip check (graceful degradation) */
                 }
 
-                /* Check group if metadata has it and owner check didn't already find divergence */
+                /* Check group if metadata has it (check even if owner differs) */
                 if (dir_entry->group && !ownership_differs) {
                     struct group *grp = getgrgid(dir_stat.st_gid);
                     if (grp && grp->gr_name) {
@@ -1010,25 +1036,31 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                     }
                     /* If getgrgid fails, skip check (graceful degradation) */
                 }
+            }
 
-                if (ownership_differs) {
-                    err = workspace_add_diverged(
-                        ws,
-                        dir_entry->filesystem_path,
-                        dir_entry->storage_prefix,
-                        profile_name,
-                        DIVERGENCE_OWNERSHIP,
-                        WORKSPACE_ITEM_DIRECTORY,
-                        true,   /* in_profile */
-                        false,  /* in_state */
-                        true,   /* on_filesystem */
-                        true    /* content_differs (ownership changed) */
-                    );
+            /* Add divergence if either mode or ownership differs */
+            if (mode_differs || ownership_differs) {
+                /* Primary divergence: mode takes precedence for counting */
+                divergence_type_t primary = mode_differs ? DIVERGENCE_MODE_DIFF : DIVERGENCE_OWNERSHIP;
 
-                    if (err) {
-                        return error_wrap(err, "Failed to record directory ownership divergence for '%s'",
-                                         dir_entry->filesystem_path);
-                    }
+                err = workspace_add_diverged(
+                    ws,
+                    dir_entry->filesystem_path,
+                    dir_entry->storage_prefix,
+                    profile_name,
+                    primary,
+                    WORKSPACE_ITEM_DIRECTORY,
+                    true,   /* in_profile */
+                    false,  /* in_state */
+                    true,   /* on_filesystem */
+                    true,   /* content_differs (metadata changed) */
+                    mode_differs,
+                    ownership_differs
+                );
+
+                if (err) {
+                    return error_wrap(err, "Failed to record directory metadata divergence for '%s'",
+                                     dir_entry->filesystem_path);
                 }
             }
         }
@@ -1163,7 +1195,9 @@ static error_t *analyze_encryption_policy_mismatch(
                 true,  /* in profile */
                 false, /* in_state (not relevant for policy mismatch) */
                 false, /* on_filesystem (not relevant for policy mismatch) */
-                false  /* content_differs (not relevant for policy mismatch) */
+                false, /* content_differs (not relevant for policy mismatch) */
+                false, /* mode_differs N/A (policy mismatch) */
+                false  /* ownership_differs N/A (policy mismatch) */
             );
 
             if (err) {
@@ -1464,8 +1498,8 @@ size_t workspace_count_divergence(
         return 0;
     }
 
-    /* Return cached count for O(1) access */
-    if (type < 9) {
+    /* Return cached count for O(1) access (valid range: 0-9) */
+    if (type <= DIVERGENCE_OWNERSHIP) {
         return ws->divergence_counts[type];
     }
 

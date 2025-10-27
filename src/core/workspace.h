@@ -22,6 +22,7 @@
 #include <git2.h>
 
 #include "types.h"
+#include "core/metadata.h"
 #include "core/profiles.h"
 #include "utils/config.h"
 
@@ -153,6 +154,29 @@ const workspace_item_t **workspace_get_diverged(
 const workspace_item_t *workspace_get_all_diverged(
     const workspace_t *ws,
     size_t *count
+);
+
+/**
+ * Get cached metadata for profile
+ *
+ * Returns pre-loaded metadata from the workspace cache (O(1) lookup).
+ * The metadata cache is populated during workspace_load() for all profiles
+ * in the workspace scope.
+ *
+ * Use this instead of metadata_load_from_branch() when you have a workspace
+ * to avoid redundant Git operations. The returned metadata is owned by the
+ * workspace and remains valid until workspace_free() is called.
+ *
+ * This is a performance optimization - operations that need metadata for
+ * multiple profiles can reuse the cache instead of loading from Git repeatedly.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @param profile_name Profile name (must not be NULL)
+ * @return Metadata or NULL if profile has no metadata (borrowed reference)
+ */
+const metadata_t *workspace_get_metadata(
+    const workspace_t *ws,
+    const char *profile_name
 );
 
 /**

@@ -1354,6 +1354,16 @@ const workspace_item_t *workspace_get_all_diverged(
 }
 
 /**
+ * Get cached metadata for profile
+ */
+const metadata_t *workspace_get_metadata(
+    const workspace_t *ws,
+    const char *profile_name
+) {
+    return ws_get_metadata(ws, profile_name);
+}
+
+/**
  * Check if item has divergence
  */
 bool workspace_item_diverged(

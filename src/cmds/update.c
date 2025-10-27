@@ -405,6 +405,9 @@ static bool is_excluded(
  * modified directories, eliminating the need for separate scanning logic.
  *
  * The --exclude patterns are applied as a simple post-filter on the detected items.
+ *
+ * IMPORTANT: The workspace is returned to the caller for metadata cache reuse.
+ * The caller is responsible for freeing the workspace with workspace_free().
  */
 static error_t *find_modified_and_new_files(
     git_repository *repo,
@@ -414,7 +417,8 @@ static error_t *find_modified_and_new_files(
     output_ctx_t *out,
     modified_file_list_t **modified_out,
     new_file_list_t **new_out,
-    modified_directory_list_t **modified_dirs_out
+    modified_directory_list_t **modified_dirs_out,
+    workspace_t **workspace_out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profiles);
@@ -422,6 +426,7 @@ static error_t *find_modified_and_new_files(
     CHECK_NULL(modified_out);
     CHECK_NULL(new_out);
     CHECK_NULL(modified_dirs_out);
+    CHECK_NULL(workspace_out);
 
     modified_file_list_t *modified = modified_file_list_create();
     if (!modified) {
@@ -643,10 +648,11 @@ static error_t *find_modified_and_new_files(
         free(items);  /* Free the allocated pointer array */
     }
 
-    workspace_free(ws);
+    /* Transfer ownership to caller - workspace contains metadata cache for reuse */
     *modified_out = modified;
     *new_out = new_files;
     *modified_dirs_out = modified_dirs;
+    *workspace_out = ws;
     return NULL;
 }
 
@@ -1124,6 +1130,8 @@ static error_t *update_directory_metadata(
 
 /**
  * Update a single profile with its modified files and directories
+ *
+ * @param ws Workspace for metadata cache access (can be NULL - will fallback to Git loading)
  */
 static error_t *update_profile(
     git_repository *repo,
@@ -1134,7 +1142,8 @@ static error_t *update_profile(
     size_t dir_count,
     const cmd_update_options_t *opts,
     output_ctx_t *out,
-    const dotta_config_t *config
+    const dotta_config_t *config,
+    workspace_t *ws
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile);
@@ -1154,24 +1163,38 @@ static error_t *update_profile(
     error_t *err = NULL;
     git_repository *wt_repo = NULL;
     metadata_t *existing_metadata = NULL;
+    bool owns_metadata = false;  /* Track if we own metadata (must free) or borrowed (don't free) */
     keymanager_t *key_mgr = NULL;
     bool *encryption_status = NULL;
     struct stat *file_stats = NULL;
 
-    /* Load existing metadata from profile branch (for encryption status) */
-    err = metadata_load_from_branch(repo, profile->name, &existing_metadata);
-    if (err) {
-        if (err->code == ERR_NOT_FOUND) {
-            /* No existing metadata - that's OK, create empty */
-            error_free(err);
-            err = metadata_create_empty(&existing_metadata);
-            if (err) {
-                return error_wrap(err, "Failed to create empty metadata");
-            }
-        } else {
-            /* Real error */
-            return error_wrap(err, "Failed to load metadata from profile '%s'", profile->name);
+    /* Try to get metadata from workspace cache first (O(1) lookup - performance optimization)
+     * This avoids redundant Git operations when workspace was already loaded for divergence analysis. */
+    if (ws) {
+        /* Cast away const - we're using it read-only, the const in API is for safety */
+        existing_metadata = (metadata_t *)workspace_get_metadata(ws, profile->name);
+        if (existing_metadata) {
+            owns_metadata = false;  /* Borrowed from workspace - don't free */
         }
+    }
+
+    /* Fallback: load from Git if not in cache (defensive fallback for robustness) */
+    if (!existing_metadata) {
+        err = metadata_load_from_branch(repo, profile->name, &existing_metadata);
+        if (err) {
+            if (err->code == ERR_NOT_FOUND) {
+                /* No existing metadata - that's OK, create empty */
+                error_free(err);
+                err = metadata_create_empty(&existing_metadata);
+                if (err) {
+                    return error_wrap(err, "Failed to create empty metadata");
+                }
+            } else {
+                /* Real error */
+                return error_wrap(err, "Failed to load metadata from profile '%s'", profile->name);
+            }
+        }
+        owns_metadata = true;  /* We own this metadata - must free in cleanup */
     }
 
     /* Get keymanager if encryption may be needed
@@ -1204,7 +1227,7 @@ static error_t *update_profile(
     if (needs_encryption && config && config->encryption_enabled) {
         key_mgr = keymanager_get_global(config);
         if (!key_mgr) {
-            if (existing_metadata) metadata_free(existing_metadata);
+            if (owns_metadata && existing_metadata) metadata_free(existing_metadata);
             return ERROR(ERR_INTERNAL, "Failed to get encryption key manager");
         }
     }
@@ -1363,7 +1386,7 @@ cleanup:
     if (tree) git_tree_free(tree);
     if (index) git_index_free(index);
     if (wt) worktree_cleanup(wt);
-    if (existing_metadata) metadata_free(existing_metadata);
+    if (owns_metadata && existing_metadata) metadata_free(existing_metadata);
     if (file_stats) free(file_stats);
     if (encryption_status) free(encryption_status);
 
@@ -1606,6 +1629,8 @@ static error_t *update_confirm_operation(
 
 /**
  * Execute profile updates for all profiles
+ *
+ * @param ws Workspace for metadata cache access (can be NULL)
  */
 static error_t *update_execute_for_all_profiles(
     git_repository *repo,
@@ -1616,6 +1641,7 @@ static error_t *update_execute_for_all_profiles(
     const cmd_update_options_t *opts,
     output_ctx_t *out,
     const dotta_config_t *config,
+    workspace_t *ws,
     size_t *total_updated
 ) {
     CHECK_NULL(repo);
@@ -1726,7 +1752,7 @@ static error_t *update_execute_for_all_profiles(
 
         error_t *err = update_profile(repo, profile, profile_files, total_file_count,
                                       profile_dirs, profile_dir_count,
-                                      opts, out, config);
+                                      opts, out, config, ws);
         free(profile_files);
         free(profile_dirs);
 
@@ -1761,6 +1787,7 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     modified_file_list_t *modified = NULL;
     new_file_list_t *new_files = NULL;
     modified_directory_list_t *modified_dirs = NULL;
+    workspace_t *ws = NULL;
     hook_context_t *hook_ctx = NULL;
     char *repo_dir = NULL;
     char *profiles_str = NULL;
@@ -1852,8 +1879,9 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     /* Determine if we should detect new files */
     should_detect_new = opts->include_new || opts->only_new || config->auto_detect_new_files;
 
-    /* Find diverged files and directories using unified workspace analysis */
-    err = find_modified_and_new_files(repo, profiles, config, opts, out, &modified, &new_files, &modified_dirs);
+    /* Find diverged files and directories using unified workspace analysis
+     * Returns workspace for metadata cache reuse during profile updates */
+    err = find_modified_and_new_files(repo, profiles, config, opts, out, &modified, &new_files, &modified_dirs, &ws);
     if (err) {
         err = error_wrap(err, "Failed to analyze divergence");
         goto cleanup;
@@ -1977,11 +2005,11 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
             break;
     }
 
-    /* Execute profile updates */
+    /* Execute profile updates - workspace provides metadata cache for O(1) lookups */
     err = update_execute_for_all_profiles(repo, profiles, modified,
                                           skip_new_files ? NULL : new_files,
                                           modified_dirs,
-                                          opts, out, config, &total_updated);
+                                          opts, out, config, ws, &total_updated);
     if (err) {
         goto cleanup;
     }
@@ -2011,6 +2039,7 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
 cleanup:
     /* Free all resources in reverse order */
     if (hook_ctx) hook_context_free(hook_ctx);
+    if (ws) workspace_free(ws);  /* Free workspace after all profile updates complete */
     if (profiles_str) free(profiles_str);
     if (repo_dir) free(repo_dir);
     if (modified_dirs) modified_directory_list_free(modified_dirs);

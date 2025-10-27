@@ -466,31 +466,31 @@ static error_t *find_modified_and_new_files(
         CMP_TYPE_DIFF
     };
 
-    /* Process modified/deleted/mode/type changes */
+    /* Process modified/deleted/mode/type changes (files only - directories handled separately) */
     for (size_t t = 0; t < 4; t++) {
         size_t count = 0;
-        const workspace_item_t **files = workspace_get_diverged(ws, modification_types[t], &count);
+        const workspace_item_t **items = workspace_get_diverged(ws, modification_types[t], &count);
 
         for (size_t i = 0; i < count; i++) {
-            const workspace_item_t *file = files[i];
+            const workspace_item_t *item = items[i];
 
-            /* Apply file filter if specified */
-            if (!file_matches_filter(file->filesystem_path, opts)) {
+            /* Apply filter if specified */
+            if (!file_matches_filter(item->filesystem_path, opts)) {
                 continue;
             }
 
             /* Check exclude patterns */
-            if (is_excluded(file->filesystem_path, opts)) {
+            if (is_excluded(item->filesystem_path, opts)) {
                 if (opts->verbose && out) {
-                    output_info(out, "Excluded: %s", file->filesystem_path);
+                    output_info(out, "Excluded: %s", item->filesystem_path);
                 }
                 continue;
             }
 
-            /* Find the profile for this file */
+            /* Find the profile for this item */
             profile_t *source_profile = NULL;
             for (size_t j = 0; j < profiles->count; j++) {
-                if (strcmp(profiles->profiles[j].name, file->profile) == 0) {
+                if (strcmp(profiles->profiles[j].name, item->profile) == 0) {
                     source_profile = &profiles->profiles[j];
                     break;
                 }
@@ -504,14 +504,14 @@ static error_t *find_modified_and_new_files(
             /* Add to modified list */
             err = modified_file_list_add(
                 modified,
-                file->filesystem_path,
-                file->storage_path,
+                item->filesystem_path,
+                item->storage_path,
                 source_profile,
                 cmp_results[t]
             );
 
             if (err) {
-                free(files);
+                free(items);
                 workspace_free(ws);
                 modified_file_list_free(modified);
                 new_file_list_free(new_files);
@@ -520,33 +520,33 @@ static error_t *find_modified_and_new_files(
             }
         }
 
-        free(files);  /* Free the allocated pointer array */
+        free(items);  /* Free the allocated pointer array */
     }
 
     /* Process untracked (new) files */
     size_t untracked_count = 0;
-    const workspace_item_t **untracked_files = workspace_get_diverged(ws, DIVERGENCE_UNTRACKED, &untracked_count);
+    const workspace_item_t **untracked_items = workspace_get_diverged(ws, DIVERGENCE_UNTRACKED, &untracked_count);
 
     for (size_t i = 0; i < untracked_count; i++) {
-        const workspace_item_t *file = untracked_files[i];
+        const workspace_item_t *item = untracked_items[i];
 
-        /* Apply file filter if specified */
-        if (!file_matches_filter(file->filesystem_path, opts)) {
+        /* Apply filter if specified */
+        if (!file_matches_filter(item->filesystem_path, opts)) {
             continue;
         }
 
         /* Check exclude patterns */
-        if (is_excluded(file->filesystem_path, opts)) {
+        if (is_excluded(item->filesystem_path, opts)) {
             if (opts->verbose && out) {
-                output_info(out, "Excluded: %s", file->filesystem_path);
+                output_info(out, "Excluded: %s", item->filesystem_path);
             }
             continue;
         }
 
-        /* Find the profile for this file */
+        /* Find the profile for this item */
         profile_t *source_profile = NULL;
         for (size_t j = 0; j < profiles->count; j++) {
-            if (strcmp(profiles->profiles[j].name, file->profile) == 0) {
+            if (strcmp(profiles->profiles[j].name, item->profile) == 0) {
                 source_profile = &profiles->profiles[j];
                 break;
             }
@@ -558,10 +558,10 @@ static error_t *find_modified_and_new_files(
         }
 
         /* Add to new files list */
-        err = new_file_list_add(new_files, file->filesystem_path,
-                               file->storage_path, source_profile);
+        err = new_file_list_add(new_files, item->filesystem_path,
+                               item->storage_path, source_profile);
         if (err) {
-            free(untracked_files);
+            free(untracked_items);
             workspace_free(ws);
             modified_file_list_free(modified);
             new_file_list_free(new_files);
@@ -570,7 +570,7 @@ static error_t *find_modified_and_new_files(
         }
     }
 
-    free(untracked_files);  /* Free the allocated pointer array */
+    free(untracked_items);  /* Free the allocated pointer array */
 
     /* Process directory metadata divergence (MODE_DIFF and OWNERSHIP only)
      * Directories are distinguished from files using in_state flag:

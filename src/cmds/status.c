@@ -94,30 +94,30 @@ static void display_enabled_profiles(
 }
 
 /**
- * Format a diverged file entry for display
+ * Format a diverged item entry for display
  *
- * Returns the label, color, and formatted info string for a file.
+ * Returns the label, color, and formatted info string for an item (file or directory).
  */
-static void format_diverged_file(
+static void format_diverged_item(
     output_ctx_t *out,
-    const workspace_item_t *file,
+    const workspace_item_t *item,
     const char **out_label,
     output_color_t *out_color,
     char *info_buffer,
     size_t buffer_size
 ) {
-    if (!out || !file || !out_label || !out_color || !info_buffer) {
+    if (!out || !item || !out_label || !out_color || !info_buffer) {
         return;
     }
 
-    switch (file->type) {
+    switch (item->type) {
         case DIVERGENCE_UNDEPLOYED:
             *out_label = "[undeployed]";
             *out_color = OUTPUT_COLOR_CYAN;
             snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
-                    file->filesystem_path,
+                    item->filesystem_path,
                     output_color_code(out, OUTPUT_COLOR_DIM),
-                    file->profile,
+                    item->profile,
                     output_color_code(out, OUTPUT_COLOR_RESET));
             break;
 
@@ -125,9 +125,9 @@ static void format_diverged_file(
             *out_label = "[modified]";
             *out_color = OUTPUT_COLOR_YELLOW;
             snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
-                    file->filesystem_path,
+                    item->filesystem_path,
                     output_color_code(out, OUTPUT_COLOR_DIM),
-                    file->profile,
+                    item->profile,
                     output_color_code(out, OUTPUT_COLOR_RESET));
             break;
 
@@ -135,9 +135,9 @@ static void format_diverged_file(
             *out_label = "[deleted]";
             *out_color = OUTPUT_COLOR_RED;
             snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
-                    file->filesystem_path,
+                    item->filesystem_path,
                     output_color_code(out, OUTPUT_COLOR_DIM),
-                    file->profile,
+                    item->profile,
                     output_color_code(out, OUTPUT_COLOR_RESET));
             break;
 
@@ -145,9 +145,9 @@ static void format_diverged_file(
             *out_label = "[new]";
             *out_color = OUTPUT_COLOR_CYAN;
             snprintf(info_buffer, buffer_size, "%s %s(in %s)%s",
-                    file->filesystem_path,
+                    item->filesystem_path,
                     output_color_code(out, OUTPUT_COLOR_DIM),
-                    file->profile,
+                    item->profile,
                     output_color_code(out, OUTPUT_COLOR_RESET));
             break;
 
@@ -155,9 +155,9 @@ static void format_diverged_file(
             *out_label = "[orphaned]";
             *out_color = OUTPUT_COLOR_RED;
             snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
-                    file->filesystem_path,
+                    item->filesystem_path,
                     output_color_code(out, OUTPUT_COLOR_DIM),
-                    file->profile,
+                    item->profile,
                     output_color_code(out, OUTPUT_COLOR_RESET));
             break;
 
@@ -165,9 +165,9 @@ static void format_diverged_file(
             *out_label = "[mode]";
             *out_color = OUTPUT_COLOR_YELLOW;
             snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
-                    file->filesystem_path,
+                    item->filesystem_path,
                     output_color_code(out, OUTPUT_COLOR_DIM),
-                    file->profile,
+                    item->profile,
                     output_color_code(out, OUTPUT_COLOR_RESET));
             break;
 
@@ -175,9 +175,9 @@ static void format_diverged_file(
             *out_label = "[type]";
             *out_color = OUTPUT_COLOR_RED;
             snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
-                    file->filesystem_path,
+                    item->filesystem_path,
                     output_color_code(out, OUTPUT_COLOR_DIM),
-                    file->profile,
+                    item->profile,
                     output_color_code(out, OUTPUT_COLOR_RESET));
             break;
 
@@ -185,9 +185,9 @@ static void format_diverged_file(
             *out_label = "[unencrypted]";
             *out_color = OUTPUT_COLOR_MAGENTA;
             snprintf(info_buffer, buffer_size, "%s %s(should be encrypted, from %s)%s",
-                    file->filesystem_path,
+                    item->filesystem_path,
                     output_color_code(out, OUTPUT_COLOR_DIM),
-                    file->profile,
+                    item->profile,
                     output_color_code(out, OUTPUT_COLOR_RESET));
             break;
 
@@ -195,24 +195,24 @@ static void format_diverged_file(
             *out_label = "[ownership]";
             *out_color = OUTPUT_COLOR_YELLOW;
             snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
-                    file->filesystem_path,
+                    item->filesystem_path,
                     output_color_code(out, OUTPUT_COLOR_DIM),
-                    file->profile,
+                    item->profile,
                     output_color_code(out, OUTPUT_COLOR_RESET));
             break;
 
         default:
             *out_label = "[unknown]";
             *out_color = OUTPUT_COLOR_DIM;
-            snprintf(info_buffer, buffer_size, "%s", file->filesystem_path);
+            snprintf(info_buffer, buffer_size, "%s", item->filesystem_path);
             break;
     }
 }
 
 /**
- * Display a divergence section with files of specific types
+ * Display a divergence section with items of specific types
  *
- * Shows section header, hint, and individual files.
+ * Shows section header, hint, and individual items (files or directories).
  * Only displays if count > 0.
  */
 static void display_divergence_section(
@@ -227,13 +227,13 @@ static void display_divergence_section(
         return;
     }
 
-    /* Count total files for these types */
+    /* Count total items for these types */
     size_t total_count = 0;
     for (size_t t = 0; t < type_count; t++) {
         total_count += workspace_count_divergence(ws, types[t]);
     }
 
-    /* Skip section if no files */
+    /* Skip section if no items */
     if (total_count == 0) {
         return;
     }
@@ -241,7 +241,7 @@ static void display_divergence_section(
     /* Display section header with count and inline hint */
     output_newline(out);
     char header[256];
-    snprintf(header, sizeof(header), "%s (%zu file%s)",
+    snprintf(header, sizeof(header), "%s (%zu item%s)",
              section_title, total_count, total_count == 1 ? "" : "s");
 
     /* Print header in bold, then hint in dim on same line */
@@ -264,26 +264,26 @@ static void display_divergence_section(
         }
     }
 
-    /* Display individual files */
+    /* Display individual items */
     output_newline(out);
 
     for (size_t t = 0; t < type_count; t++) {
         size_t count = 0;
-        const workspace_item_t **files = workspace_get_diverged(ws, types[t], &count);
+        const workspace_item_t **items = workspace_get_diverged(ws, types[t], &count);
 
-        if (files) {
+        if (items) {
             for (size_t i = 0; i < count; i++) {
-                const workspace_item_t *file = files[i];
+                const workspace_item_t *item = items[i];
                 char info[1024];
                 const char *label = NULL;
                 output_color_t color = OUTPUT_COLOR_YELLOW;
 
-                format_diverged_file(out, file, &label, &color, info, sizeof(info));
+                format_diverged_item(out, item, &label, &color, info, sizeof(info));
                 output_item(out, label, color, info);
             }
 
             /* Free the allocated pointer array */
-            free(files);
+            free(items);
         }
     }
 }

@@ -5,10 +5,12 @@
 #include "update.h"
 
 #include <dirent.h>
+#include <errno.h>
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "base/error.h"
 #include "base/filesystem.h"
@@ -224,6 +226,105 @@ static void new_file_list_free(new_file_list_t *list) {
 }
 
 /**
+ * Modified directory entry (for tracking directory metadata changes)
+ */
+typedef struct {
+    char *filesystem_path;      /* Full filesystem path */
+    char *storage_prefix;       /* Storage prefix (home/.config/nvim) */
+    profile_t *source_profile;  /* Which profile owns this directory */
+    divergence_type_t status;   /* Type of divergence (MODE_DIFF or OWNERSHIP) */
+} modified_directory_t;
+
+/**
+ * List of modified directories
+ */
+typedef struct {
+    modified_directory_t *dirs;
+    size_t count;
+    size_t capacity;
+} modified_directory_list_t;
+
+/**
+ * Create modified directory list
+ */
+static modified_directory_list_t *modified_directory_list_create(void) {
+    modified_directory_list_t *list = calloc(1, sizeof(modified_directory_list_t));
+    if (!list) {
+        return NULL;
+    }
+
+    list->capacity = 16;
+    list->dirs = calloc(list->capacity, sizeof(modified_directory_t));
+    if (!list->dirs) {
+        free(list);
+        return NULL;
+    }
+
+    return list;
+}
+
+/**
+ * Add directory to list
+ */
+static error_t *modified_directory_list_add(
+    modified_directory_list_t *list,
+    const char *filesystem_path,
+    const char *storage_prefix,
+    profile_t *profile,
+    divergence_type_t status
+) {
+    CHECK_NULL(list);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(storage_prefix);
+    CHECK_NULL(profile);
+
+    /* Grow if needed */
+    if (list->count >= list->capacity) {
+        size_t new_capacity = list->capacity * 2;
+        modified_directory_t *new_dirs = realloc(list->dirs,
+                                                 new_capacity * sizeof(modified_directory_t));
+        if (!new_dirs) {
+            return ERROR(ERR_MEMORY, "Failed to grow directory list");
+        }
+        list->dirs = new_dirs;
+        list->capacity = new_capacity;
+    }
+
+    /* Add entry */
+    modified_directory_t *entry = &list->dirs[list->count];
+    entry->filesystem_path = strdup(filesystem_path);
+    entry->storage_prefix = strdup(storage_prefix);
+    entry->source_profile = profile;
+    entry->status = status;
+
+    if (!entry->filesystem_path || !entry->storage_prefix) {
+        free(entry->filesystem_path);
+        free(entry->storage_prefix);
+        return ERROR(ERR_MEMORY, "Failed to allocate directory paths");
+    }
+
+    list->count++;
+    return NULL;
+}
+
+/**
+ * Free modified directory list
+ */
+static void modified_directory_list_free(modified_directory_list_t *list) {
+    if (!list) {
+        return;
+    }
+
+    for (size_t i = 0; i < list->count; i++) {
+        free(list->dirs[i].filesystem_path);
+        free(list->dirs[i].storage_prefix);
+    }
+
+    free(list->dirs);
+    free(list);
+}
+
+/**
  * Check if file matches filter (if any)
  */
 static bool file_matches_filter(
@@ -282,23 +383,28 @@ static bool is_excluded(
 }
 
 /**
- * Find all modified and new files using workspace divergence analysis
+ * Find all modified and new files, plus modified directories
  *
  * This function uses the workspace module to detect divergence between
  * profile state, deployment state, and filesystem state. It correctly
  * distinguishes between:
  * - MODIFIED: Files deployed and changed on disk (modified files)
  * - DELETED: Files deployed and removed from disk (modified files)
- * - MODE_DIFF: Files with permission changes (modified files)
+ * - MODE_DIFF: Files/directories with permission changes (modified files/directories)
  * - TYPE_DIFF: Files with type changes (modified files)
+ * - OWNERSHIP: Files/directories with ownership changes (modified files/directories)
  * - UNTRACKED: New files in tracked directories (new files)
  * - UNDEPLOYED: Files in profile but never deployed (skip - not a modification)
  * - ORPHANED: State cleanup issues (skip - not file updates)
  *
- * This single workspace load efficiently provides both modified and new files,
- * eliminating the need for separate scanning logic.
+ * Directories are distinguished from files using the in_state flag:
+ * - Files: in_state can be true (when deployed)
+ * - Directories: in_state is always false (never in deployment state)
  *
- * The --exclude patterns are applied as a simple post-filter on the detected files.
+ * This single workspace load efficiently provides modified files, new files, and
+ * modified directories, eliminating the need for separate scanning logic.
+ *
+ * The --exclude patterns are applied as a simple post-filter on the detected items.
  */
 static error_t *find_modified_and_new_files(
     git_repository *repo,
@@ -307,13 +413,15 @@ static error_t *find_modified_and_new_files(
     const cmd_update_options_t *opts,
     output_ctx_t *out,
     modified_file_list_t **modified_out,
-    new_file_list_t **new_out
+    new_file_list_t **new_out,
+    modified_directory_list_t **modified_dirs_out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profiles);
     CHECK_NULL(opts);
     CHECK_NULL(modified_out);
     CHECK_NULL(new_out);
+    CHECK_NULL(modified_dirs_out);
 
     modified_file_list_t *modified = modified_file_list_create();
     if (!modified) {
@@ -326,12 +434,20 @@ static error_t *find_modified_and_new_files(
         return ERROR(ERR_MEMORY, "Failed to create new file list");
     }
 
-    /* Load workspace to analyze ALL divergence (modified + new) */
+    modified_directory_list_t *modified_dirs = modified_directory_list_create();
+    if (!modified_dirs) {
+        modified_file_list_free(modified);
+        new_file_list_free(new_files);
+        return ERROR(ERR_MEMORY, "Failed to create modified directory list");
+    }
+
+    /* Load workspace to analyze ALL divergence (modified + new + directories) */
     workspace_t *ws = NULL;
     error_t *err = workspace_load(repo, profiles, config, &ws);
     if (err) {
         modified_file_list_free(modified);
         new_file_list_free(new_files);
+        modified_directory_list_free(modified_dirs);
         return error_wrap(err, "Failed to load workspace");
     }
 
@@ -399,6 +515,7 @@ static error_t *find_modified_and_new_files(
                 workspace_free(ws);
                 modified_file_list_free(modified);
                 new_file_list_free(new_files);
+                modified_directory_list_free(modified_dirs);
                 return err;
             }
         }
@@ -448,15 +565,88 @@ static error_t *find_modified_and_new_files(
             workspace_free(ws);
             modified_file_list_free(modified);
             new_file_list_free(new_files);
+            modified_directory_list_free(modified_dirs);
             return err;
         }
     }
 
     free(untracked_files);  /* Free the allocated pointer array */
 
+    /* Process directory metadata divergence (MODE_DIFF and OWNERSHIP only)
+     * Directories are distinguished from files using in_state flag:
+     * - Files: in_state can be true (when deployed)
+     * - Directories: in_state is always false (never in deployment state) */
+    divergence_type_t directory_types[] = {
+        DIVERGENCE_MODE_DIFF,
+        DIVERGENCE_OWNERSHIP
+    };
+
+    for (size_t t = 0; t < 2; t++) {
+        size_t count = 0;
+        const workspace_item_t **items = workspace_get_diverged(ws, directory_types[t], &count);
+
+        for (size_t i = 0; i < count; i++) {
+            const workspace_item_t *item = items[i];
+
+            /* Skip files - we only want directories here
+             * Directories have in_state==false (never in deployment state) */
+            if (item->in_state) {
+                continue;  /* This is a file, not a directory */
+            }
+
+            /* Apply filter if specified */
+            if (!file_matches_filter(item->filesystem_path, opts)) {
+                continue;
+            }
+
+            /* Check exclude patterns */
+            if (is_excluded(item->filesystem_path, opts)) {
+                if (opts->verbose && out) {
+                    output_info(out, "Excluded: %s", item->filesystem_path);
+                }
+                continue;
+            }
+
+            /* Find the profile for this directory */
+            profile_t *source_profile = NULL;
+            for (size_t j = 0; j < profiles->count; j++) {
+                if (strcmp(profiles->profiles[j].name, item->profile) == 0) {
+                    source_profile = &profiles->profiles[j];
+                    break;
+                }
+            }
+
+            if (!source_profile) {
+                /* Profile not in enabled set - skip */
+                continue;
+            }
+
+            /* Add to modified directories list */
+            err = modified_directory_list_add(
+                modified_dirs,
+                item->filesystem_path,
+                item->storage_path,
+                source_profile,
+                item->type
+            );
+
+            if (err) {
+                free(items);
+                workspace_free(ws);
+                modified_file_list_free(modified);
+                new_file_list_free(new_files);
+                modified_directory_list_free(modified_dirs);
+                return err;
+            }
+        }
+
+        free(items);  /* Free the allocated pointer array */
+    }
+
     workspace_free(ws);
     *modified_out = modified;
     *new_out = new_files;
+    *modified_dirs_out = modified_dirs;
     return NULL;
 }
 
@@ -761,24 +951,197 @@ static error_t *capture_and_save_metadata(
 }
 
 /**
- * Update a single profile with its modified files
+ * Update directory metadata for a profile
+ *
+ * Re-captures directory metadata from filesystem and updates the profile's
+ * metadata.json file in the worktree.
+ *
+ * This function is called when directory permissions or ownership have changed
+ * on the filesystem and need to be synchronized back to the profile metadata.
+ *
+ * @param wt Worktree handle for the profile (must not be NULL)
+ * @param dirs Array of modified directories (must not be NULL)
+ * @param dir_count Number of directories
+ * @param opts Update options (for verbose output)
+ * @param out Output context (can be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *update_directory_metadata(
+    worktree_handle_t *wt,
+    const modified_directory_t *dirs,
+    size_t dir_count,
+    const cmd_update_options_t *opts,
+    output_ctx_t *out
+) {
+    CHECK_NULL(wt);
+    CHECK_NULL(dirs);
+
+    if (dir_count == 0) {
+        return NULL;
+    }
+
+    const char *worktree_path = worktree_get_path(wt);
+    if (!worktree_path) {
+        return ERROR(ERR_INTERNAL, "Worktree path is NULL");
+    }
+
+    /* Load existing metadata */
+    metadata_t *metadata = NULL;
+    char *metadata_file_path = str_format("%s/%s", worktree_path, METADATA_FILE_PATH);
+    if (!metadata_file_path) {
+        return ERROR(ERR_MEMORY, "Failed to allocate metadata file path");
+    }
+
+    error_t *err = metadata_load_from_file(metadata_file_path, &metadata);
+    free(metadata_file_path);
+
+    if (err) {
+        if (err->code == ERR_NOT_FOUND) {
+            /* Shouldn't happen - profile should have metadata if it has tracked dirs */
+            error_free(err);
+            err = metadata_create_empty(&metadata);
+            if (err) {
+                return err;
+            }
+        } else {
+            return error_wrap(err, "Failed to load existing metadata");
+        }
+    }
+
+    size_t updated_count = 0;
+
+    /* Update each directory's metadata */
+    for (size_t i = 0; i < dir_count; i++) {
+        const modified_directory_t *dir = &dirs[i];
+
+        /* Stat directory to capture current metadata */
+        struct stat dir_stat;
+        if (stat(dir->filesystem_path, &dir_stat) != 0) {
+            if (opts->verbose && out) {
+                output_warning(out, "Failed to stat directory '%s': %s",
+                              dir->filesystem_path, strerror(errno));
+            }
+            continue;
+        }
+
+        /* Capture fresh directory metadata */
+        metadata_directory_entry_t *dir_entry = NULL;
+        err = metadata_capture_from_directory(
+            dir->filesystem_path,
+            dir->storage_prefix,
+            &dir_stat,
+            &dir_entry
+        );
+
+        if (err) {
+            if (opts->verbose && out) {
+                output_warning(out, "Failed to capture metadata for directory '%s': %s",
+                              dir->filesystem_path, error_message(err));
+            }
+            error_free(err);
+            err = NULL;
+            continue;
+        }
+
+        /* Save metadata before adding (for verbose output) */
+        mode_t mode = dir_entry->mode;
+        char *owner = dir_entry->owner ? strdup(dir_entry->owner) : NULL;
+        char *group = dir_entry->group ? strdup(dir_entry->group) : NULL;
+
+        /* Update metadata in collection (upsert - metadata_add_tracked_directory handles both insert and update) */
+        err = metadata_add_tracked_directory(
+            metadata,
+            dir_entry->filesystem_path,
+            dir_entry->storage_prefix,
+            dir_entry->added_at,
+            dir_entry->mode,
+            dir_entry->owner,
+            dir_entry->group
+        );
+
+        metadata_directory_entry_free(dir_entry);
+
+        if (err) {
+            free(owner);
+            free(group);
+            metadata_free(metadata);
+            return error_wrap(err, "Failed to update directory metadata for '%s'",
+                             dir->filesystem_path);
+        }
+
+        updated_count++;
+
+        if (opts->verbose && out) {
+            if (owner || group) {
+                output_info(out, "  Updated directory metadata: %s (mode: %04o, owner: %s:%s)",
+                           dir->filesystem_path, mode,
+                           owner ? owner : "?",
+                           group ? group : "?");
+            } else {
+                output_info(out, "  Updated directory metadata: %s (mode: %04o)",
+                           dir->filesystem_path, mode);
+            }
+        }
+
+        free(owner);
+        free(group);
+    }
+
+    /* Save updated metadata */
+    err = metadata_save_to_worktree(worktree_path, metadata);
+    metadata_free(metadata);
+
+    if (err) {
+        return error_wrap(err, "Failed to save metadata");
+    }
+
+    /* Stage metadata.json */
+    git_index *index = NULL;
+    err = worktree_get_index(wt, &index);
+    if (err) {
+        return error_wrap(err, "Failed to get worktree index");
+    }
+
+    int git_err = git_index_add_bypath(index, METADATA_FILE_PATH);
+    if (git_err < 0) {
+        git_index_free(index);
+        return error_from_git(git_err);
+    }
+
+    git_err = git_index_write(index);
+    git_index_free(index);
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    if (opts->verbose && out && updated_count > 0) {
+        output_info(out, "Updated metadata for %zu director%s",
+                   updated_count, updated_count == 1 ? "y" : "ies");
+    }
+
+    return NULL;
+}
+
+/**
+ * Update a single profile with its modified files and directories
  */
 static error_t *update_profile(
     git_repository *repo,
     profile_t *profile,
     modified_file_t *files,
     size_t file_count,
+    modified_directory_t *dirs,
+    size_t dir_count,
     const cmd_update_options_t *opts,
     output_ctx_t *out,
     const dotta_config_t *config
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile);
-    CHECK_NULL(files);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
-    if (file_count == 0) {
+    if (file_count == 0 && dir_count == 0) {
         return NULL;
     }
 
@@ -924,13 +1287,24 @@ static error_t *update_profile(
     }
 
     /* Capture and save metadata for updated files (using pre-captured stats) */
-    err = capture_and_save_metadata(wt, files, file_count, encryption_status, file_stats, opts->verbose);
-    if (err) {
-        err = error_wrap(err, "Failed to capture metadata");
-        goto cleanup;
+    if (file_count > 0) {
+        err = capture_and_save_metadata(wt, files, file_count, encryption_status, file_stats, opts->verbose);
+        if (err) {
+            err = error_wrap(err, "Failed to capture metadata");
+            goto cleanup;
+        }
     }
 
-    /* Note: metadata capture function already wrote the index */
+    /* Update directory metadata if needed */
+    if (dir_count > 0) {
+        err = update_directory_metadata(wt, dirs, dir_count, opts, out);
+        if (err) {
+            err = error_wrap(err, "Failed to update directory metadata");
+            goto cleanup;
+        }
+    }
+
+    /* Note: metadata functions already wrote the index */
 
     /* Create commit */
     git_oid tree_oid;
@@ -1238,6 +1612,7 @@ static error_t *update_execute_for_all_profiles(
     profile_list_t *profiles,
     modified_file_list_t *modified,
     new_file_list_t *new_files,
+    modified_directory_list_t *modified_dirs,
     const cmd_update_options_t *opts,
     output_ctx_t *out,
     const dotta_config_t *config,
@@ -1276,37 +1651,66 @@ static error_t *update_execute_for_all_profiles(
             }
         }
 
-        size_t total_file_count = profile_file_count + new_file_count_for_profile;
-
-        if (total_file_count == 0) {
-            continue;
-        }
-
-        /* Allocate array for this profile's files (modified + new) */
-        profile_files = calloc(total_file_count, sizeof(modified_file_t));
-        if (!profile_files) {
-            return ERROR(ERR_MEMORY, "Failed to allocate profile files");
-        }
-
-        /* Copy modified file entries */
-        size_t idx = 0;
-        for (size_t j = 0; j < modified->count; j++) {
-            if (modified->files[j].source_profile == profile) {
-                profile_files[idx++] = modified->files[j];
+        /* Count modified directories for this profile */
+        size_t profile_dir_count = 0;
+        if (modified_dirs) {
+            for (size_t j = 0; j < modified_dirs->count; j++) {
+                if (modified_dirs->dirs[j].source_profile == profile) {
+                    profile_dir_count++;
+                }
             }
         }
 
-        /* Add new files as modified entries (they'll be copied and staged) */
-        if (new_files) {
-            for (size_t j = 0; j < new_files->count; j++) {
-                new_file_t *new_file = &new_files->files[j];
-                if (new_file->source_profile == profile) {
-                    /* Convert new_file to modified_file format */
-                    profile_files[idx].filesystem_path = new_file->filesystem_path;
-                    profile_files[idx].storage_path = new_file->storage_path;
-                    profile_files[idx].source_profile = new_file->source_profile;
-                    profile_files[idx].status = CMP_DIFFERENT;  /* Treat as modified/new */
-                    idx++;
+        size_t total_file_count = profile_file_count + new_file_count_for_profile;
+
+        if (total_file_count == 0 && profile_dir_count == 0) {
+            continue;
+        }
+
+        /* Allocate arrays for this profile's items */
+        if (total_file_count > 0) {
+            profile_files = calloc(total_file_count, sizeof(modified_file_t));
+            if (!profile_files) {
+                return ERROR(ERR_MEMORY, "Failed to allocate profile files");
+            }
+
+            /* Copy modified file entries */
+            size_t idx = 0;
+            for (size_t j = 0; j < modified->count; j++) {
+                if (modified->files[j].source_profile == profile) {
+                    profile_files[idx++] = modified->files[j];
+                }
+            }
+
+            /* Add new files as modified entries (they'll be copied and staged) */
+            if (new_files) {
+                for (size_t j = 0; j < new_files->count; j++) {
+                    new_file_t *new_file = &new_files->files[j];
+                    if (new_file->source_profile == profile) {
+                        /* Convert new_file to modified_file format */
+                        profile_files[idx].filesystem_path = new_file->filesystem_path;
+                        profile_files[idx].storage_path = new_file->storage_path;
+                        profile_files[idx].source_profile = new_file->source_profile;
+                        profile_files[idx].status = CMP_DIFFERENT;  /* Treat as modified/new */
+                        idx++;
+                    }
+                }
+            }
+        }
+
+        /* Collect directories for this profile */
+        modified_directory_t *profile_dirs = NULL;
+        if (profile_dir_count > 0) {
+            profile_dirs = calloc(profile_dir_count, sizeof(modified_directory_t));
+            if (!profile_dirs) {
+                free(profile_files);
+                return ERROR(ERR_MEMORY, "Failed to allocate profile directories");
+            }
+
+            size_t dir_idx = 0;
+            for (size_t j = 0; j < modified_dirs->count; j++) {
+                if (modified_dirs->dirs[j].source_profile == profile) {
+                    profile_dirs[dir_idx++] = modified_dirs->dirs[j];
                 }
             }
         }
@@ -1320,8 +1724,11 @@ static error_t *update_execute_for_all_profiles(
             output_info(out, "Updating profile '%s':", profile->name);
         }
 
-        error_t *err = update_profile(repo, profile, profile_files, total_file_count, opts, out, config);
+        error_t *err = update_profile(repo, profile, profile_files, total_file_count,
+                                      profile_dirs, profile_dir_count,
+                                      opts, out, config);
         free(profile_files);
+        free(profile_dirs);
 
         if (err) {
             return error_wrap(err, "Failed to update profile '%s'", profile->name);
@@ -1330,8 +1737,9 @@ static error_t *update_execute_for_all_profiles(
         *total_updated += total_file_count;
 
         if (!opts->verbose) {
-            output_success(out, "  Updated %zu file%s",
-                          total_file_count, total_file_count == 1 ? "" : "s");
+            size_t total_items = total_file_count + profile_dir_count;
+            output_success(out, "  Updated %zu item%s",
+                          total_items, total_items == 1 ? "" : "s");
         }
     }
 
@@ -1352,6 +1760,7 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     profile_list_t *profiles = NULL;
     modified_file_list_t *modified = NULL;
     new_file_list_t *new_files = NULL;
+    modified_directory_list_t *modified_dirs = NULL;
     hook_context_t *hook_ctx = NULL;
     char *repo_dir = NULL;
     char *profiles_str = NULL;
@@ -1443,8 +1852,8 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     /* Determine if we should detect new files */
     should_detect_new = opts->include_new || opts->only_new || config->auto_detect_new_files;
 
-    /* Find diverged files (modified + new) using unified workspace analysis */
-    err = find_modified_and_new_files(repo, profiles, config, opts, out, &modified, &new_files);
+    /* Find diverged files and directories using unified workspace analysis */
+    err = find_modified_and_new_files(repo, profiles, config, opts, out, &modified, &new_files, &modified_dirs);
     if (err) {
         err = error_wrap(err, "Failed to analyze divergence");
         goto cleanup;
@@ -1468,14 +1877,14 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     }
 
     /* Check if we have anything to update */
-    size_t total_count = modified->count + (new_files ? new_files->count : 0);
+    size_t total_count = modified->count + (new_files ? new_files->count : 0) + (modified_dirs ? modified_dirs->count : 0);
     if (total_count == 0) {
         if (opts->only_new) {
             output_info(out, "No new files to add");
         } else if (opts->include_new) {
-            output_info(out, "No modified or new files to update");
+            output_info(out, "No modified or new files/directories to update");
         } else {
-            output_info(out, "No modified files to update");
+            output_info(out, "No modified files or directories to update");
         }
         err = NULL;  /* Not an error */
         goto cleanup;
@@ -1571,6 +1980,7 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
     /* Execute profile updates */
     err = update_execute_for_all_profiles(repo, profiles, modified,
                                           skip_new_files ? NULL : new_files,
+                                          modified_dirs,
                                           opts, out, config, &total_updated);
     if (err) {
         goto cleanup;
@@ -1603,6 +2013,7 @@ cleanup:
     if (hook_ctx) hook_context_free(hook_ctx);
     if (profiles_str) free(profiles_str);
     if (repo_dir) free(repo_dir);
+    if (modified_dirs) modified_directory_list_free(modified_dirs);
     if (new_files) new_file_list_free(new_files);
     if (modified) modified_file_list_free(modified);
     if (profiles) profile_list_free(profiles);

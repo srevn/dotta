@@ -8,6 +8,7 @@
 #include "workspace.h"
 
 #include <dirent.h>
+#include <errno.h>
 #include <grp.h>
 #include <pwd.h>
 #include <stdio.h>
@@ -844,6 +845,176 @@ static error_t *analyze_untracked_files(
 }
 
 /**
+ * Analyze directory metadata for divergence
+ *
+ * Checks if tracked directories have changed on the filesystem by comparing
+ * actual metadata (stat) against stored metadata from profiles.
+ *
+ * This is a 2-way comparison (metadata vs filesystem) because directories
+ * are NOT tracked in deployment state - they are metadata-only containers.
+ *
+ * Detects:
+ * - DIVERGENCE_DELETED: Directory removed from filesystem
+ * - DIVERGENCE_MODE_DIFF: Directory permissions changed
+ * - DIVERGENCE_OWNERSHIP: Directory owner/group changed (requires root)
+ *
+ * Only analyzes directories from enabled profiles in the workspace scope.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
+    CHECK_NULL(ws);
+    CHECK_NULL(ws->profiles);
+
+    error_t *err = NULL;
+
+    /* Check each enabled profile's tracked directories */
+    for (size_t p = 0; p < ws->profiles->count; p++) {
+        const char *profile_name = ws->profiles->profiles[p].name;
+
+        /* Get cached metadata for this profile */
+        const metadata_t *metadata = ws_get_metadata(ws, profile_name);
+        if (!metadata) {
+            /* Profile has no metadata - skip (this is normal for new profiles) */
+            continue;
+        }
+
+        /* Get tracked directories from metadata */
+        size_t dir_count = 0;
+        const metadata_directory_entry_t *directories =
+            metadata_get_all_tracked_directories(metadata, &dir_count);
+
+        if (dir_count == 0) {
+            continue;  /* No tracked directories in this profile */
+        }
+
+        /* Check each tracked directory */
+        for (size_t i = 0; i < dir_count; i++) {
+            const metadata_directory_entry_t *dir_entry = &directories[i];
+
+            /* Check if directory still exists */
+            if (!fs_exists(dir_entry->filesystem_path)) {
+                /* Directory deleted - record divergence */
+                err = workspace_add_diverged(
+                    ws,
+                    dir_entry->filesystem_path,
+                    dir_entry->storage_prefix,
+                    profile_name,
+                    DIVERGENCE_DELETED,
+                    true,   /* in_profile (tracked in metadata) */
+                    false,  /* in_state (directories never in deployment state) */
+                    false,  /* on_filesystem (deleted) */
+                    false   /* content_differs (N/A for deleted directories) */
+                );
+
+                if (err) {
+                    return error_wrap(err, "Failed to record deleted directory '%s'",
+                                     dir_entry->filesystem_path);
+                }
+                continue;
+            }
+
+            /* Stat directory to get current metadata */
+            struct stat dir_stat;
+            if (stat(dir_entry->filesystem_path, &dir_stat) != 0) {
+                /* Stat failed - log warning and continue (non-fatal) */
+                fprintf(stderr, "warning: failed to stat directory '%s': %s\n",
+                        dir_entry->filesystem_path, strerror(errno));
+                continue;
+            }
+
+            /* Verify it's actually a directory */
+            if (!S_ISDIR(dir_stat.st_mode)) {
+                /* Something replaced the directory with a non-directory - log warning */
+                fprintf(stderr, "warning: '%s' is no longer a directory\n",
+                        dir_entry->filesystem_path);
+                continue;
+            }
+
+            /* Extract current mode (permission bits only) */
+            mode_t actual_mode = dir_stat.st_mode & 0777;
+
+            /* Check for mode divergence */
+            if (actual_mode != dir_entry->mode) {
+                err = workspace_add_diverged(
+                    ws,
+                    dir_entry->filesystem_path,
+                    dir_entry->storage_prefix,
+                    profile_name,
+                    DIVERGENCE_MODE_DIFF,
+                    true,   /* in_profile */
+                    false,  /* in_state */
+                    true,   /* on_filesystem */
+                    true    /* content_differs (mode changed) */
+                );
+
+                if (err) {
+                    return error_wrap(err, "Failed to record directory mode divergence for '%s'",
+                                     dir_entry->filesystem_path);
+                }
+
+                /* Skip ownership check if mode differs (priority: mode > ownership) */
+                continue;
+            }
+
+            /* Check for ownership divergence (only when running as root AND metadata has ownership)
+             * Use effective UID (geteuid) to check privilege, not real UID (getuid).
+             * This correctly detects whether we have the capability to read ownership. */
+            bool running_as_root = (geteuid() == 0);
+            bool has_ownership = (dir_entry->owner != NULL || dir_entry->group != NULL);
+
+            if (running_as_root && has_ownership) {
+                bool ownership_differs = false;
+
+                /* Check owner if metadata has it */
+                if (dir_entry->owner) {
+                    struct passwd *pwd = getpwuid(dir_stat.st_uid);
+                    if (pwd && pwd->pw_name) {
+                        if (strcmp(dir_entry->owner, pwd->pw_name) != 0) {
+                            ownership_differs = true;
+                        }
+                    }
+                    /* If getpwuid fails, skip check (graceful degradation) */
+                }
+
+                /* Check group if metadata has it and owner check didn't already find divergence */
+                if (dir_entry->group && !ownership_differs) {
+                    struct group *grp = getgrgid(dir_stat.st_gid);
+                    if (grp && grp->gr_name) {
+                        if (strcmp(dir_entry->group, grp->gr_name) != 0) {
+                            ownership_differs = true;
+                        }
+                    }
+                    /* If getgrgid fails, skip check (graceful degradation) */
+                }
+
+                if (ownership_differs) {
+                    err = workspace_add_diverged(
+                        ws,
+                        dir_entry->filesystem_path,
+                        dir_entry->storage_prefix,
+                        profile_name,
+                        DIVERGENCE_OWNERSHIP,
+                        true,   /* in_profile */
+                        false,  /* in_state */
+                        true,   /* on_filesystem */
+                        true    /* content_differs (ownership changed) */
+                    );
+
+                    if (err) {
+                        return error_wrap(err, "Failed to record directory ownership divergence for '%s'",
+                                         dir_entry->filesystem_path);
+                    }
+                }
+            }
+        }
+    }
+
+    return NULL;
+}
+
+/**
  * Analyze encryption policy mismatches
  *
  * Detects files that should be encrypted (per auto-encrypt patterns)
@@ -1080,6 +1251,13 @@ error_t *workspace_load(
     if (err) {
         workspace_free(ws);
         return error_wrap(err, "Failed to analyze untracked files");
+    }
+
+    /* Analyze directory metadata for divergence */
+    err = analyze_directory_metadata_divergence(ws);
+    if (err) {
+        workspace_free(ws);
+        return error_wrap(err, "Failed to analyze directory metadata");
     }
 
     /* Analyze encryption policy mismatches */

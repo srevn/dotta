@@ -776,13 +776,10 @@ static error_t *analyze_untracked_files(
     for (size_t p = 0; p < ws->profiles->count; p++) {
         const char *profile_name = ws->profiles->profiles[p].name;
 
-        /* Load metadata for this profile */
-        metadata_t *metadata = NULL;
-        err = metadata_load_from_branch(ws->repo, profile_name, &metadata);
-        if (err) {
-            /* Non-fatal: profile may not have metadata yet */
-            error_free(err);
-            err = NULL;
+        /* Get cached metadata for this profile */
+        const metadata_t *metadata = ws_get_metadata(ws, profile_name);
+        if (!metadata) {
+            /* Profile has no metadata - skip */
             continue;
         }
 
@@ -841,8 +838,6 @@ static error_t *analyze_untracked_files(
                 err = NULL;
             }
         }
-
-        metadata_free(metadata);
     }
 
     return NULL;

@@ -1140,14 +1140,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         }
 
         output_newline(out);
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "%sHint: Run 'dotta apply -p %s' to deploy files to filesystem%s\n",
-                         output_color_code(out, OUTPUT_COLOR_DIM),
-                         opts->profile,
-                         output_color_code(out, OUTPUT_COLOR_RESET));
-        } else {
-            output_info(out, "Hint: Run 'dotta apply -p %s' to deploy files to filesystem", opts->profile);
-        }
+        output_hint(out, "Run 'dotta apply -p %s' to deploy files to filesystem", opts->profile);
     }
 
 cleanup:

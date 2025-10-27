@@ -365,17 +365,8 @@ static error_t *bootstrap_list(
         }
 
         output_newline(out);
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "%sHint: Create a bootstrap script with:%s\n",
-                         output_color_code(out, OUTPUT_COLOR_DIM),
-                         output_color_code(out, OUTPUT_COLOR_RESET));
-            output_printf(out, OUTPUT_NORMAL, "%s  dotta bootstrap --profile <profile> --edit%s\n",
-                         output_color_code(out, OUTPUT_COLOR_DIM),
-                         output_color_code(out, OUTPUT_COLOR_RESET));
-        } else {
-            output_info(out, "Hint: Create a bootstrap script with:");
-            output_info(out, "  dotta bootstrap --profile <profile> --edit");
-        }
+        output_hint(out, "Create a bootstrap script with:");
+        output_hint_line(out, "  dotta bootstrap --profile <profile> --edit");
     }
 
     return NULL;
@@ -478,17 +469,8 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
         if (profiles->count == 0) {
             output_info(out, "No profiles detected for this machine.");
             output_newline(out);
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "%sHint: Create a profile with:%s\n",
-                             output_color_code(out, OUTPUT_COLOR_DIM),
-                             output_color_code(out, OUTPUT_COLOR_RESET));
-                output_printf(out, OUTPUT_NORMAL, "%s  dotta add --profile <profile-name> <file>%s\n",
-                             output_color_code(out, OUTPUT_COLOR_DIM),
-                             output_color_code(out, OUTPUT_COLOR_RESET));
-            } else {
-                output_info(out, "Hint: Create a profile with:");
-                output_info(out, "  dotta add --profile <profile-name> <file>");
-            }
+            output_hint(out, "Create a profile with:");
+            output_hint_line(out, "  dotta add --profile <profile-name> <file>");
             goto cleanup;
         }
     }
@@ -537,17 +519,8 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
             output_printf(out, OUTPUT_NORMAL, "  - %s\n", profiles->profiles[i].name);
         }
         output_newline(out);
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "%sHint: Create a bootstrap script with:%s\n",
-                         output_color_code(out, OUTPUT_COLOR_DIM),
-                         output_color_code(out, OUTPUT_COLOR_RESET));
-            output_printf(out, OUTPUT_NORMAL, "%s  dotta bootstrap --profile <profile> --edit%s\n",
-                         output_color_code(out, OUTPUT_COLOR_DIM),
-                         output_color_code(out, OUTPUT_COLOR_RESET));
-        } else {
-            output_info(out, "Hint: Create a bootstrap script with:");
-            output_info(out, "  dotta bootstrap --profile <profile> --edit");
-        }
+        output_hint(out, "Create a bootstrap script with:");
+        output_hint_line(out, "  dotta bootstrap --profile <profile> --edit");
         goto cleanup;
     }
 

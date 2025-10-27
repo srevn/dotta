@@ -312,7 +312,8 @@ error_t *cmd_init(const cmd_init_options_t *opts) {
                      output_color_code(out, OUTPUT_COLOR_RESET));
     } else {
         output_info(out, "Next steps:");
-        output_info(out, "  Create a profile: dotta add --profile global ~/.bashrc");
+        output_info(out, "  1. Create a profile: dotta add --profile global ~/.bashrc");
+        output_info(out, "  2. Apply profiles: dotta apply");
     }
 
 cleanup:

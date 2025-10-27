@@ -154,7 +154,7 @@ static error_t *profile_list(
         output_newline(out);
     } else {
         output_info(out, "No enabled profiles");
-        output_info(out, "Hint: Run 'dotta profile enable <name>' to enable a profile\n");
+        output_hint(out, "Run 'dotta profile enable <name>' to enable a profile");
     }
 
     /* Print available (disabled) profiles */
@@ -584,7 +584,7 @@ static error_t *profile_enable(
         /* Check if profile exists */
         if (!profile_exists(repo, profile_name)) {
             output_warning(out, "Profile '%s' does not exist locally", profile_name);
-            output_info(out, "  Hint: Run 'dotta profile fetch %s' first", profile_name);
+            output_hint(out, "  Run 'dotta profile fetch %s' first", profile_name);
             not_found++;
             continue;
         }
@@ -1197,7 +1197,7 @@ static error_t *profile_validate(
             output_success(out, "✓ Removed missing profiles from state\n");
             fixed_enabled_profiles = true;
         } else {
-            output_info(out, "Hint: Run 'dotta profile validate --fix' to remove them\n");
+            output_hint(out, "Run 'dotta profile validate --fix' to remove them");
         }
     }
 
@@ -1225,7 +1225,7 @@ static error_t *profile_validate(
                       orphaned_files,
                       orphaned_files == 1 ? "y" : "ies");
         output_info(out, "  These reference non-existent profiles");
-        output_info(out, "  Hint: Run 'dotta apply' to clean up\n");
+        output_hint(out, "  Run 'dotta apply' to clean up");
     }
 
 cleanup:

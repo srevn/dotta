@@ -564,7 +564,7 @@ static error_t *sync_push_phase(
                     output_info(out, "↓ %s: remote has %zu new commit%s",
                            colored ? colored : result->profile_name,
                            result->behind, result->behind == 1 ? "" : "s");
-                    output_info(out, "   Hint: Run 'dotta pull' or enable auto_pull in config to automatically pull");
+                    output_hint(out, "   Run 'dotta pull' or enable auto_pull in config to automatically pull");
                     free(colored);
                 }
                 break;
@@ -581,8 +581,8 @@ static error_t *sync_push_phase(
                 error_t *err = NULL;
                 switch (diverged_strategy) {
                     case DIVERGE_WARN:
-                        output_info(out, "   Hint: Use --diverged=<strategy> or set sync.diverged_strategy in config");
-                        output_info(out, "   Strategies: rebase, merge, ours (keep local), theirs (keep remote)");
+                        output_hint(out, "   Use --diverged=<strategy> or set sync.diverged_strategy in config");
+                        output_hint_line(out, "   Strategies: rebase, merge, ours (keep local), theirs (keep remote)");
                         results->diverged_count++;
                         break;
 

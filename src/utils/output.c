@@ -381,6 +381,85 @@ void output_debug(const output_ctx_t *ctx, const char *fmt, ...) {
     fprintf(ctx->stream, "\n");
 }
 
+void output_hint(const output_ctx_t *ctx, const char *fmt, ...) {
+    if (!ctx || !fmt) {
+        return;
+    }
+
+    if (ctx->verbosity < OUTPUT_NORMAL) {
+        return;
+    }
+
+    /* Count leading whitespace in format string */
+    const char *p = fmt;
+    while (*p == ' ' || *p == '\t') {
+        p++;
+    }
+    size_t leading_ws = p - fmt;
+
+    if (ctx->color_enabled) {
+        /* Print leading whitespace (uncolored) */
+        if (leading_ws > 0) {
+            fprintf(ctx->stream, "%.*s", (int)leading_ws, fmt);
+        }
+
+        /* Print "Hint: " and message content with DIM color */
+        fprintf(ctx->stream, "%sHint: ", ANSI_DIM);
+
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(ctx->stream, p, args);  /* Use p to skip leading whitespace */
+        va_end(args);
+
+        fprintf(ctx->stream, "%s\n", ANSI_RESET);
+    } else {
+        /* No color mode */
+        /* Print leading whitespace */
+        if (leading_ws > 0) {
+            fprintf(ctx->stream, "%.*s", (int)leading_ws, fmt);
+        }
+
+        fprintf(ctx->stream, "Hint: ");
+
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(ctx->stream, p, args);  /* Use p to skip leading whitespace */
+        va_end(args);
+
+        fprintf(ctx->stream, "\n");
+    }
+}
+
+void output_hint_line(const output_ctx_t *ctx, const char *fmt, ...) {
+    if (!ctx || !fmt) {
+        return;
+    }
+
+    if (ctx->verbosity < OUTPUT_NORMAL) {
+        return;
+    }
+
+    if (ctx->color_enabled) {
+        /* No prefix, but still DIM color */
+        fprintf(ctx->stream, "%s", ANSI_DIM);
+
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(ctx->stream, fmt, args);
+        va_end(args);
+
+        fprintf(ctx->stream, "%s\n", ANSI_RESET);
+    } else {
+        /* No color mode */
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(ctx->stream, fmt, args);
+        va_end(args);
+
+        fprintf(ctx->stream, "\n");
+    }
+}
+
 void output_newline(const output_ctx_t *ctx) {
     if (!ctx) {
         return;

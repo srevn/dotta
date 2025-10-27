@@ -171,6 +171,46 @@ void output_debug(const output_ctx_t *ctx, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
 
 /**
+ * Print hint message (always dimmed when colors enabled)
+ *
+ * Automatically adds "Hint: " prefix and applies DIM styling to the entire
+ * message. Supports printf-style formatting. Respects verbosity (requires
+ * OUTPUT_NORMAL). Leading whitespace is preserved for indentation support.
+ *
+ * @param ctx Output context
+ * @param fmt Printf-style format string
+ *
+ * Examples:
+ *   output_hint(out, "Run 'dotta apply' to deploy files");
+ *   → "Hint: Run 'dotta apply' to deploy files" (entire line dimmed)
+ *
+ *   output_hint(out, "  Run 'dotta profile fetch %s' first", name);
+ *   → "  Hint: Run 'dotta profile fetch foo' first" (dimmed, indented)
+ */
+void output_hint(const output_ctx_t *ctx, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
+
+/**
+ * Print hint continuation line (no "Hint:" prefix, but still dimmed)
+ *
+ * For multi-line hints where only the first line has "Hint:" prefix.
+ * Still applies DIM color and respects verbosity. Use for continuation lines.
+ * Leading whitespace is preserved for indentation.
+ *
+ * @param ctx Output context
+ * @param fmt Printf-style format string
+ *
+ * Example:
+ *   output_hint(out, "Create a bootstrap script with:");
+ *   output_hint_line(out, "  dotta bootstrap --profile <profile> --edit");
+ *   → Output:
+ *   "Hint: Create a bootstrap script with:" (dimmed)
+ *   "  dotta bootstrap --profile <profile> --edit" (dimmed)
+ */
+void output_hint_line(const output_ctx_t *ctx, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
+
+/**
  * Print newline (respects verbosity)
  *
  * Use this instead of fprintf(out->stream, "\n") for consistent

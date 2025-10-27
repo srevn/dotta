@@ -287,8 +287,6 @@ static void print_safety_violations(
     output_info(out, "These files are from disabled profiles but have uncommitted changes.");
     output_info(out, "To prevent data loss, commit changes before removing:");
     output_newline(out);
-    output_info(out, "Options:");
-    output_info(out, "  1. Commit changes to the profile:");
 
     /* Get first violation's profile for example commands */
     const char *example_profile = NULL;
@@ -296,20 +294,23 @@ static void print_safety_violations(
         example_profile = safety_result->violations[0].source_profile;
     }
 
+    output_hint(out, "Options:");
+    output_hint_line(out, "  1. Commit changes to the profile:");
+
     if (example_profile) {
-        output_info(out, "     dotta update -p %s <files>", example_profile);
-        output_info(out, "     dotta apply");
+        output_hint_line(out, "     dotta update -p %s <files>", example_profile);
+        output_hint_line(out, "     dotta apply");
     } else {
-        output_info(out, "     dotta update <files>");
-        output_info(out, "     dotta apply");
+        output_hint_line(out, "     dotta update <files>");
+        output_hint_line(out, "     dotta apply");
     }
 
-    output_info(out, "  2. Force removal (discards changes):");
-    output_info(out, "     dotta apply --force");
-    output_info(out, "  3. Keep the profile enabled:");
+    output_hint_line(out, "  2. Force removal (discards changes):");
+    output_hint_line(out, "     dotta apply --force");
+    output_hint_line(out, "  3. Keep the profile enabled:");
 
     if (example_profile) {
-        output_info(out, "     dotta profile enable %s", example_profile);
+        output_hint_line(out, "     dotta profile enable %s", example_profile);
     }
 }
 

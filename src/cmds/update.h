@@ -28,6 +28,10 @@ typedef struct {
     bool verbose;                   /* Verbose output */
     bool include_new;               /* Include new files from tracked directories */
     bool only_new;                  /* Only process new files (ignore modified) */
+
+    /* Privilege re-exec support */
+    int argc;                       /* Original argc (for privilege re-exec) */
+    char **argv;                    /* Original argv (for privilege re-exec) */
 } cmd_update_options_t;
 
 /**

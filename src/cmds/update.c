@@ -29,6 +29,7 @@
 #include "utils/hooks.h"
 #include "utils/match.h"
 #include "utils/output.h"
+#include "utils/privilege.h"
 #include "utils/string.h"
 
 /**
@@ -1460,6 +1461,58 @@ error_t *cmd_update(git_repository *repo, const cmd_update_options_t *opts) {
         }
         err = NULL;  /* Not an error */
         goto cleanup;
+    }
+
+    /* PRE-FLIGHT PRIVILEGE CHECK
+     *
+     * This check happens AFTER finding modified files but BEFORE any write
+     * operations begin. If elevation is needed, the process will re-exec with
+     * sudo, and all operations will restart cleanly from main().
+     *
+     * NOTE: Pre-update hook may run twice on re-exec (once before privilege
+     * check, once after). Hooks should be idempotent to handle this correctly.
+     *
+     * If re-exec succeeds, this function DOES NOT RETURN.
+     */
+    if (modified && modified->count > 0) {
+        /* Extract storage paths from modified files */
+        const char **storage_paths = calloc(modified->count, sizeof(char *));
+        if (!storage_paths) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
+            goto cleanup;
+        }
+
+        for (size_t i = 0; i < modified->count; i++) {
+            storage_paths[i] = modified->files[i].storage_path;
+        }
+
+        /* Check privilege requirements
+         *
+         * If root/ files detected without root privileges:
+         * - Interactive: Prompts user, re-execs with sudo if approved
+         * - Non-interactive: Returns error with clear message
+         *
+         * If re-exec succeeds, this function DOES NOT RETURN.
+         * If re-exec fails or user declines, returns error.
+         */
+        err = privilege_ensure_for_operation(
+            storage_paths,
+            modified->count,
+            "update",
+            opts->interactive,  /* Use existing interactive flag */
+            opts->argc,
+            opts->argv,
+            out
+        );
+
+        free(storage_paths);
+
+        if (err) {
+            /* User declined elevation or non-interactive mode blocked it */
+            goto cleanup;
+        }
+
+        /* If we reach here, privileges are OK - proceed with operation */
     }
 
     /* Display summary of files to update */

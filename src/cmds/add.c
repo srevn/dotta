@@ -28,6 +28,7 @@
 #include "utils/config.h"
 #include "utils/hooks.h"
 #include "utils/output.h"
+#include "utils/privilege.h"
 #include "utils/string.h"
 
 /**
@@ -605,6 +606,87 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     /* CLI flags override config */
     if (opts->verbose) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
+    }
+
+    /* PRE-FLIGHT PRIVILEGE CHECK
+     *
+     * This check happens BEFORE any operations begin to ensure we have required
+     * privileges. If elevation is needed, the process will re-exec with sudo,
+     * and all operations will restart cleanly from main().
+     *
+     * CRITICAL: Must happen before:
+     * - Hook execution (avoids double execution on re-exec)
+     * - Worktree creation (avoids resource leaks)
+     * - Any filesystem modifications (ensures clean restart)
+     *
+     * If re-exec succeeds, this function DOES NOT RETURN.
+     */
+    {
+        /* Build array of storage paths by pre-resolving all file paths */
+        const char **storage_paths = calloc(opts->file_count, sizeof(char *));
+        char **allocated_paths = calloc(opts->file_count, sizeof(char *));
+
+        if (!storage_paths || !allocated_paths) {
+            free(storage_paths);
+            free(allocated_paths);
+            err = ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
+            goto cleanup;
+        }
+
+        /* Resolve all filesystem paths to storage paths */
+        for (size_t i = 0; i < opts->file_count; i++) {
+            const char *file_path = opts->files[i];
+            char *storage_path = NULL;
+            path_prefix_t prefix;
+
+            err = path_to_storage(file_path, &storage_path, &prefix);
+            if (err) {
+                /* Cleanup allocated paths on error */
+                for (size_t j = 0; j < i; j++) {
+                    free(allocated_paths[j]);
+                }
+                free(storage_paths);
+                free(allocated_paths);
+                err = error_wrap(err, "Failed to resolve path '%s'", file_path);
+                goto cleanup;
+            }
+
+            allocated_paths[i] = storage_path;
+            storage_paths[i] = storage_path;
+        }
+
+        /* Check privilege requirements
+         *
+         * If root/ files detected without root privileges:
+         * - Interactive: Prompts user, re-execs with sudo if approved
+         * - Non-interactive: Returns error with clear message
+         *
+         * If re-exec succeeds, this function DOES NOT RETURN.
+         * If re-exec fails or user declines, returns error.
+         */
+        err = privilege_ensure_for_operation(
+            storage_paths,
+            opts->file_count,
+            "add",
+            true,  /* interactive = true (default for add) */
+            opts->argc,
+            opts->argv,
+            out
+        );
+
+        /* Cleanup storage paths array */
+        for (size_t i = 0; i < opts->file_count; i++) {
+            free(allocated_paths[i]);
+        }
+        free(storage_paths);
+        free(allocated_paths);
+
+        if (err) {
+            /* User declined elevation or non-interactive mode blocked it */
+            goto cleanup;
+        }
+
+        /* If we reach here, privileges are OK - proceed with operation */
     }
 
     /* Create ignore context */

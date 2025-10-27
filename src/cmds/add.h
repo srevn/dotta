@@ -25,6 +25,10 @@ typedef struct {
     bool verbose;               /* Print verbose output */
     bool encrypt;               /* Force encryption (--encrypt flag) */
     bool no_encrypt;            /* Force no encryption (--no-encrypt flag) */
+
+    /* Privilege re-exec support */
+    int argc;                   /* Original argc (for privilege re-exec) */
+    char **argv;                /* Original argv (for privilege re-exec) */
 } cmd_add_options_t;
 
 /**

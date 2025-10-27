@@ -139,7 +139,9 @@ static int cmd_add_main(int argc, char **argv) {
         .force = false,
         .verbose = false,
         .encrypt = false,
-        .no_encrypt = false
+        .no_encrypt = false,
+        .argc = argc,
+        .argv = argv
     };
 
     /* Collect file and exclude pattern arguments */
@@ -1098,7 +1100,9 @@ static int cmd_update_main(int argc, char **argv) {
         .interactive = false,
         .verbose = false,
         .include_new = false,
-        .only_new = false
+        .only_new = false,
+        .argc = argc,
+        .argv = argv
     };
 
     /* Collect file and profile arguments */

@@ -23,6 +23,7 @@
 #include <unistd.h>
 
 #include "utils/string.h"
+#include "utils/terminal.h"
 
 /**
  * Check if running with elevated privileges
@@ -350,7 +351,7 @@ error_t *privilege_ensure_for_operation(
     error_t *result = NULL;
 
     /* Check if we can prompt user interactively */
-    if (interactive && isatty(STDIN_FILENO)) {
+    if (interactive && terminal_is_tty()) {
         /* Interactive mode: prompt for confirmation */
         if (prompt_for_elevation(out)) {
             /* User approved - re-exec with sudo */

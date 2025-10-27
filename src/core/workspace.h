@@ -32,12 +32,13 @@
  * Represents a single item (file or directory) with divergence between states.
  *
  * Items can be:
- * - Files: Tracked in profile, deployment state, and filesystem
- * - Directories: Tracked in profile metadata only (in_state is always false)
+ * - Files (WORKSPACE_ITEM_FILE): Have content, tracked in profile and state,
+ *   deployed to filesystem
+ * - Directories (WORKSPACE_ITEM_DIRECTORY): Metadata-only, tracked in profile,
+ *   never in deployment state (created implicitly when files are deployed)
  *
- * Use in_state flag to distinguish:
- * - Files: in_state can be true (when deployed)
- * - Directories: in_state is always false (never in deployment state)
+ * Use item_kind to distinguish between files and directories. Invariant:
+ * directories always have in_state == false.
  */
 typedef struct {
     char *filesystem_path;      /* Target path on filesystem */
@@ -45,11 +46,14 @@ typedef struct {
     char *profile;              /* Source profile name */
     divergence_type_t type;     /* Divergence category */
 
+    /* Item classification */
+    workspace_item_kind_t item_kind;  /* FILE or DIRECTORY (explicit type) */
+
     /* State flags */
     bool in_profile;            /* Exists in profile branch */
-    bool in_state;              /* Exists in deployment state (files only, never true for directories) */
+    bool in_state;              /* Exists in deployment state (only meaningful for FILES) */
     bool on_filesystem;         /* Exists on actual filesystem */
-    bool content_differs;       /* Content changed (if on filesystem) */
+    bool content_differs;       /* Content changed (only meaningful for FILES) */
 } workspace_item_t;
 
 /**

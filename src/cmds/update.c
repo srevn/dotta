@@ -479,10 +479,9 @@ static error_t *find_modified_and_new_files(
         for (size_t i = 0; i < count; i++) {
             const workspace_item_t *item = items[i];
 
-            /* Skip directories - they are handled separately in the directory loop below
-             * Directories have in_state==false (never in deployment state) */
-            if (!item->in_state) {
-                continue;  /* This is a directory, not a file */
+            /* Skip directories - they are handled separately in the directory loop below */
+            if (item->item_kind == WORKSPACE_ITEM_DIRECTORY) {
+                continue;
             }
 
             /* Apply filter if specified */
@@ -599,10 +598,9 @@ static error_t *find_modified_and_new_files(
         for (size_t i = 0; i < count; i++) {
             const workspace_item_t *item = items[i];
 
-            /* Skip files - we only want directories here
-             * Directories have in_state==false (never in deployment state) */
-            if (item->in_state) {
-                continue;  /* This is a file, not a directory */
+            /* Skip files - we only want directories here */
+            if (item->item_kind == WORKSPACE_ITEM_FILE) {
+                continue;
             }
 
             /* Apply filter if specified */

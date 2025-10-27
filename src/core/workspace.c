@@ -241,7 +241,12 @@ static error_t *check_metadata_divergence(
 }
 
 /**
- * Add diverged file to workspace
+ * Add diverged item to workspace
+ *
+ * Adds a file or directory with divergence to the workspace tracking list.
+ *
+ * @param item_kind Explicit type (FILE or DIRECTORY)
+ * @param in_state Must be false for directories (invariant enforced)
  */
 static error_t *workspace_add_diverged(
     workspace_t *ws,
@@ -249,6 +254,7 @@ static error_t *workspace_add_diverged(
     const char *storage_path,
     const char *profile,
     divergence_type_t type,
+    workspace_item_kind_t item_kind,
     bool in_profile,
     bool in_state,
     bool on_filesystem,
@@ -256,6 +262,13 @@ static error_t *workspace_add_diverged(
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(filesystem_path);
+
+    /* Validate invariant: directories never in deployment state */
+    if (item_kind == WORKSPACE_ITEM_DIRECTORY && in_state) {
+        return ERROR(ERR_INTERNAL,
+            "Invariant violation: directory '%s' marked as in_state (directories never in deployment state)",
+            filesystem_path);
+    }
 
     /* Grow array if needed */
     if (ws->diverged_count >= ws->diverged_capacity) {
@@ -277,6 +290,7 @@ static error_t *workspace_add_diverged(
     entry->storage_path = storage_path ? strdup(storage_path) : NULL;
     entry->profile = profile ? strdup(profile) : NULL;
     entry->type = type;
+    entry->item_kind = item_kind;
     entry->in_profile = in_profile;
     entry->in_state = in_state;
     entry->on_filesystem = on_filesystem;
@@ -409,7 +423,8 @@ static error_t *analyze_file_divergence(
                 div_type = DIVERGENCE_MODIFIED;
                 content_differs = true;
                 return workspace_add_diverged(ws, fs_path, storage_path, profile,
-                                             div_type, in_profile, in_state,
+                                             div_type, WORKSPACE_ITEM_FILE,
+                                             in_profile, in_state,
                                              on_filesystem, content_differs);
 
             case CMP_MODE_DIFF:
@@ -423,7 +438,8 @@ static error_t *analyze_file_divergence(
                 div_type = DIVERGENCE_TYPE_DIFF;
                 content_differs = true;
                 return workspace_add_diverged(ws, fs_path, storage_path, profile,
-                                             div_type, in_profile, in_state,
+                                             div_type, WORKSPACE_ITEM_FILE,
+                                             in_profile, in_state,
                                              on_filesystem, content_differs);
 
             case CMP_MISSING:
@@ -431,7 +447,8 @@ static error_t *analyze_file_divergence(
                 div_type = DIVERGENCE_DELETED;
                 content_differs = false;
                 return workspace_add_diverged(ws, fs_path, storage_path, profile,
-                                             div_type, in_profile, in_state,
+                                             div_type, WORKSPACE_ITEM_FILE,
+                                             in_profile, in_state,
                                              on_filesystem, content_differs);
         }
 
@@ -465,7 +482,8 @@ static error_t *analyze_file_divergence(
     /* Add divergence if anything differs, or return NULL if clean */
     if (div_type != DIVERGENCE_CLEAN) {
         return workspace_add_diverged(ws, fs_path, storage_path, profile,
-                                     div_type, in_profile, in_state,
+                                     div_type, WORKSPACE_ITEM_FILE,
+                                     in_profile, in_state,
                                      on_filesystem, content_differs);
     }
 
@@ -518,6 +536,7 @@ static error_t *analyze_orphaned_state(workspace_t *ws) {
                 state_entry->storage_path,
                 state_entry->profile,
                 DIVERGENCE_ORPHANED,
+                WORKSPACE_ITEM_FILE,
                 false,     /* not in profile */
                 true,      /* in state */
                 on_filesystem,
@@ -731,6 +750,7 @@ static error_t *scan_directory_for_untracked(
                     storage_path,
                     profile,
                     DIVERGENCE_UNTRACKED,
+                    WORKSPACE_ITEM_FILE,
                     false,  /* not in profile */
                     false,  /* not in state */
                     true,   /* on filesystem */
@@ -902,6 +922,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                     dir_entry->storage_prefix,
                     profile_name,
                     DIVERGENCE_DELETED,
+                    WORKSPACE_ITEM_DIRECTORY,
                     true,   /* in_profile (tracked in metadata) */
                     false,  /* in_state (directories never in deployment state) */
                     false,  /* on_filesystem (deleted) */
@@ -943,6 +964,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                     dir_entry->storage_prefix,
                     profile_name,
                     DIVERGENCE_MODE_DIFF,
+                    WORKSPACE_ITEM_DIRECTORY,
                     true,   /* in_profile */
                     false,  /* in_state */
                     true,   /* on_filesystem */
@@ -996,6 +1018,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                         dir_entry->storage_prefix,
                         profile_name,
                         DIVERGENCE_OWNERSHIP,
+                        WORKSPACE_ITEM_DIRECTORY,
                         true,   /* in_profile */
                         false,  /* in_state */
                         true,   /* on_filesystem */
@@ -1136,6 +1159,7 @@ static error_t *analyze_encryption_policy_mismatch(
                 storage_path,
                 profile_name,
                 DIVERGENCE_ENCRYPTION,
+                WORKSPACE_ITEM_FILE,
                 true,  /* in profile */
                 false, /* in_state (not relevant for policy mismatch) */
                 false, /* on_filesystem (not relevant for policy mismatch) */

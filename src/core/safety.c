@@ -280,7 +280,7 @@ static bool try_fast_path_check(
         }
 
         /* Compare plaintext to disk */
-        err = compare_buffer_to_disk(plaintext, filesystem_path, expected_mode, &cmp_result);
+        err = compare_buffer_to_disk(plaintext, filesystem_path, expected_mode, NULL, &cmp_result, NULL);
 
         /* Free owned buffer if we allocated it */
         if (owns_buffer) {
@@ -449,7 +449,7 @@ static error_t *check_file_with_tree(
 
     /* Compare decrypted content to disk file */
     compare_result_t cmp_result;
-    err = compare_buffer_to_disk(content, filesystem_path, mode, &cmp_result);
+    err = compare_buffer_to_disk(content, filesystem_path, mode, NULL, &cmp_result, NULL);
 
     /* Free resources immediately */
     buffer_free(content);

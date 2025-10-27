@@ -28,30 +28,57 @@ const char *compare_result_string(compare_result_t result) {
 }
 
 /**
- * Compare buffer content to disk file
+ * Compare buffer content to disk file with stat propagation
  *
- * Pure function with zero git/encryption knowledge.
- * Designed for use with decrypted content from the content layer.
+ * Optimized to minimize filesystem syscalls by:
+ * 1. Accepting pre-captured stat (in_stat parameter)
+ * 2. Returning stat for caller reuse (out_stat parameter)
+ * 3. Using single lstat/fstat for all type/size/mode checks
  */
 error_t *compare_buffer_to_disk(
     const buffer_t *content,
     const char *disk_path,
     git_filemode_t expected_mode,
-    compare_result_t *result
+    const struct stat *in_stat,
+    compare_result_t *result,
+    struct stat *out_stat
 ) {
     CHECK_NULL(content);
     CHECK_NULL(disk_path);
     CHECK_NULL(result);
 
-    /* Check file exists */
-    if (!fs_exists(disk_path)) {
-        *result = CMP_MISSING;
-        return NULL;
+    struct stat st;
+    const struct stat *stat_ptr;
+
+    /* Stat handling: use provided stat or capture new one */
+    if (in_stat) {
+        /* Caller provided stat - use it (zero syscalls) */
+        stat_ptr = in_stat;
+        if (out_stat) {
+            memcpy(out_stat, in_stat, sizeof(struct stat));
+        }
+    } else {
+        /* Need to stat - use lstat to detect symlinks correctly */
+        if (lstat(disk_path, &st) != 0) {
+            if (errno == ENOENT) {
+                /* File doesn't exist - not an error, just report it */
+                *result = CMP_MISSING;
+                if (out_stat) {
+                    memset(out_stat, 0, sizeof(*out_stat));
+                }
+                return NULL;
+            }
+            return ERROR(ERR_FS, "Failed to stat '%s': %s", disk_path, strerror(errno));
+        }
+        stat_ptr = &st;
+        if (out_stat) {
+            memcpy(out_stat, &st, sizeof(struct stat));
+        }
     }
 
-    /* Handle symlinks */
+    /* Handle symlinks using captured stat */
     if (expected_mode == GIT_FILEMODE_LINK) {
-        if (!fs_is_symlink(disk_path)) {
+        if (!fs_stat_is_symlink(stat_ptr)) {
             *result = CMP_TYPE_DIFF;
             return NULL;
         }
@@ -72,46 +99,37 @@ error_t *compare_buffer_to_disk(
         return NULL;
     }
 
-    /* Handle regular files */
+    /* Handle regular files using captured stat */
     if (expected_mode == GIT_FILEMODE_BLOB ||
         expected_mode == GIT_FILEMODE_BLOB_EXECUTABLE) {
 
-        /* Check disk is also regular file */
-        if (fs_is_symlink(disk_path)) {
+        /* Check disk is also regular file (using captured stat - no syscall) */
+        if (fs_stat_is_symlink(stat_ptr)) {
             *result = CMP_TYPE_DIFF;
             return NULL;
         }
 
-        if (!fs_file_exists(disk_path)) {
+        if (!fs_stat_is_regular(stat_ptr)) {
             *result = CMP_TYPE_DIFF;
             return NULL;
         }
 
-        /* Open disk file for optimized comparison */
-        int fd = open(disk_path, O_RDONLY);
-        if (fd < 0) {
-            return ERROR(ERR_FS, "Failed to open '%s': %s", disk_path, strerror(errno));
-        }
-
-        /* Get disk file size */
-        struct stat st;
-        if (fstat(fd, &st) < 0) {
-            int saved_errno = errno;
-            close(fd);
-            return ERROR(ERR_FS, "Failed to stat '%s': %s", disk_path, strerror(saved_errno));
-        }
-
-        /* Compare sizes first - fast path */
-        if (buffer_size(content) != (size_t)st.st_size) {
+        /* Fast path: compare sizes using captured stat (no open needed yet) */
+        if (buffer_size(content) != (size_t)stat_ptr->st_size) {
             *result = CMP_DIFFERENT;
-            close(fd);
             return NULL;
         }
 
-        /* For non-empty files, compare content */
-        if (st.st_size > 0) {
-            /* Memory-map the disk file for efficient comparison */
-            void *disk_data = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+        /* Sizes match - need content comparison for non-empty files */
+        if (stat_ptr->st_size > 0) {
+            /* Open file for content comparison */
+            int fd = open(disk_path, O_RDONLY);
+            if (fd < 0) {
+                return ERROR(ERR_FS, "Failed to open '%s': %s", disk_path, strerror(errno));
+            }
+
+            /* Memory-map for efficient comparison */
+            void *disk_data = mmap(NULL, stat_ptr->st_size, PROT_READ, MAP_PRIVATE, fd, 0);
             if (disk_data == MAP_FAILED) {
                 /* mmap failed - fall back to buffered reading */
                 close(fd);
@@ -131,11 +149,11 @@ error_t *compare_buffer_to_disk(
                     return NULL;
                 }
             } else {
-                /* Compare content using memory-mapped data */
+                /* Compare using memory-mapped data */
                 int cmp = memcmp(buffer_data(content), disk_data, buffer_size(content));
 
                 /* Cleanup */
-                munmap(disk_data, st.st_size);
+                munmap(disk_data, stat_ptr->st_size);
                 close(fd);
 
                 if (cmp != 0) {
@@ -143,14 +161,11 @@ error_t *compare_buffer_to_disk(
                     return NULL;
                 }
             }
-        } else {
-            /* Empty files - content trivially equal */
-            close(fd);
         }
 
-        /* Content equal - check executable bit */
+        /* Content equal - check executable bit using captured stat (no syscall) */
         bool expect_exec = (expected_mode == GIT_FILEMODE_BLOB_EXECUTABLE);
-        bool is_exec = fs_is_executable(disk_path);
+        bool is_exec = fs_stat_is_executable(stat_ptr);
 
         if (expect_exec != is_exec) {
             *result = CMP_MODE_DIFF;
@@ -403,7 +418,7 @@ static error_t *generate_text_diff(
 }
 
 /**
- * Generate diff from buffer content to disk file
+ * Generate diff from buffer content to disk file with stat propagation
  */
 error_t *compare_generate_diff(
     git_repository *repo,
@@ -411,6 +426,7 @@ error_t *compare_generate_diff(
     const char *disk_path,
     const char *path_label,
     git_filemode_t mode,
+    const struct stat *in_stat,
     compare_direction_t direction,
     file_diff_t **out
 ) {
@@ -431,8 +447,9 @@ error_t *compare_generate_diff(
         return ERROR(ERR_MEMORY, "Failed to allocate path");
     }
 
-    /* Perform comparison using buffer */
-    error_t *err = compare_buffer_to_disk(content, disk_path, mode, &diff->status);
+    /* Perform comparison using buffer with optional stat */
+    struct stat file_stat;
+    error_t *err = compare_buffer_to_disk(content, disk_path, mode, in_stat, &diff->status, &file_stat);
     if (err) {
         free(diff->path);
         free(diff);
@@ -443,12 +460,13 @@ error_t *compare_generate_diff(
     if (diff->status == CMP_MISSING) {
         diff->diff_text = strdup("File not deployed on disk");
     } else if (diff->status == CMP_TYPE_DIFF) {
-        /* Type mismatch - describe what's different */
+        /* Type mismatch - describe what's different using captured stat */
         const char *expected = (mode == GIT_FILEMODE_LINK) ? "symlink" : "regular file";
         const char *actual = "unknown";
 
-        if (fs_exists(disk_path)) {
-            actual = fs_is_symlink(disk_path) ? "symlink" : "regular file";
+        /* Use captured stat from compare_buffer_to_disk if available */
+        if (file_stat.st_mode != 0) {
+            actual = fs_stat_is_symlink(&file_stat) ? "symlink" : "regular file";
         }
 
         /* Calculate exact buffer size needed for format string */

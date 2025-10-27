@@ -347,6 +347,45 @@ bool fs_exists(const char *path);
 bool fs_lexists(const char *path);
 
 /**
+ * Stat-based type checking helpers
+ *
+ * These helpers accept pre-captured stat data to avoid redundant syscalls.
+ * Use these when you've already stat'd a file and need to check its type.
+ */
+
+/**
+ * Check if stat represents a symlink
+ *
+ * @param st Stat data (must not be NULL)
+ * @return true if S_ISLNK(st->st_mode)
+ */
+bool fs_stat_is_symlink(const struct stat *st);
+
+/**
+ * Check if stat represents a regular file
+ *
+ * @param st Stat data (must not be NULL)
+ * @return true if S_ISREG(st->st_mode)
+ */
+bool fs_stat_is_regular(const struct stat *st);
+
+/**
+ * Check if stat represents a directory
+ *
+ * @param st Stat data (must not be NULL)
+ * @return true if S_ISDIR(st->st_mode)
+ */
+bool fs_stat_is_directory(const struct stat *st);
+
+/**
+ * Check if stat represents an executable file
+ *
+ * @param st Stat data (must not be NULL)
+ * @return true if owner execute bit is set (st->st_mode & S_IXUSR)
+ */
+bool fs_stat_is_executable(const struct stat *st);
+
+/**
  * Privilege and ownership operations
  */
 

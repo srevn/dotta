@@ -153,7 +153,7 @@ static error_t *show_file_diff(
     /* Compare buffer to disk (works with decrypted content) */
     git_filemode_t mode = git_tree_entry_filemode(entry->entry);
     compare_result_t cmp_result;
-    err = compare_buffer_to_disk(content, entry->filesystem_path, mode, &cmp_result);
+    err = compare_buffer_to_disk(content, entry->filesystem_path, mode, NULL, &cmp_result, NULL);
 
     if (err) {
         return error_wrap(err, "Failed to compare '%s'", entry->filesystem_path);
@@ -255,6 +255,7 @@ static error_t *show_file_diff(
         entry->filesystem_path,
         entry->storage_path,  /* Use storage_path as label for consistent diff output */
         mode,
+        NULL,  /* No pre-captured stat - let compare_generate_diff stat internally */
         cmp_dir,
         &diff
     );
@@ -373,7 +374,7 @@ static error_t *show_diffs_for_direction(
         /* Compare buffer to disk (works with decrypted content) */
         git_filemode_t mode = git_tree_entry_filemode(entry->entry);
         compare_result_t cmp_result;
-        err = compare_buffer_to_disk(content, entry->filesystem_path, mode, &cmp_result);
+        err = compare_buffer_to_disk(content, entry->filesystem_path, mode, NULL, &cmp_result, NULL);
 
         if (err) {
             metadata_free(metadata);

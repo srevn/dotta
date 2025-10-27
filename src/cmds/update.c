@@ -464,6 +464,7 @@ static error_t *find_modified_and_new_files(
  * Copy file from filesystem to worktree (with optional encryption)
  *
  * @param out_was_encrypted Optional output - set to true if file was encrypted (can be NULL)
+ * @param out_stat Optional output - filled with stat data from source file (can be NULL)
  */
 static error_t *copy_file_to_worktree(
     worktree_handle_t *wt,
@@ -473,7 +474,8 @@ static error_t *copy_file_to_worktree(
     keymanager_t *km,
     const dotta_config_t *config,
     const metadata_t *metadata,
-    bool *out_was_encrypted
+    bool *out_was_encrypted,
+    struct stat *out_stat
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(filesystem_path);
@@ -556,7 +558,10 @@ static error_t *copy_file_to_worktree(
             goto cleanup;
         }
 
-        /* Store file to worktree with optional encryption (handles read → encrypt → write) */
+        /* Store file to worktree and capture stat atomically
+         * ARCHITECTURE: Single lstat() inside content_store_file_to_worktree() is captured
+         * and propagated to caller for metadata operations, eliminating race condition. */
+        struct stat file_stat;
         err = content_store_file_to_worktree(
             filesystem_path,
             dest_path,
@@ -564,11 +569,16 @@ static error_t *copy_file_to_worktree(
             profile_name,
             km,
             should_encrypt,
-            NULL  /* Don't need stat data here - metadata captured separately */
+            &file_stat  /* Capture stat for metadata - eliminates race condition */
         );
         if (err) {
             err = error_wrap(err, "Failed to store file to worktree");
             goto cleanup;
+        }
+
+        /* Propagate stat to caller if requested */
+        if (out_stat) {
+            memcpy(out_stat, &file_stat, sizeof(struct stat));
         }
 
         /* Propagate encryption status to caller */
@@ -588,12 +598,14 @@ cleanup:
  * Capture and save metadata for updated files
  *
  * @param encryption_status Encryption status for each file (can be NULL)
+ * @param file_stats Stat data for each file (must not be NULL)
  */
 static error_t *capture_and_save_metadata(
     worktree_handle_t *wt,
     modified_file_t *files,
     size_t file_count,
     const bool *encryption_status,
+    const struct stat *file_stats,
     bool verbose
 ) {
     CHECK_NULL(wt);
@@ -653,17 +665,14 @@ static error_t *capture_and_save_metadata(
             continue;
         }
 
-        /* Stat file to capture metadata
-         * ARCHITECTURE: Single stat() call shared with metadata capture to eliminate race conditions */
-        struct stat file_stat;
-        if (stat(file->filesystem_path, &file_stat) != 0) {
-            metadata_free(metadata);
-            return ERROR(ERR_FS, "Failed to stat file: %s", file->filesystem_path);
-        }
+        /* Use pre-captured stat from copy_file_to_worktree() - no race condition
+         * ARCHITECTURE: Stat was captured atomically during file read in copy_file_to_worktree(),
+         * guaranteeing metadata matches the actual file content that was stored. */
+        const struct stat *file_stat = &file_stats[i];
 
-        /* Capture metadata from filesystem using stat data */
+        /* Capture metadata from pre-captured stat data */
         metadata_entry_t *entry = NULL;
-        err = metadata_capture_from_file(file->filesystem_path, file->storage_path, &file_stat, &entry);
+        err = metadata_capture_from_file(file->filesystem_path, file->storage_path, file_stat, &entry);
 
         if (err) {
             metadata_free(metadata);
@@ -784,6 +793,7 @@ static error_t *update_profile(
     metadata_t *existing_metadata = NULL;
     keymanager_t *key_mgr = NULL;
     bool *encryption_status = NULL;
+    struct stat *file_stats = NULL;
 
     /* Load existing metadata from profile branch (for encryption status) */
     err = metadata_load_from_branch(repo, profile->name, &existing_metadata);
@@ -850,10 +860,16 @@ static error_t *update_profile(
         goto cleanup;
     }
 
-    /* Allocate encryption status tracking array */
+    /* Allocate tracking arrays */
     encryption_status = calloc(file_count, sizeof(bool));
     if (!encryption_status) {
         err = ERROR(ERR_MEMORY, "Failed to allocate encryption status array");
+        goto cleanup;
+    }
+
+    file_stats = calloc(file_count, sizeof(struct stat));
+    if (!file_stats) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate file stats array");
         goto cleanup;
     }
 
@@ -882,7 +898,7 @@ static error_t *update_profile(
             continue;
         }
 
-        /* Copy to worktree (encryption handled transparently by content layer) */
+        /* Copy to worktree and capture stat atomically */
         err = copy_file_to_worktree(
             wt,
             file->filesystem_path,
@@ -891,7 +907,8 @@ static error_t *update_profile(
             key_mgr,
             config,
             existing_metadata,
-            &encryption_status[i]
+            &encryption_status[i],
+            &file_stats[i]  /* Capture stat for metadata - eliminates race condition */
         );
         if (err) {
             err = error_wrap(err, "Failed to copy '%s'", file->filesystem_path);
@@ -906,8 +923,8 @@ static error_t *update_profile(
         }
     }
 
-    /* Capture and save metadata for updated files */
-    err = capture_and_save_metadata(wt, files, file_count, encryption_status, opts->verbose);
+    /* Capture and save metadata for updated files (using pre-captured stats) */
+    err = capture_and_save_metadata(wt, files, file_count, encryption_status, file_stats, opts->verbose);
     if (err) {
         err = error_wrap(err, "Failed to capture metadata");
         goto cleanup;
@@ -973,6 +990,7 @@ cleanup:
     if (index) git_index_free(index);
     if (wt) worktree_cleanup(wt);
     if (existing_metadata) metadata_free(existing_metadata);
+    if (file_stats) free(file_stats);
     if (encryption_status) free(encryption_status);
 
     return err;

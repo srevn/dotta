@@ -883,6 +883,38 @@ bool fs_lexists(const char *path) {
 }
 
 /**
+ * Stat-based type checking helpers
+ */
+
+bool fs_stat_is_symlink(const struct stat *st) {
+    if (!st) {
+        return false;
+    }
+    return S_ISLNK(st->st_mode);
+}
+
+bool fs_stat_is_regular(const struct stat *st) {
+    if (!st) {
+        return false;
+    }
+    return S_ISREG(st->st_mode);
+}
+
+bool fs_stat_is_directory(const struct stat *st) {
+    if (!st) {
+        return false;
+    }
+    return S_ISDIR(st->st_mode);
+}
+
+bool fs_stat_is_executable(const struct stat *st) {
+    if (!st) {
+        return false;
+    }
+    return (st->st_mode & S_IXUSR) != 0;
+}
+
+/**
  * Ensure parent directories exist
  */
 error_t *fs_ensure_parent_dirs(const char *path) {

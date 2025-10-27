@@ -157,7 +157,7 @@ static error_t *workspace_create_empty(
 }
 
 /**
- * Check for metadata (mode and ownership) divergence
+ * Check for metadata (mode and ownership) divergence (optimized with stat propagation)
  *
  * Compares filesystem metadata with stored metadata to detect changes in
  * permissions (mode) and ownership (user/group). Ownership checks only run
@@ -165,7 +165,7 @@ static error_t *workspace_create_empty(
  *
  * @param metadata Metadata entry for the file (must not be NULL)
  * @param fs_path Filesystem path to check (must not be NULL)
- * @param storage_path Storage path in profile (must not be NULL)
+ * @param st File stat data (must not be NULL, pre-captured by caller)
  * @param current_div Current divergence type (may be overridden)
  * @param out_div Output divergence type (must not be NULL)
  * @return Error or NULL on success
@@ -173,24 +173,20 @@ static error_t *workspace_create_empty(
 static error_t *check_metadata_divergence(
     const metadata_entry_t *metadata,
     const char *fs_path,
+    const struct stat *st,
     divergence_type_t current_div,
     divergence_type_t *out_div
 ) {
     CHECK_NULL(metadata);
     CHECK_NULL(fs_path);
+    CHECK_NULL(st);
     CHECK_NULL(out_div);
 
     /* Start with current divergence */
     *out_div = current_div;
 
-    /* Stat file once for both mode and ownership checks */
-    struct stat st;
-    if (stat(fs_path, &st) != 0) {
-        /* Cannot stat - keep current divergence (graceful degradation) */
-        return NULL;
-    }
-
-    mode_t actual_mode = st.st_mode & 0777;
+    /* Use provided stat (no syscall - caller already stat'd via compare) */
+    mode_t actual_mode = st->st_mode & 0777;
 
     /* Check full mode (all permission bits, not just executable) */
     if (actual_mode != metadata->mode) {
@@ -216,7 +212,7 @@ static error_t *check_metadata_divergence(
     /* Check owner if metadata has it */
     bool ownership_differs = false;
     if (metadata->owner) {
-        struct passwd *pwd = getpwuid(st.st_uid);
+        struct passwd *pwd = getpwuid(st->st_uid);
         if (pwd && pwd->pw_name) {
             if (strcmp(metadata->owner, pwd->pw_name) != 0) {
                 ownership_differs = true;
@@ -227,7 +223,7 @@ static error_t *check_metadata_divergence(
 
     /* Check group if metadata has it and owner check didn't fail */
     if (metadata->group && !ownership_differs) {
-        struct group *grp = getgrgid(st.st_gid);
+        struct group *grp = getgrgid(st->st_gid);
         if (grp && grp->gr_name) {
             if (strcmp(metadata->group, grp->gr_name) != 0) {
                 ownership_differs = true;
@@ -387,10 +383,11 @@ static error_t *analyze_file_divergence(
             return error_wrap(err, "Failed to get content for '%s'", fs_path);
         }
 
-        /* Compare buffer to disk (pure function) */
+        /* Compare buffer to disk - capture stat for reuse in metadata check */
         git_filemode_t mode = git_tree_entry_filemode(manifest_entry->entry);
         compare_result_t cmp_result;
-        err = compare_buffer_to_disk(content, fs_path, mode, &cmp_result);
+        struct stat file_stat;  /* Captured from compare, reused for metadata */
+        err = compare_buffer_to_disk(content, fs_path, mode, NULL, &cmp_result, &file_stat);
 
         if (err) {
             return error_wrap(err, "Failed to compare '%s'", fs_path);
@@ -438,16 +435,15 @@ static error_t *analyze_file_divergence(
         }
 
         /* Content is equal or only executable bit differs - check full metadata */
-        /* Note: metadata variable already declared and loaded above (line 280) */
         if (metadata) {
             const metadata_entry_t *meta_entry = NULL;
             error_t *meta_err = metadata_get_entry(metadata, storage_path, &meta_entry);
 
             if (meta_err == NULL && meta_entry) {
-                /* Check for mode and ownership divergence using helper */
+                /* Check for mode and ownership divergence using captured stat */
                 divergence_type_t checked_div = div_type;
                 error_t *check_err = check_metadata_divergence(
-                    meta_entry, fs_path, div_type, &checked_div);
+                    meta_entry, fs_path, &file_stat, div_type, &checked_div);
 
                 if (check_err) {
                     error_free(meta_err);

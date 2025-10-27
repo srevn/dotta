@@ -227,7 +227,7 @@ error_t *deploy_preflight_check(
             /* Compare decrypted content to disk file */
             compare_result_t cmp_result;
             git_filemode_t mode = git_tree_entry_filemode(entry->entry);
-            err = compare_buffer_to_disk(content, entry->filesystem_path, mode, &cmp_result);
+            err = compare_buffer_to_disk(content, entry->filesystem_path, mode, NULL, &cmp_result, NULL);
 
             if (err) {
                 err = error_wrap(err, "Failed to compare '%s'", entry->filesystem_path);
@@ -815,7 +815,7 @@ error_t *deploy_execute(
                     if (!cmp_err) {
                         compare_result_t cmp_result;
                         git_filemode_t mode = git_tree_entry_filemode(entry->entry);
-                        cmp_err = compare_buffer_to_disk(content, entry->filesystem_path, mode, &cmp_result);
+                        cmp_err = compare_buffer_to_disk(content, entry->filesystem_path, mode, NULL, &cmp_result, NULL);
 
                         if (!cmp_err && cmp_result == CMP_EQUAL) {
                             should_skip = true;

@@ -23,6 +23,10 @@ typedef struct {
     bool verbose;               /* Print verbose output */
     bool skip_existing;         /* Skip files that already exist */
     bool skip_unchanged;        /* Skip files that match profile content (default: true) */
+    
+    /* Privilege re-exec support */
+    int argc;                   /* Original argc (for privilege re-exec) */
+    char **argv;                /* Original argv (for privilege re-exec) */
 } cmd_apply_options_t;
 
 /**

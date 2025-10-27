@@ -392,7 +392,9 @@ static int cmd_apply_main(int argc, char **argv) {
         .keep_orphans = false,  /* Default: prune orphaned files */
         .verbose = false,
         .skip_existing = false,
-        .skip_unchanged = true  /* Default: enabled for efficiency */
+        .skip_unchanged = true,  /* Default: enabled for efficiency */
+        .argc = argc,            /* For privilege re-exec */
+        .argv = argv             /* For privilege re-exec */
     };
 
     /* Collect profile arguments */

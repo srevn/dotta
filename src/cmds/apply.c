@@ -22,6 +22,7 @@
 #include "utils/config.h"
 #include "utils/hooks.h"
 #include "utils/output.h"
+#include "utils/privilege.h"
 
 /**
  * Print pre-flight results
@@ -862,6 +863,52 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
 
         free(profile_metadata);
+    }
+
+    /* Check privileges for root/ files BEFORE deployment begins
+     *
+     * This ensures we have required privileges upfront, preventing partial
+     * deployments and cryptic mid-operation failures. Checks occur AFTER
+     * manifest building (know all files) but BEFORE any filesystem modifications.
+     *
+     * Skip check if dry-run (read-only operation, no privileges needed).
+     *
+     * If re-exec with sudo occurs, the entire process restarts from main(),
+     * and state lock is safely released before execvp() replaces the process.
+     */
+    if (!opts->dry_run) {
+        output_print(out, OUTPUT_VERBOSE, "\nChecking privilege requirements...\n");
+
+        /* Collect storage paths from manifest for privilege check */
+        const char **storage_paths = malloc(manifest->count * sizeof(char *));
+        if (!storage_paths) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate storage paths for privilege check");
+            goto cleanup;
+        }
+
+        for (size_t i = 0; i < manifest->count; i++) {
+            storage_paths[i] = manifest->entries[i].storage_path;
+        }
+
+        /* Check if any root/ files require elevation.
+         * If not elevated, prompts user and re-execs with sudo.
+         * If already elevated or no root/ files, returns immediately. */
+        err = privilege_ensure_for_operation(
+            storage_paths,
+            manifest->count,
+            "apply",
+            true,        /* interactive: prompt user if elevation needed */
+            opts->argc,
+            opts->argv,
+            out
+        );
+
+        free(storage_paths);
+
+        if (err) {
+            err = error_wrap(err, "Insufficient privileges for deployment");
+            goto cleanup;
+        }
     }
 
     /* Create content cache for batch operations (reused across preflight and deployment)

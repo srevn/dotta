@@ -1584,6 +1584,36 @@ const metadata_t *workspace_get_metadata(
 }
 
 /**
+ * Get the repository associated with the workspace
+ */
+git_repository *workspace_get_repo(const workspace_t *ws) {
+    if (!ws) {
+        return NULL;
+    }
+    return ws->repo;
+}
+
+/**
+ * Get the list of profiles managed by the workspace
+ */
+const profile_list_t *workspace_get_profiles(const workspace_t *ws) {
+    if (!ws) {
+        return NULL;
+    }
+    return ws->profiles;
+}
+
+/**
+ * Get the manifest of files managed by the workspace
+ */
+const manifest_t *workspace_get_manifest(const workspace_t *ws) {
+    if (!ws) {
+        return NULL;
+    }
+    return ws->manifest;
+}
+
+/**
  * Get merged metadata from workspace
  *
  * Builds metadata_t from workspace's pre-merged view instead of re-merging

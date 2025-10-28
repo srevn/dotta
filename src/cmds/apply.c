@@ -563,27 +563,33 @@ static void print_cleanup_preflight_results(
  * - Temporary CLI overrides (-p flag) don't persist to state
  * - Profile management is predictable and intentional
  *
- * @param repo Repository (must not be NULL)
+ * @param ws Workspace containing repo, profiles, manifest, and metadata cache (must not be NULL)
  * @param state State to update (must not be NULL)
- * @param profiles Profiles being applied (used for file tracking only)
- * @param manifest Manifest of deployed files (must not be NULL)
  * @param metadata Merged metadata for mode extraction (can be NULL)
  * @param out Output context for messages (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *apply_update_and_save_state(
-    git_repository *repo,
+    workspace_t *ws,
     state_t *state,
-    const profile_list_t *profiles,
-    const manifest_t *manifest,
     const metadata_t *metadata,
     output_ctx_t *out
 ) {
-    CHECK_NULL(repo);
+    CHECK_NULL(ws);
     CHECK_NULL(state);
-    CHECK_NULL(profiles);
-    CHECK_NULL(manifest);
     CHECK_NULL(out);
+
+    /* Extract data from workspace using accessor functions */
+    git_repository *repo = workspace_get_repo(ws);
+    const profile_list_t *profiles = workspace_get_profiles(ws);
+    const manifest_t *manifest = workspace_get_manifest(ws);
+
+    /* Defensive checks: workspace should always have these initialized */
+    if (!repo || !profiles || !manifest) {
+        return ERROR(ERR_INTERNAL,
+                    "Workspace missing required data (repo=%p, profiles=%p, manifest=%p)",
+                    (void*)repo, (void*)profiles, (void*)manifest);
+    }
 
     error_t *err = NULL;
 
@@ -677,31 +683,23 @@ static error_t *apply_update_and_save_state(
      *
      * Architecture: We cannot use merged_metadata here because it loses
      * profile attribution (all directories merged into one list without
-     * source profile information). Instead, we load each profile's metadata
-     * individually to correctly associate directories with their source profile.
-     *
-     * This mirrors the pattern used for metadata loading during apply (lines 908-940).
+     * source profile information). Instead, we retrieve each profile's metadata
+     * from the workspace cache to correctly associate directories with their source profile.
      */
     for (size_t p = 0; p < profiles->count; p++) {
         const char *profile_name = profiles->profiles[p].name;
-        metadata_t *profile_meta = NULL;
 
-        /* Load metadata for this profile */
-        error_t *meta_err = metadata_load_from_branch(repo, profile_name, &profile_meta);
-        if (meta_err) {
-            if (meta_err->code == ERR_NOT_FOUND) {
-                /* No metadata in this profile - not an error */
-                output_print(out, OUTPUT_VERBOSE,
-                            "  No metadata in profile '%s' (skipping directories)\n",
-                            profile_name);
-                error_free(meta_err);
-                continue;
-            } else {
-                /* Real error - propagate */
-                return error_wrap(meta_err,
-                                "Failed to load metadata from profile '%s' for directory sync",
-                                profile_name);
-            }
+        /* Get cached metadata for this profile (O(1) hashmap lookup) */
+        const metadata_t *profile_meta = workspace_get_metadata(ws, profile_name);
+
+        /* Defensive check: workspace should always have metadata for enabled profiles.
+         * During workspace_load(), empty metadata is created for profiles without
+         * metadata.json, so NULL here indicates an invariant violation. */
+        if (!profile_meta) {
+            output_print(out, OUTPUT_VERBOSE,
+                        "  No metadata in profile '%s' (skipping directories)\n",
+                        profile_name);
+            continue;
         }
 
         /* Get tracked directories from this profile's metadata */
@@ -726,7 +724,6 @@ static error_t *apply_update_and_save_state(
 
             if (err) {
                 free(directories);
-                metadata_free(profile_meta);
                 return error_wrap(err, "Failed to create state directory entry for '%s'",
                                 directories[i]->key);
             }
@@ -736,7 +733,6 @@ static error_t *apply_update_and_save_state(
 
             if (err) {
                 free(directories);
-                metadata_free(profile_meta);
                 return error_wrap(err, "Failed to add directory '%s' to state",
                                 directories[i]->key);
             }
@@ -745,8 +741,7 @@ static error_t *apply_update_and_save_state(
         /* Free the pointer array (items themselves are owned by metadata) */
         free(directories);
 
-        /* Free this profile's metadata */
-        metadata_free(profile_meta);
+        /* Note: profile_meta is borrowed from workspace cache - no free needed */
     }
 
     output_print(out, OUTPUT_VERBOSE, "Directory sync complete\n");
@@ -1289,7 +1284,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
 
         /* Now update state with the new manifest */
-        err = apply_update_and_save_state(repo, state, profiles, manifest, merged_metadata, out);
+        err = apply_update_and_save_state(ws, state, merged_metadata, out);
         if (err) {
             goto cleanup;
         }

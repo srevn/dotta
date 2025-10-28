@@ -188,6 +188,43 @@ const metadata_t *workspace_get_metadata(
 );
 
 /**
+ * Get the repository associated with the workspace
+ *
+ * Returns borrowed reference to the git_repository that the workspace
+ * was loaded from. The repository is owned by the caller of workspace_load()
+ * and remains valid until that caller closes it.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @return Repository (borrowed reference, never NULL for valid workspace)
+ */
+git_repository *workspace_get_repo(const workspace_t *ws);
+
+/**
+ * Get the list of profiles managed by the workspace
+ *
+ * Returns borrowed reference to the profile_list_t that defines the
+ * workspace scope. The profile list is owned by the caller of workspace_load()
+ * and remains valid until that caller frees it.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @return Profile list (borrowed reference, never NULL for valid workspace)
+ */
+const profile_list_t *workspace_get_profiles(const workspace_t *ws);
+
+/**
+ * Get the manifest of files managed by the workspace
+ *
+ * Returns borrowed reference to the manifest built during workspace_load().
+ * The manifest represents all files across all profiles in the workspace scope.
+ * The manifest is owned by the workspace and remains valid until workspace_free()
+ * is called.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @return Manifest (borrowed reference, never NULL for valid workspace)
+ */
+const manifest_t *workspace_get_manifest(const workspace_t *ws);
+
+/**
  * Get merged metadata from workspace
  *
  * Returns metadata merged across all profiles in precedence order (global → OS → host).

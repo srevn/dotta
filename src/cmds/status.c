@@ -170,11 +170,20 @@ static void format_diverged_item(
         case DIVERGENCE_MODE_DIFF:
             offset += snprintf(label_buffer + offset, sizeof(label_buffer) - offset, "[mode]");
             *out_color = OUTPUT_COLOR_YELLOW;
-            snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
-                    item->filesystem_path,
-                    output_color_code(out, OUTPUT_COLOR_DIM),
-                    item->profile,
-                    output_color_code(out, OUTPUT_COLOR_RESET));
+            /* Show metadata provenance if available (useful for multi-profile directories) */
+            if (item->metadata_profile) {
+                snprintf(info_buffer, buffer_size, "%s %s(metadata from %s)%s",
+                        item->filesystem_path,
+                        output_color_code(out, OUTPUT_COLOR_DIM),
+                        item->metadata_profile,
+                        output_color_code(out, OUTPUT_COLOR_RESET));
+            } else {
+                snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
+                        item->filesystem_path,
+                        output_color_code(out, OUTPUT_COLOR_DIM),
+                        item->profile,
+                        output_color_code(out, OUTPUT_COLOR_RESET));
+            }
             break;
 
         case DIVERGENCE_TYPE_DIFF:
@@ -200,11 +209,20 @@ static void format_diverged_item(
         case DIVERGENCE_OWNERSHIP:
             offset += snprintf(label_buffer + offset, sizeof(label_buffer) - offset, "[ownership]");
             *out_color = OUTPUT_COLOR_YELLOW;
-            snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
-                    item->filesystem_path,
-                    output_color_code(out, OUTPUT_COLOR_DIM),
-                    item->profile,
-                    output_color_code(out, OUTPUT_COLOR_RESET));
+            /* Show metadata provenance if available (useful for multi-profile directories) */
+            if (item->metadata_profile) {
+                snprintf(info_buffer, buffer_size, "%s %s(metadata from %s)%s",
+                        item->filesystem_path,
+                        output_color_code(out, OUTPUT_COLOR_DIM),
+                        item->metadata_profile,
+                        output_color_code(out, OUTPUT_COLOR_RESET));
+            } else {
+                snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
+                        item->filesystem_path,
+                        output_color_code(out, OUTPUT_COLOR_DIM),
+                        item->profile,
+                        output_color_code(out, OUTPUT_COLOR_RESET));
+            }
             break;
 
         default:

@@ -44,6 +44,7 @@ typedef struct {
     char *filesystem_path;      /* Target path on filesystem */
     char *storage_path;         /* Path in profile (e.g., home/.bashrc) */
     char *profile;              /* Source profile name */
+    char *metadata_profile;     /* Which profile's metadata won (can differ from profile) */
     divergence_type_t type;     /* Divergence category */
 
     /* Item classification */

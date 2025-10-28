@@ -46,6 +46,17 @@
 #include "utils/string.h"
 
 /**
+ * Merged metadata entry (internal structure)
+ *
+ * Pairs a metadata item with its source profile name to track provenance
+ * after profile precedence is applied.
+ */
+typedef struct {
+    const metadata_item_t *item;      /* Borrowed from metadata_cache */
+    const char *profile_name;         /* Which profile provided this (borrowed) */
+} merged_metadata_entry_t;
+
+/**
  * Workspace structure
  *
  * Contains indexed views of all three states plus divergence analysis.
@@ -67,7 +78,10 @@ struct workspace {
     hashmap_t *metadata_cache;       /* Owned - maps profile_name -> metadata_t* */
 
     /* Unified metadata view with profile precedence applied */
-    hashmap_t *merged_metadata;      /* Owned map, borrowed pointers */
+    hashmap_t *merged_metadata;      /* Owned map: key -> merged_metadata_entry_t* */
+    merged_metadata_entry_t *merged_entries;  /* Owned array of entries */
+    size_t merged_count;
+    size_t merged_capacity;
 
     /* Divergence tracking */
     workspace_item_t *diverged;      /* Array of diverged items (files and directories) */
@@ -326,6 +340,7 @@ static error_t *workspace_add_diverged(
     entry->filesystem_path = strdup(filesystem_path);
     entry->storage_path = storage_path ? strdup(storage_path) : NULL;
     entry->profile = profile ? strdup(profile) : NULL;
+    entry->metadata_profile = NULL;  /* Will be set below if metadata exists */
     entry->type = type;
     entry->item_kind = item_kind;
     entry->in_profile = in_profile;
@@ -342,6 +357,26 @@ static error_t *workspace_add_diverged(
         free(entry->storage_path);
         free(entry->profile);
         return ERROR(ERR_MEMORY, "Failed to allocate diverged entry");
+    }
+
+    /* Check if this item has metadata in merged_metadata and populate provenance */
+    if (ws->merged_metadata) {
+        const char *lookup_key = (item_kind == WORKSPACE_ITEM_FILE)
+            ? storage_path
+            : filesystem_path;
+
+        if (lookup_key) {
+            const merged_metadata_entry_t *meta_entry = hashmap_get(ws->merged_metadata, lookup_key);
+            if (meta_entry && meta_entry->profile_name) {
+                entry->metadata_profile = strdup(meta_entry->profile_name);
+                if (!entry->metadata_profile) {
+                    free(entry->filesystem_path);
+                    free(entry->storage_path);
+                    free(entry->profile);
+                    return ERROR(ERR_MEMORY, "Failed to allocate metadata_profile");
+                }
+            }
+        }
     }
 
     /* Add to diverged index for O(1) lookup */
@@ -957,14 +992,15 @@ typedef struct {
  * Filters for DIRECTORY kind and checks against filesystem.
  *
  * @param key Unused (item->key contains the actual key)
- * @param value Pointer to metadata_item_t
+ * @param value Pointer to merged_metadata_entry_t
  * @param user_data Pointer to directory_check_context_t
  * @return true to continue iteration, false to stop on error
  */
 static bool check_directory_callback(const char *key, void *value, void *user_data) {
     (void)key;  /* Unused - item has the key */
 
-    const metadata_item_t *item = (const metadata_item_t *)value;
+    const merged_metadata_entry_t *entry = (const merged_metadata_entry_t *)value;
+    const metadata_item_t *item = entry->item;
     directory_check_context_t *ctx = (directory_check_context_t *)user_data;
     workspace_t *ws = ctx->ws;
 
@@ -1331,7 +1367,14 @@ error_t *workspace_load(
 
     /* Build unified metadata view with profile precedence.
      * CRITICAL INVARIANT: profiles array is in precedence order (global → OS → host).
-     * Iterating in order with hashmap_set() naturally implements "last profile wins". */
+     * Iterating in order naturally implements "last profile wins" - we update existing
+     * entries to track the winning profile. */
+
+    /* Initialize merged entries array */
+    ws->merged_entries = NULL;
+    ws->merged_count = 0;
+    ws->merged_capacity = 0;
+
     ws->merged_metadata = hashmap_create(256);
     if (!ws->merged_metadata) {
         workspace_free(ws);
@@ -1367,17 +1410,41 @@ error_t *workspace_load(
              * - For FILES: key = storage_path (relative, e.g., "home/.bashrc")
              * - For DIRECTORIES: key = filesystem_path (absolute, e.g., "/home/user/.config")
              * No collision risk: different namespaces (relative vs absolute paths). */
-            error_t *map_err = hashmap_set(
-                ws->merged_metadata,
-                item->key,
-                (void *)item  /* Borrow pointer - safe as metadata_cache owns it */
-            );
 
-            if (map_err) {
-                workspace_free(ws);
-                return error_wrap(map_err,
-                    "Failed to add item '%s' to merged metadata (profile: %s)",
-                    item->key, profile_name);
+            /* Check if entry exists (for updating profile_name on override) */
+            merged_metadata_entry_t *existing = hashmap_get(ws->merged_metadata, item->key);
+
+            if (existing) {
+                /* Update existing entry - last profile wins (precedence) */
+                existing->item = item;
+                existing->profile_name = profile_name;
+            } else {
+                /* Grow array if needed */
+                if (ws->merged_count >= ws->merged_capacity) {
+                    size_t new_cap = ws->merged_capacity == 0 ? 256 : ws->merged_capacity * 2;
+                    merged_metadata_entry_t *new_entries = realloc(
+                        ws->merged_entries,
+                        new_cap * sizeof(merged_metadata_entry_t)
+                    );
+                    if (!new_entries) {
+                        workspace_free(ws);
+                        return ERROR(ERR_MEMORY, "Failed to grow merged entries");
+                    }
+                    ws->merged_entries = new_entries;
+                    ws->merged_capacity = new_cap;
+                }
+
+                /* Add new entry */
+                merged_metadata_entry_t *entry = &ws->merged_entries[ws->merged_count++];
+                entry->item = item;
+                entry->profile_name = profile_name;
+
+                /* Add to hashmap */
+                error_t *map_err = hashmap_set(ws->merged_metadata, item->key, entry);
+                if (map_err) {
+                    workspace_free(ws);
+                    return error_wrap(map_err, "Failed to add entry to merged metadata");
+                }
             }
         }
     }
@@ -1633,6 +1700,7 @@ void workspace_free(workspace_t *ws) {
         free(ws->diverged[i].filesystem_path);
         free(ws->diverged[i].storage_path);
         free(ws->diverged[i].profile);
+        free(ws->diverged[i].metadata_profile);
     }
     free(ws->diverged);
 
@@ -1642,7 +1710,10 @@ void workspace_free(workspace_t *ws) {
     hashmap_free(ws->diverged_index, NULL);
 
     /* Free merged_metadata BEFORE metadata_cache (borrowed pointers) */
-    hashmap_free(ws->merged_metadata, NULL);  /* NULL = don't free values */
+    hashmap_free(ws->merged_metadata, NULL);  /* NULL = don't free values (they're in merged_entries) */
+
+    /* Free merged_entries array (strings are borrowed, just free array) */
+    free(ws->merged_entries);
 
     /* Free encryption infrastructure */
     if (ws->metadata_cache) {

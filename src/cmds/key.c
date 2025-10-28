@@ -219,11 +219,14 @@ static error_t *count_encrypted_files(
 
     /* Count encrypted files */
     size_t count;
-    const metadata_item_t *items = metadata_get_items(metadata, METADATA_ITEM_FILE, &count);
-    for (size_t i = 0; i < count; i++) {
-        if (items[i].file.encrypted) {
-            (*out_count)++;
+    const metadata_item_t **files = metadata_get_items_by_kind(metadata, METADATA_ITEM_FILE, &count);
+    if (files) {
+        for (size_t i = 0; i < count; i++) {
+            if (files[i]->file.encrypted) {
+                (*out_count)++;
+            }
         }
+        free(files);  /* Free pointer array only */
     }
 
     metadata_free(metadata);

@@ -259,21 +259,43 @@ bool metadata_has_item(
 );
 
 /**
- * Get all items with optional kind filtering
+ * Get all items (unfiltered)
  *
- * Returns direct pointer to internal array (borrowed reference).
- * Filtering is done by iterating and counting, not by copying.
+ * Returns direct pointer to internal items array (borrowed reference).
+ * Zero-cost operation - no allocation, no copying.
  *
- * IMPORTANT: The returned pointer is only valid until the next modification to metadata.
+ * The returned pointer is only valid until the next modification to metadata.
  *
  * @param metadata Metadata collection (must not be NULL)
- * @param kind_filter Kind to filter by (METADATA_ITEM_FILE, METADATA_ITEM_DIRECTORY, or -1 for all)
  * @param count Output count (must not be NULL)
- * @return Array of items (borrowed reference - do not free)
+ * @return Array of items (borrowed reference - do not free), or NULL if empty
  */
-const metadata_item_t *metadata_get_items(
+const metadata_item_t *metadata_get_all_items(
     const metadata_t *metadata,
-    int kind_filter,
+    size_t *count
+);
+
+/**
+ * Get items filtered by kind
+ *
+ * Returns allocated array of pointers to matching items.
+ * Caller must free the returned pointer array (but not the items themselves).
+ *
+ * This performs a small allocation (pointers only, ~8 bytes per item).
+ * Items themselves remain in the metadata structure and are not copied.
+ *
+ * @param metadata Metadata collection (must not be NULL)
+ * @param kind Item kind to filter by (METADATA_ITEM_FILE or METADATA_ITEM_DIRECTORY)
+ * @param count Output count (must not be NULL)
+ * @return Allocated array of item pointers (caller must free), or NULL if no matches
+ *
+ * Return value semantics:
+ * - NULL with count=0: No matches, or allocation failure, or invalid input
+ * - Non-NULL with count=N: Array of N item pointers (caller must free array)
+ */
+const metadata_item_t **metadata_get_items_by_kind(
+    const metadata_t *metadata,
+    metadata_item_kind_t kind,
     size_t *count
 );
 

@@ -637,45 +637,110 @@ bool metadata_has_item(
 }
 
 /**
- * Get all items with optional kind filtering
+ * Get all items (unfiltered)
  *
- * Replaces metadata_get_all_tracked_directories().
- * Returns pointer to internal items array (borrowed reference).
- *
- * IMPORTANT:
- * - Always returns pointer to full items array
- * - If kind_filter == -1: count = total items
- * - If kind_filter == specific kind: count = number of that kind (but array contains all items)
- * - Caller must iterate all items and check item->kind if filtering
+ * Returns direct pointer to internal items array (borrowed reference).
+ * Zero-cost operation - no allocation, no copying.
  *
  * The returned pointer is only valid until the next modification to metadata.
+ *
+ * @param metadata Metadata collection (must not be NULL)
+ * @param count Output count (must not be NULL)
+ * @return Array of items (borrowed reference - do not free), or NULL if empty
  */
-const metadata_item_t *metadata_get_items(
+const metadata_item_t *metadata_get_all_items(
     const metadata_t *metadata,
-    int kind_filter,
     size_t *count
 ) {
+    /* Handle invalid inputs */
     if (!metadata || !count) {
+        if (count) {
+            *count = 0;
+        }
         return NULL;
     }
 
-    /* Calculate count based on filter */
-    if (kind_filter == -1) {
-        /* No filtering - return all items */
-        *count = metadata->count;
-    } else {
-        /* Count matching items */
-        size_t matching = 0;
-        for (size_t i = 0; i < metadata->count; i++) {
-            if (metadata->items[i].kind == (metadata_item_kind_t)kind_filter) {
-                matching++;
-            }
+    *count = metadata->count;
+
+    /* Return direct pointer to array (borrowed reference)
+     * Note: metadata->items is always allocated (even for empty metadata),
+     * so this is safe even when count=0 */
+    return metadata->items;
+}
+
+/**
+ * Get items filtered by kind
+ *
+ * Returns allocated array of pointers to matching items.
+ * Caller must free the returned pointer array (but not the items themselves).
+ *
+ * This performs a small allocation (pointers only, ~8 bytes per item).
+ * Items themselves remain in the metadata structure and are not copied.
+ *
+ * @param metadata Metadata collection (must not be NULL)
+ * @param kind Item kind to filter by (METADATA_ITEM_FILE or METADATA_ITEM_DIRECTORY)
+ * @param count Output count (must not be NULL)
+ * @return Allocated array of item pointers (caller must free), or NULL if no matches
+ *
+ * Return value semantics:
+ * - NULL with count=0: No matches, or allocation failure, or invalid input
+ * - Non-NULL with count=N: Array of N item pointers (caller must free array)
+ *
+ * Important: Always maintain invariant: if return is NULL, count must be 0
+ */
+const metadata_item_t **metadata_get_items_by_kind(
+    const metadata_t *metadata,
+    metadata_item_kind_t kind,
+    size_t *count
+) {
+    /* Handle invalid inputs */
+    if (!metadata || !count) {
+        if (count) {
+            *count = 0;
         }
-        *count = matching;
+        return NULL;
     }
 
-    /* Always return pointer to full array */
-    return metadata->items;
+    /* First pass: count matching items */
+    size_t matching = 0;
+    for (size_t i = 0; i < metadata->count; i++) {
+        if (metadata->items[i].kind == kind) {
+            matching++;
+        }
+    }
+
+    *count = matching;
+
+    /* Handle empty result (no matches) */
+    if (matching == 0) {
+        return NULL;  /* Not an error - just no items of this kind */
+    }
+
+    /* Allocate pointer array (small allocation - just pointers) */
+    const metadata_item_t **result = malloc(matching * sizeof(metadata_item_t *));
+    if (!result) {
+        /* Allocation failed - set count to 0 to maintain invariant */
+        *count = 0;
+        return NULL;
+    }
+
+    /* Second pass: populate pointer array with matching items */
+    size_t idx = 0;
+    for (size_t i = 0; i < metadata->count; i++) {
+        if (metadata->items[i].kind == kind) {
+            result[idx++] = &metadata->items[i];
+        }
+    }
+
+    /* Verify we populated exactly the expected number of items */
+    if (idx != matching) {
+        /* This should never happen - indicates a bug in our logic */
+        free(result);
+        *count = 0;
+        return NULL;
+    }
+
+    return result;
 }
 
 /**

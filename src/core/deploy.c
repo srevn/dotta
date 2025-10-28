@@ -571,10 +571,10 @@ static error_t *deploy_tracked_directories(
         return NULL;  /* No metadata, nothing to do */
     }
 
-    /* Get all tracked directories (filter by DIRECTORY kind) */
+    /* Get all tracked directories (filtered by kind) */
     size_t dir_count = 0;
-    const metadata_item_t *directories =
-        metadata_get_items(metadata, METADATA_ITEM_DIRECTORY, &dir_count);
+    const metadata_item_t **directories =
+        metadata_get_items_by_kind(metadata, METADATA_ITEM_DIRECTORY, &dir_count);
 
     if (dir_count == 0) {
         return NULL;  /* No tracked directories */
@@ -587,7 +587,7 @@ static error_t *deploy_tracked_directories(
 
     /* Deploy each tracked directory */
     for (size_t i = 0; i < dir_count; i++) {
-        const metadata_item_t *dir_entry = &directories[i];
+        const metadata_item_t *dir_entry = directories[i];
 
         /* For directory items:
          * - key field contains filesystem_path
@@ -675,6 +675,9 @@ static error_t *deploy_tracked_directories(
             }
         }
     }
+
+    /* Free the pointer array (items themselves remain in metadata) */
+    free(directories);
 
     return NULL;
 }

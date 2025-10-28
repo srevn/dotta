@@ -920,14 +920,14 @@ static error_t *analyze_untracked_files(
             continue;
         }
 
-        /* Get tracked directories from metadata (unified API) */
+        /* Get tracked directories from metadata (filtered by kind) */
         size_t dir_count = 0;
-        const metadata_item_t *directories =
-            metadata_get_items(metadata, METADATA_ITEM_DIRECTORY, &dir_count);
+        const metadata_item_t **directories =
+            metadata_get_items_by_kind(metadata, METADATA_ITEM_DIRECTORY, &dir_count);
 
         /* Scan each tracked directory */
         for (size_t i = 0; i < dir_count; i++) {
-            const metadata_item_t *dir_entry = &directories[i];
+            const metadata_item_t *dir_entry = directories[i];
 
             /* Check if directory still exists
              * For directories: key = filesystem_path (absolute path) */
@@ -976,6 +976,9 @@ static error_t *analyze_untracked_files(
                 err = NULL;
             }
         }
+
+        /* Free the pointer array (items themselves remain in metadata) */
+        free(directories);
     }
 
     return NULL;
@@ -1396,11 +1399,7 @@ error_t *workspace_load(
 
         /* Get ALL items from this profile (files + directories) */
         size_t item_count = 0;
-        const metadata_item_t *items = metadata_get_items(
-            metadata,
-            -1,  /* -1 = all kinds (files + directories) */
-            &item_count
-        );
+        const metadata_item_t *items = metadata_get_all_items(metadata, &item_count);
 
         if (!items || item_count == 0) {
             continue;  /* No items in this profile */

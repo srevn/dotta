@@ -138,7 +138,7 @@ static error_t *discover_file(
 
     if (!matching_profiles || string_array_size(matching_profiles) == 0) {
         /* Not found in any profile */
-        hashmap_free(profile_index, (void (*)(void *))string_array_free);
+        hashmap_free(profile_index, string_array_free);
         profile_list_free(profiles);
         config_free(config);
         free(storage_path);
@@ -154,7 +154,7 @@ static error_t *discover_file(
         *out_profile = strdup(profile_name);
         *out_resolved_path = storage_path;
 
-        hashmap_free(profile_index, (void (*)(void *))string_array_free);
+        hashmap_free(profile_index, string_array_free);
         profile_list_free(profiles);
         config_free(config);
 
@@ -174,7 +174,7 @@ static error_t *discover_file(
     fprintf(stderr, "\nPlease specify --profile to disambiguate:\n");
     fprintf(stderr, "  dotta revert --profile <name> %s\n", storage_path);
 
-    hashmap_free(profile_index, (void (*)(void *))string_array_free);
+    hashmap_free(profile_index, string_array_free);
     profile_list_free(profiles);
     config_free(config);
     free(storage_path);

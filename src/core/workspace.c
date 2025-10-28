@@ -1776,7 +1776,7 @@ void workspace_free(workspace_t *ws) {
 
     /* Free encryption infrastructure */
     if (ws->metadata_cache) {
-        hashmap_free(ws->metadata_cache, (void (*)(void *))metadata_free);
+        hashmap_free(ws->metadata_cache, metadata_free);
     }
     content_cache_free(ws->content_cache);
     /* Don't free keymanager - it's global */

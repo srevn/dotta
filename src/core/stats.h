@@ -174,9 +174,12 @@ const commit_info_t *stats_file_commit_map_get(
 /**
  * Free commit info
  *
- * @param info Commit info to free (NULL safe)
+ * Generic callback signature for use with containers (e.g., hashmap_free).
+ * Accepts void* to match standard C cleanup callback pattern.
+ *
+ * @param ptr Commit info to free (NULL safe)
  */
-void stats_free_commit_info(commit_info_t *info);
+void stats_free_commit_info(void *ptr);
 
 /**
  * Free file→commit map

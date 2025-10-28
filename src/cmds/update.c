@@ -200,9 +200,13 @@ typedef struct {
  * Frees the array structure and pointer array, but NOT the pointed-to items
  * (which are owned by the workspace).
  *
- * @param array Array to free (can be NULL)
+ * Generic callback signature for use with containers (e.g., hashmap_free).
+ * Accepts void* to match standard C cleanup callback pattern.
+ *
+ * @param ptr Array to free (can be NULL)
  */
-static void item_array_free(item_array_t *array) {
+static void item_array_free(void *ptr) {
+    item_array_t *array = ptr;
     if (!array) {
         return;
     }
@@ -476,7 +480,7 @@ static error_t *group_items_by_profile(
             /* Create new array for this profile */
             array = calloc(1, sizeof(item_array_t));
             if (!array) {
-                hashmap_free(groups, (void (*)(void *))item_array_free);
+                hashmap_free(groups, item_array_free);
                 return ERROR(ERR_MEMORY, "Failed to allocate item array");
             }
 
@@ -484,7 +488,7 @@ static error_t *group_items_by_profile(
             array->items = calloc(array->capacity, sizeof(workspace_item_t *));
             if (!array->items) {
                 free(array);
-                hashmap_free(groups, (void (*)(void *))item_array_free);
+                hashmap_free(groups, item_array_free);
                 return ERROR(ERR_MEMORY, "Failed to allocate items array");
             }
 
@@ -492,7 +496,7 @@ static error_t *group_items_by_profile(
             if (err) {
                 free(array->items);
                 free(array);
-                hashmap_free(groups, (void (*)(void *))item_array_free);
+                hashmap_free(groups, item_array_free);
                 return error_wrap(err, "Failed to add profile group to hashmap");
             }
         }
@@ -505,7 +509,7 @@ static error_t *group_items_by_profile(
                 new_capacity * sizeof(workspace_item_t *)
             );
             if (!new_items) {
-                hashmap_free(groups, (void (*)(void *))item_array_free);
+                hashmap_free(groups, item_array_free);
                 return ERROR(ERR_MEMORY, "Failed to grow item array");
             }
             array->items = new_items;
@@ -1208,7 +1212,7 @@ static error_t *update_execute_for_all_profiles(
     /* Create hashmap for O(1) profile lookup */
     hashmap_t *profile_index = hashmap_create(32);
     if (!profile_index) {
-        hashmap_free(by_profile, (void (*)(void *))item_array_free);
+        hashmap_free(by_profile, item_array_free);
         return ERROR(ERR_MEMORY, "Failed to create profile index");
     }
 
@@ -1217,7 +1221,7 @@ static error_t *update_execute_for_all_profiles(
         error_t *index_err = hashmap_set(profile_index, profile->name, profile);
         if (index_err) {
             hashmap_free(profile_index, NULL);
-            hashmap_free(by_profile, (void (*)(void *))item_array_free);
+            hashmap_free(by_profile, item_array_free);
             return error_wrap(index_err, "Failed to index profile");
         }
     }
@@ -1238,7 +1242,7 @@ static error_t *update_execute_for_all_profiles(
     hashmap_foreach(by_profile, update_profile_callback, &ctx);
 
     hashmap_free(profile_index, NULL);
-    hashmap_free(by_profile, (void (*)(void *))item_array_free);
+    hashmap_free(by_profile, item_array_free);
 
     return err;
 }
@@ -1482,7 +1486,7 @@ static error_t *update_display_summary(
 
     /* Free profile index if created */
     if (profile_index) {
-        hashmap_free(profile_index, (void (*)(void *))string_array_free);
+        hashmap_free(profile_index, string_array_free);
     }
 
     /* Show multi-profile warning if needed */

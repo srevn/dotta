@@ -1248,7 +1248,7 @@ cleanup:
     string_array_free(all_branches);
     if (index) {
         /* Free index and all its arrays */
-        hashmap_free(index, (void (*)(void *))string_array_free);
+        hashmap_free(index, string_array_free);
     }
     return err;
 }

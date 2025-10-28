@@ -451,7 +451,7 @@ static error_t *analyze_multi_profile_conflicts(
     }
 
     /* Free the index (and all its string arrays) */
-    hashmap_free(profile_index, (void (*)(void *))string_array_free);
+    hashmap_free(profile_index, string_array_free);
 
     *other_profiles_out = other_profiles;
     *multi_profile_count_out = multi_profile_count;

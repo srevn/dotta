@@ -27,9 +27,12 @@ string_array_t *string_array_create_with_capacity(size_t capacity);
 /**
  * Free string array and all contained strings
  *
- * @param arr Array to free (can be NULL)
+ * Generic callback signature for use with containers (e.g., hashmap_free).
+ * Accepts void* to match standard C cleanup callback pattern.
+ *
+ * @param ptr Array to free (can be NULL)
  */
-void string_array_free(string_array_t *arr);
+void string_array_free(void *ptr);
 
 /**
  * Push a string to the array (copies the string)

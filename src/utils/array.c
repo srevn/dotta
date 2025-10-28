@@ -35,7 +35,8 @@ string_array_t *string_array_create_with_capacity(size_t capacity) {
     return arr;
 }
 
-void string_array_free(string_array_t *arr) {
+void string_array_free(void *ptr) {
+    string_array_t *arr = ptr;
     if (!arr) {
         return;
     }

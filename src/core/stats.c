@@ -609,7 +609,7 @@ error_t *stats_build_file_commit_map(
     /* Walk commits to build map */
     err = walk_commits(repo, branch_name, &ctx);
     if (err) {
-        hashmap_free(map->map, (void (*)(void *))stats_free_commit_info);
+        hashmap_free(map->map, stats_free_commit_info);
         free(map);
         return err;
     }
@@ -695,8 +695,12 @@ const commit_info_t *stats_file_commit_map_get(
 
 /**
  * Free commit info
+ *
+ * Generic callback signature for use with containers (e.g., hashmap_free).
+ * Accepts void* to match standard C cleanup callback pattern.
  */
-void stats_free_commit_info(commit_info_t *info) {
+void stats_free_commit_info(void *ptr) {
+    commit_info_t *info = ptr;
     if (!info) {
         return;
     }
@@ -712,7 +716,7 @@ void stats_free_file_commit_map(file_commit_map_t *map) {
         return;
     }
     if (map->map) {
-        hashmap_free(map->map, (void (*)(void *))stats_free_commit_info);
+        hashmap_free(map->map, stats_free_commit_info);
     }
     free(map);
 }

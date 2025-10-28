@@ -147,9 +147,12 @@ error_t *metadata_create_empty(metadata_t **out);
  * Frees all items and the structure itself.
  * Handles kind-specific union fields correctly.
  *
- * @param metadata Metadata to free (can be NULL)
+ * Generic callback signature for use with containers (e.g., hashmap_free).
+ * Accepts void* to match standard C cleanup callback pattern.
+ *
+ * @param ptr Metadata to free (can be NULL)
  */
-void metadata_free(metadata_t *metadata);
+void metadata_free(void *ptr);
 
 /**
  * Create file metadata item

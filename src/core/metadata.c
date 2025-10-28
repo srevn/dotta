@@ -90,8 +90,14 @@ void metadata_item_free(metadata_item_t *item) {
  * Free metadata structure
  *
  * Frees all items (handling union fields correctly) and the structure itself.
+ *
+ * Generic callback signature for use with containers (e.g., hashmap_free).
+ * Accepts void* to match standard C cleanup callback pattern.
  */
-void metadata_free(metadata_t *metadata) {
+void metadata_free(void *ptr) {
+    /* Safe cast: this function is designed to accept metadata_t* via void* */
+    metadata_t *metadata = ptr;
+
     if (!metadata) {
         return;
     }

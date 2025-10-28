@@ -1440,108 +1440,112 @@ static void update_display_summary(
      * This is a massive performance improvement for repos with many profiles */
     hashmap_t *profile_index = NULL;
 
-    /* Show modified files */
-    output_section(out, "Modified files");
-    for (size_t i = 0; i < modified->count; i++) {
-        modified_file_t *file = &modified->files[i];
+    /* Show modified files if any */
+    if (modified->count > 0) {
+        output_section(out, "Modified files");
+        output_newline(out);
 
-        /* Lazy-build index on first file needing multi-profile check */
-        if (!profile_index && i == 0) {
-            error_t *err = profile_build_file_index(repo, NULL, &profile_index);
-            if (err) {
-                /* Non-fatal: continue without multi-profile detection */
-                error_free(err);
-                profile_index = NULL;
+        for (size_t i = 0; i < modified->count; i++) {
+            modified_file_t *file = &modified->files[i];
+    
+            /* Lazy-build index on first file needing multi-profile check */
+            if (!profile_index && i == 0) {
+                error_t *err = profile_build_file_index(repo, NULL, &profile_index);
+                if (err) {
+                    /* Non-fatal: continue without multi-profile detection */
+                    error_free(err);
+                    profile_index = NULL;
+                }
             }
-        }
-
-        /* Check if file exists in other profiles using O(1) index lookup */
-        string_array_t *other_profiles = NULL;
-        if (profile_index) {
-            string_array_t *indexed_profiles = hashmap_get(profile_index, file->storage_path);
-            if (indexed_profiles && string_array_size(indexed_profiles) > 0) {
-                /* Create filtered copy excluding the source profile */
-                other_profiles = string_array_create();
-                if (other_profiles) {
-                    for (size_t j = 0; j < string_array_size(indexed_profiles); j++) {
-                        const char *profile_name = string_array_get(indexed_profiles, j);
-                        /* Skip the source profile */
-                        if (strcmp(profile_name, file->source_profile->name) != 0) {
-                            string_array_push(other_profiles, profile_name);
+    
+            /* Check if file exists in other profiles using O(1) index lookup */
+            string_array_t *other_profiles = NULL;
+            if (profile_index) {
+                string_array_t *indexed_profiles = hashmap_get(profile_index, file->storage_path);
+                if (indexed_profiles && string_array_size(indexed_profiles) > 0) {
+                    /* Create filtered copy excluding the source profile */
+                    other_profiles = string_array_create();
+                    if (other_profiles) {
+                        for (size_t j = 0; j < string_array_size(indexed_profiles); j++) {
+                            const char *profile_name = string_array_get(indexed_profiles, j);
+                            /* Skip the source profile */
+                            if (strcmp(profile_name, file->source_profile->name) != 0) {
+                                string_array_push(other_profiles, profile_name);
+                            }
                         }
                     }
                 }
             }
-        }
-
-        /* Build info string using dynamic buffer to avoid overflow */
-        buffer_t *info_buf = buffer_create();
-        if (!info_buf) {
-            string_array_free(other_profiles);
-            continue;  /* Skip this file on memory error */
-        }
-
-        if (other_profiles && string_array_size(other_profiles) > 0) {
-            /* File exists in multiple profiles - add warning indicator */
-            buffer_append_string(info_buf, file->filesystem_path);
-            buffer_append_string(info_buf, " (in ");
-            buffer_append_string(info_buf, file->source_profile->name);
-            buffer_append_string(info_buf, ") ");
-            buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_DIM));
-            buffer_append_string(info_buf, "[also in:");
-
-            for (size_t j = 0; j < string_array_size(other_profiles); j++) {
-                buffer_append_string(info_buf, " ");
-                buffer_append_string(info_buf, string_array_get(other_profiles, j));
+    
+            /* Build info string using dynamic buffer to avoid overflow */
+            buffer_t *info_buf = buffer_create();
+            if (!info_buf) {
+                string_array_free(other_profiles);
+                continue;  /* Skip this file on memory error */
             }
-
-            buffer_append_string(info_buf, "]");
-            buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_RESET));
-
-            multi_profile_count++;
-        } else {
-            buffer_append_string(info_buf, file->filesystem_path);
-            buffer_append_string(info_buf, " (in ");
-            buffer_append_string(info_buf, file->source_profile->name);
-            buffer_append_string(info_buf, ")");
-        }
-
-        /* Release buffer as null-terminated string */
-        char *info = NULL;
-        error_t *release_err = buffer_release_data(info_buf, &info);
-        if (release_err) {
-            error_free(release_err);
+    
+            if (other_profiles && string_array_size(other_profiles) > 0) {
+                /* File exists in multiple profiles - add warning indicator */
+                buffer_append_string(info_buf, file->filesystem_path);
+                buffer_append_string(info_buf, " (from ");
+                buffer_append_string(info_buf, file->source_profile->name);
+                buffer_append_string(info_buf, ") ");
+                buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_DIM));
+                buffer_append_string(info_buf, "[also in:");
+    
+                for (size_t j = 0; j < string_array_size(other_profiles); j++) {
+                    buffer_append_string(info_buf, " ");
+                    buffer_append_string(info_buf, string_array_get(other_profiles, j));
+                }
+    
+                buffer_append_string(info_buf, "]");
+                buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_RESET));
+    
+                multi_profile_count++;
+            } else {
+                buffer_append_string(info_buf, file->filesystem_path);
+                buffer_append_string(info_buf, " (from ");
+                buffer_append_string(info_buf, file->source_profile->name);
+                buffer_append_string(info_buf, ")");
+            }
+    
+            /* Release buffer as null-terminated string */
+            char *info = NULL;
+            error_t *release_err = buffer_release_data(info_buf, &info);
+            if (release_err) {
+                error_free(release_err);
+                string_array_free(other_profiles);
+                continue;  /* Skip this file on error */
+            }
+    
+            const char *status_label = NULL;
+            output_color_t color = OUTPUT_COLOR_YELLOW;
+    
+            switch (file->status) {
+                case CMP_DIFFERENT:
+                    status_label = "[modified]";
+                    break;
+                case CMP_MODE_DIFF:
+                    status_label = "[mode]";
+                    break;
+                case CMP_TYPE_DIFF:
+                    status_label = "[type]";
+                    color = OUTPUT_COLOR_RED;
+                    break;
+                case CMP_MISSING:
+                    status_label = "[deleted]";
+                    color = OUTPUT_COLOR_RED;
+                    break;
+                default:
+                    status_label = "[?]";
+                    break;
+            }
+    
+            output_item(out, status_label, color, info);
+    
+            free(info);
             string_array_free(other_profiles);
-            continue;  /* Skip this file on error */
         }
-
-        const char *status_label = NULL;
-        output_color_t color = OUTPUT_COLOR_YELLOW;
-
-        switch (file->status) {
-            case CMP_DIFFERENT:
-                status_label = "[modified]";
-                break;
-            case CMP_MODE_DIFF:
-                status_label = "[mode]";
-                break;
-            case CMP_TYPE_DIFF:
-                status_label = "[type]";
-                color = OUTPUT_COLOR_RED;
-                break;
-            case CMP_MISSING:
-                status_label = "[deleted]";
-                color = OUTPUT_COLOR_RED;
-                break;
-            default:
-                status_label = "[?]";
-                break;
-        }
-
-        output_item(out, status_label, color, info);
-
-        free(info);
-        string_array_free(other_profiles);
     }
 
     /* Free the profile index */
@@ -1563,6 +1567,8 @@ static void update_display_summary(
     /* Show new files if any */
     if (new_files && new_files->count > 0) {
         output_section(out, "New files");
+        output_newline(out);
+
         for (size_t i = 0; i < new_files->count; i++) {
             new_file_t *file = &new_files->files[i];
             char info[1024];
@@ -1575,6 +1581,7 @@ static void update_display_summary(
     /* Show modified directories if any */
     if (modified_dirs && modified_dirs->count > 0) {
         output_section(out, "Modified directories");
+        output_newline(out);
 
         for (size_t i = 0; i < modified_dirs->count; i++) {
             const modified_directory_t *dir = &modified_dirs->dirs[i];
@@ -1607,7 +1614,7 @@ static void update_display_summary(
 
             /* Build info string with profile context and trailing slash */
             char info[1024];
-            snprintf(info, sizeof(info), "%s/ %s(directory in %s)%s",
+            snprintf(info, sizeof(info), "%s/ %s(directory from %s)%s",
                     dir->filesystem_path,
                     output_color_code(out, OUTPUT_COLOR_DIM),
                     dir->source_profile->name,

@@ -13,6 +13,7 @@
 #ifndef DOTTA_REPO_H
 #define DOTTA_REPO_H
 
+#include <git2.h>
 #include <stdbool.h>
 
 #include "types.h"
@@ -43,6 +44,40 @@ error_t *resolve_repo_path(char **out);
  * @return Error or NULL on success
  */
 error_t *get_default_repo_path(char **out);
+
+/**
+ * Open dotta repository
+ *
+ * Resolves the repository path, validates it exists and is a valid git
+ * repository, then opens it. This is the standard way to open a repository
+ * for dotta commands.
+ *
+ * RESOLUTION ORDER:
+ * 1. DOTTA_REPO_DIR environment variable
+ * 2. Config file repo_dir setting
+ * 3. Default: ~/.local/share/dotta/repo
+ *
+ * VALIDATION:
+ * - Checks path exists and is a valid git repository
+ * - Returns detailed error with helpful hints if not found
+ * - Includes DOTTA_REPO_DIR hint in error if set
+ *
+ * ERROR MESSAGES:
+ * If repository not found, error includes:
+ * - Path that was checked
+ * - Hint to run 'dotta init'
+ * - DOTTA_REPO_DIR value if set
+ *
+ * OWNERSHIP:
+ * - Caller must free repository with git_repository_free()
+ * - Caller must free path_out (if requested) with free()
+ * - On error, outputs are not modified
+ *
+ * @param repo_out Repository handle (must not be NULL, caller must free)
+ * @param path_out Optional resolved path (can be NULL, caller must free if set)
+ * @return Error or NULL on success
+ */
+error_t *repo_open(git_repository **repo_out, char **path_out);
 
 /**
  * Fix repository ownership if running under sudo

@@ -11,7 +11,6 @@
 #include <string.h>
 
 #include "base/error.h"
-#include "base/gitops.h"
 #include "base/refspec.h"
 #include "cmds/add.h"
 #include "cmds/apply.h"
@@ -39,60 +38,6 @@
 #include "utils/privilege.h"
 #include "utils/repo.h"
 #include "utils/string.h"
-
-/**
- * Helper: Open resolved repository
- *
- * Resolves the repository path and opens it. If the repository doesn't exist,
- * prints a helpful error message and returns NULL.
- */
-static git_repository *open_resolved_repo(char **repo_path_out) {
-    char *repo_path = NULL;
-    git_repository *repo = NULL;
-
-    /* Resolve repository path */
-    error_t *err = resolve_repo_path(&repo_path);
-    if (err) {
-        fprintf(stderr, "Error: Failed to resolve repository path\n");
-        error_print(err, stderr);
-        error_free(err);
-        return NULL;
-    }
-
-    /* Check if repository exists */
-    if (!gitops_is_repository(repo_path)) {
-        fprintf(stderr, "Error: No dotta repository found at: %s\n", repo_path);
-        fprintf(stderr, "\nRun 'dotta init' to create a new repository\n");
-
-        /* Show hint about DOTTA_REPO_DIR */
-        const char *env_repo = getenv("DOTTA_REPO_DIR");
-        if (env_repo) {
-            fprintf(stderr, "Note: DOTTA_REPO_DIR is set to: %s\n", env_repo);
-        }
-
-        free(repo_path);
-        return NULL;
-    }
-
-    /* Open repository */
-    err = gitops_open_repository(&repo, repo_path);
-    if (err) {
-        fprintf(stderr, "Error: Failed to open repository at: %s\n", repo_path);
-        error_print(err, stderr);
-        error_free(err);
-        free(repo_path);
-        return NULL;
-    }
-
-    /* Return repository (caller must free both repo and repo_path) */
-    if (repo_path_out) {
-        *repo_path_out = repo_path;
-    } else {
-        free(repo_path);
-    }
-
-    return repo;
-}
 
 /**
  * Parse init command
@@ -238,15 +183,18 @@ static int cmd_add_main(int argc, char **argv) {
     }
 
     /* Open resolved repository */
-    git_repository *repo = open_resolved_repo(NULL);
-    if (!repo) {
+    git_repository *repo = NULL;
+    error_t *err = repo_open(&repo, NULL);
+    if (err) {
+        error_print(err, stderr);
+        error_free(err);
         free(files);
         free(excludes);
         return 1;
     }
 
     /* Execute command */
-    error_t *err = cmd_add(repo, &opts);
+    err = cmd_add(repo, &opts);
     free(files);
     free(excludes);
     git_repository_free(repo);
@@ -361,14 +309,17 @@ static int cmd_remove_main(int argc, char **argv) {
     }
 
     /* Open resolved repository */
-    git_repository *repo = open_resolved_repo(NULL);
-    if (!repo) {
+    git_repository *repo = NULL;
+    error_t *err = repo_open(&repo, NULL);
+    if (err) {
+        error_print(err, stderr);
+        error_free(err);
         free(paths);
         return 1;
     }
 
     /* Execute command */
-    error_t *err = cmd_remove(repo, &opts);
+    err = cmd_remove(repo, &opts);
     free(paths);
     git_repository_free(repo);
 
@@ -448,14 +399,17 @@ static int cmd_apply_main(int argc, char **argv) {
     }
 
     /* Open resolved repository */
-    git_repository *repo = open_resolved_repo(NULL);
-    if (!repo) {
+    git_repository *repo = NULL;
+    error_t *err = repo_open(&repo, NULL);
+    if (err) {
+        error_print(err, stderr);
+        error_free(err);
         free(profiles);
         return 1;
     }
 
     /* Execute command */
-    error_t *err = cmd_apply(repo, &opts);
+    err = cmd_apply(repo, &opts);
     free(profiles);
     git_repository_free(repo);
 
@@ -557,14 +511,17 @@ static int cmd_status_main(int argc, char **argv) {
     }
 
     /* Open resolved repository */
-    git_repository *repo = open_resolved_repo(NULL);
-    if (!repo) {
+    git_repository *repo = NULL;
+    error_t *err = repo_open(&repo, NULL);
+    if (err) {
+        error_print(err, stderr);
+        error_free(err);
         free(profiles);
         return 1;
     }
 
     /* Execute command */
-    error_t *err = cmd_status(repo, &opts);
+    err = cmd_status(repo, &opts);
     free(profiles);
     git_repository_free(repo);
 
@@ -641,13 +598,16 @@ static int cmd_list_main(int argc, char **argv) {
     }
 
     /* Open resolved repository */
-    git_repository *repo = open_resolved_repo(NULL);
-    if (!repo) {
+    git_repository *repo = NULL;
+    error_t *err = repo_open(&repo, NULL);
+    if (err) {
+        error_print(err, stderr);
+        error_free(err);
         return 1;
     }
 
     /* Execute command */
-    error_t *err = cmd_list(repo, &opts);
+    err = cmd_list(repo, &opts);
     git_repository_free(repo);
 
     if (err) {
@@ -861,8 +821,11 @@ static int cmd_profile_main(int argc, char **argv) {
     }
 
     /* Open resolved repository */
-    git_repository *repo = open_resolved_repo(NULL);
-    if (!repo) {
+    git_repository *repo = NULL;
+    error_t *err = repo_open(&repo, NULL);
+    if (err) {
+        error_print(err, stderr);
+        error_free(err);
         if (opts.profiles) {
             free(opts.profiles);
         }
@@ -870,7 +833,7 @@ static int cmd_profile_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    error_t *err = cmd_profile(repo, &opts);
+    err = cmd_profile(repo, &opts);
     if (opts.profiles) {
         free(opts.profiles);
     }
@@ -980,14 +943,17 @@ static int cmd_diff_main(int argc, char **argv) {
     }
 
     /* Open resolved repository */
-    git_repository *repo = open_resolved_repo(NULL);
-    if (!repo) {
+    git_repository *repo = NULL;
+    error_t *err = repo_open(&repo, NULL);
+    if (err) {
+        error_print(err, stderr);
+        error_free(err);
         free(positional);
         return 1;
     }
 
     /* Execute command */
-    error_t *err = cmd_diff(repo, &opts);
+    err = cmd_diff(repo, &opts);
     free(positional);
     git_repository_free(repo);
 
@@ -1214,8 +1180,11 @@ static int cmd_update_main(int argc, char **argv) {
     }
 
     /* Open resolved repository */
-    git_repository *repo = open_resolved_repo(NULL);
-    if (!repo) {
+    git_repository *repo = NULL;
+    error_t *err = repo_open(&repo, NULL);
+    if (err) {
+        error_print(err, stderr);
+        error_free(err);
         free(files);
         free(profiles);
         free(excludes);
@@ -1223,7 +1192,7 @@ static int cmd_update_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    error_t *err = cmd_update(repo, &opts);
+    err = cmd_update(repo, &opts);
     free(files);
     free(profiles);
     free(excludes);
@@ -1320,13 +1289,16 @@ static int cmd_ignore_main(int argc, char **argv) {
     opts.remove_count = remove_count;
 
     /* Open resolved repository */
-    git_repository *repo = open_resolved_repo(NULL);
-    if (!repo) {
+    git_repository *repo = NULL;
+    error_t *err = repo_open(&repo, NULL);
+    if (err) {
+        error_print(err, stderr);
+        error_free(err);
         return 1;
     }
 
     /* Execute command */
-    error_t *err = cmd_ignore(repo, &opts);
+    err = cmd_ignore(repo, &opts);
     git_repository_free(repo);
 
     if (err) {
@@ -1342,28 +1314,13 @@ static int cmd_ignore_main(int argc, char **argv) {
  * Parse git command
  */
 static int cmd_git_main(int argc, char **argv) {
-    /* Resolve repository path */
+    /* Open repository and get path */
+    git_repository *repo = NULL;
     char *repo_path = NULL;
-    error_t *err = resolve_repo_path(&repo_path);
+    error_t *err = repo_open(&repo, &repo_path);
     if (err) {
-        fprintf(stderr, "Error: Failed to resolve repository path\n");
         error_print(err, stderr);
         error_free(err);
-        return 1;
-    }
-
-    /* Check if repository exists */
-    if (!gitops_is_repository(repo_path)) {
-        fprintf(stderr, "Error: No dotta repository found at: %s\n", repo_path);
-        fprintf(stderr, "\nRun 'dotta init' to create a new repository\n");
-
-        /* Show hint about DOTTA_REPO_DIR */
-        const char *env_repo = getenv("DOTTA_REPO_DIR");
-        if (env_repo) {
-            fprintf(stderr, "Note: DOTTA_REPO_DIR is set to: %s\n", env_repo);
-        }
-
-        free(repo_path);
         return 1;
     }
 
@@ -1373,9 +1330,12 @@ static int cmd_git_main(int argc, char **argv) {
         .arg_count = argc - 2
     };
 
-    /* Execute git command */
+    /* Execute git command (needs path, not repo handle) */
     int exit_code = cmd_git(repo_path, &opts);
+
+    /* Cleanup */
     free(repo_path);
+    git_repository_free(repo);
 
     return exit_code;
 }
@@ -1450,14 +1410,17 @@ static int cmd_sync_main(int argc, char **argv) {
     }
 
     /* Open resolved repository */
-    git_repository *repo = open_resolved_repo(NULL);
-    if (!repo) {
+    git_repository *repo = NULL;
+    error_t *err = repo_open(&repo, NULL);
+    if (err) {
+        error_print(err, stderr);
+        error_free(err);
         free(profiles);
         return 1;
     }
 
     /* Execute command */
-    error_t *err = cmd_sync(repo, &opts);
+    err = cmd_sync(repo, &opts);
     free(profiles);
     git_repository_free(repo);
 
@@ -1542,13 +1505,16 @@ static int cmd_remote_main(int argc, char **argv) {
     }
 
     /* Open resolved repository */
-    git_repository *repo = open_resolved_repo(NULL);
-    if (!repo) {
+    git_repository *repo = NULL;
+    error_t *err = repo_open(&repo, NULL);
+    if (err) {
+        error_print(err, stderr);
+        error_free(err);
         return 1;
     }
 
     /* Execute command */
-    error_t *err = cmd_remote(repo, &opts);
+    err = cmd_remote(repo, &opts);
     git_repository_free(repo);
 
     if (err) {
@@ -1687,8 +1653,11 @@ static int cmd_show_main(int argc, char **argv) {
     }
 
     /* Open resolved repository */
-    git_repository *repo = open_resolved_repo(NULL);
-    if (!repo) {
+    git_repository *repo = NULL;
+    err = repo_open(&repo, NULL);
+    if (err) {
+        error_print(err, stderr);
+        error_free(err);
         return 1;
     }
 
@@ -1861,8 +1830,11 @@ static int cmd_revert_main(int argc, char **argv) {
     }
 
     /* Open resolved repository */
-    git_repository *repo = open_resolved_repo(NULL);
-    if (!repo) {
+    git_repository *repo = NULL;
+    err = repo_open(&repo, NULL);
+    if (err) {
+        error_print(err, stderr);
+        error_free(err);
         return 1;
     }
 
@@ -1895,13 +1867,16 @@ static int cmd_interactive_main(int argc, char **argv) {
     }
 
     /* Open resolved repository */
-    git_repository *repo = open_resolved_repo(NULL);
-    if (!repo) {
+    git_repository *repo = NULL;
+    error_t *err = repo_open(&repo, NULL);
+    if (err) {
+        error_print(err, stderr);
+        error_free(err);
         return 1;
     }
 
     /* Run interactive mode */
-    error_t *err = interactive_run(repo);
+    err = interactive_run(repo);
     git_repository_free(repo);
 
     if (err) {
@@ -2044,13 +2019,16 @@ static int cmd_key_main(int argc, char **argv) {
     }
 
     /* Open repository */
-    git_repository *repo = open_resolved_repo(NULL);
-    if (!repo) {
+    git_repository *repo = NULL;
+    error_t *err = repo_open(&repo, NULL);
+    if (err) {
+        error_print(err, stderr);
+        error_free(err);
         return 1;
     }
 
     /* Execute command */
-    error_t *err = cmd_key(repo, &opts);
+    err = cmd_key(repo, &opts);
 
     int ret = 0;
     if (err) {

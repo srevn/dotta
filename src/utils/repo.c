@@ -10,6 +10,7 @@
 
 #include "base/error.h"
 #include "base/filesystem.h"
+#include "base/gitops.h"
 #include "infra/path.h"
 #include "utils/config.h"
 #include "utils/privilege.h"
@@ -84,6 +85,64 @@ error_t *resolve_repo_path(char **out) {
     }
 
     *out = repo_dir;
+    return NULL;
+}
+
+/**
+ * Open dotta repository
+ */
+error_t *repo_open(git_repository **repo_out, char **path_out) {
+    CHECK_NULL(repo_out);
+
+    char *repo_path = NULL;
+    git_repository *repo = NULL;
+    error_t *err = NULL;
+
+    /* Resolve repository path */
+    err = resolve_repo_path(&repo_path);
+    if (err) {
+        return error_wrap(err, "Failed to resolve repository path");
+    }
+
+    /* Check if repository exists and is valid */
+    if (!gitops_is_repository(repo_path)) {
+        /* Build helpful error message with actionable hints */
+        const char *env_repo = getenv("DOTTA_REPO_DIR");
+
+        if (env_repo) {
+            err = ERROR(ERR_NOT_FOUND,
+                "No dotta repository found at: %s\n\n"
+                "Run 'dotta init' to create a new repository\n"
+                "Note: DOTTA_REPO_DIR is set to: %s",
+                repo_path, env_repo);
+        } else {
+            err = ERROR(ERR_NOT_FOUND,
+                "No dotta repository found at: %s\n\n"
+                "Run 'dotta init' to create a new repository",
+                repo_path);
+        }
+
+        free(repo_path);
+        return err;
+    }
+
+    /* Open repository */
+    err = gitops_open_repository(&repo, repo_path);
+    if (err) {
+        error_t *wrapped = error_wrap(err, "Failed to open repository at: %s",
+                        repo_path);
+        free(repo_path);
+        return wrapped;
+    }
+
+    /* Success - set outputs */
+    *repo_out = repo;
+    if (path_out) {
+        *path_out = repo_path;
+    } else {
+        free(repo_path);
+    }
+
     return NULL;
 }
 

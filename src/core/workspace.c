@@ -341,6 +341,10 @@ static error_t *workspace_add_diverged(
     entry->storage_path = storage_path ? strdup(storage_path) : NULL;
     entry->profile = profile ? strdup(profile) : NULL;
     entry->metadata_profile = NULL;  /* Will be set below if metadata exists */
+
+    /* Lookup profile pointer from profile_index (borrowed, can be NULL if profile not in enabled set) */
+    entry->source_profile = profile ? hashmap_get(ws->profile_index, profile) : NULL;
+
     entry->type = type;
     entry->item_kind = item_kind;
     entry->in_profile = in_profile;

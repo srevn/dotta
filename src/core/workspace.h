@@ -39,12 +39,21 @@
  *
  * Use item_kind to distinguish between files and directories. Invariant:
  * directories always have in_state == false.
+ *
+ * Lifetime notes:
+ * - filesystem_path, storage_path, profile, metadata_profile: owned strings (must free)
+ * - source_profile: borrowed pointer, valid while workspace lives
+ *   (workspace borrows profiles list from caller, so pointer is safe)
  */
 typedef struct {
     char *filesystem_path;      /* Target path on filesystem */
     char *storage_path;         /* Path in profile (e.g., home/.bashrc) */
-    char *profile;              /* Source profile name */
+    char *profile;              /* Source profile name (owned string) */
     char *metadata_profile;     /* Which profile's metadata won (can differ from profile) */
+
+    /* Direct pointer to profile for convenience (borrowed, can be NULL if profile not in enabled set) */
+    profile_t *source_profile;  /* Borrowed - valid while workspace lives */
+
     divergence_type_t type;     /* Divergence category */
 
     /* Item classification */

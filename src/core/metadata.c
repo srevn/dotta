@@ -1138,7 +1138,6 @@ static error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         cJSON_Delete(root);
         return ERROR(ERR_INVALID_ARG,
                     "Unsupported metadata version: %d (expected %d). "
-                    "This is ALPHA software with breaking changes. "
                     "Please re-run 'dotta add' for all your files.",
                     version, METADATA_VERSION);
     }

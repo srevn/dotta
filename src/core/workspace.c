@@ -1027,7 +1027,7 @@ static bool check_directory_callback(const char *key, void *value, void *user_da
             ws,
             filesystem_path,
             storage_prefix,
-            "multiple",  /* Profile source lost in merge (acceptable for ALPHA) */
+            entry->profile_name,  /* Track source profile */
             DIVERGENCE_DELETED,
             WORKSPACE_ITEM_DIRECTORY,
             true,   /* in_profile */
@@ -1089,7 +1089,7 @@ static bool check_directory_callback(const char *key, void *value, void *user_da
             ws,
             filesystem_path,
             storage_prefix,
-            "multiple",  /* Profile source lost in merge */
+            entry->profile_name,  /* Track source profile */
             div_type,    /* MODE_DIFF or OWNERSHIP from check function */
             WORKSPACE_ITEM_DIRECTORY,
             true,   /* in_profile */

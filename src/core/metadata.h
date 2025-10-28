@@ -55,8 +55,8 @@
  * }
  */
 
-#ifndef DOTTA_METADATA_V2_H
-#define DOTTA_METADATA_V2_H
+#ifndef DOTTA_METADATA_H
+#define DOTTA_METADATA_H
 
 #include <git2.h>
 #include <sys/stat.h>
@@ -509,4 +509,4 @@ error_t *metadata_resolve_ownership(
     gid_t *out_gid
 );
 
-#endif /* DOTTA_METADATA_V2_H */
+#endif /* DOTTA_METADATA_H */

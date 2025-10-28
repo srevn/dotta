@@ -426,22 +426,22 @@ static void print_cleanup_results(
             }
         }
 
-        if (result->directories_removed > 0) {
+        if (result->orphaned_directories_removed > 0) {
             if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "Pruned %s%zu%s empty director%s\n",
+                output_printf(out, OUTPUT_NORMAL, "Pruned %s%zu%s orphaned director%s\n",
                        output_color_code(out, OUTPUT_COLOR_YELLOW),
-                       result->directories_removed,
+                       result->orphaned_directories_removed,
                        output_color_code(out, OUTPUT_COLOR_RESET),
-                       result->directories_removed == 1 ? "y" : "ies");
+                       result->orphaned_directories_removed == 1 ? "y" : "ies");
             } else {
-                output_printf(out, OUTPUT_NORMAL, "Pruned %zu empty director%s\n",
-                       result->directories_removed,
-                       result->directories_removed == 1 ? "y" : "ies");
+                output_printf(out, OUTPUT_NORMAL, "Pruned %zu orphaned director%s\n",
+                       result->orphaned_directories_removed,
+                       result->orphaned_directories_removed == 1 ? "y" : "ies");
             }
         }
 
-        if (result->orphaned_files_failed > 0 || result->directories_failed > 0) {
-            size_t total_failed = result->orphaned_files_failed + result->directories_failed;
+        if (result->orphaned_files_failed > 0 || result->orphaned_directories_failed > 0) {
+            size_t total_failed = result->orphaned_files_failed + result->orphaned_directories_failed;
             output_warning(out, "Failed to prune %zu item%s",
                    total_failed,
                    total_failed == 1 ? "" : "s");
@@ -524,22 +524,22 @@ static void print_cleanup_preflight_results(
         output_section(out, "Empty directories");
 
         if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "  %s%zu%s empty director%s will be pruned\n",
+            output_printf(out, OUTPUT_NORMAL, "  %s%zu%s orphaned director%s will be pruned\n",
                    output_color_code(out, OUTPUT_COLOR_CYAN),
-                   result->directories_count,
+                   result->orphaned_directories_count,
                    output_color_code(out, OUTPUT_COLOR_RESET),
-                   result->directories_count == 1 ? "y" : "ies");
+                   result->orphaned_directories_count == 1 ? "y" : "ies");
         } else {
-            output_printf(out, OUTPUT_NORMAL, "  %zu empty director%s will be pruned\n",
-                   result->directories_count,
-                   result->directories_count == 1 ? "y" : "ies");
+            output_printf(out, OUTPUT_NORMAL, "  %zu orphaned director%s will be pruned\n",
+                   result->orphaned_directories_count,
+                   result->orphaned_directories_count == 1 ? "y" : "ies");
         }
 
         /* Show directory paths if not too many */
-        if (result->directories && result->directories_count <= 10) {
-            for (size_t i = 0; i < result->directories_count; i++) {
+        if (result->orphaned_directories && result->orphaned_directories_count <= 10) {
+            for (size_t i = 0; i < result->orphaned_directories_count; i++) {
                 output_printf(out, OUTPUT_NORMAL, "    • %s\n",
-                       string_array_get(result->directories, i));
+                       string_array_get(result->orphaned_directories, i));
             }
         }
     }
@@ -853,6 +853,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     manifest_t *manifest = NULL;
     workspace_t *ws = NULL;
     orphan_list_t *orphans = NULL;
+    orphan_directory_list_t *dir_orphans = NULL;
     metadata_t *merged_metadata = NULL;
     content_cache_t *cache = NULL;
     preflight_result_t *preflight = NULL;
@@ -1019,6 +1020,33 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
     }
 
+    /* Identify orphaned directories (state vs metadata)
+     *
+     * Similar to file orphan identification above, this computes the list of
+     * directories that are tracked in state but no longer in any enabled profile's
+     * metadata. Must happen AFTER metadata loading.
+     *
+     * Used for:
+     * 1. Preflight display (show user what will be removed)
+     * 2. Actual removal (pass to cleanup)
+     */
+    if (!opts->keep_orphans) {
+        output_print(out, OUTPUT_VERBOSE, "\nIdentifying orphaned directories...\n");
+
+        err = cleanup_identify_orphaned_directories(state, merged_metadata, &dir_orphans);
+        if (err) {
+            err = error_wrap(err, "Failed to identify orphaned directories");
+            goto cleanup;
+        }
+
+        if (opts->verbose && dir_orphans && dir_orphans->count > 0) {
+            output_print(out, OUTPUT_VERBOSE,
+                        "Found %zu orphaned director%s\n",
+                        dir_orphans->count,
+                        dir_orphans->count == 1 ? "y" : "ies");
+        }
+    }
+
     /* Check privileges for root/ files BEFORE deployment begins
      *
      * This ensures we have required privileges upfront, preventing partial
@@ -1101,7 +1129,8 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             .enabled_metadata = merged_metadata,
             .enabled_profiles = profiles,
             .cache = cache,
-            .orphaned_files = orphans,  /* Pass pre-computed orphans */
+            .orphaned_files = orphans,              /* Pass pre-computed file orphans */
+            .orphaned_directories = dir_orphans,    /* Pass pre-computed directory orphans */
             .verbose = opts->verbose,
             .dry_run = false,  /* Preflight is always read-only */
             .force = opts->force,
@@ -1246,8 +1275,9 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             cleanup_options_t cleanup_opts = {
                 .enabled_metadata = merged_metadata,
                 .enabled_profiles = profiles,
-                .cache = cache,             /* Pass cache for performance (avoids re-decryption) */
-                .orphaned_files = orphans,  /* Pass pre-computed orphans */
+                .cache = cache,                      /* Pass cache for performance (avoids re-decryption) */
+                .orphaned_files = orphans,           /* Pass pre-computed file orphans */
+                .orphaned_directories = dir_orphans, /* Pass pre-computed directory orphans */
                 .verbose = opts->verbose,
                 .dry_run = false,  /* Dry-run handled at deployment level */
                 .force = opts->force,
@@ -1318,6 +1348,7 @@ cleanup:
     if (profiles_str) free(profiles_str);
     if (cache) content_cache_free(cache);
     if (merged_metadata) metadata_free(merged_metadata);
+    if (dir_orphans) orphan_directory_list_free(dir_orphans);
     if (orphans) orphan_list_free(orphans);
     if (manifest) manifest_free(manifest);
     if (ws) workspace_free(ws);

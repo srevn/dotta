@@ -54,11 +54,12 @@ static error_t *create_result(cleanup_result_t **out) {
     result->skipped_files = string_array_create();
     result->failed_files = string_array_create();
     result->removed_dirs = string_array_create();
+    result->skipped_dirs = string_array_create();
     result->failed_dirs = string_array_create();
 
     /* Check allocations */
     if (!result->removed_files || !result->skipped_files || !result->failed_files ||
-        !result->removed_dirs || !result->failed_dirs) {
+        !result->removed_dirs || !result->skipped_dirs || !result->failed_dirs) {
         cleanup_result_free(result);
         return ERROR(ERR_MEMORY, "Failed to allocate cleanup result arrays");
     }
@@ -83,6 +84,7 @@ void cleanup_result_free(cleanup_result_t *result) {
     if (result->skipped_files) string_array_free(result->skipped_files);
     if (result->failed_files) string_array_free(result->failed_files);
     if (result->removed_dirs) string_array_free(result->removed_dirs);
+    if (result->skipped_dirs) string_array_free(result->skipped_dirs);
     if (result->failed_dirs) string_array_free(result->failed_dirs);
 
     /* Free embedded safety violations */
@@ -107,8 +109,8 @@ void cleanup_preflight_result_free(cleanup_preflight_result_t *result) {
     if (result->orphaned_files) {
         string_array_free(result->orphaned_files);
     }
-    if (result->directories) {
-        string_array_free(result->directories);
+    if (result->orphaned_directories) {
+        string_array_free(result->orphaned_directories);
     }
 
     /* Free embedded safety violations */
@@ -240,6 +242,146 @@ void orphan_list_free(orphan_list_t *list) {
     for (size_t i = 0; i < list->count; i++) {
         free(list->entries[i].filesystem_path);
         free(list->entries[i].storage_path);
+    }
+    free(list->entries);
+    free(list);
+}
+
+/**
+ * Identify orphaned directories
+ *
+ * Returns list of directories in deployment state that are not present in
+ * target metadata. Mirrors cleanup_identify_orphans() for directories.
+ */
+error_t *cleanup_identify_orphaned_directories(
+    const state_t *state,
+    const metadata_t *metadata,
+    orphan_directory_list_t **out_orphans
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(metadata);
+    CHECK_NULL(out_orphans);
+
+    error_t *err = NULL;
+    orphan_directory_list_t *list = NULL;
+    hashmap_t *metadata_index = NULL;
+    state_directory_entry_t *state_dirs = NULL;
+    size_t state_count = 0;
+    const metadata_item_t **meta_dirs = NULL;
+    size_t meta_count = 0;
+
+    /* Allocate orphan list */
+    list = calloc(1, sizeof(orphan_directory_list_t));
+    if (!list) {
+        return ERROR(ERR_MEMORY, "Failed to allocate orphan directory list");
+    }
+
+    /* Get all state directories */
+    err = state_get_all_directories(state, &state_dirs, &state_count);
+    if (err) {
+        free(list);
+        return error_wrap(err, "Failed to get state directories");
+    }
+
+    /* Early exit: no directories in state means no orphans */
+    if (state_count == 0) {
+        state_free_all_directories(state_dirs, state_count);
+        *out_orphans = list;
+        return NULL;
+    }
+
+    /* Get all metadata directories for comparison */
+    meta_dirs = metadata_get_items_by_kind(metadata, METADATA_ITEM_DIRECTORY, &meta_count);
+
+    /* Build metadata index for O(1) lookups (key = filesystem_path for directories) */
+    metadata_index = hashmap_create(meta_count > 0 ? meta_count : 16);
+    if (!metadata_index) {
+        if (meta_dirs) free(meta_dirs);
+        state_free_all_directories(state_dirs, state_count);
+        free(list);
+        return ERROR(ERR_MEMORY, "Failed to create metadata index");
+    }
+
+    for (size_t i = 0; i < meta_count; i++) {
+        /* For directories, key is filesystem_path */
+        err = hashmap_set(metadata_index,
+                         meta_dirs[i]->key,
+                         (void *)1);
+        if (err) {
+            hashmap_free(metadata_index, NULL);
+            free(meta_dirs);
+            state_free_all_directories(state_dirs, state_count);
+            free(list);
+            return error_wrap(err, "Failed to build metadata index");
+        }
+    }
+
+    /* Identify orphans (in state, not in metadata) */
+    for (size_t i = 0; i < state_count; i++) {
+        const state_directory_entry_t *entry = &state_dirs[i];
+
+        /* Check if directory exists in metadata (O(1) lookup) */
+        if (!hashmap_has(metadata_index, entry->directory_path)) {
+            /* Orphaned - grow array if needed */
+            if (list->count >= list->capacity) {
+                size_t new_cap = list->capacity == 0 ? 16 : list->capacity * 2;
+                orphan_directory_entry_t *new_entries = realloc(list->entries,
+                                                                new_cap * sizeof(orphan_directory_entry_t));
+                if (!new_entries) {
+                    orphan_directory_list_free(list);
+                    hashmap_free(metadata_index, NULL);
+                    free(meta_dirs);
+                    state_free_all_directories(state_dirs, state_count);
+                    return ERROR(ERR_MEMORY, "Failed to grow orphan directory list");
+                }
+                list->entries = new_entries;
+                list->capacity = new_cap;
+            }
+
+            /* Add orphan entry with all needed fields */
+            orphan_directory_entry_t *orphan = &list->entries[list->count];
+            orphan->filesystem_path = strdup(entry->directory_path);
+            orphan->storage_prefix = strdup(entry->storage_prefix);
+            orphan->profile = strdup(entry->profile);
+
+            if (!orphan->filesystem_path || !orphan->storage_prefix || !orphan->profile) {
+                free(orphan->filesystem_path);
+                free(orphan->storage_prefix);
+                free(orphan->profile);
+                orphan_directory_list_free(list);
+                hashmap_free(metadata_index, NULL);
+                free(meta_dirs);
+                state_free_all_directories(state_dirs, state_count);
+                return ERROR(ERR_MEMORY, "Failed to allocate orphan directory paths");
+            }
+
+            list->count++;
+        }
+    }
+
+    /* Cleanup */
+    hashmap_free(metadata_index, NULL);
+    if (meta_dirs) free(meta_dirs);
+    state_free_all_directories(state_dirs, state_count);
+
+    *out_orphans = list;
+    return NULL;
+}
+
+/**
+ * Free orphaned directory list
+ *
+ * Frees all orphan entries (including their strings) and the list structure.
+ */
+void orphan_directory_list_free(orphan_directory_list_t *list) {
+    if (!list) {
+        return;
+    }
+
+    for (size_t i = 0; i < list->count; i++) {
+        free(list->entries[i].filesystem_path);
+        free(list->entries[i].storage_prefix);
+        free(list->entries[i].profile);
     }
     free(list->entries);
     free(list);
@@ -405,29 +547,23 @@ static error_t *prune_orphaned_files(
 }
 
 /**
- * Reset parent directory state to UNKNOWN
+ * Reset parent directory state to UNKNOWN (for orphan directories)
  *
- * When a child directory is removed, the parent might now be empty.
- * This function finds the parent in the directory list and resets its
- * state so it will be rechecked in the next iteration.
+ * Variant for orphaned directory entries. Same logic but works with
+ * orphan_directory_entry_t array instead of state_directory_entry_t.
  *
- * Edge cases:
- * - Root directory (/) → No parent, skip
- * - No slash in path → No parent, skip
- * - Parent not in tracked list → Skip (only track explicitly added dirs)
- *
- * @param directories Array of tracked directories
+ * @param orphan_entries Array of orphaned directory entries
  * @param dir_count Number of directories
- * @param states Array of directory states (parallel to directories)
+ * @param states Array of directory states (parallel to entries)
  * @param removed_path Path of directory that was just removed
  */
-static void reset_parent_directory_state(
-    const state_directory_entry_t *directories,
+static void reset_parent_directory_state_orphans(
+    const orphan_directory_entry_t *orphan_entries,
     size_t dir_count,
     directory_state_t *states,
     const char *removed_path
 ) {
-    if (!directories || !states || !removed_path || dir_count == 0) {
+    if (!orphan_entries || !states || !removed_path || dir_count == 0) {
         return;
     }
 
@@ -446,9 +582,9 @@ static void reset_parent_directory_state(
         return;  /* Memory allocation failed - non-fatal */
     }
 
-    /* Find parent in directories list */
+    /* Find parent in orphan entries list */
     for (size_t i = 0; i < dir_count; i++) {
-        if (strcmp(directories[i].directory_path, parent_path) == 0) {
+        if (strcmp(orphan_entries[i].filesystem_path, parent_path) == 0) {
             /* Found parent - reset state if it was marked non-empty */
             if (states[i] == DIR_STATE_NOT_EMPTY) {
                 states[i] = DIR_STATE_UNKNOWN;
@@ -461,57 +597,57 @@ static void reset_parent_directory_state(
 }
 
 /**
- * Prune empty tracked directories
+ * Prune orphaned directories (with inline safety check)
  *
- * Iteratively removes directories that are:
- * 1. Explicitly tracked in state (added via `dotta add` and deployed via `dotta apply`)
+ * Iteratively removes orphaned directories that are:
+ * 1. In orphaned_dirs list (not in enabled profile metadata)
  * 2. Empty (contain no files or subdirectories)
  *
- * Uses state tracking optimization to avoid redundant filesystem checks
- * for deep directory hierarchies.
+ * Safety Check (INLINE):
+ * - If directory is non-empty: SKIP (contains untracked files - data loss risk)
+ * - If directory is empty: SAFE (no data loss possible)
+ *
+ * This mirrors file pruning but with simpler safety logic:
+ * - Files: Complex safety (Git comparison, hash checks, decryption)
+ * - Directories: Simple safety (filesystem empty check)
  *
  * Algorithm:
- * - Iteration 1: Check all dirs, remove empty ones
+ * - Iteration 1: Check all orphaned dirs, remove empty ones, skip non-empty
  * - Iteration 2: Parent dirs might now be empty, check unknowns only
  * - Repeat until no progress made (stable state)
  *
  * State Tracking Optimization:
  * - DIR_STATE_REMOVED: Skip in all future iterations
- * - DIR_STATE_NOT_EMPTY: Skip until child removed (then reset to UNKNOWN)
+ * - DIR_STATE_NOT_EMPTY: Skipped (safety violation - contains untracked files)
  * - DIR_STATE_NONEXISTENT: Skip in all future iterations
  * - DIR_STATE_FAILED: Skip in all future iterations
  * - DIR_STATE_UNKNOWN: Check in this iteration
  *
- * @param state Deployment state (must not be NULL)
+ * @param orphaned_dirs Pre-computed orphan list (must not be NULL)
  * @param result Cleanup result to update (must not be NULL)
  * @param opts Cleanup options (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *prune_empty_directories(
-    const state_t *state,
+static error_t *prune_orphaned_directories(
+    const orphan_directory_list_t *orphaned_dirs,
     cleanup_result_t *result,
     const cleanup_options_t *opts
 ) {
-    CHECK_NULL(state);
+    CHECK_NULL(orphaned_dirs);
     CHECK_NULL(result);
     CHECK_NULL(opts);
 
-    error_t *err = NULL;
     bool dry_run = opts->dry_run;
 
-    /* Get all tracked directories from state */
-    state_directory_entry_t *directories = NULL;
-    size_t dir_count = 0;
-    err = state_get_all_directories(state, &directories, &dir_count);
-    if (err) {
-        return error_wrap(err, "Failed to get tracked directories from state");
+    const orphan_directory_list_t *orphans = orphaned_dirs;
+    result->orphaned_directories_found = orphans->count;
+
+    /* Early exit: no orphaned directories */
+    if (orphans->count == 0) {
+        return NULL;
     }
 
-    if (dir_count == 0) {
-        return NULL;  /* No tracked directories */
-    }
-
-    result->directories_checked = dir_count;
+    size_t dir_count = orphans->count;
 
     /* Allocate state tracking array */
     directory_state_t *states = calloc(dir_count, sizeof(directory_state_t));
@@ -519,8 +655,7 @@ static error_t *prune_empty_directories(
         /* Non-fatal: allocation failure skips directory pruning entirely.
          * This is safer than attempting unoptimized pruning, which could
          * be prohibitively expensive for large directory hierarchies.
-         * Caller can check if directories_removed is 0 to detect this case. */
-        state_free_all_directories(directories, dir_count);
+         * Caller can check if orphaned_directories_removed is 0 to detect this case. */
         return NULL;
     }
 
@@ -528,12 +663,12 @@ static error_t *prune_empty_directories(
 
     bool made_progress = true;
 
-    /* Iteratively remove empty directories until stable */
+    /* Iteratively remove empty orphaned directories until stable */
     while (made_progress) {
         made_progress = false;
 
         for (size_t i = 0; i < dir_count; i++) {
-            const char *dir_path = directories[i].directory_path;
+            const char *dir_path = orphans->entries[i].filesystem_path;
 
             /* Optimization: Skip directories with known state */
             if (states[i] == DIR_STATE_REMOVED ||
@@ -542,7 +677,7 @@ static error_t *prune_empty_directories(
                 continue;
             }
 
-            /* Skip non-empty directories (until child removed) */
+            /* Skip non-empty directories (safety violation - already tracked) */
             if (states[i] == DIR_STATE_NOT_EMPTY) {
                 continue;
             }
@@ -553,24 +688,38 @@ static error_t *prune_empty_directories(
                 continue;
             }
 
-            /* Check if directory is empty */
+            /* INLINE SAFETY CHECK: Is directory empty? */
             if (!fs_is_directory_empty(dir_path)) {
-                states[i] = DIR_STATE_NOT_EMPTY;
+                /* Safety violation: contains untracked files */
+                if (states[i] != DIR_STATE_NOT_EMPTY) {
+                    /* First time seeing this violation - track it */
+                    result->orphaned_directories_skipped++;
+
+                    /* Populate skipped_dirs array for caller display */
+                    error_t *push_err = string_array_push(result->skipped_dirs, dir_path);
+                    if (push_err) {
+                        /* Free resources and return fatal error */
+                        free(states);
+                        return error_wrap(push_err, "Failed to track skipped directory");
+                    }
+
+                    states[i] = DIR_STATE_NOT_EMPTY;
+                }
                 continue;  /* Won't re-check until child removed */
             }
 
             /* Dry run: don't remove */
             if (dry_run) {
                 /* In dry-run mode, we don't remove but caller can infer what would happen
-                 * from directories_checked and directories_removed counters */
+                 * from orphaned_directories_found and orphaned_directories_removed counters */
                 continue;
             }
 
-            /* Remove empty directory */
+            /* Remove empty orphaned directory */
             error_t *remove_err = fs_remove_dir(dir_path, false);
             if (remove_err) {
                 /* Non-fatal: track failure, populate result array, and continue */
-                result->directories_failed++;
+                result->orphaned_directories_failed++;
                 states[i] = DIR_STATE_FAILED;
 
                 /* Populate failed_dirs array for caller display */
@@ -579,26 +728,24 @@ static error_t *prune_empty_directories(
                     error_free(remove_err);
                     /* Free resources and return fatal error */
                     free(states);
-                    state_free_all_directories(directories, dir_count);
                     return error_wrap(push_err, "Failed to track failed directory");
                 }
 
                 error_free(remove_err);
             } else {
                 /* Directory removed successfully */
-                result->directories_removed++;
+                result->orphaned_directories_removed++;
                 states[i] = DIR_STATE_REMOVED;
                 made_progress = true;
 
                 /* Reset parent directory state (might now be empty) */
-                reset_parent_directory_state(directories, dir_count, states, dir_path);
+                reset_parent_directory_state_orphans(orphans->entries, dir_count, states, dir_path);
 
                 /* Populate removed_dirs array for caller display */
                 error_t *push_err = string_array_push(result->removed_dirs, dir_path);
                 if (push_err) {
                     /* Free resources and return fatal error */
                     free(states);
-                    state_free_all_directories(directories, dir_count);
                     return error_wrap(push_err, "Failed to track removed directory");
                 }
             }
@@ -607,7 +754,6 @@ static error_t *prune_empty_directories(
 
     /* Cleanup */
     free(states);
-    state_free_all_directories(directories, dir_count);
     return NULL;
 }
 
@@ -630,17 +776,18 @@ error_t *cleanup_preflight_check(
     CHECK_NULL(manifest);
     CHECK_NULL(opts);
     CHECK_NULL(opts->orphaned_files);
+    CHECK_NULL(opts->orphaned_directories);
     CHECK_NULL(out_result);
 
     /* Declare all resources at top, initialized to NULL */
     error_t *err = NULL;
     cleanup_preflight_result_t *result = NULL;
     string_array_t *orphaned_files = NULL;
-    state_directory_entry_t *directories = NULL;
-    size_t dir_count = 0;
+    string_array_t *orphaned_dirs_display = NULL;
     char **filesystem_paths = NULL;
 
-    const orphan_list_t *orphans = opts->orphaned_files;
+    const orphan_list_t *file_orphans = opts->orphaned_files;
+    const orphan_directory_list_t *dir_orphans = opts->orphaned_directories;
 
     /* Allocate result structure */
     result = calloc(1, sizeof(cleanup_preflight_result_t));
@@ -650,17 +797,19 @@ error_t *cleanup_preflight_check(
     }
 
     /* Initialize all fields */
-    result->orphaned_files_count = orphans->count;
+    result->orphaned_files_count = file_orphans->count;
     result->orphaned_files = NULL;
     result->safety_violations = NULL;
-    result->directories_count = 0;
-    result->directories = NULL;
+    result->orphaned_directories_count = dir_orphans->count;
+    result->orphaned_directories_nonempty = 0;
+    result->orphaned_directories = NULL;
     result->has_blocking_violations = false;
-    result->will_prune_orphans = (orphans->count > 0);
-    result->will_prune_directories = false;
+    result->has_blocking_directories = false;
+    result->will_prune_orphans = (file_orphans->count > 0);
+    result->will_prune_directories = (dir_orphans->count > 0);
 
-    /* Early exit: no orphaned files */
-    if (orphans->count == 0) {
+    /* Early exit: no orphaned files or directories */
+    if (file_orphans->count == 0 && dir_orphans->count == 0) {
         /* Success - no orphans to check */
         *out_result = result;
         result = NULL;
@@ -668,96 +817,100 @@ error_t *cleanup_preflight_check(
         goto cleanup;
     }
 
-    /* Convert orphan_list_t to string_array_t for result (display purposes) */
-    orphaned_files = string_array_create();
-    if (!orphaned_files) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate orphan list for display");
-        goto cleanup;
-    }
-
-    for (size_t i = 0; i < orphans->count; i++) {
-        err = string_array_push(orphaned_files, orphans->entries[i].filesystem_path);
-        if (err) {
-            err = error_wrap(err, "Failed to add orphaned file to display list");
-            goto cleanup;
-        }
-    }
-
-    /* Transfer ownership to result */
-    result->orphaned_files = orphaned_files;
-    orphaned_files = NULL;  /* Prevent double-free */
-
-    /* Run safety checks (unless force=true) */
-    if (!opts->force) {
-        /* Extract filesystem paths for safety check */
-        filesystem_paths = calloc(orphans->count, sizeof(char *));
-        if (!filesystem_paths) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate filesystem paths array");
+    /* Convert file orphans to string array for display */
+    if (file_orphans->count > 0) {
+        orphaned_files = string_array_create();
+        if (!orphaned_files) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate orphan file list for display");
             goto cleanup;
         }
 
-        for (size_t i = 0; i < orphans->count; i++) {
-            filesystem_paths[i] = orphans->entries[i].filesystem_path;
+        for (size_t i = 0; i < file_orphans->count; i++) {
+            err = string_array_push(orphaned_files, file_orphans->entries[i].filesystem_path);
+            if (err) {
+                err = error_wrap(err, "Failed to add orphaned file to display list");
+                goto cleanup;
+            }
         }
 
-        /* Get keymanager for decryption (if needed) */
-        keymanager_t *keymanager = keymanager_get_global(NULL);
+        /* Transfer ownership to result */
+        result->orphaned_files = orphaned_files;
+        orphaned_files = NULL;  /* Prevent double-free */
 
-        err = safety_check_removal(
-            repo,
-            state,
-            filesystem_paths,
-            orphans->count,
-            opts->force,
-            opts->enabled_metadata,
-            keymanager,
-            opts->cache,
-            &result->safety_violations
-        );
+        /* Run file safety checks (unless force=true) */
+        if (!opts->force) {
+            /* Extract filesystem paths for safety check */
+            filesystem_paths = calloc(file_orphans->count, sizeof(char *));
+            if (!filesystem_paths) {
+                err = ERROR(ERR_MEMORY, "Failed to allocate filesystem paths array");
+                goto cleanup;
+            }
 
-        if (err) {
-            err = error_wrap(err, "Safety check failed");
-            goto cleanup;
-        }
+            for (size_t i = 0; i < file_orphans->count; i++) {
+                filesystem_paths[i] = file_orphans->entries[i].filesystem_path;
+            }
 
-        /* Set blocking flag if violations found */
-        if (result->safety_violations && result->safety_violations->count > 0) {
-            result->has_blocking_violations = true;
+            /* Get keymanager for decryption (if needed) */
+            keymanager_t *keymanager = keymanager_get_global(NULL);
+
+            err = safety_check_removal(
+                repo,
+                state,
+                filesystem_paths,
+                file_orphans->count,
+                opts->force,
+                opts->enabled_metadata,
+                keymanager,
+                opts->cache,
+                &result->safety_violations
+            );
+
+            if (err) {
+                err = error_wrap(err, "Safety check failed");
+                goto cleanup;
+            }
+
+            /* Set blocking flag if violations found */
+            if (result->safety_violations && result->safety_violations->count > 0) {
+                result->has_blocking_violations = true;
+            }
         }
     }
 
-    /* Preview empty directories from state */
-    err = state_get_all_directories(state, &directories, &dir_count);
-    if (err) {
-        /* Non-fatal: continue without directory preview */
-        error_free(err);
-        err = NULL;
-        directories = NULL;
-        dir_count = 0;
-    } else if (dir_count > 0) {
+    /* Preview orphaned directories (check which are non-empty) */
+    if (dir_orphans->count > 0) {
         /* Allocate directory array for preview */
-        result->directories = string_array_create();
-        if (!result->directories) {
+        orphaned_dirs_display = string_array_create();
+        if (!orphaned_dirs_display) {
             /* Non-fatal: continue without directory preview */
         } else {
-            /* Check which directories are empty (read-only preview) */
-            for (size_t i = 0; i < dir_count; i++) {
-                const char *dir_path = directories[i].directory_path;
+            /* Check which orphaned directories are non-empty (read-only preview) */
+            for (size_t i = 0; i < dir_orphans->count; i++) {
+                const char *dir_path = dir_orphans->entries[i].filesystem_path;
 
-                /* Check if directory exists and is empty */
-                if (fs_exists(dir_path) && fs_is_directory_empty(dir_path)) {
-                    err = string_array_push(result->directories, dir_path);
-                    if (err) {
-                        /* Non-fatal: best-effort directory preview */
-                        error_free(err);
-                        err = NULL;
-                        break;
-                    }
+                /* Add to display list */
+                err = string_array_push(orphaned_dirs_display, dir_path);
+                if (err) {
+                    /* Non-fatal: best-effort directory preview */
+                    error_free(err);
+                    err = NULL;
+                    break;
+                }
+
+                /* Check if directory exists and is non-empty (safety violation) */
+                if (fs_exists(dir_path) && !fs_is_directory_empty(dir_path)) {
+                    result->orphaned_directories_nonempty++;
                 }
             }
 
-            result->directories_count = string_array_size(result->directories);
-            result->will_prune_directories = (result->directories_count > 0);
+            /* Transfer ownership to result */
+            result->orphaned_directories = orphaned_dirs_display;
+            orphaned_dirs_display = NULL;  /* Prevent double-free */
+
+            /* Set blocking flag if non-empty orphaned directories found */
+            if (result->orphaned_directories_nonempty > 0 && !opts->force) {
+                result->has_blocking_directories = true;
+            }
         }
     }
 
@@ -768,7 +921,7 @@ error_t *cleanup_preflight_check(
 
 cleanup:
     /* Free resources in reverse order of allocation */
-    if (directories) state_free_all_directories(directories, dir_count);
+    if (orphaned_dirs_display) string_array_free(orphaned_dirs_display);
     if (orphaned_files) string_array_free(orphaned_files);
     if (filesystem_paths) free(filesystem_paths);
     if (result) cleanup_preflight_result_free(result);
@@ -793,6 +946,8 @@ error_t *cleanup_execute(
     CHECK_NULL(state);
     CHECK_NULL(manifest);
     CHECK_NULL(opts);
+    CHECK_NULL(opts->orphaned_files);
+    CHECK_NULL(opts->orphaned_directories);
     CHECK_NULL(out_result);
 
     error_t *err = NULL;
@@ -811,11 +966,11 @@ error_t *cleanup_execute(
         return error_wrap(err, "Failed to remove orphaned files");
     }
 
-    /* Step 2: Prune empty tracked directories (from state) */
-    err = prune_empty_directories(state, result, opts);
+    /* Step 2: Prune orphaned directories (with inline safety check) */
+    err = prune_orphaned_directories(opts->orphaned_directories, result, opts);
     if (err) {
         cleanup_result_free(result);
-        return error_wrap(err, "Failed to prune empty directories");
+        return error_wrap(err, "Failed to prune orphaned directories");
     }
 
     /* Return result */

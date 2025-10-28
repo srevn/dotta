@@ -1,30 +1,44 @@
 /**
- * cleanup.h - Orphaned file and empty directory cleanup
+ * cleanup.h - Orphaned file and directory cleanup
  *
  * This module handles cleanup operations during profile application:
  * 1. Identifies and removes orphaned files (files in state but not in manifest)
- * 2. Validates removal safety using the safety module
- * 3. Prunes empty tracked directories using optimized metadata loading
+ * 2. Identifies and removes orphaned directories (directories in state but not in metadata)
+ * 3. Validates file removal safety using the safety module
+ * 4. Validates directory removal safety inline (non-empty check)
  *
  * Design Principles:
  * ─────────────────
  * - Separation: Isolates cleanup logic from apply command
- * - Safety: Integrates with safety module to prevent data loss
- * - Performance: Optimized metadata loading and directory state tracking
+ * - Safety: Dual approach - safety module for files, inline check for directories
+ * - Performance: Pre-computed orphan lists and directory state tracking
  * - Reporting: Rich result structure for detailed feedback
+ *
+ * Orphan Detection:
+ * ────────────────
+ * - Files: Compare state vs manifest (filesystem paths)
+ * - Directories: Compare state vs metadata (filesystem paths)
+ * - Pre-computed: Orphan lists computed once by caller, reused across preflight and execution
+ *
+ * Safety Validation:
+ * ─────────────────
+ * - Files: safety_check_removal() - Complex Git comparison, hash checks, decryption
+ * - Directories: Inline fs_is_directory_empty() - Simple filesystem check
+ * - Rationale: Different complexity levels warrant different approaches
  *
  * Optimization Strategy:
  * ─────────────────────
- * - Metadata: Only load from deployed-but-not-enabled profiles (no duplication)
+ * - Pre-computation: Orphan lists computed once, passed via cleanup_options_t
  * - Content cache: Reuse decrypted content from preflight checks (avoid re-decryption)
  * - Directory pruning: State tracking to avoid redundant filesystem checks
- * - Parent awareness: Reset parent directory state when child removed
+ * - Parent awareness: Reset parent directory state when child removed (iterative pruning)
  *
  * Integration Points:
  * ──────────────────
  * - safety.h: Validates file removal (uncommitted change detection)
- * - metadata.h: Tracks directories for cleanup
- * - state.h: Identifies orphaned files and deployed profiles
+ * - metadata.h: Provides merged metadata to identify orphaned directories
+ * - state.h: Provides deployment state for orphan detection
+ * - manifest.h: Provides target manifest for file orphan detection
  * - filesystem.h: Low-level file/directory operations
  */
 
@@ -74,6 +88,35 @@ typedef struct {
 } orphan_list_t;
 
 /**
+ * Orphaned directory entry - minimal information for directory cleanup
+ *
+ * Stores filesystem path (where directory is deployed), storage prefix
+ * (how directory is stored in Git), and source profile for reporting.
+ *
+ * Lifecycle: Owned by orphan_directory_list_t, freed together with the list.
+ */
+typedef struct {
+    char *filesystem_path;   /* Deployed location (e.g., /home/user/.config) */
+    char *storage_prefix;    /* Storage prefix in profile (e.g., home/.config) */
+    char *profile;           /* Source profile name (for reporting) */
+} orphan_directory_entry_t;
+
+/**
+ * Orphaned directory list - dynamic array of orphaned directory entries
+ *
+ * Self-contained structure representing directories that are in deployment state
+ * but not in the target metadata (i.e., orphaned directories to be removed).
+ *
+ * Memory management: All strings are owned by the list and freed together.
+ * Use orphan_directory_list_free() to release all resources.
+ */
+typedef struct {
+    orphan_directory_entry_t *entries;  /* Array of orphan entries (owns memory) */
+    size_t count;                        /* Number of orphans */
+    size_t capacity;                     /* Allocated capacity (internal use) */
+} orphan_directory_list_t;
+
+/**
  * Cleanup operation options
  *
  * Configures cleanup behavior and provides pre-loaded data to avoid duplication.
@@ -86,7 +129,7 @@ typedef struct {
     content_cache_t *cache;                  /* Content cache for performance (can be NULL) */
 
     /**
-     * Pre-computed orphan list (REQUIRED)
+     * Pre-computed file orphan list (REQUIRED)
      *
      * Must be computed by caller using cleanup_identify_orphans().
      * Treated as borrowed reference (cleanup does not free).
@@ -98,7 +141,20 @@ typedef struct {
      *
      * Performance: Eliminates O(2N+2M) redundant state/manifest comparisons.
      */
-    const orphan_list_t *orphaned_files;     /* Pre-computed orphans (must not be NULL) */
+    const orphan_list_t *orphaned_files;     /* Pre-computed file orphans (must not be NULL) */
+
+    /**
+     * Pre-computed directory orphan list (REQUIRED)
+     *
+     * Must be computed by caller using cleanup_identify_orphaned_directories().
+     * Treated as borrowed reference (cleanup does not free).
+     *
+     * Rationale: Mirrors file orphan pattern to avoid recomputation and ensure
+     * consistent orphan detection across preflight checks and actual cleanup.
+     *
+     * Performance: Eliminates redundant state/metadata comparisons.
+     */
+    const orphan_directory_list_t *orphaned_directories;  /* Pre-computed directory orphans (must not be NULL) */
 
     /* Control flags */
     bool verbose;                           /* Kept for consistency (unused in module) */
@@ -120,10 +176,11 @@ typedef struct {
     size_t orphaned_files_failed;        /* Failed to remove (I/O errors) */
     size_t orphaned_files_skipped;       /* Skipped due to safety violations */
 
-    /* Empty directory statistics */
-    size_t directories_checked;          /* Total directories examined */
-    size_t directories_removed;          /* Successfully removed */
-    size_t directories_failed;           /* Failed to remove (I/O errors) */
+    /* Orphaned directory statistics */
+    size_t orphaned_directories_found;   /* Total orphaned directories detected */
+    size_t orphaned_directories_removed; /* Successfully removed */
+    size_t orphaned_directories_skipped; /* Skipped (non-empty - safety) */
+    size_t orphaned_directories_failed;  /* Failed to remove (I/O errors) */
 
     /* Safety violation details */
     safety_result_t *safety_violations;  /* NULL if no violations or force=true */
@@ -135,6 +192,7 @@ typedef struct {
 
     /* Detailed directory lists */
     string_array_t *removed_dirs;        /* Successfully removed directory paths */
+    string_array_t *skipped_dirs;        /* Skipped directory paths (non-empty orphans) */
     string_array_t *failed_dirs;         /* Failed directory paths (with errors) */
 } cleanup_result_t;
 
@@ -166,14 +224,16 @@ typedef struct {
     /* Safety violations */
     safety_result_t *safety_violations; /* Blocking issues (NULL if none or force=true) */
 
-    /* Directory pruning preview */
-    size_t directories_count;           /* Empty dirs that will be removed */
-    string_array_t *directories;        /* Directory paths (for verbose display) */
+    /* Orphaned directory pruning preview */
+    size_t orphaned_directories_count;        /* Orphaned directories detected */
+    size_t orphaned_directories_nonempty;     /* Non-empty orphaned dirs (blocking) */
+    string_array_t *orphaned_directories;     /* Directory paths (for display) */
 
     /* Summary flags */
-    bool has_blocking_violations;       /* True if safety violations present */
+    bool has_blocking_violations;       /* True if file safety violations present */
+    bool has_blocking_directories;      /* True if non-empty orphaned dirs present */
     bool will_prune_orphans;            /* True if orphaned_files_count > 0 */
-    bool will_prune_directories;        /* True if directories_count > 0 */
+    bool will_prune_directories;        /* True if orphaned_directories_count > 0 */
 } cleanup_preflight_result_t;
 
 /**
@@ -232,6 +292,62 @@ error_t *cleanup_identify_orphans(
  * @param list Orphan list to free (can be NULL)
  */
 void orphan_list_free(orphan_list_t *list);
+
+/**
+ * Identify orphaned directories
+ *
+ * Returns list of directories in deployment state that are not present in
+ * target metadata. Each orphan entry includes filesystem path, storage prefix,
+ * and source profile for reporting.
+ *
+ * Purpose:
+ * --------
+ * Mirrors cleanup_identify_orphans() for directories. The apply command uses it
+ * to compute directory orphans once, then reuses the list for:
+ * 1. Preflight display (show user what will be removed)
+ * 2. Actual removal (pass to cleanup_execute)
+ *
+ * Algorithm:
+ * ----------
+ * 1. Build hashmap of metadata directories (filesystem_path -> item) for O(1) lookup
+ * 2. Iterate all state directory entries
+ * 3. For each entry not in metadata: add to orphan list
+ * 4. Return self-contained orphan_directory_list_t structure
+ *
+ * Complexity: O(D_state + D_meta) where D = directory count
+ *
+ * Edge Cases:
+ * -----------
+ * - No state directories: Returns empty list (count=0)
+ * - Empty metadata: ALL state directories are orphans
+ * - No orphans: Returns empty list (count=0)
+ * - Large state: Efficient hashmap-based lookup
+ *
+ * Memory:
+ * -------
+ * Allocates ~300 bytes per orphan (3 string pointers + overhead).
+ * Caller must free result with orphan_directory_list_free().
+ *
+ * @param state Deployment state (must not be NULL, read-only)
+ * @param metadata Target metadata from enabled profiles (must not be NULL, read-only)
+ * @param out_orphans Orphan list (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+error_t *cleanup_identify_orphaned_directories(
+    const state_t *state,
+    const metadata_t *metadata,
+    orphan_directory_list_t **out_orphans
+);
+
+/**
+ * Free orphaned directory list
+ *
+ * Frees all orphan entries (including their strings) and the list structure.
+ * Safe to call with NULL.
+ *
+ * @param list Orphan list to free (can be NULL)
+ */
+void orphan_directory_list_free(orphan_directory_list_t *list);
 
 /**
  * Run cleanup preflight checks

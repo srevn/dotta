@@ -198,6 +198,29 @@ const metadata_t *workspace_get_metadata(
 );
 
 /**
+ * Get merged metadata from workspace
+ *
+ * Returns metadata merged across all profiles in precedence order.
+ * The workspace pre-loads per-profile metadata during workspace_load().
+ * This function merges them using the same precedence rules as divergence analysis.
+ *
+ * Convenience function for commands that need merged metadata (e.g., apply, deploy).
+ * The returned metadata is a new allocation - caller receives ownership and must
+ * free with metadata_free().
+ *
+ * Performance note: This creates a new merged metadata on each call. If you only
+ * need metadata for a specific profile, use workspace_get_metadata() instead.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @param out Merged metadata (must not be NULL, caller must free with metadata_free)
+ * @return Error or NULL on success
+ */
+error_t *workspace_get_merged_metadata(
+    const workspace_t *ws,
+    metadata_t **out
+);
+
+/**
  * Check if item has divergence
  *
  * Checks if a specific item (file or directory) has any divergence.

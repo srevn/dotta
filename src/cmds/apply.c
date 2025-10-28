@@ -16,6 +16,7 @@
 #include "core/profiles.h"
 #include "core/safety.h"
 #include "core/state.h"
+#include "core/workspace.h"
 #include "crypto/keymanager.h"
 #include "infra/content.h"
 #include "utils/array.h"
@@ -768,6 +769,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     state_t *state = NULL;
     profile_list_t *profiles = NULL;
     manifest_t *manifest = NULL;
+    workspace_t *ws = NULL;
     orphan_list_t *orphans = NULL;
     metadata_t *merged_metadata = NULL;
     content_cache_t *cache = NULL;
@@ -895,85 +897,44 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Load and merge metadata from profiles */
-    output_print(out, OUTPUT_VERBOSE, "\nLoading metadata...\n");
+    /* Load workspace (includes metadata loading and merging)
+     *
+     * The workspace pre-loads per-profile metadata during initialization and
+     * provides a merged view via workspace_get_merged_metadata(). This eliminates
+     * the need for manual metadata loading and ensures consistency with other
+     * commands (status, update, sync).
+     */
+    output_print(out, OUTPUT_VERBOSE, "\nLoading workspace...\n");
 
-    {
-        /* Allocate array to hold metadata from each profile */
-        metadata_t **profile_metadata = calloc(profiles->count, sizeof(metadata_t *));
-        if (!profile_metadata) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate profile metadata array");
-            goto cleanup;
-        }
+    err = workspace_load(repo, profiles, config, &ws);
+    if (err) {
+        err = error_wrap(err, "Failed to load workspace");
+        goto cleanup;
+    }
 
-        size_t loaded_count = 0;
+    /* Extract merged metadata from workspace
+     *
+     * workspace_get_merged_metadata() merges metadata across all profiles
+     * in precedence order (global → OS → host), matching the behavior of
+     * the previous manual implementation.
+     */
+    output_print(out, OUTPUT_VERBOSE, "  Merging metadata from profiles...\n");
 
-        /* Load metadata from each profile (in order for proper layering) */
-        for (size_t i = 0; i < profiles->count; i++) {
-            const char *profile_name = profiles->profiles[i].name;
-            metadata_t *meta = NULL;
+    err = workspace_get_merged_metadata(ws, &merged_metadata);
+    if (err) {
+        err = error_wrap(err, "Failed to get merged metadata from workspace");
+        goto cleanup;
+    }
 
-            error_t *meta_err = metadata_load_from_branch(repo, profile_name, &meta);
-            if (meta_err) {
-                if (meta_err->code == ERR_NOT_FOUND) {
-                    /* No metadata in this profile - not an error */
-                    if (opts->verbose) {
-                        output_print(out, OUTPUT_VERBOSE,
-                                    "  No metadata in profile '%s'\n", profile_name);
-                    }
-                    error_free(meta_err);
-                } else {
-                    /* Real error - clean up and propagate */
-                    for (size_t j = 0; j < loaded_count; j++) {
-                        metadata_free(profile_metadata[j]);
-                    }
-                    free(profile_metadata);
-                    err = error_wrap(meta_err, "Failed to load metadata from profile '%s'",
-                                   profile_name);
-                    goto cleanup;
-                }
-            } else {
-                /* Successfully loaded */
-                profile_metadata[i] = meta;
-                loaded_count++;
-                if (opts->verbose) {
-                    output_print(out, OUTPUT_VERBOSE,
-                                "  Loaded %zu metadata entr%s from profile '%s'\n",
-                                meta->count, meta->count == 1 ? "y" : "ies", profile_name);
-                }
-            }
-        }
-
-        /* Merge metadata according to profile precedence */
-        if (loaded_count > 0) {
-            err = metadata_merge((const metadata_t **)profile_metadata, profiles->count, &merged_metadata);
-
-            /* Free individual profile metadata */
-            for (size_t i = 0; i < profiles->count; i++) {
-                if (profile_metadata[i]) {
-                    metadata_free(profile_metadata[i]);
-                }
-            }
-
-            if (err) {
-                free(profile_metadata);
-                err = error_wrap(err, "Failed to merge metadata");
-                goto cleanup;
-            }
-
-            if (opts->verbose) {
-                output_print(out, OUTPUT_VERBOSE,
-                            "  Merged metadata: %zu entr%s total\n",
-                            merged_metadata->count,
-                            merged_metadata->count == 1 ? "y" : "ies");
-            }
+    if (opts->verbose) {
+        if (merged_metadata && merged_metadata->count > 0) {
+            output_print(out, OUTPUT_VERBOSE,
+                        "  Merged metadata: %zu entr%s total\n",
+                        merged_metadata->count,
+                        merged_metadata->count == 1 ? "y" : "ies");
         } else {
-            if (opts->verbose) {
-                output_print(out, OUTPUT_VERBOSE, "  No metadata found in any profile\n");
-            }
+            output_print(out, OUTPUT_VERBOSE, "  No metadata found in any profile\n");
         }
-
-        free(profile_metadata);
     }
 
     /* Check privileges for root/ files BEFORE deployment begins
@@ -1277,6 +1238,7 @@ cleanup:
     if (merged_metadata) metadata_free(merged_metadata);
     if (orphans) orphan_list_free(orphans);
     if (manifest) manifest_free(manifest);
+    if (ws) workspace_free(ws);
     if (profiles) profile_list_free(profiles);
     if (state) state_free(state);
     if (repo_dir) free(repo_dir);

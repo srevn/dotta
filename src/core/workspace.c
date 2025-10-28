@@ -1599,6 +1599,62 @@ const metadata_t *workspace_get_metadata(
 }
 
 /**
+ * Get merged metadata from workspace
+ */
+error_t *workspace_get_merged_metadata(
+    const workspace_t *ws,
+    metadata_t **out
+) {
+    CHECK_NULL(ws);
+    CHECK_NULL(out);
+
+    if (!ws->metadata_cache) {
+        return ERROR(ERR_INTERNAL, "Workspace has no metadata cache");
+    }
+
+    if (!ws->profiles || ws->profiles->count == 0) {
+        return ERROR(ERR_INTERNAL, "Workspace has no profiles");
+    }
+
+    /* Build array of per-profile metadata in precedence order
+     *
+     * The workspace profiles array is already in precedence order
+     * (global → OS → host), so we just need to extract metadata
+     * for each profile from the cache.
+     */
+    metadata_t **profile_metadata = calloc(ws->profiles->count, sizeof(metadata_t *));
+    if (!profile_metadata) {
+        return ERROR(ERR_MEMORY, "Failed to allocate metadata array");
+    }
+
+    /* Extract metadata for each profile (NULL entries are OK) */
+    for (size_t i = 0; i < ws->profiles->count; i++) {
+        const char *profile_name = ws->profiles->profiles[i].name;
+        profile_metadata[i] = (metadata_t *)hashmap_get(ws->metadata_cache, profile_name);
+        /* NULL is OK - metadata_merge() handles sparse arrays gracefully */
+    }
+
+    /* Merge using existing metadata_merge() function
+     *
+     * metadata_merge() implements precedence (later profiles override earlier).
+     * This ensures merged metadata matches the precedence used in divergence analysis.
+     */
+    error_t *err = metadata_merge(
+        (const metadata_t **)profile_metadata,
+        ws->profiles->count,
+        out
+    );
+
+    free(profile_metadata);
+
+    if (err) {
+        return error_wrap(err, "Failed to merge workspace metadata");
+    }
+
+    return NULL;
+}
+
+/**
  * Check if item has divergence
  */
 bool workspace_item_diverged(

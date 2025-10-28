@@ -1608,15 +1608,45 @@ static cJSON_bool print_array(const cJSON * const item, printbuffer * const outp
 
     *output_pointer = '[';
     output_buffer->offset++;
+
+    if (output_buffer->format && current_element)
+    {
+        output_pointer = ensure(output_buffer, 1);
+        if (output_pointer == NULL)
+        {
+            return false;
+        }
+        *output_pointer = '\n';
+        output_buffer->offset++;
+    }
+
     output_buffer->depth++;
 
     while (current_element != NULL)
     {
+        if (output_buffer->format)
+        {
+            size_t i;
+            const size_t indentation = output_buffer->depth * 4;
+            output_pointer = ensure(output_buffer, indentation);
+            if (output_pointer == NULL)
+            {
+                return false;
+            }
+            for (i = 0; i < output_buffer->depth; i++)
+            {
+                memcpy(output_pointer, "    ", 4);
+                output_pointer += 4;
+            }
+            output_buffer->offset += indentation;
+        }
+
         if (!print_value(current_element, output_buffer))
         {
             return false;
         }
         update_offset(output_buffer);
+
         if (current_element->next)
         {
             length = (size_t) (output_buffer->format ? 2 : 1);
@@ -1628,12 +1658,36 @@ static cJSON_bool print_array(const cJSON * const item, printbuffer * const outp
             *output_pointer++ = ',';
             if(output_buffer->format)
             {
+                *output_pointer++ = '\n';
+            }
+            else
+            {
                 *output_pointer++ = ' ';
             }
             *output_pointer = '\0';
             output_buffer->offset += length;
         }
+
         current_element = current_element->next;
+    }
+
+    if (output_buffer->format && item->child)
+    {
+        const size_t closing_indentation = (output_buffer->depth - 1) * 4;
+        output_pointer = ensure(output_buffer, closing_indentation + 1);
+        if (output_pointer == NULL)
+        {
+            return false;
+        }
+        *output_pointer++ = '\n';
+
+        size_t i;
+        for (i = 0; i < (output_buffer->depth - 1); i++)
+        {
+            memcpy(output_pointer, "    ", 4);
+            output_pointer += 4;
+        }
+        output_buffer->offset += closing_indentation + 1;
     }
 
     output_pointer = ensure(output_buffer, 2);
@@ -1799,16 +1853,18 @@ static cJSON_bool print_object(const cJSON * const item, printbuffer * const out
         if (output_buffer->format)
         {
             size_t i;
-            output_pointer = ensure(output_buffer, output_buffer->depth);
+            const size_t indentation = output_buffer->depth * 4;
+            output_pointer = ensure(output_buffer, indentation);
             if (output_pointer == NULL)
             {
                 return false;
             }
             for (i = 0; i < output_buffer->depth; i++)
             {
-                *output_pointer++ = '\t';
+                memcpy(output_pointer, "    ", 4);
+                output_pointer += 4;
             }
-            output_buffer->offset += output_buffer->depth;
+            output_buffer->offset += indentation;
         }
 
         /* print key */
@@ -1827,7 +1883,7 @@ static cJSON_bool print_object(const cJSON * const item, printbuffer * const out
         *output_pointer++ = ':';
         if (output_buffer->format)
         {
-            *output_pointer++ = '\t';
+            *output_pointer++ = ' ';
         }
         output_buffer->offset += length;
 
@@ -1860,18 +1916,29 @@ static cJSON_bool print_object(const cJSON * const item, printbuffer * const out
         current_item = current_item->next;
     }
 
-    output_pointer = ensure(output_buffer, output_buffer->format ? (output_buffer->depth + 1) : 2);
-    if (output_pointer == NULL)
+    if (output_buffer->format && item->child)
     {
-        return false;
-    }
-    if (output_buffer->format)
-    {
+        const size_t closing_indentation = (output_buffer->depth - 1) * 4;
+        output_pointer = ensure(output_buffer, closing_indentation + 1);
+        if (output_pointer == NULL)
+        {
+            return false;
+        }
+        *output_pointer++ = '\n';
+
         size_t i;
         for (i = 0; i < (output_buffer->depth - 1); i++)
         {
-            *output_pointer++ = '\t';
+            memcpy(output_pointer, "    ", 4);
+            output_pointer += 4;
         }
+        output_buffer->offset += closing_indentation + 1;
+    }
+
+    output_pointer = ensure(output_buffer, 2);
+    if (output_pointer == NULL)
+    {
+        return false;
     }
     *output_pointer++ = '}';
     *output_pointer = '\0';

@@ -409,4 +409,46 @@ error_t *fs_get_actual_user(uid_t *uid, gid_t *gid);
  */
 bool fs_is_running_as_root(void);
 
+/**
+ * Fix ownership recursively for a directory tree
+ *
+ * Recursively changes ownership of all files and directories under path
+ * to the specified UID/GID. This is used to restore normal user ownership
+ * of repository files after operations that ran under sudo.
+ *
+ * Uses lchown() to handle symlinks safely (changes link ownership, not target).
+ * Uses nftw() for efficient recursive traversal with minimal memory usage.
+ *
+ * Error Handling Philosophy:
+ * - Individual file failures (e.g., permission denied): Continue, count as failed
+ * - Fatal errors (path doesn't exist, nftw fails): Return error immediately
+ * - This ensures we fix as many files as possible even if some fail
+ *
+ * Behavior:
+ * - Traverses entire directory tree depth-first
+ * - For each file/directory: checks current ownership, calls lchown() if different
+ * - Tracks statistics: files successfully fixed, files that failed
+ * - Continues processing even if individual files fail
+ * - Safe to run multiple times (idempotent)
+ *
+ * Security:
+ * - Only call this when running as root (effective UID 0)
+ * - Uses lchown() to prevent symlink attacks
+ * - Validates all inputs before traversal
+ *
+ * @param path Root path to fix (must not be NULL, must exist, must be a directory)
+ * @param uid Target UID for ownership
+ * @param gid Target GID for ownership
+ * @param out_fixed Optional output: number of files/dirs successfully fixed (can be NULL)
+ * @param out_failed Optional output: number of files/dirs that failed to fix (can be NULL)
+ * @return Error for fatal failures, NULL on success (even if some individual files failed)
+ */
+error_t *fs_fix_ownership_recursive(
+    const char *path,
+    uid_t uid,
+    gid_t gid,
+    size_t *out_fixed,
+    size_t *out_failed
+);
+
 #endif /* DOTTA_FILESYSTEM_H */

@@ -36,6 +36,7 @@
 #include "crypto/keymanager.h"
 #include "types.h"
 #include "utils/help.h"
+#include "utils/privilege.h"
 #include "utils/repo.h"
 #include "utils/string.h"
 
@@ -2156,6 +2157,43 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Error: Unknown command '%s'\n", command);
         print_usage(argv[0]);
         ret = 1;
+    }
+
+    /* Fix repository ownership if running under sudo
+     *
+     * This ensures that .git/ files created during privileged operations
+     * (e.g., sudo dotta update crypto) are owned by the original user, not root.
+     * Without this fix, subsequent non-sudo operations would fail with
+     * "Permission denied" when trying to access root-owned files.
+     *
+     * When: After all Git operations complete, before shutdown
+     * Why: Catches all root-owned files created during this run
+     * Where: Only when running under sudo (automatic detection)
+     * Error handling: Log warning but don't change exit code (non-fatal)
+     */
+    if (privilege_is_sudo()) {
+        char *repo_path = NULL;
+        error_t *err = resolve_repo_path(&repo_path);
+
+        if (!err) {
+            /* Fix ownership of .git directory */
+            err = repo_fix_ownership_if_needed(repo_path);
+            if (err) {
+                /* Non-fatal: warn user but don't fail the command
+                 * The command itself succeeded, ownership fix is just cleanup */
+                fprintf(stderr, "\nWarning: Failed to fix repository ownership\n");
+                fprintf(stderr, "The repository may be inaccessible to your normal user.\n");
+                fprintf(stderr, "To fix manually, run:\n");
+                fprintf(stderr, "  sudo chown -R $USER:$GROUP %s/.git\n\n", repo_path);
+                error_print(err, stderr);
+                error_free(err);
+            }
+            free(repo_path);
+        } else {
+            /* Path resolution failed - unusual but non-fatal
+             * Likely means we're in a context where there's no repo (e.g., init) */
+            error_free(err);
+        }
     }
 
     git_libgit2_shutdown();

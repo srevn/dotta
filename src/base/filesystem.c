@@ -11,6 +11,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <ftw.h>
 #include <libgen.h>
 #include <limits.h>
 #include <pwd.h>
@@ -1001,5 +1002,146 @@ error_t *fs_get_actual_user(uid_t *uid, gid_t *gid) {
     /* Not running under sudo - return current effective UID/GID */
     *uid = geteuid();
     *gid = getegid();
+    return NULL;
+}
+
+/**
+ * Context for ownership fix callback
+ *
+ * Since nftw() doesn't support passing user data to the callback,
+ * we use a static context pointer. This is safe because:
+ * 1. dotta is single-threaded
+ * 2. nftw() is not re-entrant
+ * 3. We only use this during a single fix operation
+ */
+typedef struct {
+    uid_t target_uid;      /* UID to set */
+    gid_t target_gid;      /* GID to set */
+    size_t fixed_count;    /* Number of files successfully fixed */
+    size_t failed_count;   /* Number of files that failed */
+} ownership_fix_context_t;
+
+/* Static context for nftw callback (safe: single-threaded, non-reentrant) */
+static ownership_fix_context_t *g_fix_context = NULL;
+
+/**
+ * Callback for nftw() - fixes ownership of a single file/directory
+ *
+ * This function is called by nftw() for each file/directory in the tree.
+ * It checks if the current ownership matches the target, and if not,
+ * calls lchown() to fix it.
+ *
+ * Error handling:
+ * - lstat() failure: Count as failed, continue
+ * - Ownership already correct: Skip, continue
+ * - lchown() success: Count as fixed, continue
+ * - lchown() failure: Count as failed, continue
+ *
+ * @param fpath Path to file/directory
+ * @param sb Stat buffer (from nftw)
+ * @param typeflag File type flag (from nftw)
+ * @param ftwbuf FTW info (from nftw)
+ * @return 0 to continue traversal
+ */
+static int fix_ownership_callback(
+    const char *fpath,
+    const struct stat *sb,
+    int typeflag,
+    struct FTW *ftwbuf
+) {
+    (void)typeflag;  /* Unused - we handle all types the same way */
+    (void)ftwbuf;    /* Unused - we don't need traversal info */
+
+    /* Sanity check: context must be set */
+    if (!g_fix_context) {
+        return 0;  /* Continue traversal even if context missing (shouldn't happen) */
+    }
+
+    /* Sanity check: stat buffer must be valid */
+    if (!sb) {
+        g_fix_context->failed_count++;
+        return 0;  /* Continue traversal */
+    }
+
+    /* Check if ownership already correct */
+    if (sb->st_uid == g_fix_context->target_uid &&
+        sb->st_gid == g_fix_context->target_gid) {
+        /* Already correct - skip */
+        return 0;
+    }
+
+    /* Ownership needs fixing - use lchown() for safety (doesn't follow symlinks) */
+    if (lchown(fpath, g_fix_context->target_uid, g_fix_context->target_gid) == 0) {
+        /* Success */
+        g_fix_context->fixed_count++;
+    } else {
+        /* Failed (e.g., permission denied on some system files)
+         * This is expected and not fatal - just count it */
+        g_fix_context->failed_count++;
+    }
+
+    return 0;  /* Continue traversal */
+}
+
+error_t *fs_fix_ownership_recursive(
+    const char *path,
+    uid_t uid,
+    gid_t gid,
+    size_t *out_fixed,
+    size_t *out_failed
+) {
+    RETURN_IF_ERROR(validate_path(path));
+
+    /* Verify path exists and is a directory */
+    if (!fs_is_directory(path)) {
+        return ERROR(ERR_INVALID_ARG,
+                    "Path '%s' does not exist or is not a directory", path);
+    }
+
+    /* Initialize context */
+    ownership_fix_context_t context = {
+        .target_uid = uid,
+        .target_gid = gid,
+        .fixed_count = 0,
+        .failed_count = 0
+    };
+
+    /* Set global context pointer for callback
+     * Safe because we're single-threaded and nftw is not re-entrant */
+    g_fix_context = &context;
+
+    /* Traverse directory tree and fix ownership
+     *
+     * Flags:
+     * - FTW_PHYS: Don't follow symlinks (safer)
+     * - FTW_DEPTH: Process directories after their contents (cleaner)
+     *
+     * nopenfd: Maximum number of file descriptors nftw may use.
+     * 64 is a reasonable limit that avoids exhausting fd limit while
+     * still allowing efficient traversal.
+     */
+    int result = nftw(path, fix_ownership_callback, 64, FTW_PHYS | FTW_DEPTH);
+
+    /* Clear global context */
+    g_fix_context = NULL;
+
+    /* Check for fatal nftw errors */
+    if (result != 0) {
+        /* nftw() returns -1 on error, or non-zero if callback requested stop
+         * Since our callback always returns 0, non-zero means nftw() failed */
+        return ERROR(ERR_FS,
+                    "Failed to traverse directory '%s': %s",
+                    path, strerror(errno));
+    }
+
+    /* Return statistics if requested */
+    if (out_fixed) {
+        *out_fixed = context.fixed_count;
+    }
+    if (out_failed) {
+        *out_failed = context.failed_count;
+    }
+
+    /* Success - even if some individual files failed, we did our best */
     return NULL;
 }

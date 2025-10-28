@@ -2,8 +2,6 @@
  * divergence.c - Branch divergence resolution implementation
  */
 
-#define _POSIX_C_SOURCE 200809L  /* For snprintf */
-
 #include "divergence.h"
 
 #include <git2.h>

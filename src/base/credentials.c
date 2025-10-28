@@ -2,8 +2,6 @@
  * credentials.c - Git credential handling implementation
  */
 
-#define _POSIX_C_SOURCE 200809L  /* For popen/pclose */
-
 #include "credentials.h"
 
 #include <stdbool.h>

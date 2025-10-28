@@ -4,8 +4,6 @@
  * All libgit2 calls are wrapped with error handling and resource cleanup.
  */
 
-#define _POSIX_C_SOURCE 200809L  /* For strdup */
-
 #include "gitops.h"
 
 #include <git2.h>

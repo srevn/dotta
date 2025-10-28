@@ -4,8 +4,6 @@
  * All functions validate inputs and handle errors explicitly.
  */
 
-#define _XOPEN_SOURCE 700  /* For realpath and other POSIX functions */
-
 #include "filesystem.h"
 
 #include <dirent.h>

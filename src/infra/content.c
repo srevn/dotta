@@ -142,8 +142,8 @@ static error_t *get_plaintext_from_blob(
          * We require metadata entry to detect these error conditions.
          * Magic header alone is not sufficient for integrity verification.
          */
-        const metadata_entry_t *meta_entry = NULL;
-        error_t *err = metadata_get_entry(metadata, storage_path, &meta_entry);
+        const metadata_item_t *meta_entry = NULL;
+        error_t *err = metadata_get_item(metadata, storage_path, &meta_entry);
 
         if (err) {
             /* Entry not found - this is now an error (metadata corruption) */
@@ -159,21 +159,31 @@ static error_t *get_plaintext_from_blob(
         }
 
         if (!meta_entry) {
-            /* Should never happen - metadata_get_entry returns error if not found */
+            /* Should never happen - metadata_get_item returns error if not found */
             return ERROR(ERR_INTERNAL,
-                "metadata_get_entry returned NULL without error for '%s'",
+                "metadata_get_item returned NULL without error for '%s'",
+                storage_path);
+        }
+
+        /* Validate this is a file entry (union safety)
+         * SECURITY: Accessing wrong union member is undefined behavior.
+         * Storage paths should only map to files, but we validate defensively. */
+        if (meta_entry->kind != METADATA_ITEM_FILE) {
+            return ERROR(ERR_STATE_INVALID,
+                "Metadata entry for '%s' is a directory, expected file.\n"
+                "This indicates severe metadata corruption.",
                 storage_path);
         }
 
         /* Cross-validate magic header against metadata encryption flag */
-        if (is_encrypted && !meta_entry->encrypted) {
+        if (is_encrypted && !meta_entry->file.encrypted) {
             return ERROR(ERR_STATE_INVALID,
                 "File '%s' is encrypted in git but metadata says plaintext.\n"
                 "This indicates metadata corruption.\n"
                 "To fix, run: dotta update -p %s '%s'",
                 storage_path, profile_name, storage_path);
         }
-        if (!is_encrypted && meta_entry->encrypted) {
+        if (!is_encrypted && meta_entry->file.encrypted) {
             return ERROR(ERR_STATE_INVALID,
                 "File '%s' is marked as encrypted in metadata but stored as plaintext in git.\n"
                 "This indicates metadata corruption.\n"

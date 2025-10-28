@@ -813,21 +813,29 @@ cleanup:
 }
 
 /**
- * Capture and save metadata for updated files
+ * Update metadata for files and directories
  *
  * @param encryption_status Encryption status for each file (can be NULL)
- * @param file_stats Stat data for each file (must not be NULL)
+ * @param file_stats Stat data for each file (must not be NULL if file_count > 0)
  */
-static error_t *capture_and_save_metadata(
+static error_t *update_metadata_for_profile(
     worktree_handle_t *wt,
     modified_file_t *files,
     size_t file_count,
+    modified_directory_t *dirs,
+    size_t dir_count,
     const bool *encryption_status,
     const struct stat *file_stats,
-    bool verbose
+    const cmd_update_options_t *opts,
+    output_ctx_t *out
 ) {
     CHECK_NULL(wt);
-    CHECK_NULL(files);
+    CHECK_NULL(opts);
+
+    /* Early exit if nothing to update */
+    if (file_count == 0 && dir_count == 0) {
+        return NULL;
+    }
 
     const char *worktree_path = worktree_get_path(wt);
     if (!worktree_path) {
@@ -858,25 +866,27 @@ static error_t *capture_and_save_metadata(
         }
     }
 
-    /* Capture metadata for each updated file */
-    size_t captured_count = 0;
+    size_t captured_file_count = 0;
+    size_t updated_dir_count = 0;
 
+    /* Process modified files */
     for (size_t i = 0; i < file_count; i++) {
         modified_file_t *file = &files[i];
 
-        /* Skip deleted files */
+        /* Handle deleted files */
         if (file->status == CMP_MISSING) {
             /* Remove metadata entry if it exists */
-            if (metadata_has_entry(metadata, file->storage_path)) {
-                err = metadata_remove_entry(metadata, file->storage_path);
+            if (metadata_has_item(metadata, file->storage_path)) {
+                err = metadata_remove_item(metadata, file->storage_path);
                 if (err && err->code != ERR_NOT_FOUND) {
                     metadata_free(metadata);
                     return error_wrap(err, "Failed to remove metadata entry");
                 }
                 if (err) {
                     error_free(err);
+                    err = NULL;
                 }
-                if (verbose) {
+                if (opts->verbose) {
                     printf("Removed metadata: %s\n", file->filesystem_path);
                 }
             }
@@ -889,33 +899,33 @@ static error_t *capture_and_save_metadata(
         const struct stat *file_stat = &file_stats[i];
 
         /* Capture metadata from pre-captured stat data */
-        metadata_entry_t *entry = NULL;
-        err = metadata_capture_from_file(file->filesystem_path, file->storage_path, file_stat, &entry);
+        metadata_item_t *item = NULL;
+        err = metadata_capture_from_file(file->filesystem_path, file->storage_path, file_stat, &item);
 
         if (err) {
             metadata_free(metadata);
             return error_wrap(err, "Failed to capture metadata for: %s", file->filesystem_path);
         }
 
-        /* entry will be NULL for symlinks - skip them */
-        if (entry) {
+        /* item will be NULL for symlinks - skip them */
+        if (item) {
             /* Use tracked encryption status from copy_file_to_worktree() */
             if (encryption_status) {
-                entry->encrypted = encryption_status[i];
+                item->file.encrypted = encryption_status[i];
             } else {
                 /* Fallback: assume plaintext if no tracked status */
-                entry->encrypted = false;
+                item->file.encrypted = false;
             }
 
             /* Save metadata before adding (for verbose output) */
-            mode_t mode = entry->mode;
-            char *owner = entry->owner ? strdup(entry->owner) : NULL;
-            char *group = entry->group ? strdup(entry->group) : NULL;
-            bool is_encrypted = entry->encrypted;
+            mode_t mode = item->mode;
+            char *owner = item->owner ? strdup(item->owner) : NULL;
+            char *group = item->group ? strdup(item->group) : NULL;
+            bool is_encrypted = item->file.encrypted;
 
             /* Add to metadata collection (copies all fields including owner/group and encryption) */
-            err = metadata_add_entry(metadata, entry);
-            metadata_entry_free(entry);
+            err = metadata_add_item(metadata, item);
+            metadata_item_free(item);
 
             if (err) {
                 free(owner);
@@ -924,9 +934,9 @@ static error_t *capture_and_save_metadata(
                 return error_wrap(err, "Failed to add metadata entry");
             }
 
-            captured_count++;
+            captured_file_count++;
 
-            if (verbose) {
+            if (opts->verbose) {
                 if (owner || group) {
                     printf("Captured metadata: %s (mode: %04o, owner: %s:%s%s)\n",
                           file->filesystem_path, mode,
@@ -944,101 +954,7 @@ static error_t *capture_and_save_metadata(
         }
     }
 
-    /* Save metadata to worktree */
-    err = metadata_save_to_worktree(worktree_path, metadata);
-    metadata_free(metadata);
-
-    if (err) {
-        return error_wrap(err, "Failed to save metadata");
-    }
-
-    /* Stage metadata.json file */
-    git_index *index = NULL;
-    err = worktree_get_index(wt, &index);
-    if (err) {
-        return error_wrap(err, "Failed to get worktree index");
-    }
-
-    int git_err = git_index_add_bypath(index, METADATA_FILE_PATH);
-    if (git_err < 0) {
-        git_index_free(index);
-        return error_from_git(git_err);
-    }
-
-    git_err = git_index_write(index);
-    git_index_free(index);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    if (verbose && captured_count > 0) {
-        printf("Updated metadata for %zu file(s)\n", captured_count);
-    }
-
-    return NULL;
-}
-
-/**
- * Update directory metadata for a profile
- *
- * Re-captures directory metadata from filesystem and updates the profile's
- * metadata.json file in the worktree.
- *
- * This function is called when directory permissions or ownership have changed
- * on the filesystem and need to be synchronized back to the profile metadata.
- *
- * @param wt Worktree handle for the profile (must not be NULL)
- * @param dirs Array of modified directories (must not be NULL)
- * @param dir_count Number of directories
- * @param opts Update options (for verbose output)
- * @param out Output context (can be NULL)
- * @return Error or NULL on success
- */
-static error_t *update_directory_metadata(
-    worktree_handle_t *wt,
-    const modified_directory_t *dirs,
-    size_t dir_count,
-    const cmd_update_options_t *opts,
-    output_ctx_t *out
-) {
-    CHECK_NULL(wt);
-    CHECK_NULL(dirs);
-
-    if (dir_count == 0) {
-        return NULL;
-    }
-
-    const char *worktree_path = worktree_get_path(wt);
-    if (!worktree_path) {
-        return ERROR(ERR_INTERNAL, "Worktree path is NULL");
-    }
-
-    /* Load existing metadata */
-    metadata_t *metadata = NULL;
-    char *metadata_file_path = str_format("%s/%s", worktree_path, METADATA_FILE_PATH);
-    if (!metadata_file_path) {
-        return ERROR(ERR_MEMORY, "Failed to allocate metadata file path");
-    }
-
-    error_t *err = metadata_load_from_file(metadata_file_path, &metadata);
-    free(metadata_file_path);
-
-    if (err) {
-        if (err->code == ERR_NOT_FOUND) {
-            /* Shouldn't happen - profile should have metadata if it has tracked dirs */
-            error_free(err);
-            err = metadata_create_empty(&metadata);
-            if (err) {
-                return err;
-            }
-        } else {
-            return error_wrap(err, "Failed to load existing metadata");
-        }
-    }
-
-    size_t updated_count = 0;
-
-    /* Update each directory's metadata */
+    /* Process modified directories */
     for (size_t i = 0; i < dir_count; i++) {
         const modified_directory_t *dir = &dirs[i];
 
@@ -1047,47 +963,38 @@ static error_t *update_directory_metadata(
         if (stat(dir->filesystem_path, &dir_stat) != 0) {
             if (opts->verbose && out) {
                 output_warning(out, "Failed to stat directory '%s': %s",
-                              dir->filesystem_path, strerror(errno));
+                               dir->filesystem_path, strerror(errno));
             }
             continue;
         }
 
-        /* Capture fresh directory metadata */
-        metadata_directory_entry_t *dir_entry = NULL;
+        /* Capture directory metadata */
+        metadata_item_t *item = NULL;
         err = metadata_capture_from_directory(
             dir->filesystem_path,
             dir->storage_prefix,
             &dir_stat,
-            &dir_entry
+            &item
         );
 
         if (err) {
             if (opts->verbose && out) {
                 output_warning(out, "Failed to capture metadata for directory '%s': %s",
-                              dir->filesystem_path, error_message(err));
+                               dir->filesystem_path, error_message(err));
             }
             error_free(err);
             err = NULL;
             continue;
         }
 
-        /* Save metadata before adding (for verbose output) */
-        mode_t mode = dir_entry->mode;
-        char *owner = dir_entry->owner ? strdup(dir_entry->owner) : NULL;
-        char *group = dir_entry->group ? strdup(dir_entry->group) : NULL;
+        /* Save metadata for verbose output before adding */
+        mode_t mode = item->mode;
+        char *owner = item->owner ? strdup(item->owner) : NULL;
+        char *group = item->group ? strdup(item->group) : NULL;
 
-        /* Update metadata in collection (upsert - metadata_add_tracked_directory handles both insert and update) */
-        err = metadata_add_tracked_directory(
-            metadata,
-            dir_entry->filesystem_path,
-            dir_entry->storage_prefix,
-            dir_entry->added_at,
-            dir_entry->mode,
-            dir_entry->owner,
-            dir_entry->group
-        );
-
-        metadata_directory_entry_free(dir_entry);
+        /* Add to metadata collection (upsert - updates if exists) */
+        err = metadata_add_item(metadata, item);
+        metadata_item_free(item);
 
         if (err) {
             free(owner);
@@ -1097,17 +1004,17 @@ static error_t *update_directory_metadata(
                              dir->filesystem_path);
         }
 
-        updated_count++;
+        updated_dir_count++;
 
         if (opts->verbose && out) {
             if (owner || group) {
                 output_info(out, "  Updated directory metadata: %s (mode: %04o, owner: %s:%s)",
-                           dir->filesystem_path, mode,
-                           owner ? owner : "?",
-                           group ? group : "?");
+                            dir->filesystem_path, mode,
+                            owner ? owner : "?",
+                            group ? group : "?");
             } else {
                 output_info(out, "  Updated directory metadata: %s (mode: %04o)",
-                           dir->filesystem_path, mode);
+                            dir->filesystem_path, mode);
             }
         }
 
@@ -1115,7 +1022,7 @@ static error_t *update_directory_metadata(
         free(group);
     }
 
-    /* Save updated metadata */
+    /* Save metadata to worktree (single save for both files and directories) */
     err = metadata_save_to_worktree(worktree_path, metadata);
     metadata_free(metadata);
 
@@ -1123,7 +1030,7 @@ static error_t *update_directory_metadata(
         return error_wrap(err, "Failed to save metadata");
     }
 
-    /* Stage metadata.json */
+    /* Stage metadata.json file (single stage operation) */
     git_index *index = NULL;
     err = worktree_get_index(wt, &index);
     if (err) {
@@ -1142,9 +1049,11 @@ static error_t *update_directory_metadata(
         return error_from_git(git_err);
     }
 
-    if (opts->verbose && out && updated_count > 0) {
-        output_info(out, "Updated metadata for %zu director%s",
-                   updated_count, updated_count == 1 ? "y" : "ies");
+    if (opts->verbose && (captured_file_count > 0 || updated_dir_count > 0)) {
+        printf("Updated metadata for %zu file(s) and %zu director%s\n",
+               captured_file_count,
+               updated_dir_count,
+               updated_dir_count == 1 ? "y" : "ies");
     }
 
     return NULL;
@@ -1233,7 +1142,8 @@ static error_t *update_profile(
     /* Check if any existing files are encrypted */
     if (existing_metadata && config && config->encryption_enabled) {
         for (size_t i = 0; i < existing_metadata->count; i++) {
-            if (existing_metadata->entries[i].encrypted) {
+            const metadata_item_t *item = &existing_metadata->items[i];
+            if (item->kind == METADATA_ITEM_FILE && item->file.encrypted) {
                 needs_encryption = true;
                 break;
             }
@@ -1331,25 +1241,15 @@ static error_t *update_profile(
         }
     }
 
-    /* Capture and save metadata for updated files (using pre-captured stats) */
-    if (file_count > 0) {
-        err = capture_and_save_metadata(wt, files, file_count, encryption_status, file_stats, opts->verbose);
-        if (err) {
-            err = error_wrap(err, "Failed to capture metadata");
-            goto cleanup;
-        }
+    /* Update metadata for both files and directories */
+    err = update_metadata_for_profile(wt, files, file_count, dirs, dir_count,
+                                      encryption_status, file_stats, opts, out);
+    if (err) {
+        err = error_wrap(err, "Failed to update metadata");
+        goto cleanup;
     }
 
-    /* Update directory metadata if needed */
-    if (dir_count > 0) {
-        err = update_directory_metadata(wt, dirs, dir_count, opts, out);
-        if (err) {
-            err = error_wrap(err, "Failed to update directory metadata");
-            goto cleanup;
-        }
-    }
-
-    /* Note: metadata functions already wrote the index */
+    /* Note: metadata function already wrote the index */
 
     /* Create commit */
     git_oid tree_oid;

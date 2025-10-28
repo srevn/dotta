@@ -70,10 +70,14 @@ static bool is_file_encrypted(
 ) {
     /* Fast path: Check metadata if available */
     if (metadata) {
-        const metadata_entry_t *meta_entry = NULL;
-        error_t *err = metadata_get_entry(metadata, storage_path, &meta_entry);
-        if (!err && meta_entry) {
-            return meta_entry->encrypted;
+        const metadata_item_t *item = NULL;
+        error_t *err = metadata_get_item(metadata, storage_path, &item);
+        if (!err && item) {
+            /* Defensive: Ensure it's a file (directories shouldn't appear here) */
+            if (item->kind == METADATA_ITEM_FILE) {
+                return item->file.encrypted;
+            }
+            /* If it's a directory, fall through to blob check (shouldn't happen) */
         }
         error_free(err);  /* Not found or error - fall through to blob check */
     }

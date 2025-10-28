@@ -202,8 +202,8 @@ static error_t *add_file_to_worktree(
     CHECK_NULL(metadata);
 
     error_t *err = NULL;
-    metadata_entry_t *entry = NULL;  /* Will be created from captured metadata */
-    struct stat file_stat;           /* Captured from content layer */
+    metadata_item_t *item = NULL;  /* Will be created from captured metadata */
+    struct stat file_stat;         /* Captured from content layer */
 
     /* Build destination path in worktree */
     const char *wt_path = worktree_get_path(wt);
@@ -294,15 +294,15 @@ static error_t *add_file_to_worktree(
 
         /* Capture metadata from file using stat data from content layer
          * SECURITY: Single stat() call eliminates race condition between content and metadata */
-        err = metadata_capture_from_file(filesystem_path, storage_path, &file_stat, &entry);
+        err = metadata_capture_from_file(filesystem_path, storage_path, &file_stat, &item);
         if (err) {
             free(dest_path);
             return error_wrap(err, "Failed to capture metadata for '%s'", filesystem_path);
         }
 
-        /* Update metadata entry with encryption status */
-        if (entry) {
-            entry->encrypted = should_encrypt;
+        /* Update metadata item with encryption status */
+        if (item) {
+            item->file.encrypted = should_encrypt;
         }
 
         /* Verbose output */
@@ -333,34 +333,34 @@ static error_t *add_file_to_worktree(
     git_index_free(index);
     if (git_err < 0) {
         free(dest_path);
-        if (entry) {
-            metadata_entry_free(entry);
+        if (item) {
+            metadata_item_free(item);
         }
         return error_from_git(git_err);
     }
 
     free(dest_path);
 
-    /* Add metadata entry to collection (entry will be NULL for symlinks - that's ok) */
-    if (entry) {
+    /* Add metadata item to collection (item will be NULL for symlinks - that's ok) */
+    if (item) {
         /* Verbose output for metadata capture */
         if (opts->verbose && out) {
-            if (entry->owner || entry->group) {
+            if (item->owner || item->group) {
                 output_info(out, "Captured metadata: %s (mode: %04o, owner: %s:%s)",
-                           filesystem_path, entry->mode,
-                           entry->owner ? entry->owner : "?",
-                           entry->group ? entry->group : "?");
+                           filesystem_path, item->mode,
+                           item->owner ? item->owner : "?",
+                           item->group ? item->group : "?");
             } else {
                 output_info(out, "Captured metadata: %s (mode: %04o)",
-                           filesystem_path, entry->mode);
+                           filesystem_path, item->mode);
             }
         }
 
-        err = metadata_add_entry(metadata, entry);
-        metadata_entry_free(entry);
+        err = metadata_add_item(metadata, item);
+        metadata_item_free(item);
 
         if (err) {
-            return error_wrap(err, "Failed to add metadata entry for '%s'", filesystem_path);
+            return error_wrap(err, "Failed to add metadata item for '%s'", filesystem_path);
         }
     }
 
@@ -995,12 +995,12 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         }
 
         /* Capture directory metadata using stat data */
-        metadata_directory_entry_t *dir_entry = NULL;
+        metadata_item_t *dir_item = NULL;
         err = metadata_capture_from_directory(
             dir->filesystem_path,
             dir->storage_prefix,
             &dir_stat,
-            &dir_entry
+            &dir_item
         );
 
         if (err) {
@@ -1014,31 +1014,23 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             continue;
         }
 
-        /* Verbose output before consuming the entry */
+        /* Verbose output before consuming the item */
         if (opts->verbose && out) {
-            if (dir_entry->owner || dir_entry->group) {
+            if (dir_item->owner || dir_item->group) {
                 output_info(out, "Captured directory metadata: %s (mode: %04o, owner: %s:%s)",
-                           dir->filesystem_path, dir_entry->mode,
-                           dir_entry->owner ? dir_entry->owner : "?",
-                           dir_entry->group ? dir_entry->group : "?");
+                           dir->filesystem_path, dir_item->mode,
+                           dir_item->owner ? dir_item->owner : "?",
+                           dir_item->group ? dir_item->group : "?");
             } else {
                 output_info(out, "Captured directory metadata: %s (mode: %04o)",
-                           dir->filesystem_path, dir_entry->mode);
+                           dir->filesystem_path, dir_item->mode);
             }
         }
 
         /* Add directory to metadata */
-        err = metadata_add_tracked_directory(
-            metadata,
-            dir_entry->filesystem_path,
-            dir_entry->storage_prefix,
-            dir_entry->added_at,
-            dir_entry->mode,
-            dir_entry->owner,
-            dir_entry->group
-        );
+        err = metadata_add_item(metadata, dir_item);
 
-        metadata_directory_entry_free(dir_entry);
+        metadata_item_free(dir_item);
 
         if (err) {
             /* Non-fatal: log warning and continue */

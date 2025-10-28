@@ -3,6 +3,19 @@
  *
  * Manages three-state consistency: Profile (git), Deployment (state.db), Filesystem (disk).
  * Detects and categorizes divergence to prevent data loss and enable safe operations.
+ *
+ * METADATA ARCHITECTURE:
+ * ===================================
+ * Profiles layer with precedence (global < OS < host). The merged_metadata map
+ * pre-applies precedence during workspace_load(), ensuring all analysis functions
+ * compare against the "winning" metadata. This prevents false divergence when
+ * multiple profiles track the same path with different metadata.
+ *
+ * Key Design:
+ * - merged_metadata: Single hashmap with precedence already applied
+ * - Maps: key -> metadata_item_t* (borrowed pointers from metadata_cache)
+ * - Key interpretation: FILES use storage_path, DIRECTORIES use filesystem_path
+ * - Built once in workspace_load(), used by all analysis functions
  */
 
 #include "workspace.h"
@@ -52,6 +65,9 @@ struct workspace {
     keymanager_t *keymanager;        /* Borrowed from global */
     content_cache_t *content_cache;  /* Owned - caches decrypted content */
     hashmap_t *metadata_cache;       /* Owned - maps profile_name -> metadata_t* */
+
+    /* Unified metadata view with profile precedence applied */
+    hashmap_t *merged_metadata;      /* Owned map, borrowed pointers */
 
     /* Divergence tracking */
     workspace_item_t *diverged;      /* Array of diverged items (files and directories) */
@@ -165,7 +181,9 @@ static error_t *workspace_create_empty(
  * ownership independently, setting flags for each. Only updates the primary
  * divergence type if starting from DIVERGENCE_CLEAN.
  *
- * @param metadata Metadata entry for the file (must not be NULL)
+ * Works for both FILE and DIRECTORY kinds - uses only common fields (mode, owner, group).
+ *
+ * @param item Metadata item (FILE or DIRECTORY, must not be NULL)
  * @param fs_path Filesystem path to check (must not be NULL)
  * @param st File stat data (must not be NULL, pre-captured by caller)
  * @param current_div Current divergence type (may be overridden if CLEAN)
@@ -174,8 +192,8 @@ static error_t *workspace_create_empty(
  * @param out_ownership_differs Output flag for ownership divergence (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *check_metadata_divergence(
-    const metadata_entry_t *metadata,
+static error_t *check_item_metadata_divergence(
+    const metadata_item_t *item,
     const char *fs_path,
     const struct stat *st,
     divergence_type_t current_div,
@@ -183,7 +201,7 @@ static error_t *check_metadata_divergence(
     bool *out_mode_differs,
     bool *out_ownership_differs
 ) {
-    CHECK_NULL(metadata);
+    CHECK_NULL(item);
     CHECK_NULL(fs_path);
     CHECK_NULL(st);
     CHECK_NULL(out_div);
@@ -199,7 +217,7 @@ static error_t *check_metadata_divergence(
     mode_t actual_mode = st->st_mode & 0777;
 
     /* Check full mode (all permission bits, not just executable) */
-    if (actual_mode != metadata->mode) {
+    if (actual_mode != item->mode) {
         *out_mode_differs = true;
         /* Only update primary divergence if currently CLEAN */
         if (current_div == DIVERGENCE_CLEAN) {
@@ -207,39 +225,43 @@ static error_t *check_metadata_divergence(
         }
     }
 
-    /* Check ownership (always check, no early return)
-     * Only when running as root AND metadata has ownership.
+    /* Check ownership (always check, no early return).
+     * Only when running as root AND item has ownership.
      * Use effective UID (geteuid) to check privilege, not real UID (getuid).
      * This correctly detects whether we have the capability to read ownership. */
     bool running_as_root = (geteuid() == 0);
-    bool has_ownership = (metadata->owner != NULL || metadata->group != NULL);
+    bool has_ownership = (item->owner != NULL || item->group != NULL);
 
     if (running_as_root && has_ownership) {
-        bool ownership_differs = false;
+        bool owner_differs = false;
+        bool group_differs = false;
 
-        /* Check owner if metadata has it */
-        if (metadata->owner) {
+        /* Check owner independently */
+        if (item->owner) {
             struct passwd *pwd = getpwuid(st->st_uid);
             if (pwd && pwd->pw_name) {
-                if (strcmp(metadata->owner, pwd->pw_name) != 0) {
-                    ownership_differs = true;
+                if (strcmp(item->owner, pwd->pw_name) != 0) {
+                    owner_differs = true;
                 }
             }
             /* If getpwuid fails, skip check (graceful degradation) */
         }
 
-        /* Check group if metadata has it (check even if owner differs) */
-        if (metadata->group && !ownership_differs) {
+        /* Check group independently - FIXED: NO SHORT-CIRCUIT!
+         * We want to detect both owner AND group differences.
+         * Previously this had: if (item->group && !ownership_differs)
+         * which skipped group check if owner already differed. */
+        if (item->group) {
             struct group *grp = getgrgid(st->st_gid);
             if (grp && grp->gr_name) {
-                if (strcmp(metadata->group, grp->gr_name) != 0) {
-                    ownership_differs = true;
+                if (strcmp(item->group, grp->gr_name) != 0) {
+                    group_differs = true;
                 }
             }
             /* If getgrgid fails, skip check (graceful degradation) */
         }
 
-        if (ownership_differs) {
+        if (owner_differs || group_differs) {
             *out_ownership_differs = true;
             /* Only update primary divergence if currently CLEAN and mode didn't change */
             if (current_div == DIVERGENCE_CLEAN && !(*out_mode_differs)) {
@@ -473,13 +495,23 @@ static error_t *analyze_file_divergence(
         bool ownership_differs = false;
 
         if (metadata) {
-            const metadata_entry_t *meta_entry = NULL;
-            error_t *meta_err = metadata_get_entry(metadata, storage_path, &meta_entry);
+            const metadata_item_t *meta_entry = NULL;
+            error_t *meta_err = metadata_get_item(metadata, storage_path, &meta_entry);
 
             if (meta_err == NULL && meta_entry) {
+                /* Verify this is FILE metadata (invariant check).
+                 * We're analyzing files from manifest, so kind should always be FILE.
+                 * Getting DIRECTORY here indicates internal inconsistency. */
+                if (meta_entry->kind != METADATA_ITEM_FILE) {
+                    error_free(meta_err);
+                    return ERROR(ERR_INTERNAL,
+                        "Expected FILE metadata for '%s', got DIRECTORY (invariant violation)",
+                        storage_path);
+                }
+
                 /* Check for mode and ownership divergence using captured stat */
                 divergence_type_t checked_div = div_type;
-                error_t *check_err = check_metadata_divergence(
+                error_t *check_err = check_item_metadata_divergence(
                     meta_entry, fs_path, &file_stat, div_type, &checked_div,
                     &mode_differs, &ownership_differs);
 
@@ -849,17 +881,18 @@ static error_t *analyze_untracked_files(
             continue;
         }
 
-        /* Get tracked directories from metadata */
+        /* Get tracked directories from metadata (unified API) */
         size_t dir_count = 0;
-        const metadata_directory_entry_t *directories =
-            metadata_get_all_tracked_directories(metadata, &dir_count);
+        const metadata_item_t *directories =
+            metadata_get_items(metadata, METADATA_ITEM_DIRECTORY, &dir_count);
 
         /* Scan each tracked directory */
         for (size_t i = 0; i < dir_count; i++) {
-            const metadata_directory_entry_t *dir_entry = &directories[i];
+            const metadata_item_t *dir_entry = &directories[i];
 
-            /* Check if directory still exists */
-            if (!fs_exists(dir_entry->filesystem_path)) {
+            /* Check if directory still exists
+             * For directories: key = filesystem_path (absolute path) */
+            if (!fs_exists(dir_entry->key)) {
                 continue;
             }
 
@@ -877,7 +910,7 @@ static error_t *analyze_untracked_files(
             if (err) {
                 /* Non-fatal: continue without ignore filtering */
                 fprintf(stderr, "warning: failed to load ignore patterns for '%s' in profile '%s': %s\n",
-                        dir_entry->filesystem_path, profile_name, err->message);
+                        dir_entry->key, profile_name, err->message);
                 error_free(err);
                 err = NULL;
                 ignore_ctx = NULL;
@@ -885,8 +918,8 @@ static error_t *analyze_untracked_files(
 
             /* Scan this directory for untracked files */
             err = scan_directory_for_untracked(
-                dir_entry->filesystem_path,
-                dir_entry->storage_prefix,
+                dir_entry->key,                         /* filesystem_path */
+                dir_entry->directory.storage_prefix,    /* storage_prefix (union field) */
                 profile_name,
                 ws->manifest_index,
                 ignore_ctx,
@@ -899,7 +932,7 @@ static error_t *analyze_untracked_files(
             if (err) {
                 /* Non-fatal: continue with other directories */
                 fprintf(stderr, "warning: failed to scan directory '%s' in profile '%s': %s\n",
-                        dir_entry->filesystem_path, profile_name, err->message);
+                        dir_entry->key, profile_name, err->message);
                 error_free(err);
                 err = NULL;
             }
@@ -910,10 +943,144 @@ static error_t *analyze_untracked_files(
 }
 
 /**
+ * Context for directory metadata checking callback
+ */
+typedef struct {
+    workspace_t *ws;
+    error_t *error;  /* Set on first error, stops iteration */
+} directory_check_context_t;
+
+/**
+ * Callback to check one directory for metadata divergence
+ *
+ * Called by hashmap_foreach for each item in merged_metadata.
+ * Filters for DIRECTORY kind and checks against filesystem.
+ *
+ * @param key Unused (item->key contains the actual key)
+ * @param value Pointer to metadata_item_t
+ * @param user_data Pointer to directory_check_context_t
+ * @return true to continue iteration, false to stop on error
+ */
+static bool check_directory_callback(const char *key, void *value, void *user_data) {
+    (void)key;  /* Unused - item has the key */
+
+    const metadata_item_t *item = (const metadata_item_t *)value;
+    directory_check_context_t *ctx = (directory_check_context_t *)user_data;
+    workspace_t *ws = ctx->ws;
+
+    /* Filter: Only process directories */
+    if (item->kind != METADATA_ITEM_DIRECTORY) {
+        return true;  /* Continue iteration */
+    }
+
+    /* For directories: key = filesystem_path (absolute) */
+    const char *filesystem_path = item->key;
+    const char *storage_prefix = item->directory.storage_prefix;
+
+    /* Check if directory still exists */
+    if (!fs_exists(filesystem_path)) {
+        /* Directory deleted - record divergence */
+        error_t *err = workspace_add_diverged(
+            ws,
+            filesystem_path,
+            storage_prefix,
+            "multiple",  /* Profile source lost in merge (acceptable for ALPHA) */
+            DIVERGENCE_DELETED,
+            WORKSPACE_ITEM_DIRECTORY,
+            true,   /* in_profile */
+            false,  /* in_state (directories never in deployment state) */
+            false,  /* on_filesystem (deleted) */
+            false,  /* content_differs (N/A for deleted) */
+            false,  /* mode_differs (N/A for deleted) */
+            false   /* ownership_differs (N/A for deleted) */
+        );
+
+        if (err) {
+            ctx->error = error_wrap(err, "Failed to record deleted directory '%s'",
+                                   filesystem_path);
+            return false;  /* Stop iteration on error */
+        }
+        return true;  /* Continue with next directory */
+    }
+
+    /* Stat directory to get current metadata */
+    struct stat dir_stat;
+    if (stat(filesystem_path, &dir_stat) != 0) {
+        /* Stat failed but exists: race condition or permission issue */
+        fprintf(stderr, "warning: failed to stat directory '%s': %s\n",
+                filesystem_path, strerror(errno));
+        return true;  /* Non-fatal, continue */
+    }
+
+    /* Verify it's actually a directory (type may have changed) */
+    if (!S_ISDIR(dir_stat.st_mode)) {
+        fprintf(stderr, "warning: '%s' is no longer a directory (type changed)\n",
+                filesystem_path);
+        return true;  /* Non-fatal, skip - apply/revert don't handle type changes */
+    }
+
+    /* Check metadata divergence using unified helper */
+    bool mode_differs = false;
+    bool ownership_differs = false;
+    divergence_type_t div_type = DIVERGENCE_CLEAN;
+
+    error_t *err = check_item_metadata_divergence(
+        item,
+        filesystem_path,
+        &dir_stat,
+        DIVERGENCE_CLEAN,
+        &div_type,
+        &mode_differs,
+        &ownership_differs
+    );
+
+    if (err) {
+        ctx->error = error_wrap(err, "Failed to check metadata for directory '%s'",
+                               filesystem_path);
+        return false;  /* Stop iteration on error */
+    }
+
+    /* Record divergence if any metadata differs */
+    if (mode_differs || ownership_differs) {
+        err = workspace_add_diverged(
+            ws,
+            filesystem_path,
+            storage_prefix,
+            "multiple",  /* Profile source lost in merge */
+            div_type,    /* MODE_DIFF or OWNERSHIP from check function */
+            WORKSPACE_ITEM_DIRECTORY,
+            true,   /* in_profile */
+            false,  /* in_state */
+            true,   /* on_filesystem */
+            true,   /* content_differs (metadata counts as content) */
+            mode_differs,
+            ownership_differs
+        );
+
+        if (err) {
+            ctx->error = error_wrap(err,
+                                   "Failed to record directory metadata divergence for '%s'",
+                                   filesystem_path);
+            return false;  /* Stop iteration on error */
+        }
+    }
+
+    return true;  /* Continue with next directory */
+}
+
+/**
  * Analyze directory metadata for divergence
  *
- * Checks if tracked directories have changed on the filesystem by comparing
- * actual metadata (stat) against stored metadata from profiles.
+ * CRITICAL FIX: Now uses workspace's merged_metadata map which has
+ * profile precedence pre-applied. This eliminates the false-positive
+ * bug when multiple profiles track the same directory with different metadata.
+ *
+ * Previous bug: Iterated all profiles independently, compared each against
+ * filesystem, causing false divergence (e.g., global=0755 vs filesystem=0700
+ * even though darwin=0700 won via precedence).
+ *
+ * New approach: Queries merged_metadata (precedence already resolved), compares
+ * filesystem against winning metadata only.
  *
  * This is a 2-way comparison (metadata vs filesystem) because directories
  * are NOT tracked in deployment state - they are metadata-only containers.
@@ -923,150 +1090,26 @@ static error_t *analyze_untracked_files(
  * - DIVERGENCE_MODE_DIFF: Directory permissions changed
  * - DIVERGENCE_OWNERSHIP: Directory owner/group changed (requires root)
  *
- * Only analyzes directories from enabled profiles in the workspace scope.
- *
- * @param ws Workspace (must not be NULL)
+ * @param ws Workspace (must not be NULL, merged_metadata must be initialized)
  * @return Error or NULL on success
  */
 static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
     CHECK_NULL(ws);
-    CHECK_NULL(ws->profiles);
+    CHECK_NULL(ws->merged_metadata);
 
-    error_t *err = NULL;
+    /* Setup context for callback iteration */
+    directory_check_context_t ctx = {
+        .ws = ws,
+        .error = NULL
+    };
 
-    /* Check each enabled profile's tracked directories */
-    for (size_t p = 0; p < ws->profiles->count; p++) {
-        const char *profile_name = ws->profiles->profiles[p].name;
+    /* Iterate merged metadata to find and check tracked directories.
+     * No need to build temporary map - merged_metadata already has what we need
+     * with precedence applied. Callback filters for DIRECTORY kind. */
+    hashmap_foreach(ws->merged_metadata, check_directory_callback, &ctx);
 
-        /* Get cached metadata for this profile */
-        const metadata_t *metadata = ws_get_metadata(ws, profile_name);
-        if (!metadata) {
-            /* Profile has no metadata - skip (this is normal for new profiles) */
-            continue;
-        }
-
-        /* Get tracked directories from metadata */
-        size_t dir_count = 0;
-        const metadata_directory_entry_t *directories =
-            metadata_get_all_tracked_directories(metadata, &dir_count);
-
-        if (dir_count == 0) {
-            continue;  /* No tracked directories in this profile */
-        }
-
-        /* Check each tracked directory */
-        for (size_t i = 0; i < dir_count; i++) {
-            const metadata_directory_entry_t *dir_entry = &directories[i];
-
-            /* Check if directory still exists */
-            if (!fs_exists(dir_entry->filesystem_path)) {
-                /* Directory deleted - record divergence */
-                err = workspace_add_diverged(
-                    ws,
-                    dir_entry->filesystem_path,
-                    dir_entry->storage_prefix,
-                    profile_name,
-                    DIVERGENCE_DELETED,
-                    WORKSPACE_ITEM_DIRECTORY,
-                    true,   /* in_profile (tracked in metadata) */
-                    false,  /* in_state (directories never in deployment state) */
-                    false,  /* on_filesystem (deleted) */
-                    false,  /* content_differs (N/A for deleted directories) */
-                    false,  /* mode_differs N/A (deleted) */
-                    false   /* ownership_differs N/A (deleted) */
-                );
-
-                if (err) {
-                    return error_wrap(err, "Failed to record deleted directory '%s'",
-                                     dir_entry->filesystem_path);
-                }
-                continue;
-            }
-
-            /* Stat directory to get current metadata */
-            struct stat dir_stat;
-            if (stat(dir_entry->filesystem_path, &dir_stat) != 0) {
-                /* Stat failed - log warning and continue (non-fatal) */
-                fprintf(stderr, "warning: failed to stat directory '%s': %s\n",
-                        dir_entry->filesystem_path, strerror(errno));
-                continue;
-            }
-
-            /* Verify it's actually a directory */
-            if (!S_ISDIR(dir_stat.st_mode)) {
-                /* Something replaced the directory with a non-directory - log warning */
-                fprintf(stderr, "warning: '%s' is no longer a directory\n",
-                        dir_entry->filesystem_path);
-                continue;
-            }
-
-            /* Extract current mode (permission bits only) */
-            mode_t actual_mode = dir_stat.st_mode & 0777;
-
-            /* Check for mode divergence */
-            bool mode_differs = (actual_mode != dir_entry->mode);
-
-            /* Check for ownership divergence (always check, no early exit)
-             * Only when running as root AND metadata has ownership.
-             * Use effective UID (geteuid) to check privilege, not real UID (getuid).
-             * This correctly detects whether we have the capability to read ownership. */
-            bool ownership_differs = false;
-            bool running_as_root = (geteuid() == 0);
-            bool has_ownership = (dir_entry->owner != NULL || dir_entry->group != NULL);
-
-            if (running_as_root && has_ownership) {
-                /* Check owner if metadata has it */
-                if (dir_entry->owner) {
-                    struct passwd *pwd = getpwuid(dir_stat.st_uid);
-                    if (pwd && pwd->pw_name) {
-                        if (strcmp(dir_entry->owner, pwd->pw_name) != 0) {
-                            ownership_differs = true;
-                        }
-                    }
-                    /* If getpwuid fails, skip check (graceful degradation) */
-                }
-
-                /* Check group if metadata has it (check even if owner differs) */
-                if (dir_entry->group && !ownership_differs) {
-                    struct group *grp = getgrgid(dir_stat.st_gid);
-                    if (grp && grp->gr_name) {
-                        if (strcmp(dir_entry->group, grp->gr_name) != 0) {
-                            ownership_differs = true;
-                        }
-                    }
-                    /* If getgrgid fails, skip check (graceful degradation) */
-                }
-            }
-
-            /* Add divergence if either mode or ownership differs */
-            if (mode_differs || ownership_differs) {
-                /* Primary divergence: mode takes precedence for counting */
-                divergence_type_t primary = mode_differs ? DIVERGENCE_MODE_DIFF : DIVERGENCE_OWNERSHIP;
-
-                err = workspace_add_diverged(
-                    ws,
-                    dir_entry->filesystem_path,
-                    dir_entry->storage_prefix,
-                    profile_name,
-                    primary,
-                    WORKSPACE_ITEM_DIRECTORY,
-                    true,   /* in_profile */
-                    false,  /* in_state */
-                    true,   /* on_filesystem */
-                    true,   /* content_differs (metadata changed) */
-                    mode_differs,
-                    ownership_differs
-                );
-
-                if (err) {
-                    return error_wrap(err, "Failed to record directory metadata divergence for '%s'",
-                                     dir_entry->filesystem_path);
-                }
-            }
-        }
-    }
-
-    return NULL;
+    /* Return any error that occurred during iteration */
+    return ctx.error;
 }
 
 /**
@@ -1159,22 +1202,32 @@ static error_t *analyze_encryption_policy_mismatch(
         /* Tier 2: Cross-validate with metadata (defense in depth) */
         const metadata_t *metadata = ws_get_metadata(ws, profile_name);
         if (metadata) {
-            const metadata_entry_t *meta_entry = NULL;
-            error_t *lookup_err = metadata_get_entry(metadata, storage_path, &meta_entry);
+            const metadata_item_t *meta_entry = NULL;
+            error_t *lookup_err = metadata_get_item(metadata, storage_path, &meta_entry);
 
             if (lookup_err == NULL && meta_entry) {
-                /* Detect mismatch between magic header and metadata */
-                if (is_encrypted != meta_entry->encrypted) {
+                /* Validate kind: encryption metadata only applies to files.
+                 * This should always be FILE (manifest contains only files), but
+                 * check defensively since this is corruption detection code. */
+                if (meta_entry->kind != METADATA_ITEM_FILE) {
                     fprintf(stderr,
-                        "warning: metadata corruption detected for '%s' in profile '%s'\n"
-                        "  Magic header says: %s\n"
-                        "  Metadata says: %s\n"
-                        "  Using actual state from magic header. To fix, run:\n"
-                        "    dotta update -p %s '%s'\n",
-                        storage_path, profile_name,
-                        is_encrypted ? "encrypted" : "plaintext",
-                        is_encrypted ? "plaintext" : "encrypted",
-                        profile_name, storage_path);
+                        "warning: metadata corruption for '%s' in profile '%s': "
+                        "expected FILE, got DIRECTORY. Skipping encryption validation.\n",
+                        storage_path, profile_name);
+                } else {
+                    /* Detect mismatch between magic header and metadata */
+                    if (is_encrypted != meta_entry->file.encrypted) {
+                        fprintf(stderr,
+                            "warning: metadata corruption detected for '%s' in profile '%s'\n"
+                            "  Magic header says: %s\n"
+                            "  Metadata says: %s\n"
+                            "  Using actual state from magic header. To fix, run:\n"
+                            "    dotta update -p %s '%s'\n",
+                            storage_path, profile_name,
+                            is_encrypted ? "encrypted" : "plaintext",
+                            is_encrypted ? "plaintext" : "encrypted",
+                            profile_name, storage_path);
+                    }
                 }
             }
 
@@ -1273,6 +1326,59 @@ error_t *workspace_load(
             metadata_free(metadata);
             workspace_free(ws);
             return error_wrap(set_err, "Failed to cache metadata for profile '%s'", profile_name);
+        }
+    }
+
+    /* Build unified metadata view with profile precedence.
+     * CRITICAL INVARIANT: profiles array is in precedence order (global → OS → host).
+     * Iterating in order with hashmap_set() naturally implements "last profile wins". */
+    ws->merged_metadata = hashmap_create(256);
+    if (!ws->merged_metadata) {
+        workspace_free(ws);
+        return ERROR(ERR_MEMORY, "Failed to create merged metadata map");
+    }
+
+    for (size_t p = 0; p < profiles->count; p++) {
+        const char *profile_name = profiles->profiles[p].name;
+        const metadata_t *metadata = hashmap_get(ws->metadata_cache, profile_name);
+
+        if (!metadata) {
+            /* Profile has no metadata - skip (empty metadata was created above) */
+            continue;
+        }
+
+        /* Get ALL items from this profile (files + directories) */
+        size_t item_count = 0;
+        const metadata_item_t *items = metadata_get_items(
+            metadata,
+            -1,  /* -1 = all kinds (files + directories) */
+            &item_count
+        );
+
+        if (!items || item_count == 0) {
+            continue;  /* No items in this profile */
+        }
+
+        /* Add/update items in merged map - last profile wins (precedence) */
+        for (size_t i = 0; i < item_count; i++) {
+            const metadata_item_t *item = &items[i];
+
+            /* Use item's key field as map key.
+             * - For FILES: key = storage_path (relative, e.g., "home/.bashrc")
+             * - For DIRECTORIES: key = filesystem_path (absolute, e.g., "/home/user/.config")
+             * No collision risk: different namespaces (relative vs absolute paths). */
+            error_t *map_err = hashmap_set(
+                ws->merged_metadata,
+                item->key,
+                (void *)item  /* Borrow pointer - safe as metadata_cache owns it */
+            );
+
+            if (map_err) {
+                workspace_free(ws);
+                return error_wrap(map_err,
+                    "Failed to add item '%s' to merged metadata (profile: %s)",
+                    item->key, profile_name);
+            }
         }
     }
 
@@ -1534,6 +1640,9 @@ void workspace_free(workspace_t *ws) {
     hashmap_free(ws->manifest_index, NULL);
     hashmap_free(ws->profile_index, NULL);
     hashmap_free(ws->diverged_index, NULL);
+
+    /* Free merged_metadata BEFORE metadata_cache (borrowed pointers) */
+    hashmap_free(ws->merged_metadata, NULL);  /* NULL = don't free values */
 
     /* Free encryption infrastructure */
     if (ws->metadata_cache) {

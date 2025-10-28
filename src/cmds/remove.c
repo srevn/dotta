@@ -748,12 +748,12 @@ static error_t *cleanup_metadata(
     for (size_t i = 0; i < string_array_size(removed_storage_paths); i++) {
         const char *storage_path = string_array_get(removed_storage_paths, i);
 
-        /* Check if metadata entry exists */
-        if (metadata_has_entry(metadata, storage_path)) {
-            err = metadata_remove_entry(metadata, storage_path);
+        /* Check if metadata item exists */
+        if (metadata_has_item(metadata, storage_path)) {
+            err = metadata_remove_item(metadata, storage_path);
             if (err) {
                 metadata_free(metadata);
-                return error_wrap(err, "Failed to remove metadata entry: %s", storage_path);
+                return error_wrap(err, "Failed to remove metadata item: %s", storage_path);
             }
 
             removed_count++;

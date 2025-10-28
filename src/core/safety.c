@@ -242,10 +242,21 @@ static bool try_fast_path_check(
     if (metadata && storage_path) {
         /* Get mode from metadata for accurate comparison */
         git_filemode_t expected_mode = GIT_FILEMODE_BLOB;
-        const metadata_entry_t *meta_entry = NULL;
-        error_t *mode_err = metadata_get_entry(metadata, storage_path, &meta_entry);
-        if (!mode_err && meta_entry && (meta_entry->mode & S_IXUSR)) {
-            expected_mode = GIT_FILEMODE_BLOB_EXECUTABLE;
+        const metadata_item_t *meta_entry = NULL;
+        error_t *mode_err = metadata_get_item(metadata, storage_path, &meta_entry);
+        if (!mode_err && meta_entry) {
+            /* Validate this is a file entry (storage_path should only map to files)
+             * If it's a directory, something is seriously wrong - fall back to slow path.
+             */
+            if (meta_entry->kind != METADATA_ITEM_FILE) {
+                error_free(mode_err);
+                return false;  /* Use slow path fallback for safety */
+            }
+
+            /* Mode is common field - check executable bit */
+            if (meta_entry->mode & S_IXUSR) {
+                expected_mode = GIT_FILEMODE_BLOB_EXECUTABLE;
+            }
         }
         error_free(mode_err);  /* Non-fatal if not found */
 

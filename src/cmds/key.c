@@ -218,8 +218,10 @@ static error_t *count_encrypted_files(
     }
 
     /* Count encrypted files */
-    for (size_t i = 0; i < metadata->count; i++) {
-        if (metadata->entries[i].encrypted) {
+    size_t count;
+    const metadata_item_t *items = metadata_get_items(metadata, METADATA_ITEM_FILE, &count);
+    for (size_t i = 0; i < count; i++) {
+        if (items[i].file.encrypted) {
             (*out_count)++;
         }
     }

@@ -132,10 +132,12 @@ error_t *encryption_policy_should_encrypt(
      *   3. dotta update file  (should stay encrypted)
      */
     if (metadata) {
-        const metadata_entry_t *existing = NULL;
-        error_t *err = metadata_get_entry(metadata, storage_path, &existing);
+        const metadata_item_t *existing = NULL;
+        error_t *err = metadata_get_item(metadata, storage_path, &existing);
 
-        if (err == NULL && existing && existing->encrypted) {
+        if (err == NULL && existing &&
+            existing->kind == METADATA_ITEM_FILE &&
+            existing->file.encrypted) {
             /* File was previously encrypted - maintain encryption */
             *out_should_encrypt = true;
             return NULL;

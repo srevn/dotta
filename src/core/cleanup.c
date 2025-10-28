@@ -565,7 +565,7 @@ static error_t *prune_orphaned_files(
  * @param removed_path Path of directory that was just removed
  */
 static void reset_parent_directory_state(
-    const metadata_directory_entry_t *directories,
+    const metadata_item_t *directories,
     size_t dir_count,
     directory_state_t *states,
     const char *removed_path
@@ -591,7 +591,7 @@ static void reset_parent_directory_state(
 
     /* Find parent in directories list */
     for (size_t i = 0; i < dir_count; i++) {
-        if (strcmp(directories[i].filesystem_path, parent_path) == 0) {
+        if (strcmp(directories[i].key, parent_path) == 0) {
             /* Found parent - reset state if it was marked non-empty */
             if (states[i] == DIR_STATE_NOT_EMPTY) {
                 states[i] = DIR_STATE_UNKNOWN;
@@ -641,10 +641,10 @@ static error_t *prune_empty_directories(
 
     bool dry_run = opts->dry_run;
 
-    /* Get all tracked directories */
+    /* Get all tracked directories (filter by DIRECTORY kind) */
     size_t dir_count = 0;
-    const metadata_directory_entry_t *directories =
-        metadata_get_all_tracked_directories(metadata, &dir_count);
+    const metadata_item_t *directories =
+        metadata_get_items(metadata, METADATA_ITEM_DIRECTORY, &dir_count);
 
     if (dir_count == 0) {
         return NULL;  /* No tracked directories */
@@ -671,7 +671,8 @@ static error_t *prune_empty_directories(
         made_progress = false;
 
         for (size_t i = 0; i < dir_count; i++) {
-            const char *dir_path = directories[i].filesystem_path;
+            /* For directory items, key field contains filesystem_path */
+            const char *dir_path = directories[i].key;
 
             /* Optimization: Skip directories with known state */
             if (states[i] == DIR_STATE_REMOVED ||
@@ -875,10 +876,10 @@ error_t *cleanup_preflight_check(
             error_free(err);
             err = NULL;
         } else {
-            /* Get tracked directories */
+            /* Get tracked directories (filter by DIRECTORY kind) */
             size_t dir_count = 0;
-            const metadata_directory_entry_t *directories =
-                metadata_get_all_tracked_directories(complete_metadata, &dir_count);
+            const metadata_item_t *directories =
+                metadata_get_items(complete_metadata, METADATA_ITEM_DIRECTORY, &dir_count);
 
             if (dir_count > 0) {
                 /* Allocate directory array for preview */
@@ -888,7 +889,8 @@ error_t *cleanup_preflight_check(
                 } else {
                     /* Check which directories are empty (read-only preview) */
                     for (size_t i = 0; i < dir_count; i++) {
-                        const char *dir_path = directories[i].filesystem_path;
+                        /* For directory items, key field contains filesystem_path */
+                        const char *dir_path = directories[i].key;
 
                         /* Check if directory exists and is empty */
                         if (fs_exists(dir_path) && fs_is_directory_empty(dir_path)) {

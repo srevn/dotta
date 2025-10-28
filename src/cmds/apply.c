@@ -623,13 +623,17 @@ static error_t *apply_update_and_save_state(
         char mode_buf[5];  /* Stack buffer for "0777\0" (max 5 bytes) */
 
         if (metadata) {
-            const metadata_entry_t *meta_entry = NULL;
-            error_t *meta_err = metadata_get_entry(metadata, entry->storage_path, &meta_entry);
+            const metadata_item_t *item = NULL;
+            error_t *meta_err = metadata_get_item(metadata, entry->storage_path, &item);
 
-            if (!meta_err && meta_entry) {
-                /* Format mode directly into stack buffer (no heap allocation) */
-                snprintf(mode_buf, sizeof(mode_buf), "%04o", (unsigned int)(meta_entry->mode & 0777));
-                mode_str = mode_buf;
+            if (!meta_err && item) {
+                /* Defensive: Check kind (files should have file entries, symlinks may not exist) */
+                if (item->kind == METADATA_ITEM_FILE) {
+                    /* Format mode directly into stack buffer (no heap allocation) */
+                    snprintf(mode_buf, sizeof(mode_buf), "%04o", (unsigned int)(item->mode & 0777));
+                    mode_str = mode_buf;
+                }
+                /* If it's a directory entry, skip (shouldn't happen for files in manifest) */
             } else if (meta_err) {
                 /* Not found is expected for symlinks and other cases - not an error */
                 error_free(meta_err);

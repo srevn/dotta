@@ -356,7 +356,7 @@ error_t *deploy_file(
     error_t *err = NULL;
     const buffer_t *content_buffer = NULL;  /* Borrowed from cache (const) */
     char *target_str = NULL;
-    const metadata_entry_t *meta_entry = NULL;
+    const metadata_item_t *meta_entry = NULL;
 
     if (opts->dry_run) {
         /* Dry-run mode - just print */
@@ -451,12 +451,24 @@ error_t *deploy_file(
     bool used_metadata = false;
 
     if (metadata) {
-        error_t *meta_err = metadata_get_entry(metadata, entry->storage_path, &meta_entry);
+        error_t *meta_err = metadata_get_item(metadata, entry->storage_path, &meta_entry);
 
         if (meta_err == NULL && meta_entry != NULL) {
-            /* Use mode from metadata */
-            file_mode = meta_entry->mode;
-            used_metadata = true;
+            /* Validate this is a file entry (storage_path should only map to files) */
+            if (meta_entry->kind != METADATA_ITEM_FILE) {
+                /* Metadata corruption - storage_path mapped to directory
+                 * Fallback to git mode for safety */
+                if (opts->verbose) {
+                    fprintf(stderr, "Warning: Metadata corruption for '%s' (expected file, got directory)\n",
+                            entry->storage_path);
+                }
+                meta_entry = NULL;
+                file_mode = (mode == GIT_FILEMODE_BLOB_EXECUTABLE) ? 0755 : 0644;
+            } else {
+                /* Use mode from metadata (common field) */
+                file_mode = meta_entry->mode;
+                used_metadata = true;
+            }
         } else {
             /* Fallback to git mode */
             if (meta_err) {
@@ -559,10 +571,10 @@ static error_t *deploy_tracked_directories(
         return NULL;  /* No metadata, nothing to do */
     }
 
-    /* Get all tracked directories */
+    /* Get all tracked directories (filter by DIRECTORY kind) */
     size_t dir_count = 0;
-    const metadata_directory_entry_t *directories =
-        metadata_get_all_tracked_directories(metadata, &dir_count);
+    const metadata_item_t *directories =
+        metadata_get_items(metadata, METADATA_ITEM_DIRECTORY, &dir_count);
 
     if (dir_count == 0) {
         return NULL;  /* No tracked directories */
@@ -575,12 +587,18 @@ static error_t *deploy_tracked_directories(
 
     /* Deploy each tracked directory */
     for (size_t i = 0; i < dir_count; i++) {
-        const metadata_directory_entry_t *dir_entry = &directories[i];
+        const metadata_item_t *dir_entry = &directories[i];
+
+        /* For directory items:
+         * - key field contains filesystem_path
+         * - directory.storage_prefix contains storage_prefix (union field)
+         * - mode, owner, group are common fields
+         */
 
         /* Skip if directory already exists and we're not forcing */
-        if (fs_is_directory(dir_entry->filesystem_path) && !opts->force) {
+        if (fs_is_directory(dir_entry->key) && !opts->force) {
             if (opts->verbose) {
-                printf("  Skipped: %s (already exists)\n", dir_entry->filesystem_path);
+                printf("  Skipped: %s (already exists)\n", dir_entry->key);
             }
             continue;
         }
@@ -590,12 +608,12 @@ static error_t *deploy_tracked_directories(
             if (opts->verbose) {
                 if (dir_entry->owner || dir_entry->group) {
                     printf("  Would create: %s (mode: %04o, owner: %s:%s)\n",
-                          dir_entry->filesystem_path, dir_entry->mode,
+                          dir_entry->key, dir_entry->mode,
                           dir_entry->owner ? dir_entry->owner : "?",
                           dir_entry->group ? dir_entry->group : "?");
                 } else {
                     printf("  Would create: %s (mode: %04o)\n",
-                          dir_entry->filesystem_path, dir_entry->mode);
+                          dir_entry->key, dir_entry->mode);
                 }
             }
             continue;
@@ -611,7 +629,7 @@ static error_t *deploy_tracked_directories(
          */
         uid_t target_uid, target_gid;
         error_t *err = resolve_deployment_ownership(
-            dir_entry->storage_prefix,
+            dir_entry->directory.storage_prefix,
             dir_entry->owner,
             dir_entry->group,
             &target_uid,
@@ -620,14 +638,14 @@ static error_t *deploy_tracked_directories(
         );
         if (err) {
             return error_wrap(err,
-                "Failed to resolve ownership for directory: %s", dir_entry->filesystem_path);
+                "Failed to resolve ownership for directory: %s", dir_entry->key);
         }
 
         /* Create directory with ATOMIC ownership and permissions
          * SECURITY: fs_create_dir_with_ownership uses fchown() and fchmod() on the
          * directory fd, ensuring no security window exists */
         err = fs_create_dir_with_ownership(
-            dir_entry->filesystem_path,
+            dir_entry->key,
             dir_entry->mode,
             target_uid,
             target_gid,
@@ -636,7 +654,7 @@ static error_t *deploy_tracked_directories(
 
         if (err) {
             return error_wrap(err, "Failed to create tracked directory: %s",
-                            dir_entry->filesystem_path);
+                            dir_entry->key);
         }
 
         /* Verbose output */
@@ -645,15 +663,15 @@ static error_t *deploy_tracked_directories(
 
             if (has_ownership && dir_entry->owner) {
                 printf("  Created: %s (mode: %04o, owner: %s:%s)\n",
-                      dir_entry->filesystem_path, dir_entry->mode,
+                      dir_entry->key, dir_entry->mode,
                       dir_entry->owner ? dir_entry->owner : "?",
                       dir_entry->group ? dir_entry->group : "?");
             } else if (has_ownership) {
                 printf("  Created: %s (mode: %04o, owner: actual user)\n",
-                      dir_entry->filesystem_path, dir_entry->mode);
+                      dir_entry->key, dir_entry->mode);
             } else {
                 printf("  Created: %s (mode: %04o)\n",
-                      dir_entry->filesystem_path, dir_entry->mode);
+                      dir_entry->key, dir_entry->mode);
             }
         }
     }

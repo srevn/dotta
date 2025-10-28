@@ -1997,7 +1997,7 @@ error_t *cmd_update(
 cleanup:
     /* Free all resources in reverse order */
     if (hook_ctx) hook_context_free(hook_ctx);
-    if (ws) workspace_free(ws);  /* Free workspace after all profile updates complete */
+    if (ws) workspace_free(ws);
     if (profiles_str) free(profiles_str);
     if (repo_dir) free(repo_dir);
     if (profiles) profile_list_free(profiles);

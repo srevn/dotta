@@ -1,5 +1,5 @@
 /**
- * metadata.h - Unified metadata system (Version 4)
+ * metadata.h - Unified metadata system
  *
  * UNIFIED DESIGN: Single discriminated union for files and directories.
  *
@@ -350,10 +350,6 @@ error_t *metadata_capture_from_directory(
     const struct stat *st,
     metadata_item_t **out
 );
-
-/* ============================================================================
- * Merge Operations
- * ============================================================================ */
 
 /**
  * Merge metadata from multiple sources

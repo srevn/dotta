@@ -227,9 +227,6 @@ error_t *metadata_item_create_directory(
  * linear search. This ensures the data structure remains consistent even if
  * hashmap rebuild fails.
  *
- * This is a UNIFIED function that works for both files and directories since
- * they share the same array and hashmap.
- *
  * @param metadata Metadata structure (must not be NULL)
  */
 static void rebuild_hashmap_index(metadata_t *metadata) {
@@ -261,9 +258,6 @@ static void rebuild_hashmap_index(metadata_t *metadata) {
  *
  * Doubles the array capacity when full. After realloc, the hashmap index
  * must be rebuilt since all pointers have changed.
- *
- * This is a UNIFIED function that grows the single items array (no separate
- * files/directories arrays like in v3).
  *
  * @param metadata Metadata structure (must not be NULL)
  * @return Error or NULL on success
@@ -302,11 +296,6 @@ static error_t *ensure_capacity(metadata_t *metadata) {
 
 /**
  * Add or update metadata item
- *
- * This is the UNIFIED add function that replaces:
- * - metadata_set_entry() (files)
- * - metadata_add_entry() (files)
- * - metadata_add_tracked_directory() (directories)
  *
  * Works for both files and directories. If an item with the same key exists,
  * it is updated. Otherwise, a new item is added.
@@ -501,10 +490,6 @@ error_t *metadata_add_item(
 /**
  * Get metadata item (const version)
  *
- * Unified lookup function that replaces:
- * - metadata_get_entry() (files)
- * - metadata_get_tracked_directory() (directories)
- *
  * Works for both files and directories. Caller should check item->kind
  * after retrieval if type matters.
  */
@@ -612,10 +597,6 @@ error_t *metadata_remove_item(
 
 /**
  * Check if metadata item exists
- *
- * Unified existence check that replaces:
- * - metadata_has_entry() (files)
- * - metadata_has_tracked_directory() (directories)
  *
  * Works for both files and directories.
  */
@@ -932,7 +913,7 @@ error_t *metadata_capture_from_directory(
 }
 
 /**
- * Convert metadata to JSON (Version 4 format)
+ * Convert metadata to JSON
  *
  * Creates unified JSON with single "items" array containing both files and directories.
  * Each item has explicit "kind" discriminator.
@@ -1110,7 +1091,7 @@ cleanup:
 }
 
 /**
- * Parse metadata from JSON (Version 4 format)
+ * Parse metadata from JSON
  *
  * Parses unified JSON with single "items" array.
  * REJECTS old versions with clear error message (NO migration code).
@@ -1780,8 +1761,7 @@ error_t *metadata_resolve_ownership(
         struct passwd *pwd = getpwnam(owner);
         if (!pwd) {
             return ERROR(ERR_NOT_FOUND,
-                        "User '%s' does not exist on this system",
-                        owner);
+                        "User '%s' does not exist on this system", owner);
         }
         *out_uid = pwd->pw_uid;
 
@@ -1796,8 +1776,7 @@ error_t *metadata_resolve_ownership(
         struct group *grp = getgrnam(group);
         if (!grp) {
             return ERROR(ERR_NOT_FOUND,
-                        "Group '%s' does not exist on this system",
-                        group);
+                        "Group '%s' does not exist on this system", group);
         }
         *out_gid = grp->gr_gid;
     }

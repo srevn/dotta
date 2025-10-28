@@ -143,16 +143,6 @@ workspace_status_t workspace_get_status(const workspace_t *ws);
  * @param count Output count of matching entries (must not be NULL)
  * @return Allocated array of pointers to matching items, or NULL if none match or on error.
  *         Caller must free() the array (but not the pointed-to entries).
- *
- * Example:
- *   size_t count;
- *   const workspace_item_t **modified = workspace_get_diverged(ws, DIVERGENCE_MODIFIED, &count);
- *   if (modified) {
- *       for (size_t i = 0; i < count; i++) {
- *           printf("%s\n", modified[i]->filesystem_path);
- *       }
- *       free(modified);  // Free the pointer array only
- *   }
  */
 const workspace_item_t **workspace_get_diverged(
     const workspace_t *ws,

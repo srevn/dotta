@@ -1114,20 +1114,6 @@ static bool check_directory_callback(const char *key, void *value, void *user_da
 /**
  * Analyze directory metadata for divergence
  *
- * CRITICAL FIX: Now uses workspace's merged_metadata map which has
- * profile precedence pre-applied. This eliminates the false-positive
- * bug when multiple profiles track the same directory with different metadata.
- *
- * Previous bug: Iterated all profiles independently, compared each against
- * filesystem, causing false divergence (e.g., global=0755 vs filesystem=0700
- * even though darwin=0700 won via precedence).
- *
- * New approach: Queries merged_metadata (precedence already resolved), compares
- * filesystem against winning metadata only.
- *
- * This is a 2-way comparison (metadata vs filesystem) because directories
- * are NOT tracked in deployment state - they are metadata-only containers.
- *
  * Detects:
  * - DIVERGENCE_DELETED: Directory removed from filesystem
  * - DIVERGENCE_MODE_DIFF: Directory permissions changed
@@ -1709,8 +1695,8 @@ error_t *workspace_validate(
 
         case WORKSPACE_INVALID:
             return ERROR(ERR_VALIDATION,
-                        "Cannot %s: workspace has orphaned state entries (run 'dotta profile validate --fix')",
-                        operation);
+                        "Cannot %s: workspace has orphaned state entries "
+                        "(run 'dotta profile validate --fix')", operation);
     }
 
     return ERROR(ERR_INTERNAL, "Unknown workspace status");

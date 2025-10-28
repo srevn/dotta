@@ -194,16 +194,9 @@ error_t *repo_fix_ownership_if_needed(const char *repo_path) {
         return error_wrap(err, "Failed to fix repository ownership");
     }
 
-    /* Log results to stderr (informational)
-     * We log even on success to let the user know what happened.
-     * This is helpful for debugging and transparency. */
-    if (fixed_count > 0 || failed_count > 0) {
-        fprintf(stderr, "Repository ownership fixed: %zu files restored to user ownership",
-                fixed_count);
-        if (failed_count > 0) {
-            fprintf(stderr, " (%zu files could not be fixed)", failed_count);
-        }
-        fprintf(stderr, "\n");
+    /* Only warn if there were failures */
+    if (failed_count > 0) {
+        fprintf(stderr, "Warning: Failed to restore ownership for %zu files\n", failed_count);
     }
 
     return NULL;

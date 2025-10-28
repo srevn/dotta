@@ -665,6 +665,93 @@ static error_t *apply_update_and_save_state(
         }
     }
 
+    /* Sync tracked directories to state */
+    output_print(out, OUTPUT_VERBOSE, "\nSyncing tracked directories to state...\n");
+
+    err = state_clear_directories(state);
+    if (err) {
+        return error_wrap(err, "Failed to clear tracked directories from state");
+    }
+
+    /* Load per-profile metadata to preserve profile attribution
+     *
+     * Architecture: We cannot use merged_metadata here because it loses
+     * profile attribution (all directories merged into one list without
+     * source profile information). Instead, we load each profile's metadata
+     * individually to correctly associate directories with their source profile.
+     *
+     * This mirrors the pattern used for metadata loading during apply (lines 908-940).
+     */
+    for (size_t p = 0; p < profiles->count; p++) {
+        const char *profile_name = profiles->profiles[p].name;
+        metadata_t *profile_meta = NULL;
+
+        /* Load metadata for this profile */
+        error_t *meta_err = metadata_load_from_branch(repo, profile_name, &profile_meta);
+        if (meta_err) {
+            if (meta_err->code == ERR_NOT_FOUND) {
+                /* No metadata in this profile - not an error */
+                output_print(out, OUTPUT_VERBOSE,
+                            "  No metadata in profile '%s' (skipping directories)\n",
+                            profile_name);
+                error_free(meta_err);
+                continue;
+            } else {
+                /* Real error - propagate */
+                return error_wrap(meta_err,
+                                "Failed to load metadata from profile '%s' for directory sync",
+                                profile_name);
+            }
+        }
+
+        /* Get tracked directories from this profile's metadata */
+        size_t dir_count = 0;
+        const metadata_item_t **directories =
+            metadata_get_items_by_kind(profile_meta, METADATA_ITEM_DIRECTORY, &dir_count);
+
+        if (dir_count > 0) {
+            output_print(out, OUTPUT_VERBOSE, "  Syncing %zu director%s from profile '%s'\n",
+                        dir_count, dir_count == 1 ? "y" : "ies", profile_name);
+        }
+
+        /* Convert each directory to state entry and add to state */
+        for (size_t i = 0; i < dir_count; i++) {
+            state_directory_entry_t *state_dir = NULL;
+
+            err = state_directory_entry_create_from_metadata(
+                directories[i],
+                profile_name,
+                &state_dir
+            );
+
+            if (err) {
+                free(directories);
+                metadata_free(profile_meta);
+                return error_wrap(err, "Failed to create state directory entry for '%s'",
+                                directories[i]->key);
+            }
+
+            err = state_add_directory(state, state_dir);
+            state_free_directory_entry(state_dir);
+
+            if (err) {
+                free(directories);
+                metadata_free(profile_meta);
+                return error_wrap(err, "Failed to add directory '%s' to state",
+                                directories[i]->key);
+            }
+        }
+
+        /* Free the pointer array (items themselves are owned by metadata) */
+        free(directories);
+
+        /* Free this profile's metadata */
+        metadata_free(profile_meta);
+    }
+
+    output_print(out, OUTPUT_VERBOSE, "Directory sync complete\n");
+    /* End tracked directories sync */
+
     /* Save updated state */
     err = state_save(repo, state);
     if (err) {

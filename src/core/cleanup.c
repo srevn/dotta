@@ -246,149 +246,6 @@ void orphan_list_free(orphan_list_t *list) {
 }
 
 /**
- * Load metadata from deployed-but-not-enabled profiles
- *
- * Optimization: Only loads metadata from profiles that are deployed (have files
- * in state) but not currently enabled. This avoids duplicate loading when the
- * caller already has metadata from enabled profiles.
- *
- * Algorithm:
- * 1. Get all deployed profiles from state
- * 2. Compute set difference: deployed - enabled
- * 3. Load metadata only from disabled profiles
- * 4. If enabled_metadata provided, merge with disabled metadata
- *
- * Edge Cases:
- * - No deployed profiles → Returns empty metadata
- * - No enabled profiles → Loads from all deployed profiles
- * - All deployed profiles are enabled → Returns empty metadata (or clones enabled)
- *
- * @param repo Repository (must not be NULL)
- * @param state State for deployed profile lookup (must not be NULL)
- * @param enabled_metadata Pre-loaded metadata from enabled profiles (can be NULL)
- * @param enabled_profiles Currently enabled profiles (can be NULL)
- * @param out_metadata Merged metadata (must not be NULL, caller must free)
- * @return Error or NULL on success
- */
-static error_t *load_complete_metadata(
-    git_repository *repo,
-    const state_t *state,
-    const metadata_t *enabled_metadata,
-    const profile_list_t *enabled_profiles,
-    metadata_t **out_metadata
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(out_metadata);
-
-    error_t *err = NULL;
-    string_array_t *deployed_profiles = NULL;
-    string_array_t *disabled_profiles = NULL;
-    metadata_t *disabled_metadata = NULL;
-    metadata_t *complete_metadata = NULL;
-
-    /* Get all deployed profiles from state */
-    err = state_get_deployed_profiles(state, &deployed_profiles);
-    if (err) {
-        return error_wrap(err, "Failed to get deployed profiles");
-    }
-
-    /* Handle case: no deployed profiles */
-    if (!deployed_profiles || string_array_size(deployed_profiles) == 0) {
-        string_array_free(deployed_profiles);
-        /* Return empty metadata (not an error) */
-        return metadata_create_empty(out_metadata);
-    }
-
-    /* Compute set difference: deployed - enabled */
-    disabled_profiles = string_array_create();
-    if (!disabled_profiles) {
-        string_array_free(deployed_profiles);
-        return ERROR(ERR_MEMORY, "Failed to allocate disabled profiles array");
-    }
-
-    for (size_t i = 0; i < string_array_size(deployed_profiles); i++) {
-        const char *deployed_name = string_array_get(deployed_profiles, i);
-        bool is_enabled = false;
-
-        /* Check if this deployed profile is also enabled */
-        if (enabled_profiles) {
-            for (size_t j = 0; j < enabled_profiles->count; j++) {
-                if (strcmp(deployed_name, enabled_profiles->profiles[j].name) == 0) {
-                    is_enabled = true;
-                    break;
-                }
-            }
-        }
-
-        /* Add to disabled list if not enabled */
-        if (!is_enabled) {
-            err = string_array_push(disabled_profiles, deployed_name);
-            if (err) {
-                string_array_free(deployed_profiles);
-                string_array_free(disabled_profiles);
-                return error_wrap(err, "Failed to add disabled profile");
-            }
-        }
-    }
-
-    /* Load metadata from disabled profiles */
-    if (string_array_size(disabled_profiles) > 0) {
-        err = metadata_load_from_profiles(repo, disabled_profiles, &disabled_metadata);
-        if (err) {
-            /* Non-fatal if metadata doesn't exist, but fatal on other errors */
-            if (err->code != ERR_NOT_FOUND) {
-                string_array_free(deployed_profiles);
-                string_array_free(disabled_profiles);
-                return error_wrap(err, "Failed to load metadata from disabled profiles");
-            }
-            /* Metadata not found - treat as empty */
-            error_free(err);
-            err = metadata_create_empty(&disabled_metadata);
-            if (err) {
-                string_array_free(deployed_profiles);
-                string_array_free(disabled_profiles);
-                return err;
-            }
-        }
-    } else {
-        /* No disabled profiles - create empty metadata */
-        err = metadata_create_empty(&disabled_metadata);
-        if (err) {
-            string_array_free(deployed_profiles);
-            string_array_free(disabled_profiles);
-            return err;
-        }
-    }
-
-    /* Merge enabled and disabled metadata */
-    if (enabled_metadata) {
-        /* Both enabled and disabled metadata available - merge them */
-        const metadata_t *to_merge[] = {enabled_metadata, disabled_metadata};
-        err = metadata_merge(to_merge, 2, &complete_metadata);
-        if (err) {
-            metadata_free(disabled_metadata);
-            string_array_free(deployed_profiles);
-            string_array_free(disabled_profiles);
-            return error_wrap(err, "Failed to merge enabled and disabled metadata");
-        }
-        /* Transfer ownership to result, free disabled */
-        metadata_free(disabled_metadata);
-    } else {
-        /* Only disabled metadata available - use it directly */
-        complete_metadata = disabled_metadata;
-        disabled_metadata = NULL;  /* Transfer ownership */
-    }
-
-    /* Clean up temporary arrays */
-    string_array_free(deployed_profiles);
-    string_array_free(disabled_profiles);
-
-    *out_metadata = complete_metadata;
-    return NULL;
-}
-
-/**
  * Remove orphaned files from filesystem
  *
  * Uses pre-computed orphan list from opts->orphaned_files to remove files
@@ -565,7 +422,7 @@ static error_t *prune_orphaned_files(
  * @param removed_path Path of directory that was just removed
  */
 static void reset_parent_directory_state(
-    const metadata_item_t **directories,
+    const state_directory_entry_t *directories,
     size_t dir_count,
     directory_state_t *states,
     const char *removed_path
@@ -591,7 +448,7 @@ static void reset_parent_directory_state(
 
     /* Find parent in directories list */
     for (size_t i = 0; i < dir_count; i++) {
-        if (strcmp(directories[i]->key, parent_path) == 0) {
+        if (strcmp(directories[i].directory_path, parent_path) == 0) {
             /* Found parent - reset state if it was marked non-empty */
             if (states[i] == DIR_STATE_NOT_EMPTY) {
                 states[i] = DIR_STATE_UNKNOWN;
@@ -607,7 +464,7 @@ static void reset_parent_directory_state(
  * Prune empty tracked directories
  *
  * Iteratively removes directories that are:
- * 1. Explicitly tracked in metadata (added via `dotta add`)
+ * 1. Explicitly tracked in state (added via `dotta add` and deployed via `dotta apply`)
  * 2. Empty (contain no files or subdirectories)
  *
  * Uses state tracking optimization to avoid redundant filesystem checks
@@ -625,26 +482,30 @@ static void reset_parent_directory_state(
  * - DIR_STATE_FAILED: Skip in all future iterations
  * - DIR_STATE_UNKNOWN: Check in this iteration
  *
- * @param metadata Complete metadata (must not be NULL)
+ * @param state Deployment state (must not be NULL)
  * @param result Cleanup result to update (must not be NULL)
  * @param opts Cleanup options (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *prune_empty_directories(
-    const metadata_t *metadata,
+    const state_t *state,
     cleanup_result_t *result,
     const cleanup_options_t *opts
 ) {
-    CHECK_NULL(metadata);
+    CHECK_NULL(state);
     CHECK_NULL(result);
     CHECK_NULL(opts);
 
+    error_t *err = NULL;
     bool dry_run = opts->dry_run;
 
-    /* Get all tracked directories (filtered by kind) */
+    /* Get all tracked directories from state */
+    state_directory_entry_t *directories = NULL;
     size_t dir_count = 0;
-    const metadata_item_t **directories =
-        metadata_get_items_by_kind(metadata, METADATA_ITEM_DIRECTORY, &dir_count);
+    err = state_get_all_directories(state, &directories, &dir_count);
+    if (err) {
+        return error_wrap(err, "Failed to get tracked directories from state");
+    }
 
     if (dir_count == 0) {
         return NULL;  /* No tracked directories */
@@ -659,7 +520,7 @@ static error_t *prune_empty_directories(
          * This is safer than attempting unoptimized pruning, which could
          * be prohibitively expensive for large directory hierarchies.
          * Caller can check if directories_removed is 0 to detect this case. */
-        free(directories);  /* Free pointer array before returning */
+        state_free_all_directories(directories, dir_count);
         return NULL;
     }
 
@@ -672,8 +533,7 @@ static error_t *prune_empty_directories(
         made_progress = false;
 
         for (size_t i = 0; i < dir_count; i++) {
-            /* For directory items, key field contains filesystem_path */
-            const char *dir_path = directories[i]->key;
+            const char *dir_path = directories[i].directory_path;
 
             /* Optimization: Skip directories with known state */
             if (states[i] == DIR_STATE_REMOVED ||
@@ -707,8 +567,8 @@ static error_t *prune_empty_directories(
             }
 
             /* Remove empty directory */
-            error_t *err = fs_remove_dir(dir_path, false);
-            if (err) {
+            error_t *remove_err = fs_remove_dir(dir_path, false);
+            if (remove_err) {
                 /* Non-fatal: track failure, populate result array, and continue */
                 result->directories_failed++;
                 states[i] = DIR_STATE_FAILED;
@@ -716,14 +576,14 @@ static error_t *prune_empty_directories(
                 /* Populate failed_dirs array for caller display */
                 error_t *push_err = string_array_push(result->failed_dirs, dir_path);
                 if (push_err) {
-                    error_free(err);
-                    /* Free states and directories, then return fatal error */
+                    error_free(remove_err);
+                    /* Free resources and return fatal error */
                     free(states);
-                    free(directories);
+                    state_free_all_directories(directories, dir_count);
                     return error_wrap(push_err, "Failed to track failed directory");
                 }
 
-                error_free(err);
+                error_free(remove_err);
             } else {
                 /* Directory removed successfully */
                 result->directories_removed++;
@@ -736,18 +596,18 @@ static error_t *prune_empty_directories(
                 /* Populate removed_dirs array for caller display */
                 error_t *push_err = string_array_push(result->removed_dirs, dir_path);
                 if (push_err) {
-                    /* Free states and directories, then return fatal error */
+                    /* Free resources and return fatal error */
                     free(states);
-                    free(directories);
+                    state_free_all_directories(directories, dir_count);
                     return error_wrap(push_err, "Failed to track removed directory");
                 }
             }
         }
     }
 
-    /* Free the pointer array and state tracking (items themselves remain in metadata) */
+    /* Cleanup */
     free(states);
-    free(directories);
+    state_free_all_directories(directories, dir_count);
     return NULL;
 }
 
@@ -776,7 +636,8 @@ error_t *cleanup_preflight_check(
     error_t *err = NULL;
     cleanup_preflight_result_t *result = NULL;
     string_array_t *orphaned_files = NULL;
-    metadata_t *complete_metadata = NULL;
+    state_directory_entry_t *directories = NULL;
+    size_t dir_count = 0;
     char **filesystem_paths = NULL;
 
     const orphan_list_t *orphans = opts->orphaned_files;
@@ -865,57 +726,38 @@ error_t *cleanup_preflight_check(
         }
     }
 
-    /* Preview empty directories (if metadata available) */
-    if (opts->enabled_metadata) {
-        /* Load complete metadata for directory detection */
-        err = load_complete_metadata(
-            repo,
-            state,
-            opts->enabled_metadata,
-            opts->enabled_profiles,
-            &complete_metadata
-        );
-
-        if (err) {
+    /* Preview empty directories from state */
+    err = state_get_all_directories(state, &directories, &dir_count);
+    if (err) {
+        /* Non-fatal: continue without directory preview */
+        error_free(err);
+        err = NULL;
+        directories = NULL;
+        dir_count = 0;
+    } else if (dir_count > 0) {
+        /* Allocate directory array for preview */
+        result->directories = string_array_create();
+        if (!result->directories) {
             /* Non-fatal: continue without directory preview */
-            error_free(err);
-            err = NULL;
         } else {
-            /* Get tracked directories (filtered by kind) */
-            size_t dir_count = 0;
-            const metadata_item_t **directories =
-                metadata_get_items_by_kind(complete_metadata, METADATA_ITEM_DIRECTORY, &dir_count);
+            /* Check which directories are empty (read-only preview) */
+            for (size_t i = 0; i < dir_count; i++) {
+                const char *dir_path = directories[i].directory_path;
 
-            if (dir_count > 0) {
-                /* Allocate directory array for preview */
-                result->directories = string_array_create();
-                if (!result->directories) {
-                    /* Non-fatal: continue without directory preview */
-                } else {
-                    /* Check which directories are empty (read-only preview) */
-                    for (size_t i = 0; i < dir_count; i++) {
-                        /* For directory items, key field contains filesystem_path */
-                        const char *dir_path = directories[i]->key;
-
-                        /* Check if directory exists and is empty */
-                        if (fs_exists(dir_path) && fs_is_directory_empty(dir_path)) {
-                            err = string_array_push(result->directories, dir_path);
-                            if (err) {
-                                /* Non-fatal: best-effort directory preview */
-                                error_free(err);
-                                err = NULL;
-                                break;
-                            }
-                        }
+                /* Check if directory exists and is empty */
+                if (fs_exists(dir_path) && fs_is_directory_empty(dir_path)) {
+                    err = string_array_push(result->directories, dir_path);
+                    if (err) {
+                        /* Non-fatal: best-effort directory preview */
+                        error_free(err);
+                        err = NULL;
+                        break;
                     }
-
-                    result->directories_count = string_array_size(result->directories);
-                    result->will_prune_directories = (result->directories_count > 0);
                 }
             }
 
-            /* Free the pointer array (items themselves remain in metadata) */
-            free(directories);
+            result->directories_count = string_array_size(result->directories);
+            result->will_prune_directories = (result->directories_count > 0);
         }
     }
 
@@ -926,7 +768,7 @@ error_t *cleanup_preflight_check(
 
 cleanup:
     /* Free resources in reverse order of allocation */
-    if (complete_metadata) metadata_free(complete_metadata);
+    if (directories) state_free_all_directories(directories, dir_count);
     if (orphaned_files) string_array_free(orphaned_files);
     if (filesystem_paths) free(filesystem_paths);
     if (result) cleanup_preflight_result_free(result);
@@ -938,7 +780,7 @@ cleanup:
  * Execute cleanup operations
  *
  * Main entry point for cleanup module. Coordinates orphaned file removal
- * and empty directory pruning with safety checks and optimized metadata loading.
+ * and empty directory pruning with safety checks.
  */
 error_t *cleanup_execute(
     git_repository *repo,
@@ -955,7 +797,6 @@ error_t *cleanup_execute(
 
     error_t *err = NULL;
     cleanup_result_t *result = NULL;
-    metadata_t *complete_metadata = NULL;
 
     /* Create result structure */
     err = create_result(&result);
@@ -970,29 +811,14 @@ error_t *cleanup_execute(
         return error_wrap(err, "Failed to remove orphaned files");
     }
 
-    /* Step 2: Load complete metadata (optimized for deployed-but-not-enabled profiles) */
-    err = load_complete_metadata(
-        repo,
-        state,
-        opts->enabled_metadata,
-        opts->enabled_profiles,
-        &complete_metadata
-    );
+    /* Step 2: Prune empty tracked directories (from state) */
+    err = prune_empty_directories(state, result, opts);
     if (err) {
-        cleanup_result_free(result);
-        return error_wrap(err, "Failed to load metadata for directory cleanup");
-    }
-
-    /* Step 3: Prune empty tracked directories */
-    err = prune_empty_directories(complete_metadata, result, opts);
-    if (err) {
-        metadata_free(complete_metadata);
         cleanup_result_free(result);
         return error_wrap(err, "Failed to prune empty directories");
     }
 
-    /* Clean up and return result */
-    metadata_free(complete_metadata);
+    /* Return result */
     *out_result = result;
     return NULL;
 }

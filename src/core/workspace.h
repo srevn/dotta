@@ -200,16 +200,18 @@ const metadata_t *workspace_get_metadata(
 /**
  * Get merged metadata from workspace
  *
- * Returns metadata merged across all profiles in precedence order.
- * The workspace pre-loads per-profile metadata during workspace_load().
- * This function merges them using the same precedence rules as divergence analysis.
+ * Returns metadata merged across all profiles in precedence order (global → OS → host).
+ * The workspace pre-computes merged metadata during workspace_load() by applying
+ * profile precedence. This function efficiently builds a new metadata_t from that
+ * pre-merged view, avoiding redundant merge operations.
  *
  * Convenience function for commands that need merged metadata (e.g., apply, deploy).
  * The returned metadata is a new allocation - caller receives ownership and must
  * free with metadata_free().
  *
- * Performance note: This creates a new merged metadata on each call. If you only
- * need metadata for a specific profile, use workspace_get_metadata() instead.
+ * Performance: O(N) where N = unique items across all profiles. This is significantly
+ * more efficient than re-merging from scratch when profiles have overlapping items.
+ * If you only need metadata for a specific profile, use workspace_get_metadata() instead.
  *
  * @param ws Workspace (must not be NULL)
  * @param out Merged metadata (must not be NULL, caller must free with metadata_free)

@@ -1599,6 +1599,10 @@ const metadata_t *workspace_get_metadata(
 
 /**
  * Get merged metadata from workspace
+ *
+ * Builds metadata_t from workspace's pre-merged view instead of re-merging
+ * from scratch. This avoids redundant precedence resolution since workspace_load()
+ * already applied profile precedence when building merged_metadata.
  */
 error_t *workspace_get_merged_metadata(
     const workspace_t *ws,
@@ -1607,49 +1611,46 @@ error_t *workspace_get_merged_metadata(
     CHECK_NULL(ws);
     CHECK_NULL(out);
 
-    if (!ws->metadata_cache) {
-        return ERROR(ERR_INTERNAL, "Workspace has no metadata cache");
+    /* Validate workspace has merged metadata hashmap (invariant: created by workspace_load).
+     * The hashmap is always allocated even when empty, so NULL indicates incomplete initialization. */
+    if (!ws->merged_metadata) {
+        return ERROR(ERR_INTERNAL,
+            "Workspace missing merged metadata (invariant violation - workspace_load incomplete)");
     }
 
-    if (!ws->profiles || ws->profiles->count == 0) {
-        return ERROR(ERR_INTERNAL, "Workspace has no profiles");
-    }
-
-    /* Build array of per-profile metadata in precedence order
-     *
-     * The workspace profiles array is already in precedence order
-     * (global → OS → host), so we just need to extract metadata
-     * for each profile from the cache.
-     */
-    metadata_t **profile_metadata = calloc(ws->profiles->count, sizeof(metadata_t *));
-    if (!profile_metadata) {
-        return ERROR(ERR_MEMORY, "Failed to allocate metadata array");
-    }
-
-    /* Extract metadata for each profile (NULL entries are OK) */
-    for (size_t i = 0; i < ws->profiles->count; i++) {
-        const char *profile_name = ws->profiles->profiles[i].name;
-        profile_metadata[i] = (metadata_t *)hashmap_get(ws->metadata_cache, profile_name);
-        /* NULL is OK - metadata_merge() handles sparse arrays gracefully */
-    }
-
-    /* Merge using existing metadata_merge() function
-     *
-     * metadata_merge() implements precedence (later profiles override earlier).
-     * This ensures merged metadata matches the precedence used in divergence analysis.
-     */
-    error_t *err = metadata_merge(
-        (const metadata_t **)profile_metadata,
-        ws->profiles->count,
-        out
-    );
-
-    free(profile_metadata);
-
+    /* Create empty metadata collection for result */
+    metadata_t *result = NULL;
+    error_t *err = metadata_create_empty(&result);
     if (err) {
-        return error_wrap(err, "Failed to merge workspace metadata");
+        return error_wrap(err, "Failed to create merged metadata result");
     }
 
+    /* Build metadata from workspace's pre-merged view.
+     *
+     * The merged_entries array contains all items with profile precedence
+     * already applied during workspace_load() (global → OS → host, last wins).
+     * We just need to copy them into a new metadata_t for the caller to own.
+     *
+     * Edge cases handled:
+     * - Empty workspace (merged_count=0): Creates empty metadata, loop skipped ✓
+     * - Profiles without metadata: Already filtered out during workspace_load ✓
+     * - No overlaps: All items copied (same as old behavior) ✓
+     * - Full overlaps: Only winning items copied (avoids redundant overwrites) ✓
+     */
+    for (size_t i = 0; i < ws->merged_count; i++) {
+        const merged_metadata_entry_t *entry = &ws->merged_entries[i];
+        const metadata_item_t *item = entry->item;
+
+        /* Copy item into result (metadata_add_item performs deep copy) */
+        err = metadata_add_item(result, item);
+        if (err) {
+            metadata_free(result);
+            return error_wrap(err, "Failed to copy merged metadata item: %s", item->key);
+        }
+    }
+
+    /* Success - transfer ownership to caller */
+    *out = result;
     return NULL;
 }
 

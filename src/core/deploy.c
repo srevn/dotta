@@ -845,6 +845,43 @@ error_t *deploy_execute(
                     }
                     error_free(cmp_err); /* Ignore comparison errors, proceed with deployment */
                 }
+            } else {
+                /* File not in state yet (first deployment) - check if already on disk with correct content
+                 *
+                 * This handles the initial deployment case where files may already exist
+                 * on the filesystem (e.g., existing dotfiles being added to dotta).
+                 * We compare directly against git content to avoid unnecessary writes.
+                 *
+                 * Architecture: Same comparison logic as subsequent deployments above.
+                 * Content cache transparently handles encrypted files (likely cache hit
+                 * from preflight checks).
+                 *
+                 * Limitation: Ownership not verified (existing limitation in compare_buffer_to_disk).
+                 * Files requiring ownership changes (home/ under sudo, root/ with metadata)
+                 * will still be written to set correct ownership. This is acceptable as it
+                 * only affects first deployment and matches existing smart skip behavior.
+                 */
+                const buffer_t *content;
+                error_t *cmp_err = content_cache_get_from_tree_entry(
+                    cache,
+                    entry->entry,
+                    entry->storage_path,
+                    entry->source_profile->name,
+                    metadata,
+                    &content
+                );
+
+                if (!cmp_err) {
+                    compare_result_t cmp_result;
+                    git_filemode_t mode = git_tree_entry_filemode(entry->entry);
+                    cmp_err = compare_buffer_to_disk(content, entry->filesystem_path, mode, NULL, &cmp_result, NULL);
+
+                    if (!cmp_err && cmp_result == CMP_EQUAL) {
+                        should_skip = true;
+                        skip_reason = "unchanged";
+                    }
+                }
+                error_free(cmp_err); /* Ignore comparison errors, deploy on failure (safe default) */
             }
         }
 

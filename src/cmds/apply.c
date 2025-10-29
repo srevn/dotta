@@ -946,7 +946,15 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
      */
     output_print(out, OUTPUT_VERBOSE, "\nLoading workspace...\n");
 
-    err = workspace_load(repo, profiles, config, NULL, &ws);
+    /* Apply needs file divergence + orphan detection for deployment and cleanup */
+    workspace_load_t ws_opts = {
+        .analyze_files = true,
+        .analyze_orphans = true,
+        .analyze_untracked = false,    /* Skip expensive directory scan */
+        .analyze_directories = false,  /* Not needed for deployment */
+        .analyze_encryption = false    /* Not needed for deployment */
+    };
+    err = workspace_load(repo, profiles, config, &ws_opts, &ws);
     if (err) {
         err = error_wrap(err, "Failed to load workspace");
         goto cleanup;

@@ -686,14 +686,15 @@ static error_t *analyze_orphaned_state(workspace_t *ws) {
 }
 
 /**
- * Perform divergence analysis
+ * Analyze divergence for all files in manifest
+ *
+ * Compares each file in the manifest against deployment state and filesystem
+ * reality to detect modifications, deletions, and undeployed files.
  */
-static error_t *workspace_analyze_divergence(workspace_t *ws) {
+static error_t *analyze_files_divergence(workspace_t *ws) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->manifest);
     CHECK_NULL(ws->state);
-
-    error_t *err = NULL;
 
     /* Analyze each file in manifest */
     for (size_t i = 0; i < ws->manifest->count; i++) {
@@ -718,18 +719,12 @@ static error_t *workspace_analyze_divergence(workspace_t *ws) {
         }
 
         /* Analyze this file */
-        err = analyze_file_divergence(ws, manifest_entry, state_entry);
+        error_t *err = analyze_file_divergence(ws, manifest_entry, state_entry);
         state_free_entry(state_entry);  /* Free owned memory from SQLite */
 
         if (err) {
             return err;
         }
-    }
-
-    /* Analyze state for orphaned entries */
-    err = analyze_orphaned_state(ws);
-    if (err) {
-        return err;
     }
 
     return NULL;
@@ -1495,48 +1490,52 @@ error_t *workspace_load(
         return error_wrap(err, "Failed to load state");
     }
 
-    /* ==================== PHASE 0 IMPLEMENTATION NOTE ====================
-     * The options have been parsed and validated above, but Phase 0 is a
-     * pure API refactor with NO behavior changes. All analyses are still
-     * performed unconditionally to ensure identical behavior and allow
-     * comprehensive validation.
-     *
-     * Phase 1 will implement selective analysis by conditionally executing
-     * the functions below based on resolved_opts flags. This two-phase
-     * approach ensures:
-     * 1. Structural changes (API) can be validated independently
-     * 2. Behavioral changes (performance) are isolated and measured
-     * 3. Rollback is simple if issues arise
-     *
-     * DO NOT modify the analysis calls below in Phase 0!
-     * ===================================================================== */
+    /* Execute analyses based on resolved_opts flags. Each analysis is
+     * independently controllable for optimal performance. */
 
-    /* Perform divergence analysis */
-    err = workspace_analyze_divergence(ws);
-    if (err) {
-        workspace_free(ws);
-        return error_wrap(err, "Failed to analyze divergence");
+    /* Analyze file divergence (most common requirement) */
+    if (resolved_opts.analyze_files) {
+        err = analyze_files_divergence(ws);
+        if (err) {
+            workspace_free(ws);
+            return error_wrap(err, "Failed to analyze file divergence");
+        }
+    }
+
+    /* Analyze orphaned state entries (requires files) */
+    if (resolved_opts.analyze_orphans) {
+        err = analyze_orphaned_state(ws);
+        if (err) {
+            workspace_free(ws);
+            return error_wrap(err, "Failed to analyze orphaned state");
+        }
     }
 
     /* Analyze tracked directories for untracked files */
-    err = analyze_untracked_files(ws, config);
-    if (err) {
-        workspace_free(ws);
-        return error_wrap(err, "Failed to analyze untracked files");
+    if (resolved_opts.analyze_untracked) {
+        err = analyze_untracked_files(ws, config);
+        if (err) {
+            workspace_free(ws);
+            return error_wrap(err, "Failed to analyze untracked files");
+        }
     }
 
-    /* Analyze directory metadata for divergence */
-    err = analyze_directory_metadata_divergence(ws);
-    if (err) {
-        workspace_free(ws);
-        return error_wrap(err, "Failed to analyze directory metadata");
+    /* Analyze directory metadata divergence */
+    if (resolved_opts.analyze_directories) {
+        err = analyze_directory_metadata_divergence(ws);
+        if (err) {
+            workspace_free(ws);
+            return error_wrap(err, "Failed to analyze directory metadata");
+        }
     }
 
     /* Analyze encryption policy mismatches */
-    err = analyze_encryption_policy_mismatch(ws, config);
-    if (err) {
-        workspace_free(ws);
-        return error_wrap(err, "Failed to analyze encryption policy");
+    if (resolved_opts.analyze_encryption) {
+        err = analyze_encryption_policy_mismatch(ws, config);
+        if (err) {
+            workspace_free(ws);
+            return error_wrap(err, "Failed to analyze encryption policy");
+        }
     }
 
     /* Compute status */

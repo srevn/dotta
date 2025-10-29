@@ -268,7 +268,7 @@ static bool matches_exclude_pattern(
  * INCLUDED DIVERGENCE TYPES:
  * - DIVERGENCE_MODIFIED (content changed)
  * - DIVERGENCE_DELETED (removed from filesystem)
- * - DIVERGENCE_UNTRACKED (new files, if opts->include_new OR opts->only_new)
+ * - DIVERGENCE_UNTRACKED (new files, if flags OR config->auto_detect_new_files)
  * - DIVERGENCE_MODE_DIFF (for files AND directories)
  * - DIVERGENCE_TYPE_DIFF (type changed)
  * - DIVERGENCE_OWNERSHIP (for files AND directories)
@@ -285,14 +285,16 @@ static bool matches_exclude_pattern(
  * - opts->only_new: Only untracked files (excludes modified)
  *
  * CRITICAL CORRECTNESS REQUIREMENTS:
- * 1. --only-new flag: should_include = (opts->include_new || opts->only_new)
- *    Both flags should include new files; difference is whether modified are also included.
+ * 1. DIVERGENCE_UNTRACKED: Include when flags OR auto_detect is enabled
+ *    Flags (--include-new, --only-new) bypass confirmation
+ *    Auto-detect includes them for later confirmation prompt
  *
  * 2. MODE_DIFF/OWNERSHIP: Apply to BOTH files AND directories
  *    Files can have metadata-only changes (e.g., chmod without content change)
  *
  * @param ws Workspace (must not be NULL)
  * @param opts Update options (must not be NULL)
+ * @param config Configuration (can be NULL, used for auto_detect_new_files)
  * @param out Output context (for verbose logging, can be NULL)
  * @param out_items Output array of pointers to workspace_item_t (must not be NULL, caller must free array)
  * @param count_out Output count (must not be NULL)
@@ -301,6 +303,7 @@ static bool matches_exclude_pattern(
 static error_t *filter_items_for_update(
     const workspace_t *ws,
     const cmd_update_options_t *opts,
+    const dotta_config_t *config,
     output_ctx_t *out,
     const workspace_item_t ***out_items,
     size_t *count_out
@@ -338,9 +341,11 @@ static error_t *filter_items_for_update(
                 break;
 
             case DIVERGENCE_UNTRACKED:
-                /* New files - include if EITHER flag is set
-                 * CRITICAL: Both --include-new and --only-new should include new files */
-                should_include = (opts->include_new || opts->only_new);
+                /* New files - include if:
+                 * - Explicit flags set (--include-new or --only-new), OR
+                 * - Config auto_detect_new_files is enabled (for confirmation prompt) */
+                should_include = (opts->include_new || opts->only_new ||
+                                 (config && config->auto_detect_new_files));
                 break;
 
             case DIVERGENCE_MODE_DIFF:
@@ -1828,7 +1833,15 @@ error_t *cmd_update(
      * - config auto_detect_new_files
      * - MODE_DIFF/OWNERSHIP for both files AND directories
      */
-    err = workspace_load(repo, profiles, config, NULL, &ws);
+    workspace_load_t ws_opts = {
+        .analyze_files = true,                              /* Need to see file changes */
+        .analyze_orphans = false,                           /* Update doesn't do cleanup */
+        .analyze_untracked = (opts->include_new || opts->only_new ||      /* Explicit flags */
+                             (config && config->auto_detect_new_files)),  /* Or config auto-detect */
+        .analyze_directories = false,                       /* Not relevant for update */
+        .analyze_encryption = false                         /* Not relevant for update */
+    };
+    err = workspace_load(repo, profiles, config, &ws_opts, &ws);
     if (err) {
         err = error_wrap(err, "Failed to analyze workspace");
         goto cleanup;
@@ -1837,7 +1850,7 @@ error_t *cmd_update(
     /* Filter items for update (handles all flags and edge cases internally) */
     const workspace_item_t **update_items = NULL;
     size_t update_count = 0;
-    err = filter_items_for_update(ws, opts, out, &update_items, &update_count);
+    err = filter_items_for_update(ws, opts, config, out, &update_items, &update_count);
     if (err) {
         err = error_wrap(err, "Failed to filter items for update");
         goto cleanup;

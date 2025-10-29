@@ -183,40 +183,94 @@ static error_t *prune_orphaned_files(
         filesystem_paths[i] = (char *)orphans[i]->filesystem_path;  /* Borrowed pointer */
     }
 
-    /* Safety check: detect modified orphaned files (unless already done in preflight) */
-    if (!force && !opts->skip_safety_check) {
-        /* Get keymanager for decryption (if needed) */
-        keymanager_t *keymanager = keymanager_get_global(NULL);
-
-        err = safety_check_removal(
-            repo,
-            state,
-            filesystem_paths,
-            orphan_count,
-            force,
-            opts->enabled_metadata,  /* Pass pre-loaded metadata */
-            keymanager,              /* Pass keymanager for decryption */
-            opts->cache,             /* Pass content cache for performance */
-            &result->safety_violations
-        );
-
-        if (err) {
-            /* Fatal error during safety check */
-            free(filesystem_paths);
-            return error_wrap(err, "Safety check failed");
-        }
-
-        /* Build violations map for O(1) lookup during removal */
-        if (result->safety_violations && result->safety_violations->count > 0) {
-            violations_map = hashmap_create(result->safety_violations->count);
+    /* Build violations map from preflight data or run safety check
+     *
+     * Two paths for detecting files with uncommitted changes:
+     * 1. Use pre-computed violations from preflight (performance optimization)
+     * 2. Run safety check now (fallback when no preflight data available)
+     */
+    if (!force) {
+        if (opts->preflight_violations && opts->preflight_violations->count > 0) {
+            /* Path 1: Use pre-computed violations from preflight
+             *
+             * This avoids re-running expensive safety checks (Git comparisons,
+             * content decryption) that were already performed in preflight.
+             * Files marked as unsafe will be skipped during removal.
+             *
+             * Race condition note: There is a small time window between preflight
+             * analysis and actual execution. If a file was modified after preflight,
+             * we still skip it (conservative approach - better to skip than risk
+             * data loss on a file that was recently unsafe).
+             *
+             * Memory ownership: opts->preflight_violations is a BORROWED reference.
+             * We use it to build violations_map but do NOT store it in result.
+             * The caller (apply.c) owns and will free the safety_result_t.
+             */
+            violations_map = hashmap_create(opts->preflight_violations->count);
             if (!violations_map) {
                 free(filesystem_paths);
                 return ERROR(ERR_MEMORY, "Failed to create violations hashmap");
             }
 
-            for (size_t i = 0; i < result->safety_violations->count; i++) {
-                const safety_violation_t *v = &result->safety_violations->violations[i];
-                hashmap_set(violations_map, v->filesystem_path, (void *)1);
+            for (size_t i = 0; i < opts->preflight_violations->count; i++) {
+                const safety_violation_t *v = &opts->preflight_violations->violations[i];
+                err = hashmap_set(violations_map, v->filesystem_path, (void *)1);
+                if (err) {
+                    hashmap_free(violations_map, NULL);
+                    free(filesystem_paths);
+                    return error_wrap(err, "Failed to populate violations map");
+                }
+            }
+
+            /* IMPORTANT: We do NOT store preflight_violations in result->safety_violations
+             * to avoid double-free (preflight owns the safety_result_t). The skipped
+             * files will be tracked in result->skipped_files array for display. */
+
+        } else if (!opts->skip_safety_check) {
+            /* Path 2: Run safety check now
+             *
+             * This path is taken when:
+             * - No preflight was run (e.g., different calling context)
+             * - Preflight found no violations (optimization: no map needed)
+             * - Called from context other than apply.c
+             */
+            keymanager_t *keymanager = keymanager_get_global(NULL);
+
+            err = safety_check_removal(
+                repo,
+                state,
+                filesystem_paths,
+                orphan_count,
+                force,
+                opts->enabled_metadata,  /* Pass pre-loaded metadata */
+                keymanager,              /* Pass keymanager for decryption */
+                opts->cache,             /* Pass content cache for performance */
+                &result->safety_violations
+            );
+
+            if (err) {
+                /* Fatal error during safety check */
+                free(filesystem_paths);
+                return error_wrap(err, "Safety check failed");
+            }
+
+            /* Build violations map for O(1) lookup during removal */
+            if (result->safety_violations && result->safety_violations->count > 0) {
+                violations_map = hashmap_create(result->safety_violations->count);
+                if (!violations_map) {
+                    free(filesystem_paths);
+                    return ERROR(ERR_MEMORY, "Failed to create violations hashmap");
+                }
+
+                for (size_t i = 0; i < result->safety_violations->count; i++) {
+                    const safety_violation_t *v = &result->safety_violations->violations[i];
+                    err = hashmap_set(violations_map, v->filesystem_path, (void *)1);
+                    if (err) {
+                        hashmap_free(violations_map, NULL);
+                        free(filesystem_paths);
+                        return error_wrap(err, "Failed to populate violations map");
+                    }
+                }
             }
         }
     }

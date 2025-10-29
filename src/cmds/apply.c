@@ -440,6 +440,14 @@ static void print_cleanup_results(
             }
         }
 
+        if (result->orphaned_files_skipped > 0) {
+            output_warning(out, "Skipped %zu orphaned file%s (uncommitted changes)",
+                          result->orphaned_files_skipped,
+                          result->orphaned_files_skipped == 1 ? "" : "s");
+            output_print(out, OUTPUT_NORMAL, "Use --verbose to see which files were skipped.\n");
+            output_print(out, OUTPUT_NORMAL, "To remove: commit/stash changes, or use --force.\n");
+        }
+
         if (result->orphaned_files_failed > 0 || result->orphaned_directories_failed > 0) {
             size_t total_failed = result->orphaned_files_failed + result->orphaned_directories_failed;
             output_warning(out, "Failed to prune %zu item%s",
@@ -1240,23 +1248,14 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         if (cleanup_preflight->has_blocking_violations && !opts->force) {
             output_print(out, OUTPUT_NORMAL, "\n");
 
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_WARNING, "%sWarning:%s ",
-                             output_color_code(out, OUTPUT_COLOR_YELLOW),
-                             output_color_code(out, OUTPUT_COLOR_RESET));
-            } else {
-                output_print(out, OUTPUT_WARNING, "Warning: ");
-            }
+            output_warning(out, "%zu orphaned file%s %s uncommitted changes.",
+                          cleanup_preflight->safety_violations->count,
+                          cleanup_preflight->safety_violations->count == 1 ? "" : "s",
+                          cleanup_preflight->safety_violations->count == 1 ? "has" : "have");
 
-            output_printf(out, OUTPUT_WARNING,
-                         "%zu orphaned file%s %s uncommitted changes.\n",
-                         cleanup_preflight->safety_violations->count,
-                         cleanup_preflight->safety_violations->count == 1 ? "" : "s",
-                         cleanup_preflight->safety_violations->count == 1 ? "has" : "have");
-
-            output_print(out, OUTPUT_WARNING,
+            output_print(out, OUTPUT_NORMAL,
                         "These files will be skipped during cleanup to prevent data loss.\n");
-            output_print(out, OUTPUT_WARNING,
+            output_print(out, OUTPUT_NORMAL,
                         "To remove them: commit/stash changes first, or use --force.\n\n");
 
             /* Continue with operation - cleanup_execute will skip unsafe files */

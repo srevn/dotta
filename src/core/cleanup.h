@@ -103,6 +103,24 @@ typedef struct {
     const workspace_item_t **orphaned_directories;  /* Workspace item array (must not be NULL) */
     size_t orphaned_directories_count;              /* Number of orphaned directories */
 
+    /**
+     * Pre-computed safety violations from preflight check (OPTIONAL)
+     *
+     * If provided, files in this list will be skipped during cleanup without
+     * re-running expensive safety checks. This is a performance optimization
+     * that avoids duplicate Git comparisons and content decryption.
+     *
+     * If NULL: Safety checks are run during cleanup (unless skip_safety_check=true).
+     * If provided: Files in violations list are skipped, no re-check performed.
+     *
+     * Typical flow:
+     * 1. apply.c runs cleanup_preflight_check() → produces safety_violations
+     * 2. apply.c passes violations to cleanup_execute() via this field
+     * 3. cleanup_execute() uses violations to build skip list
+     * 4. apply.c frees cleanup_preflight_result (owns the data)
+     */
+    const safety_result_t *preflight_violations;
+
     /* Control flags */
     bool verbose;                           /* Kept for consistency (unused in module) */
     bool dry_run;                           /* Don't actually remove anything */

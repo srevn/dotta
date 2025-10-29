@@ -61,15 +61,17 @@ typedef struct content_cache content_cache_t;
 /**
  * Orphan entry - minimal information for cleanup operations
  *
- * Stores both filesystem path (where file is deployed) and storage path
- * (how file is stored in Git) to enable both privilege checking and removal
- * without expensive state lookups.
+ * Stores filesystem path (where file is deployed), storage path (how file
+ * is stored in Git), and source profile for reporting and metadata caching.
+ * The profile field enables efficient on-demand metadata loading when verifying
+ * orphaned files from disabled profiles.
  *
  * Lifecycle: Owned by orphan_list_t, freed together with the list.
  */
 typedef struct {
     char *filesystem_path;  /* Deployed location (e.g., /home/user/.bashrc) */
     char *storage_path;     /* Git storage path (e.g., home/.bashrc) */
+    char *profile;          /* Source profile name (for reporting and caching) */
 } orphan_entry_t;
 
 /**
@@ -124,7 +126,11 @@ typedef struct {
  */
 typedef struct {
     /* Pre-loaded data */
-    const metadata_t *enabled_metadata;      /* Metadata from enabled profiles (can be NULL) */
+    const metadata_t *enabled_metadata;      /* Metadata covering files to be checked.
+                                              * Safety module will load additional metadata
+                                              * on-demand for orphaned files from disabled
+                                              * profiles (with caching for efficiency).
+                                              * Can be NULL (safety module handles gracefully). */
     const profile_list_t *enabled_profiles;  /* Currently enabled profiles (can be NULL) */
     content_cache_t *cache;                  /* Content cache for performance (can be NULL) */
 

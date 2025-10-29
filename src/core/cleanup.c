@@ -203,14 +203,16 @@ error_t *cleanup_identify_orphans(
                 list->capacity = new_cap;
             }
 
-            /* Add orphan entry with both paths */
+            /* Add orphan entry with filesystem path, storage path, and source profile */
             orphan_entry_t *orphan = &list->entries[list->count];
             orphan->filesystem_path = strdup(entry->filesystem_path);
             orphan->storage_path = strdup(entry->storage_path);
+            orphan->profile = strdup(entry->profile);
 
-            if (!orphan->filesystem_path || !orphan->storage_path) {
+            if (!orphan->filesystem_path || !orphan->storage_path || !orphan->profile) {
                 free(orphan->filesystem_path);
                 free(orphan->storage_path);
+                free(orphan->profile);
                 orphan_list_free(list);
                 hashmap_free(manifest_index, NULL);
                 state_free_all_files(state_files, state_count);
@@ -242,6 +244,7 @@ void orphan_list_free(orphan_list_t *list) {
     for (size_t i = 0; i < list->count; i++) {
         free(list->entries[i].filesystem_path);
         free(list->entries[i].storage_path);
+        free(list->entries[i].profile);
     }
     free(list->entries);
     free(list);

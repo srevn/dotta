@@ -404,9 +404,9 @@ static error_t *check_file_with_tree(
 
     /* Use passed-in metadata OR load as fallback */
     metadata_t *fallback_metadata = NULL;
-    const metadata_t *meta_to_use = metadata;  /* Prefer passed-in */
+    const metadata_t *resolved_metadata = metadata;  /* Prefer passed-in */
 
-    if (!meta_to_use) {
+    if (!resolved_metadata) {
         /* Fallback: load metadata (for tests or standalone usage) */
         error_t *err = metadata_load_from_branch(repo, source_profile, &fallback_metadata);
         if (err) {
@@ -421,7 +421,7 @@ static error_t *check_file_with_tree(
             }
             error_free(err);
         }
-        meta_to_use = fallback_metadata;
+        resolved_metadata = fallback_metadata;
     }
 
     /* Get content via content layer (transparent encryption handling) */
@@ -436,7 +436,7 @@ static error_t *check_file_with_tree(
         tree_entry,
         storage_path,
         source_profile,
-        meta_to_use,
+        resolved_metadata,
         km_to_use,
         &content
     );
@@ -562,6 +562,7 @@ error_t *safety_check_removal(
     size_t state_count = 0;
     hashmap_t *state_index = NULL;  /* Used only if path_count >= HASHMAP_THRESHOLD */
     hashmap_t *tree_cache = NULL;
+    hashmap_t *orphan_metadata_cache = NULL;  /* For lazy loading metadata from disabled profiles */
 
     /* Allocate result */
     result = calloc(1, sizeof(safety_result_t));
@@ -580,6 +581,22 @@ error_t *safety_check_removal(
     if (err) {
         safety_result_free(result);
         return error_wrap(err, "Failed to load state for safety check");
+    }
+
+    /* Create cache for on-demand metadata loading
+     *
+     * When verifying orphaned files from disabled profiles, we need their metadata
+     * for encryption detection, mode verification, and content comparison. This cache
+     * ensures we load each profile's metadata at most once, avoiding redundant Git
+     * operations when multiple orphans share the same source profile.
+     *
+     * Lifecycle: Created here, freed at ALL exit points after this line.
+     */
+    orphan_metadata_cache = hashmap_create(16);
+    if (!orphan_metadata_cache) {
+        state_free_all_files(state_entries, state_count);
+        safety_result_free(result);
+        return ERROR(ERR_MEMORY, "Failed to create orphan metadata cache");
     }
 
     /* Adaptive lookup strategy: hashmap for large batches, linear for small
@@ -601,6 +618,7 @@ error_t *safety_check_removal(
         /* Build hashmap for O(1) state lookups */
         state_index = hashmap_create(state_count > 0 ? state_count : INITIAL_CAPACITY);
         if (!state_index) {
+            hashmap_free(orphan_metadata_cache, (void(*)(void*))metadata_free);
             state_free_all_files(state_entries, state_count);
             safety_result_free(result);
             return ERROR(ERR_MEMORY, "Failed to create state index");
@@ -610,6 +628,7 @@ error_t *safety_check_removal(
         for (size_t i = 0; i < state_count; i++) {
             err = hashmap_set(state_index, state_entries[i].filesystem_path, &state_entries[i]);
             if (err) {
+                hashmap_free(orphan_metadata_cache, (void(*)(void*))metadata_free);
                 hashmap_free(state_index, NULL);
                 state_free_all_files(state_entries, state_count);
                 safety_result_free(result);
@@ -621,6 +640,7 @@ error_t *safety_check_removal(
     /* Create profile tree cache for fallback path */
     tree_cache = hashmap_create(PROFILE_TREE_CACHE_SIZE);
     if (!tree_cache) {
+        hashmap_free(orphan_metadata_cache, (void(*)(void*))metadata_free);
         if (state_index) hashmap_free(state_index, NULL);
         state_free_all_files(state_entries, state_count);
         safety_result_free(result);
@@ -657,20 +677,105 @@ error_t *safety_check_removal(
             continue;
         }
 
+        /* METADATA RESOLUTION: Enabled vs Disabled Profiles
+         *
+         * Problem: Orphaned files may come from disabled profiles, but the
+         * passed-in metadata only covers enabled profiles.
+         *
+         * Solution: Three-tier resolution strategy:
+         * 1. Try enabled metadata first (fast path for enabled profiles)
+         * 2. Load from source profile on-demand if not found (lazy loading)
+         * 3. Cache loaded metadata to avoid redundant Git operations
+         *
+         * This handles both cases correctly:
+         * - Enabled profile orphans: Found in passed metadata (instant)
+         * - Disabled profile orphans: Loaded once and cached (efficient)
+         */
+        const metadata_t *resolved_metadata = metadata;  /* Start with enabled metadata */
+        bool need_source_metadata = false;
+
+        /* Check if we need to load metadata from source profile */
+        if (metadata && storage_path) {
+            /* Try to find item in enabled metadata (fast path) */
+            const metadata_item_t *meta_item = NULL;
+            error_t *lookup_err = metadata_get_item(metadata, storage_path, &meta_item);
+
+            if (lookup_err || !meta_item) {
+                /* Item not found in enabled metadata - likely disabled profile */
+                need_source_metadata = true;
+            }
+
+            error_free(lookup_err);  /* Non-fatal */
+        } else if (!metadata && source_profile) {
+            /* No enabled metadata at all - need source metadata for verification */
+            need_source_metadata = true;
+        }
+
+        /* Load source profile metadata on-demand if needed */
+        if (need_source_metadata && source_profile) {
+            /* Check cache first (O(1) lookup) */
+            metadata_t *profile_meta = hashmap_get(orphan_metadata_cache, source_profile);
+
+            if (!profile_meta) {
+                /* Cache miss - load from branch (O(git_read)) */
+                error_t *load_err = metadata_load_from_branch(repo, source_profile, &profile_meta);
+
+                if (!load_err && profile_meta) {
+                    /* Successfully loaded - try to cache for reuse */
+                    error_t *cache_err = hashmap_set(orphan_metadata_cache, source_profile, profile_meta);
+
+                    if (cache_err) {
+                        /* Caching failed (memory exhaustion?) - free metadata and fall back
+                         *
+                         * Ownership note: hashmap_set() failed, so cache did NOT take ownership.
+                         * We must free profile_meta to avoid leak. Next file from same profile
+                         * will reload metadata (inefficient but correct).
+                         *
+                         * Rationale: Cache insertion failure is extremely rare (memory exhaustion).
+                         * Falling back to slow path is acceptable in this edge case.
+                         */
+                        error_free(cache_err);
+                        metadata_free(profile_meta);
+                        profile_meta = NULL;
+                        /* resolved_metadata remains 'metadata' - will trigger slow path fallback */
+                    }
+                    /* If cache succeeded, cache now OWNS profile_meta (will free at function end) */
+                } else if (load_err && load_err->code == ERR_NOT_FOUND) {
+                    /* Profile branch has no metadata file - not an error */
+                    error_free(load_err);
+                } else if (load_err) {
+                    /* FATAL: Real error loading metadata (I/O error, corrupt file, etc.) */
+                    hashmap_free(orphan_metadata_cache, (void(*)(void*))metadata_free);
+                    hashmap_free(tree_cache, free_profile_tree_cache);
+                    if (state_index) hashmap_free(state_index, NULL);
+                    state_free_all_files(state_entries, state_count);
+                    safety_result_free(result);
+                    return error_wrap(load_err, "Failed to load metadata from profile '%s'",
+                                    source_profile);
+                }
+            }
+
+            /* Use profile-specific metadata if available (borrowed from cache) */
+            if (profile_meta) {
+                resolved_metadata = profile_meta;
+            }
+        }
+
         /* File exists - verify it's unmodified before removal */
-        /* Try fast path WITH metadata and cache */
+        /* Try fast path WITH resolved metadata (enabled OR disabled profile) */
         error_t *check_err = NULL;
         bool fast_path_succeeded = try_fast_path_check(
             repo, fs_path, storage_path, source_profile,
             state_entry->hash,
-            metadata,   /* Pass metadata for encryption detection */
-            keymanager, /* Pass keymanager for decryption */
-            cache,      /* Pass cache for performance */
+            resolved_metadata,   /* ← Use resolved metadata (enabled OR loaded on-demand) */
+            keymanager,          /* Pass keymanager for decryption */
+            cache,               /* Pass cache for performance */
             result, &check_err
         );
 
         if (check_err) {
-            /* Error during fast path check */
+            /* Error during fast path check - FATAL */
+            hashmap_free(orphan_metadata_cache, (void(*)(void*))metadata_free);
             hashmap_free(tree_cache, free_profile_tree_cache);
             if (state_index) hashmap_free(state_index, NULL);
             state_free_all_files(state_entries, state_count);
@@ -684,6 +789,7 @@ error_t *safety_check_removal(
             err = get_or_load_profile_tree(repo, tree_cache, source_profile, &profile_tree);
             if (err) {
                 /* Fatal error (memory allocation, cache failure) */
+                hashmap_free(orphan_metadata_cache, (void(*)(void*))metadata_free);
                 hashmap_free(tree_cache, free_profile_tree_cache);
                 if (state_index) hashmap_free(state_index, NULL);
                 state_free_all_files(state_entries, state_count);
@@ -691,13 +797,14 @@ error_t *safety_check_removal(
                 return error_wrap(err, "Failed to load profile tree for '%s'", source_profile);
             }
 
-            /* Check file using tree-based comparison WITH metadata and keymanager */
+            /* Check file using tree-based comparison WITH resolved metadata */
             err = check_file_with_tree(repo, fs_path, storage_path, source_profile,
                                       profile_tree,
-                                      metadata,   /* Pass metadata (avoids reload) */
-                                      keymanager, /* Pass keymanager */
+                                      resolved_metadata,   /* ← Use resolved metadata */
+                                      keymanager,          /* Pass keymanager */
                                       result);
             if (err) {
+                hashmap_free(orphan_metadata_cache, (void(*)(void*))metadata_free);
                 hashmap_free(tree_cache, free_profile_tree_cache);
                 if (state_index) hashmap_free(state_index, NULL);
                 state_free_all_files(state_entries, state_count);
@@ -708,8 +815,16 @@ error_t *safety_check_removal(
     }
 
     /* Cleanup */
+    /* Free orphan metadata cache (OWNS all cached metadata) */
+    hashmap_free(orphan_metadata_cache, (void(*)(void*))metadata_free);
+
+    /* Free profile tree cache */
     hashmap_free(tree_cache, free_profile_tree_cache);
+
+    /* Free state index if used */
     if (state_index) hashmap_free(state_index, NULL);
+
+    /* Free state entries */
     state_free_all_files(state_entries, state_count);
 
     /* Return result (caller checks result->count for violations) */

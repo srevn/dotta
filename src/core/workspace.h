@@ -71,6 +71,10 @@ typedef struct {
 
     /* Scope tracking */
     bool profile_enabled;       /* Is source profile in workspace's enabled list? */
+
+    /* Profile change tracking (ownership changes between profiles) */
+    bool profile_changed;       /* Profile differs from state (ownership changed) */
+    char *old_profile;          /* Profile from state (NULL if not changed, owned) */
 } workspace_item_t;
 
 /**
@@ -224,6 +228,26 @@ const workspace_item_t **workspace_get_diverged_filtered(
 const workspace_item_t *workspace_get_all_diverged(
     const workspace_t *ws,
     size_t *count
+);
+
+/**
+ * Get workspace item by filesystem path
+ *
+ * Returns the divergence information for a specific file or directory via
+ * O(1) hashmap lookup. If the item exists in the workspace but has no
+ * divergence (CLEAN), this returns NULL. Only items with divergence are
+ * indexed.
+ *
+ * This function enables preflight to efficiently query workspace data
+ * instead of re-analyzing files, eliminating redundant comparisons.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @param filesystem_path Path to query (must not be NULL)
+ * @return Workspace item or NULL if not found/clean (borrowed reference)
+ */
+const workspace_item_t *workspace_get_item(
+    const workspace_t *ws,
+    const char *filesystem_path
 );
 
 /**

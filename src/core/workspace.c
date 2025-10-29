@@ -314,6 +314,8 @@ static error_t *check_item_metadata_divergence(
  * @param mode_differs Flag indicating mode/permissions divergence
  * @param ownership_differs Flag indicating ownership divergence
  * @param profile_enabled Is the source profile in workspace's enabled list?
+ * @param profile_changed Has the owning profile changed (vs state)?
+ * @param old_profile Previous profile name from state (can be NULL, takes ownership)
  */
 static error_t *workspace_add_diverged(
     workspace_t *ws,
@@ -328,7 +330,9 @@ static error_t *workspace_add_diverged(
     bool content_differs,
     bool mode_differs,
     bool ownership_differs,
-    bool profile_enabled
+    bool profile_enabled,
+    bool profile_changed,
+    char *old_profile
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(filesystem_path);
@@ -373,6 +377,8 @@ static error_t *workspace_add_diverged(
     entry->mode_differs = mode_differs;
     entry->ownership_differs = ownership_differs;
     entry->profile_enabled = profile_enabled;
+    entry->profile_changed = profile_changed;
+    entry->old_profile = old_profile;  /* Takes ownership (can be NULL) */
 
     if (!entry->filesystem_path ||
         (storage_path && !entry->storage_path) ||
@@ -380,6 +386,7 @@ static error_t *workspace_add_diverged(
         free(entry->filesystem_path);
         free(entry->storage_path);
         free(entry->profile);
+        free(entry->old_profile);  /* Clean up if early return */
         return ERROR(ERR_MEMORY, "Failed to allocate diverged entry");
     }
 
@@ -444,6 +451,17 @@ static error_t *workspace_build_manifest_index(workspace_t *ws) {
 
 /**
  * Analyze single file for divergence
+ *
+ * ARCHITECTURE: Filesystem-first comparison logic.
+ * Compares content for ALL files that exist on filesystem (deployed AND undeployed).
+ * This prevents data loss by detecting conflicts before deployment.
+ *
+ * Example scenario this fixes:
+ * - Profile has: home/.bashrc
+ * - State: empty (never deployed)
+ * - Filesystem: ~/.bashrc exists with different content
+ * - Old logic: DIVERGENCE_UNDEPLOYED (no comparison!) → would overwrite on deploy
+ * - New logic: DIVERGENCE_MODIFIED (comparison detects conflict) → blocks deploy
  */
 static error_t *analyze_file_divergence(
     workspace_t *ws,
@@ -461,19 +479,18 @@ static error_t *analyze_file_divergence(
     bool in_state = (state_entry != NULL);
     bool on_filesystem = fs_lexists(fs_path);
     bool content_differs = false;
+    bool mode_differs = false;
+    bool ownership_differs = false;
     divergence_type_t div_type = DIVERGENCE_CLEAN;
 
-    /* Case 1: File not deployed (in profile, not in state) */
-    if (!in_state) {
-        div_type = DIVERGENCE_UNDEPLOYED;
-    }
-    /* Case 2: File deployed but missing from filesystem */
-    else if (in_state && !on_filesystem) {
-        div_type = DIVERGENCE_DELETED;
-    }
-    /* Case 3: File deployed and exists - check for modifications */
-    else if (in_state && on_filesystem) {
-        /* Get metadata for validation (should always exist) */
+    /*
+     * PHASE 1: Filesystem content analysis (if file exists)
+     * ========================================================
+     * Compare content for ALL files on filesystem, regardless of deployment state.
+     * This catches conflicts for both deployed AND undeployed files.
+     */
+    if (on_filesystem) {
+        /* Get metadata for decryption policy and metadata checking */
         const metadata_t *metadata = ws_get_metadata(ws, manifest_entry->source_profile->name);
         if (!metadata) {
             return ERROR(ERR_INTERNAL,
@@ -511,25 +528,25 @@ static error_t *analyze_file_divergence(
         /* Determine base divergence from content comparison */
         switch (cmp_result) {
             case CMP_EQUAL:
-                /* Content equal - will check metadata below */
+                /* Content equal - check metadata below */
                 div_type = DIVERGENCE_CLEAN;
                 content_differs = false;
                 break;
 
             case CMP_DIFFERENT:
-                /* Content differs - still check metadata below for complete picture */
+                /* Content differs - this is a conflict (deployed or not!) */
                 div_type = DIVERGENCE_MODIFIED;
                 content_differs = true;
                 break;
 
             case CMP_MODE_DIFF:
-                /* Executable bit differs - full metadata check below will detect this */
+                /* Executable bit differs - metadata check below will detect this */
                 div_type = DIVERGENCE_CLEAN;
                 content_differs = false;
                 break;
 
             case CMP_TYPE_DIFF:
-                /* Type differs - metadata irrelevant, return immediately */
+                /* Type differs (file vs symlink vs dir) - block immediately */
                 div_type = DIVERGENCE_TYPE_DIFF;
                 content_differs = true;
                 return workspace_add_diverged(ws, fs_path, storage_path, profile,
@@ -537,40 +554,36 @@ static error_t *analyze_file_divergence(
                                              in_profile, in_state,
                                              on_filesystem, content_differs,
                                              false, false,  /* No metadata check for type change */
-                                             true);  /* profile_enabled: from manifest = enabled */
+                                             true,  /* profile_enabled */
+                                             false, NULL);  /* No profile change yet */
 
             case CMP_MISSING:
-                /* File missing - can't check metadata, return immediately */
+                /* Shouldn't happen (we checked on_filesystem), but be defensive */
                 div_type = DIVERGENCE_DELETED;
                 content_differs = false;
                 return workspace_add_diverged(ws, fs_path, storage_path, profile,
                                              div_type, WORKSPACE_ITEM_FILE,
                                              in_profile, in_state,
                                              on_filesystem, content_differs,
-                                             false, false,  /* No metadata check for missing file */
-                                             true);  /* profile_enabled: from manifest = enabled */
+                                             false, false,
+                                             true, false, NULL);
         }
 
-        /* Check metadata for all cases that reach here (including content modifications) */
-        bool mode_differs = false;
-        bool ownership_differs = false;
-
+        /* Check metadata divergence (mode and ownership) */
         if (metadata) {
             const metadata_item_t *meta_entry = NULL;
             error_t *meta_err = metadata_get_item(metadata, storage_path, &meta_entry);
 
             if (meta_err == NULL && meta_entry) {
-                /* Verify this is FILE metadata (invariant check).
-                 * We're analyzing files from manifest, so kind should always be FILE.
-                 * Getting DIRECTORY here indicates internal inconsistency. */
+                /* Validate kind (should be FILE) */
                 if (meta_entry->kind != METADATA_ITEM_FILE) {
                     error_free(meta_err);
                     return ERROR(ERR_INTERNAL,
-                        "Expected FILE metadata for '%s', got DIRECTORY (invariant violation)",
+                        "Expected FILE metadata for '%s', got DIRECTORY",
                         storage_path);
                 }
 
-                /* Check for mode and ownership divergence using captured stat */
+                /* Check mode and ownership using captured stat */
                 divergence_type_t checked_div = div_type;
                 error_t *check_err = check_item_metadata_divergence(
                     meta_entry, fs_path, &file_stat, div_type, &checked_div,
@@ -579,49 +592,81 @@ static error_t *analyze_file_divergence(
                 if (check_err) {
                     error_free(meta_err);
                     return error_wrap(check_err,
-                        "Failed to check metadata divergence for '%s'", fs_path);
+                        "Failed to check metadata for '%s'", fs_path);
                 }
 
-                /* Update primary divergence only if content doesn't differ */
+                /* Update primary divergence if content doesn't differ */
                 if (!content_differs) {
                     div_type = checked_div;
                 }
-                /* If content differs, keep div_type = MODIFIED (higher priority) */
-                /* But still record mode_differs and ownership_differs flags for display */
+                /* Content differs → keep MODIFIED, but track metadata flags too */
             }
 
             error_free(meta_err);
         }
+    }
 
-        /* Add divergence if anything differs */
-        if (div_type != DIVERGENCE_CLEAN || mode_differs || ownership_differs) {
-            return workspace_add_diverged(ws, fs_path, storage_path, profile,
-                                         div_type, WORKSPACE_ITEM_FILE,
-                                         in_profile, in_state,
-                                         on_filesystem, content_differs,
-                                         mode_differs, ownership_differs,
-                                         true);  /* profile_enabled: from manifest = enabled */
+    /*
+     * PHASE 2: State-based divergence classification
+     * ================================================
+     * Apply deployment state logic to determine final divergence type.
+     */
+
+    /* File not deployed yet */
+    if (!in_state) {
+        if (div_type == DIVERGENCE_CLEAN) {
+            /* Safe case: file doesn't exist, or exists and matches exactly */
+            div_type = DIVERGENCE_UNDEPLOYED;
+        } else if (content_differs) {
+            /* CRITICAL: Undeployed file exists with different content!
+             * Keep div_type = MODIFIED to block deployment. This is the safety fix. */
+        }
+        /* If metadata differs but content matches, keep MODE_DIFF/OWNERSHIP */
+    }
+
+    /* File was deployed but now missing */
+    if (in_state && !on_filesystem) {
+        div_type = DIVERGENCE_DELETED;
+    }
+
+    /*
+     * PHASE 3: Profile ownership change detection
+     * ============================================
+     * Detect when a file moves from one profile to another.
+     * Example: file was in 'global', now in 'darwin'.
+     */
+    bool profile_changed = false;
+    char *old_profile = NULL;
+
+    if (in_state && state_entry) {
+        /* Compare state profile vs manifest profile */
+        if (strcmp(state_entry->profile, manifest_entry->source_profile->name) != 0) {
+            profile_changed = true;
+            old_profile = strdup(state_entry->profile);
+            if (!old_profile) {
+                return ERROR(ERR_MEMORY,
+                    "Failed to allocate old_profile for '%s'", fs_path);
+            }
         }
     }
 
-    /* Case 4: File not deployed and doesn't exist - add as undeployed */
-    if (div_type == DIVERGENCE_UNDEPLOYED) {
-        return workspace_add_diverged(ws, fs_path, storage_path, profile,
-                                     div_type, WORKSPACE_ITEM_FILE,
-                                     in_profile, in_state,
-                                     on_filesystem, false,
-                                     false, false,
-                                     true);  /* profile_enabled: from manifest = enabled */
-    }
-
-    /* Case 5: File deleted from filesystem */
-    if (div_type == DIVERGENCE_DELETED) {
-        return workspace_add_diverged(ws, fs_path, storage_path, profile,
-                                     div_type, WORKSPACE_ITEM_FILE,
-                                     in_profile, in_state,
-                                     on_filesystem, false,
-                                     false, false,
-                                     true);  /* profile_enabled: from manifest = enabled */
+    /* Add to workspace if there's any divergence */
+    if (div_type != DIVERGENCE_CLEAN || mode_differs || ownership_differs || profile_changed) {
+        error_t *err = workspace_add_diverged(ws, fs_path, storage_path, profile,
+                                              div_type, WORKSPACE_ITEM_FILE,
+                                              in_profile, in_state,
+                                              on_filesystem, content_differs,
+                                              mode_differs, ownership_differs,
+                                              true,  /* profile_enabled */
+                                              profile_changed, old_profile);  /* Takes ownership */
+        if (err) {
+            /* On error, free old_profile since workspace_add_diverged didn't take ownership */
+            free(old_profile);
+            return err;
+        }
+    } else {
+        /* No divergence - free old_profile if allocated */
+        free(old_profile);
     }
 
     return NULL;
@@ -692,7 +737,8 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
                 false,            /* content_differs N/A */
                 false,            /* mode_differs N/A */
                 false,            /* ownership_differs N/A */
-                profile_enabled   /* NEW: explicit scope flag */
+                profile_enabled,  /* explicit scope flag */
+                false, NULL       /* No profile change for orphans */
             );
 
             if (err) {
@@ -774,7 +820,8 @@ static error_t *analyze_orphaned_directories(workspace_t *ws) {
                 false,            /* content_differs N/A */
                 false,            /* mode_differs N/A */
                 false,            /* ownership_differs N/A */
-                profile_enabled   /* NEW: explicit scope flag */
+                profile_enabled,  /* explicit scope flag */
+                false, NULL       /* No profile change for orphans */
             );
 
             if (err) {
@@ -1013,7 +1060,8 @@ static error_t *scan_directory_for_untracked(
                     false,  /* content_differs N/A */
                     false,  /* mode_differs N/A (untracked file) */
                     false,  /* ownership_differs N/A (untracked file) */
-                    true    /* profile_enabled: scanning enabled profile's tracked dir */
+                    true,   /* profile_enabled: scanning enabled profile's tracked dir */
+                    false, NULL  /* No profile change for untracked */
                 );
 
                 free(storage_path);
@@ -1179,7 +1227,8 @@ static bool check_directory_callback(const char *key, void *value, void *user_da
             false,  /* content_differs (N/A for deleted) */
             false,  /* mode_differs (N/A for deleted) */
             false,  /* ownership_differs (N/A for deleted) */
-            true    /* profile_enabled: from merged_metadata = enabled */
+            true,   /* profile_enabled: from merged_metadata = enabled */
+            false, NULL  /* No profile change for directories */
         );
 
         if (err) {
@@ -1242,7 +1291,8 @@ static bool check_directory_callback(const char *key, void *value, void *user_da
             true,   /* content_differs (metadata counts as content) */
             mode_differs,
             ownership_differs,
-            true    /* profile_enabled: from merged_metadata = enabled */
+            true,   /* profile_enabled: from merged_metadata = enabled */
+            false, NULL  /* No profile change for directories */
         );
 
         if (err) {
@@ -1425,7 +1475,8 @@ static error_t *analyze_encryption_policy_mismatch(
                 false, /* content_differs (not relevant for policy mismatch) */
                 false, /* mode_differs N/A (policy mismatch) */
                 false, /* ownership_differs N/A (policy mismatch) */
-                true   /* profile_enabled: from manifest = enabled */
+                true,  /* profile_enabled: from manifest = enabled */
+                false, NULL  /* No profile change for encryption mismatch */
             );
 
             if (err) {
@@ -1794,6 +1845,24 @@ const workspace_item_t *workspace_get_all_diverged(
 }
 
 /**
+ * Get workspace item by filesystem path
+ *
+ * O(1) lookup via diverged_index hashmap. Returns NULL if item has no
+ * divergence (CLEAN items are not indexed).
+ */
+const workspace_item_t *workspace_get_item(
+    const workspace_t *ws,
+    const char *filesystem_path
+) {
+    if (!ws || !filesystem_path) {
+        return NULL;
+    }
+
+    /* O(1) lookup via hashmap - returns NULL if not found or CLEAN */
+    return hashmap_get(ws->diverged_index, filesystem_path);
+}
+
+/**
  * Get cached metadata for profile
  */
 const metadata_t *workspace_get_metadata(
@@ -1997,6 +2066,7 @@ void workspace_free(workspace_t *ws) {
         free(ws->diverged[i].storage_path);
         free(ws->diverged[i].profile);
         free(ws->diverged[i].metadata_profile);
+        free(ws->diverged[i].old_profile);  /* Free profile change tracking */
     }
     free(ws->diverged);
 

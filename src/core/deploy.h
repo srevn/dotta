@@ -25,6 +25,7 @@
 typedef struct hashmap hashmap_t;
 typedef struct content_cache content_cache_t;
 typedef struct keymanager keymanager_t;
+typedef struct workspace workspace_t;
 
 /**
  * Ownership change entry
@@ -73,35 +74,28 @@ typedef struct {
 } deploy_result_t;
 
 /**
- * Run pre-flight checks
+ * Run pre-flight checks using workspace divergence analysis
  *
- * Checks for:
- * - Modified files (conflicts)
- * - Permission issues
- * - Path validity
+ * Simplified preflight that leverages workspace's pre-computed divergence
+ * analysis instead of re-analyzing files. Maps divergence types to
+ * deployment decisions.
  *
- * Uses content cache for transparent decryption when comparing encrypted files.
- * This ensures preflight checks work correctly with encrypted content and
- * populates the cache for subsequent deployment operations.
+ * Checks performed:
+ * - Overlap detection (files in multiple profiles) - manifest-level
+ * - Conflict detection (modified files) - from workspace divergence
+ * - Ownership changes (profile switches) - from workspace tracking
+ * - Writability checks - filesystem-level (not in workspace)
  *
- * @param repo Repository (must not be NULL)
- * @param manifest Manifest to check (must not be NULL)
- * @param state Current state (can be NULL)
+ * @param ws Workspace with pre-loaded divergence analysis (must not be NULL)
+ * @param manifest Manifest for overlap detection (must not be NULL)
  * @param opts Deployment options (must not be NULL)
- * @param km Key manager for encryption (can be NULL for plaintext-only)
- * @param cache Content cache for batch operations (must not be NULL)
- * @param metadata Merged metadata for encryption detection (can be NULL)
  * @param out Pre-flight results (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *deploy_preflight_check(
-    git_repository *repo,
+error_t *deploy_preflight_check_from_workspace(
+    const workspace_t *ws,
     const manifest_t *manifest,
-    const state_t *state,
     const deploy_options_t *opts,
-    keymanager_t *km,
-    content_cache_t *cache,
-    const metadata_t *metadata,
     preflight_result_t **out
 );
 

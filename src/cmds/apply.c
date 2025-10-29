@@ -1169,7 +1169,11 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    /* Run pre-flight checks */
+    /* Run pre-flight checks (using workspace divergence analysis)
+     *
+     * Workspace already compared all files during workspace_load(), so preflight
+     * just queries the results via O(1) hashmap lookups.
+     */
     output_print(out, OUTPUT_VERBOSE, "\nRunning pre-flight checks...\n");
 
     deploy_options_t deploy_opts = {
@@ -1180,7 +1184,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         .skip_unchanged = opts->skip_unchanged
     };
 
-    err = deploy_preflight_check(repo, manifest, state, &deploy_opts, km, cache, merged_metadata, &preflight);
+    err = deploy_preflight_check_from_workspace(ws, manifest, &deploy_opts, &preflight);
     if (err) {
         err = error_wrap(err, "Pre-flight checks failed");
         goto cleanup;

@@ -14,6 +14,7 @@
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "core/metadata.h"
+#include "core/workspace.h"
 #include "infra/compare.h"
 #include "infra/content.h"
 #include "utils/array.h"
@@ -22,247 +23,181 @@
 #include "utils/string.h"
 
 /**
- * Run pre-flight checks
+ * Run pre-flight checks using workspace divergence analysis
+ *
+ * This is the optimized preflight implementation that eliminates redundant
+ * file comparisons by querying pre-computed workspace divergence data.
+ *
+ * Architecture:
+ * - Workspace (single source of truth) = Analysis Layer
+ * - Preflight (this function) = Decision Layer
+ * - Deploy = Execution Layer
  */
-error_t *deploy_preflight_check(
-    git_repository *repo,
+error_t *deploy_preflight_check_from_workspace(
+    const workspace_t *ws,
     const manifest_t *manifest,
-    const state_t *state,
     const deploy_options_t *opts,
-    keymanager_t *km,
-    content_cache_t *cache,
-    const metadata_t *metadata,
     preflight_result_t **out
 ) {
-    CHECK_NULL(repo);
+    CHECK_NULL(ws);
     CHECK_NULL(manifest);
     CHECK_NULL(opts);
-    CHECK_NULL(cache);
     CHECK_NULL(out);
 
-    /* Note: km parameter provided for API consistency with other core operations.
-     * Encryption/decryption is handled via cache->km (set during cache creation).
-     * This design keeps the cache as the abstraction boundary while maintaining
-     * uniform function signatures across deploy, safety, and cleanup modules. */
-    (void)km;  /* Explicitly mark as intentionally unused */
-
-    /* Declare all resources at top, initialized to NULL */
-    error_t *err = NULL;
-    preflight_result_t *result = NULL;
-    hashmap_t *seen_paths = NULL;
-    state_file_entry_t *state_entries = NULL;
-    size_t state_count = 0;
-    hashmap_t *state_map = NULL;
-
-    /* Allocate result */
-    result = calloc(1, sizeof(preflight_result_t));
+    /* Allocate result structure */
+    preflight_result_t *result = calloc(1, sizeof(preflight_result_t));
     if (!result) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate preflight result");
-        goto cleanup;
+        return ERROR(ERR_MEMORY, "Failed to allocate preflight result");
     }
 
+    result->has_errors = false;
     result->conflicts = string_array_create();
     result->permission_errors = string_array_create();
     result->overlaps = string_array_create();
     result->ownership_changes = NULL;
     result->ownership_change_count = 0;
-    result->has_errors = false;
 
     if (!result->conflicts || !result->permission_errors || !result->overlaps) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate result arrays");
-        goto cleanup;
+        preflight_result_free(result);
+        return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
     }
 
-    /* Detect overlaps: files that appear in multiple profiles */
-    /* Use single hashmap with state tracking: (void*)1 = seen once, (void*)2 = overlap recorded */
-    seen_paths = hashmap_create(manifest->count);
+    /*
+     * CHECK 1: Overlap Detection (Manifest-level)
+     * ============================================
+     * Detect files appearing in multiple profiles. This is a manifest concern,
+     * not a divergence concern, so it stays in preflight.
+     */
+    hashmap_t *seen_paths = hashmap_create(manifest->count);
     if (!seen_paths) {
-        err = ERROR(ERR_MEMORY, "Failed to create hashmap for overlap detection");
-        goto cleanup;
+        preflight_result_free(result);
+        return ERROR(ERR_MEMORY, "Failed to create overlap detection map");
     }
 
     for (size_t i = 0; i < manifest->count; i++) {
         const file_entry_t *entry = &manifest->entries[i];
-
-        /* Check occurrence state */
         void *state_val = hashmap_get(seen_paths, entry->filesystem_path);
 
         if (state_val == NULL) {
             /* First occurrence - mark as seen */
-            err = hashmap_set(seen_paths, entry->filesystem_path, (void *)1);
-            if (err) {
-                err = error_wrap(err, "Failed to track path in overlap detection");
-                goto cleanup;
-            }
+            hashmap_set(seen_paths, entry->filesystem_path, (void *)1);
         } else if (state_val == (void *)1) {
-            /* Second occurrence - this is an overlap, record it */
-            string_array_push(result->overlaps, entry->filesystem_path);
-            err = hashmap_set(seen_paths, entry->filesystem_path, (void *)2);
+            /* Second occurrence - record as overlap */
+            error_t *err = string_array_push(result->overlaps, entry->filesystem_path);
             if (err) {
-                err = error_wrap(err, "Failed to record overlap");
-                goto cleanup;
+                hashmap_free(seen_paths, NULL);
+                preflight_result_free(result);
+                return error_wrap(err, "Failed to record overlap");
             }
+            /* Mark as already recorded to avoid duplicates */
+            hashmap_set(seen_paths, entry->filesystem_path, (void *)2);
         }
-        /* else: state_val == (void*)2, already recorded as overlap, skip */
+        /* (void *)2 means already recorded - skip */
     }
 
-    /* Done with seen_paths, free it now */
     hashmap_free(seen_paths, NULL);
-    seen_paths = NULL;
 
-    /* Detect ownership changes: files deployed from one profile, now being deployed from another */
-    if (state) {
-        /* Load all state entries once for O(1) lookups instead of O(N) database queries */
-        err = state_get_all_files(state, &state_entries, &state_count);
-        if (err) {
-            err = error_wrap(err, "Failed to load state for ownership detection");
-            goto cleanup;
-        }
+    /*
+     * CHECK 2: Conflict Detection + Ownership Changes + Writability
+     * ==============================================================
+     * Query workspace for divergence (O(1) per file), map to preflight decisions.
+     */
 
-        /* Build hashmap for O(1) lookups */
-        state_map = hashmap_create(state_count > 0 ? state_count : 16);
-        if (!state_map) {
-            err = ERROR(ERR_MEMORY, "Failed to create state lookup map");
-            goto cleanup;
-        }
-
-        for (size_t i = 0; i < state_count; i++) {
-            err = hashmap_set(state_map, state_entries[i].filesystem_path, &state_entries[i]);
-            if (err) {
-                err = error_wrap(err, "Failed to populate state lookup map");
-                goto cleanup;
-            }
-        }
-
-        /* Allocate ownership changes array */
-        size_t ownership_change_capacity = 16;
-        result->ownership_changes = calloc(ownership_change_capacity, sizeof(ownership_change_t));
-        if (!result->ownership_changes) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate ownership changes array");
-            goto cleanup;
-        }
-
-        /* Detect ownership changes using hashmap lookups (O(1) per file) */
-        for (size_t i = 0; i < manifest->count; i++) {
-            const file_entry_t *entry = &manifest->entries[i];
-
-            /* Check if file exists in state (O(1) lookup) */
-            state_file_entry_t *state_entry = hashmap_get(state_map, entry->filesystem_path);
-
-            if (state_entry) {
-                /* Check if profile is changing */
-                if (strcmp(state_entry->profile, entry->source_profile->name) != 0) {
-                    /* Ownership is changing - add to list */
-                    if (result->ownership_change_count >= ownership_change_capacity) {
-                        ownership_change_capacity *= 2;
-                        ownership_change_t *new_changes = realloc(result->ownership_changes,
-                                                                  ownership_change_capacity * sizeof(ownership_change_t));
-                        if (!new_changes) {
-                            err = ERROR(ERR_MEMORY, "Failed to grow ownership changes array");
-                            goto cleanup;
-                        }
-                        result->ownership_changes = new_changes;
-                    }
-
-                    ownership_change_t *change = &result->ownership_changes[result->ownership_change_count];
-
-                    /* Allocate all strings first, so we can clean them up properly on error */
-                    char *fs_path = strdup(entry->filesystem_path);
-                    char *old_prof = strdup(state_entry->profile);
-                    char *new_prof = strdup(entry->source_profile->name);
-
-                    if (!fs_path || !old_prof || !new_prof) {
-                        /* Clean up partial allocations before goto cleanup */
-                        free(fs_path);
-                        free(old_prof);
-                        free(new_prof);
-                        err = ERROR(ERR_MEMORY, "Failed to allocate ownership change entry");
-                        goto cleanup;
-                    }
-
-                    /* All allocations succeeded - assign and increment count */
-                    change->filesystem_path = fs_path;
-                    change->old_profile = old_prof;
-                    change->new_profile = new_prof;
-                    result->ownership_change_count++;
-                }
-            }
-        }
-
-        /* Clean up state cache - done with it */
-        hashmap_free(state_map, NULL);
-        state_map = NULL;
-        state_free_all_files(state_entries, state_count);
-        state_entries = NULL;
+    /* Pre-allocate ownership_changes array (resize as needed) */
+    size_t ownership_capacity = 16;
+    result->ownership_changes = calloc(ownership_capacity, sizeof(ownership_change_t));
+    if (!result->ownership_changes) {
+        preflight_result_free(result);
+        return ERROR(ERR_MEMORY, "Failed to allocate ownership changes array");
     }
 
-    /* Check each file */
     for (size_t i = 0; i < manifest->count; i++) {
         const file_entry_t *entry = &manifest->entries[i];
+        const char *path = entry->filesystem_path;
 
-        /* Check if file exists and is modified */
-        if (fs_exists(entry->filesystem_path)) {
-            /* Get decrypted content from cache for comparison
-             *
-             * This approach:
-             * 1. Gets plaintext content via cache (transparently decrypts if needed)
-             * 2. Compares plaintext to plaintext (correct comparison)
-             * 3. Populates cache for reuse by deploy phase (performance)
+        /* Query workspace for divergence (O(1) hashmap lookup) */
+        const workspace_item_t *ws_item = workspace_get_item(ws, path);
+
+        if (ws_item && !opts->force) {
+            /*
+             * File has divergence - check if it's a blocking conflict.
+             * Only block on content conflicts (MODIFIED, TYPE_DIFF).
+             * Metadata divergence (mode, ownership) is informational.
              */
-            const buffer_t *content;
-            err = content_cache_get_from_tree_entry(
-                cache,
-                entry->entry,
-                entry->storage_path,
-                entry->source_profile->name,
-                metadata,
-                &content
-            );
+            switch (ws_item->type) {
+                case DIVERGENCE_MODIFIED:
+                case DIVERGENCE_TYPE_DIFF:
+                    /* Content conflict - block deployment */
+                    {
+                        error_t *err = string_array_push(result->conflicts, path);
+                        if (err) {
+                            preflight_result_free(result);
+                            return error_wrap(err, "Failed to record conflict");
+                        }
+                        result->has_errors = true;
+                    }
+                    break;
 
-            if (err) {
-                err = error_wrap(err, "Failed to get content for '%s'", entry->filesystem_path);
-                goto cleanup;
-            }
-
-            /* Compare decrypted content to disk file */
-            compare_result_t cmp_result;
-            git_filemode_t mode = git_tree_entry_filemode(entry->entry);
-            err = compare_buffer_to_disk(content, entry->filesystem_path, mode, NULL, &cmp_result, NULL);
-
-            if (err) {
-                err = error_wrap(err, "Failed to compare '%s'", entry->filesystem_path);
-                goto cleanup;
-            }
-
-            /* If different and not forcing, it's a conflict */
-            if ((cmp_result == CMP_DIFFERENT ||
-                 cmp_result == CMP_MODE_DIFF ||
-                 cmp_result == CMP_TYPE_DIFF) && !opts->force) {
-                string_array_push(result->conflicts, entry->filesystem_path);
-                result->has_errors = true;
+                case DIVERGENCE_UNDEPLOYED:
+                case DIVERGENCE_DELETED:
+                case DIVERGENCE_CLEAN:
+                case DIVERGENCE_MODE_DIFF:
+                case DIVERGENCE_OWNERSHIP:
+                case DIVERGENCE_ORPHANED:
+                case DIVERGENCE_UNTRACKED:
+                case DIVERGENCE_ENCRYPTION:
+                    /* Not blocking conflicts */
+                    break;
             }
         }
 
-        /* Check if path is writable */
-        if (!fs_is_writable(entry->filesystem_path)) {
-            string_array_push(result->permission_errors, entry->filesystem_path);
+        /* Check for profile ownership changes */
+        if (ws_item && ws_item->profile_changed) {
+            /* Grow ownership_changes array if needed */
+            if (result->ownership_change_count >= ownership_capacity) {
+                ownership_capacity *= 2;
+                ownership_change_t *new_array = realloc(
+                    result->ownership_changes,
+                    ownership_capacity * sizeof(ownership_change_t)
+                );
+                if (!new_array) {
+                    preflight_result_free(result);
+                    return ERROR(ERR_MEMORY, "Failed to grow ownership changes array");
+                }
+                result->ownership_changes = new_array;
+            }
+
+            /* Add ownership change */
+            ownership_change_t *change = &result->ownership_changes[result->ownership_change_count];
+            change->filesystem_path = strdup(path);
+            change->old_profile = strdup(ws_item->old_profile);
+            change->new_profile = strdup(ws_item->profile);
+
+            if (!change->filesystem_path || !change->old_profile || !change->new_profile) {
+                /* Cleanup partial allocation */
+                free(change->filesystem_path);
+                free(change->old_profile);
+                free(change->new_profile);
+                preflight_result_free(result);
+                return ERROR(ERR_MEMORY, "Failed to allocate ownership change strings");
+            }
+
+            result->ownership_change_count++;
+        }
+
+        /* Writability check (filesystem-level, not in workspace) */
+        if (!fs_is_writable(path)) {
+            error_t *err = string_array_push(result->permission_errors, path);
+            if (err) {
+                preflight_result_free(result);
+                return error_wrap(err, "Failed to record permission error");
+            }
             result->has_errors = true;
         }
     }
 
-    /* Success - set output and prevent cleanup from freeing result */
     *out = result;
-    result = NULL;
-    err = NULL;
-
-cleanup:
-    /* Free resources in reverse order of allocation */
-    if (state_map) hashmap_free(state_map, NULL);
-    if (state_entries) state_free_all_files(state_entries, state_count);
-    if (seen_paths) hashmap_free(seen_paths, NULL);
-    if (result) preflight_result_free(result);
-
-    return err;
+    return NULL;
 }
 
 /**

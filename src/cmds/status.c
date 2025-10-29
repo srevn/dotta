@@ -342,7 +342,7 @@ static void display_workspace_status(
 
     /* Load workspace */
     workspace_t *ws = NULL;
-    error_t *err = workspace_load(repo, profiles, config, &ws);
+    error_t *err = workspace_load(repo, profiles, config, NULL, &ws);
     if (err) {
         /* Non-fatal: if workspace fails to load, skip this section */
         if (verbose) {

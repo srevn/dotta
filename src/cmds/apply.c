@@ -989,7 +989,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
      */
     output_print(out, OUTPUT_VERBOSE, "\nLoading workspace...\n");
 
-    err = workspace_load(repo, profiles, config, &ws);
+    err = workspace_load(repo, profiles, config, NULL, &ws);
     if (err) {
         err = error_wrap(err, "Failed to load workspace");
         goto cleanup;

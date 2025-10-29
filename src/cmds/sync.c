@@ -967,7 +967,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
 
     /* Validate workspace - sync requires clean workspace (no uncommitted changes) */
     workspace_t *ws = NULL;
-    err = workspace_load(repo, profiles, config, &ws);
+    err = workspace_load(repo, profiles, config, NULL, &ws);
     if (err) {
         sync_results_free(results);
         profile_list_free(profiles);

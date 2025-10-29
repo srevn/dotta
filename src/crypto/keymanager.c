@@ -1012,6 +1012,9 @@ error_t *keymanager_get_key(
     return NULL;
 }
 
+/**
+ * Get derived profile key (with caching)
+ */
 error_t *keymanager_get_profile_key(
     keymanager_t *mgr,
     const char *profile_name,

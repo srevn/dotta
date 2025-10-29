@@ -1828,7 +1828,7 @@ error_t *cmd_update(
      * - config auto_detect_new_files
      * - MODE_DIFF/OWNERSHIP for both files AND directories
      */
-    err = workspace_load(repo, profiles, config, &ws);
+    err = workspace_load(repo, profiles, config, NULL, &ws);
     if (err) {
         err = error_wrap(err, "Failed to analyze workspace");
         goto cleanup;

@@ -87,6 +87,36 @@ typedef enum {
 } workspace_status_t;
 
 /**
+ * Workspace load options
+ *
+ * Controls which analyses workspace_load() performs. All flags default to
+ * false when zero-initialized. Use workspace_load_default() for all analyses
+ * enabled, or build custom options by setting specific flags.
+ *
+ * Analysis dependencies are automatically resolved:
+ * - analyze_orphans requires analyze_files (auto-enabled if needed)
+ *
+ * Lifetime: Options are read-only during workspace_load(), safe to stack-allocate.
+ */
+typedef struct {
+    bool analyze_files;        /* File divergence detection */
+    bool analyze_orphans;      /* Orphaned state validation (depends on analyze_files) */
+    bool analyze_untracked;    /* Directory scanning for new files (EXPENSIVE!) */
+    bool analyze_directories;  /* Directory metadata checks */
+    bool analyze_encryption;   /* Encryption policy validation */
+} workspace_load_t;
+
+/**
+ * Get default workspace load options
+ *
+ * Returns options with ALL analyses enabled. This matches the current
+ * behavior of workspace_load() and provides backward compatibility.
+ *
+ * @return Default options (all analyses enabled)
+ */
+workspace_load_t workspace_load_default(void);
+
+/**
  * Load workspace from repository
  *
  * Loads all three states and performs divergence analysis:
@@ -105,6 +135,7 @@ typedef enum {
  * @param repo Git repository (must not be NULL)
  * @param profiles Profile list to analyze (must not be NULL)
  * @param config Configuration (for ignore patterns, can be NULL)
+ * @param options Analysis options (can be NULL for defaults)
  * @param out Workspace (must not be NULL, caller must free with workspace_free)
  * @return Error or NULL on success
  */
@@ -112,6 +143,7 @@ error_t *workspace_load(
     git_repository *repo,
     profile_list_t *profiles,
     const struct dotta_config *config,
+    const workspace_load_t *options,
     workspace_t **out
 );
 

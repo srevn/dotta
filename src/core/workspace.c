@@ -46,6 +46,23 @@
 #include "utils/string.h"
 
 /**
+ * Get default workspace load options
+ *
+ * Returns options with all analyses enabled for backward compatibility.
+ * This matches the behavior of workspace_load() before the refactor.
+ */
+workspace_load_t workspace_load_default(void) {
+    workspace_load_t opts = {
+        .analyze_files       = true,
+        .analyze_orphans     = true,
+        .analyze_untracked   = true,
+        .analyze_directories = true,
+        .analyze_encryption  = true
+    };
+    return opts;
+}
+
+/**
  * Merged metadata entry (internal structure)
  *
  * Pairs a metadata item with its source profile name to track provenance
@@ -1298,11 +1315,30 @@ error_t *workspace_load(
     git_repository *repo,
     profile_list_t *profiles,
     const dotta_config_t *config,
+    const workspace_load_t *options,
     workspace_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profiles);
     CHECK_NULL(out);
+
+    /* Resolve options: NULL means default (all analyses enabled).
+     * This provides backward compatibility - callers not using the new
+     * options parameter get the same behavior as before. */
+    workspace_load_t resolved_opts;
+    if (options) {
+        resolved_opts = *options;  /* Copy provided options */
+    } else {
+        resolved_opts = workspace_load_default();  /* Default to all analyses */
+    }
+
+    /* Handle analysis dependencies.
+     * Orphan analysis requires file analysis (can't detect orphans without
+     * knowing what files exist in profiles). Auto-enable file analysis if
+     * orphans are requested to prevent invalid state. */
+    if (resolved_opts.analyze_orphans && !resolved_opts.analyze_files) {
+        resolved_opts.analyze_files = true;
+    }
 
     workspace_t *ws = NULL;
     error_t *err = NULL;
@@ -1458,6 +1494,22 @@ error_t *workspace_load(
         workspace_free(ws);
         return error_wrap(err, "Failed to load state");
     }
+
+    /* ==================== PHASE 0 IMPLEMENTATION NOTE ====================
+     * The options have been parsed and validated above, but Phase 0 is a
+     * pure API refactor with NO behavior changes. All analyses are still
+     * performed unconditionally to ensure identical behavior and allow
+     * comprehensive validation.
+     *
+     * Phase 1 will implement selective analysis by conditionally executing
+     * the functions below based on resolved_opts flags. This two-phase
+     * approach ensures:
+     * 1. Structural changes (API) can be validated independently
+     * 2. Behavioral changes (performance) are isolated and measured
+     * 3. Rollback is simple if issues arise
+     *
+     * DO NOT modify the analysis calls below in Phase 0!
+     * ===================================================================== */
 
     /* Perform divergence analysis */
     err = workspace_analyze_divergence(ws);

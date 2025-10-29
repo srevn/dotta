@@ -1,24 +1,29 @@
 /**
- * cleanup.h - Orphaned file and directory cleanup
+ * cleanup.h - Orphaned file and directory removal
  *
- * This module handles cleanup operations during profile application:
- * 1. Identifies and removes orphaned files (files in state but not in manifest)
- * 2. Identifies and removes orphaned directories (directories in state but not in metadata)
- * 3. Validates file removal safety using the safety module
- * 4. Validates directory removal safety inline (non-empty check)
+ * This module handles removal of orphaned files and directories during profile application.
+ * Orphan detection is performed by the workspace module; this module focuses on safe removal.
+ *
+ * Responsibilities:
+ * ────────────────
+ * 1. Removes orphaned files (validated by safety module)
+ * 2. Prunes orphaned directories (iterative empty-directory removal)
+ * 3. Provides preflight analysis (safety violations, removal preview)
+ * 4. Reports detailed cleanup results
  *
  * Design Principles:
  * ─────────────────
- * - Separation: Isolates cleanup logic from apply command
+ * - Separation: Cleanup is decoupled from orphan detection (workspace responsibility)
  * - Safety: Dual approach - safety module for files, inline check for directories
- * - Performance: Pre-computed orphan lists and directory state tracking
+ * - Performance: Accepts pre-detected orphans from workspace (zero redundancy)
  * - Reporting: Rich result structure for detailed feedback
  *
- * Orphan Detection:
- * ────────────────
- * - Files: Compare state vs manifest (filesystem paths)
- * - Directories: Compare state vs metadata (filesystem paths)
- * - Pre-computed: Orphan lists computed once by caller, reused across preflight and execution
+ * Orphan Sources:
+ * ──────────────
+ * - Workspace module detects ALL orphans during workspace_load()
+ * - Orphans extracted via workspace_get_diverged_filtered(DIVERGENCE_ORPHANED)
+ * - Passed to cleanup module as workspace_item_t** arrays
+ * - See workspace.h for orphan detection algorithm details
  *
  * Safety Validation:
  * ─────────────────
@@ -28,17 +33,15 @@
  *
  * Optimization Strategy:
  * ─────────────────────
- * - Pre-computation: Orphan lists computed once, passed via cleanup_options_t
+ * - Zero redundancy: Orphans detected once by workspace, reused here
  * - Content cache: Reuse decrypted content from preflight checks (avoid re-decryption)
  * - Directory pruning: State tracking to avoid redundant filesystem checks
  * - Parent awareness: Reset parent directory state when child removed (iterative pruning)
  *
  * Integration Points:
  * ──────────────────
+ * - workspace.h: Provides orphan detection and divergence analysis
  * - safety.h: Validates file removal (uncommitted change detection)
- * - metadata.h: Provides merged metadata to identify orphaned directories
- * - state.h: Provides deployment state for orphan detection
- * - manifest.h: Provides target manifest for file orphan detection
  * - filesystem.h: Low-level file/directory operations
  */
 
@@ -54,69 +57,7 @@
 #include "core/profiles.h"
 #include "core/safety.h"
 #include "core/state.h"
-
-/* Forward declarations */
-typedef struct content_cache content_cache_t;
-
-/**
- * Orphan entry - minimal information for cleanup operations
- *
- * Stores filesystem path (where file is deployed), storage path (how file
- * is stored in Git), and source profile for reporting and metadata caching.
- * The profile field enables efficient on-demand metadata loading when verifying
- * orphaned files from disabled profiles.
- *
- * Lifecycle: Owned by orphan_list_t, freed together with the list.
- */
-typedef struct {
-    char *filesystem_path;  /* Deployed location (e.g., /home/user/.bashrc) */
-    char *storage_path;     /* Git storage path (e.g., home/.bashrc) */
-    char *profile;          /* Source profile name (for reporting and caching) */
-} orphan_entry_t;
-
-/**
- * Orphan list - dynamic array of orphan entries
- *
- * Self-contained structure representing files that are in deployment state
- * but not in the target manifest (i.e., orphaned files to be removed).
- *
- * Memory management: All strings are owned by the list and freed together.
- * Use orphan_list_free() to release all resources.
- */
-typedef struct {
-    orphan_entry_t *entries;  /* Array of orphan entries (owns memory) */
-    size_t count;              /* Number of orphans */
-    size_t capacity;           /* Allocated capacity (internal use) */
-} orphan_list_t;
-
-/**
- * Orphaned directory entry - minimal information for directory cleanup
- *
- * Stores filesystem path (where directory is deployed), storage prefix
- * (how directory is stored in Git), and source profile for reporting.
- *
- * Lifecycle: Owned by orphan_directory_list_t, freed together with the list.
- */
-typedef struct {
-    char *filesystem_path;   /* Deployed location (e.g., /home/user/.config) */
-    char *storage_prefix;    /* Storage prefix in profile (e.g., home/.config) */
-    char *profile;           /* Source profile name (for reporting) */
-} orphan_directory_entry_t;
-
-/**
- * Orphaned directory list - dynamic array of orphaned directory entries
- *
- * Self-contained structure representing directories that are in deployment state
- * but not in the target metadata (i.e., orphaned directories to be removed).
- *
- * Memory management: All strings are owned by the list and freed together.
- * Use orphan_directory_list_free() to release all resources.
- */
-typedef struct {
-    orphan_directory_entry_t *entries;  /* Array of orphan entries (owns memory) */
-    size_t count;                        /* Number of orphans */
-    size_t capacity;                     /* Allocated capacity (internal use) */
-} orphan_directory_list_t;
+#include "core/workspace.h"
 
 /**
  * Cleanup operation options
@@ -135,32 +76,32 @@ typedef struct {
     content_cache_t *cache;                  /* Content cache for performance (can be NULL) */
 
     /**
-     * Pre-computed file orphan list (REQUIRED)
+     * Pre-computed file orphan array from workspace (REQUIRED)
      *
-     * Must be computed by caller using cleanup_identify_orphans().
+     * Must be extracted by caller from workspace using workspace_get_diverged_filtered().
      * Treated as borrowed reference (cleanup does not free).
      *
-     * Rationale: Avoids triple computation in apply flow:
-     * - Once for privilege checking (needs storage paths)
-     * - Once for preflight display (show user what will be removed)
-     * - Once for actual removal (filesystem paths)
+     * Rationale: Workspace already detected orphans during workspace_load().
+     * Eliminates redundant orphan detection in cleanup module.
      *
-     * Performance: Eliminates O(2N+2M) redundant state/manifest comparisons.
+     * Performance: Single orphan detection pass instead of multiple.
      */
-    const orphan_list_t *orphaned_files;     /* Pre-computed file orphans (must not be NULL) */
+    const workspace_item_t **orphaned_files;     /* Workspace item array (must not be NULL) */
+    size_t orphaned_files_count;                 /* Number of orphaned files */
 
     /**
-     * Pre-computed directory orphan list (REQUIRED)
+     * Pre-computed directory orphan array from workspace (REQUIRED)
      *
-     * Must be computed by caller using cleanup_identify_orphaned_directories().
+     * Must be extracted by caller from workspace using workspace_get_diverged_filtered().
      * Treated as borrowed reference (cleanup does not free).
      *
-     * Rationale: Mirrors file orphan pattern to avoid recomputation and ensure
-     * consistent orphan detection across preflight checks and actual cleanup.
+     * Rationale: Workspace already detected directory orphans during workspace_load().
+     * Eliminates redundant orphan detection in cleanup module.
      *
-     * Performance: Eliminates redundant state/metadata comparisons.
+     * Performance: Single orphan detection pass instead of multiple.
      */
-    const orphan_directory_list_t *orphaned_directories;  /* Pre-computed directory orphans (must not be NULL) */
+    const workspace_item_t **orphaned_directories;  /* Workspace item array (must not be NULL) */
+    size_t orphaned_directories_count;              /* Number of orphaned directories */
 
     /* Control flags */
     bool verbose;                           /* Kept for consistency (unused in module) */
@@ -243,119 +184,6 @@ typedef struct {
 } cleanup_preflight_result_t;
 
 /**
- * Identify orphaned files
- *
- * Returns list of files in deployment state that are not present in target
- * manifest. Each orphan entry includes both filesystem path (for removal)
- * and storage path (for privilege checking), avoiding expensive lookups.
- *
- * Purpose:
- * --------
- * This is the foundation API for orphan cleanup. The apply command uses it
- * to compute orphans once, then reuses the list for:
- * 1. Privilege checking (filter root/ paths)
- * 2. Preflight display (show user what will be removed)
- * 3. Actual removal (pass to cleanup_execute)
- *
- * Algorithm:
- * ----------
- * 1. Build hashmap of manifest filesystem paths for O(1) lookup
- * 2. Iterate all state entries
- * 3. For each entry not in manifest: add to orphan list
- * 4. Return self-contained orphan_list_t structure
- *
- * Complexity: O(N + M) where N = state files, M = manifest files
- *
- * Edge Cases:
- * -----------
- * - No state files: Returns empty list (count=0)
- * - Empty manifest: ALL state files are orphans
- * - No orphans: Returns empty list (count=0)
- * - Large state: Efficient hashmap-based lookup
- *
- * Memory:
- * -------
- * Allocates ~200 bytes per orphan (2 string pointers + overhead).
- * Caller must free result with orphan_list_free().
- *
- * @param state Deployment state (must not be NULL, read-only)
- * @param manifest Target file manifest (must not be NULL, read-only)
- * @param out_orphans Orphan list (must not be NULL, caller must free)
- * @return Error or NULL on success
- */
-error_t *cleanup_identify_orphans(
-    const state_t *state,
-    const manifest_t *manifest,
-    orphan_list_t **out_orphans
-);
-
-/**
- * Free orphan list
- *
- * Frees all orphan entries (including their strings) and the list structure.
- * Safe to call with NULL.
- *
- * @param list Orphan list to free (can be NULL)
- */
-void orphan_list_free(orphan_list_t *list);
-
-/**
- * Identify orphaned directories
- *
- * Returns list of directories in deployment state that are not present in
- * target metadata. Each orphan entry includes filesystem path, storage prefix,
- * and source profile for reporting.
- *
- * Purpose:
- * --------
- * Mirrors cleanup_identify_orphans() for directories. The apply command uses it
- * to compute directory orphans once, then reuses the list for:
- * 1. Preflight display (show user what will be removed)
- * 2. Actual removal (pass to cleanup_execute)
- *
- * Algorithm:
- * ----------
- * 1. Build hashmap of metadata directories (filesystem_path -> item) for O(1) lookup
- * 2. Iterate all state directory entries
- * 3. For each entry not in metadata: add to orphan list
- * 4. Return self-contained orphan_directory_list_t structure
- *
- * Complexity: O(D_state + D_meta) where D = directory count
- *
- * Edge Cases:
- * -----------
- * - No state directories: Returns empty list (count=0)
- * - Empty metadata: ALL state directories are orphans
- * - No orphans: Returns empty list (count=0)
- * - Large state: Efficient hashmap-based lookup
- *
- * Memory:
- * -------
- * Allocates ~300 bytes per orphan (3 string pointers + overhead).
- * Caller must free result with orphan_directory_list_free().
- *
- * @param state Deployment state (must not be NULL, read-only)
- * @param metadata Target metadata from enabled profiles (must not be NULL, read-only)
- * @param out_orphans Orphan list (must not be NULL, caller must free)
- * @return Error or NULL on success
- */
-error_t *cleanup_identify_orphaned_directories(
-    const state_t *state,
-    const metadata_t *metadata,
-    orphan_directory_list_t **out_orphans
-);
-
-/**
- * Free orphaned directory list
- *
- * Frees all orphan entries (including their strings) and the list structure.
- * Safe to call with NULL.
- *
- * @param list Orphan list to free (can be NULL)
- */
-void orphan_directory_list_free(orphan_directory_list_t *list);
-
-/**
  * Run cleanup preflight checks
  *
  * Analyzes what cleanup_execute() will do WITHOUT modifying the filesystem.
@@ -370,29 +198,33 @@ void orphan_directory_list_free(orphan_directory_list_t *list);
  * - Safety violations (uncommitted changes)
  * - Empty directories to be pruned
  *
+ * Architecture:
+ * ------------
+ * Orphans are PRE-DETECTED by workspace module and passed via opts:
+ * - opts->orphaned_files: workspace_item_t** array from workspace
+ * - opts->orphaned_directories: workspace_item_t** array from workspace
+ *
+ * This function focuses on safety validation and preview, not detection.
+ *
  * Algorithm:
  * ----------
- * 1. Early exit if --keep-orphans (nothing to analyze)
- * 2. Build manifest hashmap for O(1) orphan detection
- * 3. Load all state files
- * 4. Identify orphans (in state, not in manifest)
- * 5. Run safety checks (unless force=true)
- * 6. Preview empty tracked directories (read-only, no removal)
+ * 1. Use pre-detected orphans from opts (NO orphan detection here)
+ * 2. Run safety checks on orphaned files (unless force=true)
+ * 3. Preview which directories will be pruned (read-only check)
+ * 4. Build result summary for user display
  *
  * Performance:
  * ------------
- * - Complexity: O(N + M) where N=state files, M=manifest files
- * - Uses hashmap for O(1) lookups (avoids O(N*M) nested loops)
+ * - Complexity: O(N) where N=orphan count (NOT O(state + manifest))
+ * - Zero redundancy: orphans detected once by workspace
  * - Reuses content cache from deploy preflight (no re-decryption)
- * - Typical: <100ms for 10,000 files
+ * - Typical: <50ms for 1,000 orphans
  *
  * Edge Cases:
  * -----------
  * - No orphans: Returns empty result (quick path)
- * - --keep-orphans: Returns empty result (skip analysis)
- * - Empty manifest: ALL deployed files are orphans (big warning)
  * - Safety violations: Returned in result, blocking (unless force=true)
- * - No state files: Returns empty result (nothing to check)
+ * - Empty orphan arrays: Valid, returns empty result
  *
  * Integration:
  * ------------
@@ -404,9 +236,9 @@ void orphan_directory_list_free(orphan_directory_list_t *list);
  * The caller (apply command) displays results and blocks on violations.
  *
  * @param repo Repository (must not be NULL)
- * @param state State for file tracking (must not be NULL, read-only)
+ * @param state State for safety validation (must not be NULL, read-only)
  * @param manifest Current file manifest (must not be NULL)
- * @param opts Cleanup options (must not be NULL)
+ * @param opts Cleanup options with PRE-DETECTED orphans (must not be NULL)
  * @param out_result Preflight result (must not be NULL, caller must free)
  * @return Error or NULL on success (check result for details)
  */
@@ -421,31 +253,27 @@ error_t *cleanup_preflight_check(
 /**
  * Execute cleanup operations
  *
- * Performs orphaned file removal and empty directory pruning in a single
- * coordinated operation. This function:
+ * Performs orphaned file removal and empty directory pruning using
+ * pre-detected orphans from workspace module. This function:
  *
- * 1. Identifies orphaned files (in state, not in manifest)
+ * 1. Uses pre-detected orphans from opts (NO detection here)
  * 2. Validates safety using safety module (unless force=true)
  * 3. Removes safe orphaned files from filesystem
- * 4. Loads metadata from deployed profiles (optimized loading)
- * 5. Prunes empty tracked directories iteratively
+ * 4. Prunes empty orphaned directories iteratively
+ *
+ * Architecture:
+ * ────────────
+ * Orphans are PRE-DETECTED by workspace module and passed via opts:
+ * - opts->orphaned_files: workspace_item_t** array
+ * - opts->orphaned_directories: workspace_item_t** array
+ *
+ * This function focuses on removal operations, not detection.
  *
  * State Management:
  * ────────────────
  * This function ONLY modifies the filesystem. It does NOT modify state.
  * The caller (typically apply command) must update state separately to
  * reflect the new filesystem reality.
- *
- * Metadata Loading Optimization:
- * ──────────────────────────────
- * If opts->enabled_metadata is provided, only loads metadata from profiles
- * that are deployed but not currently enabled. This eliminates duplicate
- * metadata loading when called from apply command.
- *
- * Example:
- *   Enabled profiles: {base, linux}
- *   Deployed profiles: {base, linux, work}  (work was previously enabled)
- *   → Only loads metadata from {work}
  *
  * Safety Integration:
  * ──────────────────
@@ -464,16 +292,22 @@ error_t *cleanup_preflight_check(
  * - Repeat until no more directories can be removed
  * - State tracking avoids redundant filesystem checks
  *
+ * Performance:
+ * ───────────
+ * - Complexity: O(N) where N=orphan count (NOT O(state + manifest))
+ * - Zero redundancy: orphans detected once by workspace
+ * - Content cache reused (no re-decryption)
+ *
  * Error Handling:
  * ──────────────
  * - Individual file/directory removal failures are NON-FATAL
  * - Tracked in failed counters and reported
- * - Fatal errors: memory allocation, state loading, safety module errors
+ * - Fatal errors: memory allocation, safety module errors
  *
  * @param repo Repository (must not be NULL)
- * @param state State for orphaned file detection (must not be NULL, read-only)
+ * @param state State for safety validation (must not be NULL, read-only)
  * @param manifest Current file manifest (must not be NULL)
- * @param opts Cleanup options (must not be NULL)
+ * @param opts Cleanup options with PRE-DETECTED orphans (must not be NULL)
  * @param out_result Cleanup result (must not be NULL, caller must free with cleanup_result_free)
  * @return Error or NULL on success (check result for operation details)
  */

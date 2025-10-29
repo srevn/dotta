@@ -313,6 +313,7 @@ static error_t *check_item_metadata_divergence(
  * @param in_state Must be false for directories (invariant enforced)
  * @param mode_differs Flag indicating mode/permissions divergence
  * @param ownership_differs Flag indicating ownership divergence
+ * @param profile_enabled Is the source profile in workspace's enabled list?
  */
 static error_t *workspace_add_diverged(
     workspace_t *ws,
@@ -326,7 +327,8 @@ static error_t *workspace_add_diverged(
     bool on_filesystem,
     bool content_differs,
     bool mode_differs,
-    bool ownership_differs
+    bool ownership_differs,
+    bool profile_enabled
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(filesystem_path);
@@ -370,6 +372,7 @@ static error_t *workspace_add_diverged(
     entry->content_differs = content_differs;
     entry->mode_differs = mode_differs;
     entry->ownership_differs = ownership_differs;
+    entry->profile_enabled = profile_enabled;
 
     if (!entry->filesystem_path ||
         (storage_path && !entry->storage_path) ||
@@ -533,7 +536,8 @@ static error_t *analyze_file_divergence(
                                              div_type, WORKSPACE_ITEM_FILE,
                                              in_profile, in_state,
                                              on_filesystem, content_differs,
-                                             false, false);  /* No metadata check for type change */
+                                             false, false,  /* No metadata check for type change */
+                                             true);  /* profile_enabled: from manifest = enabled */
 
             case CMP_MISSING:
                 /* File missing - can't check metadata, return immediately */
@@ -543,7 +547,8 @@ static error_t *analyze_file_divergence(
                                              div_type, WORKSPACE_ITEM_FILE,
                                              in_profile, in_state,
                                              on_filesystem, content_differs,
-                                             false, false);  /* No metadata check for missing file */
+                                             false, false,  /* No metadata check for missing file */
+                                             true);  /* profile_enabled: from manifest = enabled */
         }
 
         /* Check metadata for all cases that reach here (including content modifications) */
@@ -594,7 +599,8 @@ static error_t *analyze_file_divergence(
                                          div_type, WORKSPACE_ITEM_FILE,
                                          in_profile, in_state,
                                          on_filesystem, content_differs,
-                                         mode_differs, ownership_differs);
+                                         mode_differs, ownership_differs,
+                                         true);  /* profile_enabled: from manifest = enabled */
         }
     }
 
@@ -604,7 +610,8 @@ static error_t *analyze_file_divergence(
                                      div_type, WORKSPACE_ITEM_FILE,
                                      in_profile, in_state,
                                      on_filesystem, false,
-                                     false, false);
+                                     false, false,
+                                     true);  /* profile_enabled: from manifest = enabled */
     }
 
     /* Case 5: File deleted from filesystem */
@@ -613,75 +620,198 @@ static error_t *analyze_file_divergence(
                                      div_type, WORKSPACE_ITEM_FILE,
                                      in_profile, in_state,
                                      on_filesystem, false,
-                                     false, false);
+                                     false, false,
+                                     true);  /* profile_enabled: from manifest = enabled */
     }
 
     return NULL;
 }
 
 /**
- * Analyze state for orphaned entries
+ * Analyze state for orphaned file entries
  *
- * An entry is orphaned if:
- * 1. Its profile is in our enabled profile list (in scope), AND
- * 2. The file no longer exists in that profile's branch
+ * Detects ALL orphaned files (enabled + disabled profiles) using cleanup
+ * module's robust algorithm. Each orphan is marked with profile_enabled
+ * flag to enable caller filtering.
  *
- * State entries from profiles NOT in our enabled list are ignored (out of scope).
+ * An entry is orphaned if it exists in state but not in manifest.
+ * - Enabled profile orphans: File removed from branch (profile_enabled=true)
+ * - Disabled profile orphans: Profile disabled, needs cleanup (profile_enabled=false)
+ *
+ * Callers filter by profile_enabled:
+ * - status: only show profile_enabled=true (enabled profiles)
+ * - apply: use all (cleanup disabled profiles too)
  */
-static error_t *analyze_orphaned_state(workspace_t *ws) {
+static error_t *analyze_orphaned_files(workspace_t *ws) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->state);
+    CHECK_NULL(ws->manifest_index);
     CHECK_NULL(ws->profile_index);
 
-    /* Get all files in state */
-    size_t state_file_count = 0;
+    error_t *err = NULL;
     state_file_entry_t *state_files = NULL;
-    error_t *err = state_get_all_files(ws->state, &state_files, &state_file_count);
+    size_t state_count = 0;
+
+    /* Get all files in state */
+    err = state_get_all_files(ws->state, &state_files, &state_count);
     if (err) {
-        return err;
+        return error_wrap(err, "Failed to get state files");
     }
 
-    /* Check each state entry */
-    for (size_t i = 0; i < state_file_count; i++) {
+    /* Early exit: no files in state means no orphans */
+    if (state_count == 0) {
+        state_free_all_files(state_files, state_count);
+        return NULL;
+    }
+
+    /* Identify orphans: in state, not in manifest */
+    for (size_t i = 0; i < state_count; i++) {
         const state_file_entry_t *state_entry = &state_files[i];
         const char *fs_path = state_entry->filesystem_path;
-        const char *entry_profile = state_entry->profile;
+        const char *storage_path = state_entry->storage_path;
+        const char *profile = state_entry->profile;
 
-        /* Skip if this state entry's profile is not in our enabled profile list */
-        if (!hashmap_get(ws->profile_index, entry_profile)) {
-            continue;  /* Out of scope - ignore */
-        }
-
-        /* Check if this file exists in manifest (profile state) */
+        /* Check if file exists in manifest (O(1) lookup) */
         file_entry_t *manifest_entry = hashmap_get(ws->manifest_index, fs_path);
 
         if (!manifest_entry) {
-            /* Orphaned: In state, profile is enabled, but not in profile branch */
+            /* Orphaned: in state, not in manifest */
+            bool profile_enabled = (hashmap_get(ws->profile_index, profile) != NULL);
             bool on_filesystem = fs_lexists(fs_path);
 
-            error_t *err = workspace_add_diverged(
+            err = workspace_add_diverged(
                 ws,
                 fs_path,
-                state_entry->storage_path,
-                state_entry->profile,
+                storage_path,
+                profile,
                 DIVERGENCE_ORPHANED,
                 WORKSPACE_ITEM_FILE,
-                false,     /* not in profile */
-                true,      /* in state */
+                false,            /* not in profile */
+                true,             /* in state (was deployed) */
                 on_filesystem,
-                false,     /* content_differs N/A */
-                false,     /* mode_differs N/A (orphaned file) */
-                false      /* ownership_differs N/A (orphaned file) */
+                false,            /* content_differs N/A */
+                false,            /* mode_differs N/A */
+                false,            /* ownership_differs N/A */
+                profile_enabled   /* NEW: explicit scope flag */
             );
 
             if (err) {
-                state_free_all_files(state_files, state_file_count);
-                return err;
+                state_free_all_files(state_files, state_count);
+                return error_wrap(err, "Failed to add orphaned file");
             }
         }
     }
 
-    state_free_all_files(state_files, state_file_count);
+    state_free_all_files(state_files, state_count);
+    return NULL;
+}
+
+/**
+ * Analyze state for orphaned directory entries
+ *
+ * Mirrors analyze_orphaned_files but compares state directories
+ * against merged_metadata instead of manifest.
+ *
+ * Detects ALL orphaned directories (enabled + disabled profiles) and
+ * marks each with profile_enabled flag for caller filtering.
+ *
+ * Directories in state but not in any profile's metadata are orphaned
+ * and should be pruned.
+ */
+static error_t *analyze_orphaned_directories(workspace_t *ws) {
+    CHECK_NULL(ws);
+    CHECK_NULL(ws->state);
+    CHECK_NULL(ws->merged_metadata);
+    CHECK_NULL(ws->profile_index);
+
+    error_t *err = NULL;
+    state_directory_entry_t *state_dirs = NULL;
+    size_t state_count = 0;
+
+    /* Get all directories in state */
+    err = state_get_all_directories(ws->state, &state_dirs, &state_count);
+    if (err) {
+        return error_wrap(err, "Failed to get state directories");
+    }
+
+    /* Early exit: no directories in state means no orphans */
+    if (state_count == 0) {
+        state_free_all_directories(state_dirs, state_count);
+        return NULL;
+    }
+
+    /* Identify orphans: in state, not in merged_metadata */
+    for (size_t i = 0; i < state_count; i++) {
+        const state_directory_entry_t *state_entry = &state_dirs[i];
+        const char *dir_path = state_entry->directory_path;
+        const char *storage_prefix = state_entry->storage_prefix;
+        const char *profile = state_entry->profile;
+
+        /* Check if directory exists in merged_metadata (O(1) lookup)
+         * For directories: key in merged_metadata = filesystem_path */
+        const merged_metadata_entry_t *meta_entry =
+            hashmap_get(ws->merged_metadata, dir_path);
+
+        /* Orphaned if: not in metadata OR wrong kind (defensive check) */
+        bool is_orphaned = (!meta_entry ||
+                           meta_entry->item->kind != METADATA_ITEM_DIRECTORY);
+
+        if (is_orphaned) {
+            /* Orphaned: in state, not in metadata */
+            bool profile_enabled = (hashmap_get(ws->profile_index, profile) != NULL);
+            bool on_filesystem = fs_exists(dir_path);
+
+            err = workspace_add_diverged(
+                ws,
+                dir_path,
+                storage_prefix,
+                profile,
+                DIVERGENCE_ORPHANED,
+                WORKSPACE_ITEM_DIRECTORY,
+                false,            /* not in profile */
+                false,            /* NOT in state (semantic: directories never deployed) */
+                on_filesystem,
+                false,            /* content_differs N/A */
+                false,            /* mode_differs N/A */
+                false,            /* ownership_differs N/A */
+                profile_enabled   /* NEW: explicit scope flag */
+            );
+
+            if (err) {
+                state_free_all_directories(state_dirs, state_count);
+                return error_wrap(err, "Failed to add orphaned directory");
+            }
+        }
+    }
+
+    state_free_all_directories(state_dirs, state_count);
+    return NULL;
+}
+
+/**
+ * Analyze state for orphaned entries (files + directories)
+ *
+ * Unified orphan detection for both files and directories.
+ * Detects ALL orphans regardless of profile scope, marking each
+ * with profile_enabled flag for caller filtering.
+ */
+static error_t *analyze_orphaned_state(workspace_t *ws) {
+    CHECK_NULL(ws);
+
+    error_t *err = NULL;
+
+    /* Analyze file orphans */
+    err = analyze_orphaned_files(ws);
+    if (err) {
+        return error_wrap(err, "Failed to analyze orphaned files");
+    }
+
+    /* Analyze directory orphans */
+    err = analyze_orphaned_directories(ws);
+    if (err) {
+        return error_wrap(err, "Failed to analyze orphaned directories");
+    }
+
     return NULL;
 }
 
@@ -882,7 +1012,8 @@ static error_t *scan_directory_for_untracked(
                     true,   /* on filesystem */
                     false,  /* content_differs N/A */
                     false,  /* mode_differs N/A (untracked file) */
-                    false   /* ownership_differs N/A (untracked file) */
+                    false,  /* ownership_differs N/A (untracked file) */
+                    true    /* profile_enabled: scanning enabled profile's tracked dir */
                 );
 
                 free(storage_path);
@@ -1047,7 +1178,8 @@ static bool check_directory_callback(const char *key, void *value, void *user_da
             false,  /* on_filesystem (deleted) */
             false,  /* content_differs (N/A for deleted) */
             false,  /* mode_differs (N/A for deleted) */
-            false   /* ownership_differs (N/A for deleted) */
+            false,  /* ownership_differs (N/A for deleted) */
+            true    /* profile_enabled: from merged_metadata = enabled */
         );
 
         if (err) {
@@ -1109,7 +1241,8 @@ static bool check_directory_callback(const char *key, void *value, void *user_da
             true,   /* on_filesystem */
             true,   /* content_differs (metadata counts as content) */
             mode_differs,
-            ownership_differs
+            ownership_differs,
+            true    /* profile_enabled: from merged_metadata = enabled */
         );
 
         if (err) {
@@ -1291,7 +1424,8 @@ static error_t *analyze_encryption_policy_mismatch(
                 false, /* on_filesystem (not relevant for policy mismatch) */
                 false, /* content_differs (not relevant for policy mismatch) */
                 false, /* mode_differs N/A (policy mismatch) */
-                false  /* ownership_differs N/A (policy mismatch) */
+                false, /* ownership_differs N/A (policy mismatch) */
+                true   /* profile_enabled: from manifest = enabled */
             );
 
             if (err) {
@@ -1559,9 +1693,13 @@ workspace_status_t workspace_get_status(const workspace_t *ws) {
 /**
  * Get diverged items by category
  */
-const workspace_item_t **workspace_get_diverged(
+/**
+ * Get diverged items by category with optional profile scope filtering
+ */
+const workspace_item_t **workspace_get_diverged_filtered(
     const workspace_t *ws,
     divergence_type_t type,
+    bool enabled_only,
     size_t *count
 ) {
     if (!ws || !count) {
@@ -1578,9 +1716,17 @@ const workspace_item_t **workspace_get_diverged(
     /* First pass: count matching entries */
     size_t match_count = 0;
     for (size_t i = 0; i < ws->diverged_count; i++) {
-        if (ws->diverged[i].type == type) {
-            match_count++;
+        const workspace_item_t *item = &ws->diverged[i];
+
+        if (item->type != type) {
+            continue;
         }
+
+        if (enabled_only && !item->profile_enabled) {
+            continue;  /* Skip disabled profiles */
+        }
+
+        match_count++;
     }
 
     /* If none found, return NULL */
@@ -1599,13 +1745,36 @@ const workspace_item_t **workspace_get_diverged(
     /* Second pass: populate pointer array */
     size_t idx = 0;
     for (size_t i = 0; i < ws->diverged_count; i++) {
-        if (ws->diverged[i].type == type) {
-            result[idx++] = &ws->diverged[i];
+        const workspace_item_t *item = &ws->diverged[i];
+
+        if (item->type != type) {
+            continue;
         }
+
+        if (enabled_only && !item->profile_enabled) {
+            continue;
+        }
+
+        result[idx++] = item;
     }
 
     *count = match_count;
     return result;
+}
+
+/**
+ * Get diverged items by category
+ *
+ * Convenience wrapper that filters to enabled profiles only.
+ * Equivalent to workspace_get_diverged_filtered(ws, type, true, count).
+ */
+const workspace_item_t **workspace_get_diverged(
+    const workspace_t *ws,
+    divergence_type_t type,
+    size_t *count
+) {
+    /* Default: enabled_only=true (preserve existing behavior for status) */
+    return workspace_get_diverged_filtered(ws, type, true, count);
 }
 
 /**

@@ -68,6 +68,9 @@ typedef struct {
     /* Secondary metadata divergences (can both be true simultaneously) */
     bool mode_differs;          /* Permissions/mode changed from metadata */
     bool ownership_differs;     /* Owner/group changed from metadata (requires root) */
+
+    /* Scope tracking */
+    bool profile_enabled;       /* Is source profile in workspace's enabled list? */
 } workspace_item_t;
 
 /**
@@ -179,6 +182,33 @@ workspace_status_t workspace_get_status(const workspace_t *ws);
 const workspace_item_t **workspace_get_diverged(
     const workspace_t *ws,
     divergence_type_t type,
+    size_t *count
+);
+
+/**
+ * Get diverged items by category with optional profile scope filtering
+ *
+ * Returns items matching the specified divergence type, optionally
+ * filtered by profile_enabled flag.
+ *
+ * The returned pointers reference the workspace's internal data and remain
+ * valid until the workspace is freed. However, the array itself must be freed
+ * by the caller using free().
+ *
+ * Use cases:
+ * - status: enabled_only=true (only show enabled profiles)
+ * - apply: enabled_only=false (cleanup all orphans including disabled)
+ *
+ * @param ws Workspace (must not be NULL)
+ * @param type Divergence type to query
+ * @param enabled_only If true, only return items where profile_enabled=true
+ * @param count Output count of matching entries (must not be NULL)
+ * @return Allocated array of pointers, or NULL if none. Caller must free().
+ */
+const workspace_item_t **workspace_get_diverged_filtered(
+    const workspace_t *ws,
+    divergence_type_t type,
+    bool enabled_only,
     size_t *count
 );
 

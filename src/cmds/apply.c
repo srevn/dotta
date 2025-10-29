@@ -777,7 +777,8 @@ static error_t *apply_update_and_save_state(
  */
 static error_t *ensure_complete_apply_privileges(
     const manifest_t *manifest,
-    const orphan_list_t *orphans,
+    const workspace_item_t **orphans,
+    size_t orphan_count,
     const cmd_apply_options_t *opts,
     output_ctx_t *out
 ) {
@@ -806,10 +807,11 @@ static error_t *ensure_complete_apply_privileges(
     }
 
     /* 2. Collect root/ paths from orphans (files being removed) */
-    if (orphans) {
-        for (size_t i = 0; i < orphans->count; i++) {
-            if (privilege_path_requires_root(orphans->entries[i].storage_path)) {
-                error_t *err = string_array_push(root_paths, orphans->entries[i].storage_path);
+    if (orphans && orphan_count > 0) {
+        for (size_t i = 0; i < orphan_count; i++) {
+            /* workspace_item_t has storage_path field */
+            if (privilege_path_requires_root(orphans[i]->storage_path)) {
+                error_t *err = string_array_push(root_paths, orphans[i]->storage_path);
                 if (err) {
                     string_array_free(root_paths);
                     return error_wrap(err, "Failed to add orphan root path");
@@ -852,8 +854,10 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     profile_list_t *profiles = NULL;
     const manifest_t *manifest = NULL;
     workspace_t *ws = NULL;
-    orphan_list_t *orphans = NULL;
-    orphan_directory_list_t *dir_orphans = NULL;
+    const workspace_item_t **file_orphans = NULL;
+    size_t file_orphan_count = 0;
+    const workspace_item_t **dir_orphans = NULL;
+    size_t dir_orphan_count = 0;
     metadata_t *merged_metadata = NULL;
     content_cache_t *cache = NULL;
     preflight_result_t *preflight = NULL;
@@ -972,31 +976,97 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                     manifest->count, manifest->count == 1 ? "" : "s");
     }
 
-    /* Identify orphaned files (unless --keep-orphans)
+    /* Extract orphans from workspace (unless --keep-orphans)
      *
-     * Architecture: Orphan identification is expensive O(N+M). We compute once here,
-     * then reuse the result for:
-     * 1. Privilege checking (filter root/ paths) - line ~948
-     * 2. Preflight display (show user what will be removed) - line ~1048
-     * 3. Actual removal (pass to cleanup) - line ~1193
+     * Architecture: workspace_load() already detected ALL orphans (enabled + disabled
+     * profiles) during analyze_orphaned_state(). We extract them here using
+     * enabled_only=false to get complete picture for cleanup.
      *
-     * This eliminates 2×-3× redundant computation and fixes the privilege gap
-     * (before: only checked manifest, missed orphaned root/ files).
+     * Why enabled_only=false?
+     * - When a profile is disabled, its files become orphans that MUST be cleaned up
+     * - apply is responsible for removing files from disabled profiles
+     * - status uses enabled_only=true to show only relevant divergence
+     *
+     * Extracted orphans are used for:
+     * 1. Privilege checking (filter root/ paths)
+     * 2. Preflight display (show user what will be removed)
+     * 3. Actual removal (pass to cleanup_execute)
+     *
+     * This eliminates redundant orphan detection in cleanup module (performance gain).
      */
     if (!opts->keep_orphans) {
-        output_print(out, OUTPUT_VERBOSE, "\nIdentifying orphaned files...\n");
+        output_print(out, OUTPUT_VERBOSE, "\nExtracting orphans from workspace...\n");
 
-        err = cleanup_identify_orphans(state, manifest, &orphans);
-        if (err) {
-            err = error_wrap(err, "Failed to identify orphaned files");
-            goto cleanup;
+        /* Get ALL orphaned items (enabled + disabled profiles) */
+        size_t all_orphan_count = 0;
+        const workspace_item_t **all_orphans = workspace_get_diverged_filtered(
+            ws,
+            DIVERGENCE_ORPHANED,
+            false,  /* enabled_only=false: include disabled profiles for cleanup */
+            &all_orphan_count
+        );
+
+        if (all_orphans && all_orphan_count > 0) {
+            /* Count files vs directories for array allocation */
+            for (size_t i = 0; i < all_orphan_count; i++) {
+                if (all_orphans[i]->item_kind == WORKSPACE_ITEM_FILE) {
+                    file_orphan_count++;
+                } else {
+                    dir_orphan_count++;
+                }
+            }
+
+            /* Allocate separate arrays for files and directories */
+            if (file_orphan_count > 0) {
+                file_orphans = malloc(file_orphan_count * sizeof(workspace_item_t *));
+                if (!file_orphans) {
+                    err = ERROR(ERR_MEMORY, "Failed to allocate file orphan array");
+                    free(all_orphans);
+                    goto cleanup;
+                }
+
+                size_t f_idx = 0;
+                for (size_t i = 0; i < all_orphan_count; i++) {
+                    if (all_orphans[i]->item_kind == WORKSPACE_ITEM_FILE) {
+                        file_orphans[f_idx++] = all_orphans[i];
+                    }
+                }
+            }
+
+            if (dir_orphan_count > 0) {
+                dir_orphans = malloc(dir_orphan_count * sizeof(workspace_item_t *));
+                if (!dir_orphans) {
+                    err = ERROR(ERR_MEMORY, "Failed to allocate directory orphan array");
+                    free(all_orphans);
+                    free(file_orphans);
+                    file_orphans = NULL;
+                    goto cleanup;
+                }
+
+                size_t d_idx = 0;
+                for (size_t i = 0; i < all_orphan_count; i++) {
+                    if (all_orphans[i]->item_kind == WORKSPACE_ITEM_DIRECTORY) {
+                        dir_orphans[d_idx++] = all_orphans[i];
+                    }
+                }
+            }
+
+            free(all_orphans);  /* Done with temporary array */
         }
 
-        if (opts->verbose && orphans && orphans->count > 0) {
-            output_print(out, OUTPUT_VERBOSE,
-                        "Found %zu orphaned file%s\n",
-                        orphans->count,
-                        orphans->count == 1 ? "" : "s");
+        if (opts->verbose) {
+            if (file_orphan_count > 0) {
+                output_print(out, OUTPUT_VERBOSE,
+                            "Found %zu orphaned file%s\n",
+                            file_orphan_count,
+                            file_orphan_count == 1 ? "" : "s");
+            }
+            if (dir_orphan_count > 0) {
+                output_print(out, OUTPUT_VERBOSE,
+                            "Found %zu orphaned director%s\n",
+                            dir_orphan_count,
+                            dir_orphan_count == 1 ? "y" : "ies");
+            }
         }
     }
 
@@ -1025,33 +1095,6 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Identify orphaned directories (state vs metadata)
-     *
-     * Similar to file orphan identification above, this computes the list of
-     * directories that are tracked in state but no longer in any enabled profile's
-     * metadata. Must happen AFTER metadata loading.
-     *
-     * Used for:
-     * 1. Preflight display (show user what will be removed)
-     * 2. Actual removal (pass to cleanup)
-     */
-    if (!opts->keep_orphans) {
-        output_print(out, OUTPUT_VERBOSE, "\nIdentifying orphaned directories...\n");
-
-        err = cleanup_identify_orphaned_directories(state, merged_metadata, &dir_orphans);
-        if (err) {
-            err = error_wrap(err, "Failed to identify orphaned directories");
-            goto cleanup;
-        }
-
-        if (opts->verbose && dir_orphans && dir_orphans->count > 0) {
-            output_print(out, OUTPUT_VERBOSE,
-                        "Found %zu orphaned director%s\n",
-                        dir_orphans->count,
-                        dir_orphans->count == 1 ? "y" : "ies");
-        }
-    }
-
     /* Check privileges for root/ files BEFORE deployment begins
      *
      * This ensures we have required privileges upfront, preventing partial
@@ -1067,7 +1110,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     if (!opts->dry_run) {
         output_print(out, OUTPUT_VERBOSE, "\nChecking privilege requirements...\n");
 
-        err = ensure_complete_apply_privileges(manifest, orphans, opts, out);
+        err = ensure_complete_apply_privileges(manifest, file_orphans, file_orphan_count, opts, out);
         if (err) {
             err = error_wrap(err, "Insufficient privileges for operation");
             goto cleanup;
@@ -1134,8 +1177,10 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             .enabled_metadata = merged_metadata,
             .enabled_profiles = profiles,
             .cache = cache,
-            .orphaned_files = orphans,              /* Pass pre-computed file orphans */
-            .orphaned_directories = dir_orphans,    /* Pass pre-computed directory orphans */
+            .orphaned_files = file_orphans,           /* Workspace item array */
+            .orphaned_files_count = file_orphan_count,
+            .orphaned_directories = dir_orphans,      /* Workspace item array */
+            .orphaned_directories_count = dir_orphan_count,
             .verbose = opts->verbose,
             .dry_run = false,  /* Preflight is always read-only */
             .force = opts->force,
@@ -1280,9 +1325,11 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             cleanup_options_t cleanup_opts = {
                 .enabled_metadata = merged_metadata,
                 .enabled_profiles = profiles,
-                .cache = cache,                      /* Pass cache for performance (avoids re-decryption) */
-                .orphaned_files = orphans,           /* Pass pre-computed file orphans */
-                .orphaned_directories = dir_orphans, /* Pass pre-computed directory orphans */
+                .cache = cache,                           /* Pass cache for performance (avoids re-decryption) */
+                .orphaned_files = file_orphans,           /* Workspace item array */
+                .orphaned_files_count = file_orphan_count,
+                .orphaned_directories = dir_orphans,      /* Workspace item array */
+                .orphaned_directories_count = dir_orphan_count,
                 .verbose = opts->verbose,
                 .dry_run = false,  /* Dry-run handled at deployment level */
                 .force = opts->force,
@@ -1353,8 +1400,8 @@ cleanup:
     if (profiles_str) free(profiles_str);
     if (cache) content_cache_free(cache);
     if (merged_metadata) metadata_free(merged_metadata);
-    if (dir_orphans) orphan_directory_list_free(dir_orphans);
-    if (orphans) orphan_list_free(orphans);
+    if (dir_orphans) free(dir_orphans);      /* Workspace item pointer array */
+    if (file_orphans) free(file_orphans);    /* Workspace item pointer array */
     if (ws) workspace_free(ws);
     if (profiles) profile_list_free(profiles);
     if (state) state_free(state);

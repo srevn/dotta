@@ -773,10 +773,6 @@ static error_t *apply_update_and_save_state(
  * AND directory orphans (directories being removed) for root/ paths. This ensures
  * we have required privileges BEFORE attempting any filesystem modifications.
  *
- * The privilege gap this fixes:
- * - Before: Only checked manifest + file orphans → missed orphaned root/ directories → cleanup failed mid-operation
- * - After: Checks manifest + file orphans + dir orphans → prompts for elevation → cleanup succeeds
- *
  * @param manifest Files being deployed (must not be NULL)
  * @param file_orphans Files being removed (can be NULL if --keep-orphans)
  * @param file_orphan_count Number of file orphans
@@ -1390,7 +1386,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                 .orphaned_files_count = file_orphan_count,
                 .orphaned_directories = dir_orphans,      /* Workspace item array */
                 .orphaned_directories_count = dir_orphan_count,
-                .preflight_violations = cleanup_preflight ? cleanup_preflight->safety_violations : NULL,  /* Pass preflight violations for granular skip */
+                .preflight_violations = cleanup_preflight ? cleanup_preflight->safety_violations : NULL,
                 .verbose = opts->verbose,
                 .dry_run = false,  /* Dry-run handled at deployment level */
                 .force = opts->force,
@@ -1461,8 +1457,8 @@ cleanup:
     if (profiles_str) free(profiles_str);
     if (cache) content_cache_free(cache);
     if (merged_metadata) metadata_free(merged_metadata);
-    if (dir_orphans) free(dir_orphans);      /* Workspace item pointer array */
-    if (file_orphans) free(file_orphans);    /* Workspace item pointer array */
+    if (dir_orphans) free(dir_orphans);
+    if (file_orphans) free(file_orphans);
     if (ws) workspace_free(ws);
     if (profiles) profile_list_free(profiles);
     if (state) state_free(state);

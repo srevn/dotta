@@ -328,31 +328,21 @@ static void display_divergence_section(
  *
  * Shows the consistency between profile state, deployment state, and filesystem.
  * Organized into actionable sections (Git-like structure).
+ *
+ * @param ws Workspace (must not be NULL, borrowed from caller)
+ * @param out Output context (must not be NULL)
+ * @param verbose Verbose output flag
  */
 static void display_workspace_status(
-    git_repository *repo,
-    profile_list_t *profiles,
-    const dotta_config_t *config,
+    workspace_t *ws,
     output_ctx_t *out,
     bool verbose
 ) {
-    if (!repo || !profiles || !out) {
+    if (!ws || !out) {
         return;
     }
 
-    /* Load workspace */
-    workspace_t *ws = NULL;
-    error_t *err = workspace_load(repo, profiles, config, NULL, &ws);
-    if (err) {
-        /* Non-fatal: if workspace fails to load, skip this section */
-        if (verbose) {
-            output_warning(out, "Failed to load workspace: %s", error_message(err));
-        }
-        error_free(err);
-        return;
-    }
-
-    /* Get workspace status */
+    /* Get workspace status from provided workspace */
     workspace_status_t ws_status = workspace_get_status(ws);
 
     /* Only display section if there's something to report */
@@ -450,8 +440,6 @@ static void display_workspace_status(
             output_newline(out);
         }
     }
-
-    workspace_free(ws);
 }
 
 /**
@@ -885,7 +873,10 @@ static error_t *extract_storage_paths_from_manifest(
 /**
  * Status command implementation
  */
-error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
+error_t *cmd_status(
+    git_repository *repo,
+    const cmd_status_options_t *opts
+) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
@@ -893,7 +884,8 @@ error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
     error_t *err = NULL;
     dotta_config_t *config = NULL;
     profile_list_t *profiles = NULL;
-    manifest_t *manifest = NULL;
+    const manifest_t *manifest = NULL;
+    workspace_t *ws = NULL;
     state_t *state = NULL;
     output_ctx_t *out = NULL;
 
@@ -943,10 +935,25 @@ error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
         goto cleanup;
     }
 
-    /* Build manifest (needed for both profile display and filesystem status) */
-    err = profile_build_manifest(repo, profiles, &manifest);
+    /* Load workspace (includes manifest building and divergence analysis)
+     *
+     * The workspace builds the manifest internally during initialization,
+     * eliminating redundant manifest building. We extract the manifest
+     * immediately for use in privilege checking and display functions.
+     *
+     * This pattern ensures single manifest build per command invocation,
+     * matching the optimization in apply.c.
+     */
+    err = workspace_load(repo, profiles, config, NULL, &ws);
     if (err) {
-        err = error_wrap(err, "Failed to build manifest");
+        err = error_wrap(err, "Failed to load workspace");
+        goto cleanup;
+    }
+
+    /* Extract manifest from workspace (borrowed reference, owned by workspace) */
+    manifest = workspace_get_manifest(ws);
+    if (!manifest) {
+        err = ERROR(ERR_INTERNAL, "Workspace manifest is NULL");
         goto cleanup;
     }
 
@@ -994,8 +1001,8 @@ error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
     /* Display enabled profiles and last deployment info */
     display_enabled_profiles(out, profiles, manifest, state, opts->verbose);
 
-    /* Display workspace status */
-    display_workspace_status(repo, profiles, config, out, opts->verbose);
+    /* Display workspace status (workspace provides divergence analysis) */
+    display_workspace_status(ws, out, opts->verbose);
 
     /* Display multi-profile files (if verbose mode or if there are any) */
     display_multi_profile_files(repo, profiles, manifest, out);
@@ -1013,7 +1020,7 @@ error_t *cmd_status(git_repository *repo, const cmd_status_options_t *opts) {
 
 cleanup:
     /* Free all resources (safe with NULL pointers) */
-    manifest_free(manifest);
+    workspace_free(ws);
     profile_list_free(profiles);
     state_free(state);
     config_free(config);

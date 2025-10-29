@@ -850,7 +850,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     char *repo_dir = NULL;
     state_t *state = NULL;
     profile_list_t *profiles = NULL;
-    manifest_t *manifest = NULL;
+    const manifest_t *manifest = NULL;
     workspace_t *ws = NULL;
     orphan_list_t *orphans = NULL;
     orphan_directory_list_t *dir_orphans = NULL;
@@ -938,17 +938,29 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Build manifest */
-    output_print(out, OUTPUT_VERBOSE, "\nBuilding manifest...\n");
+    /* Load workspace (includes manifest building and metadata loading)
+     *
+     * The workspace builds the manifest internally during initialization,
+     * eliminating redundant manifest building. We extract the manifest
+     * immediately after loading for use throughout the command.
+     */
+    output_print(out, OUTPUT_VERBOSE, "\nLoading workspace...\n");
 
-    err = profile_build_manifest(repo, profiles, &manifest);
+    err = workspace_load(repo, profiles, config, NULL, &ws);
     if (err) {
-        err = error_wrap(err, "Failed to build manifest");
+        err = error_wrap(err, "Failed to load workspace");
+        goto cleanup;
+    }
+
+    /* Extract manifest from workspace (borrowed reference, owned by workspace) */
+    manifest = workspace_get_manifest(ws);
+    if (!manifest) {
+        err = ERROR(ERR_INTERNAL, "Workspace manifest is NULL");
         goto cleanup;
     }
 
     if (opts->verbose) {
-        output_print(out, OUTPUT_VERBOSE, "Manifest contains %zu file%s\n",
+        output_print(out, OUTPUT_VERBOSE, "Workspace loaded: %zu file%s in manifest\n",
                     manifest->count, manifest->count == 1 ? "" : "s");
     }
 
@@ -980,28 +992,13 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Load workspace (includes metadata loading and merging)
-     *
-     * The workspace pre-loads per-profile metadata during initialization and
-     * provides a merged view via workspace_get_merged_metadata(). This eliminates
-     * the need for manual metadata loading and ensures consistency with other
-     * commands (status, update, sync).
-     */
-    output_print(out, OUTPUT_VERBOSE, "\nLoading workspace...\n");
-
-    err = workspace_load(repo, profiles, config, NULL, &ws);
-    if (err) {
-        err = error_wrap(err, "Failed to load workspace");
-        goto cleanup;
-    }
-
     /* Extract merged metadata from workspace
      *
      * workspace_get_merged_metadata() merges metadata across all profiles
-     * in precedence order (global → OS → host), matching the behavior of
-     * the previous manual implementation.
+     * in precedence order (global → OS → host). The workspace was already
+     * loaded earlier, so we just extract the merged metadata here.
      */
-    output_print(out, OUTPUT_VERBOSE, "  Merging metadata from profiles...\n");
+    output_print(out, OUTPUT_VERBOSE, "\nExtracting merged metadata...\n");
 
     err = workspace_get_merged_metadata(ws, &merged_metadata);
     if (err) {
@@ -1350,7 +1347,6 @@ cleanup:
     if (merged_metadata) metadata_free(merged_metadata);
     if (dir_orphans) orphan_directory_list_free(dir_orphans);
     if (orphans) orphan_list_free(orphans);
-    if (manifest) manifest_free(manifest);
     if (ws) workspace_free(ws);
     if (profiles) profile_list_free(profiles);
     if (state) state_free(state);

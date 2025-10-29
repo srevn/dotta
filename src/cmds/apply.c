@@ -761,24 +761,29 @@ static error_t *apply_update_and_save_state(
 /**
  * Check privileges for complete apply operation
  *
- * Examines BOTH manifest (files being deployed) and orphans (files being removed)
- * for root/ paths. This ensures we have required privileges BEFORE attempting
- * any filesystem modifications.
+ * Examines manifest (files being deployed), file orphans (files being removed),
+ * AND directory orphans (directories being removed) for root/ paths. This ensures
+ * we have required privileges BEFORE attempting any filesystem modifications.
  *
  * The privilege gap this fixes:
- * - Before: Only checked manifest → missed orphaned root/ files → cleanup failed silently
- * - After: Checks both manifest + orphans → prompts for elevation → cleanup succeeds
+ * - Before: Only checked manifest + file orphans → missed orphaned root/ directories → cleanup failed mid-operation
+ * - After: Checks manifest + file orphans + dir orphans → prompts for elevation → cleanup succeeds
  *
  * @param manifest Files being deployed (must not be NULL)
- * @param orphans Files being removed (can be NULL if --keep-orphans)
+ * @param file_orphans Files being removed (can be NULL if --keep-orphans)
+ * @param file_orphan_count Number of file orphans
+ * @param dir_orphans Directories being removed (can be NULL if --keep-orphans)
+ * @param dir_orphan_count Number of directory orphans
  * @param opts Apply command options (must not be NULL)
  * @param out Output context for messages (must not be NULL)
  * @return NULL if OK to proceed, error otherwise (or does not return if re-exec with sudo)
  */
 static error_t *ensure_complete_apply_privileges(
     const manifest_t *manifest,
-    const workspace_item_t **orphans,
-    size_t orphan_count,
+    const workspace_item_t **file_orphans,
+    size_t file_orphan_count,
+    const workspace_item_t **dir_orphans,
+    size_t dir_orphan_count,
     const cmd_apply_options_t *opts,
     output_ctx_t *out
 ) {
@@ -806,21 +811,35 @@ static error_t *ensure_complete_apply_privileges(
         }
     }
 
-    /* 2. Collect root/ paths from orphans (files being removed) */
-    if (orphans && orphan_count > 0) {
-        for (size_t i = 0; i < orphan_count; i++) {
+    /* 2. Collect root/ paths from file orphans (files being removed) */
+    if (file_orphans && file_orphan_count > 0) {
+        for (size_t i = 0; i < file_orphan_count; i++) {
             /* workspace_item_t has storage_path field */
-            if (privilege_path_requires_root(orphans[i]->storage_path)) {
-                error_t *err = string_array_push(root_paths, orphans[i]->storage_path);
+            if (privilege_path_requires_root(file_orphans[i]->storage_path)) {
+                error_t *err = string_array_push(root_paths, file_orphans[i]->storage_path);
                 if (err) {
                     string_array_free(root_paths);
-                    return error_wrap(err, "Failed to add orphan root path");
+                    return error_wrap(err, "Failed to add file orphan root path");
                 }
             }
         }
     }
 
-    /* 3. Check privileges if any root/ paths found */
+    /* 3. Collect root/ paths from directory orphans (directories being removed) */
+    if (dir_orphans && dir_orphan_count > 0) {
+        for (size_t i = 0; i < dir_orphan_count; i++) {
+            /* workspace_item_t has storage_path field */
+            if (privilege_path_requires_root(dir_orphans[i]->storage_path)) {
+                error_t *err = string_array_push(root_paths, dir_orphans[i]->storage_path);
+                if (err) {
+                    string_array_free(root_paths);
+                    return error_wrap(err, "Failed to add directory orphan root path");
+                }
+            }
+        }
+    }
+
+    /* 4. Check privileges if any root/ paths found */
     error_t *err = NULL;
     if (string_array_size(root_paths) > 0) {
         err = privilege_ensure_for_operation(
@@ -1095,11 +1114,11 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Check privileges for root/ files BEFORE deployment begins
+    /* Check privileges for root/ files AND directories BEFORE deployment begins
      *
      * This ensures we have required privileges upfront, preventing partial
      * deployments and cryptic mid-operation failures. Checks occur AFTER
-     * manifest building AND orphan identification (know all files) but BEFORE
+     * manifest building AND orphan identification (know all files/dirs) but BEFORE
      * any filesystem modifications.
      *
      * Skip check if dry-run (read-only operation, no privileges needed).
@@ -1110,7 +1129,15 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     if (!opts->dry_run) {
         output_print(out, OUTPUT_VERBOSE, "\nChecking privilege requirements...\n");
 
-        err = ensure_complete_apply_privileges(manifest, file_orphans, file_orphan_count, opts, out);
+        err = ensure_complete_apply_privileges(
+            manifest,
+            file_orphans,
+            file_orphan_count,
+            dir_orphans,
+            dir_orphan_count,
+            opts,
+            out
+        );
         if (err) {
             err = error_wrap(err, "Insufficient privileges for operation");
             goto cleanup;
@@ -1181,6 +1208,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             .orphaned_files_count = file_orphan_count,
             .orphaned_directories = dir_orphans,      /* Workspace item array */
             .orphaned_directories_count = dir_orphan_count,
+            .preflight_violations = NULL,             /* No preflight violations yet (this IS the preflight) */
             .verbose = opts->verbose,
             .dry_run = false,  /* Preflight is always read-only */
             .force = opts->force,
@@ -1193,16 +1221,45 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             goto cleanup;
         }
 
-        /* Display cleanup preflight results (will be added in Phase 5) */
+        /* Display cleanup preflight results */
         print_cleanup_preflight_results(out, cleanup_preflight, opts->verbose);
 
-        /* Block if safety violations (unless --force) */
+        /* Warn about safety violations but allow partial cleanup
+         *
+         * Changed from blocking abort to warning + continue. This enables granular
+         * cleanup where safe files are removed and unsafe files are skipped.
+         *
+         * The cleanup_execute function will use preflight_violations to build a
+         * skip list, ensuring files with uncommitted changes are preserved.
+         *
+         * User benefits:
+         * - Partial cleanup better than no cleanup
+         * - Clear feedback about what was removed vs skipped
+         * - Instructions on how to resolve remaining orphans
+         */
         if (cleanup_preflight->has_blocking_violations && !opts->force) {
-            err = ERROR(ERR_CONFLICT,
-                       "Cannot remove %zu orphaned file%s with uncommitted changes",
-                       cleanup_preflight->safety_violations->count,
-                       cleanup_preflight->safety_violations->count == 1 ? "" : "s");
-            goto cleanup;
+            output_print(out, OUTPUT_NORMAL, "\n");
+
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_WARNING, "%sWarning:%s ",
+                             output_color_code(out, OUTPUT_COLOR_YELLOW),
+                             output_color_code(out, OUTPUT_COLOR_RESET));
+            } else {
+                output_print(out, OUTPUT_WARNING, "Warning: ");
+            }
+
+            output_printf(out, OUTPUT_WARNING,
+                         "%zu orphaned file%s %s uncommitted changes.\n",
+                         cleanup_preflight->safety_violations->count,
+                         cleanup_preflight->safety_violations->count == 1 ? "" : "s",
+                         cleanup_preflight->safety_violations->count == 1 ? "has" : "have");
+
+            output_print(out, OUTPUT_WARNING,
+                        "These files will be skipped during cleanup to prevent data loss.\n");
+            output_print(out, OUTPUT_WARNING,
+                        "To remove them: commit/stash changes first, or use --force.\n\n");
+
+            /* Continue with operation - cleanup_execute will skip unsafe files */
         }
     }
 
@@ -1330,10 +1387,11 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                 .orphaned_files_count = file_orphan_count,
                 .orphaned_directories = dir_orphans,      /* Workspace item array */
                 .orphaned_directories_count = dir_orphan_count,
+                .preflight_violations = cleanup_preflight ? cleanup_preflight->safety_violations : NULL,  /* Pass preflight violations for granular skip */
                 .verbose = opts->verbose,
                 .dry_run = false,  /* Dry-run handled at deployment level */
                 .force = opts->force,
-                .skip_safety_check = (cleanup_preflight != NULL)  /* Skip if preflight already checked */
+                .skip_safety_check = true  /* Trust preflight data (performance optimization) */
             };
 
             err = cleanup_execute(repo, state, manifest, &cleanup_opts, &cleanup_res);

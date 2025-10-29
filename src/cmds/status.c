@@ -316,9 +316,6 @@ static void display_divergence_section(
                 format_diverged_item(out, item, &label, &color, info, sizeof(info));
                 output_item(out, label, color, info);
             }
-
-            /* Free the allocated pointer array */
-            free(items);
         }
     }
 }

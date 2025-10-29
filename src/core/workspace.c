@@ -71,6 +71,19 @@ typedef struct {
 } merged_metadata_entry_t;
 
 /**
+ * Divergence bucket (internal structure)
+ *
+ * Pre-bucketed storage for items of a specific divergence type.
+ * Eliminates query-time filtering and allocation by organizing items
+ * during workspace_load() rather than on every query.
+ */
+typedef struct {
+    workspace_item_t **items;    /* Array of pointers into ws->diverged (borrowed) */
+    size_t count;                /* Number of items in this bucket */
+    size_t capacity;             /* Allocated capacity for growth */
+} divergence_bucket_t;
+
+/**
  * Workspace structure
  *
  * Contains indexed views of all three states plus divergence analysis.
@@ -102,6 +115,9 @@ struct workspace {
     size_t diverged_count;
     size_t diverged_capacity;
     hashmap_t *diverged_index;       /* Maps filesystem_path -> workspace_item_t* */
+
+    /* Pre-bucketed divergence storage for O(1) type-based queries */
+    divergence_bucket_t buckets[10]; /* One per divergence_type_t (0-9), indexed by type value */
 
     /* Divergence count cache */
     size_t divergence_counts[10];    /* Cached counts for O(1) access (enum has values 0-9) */
@@ -188,6 +204,13 @@ static error_t *workspace_create_empty(
     ws->diverged = NULL;
     ws->diverged_count = 0;
     ws->diverged_capacity = 0;
+
+    /* Initialize divergence buckets (10 divergence types: 0-9) */
+    for (size_t i = 0; i < 10; i++) {
+        ws->buckets[i].items = NULL;
+        ws->buckets[i].count = 0;
+        ws->buckets[i].capacity = 0;
+    }
 
     /* Initialize divergence count cache (10 divergence types: 0-9) */
     for (size_t i = 0; i < 10; i++) {
@@ -418,9 +441,31 @@ static error_t *workspace_add_diverged(
 
     ws->diverged_count++;
 
-    /* Update divergence count cache (valid range: 0-9) */
+    /* Update divergence count cache and populate type-specific bucket (valid range: 0-9) */
     if (type <= DIVERGENCE_OWNERSHIP) {
         ws->divergence_counts[type]++;
+
+        /* Add to type-specific bucket for O(1) query access */
+        divergence_bucket_t *bucket = &ws->buckets[type];
+
+        /* Grow bucket if needed */
+        if (bucket->count >= bucket->capacity) {
+            size_t new_capacity = bucket->capacity == 0 ? 16 : bucket->capacity * 2;
+            workspace_item_t **new_items = realloc(bucket->items,
+                                                    new_capacity * sizeof(workspace_item_t *));
+            if (!new_items) {
+                /* Critical: bucket is now inconsistent with count cache.
+                 * This is a fatal error - workspace is corrupted. */
+                return ERROR(ERR_MEMORY,
+                    "Failed to grow divergence bucket for type %d (critical)", type);
+            }
+            bucket->items = new_items;
+            bucket->capacity = new_capacity;
+        }
+
+        /* Add pointer to the entry we just added to ws->diverged array
+         * Note: entry points to ws->diverged[ws->diverged_count - 1] */
+        bucket->items[bucket->count++] = entry;
     }
 
     return NULL;
@@ -1739,10 +1784,17 @@ workspace_status_t workspace_get_status(const workspace_t *ws) {
 }
 
 /**
- * Get diverged items by category
- */
-/**
  * Get diverged items by category with optional profile scope filtering
+ *
+ * Uses pre-bucketed storage for O(1) access without filtering or allocation.
+ *
+ * Performance characteristics:
+ * - Fast path (no filtering needed): O(1) bucket lookup, no allocation, borrowed reference
+ * - Slow path (enabled_only filtering): O(N) scan + allocation (rare: only orphan cleanup)
+ *
+ * Most commands use enabled_only=true and all workspace items ARE enabled,
+ * triggering the fast path. The slow path only activates for apply.c orphan cleanup
+ * when disabled profile orphans exist.
  */
 const workspace_item_t **workspace_get_diverged_filtered(
     const workspace_t *ws,
@@ -1755,59 +1807,70 @@ const workspace_item_t **workspace_get_diverged_filtered(
         return NULL;
     }
 
-    /* For CLEAN, return nothing */
+    /* CLEAN has no bucket, always empty */
     if (type == DIVERGENCE_CLEAN) {
         *count = 0;
         return NULL;
     }
 
-    /* First pass: count matching entries */
-    size_t match_count = 0;
-    for (size_t i = 0; i < ws->diverged_count; i++) {
-        const workspace_item_t *item = &ws->diverged[i];
-
-        if (item->type != type) {
-            continue;
-        }
-
-        if (enabled_only && !item->profile_enabled) {
-            continue;  /* Skip disabled profiles */
-        }
-
-        match_count++;
+    /* Validate type range (enum values 0-9) */
+    if (type > DIVERGENCE_OWNERSHIP) {
+        *count = 0;
+        return NULL;
     }
 
-    /* If none found, return NULL */
+    /* Get pre-bucketed items (O(1) lookup, no filtering, no allocation) */
+    const divergence_bucket_t *bucket = &ws->buckets[type];
+    const workspace_item_t **bucket_items = (const workspace_item_t **)bucket->items;
+    size_t bucket_count = bucket->count;
+
+    /* Fast path: no filtering needed or bucket is empty */
+    if (!enabled_only || bucket_count == 0) {
+        *count = bucket_count;
+        return bucket_items;  /* Borrowed reference to internal bucket */
+    }
+
+    /* Slow path: filter by profile_enabled flag
+     * NOTE: This is RARE - only apply.c orphan cleanup uses enabled_only=false.
+     * Most commands (status, update) trigger the fast path above. */
+
+    /* First pass: count enabled items and check if all are enabled */
+    size_t match_count = 0;
+    for (size_t i = 0; i < bucket_count; i++) {
+        if (bucket_items[i]->profile_enabled) {
+            match_count++;
+        }
+    }
+
+    /* Optimization: if all items are enabled, return bucket directly */
+    if (match_count == bucket_count) {
+        *count = bucket_count;
+        return bucket_items;  /* Borrowed reference - all match filter */
+    }
+
+    /* Edge case: no enabled items */
     if (match_count == 0) {
         *count = 0;
         return NULL;
     }
 
-    /* Allocate array of pointers */
+    /* Need to allocate filtered array (only orphan cleanup with disabled profiles) */
     const workspace_item_t **result = malloc(match_count * sizeof(workspace_item_t *));
     if (!result) {
         *count = 0;
         return NULL;
     }
 
-    /* Second pass: populate pointer array */
+    /* Second pass: populate filtered array */
     size_t idx = 0;
-    for (size_t i = 0; i < ws->diverged_count; i++) {
-        const workspace_item_t *item = &ws->diverged[i];
-
-        if (item->type != type) {
-            continue;
+    for (size_t i = 0; i < bucket_count; i++) {
+        if (bucket_items[i]->profile_enabled) {
+            result[idx++] = bucket_items[i];
         }
-
-        if (enabled_only && !item->profile_enabled) {
-            continue;
-        }
-
-        result[idx++] = item;
     }
 
     *count = match_count;
-    return result;
+    return result;  /* Caller MUST free (rare allocation case) */
 }
 
 /**
@@ -2076,6 +2139,11 @@ void workspace_free(workspace_t *ws) {
         free(ws->diverged[i].old_profile);  /* Free profile change tracking */
     }
     free(ws->diverged);
+
+    /* Free bucket pointer arrays (items themselves are freed above with diverged array) */
+    for (size_t i = 0; i < 10; i++) {
+        free(ws->buckets[i].items);  /* Free pointer array only, not pointed-to items */
+    }
 
     /* Free indices (values are borrowed, so pass NULL for value free function) */
     hashmap_free(ws->manifest_index, NULL);

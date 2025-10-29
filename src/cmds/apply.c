@@ -1044,7 +1044,6 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                 file_orphans = malloc(file_orphan_count * sizeof(workspace_item_t *));
                 if (!file_orphans) {
                     err = ERROR(ERR_MEMORY, "Failed to allocate file orphan array");
-                    free(all_orphans);
                     goto cleanup;
                 }
 
@@ -1060,7 +1059,6 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                 dir_orphans = malloc(dir_orphan_count * sizeof(workspace_item_t *));
                 if (!dir_orphans) {
                     err = ERROR(ERR_MEMORY, "Failed to allocate directory orphan array");
-                    free(all_orphans);
                     free(file_orphans);
                     file_orphans = NULL;
                     goto cleanup;
@@ -1073,8 +1071,6 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                     }
                 }
             }
-
-            free(all_orphans);  /* Done with temporary array */
         }
 
         if (opts->verbose) {

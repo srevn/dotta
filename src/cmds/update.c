@@ -1838,7 +1838,7 @@ error_t *cmd_update(
         .analyze_orphans = false,                           /* Update doesn't do cleanup */
         .analyze_untracked = (opts->include_new || opts->only_new ||      /* Explicit flags */
                              (config && config->auto_detect_new_files)),  /* Or config auto-detect */
-        .analyze_directories = false,                       /* Not relevant for update */
+        .analyze_directories = true,                        /* Detect directory metadata changes */
         .analyze_encryption = false                         /* Not relevant for update */
     };
     err = workspace_load(repo, profiles, config, &ws_opts, &ws);

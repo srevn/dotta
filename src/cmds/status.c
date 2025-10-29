@@ -886,7 +886,6 @@ error_t *cmd_status(
     profile_list_t *profiles = NULL;
     const manifest_t *manifest = NULL;
     workspace_t *ws = NULL;
-    state_t *state = NULL;
     output_ctx_t *out = NULL;
 
     /* Load configuration */
@@ -912,13 +911,6 @@ error_t *cmd_status(
     /* CLI flags override config */
     if (opts->verbose) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
-    }
-
-    /* Load state */
-    err = state_load(repo, &state);
-    if (err) {
-        err = error_wrap(err, "Failed to load state");
-        goto cleanup;
     }
 
     /* Load profiles */
@@ -954,6 +946,13 @@ error_t *cmd_status(
     manifest = workspace_get_manifest(ws);
     if (!manifest) {
         err = ERROR(ERR_INTERNAL, "Workspace manifest is NULL");
+        goto cleanup;
+    }
+
+    /* Extract state from workspace (borrowed reference, owned by workspace) */
+    const state_t *state = workspace_get_state(ws);
+    if (!state) {
+        err = ERROR(ERR_INTERNAL, "Workspace state is NULL");
         goto cleanup;
     }
 
@@ -1022,7 +1021,6 @@ cleanup:
     /* Free all resources (safe with NULL pointers) */
     workspace_free(ws);
     profile_list_free(profiles);
-    state_free(state);
     config_free(config);
     output_free(out);
 

@@ -33,9 +33,6 @@
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "core/ignore.h"
-#include "core/metadata.h"
-#include "core/profiles.h"
-#include "core/state.h"
 #include "crypto/encryption.h"
 #include "crypto/keymanager.h"
 #include "crypto/policy.h"
@@ -1900,6 +1897,16 @@ const manifest_t *workspace_get_manifest(const workspace_t *ws) {
         return NULL;
     }
     return ws->manifest;
+}
+
+/**
+ * Get the deployment state from workspace
+ */
+const state_t *workspace_get_state(const workspace_t *ws) {
+    if (!ws) {
+        return NULL;
+    }
+    return ws->state;
 }
 
 /**

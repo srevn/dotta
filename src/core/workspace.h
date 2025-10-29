@@ -22,6 +22,7 @@
 #include <git2.h>
 
 #include "types.h"
+#include "core/state.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "utils/config.h"
@@ -309,6 +310,21 @@ const profile_list_t *workspace_get_profiles(const workspace_t *ws);
  * @return Manifest (borrowed reference, never NULL for valid workspace)
  */
 const manifest_t *workspace_get_manifest(const workspace_t *ws);
+
+/**
+ * Get the deployment state from workspace
+ *
+ * Returns borrowed reference to the state_t that was loaded during
+ * workspace_load(). The state is owned by the workspace and remains
+ * valid until workspace_free() is called.
+ *
+ * This allows commands to access deployment state without redundant
+ * loads, improving performance and reducing database connections.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @return State (borrowed reference, never NULL for valid workspace)
+ */
+const state_t *workspace_get_state(const workspace_t *ws);
 
 /**
  * Get merged metadata from workspace

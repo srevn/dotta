@@ -1786,15 +1786,13 @@ workspace_status_t workspace_get_status(const workspace_t *ws) {
 /**
  * Get diverged items by category with optional profile scope filtering
  *
- * Uses pre-bucketed storage for O(1) access without filtering or allocation.
+ * Returns NULL if no items found (count will be 0).
  *
- * Performance characteristics:
- * - Fast path (no filtering needed): O(1) bucket lookup, no allocation, borrowed reference
- * - Slow path (enabled_only filtering): O(N) scan + allocation (rare: only orphan cleanup)
- *
- * Most commands use enabled_only=true and all workspace items ARE enabled,
- * triggering the fast path. The slow path only activates for apply.c orphan cleanup
- * when disabled profile orphans exist.
+ * @param ws Workspace (must not be NULL)
+ * @param type Divergence type to query
+ * @param enabled_only Filter to enabled profiles only
+ * @param count Output parameter for item count (must not be NULL)
+ * @return Owned array of pointers (caller must free) or NULL if empty
  */
 const workspace_item_t **workspace_get_diverged_filtered(
     const workspace_t *ws,
@@ -1819,65 +1817,70 @@ const workspace_item_t **workspace_get_diverged_filtered(
         return NULL;
     }
 
-    /* Get pre-bucketed items (O(1) lookup, no filtering, no allocation) */
+    /* Get pre-bucketed items */
     const divergence_bucket_t *bucket = &ws->buckets[type];
     const workspace_item_t **bucket_items = (const workspace_item_t **)bucket->items;
     size_t bucket_count = bucket->count;
 
-    /* Fast path: no filtering needed or bucket is empty */
-    if (!enabled_only || bucket_count == 0) {
-        *count = bucket_count;
-        return bucket_items;  /* Borrowed reference to internal bucket */
-    }
-
-    /* Slow path: filter by profile_enabled flag
-     * NOTE: This is RARE - only apply.c orphan cleanup uses enabled_only=false.
-     * Most commands (status, update) trigger the fast path above. */
-
-    /* First pass: count enabled items and check if all are enabled */
-    size_t match_count = 0;
-    for (size_t i = 0; i < bucket_count; i++) {
-        if (bucket_items[i]->profile_enabled) {
-            match_count++;
-        }
-    }
-
-    /* Optimization: if all items are enabled, return bucket directly */
-    if (match_count == bucket_count) {
-        *count = bucket_count;
-        return bucket_items;  /* Borrowed reference - all match filter */
-    }
-
-    /* Edge case: no enabled items */
-    if (match_count == 0) {
+    /* Empty bucket - return NULL */
+    if (bucket_count == 0) {
         *count = 0;
         return NULL;
     }
 
-    /* Need to allocate filtered array (only orphan cleanup with disabled profiles) */
-    const workspace_item_t **result = malloc(match_count * sizeof(workspace_item_t *));
+    /* Determine effective count based on filtering */
+    size_t effective_count = bucket_count;
+
+    if (enabled_only) {
+        /* Count enabled items */
+        effective_count = 0;
+        for (size_t i = 0; i < bucket_count; i++) {
+            if (bucket_items[i]->profile_enabled) {
+                effective_count++;
+            }
+        }
+
+        /* No enabled items after filtering */
+        if (effective_count == 0) {
+            *count = 0;
+            return NULL;
+        }
+    }
+
+    /* Allocate new array (explicit ownership transfer) */
+    const workspace_item_t **result = malloc(effective_count * sizeof(workspace_item_t *));
     if (!result) {
         *count = 0;
-        return NULL;
+        return NULL;  /* Allocation failure */
     }
 
-    /* Second pass: populate filtered array */
-    size_t idx = 0;
-    for (size_t i = 0; i < bucket_count; i++) {
-        if (bucket_items[i]->profile_enabled) {
-            result[idx++] = bucket_items[i];
+    /* Populate result array */
+    if (enabled_only) {
+        /* Filter to enabled profiles */
+        size_t idx = 0;
+        for (size_t i = 0; i < bucket_count && idx < effective_count; i++) {
+            if (bucket_items[i]->profile_enabled) {
+                result[idx++] = bucket_items[i];
+            }
         }
+    } else {
+        /* Copy all items */
+        memcpy(result, bucket_items, effective_count * sizeof(workspace_item_t *));
     }
 
-    *count = match_count;
-    return result;  /* Caller MUST free (rare allocation case) */
+    *count = effective_count;
+    return result;  /* Caller MUST free */
 }
 
 /**
- * Get diverged items by category
+ * Get diverged items by category (enabled profiles only)
  *
  * Convenience wrapper that filters to enabled profiles only.
  * Equivalent to workspace_get_diverged_filtered(ws, type, true, count).
+ *
+ * Always returns owned array. Caller MUST free with free().
+ *
+ * @return Owned array of pointers (caller must free) or NULL if empty
  */
 const workspace_item_t **workspace_get_diverged(
     const workspace_t *ws,

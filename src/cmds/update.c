@@ -409,7 +409,8 @@ static error_t *filter_items_for_update(
                 break;
 
             case DIVERGENCE_UNTRACKED:
-                should_include = (opts->include_new || opts->only_new);
+                should_include = (opts->include_new || opts->only_new ||
+                                 (config && config->auto_detect_new_files));
                 break;
 
             case DIVERGENCE_MODE_DIFF:

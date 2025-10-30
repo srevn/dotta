@@ -169,24 +169,15 @@ error_t *workspace_load(
 workspace_status_t workspace_get_status(const workspace_t *ws);
 
 /**
- * Get diverged items by category
+ * Get diverged items by category (enabled profiles only)
  *
- * Returns pointer to internal pre-bucketed array of items matching the specified type.
- * Uses O(1) bucket lookup with zero allocations and no filtering overhead.
- *
- * Performance characteristics:
- * - Time complexity: O(1) - direct bucket access
- * - Space complexity: O(1) - no allocations
- * - Memory management: Borrowed reference, valid until workspace_free()
- *
- * The returned pointers reference the workspace's internal data and remain
- * valid until the workspace is freed.
+ * Returns dynamically allocated array of pointers to matching diverged items.
+ * Equivalent to workspace_get_diverged_filtered(ws, type, true, count).
  *
  * @param ws Workspace (must not be NULL)
  * @param type Divergence type to query
  * @param count Output count of matching entries (must not be NULL)
- * @return Borrowed pointer to internal bucket array, or NULL if empty.
- *         Caller MUST NOT free() - workspace owns the array.
+ * @return Owned array of pointers (caller must free) or NULL if empty.
  */
 const workspace_item_t **workspace_get_diverged(
     const workspace_t *ws,
@@ -200,25 +191,18 @@ const workspace_item_t **workspace_get_diverged(
  * Returns items matching the specified divergence type, optionally
  * filtered by profile_enabled flag.
  *
- * Uses pre-bucketed storage with intelligent fast/slow paths:
- * - Fast path (common): Returns borrowed reference, no allocation, O(1)
- * - Slow path (rare): Allocates filtered array, caller must free(), O(N)
- *
  * Use cases:
- * - status: enabled_only=true (fast path - all items enabled)
- * - apply: enabled_only=false (fast path - no filtering)
- * - apply orphan cleanup: enabled_only=true (slow path if mixed - rare)
+ * - status: enabled_only=true (show only enabled profiles)
+ * - apply: enabled_only=false (include all orphans for cleanup)
  *
- * The returned pointers reference the workspace's internal data and remain
- * valid until the workspace is freed.
+ * The returned workspace_item_t pointers reference the workspace's internal data
+ * and remain valid until the workspace is freed.
  *
  * @param ws Workspace (must not be NULL)
  * @param type Divergence type to query
  * @param enabled_only If true, only return items where profile_enabled=true
  * @param count Output count of matching entries (must not be NULL)
- * @return Fast path: Borrowed reference (MUST NOT free).
- *         Slow path: Allocated array (MUST free if filtering occurred).
- *         NULL if no matches.
+ * @return Owned array of pointers (caller must free) or NULL if empty.
  */
 const workspace_item_t **workspace_get_diverged_filtered(
     const workspace_t *ws,

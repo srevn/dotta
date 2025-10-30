@@ -21,7 +21,6 @@
 #include "utils/hashmap.h"
 #include "utils/string.h"
 
-
 /**
  * Check if profile exists
  */

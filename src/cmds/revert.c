@@ -676,8 +676,7 @@ static error_t *revert_file_in_branch(
     const char *profile_name,
     const char *file_path,
     const git_oid *target_commit_oid,
-    const char *commit_message,
-    bool create_commit
+    const char *commit_message
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile_name);
@@ -904,11 +903,6 @@ static error_t *revert_file_in_branch(
     ret = git_index_write(index);
     if (ret < 0) {
         err = error_from_git(ret);
-        goto cleanup;
-    }
-
-    /* If not creating commit, we're done (staging only) */
-    if (!create_commit) {
         goto cleanup;
     }
 
@@ -1228,8 +1222,7 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
         profile_name,
         resolved_path,
         &target_oid,
-        opts->message,
-        opts->commit_changes
+        opts->message
     );
     if (err) {
         err = error_wrap(err, "Failed to revert file");
@@ -1246,9 +1239,7 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     }
 
     /* Guide user to deploy changes */
-    if (!opts->commit_changes) {
-        output_info(out, "\nRun 'dotta apply' to deploy changes to filesystem");
-    }
+    output_info(out, "\nRun 'dotta apply' to deploy changes to filesystem");
 
 cleanup:
     if (current_entry) git_tree_entry_free(current_entry);

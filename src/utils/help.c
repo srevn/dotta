@@ -459,8 +459,7 @@ void print_revert_help(const char *prog_name) {
     printf("  commit                        Required commit ref (e.g., HEAD~3, abc123)\n");
     printf("\nOptions:\n");
     printf("  -p, --profile <name>  Override profile (required if file is ambiguous)\n");
-    printf("  --commit              Create a commit with the reverted changes\n");
-    printf("  -m, --message <msg>   Commit message (requires --commit)\n");
+    printf("  -m, --message <msg>   Custom commit message\n");
     printf("  -f, --force           Skip confirmation and override conflicts\n");
     printf("  --dry-run             Preview changes without modifying anything\n");
     printf("  -v, --verbose         Print verbose output\n");
@@ -473,13 +472,13 @@ void print_revert_help(const char *prog_name) {
     printf("  2. Resolves target commit in profile history\n");
     printf("  3. Shows diff preview between current and target state\n");
     printf("  4. Prompts for confirmation (unless --force)\n");
-    printf("  5. Updates file in profile branch to target state\n");
-    printf("  6. Optionally creates commit (with --commit)\n");
+    printf("  5. Reverts file and metadata to target commit state\n");
+    printf("  6. Creates commit with restored changes\n");
     printf("\nExamples:\n");
     printf("  %s revert home/.bashrc HEAD~3\n", prog_name);
     printf("  %s revert darwin home/.bashrc a4f2c8e\n", prog_name);
     printf("  %s revert darwin:home/.bashrc@a4f2c8e\n", prog_name);
-    printf("  %s revert --commit -m \"Fix config\" home/.bashrc HEAD~1\n", prog_name);
+    printf("  %s revert -m \"Fix config\" home/.bashrc HEAD~1\n", prog_name);
     printf("  %s revert --dry-run darwin home/.config/nvim/init.lua HEAD~2\n", prog_name);
     printf("\n");
 }

@@ -158,7 +158,7 @@ dotta ignore
 # Edit profile-specific overrides
 dotta ignore --profile darwin
 
-# Quicky add a specific pattern to profile
+# Quickly add a specific pattern to profile
 dotta ignore --profile darwin --add 'somefile'
 
 # Test if a path would be ignored

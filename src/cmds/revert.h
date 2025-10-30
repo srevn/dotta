@@ -19,7 +19,6 @@ typedef struct {
     const char *file_path;      /* File path within profile (required) */
     const char *commit;         /* Commit reference (required) */
     const char *profile;        /* Profile name (NULL = use state/config) */
-    bool commit_changes;        /* Create commit after reverting */
     const char *message;        /* Commit message (NULL = auto-generate) */
     bool force;                 /* Skip confirmation and override conflicts */
     bool dry_run;               /* Preview without making changes */
@@ -39,7 +38,7 @@ typedef struct {
  * 3. Shows diff preview (current → target state)
  * 4. Prompts for confirmation (unless --force)
  * 5. Reverts file to target commit state
- * 6. Optionally creates commit (with --commit)
+ * 6. Creates commit with restored file and metadata
  *
  * @param repo Repository (must not be NULL)
  * @param opts Command options (must not be NULL)

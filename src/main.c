@@ -1682,7 +1682,6 @@ static int cmd_revert_main(int argc, char **argv) {
         .file_path = NULL,
         .commit = NULL,
         .profile = NULL,
-        .commit_changes = false,
         .message = NULL,
         .force = false,
         .dry_run = false,
@@ -1710,8 +1709,6 @@ static int cmd_revert_main(int argc, char **argv) {
                 return 1;
             }
             opts.message = argv[++i];
-        } else if (strcmp(argv[i], "--commit") == 0) {
-            opts.commit_changes = true;
         } else if (strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--force") == 0) {
             opts.force = true;
         } else if (strcmp(argv[i], "--dry-run") == 0) {
@@ -1820,12 +1817,6 @@ static int cmd_revert_main(int argc, char **argv) {
         fprintf(stderr, "  %s revert home/.bashrc@HEAD~1\n", argv[0]);
         fprintf(stderr, "  %s revert darwin home/.bashrc@a4f2c8e\n", argv[0]);
         fprintf(stderr, "  %s revert darwin home/.bashrc HEAD~1\n", argv[0]);
-        return 1;
-    }
-
-    /* Validate option combinations */
-    if (opts.message && !opts.commit_changes) {
-        fprintf(stderr, "Error: --message requires --commit\n");
         return 1;
     }
 

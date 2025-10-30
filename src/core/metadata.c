@@ -220,6 +220,82 @@ error_t *metadata_item_create_directory(
 }
 
 /**
+ * Clone metadata item (deep copy)
+ *
+ * Creates a deep copy of a metadata item, duplicating all strings and
+ * union fields based on the item's kind. This is useful when you need
+ * to preserve an item while modifying the original collection.
+ *
+ * @param source Source item to clone (must not be NULL)
+ * @param out Cloned item (must not be NULL, caller must free with metadata_item_free)
+ * @return Error or NULL on success
+ */
+error_t *metadata_item_clone(const metadata_item_t *source, metadata_item_t **out) {
+    CHECK_NULL(source);
+    CHECK_NULL(out);
+
+    metadata_item_t *item = calloc(1, sizeof(metadata_item_t));
+    if (!item) {
+        return ERROR(ERR_MEMORY, "Failed to allocate metadata item");
+    }
+
+    /* Copy kind discriminator */
+    item->kind = source->kind;
+
+    /* Deep copy common fields */
+    item->key = strdup(source->key);
+    if (!item->key) {
+        free(item);
+        return ERROR(ERR_MEMORY, "Failed to duplicate key");
+    }
+
+    item->mode = source->mode;
+
+    if (source->owner) {
+        item->owner = strdup(source->owner);
+        if (!item->owner) {
+            free(item->key);
+            free(item);
+            return ERROR(ERR_MEMORY, "Failed to duplicate owner");
+        }
+    } else {
+        item->owner = NULL;
+    }
+
+    if (source->group) {
+        item->group = strdup(source->group);
+        if (!item->group) {
+            free(item->owner);
+            free(item->key);
+            free(item);
+            return ERROR(ERR_MEMORY, "Failed to duplicate group");
+        }
+    } else {
+        item->group = NULL;
+    }
+
+    /* Deep copy kind-specific union fields */
+    if (source->kind == METADATA_ITEM_FILE) {
+        /* File: copy encrypted flag */
+        item->file.encrypted = source->file.encrypted;
+    } else {
+        /* Directory: copy storage_prefix and added_at */
+        item->directory.storage_prefix = strdup(source->directory.storage_prefix);
+        if (!item->directory.storage_prefix) {
+            free(item->group);
+            free(item->owner);
+            free(item->key);
+            free(item);
+            return ERROR(ERR_MEMORY, "Failed to duplicate storage prefix");
+        }
+        item->directory.added_at = source->directory.added_at;
+    }
+
+    *out = item;
+    return NULL;
+}
+
+/**
  * Safely rebuild hashmap index after array reallocation
  *
  * After realloc, all pointers in the hashmap are invalid and must be updated.
@@ -918,7 +994,7 @@ error_t *metadata_capture_from_directory(
  * Creates unified JSON with single "items" array containing both files and directories.
  * Each item has explicit "kind" discriminator.
  */
-static error_t *metadata_to_json(const metadata_t *metadata, buffer_t **out) {
+error_t *metadata_to_json(const metadata_t *metadata, buffer_t **out) {
     CHECK_NULL(metadata);
     CHECK_NULL(out);
 
@@ -1096,7 +1172,7 @@ cleanup:
  * Parses unified JSON with single "items" array.
  * REJECTS old versions with clear error message (NO migration code).
  */
-static error_t *metadata_from_json(const char *json_str, metadata_t **out) {
+error_t *metadata_from_json(const char *json_str, metadata_t **out) {
     CHECK_NULL(json_str);
     CHECK_NULL(out);
 

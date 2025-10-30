@@ -14,6 +14,7 @@
 #include "base/gitops.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
+#include "core/stats.h"
 #include "crypto/keymanager.h"
 #include "infra/content.h"
 #include "infra/path.h"
@@ -25,11 +26,86 @@
 #include "utils/output.h"
 
 /**
+ * Discover file in history (fallback when not found in HEAD)
+ *
+ * Uses stats_get_file_history() to search the commit history of a profile
+ * for evidence that a file existed. This is expensive (O(all commits)) but
+ * necessary for reverting deleted files.
+ *
+ * This function should only be called as a fallback when the file is not
+ * found in the current HEAD and the user has provided a profile hint.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param storage_path Storage path (must not be NULL)
+ * @param profile_name Profile name (must not be NULL)
+ * @param out_profile Output profile name (must not be NULL, caller must free)
+ * @param out_resolved_path Output storage path (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+static error_t *discover_file_in_history(
+    git_repository *repo,
+    const char *storage_path,
+    const char *profile_name,
+    char **out_profile,
+    char **out_resolved_path
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(profile_name);
+    CHECK_NULL(out_profile);
+    CHECK_NULL(out_resolved_path);
+
+    /* Inform user about expensive operation */
+    fprintf(stderr, "File not found in current HEAD, searching history of '%s' profile...\n",
+            profile_name);
+
+    /* Use stats module to get file history */
+    file_history_t *history = NULL;
+    error_t *err = stats_get_file_history(repo, profile_name, storage_path, &history);
+    if (err) {
+        return error_wrap(err, "Failed to search history");
+    }
+
+    /* Check if file ever existed */
+    if (history->count == 0) {
+        stats_free_file_history(history);
+        return ERROR(ERR_NOT_FOUND,
+                    "File '%s' has no history in profile '%s'\n"
+                    "The file was never tracked in this profile.\n"
+                    "Hint: Use 'dotta list --profile %s' to see tracked files",
+                    storage_path, profile_name, profile_name);
+    }
+
+    /* Found in history! Show user where it was last seen */
+    char short_sha[8];
+    git_oid_tostr(short_sha, sizeof(short_sha), &history->commits[0].oid);
+
+    fprintf(stderr, "✓ Found in history (last modified: commit %s)\n", short_sha);
+
+    stats_free_file_history(history);
+
+    /* Return profile and path */
+    *out_profile = strdup(profile_name);
+    *out_resolved_path = strdup(storage_path);
+
+    if (!*out_profile || !*out_resolved_path) {
+        if (*out_profile) free(*out_profile);
+        if (*out_resolved_path) free(*out_resolved_path);
+        return ERROR(ERR_MEMORY, "Failed to allocate strings");
+    }
+
+    return NULL;
+}
+
+/**
  * Discover file in profiles
  *
  * Returns profile name and resolved storage path.
  * Accepts filesystem paths or storage paths.
- * Uses profile_build_file_index()
+ * Uses profile_build_file_index() for fast HEAD-based discovery.
+ *
+ * If the file is not found in the current HEAD and a profile hint is provided,
+ * falls back to expensive history search using stats_get_file_history().
  *
  * Uses path_resolve_input() for unified path handling.
  */
@@ -37,16 +113,21 @@ static error_t *discover_file(
     git_repository *repo,
     const char *file_path,
     const char *profile_hint,
+    bool *found_in_history,
     char **out_profile,
     char **out_resolved_path
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(file_path);
+    CHECK_NULL(found_in_history);
     CHECK_NULL(out_profile);
     CHECK_NULL(out_resolved_path);
 
     error_t *err = NULL;
     char *storage_path = NULL;
+
+    /* Initialize output flag */
+    *found_in_history = false;
 
     /* Resolve input path to storage format (flexible mode - file need not exist) */
     err = path_resolve_input(file_path, false, &storage_path);
@@ -82,13 +163,21 @@ static error_t *discover_file(
         profile_free(profile);
 
         if (!exists) {
+            /* File not in HEAD - try history search as fallback */
+            err = discover_file_in_history(repo, storage_path, profile_hint,
+                                          out_profile, out_resolved_path);
             free(storage_path);
-            return ERROR(ERR_NOT_FOUND,
-                        "File '%s' not found in profile '%s'\n"
-                        "Hint: Use 'dotta list --profile %s' to see tracked files",
-                        storage_path, profile_hint, profile_hint);
+
+            if (err) {
+                return err;
+            }
+
+            /* Found in history! */
+            *found_in_history = true;
+            return NULL;
         }
 
+        /* Found in HEAD (fast path) */
         *out_profile = strdup(profile_hint);
         *out_resolved_path = storage_path;
 
@@ -137,15 +226,17 @@ static error_t *discover_file(
     string_array_t *matching_profiles = hashmap_get(profile_index, storage_path);
 
     if (!matching_profiles || string_array_size(matching_profiles) == 0) {
-        /* Not found in any profile */
+        /* Not found in any profile's current HEAD */
         hashmap_free(profile_index, string_array_free);
         profile_list_free(profiles);
         config_free(config);
         free(storage_path);
         return ERROR(ERR_NOT_FOUND,
-                    "File '%s' not found in any enabled profile\n"
-                    "Hint: Use 'dotta list' to see tracked files",
-                    storage_path);
+                    "File '%s' not found in any enabled profile\n\n"
+                    "If you are trying to revert a deleted file, specify the profile:\n"
+                    "  dotta revert --profile <name> %s <commit>\n\n"
+                    "Use 'dotta list --all' to see all profiles.",
+                    storage_path, file_path);
     }
 
     if (string_array_size(matching_profiles) == 1) {
@@ -388,9 +479,196 @@ static error_t *check_working_tree_status(
 }
 
 /**
- * Revert file in profile branch to target commit
+ * Check for uncommitted changes to file or metadata
  *
- * This creates a new commit with the file reverted to its target state.
+ * Checks both the file itself and .dotta/metadata.json to ensure
+ * neither has uncommitted changes before reverting. This prevents
+ * accidental loss of pending metadata changes.
+ */
+static error_t *check_uncommitted_changes(
+    git_repository *repo,
+    const char *profile_name,
+    const char *file_path,
+    bool *has_changes
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(profile_name);
+    CHECK_NULL(file_path);
+    CHECK_NULL(has_changes);
+
+    /* Check file itself */
+    error_t *err = check_working_tree_status(repo, profile_name, file_path, has_changes);
+    if (err || *has_changes) {
+        return err;
+    }
+
+    /* Check metadata.json */
+    return check_working_tree_status(repo, profile_name, METADATA_FILE_PATH, has_changes);
+}
+
+/**
+ * Load metadata from branch with graceful fallback
+ *
+ * If metadata.json doesn't exist or can't be parsed, returns empty metadata
+ * instead of failing. This is appropriate for operations that want to continue
+ * even without metadata (e.g., showing diff preview, handling old commits).
+ *
+ * @param repo Repository (must not be NULL)
+ * @param branch_name Branch name (must not be NULL)
+ * @param out Metadata (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+static error_t *load_metadata_graceful(
+    git_repository *repo,
+    const char *branch_name,
+    metadata_t **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(branch_name);
+    CHECK_NULL(out);
+
+    error_t *err = metadata_load_from_branch(repo, branch_name, out);
+    if (err) {
+        /* Graceful fallback: create empty metadata if loading fails */
+        error_t *create_err = metadata_create_empty(out);
+        if (create_err) {
+            error_free(create_err);
+            error_free(err);
+            return ERROR(ERR_MEMORY, "Failed to create metadata");
+        }
+        error_free(err);
+    }
+
+    return NULL;
+}
+
+/**
+ * Build commit message for revert operation
+ *
+ * Uses custom message if provided, otherwise generates from template system.
+ * This centralizes message generation logic for reuse across revert operations.
+ *
+ * @param config Configuration (must not be NULL)
+ * @param profile_name Profile name (must not be NULL)
+ * @param file_path File path (must not be NULL)
+ * @param target_commit_oid Target commit OID (must not be NULL)
+ * @param custom_message Custom message (can be NULL for template generation)
+ * @return Allocated message string (caller must free), or NULL on allocation failure
+ */
+static char *build_revert_commit_message(
+    const dotta_config_t *config,
+    const char *profile_name,
+    const char *file_path,
+    const git_oid *target_commit_oid,
+    const char *custom_message
+) {
+    if (custom_message && custom_message[0]) {
+        return strdup(custom_message);
+    }
+
+    /* Generate message using template system */
+    char oid_str[GIT_OID_HEXSZ + 1];
+    git_oid_tostr(oid_str, sizeof(oid_str), target_commit_oid);
+
+    /* Build context for commit message */
+    char *files[] = {(char *)file_path};
+    commit_message_context_t ctx = {
+        .action = COMMIT_ACTION_REVERT,
+        .profile = profile_name,
+        .files = files,
+        .file_count = 1,
+        .custom_msg = NULL,
+        .target_commit = oid_str
+    };
+
+    return build_commit_message(config, &ctx);
+}
+
+/**
+ * Load metadata from a specific commit
+ *
+ * Extracts .dotta/metadata.json from a commit's tree and parses it.
+ * If metadata.json doesn't exist in the commit, returns empty metadata
+ * (graceful fallback for old commits or commits without metadata).
+ *
+ * @param repo Repository (must not be NULL)
+ * @param commit Commit to load from (must not be NULL)
+ * @param out Metadata (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+static error_t *load_metadata_from_commit(
+    git_repository *repo,
+    git_commit *commit,
+    metadata_t **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(commit);
+    CHECK_NULL(out);
+
+    error_t *err = NULL;
+    git_tree *tree = NULL;
+    git_tree_entry *entry = NULL;
+    git_blob *blob = NULL;
+
+    /* Get commit's tree */
+    int ret = git_commit_tree(&tree, commit);
+    if (ret < 0) {
+        err = error_from_git(ret);
+        goto cleanup;
+    }
+
+    /* Try to find .dotta/metadata.json in tree */
+    ret = git_tree_entry_bypath(&entry, tree, METADATA_FILE_PATH);
+    if (ret == GIT_ENOTFOUND) {
+        /* No metadata in this commit - return empty metadata (graceful fallback) */
+        git_tree_free(tree);
+        return metadata_create_empty(out);
+    } else if (ret < 0) {
+        err = error_from_git(ret);
+        goto cleanup;
+    }
+
+    /* Load and parse metadata blob */
+    const git_oid *blob_oid = git_tree_entry_id(entry);
+    ret = git_blob_lookup(&blob, repo, blob_oid);
+    if (ret < 0) {
+        err = error_from_git(ret);
+        goto cleanup;
+    }
+
+    const char *json_content = (const char *)git_blob_rawcontent(blob);
+    if (!json_content) {
+        err = ERROR(ERR_INVALID_ARG, "Metadata blob has no content");
+        goto cleanup;
+    }
+
+    /* Parse JSON content */
+    err = metadata_from_json(json_content, out);
+    if (err) {
+        err = error_wrap(err, "Failed to parse metadata from commit");
+        goto cleanup;
+    }
+
+cleanup:
+    if (blob) git_blob_free(blob);
+    if (entry) git_tree_entry_free(entry);
+    if (tree) git_tree_free(tree);
+
+    return err;
+}
+
+/**
+ * Revert file and metadata in profile branch to target commit
+ *
+ * This atomically reverts both file content AND its metadata entry to the
+ * target commit state in a single commit. This ensures that permissions,
+ * ownership, and encryption flags are restored along with file content.
+ *
+ * The function handles:
+ * - Files that exist in both current and target (normal revert)
+ * - Files deleted from HEAD (restore from history)
+ * - Missing metadata gracefully (creates defaults with warning)
+ * - Symlinks (skip metadata, they're tracked via tree mode only)
  */
 static error_t *revert_file_in_branch(
     git_repository *repo,
@@ -410,9 +688,13 @@ static error_t *revert_file_in_branch(
     git_commit *target_commit = NULL;
     git_tree *target_tree = NULL;
     git_tree_entry *target_entry = NULL;
+    metadata_t *target_metadata = NULL;
+    metadata_item_t *meta_to_restore = NULL;
     git_reference *branch_ref = NULL;
     git_commit *head_commit = NULL;
     git_tree *head_tree = NULL;
+    metadata_t *current_metadata = NULL;
+    buffer_t *metadata_json_buf = NULL;
     git_index *index = NULL;
     git_blob *target_blob = NULL;
     git_tree *new_tree = NULL;
@@ -420,6 +702,9 @@ static error_t *revert_file_in_branch(
     char *msg = NULL;
     git_oid target_blob_oid_copy;
     git_filemode_t target_mode = 0;
+    bool is_symlink = false;
+
+    /* === Phase 1: Load Target State === */
 
     /* Get target commit's tree */
     int ret = git_commit_lookup(&target_commit, repo, target_commit_oid);
@@ -446,11 +731,59 @@ static error_t *revert_file_in_branch(
         goto cleanup;
     }
 
-    /* Get the target blob OID and copy it before freeing the entry */
+    /* Get target blob OID and mode */
     git_oid_cpy(&target_blob_oid_copy, git_tree_entry_id(target_entry));
     target_mode = git_tree_entry_filemode(target_entry);
+    is_symlink = S_ISLNK(target_mode);
 
-    /* Load current HEAD for the profile */
+    /* Load metadata from target commit */
+    err = load_metadata_from_commit(repo, target_commit, &target_metadata);
+    if (err) {
+        err = error_wrap(err, "Failed to load metadata from target commit");
+        goto cleanup;
+    }
+
+    /* Extract or create metadata item for this file */
+    if (!is_symlink) {
+        const metadata_item_t *target_meta_item = NULL;
+        error_t *lookup_err = metadata_get_item(target_metadata, file_path, &target_meta_item);
+
+        if (!lookup_err && target_meta_item && target_meta_item->kind == METADATA_ITEM_FILE) {
+            /* Found metadata entry - clone it */
+            err = metadata_item_clone(target_meta_item, &meta_to_restore);
+            if (err) {
+                err = error_wrap(err, "Failed to clone metadata item");
+                goto cleanup;
+            }
+        } else {
+            /* No metadata entry at target commit - create default from tree mode */
+            char oid_str[8];
+            git_oid_tostr(oid_str, sizeof(oid_str), target_commit_oid);
+
+            fprintf(stderr,
+                    "Warning: No metadata found for '%s' at commit %s\n"
+                    "         Using defaults (mode=%04o, encrypted=false)\n",
+                    file_path, oid_str, (unsigned int)(target_mode & 0777));
+
+            err = metadata_item_create_file(file_path, target_mode & 0777, false, &meta_to_restore);
+            if (err) {
+                err = error_wrap(err, "Failed to create default metadata item");
+                goto cleanup;
+            }
+
+            if (lookup_err) {
+                error_free(lookup_err);
+            }
+        }
+    }
+
+    /* Free target metadata (no longer needed) */
+    metadata_free(target_metadata);
+    target_metadata = NULL;
+
+    /* === Phase 2: Load Current HEAD === */
+
+    /* Build branch reference name */
     size_t ref_name_size = strlen("refs/heads/") + strlen(profile_name) + 1;
     char *ref_name = malloc(ref_name_size);
     if (!ref_name) {
@@ -485,7 +818,16 @@ static error_t *revert_file_in_branch(
         goto cleanup;
     }
 
-    /* Use index approach to handle nested paths correctly */
+    /* Load current metadata */
+    err = load_metadata_from_commit(repo, head_commit, &current_metadata);
+    if (err) {
+        err = error_wrap(err, "Failed to load current metadata");
+        goto cleanup;
+    }
+
+    /* === Phase 3: Build New Index === */
+
+    /* Get repository index */
     ret = git_repository_index(&index, repo);
     if (ret < 0) {
         err = error_from_git(ret);
@@ -499,8 +841,7 @@ static error_t *revert_file_in_branch(
         goto cleanup;
     }
 
-    /* Update the file entry in index */
-    /* Lookup blob to get content - we'll recreate it via git_index_add_frombuffer */
+    /* Update file entry in index */
     ret = git_blob_lookup(&target_blob, repo, &target_blob_oid_copy);
     if (ret < 0) {
         err = error_from_git(ret);
@@ -510,10 +851,8 @@ static error_t *revert_file_in_branch(
     const void *blob_content = git_blob_rawcontent(target_blob);
     git_object_size_t blob_size = git_blob_rawsize(target_blob);
 
-    /* Remove old entry */
     git_index_remove_bypath(index, file_path);
 
-    /* Create new entry using git_index_add_frombuffer which handles nested paths */
     git_index_entry source_entry;
     memset(&source_entry, 0, sizeof(source_entry));
     source_entry.mode = target_mode;
@@ -525,16 +864,57 @@ static error_t *revert_file_in_branch(
         goto cleanup;
     }
 
-    /* If not creating commit, write index and return */
-    if (!create_commit) {
-        ret = git_index_write(index);
-        if (ret < 0) {
-            err = error_from_git(ret);
+    git_blob_free(target_blob);
+    target_blob = NULL;
+
+    /* Update metadata entry (if not symlink) */
+    if (meta_to_restore) {
+        err = metadata_add_item(current_metadata, meta_to_restore);
+        if (err) {
+            err = error_wrap(err, "Failed to update metadata");
+            goto cleanup;
         }
+    }
+
+    /* Serialize updated metadata to JSON */
+    err = metadata_to_json(current_metadata, &metadata_json_buf);
+    if (err) {
+        err = error_wrap(err, "Failed to serialize metadata");
         goto cleanup;
     }
 
-    /* Write index to tree - use _to variant to specify repository */
+    const char *metadata_json_str = (const char *)buffer_data(metadata_json_buf);
+    size_t metadata_json_len = buffer_size(metadata_json_buf);
+
+    /* Stage updated metadata.json */
+    git_index_remove_bypath(index, METADATA_FILE_PATH);
+
+    git_index_entry meta_entry;
+    memset(&meta_entry, 0, sizeof(meta_entry));
+    meta_entry.mode = GIT_FILEMODE_BLOB;
+    meta_entry.path = METADATA_FILE_PATH;
+
+    ret = git_index_add_from_buffer(index, &meta_entry, metadata_json_str, metadata_json_len);
+    if (ret < 0) {
+        err = error_from_git(ret);
+        goto cleanup;
+    }
+
+    /* Write index */
+    ret = git_index_write(index);
+    if (ret < 0) {
+        err = error_from_git(ret);
+        goto cleanup;
+    }
+
+    /* If not creating commit, we're done (staging only) */
+    if (!create_commit) {
+        goto cleanup;
+    }
+
+    /* === Phase 4: Create Atomic Commit === */
+
+    /* Write index to tree */
     git_oid new_tree_oid;
     ret = git_index_write_tree_to(&new_tree_oid, index, repo);
     if (ret < 0) {
@@ -542,42 +922,22 @@ static error_t *revert_file_in_branch(
         goto cleanup;
     }
 
-    /* Create commit with reverted file */
     ret = git_tree_lookup(&new_tree, repo, &new_tree_oid);
     if (ret < 0) {
         err = error_from_git(ret);
         goto cleanup;
     }
 
-    /* Get default signature */
+    /* Get signature */
     ret = git_signature_default(&sig, repo);
     if (ret < 0) {
         err = error_from_git(ret);
         goto cleanup;
     }
 
-    /* Create commit message if not provided */
-    if (commit_message && commit_message[0]) {
-        msg = strdup(commit_message);
-    } else {
-        /* Generate message using template system */
-        char oid_str[GIT_OID_HEXSZ + 1];
-        git_oid_tostr(oid_str, sizeof(oid_str), target_commit_oid);
-
-        /* Build context for commit message */
-        char *files[] = {(char *)file_path};
-        commit_message_context_t ctx = {
-            .action = COMMIT_ACTION_REVERT,
-            .profile = profile_name,
-            .files = files,
-            .file_count = 1,
-            .custom_msg = NULL,
-            .target_commit = oid_str
-        };
-
-        msg = build_commit_message(config, &ctx);
-    }
-
+    /* Build commit message */
+    msg = build_revert_commit_message(config, profile_name, file_path,
+                                      target_commit_oid, commit_message);
     if (!msg) {
         err = ERROR(ERR_MEMORY, "Failed to allocate commit message");
         goto cleanup;
@@ -589,13 +949,13 @@ static error_t *revert_file_in_branch(
     ret = git_commit_create(
         &new_commit_oid,
         repo,
-        git_reference_name(branch_ref),  /* Update the branch */
-        sig,     /* author */
-        sig,     /* committer */
-        NULL,    /* encoding (NULL = UTF-8) */
-        msg,     /* message */
+        git_reference_name(branch_ref), /* Update the branch */
+        sig,        /* author */
+        sig,        /* committer */
+        NULL,       /* encoding (NULL = UTF-8) */
+        msg,        /* message */
         new_tree,
-        1,       /* parent count */
+        1,          /* parent count */
         parents
     );
 
@@ -607,9 +967,13 @@ cleanup:
     if (target_commit) git_commit_free(target_commit);
     if (target_tree) git_tree_free(target_tree);
     if (target_entry) git_tree_entry_free(target_entry);
+    if (target_metadata) metadata_free(target_metadata);
+    if (meta_to_restore) metadata_item_free(meta_to_restore);
     if (branch_ref) git_reference_free(branch_ref);
     if (head_commit) git_commit_free(head_commit);
     if (head_tree) git_tree_free(head_tree);
+    if (current_metadata) metadata_free(current_metadata);
+    if (metadata_json_buf) buffer_free(metadata_json_buf);
     if (index) git_index_free(index);
     if (target_blob) git_blob_free(target_blob);
     if (new_tree) git_tree_free(new_tree);
@@ -666,8 +1030,14 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     /* Step 1: Discover file in profiles */
     output_print(out, OUTPUT_VERBOSE, "Discovering file in profiles...\n");
 
-    err = discover_file(repo, opts->file_path, opts->profile, &profile_name, &resolved_path);
+    bool found_in_history = false;
+    err = discover_file(repo, opts->file_path, opts->profile, &found_in_history,
+                       &profile_name, &resolved_path);
     if (err) goto cleanup;
+
+    if (found_in_history) {
+        output_info(out, "File was deleted from HEAD, reverting from history");
+    }
 
     output_print(out, OUTPUT_VERBOSE, "Found file in profile '%s': %s\n", profile_name, resolved_path);
 
@@ -681,84 +1051,89 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     err = gitops_resolve_commit_in_branch(repo, profile_name, "HEAD", &current_oid, &current_commit);
     if (err) goto cleanup;
 
-    /* Step 4: Get file entries from both commits */
-    int ret = git_commit_tree(&current_tree, current_commit);
-    if (ret < 0) {
-        err = error_from_git(ret);
-        goto cleanup;
-    }
+    /* Step 4: Prepare for revert - two distinct workflows based on file state */
+    const git_oid *current_blob_oid = NULL;
+    const git_oid *target_blob_oid = NULL;
 
-    ret = git_commit_tree(&target_tree, target_commit);
-    if (ret < 0) {
-        err = error_from_git(ret);
-        goto cleanup;
-    }
+    if (found_in_history) {
+        /*
+         * === Workflow A: Restoring Deleted File ===
+         * File doesn't exist in current HEAD but was found in commit history.
+         * Skip tree extraction entirely - not needed for restoration preview.
+         * The revert operation itself will handle all necessary Git operations.
+         */
+        output_print(out, OUTPUT_VERBOSE, "File deleted from HEAD, preparing restoration from history\n");
 
-    ret = git_tree_entry_bypath(&current_entry, current_tree, resolved_path);
-    if (ret < 0) {
-        if (ret == GIT_ENOTFOUND) {
-            err = ERROR(ERR_NOT_FOUND, "File '%s' not found in current HEAD", resolved_path);
-        } else {
+    } else {
+        /*
+         * === Workflow B: Reverting Existing File ===
+         * File exists in current HEAD - perform standard revert workflow.
+         * Extract trees and entries for blob comparison and diff preview.
+         */
+        output_print(out, OUTPUT_VERBOSE, "File exists in HEAD, extracting trees for comparison\n");
+
+        int ret = git_commit_tree(&current_tree, current_commit);
+        if (ret < 0) {
             err = error_from_git(ret);
+            goto cleanup;
         }
-        goto cleanup;
-    }
 
-    ret = git_tree_entry_bypath(&target_entry, target_tree, resolved_path);
-    if (ret < 0) {
-        if (ret == GIT_ENOTFOUND) {
-            err = ERROR(ERR_NOT_FOUND, "File '%s' not found at target commit", resolved_path);
-        } else {
+        ret = git_commit_tree(&target_tree, target_commit);
+        if (ret < 0) {
             err = error_from_git(ret);
+            goto cleanup;
         }
-        goto cleanup;
+
+        ret = git_tree_entry_bypath(&current_entry, current_tree, resolved_path);
+        if (ret < 0) {
+            if (ret == GIT_ENOTFOUND) {
+                err = ERROR(ERR_NOT_FOUND, "File '%s' not found in current HEAD", resolved_path);
+            } else {
+                err = error_from_git(ret);
+            }
+            goto cleanup;
+        }
+
+        ret = git_tree_entry_bypath(&target_entry, target_tree, resolved_path);
+        if (ret < 0) {
+            if (ret == GIT_ENOTFOUND) {
+                err = ERROR(ERR_NOT_FOUND, "File '%s' not found at target commit", resolved_path);
+            } else {
+                err = error_from_git(ret);
+            }
+            goto cleanup;
+        }
+
+        current_blob_oid = git_tree_entry_id(current_entry);
+        target_blob_oid = git_tree_entry_id(target_entry);
+
+        /* Early exit: Check if file is already at target state */
+        if (git_oid_equal(current_blob_oid, target_blob_oid)) {
+            output_info(out, "File '%s' is already at target state (no changes)", opts->file_path);
+            goto cleanup;  /* Not an error, just nothing to do */
+        }
     }
 
-    const git_oid *current_blob_oid = git_tree_entry_id(current_entry);
-    const git_oid *target_blob_oid = git_tree_entry_id(target_entry);
-
-    /* Step 5: Check if file is already at target state */
-    if (git_oid_equal(current_blob_oid, target_blob_oid)) {
-        fprintf(stderr, "File '%s' is already at target state (no changes)\n", opts->file_path);
-        goto cleanup;  /* Not an error, just nothing to do */
-    }
-
-    /* Step 6: Check for uncommitted changes (unless --force) */
+    /* Step 5: Check for uncommitted changes (unless --force) */
     if (!opts->force) {
         bool has_changes = false;
-        err = check_working_tree_status(repo, profile_name, resolved_path, &has_changes);
+        err = check_uncommitted_changes(repo, profile_name, resolved_path, &has_changes);
         if (err) {
-            err = error_wrap(err, "Failed to check working tree status");
+            err = error_wrap(err, "Failed to check for uncommitted changes");
             goto cleanup;
         }
 
         if (has_changes) {
             err = ERROR(ERR_CONFLICT,
-                       "File '%s' has uncommitted changes in profile '%s'\n"
+                       "File '%s' or metadata has uncommitted changes in profile '%s'\n"
                        "Use --force to discard changes, or commit them first",
                        resolved_path, profile_name);
             goto cleanup;
         }
     }
 
-    /* Step 7: Show preview */
+    /* Step 6: Show preview */
     if (!opts->dry_run) {
-        /* Load metadata and keymanager for decryption */
-        err = metadata_load_from_branch(repo, profile_name, &metadata);
-        if (err) {
-            /* Graceful fallback: create empty metadata if loading fails */
-            error_t *create_err = metadata_create_empty(&metadata);
-            if (create_err) {
-                error_free(create_err);
-                err = ERROR(ERR_MEMORY, "Failed to create metadata");
-                goto cleanup;
-            }
-            error_free(err);
-            err = NULL;
-        }
-
-        km = keymanager_get_global(NULL);
-
         /* Show commit metadata */
         if (output_colors_enabled(out)) {
             output_printf(out, OUTPUT_NORMAL, "\n%sRevert preview:%s\n",
@@ -790,12 +1165,29 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
             output_printf(out, OUTPUT_NORMAL, "  Target commit: %s (%s)\n", oid_str, time_buf);
         }
 
-        /* Show diff preview with decryption support */
-        err = show_diff_preview(repo, resolved_path, profile_name, metadata, km,
-                               current_blob_oid, target_blob_oid, out);
-        if (err) {
-            err = error_wrap(err, "Failed to show diff preview");
-            goto cleanup;
+        if (found_in_history) {
+            /* File was deleted - show simple restoration message */
+            output_printf(out, OUTPUT_NORMAL, "\n");
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "%sRestoring deleted file from commit history%s\n",
+                        output_color_code(out, OUTPUT_COLOR_GREEN),
+                        output_color_code(out, OUTPUT_COLOR_RESET));
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "Restoring deleted file from commit history\n");
+            }
+        } else {
+            /* File exists - show detailed diff preview with decryption support */
+            err = load_metadata_graceful(repo, profile_name, &metadata);
+            if (err) goto cleanup;
+
+            km = keymanager_get_global(NULL);
+
+            err = show_diff_preview(repo, resolved_path, profile_name, metadata, km,
+                                   current_blob_oid, target_blob_oid, out);
+            if (err) {
+                err = error_wrap(err, "Failed to show diff preview");
+                goto cleanup;
+            }
         }
     }
 
@@ -809,7 +1201,7 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     git_tree_free(current_tree);
     current_tree = NULL;
 
-    /* Step 8: Prompt for confirmation (unless --force or --dry-run) */
+    /* Step 7: Prompt for confirmation (unless --force or --dry-run) */
     if (config->confirm_destructive && !opts->force && !opts->dry_run) {
         if (!output_confirm(out, "Revert file?", false)) {
             fprintf(stderr, "Aborted.\n");
@@ -822,7 +1214,7 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     git_commit_free(current_commit);
     current_commit = NULL;
 
-    /* Step 9: Perform revert (unless dry-run) */
+    /* Step 8: Perform revert (unless dry-run) */
     if (opts->dry_run) {
         output_info(out, "\nDry-run mode: No changes made");
         goto cleanup;

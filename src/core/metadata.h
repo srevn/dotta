@@ -199,6 +199,19 @@ error_t *metadata_item_create_directory(
 void metadata_item_free(metadata_item_t *item);
 
 /**
+ * Clone metadata item (deep copy)
+ *
+ * Creates a deep copy of a metadata item, duplicating all strings and
+ * union fields based on the item's kind. Useful when preserving an item
+ * while modifying the original collection.
+ *
+ * @param source Source item to clone (must not be NULL)
+ * @param out Cloned item (must not be NULL, caller must free with metadata_item_free)
+ * @return Error or NULL on success
+ */
+error_t *metadata_item_clone(const metadata_item_t *source, metadata_item_t **out);
+
+/**
  * Add or update metadata item
  *
  * Works for both files and directories.
@@ -389,6 +402,35 @@ error_t *metadata_merge(
 error_t *metadata_load_from_branch(
     git_repository *repo,
     const char *branch_name,
+    metadata_t **out
+);
+
+/**
+ * Convert metadata to JSON string
+ *
+ * Serializes metadata to JSON format (version 4).
+ *
+ * @param metadata Metadata to serialize (must not be NULL)
+ * @param out JSON buffer (must not be NULL, caller must free with buffer_free)
+ * @return Error or NULL on success
+ */
+error_t *metadata_to_json(
+    const metadata_t *metadata,
+    buffer_t **out
+);
+
+/**
+ * Parse metadata from JSON string
+ *
+ * Parses metadata from JSON content.
+ * Rejects version mismatches with clear error message (no migration code).
+ *
+ * @param json_str JSON string (must not be NULL)
+ * @param out Metadata (must not be NULL, caller must free with metadata_free)
+ * @return Error or NULL on success
+ */
+error_t *metadata_from_json(
+    const char *json_str,
     metadata_t **out
 );
 

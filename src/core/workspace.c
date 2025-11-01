@@ -1883,64 +1883,6 @@ error_t *workspace_get_merged_metadata(
 }
 
 /**
- * Check if item has divergence
- */
-bool workspace_item_diverged(
-    const workspace_t *ws,
-    const char *filesystem_path
-) {
-    if (!ws || !filesystem_path) {
-        return false;
-    }
-
-    /* O(1) lookup via hashmap index */
-    /* Any item in the index has some form of state change or divergence */
-    workspace_item_t *entry = hashmap_get(ws->diverged_index, filesystem_path);
-    return (entry != NULL);
-}
-
-/**
- * Validate workspace for operation
- */
-error_t *workspace_validate(
-    const workspace_t *ws,
-    const char *operation,
-    bool allow_dirty
-) {
-    CHECK_NULL(ws);
-    CHECK_NULL(operation);
-
-    workspace_status_t status = workspace_get_status(ws);
-
-    switch (status) {
-        case WORKSPACE_CLEAN:
-            return NULL;  /* All good */
-
-        case WORKSPACE_DIRTY:
-            if (allow_dirty) {
-                return NULL;  /* Warnings only */
-            }
-            return ERROR(ERR_VALIDATION,
-                        "Cannot %s: workspace has divergence (use --force or resolve first)",
-                        operation);
-
-        case WORKSPACE_INVALID:
-            return ERROR(ERR_VALIDATION,
-                        "Cannot %s: workspace has orphaned state entries "
-                        "(run 'dotta profile validate --fix')", operation);
-    }
-
-    return ERROR(ERR_INTERNAL, "Unknown workspace status");
-}
-
-/**
- * Check if workspace is clean
- */
-bool workspace_is_clean(const workspace_t *ws) {
-    return workspace_get_status(ws) == WORKSPACE_CLEAN;
-}
-
-/**
  * Free workspace
  */
 void workspace_free(workspace_t *ws) {

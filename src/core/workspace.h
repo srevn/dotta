@@ -90,24 +90,6 @@ static inline bool workspace_item_is_multi_profile(const workspace_item_t *item)
 }
 
 /**
- * Get number of profiles containing this item
- *
- * Returns the total count of enabled profiles that contain this file.
- * Useful for displaying overlap statistics and making decisions about
- * update/remove operations.
- *
- * @param item Workspace item (must not be NULL)
- * @return Profile count (minimum 1 if item has a profile, 0 if orphaned)
- */
-static inline size_t workspace_item_profile_count(const workspace_item_t *item) {
-    if (!item) {
-        return 0;
-    }
-    /* If all_profiles exists, use its count; otherwise infer from profile field */
-    return item->all_profiles ? item->all_profiles->count : (item->profile ? 1 : 0);
-}
-
-/**
  * Workspace structure (opaque)
  *
  * Contains all three states and divergence analysis results.
@@ -331,54 +313,6 @@ error_t *workspace_get_merged_metadata(
     const workspace_t *ws,
     metadata_t **out
 );
-
-/**
- * Check if item has divergence
- *
- * Checks if a specific item (file or directory) has any state change or divergence.
- * Returns true if item is not in DEPLOYED state with NONE divergence.
- *
- * @param ws Workspace (must not be NULL)
- * @param filesystem_path Item path to check (must not be NULL)
- * @return true if item has state change or divergence
- */
-bool workspace_item_diverged(
-    const workspace_t *ws,
-    const char *filesystem_path
-);
-
-/**
- * Validate workspace for operation
- *
- * Checks if workspace is suitable for the given operation.
- * Returns error if workspace is in invalid state.
- *
- * Validation rules:
- * - WORKSPACE_INVALID always fails (orphaned state)
- * - WORKSPACE_DIRTY fails if allow_dirty=false
- * - WORKSPACE_CLEAN always succeeds
- *
- * @param ws Workspace (must not be NULL)
- * @param operation Operation name for error messages (must not be NULL)
- * @param allow_dirty Allow dirty workspace (warnings only)
- * @return Error or NULL if valid
- */
-error_t *workspace_validate(
-    const workspace_t *ws,
-    const char *operation,
-    bool allow_dirty
-);
-
-
-/**
- * Check if workspace is clean
- *
- * Convenience function - equivalent to workspace_get_status() == WORKSPACE_CLEAN
- *
- * @param ws Workspace (must not be NULL)
- * @return true if clean
- */
-bool workspace_is_clean(const workspace_t *ws);
 
 /**
  * Free workspace

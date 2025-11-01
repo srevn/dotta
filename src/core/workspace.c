@@ -1083,6 +1083,26 @@ static error_t *analyze_untracked_files(
         const metadata_item_t **directories =
             metadata_get_items_by_kind(metadata, METADATA_ITEM_DIRECTORY, &dir_count);
 
+        /* Create profile-specific ignore context once for all directories */
+        ignore_context_t *ignore_ctx = NULL;
+        err = ignore_context_create(
+            ws->repo,
+            config,
+            profile_name,
+            NULL,
+            0,
+            &ignore_ctx
+        );
+
+        if (err) {
+            /* Non-fatal: continue without ignore filtering */
+            fprintf(stderr, "warning: failed to load ignore patterns for profile '%s': %s\n",
+                    profile_name, err->message);
+            error_free(err);
+            err = NULL;
+            ignore_ctx = NULL;
+        }
+
         /* Scan each tracked directory */
         for (size_t i = 0; i < dir_count; i++) {
             const metadata_item_t *dir_entry = directories[i];
@@ -1091,26 +1111,6 @@ static error_t *analyze_untracked_files(
              * For directories: key = filesystem_path (absolute path) */
             if (!fs_exists(dir_entry->key)) {
                 continue;
-            }
-
-            /* Create profile-specific ignore context for this directory */
-            ignore_context_t *ignore_ctx = NULL;
-            err = ignore_context_create(
-                ws->repo,
-                config,
-                profile_name,
-                NULL,
-                0,
-                &ignore_ctx
-            );
-
-            if (err) {
-                /* Non-fatal: continue without ignore filtering */
-                fprintf(stderr, "warning: failed to load ignore patterns for '%s' in profile '%s': %s\n",
-                        dir_entry->key, profile_name, err->message);
-                error_free(err);
-                err = NULL;
-                ignore_ctx = NULL;
             }
 
             /* Scan this directory for untracked files */
@@ -1123,9 +1123,6 @@ static error_t *analyze_untracked_files(
                 ws
             );
 
-            /* Free ignore context */
-            ignore_context_free(ignore_ctx);
-
             if (err) {
                 /* Non-fatal: continue with other directories */
                 fprintf(stderr, "warning: failed to scan directory '%s' in profile '%s': %s\n",
@@ -1134,6 +1131,9 @@ static error_t *analyze_untracked_files(
                 err = NULL;
             }
         }
+
+        /* Free ignore context after scanning all directories in this profile */
+        ignore_context_free(ignore_ctx);
 
         /* Free the pointer array (items themselves remain in metadata) */
         free(directories);

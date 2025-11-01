@@ -859,6 +859,7 @@ error_t *gitops_fetch_branches(
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(branch_names);
+    CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
     CHECK_ARG(branch_count > 0, "branch_count must be greater than 0");
 
     /* Look up remote once */
@@ -880,6 +881,10 @@ error_t *gitops_fetch_branches(
     for (size_t i = 0; i < branch_count; i++) {
         if (!branch_names[i]) {
             err_result = ERROR(ERR_INVALID_ARG, "branch_names[%zu] is NULL", i);
+            goto cleanup;
+        }
+        if (branch_names[i][0] == '\0') {
+            err_result = ERROR(ERR_INVALID_ARG, "branch_names[%zu] cannot be empty", i);
             goto cleanup;
         }
 

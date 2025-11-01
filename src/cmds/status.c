@@ -586,18 +586,35 @@ static error_t *display_remote_status(
             output_info(out, "Fetching from '%s'...", remote_name);
         }
 
-        /* Fetch each profile branch */
-        for (size_t i = 0; i < profiles_to_check->count; i++) {
-            const char *branch_name = profiles_to_check->profiles[i].name;
-            error_t *fetch_err = gitops_fetch_branch(repo, remote_name, branch_name, NULL);
+        /* Build array of branch names for batched fetch */
+        char **branch_names = calloc(profiles_to_check->count, sizeof(char *));
+        if (!branch_names) {
+            /* Memory allocation failed - non-fatal, just warn */
+            if (verbose) {
+                output_warning(out, "Failed to allocate memory for fetch operation");
+            }
+        } else {
+            /* Populate array with borrowed references to profile names */
+            for (size_t i = 0; i < profiles_to_check->count; i++) {
+                branch_names[i] = (char *)profiles_to_check->profiles[i].name;
+            }
+
+            /* Perform batched fetch - single network operation for all branches */
+            error_t *fetch_err = gitops_fetch_branches(
+                repo, remote_name, branch_names, profiles_to_check->count, NULL
+            );
+
             if (fetch_err) {
-                /* Non-fatal: just warn */
+                /* Non-fatal: just warn and continue with status display */
                 if (verbose) {
-                    output_warning(out, "Failed to fetch '%s': %s",
-                                  branch_name, error_message(fetch_err));
+                    output_warning(out, "Failed to fetch branches: %s",
+                                  error_message(fetch_err));
                 }
                 error_free(fetch_err);
             }
+
+            /* Free the array (strings are borrowed, don't free them) */
+            free(branch_names);
         }
 
         /* Add spacing after fetch output in verbose mode */

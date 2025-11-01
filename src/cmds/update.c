@@ -1509,6 +1509,11 @@ static error_t *update_display_summary(
                     buffer_append_string(info_buf, "[ownership]");
                     first_flag = false;
                 }
+                if (item->encryption_differs) {
+                    if (!first_flag) buffer_append_string(info_buf, " ");
+                    buffer_append_string(info_buf, "[encryption]");
+                    first_flag = false;
+                }
 
                 buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_RESET));
             }
@@ -1657,6 +1662,11 @@ static error_t *update_display_summary(
                 if (item->ownership_differs) {
                     if (!first_flag) buffer_append_string(info_buf, " ");
                     buffer_append_string(info_buf, "[ownership]");
+                    first_flag = false;
+                }
+                if (item->encryption_differs) {
+                    if (!first_flag) buffer_append_string(info_buf, " ");
+                    buffer_append_string(info_buf, "[encryption]");
                 }
 
                 buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_RESET));

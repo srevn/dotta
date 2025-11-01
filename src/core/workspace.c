@@ -344,6 +344,7 @@ static error_t *check_item_metadata_divergence(
  * @param content_differs Content changed
  * @param mode_differs Permissions/mode divergence
  * @param ownership_differs Owner/group divergence
+ * @param encryption_differs Encryption policy mismatch
  * @param profile_enabled Is source profile in enabled list?
  * @param profile_changed Has owning profile changed vs state?
  */
@@ -362,6 +363,7 @@ static error_t *workspace_add_diverged(
     bool content_differs,
     bool mode_differs,
     bool ownership_differs,
+    bool encryption_differs,
     bool profile_enabled,
     bool profile_changed
 ) {
@@ -407,6 +409,7 @@ static error_t *workspace_add_diverged(
     entry->content_differs = content_differs;
     entry->mode_differs = mode_differs;
     entry->ownership_differs = ownership_differs;
+    entry->encryption_differs = encryption_differs;
     entry->profile_enabled = profile_enabled;
     entry->profile_changed = profile_changed;
     entry->old_profile = old_profile;  /* Takes ownership (can be NULL) */
@@ -549,9 +552,7 @@ static error_t *analyze_file_divergence(
     bool ownership_differs = false;
     divergence_type_t div_type = DIVERGENCE_CLEAN;
 
-    /*
-     * PHASE 1: Filesystem content analysis (if file exists)
-     * ========================================================
+    /* PHASE 1: Filesystem content analysis (if file exists)
      * Compare content for ALL files on filesystem, regardless of deployment state.
      * This catches conflicts for both deployed AND undeployed files.
      */
@@ -620,7 +621,7 @@ static error_t *analyze_file_divergence(
                                              div_type, WORKSPACE_ITEM_FILE,
                                              in_profile, in_state,
                                              on_filesystem, content_differs,
-                                             false, false,
+                                             false, false, false,
                                              true, false);
 
             case CMP_MISSING:
@@ -632,7 +633,7 @@ static error_t *analyze_file_divergence(
                                              div_type, WORKSPACE_ITEM_FILE,
                                              in_profile, in_state,
                                              on_filesystem, content_differs,
-                                             false, false,
+                                             false, false, false,
                                              true, false);
         }
 
@@ -673,9 +674,7 @@ static error_t *analyze_file_divergence(
         }
     }
 
-    /*
-     * PHASE 2: State-based divergence classification
-     * ================================================
+    /* PHASE 2: State-based divergence classification
      * Apply deployment state logic to determine final divergence type.
      */
 
@@ -696,9 +695,7 @@ static error_t *analyze_file_divergence(
         div_type = DIVERGENCE_DELETED;
     }
 
-    /*
-     * PHASE 3: Profile ownership change detection
-     * ============================================
+    /* PHASE 3: Profile ownership change detection
      * Detect when a file moves from one profile to another.
      * Example: file was in 'global', now in 'darwin'.
      */
@@ -724,7 +721,7 @@ static error_t *analyze_file_divergence(
                                               div_type, WORKSPACE_ITEM_FILE,
                                               in_profile, in_state,
                                               on_filesystem, content_differs,
-                                              mode_differs, ownership_differs,
+                                              mode_differs, ownership_differs, false,
                                               true, profile_changed);
         if (err) {
             /* On error, free old_profile since workspace_add_diverged didn't take ownership */
@@ -805,6 +802,7 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
                 false,            /* content_differs N/A */
                 false,            /* mode_differs N/A */
                 false,            /* ownership_differs N/A */
+                false,            /* encryption_differs N/A */
                 profile_enabled,
                 false             /* No profile change for orphans */
             );
@@ -889,6 +887,7 @@ static error_t *analyze_orphaned_directories(workspace_t *ws) {
                 false,            /* content_differs N/A */
                 false,            /* mode_differs N/A */
                 false,            /* ownership_differs N/A */
+                false,            /* encryption_differs N/A */
                 profile_enabled,
                 false             /* No profile change for orphans */
             );
@@ -1130,6 +1129,7 @@ static error_t *scan_directory_for_untracked(
                     false,  /* content_differs N/A */
                     false,  /* mode_differs N/A */
                     false,  /* ownership_differs N/A */
+                    false,  /* encryption_differs N/A */
                     true,   /* profile_enabled */
                     false   /* No profile change */
                 );
@@ -1298,6 +1298,7 @@ static bool check_directory_callback(const char *key, void *value, void *user_da
             false,  /* content_differs N/A */
             false,  /* mode_differs N/A */
             false,  /* ownership_differs N/A */
+            false,  /* encryption_differs N/A */
             true,   /* profile_enabled */
             false   /* No profile change */
         );
@@ -1363,6 +1364,7 @@ static bool check_directory_callback(const char *key, void *value, void *user_da
             true,   /* content_differs (metadata counts as content) */
             mode_differs,
             ownership_differs,
+            false,  /* encryption_differs (directories don't have encryption) */
             true,   /* profile_enabled */
             false   /* No profile change */
         );
@@ -1534,26 +1536,48 @@ static error_t *analyze_encryption_policy_mismatch(
 
         /* Policy mismatch: should be encrypted but isn't */
         if (should_auto_encrypt && !is_encrypted) {
-            err = workspace_add_diverged(
-                ws,
-                manifest_entry->filesystem_path,
-                storage_path,
-                profile_name,
-                NULL, manifest_entry->all_profiles,
-                DIVERGENCE_ENCRYPTION,
-                WORKSPACE_ITEM_FILE,
-                true,  /* in profile */
-                false, /* in_state */
-                false, /* on_filesystem */
-                false, /* content_differs */
-                false, /* mode_differs N/A */
-                false, /* ownership_differs N/A */
-                true,  /* profile_enabled */
-                false  /* No profile change */
+            /* Check if file already has divergence (O(1) hashmap lookup).
+             * This prevents last-write-wins bug when multiple analysis functions
+             * detect different divergence types for the same file. */
+            workspace_item_t *existing = hashmap_get(
+                ws->diverged_index,
+                manifest_entry->filesystem_path
             );
 
-            if (err) {
-                return err;
+            if (existing) {
+                /* File already diverged - add encryption as secondary flag.
+                 * This preserves the primary divergence (e.g., MODIFIED blocks
+                 * deployment) while still indicating the encryption policy issue.
+                 *
+                 * Example: File is MODIFIED (content changed) AND violates encryption
+                 * policy. Primary type stays MODIFIED (blocks deployment), but we set
+                 * encryption_differs=true so user sees "modified [encryption]" in status. */
+                existing->encryption_differs = true;
+            } else {
+                /* File has NO other divergence - encryption policy is the primary issue.
+                 * Create new entry with type=DIVERGENCE_ENCRYPTION. */
+                err = workspace_add_diverged(
+                    ws,
+                    manifest_entry->filesystem_path,
+                    storage_path,
+                    profile_name,
+                    NULL, manifest_entry->all_profiles,
+                    DIVERGENCE_ENCRYPTION,
+                    WORKSPACE_ITEM_FILE,
+                    true,  /* in profile */
+                    false, /* in_state */
+                    false, /* on_filesystem */
+                    false, /* content_differs */
+                    false, /* mode_differs */
+                    false, /* ownership_differs */
+                    true,  /* encryption_differs - true when policy violated */
+                    true,  /* profile_enabled */
+                    false  /* No profile change */
+                );
+
+                if (err) {
+                    return err;
+                }
             }
         }
     }

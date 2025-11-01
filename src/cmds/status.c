@@ -239,6 +239,9 @@ static void format_diverged_item(
     if (item->ownership_differs && item->type != DIVERGENCE_OWNERSHIP && offset < sizeof(label_buffer)) {
         offset += snprintf(label_buffer + offset, sizeof(label_buffer) - offset, " [ownership]");
     }
+    if (item->encryption_differs && item->type != DIVERGENCE_ENCRYPTION && offset < sizeof(label_buffer)) {
+        offset += snprintf(label_buffer + offset, sizeof(label_buffer) - offset, " [encryption]");
+    }
 
     /* Point out_label to the composite buffer */
     *out_label = label_buffer;

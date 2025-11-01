@@ -67,13 +67,14 @@ typedef struct {
     divergence_type_t type;              /* Divergence category */
     workspace_item_kind_t item_kind;     /* FILE or DIRECTORY (explicit type) */
 
-    /* State flags (8 bytes for 8 booleans) */
+    /* State flags (9 booleans) */
     bool in_profile;            /* Exists in profile branch */
     bool in_state;              /* Exists in deployment state (only for FILES) */
     bool on_filesystem;         /* Exists on actual filesystem */
     bool content_differs;       /* Content changed (only for FILES) */
     bool mode_differs;          /* Permissions/mode changed from metadata */
     bool ownership_differs;     /* Owner/group changed from metadata (requires root) */
+    bool encryption_differs;    /* Encryption policy mismatch (secondary divergence) */
     bool profile_enabled;       /* Is source profile in workspace's enabled list? */
     bool profile_changed;       /* Profile differs from state (ownership changed) */
 } workspace_item_t;

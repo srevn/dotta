@@ -61,9 +61,7 @@ error_t *deploy_preflight_check_from_workspace(
         return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
     }
 
-    /*
-     * CHECK 1: Overlap Detection (Manifest-level)
-     * ============================================
+    /* CHECK 1: Overlap Detection (Manifest-level)
      * Detect files appearing in multiple profiles. This is a manifest concern,
      * not a divergence concern, so it stays in preflight.
      */
@@ -96,9 +94,7 @@ error_t *deploy_preflight_check_from_workspace(
 
     hashmap_free(seen_paths, NULL);
 
-    /*
-     * CHECK 2: Conflict Detection + Ownership Changes + Writability
-     * ==============================================================
+    /* CHECK 2: Conflict Detection + Ownership Changes + Writability
      * Query workspace for divergence (O(1) per file), map to preflight decisions.
      */
 

@@ -354,10 +354,19 @@ static error_t *filter_items_for_update(
                 should_include = !opts->only_new;
                 break;
 
+            case DIVERGENCE_ENCRYPTION:
+                /* Encryption policy violations - include for automatic policy enforcement.
+                 *
+                 * SECURITY: Files matching auto_encrypt_patterns but stored as plaintext
+                 * violate the configured security policy and should be re-encrypted.
+                 * The centralized policy system (crypto/policy.c) will automatically
+                 * apply encryption via Priority 4 (auto-encrypt patterns) */
+                should_include = !opts->only_new;
+                break;
+
             case DIVERGENCE_UNDEPLOYED:
             case DIVERGENCE_ORPHANED:
             case DIVERGENCE_CLEAN:
-            case DIVERGENCE_ENCRYPTION:
                 /* Not relevant for update command */
                 should_include = false;
                 break;
@@ -414,6 +423,11 @@ static error_t *filter_items_for_update(
 
             case DIVERGENCE_MODE_DIFF:
             case DIVERGENCE_OWNERSHIP:
+                should_include = !opts->only_new;
+                break;
+
+            case DIVERGENCE_ENCRYPTION:
+                /* Encryption policy violations */
                 should_include = !opts->only_new;
                 break;
 
@@ -984,6 +998,37 @@ static error_t *update_profile(
                     break;
                 }
 
+                /* Handle encryption divergence for files missing from filesystem
+                 *
+                 * EDGE CASE: File has DIVERGENCE_ENCRYPTION but doesn't exist on filesystem.
+                 * This occurs when:
+                 *   1. File exists in Git (detected via profile scan)
+                 *   2. File matches auto_encrypt_patterns (policy violation detected)
+                 *   3. File is NOT on filesystem (deleted locally, or never deployed)
+                 *
+                 * DEFENSIVE: Cannot re-encrypt a file that doesn't exist. Skip gracefully
+                 * to prevent errors from copy_file_to_worktree() trying to read missing file.
+                 *
+                 * RESOLUTION PATHS:
+                 *   - User can re-create the file and run update again to fix encryption
+                 *   - User can remove file from profile with 'dotta remove'
+                 *   - If file is BOTH deleted AND has encryption divergence, deletion
+                 *     divergence takes precedence (already handled above)
+                 */
+                if (item->type == DIVERGENCE_ENCRYPTION && !item->on_filesystem) {
+                    if (opts->verbose) {
+                        output_warning(out,
+                            "Skipping encryption fix for missing file: %s",
+                            item->filesystem_path);
+                        output_info(out,
+                            "  File violates encryption policy but doesn't exist on filesystem.");
+                        output_info(out,
+                            "  To resolve: re-create file and run update, or remove from profile.");
+                    }
+                    /* Skip this file - don't advance file_idx (no stat captured) */
+                    break;
+                }
+
                 /* Copy to worktree and capture stat atomically */
                 err = copy_file_to_worktree(
                     wt,
@@ -1319,6 +1364,7 @@ static error_t *update_display_summary(
     size_t new_count = 0;
     size_t deleted_count = 0;
     size_t dir_count = 0;
+    size_t encryption_count = 0;
 
     for (size_t i = 0; i < item_count; i++) {
         const workspace_item_t *item = items[i];
@@ -1336,6 +1382,9 @@ static error_t *update_display_summary(
                     break;
                 case DIVERGENCE_UNTRACKED:
                     new_count++;
+                    break;
+                case DIVERGENCE_ENCRYPTION:
+                    encryption_count++;
                     break;
                 default:
                     break;
@@ -1603,6 +1652,62 @@ static error_t *update_display_summary(
         }
     }
 
+    /* Display encryption policy violations section */
+    if (encryption_count > 0) {
+        output_section(out, "Encryption policy violations");
+        output_newline(out);
+
+        output_warning(out,
+            "The following files match auto-encrypt patterns but are stored as plaintext:");
+        output_newline(out);
+
+        for (size_t i = 0; i < item_count; i++) {
+            const workspace_item_t *item = items[i];
+
+            if (item->item_kind != WORKSPACE_ITEM_FILE ||
+                item->type != DIVERGENCE_ENCRYPTION) {
+                continue;
+            }
+
+            /* Build info string with security context and resolution status */
+            buffer_t *info_buf = buffer_create();
+            if (!info_buf) {
+                continue;
+            }
+
+            buffer_append_string(info_buf, item->filesystem_path);
+            buffer_append_string(info_buf, " (from ");
+            buffer_append_string(info_buf, item->profile);
+            buffer_append_string(info_buf, ") ");
+            buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_DIM));
+
+            /* Show resolution status based on filesystem presence */
+            if (item->on_filesystem) {
+                buffer_append_string(info_buf, "[will be encrypted]");
+            } else {
+                buffer_append_string(info_buf, "[file missing - cannot fix]");
+            }
+
+            buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_RESET));
+
+            char *info = NULL;
+            error_t *release_err = buffer_release_data(info_buf, &info);
+            if (release_err) {
+                error_free(release_err);
+                continue;
+            }
+
+            output_item(out, "[plaintext]", OUTPUT_COLOR_RED, info);
+            free(info);
+        }
+
+        output_newline(out);
+        output_info(out,
+            "These files will be re-encrypted according to your auto_encrypt_patterns config.");
+        output_info(out,
+            "To keep a file as plaintext, use: dotta update --no-encrypt <file>");
+    }
+
     output_newline(out);
     return NULL;
 }
@@ -1826,7 +1931,7 @@ error_t *cmd_update(
         .analyze_untracked = (opts->include_new || opts->only_new ||      /* Explicit flags */
                              (config && config->auto_detect_new_files)),  /* Or config auto-detect */
         .analyze_directories = true,                        /* Detect directory metadata changes */
-        .analyze_encryption = false                         /* Not relevant for update */
+        .analyze_encryption = true                          /* Detect encryption policy violations */
     };
     err = workspace_load(repo, profiles, config, &ws_opts, &ws);
     if (err) {

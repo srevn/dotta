@@ -250,7 +250,6 @@ static error_t *show_file_diff(
     compare_direction_t cmp_dir = (direction == DIFF_UPSTREAM) ?
                                    CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM;
     err = compare_generate_diff(
-        repo,
         content,
         entry->filesystem_path,
         entry->storage_path,  /* Use storage_path as label for consistent diff output */

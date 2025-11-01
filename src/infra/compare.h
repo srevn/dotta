@@ -94,13 +94,11 @@ typedef enum {
  * Generate diff from buffer content to disk file
  *
  * Works with decrypted content from the content layer.
- * Creates temporary git blobs from the buffer to leverage
- * libgit2's diff generation capabilities.
+ * Uses libgit2's git_diff_buffers for pure in-memory diff generation.
  *
  * Stat propagation: Accepts pre-captured stat to avoid redundant syscalls
  * during comparison phase. If in_stat is NULL, performs lstat() internally.
  *
- * @param repo Repository (must not be NULL)
  * @param content Content buffer (e.g., decrypted content, must not be NULL)
  * @param disk_path Disk file path (must not be NULL)
  * @param path_label Label for diff output (can be NULL, defaults to disk_path)
@@ -111,7 +109,6 @@ typedef enum {
  * @return Error or NULL on success
  */
 error_t *compare_generate_diff(
-    git_repository *repo,
     const buffer_t *content,
     const char *disk_path,
     const char *path_label,

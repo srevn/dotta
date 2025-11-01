@@ -88,11 +88,11 @@ error_t *worktree_create_orphan(
  * Safe to call with NULL.
  *
  * Cleanup order (critical):
- * 1. Close worktree repository handle.
- * 2. Delete temporary worktree branch from main repo.
- * 3. Prune libgit2 worktree object.
- * 4. Remove worktree directory.
- * 5. Free handle memory.
+ * 1. Close worktree repository handle
+ * 2. Prune libgit2 worktree object
+ * 3. Remove worktree directory
+ * 4. Free name string
+ * 5. Free handle memory
  *
  * @param wt Worktree handle (can be NULL)
  */

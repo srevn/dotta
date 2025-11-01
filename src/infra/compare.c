@@ -421,7 +421,6 @@ static error_t *generate_text_diff(
  * Generate diff from buffer content to disk file with stat propagation
  */
 error_t *compare_generate_diff(
-    git_repository *repo,
     const buffer_t *content,
     const char *disk_path,
     const char *path_label,
@@ -430,7 +429,6 @@ error_t *compare_generate_diff(
     compare_direction_t direction,
     file_diff_t **out
 ) {
-    CHECK_NULL(repo);
     CHECK_NULL(content);
     CHECK_NULL(disk_path);
     CHECK_NULL(out);

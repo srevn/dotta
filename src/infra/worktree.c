@@ -232,20 +232,7 @@ void worktree_cleanup(worktree_handle_t *wt) {
         wt->repo = NULL;
     }
 
-    /* Step 2: Delete the temporary worktree branch from main repo */
-    if (wt->name && wt->main_repo) {
-        char *refname = str_format("refs/heads/%s", wt->name);
-        if (refname) {
-            git_reference *ref = NULL;
-            if (git_reference_lookup(&ref, wt->main_repo, refname) == 0) {
-                git_branch_delete(ref);
-                git_reference_free(ref);
-            }
-            free(refname);
-        }
-    }
-
-    /* Step 3: Prune worktree */
+    /* Step 2: Prune worktree */
     if (wt->worktree) {
         git_worktree_prune_options opts = {0};
         opts.version = 1;
@@ -256,7 +243,7 @@ void worktree_cleanup(worktree_handle_t *wt) {
         wt->worktree = NULL;
     }
 
-    /* Step 4: Remove temporary directory */
+    /* Step 3: Remove temporary directory */
     if (wt->path) {
         /* Ignore errors - best effort cleanup */
         fs_remove_dir(wt->path, true);
@@ -264,13 +251,13 @@ void worktree_cleanup(worktree_handle_t *wt) {
         wt->path = NULL;
     }
 
-    /* Step 5: Free name */
+    /* Step 4: Free name */
     if (wt->name) {
         free(wt->name);
         wt->name = NULL;
     }
 
-    /* Step 6: Free handle */
+    /* Step 5: Free handle */
     free(wt);
 }
 

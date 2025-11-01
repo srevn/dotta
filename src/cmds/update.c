@@ -831,7 +831,10 @@ static error_t *update_metadata_for_profile(
 /**
  * Update a single profile with workspace items
  *
- * @param repo Git repository (must not be NULL)
+ * ARCHITECTURE NOTE: This function now receives a pre-created worktree
+ * that has been checked out to the target profile branch.
+ *
+ * @param wt Worktree handle (must not be NULL, already checked out to profile branch)
  * @param profile Profile to update (must not be NULL)
  * @param items Array of workspace items to update (must not be NULL)
  * @param item_count Number of items
@@ -842,7 +845,7 @@ static error_t *update_metadata_for_profile(
  * @return Error or NULL on success
  */
 static error_t *update_profile(
-    git_repository *repo,
+    worktree_handle_t *wt,
     profile_t *profile,
     const workspace_item_t **items,
     size_t item_count,
@@ -851,7 +854,7 @@ static error_t *update_profile(
     const dotta_config_t *config,
     workspace_t *ws
 ) {
-    CHECK_NULL(repo);
+    CHECK_NULL(wt);
     CHECK_NULL(profile);
     CHECK_NULL(items);
     CHECK_NULL(opts);
@@ -861,14 +864,18 @@ static error_t *update_profile(
         return NULL;
     }
 
+    /* Get repository from worktree (shared object DB and refs) */
+    git_repository *wt_repo = worktree_get_repo(wt);
+    if (!wt_repo) {
+        return ERROR(ERR_INTERNAL, "Failed to get repository from worktree");
+    }
+
     /* Initialize all resources to NULL for goto cleanup */
-    worktree_handle_t *wt = NULL;
     git_index *index = NULL;
     git_tree *tree = NULL;
     char **storage_paths = NULL;
     char *message = NULL;
     error_t *err = NULL;
-    git_repository *wt_repo = NULL;
     metadata_t *existing_metadata = NULL;
     bool owns_metadata = false;
     keymanager_t *key_mgr = NULL;
@@ -885,7 +892,7 @@ static error_t *update_profile(
 
     /* Fallback: load from Git if not in cache */
     if (!existing_metadata) {
-        err = metadata_load_from_branch(repo, profile->name, &existing_metadata);
+        err = metadata_load_from_branch(wt_repo, profile->name, &existing_metadata);
         if (err) {
             if (err->code == ERR_NOT_FOUND) {
                 error_free(err);
@@ -924,20 +931,6 @@ static error_t *update_profile(
             if (owns_metadata && existing_metadata) metadata_free(existing_metadata);
             return ERROR(ERR_INTERNAL, "Failed to get encryption key manager");
         }
-    }
-
-    /* Create temporary worktree */
-    err = worktree_create_temp(repo, &wt);
-    if (err) {
-        err = error_wrap(err, "Failed to create temporary worktree");
-        goto cleanup;
-    }
-
-    /* Checkout profile branch */
-    err = worktree_checkout_branch(wt, profile->name);
-    if (err) {
-        err = error_wrap(err, "Failed to checkout profile '%s'", profile->name);
-        goto cleanup;
     }
 
     /* Count files that need stat tracking (non-deleted files only) */
@@ -1089,7 +1082,6 @@ static error_t *update_profile(
         goto cleanup;
     }
 
-    wt_repo = worktree_get_repo(wt);
     git_err = git_tree_lookup(&tree, wt_repo, &tree_oid);
     if (git_err < 0) {
         err = error_from_git(git_err);
@@ -1140,7 +1132,6 @@ cleanup:
     if (storage_paths) free(storage_paths);
     if (tree) git_tree_free(tree);
     if (index) git_index_free(index);
-    if (wt) worktree_cleanup(wt);
     if (owns_metadata && existing_metadata) metadata_free(existing_metadata);
     if (file_stats) free(file_stats);
     if (encryption_status) free(encryption_status);
@@ -1152,7 +1143,7 @@ cleanup:
  * Context for update_profile_callback
  */
 typedef struct {
-    git_repository *repo;
+    worktree_handle_t *wt;       /* Shared worktree for all profiles */
     hashmap_t *profile_index;
     const cmd_update_options_t *opts;
     output_ctx_t *out;
@@ -1192,9 +1183,16 @@ static bool update_profile_callback(const char *profile_name, void *value, void 
         output_info(ctx->out, "Updating profile '%s':", profile->name);
     }
 
-    /* Update this profile */
-    error_t *err = update_profile(
-        ctx->repo, profile,
+    /* Checkout profile branch in shared worktree */
+    error_t *err = worktree_checkout_branch(ctx->wt, profile->name);
+    if (err) {
+        *(ctx->err_out) = error_wrap(err, "Failed to checkout profile '%s'", profile->name);
+        return false;  /* Stop iteration */
+    }
+
+    /* Update this profile using shared worktree */
+    err = update_profile(
+        ctx->wt, profile,
         array->items, array->count,
         ctx->opts, ctx->out, ctx->config, ctx->ws
     );
@@ -1216,6 +1214,10 @@ static bool update_profile_callback(const char *profile_name, void *value, void 
 
 /**
  * Execute profile updates for all profiles
+ *
+ * PERFORMANCE NOTE: This function creates a single shared worktree and reuses it
+ * for all profile updates, eliminating expensive worktree creation/destruction
+ * overhead. Each profile is checked out into the same worktree before updating.
  *
  * @param repo Git repository (must not be NULL)
  * @param profiles Profile list for lookup (must not be NULL)
@@ -1252,33 +1254,44 @@ static error_t *update_execute_for_all_profiles(
         return NULL;
     }
 
-    /* Group items by profile */
+    /* Initialize all resources to NULL for goto cleanup */
+    worktree_handle_t *wt = NULL;
     hashmap_t *by_profile = NULL;
-    error_t *err = group_items_by_profile(update_items, update_count, &by_profile);
+    hashmap_t *profile_index = NULL;
+    error_t *err = NULL;
+
+    /* Create shared temporary worktree for all profile updates */
+    err = worktree_create_temp(repo, &wt);
     if (err) {
-        return error_wrap(err, "Failed to group items by profile");
+        return error_wrap(err, "Failed to create temporary worktree");
+    }
+
+    /* Group items by profile */
+    err = group_items_by_profile(update_items, update_count, &by_profile);
+    if (err) {
+        err = error_wrap(err, "Failed to group items by profile");
+        goto cleanup;
     }
 
     /* Create hashmap for O(1) profile lookup */
-    hashmap_t *profile_index = hashmap_create(32);
+    profile_index = hashmap_create(32);
     if (!profile_index) {
-        hashmap_free(by_profile, item_array_free);
-        return ERROR(ERR_MEMORY, "Failed to create profile index");
+        err = ERROR(ERR_MEMORY, "Failed to create profile index");
+        goto cleanup;
     }
 
     for (size_t i = 0; i < profiles->count; i++) {
         profile_t *profile = &profiles->profiles[i];
         error_t *index_err = hashmap_set(profile_index, profile->name, profile);
         if (index_err) {
-            hashmap_free(profile_index, NULL);
-            hashmap_free(by_profile, item_array_free);
-            return error_wrap(index_err, "Failed to index profile");
+            err = error_wrap(index_err, "Failed to index profile");
+            goto cleanup;
         }
     }
 
     /* Update each profile using hashmap_foreach callback */
     update_profile_context_t ctx = {
-        .repo = repo,
+        .wt = wt,
         .profile_index = profile_index,
         .opts = opts,
         .out = out,
@@ -1291,8 +1304,17 @@ static error_t *update_execute_for_all_profiles(
     /* Execute foreach with callback */
     hashmap_foreach(by_profile, update_profile_callback, &ctx);
 
-    hashmap_free(profile_index, NULL);
-    hashmap_free(by_profile, item_array_free);
+cleanup:
+    /* Cleanup resources in reverse order */
+    if (profile_index) {
+        hashmap_free(profile_index, NULL);
+    }
+    if (by_profile) {
+        hashmap_free(by_profile, item_array_free);
+    }
+    if (wt) {
+        worktree_cleanup(wt);
+    }
 
     return err;
 }

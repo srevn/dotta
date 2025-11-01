@@ -18,7 +18,6 @@
 
 #include "metadata.h"
 #include "profiles.h"
-#include "state.h"
 #include "types.h"
 
 /* Forward declarations */
@@ -103,14 +102,19 @@ error_t *deploy_preflight_check_from_workspace(
  * Execute deployment
  *
  * Deploys all files in manifest to filesystem.
- * Updates state on success.
  *
- * Uses content cache for smart skip optimization and transparent decryption.
- * Cache reuse from preflight phase provides significant performance benefits.
+ * Uses workspace for smart skip optimization - queries pre-computed divergence
+ * analysis instead of re-analyzing files. This eliminates redundant content
+ * comparisons and decryption operations.
+ *
+ * Architecture:
+ * - Workspace: Single source of truth for divergence (already computed)
+ * - Deploy: Pure execution engine, queries workspace for skip decisions
+ * - State management: Handled by caller after deployment succeeds
  *
  * @param repo Repository (must not be NULL)
+ * @param ws Workspace with pre-computed divergence analysis (must not be NULL)
  * @param manifest Manifest to deploy (must not be NULL)
- * @param state Current state for tracking deployed files (can be NULL)
  * @param metadata Merged metadata for permission restoration (can be NULL)
  * @param opts Deployment options (must not be NULL)
  * @param km Key manager for encryption (can be NULL for plaintext-only)
@@ -120,8 +124,8 @@ error_t *deploy_preflight_check_from_workspace(
  */
 error_t *deploy_execute(
     git_repository *repo,
+    const workspace_t *ws,
     const manifest_t *manifest,
-    const state_t *state,
     const metadata_t *metadata,
     const deploy_options_t *opts,
     keymanager_t *km,

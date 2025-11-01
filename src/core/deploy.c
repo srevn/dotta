@@ -15,7 +15,6 @@
 #include "base/filesystem.h"
 #include "core/metadata.h"
 #include "core/workspace.h"
-#include "infra/compare.h"
 #include "infra/content.h"
 #include "utils/array.h"
 #include "utils/buffer.h"
@@ -622,8 +621,8 @@ static error_t *deploy_tracked_directories(
  */
 error_t *deploy_execute(
     git_repository *repo,
+    const workspace_t *ws,
     const manifest_t *manifest,
-    const state_t *state,
     const metadata_t *metadata,
     const deploy_options_t *opts,
     keymanager_t *km,
@@ -631,6 +630,7 @@ error_t *deploy_execute(
     deploy_result_t **out
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(ws);
     CHECK_NULL(manifest);
     CHECK_NULL(opts);
     CHECK_NULL(cache);
@@ -645,15 +645,11 @@ error_t *deploy_execute(
     /* Declare all resources at top, initialized to NULL */
     error_t *err = NULL;
     deploy_result_t *result = NULL;
-    hashmap_t *state_map = NULL;
-    state_file_entry_t *state_entries = NULL;
-    size_t state_count = 0;
 
     /* Allocate result */
     result = calloc(1, sizeof(deploy_result_t));
     if (!result) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate deploy result");
-        goto cleanup;
+        return ERROR(ERR_MEMORY, "Failed to allocate deploy result");
     }
 
     result->deployed = string_array_create();
@@ -664,39 +660,15 @@ error_t *deploy_execute(
     result->error_message = NULL;
 
     if (!result->deployed || !result->skipped || !result->failed) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate result arrays");
-        goto cleanup;
+        deploy_result_free(result);
+        return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
     }
 
     /* Deploy tracked directories with metadata first */
     err = deploy_tracked_directories(metadata, opts);
     if (err) {
-        err = error_wrap(err, "Failed to deploy tracked directories");
-        goto cleanup;
-    }
-
-    /* Load state entries once for O(1) lookups during smart skip (avoid O(N) database queries) */
-    if (state && opts->skip_unchanged) {
-        err = state_get_all_files(state, &state_entries, &state_count);
-        if (err) {
-            err = error_wrap(err, "Failed to load state for smart skip");
-            goto cleanup;
-        }
-
-        /* Build hashmap for O(1) lookups */
-        state_map = hashmap_create(state_count > 0 ? state_count : 16);
-        if (!state_map) {
-            err = ERROR(ERR_MEMORY, "Failed to create state lookup map");
-            goto cleanup;
-        }
-
-        for (size_t i = 0; i < state_count; i++) {
-            err = hashmap_set(state_map, state_entries[i].filesystem_path, &state_entries[i]);
-            if (err) {
-                err = error_wrap(err, "Failed to populate state lookup map");
-                goto cleanup;
-            }
-        }
+        deploy_result_free(result);
+        return error_wrap(err, "Failed to deploy tracked directories");
     }
 
     /* Deploy each file */
@@ -713,111 +685,45 @@ error_t *deploy_execute(
             skip_reason = "exists";
         }
 
-        /* Use Case 1: Smart skip - file already up-to-date AND tracked in state */
-        if (!should_skip && opts->skip_unchanged && fs_exists(entry->filesystem_path)) {
-            /* Check if file is tracked in state - only skip if it is (O(1) lookup) */
-            state_file_entry_t *state_entry = NULL;
-            if (state_map) {
-                state_entry = hashmap_get(state_map, entry->filesystem_path);
+        /* Use Case 1: Smart skip - file already up-to-date
+         *
+         * Architecture: Query workspace for pre-computed divergence instead of
+         * re-analyzing. The workspace already performed full content comparison
+         * during workspace_load(), eliminating redundant:
+         * - content_cache_get_from_tree_entry() calls (decryption)
+         * - compare_buffer_to_disk() operations (filesystem I/O)
+         * - Git OID comparisons (workspace already knows)
+         *
+         * Skip conditions:
+         * 1. File is CLEAN (no divergence) → ws_item == NULL
+         * 2. File is UNDEPLOYED but exists with matching content → optimization
+         *
+         * All other divergence types (MODIFIED, MODE_DIFF, OWNERSHIP, DELETED)
+         * naturally fall through to deployment, ensuring metadata is always fixed.
+         */
+        if (!should_skip && opts->skip_unchanged && !opts->force) {
+            /* Query workspace for pre-computed divergence (O(1) hashmap lookup) */
+            const workspace_item_t *ws_item = workspace_get_item(ws, entry->filesystem_path);
+
+            /* Case 1: The workspace found NO divergence. The file is CLEAN.
+             * CLEAN items are not stored in the divergence index, so ws_item is NULL. */
+            if (ws_item == NULL) {
+                should_skip = true;
+                skip_reason = "unchanged";
             }
-
-            if (state_entry) {
-                /* File is tracked in state - check if we can skip deployment
-                 *
-                 * Optimization: Use git blob OID hash comparison to avoid expensive
-                 * filesystem comparisons when the profile version changed.
-                 *
-                 * Two cases:
-                 * 1. Profile changed (git OID differs from state)
-                 *    → Must deploy, skip filesystem comparison
-                 * 2. Profile unchanged (git OID matches state)
-                 *    → Still need to verify user didn't modify file (safe comparison)
-                 */
-
-                /* Get git blob OID from manifest entry */
-                const git_oid *manifest_oid = git_tree_entry_id(entry->entry);
-                char manifest_oid_str[GIT_OID_SHA1_HEXSIZE + 1];
-                git_oid_tostr(manifest_oid_str, sizeof(manifest_oid_str), manifest_oid);
-
-                /* Compare with state hash to detect profile changes */
-                bool profile_version_changed = true;
-                if (state_entry->hash) {
-                    profile_version_changed = (strcmp(state_entry->hash, manifest_oid_str) != 0);
-                }
-
-                if (profile_version_changed) {
-                    /* Profile version changed since last deployment
-                     * → File MUST be deployed, no need for expensive filesystem comparison
-                     * This is the fast path that avoids syscalls when profiles are updated */
-                    should_skip = false;
-                } else {
-                    /* Profile version unchanged - but user might have modified the file locally
-                     * Do full content comparison to verify (safe, reliable)
-                     * This catches user modifications while maintaining correctness
-                     *
-                     * Architecture: Use content cache for comparison to handle encrypted files.
-                     * Cache may already contain this content from preflight (cache hit = O(1)).
-                     */
-                    const buffer_t *content;
-                    error_t *cmp_err = content_cache_get_from_tree_entry(
-                        cache,
-                        entry->entry,
-                        entry->storage_path,
-                        entry->source_profile->name,
-                        metadata,
-                        &content
-                    );
-
-                    if (!cmp_err) {
-                        compare_result_t cmp_result;
-                        git_filemode_t mode = git_tree_entry_filemode(entry->entry);
-                        cmp_err = compare_buffer_to_disk(content, entry->filesystem_path, mode, NULL, &cmp_result, NULL);
-
-                        if (!cmp_err && cmp_result == CMP_EQUAL) {
-                            should_skip = true;
-                            skip_reason = "unchanged";
-                        }
-                    }
-                    error_free(cmp_err); /* Ignore comparison errors, proceed with deployment */
-                }
-            } else {
-                /* File not in state yet (first deployment) - check if already on disk with correct content
-                 *
-                 * This handles the initial deployment case where files may already exist
-                 * on the filesystem (e.g., existing dotfiles being added to dotta).
-                 * We compare directly against git content to avoid unnecessary writes.
-                 *
-                 * Architecture: Same comparison logic as subsequent deployments above.
-                 * Content cache transparently handles encrypted files (likely cache hit
-                 * from preflight checks).
-                 *
-                 * Limitation: Ownership not verified (existing limitation in compare_buffer_to_disk).
-                 * Files requiring ownership changes (home/ under sudo, root/ with metadata)
-                 * will still be written to set correct ownership. This is acceptable as it
-                 * only affects first deployment and matches existing smart skip behavior.
-                 */
-                const buffer_t *content;
-                error_t *cmp_err = content_cache_get_from_tree_entry(
-                    cache,
-                    entry->entry,
-                    entry->storage_path,
-                    entry->source_profile->name,
-                    metadata,
-                    &content
-                );
-
-                if (!cmp_err) {
-                    compare_result_t cmp_result;
-                    git_filemode_t mode = git_tree_entry_filemode(entry->entry);
-                    cmp_err = compare_buffer_to_disk(content, entry->filesystem_path, mode, NULL, &cmp_result, NULL);
-
-                    if (!cmp_err && cmp_result == CMP_EQUAL) {
-                        should_skip = true;
-                        skip_reason = "unchanged";
-                    }
-                }
-                error_free(cmp_err); /* Ignore comparison errors, deploy on failure (safe default) */
+            /* Case 2 (Optimization): The file is UNDEPLOYED but already exists on disk
+             * with the correct content. We can safely skip the initial deployment. */
+            else if (ws_item->type == DIVERGENCE_UNDEPLOYED &&
+                     ws_item->on_filesystem &&
+                     !ws_item->content_differs) {
+                should_skip = true;
+                skip_reason = "unchanged";
             }
+            /* All other cases (MODIFIED, MODE_DIFF, OWNERSHIP, DELETED, etc.) will
+             * result in ws_item being non-NULL and the conditions above being false,
+             * correctly leading to a deployment. This ensures metadata divergence
+             * (MODE_DIFF, OWNERSHIP) is always fixed by redeploying with correct
+             * permissions/ownership atomically. */
         }
 
         if (should_skip) {
@@ -833,16 +739,11 @@ error_t *deploy_execute(
         /* Deploy the file */
         err = deploy_file(repo, cache, entry, metadata, opts);
         if (err) {
-            /* Record failure */
+            /* Record failure and return partial results */
             string_array_push(result->failed, entry->filesystem_path);
             result->error_message = strdup(error_message(err));
-
-            /* Fail-stop: set output and goto cleanup */
             *out = result;
-            result = NULL;  /* Prevent cleanup from freeing result */
-
-            err = ERROR(ERR_INTERNAL, "Deployment failed at '%s'", entry->filesystem_path);
-            goto cleanup;
+            return ERROR(ERR_INTERNAL, "Deployment failed at '%s'", entry->filesystem_path);
         }
 
         /* Record success */
@@ -850,18 +751,9 @@ error_t *deploy_execute(
         result->deployed_count++;
     }
 
-    /* Success - set output and prevent cleanup from freeing result */
+    /* Success - return results */
     *out = result;
-    result = NULL;
-    err = NULL;
-
-cleanup:
-    /* Free resources in reverse order of allocation */
-    if (state_map) hashmap_free(state_map, NULL);
-    if (state_entries) state_free_all_files(state_entries, state_count);
-    if (result) deploy_result_free(result);
-
-    return err;
+    return NULL;
 }
 
 /**

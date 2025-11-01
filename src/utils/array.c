@@ -49,6 +49,32 @@ void string_array_free(void *ptr) {
     free(arr);
 }
 
+string_array_t *string_array_clone(const string_array_t *src) {
+    if (!src) {
+        return NULL;
+    }
+
+    /* Create new array with same capacity for efficiency */
+    string_array_t *clone = string_array_create_with_capacity(src->count);
+    if (!clone) {
+        return NULL;
+    }
+
+    /* Deep copy all strings */
+    for (size_t i = 0; i < src->count; i++) {
+        char *dup = strdup(src->items[i]);
+        if (!dup) {
+            /* Cleanup on failure */
+            string_array_free(clone);
+            return NULL;
+        }
+        /* Direct assignment is safe - we pre-allocated capacity */
+        clone->items[clone->count++] = dup;
+    }
+
+    return clone;
+}
+
 /**
  * Grow array capacity
  */

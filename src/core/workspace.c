@@ -38,6 +38,7 @@
 #include "crypto/policy.h"
 #include "infra/compare.h"
 #include "infra/content.h"
+#include "utils/array.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
 #include "utils/string.h"
@@ -329,19 +330,30 @@ static error_t *check_item_metadata_divergence(
  *
  * Adds a file or directory with divergence to the workspace tracking list.
  *
- * @param item_kind Explicit type (FILE or DIRECTORY)
- * @param in_state Must be false for directories (invariant enforced)
- * @param mode_differs Flag indicating mode/permissions divergence
- * @param ownership_differs Flag indicating ownership divergence
- * @param profile_enabled Is the source profile in workspace's enabled list?
- * @param profile_changed Has the owning profile changed (vs state)?
- * @param old_profile Previous profile name from state (can be NULL, takes ownership)
+ * @param ws Workspace context (must not be NULL)
+ * @param filesystem_path Target path on filesystem (must not be NULL)
+ * @param storage_path Path in profile (can be NULL for directories)
+ * @param profile Source profile name (can be NULL for orphans)
+ * @param old_profile Previous profile from state (can be NULL, takes ownership)
+ * @param all_profiles All profiles containing file (can be NULL, deep copied)
+ * @param type Divergence category
+ * @param item_kind FILE or DIRECTORY (explicit type)
+ * @param in_profile Exists in profile branch
+ * @param in_state Exists in deployment state (must be false for directories)
+ * @param on_filesystem Exists on actual filesystem
+ * @param content_differs Content changed
+ * @param mode_differs Permissions/mode divergence
+ * @param ownership_differs Owner/group divergence
+ * @param profile_enabled Is source profile in enabled list?
+ * @param profile_changed Has owning profile changed vs state?
  */
 static error_t *workspace_add_diverged(
     workspace_t *ws,
     const char *filesystem_path,
     const char *storage_path,
     const char *profile,
+    char *old_profile,
+    const string_array_t *all_profiles,
     divergence_type_t type,
     workspace_item_kind_t item_kind,
     bool in_profile,
@@ -351,8 +363,7 @@ static error_t *workspace_add_diverged(
     bool mode_differs,
     bool ownership_differs,
     bool profile_enabled,
-    bool profile_changed,
-    char *old_profile
+    bool profile_changed
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(filesystem_path);
@@ -400,6 +411,16 @@ static error_t *workspace_add_diverged(
     entry->profile_changed = profile_changed;
     entry->old_profile = old_profile;  /* Takes ownership (can be NULL) */
 
+    /* Deep copy all_profiles if present (NULL optimization for single-profile files) */
+    entry->all_profiles = string_array_clone(all_profiles);
+    if (all_profiles && !entry->all_profiles) {
+        free(entry->filesystem_path);
+        free(entry->storage_path);
+        free(entry->profile);
+        free(entry->old_profile);
+        return ERROR(ERR_MEMORY, "Failed to clone all_profiles array");
+    }
+
     if (!entry->filesystem_path ||
         (storage_path && !entry->storage_path) ||
         (profile && !entry->profile)) {
@@ -407,6 +428,7 @@ static error_t *workspace_add_diverged(
         free(entry->storage_path);
         free(entry->profile);
         free(entry->old_profile);  /* Clean up if early return */
+        string_array_free(entry->all_profiles);  /* Clean up all_profiles */
         return ERROR(ERR_MEMORY, "Failed to allocate diverged entry");
     }
 
@@ -424,6 +446,8 @@ static error_t *workspace_add_diverged(
                     free(entry->filesystem_path);
                     free(entry->storage_path);
                     free(entry->profile);
+                    free(entry->old_profile);
+                    string_array_free(entry->all_profiles);
                     return ERROR(ERR_MEMORY, "Failed to allocate metadata_profile");
                 }
             }
@@ -592,23 +616,24 @@ static error_t *analyze_file_divergence(
                 div_type = DIVERGENCE_TYPE_DIFF;
                 content_differs = true;
                 return workspace_add_diverged(ws, fs_path, storage_path, profile,
+                                             NULL, manifest_entry->all_profiles,
                                              div_type, WORKSPACE_ITEM_FILE,
                                              in_profile, in_state,
                                              on_filesystem, content_differs,
-                                             false, false,  /* No metadata check for type change */
-                                             true,  /* profile_enabled */
-                                             false, NULL);  /* No profile change yet */
+                                             false, false,
+                                             true, false);
 
             case CMP_MISSING:
                 /* Shouldn't happen (we checked on_filesystem), but be defensive */
                 div_type = DIVERGENCE_DELETED;
                 content_differs = false;
                 return workspace_add_diverged(ws, fs_path, storage_path, profile,
+                                             NULL, manifest_entry->all_profiles,
                                              div_type, WORKSPACE_ITEM_FILE,
                                              in_profile, in_state,
                                              on_filesystem, content_differs,
                                              false, false,
-                                             true, false, NULL);
+                                             true, false);
         }
 
         /* Check metadata divergence (mode and ownership) */
@@ -695,12 +720,12 @@ static error_t *analyze_file_divergence(
     /* Add to workspace if there's any divergence */
     if (div_type != DIVERGENCE_CLEAN || mode_differs || ownership_differs || profile_changed) {
         error_t *err = workspace_add_diverged(ws, fs_path, storage_path, profile,
+                                              old_profile, manifest_entry->all_profiles,
                                               div_type, WORKSPACE_ITEM_FILE,
                                               in_profile, in_state,
                                               on_filesystem, content_differs,
                                               mode_differs, ownership_differs,
-                                              true,  /* profile_enabled */
-                                              profile_changed, old_profile);  /* Takes ownership */
+                                              true, profile_changed);
         if (err) {
             /* On error, free old_profile since workspace_add_diverged didn't take ownership */
             free(old_profile);
@@ -771,6 +796,7 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
                 fs_path,
                 storage_path,
                 profile,
+                NULL, NULL,       /* No old_profile or all_profiles for orphans */
                 DIVERGENCE_ORPHANED,
                 WORKSPACE_ITEM_FILE,
                 false,            /* not in profile */
@@ -779,8 +805,8 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
                 false,            /* content_differs N/A */
                 false,            /* mode_differs N/A */
                 false,            /* ownership_differs N/A */
-                profile_enabled,  /* explicit scope flag */
-                false, NULL       /* No profile change for orphans */
+                profile_enabled,
+                false             /* No profile change for orphans */
             );
 
             if (err) {
@@ -854,6 +880,7 @@ static error_t *analyze_orphaned_directories(workspace_t *ws) {
                 dir_path,
                 storage_prefix,
                 profile,
+                NULL, NULL,       /* No old_profile or all_profiles for orphans */
                 DIVERGENCE_ORPHANED,
                 WORKSPACE_ITEM_DIRECTORY,
                 false,            /* not in profile */
@@ -862,8 +889,8 @@ static error_t *analyze_orphaned_directories(workspace_t *ws) {
                 false,            /* content_differs N/A */
                 false,            /* mode_differs N/A */
                 false,            /* ownership_differs N/A */
-                profile_enabled,  /* explicit scope flag */
-                false, NULL       /* No profile change for orphans */
+                profile_enabled,
+                false             /* No profile change for orphans */
             );
 
             if (err) {
@@ -1094,16 +1121,17 @@ static error_t *scan_directory_for_untracked(
                     full_path,
                     storage_path,
                     profile,
+                    NULL, NULL,  /* No old_profile or all_profiles for untracked */
                     DIVERGENCE_UNTRACKED,
                     WORKSPACE_ITEM_FILE,
                     false,  /* not in profile */
                     false,  /* not in state */
                     true,   /* on filesystem */
                     false,  /* content_differs N/A */
-                    false,  /* mode_differs N/A (untracked file) */
-                    false,  /* ownership_differs N/A (untracked file) */
-                    true,   /* profile_enabled: scanning enabled profile's tracked dir */
-                    false, NULL  /* No profile change for untracked */
+                    false,  /* mode_differs N/A */
+                    false,  /* ownership_differs N/A */
+                    true,   /* profile_enabled */
+                    false   /* No profile change */
                 );
 
                 free(storage_path);
@@ -1260,17 +1288,18 @@ static bool check_directory_callback(const char *key, void *value, void *user_da
             ws,
             filesystem_path,
             storage_prefix,
-            entry->profile_name,  /* Track source profile */
+            entry->profile_name,
+            NULL, NULL,  /* No old_profile or all_profiles for directories */
             DIVERGENCE_DELETED,
             WORKSPACE_ITEM_DIRECTORY,
             true,   /* in_profile */
-            false,  /* in_state (directories never in deployment state) */
+            false,  /* in_state */
             false,  /* on_filesystem (deleted) */
-            false,  /* content_differs (N/A for deleted) */
-            false,  /* mode_differs (N/A for deleted) */
-            false,  /* ownership_differs (N/A for deleted) */
-            true,   /* profile_enabled: from merged_metadata = enabled */
-            false, NULL  /* No profile change for directories */
+            false,  /* content_differs N/A */
+            false,  /* mode_differs N/A */
+            false,  /* ownership_differs N/A */
+            true,   /* profile_enabled */
+            false   /* No profile change */
         );
 
         if (err) {
@@ -1324,8 +1353,9 @@ static bool check_directory_callback(const char *key, void *value, void *user_da
             ws,
             filesystem_path,
             storage_prefix,
-            entry->profile_name,  /* Track source profile */
-            div_type,    /* MODE_DIFF or OWNERSHIP from check function */
+            entry->profile_name,
+            NULL, NULL,  /* No old_profile or all_profiles for directories */
+            div_type,
             WORKSPACE_ITEM_DIRECTORY,
             true,   /* in_profile */
             false,  /* in_state */
@@ -1333,8 +1363,8 @@ static bool check_directory_callback(const char *key, void *value, void *user_da
             true,   /* content_differs (metadata counts as content) */
             mode_differs,
             ownership_differs,
-            true,   /* profile_enabled: from merged_metadata = enabled */
-            false, NULL  /* No profile change for directories */
+            true,   /* profile_enabled */
+            false   /* No profile change */
         );
 
         if (err) {
@@ -1509,16 +1539,17 @@ static error_t *analyze_encryption_policy_mismatch(
                 manifest_entry->filesystem_path,
                 storage_path,
                 profile_name,
+                NULL, manifest_entry->all_profiles,
                 DIVERGENCE_ENCRYPTION,
                 WORKSPACE_ITEM_FILE,
                 true,  /* in profile */
-                false, /* in_state (not relevant for policy mismatch) */
-                false, /* on_filesystem (not relevant for policy mismatch) */
-                false, /* content_differs (not relevant for policy mismatch) */
-                false, /* mode_differs N/A (policy mismatch) */
-                false, /* ownership_differs N/A (policy mismatch) */
-                true,  /* profile_enabled: from manifest = enabled */
-                false, NULL  /* No profile change for encryption mismatch */
+                false, /* in_state */
+                false, /* on_filesystem */
+                false, /* content_differs */
+                false, /* mode_differs N/A */
+                false, /* ownership_differs N/A */
+                true,  /* profile_enabled */
+                false  /* No profile change */
             );
 
             if (err) {
@@ -2140,6 +2171,7 @@ void workspace_free(workspace_t *ws) {
         free(ws->diverged[i].profile);
         free(ws->diverged[i].metadata_profile);
         free(ws->diverged[i].old_profile);  /* Free profile change tracking */
+        string_array_free(ws->diverged[i].all_profiles);  /* Free multi-profile tracking */
     }
     free(ws->diverged);
 

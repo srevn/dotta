@@ -41,42 +41,73 @@
  * Use item_kind to distinguish between files and directories. Invariant:
  * directories always have in_state == false.
  *
+ * Memory layout optimized for cache locality: pointers grouped together to
+ * fit in first cache line (64 bytes), followed by scalars.
+ *
  * Lifetime notes:
- * - filesystem_path, storage_path, profile, metadata_profile: owned strings (must free)
+ * - filesystem_path, storage_path, profile, metadata_profile, old_profile: owned strings (must free)
+ * - all_profiles: owned array, must free with string_array_free()
  * - source_profile: borrowed pointer, valid while workspace lives
  *   (workspace borrows profiles list from caller, so pointer is safe)
  */
 typedef struct {
-    char *filesystem_path;      /* Target path on filesystem */
-    char *storage_path;         /* Path in profile (e.g., home/.bashrc) */
-    char *profile;              /* Source profile name (owned string) */
-    char *metadata_profile;     /* Which profile's metadata won (can differ from profile) */
+    char *filesystem_path;      /* Target path on filesystem (owned) */
+    char *storage_path;         /* Path in profile, e.g., home/.bashrc (owned) */
+    char *profile;              /* Winning profile name (owned) */
+    char *metadata_profile;     /* Which profile's metadata won, can differ from profile (owned) */
+    char *old_profile;          /* Previous profile from state, NULL if unchanged (owned) */
 
-    /* Direct pointer to profile for convenience (borrowed, can be NULL if profile not in enabled set) */
-    profile_t *source_profile;  /* Borrowed - valid while workspace lives */
+    /* All enabled profiles containing this file (multi-profile overlap tracking) */
+    string_array_t *all_profiles;
 
-    divergence_type_t type;     /* Divergence category */
+    /* Direct pointer to profile structure for convenience (borrowed, can be NULL if not enabled) */
+    profile_t *source_profile;
 
     /* Item classification */
-    workspace_item_kind_t item_kind;  /* FILE or DIRECTORY (explicit type) */
+    divergence_type_t type;              /* Divergence category */
+    workspace_item_kind_t item_kind;     /* FILE or DIRECTORY (explicit type) */
 
-    /* State flags */
+    /* State flags (8 bytes for 8 booleans) */
     bool in_profile;            /* Exists in profile branch */
-    bool in_state;              /* Exists in deployment state (only meaningful for FILES) */
+    bool in_state;              /* Exists in deployment state (only for FILES) */
     bool on_filesystem;         /* Exists on actual filesystem */
-    bool content_differs;       /* Content changed (only meaningful for FILES) */
-
-    /* Secondary metadata divergences (can both be true simultaneously) */
+    bool content_differs;       /* Content changed (only for FILES) */
     bool mode_differs;          /* Permissions/mode changed from metadata */
     bool ownership_differs;     /* Owner/group changed from metadata (requires root) */
-
-    /* Scope tracking */
     bool profile_enabled;       /* Is source profile in workspace's enabled list? */
-
-    /* Profile change tracking (ownership changes between profiles) */
     bool profile_changed;       /* Profile differs from state (ownership changed) */
-    char *old_profile;          /* Profile from state (NULL if not changed, owned) */
 } workspace_item_t;
+
+/**
+ * Check if workspace item appears in multiple profiles
+ *
+ * Determines if a file exists in 2 or more enabled profiles, indicating
+ * a potential conflict that requires user attention during updates.
+ *
+ * @param item Workspace item (must not be NULL)
+ * @return true if file exists in 2+ enabled profiles, false otherwise
+ */
+static inline bool workspace_item_is_multi_profile(const workspace_item_t *item) {
+    return item && item->all_profiles && item->all_profiles->count > 1;
+}
+
+/**
+ * Get number of profiles containing this item
+ *
+ * Returns the total count of enabled profiles that contain this file.
+ * Useful for displaying overlap statistics and making decisions about
+ * update/remove operations.
+ *
+ * @param item Workspace item (must not be NULL)
+ * @return Profile count (minimum 1 if item has a profile, 0 if orphaned)
+ */
+static inline size_t workspace_item_profile_count(const workspace_item_t *item) {
+    if (!item) {
+        return 0;
+    }
+    /* If all_profiles exists, use its count; otherwise infer from profile field */
+    return item->all_profiles ? item->all_profiles->count : (item->profile ? 1 : 0);
+}
 
 /**
  * Workspace structure (opaque)

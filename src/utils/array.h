@@ -35,6 +35,17 @@ string_array_t *string_array_create_with_capacity(size_t capacity);
 void string_array_free(void *ptr);
 
 /**
+ * Deep clone string array
+ *
+ * Creates a new array with duplicates of all strings. The returned array
+ * is completely independent of the source array.
+ *
+ * @param src Source array (can be NULL)
+ * @return Cloned array or NULL if src is NULL or allocation fails (must free with string_array_free)
+ */
+string_array_t *string_array_clone(const string_array_t *src);
+
+/**
  * Push a string to the array (copies the string)
  *
  * @param arr Array

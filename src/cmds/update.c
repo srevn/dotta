@@ -20,7 +20,6 @@
 #include "core/workspace.h"
 #include "crypto/keymanager.h"
 #include "crypto/policy.h"
-#include "infra/compare.h"
 #include "infra/content.h"
 #include "infra/worktree.h"
 #include "utils/array.h"
@@ -1256,10 +1255,12 @@ static error_t *update_execute_for_all_profiles(
 /**
  * Display summary of items to be updated
  *
+ * Multi-profile overlap detection uses item->all_profiles directly,
+ * which is computed during workspace load (no Git operations needed).
+ *
  * @param out Output context (must not be NULL)
  * @param items Items to display (must not be NULL)
  * @param item_count Number of items
- * @param repo Git repository (for multi-profile detection, can be NULL)
  * @param opts Update options (can be NULL)
  * @return Error or NULL on success
  */
@@ -1267,7 +1268,6 @@ static error_t *update_display_summary(
     output_ctx_t *out,
     const workspace_item_t **items,
     size_t item_count,
-    git_repository *repo,
     const cmd_update_options_t *opts
 ) {
     CHECK_NULL(out);
@@ -1347,21 +1347,11 @@ static error_t *update_display_summary(
 
     /* Track multi-profile files for warning */
     size_t multi_profile_count = 0;
-    hashmap_t *profile_index = NULL;
 
     /* Display modified files section */
     if (modified_count > 0) {
         output_section(out, "Modified files");
         output_newline(out);
-
-        /* Lazy-build profile index for multi-profile detection */
-        if (repo && !profile_index) {
-            error_t *err = profile_build_file_index(repo, NULL, &profile_index);
-            if (err) {
-                error_free(err);
-                profile_index = NULL;
-            }
-        }
 
         for (size_t i = 0; i < item_count; i++) {
             const workspace_item_t *item = items[i];
@@ -1379,19 +1369,20 @@ static error_t *update_display_summary(
                 continue;
             }
 
-            /* Check if file exists in other profiles */
+            /* Check if file exists in multiple profiles (multi-profile overlap).
+             * item->all_profiles contains ALL profiles with this file (if >1),
+             * with the winning profile as the last entry. Extract other profiles
+             * for display (all except the winning one).
+             */
             string_array_t *other_profiles = NULL;
-            if (profile_index) {
-                string_array_t *indexed_profiles = hashmap_get(profile_index, item->storage_path);
-                if (indexed_profiles && string_array_size(indexed_profiles) > 0) {
-                    other_profiles = string_array_create();
-                    if (other_profiles) {
-                        for (size_t j = 0; j < string_array_size(indexed_profiles); j++) {
-                            const char *prof_name = string_array_get(indexed_profiles, j);
-                            if (strcmp(prof_name, item->profile) != 0) {
-                                string_array_push(other_profiles, prof_name);
-                            }
-                        }
+            if (workspace_item_is_multi_profile(item)) {
+                /* Multi-profile: extract all except the winner (last entry) */
+                other_profiles = string_array_create();
+                if (other_profiles) {
+                    size_t count = item->all_profiles->count;
+                    /* Include all profiles except the last one (winner) */
+                    for (size_t j = 0; j < count - 1; j++) {
+                        string_array_push(other_profiles, item->all_profiles->items[j]);
                     }
                 }
             }
@@ -1488,11 +1479,6 @@ static error_t *update_display_summary(
             free(info);
             string_array_free(other_profiles);
         }
-    }
-
-    /* Free profile index if created */
-    if (profile_index) {
-        hashmap_free(profile_index, string_array_free);
     }
 
     /* Show multi-profile warning if needed */
@@ -1939,7 +1925,7 @@ error_t *cmd_update(
     }
 
     /* Display summary of items to update */
-    err = update_display_summary(out, update_items, update_count, repo, opts);
+    err = update_display_summary(out, update_items, update_count, opts);
     if (err) {
         if (update_items) free(update_items);
         goto cleanup;

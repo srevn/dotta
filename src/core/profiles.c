@@ -162,6 +162,11 @@ static error_t *add_profiles_to_list(
  * Finds both base profile (exact match) and sub-profiles (prefix/variant).
  * Sub-profiles are limited to one level deep and sorted alphabetically.
  *
+ * This is a pure filtering function - it takes a pre-fetched branch list
+ * and filters it by prefix. This allows the caller to fetch branches once
+ * and reuse the list for multiple hierarchical detections (OS, host, etc.),
+ * avoiding redundant Git operations.
+ *
  * Examples:
  * - Prefix "darwin":
  *   Finds: darwin, darwin/personal, darwin/work
@@ -171,6 +176,7 @@ static error_t *add_profiles_to_list(
  *   Finds: hosts/visavis, hosts/visavis/github, hosts/visavis/work
  *
  * @param repo Repository (must not be NULL)
+ * @param branches Pre-fetched branch list to filter (must not be NULL)
  * @param prefix Profile prefix to match (must not be NULL)
  * @param list Profile list to append to (must not be NULL)
  * @param capacity Current capacity of list->profiles array (must not be NULL, updated on realloc)
@@ -178,27 +184,22 @@ static error_t *add_profiles_to_list(
  */
 static error_t *detect_hierarchical_profiles(
     git_repository *repo,
+    const string_array_t *branches,
     const char *prefix,
     profile_list_t *list,
     size_t *capacity
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(branches);
     CHECK_NULL(prefix);
     CHECK_NULL(list);
     CHECK_NULL(capacity);
 
     error_t *err = NULL;
-    string_array_t *branches = NULL;
     string_array_t *base_profile = NULL;
     string_array_t *sub_profiles = NULL;
 
     size_t prefix_len = strlen(prefix);
-
-    /* Get all branches */
-    err = gitops_list_branches(repo, &branches);
-    if (err) {
-        goto cleanup;
-    }
 
     /* Collect matching profiles: base + sub-profiles */
     base_profile = string_array_create();
@@ -238,10 +239,6 @@ static error_t *detect_hierarchical_profiles(
             }
         }
     }
-
-    /* Done with branches */
-    string_array_free(branches);
-    branches = NULL;
 
     /* Calculate total profiles to add */
     size_t base_count = string_array_size(base_profile);
@@ -299,7 +296,6 @@ static error_t *detect_hierarchical_profiles(
     }
 
 cleanup:
-    string_array_free(branches);
     string_array_free(base_profile);
     string_array_free(sub_profiles);
     return err;
@@ -331,6 +327,7 @@ error_t *profile_detect_auto(
 
     error_t *err = NULL;
     profile_list_t *list = NULL;
+    string_array_t *branches = NULL;
     char *os_name = NULL;
     char host_prefix[256];
 
@@ -362,9 +359,22 @@ error_t *profile_detect_auto(
         free(profile);  /* Shallow copy of internals to list, only free struct */
     }
 
+    /* Fetch all branches once for efficient hierarchical profile detection.
+     * This list is reused for both OS-specific and host-specific detection,
+     * avoiding redundant Git operations. Non-fatal if fetching fails. */
+    err = gitops_list_branches(repo, &branches);
+    if (err) {
+        /* Non-fatal: skip hierarchical profile detection if branch listing fails.
+         * The function can still succeed with just the global profile (if present)
+         * or return an empty profile list. */
+        error_free(err);
+        err = NULL;
+        /* branches remains NULL, hierarchical detection will be skipped */
+    }
+
     /* 2. Detect OS-specific profiles (e.g., darwin, darwin/work) */
     struct utsname uts;
-    if (uname(&uts) == 0) {
+    if (branches && uname(&uts) == 0) {
         /* Convert OS name to lowercase (Darwin -> darwin, Linux -> linux) */
         os_name = strdup(uts.sysname);
         if (!os_name) {
@@ -377,7 +387,7 @@ error_t *profile_detect_auto(
             *p = (char)tolower((unsigned char)*p);
         }
 
-        err = detect_hierarchical_profiles(repo, os_name, list, &capacity);
+        err = detect_hierarchical_profiles(repo, branches, os_name, list, &capacity);
         if (err) {
             /* Non-fatal: skip OS profiles if detection fails */
             error_free(err);
@@ -391,7 +401,7 @@ error_t *profile_detect_auto(
 
     /* 3. Detect host-specific profiles (e.g., hosts/myhost, hosts/myhost/work) */
     char hostname[256];
-    if (gethostname(hostname, sizeof(hostname)) == 0) {
+    if (branches && gethostname(hostname, sizeof(hostname)) == 0) {
         /* Null-terminate to be safe */
         hostname[sizeof(hostname) - 1] = '\0';
 
@@ -402,7 +412,7 @@ error_t *profile_detect_auto(
             goto cleanup;
         }
 
-        err = detect_hierarchical_profiles(repo, host_prefix, list, &capacity);
+        err = detect_hierarchical_profiles(repo, branches, host_prefix, list, &capacity);
         if (err) {
             /* Non-fatal: skip host profiles if detection fails */
             error_free(err);
@@ -413,9 +423,11 @@ error_t *profile_detect_auto(
 
     /* Success */
     *out = list;
+    string_array_free(branches);
     return NULL;
 
 cleanup:
+    string_array_free(branches);
     free(os_name);
     if (err) {
         profile_list_free(list);

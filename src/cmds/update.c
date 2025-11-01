@@ -262,21 +262,17 @@ static bool matches_exclude_pattern(
 /**
  * Filter workspace items relevant for update command
  *
- * Returns items that should be updated based on command options and divergence type.
+ * Returns items that should be updated based on command options, workspace state, and divergence.
  *
- * INCLUDED DIVERGENCE TYPES:
- * - DIVERGENCE_MODIFIED (content changed)
- * - DIVERGENCE_DELETED (removed from filesystem)
- * - DIVERGENCE_UNTRACKED (new files, if flags OR config->auto_detect_new_files)
- * - DIVERGENCE_MODE_DIFF (for files AND directories)
- * - DIVERGENCE_TYPE_DIFF (type changed)
- * - DIVERGENCE_OWNERSHIP (for files AND directories)
+ * INCLUDED ITEMS (STATE + DIVERGENCE):
+ * - DEPLOYED + any divergence (content/mode/ownership/encryption/type changed)
+ * - DELETED state (removed from filesystem)
+ * - UNTRACKED state (new files, if flags OR config->auto_detect_new_files)
  *
- * EXCLUDED DIVERGENCE TYPES:
- * - DIVERGENCE_UNDEPLOYED (not modified, just not deployed yet)
- * - DIVERGENCE_ORPHANED (handled by remove command)
- * - DIVERGENCE_CLEAN (nothing to update)
- * - DIVERGENCE_ENCRYPTION (not handled by update)
+ * EXCLUDED ITEMS:
+ * - UNDEPLOYED state (not modified, just not deployed yet - handled by apply)
+ * - ORPHANED state (handled by remove command)
+ * - DEPLOYED + NONE divergence (clean, nothing to update)
  *
  * CLI FILTERS APPLIED:
  * - opts->files: Only specific files (if provided)
@@ -284,11 +280,11 @@ static bool matches_exclude_pattern(
  * - opts->only_new: Only untracked files (excludes modified)
  *
  * CRITICAL CORRECTNESS REQUIREMENTS:
- * 1. DIVERGENCE_UNTRACKED: Include when flags OR auto_detect is enabled
+ * 1. UNTRACKED state: Include when flags OR auto_detect is enabled
  *    Flags (--include-new, --only-new) bypass confirmation
  *    Auto-detect includes them for later confirmation prompt
  *
- * 2. MODE_DIFF/OWNERSHIP: Apply to BOTH files AND directories
+ * 2. MODE/OWNERSHIP divergence: Apply to BOTH files AND directories
  *    Files can have metadata-only changes (e.g., chmod without content change)
  *
  * @param ws Workspace (must not be NULL)
@@ -330,16 +326,23 @@ static error_t *filter_items_for_update(
         const workspace_item_t *item = &all[i];
         bool should_include = false;
 
-        /* Determine if item should be included based on divergence type */
-        switch (item->type) {
-            case DIVERGENCE_MODIFIED:
-            case DIVERGENCE_DELETED:
-            case DIVERGENCE_TYPE_DIFF:
-                /* Core modifications - always include unless --only-new */
+        /* Determine if item should be included based on state + divergence */
+        switch (item->state) {
+            case WORKSPACE_STATE_DEPLOYED:
+                /* Deployed files/dirs with divergence - check what kind */
+                if (item->divergence != DIVERGENCE_NONE) {
+                    /* Has some divergence (content/mode/ownership/encryption/type) */
+                    should_include = !opts->only_new;
+                }
+                /* DEPLOYED + NONE = clean, exclude */
+                break;
+
+            case WORKSPACE_STATE_DELETED:
+                /* File removed from filesystem - include unless --only-new */
                 should_include = !opts->only_new;
                 break;
 
-            case DIVERGENCE_UNTRACKED:
+            case WORKSPACE_STATE_UNTRACKED:
                 /* New files - include if:
                  * - Explicit flags set (--include-new or --only-new), OR
                  * - Config auto_detect_new_files is enabled (for confirmation prompt) */
@@ -347,27 +350,11 @@ static error_t *filter_items_for_update(
                                  (config && config->auto_detect_new_files));
                 break;
 
-            case DIVERGENCE_MODE_DIFF:
-            case DIVERGENCE_OWNERSHIP:
-                /* Metadata changes - apply to BOTH files AND directories
-                 * CRITICAL: Files can have metadata-only changes (e.g., chmod without content change) */
-                should_include = !opts->only_new;
-                break;
-
-            case DIVERGENCE_ENCRYPTION:
-                /* Encryption policy violations - include for automatic policy enforcement.
-                 *
-                 * SECURITY: Files matching auto_encrypt_patterns but stored as plaintext
-                 * violate the configured security policy and should be re-encrypted.
-                 * The centralized policy system (crypto/policy.c) will automatically
-                 * apply encryption via Priority 4 (auto-encrypt patterns) */
-                should_include = !opts->only_new;
-                break;
-
-            case DIVERGENCE_UNDEPLOYED:
-            case DIVERGENCE_ORPHANED:
-            case DIVERGENCE_CLEAN:
-                /* Not relevant for update command */
+            case WORKSPACE_STATE_UNDEPLOYED:
+            case WORKSPACE_STATE_ORPHANED:
+                /* Not relevant for update command:
+                 * - UNDEPLOYED: handled by apply command
+                 * - ORPHANED: handled by remove command */
                 should_include = false;
                 break;
         }
@@ -409,29 +396,24 @@ static error_t *filter_items_for_update(
         bool should_include = false;
 
         /* Same filtering logic as first pass */
-        switch (item->type) {
-            case DIVERGENCE_MODIFIED:
-            case DIVERGENCE_DELETED:
-            case DIVERGENCE_TYPE_DIFF:
+        switch (item->state) {
+            case WORKSPACE_STATE_DEPLOYED:
+                if (item->divergence != DIVERGENCE_NONE) {
+                    should_include = !opts->only_new;
+                }
+                break;
+
+            case WORKSPACE_STATE_DELETED:
                 should_include = !opts->only_new;
                 break;
 
-            case DIVERGENCE_UNTRACKED:
+            case WORKSPACE_STATE_UNTRACKED:
                 should_include = (opts->include_new || opts->only_new ||
                                  (config && config->auto_detect_new_files));
                 break;
 
-            case DIVERGENCE_MODE_DIFF:
-            case DIVERGENCE_OWNERSHIP:
-                should_include = !opts->only_new;
-                break;
-
-            case DIVERGENCE_ENCRYPTION:
-                /* Encryption policy violations */
-                should_include = !opts->only_new;
-                break;
-
-            default:
+            case WORKSPACE_STATE_UNDEPLOYED:
+            case WORKSPACE_STATE_ORPHANED:
                 should_include = false;
                 break;
         }
@@ -619,7 +601,7 @@ static error_t *update_metadata_for_profile(
                 /* Handle file metadata */
 
                 /* Handle deleted files */
-                if (item->type == DIVERGENCE_DELETED) {
+                if (item->state == WORKSPACE_STATE_DELETED) {
                     /* Remove metadata entry if it exists */
                     if (metadata_has_item(metadata, item->storage_path)) {
                         err = metadata_remove_item(metadata, item->storage_path);
@@ -937,7 +919,7 @@ static error_t *update_profile(
     size_t file_count = 0;
     for (size_t i = 0; i < item_count; i++) {
         const workspace_item_t *item = items[i];
-        if (item->item_kind == WORKSPACE_ITEM_FILE && item->type != DIVERGENCE_DELETED) {
+        if (item->item_kind == WORKSPACE_ITEM_FILE && item->state != WORKSPACE_STATE_DELETED) {
             file_count++;
         }
     }
@@ -980,7 +962,7 @@ static error_t *update_profile(
                 }
 
                 /* Handle deleted files */
-                if (item->type == DIVERGENCE_DELETED) {
+                if (item->state == WORKSPACE_STATE_DELETED) {
                     /* Remove from index (stage deletion) */
                     int git_err = git_index_remove_bypath(index, item->storage_path);
                     if (git_err < 0) {
@@ -1008,7 +990,7 @@ static error_t *update_profile(
                  *   - If file is BOTH deleted AND has encryption divergence, deletion
                  *     divergence takes precedence (already handled above)
                  */
-                if (item->type == DIVERGENCE_ENCRYPTION && !item->on_filesystem) {
+                if ((item->divergence & DIVERGENCE_ENCRYPTION) && !item->on_filesystem) {
                     if (opts->verbose) {
                         output_warning(out,
                             "Skipping encryption fix for missing file: %s",
@@ -1392,23 +1374,28 @@ static error_t *update_display_summary(
         const workspace_item_t *item = items[i];
 
         if (item->item_kind == WORKSPACE_ITEM_FILE) {
-            switch (item->type) {
-                case DIVERGENCE_MODIFIED:
-                case DIVERGENCE_MODE_DIFF:
-                case DIVERGENCE_TYPE_DIFF:
-                case DIVERGENCE_OWNERSHIP:
+            /* Count by state */
+            switch (item->state) {
+                case WORKSPACE_STATE_DEPLOYED:
+                    /* Has some divergence (filtered items always have divergence) */
                     modified_count++;
+                    /* Also count encryption divergence separately for informational display */
+                    if (item->divergence & DIVERGENCE_ENCRYPTION) {
+                        encryption_count++;
+                    }
                     break;
-                case DIVERGENCE_DELETED:
+
+                case WORKSPACE_STATE_DELETED:
                     deleted_count++;
                     break;
-                case DIVERGENCE_UNTRACKED:
+
+                case WORKSPACE_STATE_UNTRACKED:
                     new_count++;
                     break;
-                case DIVERGENCE_ENCRYPTION:
-                    encryption_count++;
-                    break;
-                default:
+
+                case WORKSPACE_STATE_UNDEPLOYED:
+                case WORKSPACE_STATE_ORPHANED:
+                    /* Should not appear in filtered results, but be defensive */
                     break;
             }
         } else if (item->item_kind == WORKSPACE_ITEM_DIRECTORY) {
@@ -1431,10 +1418,9 @@ static error_t *update_display_summary(
                 continue;
             }
 
-            bool is_modified = (item->type == DIVERGENCE_MODIFIED ||
-                               item->type == DIVERGENCE_MODE_DIFF ||
-                               item->type == DIVERGENCE_TYPE_DIFF ||
-                               item->type == DIVERGENCE_OWNERSHIP);
+            /* Check if file is deployed and has any divergence */
+            bool is_modified = (item->state == WORKSPACE_STATE_DEPLOYED &&
+                               item->divergence != DIVERGENCE_NONE);
 
             if (!is_modified) {
                 continue;
@@ -1495,21 +1481,21 @@ static error_t *update_display_summary(
                 buffer_append_string(info_buf, " ");
                 buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_DIM));
 
-                if (item->content_differs) {
+                if (item->divergence & DIVERGENCE_CONTENT) {
                     buffer_append_string(info_buf, "[content]");
                     first_flag = false;
                 }
-                if (item->mode_differs) {
+                if (item->divergence & DIVERGENCE_MODE) {
                     if (!first_flag) buffer_append_string(info_buf, " ");
                     buffer_append_string(info_buf, "[mode]");
                     first_flag = false;
                 }
-                if (item->ownership_differs) {
+                if (item->divergence & DIVERGENCE_OWNERSHIP) {
                     if (!first_flag) buffer_append_string(info_buf, " ");
                     buffer_append_string(info_buf, "[ownership]");
                     first_flag = false;
                 }
-                if (item->encryption_differs) {
+                if (item->divergence & DIVERGENCE_ENCRYPTION) {
                     if (!first_flag) buffer_append_string(info_buf, " ");
                     buffer_append_string(info_buf, "[encryption]");
                     first_flag = false;
@@ -1526,28 +1512,27 @@ static error_t *update_display_summary(
                 continue;
             }
 
-            /* Determine label and color */
+            /* Determine label and color (prioritize by severity) */
             const char *status_label = NULL;
             output_color_t color = OUTPUT_COLOR_YELLOW;
 
-            switch (item->type) {
-                case DIVERGENCE_MODIFIED:
-                    status_label = "[modified]";
-                    break;
-                case DIVERGENCE_MODE_DIFF:
-                    status_label = "[mode]";
-                    break;
-                case DIVERGENCE_TYPE_DIFF:
-                    status_label = "[type]";
-                    color = OUTPUT_COLOR_RED;
-                    break;
-                case DIVERGENCE_OWNERSHIP:
-                    status_label = "[ownership]";
-                    color = OUTPUT_COLOR_MAGENTA;
-                    break;
-                default:
-                    status_label = "[?]";
-                    break;
+            /* Prioritize TYPE (most severe), then CONTENT, then metadata */
+            if (item->divergence & DIVERGENCE_TYPE) {
+                status_label = "[type]";
+                color = OUTPUT_COLOR_RED;
+            } else if (item->divergence & DIVERGENCE_CONTENT) {
+                status_label = "[modified]";
+            } else if (item->divergence & DIVERGENCE_MODE) {
+                status_label = "[mode]";
+            } else if (item->divergence & DIVERGENCE_OWNERSHIP) {
+                status_label = "[ownership]";
+                color = OUTPUT_COLOR_MAGENTA;
+            } else if (item->divergence & DIVERGENCE_ENCRYPTION) {
+                status_label = "[encryption]";
+                color = OUTPUT_COLOR_MAGENTA;
+            } else {
+                /* Should not happen for filtered deployed items, but be defensive */
+                status_label = "[modified]";
             }
 
             output_item(out, status_label, color, info);
@@ -1576,7 +1561,7 @@ static error_t *update_display_summary(
         for (size_t i = 0; i < item_count; i++) {
             const workspace_item_t *item = items[i];
 
-            if (item->item_kind == WORKSPACE_ITEM_FILE && item->type == DIVERGENCE_UNTRACKED) {
+            if (item->item_kind == WORKSPACE_ITEM_FILE && item->state == WORKSPACE_STATE_UNTRACKED) {
                 char info[1024];
                 snprintf(info, sizeof(info), "%s (in %s)",
                         item->filesystem_path, item->profile);
@@ -1593,7 +1578,7 @@ static error_t *update_display_summary(
         for (size_t i = 0; i < item_count; i++) {
             const workspace_item_t *item = items[i];
 
-            if (item->item_kind == WORKSPACE_ITEM_FILE && item->type == DIVERGENCE_DELETED) {
+            if (item->item_kind == WORKSPACE_ITEM_FILE && item->state == WORKSPACE_STATE_DELETED) {
                 char info[1024];
                 snprintf(info, sizeof(info), "%s (from %s)",
                         item->filesystem_path, item->profile);
@@ -1614,25 +1599,21 @@ static error_t *update_display_summary(
                 continue;
             }
 
-            /* Determine label and color based on divergence type */
+            /* Determine label and color based on divergence */
             const char *label = NULL;
             output_color_t color = OUTPUT_COLOR_YELLOW;
 
-            switch (item->type) {
-                case DIVERGENCE_MODE_DIFF:
-                    label = "[mode]";
-                    color = OUTPUT_COLOR_YELLOW;
-                    break;
-
-                case DIVERGENCE_OWNERSHIP:
-                    label = "[ownership]";
-                    color = OUTPUT_COLOR_MAGENTA;
-                    break;
-
-                default:
-                    label = "[metadata]";
-                    color = OUTPUT_COLOR_YELLOW;
-                    break;
+            /* Directories can have mode and/or ownership divergence */
+            if (item->divergence & DIVERGENCE_MODE) {
+                label = "[mode]";
+                color = OUTPUT_COLOR_YELLOW;
+            } else if (item->divergence & DIVERGENCE_OWNERSHIP) {
+                label = "[ownership]";
+                color = OUTPUT_COLOR_MAGENTA;
+            } else {
+                /* Should not happen for filtered directories, but be defensive */
+                label = "[metadata]";
+                color = OUTPUT_COLOR_YELLOW;
             }
 
             /* Build info string with trailing slash */
@@ -1655,16 +1636,16 @@ static error_t *update_display_summary(
                 buffer_append_string(info_buf, " ");
                 buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_DIM));
 
-                if (item->mode_differs) {
+                if (item->divergence & DIVERGENCE_MODE) {
                     buffer_append_string(info_buf, "[mode]");
                     first_flag = false;
                 }
-                if (item->ownership_differs) {
+                if (item->divergence & DIVERGENCE_OWNERSHIP) {
                     if (!first_flag) buffer_append_string(info_buf, " ");
                     buffer_append_string(info_buf, "[ownership]");
                     first_flag = false;
                 }
-                if (item->encryption_differs) {
+                if (item->divergence & DIVERGENCE_ENCRYPTION) {
                     if (!first_flag) buffer_append_string(info_buf, " ");
                     buffer_append_string(info_buf, "[encryption]");
                 }
@@ -1697,7 +1678,7 @@ static error_t *update_display_summary(
             const workspace_item_t *item = items[i];
 
             if (item->item_kind != WORKSPACE_ITEM_FILE ||
-                item->type != DIVERGENCE_ENCRYPTION) {
+                !(item->divergence & DIVERGENCE_ENCRYPTION)) {
                 continue;
             }
 
@@ -1779,7 +1760,7 @@ static error_t *update_confirm_operation(
         const workspace_item_t *item = items[i];
 
         if (item->item_kind == WORKSPACE_ITEM_FILE) {
-            if (item->type == DIVERGENCE_UNTRACKED) {
+            if (item->state == WORKSPACE_STATE_UNTRACKED) {
                 new_count++;
             } else {
                 modified_count++;

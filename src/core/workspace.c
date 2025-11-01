@@ -71,18 +71,6 @@ typedef struct {
     const char *profile_name;         /* Which profile provided this (borrowed) */
 } merged_metadata_entry_t;
 
-/**
- * Divergence bucket (internal structure)
- *
- * Pre-bucketed storage for items of a specific divergence type.
- * Eliminates query-time filtering and allocation by organizing items
- * during workspace_load() rather than on every query.
- */
-typedef struct {
-    workspace_item_t **items;    /* Array of pointers into ws->diverged (borrowed) */
-    size_t count;                /* Number of items in this bucket */
-    size_t capacity;             /* Allocated capacity for growth */
-} divergence_bucket_t;
 
 /**
  * Workspace structure
@@ -116,12 +104,6 @@ struct workspace {
     size_t diverged_count;
     size_t diverged_capacity;
     hashmap_t *diverged_index;       /* Maps filesystem_path -> workspace_item_t* */
-
-    /* Pre-bucketed divergence storage for O(1) type-based queries */
-    divergence_bucket_t buckets[10]; /* One per divergence_type_t (0-9), indexed by type value */
-
-    /* Divergence count cache */
-    size_t divergence_counts[10];    /* Cached counts for O(1) access (enum has values 0-9) */
 
     /* Status cache */
     workspace_status_t status;
@@ -206,18 +188,6 @@ static error_t *workspace_create_empty(
     ws->diverged_count = 0;
     ws->diverged_capacity = 0;
 
-    /* Initialize divergence buckets (10 divergence types: 0-9) */
-    for (size_t i = 0; i < 10; i++) {
-        ws->buckets[i].items = NULL;
-        ws->buckets[i].count = 0;
-        ws->buckets[i].capacity = 0;
-    }
-
-    /* Initialize divergence count cache (10 divergence types: 0-9) */
-    for (size_t i = 0; i < 10; i++) {
-        ws->divergence_counts[i] = 0;
-    }
-
     ws->status = WORKSPACE_CLEAN;
     ws->status_computed = false;
 
@@ -230,16 +200,13 @@ static error_t *workspace_create_empty(
  *
  * Compares filesystem metadata with stored metadata to detect changes in
  * permissions (mode) and ownership (user/group). Always checks both mode and
- * ownership independently, setting flags for each. Only updates the primary
- * divergence type if starting from DIVERGENCE_CLEAN.
+ * ownership independently, setting flags for each.
  *
  * Works for both FILE and DIRECTORY kinds - uses only common fields (mode, owner, group).
  *
  * @param item Metadata item (FILE or DIRECTORY, must not be NULL)
  * @param fs_path Filesystem path to check (must not be NULL)
  * @param st File stat data (must not be NULL, pre-captured by caller)
- * @param current_div Current divergence type (may be overridden if CLEAN)
- * @param out_div Output divergence type (must not be NULL)
  * @param out_mode_differs Output flag for mode divergence (must not be NULL)
  * @param out_ownership_differs Output flag for ownership divergence (must not be NULL)
  * @return Error or NULL on success
@@ -248,20 +215,16 @@ static error_t *check_item_metadata_divergence(
     const metadata_item_t *item,
     const char *fs_path,
     const struct stat *st,
-    divergence_type_t current_div,
-    divergence_type_t *out_div,
     bool *out_mode_differs,
     bool *out_ownership_differs
 ) {
     CHECK_NULL(item);
     CHECK_NULL(fs_path);
     CHECK_NULL(st);
-    CHECK_NULL(out_div);
     CHECK_NULL(out_mode_differs);
     CHECK_NULL(out_ownership_differs);
 
-    /* Start with current divergence and clear flags */
-    *out_div = current_div;
+    /* Clear output flags */
     *out_mode_differs = false;
     *out_ownership_differs = false;
 
@@ -271,10 +234,6 @@ static error_t *check_item_metadata_divergence(
     /* Check full mode (all permission bits, not just executable) */
     if (actual_mode != item->mode) {
         *out_mode_differs = true;
-        /* Only update primary divergence if currently CLEAN */
-        if (current_div == DIVERGENCE_CLEAN) {
-            *out_div = DIVERGENCE_MODE_DIFF;
-        }
     }
 
     /* Check ownership (always check, no early return).
@@ -299,10 +258,7 @@ static error_t *check_item_metadata_divergence(
             /* If getpwuid fails, skip check (graceful degradation) */
         }
 
-        /* Check group independently - FIXED: NO SHORT-CIRCUIT!
-         * We want to detect both owner AND group differences.
-         * Previously this had: if (item->group && !ownership_differs)
-         * which skipped group check if owner already differed. */
+        /* Check group independently - no short-circuit */
         if (item->group) {
             struct group *grp = getgrgid(st->st_gid);
             if (grp && grp->gr_name) {
@@ -315,10 +271,6 @@ static error_t *check_item_metadata_divergence(
 
         if (owner_differs || group_differs) {
             *out_ownership_differs = true;
-            /* Only update primary divergence if currently CLEAN and mode didn't change */
-            if (current_div == DIVERGENCE_CLEAN && !(*out_mode_differs)) {
-                *out_div = DIVERGENCE_OWNERSHIP;
-            }
         }
     }
 
@@ -336,15 +288,12 @@ static error_t *check_item_metadata_divergence(
  * @param profile Source profile name (can be NULL for orphans)
  * @param old_profile Previous profile from state (can be NULL, takes ownership)
  * @param all_profiles All profiles containing file (can be NULL, deep copied)
- * @param type Divergence category
+ * @param state Where the item exists (deployed/undeployed/etc.)
+ * @param divergence What's wrong with it (bit flags, can combine)
  * @param item_kind FILE or DIRECTORY (explicit type)
  * @param in_profile Exists in profile branch
  * @param in_state Exists in deployment state (must be false for directories)
  * @param on_filesystem Exists on actual filesystem
- * @param content_differs Content changed
- * @param mode_differs Permissions/mode divergence
- * @param ownership_differs Owner/group divergence
- * @param encryption_differs Encryption policy mismatch
  * @param profile_enabled Is source profile in enabled list?
  * @param profile_changed Has owning profile changed vs state?
  */
@@ -355,15 +304,12 @@ static error_t *workspace_add_diverged(
     const char *profile,
     char *old_profile,
     const string_array_t *all_profiles,
-    divergence_type_t type,
+    workspace_state_t state,
+    divergence_type_t divergence,
     workspace_item_kind_t item_kind,
     bool in_profile,
     bool in_state,
     bool on_filesystem,
-    bool content_differs,
-    bool mode_differs,
-    bool ownership_differs,
-    bool encryption_differs,
     bool profile_enabled,
     bool profile_changed
 ) {
@@ -401,15 +347,12 @@ static error_t *workspace_add_diverged(
     /* Lookup profile pointer from profile_index (borrowed, can be NULL if profile not in enabled set) */
     entry->source_profile = profile ? hashmap_get(ws->profile_index, profile) : NULL;
 
-    entry->type = type;
+    entry->state = state;
+    entry->divergence = divergence;
     entry->item_kind = item_kind;
     entry->in_profile = in_profile;
     entry->in_state = in_state;
     entry->on_filesystem = on_filesystem;
-    entry->content_differs = content_differs;
-    entry->mode_differs = mode_differs;
-    entry->ownership_differs = ownership_differs;
-    entry->encryption_differs = encryption_differs;
     entry->profile_enabled = profile_enabled;
     entry->profile_changed = profile_changed;
     entry->old_profile = old_profile;  /* Takes ownership (can be NULL) */
@@ -468,33 +411,6 @@ static error_t *workspace_add_diverged(
 
     ws->diverged_count++;
 
-    /* Update divergence count cache and populate type-specific bucket (valid range: 0-9) */
-    if (type <= DIVERGENCE_OWNERSHIP) {
-        ws->divergence_counts[type]++;
-
-        /* Add to type-specific bucket for O(1) query access */
-        divergence_bucket_t *bucket = &ws->buckets[type];
-
-        /* Grow bucket if needed */
-        if (bucket->count >= bucket->capacity) {
-            size_t new_capacity = bucket->capacity == 0 ? 16 : bucket->capacity * 2;
-            workspace_item_t **new_items = realloc(bucket->items,
-                                                    new_capacity * sizeof(workspace_item_t *));
-            if (!new_items) {
-                /* Critical: bucket is now inconsistent with count cache.
-                 * This is a fatal error - workspace is corrupted. */
-                return ERROR(ERR_MEMORY,
-                    "Failed to grow divergence bucket for type %d (critical)", type);
-            }
-            bucket->items = new_items;
-            bucket->capacity = new_capacity;
-        }
-
-        /* Add pointer to the entry we just added to ws->diverged array
-         * Note: entry points to ws->diverged[ws->diverged_count - 1] */
-        bucket->items[bucket->count++] = entry;
-    }
-
     return NULL;
 }
 
@@ -529,8 +445,8 @@ static error_t *workspace_build_manifest_index(workspace_t *ws) {
  * - Profile has: home/.bashrc
  * - State: empty (never deployed)
  * - Filesystem: ~/.bashrc exists with different content
- * - Old logic: DIVERGENCE_UNDEPLOYED (no comparison!) → would overwrite on deploy
- * - New logic: DIVERGENCE_MODIFIED (comparison detects conflict) → blocks deploy
+ * - Old logic: UNDEPLOYED state (no comparison!) → would overwrite on deploy
+ * - New logic: UNDEPLOYED state + DIVERGENCE_CONTENT flag → blocks deploy
  */
 static error_t *analyze_file_divergence(
     workspace_t *ws,
@@ -547,10 +463,12 @@ static error_t *analyze_file_divergence(
     bool in_profile = true;  /* By definition - we're iterating manifest */
     bool in_state = (state_entry != NULL);
     bool on_filesystem = fs_lexists(fs_path);
-    bool content_differs = false;
-    bool mode_differs = false;
-    bool ownership_differs = false;
-    divergence_type_t div_type = DIVERGENCE_CLEAN;
+
+    /* Divergence accumulator (bit flags, can combine) */
+    divergence_type_t divergence = DIVERGENCE_NONE;
+
+    /* State will be determined in PHASE 2 based on deployment status */
+    workspace_state_t state = WORKSPACE_STATE_DEPLOYED;
 
     /* PHASE 1: Filesystem content analysis (if file exists)
      * Compare content for ALL files on filesystem, regardless of deployment state.
@@ -592,48 +510,43 @@ static error_t *analyze_file_divergence(
 
         /* Don't free content - cache owns it! */
 
-        /* Determine base divergence from content comparison */
+        /* Accumulate divergence from content comparison */
         switch (cmp_result) {
             case CMP_EQUAL:
-                /* Content equal - check metadata below */
-                div_type = DIVERGENCE_CLEAN;
-                content_differs = false;
+                /* Content equal - no divergence from content */
                 break;
 
             case CMP_DIFFERENT:
-                /* Content differs - this is a conflict (deployed or not!) */
-                div_type = DIVERGENCE_MODIFIED;
-                content_differs = true;
+                /* Content differs - accumulate CONTENT flag */
+                divergence |= DIVERGENCE_CONTENT;
                 break;
 
             case CMP_MODE_DIFF:
                 /* Executable bit differs - metadata check below will detect this */
-                div_type = DIVERGENCE_CLEAN;
-                content_differs = false;
                 break;
 
             case CMP_TYPE_DIFF:
                 /* Type differs (file vs symlink vs dir) - block immediately */
-                div_type = DIVERGENCE_TYPE_DIFF;
-                content_differs = true;
+                /* Early return for TYPE_DIFF (critical blocking case) */
                 return workspace_add_diverged(ws, fs_path, storage_path, profile,
                                              NULL, manifest_entry->all_profiles,
-                                             div_type, WORKSPACE_ITEM_FILE,
+                                             WORKSPACE_STATE_DEPLOYED,
+                                             DIVERGENCE_TYPE,
+                                             WORKSPACE_ITEM_FILE,
                                              in_profile, in_state,
-                                             on_filesystem, content_differs,
-                                             false, false, false,
+                                             on_filesystem,
                                              true, false);
 
             case CMP_MISSING:
                 /* Shouldn't happen (we checked on_filesystem), but be defensive */
-                div_type = DIVERGENCE_DELETED;
-                content_differs = false;
+                /* Early return for MISSING (defensive case) */
                 return workspace_add_diverged(ws, fs_path, storage_path, profile,
                                              NULL, manifest_entry->all_profiles,
-                                             div_type, WORKSPACE_ITEM_FILE,
+                                             WORKSPACE_STATE_DELETED,
+                                             DIVERGENCE_NONE,
+                                             WORKSPACE_ITEM_FILE,
                                              in_profile, in_state,
-                                             on_filesystem, content_differs,
-                                             false, false, false,
+                                             on_filesystem,
                                              true, false);
         }
 
@@ -652,9 +565,10 @@ static error_t *analyze_file_divergence(
                 }
 
                 /* Check mode and ownership using captured stat */
-                divergence_type_t checked_div = div_type;
+                bool mode_differs = false;
+                bool ownership_differs = false;
                 error_t *check_err = check_item_metadata_divergence(
-                    meta_entry, fs_path, &file_stat, div_type, &checked_div,
+                    meta_entry, fs_path, &file_stat,
                     &mode_differs, &ownership_differs);
 
                 if (check_err) {
@@ -663,36 +577,30 @@ static error_t *analyze_file_divergence(
                         "Failed to check metadata for '%s'", fs_path);
                 }
 
-                /* Update primary divergence if content doesn't differ */
-                if (!content_differs) {
-                    div_type = checked_div;
-                }
-                /* Content differs → keep MODIFIED, but track metadata flags too */
+                /* Accumulate metadata divergence flags */
+                if (mode_differs) divergence |= DIVERGENCE_MODE;
+                if (ownership_differs) divergence |= DIVERGENCE_OWNERSHIP;
             }
 
             error_free(meta_err);
         }
     }
 
-    /* PHASE 2: State-based divergence classification
-     * Apply deployment state logic to determine final divergence type.
+    /* PHASE 2: State-based classification
+     * Determine final state based on deployment and filesystem status.
      */
-
-    /* File not deployed yet */
     if (!in_state) {
-        if (div_type == DIVERGENCE_CLEAN) {
-            /* Safe case: file doesn't exist, or exists and matches exactly */
-            div_type = DIVERGENCE_UNDEPLOYED;
-        } else if (content_differs) {
-            /* CRITICAL: Undeployed file exists with different content!
-             * Keep div_type = MODIFIED to block deployment. This is the safety fix. */
-        }
-        /* If metadata differs but content matches, keep MODE_DIFF/OWNERSHIP */
-    }
-
-    /* File was deployed but now missing */
-    if (in_state && !on_filesystem) {
-        div_type = DIVERGENCE_DELETED;
+        /* File not deployed yet */
+        state = WORKSPACE_STATE_UNDEPLOYED;
+        /* Keep accumulated divergence flags (may have CONTENT from conflict check) */
+    } else if (!on_filesystem) {
+        /* File was deployed but now missing */
+        state = WORKSPACE_STATE_DELETED;
+        divergence = DIVERGENCE_NONE;  /* No divergence for deleted files */
+    } else {
+        /* File is deployed and on filesystem */
+        state = WORKSPACE_STATE_DEPLOYED;
+        /* Keep accumulated divergence flags */
     }
 
     /* PHASE 3: Profile ownership change detection
@@ -714,14 +622,14 @@ static error_t *analyze_file_divergence(
         }
     }
 
-    /* Add to workspace if there's any divergence */
-    if (div_type != DIVERGENCE_CLEAN || mode_differs || ownership_differs || profile_changed) {
+    /* Add to workspace if there's any state change or divergence */
+    if (state != WORKSPACE_STATE_DEPLOYED || divergence != DIVERGENCE_NONE || profile_changed) {
         error_t *err = workspace_add_diverged(ws, fs_path, storage_path, profile,
                                               old_profile, manifest_entry->all_profiles,
-                                              div_type, WORKSPACE_ITEM_FILE,
+                                              state, divergence,
+                                              WORKSPACE_ITEM_FILE,
                                               in_profile, in_state,
-                                              on_filesystem, content_differs,
-                                              mode_differs, ownership_differs, false,
+                                              on_filesystem,
                                               true, profile_changed);
         if (err) {
             /* On error, free old_profile since workspace_add_diverged didn't take ownership */
@@ -794,15 +702,12 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
                 storage_path,
                 profile,
                 NULL, NULL,       /* No old_profile or all_profiles for orphans */
-                DIVERGENCE_ORPHANED,
+                WORKSPACE_STATE_ORPHANED,  /* State: in deployment state, not in profile */
+                DIVERGENCE_NONE,           /* Divergence: none */
                 WORKSPACE_ITEM_FILE,
                 false,            /* not in profile */
                 true,             /* in state (was deployed) */
                 on_filesystem,
-                false,            /* content_differs N/A */
-                false,            /* mode_differs N/A */
-                false,            /* ownership_differs N/A */
-                false,            /* encryption_differs N/A */
                 profile_enabled,
                 false             /* No profile change for orphans */
             );
@@ -879,15 +784,12 @@ static error_t *analyze_orphaned_directories(workspace_t *ws) {
                 storage_prefix,
                 profile,
                 NULL, NULL,       /* No old_profile or all_profiles for orphans */
-                DIVERGENCE_ORPHANED,
+                WORKSPACE_STATE_ORPHANED,  /* State: in state, not in profile */
+                DIVERGENCE_NONE,           /* Divergence: none */
                 WORKSPACE_ITEM_DIRECTORY,
                 false,            /* not in profile */
                 false,            /* NOT in state (semantic: directories never deployed) */
                 on_filesystem,
-                false,            /* content_differs N/A */
-                false,            /* mode_differs N/A */
-                false,            /* ownership_differs N/A */
-                false,            /* encryption_differs N/A */
                 profile_enabled,
                 false             /* No profile change for orphans */
             );
@@ -989,24 +891,22 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
     for (size_t i = 0; i < ws->diverged_count; i++) {
         const workspace_item_t *item = &ws->diverged[i];
 
-        switch (item->type) {
-            case DIVERGENCE_ORPHANED:
+        switch (item->state) {
+            case WORKSPACE_STATE_ORPHANED:
                 has_orphaned = true;
                 break;
 
-            case DIVERGENCE_UNDEPLOYED:
-            case DIVERGENCE_MODIFIED:
-            case DIVERGENCE_DELETED:
-            case DIVERGENCE_MODE_DIFF:
-            case DIVERGENCE_OWNERSHIP:
-            case DIVERGENCE_TYPE_DIFF:
-            case DIVERGENCE_UNTRACKED:
-            case DIVERGENCE_ENCRYPTION:
+            case WORKSPACE_STATE_UNDEPLOYED:
+            case WORKSPACE_STATE_DELETED:
+            case WORKSPACE_STATE_UNTRACKED:
                 has_warnings = true;
                 break;
 
-            case DIVERGENCE_CLEAN:
-                /* Should not be in diverged list */
+            case WORKSPACE_STATE_DEPLOYED:
+                /* Check metadata divergence */
+                if (item->divergence != DIVERGENCE_NONE) {
+                    has_warnings = true;
+                }
                 break;
         }
     }
@@ -1121,15 +1021,12 @@ static error_t *scan_directory_for_untracked(
                     storage_path,
                     profile,
                     NULL, NULL,  /* No old_profile or all_profiles for untracked */
-                    DIVERGENCE_UNTRACKED,
+                    WORKSPACE_STATE_UNTRACKED,  /* State: on filesystem in tracked dir */
+                    DIVERGENCE_NONE,            /* Divergence: none */
                     WORKSPACE_ITEM_FILE,
                     false,  /* not in profile */
                     false,  /* not in state */
                     true,   /* on filesystem */
-                    false,  /* content_differs N/A */
-                    false,  /* mode_differs N/A */
-                    false,  /* ownership_differs N/A */
-                    false,  /* encryption_differs N/A */
                     true,   /* profile_enabled */
                     false   /* No profile change */
                 );
@@ -1290,15 +1187,12 @@ static bool check_directory_callback(const char *key, void *value, void *user_da
             storage_prefix,
             entry->profile_name,
             NULL, NULL,  /* No old_profile or all_profiles for directories */
-            DIVERGENCE_DELETED,
+            WORKSPACE_STATE_DELETED,  /* State: was in profile, removed from filesystem */
+            DIVERGENCE_NONE,          /* Divergence: none (file is gone) */
             WORKSPACE_ITEM_DIRECTORY,
             true,   /* in_profile */
             false,  /* in_state */
             false,  /* on_filesystem (deleted) */
-            false,  /* content_differs N/A */
-            false,  /* mode_differs N/A */
-            false,  /* ownership_differs N/A */
-            false,  /* encryption_differs N/A */
             true,   /* profile_enabled */
             false   /* No profile change */
         );
@@ -1330,14 +1224,11 @@ static bool check_directory_callback(const char *key, void *value, void *user_da
     /* Check metadata divergence using unified helper */
     bool mode_differs = false;
     bool ownership_differs = false;
-    divergence_type_t div_type = DIVERGENCE_CLEAN;
 
     error_t *err = check_item_metadata_divergence(
         item,
         filesystem_path,
         &dir_stat,
-        DIVERGENCE_CLEAN,
-        &div_type,
         &mode_differs,
         &ownership_differs
     );
@@ -1350,21 +1241,23 @@ static bool check_directory_callback(const char *key, void *value, void *user_da
 
     /* Record divergence if any metadata differs */
     if (mode_differs || ownership_differs) {
+        /* Accumulate divergence flags */
+        divergence_type_t divergence = DIVERGENCE_NONE;
+        if (mode_differs) divergence |= DIVERGENCE_MODE;
+        if (ownership_differs) divergence |= DIVERGENCE_OWNERSHIP;
+
         err = workspace_add_diverged(
             ws,
             filesystem_path,
             storage_prefix,
             entry->profile_name,
             NULL, NULL,  /* No old_profile or all_profiles for directories */
-            div_type,
+            WORKSPACE_STATE_DEPLOYED,  /* State: directory exists as expected */
+            divergence,                /* Divergence: mode/ownership flags */
             WORKSPACE_ITEM_DIRECTORY,
             true,   /* in_profile */
             false,  /* in_state */
             true,   /* on_filesystem */
-            true,   /* content_differs (metadata counts as content) */
-            mode_differs,
-            ownership_differs,
-            false,  /* encryption_differs (directories don't have encryption) */
             true,   /* profile_enabled */
             false   /* No profile change */
         );
@@ -1384,8 +1277,8 @@ static bool check_directory_callback(const char *key, void *value, void *user_da
  * Analyze directory metadata for divergence
  *
  * Detects:
- * - DIVERGENCE_DELETED: Directory removed from filesystem
- * - DIVERGENCE_MODE_DIFF: Directory permissions changed
+ * - DELETED state: Directory removed from filesystem
+ * - DIVERGENCE_MODE: Directory permissions changed
  * - DIVERGENCE_OWNERSHIP: Directory owner/group changed (requires root)
  *
  * @param ws Workspace (must not be NULL, merged_metadata must be initialized)
@@ -1545,32 +1438,41 @@ static error_t *analyze_encryption_policy_mismatch(
             );
 
             if (existing) {
-                /* File already diverged - add encryption as secondary flag.
-                 * This preserves the primary divergence (e.g., MODIFIED blocks
-                 * deployment) while still indicating the encryption policy issue.
+                /* File already diverged - accumulate encryption flag
                  *
-                 * Example: File is MODIFIED (content changed) AND violates encryption
-                 * policy. Primary type stays MODIFIED (blocks deployment), but we set
-                 * encryption_differs=true so user sees "modified [encryption]" in status. */
-                existing->encryption_differs = true;
+                 * Example: File is DEPLOYED with CONTENT divergence AND violates encryption
+                 * policy. We accumulate: divergence |= DIVERGENCE_ENCRYPTION.
+                 * Result: User sees both flags: "modified [encryption]" in status. */
+                existing->divergence |= DIVERGENCE_ENCRYPTION;
             } else {
-                /* File has NO other divergence - encryption policy is the primary issue.
-                 * Create new entry with type=DIVERGENCE_ENCRYPTION. */
+                /* File has NO other divergence - encryption policy is the only issue.
+                 * Determine state: if in state, it's deployed; otherwise undeployed. */
+                bool in_state = false;
+                if (ws->state) {
+                    state_file_entry_t *state_entry = NULL;
+                    error_t *state_err = state_get_file(ws->state, manifest_entry->filesystem_path, &state_entry);
+                    if (state_err == NULL && state_entry) {
+                        in_state = true;
+                        state_free_entry(state_entry);
+                    }
+                    error_free(state_err);
+                }
+
+                workspace_state_t item_state = in_state ?
+                    WORKSPACE_STATE_DEPLOYED : WORKSPACE_STATE_UNDEPLOYED;
+
                 err = workspace_add_diverged(
                     ws,
                     manifest_entry->filesystem_path,
                     storage_path,
                     profile_name,
                     NULL, manifest_entry->all_profiles,
-                    DIVERGENCE_ENCRYPTION,
+                    item_state,            /* State: deployed or undeployed */
+                    DIVERGENCE_ENCRYPTION, /* Divergence: encryption policy violated */
                     WORKSPACE_ITEM_FILE,
                     true,  /* in profile */
-                    false, /* in_state */
-                    false, /* on_filesystem */
-                    false, /* content_differs */
-                    false, /* mode_differs */
-                    false, /* ownership_differs */
-                    true,  /* encryption_differs - true when policy violated */
+                    in_state,
+                    false, /* on_filesystem (unknown, encryption check is in-repo only) */
                     true,  /* profile_enabled */
                     false  /* No profile change */
                 );
@@ -1838,113 +1740,6 @@ workspace_status_t workspace_get_status(const workspace_t *ws) {
     return ws->status;
 }
 
-/**
- * Get diverged items by category with optional profile scope filtering
- *
- * Returns NULL if no items found (count will be 0).
- *
- * @param ws Workspace (must not be NULL)
- * @param type Divergence type to query
- * @param enabled_only Filter to enabled profiles only
- * @param count Output parameter for item count (must not be NULL)
- * @return Owned array of pointers (caller must free) or NULL if empty
- */
-const workspace_item_t **workspace_get_diverged_filtered(
-    const workspace_t *ws,
-    divergence_type_t type,
-    bool enabled_only,
-    size_t *count
-) {
-    if (!ws || !count) {
-        if (count) *count = 0;
-        return NULL;
-    }
-
-    /* CLEAN has no bucket, always empty */
-    if (type == DIVERGENCE_CLEAN) {
-        *count = 0;
-        return NULL;
-    }
-
-    /* Validate type range (enum values 0-9) */
-    if (type > DIVERGENCE_OWNERSHIP) {
-        *count = 0;
-        return NULL;
-    }
-
-    /* Get pre-bucketed items */
-    const divergence_bucket_t *bucket = &ws->buckets[type];
-    const workspace_item_t **bucket_items = (const workspace_item_t **)bucket->items;
-    size_t bucket_count = bucket->count;
-
-    /* Empty bucket - return NULL */
-    if (bucket_count == 0) {
-        *count = 0;
-        return NULL;
-    }
-
-    /* Determine effective count based on filtering */
-    size_t effective_count = bucket_count;
-
-    if (enabled_only) {
-        /* Count enabled items */
-        effective_count = 0;
-        for (size_t i = 0; i < bucket_count; i++) {
-            if (bucket_items[i]->profile_enabled) {
-                effective_count++;
-            }
-        }
-
-        /* No enabled items after filtering */
-        if (effective_count == 0) {
-            *count = 0;
-            return NULL;
-        }
-    }
-
-    /* Allocate new array (explicit ownership transfer) */
-    const workspace_item_t **result = malloc(effective_count * sizeof(workspace_item_t *));
-    if (!result) {
-        *count = 0;
-        return NULL;  /* Allocation failure */
-    }
-
-    /* Populate result array */
-    if (enabled_only) {
-        /* Filter to enabled profiles */
-        size_t idx = 0;
-        for (size_t i = 0; i < bucket_count && idx < effective_count; i++) {
-            if (bucket_items[i]->profile_enabled) {
-                result[idx++] = bucket_items[i];
-            }
-        }
-    } else {
-        /* Copy all items */
-        memcpy(result, bucket_items, effective_count * sizeof(workspace_item_t *));
-    }
-
-    *count = effective_count;
-    return result;  /* Caller MUST free */
-}
-
-/**
- * Get diverged items by category (enabled profiles only)
- *
- * Convenience wrapper that filters to enabled profiles only.
- * Equivalent to workspace_get_diverged_filtered(ws, type, true, count).
- *
- * Always returns owned array. Caller MUST free with free().
- *
- * @return Owned array of pointers (caller must free) or NULL if empty
- */
-const workspace_item_t **workspace_get_diverged(
-    const workspace_t *ws,
-    divergence_type_t type,
-    size_t *count
-) {
-    /* Default: enabled_only=true (preserve existing behavior for status) */
-    return workspace_get_diverged_filtered(ws, type, true, count);
-}
 
 /**
  * Get all diverged items
@@ -2092,27 +1887,16 @@ error_t *workspace_get_merged_metadata(
  */
 bool workspace_item_diverged(
     const workspace_t *ws,
-    const char *filesystem_path,
-    divergence_type_t *type
+    const char *filesystem_path
 ) {
     if (!ws || !filesystem_path) {
         return false;
     }
 
     /* O(1) lookup via hashmap index */
+    /* Any item in the index has some form of state change or divergence */
     workspace_item_t *entry = hashmap_get(ws->diverged_index, filesystem_path);
-
-    if (entry) {
-        if (type) {
-            *type = entry->type;
-        }
-        return true;
-    }
-
-    if (type) {
-        *type = DIVERGENCE_CLEAN;
-    }
-    return false;
+    return (entry != NULL);
 }
 
 /**
@@ -2150,30 +1934,6 @@ error_t *workspace_validate(
 }
 
 /**
- * Get divergence count by type
- *
- * Returns cached count computed during workspace load.
- * This is O(1) instead of O(n), significantly improving performance
- * when multiple counts are queried (e.g., in cmd_sync).
- */
-size_t workspace_count_divergence(
-    const workspace_t *ws,
-    divergence_type_t type
-) {
-    if (!ws) {
-        return 0;
-    }
-
-    /* Return cached count for O(1) access (valid range: 0-9) */
-    if (type <= DIVERGENCE_OWNERSHIP) {
-        return ws->divergence_counts[type];
-    }
-
-    /* Fallback for invalid type (should never happen) */
-    return 0;
-}
-
-/**
  * Check if workspace is clean
  */
 bool workspace_is_clean(const workspace_t *ws) {
@@ -2198,11 +1958,6 @@ void workspace_free(workspace_t *ws) {
         string_array_free(ws->diverged[i].all_profiles);  /* Free multi-profile tracking */
     }
     free(ws->diverged);
-
-    /* Free bucket pointer arrays (items themselves are freed above with diverged array) */
-    for (size_t i = 0; i < 10; i++) {
-        free(ws->buckets[i].items);  /* Free pointer array only, not pointed-to items */
-    }
 
     /* Free indices (values are borrowed, so pass NULL for value free function) */
     hashmap_free(ws->manifest_index, NULL);

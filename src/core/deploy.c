@@ -116,34 +116,19 @@ error_t *deploy_preflight_check_from_workspace(
         if (ws_item && !opts->force) {
             /*
              * File has divergence - check if it's a blocking conflict.
-             * Only block on content conflicts (MODIFIED, TYPE_DIFF).
-             * Metadata divergence (mode, ownership) is informational.
+             * Only block on content conflicts (CONTENT, TYPE).
+             * Metadata divergence (mode, ownership) and encryption policy are informational.
              */
-            switch (ws_item->type) {
-                case DIVERGENCE_MODIFIED:
-                case DIVERGENCE_TYPE_DIFF:
-                    /* Content conflict - block deployment */
-                    {
-                        error_t *err = string_array_push(result->conflicts, path);
-                        if (err) {
-                            preflight_result_free(result);
-                            return error_wrap(err, "Failed to record conflict");
-                        }
-                        result->has_errors = true;
-                    }
-                    break;
-
-                case DIVERGENCE_UNDEPLOYED:
-                case DIVERGENCE_DELETED:
-                case DIVERGENCE_CLEAN:
-                case DIVERGENCE_MODE_DIFF:
-                case DIVERGENCE_OWNERSHIP:
-                case DIVERGENCE_ORPHANED:
-                case DIVERGENCE_UNTRACKED:
-                case DIVERGENCE_ENCRYPTION:
-                    /* Not blocking conflicts */
-                    break;
+            if (ws_item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE)) {
+                /* Content or type conflict - block deployment */
+                error_t *err = string_array_push(result->conflicts, path);
+                if (err) {
+                    preflight_result_free(result);
+                    return error_wrap(err, "Failed to record conflict");
+                }
+                result->has_errors = true;
             }
+            /* Mode/ownership/encryption divergence is not blocking */
         }
 
         /* Check for profile ownership changes */
@@ -709,16 +694,16 @@ error_t *deploy_execute(
             }
             /* Case 2 (Optimization): The file is UNDEPLOYED but already exists on disk
              * with the correct content. We can safely skip the initial deployment. */
-            else if (ws_item->type == DIVERGENCE_UNDEPLOYED &&
+            else if (ws_item->state == WORKSPACE_STATE_UNDEPLOYED &&
                      ws_item->on_filesystem &&
-                     !ws_item->content_differs) {
+                     !(ws_item->divergence & DIVERGENCE_CONTENT)) {
                 should_skip = true;
                 skip_reason = "unchanged";
             }
-            /* All other cases (MODIFIED, MODE_DIFF, OWNERSHIP, DELETED, etc.) will
+            /* All other cases (DEPLOYED with divergence, DELETED, etc.) will
              * result in ws_item being non-NULL and the conditions above being false,
              * correctly leading to a deployment. This ensures metadata divergence
-             * (MODE_DIFF, OWNERSHIP) is always fixed by redeploying with correct
+             * (mode, ownership) is always fixed by redeploying with correct
              * permissions/ownership atomically. */
         }
 

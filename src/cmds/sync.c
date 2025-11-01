@@ -984,13 +984,40 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     }
 
     /* Count all types of divergence */
-    size_t modified_count = workspace_count_divergence(ws, DIVERGENCE_MODIFIED);
-    size_t deleted_count = workspace_count_divergence(ws, DIVERGENCE_DELETED);
-    size_t mode_diff_count = workspace_count_divergence(ws, DIVERGENCE_MODE_DIFF);
-    size_t type_diff_count = workspace_count_divergence(ws, DIVERGENCE_TYPE_DIFF);
-    size_t untracked_count = workspace_count_divergence(ws, DIVERGENCE_UNTRACKED);
-    size_t undeployed_count = workspace_count_divergence(ws, DIVERGENCE_UNDEPLOYED);
-    size_t orphaned_count = workspace_count_divergence(ws, DIVERGENCE_ORPHANED);
+    size_t all_diverged_count = 0;
+    const workspace_item_t *all_diverged = workspace_get_all_diverged(ws, &all_diverged_count);
+
+    size_t modified_count = 0;    /* DEPLOYED with CONTENT divergence */
+    size_t deleted_count = 0;     /* DELETED state */
+    size_t mode_diff_count = 0;   /* DEPLOYED with MODE divergence */
+    size_t type_diff_count = 0;   /* DEPLOYED with TYPE divergence */
+    size_t untracked_count = 0;   /* UNTRACKED state */
+    size_t undeployed_count = 0;  /* UNDEPLOYED state */
+    size_t orphaned_count = 0;    /* ORPHANED state */
+
+    for (size_t i = 0; i < all_diverged_count; i++) {
+        const workspace_item_t *item = &all_diverged[i];
+
+        switch (item->state) {
+            case WORKSPACE_STATE_DEPLOYED:
+                if (item->divergence & DIVERGENCE_CONTENT) modified_count++;
+                if (item->divergence & DIVERGENCE_MODE) mode_diff_count++;
+                if (item->divergence & DIVERGENCE_TYPE) type_diff_count++;
+                break;
+            case WORKSPACE_STATE_DELETED:
+                deleted_count++;
+                break;
+            case WORKSPACE_STATE_UNTRACKED:
+                untracked_count++;
+                break;
+            case WORKSPACE_STATE_UNDEPLOYED:
+                undeployed_count++;
+                break;
+            case WORKSPACE_STATE_ORPHANED:
+                orphaned_count++;
+                break;
+        }
+    }
 
     size_t uncommitted_count = modified_count + deleted_count + mode_diff_count +
                                type_diff_count + untracked_count;

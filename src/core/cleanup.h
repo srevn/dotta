@@ -21,7 +21,7 @@
  * Orphan Sources:
  * ──────────────
  * - Workspace module detects ALL orphans during workspace_load()
- * - Orphans extracted via workspace_get_diverged_filtered(DIVERGENCE_ORPHANED)
+ * - Orphans extracted via inline filtering (state == WORKSPACE_STATE_ORPHANED)
  * - Passed to cleanup module as workspace_item_t** arrays
  * - See workspace.h for orphan detection algorithm details
  *

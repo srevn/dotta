@@ -76,22 +76,38 @@ typedef enum {
 } profile_source_t;
 
 /**
- * Workspace divergence category
+ * Workspace state - where an item exists
  *
- * Represents the relationship between profile state (Git), deployment state
- * (.git/dotta.db), and filesystem state (actual files).
+ * Represents the location/deployment status of a file or directory across
+ * the three states: profile (Git), deployment (state.db), and filesystem.
+ *
+ * This enum captures WHERE an item exists, separate from WHAT is wrong with it
+ * (see divergence_flags_t). States are mutually exclusive.
  */
 typedef enum {
-    DIVERGENCE_CLEAN,              /* All states aligned */
-    DIVERGENCE_UNDEPLOYED,         /* In profile, not in deployment state */
-    DIVERGENCE_MODIFIED,           /* Deployed, content changed on filesystem */
-    DIVERGENCE_DELETED,            /* Deployed, removed from filesystem */
-    DIVERGENCE_ORPHANED,           /* In deployment state, not in profile */
-    DIVERGENCE_MODE_DIFF,          /* Deployed, mode changed on filesystem */
-    DIVERGENCE_TYPE_DIFF,          /* Deployed, type changed on filesystem */
-    DIVERGENCE_UNTRACKED,          /* On filesystem in tracked directory, not in manifest */
-    DIVERGENCE_ENCRYPTION,         /* File encryption state doesn't match policy */
-    DIVERGENCE_OWNERSHIP           /* Deployed, owner/group changed on filesystem (requires root) */
+    WORKSPACE_STATE_DEPLOYED,      /* In profile + deployed + on filesystem */
+    WORKSPACE_STATE_UNDEPLOYED,    /* In profile, not deployed yet */
+    WORKSPACE_STATE_DELETED,       /* Was deployed, removed from filesystem */
+    WORKSPACE_STATE_ORPHANED,      /* In deployment state, not in profile */
+    WORKSPACE_STATE_UNTRACKED      /* On filesystem in tracked directory, not in manifest */
+} workspace_state_t;
+
+/**
+ * Divergence type - what is wrong with an item
+ *
+ * Bit flags representing types of divergence between expected and actual state.
+ * Multiple flags can be set simultaneously (e.g., content changed AND mode changed).
+ *
+ * This enum captures WHAT is wrong, separate from WHERE the item exists
+ * (see workspace_state_t). Flags can be combined with bitwise OR.
+ */
+typedef enum {
+    DIVERGENCE_NONE       = 0,       /* No divergence detected */
+    DIVERGENCE_CONTENT    = 1 << 0,  /* Content differs from profile */
+    DIVERGENCE_MODE       = 1 << 1,  /* Permissions/mode changed */
+    DIVERGENCE_OWNERSHIP  = 1 << 2,  /* Owner/group changed (requires root) */
+    DIVERGENCE_ENCRYPTION = 1 << 3,  /* File violates encryption policy */
+    DIVERGENCE_TYPE       = 1 << 4   /* Type changed (file/symlink/dir) */
 } divergence_type_t;
 
 /**

@@ -64,17 +64,14 @@ typedef struct {
     profile_t *source_profile;
 
     /* Item classification */
-    divergence_type_t type;              /* Divergence category */
+    workspace_state_t state;             /* Where the item exists (deployed/undeployed/etc.) */
+    divergence_type_t divergence;        /* What's wrong with it (bit flags, can combine) */
     workspace_item_kind_t item_kind;     /* FILE or DIRECTORY (explicit type) */
 
-    /* State flags (9 booleans) */
+    /* State flags */
     bool in_profile;            /* Exists in profile branch */
     bool in_state;              /* Exists in deployment state (only for FILES) */
     bool on_filesystem;         /* Exists on actual filesystem */
-    bool content_differs;       /* Content changed (only for FILES) */
-    bool mode_differs;          /* Permissions/mode changed from metadata */
-    bool ownership_differs;     /* Owner/group changed from metadata (requires root) */
-    bool encryption_differs;    /* Encryption policy mismatch (secondary divergence) */
     bool profile_enabled;       /* Is source profile in workspace's enabled list? */
     bool profile_changed;       /* Profile differs from state (ownership changed) */
 } workspace_item_t;
@@ -200,48 +197,6 @@ error_t *workspace_load(
  */
 workspace_status_t workspace_get_status(const workspace_t *ws);
 
-/**
- * Get diverged items by category (enabled profiles only)
- *
- * Returns dynamically allocated array of pointers to matching diverged items.
- * Equivalent to workspace_get_diverged_filtered(ws, type, true, count).
- *
- * @param ws Workspace (must not be NULL)
- * @param type Divergence type to query
- * @param count Output count of matching entries (must not be NULL)
- * @return Owned array of pointers (caller must free) or NULL if empty.
- */
-const workspace_item_t **workspace_get_diverged(
-    const workspace_t *ws,
-    divergence_type_t type,
-    size_t *count
-);
-
-/**
- * Get diverged items by category with optional profile scope filtering
- *
- * Returns items matching the specified divergence type, optionally
- * filtered by profile_enabled flag.
- *
- * Use cases:
- * - status: enabled_only=true (show only enabled profiles)
- * - apply: enabled_only=false (include all orphans for cleanup)
- *
- * The returned workspace_item_t pointers reference the workspace's internal data
- * and remain valid until the workspace is freed.
- *
- * @param ws Workspace (must not be NULL)
- * @param type Divergence type to query
- * @param enabled_only If true, only return items where profile_enabled=true
- * @param count Output count of matching entries (must not be NULL)
- * @return Owned array of pointers (caller must free) or NULL if empty.
- */
-const workspace_item_t **workspace_get_diverged_filtered(
-    const workspace_t *ws,
-    divergence_type_t type,
-    bool enabled_only,
-    size_t *count
-);
 
 /**
  * Get all diverged items
@@ -380,17 +335,16 @@ error_t *workspace_get_merged_metadata(
 /**
  * Check if item has divergence
  *
- * Checks if a specific item (file or directory) has any divergence.
+ * Checks if a specific item (file or directory) has any state change or divergence.
+ * Returns true if item is not in DEPLOYED state with NONE divergence.
  *
  * @param ws Workspace (must not be NULL)
  * @param filesystem_path Item path to check (must not be NULL)
- * @param type Output divergence type (can be NULL)
- * @return true if diverged
+ * @return true if item has state change or divergence
  */
 bool workspace_item_diverged(
     const workspace_t *ws,
-    const char *filesystem_path,
-    divergence_type_t *type
+    const char *filesystem_path
 );
 
 /**
@@ -415,19 +369,6 @@ error_t *workspace_validate(
     bool allow_dirty
 );
 
-/**
- * Get divergence count by type
- *
- * Returns count of items (files and directories) with specified divergence.
- *
- * @param ws Workspace (must not be NULL)
- * @param type Divergence type
- * @return Count of items
- */
-size_t workspace_count_divergence(
-    const workspace_t *ws,
-    divergence_type_t type
-);
 
 /**
  * Check if workspace is clean

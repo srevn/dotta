@@ -1020,62 +1020,56 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     if (!opts->keep_orphans) {
         output_print(out, OUTPUT_VERBOSE, "\nExtracting orphans from workspace...\n");
 
-        /* Get ALL orphaned items (enabled + disabled profiles) */
-        size_t all_orphan_count = 0;
-        const workspace_item_t **all_orphans = workspace_get_diverged_filtered(
-            ws,
-            DIVERGENCE_ORPHANED,
-            false,  /* enabled_only=false: include disabled profiles for cleanup */
-            &all_orphan_count
-        );
+        /* Get ALL diverged items and filter for orphans */
+        size_t all_diverged_count = 0;
+        const workspace_item_t *all_diverged = workspace_get_all_diverged(ws, &all_diverged_count);
 
-        if (all_orphans && all_orphan_count > 0) {
-            /* Count files vs directories for array allocation */
-            for (size_t i = 0; i < all_orphan_count; i++) {
-                if (all_orphans[i]->item_kind == WORKSPACE_ITEM_FILE) {
+        /* First pass: count orphaned files vs directories */
+        for (size_t i = 0; i < all_diverged_count; i++) {
+            if (all_diverged[i].state == WORKSPACE_STATE_ORPHANED) {
+                if (all_diverged[i].item_kind == WORKSPACE_ITEM_FILE) {
                     file_orphan_count++;
                 } else {
                     dir_orphan_count++;
                 }
             }
+        }
 
-            /* Allocate separate arrays for files and directories */
-            if (file_orphan_count > 0) {
-                file_orphans = malloc(file_orphan_count * sizeof(workspace_item_t *));
-                if (!file_orphans) {
-                    free((void *)all_orphans);  /* Free before error return */
-                    err = ERROR(ERR_MEMORY, "Failed to allocate file orphan array");
-                    goto cleanup;
-                }
-
-                size_t f_idx = 0;
-                for (size_t i = 0; i < all_orphan_count; i++) {
-                    if (all_orphans[i]->item_kind == WORKSPACE_ITEM_FILE) {
-                        file_orphans[f_idx++] = all_orphans[i];
-                    }
-                }
+        /* Allocate separate arrays for files and directories */
+        if (file_orphan_count > 0) {
+            file_orphans = malloc(file_orphan_count * sizeof(workspace_item_t *));
+            if (!file_orphans) {
+                err = ERROR(ERR_MEMORY, "Failed to allocate file orphan array");
+                goto cleanup;
             }
 
-            if (dir_orphan_count > 0) {
-                dir_orphans = malloc(dir_orphan_count * sizeof(workspace_item_t *));
-                if (!dir_orphans) {
-                    free((void *)all_orphans);  /* Free before error return */
-                    free(file_orphans);
-                    file_orphans = NULL;
-                    err = ERROR(ERR_MEMORY, "Failed to allocate directory orphan array");
-                    goto cleanup;
-                }
-
-                size_t d_idx = 0;
-                for (size_t i = 0; i < all_orphan_count; i++) {
-                    if (all_orphans[i]->item_kind == WORKSPACE_ITEM_DIRECTORY) {
-                        dir_orphans[d_idx++] = all_orphans[i];
-                    }
+            /* Second pass: populate file orphans array */
+            size_t f_idx = 0;
+            for (size_t i = 0; i < all_diverged_count; i++) {
+                if (all_diverged[i].state == WORKSPACE_STATE_ORPHANED &&
+                    all_diverged[i].item_kind == WORKSPACE_ITEM_FILE) {
+                    file_orphans[f_idx++] = &all_diverged[i];
                 }
             }
+        }
 
-            /* Free the combined orphan array now that we've split it */
-            free((void *)all_orphans);
+        if (dir_orphan_count > 0) {
+            dir_orphans = malloc(dir_orphan_count * sizeof(workspace_item_t *));
+            if (!dir_orphans) {
+                free(file_orphans);
+                file_orphans = NULL;
+                err = ERROR(ERR_MEMORY, "Failed to allocate directory orphan array");
+                goto cleanup;
+            }
+
+            /* Second pass: populate directory orphans array */
+            size_t d_idx = 0;
+            for (size_t i = 0; i < all_diverged_count; i++) {
+                if (all_diverged[i].state == WORKSPACE_STATE_ORPHANED &&
+                    all_diverged[i].item_kind == WORKSPACE_ITEM_DIRECTORY) {
+                    dir_orphans[d_idx++] = &all_diverged[i];
+                }
+            }
         }
 
         if (opts->verbose) {

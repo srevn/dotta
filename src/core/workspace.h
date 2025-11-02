@@ -77,19 +77,6 @@ typedef struct {
 } workspace_item_t;
 
 /**
- * Check if workspace item appears in multiple profiles
- *
- * Determines if a file exists in 2 or more enabled profiles, indicating
- * a potential conflict that requires user attention during updates.
- *
- * @param item Workspace item (must not be NULL)
- * @return true if file exists in 2+ enabled profiles, false otherwise
- */
-static inline bool workspace_item_is_multi_profile(const workspace_item_t *item) {
-    return item && item->all_profiles && item->all_profiles->count > 1;
-}
-
-/**
  * Workspace structure (opaque)
  *
  * Contains all three states and divergence analysis results.
@@ -109,8 +96,7 @@ typedef enum {
  * Workspace load options
  *
  * Controls which analyses workspace_load() performs. All flags default to
- * false when zero-initialized. Use workspace_load_default() for all analyses
- * enabled, or build custom options by setting specific flags.
+ * false when zero-initialized. Build custom options by setting specific flags.
  *
  * Analysis dependencies are automatically resolved:
  * - analyze_orphans requires analyze_files (auto-enabled if needed)
@@ -124,16 +110,6 @@ typedef struct {
     bool analyze_directories;  /* Directory metadata checks */
     bool analyze_encryption;   /* Encryption policy validation */
 } workspace_load_t;
-
-/**
- * Get default workspace load options
- *
- * Returns options with ALL analyses enabled. This matches the current
- * behavior of workspace_load() and provides backward compatibility.
- *
- * @return Default options (all analyses enabled)
- */
-workspace_load_t workspace_load_default(void);
 
 /**
  * Load workspace from repository
@@ -154,7 +130,7 @@ workspace_load_t workspace_load_default(void);
  * @param repo Git repository (must not be NULL)
  * @param profiles Profile list to analyze (must not be NULL)
  * @param config Configuration (for ignore patterns, can be NULL)
- * @param options Analysis options (can be NULL for defaults)
+ * @param options Analysis options (must not be NULL)
  * @param out Workspace (must not be NULL, caller must free with workspace_free)
  * @return Error or NULL on success
  */

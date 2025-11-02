@@ -970,7 +970,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     workspace_load_t ws_opts = {
         .analyze_files = true,         /* Validate file state */
         .analyze_orphans = true,       /* Validate no orphans */
-        .analyze_untracked = true,     /* Detect untracked files (blocks sync unless --force) */
+        .analyze_untracked = (config && config->auto_detect_new_files), /* Respect config */
         .analyze_directories = false,  /* Don't block sync on directory metadata */
         .analyze_encryption = false    /* Encryption checked during deployment, not here */
     };

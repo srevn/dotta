@@ -44,23 +44,6 @@
 #include "utils/string.h"
 
 /**
- * Get default workspace load options
- *
- * Returns options with all analyses enabled for backward compatibility.
- * This matches the behavior of workspace_load() before the refactor.
- */
-workspace_load_t workspace_load_default(void) {
-    workspace_load_t opts = {
-        .analyze_files       = true,
-        .analyze_orphans     = true,
-        .analyze_untracked   = true,
-        .analyze_directories = true,
-        .analyze_encryption  = true
-    };
-    return opts;
-}
-
-/**
  * Merged metadata entry (internal structure)
  *
  * Pairs a metadata item with its source profile name to track provenance
@@ -1531,17 +1514,11 @@ error_t *workspace_load(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profiles);
+    CHECK_NULL(options);
     CHECK_NULL(out);
 
-    /* Resolve options: NULL means default (all analyses enabled).
-     * This provides backward compatibility - callers not using the new
-     * options parameter get the same behavior as before. */
-    workspace_load_t resolved_opts;
-    if (options) {
-        resolved_opts = *options;  /* Copy provided options */
-    } else {
-        resolved_opts = workspace_load_default();  /* Default to all analyses */
-    }
+    /* Copy provided options */
+    workspace_load_t resolved_opts = *options;
 
     /* Handle analysis dependencies.
      * Orphan analysis requires file analysis (can't detect orphans without

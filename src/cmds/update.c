@@ -1432,7 +1432,7 @@ static error_t *update_display_summary(
              * for display (all except the winning one).
              */
             string_array_t *other_profiles = NULL;
-            if (workspace_item_is_multi_profile(item)) {
+            if (item->all_profiles && item->all_profiles->count > 1) {
                 /* Multi-profile: extract all except the winner (last entry) */
                 other_profiles = string_array_create();
                 if (other_profiles) {

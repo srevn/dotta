@@ -956,7 +956,14 @@ error_t *cmd_status(
      * This pattern ensures single manifest build per command invocation,
      * matching the optimization in apply.c.
      */
-    err = workspace_load(repo, profiles, config, NULL, &ws);
+    workspace_load_t ws_opts = {
+        .analyze_files = true,
+        .analyze_orphans = true,
+        .analyze_untracked = (config && config->auto_detect_new_files),
+        .analyze_directories = true,
+        .analyze_encryption = true
+    };
+    err = workspace_load(repo, profiles, config, &ws_opts, &ws);
     if (err) {
         err = error_wrap(err, "Failed to load workspace");
         goto cleanup;

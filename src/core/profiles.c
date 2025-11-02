@@ -633,8 +633,8 @@ error_t *profile_resolve(
         goto cleanup;
     }
 
-    /* Warn about missing profiles (diagnostic message) */
-    /*
+    /* Warn about missing profiles (diagnostic message)
+     *
      * Note: We use fprintf(stderr) here because this is a low-level core module
      * without access to an output_ctx_t. This is consistent with other core
      * modules (deploy.c, workspace.c) that also write diagnostic warnings to stderr.
@@ -835,7 +835,10 @@ struct walk_data {
 /**
  * Tree walk callback
  */
-static int tree_walk_callback(const char *root, const git_tree_entry *entry, void *payload) {
+static int tree_walk_callback(const char *root,
+    const git_tree_entry *entry,
+    void *payload
+) {
     struct walk_data *data = (struct walk_data *)payload;
 
     /* Only process blobs (files) */
@@ -1094,8 +1097,7 @@ error_t *profile_build_manifest(
                 manifest->entries[manifest->count].source_profile = profile;
                 manifest->entries[manifest->count].all_profiles = NULL;  /* Initialize to NULL (single profile) */
 
-                /*
-                 * Store index in hashmap (offset by 1 to distinguish from NULL).
+                /* Store index in hashmap (offset by 1 to distinguish from NULL).
                  * We cast the index through uintptr_t to store it as a void pointer.
                  * This is safe because:
                  * 1. Array indices are always much smaller than SIZE_MAX

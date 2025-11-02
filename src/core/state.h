@@ -10,6 +10,7 @@
  *   - schema_meta: Schema versioning
  *   - enabled_profiles: User's profile management (authority: profile commands)
  *   - deployed_files: Deployed file manifest (authority: apply/revert)
+ *   - tracked_directories: Tracked directories from metadata
  *
  * Design principles:
  * - Binary format (fast, compact)

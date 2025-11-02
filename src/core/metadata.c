@@ -1,5 +1,5 @@
 /**
- * metadata_v2.c - Unified metadata system implementation (Version 4)
+ * metadata.c - Unified metadata system implementation
  */
 
 #include "metadata.h"

@@ -618,7 +618,7 @@ static error_t *update_metadata_for_profile(
                         }
                     }
                     /* Deleted files don't advance file_idx (no stat captured) */
-                    break;
+                    continue;
                 }
 
                 /* Use pre-captured stat from copy_file_to_worktree()
@@ -707,7 +707,7 @@ static error_t *update_metadata_for_profile(
                         output_warning(out, "Failed to stat directory '%s': %s",
                                        item->filesystem_path, strerror(errno));
                     }
-                    break;
+                    continue;
                 }
 
                 /* Capture directory metadata */
@@ -726,7 +726,7 @@ static error_t *update_metadata_for_profile(
                     }
                     error_free(err);
                     err = NULL;
-                    break;
+                    continue;
                 }
 
                 /* Save metadata for verbose output before adding */
@@ -970,7 +970,7 @@ static error_t *update_profile(
                         goto cleanup;
                     }
                     /* Deleted files don't advance file_idx (no stat captured) */
-                    break;
+                    continue;
                 }
 
                 /* Handle encryption divergence for files missing from filesystem
@@ -1001,7 +1001,7 @@ static error_t *update_profile(
                             "  To resolve: re-create file and run update, or remove from profile.");
                     }
                     /* Skip this file - don't advance file_idx (no stat captured) */
-                    break;
+                    continue;
                 }
 
                 /* Copy to worktree and capture stat atomically */

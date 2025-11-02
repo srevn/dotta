@@ -211,7 +211,7 @@ static error_t *workspace_create_empty(
  * @param out_ownership_differs Output flag for ownership divergence (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *check_item_metadata_divergence(
+error_t *check_item_metadata_divergence(
     const metadata_item_t *item,
     const char *fs_path,
     const struct stat *st,
@@ -513,16 +513,13 @@ static error_t *analyze_file_divergence(
         /* Accumulate divergence from content comparison */
         switch (cmp_result) {
             case CMP_EQUAL:
-                /* Content equal - no divergence from content */
+                /* Content and type match - no divergence from content comparison.
+                 * Permission checking happens below in the metadata section. */
                 break;
 
             case CMP_DIFFERENT:
                 /* Content differs - accumulate CONTENT flag */
                 divergence |= DIVERGENCE_CONTENT;
-                break;
-
-            case CMP_MODE_DIFF:
-                /* Executable bit differs - metadata check below will detect this */
                 break;
 
             case CMP_TYPE_DIFF:
@@ -550,7 +547,35 @@ static error_t *analyze_file_divergence(
                                              true, false);
         }
 
-        /* Check metadata divergence (mode and ownership) */
+        /* PERMISSION CHECKING: Two-phase approach
+         *
+         * PHASE A: Git filemode (executable bit)
+         *   - Always check, even without metadata
+         *   - Catches: file is 0755 in git but 0644 on disk (or vice versa)
+         *   - Fixes bug: files without metadata losing exec bit divergence
+         *
+         * PHASE B: Full metadata (all permission bits + ownership)
+         *   - Only if metadata exists for this file
+         *   - Catches: granular changes like 0600→0644, ownership changes
+         *
+         * Both phases use the SAME file_stat (already captured above), so no
+         * extra syscalls. Flags are accumulated with |=, so detecting the same
+         * divergence twice is idempotent and harmless.
+         */
+
+        /* PHASE A: Check git filemode (executable bit) */
+        {
+            git_filemode_t expected_mode = git_tree_entry_filemode(manifest_entry->entry);
+            bool expect_exec = (expected_mode == GIT_FILEMODE_BLOB_EXECUTABLE);
+            bool is_exec = fs_stat_is_executable(&file_stat);
+
+            if (expect_exec != is_exec) {
+                /* Executable bit differs between git and filesystem */
+                divergence |= DIVERGENCE_MODE;
+            }
+        }
+
+        /* PHASE B: Check full metadata (mode and ownership) if available */
         if (metadata) {
             const metadata_item_t *meta_entry = NULL;
             error_t *meta_err = metadata_get_item(metadata, storage_path, &meta_entry);
@@ -564,7 +589,14 @@ static error_t *analyze_file_divergence(
                         storage_path);
                 }
 
-                /* Check mode and ownership using captured stat */
+                /* Check FULL mode (all 9 permission bits) and ownership.
+                 * This may detect additional divergence beyond executable bit.
+                 *
+                 * Examples:
+                 * - Phase A passed (both non-exec), but file is 0600 in metadata, 0644 on disk
+                 * - Phase A detected exec bit diff, metadata also detects group/other bits differ
+                 *
+                 * The |= operator means we accumulate flags, never lose information. */
                 bool mode_differs = false;
                 bool ownership_differs = false;
                 error_t *check_err = check_item_metadata_divergence(

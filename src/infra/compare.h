@@ -26,13 +26,17 @@
 
 /**
  * Comparison result
+ *
+ * NOTE: Permission checking is explicitly NOT part of this module.
+ * The compare module is infrastructure-layer, handling only content and type.
+ * Permission validation (git filemode + full metadata) is a core-layer concern
+ * handled by workspace.c using metadata from .dotta/metadata.json.
  */
 typedef enum {
-    CMP_EQUAL,       /* Files are identical */
+    CMP_EQUAL,       /* Files are identical (content and type) */
     CMP_DIFFERENT,   /* Files have different content */
     CMP_MISSING,     /* File doesn't exist on disk */
-    CMP_TYPE_DIFF,   /* Different types (file vs symlink) */
-    CMP_MODE_DIFF    /* Different permissions (executable bit) */
+    CMP_TYPE_DIFF    /* Different types (file vs symlink) */
 } compare_result_t;
 
 /**
@@ -53,8 +57,7 @@ typedef struct {
  * Tests:
  * 1. File exists on disk
  * 2. File type matches (regular/symlink)
- * 3. Content matches
- * 4. Mode matches (executable bit)
+ * 3. Content matches (byte-for-byte)
  *
  * Stat propagation optimization:
  * - If in_stat != NULL: Uses provided stat data (zero syscalls)

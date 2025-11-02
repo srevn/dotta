@@ -23,6 +23,7 @@
 #include "base/gitops.h"
 #include "core/metadata.h"
 #include "core/state.h"
+#include "core/workspace.h"
 #include "crypto/keymanager.h"
 #include "infra/compare.h"
 #include "infra/content.h"
@@ -238,10 +239,12 @@ static bool try_fast_path_check(
 
     compare_result_t cmp_result;
     error_t *err = NULL;
+    git_filemode_t expected_mode = GIT_FILEMODE_BLOB;  /* Default, may be updated from metadata */
+    struct stat file_stat;  /* Captured during comparison, used for permission checking */
+    memset(&file_stat, 0, sizeof(file_stat));
 
     if (metadata && storage_path) {
         /* Get mode from metadata for accurate comparison */
-        git_filemode_t expected_mode = GIT_FILEMODE_BLOB;
         const metadata_item_t *meta_entry = NULL;
         error_t *mode_err = metadata_get_item(metadata, storage_path, &meta_entry);
         if (!mode_err && meta_entry) {
@@ -290,8 +293,9 @@ static bool try_fast_path_check(
             return true;  /* Handled (don't try slow path) */
         }
 
-        /* Compare plaintext to disk */
-        err = compare_buffer_to_disk(plaintext, filesystem_path, expected_mode, NULL, &cmp_result, NULL);
+        /* Compare plaintext to disk (captures stat for reuse) */
+        err = compare_buffer_to_disk(plaintext, filesystem_path, expected_mode, NULL,
+                                    &cmp_result, &file_stat);
 
         /* Free owned buffer if we allocated it */
         if (owns_buffer) {
@@ -315,34 +319,67 @@ static bool try_fast_path_check(
         return true;
     }
 
-    if (cmp_result != CMP_EQUAL) {
-        /* File is modified - add violation */
-        const char *reason = NULL;
-        bool content_mod = false;
+    /* Check for divergence: content/type from compare, permissions separately */
+    bool has_divergence = false;
+    const char *reason = NULL;
+    bool content_mod = false;
 
-        switch (cmp_result) {
-            case CMP_DIFFERENT:
-                reason = SAFETY_REASON_MODIFIED;
-                content_mod = true;
-                break;
-            case CMP_MODE_DIFF:
-                reason = SAFETY_REASON_MODE_CHANGED;
-                content_mod = false;
-                break;
-            case CMP_TYPE_DIFF:
-                reason = SAFETY_REASON_TYPE_CHANGED;
-                content_mod = true;
-                break;
-            case CMP_MISSING:
-            case CMP_EQUAL:
-                /* Already handled above */
-                break;
+    /* Content/type divergence from compare_buffer_to_disk */
+    if (cmp_result == CMP_DIFFERENT) {
+        has_divergence = true;
+        reason = SAFETY_REASON_MODIFIED;
+        content_mod = true;
+    } else if (cmp_result == CMP_TYPE_DIFF) {
+        has_divergence = true;
+        reason = SAFETY_REASON_TYPE_CHANGED;
+        content_mod = true;
+    } else if (cmp_result == CMP_EQUAL) {
+        /* Content matches - check permissions separately.
+         * Two-phase permission checking (matches workspace.c logic):
+         *
+         * PHASE A: Git filemode (executable bit) - always check
+         * PHASE B: Full metadata - only if metadata available
+         */
+
+        bool mode_changed = false;
+
+        /* PHASE A: Check git filemode (executable bit) */
+        bool expect_exec = (expected_mode == GIT_FILEMODE_BLOB_EXECUTABLE);
+        bool is_exec = fs_stat_is_executable(&file_stat);
+        if (expect_exec != is_exec) {
+            mode_changed = true;
         }
 
-        if (reason) {
-            *out_err = add_violation(result, filesystem_path, storage_path,
-                                   source_profile, reason, content_mod);
+        /* PHASE B: Check full metadata if available and exec bit matches */
+        if (!mode_changed && metadata && storage_path) {
+            const metadata_item_t *meta_entry = NULL;
+            error_t *meta_err = metadata_get_item(metadata, storage_path, &meta_entry);
+
+            if (meta_err == NULL && meta_entry && meta_entry->kind == METADATA_ITEM_FILE) {
+                bool mode_differs = false;
+                bool ownership_differs = false;
+                error_t *check_err = check_item_metadata_divergence(
+                    meta_entry, filesystem_path, &file_stat,
+                    &mode_differs, &ownership_differs);
+
+                if (check_err == NULL && (mode_differs || ownership_differs)) {
+                    mode_changed = true;
+                }
+                error_free(check_err);
+            }
+            error_free(meta_err);
         }
+
+        if (mode_changed) {
+            has_divergence = true;
+            reason = SAFETY_REASON_MODE_CHANGED;
+            content_mod = false;
+        }
+    }
+
+    if (has_divergence && reason) {
+        *out_err = add_violation(result, filesystem_path, storage_path,
+                                source_profile, reason, content_mod);
     }
 
     /* Fast path succeeded! */
@@ -458,9 +495,10 @@ static error_t *check_file_with_tree(
                            source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
     }
 
-    /* Compare decrypted content to disk file */
+    /* Compare decrypted content to disk file (capture stat for reuse) */
     compare_result_t cmp_result;
-    err = compare_buffer_to_disk(content, filesystem_path, mode, NULL, &cmp_result, NULL);
+    struct stat file_stat;
+    err = compare_buffer_to_disk(content, filesystem_path, mode, NULL, &cmp_result, &file_stat);
 
     /* Free resources immediately */
     buffer_free(content);
@@ -481,30 +519,61 @@ static error_t *check_file_with_tree(
         return NULL;
     }
 
-    if (cmp_result != CMP_EQUAL) {
-        const char *reason = NULL;
-        bool content_mod = false;
+    /* Check for divergence: content/type from compare, permissions separately */
+    const char *reason = NULL;
+    bool content_mod = false;
 
-        switch (cmp_result) {
-            case CMP_DIFFERENT:
-                reason = SAFETY_REASON_MODIFIED;
-                content_mod = true;
-                break;
-            case CMP_MODE_DIFF:
-                reason = SAFETY_REASON_MODE_CHANGED;
-                content_mod = false;
-                break;
-            case CMP_TYPE_DIFF:
-                reason = SAFETY_REASON_TYPE_CHANGED;
-                content_mod = true;
-                break;
-            case CMP_MISSING:
-            case CMP_EQUAL:
-                /* Already handled above */
-                if (fallback_metadata) metadata_free(fallback_metadata);
-                return NULL;
+    /* Content/type divergence from compare_buffer_to_disk */
+    if (cmp_result == CMP_DIFFERENT) {
+        reason = SAFETY_REASON_MODIFIED;
+        content_mod = true;
+    } else if (cmp_result == CMP_TYPE_DIFF) {
+        reason = SAFETY_REASON_TYPE_CHANGED;
+        content_mod = true;
+    } else if (cmp_result == CMP_EQUAL) {
+        /* Content matches - check permissions separately.
+         * Two-phase permission checking (matches workspace.c logic):
+         *
+         * PHASE A: Git filemode (executable bit) - always check
+         * PHASE B: Full metadata - only if metadata available
+         */
+
+        bool mode_changed = false;
+
+        /* PHASE A: Check git filemode (executable bit) */
+        bool expect_exec = (mode == GIT_FILEMODE_BLOB_EXECUTABLE);
+        bool is_exec = fs_stat_is_executable(&file_stat);
+        if (expect_exec != is_exec) {
+            mode_changed = true;
         }
 
+        /* PHASE B: Check full metadata if available and exec bit matches */
+        if (!mode_changed && resolved_metadata && storage_path) {
+            const metadata_item_t *meta_entry = NULL;
+            error_t *meta_err = metadata_get_item(resolved_metadata, storage_path, &meta_entry);
+
+            if (meta_err == NULL && meta_entry && meta_entry->kind == METADATA_ITEM_FILE) {
+                bool mode_differs = false;
+                bool ownership_differs = false;
+                error_t *check_err = check_item_metadata_divergence(
+                    meta_entry, filesystem_path, &file_stat,
+                    &mode_differs, &ownership_differs);
+
+                if (check_err == NULL && (mode_differs || ownership_differs)) {
+                    mode_changed = true;
+                }
+                error_free(check_err);
+            }
+            error_free(meta_err);
+        }
+
+        if (mode_changed) {
+            reason = SAFETY_REASON_MODE_CHANGED;
+            content_mod = false;
+        }
+    }
+
+    if (reason) {
         if (fallback_metadata) metadata_free(fallback_metadata);
         return add_violation(result, filesystem_path, storage_path,
                            source_profile, reason, content_mod);

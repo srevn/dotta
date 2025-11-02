@@ -11,9 +11,11 @@
 #include <time.h>
 
 #include "base/error.h"
+#include "base/filesystem.h"
 #include "base/gitops.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
+#include "core/workspace.h"
 #include "crypto/keymanager.h"
 #include "infra/compare.h"
 #include "infra/content.h"
@@ -98,7 +100,6 @@ static const char *get_status_message(compare_result_t result, diff_direction_t 
         switch (result) {
             case CMP_MISSING:    return "not deployed (would be created by apply)";
             case CMP_DIFFERENT:  return "would be overwritten by apply";
-            case CMP_MODE_DIFF:  return "mode would change on apply";
             case CMP_TYPE_DIFF:  return "type would change on apply";
             default:             return "unknown";
         }
@@ -107,7 +108,6 @@ static const char *get_status_message(compare_result_t result, diff_direction_t 
         switch (result) {
             case CMP_MISSING:    return "deleted locally (would be removed by update)";
             case CMP_DIFFERENT:  return "modified locally (would be committed by update)";
-            case CMP_MODE_DIFF:  return "mode changed locally";
             case CMP_TYPE_DIFF:  return "type changed locally";
             default:             return "unknown";
         }
@@ -150,17 +150,58 @@ static error_t *show_file_diff(
         return error_wrap(err, "Failed to get content for '%s'", entry->filesystem_path);
     }
 
-    /* Compare buffer to disk (works with decrypted content) */
+    /* Compare buffer to disk (works with decrypted content, captures stat) */
     git_filemode_t mode = git_tree_entry_filemode(entry->entry);
     compare_result_t cmp_result;
-    err = compare_buffer_to_disk(content, entry->filesystem_path, mode, NULL, &cmp_result, NULL);
+    struct stat file_stat;
+    err = compare_buffer_to_disk(content, entry->filesystem_path, mode, NULL, &cmp_result, &file_stat);
 
     if (err) {
         return error_wrap(err, "Failed to compare '%s'", entry->filesystem_path);
     }
 
-    /* Only show if different */
+    /* Check for permission changes (two-phase: git filemode + full metadata) */
+    bool mode_differs = false;
+    const char *mode_status = NULL;
+
     if (cmp_result == CMP_EQUAL) {
+        /* Content matches - check permissions separately.
+         * PHASE A: Git filemode (executable bit) - always check */
+        bool expect_exec = (mode == GIT_FILEMODE_BLOB_EXECUTABLE);
+        bool is_exec = fs_stat_is_executable(&file_stat);
+        if (expect_exec != is_exec) {
+            mode_differs = true;
+        }
+
+        /* PHASE B: Full metadata - only if available */
+        if (!mode_differs && metadata && entry->storage_path) {
+            const metadata_item_t *meta_entry = NULL;
+            error_t *meta_err = metadata_get_item(metadata, entry->storage_path, &meta_entry);
+
+            if (meta_err == NULL && meta_entry && meta_entry->kind == METADATA_ITEM_FILE) {
+                bool full_mode_differs = false;
+                bool ownership_differs = false;
+                error_t *check_err = check_item_metadata_divergence(
+                    meta_entry, entry->filesystem_path, &file_stat,
+                    &full_mode_differs, &ownership_differs);
+
+                if (check_err == NULL && (full_mode_differs || ownership_differs)) {
+                    mode_differs = true;
+                }
+                error_free(check_err);
+            }
+            error_free(meta_err);
+        }
+
+        /* Set appropriate status message for mode changes */
+        if (mode_differs) {
+            mode_status = (direction == DIFF_UPSTREAM) ?
+                "mode would change on apply" : "mode changed locally";
+        }
+    }
+
+    /* Only show if different (content, type, or mode) */
+    if (cmp_result == CMP_EQUAL && !mode_differs) {
         return NULL;
     }
 
@@ -218,9 +259,16 @@ static error_t *show_file_diff(
     }
 
     /* Show status with appropriate color and message based on direction */
-    const char *status_msg = get_status_message(cmp_result, direction);
-    output_color_t status_color = OUTPUT_COLOR_YELLOW;
+    const char *status_msg;
+    if (mode_differs && mode_status) {
+        /* Mode-only change (content matches) */
+        status_msg = mode_status;
+    } else {
+        /* Content or type change */
+        status_msg = get_status_message(cmp_result, direction);
+    }
 
+    output_color_t status_color = OUTPUT_COLOR_YELLOW;
     if (cmp_result == CMP_MISSING || cmp_result == CMP_TYPE_DIFF) {
         status_color = OUTPUT_COLOR_RED;
     }
@@ -234,13 +282,13 @@ static error_t *show_file_diff(
         output_printf(out, OUTPUT_NORMAL, "status: %s\n", status_msg);
     }
 
-    /* For missing files, no diff to show */
+    /* For missing files or type changes, no diff to show */
     if (cmp_result == CMP_MISSING || cmp_result == CMP_TYPE_DIFF) {
         return NULL;
     }
 
-    /* For mode-only changes, no content diff */
-    if (cmp_result == CMP_MODE_DIFF) {
+    /* For mode-only changes (content matches), no content diff to show */
+    if (mode_differs && cmp_result == CMP_EQUAL) {
         return NULL;
     }
 

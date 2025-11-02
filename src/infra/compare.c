@@ -22,7 +22,6 @@ const char *compare_result_string(compare_result_t result) {
         case CMP_DIFFERENT: return "different";
         case CMP_MISSING:   return "missing";
         case CMP_TYPE_DIFF: return "type mismatch";
-        case CMP_MODE_DIFF: return "mode mismatch";
         default:            return "unknown";
     }
 }
@@ -163,16 +162,16 @@ error_t *compare_buffer_to_disk(
             }
         }
 
-        /* Content equal - check executable bit using captured stat (no syscall) */
-        bool expect_exec = (expected_mode == GIT_FILEMODE_BLOB_EXECUTABLE);
-        bool is_exec = fs_stat_is_executable(stat_ptr);
-
-        if (expect_exec != is_exec) {
-            *result = CMP_MODE_DIFF;
-        } else {
-            *result = CMP_EQUAL;
-        }
-
+        /* Content and type match - files are equal
+         *
+         * NOTE: We do NOT check permissions here. Permission validation is a
+         * core-layer concern handled by workspace.c, which checks:
+         * 1. Git filemode (executable bit from tree)
+         * 2. Full metadata (all permission bits + ownership from .dotta/metadata.json)
+         *
+         * This separation keeps the infrastructure layer pure and focused on
+         * content comparison only. */
+        *result = CMP_EQUAL;
         return NULL;
     }
 
@@ -474,8 +473,6 @@ error_t *compare_generate_diff(
         if (diff->diff_text) {
             snprintf(diff->diff_text, msg_len, format, expected, actual);
         }
-    } else if (diff->status == CMP_MODE_DIFF) {
-        diff->diff_text = strdup("Executable bit differs");
     } else if (diff->status == CMP_DIFFERENT) {
         /* Generate actual unified diff */
         if (mode == GIT_FILEMODE_LINK) {

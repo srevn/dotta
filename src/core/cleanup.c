@@ -180,7 +180,7 @@ static error_t *prune_orphaned_files(
     }
 
     for (size_t i = 0; i < orphan_count; i++) {
-        filesystem_paths[i] = (char *)orphans[i]->filesystem_path;  /* Borrowed pointer */
+        filesystem_paths[i] = (char *)orphans[i]->filesystem_path;
     }
 
     /* Build violations map from preflight data or run safety check
@@ -753,7 +753,9 @@ error_t *cleanup_execute(
     }
 
     /* Step 2: Prune orphaned directories (with inline safety check) */
-    err = prune_orphaned_directories(opts->orphaned_directories, opts->orphaned_directories_count, result, opts);
+    err = prune_orphaned_directories(opts->orphaned_directories,
+                                     opts->orphaned_directories_count,
+                                     result, opts);
     if (err) {
         cleanup_result_free(result);
         return error_wrap(err, "Failed to prune orphaned directories");

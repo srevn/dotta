@@ -181,9 +181,7 @@ install: $(TARGET)
 	@echo "Installing configuration samples..."
 	@install -d $(DATADIR)
 	@install -m 644 $(ETC_DIR)/config.toml.sample $(DATADIR)/config.toml.sample
-	@install -m 644 $(ETC_DIR)/README.md $(DATADIR)/README.md
 	@echo "  Installed: $(DATADIR)/config.toml.sample"
-	@echo "  Installed: $(DATADIR)/README.md"
 	@echo ""
 	@echo "Installing hook samples..."
 	@install -d $(DATADIR)/hooks
@@ -206,7 +204,6 @@ install: $(TARGET)
 	@echo "  3. Add your first file:"
 	@echo "     dotta add --profile global ~/.bashrc"
 	@echo ""
-	@echo "For more information, see: $(DATADIR)/README.md"
 
 # Uninstall
 .PHONY: uninstall

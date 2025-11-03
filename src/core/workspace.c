@@ -867,6 +867,90 @@ static error_t *analyze_orphaned_state(workspace_t *ws) {
 }
 
 /**
+ * Analyze files with PENDING_REMOVAL status
+ *
+ * Files with status=PENDING_REMOVAL are staged for deletion (via profile disable
+ * or file remove). They appear in the manifest table but should be shown
+ * separately in status output as "Changes to be removed."
+ *
+ * These files are in a transition state:
+ * - They're in the manifest table (PENDING_REMOVAL status)
+ * - They may still exist on filesystem (until apply removes them)
+ * - They're NOT in the regular manifest loaded by workspace_build_manifest_from_state()
+ *   (that function filters to only include enabled profiles)
+ *
+ * This function queries state directly to find PENDING_REMOVAL entries and adds
+ * them to the diverged list so they appear in status output.
+ */
+static error_t *analyze_pending_removals(workspace_t *ws) {
+    CHECK_NULL(ws);
+    CHECK_NULL(ws->state);
+
+    error_t *err = NULL;
+    state_file_entry_t *entries = NULL;
+    size_t count = 0;
+
+    /* Get all entries with PENDING_REMOVAL status */
+    err = state_get_entries_by_status(ws->state, MANIFEST_STATUS_PENDING_REMOVAL,
+                                       &entries, &count);
+    if (err) {
+        return error_wrap(err, "Failed to get pending removal entries");
+    }
+
+    /* No pending removals - early exit */
+    if (count == 0) {
+        state_free_all_files(entries, count);
+        return NULL;
+    }
+
+    /* Add each pending removal to diverged list */
+    for (size_t i = 0; i < count; i++) {
+        state_file_entry_t *entry = &entries[i];
+
+        /* Check if profile is enabled (might have been disabled) */
+        bool profile_enabled = (hashmap_get(ws->profile_index, entry->profile) != NULL);
+
+        /* Check if file still exists on filesystem */
+        bool on_filesystem = fs_lexists(entry->filesystem_path);
+
+        /* Add to diverged list with PENDING_REMOVAL state
+         *
+         * State interpretation:
+         * - in_profile: false (file was removed from profile or profile disabled)
+         * - in_state: true (still in manifest table, waiting for apply)
+         * - on_filesystem: varies (may still exist until apply removes it)
+         * - workspace_state: DEPLOYED (semantically deployed until apply removes)
+         *   but manifest_status distinguishes this as PENDING_REMOVAL
+         */
+        err = workspace_add_diverged(
+            ws,
+            entry->filesystem_path,
+            entry->storage_path,
+            entry->profile,
+            NULL, NULL,  /* No old_profile or all_profiles */
+            WORKSPACE_STATE_DEPLOYED,  /* Still deployed until apply removes */
+            DIVERGENCE_NONE,           /* No content divergence for pending removal */
+            WORKSPACE_ITEM_FILE,
+            MANIFEST_STATUS_PENDING_REMOVAL,  /* Key: this is what makes it special */
+            false,           /* not in profile (was removed) */
+            true,            /* in state (still in manifest table) */
+            on_filesystem,   /* may or may not exist */
+            profile_enabled, /* profile may still be enabled */
+            false            /* No profile change */
+        );
+
+        if (err) {
+            state_free_all_files(entries, count);
+            return error_wrap(err, "Failed to add pending removal '%s'",
+                            entry->filesystem_path);
+        }
+    }
+
+    state_free_all_files(entries, count);
+    return NULL;
+}
+
+/**
  * Analyze divergence for all files in manifest
  *
  * Compares each file in the manifest against deployment state and filesystem
@@ -1842,6 +1926,17 @@ error_t *workspace_load(
         if (err) {
             workspace_free(ws);
             return error_wrap(err, "Failed to analyze orphaned state");
+        }
+    }
+
+    /* Analyze pending removals (files staged for deletion)
+     * This should run when analyze_files is enabled since pending removals
+     * are part of the file staging workflow. */
+    if (resolved_opts.analyze_files) {
+        err = analyze_pending_removals(ws);
+        if (err) {
+            workspace_free(ws);
+            return error_wrap(err, "Failed to analyze pending removals");
         }
     }
 

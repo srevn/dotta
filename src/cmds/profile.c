@@ -15,6 +15,7 @@
 #include "base/error.h"
 #include "base/gitops.h"
 #include "base/transfer.h"
+#include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "core/upstream.h"
@@ -597,15 +598,22 @@ static error_t *profile_enable(
         }
         enabled_count++;
 
+        /* Sync profile to manifest (populate VWD) */
+        err = manifest_sync_profile(repo, state, profile_name, enabled);
+        if (err) {
+            err = error_wrap(err, "Failed to sync profile '%s' to manifest", profile_name);
+            goto cleanup;
+        }
+
         if (opts->verbose) {
             size_t file_count = 0;
             error_t *count_err = count_profile_files(repo, profile_name, &file_count);
 
             if (count_err) {
-                output_success(out, "  ✓ Enabled %s", profile_name);
+                output_success(out, "  ✓ Enabled %s (staged for deployment)", profile_name);
                 error_free(count_err);
             } else {
-                output_success(out, "  ✓ Enabled %s (%zu file%s)",
+                output_success(out, "  ✓ Enabled %s (%zu file%s staged)",
                               profile_name, file_count, file_count == 1 ? "" : "s");
             }
         }
@@ -658,7 +666,8 @@ cleanup:
     if (enabled_count > 0) {
         output_success(out, "Enabled %zu profile%s",
                       enabled_count, enabled_count == 1 ? "" : "s");
-        output_info(out, "Run 'dotta apply' to deploy these profiles to your filesystem");
+        output_info(out, "Files staged for deployment in manifest");
+        output_info(out, "Run 'dotta status' to review or 'dotta apply' to deploy");
     }
     if (already_enabled > 0 && !opts->quiet) {
         output_info(out, "%zu profile%s already enabled",
@@ -832,6 +841,30 @@ static error_t *profile_disable(
 
     /* Update state with new enabled profiles */
     if (disabled_count > 0) {
+        /* Unsync each disabled profile from manifest (handle fallback) */
+        for (size_t i = 0; i < string_array_size(to_disable); i++) {
+            const char *profile_name = string_array_get(to_disable, i);
+
+            /* Check if this profile was actually enabled */
+            bool was_enabled = false;
+            for (size_t j = 0; j < string_array_size(enabled); j++) {
+                if (strcmp(string_array_get(enabled, j), profile_name) == 0) {
+                    was_enabled = true;
+                    break;
+                }
+            }
+
+            if (was_enabled) {
+                /* Unsync from manifest (updates to fallback or marks for removal) */
+                err = manifest_unsync_profile(repo, state, profile_name, new_enabled);
+                if (err) {
+                    err = error_wrap(err, "Failed to unsync profile '%s' from manifest",
+                                   profile_name);
+                    goto cleanup;
+                }
+            }
+        }
+
         profile_names = malloc(string_array_size(new_enabled) * sizeof(char *));
         if (!profile_names) {
             err = ERROR(ERR_MEMORY, "Failed to allocate profile names");
@@ -877,7 +910,8 @@ cleanup:
     if (disabled_count > 0) {
         output_success(out, "Disabled %zu profile%s",
                       disabled_count, disabled_count == 1 ? "" : "s");
-        output_info(out, "Run 'dotta apply' to remove deployed files from filesystem");
+        output_info(out, "Files updated in manifest (fallback or marked for removal)");
+        output_info(out, "Run 'dotta status' to review or 'dotta apply' to execute changes");
     }
     if (not_enabled > 0 && !opts->quiet) {
         output_info(out, "%zu profile%s were not enabled",

@@ -30,10 +30,6 @@
 #include "utils/config.h"
 #include "utils/string.h"
 
-/* ========================================================================
- * Internal Utilities
- * ======================================================================== */
-
 /**
  * Get current HEAD oid for branch
  */
@@ -115,11 +111,16 @@ static file_entry_t *find_file_in_manifest(
  * This is the "precedence oracle" pattern - we use profile_build_manifest()
  * to determine who should own what files, then use that authoritative answer.
  *
- * @param repo Git repository
- * @param profile_names Profile names to build from
+ * IMPORTANT: Manifest entries reference profile structures (source_profile field).
+ * The profile_list must remain alive while the manifest is in use, otherwise
+ * accessing entry->source_profile->name results in use-after-free.
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param profile_names Profile names to build from (must not be NULL)
  * @param storage_path Optional storage path to find (NULL to skip)
  * @param out_entry Optional output for found entry (borrowed, don't free)
- * @param out_manifest Output manifest (caller must free)
+ * @param out_manifest Output manifest (caller must free with manifest_free)
+ * @param out_profiles Output profile list (caller must free with profile_list_free, must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *build_manifest_and_find(
@@ -127,11 +128,13 @@ static error_t *build_manifest_and_find(
     const string_array_t *profile_names,
     const char *storage_path,
     file_entry_t **out_entry,
-    manifest_t **out_manifest
+    manifest_t **out_manifest,
+    profile_list_t **out_profiles
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile_names);
     CHECK_NULL(out_manifest);
+    CHECK_NULL(out_profiles);
 
     error_t *err = NULL;
     profile_list_t *profiles = NULL;
@@ -151,7 +154,7 @@ static error_t *build_manifest_and_find(
         return error_wrap(err, "Failed to build manifest from profiles");
     }
 
-    profile_list_free(profiles);
+    /* DO NOT free profiles here - caller must keep them alive while using manifest */
 
     /* Find entry if requested */
     if (storage_path && out_entry) {
@@ -159,6 +162,7 @@ static error_t *build_manifest_and_find(
     }
 
     *out_manifest = manifest;
+    *out_profiles = profiles;
     return NULL;
 }
 
@@ -193,10 +197,6 @@ static error_t *compute_content_hash_from_entry(
 
     return NULL;
 }
-
-/* ========================================================================
- * Core Translation: file_entry_t → state_file_entry_t
- * ======================================================================== */
 
 /**
  * Sync single entry from in-memory manifest to state
@@ -337,10 +337,6 @@ cleanup:
     return err;
 }
 
-/* ========================================================================
- * Public API: Manifest Synchronization Operations
- * ======================================================================== */
-
 /**
  * Sync entire profile to manifest (bulk population)
  *
@@ -364,6 +360,7 @@ error_t *manifest_sync_profile(
 
     error_t *err = NULL;
     manifest_t *manifest = NULL;
+    profile_list_t *profiles = NULL;
     metadata_t *metadata = NULL;
     keymanager_t *km = NULL;
     dotta_config_t *config = NULL;
@@ -378,7 +375,7 @@ error_t *manifest_sync_profile(
     git_oid_tostr(head_oid_str, sizeof(head_oid_str), &head_oid);
 
     /* 2. Build manifest from all enabled profiles (precedence oracle) */
-    err = build_manifest_and_find(repo, enabled_profiles, NULL, NULL, &manifest);
+    err = build_manifest_and_find(repo, enabled_profiles, NULL, NULL, &manifest, &profiles);
     if (err) {
         return error_wrap(err, "Failed to build manifest for profile sync");
     }
@@ -425,6 +422,9 @@ error_t *manifest_sync_profile(
     }
 
 cleanup:
+    if (profiles) {
+        profile_list_free(profiles);
+    }
     if (km) {
         keymanager_free(km);
     }
@@ -466,6 +466,7 @@ error_t *manifest_unsync_profile(
     state_file_entry_t *entries = NULL;
     size_t count = 0;
     manifest_t *fallback_manifest = NULL;
+    profile_list_t *fallback_profiles = NULL;
 
     /* 1. Get all entries from disabled profile */
     err = state_get_entries_by_profile(state, profile_name, &entries, &count);
@@ -481,7 +482,7 @@ error_t *manifest_unsync_profile(
     /* 2. Build manifest from remaining profiles (fallback check) */
     if (remaining_enabled->count > 0) {
         err = build_manifest_and_find(repo, remaining_enabled, NULL, NULL,
-                                      &fallback_manifest);
+                                      &fallback_manifest, &fallback_profiles);
         if (err) {
             state_free_all_files(entries, count);
             return error_wrap(err, "Failed to build fallback manifest");
@@ -535,6 +536,9 @@ error_t *manifest_unsync_profile(
     }
 
 cleanup:
+    if (fallback_profiles) {
+        profile_list_free(fallback_profiles);
+    }
     if (fallback_manifest) {
         manifest_free(fallback_manifest);
     }
@@ -570,6 +574,7 @@ error_t *manifest_sync_file(
 
     error_t *err = NULL;
     manifest_t *manifest = NULL;
+    profile_list_t *profiles = NULL;
     file_entry_t *manifest_entry = NULL;
     metadata_t *metadata = NULL;
     keymanager_t *km = NULL;
@@ -577,7 +582,7 @@ error_t *manifest_sync_file(
 
     /* 1. Build manifest and find file (precedence check) */
     err = build_manifest_and_find(repo, enabled_profiles, storage_path,
-                                  &manifest_entry, &manifest);
+                                  &manifest_entry, &manifest, &profiles);
     if (err) {
         return error_wrap(err, "Failed to build manifest for file sync");
     }
@@ -682,6 +687,9 @@ error_t *manifest_sync_file(
                               initial_status, km);
 
 cleanup:
+    if (profiles) {
+        profile_list_free(profiles);
+    }
     if (km) {
         keymanager_free(km);
     }
@@ -720,6 +728,7 @@ error_t *manifest_remove_file(
     error_t *err = NULL;
     state_file_entry_t *existing = NULL;
     manifest_t *fallback_manifest = NULL;
+    profile_list_t *fallback_profiles = NULL;
     file_entry_t *fallback = NULL;
 
     /* 1. Get existing entry */
@@ -732,7 +741,7 @@ error_t *manifest_remove_file(
     if (enabled_profiles->count > 0) {
         err = build_manifest_and_find(repo, enabled_profiles,
                                       existing->storage_path, &fallback,
-                                      &fallback_manifest);
+                                      &fallback_manifest, &fallback_profiles);
         if (err) {
             state_free_entry(existing);
             return error_wrap(err, "Failed to build fallback manifest");
@@ -772,6 +781,9 @@ error_t *manifest_remove_file(
     }
 
 cleanup:
+    if (fallback_profiles) {
+        profile_list_free(fallback_profiles);
+    }
     if (fallback_manifest) {
         manifest_free(fallback_manifest);
     }
@@ -953,6 +965,7 @@ error_t *manifest_update_for_precedence_change(
 
     error_t *err = NULL;
     manifest_t *new_manifest = NULL;
+    profile_list_t *profiles = NULL;
     state_file_entry_t *old_entries = NULL;
     size_t old_count = 0;
     metadata_t *metadata = NULL;
@@ -960,7 +973,7 @@ error_t *manifest_update_for_precedence_change(
     dotta_config_t *config = NULL;
 
     /* 1. Build new manifest with new precedence order (precedence oracle) */
-    err = build_manifest_and_find(repo, new_profile_order, NULL, NULL, &new_manifest);
+    err = build_manifest_and_find(repo, new_profile_order, NULL, NULL, &new_manifest, &profiles);
     if (err) {
         return error_wrap(err, "Failed to build manifest for precedence update");
     }
@@ -1068,6 +1081,9 @@ error_t *manifest_update_for_precedence_change(
     }
 
 cleanup:
+    if (profiles) {
+        profile_list_free(profiles);
+    }
     if (km) {
         keymanager_free(km);
     }

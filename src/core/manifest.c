@@ -932,3 +932,155 @@ error_t *manifest_rebuild(
 
     return NULL;
 }
+
+/**
+ * Update manifest after profile precedence change
+ *
+ * Implementation strategy:
+ *   1. Build new manifest with precedence oracle
+ *   2. Compare with current state to detect ownership changes
+ *   3. Update only changed files (preserves DEPLOYED status for unchanged)
+ *   4. Handle orphaned files (mark PENDING_REMOVAL)
+ */
+error_t *manifest_update_for_precedence_change(
+    git_repository *repo,
+    state_t *state,
+    const string_array_t *new_profile_order
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(state);
+    CHECK_NULL(new_profile_order);
+
+    error_t *err = NULL;
+    manifest_t *new_manifest = NULL;
+    state_file_entry_t *old_entries = NULL;
+    size_t old_count = 0;
+    metadata_t *metadata = NULL;
+    keymanager_t *km = NULL;
+    dotta_config_t *config = NULL;
+
+    /* 1. Build new manifest with new precedence order (precedence oracle) */
+    err = build_manifest_and_find(repo, new_profile_order, NULL, NULL, &new_manifest);
+    if (err) {
+        return error_wrap(err, "Failed to build manifest for precedence update");
+    }
+
+    /* 2. Get all current manifest entries */
+    err = state_get_all_files(state, &old_entries, &old_count);
+    if (err) {
+        goto cleanup;
+    }
+
+    /* 3. Load metadata and keymanager (needed for content hash computation) */
+    err = metadata_load_from_profiles(repo, new_profile_order, &metadata);
+    if (err && err->code != ERR_NOT_FOUND) {
+        goto cleanup;
+    }
+    if (err) {
+        error_free(err);
+        err = NULL;
+    }
+
+    err = config_load(NULL, &config);
+    if (err) {
+        goto cleanup;
+    }
+
+    err = keymanager_create(config, &km);
+    if (err) {
+        goto cleanup;
+    }
+
+    /* 4. Process each file in new manifest */
+    for (size_t i = 0; i < new_manifest->count; i++) {
+        file_entry_t *new_entry = &new_manifest->entries[i];
+
+        /* Check if exists in old state */
+        state_file_entry_t *old_entry = NULL;
+        err = state_get_file(state, new_entry->filesystem_path, &old_entry);
+
+        if (err && err->code == ERR_NOT_FOUND) {
+            /* New file (rare in reorder, but handle it) */
+            error_free(err);
+            err = NULL;
+
+            /* Add new entry with PENDING_DEPLOYMENT */
+            git_oid oid;
+            char oid_str[GIT_OID_HEXSZ + 1];
+            err = get_branch_head_oid(repo, new_entry->source_profile->name, &oid);
+            if (err) {
+                goto cleanup;
+            }
+            git_oid_tostr(oid_str, sizeof(oid_str), &oid);
+
+            err = sync_entry_to_state(repo, state, new_entry, oid_str, metadata,
+                                      MANIFEST_STATUS_PENDING_DEPLOYMENT, km);
+            if (err) {
+                goto cleanup;
+            }
+        } else if (err) {
+            /* Real error */
+            goto cleanup;
+        } else {
+            /* Existing entry - check if owner changed */
+            bool owner_changed = strcmp(old_entry->profile, new_entry->source_profile->name) != 0;
+
+            if (owner_changed) {
+                /* Owner changed - update entry to new owner */
+                git_oid oid;
+                char oid_str[GIT_OID_HEXSZ + 1];
+                err = get_branch_head_oid(repo, new_entry->source_profile->name, &oid);
+                if (err) {
+                    state_free_entry(old_entry);
+                    goto cleanup;
+                }
+                git_oid_tostr(oid_str, sizeof(oid_str), &oid);
+
+                /* Sync with new owner (status = PENDING_DEPLOYMENT) */
+                err = sync_entry_to_state(repo, state, new_entry, oid_str, metadata,
+                                          MANIFEST_STATUS_PENDING_DEPLOYMENT, km);
+                if (err) {
+                    state_free_entry(old_entry);
+                    goto cleanup;
+                }
+            }
+            /* else: owner unchanged, preserve existing entry status */
+
+            state_free_entry(old_entry);
+        }
+    }
+
+    /* 5. Check for files in old manifest but not in new (mark for removal) */
+    for (size_t i = 0; i < old_count; i++) {
+        state_file_entry_t *old_entry = &old_entries[i];
+
+        /* Check if still exists in new manifest */
+        file_entry_t *new_entry = find_file_in_manifest(new_manifest, old_entry->storage_path);
+
+        if (new_entry == NULL) {
+            /* File no longer in any profile - mark for removal */
+            err = state_update_entry_status(state, old_entry->filesystem_path,
+                                            MANIFEST_STATUS_PENDING_REMOVAL);
+            if (err) {
+                goto cleanup;
+            }
+        }
+    }
+
+cleanup:
+    if (km) {
+        keymanager_free(km);
+    }
+    if (config) {
+        config_free(config);
+    }
+    if (metadata) {
+        metadata_free(metadata);
+    }
+    state_free_all_files(old_entries, old_count);
+    if (new_manifest) {
+        manifest_free(new_manifest);
+    }
+
+    return err;
+}

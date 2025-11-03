@@ -306,4 +306,53 @@ error_t *manifest_rebuild(
     const string_array_t *enabled_profiles
 );
 
+/**
+ * Update manifest after profile precedence change
+ *
+ * Called when profiles are reordered. Intelligently updates ownership
+ * and status only for files that change owner, preserving DEPLOYED
+ * status for files whose ownership remains unchanged.
+ *
+ * Algorithm:
+ *   1. Build manifest from new profile order (precedence oracle)
+ *   2. Get all current manifest entries
+ *   3. For each file in new manifest:
+ *      - If not in old manifest: add with PENDING_DEPLOYMENT (rare)
+ *      - If owner changed: update source_profile + git_oid, mark PENDING_DEPLOYMENT
+ *      - If owner unchanged: skip (preserve existing status)
+ *   4. For files in old manifest but not new: mark PENDING_REMOVAL
+ *
+ * Key Benefit: Unlike manifest_rebuild(), this preserves DEPLOYED status
+ * for files whose ownership doesn't change, providing better UX when
+ * reordering profiles.
+ *
+ * Preconditions:
+ *   - state MUST have active transaction (via state_load_for_update)
+ *   - new_profile_order MUST be valid enabled profiles
+ *
+ * Postconditions:
+ *   - Files with changed ownership marked PENDING_DEPLOYMENT
+ *   - Files with unchanged ownership preserve existing status
+ *   - Orphaned files marked PENDING_REMOVAL
+ *   - Transaction remains open (caller commits)
+ *
+ * Error Conditions:
+ *   - ERR_GIT: Git operation failed
+ *   - ERR_CRYPTO: Encrypted file but key unavailable
+ *   - ERR_STATE: Database operation failed
+ *   - ERR_NOMEM: Memory allocation failed
+ *
+ * Performance: O(N*M) where N = files in manifest, M = enabled profiles
+ *
+ * @param repo Git repository
+ * @param state State handle (with active transaction)
+ * @param new_profile_order New profile order (determines precedence)
+ * @return Error or NULL on success
+ */
+error_t *manifest_update_for_precedence_change(
+    git_repository *repo,
+    state_t *state,
+    const string_array_t *new_profile_order
+);
+
 #endif /* DOTTA_MANIFEST_H */

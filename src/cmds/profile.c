@@ -1086,6 +1086,21 @@ static error_t *profile_reorder(
         goto cleanup;
     }
 
+    /* Update manifest to reflect new precedence order */
+    string_array_t *new_order = NULL;
+    err = state_get_profiles(state, &new_order);
+    if (err) {
+        err = error_wrap(err, "Failed to get new profile order");
+        goto cleanup;
+    }
+
+    err = manifest_update_for_precedence_change(repo, state, new_order);
+    string_array_free(new_order);
+    if (err) {
+        err = error_wrap(err, "Failed to update manifest with new precedence");
+        goto cleanup;
+    }
+
     /* Save state (releases lock automatically) */
     err = state_save(repo, state);
     if (err) {
@@ -1099,7 +1114,9 @@ static error_t *profile_reorder(
         output_success(out, "Reordered %zu profile%s",
                       opts->profile_count,
                       opts->profile_count == 1 ? "" : "s");
-        output_info(out, "Run 'dotta apply' to deploy with new profile order");
+        output_info(out, "Manifest updated to reflect new precedence");
+        output_info(out, "Run 'dotta status' to review changes");
+        output_info(out, "Run 'dotta apply' to deploy");
     }
 
 cleanup:

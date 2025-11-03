@@ -16,7 +16,9 @@
 #include "base/filesystem.h"
 #include "base/gitops.h"
 #include "core/ignore.h"
+#include "core/manifest.h"
 #include "core/metadata.h"
+#include "core/state.h"
 #include "crypto/keymanager.h"
 #include "crypto/policy.h"
 #include "infra/content.h"
@@ -459,13 +461,22 @@ typedef struct {
 
 /**
  * Create commit in worktree
+ *
+ * @param repo Repository
+ * @param wt Worktree handle
+ * @param opts Command options
+ * @param added_files Files that were added
+ * @param config Configuration
+ * @param out_commit_oid Output for commit OID (optional, can be NULL)
+ * @return Error or NULL on success
  */
 static error_t *create_commit(
     git_repository *repo,
     worktree_handle_t *wt,
     const cmd_add_options_t *opts,
     string_array_t *added_files,
-    const dotta_config_t *config
+    const dotta_config_t *config,
+    git_oid *out_commit_oid
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(wt);
@@ -556,7 +567,193 @@ static error_t *create_commit(
         return error_wrap(derr, "Failed to create commit");
     }
 
+    /* Copy commit OID to output if requested */
+    if (out_commit_oid) {
+        git_oid_cpy(out_commit_oid, &commit_oid);
+    }
+
     return NULL;
+}
+
+/**
+ * Update manifest after successful add operation
+ *
+ * Called after Git commit succeeds. Updates manifest for all added files
+ * if the profile is enabled. This is part of the Virtual Working Directory
+ * integration - maintaining the manifest as a staging area.
+ *
+ * Algorithm:
+ *   1. Check if profile is enabled (read-only check)
+ *   2. If not enabled: return NULL (skip manifest update)
+ *   3. If enabled:
+ *      a. Open transaction (state_load_for_update)
+ *      b. Get enabled profiles list
+ *      c. For each added file:
+ *         - Convert filesystem path → storage path
+ *         - Call manifest_sync_file() with DEPLOYED status
+ *      d. Commit transaction (state_save)
+ *
+ * Status Semantics:
+ *   Files are marked DEPLOYED (not PENDING_DEPLOYMENT) because ADD
+ *   captures files FROM the filesystem. They're already at their target
+ *   locations, so they're "deployed" by definition.
+ *
+ * Error Handling:
+ *   - State doesn't exist → treat as "not enabled" (return NULL)
+ *   - Profile not enabled → return NULL (success, no update)
+ *   - Manifest sync fails → rollback, return error
+ *
+ * Non-Fatal Integration:
+ *   Caller should treat manifest update failure as non-fatal warning.
+ *   Git commit already succeeded; user can repair with `profile enable`.
+ *
+ * Performance Note:
+ *   Each file calls manifest_sync_file() which rebuilds precedence manifest.
+ *   For bulk adds (>50 files), this is O(N*M) where N=files, M=profile_files.
+ *   TODO: Optimize for bulk operations by pre-building manifest once.
+ *
+ * @param repo Git repository
+ * @param profile_name Profile that files were added to
+ * @param commit_oid Commit OID from Git commit (for git_oid field)
+ * @param added_files Filesystem paths that were added
+ * @param out Output context for verbose logging (can be NULL)
+ * @param out_updated Output flag: true if manifest was updated (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *update_manifest_after_add(
+    git_repository *repo,
+    const char *profile_name,
+    const git_oid *commit_oid,
+    const string_array_t *added_files,
+    output_ctx_t *out,
+    bool *out_updated
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(profile_name);
+    CHECK_NULL(commit_oid);
+    CHECK_NULL(added_files);
+    CHECK_NULL(out_updated);
+
+    /* Unused for now - reserved for future verbose logging */
+    (void)out;
+
+    error_t *err = NULL;
+    state_t *state = NULL;
+    string_array_t *enabled_profiles = NULL;
+    char git_oid_str[GIT_OID_HEXSZ + 1];
+
+    /* Initialize output */
+    *out_updated = false;
+
+    /* Convert commit OID to hex string once */
+    git_oid_tostr(git_oid_str, sizeof(git_oid_str), commit_oid);
+
+    /* STEP 1: Check if profile is enabled (read-only) */
+    err = state_load(repo, &state);
+    if (err) {
+        if (err->code == ERR_NOT_FOUND) {
+            /* State file doesn't exist yet - profile can't be enabled */
+            error_free(err);
+            return NULL;
+        }
+        return error_wrap(err, "Failed to load state for manifest check");
+    }
+
+    err = state_get_profiles(state, &enabled_profiles);
+    if (err) {
+        state_free(state);
+        return error_wrap(err, "Failed to get enabled profiles");
+    }
+
+    /* Check if this profile is enabled */
+    bool is_enabled = false;
+    for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
+        if (strcmp(string_array_get(enabled_profiles, i), profile_name) == 0) {
+            is_enabled = true;
+            break;
+        }
+    }
+
+    /* Free read-only state */
+    state_free(state);
+    state = NULL;
+
+    if (!is_enabled) {
+        /* Profile not enabled - skip manifest update (this is success) */
+        string_array_free(enabled_profiles);
+        return NULL;
+    }
+
+    /* STEP 2: Profile is enabled - update manifest */
+
+    /* Open transaction */
+    err = state_load_for_update(repo, &state);
+    if (err) {
+        string_array_free(enabled_profiles);
+        return error_wrap(err, "Failed to open state transaction for manifest update");
+    }
+
+    /* STEP 3: Sync each file to manifest */
+    for (size_t i = 0; i < string_array_size(added_files); i++) {
+        const char *filesystem_path = string_array_get(added_files, i);
+
+        /* Convert filesystem path to storage path */
+        char *storage_path = NULL;
+        path_prefix_t prefix;
+        err = path_to_storage(filesystem_path, &storage_path, &prefix);
+        if (err) {
+            err = error_wrap(err, "Failed to convert path '%s' for manifest",
+                           filesystem_path);
+            goto cleanup;
+        }
+
+        /* Sync file to manifest with DEPLOYED status
+         *
+         * manifest_sync_file() handles precedence automatically:
+         * - Builds manifest from all enabled profiles
+         * - Checks if this profile should own the file
+         * - Syncs to state if precedence is sufficient
+         * - Skips silently if lower precedence
+         */
+        err = manifest_sync_file(
+            repo,
+            state,
+            profile_name,
+            storage_path,
+            filesystem_path,
+            git_oid_str,
+            enabled_profiles,
+            MANIFEST_STATUS_DEPLOYED  /* Files captured from filesystem */
+        );
+
+        free(storage_path);
+
+        if (err) {
+            err = error_wrap(err, "Failed to sync file '%s' to manifest",
+                           filesystem_path);
+            goto cleanup;
+        }
+    }
+
+    /* STEP 4: Commit transaction */
+    err = state_save(repo, state);
+    if (err) {
+        err = error_wrap(err, "Failed to save manifest updates");
+        goto cleanup;
+    }
+
+    /* Success */
+    *out_updated = true;
+
+cleanup:
+    if (enabled_profiles) {
+        string_array_free(enabled_profiles);
+    }
+    if (state) {
+        state_free(state);  /* Rolls back if err != NULL */
+    }
+
+    return err;
 }
 
 /**
@@ -1090,9 +1287,37 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     }
 
     /* Create commit */
-    err = create_commit(repo, wt, opts, all_files, config);
+    git_oid commit_oid;
+    err = create_commit(repo, wt, opts, all_files, config, &commit_oid);
     if (err) {
         goto cleanup;
+    }
+
+    /* Update manifest if profile enabled (VWD integration)
+     *
+     * This maintains the manifest as a Virtual Working Directory - a staging
+     * area between Git and the filesystem. Files are marked DEPLOYED because
+     * ADD captures them FROM the filesystem (already at target locations).
+     *
+     * Non-fatal: If manifest update fails, Git commit still succeeded.
+     * User can repair manifest by running 'dotta profile enable <profile>'.
+     */
+    bool manifest_updated = false;
+    error_t *manifest_err = update_manifest_after_add(
+        repo, opts->profile, &commit_oid, all_files, out, &manifest_updated
+    );
+
+    if (manifest_err) {
+        /* Non-fatal: commit succeeded but manifest update failed */
+        if (out) {
+            output_warning(out, "Failed to update manifest: %s",
+                          error_message(manifest_err));
+            output_info(out, "Files committed to Git successfully");
+            output_hint(out, "Run 'dotta profile enable %s' to sync manifest",
+                        opts->profile);
+        }
+        error_free(manifest_err);
+        /* Continue to cleanup and show success */
     }
 
     /* Cleanup worktree before post-processing */
@@ -1132,7 +1357,18 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         }
 
         output_newline(out);
-        output_hint(out, "Run 'dotta apply -p %s' to deploy files to filesystem", opts->profile);
+
+        /* Manifest status feedback (VWD integration) */
+        if (manifest_updated) {
+            output_info(out, "Manifest updated (%zu file%s marked as DEPLOYED)",
+                       added_count, added_count == 1 ? "" : "s");
+            output_hint(out, "Files captured from filesystem (already deployed)");
+            output_hint(out, "Run 'dotta status' to verify");
+        } else {
+            output_info(out, "Profile not enabled - manifest not updated");
+            output_hint(out, "Run 'dotta profile enable %s' to activate", opts->profile);
+            output_hint(out, "Run 'dotta apply -p %s' to deploy files", opts->profile);
+        }
     }
 
 cleanup:

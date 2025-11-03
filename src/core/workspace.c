@@ -274,6 +274,7 @@ error_t *check_item_metadata_divergence(
  * @param state Where the item exists (deployed/undeployed/etc.)
  * @param divergence What's wrong with it (bit flags, can combine)
  * @param item_kind FILE or DIRECTORY (explicit type)
+ * @param manifest_status Manifest status from VWD (pending/deployed/pending_removal)
  * @param in_profile Exists in profile branch
  * @param in_state Exists in deployment state (must be false for directories)
  * @param on_filesystem Exists on actual filesystem
@@ -290,6 +291,7 @@ static error_t *workspace_add_diverged(
     workspace_state_t state,
     divergence_type_t divergence,
     workspace_item_kind_t item_kind,
+    manifest_status_t manifest_status,
     bool in_profile,
     bool in_state,
     bool on_filesystem,
@@ -333,6 +335,7 @@ static error_t *workspace_add_diverged(
     entry->state = state;
     entry->divergence = divergence;
     entry->item_kind = item_kind;
+    entry->manifest_status = manifest_status;
     entry->in_profile = in_profile;
     entry->in_state = in_state;
     entry->on_filesystem = on_filesystem;
@@ -454,11 +457,25 @@ static error_t *analyze_file_divergence(
     workspace_state_t state = WORKSPACE_STATE_DEPLOYED;
 
     /* PHASE 1: Filesystem content analysis (if file exists)
-     * Compare content for ALL files on filesystem, regardless of deployment state.
-     * This catches conflicts for both deployed AND undeployed files.
+     * Hash-based comparison for fast divergence detection.
+     *
+     * VWD Architecture: Instead of loading full content from Git and comparing buffers,
+     * we compare content hashes. The manifest table stores content_hash (computed during
+     * profile enable), and we compute the hash from the filesystem file.
+     *
+     * This provides:
+     * - O(1) comparison (hash comparison vs buffer comparison)
+     * - No Git tree walking (manifest_entry->entry is NULL)
+     * - Transparent decryption (content_hash_file handles encrypted files)
      */
     if (on_filesystem) {
-        /* Get metadata for decryption policy and metadata checking */
+        /* Capture stat early for metadata checking and permission analysis */
+        struct stat file_stat;
+        if (lstat(fs_path, &file_stat) != 0) {
+            return ERROR(ERR_FS, "Failed to stat '%s': %s", fs_path, strerror(errno));
+        }
+
+        /* Get metadata for hash computation (needed for decryption) and metadata checking */
         const metadata_t *metadata = ws_get_metadata(ws, manifest_entry->source_profile->name);
         if (!metadata) {
             return ERROR(ERR_INTERNAL,
@@ -466,69 +483,36 @@ static error_t *analyze_file_divergence(
                 manifest_entry->source_profile->name);
         }
 
-        /* Get plaintext content (cached, automatic decryption) */
-        const buffer_t *content = NULL;
-        error_t *err = content_cache_get_from_tree_entry(
-            ws->content_cache,
-            manifest_entry->entry,
-            manifest_entry->storage_path,
-            manifest_entry->source_profile->name,
-            metadata,
-            &content
-        );
+        /* Hash-based content comparison (only if we have state entry with hash) */
+        if (state_entry && state_entry->content_hash) {
+            /* Compute hash from filesystem file (with transparent decryption) */
+            char *fs_content_hash = NULL;
+            error_t *err = content_hash_file(
+                fs_path,
+                storage_path,
+                profile,
+                metadata,
+                ws->keymanager,
+                &fs_content_hash
+            );
 
-        if (err) {
-            return error_wrap(err, "Failed to get content for '%s'", fs_path);
-        }
+            if (err) {
+                return error_wrap(err, "Failed to compute content hash for '%s'", fs_path);
+            }
 
-        /* Compare buffer to disk - capture stat for reuse in metadata check */
-        git_filemode_t mode = git_tree_entry_filemode(manifest_entry->entry);
-        compare_result_t cmp_result;
-        struct stat file_stat;  /* Captured from compare, reused for metadata */
-        err = compare_buffer_to_disk(content, fs_path, mode, NULL, &cmp_result, &file_stat);
-
-        if (err) {
-            return error_wrap(err, "Failed to compare '%s'", fs_path);
-        }
-
-        /* Don't free content - cache owns it! */
-
-        /* Accumulate divergence from content comparison */
-        switch (cmp_result) {
-            case CMP_EQUAL:
-                /* Content and type match - no divergence from content comparison.
-                 * Permission checking happens below in the metadata section. */
-                break;
-
-            case CMP_DIFFERENT:
+            /* Compare hashes */
+            if (strcmp(state_entry->content_hash, fs_content_hash) != 0) {
                 /* Content differs - accumulate CONTENT flag */
                 divergence |= DIVERGENCE_CONTENT;
-                break;
+            }
 
-            case CMP_TYPE_DIFF:
-                /* Type differs (file vs symlink vs dir) - block immediately */
-                /* Early return for TYPE_DIFF (critical blocking case) */
-                return workspace_add_diverged(ws, fs_path, storage_path, profile,
-                                             NULL, manifest_entry->all_profiles,
-                                             WORKSPACE_STATE_DEPLOYED,
-                                             DIVERGENCE_TYPE,
-                                             WORKSPACE_ITEM_FILE,
-                                             in_profile, in_state,
-                                             on_filesystem,
-                                             true, false);
-
-            case CMP_MISSING:
-                /* Shouldn't happen (we checked on_filesystem), but be defensive */
-                /* Early return for MISSING (defensive case) */
-                return workspace_add_diverged(ws, fs_path, storage_path, profile,
-                                             NULL, manifest_entry->all_profiles,
-                                             WORKSPACE_STATE_DELETED,
-                                             DIVERGENCE_NONE,
-                                             WORKSPACE_ITEM_FILE,
-                                             in_profile, in_state,
-                                             on_filesystem,
-                                             true, false);
+            free(fs_content_hash);
         }
+        /* If no state_entry or no content_hash: skip content comparison.
+         * This can happen for:
+         * - New files being added (not in state yet)
+         * - Corrupted state (missing hash)
+         * In these cases, file will show as UNDEPLOYED or other state, which is correct. */
 
         /* PERMISSION CHECKING: Two-phase approach
          *
@@ -546,17 +530,19 @@ static error_t *analyze_file_divergence(
          * divergence twice is idempotent and harmless.
          */
 
-        /* PHASE A: Check git filemode (executable bit) */
-        {
-            git_filemode_t expected_mode = git_tree_entry_filemode(manifest_entry->entry);
-            bool expect_exec = (expected_mode == GIT_FILEMODE_BLOB_EXECUTABLE);
+        /* PHASE A: Check filemode (executable bit) from state entry */
+        if (state_entry) {
+            /* VWD: Get executable bit from state entry type instead of Git tree entry.
+             * state_entry->type is STATE_FILE_EXECUTABLE or STATE_FILE_REGULAR. */
+            bool expect_exec = (state_entry->type == STATE_FILE_EXECUTABLE);
             bool is_exec = fs_stat_is_executable(&file_stat);
 
             if (expect_exec != is_exec) {
-                /* Executable bit differs between git and filesystem */
+                /* Executable bit differs between manifest and filesystem */
                 divergence |= DIVERGENCE_MODE;
             }
         }
+        /* If no state_entry: skip exec bit check (file not in manifest, will show as UNDEPLOYED) */
 
         /* PHASE B: Check full metadata (mode and ownership) if available */
         if (metadata) {
@@ -602,20 +588,50 @@ static error_t *analyze_file_divergence(
     }
 
     /* PHASE 2: State-based classification
-     * Determine final state based on deployment and filesystem status.
+     * VWD: Determine state based on manifest_status and filesystem reality.
+     *
+     * The manifest status reflects staging intent:
+     * - PENDING_DEPLOYMENT: File staged for deployment (not deployed yet)
+     * - DEPLOYED: File deployed to filesystem
+     * - PENDING_REMOVAL: File staged for removal
+     *
+     * We combine this with filesystem reality to determine workspace state.
      */
-    if (!in_state) {
-        /* File not deployed yet */
+    manifest_status_t manifest_status = MANIFEST_STATUS_PENDING_DEPLOYMENT;  /* Default for files not in state */
+
+    if (!in_state || !state_entry) {
+        /* File not in manifest table yet (shouldn't happen with VWD, but be defensive) */
         state = WORKSPACE_STATE_UNDEPLOYED;
-        /* Keep accumulated divergence flags (may have CONTENT from conflict check) */
-    } else if (!on_filesystem) {
-        /* File was deployed but now missing */
-        state = WORKSPACE_STATE_DELETED;
-        divergence = DIVERGENCE_NONE;  /* No divergence for deleted files */
-    } else {
-        /* File is deployed and on filesystem */
-        state = WORKSPACE_STATE_DEPLOYED;
         /* Keep accumulated divergence flags */
+    } else {
+        /* Get manifest status from state entry */
+        manifest_status = state_entry->status;
+
+        switch (manifest_status) {
+            case MANIFEST_STATUS_PENDING_DEPLOYMENT:
+                /* File staged for deployment but not deployed yet */
+                state = WORKSPACE_STATE_UNDEPLOYED;
+                /* Keep accumulated divergence flags (may have CONTENT from conflict check) */
+                break;
+
+            case MANIFEST_STATUS_DEPLOYED:
+                /* File was deployed - check if still on filesystem */
+                if (!on_filesystem) {
+                    state = WORKSPACE_STATE_DELETED;
+                    divergence = DIVERGENCE_NONE;  /* No divergence for deleted files */
+                } else {
+                    state = WORKSPACE_STATE_DEPLOYED;
+                    /* Keep accumulated divergence flags */
+                }
+                break;
+
+            case MANIFEST_STATUS_PENDING_REMOVAL:
+                /* File staged for removal - will be deleted on next apply.
+                 * Technically still deployed until apply runs.
+                 * Note: This case is handled separately by analyze_pending_removals(). */
+                state = WORKSPACE_STATE_DEPLOYED;
+                break;
+        }
     }
 
     /* PHASE 3: Profile ownership change detection
@@ -643,6 +659,7 @@ static error_t *analyze_file_divergence(
                                               old_profile, manifest_entry->all_profiles,
                                               state, divergence,
                                               WORKSPACE_ITEM_FILE,
+                                              manifest_status,
                                               in_profile, in_state,
                                               on_filesystem,
                                               true, profile_changed);
@@ -720,6 +737,7 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
                 WORKSPACE_STATE_ORPHANED,  /* State: in deployment state, not in profile */
                 DIVERGENCE_NONE,           /* Divergence: none */
                 WORKSPACE_ITEM_FILE,
+                state_entry->status,       /* Preserve manifest status from state */
                 false,            /* not in profile */
                 true,             /* in state (was deployed) */
                 on_filesystem,
@@ -802,6 +820,7 @@ static error_t *analyze_orphaned_directories(workspace_t *ws) {
                 WORKSPACE_STATE_ORPHANED,  /* State: in state, not in profile */
                 DIVERGENCE_NONE,           /* Divergence: none */
                 WORKSPACE_ITEM_DIRECTORY,
+                MANIFEST_STATUS_DEPLOYED,  /* N/A for directories (not in manifest table) */
                 false,            /* not in profile */
                 false,            /* NOT in state (semantic: directories never deployed) */
                 on_filesystem,
@@ -1039,6 +1058,7 @@ static error_t *scan_directory_for_untracked(
                     WORKSPACE_STATE_UNTRACKED,  /* State: on filesystem in tracked dir */
                     DIVERGENCE_NONE,            /* Divergence: none */
                     WORKSPACE_ITEM_FILE,
+                    MANIFEST_STATUS_PENDING_DEPLOYMENT,  /* Not in manifest yet */
                     false,  /* not in profile */
                     false,  /* not in state */
                     true,   /* on filesystem */
@@ -1205,6 +1225,7 @@ static bool check_directory_callback(const char *key, void *value, void *user_da
             WORKSPACE_STATE_DELETED,  /* State: was in profile, removed from filesystem */
             DIVERGENCE_NONE,          /* Divergence: none (file is gone) */
             WORKSPACE_ITEM_DIRECTORY,
+            MANIFEST_STATUS_DEPLOYED,  /* N/A for directories (not in manifest table) */
             true,   /* in_profile */
             false,  /* in_state */
             false,  /* on_filesystem (deleted) */
@@ -1270,6 +1291,7 @@ static bool check_directory_callback(const char *key, void *value, void *user_da
             WORKSPACE_STATE_DEPLOYED,  /* State: directory exists as expected */
             divergence,                /* Divergence: mode/ownership flags */
             WORKSPACE_ITEM_DIRECTORY,
+            MANIFEST_STATUS_DEPLOYED,  /* N/A for directories (not in manifest table) */
             true,   /* in_profile */
             false,  /* in_state */
             true,   /* on_filesystem */
@@ -1463,11 +1485,14 @@ static error_t *analyze_encryption_policy_mismatch(
                 /* File has NO other divergence - encryption policy is the only issue.
                  * Determine state: if in state, it's deployed; otherwise undeployed. */
                 bool in_state = false;
+                manifest_status_t status = MANIFEST_STATUS_PENDING_DEPLOYMENT;  /* Default for files not in state */
+
                 if (ws->state) {
                     state_file_entry_t *state_entry = NULL;
                     error_t *state_err = state_get_file(ws->state, manifest_entry->filesystem_path, &state_entry);
                     if (state_err == NULL && state_entry) {
                         in_state = true;
+                        status = state_entry->status;  /* Preserve status from state */
                         state_free_entry(state_entry);
                     }
                     error_free(state_err);
@@ -1485,6 +1510,7 @@ static error_t *analyze_encryption_policy_mismatch(
                     item_state,            /* State: deployed or undeployed */
                     DIVERGENCE_ENCRYPTION, /* Divergence: encryption policy violated */
                     WORKSPACE_ITEM_FILE,
+                    status,                /* Manifest status from state or default */
                     true,  /* in profile */
                     in_state,
                     false, /* on_filesystem (unknown, encryption check is in-repo only) */
@@ -1499,6 +1525,118 @@ static error_t *analyze_encryption_policy_mismatch(
         }
     }
 
+    return NULL;
+}
+
+/**
+ * Build in-memory manifest from state manifest table
+ *
+ * Reads manifest entries from state DB and constructs manifest_t structure.
+ * Does NOT load git_tree_entry* pointers (set to NULL). Tree entries are
+ * lazy-loaded only when needed for content display (diffs, conflict resolution).
+ *
+ * This is the core of the Virtual Working Directory architecture - we read
+ * the staging area (manifest table) instead of walking Git trees. This makes
+ * status operations O(M) where M = entries in manifest, not O(N) where N =
+ * all files across all enabled profiles.
+ *
+ * Files from profiles not in the workspace scope are filtered out with a warning.
+ * This can happen if a profile is disabled but manifest still has orphaned entries.
+ *
+ * Performance: O(M) where M = entries in manifest table (typically much smaller than Git)
+ *
+ * @param ws Workspace (must not be NULL, state must be loaded)
+ * @return Error or NULL on success
+ */
+static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
+    CHECK_NULL(ws);
+    CHECK_NULL(ws->state);
+    CHECK_NULL(ws->profile_index);
+
+    error_t *err = NULL;
+    state_file_entry_t *state_entries = NULL;
+    size_t state_count = 0;
+
+    /* Read all entries from manifest table */
+    err = state_get_all_files(ws->state, &state_entries, &state_count);
+    if (err) {
+        return error_wrap(err, "Failed to read manifest from state");
+    }
+
+    /* Allocate manifest structure */
+    ws->manifest = calloc(1, sizeof(manifest_t));
+    if (!ws->manifest) {
+        state_free_all_files(state_entries, state_count);
+        return ERROR(ERR_MEMORY, "Failed to allocate manifest");
+    }
+
+    /* Allocate entries array (max size = state_count, actual may be smaller due to filtering) */
+    ws->manifest->entries = calloc(state_count, sizeof(file_entry_t));
+    if (!ws->manifest->entries) {
+        free(ws->manifest);
+        ws->manifest = NULL;
+        state_free_all_files(state_entries, state_count);
+        return ERROR(ERR_MEMORY, "Failed to allocate manifest entries");
+    }
+
+    size_t manifest_idx = 0;
+
+    /* Build manifest entries from state */
+    for (size_t i = 0; i < state_count; i++) {
+        const state_file_entry_t *state_entry = &state_entries[i];
+        file_entry_t *entry = &ws->manifest->entries[manifest_idx];
+
+        /* Find profile in workspace's profile list (O(1) hashmap lookup) */
+        entry->source_profile = hashmap_get(ws->profile_index, state_entry->profile);
+
+        if (!entry->source_profile) {
+            /* Profile not in workspace scope - this can happen if:
+             * 1. Profile was disabled but manifest has orphaned entries
+             * 2. Profile branch was deleted outside dotta
+             *
+             * Skip with warning. Orphan detection will handle cleanup. */
+            fprintf(stderr,
+                "warning: manifest entry '%s' references profile '%s' not in workspace - "
+                "run 'dotta apply' to clean up orphans\n",
+                state_entry->filesystem_path,
+                state_entry->profile);
+            continue;
+        }
+
+        /* Copy paths (owned by manifest) */
+        entry->storage_path = strdup(state_entry->storage_path);
+        entry->filesystem_path = strdup(state_entry->filesystem_path);
+
+        if (!entry->storage_path || !entry->filesystem_path) {
+            /* Cleanup on allocation failure */
+            free(entry->storage_path);
+            free(entry->filesystem_path);
+
+            /* Free previously allocated entries */
+            for (size_t j = 0; j < manifest_idx; j++) {
+                free(ws->manifest->entries[j].storage_path);
+                free(ws->manifest->entries[j].filesystem_path);
+            }
+            free(ws->manifest->entries);
+            free(ws->manifest);
+            ws->manifest = NULL;
+            state_free_all_files(state_entries, state_count);
+            return ERROR(ERR_MEMORY, "Failed to allocate manifest entry paths");
+        }
+
+        /* Tree entry is NULL (lazy-loaded when needed for content display) */
+        entry->entry = NULL;
+
+        /* all_profiles not populated (not needed for hash-based divergence detection) */
+        entry->all_profiles = NULL;
+
+        manifest_idx++;
+    }
+
+    /* Set final count (may be less than state_count due to filtering) */
+    ws->manifest->count = manifest_idx;
+
+    state_free_all_files(state_entries, state_count);
     return NULL;
 }
 
@@ -1662,11 +1800,21 @@ error_t *workspace_load(
         }
     }
 
-    /* Load profile state (manifest) */
-    err = profile_build_manifest(repo, profiles, &ws->manifest);
+    /* Load deployment state (must load before building manifest from it) */
+    err = state_load(repo, &ws->state);
     if (err) {
         workspace_free(ws);
-        return error_wrap(err, "Failed to build manifest");
+        return error_wrap(err, "Failed to load state");
+    }
+
+    /* Build manifest from state (Virtual Working Directory architecture)
+     * This replaces the old profile_build_manifest() which walked Git trees.
+     * Now we read from the manifest table (staging area) for O(M) performance
+     * where M = entries in manifest, not O(N) where N = all files in Git. */
+    err = workspace_build_manifest_from_state(ws);
+    if (err) {
+        workspace_free(ws);
+        return error_wrap(err, "Failed to build manifest from state");
     }
 
     /* Build manifest index for O(1) lookups */
@@ -1674,13 +1822,6 @@ error_t *workspace_load(
     if (err) {
         workspace_free(ws);
         return error_wrap(err, "Failed to build manifest index");
-    }
-
-    /* Load deployment state */
-    err = state_load(repo, &ws->state);
-    if (err) {
-        workspace_free(ws);
-        return error_wrap(err, "Failed to load state");
     }
 
     /* Execute analyses based on resolved_opts flags. Each analysis is

@@ -519,6 +519,188 @@ error_t *content_store_to_blob(
     return NULL;
 }
 
+/**
+ * Hash buffer content using Blake2b and return hex string
+ *
+ * Internal helper for content hashing.
+ *
+ * @param content Buffer to hash (must not be NULL)
+ * @param out_hash Output hex string (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+static error_t *hash_buffer_to_hex(const buffer_t *content, char **out_hash) {
+    CHECK_NULL(content);
+    CHECK_NULL(out_hash);
+
+    /* Blake2b produces 32 bytes, which becomes 64 hex chars + null terminator */
+    uint8_t hash_bytes[32];
+    char *hex = NULL;
+
+    /* Compute Blake2b hash
+     * Context: "dottahsh" (8 bytes) for domain separation
+     * Key: NULL (no keyed hashing needed for content addressing)
+     */
+    int result = hydro_hash_hash(
+        hash_bytes,
+        32,
+        buffer_data(content),
+        buffer_size(content),
+        "dottahsh",
+        NULL
+    );
+
+    if (result != 0) {
+        return ERROR(ERR_CRYPTO, "Failed to compute Blake2b hash");
+    }
+
+    /* Convert to hex string */
+    hex = malloc(65);  /* 64 hex chars + null terminator */
+    if (!hex) {
+        hydro_memzero(hash_bytes, sizeof(hash_bytes));
+        return ERROR(ERR_MEMORY, "Failed to allocate hex string");
+    }
+
+    for (size_t i = 0; i < 32; i++) {
+        snprintf(hex + (i * 2), 3, "%02x", hash_bytes[i]);
+    }
+    hex[64] = '\0';
+
+    /* Clear sensitive hash bytes */
+    hydro_memzero(hash_bytes, sizeof(hash_bytes));
+
+    *out_hash = hex;
+    return NULL;
+}
+
+error_t *content_hash_file(
+    const char *filesystem_path,
+    const char *storage_path,
+    const char *profile_name,
+    const metadata_t *metadata,
+    keymanager_t *km,
+    char **out_hash
+) {
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(profile_name);
+    CHECK_NULL(metadata);
+    CHECK_NULL(out_hash);
+
+    error_t *err = NULL;
+    buffer_t *content = NULL;
+
+    /* Read file from filesystem
+     * We need to handle encryption transparently, so we:
+     * 1. Read the raw file
+     * 2. Check magic header for encryption
+     * 3. Decrypt if needed
+     * 4. Hash the plaintext
+     *
+     * For simplicity, we use the same pattern as content_get_from_tree_entry:
+     * - Load file into buffer
+     * - Detect encryption from magic
+     * - Decrypt if needed
+     */
+
+    /* Read file into buffer */
+    err = fs_read_file(filesystem_path, &content);
+    if (err) {
+        return error_wrap(err, "Failed to read file for hashing");
+    }
+
+    /* Check if encrypted */
+    bool is_encrypted = encryption_is_encrypted(
+        (const unsigned char *)buffer_data(content),
+        buffer_size(content)
+    );
+
+    if (is_encrypted) {
+        /* Encrypted - need to decrypt before hashing */
+        if (!km) {
+            buffer_free(content);
+            return ERROR(ERR_CRYPTO,
+                "File '%s' is encrypted but no key manager provided",
+                filesystem_path);
+        }
+
+        /* Get profile key */
+        uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
+        err = keymanager_get_profile_key(km, profile_name, profile_key);
+        if (err) {
+            buffer_free(content);
+            return error_wrap(err, "Failed to get profile key");
+        }
+
+        /* Decrypt */
+        buffer_t *plaintext = NULL;
+        err = encryption_decrypt(
+            (const unsigned char *)buffer_data(content),
+            buffer_size(content),
+            profile_key,
+            storage_path,
+            &plaintext
+        );
+
+        /* Clear profile key immediately */
+        hydro_memzero(profile_key, sizeof(profile_key));
+
+        buffer_free(content);
+        content = NULL;
+
+        if (err) {
+            return error_wrap(err, "Failed to decrypt file for hashing");
+        }
+
+        content = plaintext;
+    }
+
+    /* Hash the plaintext content */
+    err = hash_buffer_to_hex(content, out_hash);
+    buffer_free_secure(content);
+
+    return err;
+}
+
+error_t *content_hash_from_tree_entry(
+    git_repository *repo,
+    const git_tree_entry *entry,
+    const char *storage_path,
+    const char *profile_name,
+    const metadata_t *metadata,
+    keymanager_t *km,
+    char **out_hash
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(entry);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(profile_name);
+    CHECK_NULL(metadata);
+    CHECK_NULL(out_hash);
+
+    error_t *err = NULL;
+    buffer_t *content = NULL;
+
+    /* Get plaintext content (handles decryption transparently) */
+    err = content_get_from_tree_entry(
+        repo,
+        entry,
+        storage_path,
+        profile_name,
+        metadata,
+        km,
+        &content
+    );
+    if (err) {
+        return error_wrap(err, "Failed to get content for hashing");
+    }
+
+    /* Hash the plaintext content */
+    err = hash_buffer_to_hex(content, out_hash);
+    buffer_free_secure(content);
+
+    return err;
+}
+
 error_t *content_store_file_to_worktree(
     const char *filesystem_path,
     const char *worktree_path,

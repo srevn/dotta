@@ -633,8 +633,11 @@ static error_t *apply_update_and_save_state(
         char hash_str[GIT_OID_HEXSZ + 1];
         git_oid_tostr(hash_str, sizeof(hash_str), oid);
 
-        /* Look up mode from metadata (if available) */
+        /* Look up metadata (mode, owner, group, encrypted) */
         const char *mode_str = NULL;
+        const char *owner_str = NULL;
+        const char *group_str = NULL;
+        bool encrypted = false;
         char mode_buf[5];  /* Stack buffer for "0777\0" (max 5 bytes) */
 
         if (metadata) {
@@ -647,6 +650,9 @@ static error_t *apply_update_and_save_state(
                     /* Format mode directly into stack buffer (no heap allocation) */
                     snprintf(mode_buf, sizeof(mode_buf), "%04o", (unsigned int)(item->mode & 0777));
                     mode_str = mode_buf;
+                    owner_str = item->owner;  /* NULL for home/ files */
+                    group_str = item->group;  /* NULL for home/ files */
+                    encrypted = item->file.encrypted;
                 }
                 /* If it's a directory entry, skip (shouldn't happen for files in manifest) */
             } else if (meta_err) {
@@ -655,15 +661,20 @@ static error_t *apply_update_and_save_state(
             }
         }
 
-        /* Create state entry */
+        /* Create state entry with full metadata */
         state_file_entry_t *state_entry = NULL;
         err = state_create_entry(
             entry->storage_path,
             entry->filesystem_path,
             entry->source_profile->name,
             type,
-            hash_str,  /* hash computed from blob OID */
-            mode_str,  /* mode from metadata (may be NULL) */
+            MANIFEST_STATUS_DEPLOYED,  /* Status: deployed by apply */
+            hash_str,                  /* git_oid: blob OID (transitional) */
+            hash_str,                  /* content_hash: same as git_oid for now */
+            mode_str,                  /* mode from metadata (may be NULL) */
+            owner_str,                 /* owner from metadata (NULL for home/) */
+            group_str,                 /* group from metadata (NULL for home/) */
+            encrypted,                 /* encrypted flag from metadata */
             &state_entry
         );
 

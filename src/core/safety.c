@@ -835,7 +835,7 @@ error_t *safety_check_removal(
         error_t *check_err = NULL;
         bool fast_path_succeeded = try_fast_path_check(
             repo, fs_path, storage_path, source_profile,
-            state_entry->hash,
+            state_entry->content_hash,
             resolved_metadata,   /* ← Use resolved metadata (enabled OR loaded on-demand) */
             keymanager,          /* Pass keymanager for decryption */
             cache,               /* Pass cache for performance */

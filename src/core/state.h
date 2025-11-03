@@ -44,15 +44,51 @@ typedef enum {
 } state_file_type_t;
 
 /**
- * State file entry
+ * Manifest status - lifecycle tracking for virtual working directory
+ */
+typedef enum {
+    MANIFEST_STATUS_PENDING_DEPLOYMENT,  /* File staged for deployment */
+    MANIFEST_STATUS_DEPLOYED,            /* File deployed to filesystem */
+    MANIFEST_STATUS_PENDING_REMOVAL      /* File staged for removal */
+} manifest_status_t;
+
+/**
+ * State file entry (virtual manifest entry)
+ *
+ * Represents the virtual working directory - the staged deployment plan
+ * that sits between Git (authoritative source) and filesystem (reality).
+ *
+ * BREAKING CHANGE from previous API:
+ * - Added 'status' field for lifecycle tracking
+ * - Added 'git_oid' for Git commit reference
+ * - Split 'hash' → 'content_hash' (separate from git_oid)
+ * - Added 'owner'/'group' for root/ files
+ * - Added 'encrypted' flag
+ * - Added 'staged_at'/'deployed_at' timestamps
  */
 typedef struct {
-    char *storage_path;      /* Path in profile (home/.bashrc) */
-    char *filesystem_path;   /* Deployed path (/home/user/.bashrc) */
-    char *profile;           /* Source profile name */
-    state_file_type_t type;  /* File type */
-    char *hash;              /* Content hash (sha256:...) */
-    char *mode;              /* Permission mode (e.g., "0644") */
+    /* Paths */
+    char *storage_path;         /* Path in profile (home/.bashrc) */
+    char *filesystem_path;      /* Deployed path (/home/user/.bashrc) */
+    char *profile;              /* Source profile name */
+
+    /* Type and status */
+    state_file_type_t type;     /* File type */
+    manifest_status_t status;   /* Lifecycle status */
+
+    /* Git tracking */
+    char *git_oid;              /* Git commit reference (40-char hex) */
+    char *content_hash;         /* Blake2b content hash for comparison */
+
+    /* Metadata */
+    char *mode;                 /* Permission mode (e.g., "0644") */
+    char *owner;                /* Owner username (root/ files only, can be NULL) */
+    char *group;                /* Group name (root/ files only, can be NULL) */
+    bool encrypted;             /* Encryption flag */
+
+    /* Timestamps */
+    time_t staged_at;           /* When added to manifest (Unix timestamp) */
+    time_t deployed_at;         /* When deployed to filesystem (0 if pending) */
 } state_file_entry_t;
 
 /**
@@ -291,8 +327,13 @@ error_t *state_clear_files(state_t *state);
  * @param filesystem_path Filesystem path (must not be NULL)
  * @param profile Profile name (must not be NULL)
  * @param type File type
- * @param hash Content hash (can be NULL)
+ * @param status Manifest status
+ * @param git_oid Git commit reference (can be NULL)
+ * @param content_hash Content hash (can be NULL)
  * @param mode Permission mode (can be NULL)
+ * @param owner Owner username (can be NULL)
+ * @param group Group name (can be NULL)
+ * @param encrypted Encryption flag
  * @param out Entry (must not be NULL, caller must free with state_free_entry)
  * @return Error or NULL on success
  */
@@ -301,8 +342,13 @@ error_t *state_create_entry(
     const char *filesystem_path,
     const char *profile,
     state_file_type_t type,
-    const char *hash,
+    manifest_status_t status,
+    const char *git_oid,
+    const char *content_hash,
     const char *mode,
+    const char *owner,
+    const char *group,
+    bool encrypted,
     state_file_entry_t **out
 );
 
@@ -312,6 +358,80 @@ error_t *state_create_entry(
  * @param entry Entry to free (can be NULL)
  */
 void state_free_entry(state_file_entry_t *entry);
+
+/**
+ * Update entry status (optimized hot path for apply)
+ *
+ * Updates only the status field of a manifest entry.
+ * Used during apply to transition from pending_deployment → deployed.
+ *
+ * @param state State (must not be NULL, must have active transaction)
+ * @param filesystem_path File path to update (must not be NULL)
+ * @param new_status New status value
+ * @return Error or NULL on success (not found is an error)
+ */
+error_t *state_update_entry_status(
+    state_t *state,
+    const char *filesystem_path,
+    manifest_status_t new_status
+);
+
+/**
+ * Update full entry
+ *
+ * Updates all fields of a manifest entry.
+ * Used by manifest sync operations to update entries when Git changes.
+ *
+ * @param state State (must not be NULL, must have active transaction)
+ * @param entry Entry with updated fields (must not be NULL)
+ * @return Error or NULL on success (not found is an error)
+ */
+error_t *state_update_entry(
+    state_t *state,
+    const state_file_entry_t *entry
+);
+
+/**
+ * Get entries by status
+ *
+ * Returns all manifest entries matching the specified status.
+ * Used by apply to get pending_deployment and pending_removal entries.
+ *
+ * Returns allocated array that caller must free with state_free_all_files().
+ *
+ * @param state State (must not be NULL)
+ * @param status Status to filter by
+ * @param out Output array (must not be NULL, caller must free with state_free_all_files)
+ * @param count Output count (must not be NULL)
+ * @return Error or NULL on success (empty array if no matches)
+ */
+error_t *state_get_entries_by_status(
+    const state_t *state,
+    manifest_status_t status,
+    state_file_entry_t **out,
+    size_t *count
+);
+
+/**
+ * Get entries by profile
+ *
+ * Returns all manifest entries from the specified profile.
+ * Used by profile disable to determine impact of disabling a profile.
+ *
+ * Returns allocated array that caller must free with state_free_all_files().
+ *
+ * @param state State (must not be NULL)
+ * @param profile Profile name to filter by (must not be NULL)
+ * @param out Output array (must not be NULL, caller must free with state_free_all_files)
+ * @param count Output count (must not be NULL)
+ * @return Error or NULL on success (empty array if no matches)
+ */
+error_t *state_get_entries_by_profile(
+    const state_t *state,
+    const char *profile,
+    state_file_entry_t **out,
+    size_t *count
+);
 
 /**
  * Create state directory entry from metadata item

@@ -21,6 +21,7 @@
 #include "infra/content.h"
 #include "utils/array.h"
 #include "utils/config.h"
+#include "utils/hashmap.h"
 #include "utils/hooks.h"
 #include "utils/output.h"
 #include "utils/privilege.h"
@@ -556,224 +557,275 @@ static void print_cleanup_preflight_results(
 }
 
 /**
- * Update state with deployed files and save to disk
+ * Build manifest containing only PENDING_DEPLOYMENT files (VWD-compliant)
  *
- * This function does NOT modify the enabled profile list in state.
- * Enabled profiles are managed exclusively by 'dotta profile enable/disable'
- * commands. Apply only deploys files and updates the file tracking list.
+ * Filters the workspace manifest to include only files staged for deployment.
+ * Uses single database query for optimal performance (O(P) + O(M) where
+ * P = pending count, M = manifest size).
  *
- * The state file tracks:
- * - Enabled profiles - Modified ONLY by 'dotta profile' commands
- * - Deployed files - Modified by 'dotta apply' and 'dotta revert'
+ * Algorithm:
+ *   1. Query all PENDING_DEPLOYMENT entries (single indexed DB query)
+ *   2. Build hashmap for O(1) lookups
+ *   3. Filter workspace manifest (shallow copy, preserves all metadata)
  *
- * This separation ensures:
- * - User's explicit profile management is never overwritten
- * - Temporary CLI overrides (-p flag) don't persist to state
- * - Profile management is predictable and intentional
+ * The filtered manifest contains shallow copies of file_entry_t structures
+ * from the workspace manifest, preserving all metadata (tree entries, profile
+ * pointers, overlap tracking). Memory is owned by workspace, so filtered
+ * manifest must be freed with simple structure cleanup only.
  *
- * @param ws Workspace containing repo, profiles, manifest, and metadata cache (must not be NULL)
- * @param state State to update (must not be NULL)
- * @param metadata Merged metadata for mode extraction (can be NULL)
- * @param out Output context for messages (must not be NULL)
+ * @param ws Workspace (must not be NULL)
+ * @param out Filtered manifest (must not be NULL, caller must free structure only)
  * @return Error or NULL on success
  */
-static error_t *apply_update_and_save_state(
-    workspace_t *ws,
-    state_t *state,
-    const metadata_t *metadata,
-    output_ctx_t *out
+static error_t *build_pending_manifest(
+    const workspace_t *ws,
+    manifest_t **out
 ) {
     CHECK_NULL(ws);
-    CHECK_NULL(state);
     CHECK_NULL(out);
 
-    /* Extract data from workspace using accessor functions */
-    git_repository *repo = workspace_get_repo(ws);
-    const profile_list_t *profiles = workspace_get_profiles(ws);
-    const manifest_t *manifest = workspace_get_manifest(ws);
+    const manifest_t *full_manifest = workspace_get_manifest(ws);
+    const state_t *state = workspace_get_state(ws);
 
-    /* Defensive checks: workspace should always have these initialized */
-    if (!repo || !profiles || !manifest) {
-        return ERROR(ERR_INTERNAL,
-                    "Workspace missing required data (repo=%p, profiles=%p, manifest=%p)",
-                    (void*)repo, (void*)profiles, (void*)manifest);
+    if (!full_manifest || !state) {
+        return ERROR(ERR_INTERNAL, "Workspace missing manifest or state");
     }
 
     error_t *err = NULL;
+    state_file_entry_t *pending_entries = NULL;
+    size_t pending_count = 0;
+    hashmap_t *pending_map = NULL;
+    manifest_t *filtered = NULL;
 
-    /* Clear old files and add new manifest */
-    err = state_clear_files(state);
+    /* Query all PENDING_DEPLOYMENT entries (single indexed query - fast!) */
+    err = state_get_entries_by_status(
+        state,
+        MANIFEST_STATUS_PENDING_DEPLOYMENT,
+        &pending_entries,
+        &pending_count
+    );
     if (err) {
-        return error_wrap(err, "Failed to clear deployment state");
+        return error_wrap(err, "Failed to query pending entries");
     }
 
-    for (size_t i = 0; i < manifest->count; i++) {
-        const file_entry_t *entry = &manifest->entries[i];
+    /* Allocate filtered manifest structure */
+    filtered = malloc(sizeof(manifest_t));
+    if (!filtered) {
+        state_free_all_files(pending_entries, pending_count);
+        return ERROR(ERR_MEMORY, "Failed to allocate filtered manifest");
+    }
 
-        /* Defensive check: ensure entry is valid */
-        if (!entry->entry) {
-            return ERROR(ERR_INTERNAL, "Invalid manifest entry at index %zu", i);
+    filtered->entries = NULL;
+    filtered->count = 0;
+
+    /* Quick exit if no pending files */
+    if (pending_count == 0) {
+        state_free_all_files(pending_entries, pending_count);
+        *out = filtered;
+        return NULL;
+    }
+
+    /* Allocate entries array */
+    filtered->entries = calloc(pending_count, sizeof(file_entry_t));
+    if (!filtered->entries) {
+        free(filtered);
+        state_free_all_files(pending_entries, pending_count);
+        return ERROR(ERR_MEMORY, "Failed to allocate filtered entries");
+    }
+
+    /* Build hashmap for O(1) pending lookups */
+    pending_map = hashmap_create(0);  /* Default capacity */
+    if (!pending_map) {
+        free(filtered->entries);
+        free(filtered);
+        state_free_all_files(pending_entries, pending_count);
+        return ERROR(ERR_MEMORY, "Failed to create pending hashmap");
+    }
+
+    for (size_t i = 0; i < pending_count; i++) {
+        err = hashmap_set(pending_map, pending_entries[i].filesystem_path, (void*)1);
+        if (err) {
+            hashmap_free(pending_map, NULL);
+            free(filtered->entries);
+            free(filtered);
+            state_free_all_files(pending_entries, pending_count);
+            return error_wrap(err, "Failed to populate pending hashmap");
         }
+    }
 
-        /* Determine file type */
-        git_filemode_t mode = git_tree_entry_filemode(entry->entry);
-        state_file_type_t type = STATE_FILE_REGULAR;
-        if (mode == GIT_FILEMODE_LINK) {
-            type = STATE_FILE_SYMLINK;
-        } else if (mode == GIT_FILEMODE_BLOB_EXECUTABLE) {
-            type = STATE_FILE_EXECUTABLE;
+    /* Filter manifest: copy only pending entries (shallow copy - pointers borrowed) */
+    for (size_t i = 0; i < full_manifest->count; i++) {
+        const file_entry_t *entry = &full_manifest->entries[i];
+
+        if (hashmap_has(pending_map, entry->filesystem_path)) {
+            /* Shallow copy: all pointers borrowed from workspace manifest */
+            filtered->entries[filtered->count++] = *entry;
         }
+    }
 
-        /* Compute hash from git blob OID */
-        const git_oid *oid = git_tree_entry_id(entry->entry);
-        if (!oid) {
-            return ERROR(ERR_INTERNAL, "Failed to get OID for entry at index %zu", i);
-        }
+    /* Cleanup temporary structures */
+    hashmap_free(pending_map, NULL);
+    state_free_all_files(pending_entries, pending_count);
 
-        char hash_str[GIT_OID_HEXSZ + 1];
-        git_oid_tostr(hash_str, sizeof(hash_str), oid);
+    *out = filtered;
+    return NULL;
+}
 
-        /* Look up metadata (mode, owner, group, encrypted) */
-        const char *mode_str = NULL;
-        const char *owner_str = NULL;
-        const char *group_str = NULL;
-        bool encrypted = false;
-        char mode_buf[5];  /* Stack buffer for "0777\0" (max 5 bytes) */
+/**
+ * Free filtered manifest structure
+ *
+ * Only frees the manifest structure and entries array, not the borrowed
+ * pointers inside (those are owned by workspace).
+ *
+ * @param manifest Filtered manifest (can be NULL)
+ */
+static void manifest_free_filtered(manifest_t *manifest) {
+    if (!manifest) return;
 
-        if (metadata) {
-            const metadata_item_t *item = NULL;
-            error_t *meta_err = metadata_get_item(metadata, entry->storage_path, &item);
+    /* Don't free entry contents - they're borrowed from workspace */
+    free(manifest->entries);
+    free(manifest);
+}
 
-            if (!meta_err && item) {
-                /* Defensive: Check kind (files should have file entries, symlinks may not exist) */
-                if (item->kind == METADATA_ITEM_FILE) {
-                    /* Format mode directly into stack buffer (no heap allocation) */
-                    snprintf(mode_buf, sizeof(mode_buf), "%04o", (unsigned int)(item->mode & 0777));
-                    mode_str = mode_buf;
-                    owner_str = item->owner;  /* NULL for home/ files */
-                    group_str = item->group;  /* NULL for home/ files */
-                    encrypted = item->file.encrypted;
-                }
-                /* If it's a directory entry, skip (shouldn't happen for files in manifest) */
-            } else if (meta_err) {
-                /* Not found is expected for symlinks and other cases - not an error */
-                error_free(meta_err);
+/**
+ * Update manifest status after deployment (VWD-compliant)
+ *
+ * Incrementally updates status for successfully deployed files instead of
+ * rebuilding entire state. This preserves lifecycle tracking.
+ *
+ * Algorithm:
+ *   1. For each successfully deployed file:
+ *      - Transition status: PENDING_DEPLOYMENT → DEPLOYED
+ *      - Update deployed_at timestamp
+ *   2. Failed files remain PENDING_DEPLOYMENT (user can retry)
+ *   3. Files with status=DEPLOYED remain unchanged (not deployed this run)
+ *
+ * All updates are batched in the active transaction for atomicity.
+ *
+ * @param state State with active transaction (must not be NULL)
+ * @param deploy_result Deployment results (must not be NULL)
+ * @param out Output context (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *apply_update_deployment_status(
+    state_t *state,
+    const deploy_result_t *deploy_result,
+    output_ctx_t *out
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(deploy_result);
+    CHECK_NULL(out);
+
+    error_t *err = NULL;
+    time_t now = time(NULL);
+
+    output_print(out, OUTPUT_VERBOSE, "\nUpdating manifest status...\n");
+
+    /* Update status for successfully deployed files */
+    if (deploy_result->deployed && deploy_result->deployed_count > 0) {
+        for (size_t i = 0; i < string_array_size(deploy_result->deployed); i++) {
+            const char *path = string_array_get(deploy_result->deployed, i);
+
+            /* Transition: PENDING_DEPLOYMENT → DEPLOYED */
+            err = state_update_entry_status(state, path, MANIFEST_STATUS_DEPLOYED);
+            if (err) {
+                return error_wrap(err, "Failed to update status for '%s'", path);
             }
-        }
 
-        /* Create state entry with full metadata */
-        state_file_entry_t *state_entry = NULL;
-        err = state_create_entry(
-            entry->storage_path,
-            entry->filesystem_path,
-            entry->source_profile->name,
-            type,
-            MANIFEST_STATUS_DEPLOYED,  /* Status: deployed by apply */
-            hash_str,                  /* git_oid: blob OID (transitional) */
-            hash_str,                  /* content_hash: same as git_oid for now */
-            mode_str,                  /* mode from metadata (may be NULL) */
-            owner_str,                 /* owner from metadata (NULL for home/) */
-            group_str,                 /* group from metadata (NULL for home/) */
-            encrypted,                 /* encrypted flag from metadata */
-            &state_entry
-        );
+            /* Update deployed_at timestamp */
+            state_file_entry_t *entry = NULL;
+            err = state_get_file(state, path, &entry);
+            if (err) {
+                return error_wrap(err, "Failed to get entry for '%s'", path);
+            }
 
-        if (err) {
-            return error_wrap(err, "Failed to create state entry");
-        }
-
-        err = state_add_file(state, state_entry);
-        state_free_entry(state_entry);
-
-        if (err) {
-            return error_wrap(err, "Failed to add file to state");
-        }
-    }
-
-    /* Sync tracked directories to state */
-    output_print(out, OUTPUT_VERBOSE, "\nSyncing tracked directories to state...\n");
-
-    err = state_clear_directories(state);
-    if (err) {
-        return error_wrap(err, "Failed to clear tracked directories from state");
-    }
-
-    /* Load per-profile metadata to preserve profile attribution
-     *
-     * Architecture: We cannot use merged_metadata here because it loses
-     * profile attribution (all directories merged into one list without
-     * source profile information). Instead, we retrieve each profile's metadata
-     * from the workspace cache to correctly associate directories with their source profile.
-     */
-    for (size_t p = 0; p < profiles->count; p++) {
-        const char *profile_name = profiles->profiles[p].name;
-
-        /* Get cached metadata for this profile (O(1) hashmap lookup) */
-        const metadata_t *profile_meta = workspace_get_metadata(ws, profile_name);
-
-        /* Defensive check: workspace should always have metadata for enabled profiles.
-         * During workspace_load(), empty metadata is created for profiles without
-         * metadata.json, so NULL here indicates an invariant violation. */
-        if (!profile_meta) {
-            output_print(out, OUTPUT_VERBOSE,
-                        "  No metadata in profile '%s' (skipping directories)\n",
-                        profile_name);
-            continue;
-        }
-
-        /* Get tracked directories from this profile's metadata */
-        size_t dir_count = 0;
-        const metadata_item_t **directories =
-            metadata_get_items_by_kind(profile_meta, METADATA_ITEM_DIRECTORY, &dir_count);
-
-        if (dir_count > 0) {
-            output_print(out, OUTPUT_VERBOSE, "  Syncing %zu director%s from profile '%s'\n",
-                        dir_count, dir_count == 1 ? "y" : "ies", profile_name);
-        }
-
-        /* Convert each directory to state entry and add to state */
-        for (size_t i = 0; i < dir_count; i++) {
-            state_directory_entry_t *state_dir = NULL;
-
-            err = state_directory_entry_create_from_metadata(
-                directories[i],
-                profile_name,
-                &state_dir
-            );
+            entry->deployed_at = now;
+            err = state_update_entry(state, entry);
+            state_free_entry(entry);
 
             if (err) {
-                free(directories);
-                return error_wrap(err, "Failed to create state directory entry for '%s'",
-                                directories[i]->key);
-            }
-
-            err = state_add_directory(state, state_dir);
-            state_free_directory_entry(state_dir);
-
-            if (err) {
-                free(directories);
-                return error_wrap(err, "Failed to add directory '%s' to state",
-                                directories[i]->key);
+                return error_wrap(err, "Failed to update timestamp for '%s'", path);
             }
         }
 
-        /* Free the pointer array (items themselves are owned by metadata) */
-        free(directories);
-
-        /* Note: profile_meta is borrowed from workspace cache - no free needed */
+        output_print(out, OUTPUT_VERBOSE,
+                    "  Updated %zu file%s to DEPLOYED status\n",
+                    deploy_result->deployed_count,
+                    deploy_result->deployed_count == 1 ? "" : "s");
     }
 
-    output_print(out, OUTPUT_VERBOSE, "Directory sync complete\n");
-    /* End tracked directories sync */
+    /* Files in deploy_result->failed remain PENDING_DEPLOYMENT (retry later) */
+    if (deploy_result->failed && string_array_size(deploy_result->failed) > 0) {
+        size_t failed_count = string_array_size(deploy_result->failed);
+        output_print(out, OUTPUT_VERBOSE,
+                    "  %zu file%s remain PENDING_DEPLOYMENT (failed)\n",
+                    failed_count,
+                    failed_count == 1 ? "" : "s");
+    }
 
-    /* Save updated state */
-    err = state_save(repo, state);
+    /* Files with status=DEPLOYED remain unchanged (not in pending_manifest) */
+
+    return NULL;
+}
+
+/**
+ * Remove PENDING_REMOVAL entries from manifest
+ *
+ * Called after cleanup_execute() removes files from filesystem.
+ * Completes the VWD state machine: PENDING_REMOVAL → [deleted from manifest].
+ *
+ * This is the final step of the removal process:
+ *   1. profile disable / remove marks files PENDING_REMOVAL
+ *   2. cleanup_execute() removes from filesystem
+ *   3. This function deletes entries from manifest table
+ *
+ * @param state State with active transaction (must not be NULL)
+ * @param out Output context (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *apply_cleanup_pending_removals(
+    state_t *state,
+    output_ctx_t *out
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(out);
+
+    error_t *err = NULL;
+    state_file_entry_t *removal_entries = NULL;
+    size_t removal_count = 0;
+
+    /* Get all PENDING_REMOVAL entries */
+    err = state_get_entries_by_status(
+        state,
+        MANIFEST_STATUS_PENDING_REMOVAL,
+        &removal_entries,
+        &removal_count
+    );
     if (err) {
-        return error_wrap(err, "Failed to save state");
+        return error_wrap(err, "Failed to query PENDING_REMOVAL entries");
     }
 
-    output_print(out, OUTPUT_VERBOSE, "\nState saved\n");
+    if (removal_count > 0) {
+        output_print(out, OUTPUT_VERBOSE,
+                    "\nRemoving %zu file%s from manifest...\n",
+                    removal_count,
+                    removal_count == 1 ? "" : "s");
 
+        /* Delete each entry from manifest table */
+        for (size_t i = 0; i < removal_count; i++) {
+            err = state_remove_file(state, removal_entries[i].filesystem_path);
+            if (err) {
+                state_free_all_files(removal_entries, removal_count);
+                return error_wrap(err,
+                                "Failed to remove '%s' from manifest",
+                                removal_entries[i].filesystem_path);
+            }
+        }
+
+        output_print(out, OUTPUT_VERBOSE, "  Manifest cleanup complete\n");
+    }
+
+    state_free_all_files(removal_entries, removal_count);
     return NULL;
 }
 
@@ -887,6 +939,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     state_t *state = NULL;
     profile_list_t *profiles = NULL;
     const manifest_t *manifest = NULL;
+    manifest_t *pending_manifest = NULL;  /* VWD: Filtered manifest for deployment */
     workspace_t *ws = NULL;
     const workspace_item_t **file_orphans = NULL;
     size_t file_orphan_count = 0;
@@ -1010,6 +1063,31 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                     manifest->count, manifest->count == 1 ? "" : "s");
     }
 
+    /* VWD: Filter manifest to only PENDING_DEPLOYMENT files
+     *
+     * The workspace manifest contains all files (PENDING + DEPLOYED).
+     * Apply should only deploy pending changes (VWD principle: respect staging).
+     *
+     * This filtering step transforms apply from "re-deploy everything" to
+     * "deploy staged changes only", matching Git's commit behavior.
+     */
+    err = build_pending_manifest(ws, &pending_manifest);
+    if (err) {
+        err = error_wrap(err, "Failed to filter manifest for pending files");
+        goto cleanup;
+    }
+
+    /* Report pending file count */
+    if (opts->verbose) {
+        if (pending_manifest->count == 0) {
+            output_print(out, OUTPUT_VERBOSE, "  No files pending deployment\n");
+        } else {
+            output_print(out, OUTPUT_VERBOSE, "  %zu file%s pending deployment\n",
+                        pending_manifest->count,
+                        pending_manifest->count == 1 ? "" : "s");
+        }
+    }
+
     /* Extract orphans from workspace (unless --keep-orphans)
      *
      * Architecture: workspace_load() already detected ALL orphans (enabled + disabled
@@ -1097,6 +1175,20 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                             dir_orphan_count == 1 ? "y" : "ies");
             }
         }
+    }
+
+    /* VWD: Check if there's anything to do
+     *
+     * After filtering to pending files and extracting orphans, check if
+     * there's any work to do. If not, exit early with clean message.
+     */
+    if (pending_manifest->count == 0 &&
+        (opts->keep_orphans || (file_orphan_count == 0 && dir_orphan_count == 0))) {
+        /* No pending files and (keeping orphans OR no orphans to clean) */
+        output_info(out, "Nothing to deploy (no pending changes)");
+        output_info(out, "Workspace is clean");
+        err = NULL;
+        goto cleanup;
     }
 
     /* Extract merged metadata from workspace
@@ -1342,25 +1434,43 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Execute deployment */
-    if (opts->dry_run) {
-        output_print(out, OUTPUT_VERBOSE, "Dry-run mode - no files will be modified\n");
-    } else {
-        output_print(out, OUTPUT_VERBOSE, "Deploying files...\n");
-    }
-
-    err = deploy_execute(repo, ws, manifest, merged_metadata, &deploy_opts, km, cache, &deploy_res);
-    if (err) {
-        if (deploy_res) {
-            print_deploy_results(out, deploy_res, opts->verbose);
+    /* VWD: Execute deployment (only if there are pending files)
+     *
+     * Deploy only PENDING_DEPLOYMENT files (filtered manifest).
+     * If pending_manifest is empty, skip deployment phase entirely.
+     */
+    if (pending_manifest->count > 0) {
+        if (opts->dry_run) {
+            output_print(out, OUTPUT_VERBOSE, "Dry-run mode - no files will be modified\n");
+        } else {
+            output_print(out, OUTPUT_VERBOSE, "Deploying %zu pending file%s...\n",
+                        pending_manifest->count,
+                        pending_manifest->count == 1 ? "" : "s");
         }
-        err = error_wrap(err, "Deployment failed");
-        goto cleanup;
-    }
 
-    print_deploy_results(out, deploy_res, opts->verbose);
-    deploy_result_free(deploy_res);
-    deploy_res = NULL;
+        err = deploy_execute(repo, ws, pending_manifest, merged_metadata, &deploy_opts, km, cache, &deploy_res);
+        if (err) {
+            if (deploy_res) {
+                print_deploy_results(out, deploy_res, opts->verbose);
+            }
+            err = error_wrap(err, "Deployment failed");
+            goto cleanup;
+        }
+
+        print_deploy_results(out, deploy_res, opts->verbose);
+    } else {
+        /* No files to deploy, but continue to cleanup phase */
+        output_print(out, OUTPUT_VERBOSE, "Skipping deployment (no pending files)\n");
+
+        /* Create empty deploy result for status update logic */
+        deploy_res = calloc(1, sizeof(deploy_result_t));
+        if (!deploy_res) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate deploy result");
+            goto cleanup;
+        }
+        deploy_res->deployed_count = 0;
+        deploy_res->skipped_count = 0;
+    }
 
     /* Save state (only if not dry-run) */
     if (!opts->dry_run) {
@@ -1428,11 +1538,99 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             cleanup_result_free(cleanup_res);
         }
 
-        /* Now update state with the new manifest */
-        err = apply_update_and_save_state(ws, state, merged_metadata, out);
+        /* VWD: Update manifest status for deployed files (incremental, not rebuild) */
+        output_print(out, OUTPUT_VERBOSE, "\nUpdating deployment state...\n");
+
+        err = apply_update_deployment_status(state, deploy_res, out);
         if (err) {
             goto cleanup;
         }
+
+        /* VWD: Delete PENDING_REMOVAL entries from manifest table */
+        err = apply_cleanup_pending_removals(state, out);
+        if (err) {
+            goto cleanup;
+        }
+
+        /* Sync tracked directories to state (unchanged from old logic) */
+        output_print(out, OUTPUT_VERBOSE, "\nSyncing tracked directories to state...\n");
+
+        err = state_clear_directories(state);
+        if (err) {
+            err = error_wrap(err, "Failed to clear tracked directories");
+            goto cleanup;
+        }
+
+        /* Extract workspace data for directory sync */
+        const profile_list_t *profiles_ws = workspace_get_profiles(ws);
+
+        /* Load per-profile metadata to preserve profile attribution */
+        for (size_t p = 0; p < profiles_ws->count; p++) {
+            const char *profile_name = profiles_ws->profiles[p].name;
+
+            /* Get cached metadata for this profile (O(1) hashmap lookup) */
+            const metadata_t *profile_meta = workspace_get_metadata(ws, profile_name);
+
+            if (!profile_meta) {
+                output_print(out, OUTPUT_VERBOSE,
+                            "  No metadata in profile '%s' (skipping directories)\n",
+                            profile_name);
+                continue;
+            }
+
+            /* Get tracked directories from this profile's metadata */
+            size_t dir_count = 0;
+            const metadata_item_t **directories =
+                metadata_get_items_by_kind(profile_meta, METADATA_ITEM_DIRECTORY, &dir_count);
+
+            if (dir_count > 0) {
+                output_print(out, OUTPUT_VERBOSE,
+                            "  Syncing %zu director%s from profile '%s'\n",
+                            dir_count, dir_count == 1 ? "y" : "ies", profile_name);
+            }
+
+            /* Convert each directory to state entry and add to state */
+            for (size_t i = 0; i < dir_count; i++) {
+                state_directory_entry_t *state_dir = NULL;
+
+                err = state_directory_entry_create_from_metadata(
+                    directories[i],
+                    profile_name,
+                    &state_dir
+                );
+
+                if (err) {
+                    free(directories);
+                    err = error_wrap(err, "Failed to create state directory entry for '%s'",
+                                    directories[i]->key);
+                    goto cleanup;
+                }
+
+                err = state_add_directory(state, state_dir);
+                state_free_directory_entry(state_dir);
+
+                if (err) {
+                    free(directories);
+                    err = error_wrap(err, "Failed to add directory '%s' to state",
+                                    directories[i]->key);
+                    goto cleanup;
+                }
+            }
+
+            /* Free the pointer array (items themselves are owned by metadata) */
+            free(directories);
+        }
+
+        output_print(out, OUTPUT_VERBOSE, "Directory sync complete\n");
+
+        /* Save updated state */
+        err = state_save(repo, state);
+        if (err) {
+            err = error_wrap(err, "Failed to save state");
+            goto cleanup;
+        }
+
+        output_print(out, OUTPUT_VERBOSE, "\nState saved\n");
     }
 
     /* Execute post-apply hook */
@@ -1457,6 +1655,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
 cleanup:
     /* Free resources in reverse order of allocation */
     if (deploy_res) deploy_result_free(deploy_res);
+    if (pending_manifest) manifest_free_filtered(pending_manifest);
     if (cleanup_preflight) cleanup_preflight_result_free(cleanup_preflight);
     if (preflight) preflight_result_free(preflight);
     if (hook_ctx) hook_context_free(hook_ctx);

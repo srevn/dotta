@@ -37,6 +37,7 @@ struct hashmap {
     size_t bucket_count;            /* Number of buckets */
     size_t entry_count;             /* Number of entries */
     size_t resize_threshold;        /* When to resize */
+    uint64_t mod_count;             /* Modification counter for iterator safety */
 };
 
 /**
@@ -142,6 +143,7 @@ static error_t *hashmap_resize(hashmap_t *map, size_t new_capacity) {
     map->buckets = new_buckets;
     map->bucket_count = new_capacity;
     map->resize_threshold = (size_t)(new_capacity * LOAD_FACTOR_THRESHOLD);
+    map->mod_count++;  /* Structural modification: rehashed all entries */
 
     /* Rehash all entries from old buckets to new buckets */
     for (size_t i = 0; i < old_capacity; i++) {
@@ -197,6 +199,7 @@ hashmap_t *hashmap_create(size_t initial_capacity) {
     map->bucket_count = capacity;
     map->entry_count = 0;
     map->resize_threshold = (size_t)(capacity * LOAD_FACTOR_THRESHOLD);
+    map->mod_count = 0;
 
     return map;
 }
@@ -232,6 +235,7 @@ error_t *hashmap_set(hashmap_t *map, const char *key, void *value) {
     new_entry->next = map->buckets[idx];
     map->buckets[idx] = new_entry;
     map->entry_count++;
+    map->mod_count++;  /* Structural modification: new entry added */
 
     /* Check if resize needed */
     if (map->entry_count > map->resize_threshold) {
@@ -311,6 +315,7 @@ error_t *hashmap_remove(hashmap_t *map, const char *key, void **old_value) {
     /* Free entry */
     hashmap_entry_free(entry);
     map->entry_count--;
+    map->mod_count++;  /* Structural modification: entry removed */
 
     return NULL;
 }
@@ -381,6 +386,87 @@ void hashmap_clear(hashmap_t *map, hashmap_value_free_fn free_value) {
     }
 
     map->entry_count = 0;
+    map->mod_count++;  /* Structural modification: all entries removed */
+}
+
+/**
+ * Initialize iterator for hashmap
+ */
+void hashmap_iter_init(hashmap_iter_t *iter, const hashmap_t *map) {
+    if (!iter) {
+        return;  /* Defensive: should not happen in correct usage */
+    }
+
+    iter->map = map;
+    iter->bucket_index = 0;
+    iter->current_entry_internal = NULL;
+    iter->snapshot_mod_count = map ? map->mod_count : 0;
+}
+
+/**
+ * Advance iterator to next entry
+ */
+bool hashmap_iter_next(
+    hashmap_iter_t *iter,
+    const char **out_key,
+    void **out_value
+) {
+    if (!iter) {
+        return false;
+    }
+
+    const hashmap_t *map = iter->map;
+
+    /* Check for NULL or empty map */
+    if (!map || map->entry_count == 0) {
+        return false;
+    }
+
+    /* Check for modification */
+    if (map->mod_count != iter->snapshot_mod_count) {
+        fprintf(stderr, "warning: hashmap was modified during iteration\n");
+        return false;
+    }
+
+    hashmap_entry_t *entry = (hashmap_entry_t *)iter->current_entry_internal;
+
+    /* Try to advance in current chain first */
+    if (entry && entry->next) {
+        entry = entry->next;
+        iter->current_entry_internal = entry;
+        goto found_entry;
+    }
+
+    /* Chain exhausted or no current entry - find next non-empty bucket */
+    for (size_t i = iter->bucket_index; i < map->bucket_count; i++) {
+        entry = map->buckets[i];
+        if (entry) {
+            /* Found non-empty bucket */
+            iter->bucket_index = i + 1;  /* Next search starts after this bucket */
+            iter->current_entry_internal = entry;
+            goto found_entry;
+        }
+    }
+
+    /* No more entries */
+    return false;
+
+found_entry:
+    /* Unified return path: output entry data */
+    if (out_key) *out_key = entry->key;
+    if (out_value) *out_value = entry->value;
+    return true;
+}
+
+/**
+ * Check if iterator is stale
+ */
+bool hashmap_iter_is_stale(const hashmap_iter_t *iter) {
+    if (!iter || !iter->map) {
+        return false;  /* No map, can't be stale */
+    }
+
+    return iter->map->mod_count != iter->snapshot_mod_count;
 }
 
 /**

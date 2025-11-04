@@ -20,6 +20,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /* Forward declarations */
 typedef struct hashmap hashmap_t;
@@ -43,6 +44,24 @@ typedef bool (*hashmap_iter_fn)(const char *key, void *value, void *user_data);
  * @param value The value to free
  */
 typedef void (*hashmap_value_free_fn)(void *value);
+
+/**
+ * Hash map iterator
+ *
+ * Stack-allocated structure for iterating over hashmap entries.
+ * Initialize with hashmap_iter_init(), advance with hashmap_iter_next().
+ *
+ * Iteration order is undefined but deterministic (same order for same map state).
+ *
+ * SAFETY: Iterator becomes invalid if hashmap is modified during iteration.
+ * Modification will be detected and hashmap_iter_next() will return false.
+ */
+typedef struct hashmap_iter {
+    const hashmap_t *map;              /* Borrowed reference */
+    size_t bucket_index;               /* Current bucket (0 to bucket_count) */
+    void *current_entry_internal;      /* Current entry (hashmap_entry_t* cast) */
+    uint64_t snapshot_mod_count;       /* Modification counter snapshot */
+} hashmap_iter_t;
 
 /**
  * Create new hash map
@@ -127,6 +146,45 @@ bool hashmap_is_empty(const hashmap_t *map);
  * @param free_value Optional callback to free values
  */
 void hashmap_clear(hashmap_t *map, hashmap_value_free_fn free_value);
+
+/**
+ * Initialize iterator for hashmap
+ *
+ * Creates a snapshot of hashmap's modification state. If hashmap is modified
+ * after initialization, subsequent hashmap_iter_next() calls detect this and
+ * return false.
+ *
+ * @param iter Iterator to initialize (must not be NULL)
+ * @param map Hashmap to iterate (can be NULL or empty, iteration will be empty)
+ */
+void hashmap_iter_init(hashmap_iter_t *iter, const hashmap_t *map);
+
+/**
+ * Advance iterator to next entry
+ *
+ * Returns next key-value pair from hashmap. Iteration order is undefined
+ * but deterministic (same for same map state).
+ *
+ * SAFETY: Returns false and prints warning if hashmap was modified during iteration.
+ *
+ * @param iter Iterator (must not be NULL)
+ * @param out_key Output for key (can be NULL to skip)
+ * @param out_value Output for value (can be NULL to skip)
+ * @return true if entry retrieved, false if end reached or map modified
+ */
+bool hashmap_iter_next(
+    hashmap_iter_t *iter,
+    const char **out_key,
+    void **out_value
+);
+
+/**
+ * Check if iterator is stale (hashmap modified during iteration)
+ *
+ * @param iter Iterator (must not be NULL)
+ * @return true if hashmap was modified since initialization
+ */
+bool hashmap_iter_is_stale(const hashmap_iter_t *iter);
 
 /**
  * Free hash map

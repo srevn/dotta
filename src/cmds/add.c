@@ -576,158 +576,24 @@ static error_t *create_commit(
 }
 
 /**
- * Build precedence context for bulk manifest sync (add command)
- *
- * Builds fresh manifest from Git (post-commit state) and supporting structures
- * for efficient bulk sync operations. Called AFTER Git commit completes.
- *
- * Algorithm:
- *   1. Load all enabled profiles from Git (current HEAD)
- *   2. Build fresh manifest with profile_build_manifest()
- *   3. Build profile→oid map for git_oid tracking
- *   4. Build metadata cache for all profiles
- *
- * Preconditions:
- *   - Git commits MUST be completed (branches at final state)
- *   - enabled_profiles MUST be non-empty array
- *
- * Postconditions:
- *   - All output structures allocated (caller must free)
- *   - Metadata cache contains entries for all profiles with metadata
- *   - Profile OID map contains current HEAD for each profile
- *
- * Memory Ownership:
- *   - Caller owns all output structures
- *   - Must call manifest_free(manifest)
- *   - Must call profile_list_free(profiles)
- *   - Must call hashmap_free(profile_oids, free) - OID strings need freeing
- *   - Must free metadata in cache before hashmap_free(metadata_cache, NULL)
- *
- * @param repo Git repository
- * @param enabled_profiles Array of enabled profile names
- * @param out_manifest Output fresh manifest from Git (caller must free)
- * @param out_profiles Output profile list (caller must free)
- * @param out_metadata_cache Output metadata cache (caller must free carefully)
- * @return Error or NULL on success
- */
-static error_t *build_precedence_context_for_add(
-    git_repository *repo,
-    const string_array_t *enabled_profiles,
-    manifest_t **out_manifest,
-    profile_list_t **out_profiles,
-    hashmap_t **out_metadata_cache
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(enabled_profiles);
-    CHECK_NULL(out_manifest);
-    CHECK_NULL(out_profiles);
-    CHECK_NULL(out_metadata_cache);
-
-    error_t *err = NULL;
-    profile_list_t *profiles = NULL;
-    manifest_t *manifest = NULL;
-    hashmap_t *metadata_cache = NULL;
-
-    /* 1. Load all enabled profiles from Git (post-commit state) */
-    err = profile_list_load(
-        repo,
-        enabled_profiles->items,
-        enabled_profiles->count,
-        false,  /* strict = false - skip missing profiles */
-        &profiles
-    );
-    if (err) {
-        return error_wrap(err, "Failed to load profiles for precedence context");
-    }
-
-    /* 2. Build manifest from Git (precedence oracle) */
-    err = profile_build_manifest(repo, profiles, &manifest);
-    if (err) {
-        profile_list_free(profiles);
-        return error_wrap(err, "Failed to build manifest for precedence context");
-    }
-
-    /* 3. Build metadata cache for all profiles */
-    metadata_cache = hashmap_create(enabled_profiles->count);
-    if (!metadata_cache) {
-        manifest_free(manifest);
-        profile_list_free(profiles);
-        return ERROR(ERR_MEMORY, "Failed to create metadata cache");
-    }
-
-    for (size_t i = 0; i < enabled_profiles->count; i++) {
-        const char *profile_name = enabled_profiles->items[i];
-        metadata_t *metadata = NULL;
-
-        /* Load metadata from branch (may not exist for old profiles) */
-        error_t *meta_err = metadata_load_from_branch(repo, profile_name, &metadata);
-        if (meta_err) {
-            if (meta_err->code == ERR_NOT_FOUND) {
-                /* Profile has no metadata - not an error, skip */
-                error_free(meta_err);
-                continue;
-            }
-            /* Other error - fatal */
-            err = meta_err;
-            goto cleanup;
-        }
-
-        /* Store in cache */
-        err = hashmap_set(metadata_cache, profile_name, metadata);
-        if (err) {
-            metadata_free(metadata);
-            goto cleanup;
-        }
-    }
-
-    /* Success - transfer ownership to caller */
-    *out_manifest = manifest;
-    *out_profiles = profiles;
-    *out_metadata_cache = metadata_cache;
-
-    return NULL;
-
-cleanup:
-    /* Cleanup on error */
-    if (metadata_cache) {
-        /* Free metadata in cache */
-        for (size_t i = 0; i < enabled_profiles->count; i++) {
-            metadata_t *metadata = hashmap_get(metadata_cache, enabled_profiles->items[i]);
-            if (metadata) {
-                metadata_free(metadata);
-            }
-        }
-        hashmap_free(metadata_cache, NULL);
-    }
-    if (manifest) {
-        manifest_free(manifest);
-    }
-    if (profiles) {
-        profile_list_free(profiles);
-    }
-
-    return err;
-}
-
-/**
  * Update manifest after successful add operation
  *
  * Called after Git commit succeeds. Updates manifest for all added files
  * if the profile is enabled. This is part of the Virtual Working Directory
  * integration - maintaining the manifest as a staging area.
  *
- * OPTIMIZED: Uses bulk manifest sync (manifest_sync_files_bulk_simple) instead
- * of per-file sync. This achieves O(M+N) complexity instead of O(N*M), resulting
- * in ~50-90x speedup for bulk operations.
+ * OPTIMIZED: Uses bulk manifest sync (manifest_add_files) with O(M+N) complexity.
+ * manifest_add_files builds its own fresh manifest from Git (post-commit state),
+ * ensuring all newly-added files are found during precedence checks.
  *
  * Algorithm:
  *   1. Check if profile is enabled (read-only check)
  *   2. If not enabled: return NULL (skip manifest update)
  *   3. If enabled:
- *      a. Build precedence context from Git ONCE (fresh manifest)
+ *      a. Build metadata cache for all enabled profiles
  *      b. Create keymanager for content hashing
  *      c. Open transaction (state_load_for_update)
- *      d. Call manifest_add_files() with pre-built context
+ *      d. Call manifest_add_files() (builds fresh manifest internally)
  *      e. Commit transaction (state_save)
  *
  * Status Semantics:
@@ -771,8 +637,6 @@ static error_t *update_manifest_after_add(
     error_t *err = NULL;
     state_t *state = NULL;
     string_array_t *enabled_profiles = NULL;
-    manifest_t *precedence_manifest = NULL;
-    profile_list_t *profiles = NULL;
     hashmap_t *metadata_cache = NULL;
     keymanager_t *km = NULL;
     dotta_config_t *config = NULL;
@@ -816,17 +680,39 @@ static error_t *update_manifest_after_add(
         return NULL;
     }
 
-    /* STEP 2: Build precedence context from Git (ONCE) */
-    err = build_precedence_context_for_add(
-        repo,
-        enabled_profiles,
-        &precedence_manifest,
-        &profiles,
-        &metadata_cache
-    );
-    if (err) {
-        string_array_free(enabled_profiles);
-        return error_wrap(err, "Failed to build precedence context for manifest sync");
+    /* STEP 2: Build metadata cache for all enabled profiles
+     *
+     * This is the only context manifest_add_files needs from us.
+     * The function builds its own fresh manifest from Git internally. */
+    metadata_cache = hashmap_create(string_array_size(enabled_profiles));
+    if (!metadata_cache) {
+        err = ERROR(ERR_MEMORY, "Failed to create metadata cache");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
+        const char *profile = string_array_get(enabled_profiles, i);
+        metadata_t *metadata = NULL;
+
+        /* Load metadata from branch (may not exist for old profiles) */
+        error_t *meta_err = metadata_load_from_branch(repo, profile, &metadata);
+        if (meta_err) {
+            if (meta_err->code == ERR_NOT_FOUND) {
+                /* Profile has no metadata - not an error, skip */
+                error_free(meta_err);
+                continue;
+            }
+            /* Other error - fatal */
+            err = meta_err;
+            goto cleanup;
+        }
+
+        /* Store in cache */
+        err = hashmap_set(metadata_cache, profile, metadata);
+        if (err) {
+            metadata_free(metadata);
+            goto cleanup;
+        }
     }
 
     /* STEP 3: Create keymanager for content hashing */
@@ -847,7 +733,7 @@ static error_t *update_manifest_after_add(
         goto cleanup;
     }
 
-    /* STEP 5: Bulk sync operation (NEW - O(M+N) instead of O(N*M)) */
+    /* STEP 5: Bulk sync operation (O(M+N)) */
     size_t synced_count = 0;
     err = manifest_add_files(
         repo,
@@ -901,12 +787,6 @@ cleanup:
             }
         }
         hashmap_free(metadata_cache, NULL);
-    }
-    if (precedence_manifest) {
-        manifest_free(precedence_manifest);
-    }
-    if (profiles) {
-        profile_list_free(profiles);
     }
     if (enabled_profiles) {
         string_array_free(enabled_profiles);

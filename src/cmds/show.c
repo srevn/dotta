@@ -160,15 +160,14 @@ static error_t *show_file(
         }
     } else {
         /* Load from branch HEAD */
-        size_t ref_name_size = strlen("refs/heads/") + strlen(profile_name) + 1;
-        ref_name = malloc(ref_name_size);
-        if (!ref_name) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate reference name");
+        char ref_name_buf[DOTTA_REFNAME_MAX];
+        err = gitops_build_refname(ref_name_buf, sizeof(ref_name_buf), "refs/heads/%s", profile_name);
+        if (err) {
+            err = error_wrap(err, "Invalid profile name '%s'", profile_name);
             goto cleanup;
         }
-        snprintf(ref_name, ref_name_size, "refs/heads/%s", profile_name);
 
-        err = gitops_load_tree(repo, ref_name, &tree);
+        err = gitops_load_tree(repo, ref_name_buf, &tree);
         if (err) {
             err = error_wrap(err, "Failed to load tree for profile '%s'", profile_name);
             goto cleanup;
@@ -525,14 +524,14 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
         const char *profile_name = profiles->profiles[i].name;
         git_tree *tree = NULL;
         git_tree_entry *entry = NULL;
-        char *ref_name = NULL;
 
-        size_t ref_name_size = strlen("refs/heads/") + strlen(profile_name) + 1;
-        ref_name = malloc(ref_name_size);
-        if (!ref_name) {
+        char ref_name[DOTTA_REFNAME_MAX];
+        error_t *refname_err = gitops_build_refname(ref_name, sizeof(ref_name),
+                                                     "refs/heads/%s", profile_name);
+        if (refname_err) {
+            error_free(refname_err);
             continue;
         }
-        snprintf(ref_name, ref_name_size, "refs/heads/%s", profile_name);
 
         error_t *load_err = gitops_load_tree(repo, ref_name, &tree);
         if (load_err == NULL) {
@@ -542,7 +541,6 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
                 found_profile = profile_name;
                 git_tree_entry_free(entry);
                 git_tree_free(tree);
-                free(ref_name);
                 break;
             }
             error_free(find_err);
@@ -550,7 +548,6 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
         } else {
             error_free(load_err);
         }
-        free(ref_name);
     }
 
     if (!found_profile) {

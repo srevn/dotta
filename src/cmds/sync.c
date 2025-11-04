@@ -151,7 +151,13 @@ static error_t *force_push_branch(
 
     /* Force push refspec ('+' prefix forces the push) */
     char refspec[DOTTA_REFSPEC_MAX];
-    snprintf(refspec, sizeof(refspec), "+refs/heads/%s:refs/heads/%s", branch_name, branch_name);
+    error_t *err_build = gitops_build_refname(refspec, sizeof(refspec),
+                                               "+refs/heads/%s:refs/heads/%s",
+                                               branch_name, branch_name);
+    if (err_build) {
+        git_remote_free(remote);
+        return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
+    }
 
     const char *refspecs[] = { refspec };
     git_strarray refs = { (char **)refspecs, 1 };

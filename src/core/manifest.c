@@ -46,10 +46,10 @@ static error_t *get_branch_head_oid(
     git_reference *ref = NULL;
 
     /* Construct reference name */
-    char refname[256];
-    int ret = snprintf(refname, sizeof(refname), "refs/heads/%s", branch_name);
-    if (ret < 0 || (size_t)ret >= sizeof(refname)) {
-        return ERROR(ERR_INTERNAL, "Branch name too long: %s", branch_name);
+    char refname[DOTTA_REFNAME_MAX];
+    err = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
+    if (err) {
+        return error_wrap(err, "Invalid branch name '%s'", branch_name);
     }
 
     /* Lookup reference */
@@ -303,9 +303,7 @@ static error_t *sync_entry_to_state(
     }
 
 cleanup:
-    if (existing) {
-        state_free_entry(existing);
-    }
+    if (existing) state_free_entry(existing);
     free(mode_str);
     free(content_hash);
     return err;
@@ -396,21 +394,11 @@ error_t *manifest_enable_profile(
     }
 
 cleanup:
-    if (profiles) {
-        profile_list_free(profiles);
-    }
-    if (km) {
-        keymanager_free(km);
-    }
-    if (config) {
-        config_free(config);
-    }
-    if (metadata) {
-        metadata_free(metadata);
-    }
-    if (manifest) {
-        manifest_free(manifest);
-    }
+    if (profiles) profile_list_free(profiles);
+    if (km) keymanager_free(km);
+    if (config) config_free(config);
+    if (metadata) metadata_free(metadata);
+    if (manifest) manifest_free(manifest);
 
     return err;
 }
@@ -527,12 +515,8 @@ error_t *manifest_disable_profile(
     }
 
 cleanup:
-    if (fallback_profiles) {
-        profile_list_free(fallback_profiles);
-    }
-    if (fallback_manifest) {
-        manifest_free(fallback_manifest);
-    }
+    if (fallback_profiles) profile_list_free(fallback_profiles);
+    if (fallback_manifest) manifest_free(fallback_manifest);
     state_free_all_files(entries, count);
     return err;
 }
@@ -765,13 +749,8 @@ cleanup:
         hashmap_free(profile_oids, NULL);
     }
 
-    if (fresh_manifest) {
-        manifest_free(fresh_manifest);
-    }
-
-    if (profiles) {
-        profile_list_free(profiles);
-    }
+    if (fresh_manifest) manifest_free(fresh_manifest);
+    if (profiles) profile_list_free(profiles);
 
     return err;
 }
@@ -967,25 +946,13 @@ error_t *manifest_reorder_profiles(
     }
 
 cleanup:
-    if (old_map) {
-        hashmap_free(old_map, NULL);
-    }
-    if (profiles) {
-        profile_list_free(profiles);
-    }
-    if (km) {
-        keymanager_free(km);
-    }
-    if (config) {
-        config_free(config);
-    }
-    if (metadata) {
-        metadata_free(metadata);
-    }
+    if (old_map) hashmap_free(old_map, NULL);
+    if (profiles) profile_list_free(profiles);
+    if (km) keymanager_free(km);
+    if (config) config_free(config);
+    if (metadata) metadata_free(metadata);
     state_free_all_files(old_entries, old_count);
-    if (new_manifest) {
-        manifest_free(new_manifest);
-    }
+    if (new_manifest) manifest_free(new_manifest);
 
     return err;
 }
@@ -1257,15 +1224,9 @@ error_t *manifest_update_files(
     }
 
 cleanup:
-    if (profile_oids) {
-        hashmap_free(profile_oids, free);  /* Free oid strings */
-    }
-    if (fresh_manifest) {
-        manifest_free(fresh_manifest);
-    }
-    if (profiles) {
-        profile_list_free(profiles);
-    }
+    if (profile_oids) hashmap_free(profile_oids, free);  /* Free oid strings */
+    if (fresh_manifest) manifest_free(fresh_manifest);
+    if (profiles) profile_list_free(profiles);
 
     return err;
 }
@@ -1432,15 +1393,9 @@ error_t *manifest_add_files(
     }
 
 cleanup:
-    if (profile_oids) {
-        hashmap_free(profile_oids, free);  /* Free oid strings */
-    }
-    if (fresh_manifest) {
-        manifest_free(fresh_manifest);
-    }
-    if (profiles) {
-        profile_list_free(profiles);
-    }
+    if (profile_oids) hashmap_free(profile_oids, free);  /* Free oid strings */
+    if (fresh_manifest) manifest_free(fresh_manifest);
+    if (profiles) profile_list_free(profiles);
 
     return err;
 }
@@ -1538,8 +1493,6 @@ error_t *manifest_sync_diff(
     size_t synced = 0, removed = 0, fallbacks = 0;
 
     /* PHASE 1: BUILD CONTEXT (O(M)) */
-    /* ============================== */
-
     /* 1.1. Load all enabled profiles from Git (current state) */
     err = profile_list_load(
         repo,
@@ -1622,8 +1575,6 @@ error_t *manifest_sync_diff(
     }
 
     /* PHASE 2: COMPUTE DIFF (O(D)) */
-    /* ============================= */
-
     /* 2.1. Lookup commits and extract trees for diff
      *
      * Note: old_oid and new_oid are commit OIDs (from branch refs), not tree OIDs.
@@ -1671,7 +1622,6 @@ error_t *manifest_sync_diff(
     size_t num_deltas = git_diff_num_deltas(diff);
 
     /* PHASE 3: PROCESS DELTAS (O(D)) */
-    /* =============================== */
 
     for (size_t i = 0; i < num_deltas; i++) {
         const git_diff_delta *delta = git_diff_get_delta(diff, i);
@@ -1697,7 +1647,6 @@ error_t *manifest_sync_diff(
         /* Handle based on delta type */
         if (delta->status == GIT_DELTA_ADDED || delta->status == GIT_DELTA_MODIFIED) {
             /* ADDITION / MODIFICATION */
-            /* ======================= */
 
             /* Lookup in fresh manifest (O(1)) */
             void *idx_ptr = hashmap_get(fresh_manifest->index, filesystem_path);
@@ -1757,7 +1706,6 @@ error_t *manifest_sync_diff(
 
         } else if (delta->status == GIT_DELTA_DELETED) {
             /* DELETION */
-            /* ======== */
 
             /* Check if file exists in manifest from OTHER profiles (fallback check)
              *
@@ -1853,39 +1801,17 @@ error_t *manifest_sync_diff(
 
 cleanup:
     /* Free resources in reverse order of acquisition */
-    if (diff) {
-        git_diff_free(diff);
-    }
-    if (new_tree) {
-        git_tree_free(new_tree);
-    }
-    if (old_tree) {
-        git_tree_free(old_tree);
-    }
-    if (new_commit) {
-        git_commit_free(new_commit);
-    }
-    if (old_commit) {
-        git_commit_free(old_commit);
-    }
-    if (config) {
-        config_free(config);
-    }
-    if (km_owned) {
-        keymanager_free(km_owned);
-    }
-    if (metadata_merged) {
-        metadata_free(metadata_merged);
-    }
-    if (profile_oids) {
-        hashmap_free(profile_oids, free);  /* Free oid strings */
-    }
-    if (fresh_manifest) {
-        manifest_free(fresh_manifest);
-    }
-    if (profiles) {
-        profile_list_free(profiles);
-    }
+    if (diff) git_diff_free(diff);
+    if (new_tree) git_tree_free(new_tree);
+    if (old_tree) git_tree_free(old_tree);
+    if (new_commit) git_commit_free(new_commit);
+    if (old_commit) git_commit_free(old_commit);
+    if (config) config_free(config);
+    if (km_owned) keymanager_free(km_owned);
+    if (metadata_merged) metadata_free(metadata_merged);
+    if (profile_oids) hashmap_free(profile_oids, free);  /* Free oid strings */
+    if (fresh_manifest) manifest_free(fresh_manifest);
+    if (profiles) profile_list_free(profiles);
 
     return err;
 }

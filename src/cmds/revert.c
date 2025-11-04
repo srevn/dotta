@@ -785,16 +785,14 @@ static error_t *revert_file_in_branch(
     /* === Phase 2: Load Current HEAD === */
 
     /* Build branch reference name */
-    size_t ref_name_size = strlen("refs/heads/") + strlen(profile_name) + 1;
-    char *ref_name = malloc(ref_name_size);
-    if (!ref_name) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate reference name");
+    char ref_name[DOTTA_REFNAME_MAX];
+    err = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", profile_name);
+    if (err) {
+        err = error_wrap(err, "Invalid profile name '%s'", profile_name);
         goto cleanup;
     }
-    snprintf(ref_name, ref_name_size, "refs/heads/%s", profile_name);
 
     ret = git_reference_lookup(&branch_ref, repo, ref_name);
-    free(ref_name);
 
     if (ret < 0) {
         err = error_from_git(ret);

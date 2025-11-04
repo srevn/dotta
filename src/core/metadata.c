@@ -18,6 +18,7 @@
 
 #include "base/error.h"
 #include "base/filesystem.h"
+#include "base/gitops.h"
 #include "utils/array.h"
 #include "utils/buffer.h"
 #include "utils/hashmap.h"
@@ -1413,8 +1414,12 @@ error_t *metadata_load_from_branch(
     metadata_t *metadata = NULL;
 
     /* Look up branch reference */
-    char ref_name[256];
-    snprintf(ref_name, sizeof(ref_name), "refs/heads/%s", branch_name);
+    char ref_name[DOTTA_REFNAME_MAX];
+    err = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", branch_name);
+    if (err) {
+        err = error_wrap(err, "Invalid branch name '%s'", branch_name);
+        goto cleanup;
+    }
 
     int git_err = git_reference_lookup(&ref, repo, ref_name);
     if (git_err < 0) {

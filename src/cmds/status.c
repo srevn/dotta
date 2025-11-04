@@ -748,10 +748,12 @@ static error_t *display_remote_status(
             output_printf(out, OUTPUT_NORMAL, "Profile: %s\n", profile_name);
 
             /* Get local commit info */
-            char local_ref[256];
-            snprintf(local_ref, sizeof(local_ref), "refs/heads/%s", profile_name);
+            char local_ref[DOTTA_REFNAME_MAX];
+            error_t *local_ref_err = gitops_build_refname(local_ref, sizeof(local_ref),
+                                                          "refs/heads/%s", profile_name);
             git_commit *local_commit = NULL;
-            error_t *commit_err = gitops_get_commit(repo, local_ref, &local_commit);
+            error_t *commit_err = local_ref_err ? local_ref_err :
+                                   gitops_get_commit(repo, local_ref, &local_commit);
 
             if (!commit_err && local_commit) {
                 const git_oid *local_oid = git_commit_id(local_commit);
@@ -782,11 +784,13 @@ static error_t *display_remote_status(
 
             /* Get remote commit info if it exists */
             if (info->exists_remotely) {
-                char remote_ref[256];
-                snprintf(remote_ref, sizeof(remote_ref), "refs/remotes/%s/%s",
-                        remote_name, profile_name);
+                char remote_ref[DOTTA_REFNAME_MAX];
+                error_t *remote_ref_err = gitops_build_refname(remote_ref, sizeof(remote_ref),
+                                                               "refs/remotes/%s/%s",
+                                                               remote_name, profile_name);
                 git_commit *remote_commit = NULL;
-                commit_err = gitops_get_commit(repo, remote_ref, &remote_commit);
+                commit_err = remote_ref_err ? remote_ref_err :
+                            gitops_get_commit(repo, remote_ref, &remote_commit);
 
                 if (!commit_err && remote_commit) {
                     const git_oid *remote_oid = git_commit_id(remote_commit);

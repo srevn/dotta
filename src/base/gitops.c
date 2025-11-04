@@ -549,22 +549,21 @@ error_t *gitops_update_file(
     }
 
     /* Load current tree from branch */
-    char *ref_name = str_format("refs/heads/%s", branch_name);
-    if (!ref_name) {
-        return ERROR(ERR_MEMORY, "Failed to allocate ref name");
+    char ref_name[DOTTA_REFNAME_MAX];
+    error_t *err = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", branch_name);
+    if (err) {
+        return error_wrap(err, "Invalid branch name '%s'", branch_name);
     }
 
     git_tree *current_tree = NULL;
-    error_t *err = gitops_load_tree(repo, ref_name, &current_tree);
+    err = gitops_load_tree(repo, ref_name, &current_tree);
     if (err) {
-        free(ref_name);
         return error_wrap(err, "Failed to load tree from branch '%s'", branch_name);
     }
 
     /* Check for no-op: file exists with same content */
     if (file_matches_oid(repo, current_tree, file_path, &blob_oid)) {
         git_tree_free(current_tree);
-        free(ref_name);
         return NULL;  /* Success, no modification needed */
     }
 
@@ -583,7 +582,6 @@ error_t *gitops_update_file(
         git_tree_free(current_tree);
 
         if (git_err < 0) {
-            free(ref_name);
             return error_from_git(git_err);
         }
 
@@ -591,7 +589,6 @@ error_t *gitops_update_file(
         git_err = git_treebuilder_insert(NULL, builder, file_path, &blob_oid, file_mode);
         if (git_err < 0) {
             git_treebuilder_free(builder);
-            free(ref_name);
             return error_from_git(git_err);
         }
 
@@ -601,7 +598,6 @@ error_t *gitops_update_file(
         git_treebuilder_free(builder);
 
         if (git_err < 0) {
-            free(ref_name);
             return error_from_git(git_err);
         }
 
@@ -609,7 +605,6 @@ error_t *gitops_update_file(
         git_tree *new_tree = NULL;
         git_err = git_tree_lookup(&new_tree, repo, &tree_oid);
         if (git_err < 0) {
-            free(ref_name);
             return error_from_git(git_err);
         }
 
@@ -623,7 +618,6 @@ error_t *gitops_update_file(
         );
 
         git_tree_free(new_tree);
-        free(ref_name);
 
         return err;
     }
@@ -635,7 +629,6 @@ error_t *gitops_update_file(
     char *dir_name = malloc(dir_len + 1);
     if (!dir_name) {
         git_tree_free(current_tree);
-        free(ref_name);
         return ERROR(ERR_MEMORY, "Failed to allocate directory name");
     }
     memcpy(dir_name, file_path, dir_len);
@@ -655,7 +648,6 @@ error_t *gitops_update_file(
         if (git_err < 0) {
             free(dir_name);
             git_tree_free(current_tree);
-            free(ref_name);
             return error_from_git(git_err);
         }
 
@@ -670,7 +662,6 @@ error_t *gitops_update_file(
     if (git_err < 0) {
         free(dir_name);
         git_tree_free(current_tree);
-        free(ref_name);
         return error_from_git(git_err);
     }
 
@@ -680,7 +671,6 @@ error_t *gitops_update_file(
         git_treebuilder_free(dir_builder);
         free(dir_name);
         git_tree_free(current_tree);
-        free(ref_name);
         return error_from_git(git_err);
     }
 
@@ -691,7 +681,6 @@ error_t *gitops_update_file(
     if (git_err < 0) {
         free(dir_name);
         git_tree_free(current_tree);
-        free(ref_name);
         return error_from_git(git_err);
     }
 
@@ -701,7 +690,6 @@ error_t *gitops_update_file(
     git_tree_free(current_tree);
     if (git_err < 0) {
         free(dir_name);
-        free(ref_name);
         return error_from_git(git_err);
     }
 
@@ -710,7 +698,6 @@ error_t *gitops_update_file(
     free(dir_name);
     if (git_err < 0) {
         git_treebuilder_free(root_builder);
-        free(ref_name);
         return error_from_git(git_err);
     }
 
@@ -719,7 +706,6 @@ error_t *gitops_update_file(
     git_err = git_treebuilder_write(&tree_oid, root_builder);
     git_treebuilder_free(root_builder);
     if (git_err < 0) {
-        free(ref_name);
         return error_from_git(git_err);
     }
 
@@ -727,7 +713,6 @@ error_t *gitops_update_file(
     git_tree *new_tree = NULL;
     git_err = git_tree_lookup(&new_tree, repo, &tree_oid);
     if (git_err < 0) {
-        free(ref_name);
         return error_from_git(git_err);
     }
 
@@ -741,7 +726,6 @@ error_t *gitops_update_file(
     );
 
     git_tree_free(new_tree);
-    free(ref_name);
 
     return err;
 }

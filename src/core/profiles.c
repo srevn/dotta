@@ -79,10 +79,10 @@ error_t *profile_load(
     }
 
     /* Load reference */
-    char refname[256];
-    int ret = snprintf(refname, sizeof(refname), "refs/heads/%s", name);
-    if (ret < 0 || (size_t)ret >= sizeof(refname)) {
-        err = ERROR(ERR_INTERNAL, "Profile name too long: %s", name);
+    char refname[DOTTA_REFNAME_MAX];
+    err = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", name);
+    if (err) {
+        err = error_wrap(err, "Invalid profile name '%s'", name);
         goto cleanup;
     }
 
@@ -118,10 +118,10 @@ error_t *profile_load_tree(git_repository *repo, profile_t *profile) {
         return NULL;  /* Already loaded */
     }
 
-    char refname[256];
-    int ret = snprintf(refname, sizeof(refname), "refs/heads/%s", profile->name);
-    if (ret < 0 || (size_t)ret >= sizeof(refname)) {
-        return ERROR(ERR_INTERNAL, "Profile name too long: %s", profile->name);
+    char refname[DOTTA_REFNAME_MAX];
+    error_t *err = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", profile->name);
+    if (err) {
+        return error_wrap(err, "Invalid profile name '%s'", profile->name);
     }
 
     return gitops_load_tree(repo, refname, &profile->tree);

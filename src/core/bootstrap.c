@@ -190,15 +190,16 @@ bool bootstrap_exists(
     }
 
     /* Build ref name */
-    char *ref_name = str_format("refs/heads/%s", profile_name);
-    if (!ref_name) {
+    char ref_name[DOTTA_REFNAME_MAX];
+    err = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", profile_name);
+    if (err) {
+        error_free(err);
         return false;
     }
 
     /* Load tree from profile branch */
     git_tree *tree = NULL;
     err = gitops_load_tree(repo, ref_name, &tree);
-    free(ref_name);
 
     if (err) {
         error_free(err);
@@ -255,15 +256,14 @@ error_t *bootstrap_extract_to_temp(
     error_t *err = NULL;
     git_tree *tree = NULL;
     git_blob *blob = NULL;
-    char *ref_name = NULL;
     char *temp_path = NULL;
     int fd = -1;
 
     /* Build ref name */
-    ref_name = str_format("refs/heads/%s", profile_name);
-    if (!ref_name) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate ref name");
-        goto cleanup;
+    char ref_name[DOTTA_REFNAME_MAX];
+    err = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", profile_name);
+    if (err) {
+        return error_wrap(err, "Invalid profile name '%s'", profile_name);
     }
 
     /* Load tree from profile branch */
@@ -355,7 +355,6 @@ cleanup:
     }
     if (blob) git_blob_free(blob);
     if (tree) git_tree_free(tree);
-    if (ref_name) free(ref_name);
 
     return err;
 }
@@ -398,14 +397,13 @@ error_t *bootstrap_read_content(
     error_t *err = NULL;
     git_tree *tree = NULL;
     git_blob *blob = NULL;
-    char *ref_name = NULL;
     buffer_t *content_buf = NULL;
 
     /* Build ref name */
-    ref_name = str_format("refs/heads/%s", profile_name);
-    if (!ref_name) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate ref name");
-        goto cleanup;
+    char ref_name[DOTTA_REFNAME_MAX];
+    err = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", profile_name);
+    if (err) {
+        return error_wrap(err, "Invalid profile name '%s'", profile_name);
     }
 
     /* Load tree from profile branch */
@@ -457,7 +455,6 @@ cleanup:
     if (content_buf) buffer_free(content_buf);
     if (blob) git_blob_free(blob);
     if (tree) git_tree_free(tree);
-    if (ref_name) free(ref_name);
 
     return err;
 }

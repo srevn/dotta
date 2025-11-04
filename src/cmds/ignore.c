@@ -495,18 +495,18 @@ static error_t *edit_profile_dottaignore(
     }
 
     /* Build ref name */
-    char *ref_name = str_format("refs/heads/%s", profile_name);
-    if (!ref_name) {
+    char ref_name[DOTTA_REFNAME_MAX];
+    err = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", profile_name);
+    if (err) {
         close(fd);
         unlink(tmpfile);
         free(tmpfile);
-        return ERROR(ERR_MEMORY, "Failed to allocate ref name");
+        return error_wrap(err, "Invalid profile name '%s'", profile_name);
     }
 
     /* Load existing .dottaignore content from profile */
     git_tree *tree = NULL;
     err = gitops_load_tree(repo, ref_name, &tree);
-    free(ref_name);
 
     if (err) {
         close(fd);
@@ -850,16 +850,16 @@ static error_t *modify_profile_dottaignore(
     }
 
     /* Build ref name */
-    char *ref_name = str_format("refs/heads/%s", profile_name);
-    if (!ref_name) {
-        return ERROR(ERR_MEMORY, "Failed to allocate ref name");
+    char ref_name[DOTTA_REFNAME_MAX];
+    err = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", profile_name);
+    if (err) {
+        return error_wrap(err, "Invalid profile name '%s'", profile_name);
     }
 
     /* Load existing .dottaignore content from profile */
     char *existing_content = NULL;
     git_tree *tree = NULL;
     err = gitops_load_tree(repo, ref_name, &tree);
-    free(ref_name);
 
     if (err) {
         return error_wrap(err, "Failed to load profile tree");

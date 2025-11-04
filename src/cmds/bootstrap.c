@@ -117,15 +117,15 @@ static error_t *bootstrap_create_template(
     }
 
     /* Load current tree from profile branch */
-    char *ref_name = str_format("refs/heads/%s", profile_name);
-    if (!ref_name) {
-        return ERROR(ERR_MEMORY, "Failed to allocate ref name");
+    char ref_name[DOTTA_REFNAME_MAX];
+    err = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", profile_name);
+    if (err) {
+        return error_wrap(err, "Invalid profile name '%s'", profile_name);
     }
 
     git_tree *current_tree = NULL;
     err = gitops_load_tree(repo, ref_name, &current_tree);
     if (err) {
-        free(ref_name);
         return error_wrap(err, "Failed to load tree from profile '%s'", profile_name);
     }
 
@@ -134,7 +134,6 @@ static error_t *bootstrap_create_template(
     git_err = git_treebuilder_new(&root_builder, repo, current_tree);
     git_tree_free(current_tree);
     if (git_err < 0) {
-        free(ref_name);
         return error_from_git(git_err);
     }
 
@@ -142,7 +141,6 @@ static error_t *bootstrap_create_template(
     git_err = git_treebuilder_insert(NULL, root_builder, script_name, &blob_oid, GIT_FILEMODE_BLOB_EXECUTABLE);
     if (git_err < 0) {
         git_treebuilder_free(root_builder);
-        free(ref_name);
         return error_from_git(git_err);
     }
 
@@ -151,7 +149,6 @@ static error_t *bootstrap_create_template(
     git_err = git_treebuilder_write(&tree_oid, root_builder);
     git_treebuilder_free(root_builder);
     if (git_err < 0) {
-        free(ref_name);
         return error_from_git(git_err);
     }
 
@@ -159,7 +156,6 @@ static error_t *bootstrap_create_template(
     git_tree *new_tree = NULL;
     git_err = git_tree_lookup(&new_tree, repo, &tree_oid);
     if (git_err < 0) {
-        free(ref_name);
         return error_from_git(git_err);
     }
 
@@ -167,7 +163,6 @@ static error_t *bootstrap_create_template(
     char *commit_message = str_format("Add bootstrap script for %s profile", profile_name);
     if (!commit_message) {
         git_tree_free(new_tree);
-        free(ref_name);
         return ERROR(ERR_MEMORY, "Failed to allocate commit message");
     }
 
@@ -181,7 +176,6 @@ static error_t *bootstrap_create_template(
 
     free(commit_message);
     git_tree_free(new_tree);
-    free(ref_name);
 
     if (err) {
         return error_wrap(err, "Failed to commit bootstrap script");

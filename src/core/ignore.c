@@ -276,15 +276,15 @@ static error_t *load_profile_dottaignore(
     }
 
     /* Build ref name */
-    char *ref_name = str_format("refs/heads/%s", profile_name);
-    if (!ref_name) {
-        return ERROR(ERR_MEMORY, "Failed to allocate ref name");
+    char ref_name[DOTTA_REFNAME_MAX];
+    err = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", profile_name);
+    if (err) {
+        return error_wrap(err, "Invalid profile name '%s'", profile_name);
     }
 
     /* Load tree from profile branch */
     git_tree *tree = NULL;
     err = gitops_load_tree(repo, ref_name, &tree);
-    free(ref_name);
 
     if (err) {
         /* Non-fatal: profile might not have .dottaignore */

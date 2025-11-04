@@ -256,10 +256,10 @@ static error_t *list_profiles(
             }
 
             /* Get last commit info */
-            char refname[LIST_REFNAME_BUFFER_SIZE];
-            snprintf(refname, sizeof(refname), "refs/heads/%s", name);
+            char refname[DOTTA_REFNAME_MAX];
+            error_t *refname_err = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", name);
             git_commit *last_commit = NULL;
-            error_t *commit_err = gitops_get_commit(repo, refname, &last_commit);
+            error_t *commit_err = refname_err ? refname_err : gitops_get_commit(repo, refname, &last_commit);
 
             if (!commit_err && last_commit) {
                 const git_oid *oid = git_commit_id(last_commit);

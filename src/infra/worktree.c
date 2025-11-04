@@ -17,6 +17,7 @@
 
 #include "base/error.h"
 #include "base/filesystem.h"
+#include "base/gitops.h"
 #include "utils/string.h"
 
 /**
@@ -153,17 +154,17 @@ error_t *worktree_checkout_branch(
         return ERROR(ERR_INVALID_ARG, "Worktree already cleaned up");
     }
 
-    /* Build reference name dynamically to support long branch names */
-    char *refname = str_format("refs/heads/%s", branch_name);
-    if (!refname) {
-        return ERROR(ERR_MEMORY, "Failed to allocate reference name");
+    /* Build reference name */
+    char refname[DOTTA_REFNAME_MAX];
+    error_t *err_build = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
+    if (err_build) {
+        return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
     }
 
     /* Find the commit for the branch */
     git_object *commit = NULL;
     int err = git_revparse_single(&commit, wt->repo, refname);
     if (err < 0) {
-        free(refname);
         return error_from_git(err);
     }
 
@@ -174,13 +175,11 @@ error_t *worktree_checkout_branch(
     err = git_checkout_tree(wt->repo, commit, &checkout_opts);
     git_object_free(commit);
     if (err < 0) {
-        free(refname);
         return error_from_git(err);
     }
 
     /* Update HEAD */
     err = git_repository_set_head(wt->repo, refname);
-    free(refname);
     if (err < 0) {
         return error_from_git(err);
     }
@@ -199,15 +198,15 @@ error_t *worktree_create_orphan(
         return ERROR(ERR_INVALID_ARG, "Worktree already cleaned up");
     }
 
-    /* Build reference name dynamically to support long branch names */
-    char *refname = str_format("refs/heads/%s", branch_name);
-    if (!refname) {
-        return ERROR(ERR_MEMORY, "Failed to allocate reference name");
+    /* Build reference name */
+    char refname[DOTTA_REFNAME_MAX];
+    error_t *err_build = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
+    if (err_build) {
+        return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
     }
 
     /* Set HEAD to new orphan branch (doesn't exist yet) */
     int err = git_repository_set_head(wt->repo, refname);
-    free(refname);
     if (err < 0) {
         return error_from_git(err);
     }
@@ -245,15 +244,17 @@ void worktree_cleanup(worktree_handle_t *wt) {
 
     /* Step 3: Delete the temporary worktree branch from main repo */
     if (wt->name && wt->main_repo) {
-        char *refname = str_format("refs/heads/%s", wt->name);
-        if (refname) {
+        char refname[DOTTA_REFNAME_MAX];
+        error_t *err_build = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", wt->name);
+        if (!err_build) {
             git_reference *ref = NULL;
             if (git_reference_lookup(&ref, wt->main_repo, refname) == 0) {
                 git_branch_delete(ref);
                 git_reference_free(ref);
             }
-            free(refname);
         }
+        /* Silently ignore refname build errors during cleanup */
+        error_free(err_build);
     }
 
     /* Step 4: Remove temporary directory */

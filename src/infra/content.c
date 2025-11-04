@@ -668,6 +668,7 @@ error_t *content_hash_from_tree_entry(
     const char *profile_name,
     const metadata_t *metadata,
     keymanager_t *km,
+    content_cache_t *cache,
     char **out_hash
 ) {
     CHECK_NULL(repo);
@@ -679,24 +680,38 @@ error_t *content_hash_from_tree_entry(
 
     error_t *err = NULL;
     buffer_t *content = NULL;
+    const buffer_t *cached_content = NULL;
+    bool owns_content = false;
 
-    /* Get plaintext content (handles decryption transparently) */
-    err = content_get_from_tree_entry(
-        repo,
-        entry,
-        storage_path,
-        profile_name,
-        metadata,
-        km,
-        &content
-    );
-    if (err) {
-        return error_wrap(err, "Failed to get content for hashing");
+    /* Get plaintext content (use cache if provided) */
+    if (cache) {
+        /* Cache path: O(1) lookup, borrowed reference */
+        err = content_cache_get_from_tree_entry(
+            cache, entry, storage_path, profile_name, metadata, &cached_content
+        );
+        if (err) {
+            return error_wrap(err, "Failed to get cached content for hashing");
+        }
+        content = (buffer_t *)cached_content;  /* Borrowed reference */
+        owns_content = false;
+    } else {
+        /* Non-cached path: load from Git, caller owns */
+        err = content_get_from_tree_entry(
+            repo, entry, storage_path, profile_name, metadata, km, &content
+        );
+        if (err) {
+            return error_wrap(err, "Failed to get content for hashing");
+        }
+        owns_content = true;  /* Must free */
     }
 
     /* Hash the plaintext content */
     err = hash_buffer_to_hex(content, out_hash);
-    buffer_free_secure(content);
+
+    /* Free content only if we own it */
+    if (owns_content) {
+        buffer_free_secure(content);
+    }
 
     return err;
 }

@@ -1232,7 +1232,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         output_print(out, OUTPUT_VERBOSE, "\nChecking privilege requirements...\n");
 
         err = ensure_complete_apply_privileges(
-            manifest,
+            pending_manifest,
             file_orphans,
             file_orphan_count,
             dir_orphans,

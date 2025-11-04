@@ -466,6 +466,7 @@ static error_t *sync_push_phase(
     /* Extract cached resources from workspace for manifest operations */
     keymanager_t *km = workspace_get_keymanager(ws);
     const hashmap_t *metadata_cache = workspace_get_metadata_cache(ws);
+    content_cache_t *content_cache = workspace_get_content_cache(ws);
 
     output_section(out, "Syncing with remote");
 
@@ -573,7 +574,7 @@ static error_t *sync_push_phase(
                         error_t *manifest_err = manifest_sync_diff(
                             repo, state, result->profile_name,
                             &old_oid, &new_oid, enabled_profiles,
-                            km, metadata_cache,
+                            km, metadata_cache, content_cache,
                             &synced, &removed, &fallbacks
                         );
 
@@ -722,7 +723,7 @@ static error_t *sync_push_phase(
                                     error_t *manifest_err = manifest_sync_diff(
                                         repo, state, result->profile_name,
                                         &ctx.saved_oid, &new_oid, enabled_profiles,
-                                        km, metadata_cache,
+                                        km, metadata_cache, content_cache,
                                         &synced, &removed, &fallbacks
                                     );
 
@@ -825,7 +826,7 @@ static error_t *sync_push_phase(
                                     error_t *manifest_err = manifest_sync_diff(
                                         repo, state, result->profile_name,
                                         &ctx.saved_oid, &new_oid, enabled_profiles,
-                                        km, metadata_cache,
+                                        km, metadata_cache, content_cache,
                                         &synced, &removed, &fallbacks
                                     );
 
@@ -960,7 +961,7 @@ static error_t *sync_push_phase(
                                 error_t *manifest_err = manifest_sync_diff(
                                     repo, state, result->profile_name,
                                     &ctx.saved_oid, &new_oid, enabled_profiles,
-                                    km, metadata_cache,
+                                    km, metadata_cache, content_cache,
                                     &synced, &removed, &fallbacks
                                 );
 

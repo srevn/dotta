@@ -1303,6 +1303,7 @@ static error_t *update_manifest_after_update(
     /* Get workspace resources (still valid after Git commits) */
     keymanager_t *km = workspace_get_keymanager(ws);
     const hashmap_t *metadata_cache = workspace_get_metadata_cache(ws);
+    content_cache_t *content_cache = workspace_get_content_cache(ws);
 
     /* Use bulk sync operation (O(M + N) - optimal!) */
     size_t synced = 0, removed = 0, fallbacks = 0;
@@ -1314,6 +1315,7 @@ static error_t *update_manifest_after_update(
         enabled_profiles,
         km,
         metadata_cache,
+        content_cache,
         &synced,
         &removed,
         &fallbacks

@@ -637,6 +637,7 @@ static error_t *update_manifest_after_add(
     hashmap_t *metadata_cache = NULL;
     keymanager_t *km = NULL;
     dotta_config_t *config = NULL;
+    content_cache_t *content_cache = NULL;
 
     /* Initialize output */
     *out_updated = false;
@@ -723,14 +724,21 @@ static error_t *update_manifest_after_add(
         goto cleanup;
     }
 
-    /* STEP 4: Open transaction */
+    /* STEP 4: Create content cache for batch operations */
+    content_cache = content_cache_create(repo, km);
+    if (!content_cache) {
+        err = ERROR(ERR_MEMORY, "Failed to create content cache");
+        goto cleanup;
+    }
+
+    /* STEP 5: Open transaction */
     err = state_load_for_update(repo, &state);
     if (err) {
         err = error_wrap(err, "Failed to open state transaction for manifest update");
         goto cleanup;
     }
 
-    /* STEP 5: Bulk sync operation (O(M+N)) */
+    /* STEP 6: Bulk sync operation (O(M+N)) */
     size_t synced_count = 0;
     err = manifest_add_files(
         repo,
@@ -740,6 +748,7 @@ static error_t *update_manifest_after_add(
         enabled_profiles,
         km,
         metadata_cache,
+        content_cache,
         &synced_count
     );
 
@@ -767,6 +776,9 @@ static error_t *update_manifest_after_add(
     }
 
 cleanup:
+    if (content_cache) {
+        content_cache_free(content_cache);
+    }
     if (km) {
         keymanager_free(km);
     }

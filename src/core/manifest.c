@@ -148,6 +148,7 @@ static error_t *compute_content_hash_from_entry(
     const char *profile_name,
     const metadata_t *metadata,
     keymanager_t *km,
+    content_cache_t *cache,
     char **out_hash
 ) {
     CHECK_NULL(repo);
@@ -157,7 +158,7 @@ static error_t *compute_content_hash_from_entry(
     CHECK_NULL(out_hash);
 
     error_t *err = content_hash_from_tree_entry(
-        repo, entry, storage_path, profile_name, metadata, km, out_hash
+        repo, entry, storage_path, profile_name, metadata, km, cache, out_hash
     );
 
     if (err) {
@@ -187,6 +188,7 @@ static error_t *compute_content_hash_from_entry(
  * @param metadata Merged metadata from all profiles
  * @param status Initial status for entry
  * @param km Keymanager for content hashing
+ * @param cache Content cache (can be NULL)
  * @return Error or NULL on success
  */
 static error_t *sync_entry_to_state(
@@ -196,7 +198,8 @@ static error_t *sync_entry_to_state(
     const char *git_oid,
     const metadata_t *metadata,
     manifest_status_t status,
-    keymanager_t *km
+    keymanager_t *km,
+    content_cache_t *cache
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -218,6 +221,7 @@ static error_t *sync_entry_to_state(
         manifest_entry->source_profile->name,
         metadata,
         km,
+        cache,
         &content_hash
     );
     if (err) {
@@ -383,7 +387,7 @@ error_t *manifest_enable_profile(
         /* Sync to state with PENDING_DEPLOYMENT status */
         err = sync_entry_to_state(
             repo, state, entry, head_oid_str, metadata,
-            MANIFEST_STATUS_PENDING_DEPLOYMENT, km
+            MANIFEST_STATUS_PENDING_DEPLOYMENT, km, NULL
         );
         if (err) {
             goto cleanup;
@@ -893,7 +897,7 @@ error_t *manifest_reorder_profiles(
             git_oid_tostr(oid_str, sizeof(oid_str), &oid);
 
             err = sync_entry_to_state(repo, state, new_entry, oid_str, metadata,
-                                      MANIFEST_STATUS_PENDING_DEPLOYMENT, km);
+                                      MANIFEST_STATUS_PENDING_DEPLOYMENT, km, NULL);
             if (err) {
                 goto cleanup;
             }
@@ -913,7 +917,7 @@ error_t *manifest_reorder_profiles(
 
                 /* Sync with new owner (status = PENDING_DEPLOYMENT) */
                 err = sync_entry_to_state(repo, state, new_entry, oid_str, metadata,
-                                          MANIFEST_STATUS_PENDING_DEPLOYMENT, km);
+                                          MANIFEST_STATUS_PENDING_DEPLOYMENT, km, NULL);
                 if (err) {
                     goto cleanup;
                 }
@@ -1091,6 +1095,7 @@ error_t *manifest_update_files(
     const string_array_t *enabled_profiles,
     keymanager_t *km,
     const hashmap_t *metadata_cache,
+    content_cache_t *content_cache,
     size_t *out_synced,
     size_t *out_removed,
     size_t *out_fallbacks
@@ -1171,7 +1176,7 @@ error_t *manifest_update_files(
                                                         fallback->source_profile->name);
 
                 err = sync_entry_to_state(repo, state, fallback, git_oid, metadata,
-                                         MANIFEST_STATUS_PENDING_DEPLOYMENT, km);
+                                         MANIFEST_STATUS_PENDING_DEPLOYMENT, km, content_cache);
                 if (err) {
                     err = error_wrap(err, "Failed to sync fallback for '%s'",
                                    item->filesystem_path);
@@ -1222,7 +1227,7 @@ error_t *manifest_update_files(
             const metadata_t *metadata = hashmap_get(metadata_cache, item->profile);
 
             err = sync_entry_to_state(repo, state, entry, git_oid, metadata,
-                                     MANIFEST_STATUS_DEPLOYED, km);
+                                     MANIFEST_STATUS_DEPLOYED, km, content_cache);
             if (err) {
                 err = error_wrap(err, "Failed to sync '%s' to manifest",
                                item->filesystem_path);
@@ -1313,6 +1318,7 @@ error_t *manifest_add_files(
     const string_array_t *enabled_profiles,
     keymanager_t *km,
     const hashmap_t *metadata_cache,
+    content_cache_t *content_cache,
     size_t *out_synced
 ) {
     CHECK_NULL(repo);
@@ -1396,7 +1402,7 @@ error_t *manifest_add_files(
         const metadata_t *metadata = hashmap_get(metadata_cache, entry->source_profile->name);
 
         err = sync_entry_to_state(repo, state, entry, profile_git_oid, metadata,
-                                 MANIFEST_STATUS_DEPLOYED, km);
+                                 MANIFEST_STATUS_DEPLOYED, km, content_cache);
 
         if (err) {
             err = error_wrap(err, "Failed to sync '%s' to manifest",
@@ -1484,6 +1490,7 @@ error_t *manifest_sync_diff(
     const string_array_t *enabled_profiles,
     keymanager_t *km,
     const hashmap_t *metadata_cache,
+    content_cache_t *content_cache,
     size_t *out_synced,
     size_t *out_removed,
     size_t *out_fallbacks
@@ -1690,7 +1697,7 @@ error_t *manifest_sync_diff(
             err = sync_entry_to_state(
                 repo, state, entry, git_oid_str, profile_metadata,
                 MANIFEST_STATUS_PENDING_DEPLOYMENT,
-                km
+                km, content_cache
             );
 
             if (err) {
@@ -1738,7 +1745,7 @@ error_t *manifest_sync_diff(
                 err = sync_entry_to_state(
                     repo, state, entry, fallback_git_oid, fallback_metadata,
                     MANIFEST_STATUS_PENDING_DEPLOYMENT,
-                    km
+                    km, content_cache
                 );
 
                 if (err) {

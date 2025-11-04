@@ -169,6 +169,7 @@ error_t *manifest_disable_profile(
  * @param enabled_profiles All enabled profiles (must not be NULL)
  * @param km Keymanager for content hashing (can be NULL if no encryption)
  * @param metadata_cache Hashmap: profile_name → metadata_t* (must not be NULL)
+ * @param content_cache Content cache (can be NULL for non-cached operation)
  * @param out_synced Output: count of files synced (must not be NULL)
  * @param out_removed Output: count of files removed (must not be NULL)
  * @param out_fallbacks Output: count of fallback resolutions (must not be NULL)
@@ -182,6 +183,7 @@ error_t *manifest_update_files(
     const string_array_t *enabled_profiles,
     keymanager_t *km,
     const hashmap_t *metadata_cache,
+    content_cache_t *content_cache,
     size_t *out_synced,
     size_t *out_removed,
     size_t *out_fallbacks
@@ -241,6 +243,7 @@ error_t *manifest_update_files(
  * @param enabled_profiles All enabled profiles (must not be NULL)
  * @param km Keymanager for content hashing (can be NULL if no encryption)
  * @param metadata_cache Hashmap: profile_name → metadata_t* (must not be NULL)
+ * @param content_cache Content cache (can be NULL for non-cached operation)
  * @param out_synced Output: count of files synced (must not be NULL)
  * @return Error or NULL on success
  */
@@ -252,6 +255,7 @@ error_t *manifest_add_files(
     const string_array_t *enabled_profiles,
     keymanager_t *km,
     const hashmap_t *metadata_cache,
+    content_cache_t *content_cache,
     size_t *out_synced
 );
 
@@ -474,6 +478,7 @@ error_t *manifest_reorder_profiles(
  * @param enabled_profiles All enabled profiles for precedence (must not be NULL)
  * @param km Keymanager for content hashing (can be NULL, will create if needed)
  * @param metadata_cache Pre-loaded metadata (can be NULL, will load if needed)
+ * @param content_cache Content cache (can be NULL for non-cached operation)
  * @param out_synced Output: number of files synced (can be NULL)
  * @param out_removed Output: number of files removed (can be NULL)
  * @param out_fallbacks Output: number of fallback resolutions (can be NULL)
@@ -488,6 +493,7 @@ error_t *manifest_sync_diff(
     const string_array_t *enabled_profiles,
     keymanager_t *km,
     const hashmap_t *metadata_cache,
+    content_cache_t *content_cache,
     size_t *out_synced,
     size_t *out_removed,
     size_t *out_fallbacks

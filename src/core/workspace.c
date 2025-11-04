@@ -2072,6 +2072,23 @@ keymanager_t *workspace_get_keymanager(const workspace_t *ws) {
 }
 
 /**
+ * Get content cache from workspace
+ *
+ * Returns the content cache used by the workspace for transparent
+ * encryption/decryption. The cache is pre-populated during workspace
+ * analysis and can be reused by commands to avoid redundant decryption.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @return Content cache (borrowed reference, do not free, can be NULL)
+ */
+content_cache_t *workspace_get_content_cache(const workspace_t *ws) {
+    if (!ws) {
+        return NULL;
+    }
+    return ws->content_cache;
+}
+
+/**
  * Get metadata cache from workspace
  *
  * Returns the pre-loaded metadata cache (hashmap: profile_name → metadata_t*)

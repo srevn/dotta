@@ -349,11 +349,14 @@ error_t *content_hash_file(
  * This is the Git counterpart to content_hash_file().
  *
  * Process:
- * 1. Load blob from Git tree entry
+ * 1. Load blob from Git tree entry (cached if cache provided)
  * 2. Detect encryption from magic header
  * 3. Decrypt if needed (transparent to caller)
  * 4. Hash plaintext content using Blake2b
  * 5. Return hex string (64 chars)
+ *
+ * Performance: With cache, avoids redundant blob loads and decryption.
+ * Without cache (NULL), falls back to direct Git operations.
  *
  * Used by manifest operations when populating from Git (e.g., profile enable).
  *
@@ -363,6 +366,7 @@ error_t *content_hash_file(
  * @param profile_name Profile name (must not be NULL, used for key derivation)
  * @param metadata Metadata for encryption detection (must not be NULL)
  * @param km Key manager for decryption (can be NULL if file is plaintext)
+ * @param cache Content cache (can be NULL for non-cached operation)
  * @param out_hash Output hash as hex string (must not be NULL, caller must free)
  * @return Error or NULL on success
  *
@@ -380,6 +384,7 @@ error_t *content_hash_from_tree_entry(
     const char *profile_name,
     const metadata_t *metadata,
     keymanager_t *km,
+    content_cache_t *cache,
     char **out_hash
 );
 

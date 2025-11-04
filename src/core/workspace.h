@@ -25,6 +25,7 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "crypto/keymanager.h"
+#include "infra/content.h"
 #include "types.h"
 #include "utils/config.h"
 
@@ -304,6 +305,21 @@ const state_t *workspace_get_state(const workspace_t *ws);
  * @return Keymanager (borrowed reference, do not free, can be NULL)
  */
 keymanager_t *workspace_get_keymanager(const workspace_t *ws);
+
+/**
+ * Get content cache from workspace
+ *
+ * Returns the content cache used by the workspace for transparent
+ * encryption/decryption. The cache is pre-populated during workspace
+ * analysis and can be reused by commands to avoid redundant decryption.
+ *
+ * Typical usage: Pass to diff/show commands to reuse decrypted content
+ * without redundant blob reads and decryption operations.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @return Content cache (borrowed reference, do not free, can be NULL)
+ */
+content_cache_t *workspace_get_content_cache(const workspace_t *ws);
 
 /**
  * Get metadata cache from workspace

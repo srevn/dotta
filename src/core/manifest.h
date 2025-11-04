@@ -26,7 +26,8 @@
 
 #include "types.h"
 #include "core/state.h"
-#include "core/profiles.h"
+#include "core/workspace.h"
+#include "crypto/keymanager.h"
 #include <git2.h>
 
 /**
@@ -215,6 +216,71 @@ error_t *manifest_remove_file(
     state_t *state,
     const char *filesystem_path,
     const string_array_t *enabled_profiles
+);
+
+/**
+ * Sync multiple files to manifest in bulk (optimized for update command)
+ *
+ * High-performance batch operation that builds a FRESH manifest from Git
+ * (post-commit state) instead of using stale workspace manifest. Designed
+ * for the update command's workflow where many files are synced at once
+ * after Git commits.
+ *
+ * CRITICAL DESIGN DECISION: This function builds a FRESH manifest from Git
+ * because the workspace manifest is stale after commits. Using the stale
+ * manifest would cause fallback to expensive single-file operations for
+ * newly added files, resulting in O(N×M) complexity instead of O(M+N).
+ *
+ * Algorithm:
+ *   1. Load enabled profiles from Git
+ *   2. Build FRESH manifest via profile_build_manifest() (O(M))
+ *   3. Build hashmap index for O(1) lookups
+ *   4. Build profile→oid map for git_oid field
+ *   5. For each item (O(N)):
+ *      - If DELETED: check fresh manifest for fallback
+ *        → Fallback exists: update to fallback profile
+ *        → No fallback: mark PENDING_REMOVAL
+ *      - Else (modified/new): lookup in fresh manifest
+ *        → Found + precedence matches: sync to state (DEPLOYED status)
+ *        → Not found: file filtered/excluded (skip gracefully)
+ *   6. All operations within caller's transaction
+ *
+ * Preconditions:
+ *   - state MUST have active transaction (via state_load_for_update)
+ *   - Git commits MUST be completed (branches at final state)
+ *   - items MUST be FILE kind only (no directories)
+ *   - enabled_profiles MUST be current enabled set
+ *
+ * Postconditions:
+ *   - Modified/new files synced with status=DEPLOYED
+ *   - Deleted files fallback or marked PENDING_REMOVAL
+ *   - Transaction remains open (caller commits)
+ *
+ * Performance: O(M + N) where M = total files in profiles, N = items to sync
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param state State handle (with active transaction, must not be NULL)
+ * @param items Array of workspace items to sync (must not be NULL)
+ * @param item_count Number of items
+ * @param enabled_profiles All enabled profiles (must not be NULL)
+ * @param km Keymanager for content hashing (can be NULL if no encryption)
+ * @param metadata_cache Hashmap: profile_name → metadata_t* (must not be NULL)
+ * @param out_synced Output: count of files synced (must not be NULL)
+ * @param out_removed Output: count of files removed (must not be NULL)
+ * @param out_fallbacks Output: count of fallback resolutions (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *manifest_sync_files_bulk(
+    git_repository *repo,
+    state_t *state,
+    const workspace_item_t **items,
+    size_t item_count,
+    const string_array_t *enabled_profiles,
+    keymanager_t *km,
+    const hashmap_t *metadata_cache,
+    size_t *out_synced,
+    size_t *out_removed,
+    size_t *out_fallbacks
 );
 
 /**

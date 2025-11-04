@@ -36,7 +36,6 @@
 #include "crypto/encryption.h"
 #include "crypto/keymanager.h"
 #include "crypto/policy.h"
-#include "infra/compare.h"
 #include "infra/content.h"
 #include "utils/array.h"
 #include "utils/config.h"
@@ -53,7 +52,6 @@ typedef struct {
     const metadata_item_t *item;      /* Borrowed from metadata_cache */
     const char *profile_name;         /* Which profile provided this (borrowed) */
 } merged_metadata_entry_t;
-
 
 /**
  * Workspace structure
@@ -2068,6 +2066,41 @@ const state_t *workspace_get_state(const workspace_t *ws) {
         return NULL;
     }
     return ws->state;
+}
+
+/**
+ * Get keymanager from workspace
+ *
+ * Returns the keymanager borrowed from global configuration. This is used
+ * for content hashing and encryption operations. Can be NULL if encryption
+ * is not configured.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @return Keymanager (borrowed reference, do not free, can be NULL)
+ */
+keymanager_t *workspace_get_keymanager(const workspace_t *ws) {
+    if (!ws) {
+        return NULL;
+    }
+    return ws->keymanager;
+}
+
+/**
+ * Get metadata cache from workspace
+ *
+ * Returns the pre-loaded metadata cache (hashmap: profile_name → metadata_t*)
+ * populated during workspace_load(). This cache remains valid for the
+ * workspace's lifetime and can be passed to bulk operations that need
+ * per-profile metadata without redundant loads.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @return Metadata cache hashmap (borrowed reference, do not free, can be NULL)
+ */
+const hashmap_t *workspace_get_metadata_cache(const workspace_t *ws) {
+    if (!ws) {
+        return NULL;
+    }
+    return ws->metadata_cache;
 }
 
 /**

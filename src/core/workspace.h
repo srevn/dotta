@@ -21,10 +21,11 @@
 
 #include <git2.h>
 
-#include "types.h"
-#include "core/state.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
+#include "core/state.h"
+#include "crypto/keymanager.h"
+#include "types.h"
 #include "utils/config.h"
 
 /**
@@ -291,6 +292,34 @@ const manifest_t *workspace_get_manifest(const workspace_t *ws);
  * @return State (borrowed reference, never NULL for valid workspace)
  */
 const state_t *workspace_get_state(const workspace_t *ws);
+
+/**
+ * Get keymanager from workspace
+ *
+ * Returns the keymanager borrowed from global configuration. This is used
+ * for content hashing and encryption operations. Can be NULL if encryption
+ * is not configured.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @return Keymanager (borrowed reference, do not free, can be NULL)
+ */
+keymanager_t *workspace_get_keymanager(const workspace_t *ws);
+
+/**
+ * Get metadata cache from workspace
+ *
+ * Returns the pre-loaded metadata cache (hashmap: profile_name → metadata_t*)
+ * populated during workspace_load(). This cache remains valid for the
+ * workspace's lifetime and can be passed to bulk operations that need
+ * per-profile metadata without redundant loads.
+ *
+ * Typical usage: Pass to manifest_sync_files_bulk() to avoid redundant
+ * metadata loads during batch operations.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @return Metadata cache hashmap (borrowed reference, do not free, can be NULL)
+ */
+const hashmap_t *workspace_get_metadata_cache(const workspace_t *ws);
 
 /**
  * Get merged metadata from workspace

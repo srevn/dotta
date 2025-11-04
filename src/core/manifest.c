@@ -23,12 +23,10 @@
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "crypto/keymanager.h"
 #include "infra/content.h"
 #include "infra/path.h"
-#include "utils/array.h"
 #include "utils/config.h"
-#include "utils/string.h"
+#include "utils/hashmap.h"
 
 /**
  * Get current HEAD oid for branch
@@ -1096,6 +1094,289 @@ cleanup:
     state_free_all_files(old_entries, old_count);
     if (new_manifest) {
         manifest_free(new_manifest);
+    }
+
+    return err;
+}
+
+/**
+ * Build hashmap of profile names to their current HEAD oids
+ *
+ * Helper for bulk operations that need git_oid for multiple profiles.
+ * Creates a map: profile_name (string) -> git_oid (40-char hex string).
+ *
+ * @param repo Git repository
+ * @param profiles Profile list (with loaded references)
+ * @param out_map Output hashmap (caller must free with hashmap_free(map, free))
+ * @return Error or NULL on success
+ */
+static error_t *build_profile_oid_map(
+    git_repository *repo,
+    const profile_list_t *profiles,
+    hashmap_t **out_map
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(profiles);
+    CHECK_NULL(out_map);
+
+    error_t *err = NULL;
+
+    /* Create hashmap */
+    hashmap_t *map = hashmap_create(profiles->count);
+    if (!map) {
+        return ERROR(ERR_MEMORY, "Failed to create profile oid map");
+    }
+
+    /* Get HEAD oid for each profile */
+    for (size_t i = 0; i < profiles->count; i++) {
+        const profile_t *profile = &profiles->profiles[i];
+        git_oid oid;
+
+        /* Get branch HEAD */
+        err = get_branch_head_oid(repo, profile->name, &oid);
+        if (err) {
+            hashmap_free(map, free);
+            return error_wrap(err, "Failed to get HEAD for profile '%s'",
+                            profile->name);
+        }
+
+        /* Convert to hex string */
+        char *oid_str = malloc(GIT_OID_HEXSZ + 1);
+        if (!oid_str) {
+            hashmap_free(map, free);
+            return ERROR(ERR_MEMORY, "Failed to allocate oid string");
+        }
+
+        git_oid_tostr(oid_str, GIT_OID_HEXSZ + 1, &oid);
+
+        /* Store in map */
+        err = hashmap_set(map, profile->name, oid_str);
+        if (err) {
+            free(oid_str);
+            hashmap_free(map, free);
+            return error_wrap(err, "Failed to add oid to map");
+        }
+    }
+
+    *out_map = map;
+    return NULL;
+}
+
+/**
+ * Sync multiple files to manifest in bulk (optimized for update command)
+ *
+ * High-performance batch operation that builds a FRESH manifest from Git
+ * (post-commit state) instead of using stale workspace manifest. Designed
+ * for the update command's workflow where many files are synced at once
+ * after Git commits.
+ *
+ * CRITICAL DESIGN DECISION: This function builds a FRESH manifest from Git
+ * because the workspace manifest is stale after commits. Using the stale
+ * manifest would cause fallback to expensive single-file operations for
+ * newly added files, resulting in O(N×M) complexity instead of O(M+N).
+ *
+ * Algorithm:
+ *   1. Load enabled profiles from Git
+ *   2. Build FRESH manifest via profile_build_manifest() (O(M))
+ *   3. Build hashmap index for O(1) lookups
+ *   4. Build profile→oid map for git_oid field
+ *   5. For each item (O(N)):
+ *      - If DELETED: check fresh manifest for fallback
+ *        → Fallback exists: update to fallback profile
+ *        → No fallback: mark PENDING_REMOVAL
+ *      - Else (modified/new): lookup in fresh manifest
+ *        → Found + precedence matches: sync to state (DEPLOYED status)
+ *        → Not found: file filtered/excluded (skip gracefully)
+ *   6. All operations within caller's transaction
+ *
+ * Preconditions:
+ *   - state MUST have active transaction (via state_load_for_update)
+ *   - Git commits MUST be completed (branches at final state)
+ *   - items MUST be FILE kind only (no directories)
+ *   - enabled_profiles MUST be current enabled set
+ *
+ * Postconditions:
+ *   - Modified/new files synced with status=DEPLOYED
+ *   - Deleted files fallback or marked PENDING_REMOVAL
+ *   - Transaction remains open (caller commits)
+ *
+ * Performance: O(M + N) where M = total files in profiles, N = items to sync
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param state State handle (with active transaction, must not be NULL)
+ * @param items Array of workspace items to sync (must not be NULL)
+ * @param item_count Number of items
+ * @param enabled_profiles All enabled profiles (must not be NULL)
+ * @param km Keymanager for content hashing (can be NULL if no encryption)
+ * @param metadata_cache Hashmap: profile_name → metadata_t* (must not be NULL)
+ * @param out_synced Output: count of files synced (must not be NULL)
+ * @param out_removed Output: count of files removed (must not be NULL)
+ * @param out_fallbacks Output: count of fallback resolutions (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *manifest_sync_files_bulk(
+    git_repository *repo,
+    state_t *state,
+    const workspace_item_t **items,
+    size_t item_count,
+    const string_array_t *enabled_profiles,
+    keymanager_t *km,
+    const hashmap_t *metadata_cache,
+    size_t *out_synced,
+    size_t *out_removed,
+    size_t *out_fallbacks
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(state);
+    CHECK_NULL(items);
+    CHECK_NULL(enabled_profiles);
+    CHECK_NULL(metadata_cache);
+    CHECK_NULL(out_synced);
+    CHECK_NULL(out_removed);
+    CHECK_NULL(out_fallbacks);
+
+    /* Initialize outputs */
+    *out_synced = 0;
+    *out_removed = 0;
+    *out_fallbacks = 0;
+
+    if (item_count == 0) {
+        return NULL;  /* Nothing to do */
+    }
+
+    error_t *err = NULL;
+    profile_list_t *profiles = NULL;
+    manifest_t *fresh_manifest = NULL;
+    hashmap_t *manifest_index = NULL;
+    hashmap_t *profile_oids = NULL;
+
+    /* 1. Load enabled profiles from Git */
+    err = profile_list_load(repo, enabled_profiles->items,
+                           enabled_profiles->count, false, &profiles);
+    if (err) {
+        return error_wrap(err, "Failed to load profiles for bulk sync");
+    }
+
+    /* 2. Build FRESH manifest from Git (post-commit state) */
+    err = profile_build_manifest(repo, profiles, &fresh_manifest);
+    if (err) {
+        profile_list_free(profiles);
+        return error_wrap(err, "Failed to build fresh manifest for bulk sync");
+    }
+
+    /* 3. Build hashmap index for O(1) lookups (storage_path -> file_entry_t*) */
+    manifest_index = hashmap_create(fresh_manifest->count);
+    if (!manifest_index) {
+        err = ERROR(ERR_MEMORY, "Failed to create manifest index");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < fresh_manifest->count; i++) {
+        file_entry_t *entry = &fresh_manifest->entries[i];
+        err = hashmap_set(manifest_index, entry->storage_path, entry);
+        if (err) {
+            err = error_wrap(err, "Failed to build manifest index");
+            goto cleanup;
+        }
+    }
+
+    /* 4. Build profile oid map (profile_name -> git_oid string) */
+    err = build_profile_oid_map(repo, profiles, &profile_oids);
+    if (err) {
+        err = error_wrap(err, "Failed to build profile oid map");
+        goto cleanup;
+    }
+
+    /* 5. Process each item */
+    for (size_t i = 0; i < item_count; i++) {
+        const workspace_item_t *item = items[i];
+
+        /* Skip directories (not in manifest table) */
+        if (item->item_kind != WORKSPACE_ITEM_FILE) {
+            continue;
+        }
+
+        if (item->state == WORKSPACE_STATE_DELETED) {
+            /* Handle deleted file - check for fallback in fresh manifest */
+            file_entry_t *fallback = hashmap_get(manifest_index, item->storage_path);
+
+            if (fallback) {
+                /* Fallback exists - update to fallback profile */
+                const char *git_oid = hashmap_get(profile_oids,
+                                                 fallback->source_profile->name);
+                const metadata_t *metadata = hashmap_get(metadata_cache,
+                                                        fallback->source_profile->name);
+
+                err = sync_entry_to_state(repo, state, fallback, git_oid, metadata,
+                                         MANIFEST_STATUS_PENDING_DEPLOYMENT, km);
+                if (err) {
+                    err = error_wrap(err, "Failed to sync fallback for '%s'",
+                                   item->filesystem_path);
+                    goto cleanup;
+                }
+
+                (*out_fallbacks)++;
+            } else {
+                /* No fallback - mark for removal */
+                err = state_update_entry_status(state, item->filesystem_path,
+                                               MANIFEST_STATUS_PENDING_REMOVAL);
+                if (err) {
+                    err = error_wrap(err, "Failed to mark '%s' for removal",
+                                   item->filesystem_path);
+                    goto cleanup;
+                }
+
+                (*out_removed)++;
+            }
+        } else {
+            /* Handle modified/new file */
+            file_entry_t *entry = hashmap_get(manifest_index, item->storage_path);
+
+            if (!entry) {
+                /* File not in fresh manifest - filtered/excluded
+                 * This is expected behavior (e.g., .dottaignore) - skip gracefully */
+                continue;
+            }
+
+            /* Check precedence matches */
+            if (entry->source_profile &&
+                strcmp(entry->source_profile->name, item->profile) != 0) {
+                /* Different profile won precedence - skip this file
+                 * (higher precedence profile will handle it) */
+                continue;
+            }
+
+            /* Sync to state with DEPLOYED status
+             *
+             * Key insight: UPDATE captures files FROM filesystem, so they're
+             * already deployed. Setting PENDING_DEPLOYMENT would be misleading. */
+            const char *git_oid = hashmap_get(profile_oids, item->profile);
+            const metadata_t *metadata = hashmap_get(metadata_cache, item->profile);
+
+            err = sync_entry_to_state(repo, state, entry, git_oid, metadata,
+                                     MANIFEST_STATUS_DEPLOYED, km);
+            if (err) {
+                err = error_wrap(err, "Failed to sync '%s' to manifest",
+                               item->filesystem_path);
+                goto cleanup;
+            }
+
+            (*out_synced)++;
+        }
+    }
+
+cleanup:
+    if (profile_oids) {
+        hashmap_free(profile_oids, free);  /* Free oid strings */
+    }
+    if (manifest_index) {
+        hashmap_free(manifest_index, NULL);  /* Don't free entries (borrowed from manifest) */
+    }
+    if (fresh_manifest) {
+        manifest_free(fresh_manifest);
+    }
+    if (profiles) {
+        profile_list_free(profiles);
     }
 
     return err;

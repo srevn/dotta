@@ -84,27 +84,6 @@ static char *mode_to_string(mode_t mode) {
 }
 
 /**
- * Find file in manifest by storage_path
- */
-static file_entry_t *find_file_in_manifest(
-    const manifest_t *manifest,
-    const char *storage_path
-) {
-    if (!manifest || !storage_path) {
-        return NULL;
-    }
-
-    for (size_t i = 0; i < manifest->count; i++) {
-        file_entry_t *entry = &manifest->entries[i];
-        if (entry->storage_path && strcmp(entry->storage_path, storage_path) == 0) {
-            return entry;
-        }
-    }
-
-    return NULL;
-}
-
-/**
  * Build manifest from profiles and optionally find specific file
  *
  * This is the "precedence oracle" pattern - we use profile_build_manifest()
@@ -492,10 +471,14 @@ error_t *manifest_unsync_profile(
     for (size_t i = 0; i < count; i++) {
         state_file_entry_t *entry = &entries[i];
 
-        /* Check for fallback in remaining profiles */
+        /* Check for fallback in remaining profiles using O(1) index lookup */
         file_entry_t *fallback = NULL;
-        if (fallback_manifest) {
-            fallback = find_file_in_manifest(fallback_manifest, entry->storage_path);
+        if (fallback_manifest && fallback_manifest->index) {
+            void *idx_ptr = hashmap_get(fallback_manifest->index, entry->filesystem_path);
+            if (idx_ptr) {
+                size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+                fallback = &fallback_manifest->entries[idx];
+            }
         }
 
         if (fallback) {
@@ -967,6 +950,7 @@ error_t *manifest_update_for_precedence_change(
     profile_list_t *profiles = NULL;
     state_file_entry_t *old_entries = NULL;
     size_t old_count = 0;
+    hashmap_t *old_map = NULL;
     metadata_t *metadata = NULL;
     keymanager_t *km = NULL;
     dotta_config_t *config = NULL;
@@ -977,13 +961,34 @@ error_t *manifest_update_for_precedence_change(
         return error_wrap(err, "Failed to build manifest for precedence update");
     }
 
-    /* 2. Get all current manifest entries */
+    /* 2. Verify new manifest has index */
+    if (!new_manifest->index) {
+        err = ERROR(ERR_INTERNAL, "New manifest missing index");
+        goto cleanup;
+    }
+
+    /* 3. Get all current manifest entries and build hashmap for O(1) lookups */
     err = state_get_all_files(state, &old_entries, &old_count);
     if (err) {
         goto cleanup;
     }
 
-    /* 3. Load metadata and keymanager (needed for content hash computation) */
+    /* Build hashmap for O(1) old entry lookups */
+    old_map = hashmap_create(old_count > 0 ? old_count : 16);
+    if (!old_map) {
+        err = ERROR(ERR_MEMORY, "Failed to create old entries hashmap");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < old_count; i++) {
+        err = hashmap_set(old_map, old_entries[i].filesystem_path, &old_entries[i]);
+        if (err) {
+            err = error_wrap(err, "Failed to populate old entries hashmap");
+            goto cleanup;
+        }
+    }
+
+    /* 4. Load metadata and keymanager (needed for content hash computation) */
     err = metadata_load_from_profiles(repo, new_profile_order, &metadata);
     if (err && err->code != ERR_NOT_FOUND) {
         goto cleanup;
@@ -1003,18 +1008,15 @@ error_t *manifest_update_for_precedence_change(
         goto cleanup;
     }
 
-    /* 4. Process each file in new manifest */
+    /* 5. Process each file in new manifest */
     for (size_t i = 0; i < new_manifest->count; i++) {
         file_entry_t *new_entry = &new_manifest->entries[i];
 
-        /* Check if exists in old state */
-        state_file_entry_t *old_entry = NULL;
-        err = state_get_file(state, new_entry->filesystem_path, &old_entry);
+        /* Check if exists in old state using O(1) hashmap lookup */
+        state_file_entry_t *old_entry = hashmap_get(old_map, new_entry->filesystem_path);
 
-        if (err && err->code == ERR_NOT_FOUND) {
+        if (!old_entry) {
             /* New file (rare in reorder, but handle it) */
-            error_free(err);
-            err = NULL;
 
             /* Add new entry with PENDING_DEPLOYMENT */
             git_oid oid;
@@ -1030,9 +1032,6 @@ error_t *manifest_update_for_precedence_change(
             if (err) {
                 goto cleanup;
             }
-        } else if (err) {
-            /* Real error */
-            goto cleanup;
         } else {
             /* Existing entry - check if owner changed */
             bool owner_changed = strcmp(old_entry->profile, new_entry->source_profile->name) != 0;
@@ -1043,7 +1042,6 @@ error_t *manifest_update_for_precedence_change(
                 char oid_str[GIT_OID_HEXSZ + 1];
                 err = get_branch_head_oid(repo, new_entry->source_profile->name, &oid);
                 if (err) {
-                    state_free_entry(old_entry);
                     goto cleanup;
                 }
                 git_oid_tostr(oid_str, sizeof(oid_str), &oid);
@@ -1052,24 +1050,26 @@ error_t *manifest_update_for_precedence_change(
                 err = sync_entry_to_state(repo, state, new_entry, oid_str, metadata,
                                           MANIFEST_STATUS_PENDING_DEPLOYMENT, km);
                 if (err) {
-                    state_free_entry(old_entry);
                     goto cleanup;
                 }
             }
             /* else: owner unchanged, preserve existing entry status */
-
-            state_free_entry(old_entry);
         }
     }
 
-    /* 5. Check for files in old manifest but not in new (mark for removal) */
+    /* 6. Check for files in old manifest but not in new (mark for removal) */
     for (size_t i = 0; i < old_count; i++) {
         state_file_entry_t *old_entry = &old_entries[i];
 
-        /* Check if still exists in new manifest */
-        file_entry_t *new_entry = find_file_in_manifest(new_manifest, old_entry->storage_path);
+        /* Check if still exists in new manifest using O(1) index lookup */
+        void *idx_ptr = hashmap_get(new_manifest->index, old_entry->filesystem_path);
+        file_entry_t *new_entry = NULL;
+        if (idx_ptr) {
+            size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+            new_entry = &new_manifest->entries[idx];
+        }
 
-        if (new_entry == NULL) {
+        if (!new_entry) {
             /* File no longer in any profile - mark for removal */
             err = state_update_entry_status(state, old_entry->filesystem_path,
                                             MANIFEST_STATUS_PENDING_REMOVAL);
@@ -1080,6 +1080,9 @@ error_t *manifest_update_for_precedence_change(
     }
 
 cleanup:
+    if (old_map) {
+        hashmap_free(old_map, NULL);
+    }
     if (profiles) {
         profile_list_free(profiles);
     }
@@ -1248,7 +1251,6 @@ error_t *manifest_sync_files_bulk(
     error_t *err = NULL;
     profile_list_t *profiles = NULL;
     manifest_t *fresh_manifest = NULL;
-    hashmap_t *manifest_index = NULL;
     hashmap_t *profile_oids = NULL;
 
     /* 1. Load enabled profiles from Git */
@@ -1265,20 +1267,10 @@ error_t *manifest_sync_files_bulk(
         return error_wrap(err, "Failed to build fresh manifest for bulk sync");
     }
 
-    /* 3. Build hashmap index for O(1) lookups (storage_path -> file_entry_t*) */
-    manifest_index = hashmap_create(fresh_manifest->count);
-    if (!manifest_index) {
-        err = ERROR(ERR_MEMORY, "Failed to create manifest index");
+    /* 3. Verify manifest has index (should be populated by profile_build_manifest) */
+    if (!fresh_manifest->index) {
+        err = ERROR(ERR_INTERNAL, "Fresh manifest missing index");
         goto cleanup;
-    }
-
-    for (size_t i = 0; i < fresh_manifest->count; i++) {
-        file_entry_t *entry = &fresh_manifest->entries[i];
-        err = hashmap_set(manifest_index, entry->storage_path, entry);
-        if (err) {
-            err = error_wrap(err, "Failed to build manifest index");
-            goto cleanup;
-        }
     }
 
     /* 4. Build profile oid map (profile_name -> git_oid string) */
@@ -1299,7 +1291,12 @@ error_t *manifest_sync_files_bulk(
 
         if (item->state == WORKSPACE_STATE_DELETED) {
             /* Handle deleted file - check for fallback in fresh manifest */
-            file_entry_t *fallback = hashmap_get(manifest_index, item->storage_path);
+            void *idx_ptr = hashmap_get(fresh_manifest->index, item->filesystem_path);
+            file_entry_t *fallback = NULL;
+            if (idx_ptr) {
+                size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+                fallback = &fresh_manifest->entries[idx];
+            }
 
             if (fallback) {
                 /* Fallback exists - update to fallback profile */
@@ -1331,7 +1328,12 @@ error_t *manifest_sync_files_bulk(
             }
         } else {
             /* Handle modified/new file */
-            file_entry_t *entry = hashmap_get(manifest_index, item->storage_path);
+            void *idx_ptr = hashmap_get(fresh_manifest->index, item->filesystem_path);
+            file_entry_t *entry = NULL;
+            if (idx_ptr) {
+                size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+                entry = &fresh_manifest->entries[idx];
+            }
 
             if (!entry) {
                 /* File not in fresh manifest - filtered/excluded
@@ -1369,9 +1371,6 @@ error_t *manifest_sync_files_bulk(
 cleanup:
     if (profile_oids) {
         hashmap_free(profile_oids, free);  /* Free oid strings */
-    }
-    if (manifest_index) {
-        hashmap_free(manifest_index, NULL);  /* Don't free entries (borrowed from manifest) */
     }
     if (fresh_manifest) {
         manifest_free(fresh_manifest);
@@ -1473,7 +1472,6 @@ error_t *manifest_sync_files_bulk_simple(
     error_t *err = NULL;
     profile_list_t *profiles = NULL;
     manifest_t *fresh_manifest = NULL;
-    hashmap_t *manifest_index = NULL;
     hashmap_t *profile_oids = NULL;
     char git_oid_str[GIT_OID_HEXSZ + 1];
 
@@ -1494,20 +1492,10 @@ error_t *manifest_sync_files_bulk_simple(
         return error_wrap(err, "Failed to build fresh manifest for bulk sync");
     }
 
-    /* 3. Build hashmap index for O(1) lookups (storage_path -> file_entry_t*) */
-    manifest_index = hashmap_create(fresh_manifest->count);
-    if (!manifest_index) {
-        err = ERROR(ERR_MEMORY, "Failed to create manifest index");
+    /* 3. Verify manifest has index (should be populated by profile_build_manifest) */
+    if (!fresh_manifest->index) {
+        err = ERROR(ERR_INTERNAL, "Fresh manifest missing index");
         goto cleanup;
-    }
-
-    for (size_t i = 0; i < fresh_manifest->count; i++) {
-        file_entry_t *entry = &fresh_manifest->entries[i];
-        err = hashmap_set(manifest_index, entry->storage_path, entry);
-        if (err) {
-            err = error_wrap(err, "Failed to build manifest index");
-            goto cleanup;
-        }
     }
 
     /* 4. Build profile oid map (profile_name -> git_oid string) */
@@ -1520,24 +1508,18 @@ error_t *manifest_sync_files_bulk_simple(
     /* 5. Process each file */
     for (size_t i = 0; i < string_array_size(filesystem_paths); i++) {
         const char *filesystem_path = string_array_get(filesystem_paths, i);
-        char *storage_path = NULL;
-        path_prefix_t prefix;
 
-        /* Convert filesystem path to storage path */
-        err = path_to_storage(filesystem_path, &storage_path, &prefix);
-        if (err) {
-            err = error_wrap(err, "Failed to convert path '%s' for manifest sync",
-                           filesystem_path);
-            goto cleanup;
+        /* Lookup in fresh manifest using filesystem_path */
+        void *idx_ptr = hashmap_get(fresh_manifest->index, filesystem_path);
+        file_entry_t *entry = NULL;
+        if (idx_ptr) {
+            size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+            entry = &fresh_manifest->entries[idx];
         }
-
-        /* Lookup in fresh manifest */
-        file_entry_t *entry = hashmap_get(manifest_index, storage_path);
 
         if (!entry) {
             /* File not in fresh manifest - filtered/excluded
              * This is expected behavior (e.g., .dottaignore, README.md) - skip gracefully */
-            free(storage_path);
             continue;
         }
 
@@ -1546,7 +1528,6 @@ error_t *manifest_sync_files_bulk_simple(
             strcmp(entry->source_profile->name, profile_name) != 0) {
             /* Different profile won precedence - skip this file
              * (higher precedence profile owns it) */
-            free(storage_path);
             continue;
         }
 
@@ -1560,8 +1541,6 @@ error_t *manifest_sync_files_bulk_simple(
         err = sync_entry_to_state(repo, state, entry, profile_git_oid, metadata,
                                  MANIFEST_STATUS_DEPLOYED, km);
 
-        free(storage_path);
-
         if (err) {
             err = error_wrap(err, "Failed to sync '%s' to manifest",
                            filesystem_path);
@@ -1574,9 +1553,6 @@ error_t *manifest_sync_files_bulk_simple(
 cleanup:
     if (profile_oids) {
         hashmap_free(profile_oids, free);  /* Free oid strings */
-    }
-    if (manifest_index) {
-        hashmap_free(manifest_index, NULL);  /* Don't free entries (borrowed from manifest) */
     }
     if (fresh_manifest) {
         manifest_free(fresh_manifest);
@@ -1667,7 +1643,6 @@ error_t *manifest_sync_diff_bulk(
     /* Resources to clean up */
     profile_list_t *profiles = NULL;
     manifest_t *fresh_manifest = NULL;
-    hashmap_t *manifest_index = NULL;
     hashmap_t *profile_oids = NULL;
     metadata_t *metadata_merged = NULL;
     keymanager_t *km_owned = NULL;
@@ -1706,20 +1681,10 @@ error_t *manifest_sync_diff_bulk(
         goto cleanup;
     }
 
-    /* 1.3. Build hashmap index for O(1) lookups (storage_path -> file_entry_t*) */
-    manifest_index = hashmap_create(fresh_manifest->count);
-    if (!manifest_index) {
-        err = ERROR(ERR_MEMORY, "Failed to create manifest index");
+    /* 1.3. Verify manifest has index (should be populated by profile_build_manifest) */
+    if (!fresh_manifest->index) {
+        err = ERROR(ERR_INTERNAL, "Fresh manifest missing index");
         goto cleanup;
-    }
-
-    for (size_t i = 0; i < fresh_manifest->count; i++) {
-        file_entry_t *entry = &fresh_manifest->entries[i];
-        err = hashmap_set(manifest_index, entry->storage_path, entry);
-        if (err) {
-            err = error_wrap(err, "Failed to add entry to manifest index");
-            goto cleanup;
-        }
     }
 
     /* 1.4. Build profile→oid map (profile_name -> git_oid string) */
@@ -1824,7 +1789,12 @@ error_t *manifest_sync_diff_bulk(
             /* ======================= */
 
             /* Lookup in fresh manifest (O(1)) */
-            file_entry_t *entry = hashmap_get(manifest_index, storage_path);
+            void *idx_ptr = hashmap_get(fresh_manifest->index, filesystem_path);
+            file_entry_t *entry = NULL;
+            if (idx_ptr) {
+                size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+                entry = &fresh_manifest->entries[idx];
+            }
 
             if (!entry) {
                 /* File not in fresh manifest (filtered by .dottaignore or other rules)
@@ -1883,7 +1853,12 @@ error_t *manifest_sync_diff_bulk(
              * When a file is deleted from one profile, it might still exist in another
              * lower-precedence profile. If so, that profile now "wins" and we should
              * update the manifest to point to it. */
-            file_entry_t *entry = hashmap_get(manifest_index, storage_path);
+            void *idx_ptr = hashmap_get(fresh_manifest->index, filesystem_path);
+            file_entry_t *entry = NULL;
+            if (idx_ptr) {
+                size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+                entry = &fresh_manifest->entries[idx];
+            }
 
             if (entry && entry->source_profile &&
                 strcmp(entry->source_profile->name, profile_name) != 0) {
@@ -1987,9 +1962,6 @@ cleanup:
     }
     if (profile_oids) {
         hashmap_free(profile_oids, free);  /* Free oid strings */
-    }
-    if (manifest_index) {
-        hashmap_free(manifest_index, NULL);  /* Entries borrowed from manifest */
     }
     if (fresh_manifest) {
         manifest_free(fresh_manifest);

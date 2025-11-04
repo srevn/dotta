@@ -67,10 +67,16 @@ typedef struct {
 
 /**
  * Manifest - collection of files to deploy
+ *
+ * The index field provides O(1) lookups by filesystem_path. It maps
+ * filesystem_path -> array index (offset by 1 to distinguish NULL from index 0).
+ * The index is populated by profile_build_manifest() and can be NULL for
+ * manifests built by other means (e.g., workspace_build_manifest_from_state).
  */
 typedef struct {
     file_entry_t *entries;
     size_t count;
+    hashmap_t *index;  /* Maps filesystem_path -> index in entries array (offset by 1), can be NULL */
 } manifest_t;
 
 /**

@@ -1124,8 +1124,8 @@ error_t *profile_build_manifest(
         files = NULL;
     }
 
-    /* Success */
-    hashmap_free(path_map, NULL);
+    /* Success - transfer index ownership to manifest */
+    manifest->index = path_map;
     *out = manifest;
     return NULL;
 
@@ -1327,5 +1327,11 @@ void manifest_free(manifest_t *manifest) {
     }
 
     free(manifest->entries);
+
+    /* Free index if present */
+    if (manifest->index) {
+        hashmap_free(manifest->index, NULL);
+    }
+
     free(manifest);
 }

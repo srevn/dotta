@@ -557,7 +557,7 @@ static void print_cleanup_preflight_results(
 }
 
 /**
- * Build manifest containing only PENDING_DEPLOYMENT files (VWD-compliant)
+ * Build manifest containing only PENDING_DEPLOYMENT files
  *
  * Filters the workspace manifest to include only files staged for deployment.
  * Uses single database query for optimal performance (O(P) + O(M) where
@@ -688,7 +688,7 @@ static void manifest_free_filtered(manifest_t *manifest) {
 }
 
 /**
- * Update manifest status after deployment (VWD-compliant)
+ * Update manifest status after deployment
  *
  * Incrementally updates status for successfully deployed files instead of
  * rebuilding entire state. This preserves lifecycle tracking.
@@ -939,7 +939,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     state_t *state = NULL;
     profile_list_t *profiles = NULL;
     const manifest_t *manifest = NULL;
-    manifest_t *pending_manifest = NULL;  /* VWD: Filtered manifest for deployment */
+    manifest_t *pending_manifest = NULL;
     workspace_t *ws = NULL;
     const workspace_item_t **file_orphans = NULL;
     size_t file_orphan_count = 0;
@@ -1063,7 +1063,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                     manifest->count, manifest->count == 1 ? "" : "s");
     }
 
-    /* VWD: Filter manifest to only PENDING_DEPLOYMENT files
+    /* Filter manifest to only PENDING_DEPLOYMENT files
      *
      * The workspace manifest contains all files (PENDING + DEPLOYED).
      * Apply should only deploy pending changes (VWD principle: respect staging).
@@ -1177,7 +1177,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* VWD: Check if there's anything to do
+    /* Check if there's anything to do
      *
      * After filtering to pending files and extracting orphans, check if
      * there's any work to do. If not, exit early with clean message.
@@ -1434,7 +1434,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* VWD: Execute deployment (only if there are pending files)
+    /* Execute deployment (only if there are pending files)
      *
      * Deploy only PENDING_DEPLOYMENT files (filtered manifest).
      * If pending_manifest is empty, skip deployment phase entirely.
@@ -1538,7 +1538,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             cleanup_result_free(cleanup_res);
         }
 
-        /* VWD: Update manifest status for deployed files (incremental, not rebuild) */
+        /* Update manifest status for deployed files (incremental, not rebuild) */
         output_print(out, OUTPUT_VERBOSE, "\nUpdating deployment state...\n");
 
         err = apply_update_deployment_status(state, deploy_res, out);
@@ -1546,7 +1546,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             goto cleanup;
         }
 
-        /* VWD: Delete PENDING_REMOVAL entries from manifest table */
+        /* Delete PENDING_REMOVAL entries from manifest table */
         err = apply_cleanup_pending_removals(state, out);
         if (err) {
             goto cleanup;

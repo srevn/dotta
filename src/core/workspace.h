@@ -67,7 +67,7 @@ typedef struct {
     workspace_state_t state;             /* Where the item exists (deployed/undeployed/etc.) */
     divergence_type_t divergence;        /* What's wrong with it (bit flags, can combine) */
     workspace_item_kind_t item_kind;     /* FILE or DIRECTORY (explicit type) */
-    manifest_status_t manifest_status;   /* Manifest status from VWD (pending/deployed/pending_removal) */
+    manifest_status_t manifest_status;   /* Manifest status (pending/deployed/pending_removal) */
 
     /* State flags */
     bool in_profile;            /* Exists in profile branch */

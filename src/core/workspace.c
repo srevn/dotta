@@ -532,7 +532,7 @@ static error_t *analyze_file_divergence(
 
         /* PHASE A: Check filemode (executable bit) from state entry */
         if (state_entry) {
-            /* VWD: Get executable bit from state entry type instead of Git tree entry.
+            /* Get executable bit from state entry type instead of Git tree entry.
              * state_entry->type is STATE_FILE_EXECUTABLE or STATE_FILE_REGULAR. */
             bool expect_exec = (state_entry->type == STATE_FILE_EXECUTABLE);
             bool is_exec = fs_stat_is_executable(&file_stat);

@@ -1293,7 +1293,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Update manifest if profile enabled (VWD integration)
+    /* Update manifest if profile enabled
      *
      * This maintains the manifest as a Virtual Working Directory - a staging
      * area between Git and the filesystem. Files are marked DEPLOYED because
@@ -1358,7 +1358,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
 
         output_newline(out);
 
-        /* Manifest status feedback (VWD integration) */
+        /* Manifest status feedback */
         if (manifest_updated) {
             output_info(out, "Manifest updated (%zu file%s marked as DEPLOYED)",
                        added_count, added_count == 1 ? "" : "s");

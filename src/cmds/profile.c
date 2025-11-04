@@ -598,7 +598,7 @@ static error_t *profile_enable(
         }
         enabled_count++;
 
-        /* Sync profile to manifest (populate VWD) */
+        /* Sync profile to manifest */
         err = manifest_sync_profile(repo, state, profile_name, enabled);
         if (err) {
             err = error_wrap(err, "Failed to sync profile '%s' to manifest", profile_name);

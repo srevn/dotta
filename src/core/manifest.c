@@ -1529,6 +1529,8 @@ error_t *manifest_sync_diff(
     metadata_t *metadata_merged = NULL;
     keymanager_t *km_owned = NULL;
     dotta_config_t *config = NULL;
+    git_commit *old_commit = NULL;
+    git_commit *new_commit = NULL;
     git_tree *old_tree = NULL;
     git_tree *new_tree = NULL;
     git_diff *diff = NULL;
@@ -1616,17 +1618,38 @@ error_t *manifest_sync_diff(
     /* PHASE 2: COMPUTE DIFF (O(D)) */
     /* ============================= */
 
-    /* 2.1. Lookup trees for diff */
-    int git_err = git_tree_lookup(&old_tree, repo, old_oid);
+    /* 2.1. Lookup commits and extract trees for diff
+     *
+     * Note: old_oid and new_oid are commit OIDs (from branch refs), not tree OIDs.
+     * We must lookup the commit object first, then extract the tree from it.
+     * This is the standard pattern used throughout the codebase. */
+
+    /* Old commit → tree */
+    int git_err = git_commit_lookup(&old_commit, repo, old_oid);
     if (git_err != 0) {
-        err = ERROR(ERR_GIT, "Failed to lookup old tree: %s",
+        err = ERROR(ERR_GIT, "Failed to lookup old commit: %s",
                    git_error_last()->message);
         goto cleanup;
     }
 
-    git_err = git_tree_lookup(&new_tree, repo, new_oid);
+    git_err = git_commit_tree(&old_tree, old_commit);
     if (git_err != 0) {
-        err = ERROR(ERR_GIT, "Failed to lookup new tree: %s",
+        err = ERROR(ERR_GIT, "Failed to extract tree from old commit: %s",
+                   git_error_last()->message);
+        goto cleanup;
+    }
+
+    /* New commit → tree */
+    git_err = git_commit_lookup(&new_commit, repo, new_oid);
+    if (git_err != 0) {
+        err = ERROR(ERR_GIT, "Failed to lookup new commit: %s",
+                   git_error_last()->message);
+        goto cleanup;
+    }
+
+    git_err = git_commit_tree(&new_tree, new_commit);
+    if (git_err != 0) {
+        err = ERROR(ERR_GIT, "Failed to extract tree from new commit: %s",
                    git_error_last()->message);
         goto cleanup;
     }
@@ -1832,6 +1855,12 @@ cleanup:
     }
     if (old_tree) {
         git_tree_free(old_tree);
+    }
+    if (new_commit) {
+        git_commit_free(new_commit);
+    }
+    if (old_commit) {
+        git_commit_free(old_commit);
     }
     if (config) {
         config_free(config);

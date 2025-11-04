@@ -65,148 +65,145 @@ static bool matches_file_filter(const char *path, const cmd_diff_options_t *opts
 }
 
 /**
- * Check if comparison result represents a difference
+ * Determine if workspace item should be shown for the given direction
  *
- * All non-equal results are shown to the user. Direction affects HOW we
- * describe the difference (via get_status_message()), not WHETHER we show it.
+ * Direction semantics:
+ * - UPSTREAM: Show items where repository would change filesystem
+ *   (undeployed files, files where Git differs from filesystem)
+ * - DOWNSTREAM: Show items where filesystem would change repository
+ *   (modified files, deleted files that exist in Git)
+ *
+ * @param item Workspace item (must not be NULL)
+ * @param direction Diff direction
+ * @return true if item should be shown
  */
-static bool is_result_different(compare_result_t result) {
-    return result != CMP_EQUAL;
+static bool should_show_item_for_direction(
+    const workspace_item_t *item,
+    diff_direction_t direction
+) {
+    if (direction == DIFF_UPSTREAM) {
+        /* Upstream: What would apply do? */
+        /* Show: undeployed, deleted (apply would restore), content/mode differs (Git → filesystem) */
+        return (item->state == WORKSPACE_STATE_UNDEPLOYED) ||
+               (item->state == WORKSPACE_STATE_DELETED) ||
+               (item->state == WORKSPACE_STATE_DEPLOYED &&
+                (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)));
+    } else {
+        /* Downstream: What would update do? */
+        /* Show: deleted, content/mode differs (filesystem → Git) */
+        return (item->state == WORKSPACE_STATE_DELETED) ||
+               (item->state == WORKSPACE_STATE_DEPLOYED &&
+                (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)));
+    }
 }
 
 /**
- * Check if file should be diffed
+ * Check if workspace item has divergence that can be diffed
+ *
+ * Some divergence types don't produce content diffs:
+ * - Untracked files (not in Git yet)
+ * - Orphaned state entries (removed from Git)
+ *
+ * @param item Workspace item (must not be NULL)
+ * @return true if item can be diffed
  */
-static bool should_diff_file(
-    const char *path,
-    compare_result_t result,
-    const cmd_diff_options_t *opts
-) {
-    /* Check file filter first */
-    if (!matches_file_filter(path, opts)) {
+static bool has_diffable_divergence(const workspace_item_t *item) {
+    /* Can't diff untracked or orphaned items (no Git side to compare) */
+    if (item->state == WORKSPACE_STATE_UNTRACKED ||
+        item->state == WORKSPACE_STATE_ORPHANED) {
         return false;
     }
 
-    /* Check if result represents a difference */
-    return is_result_different(result);
+    /* Must have actual divergence or be in transition state */
+    return item->divergence != DIVERGENCE_NONE ||
+           item->state == WORKSPACE_STATE_UNDEPLOYED ||
+           item->state == WORKSPACE_STATE_DELETED;
 }
 
 /**
- * Get status message based on comparison result and direction
- */
-static const char *get_status_message(compare_result_t result, diff_direction_t direction) {
-    if (direction == DIFF_UPSTREAM) {
-        /* Upstream: repo → filesystem (what apply would do) */
-        switch (result) {
-            case CMP_MISSING:    return "not deployed (would be created by apply)";
-            case CMP_DIFFERENT:  return "would be overwritten by apply";
-            case CMP_TYPE_DIFF:  return "type would change on apply";
-            default:             return "unknown";
-        }
-    } else {
-        /* Downstream: filesystem → repo (what update would do) */
-        switch (result) {
-            case CMP_MISSING:    return "deleted locally (would be removed by update)";
-            case CMP_DIFFERENT:  return "modified locally (would be committed by update)";
-            case CMP_TYPE_DIFF:  return "type changed locally";
-            default:             return "unknown";
-        }
-    }
-}
-
-/**
- * Show diff for a file with color support
+ * Get status message from workspace item and direction
  *
- * Uses content cache to avoid redundant loading/decryption.
- * Metadata is passed from caller to avoid redundant loading.
+ * Determines the appropriate status message based on item's state,
+ * divergence flags, and diff direction. This replaces the comparison-based
+ * get_status_message() for workspace-aware diffs.
+ *
+ * @param item Workspace item (must not be NULL)
+ * @param direction Diff direction
+ * @return Status message string
  */
-static error_t *show_file_diff(
-    git_repository *repo,
-    content_cache_t *cache,
-    metadata_t *metadata,
+static const char *get_status_message_from_item(
+    const workspace_item_t *item,
+    diff_direction_t direction
+) {
+    /* Handle state-based messages first */
+    if (item->state == WORKSPACE_STATE_UNDEPLOYED) {
+        return direction == DIFF_UPSTREAM ?
+            "not deployed (would be created by apply)" :
+            "new in repository (not deployed yet)";
+    }
+
+    if (item->state == WORKSPACE_STATE_DELETED) {
+        return direction == DIFF_UPSTREAM ?
+            "deleted locally (file missing)" :
+            "deleted locally (would be removed by update)";
+    }
+
+    /* Handle divergence-based messages for deployed items */
+    if (item->divergence & DIVERGENCE_TYPE) {
+        return direction == DIFF_UPSTREAM ?
+            "type would change on apply" :
+            "type changed locally";
+    }
+
+    if (item->divergence & DIVERGENCE_CONTENT) {
+        return direction == DIFF_UPSTREAM ?
+            "would be overwritten by apply" :
+            "modified locally (would be committed by update)";
+    }
+
+    if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
+        return direction == DIFF_UPSTREAM ?
+            "mode would change on apply" :
+            "mode changed locally";
+    }
+
+    return "unknown";
+}
+
+/**
+ * Show diff for a single file using workspace data
+ *
+ * Simplified version of show_file_diff() that uses pre-computed divergence
+ * from workspace analysis. Doesn't re-analyze - just formats and displays.
+ *
+ * @param item Workspace item with divergence info (must not be NULL)
+ * @param entry Manifest entry with tree entry (must not be NULL)
+ * @param metadata Cached metadata (must not be NULL)
+ * @param cache Content cache (must not be NULL)
+ * @param direction Diff direction
+ * @param opts Command options (must not be NULL)
+ * @param out Output context (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *show_file_diff_from_workspace(
+    const workspace_item_t *item,
     const file_entry_t *entry,
+    const metadata_t *metadata,
+    content_cache_t *cache,
     diff_direction_t direction,
     const cmd_diff_options_t *opts,
     output_ctx_t *out
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(cache);
-    CHECK_NULL(metadata);
+    CHECK_NULL(item);
     CHECK_NULL(entry);
+    CHECK_NULL(metadata);
+    CHECK_NULL(cache);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
-    /* Get plaintext content from cache (borrowed reference - don't free) */
-    const buffer_t *content = NULL;
-    error_t *err = content_cache_get_from_tree_entry(
-        cache,
-        entry->entry,
-        entry->storage_path,
-        entry->source_profile->name,
-        metadata,
-        &content
-    );
-    if (err) {
-        return error_wrap(err, "Failed to get content for '%s'", entry->filesystem_path);
-    }
-
-    /* Compare buffer to disk (works with decrypted content, captures stat) */
-    git_filemode_t mode = git_tree_entry_filemode(entry->entry);
-    compare_result_t cmp_result;
-    struct stat file_stat;
-    err = compare_buffer_to_disk(content, entry->filesystem_path, mode, NULL, &cmp_result, &file_stat);
-
-    if (err) {
-        return error_wrap(err, "Failed to compare '%s'", entry->filesystem_path);
-    }
-
-    /* Check for permission changes (two-phase: git filemode + full metadata) */
-    bool mode_differs = false;
-    const char *mode_status = NULL;
-
-    if (cmp_result == CMP_EQUAL) {
-        /* Content matches - check permissions separately.
-         * PHASE A: Git filemode (executable bit) - always check */
-        bool expect_exec = (mode == GIT_FILEMODE_BLOB_EXECUTABLE);
-        bool is_exec = fs_stat_is_executable(&file_stat);
-        if (expect_exec != is_exec) {
-            mode_differs = true;
-        }
-
-        /* PHASE B: Full metadata - only if available */
-        if (!mode_differs && metadata && entry->storage_path) {
-            const metadata_item_t *meta_entry = NULL;
-            error_t *meta_err = metadata_get_item(metadata, entry->storage_path, &meta_entry);
-
-            if (meta_err == NULL && meta_entry && meta_entry->kind == METADATA_ITEM_FILE) {
-                bool full_mode_differs = false;
-                bool ownership_differs = false;
-                error_t *check_err = check_item_metadata_divergence(
-                    meta_entry, entry->filesystem_path, &file_stat,
-                    &full_mode_differs, &ownership_differs);
-
-                if (check_err == NULL && (full_mode_differs || ownership_differs)) {
-                    mode_differs = true;
-                }
-                error_free(check_err);
-            }
-            error_free(meta_err);
-        }
-
-        /* Set appropriate status message for mode changes */
-        if (mode_differs) {
-            mode_status = (direction == DIFF_UPSTREAM) ?
-                "mode would change on apply" : "mode changed locally";
-        }
-    }
-
-    /* Only show if different (content, type, or mode) */
-    if (cmp_result == CMP_EQUAL && !mode_differs) {
-        return NULL;
-    }
-
+    /* Name-only output */
     if (opts->name_only) {
-        output_printf(out, OUTPUT_NORMAL, "%s\n", entry->filesystem_path);
+        output_printf(out, OUTPUT_NORMAL, "%s\n", item->filesystem_path);
         return NULL;
     }
 
@@ -258,21 +255,18 @@ static error_t *show_file_diff(
         output_newline(out);
     }
 
-    /* Show status with appropriate color and message based on direction */
-    const char *status_msg;
-    if (mode_differs && mode_status) {
-        /* Mode-only change (content matches) */
-        status_msg = mode_status;
-    } else {
-        /* Content or type change */
-        status_msg = get_status_message(cmp_result, direction);
-    }
+    /* Get status message from workspace item (no re-analysis needed) */
+    const char *status_msg = get_status_message_from_item(item, direction);
 
+    /* Determine status color */
     output_color_t status_color = OUTPUT_COLOR_YELLOW;
-    if (cmp_result == CMP_MISSING || cmp_result == CMP_TYPE_DIFF) {
+    if (item->state == WORKSPACE_STATE_DELETED || item->state == WORKSPACE_STATE_UNDEPLOYED) {
+        status_color = OUTPUT_COLOR_RED;
+    } else if (item->divergence & DIVERGENCE_TYPE) {
         status_color = OUTPUT_COLOR_RED;
     }
 
+    /* Show status */
     if (output_colors_enabled(out)) {
         output_printf(out, OUTPUT_NORMAL, "status: %s%s%s\n",
                 output_color_code(out, status_color),
@@ -282,33 +276,42 @@ static error_t *show_file_diff(
         output_printf(out, OUTPUT_NORMAL, "status: %s\n", status_msg);
     }
 
-    /* For missing files or type changes, no diff to show */
-    if (cmp_result == CMP_MISSING || cmp_result == CMP_TYPE_DIFF) {
+    /* For missing files or type changes, no content diff to show */
+    if (item->state == WORKSPACE_STATE_DELETED ||
+        item->state == WORKSPACE_STATE_UNDEPLOYED ||
+        (item->divergence & DIVERGENCE_TYPE)) {
         return NULL;
     }
 
-    /* For mode-only changes (content matches), no content diff to show */
-    if (mode_differs && cmp_result == CMP_EQUAL) {
+    /* For mode-only changes (content matches), no content diff */
+    if ((item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) &&
+        !(item->divergence & DIVERGENCE_CONTENT)) {
         return NULL;
     }
 
-    /* Generate actual diff from decrypted buffer (borrowed from cache) */
-    file_diff_t *diff = NULL;
-    /* Convert diff direction to compare direction */
+    /* Get content from cache (borrowed reference - don't free) */
+    const buffer_t *content = NULL;
+    error_t *err = content_cache_get_from_tree_entry(
+        cache, entry->entry, entry->storage_path,
+        entry->source_profile->name, metadata, &content
+    );
+    if (err) {
+        return error_wrap(err, "Failed to get content for '%s'", item->filesystem_path);
+    }
+
+    /* Generate diff */
+    git_filemode_t mode = git_tree_entry_filemode(entry->entry);
     compare_direction_t cmp_dir = (direction == DIFF_UPSTREAM) ?
                                    CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM;
+
+    file_diff_t *diff = NULL;
     err = compare_generate_diff(
-        content,
-        entry->filesystem_path,
-        entry->storage_path,  /* Use storage_path as label for consistent diff output */
-        mode,
-        NULL,  /* No pre-captured stat - let compare_generate_diff stat internally */
-        cmp_dir,
-        &diff
+        content, item->filesystem_path, entry->storage_path,
+        mode, NULL, cmp_dir, &diff
     );
 
     if (err) {
-        return error_wrap(err, "Failed to generate diff for '%s'", entry->filesystem_path);
+        return error_wrap(err, "Failed to generate diff for '%s'", item->filesystem_path);
     }
 
     /* Print diff with colors if enabled */
@@ -353,100 +356,122 @@ static error_t *show_file_diff(
 }
 
 /**
- * Show diffs for a specific direction
+ * Present diffs for a specific direction using workspace analysis
  *
- * Uses content cache to avoid redundant loading/decryption when comparing
- * and generating diffs.
+ * Filters pre-analyzed divergence and generates diffs for display.
+ * Uses cached metadata and content from workspace/caches.
+ *
+ * Key improvement over old show_diffs_for_direction():
+ * - No metadata loading (uses cache parameter)
+ * - No redundant comparisons (uses workspace divergence)
+ * - Single comparison per file
+ *
+ * @param diverged Array of diverged items from workspace (must not be NULL)
+ * @param diverged_count Number of diverged items
+ * @param manifest Manifest for tree entry lookup (must not be NULL)
+ * @param metadata_cache Pre-loaded metadata cache (must not be NULL)
+ * @param content_cache Content cache for blob access (must not be NULL)
+ * @param direction Diff direction (UPSTREAM or DOWNSTREAM)
+ * @param opts Command options (must not be NULL)
+ * @param out Output context (must not be NULL)
+ * @param diff_count Output: number of diffs shown (must not be NULL)
+ * @return Error or NULL on success
  */
-static error_t *show_diffs_for_direction(
-    git_repository *repo,
-    manifest_t *manifest,
+static error_t *present_diffs_for_direction(
+    const workspace_item_t *diverged,
+    size_t diverged_count,
+    const manifest_t *manifest,
+    const hashmap_t *metadata_cache,
+    content_cache_t *content_cache,
     diff_direction_t direction,
     const cmd_diff_options_t *opts,
     output_ctx_t *out,
     size_t *diff_count
 ) {
-    CHECK_NULL(repo);
+    CHECK_NULL(diverged);
     CHECK_NULL(manifest);
+    CHECK_NULL(metadata_cache);
+    CHECK_NULL(content_cache);
     CHECK_NULL(opts);
     CHECK_NULL(out);
     CHECK_NULL(diff_count);
 
-    error_t *err = NULL;
     *diff_count = 0;
+    error_t *err = NULL;
 
-    /* Get keymanager once for all files (caches password prompt) */
-    keymanager_t *km = keymanager_get_global(NULL);
-
-    /* Create content cache for batch operations (avoids redundant decryption) */
-    content_cache_t *cache = content_cache_create(repo, km);
-    if (!cache) {
-        return ERROR(ERR_MEMORY, "Failed to create content cache");
+    /* Create single empty metadata for fallback cases (addresses memory leak concern) */
+    metadata_t *fallback_metadata = NULL;
+    err = metadata_create_empty(&fallback_metadata);
+    if (err) {
+        return error_wrap(err, "Failed to create fallback metadata");
     }
 
-    for (size_t i = 0; i < manifest->count; i++) {
-        const file_entry_t *entry = &manifest->entries[i];
+    for (size_t i = 0; i < diverged_count; i++) {
+        const workspace_item_t *item = &diverged[i];
 
-        /* Load metadata for encryption state validation */
-        metadata_t *metadata = NULL;
-        err = metadata_load_from_branch(repo, entry->source_profile->name, &metadata);
-        if (err) {
-            /* Graceful fallback: create empty metadata if loading fails */
-            error_t *create_err = metadata_create_empty(&metadata);
-            if (create_err) {
-                error_free(create_err);
-                content_cache_free(cache);
-                return ERROR(ERR_MEMORY, "Failed to create metadata");
-            }
-            error_free(err);
-            err = NULL;
-        }
-
-        /* Get plaintext content from cache (borrowed reference - don't free) */
-        const buffer_t *content = NULL;
-        err = content_cache_get_from_tree_entry(
-            cache,
-            entry->entry,
-            entry->storage_path,
-            entry->source_profile->name,
-            metadata,
-            &content
-        );
-        if (err) {
-            metadata_free(metadata);
-            content_cache_free(cache);
-            return error_wrap(err, "Failed to get content for '%s'", entry->filesystem_path);
-        }
-
-        /* Compare buffer to disk (works with decrypted content) */
-        git_filemode_t mode = git_tree_entry_filemode(entry->entry);
-        compare_result_t cmp_result;
-        err = compare_buffer_to_disk(content, entry->filesystem_path, mode, NULL, &cmp_result, NULL);
-
-        if (err) {
-            metadata_free(metadata);
-            content_cache_free(cache);
-            return error_wrap(err, "Failed to compare '%s'", entry->filesystem_path);
-        }
-
-        /* Check if we should diff this file */
-        if (!should_diff_file(entry->filesystem_path, cmp_result, opts)) {
-            metadata_free(metadata);
+        /* Filter 1: Only process FILES (skip directories) */
+        if (item->item_kind != WORKSPACE_ITEM_FILE) {
             continue;
         }
 
-        /* Show diff (reuses cached content - no redundant loading/decryption) */
-        err = show_file_diff(repo, cache, metadata, entry, direction, opts, out);
-        metadata_free(metadata);
+        /* Filter 2: Check file filter (user-specified files) */
+        if (!matches_file_filter(item->filesystem_path, opts)) {
+            continue;
+        }
+
+        /* Filter 3: Direction-based filtering */
+        if (!should_show_item_for_direction(item, direction)) {
+            continue;
+        }
+
+        /* Filter 4: Check if item has diffable divergence */
+        if (!has_diffable_divergence(item)) {
+            continue;
+        }
+
+        /* Lookup manifest entry using O(1) index */
+        if (!manifest->index) {
+            /* Manifest must have index for O(1) lookup */
+            metadata_free(fallback_metadata);
+            return ERROR(ERR_INTERNAL, "Manifest missing index");
+        }
+
+        void *idx_ptr = hashmap_get(manifest->index, item->filesystem_path);
+        if (!idx_ptr) {
+            /* Item in diverged but not in manifest
+             * This can happen for untracked/orphaned items - skip */
+            continue;
+        }
+
+        size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+        if (idx >= manifest->count) {
+            /* Index out of bounds - shouldn't happen */
+            continue;
+        }
+
+        const file_entry_t *entry = &manifest->entries[idx];
+
+        /* Get metadata from cache (O(1) lookup) */
+        const metadata_t *metadata = hashmap_get(metadata_cache, item->profile);
+        if (!metadata) {
+            /* Graceful fallback: use empty metadata */
+            metadata = fallback_metadata;
+        }
+
+        /* Show the diff (content already analyzed by workspace) */
+        err = show_file_diff_from_workspace(
+            item, entry, metadata,
+            content_cache, direction, opts, out
+        );
         if (err) {
-            content_cache_free(cache);
+            metadata_free(fallback_metadata);
             return err;
         }
 
         (*diff_count)++;
     }
 
-    content_cache_free(cache);
+    metadata_free(fallback_metadata);
     return NULL;
 }
 
@@ -735,6 +760,347 @@ static int print_diff_line_cb(
 }
 
 /**
+ * Compare historical manifest to filesystem and show diffs
+ *
+ * Generic comparison function for commit-to-workspace diffs.
+ * Takes a historical manifest (from a specific commit) and compares
+ * each file against the current filesystem state.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param manifest Historical manifest to compare (must not be NULL)
+ * @param metadata Metadata from historical commit (must not be NULL)
+ * @param profile_name Profile name (must not be NULL)
+ * @param opts Command options (must not be NULL)
+ * @param out Output context (must not be NULL)
+ * @param diff_count Output: number of diffs shown (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *compare_manifest_to_filesystem(
+    git_repository *repo,
+    const manifest_t *manifest,
+    const metadata_t *metadata,
+    const char *profile_name,
+    const cmd_diff_options_t *opts,
+    output_ctx_t *out,
+    size_t *diff_count
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(manifest);
+    CHECK_NULL(metadata);
+    CHECK_NULL(profile_name);
+    CHECK_NULL(opts);
+    CHECK_NULL(out);
+    CHECK_NULL(diff_count);
+
+    *diff_count = 0;
+    error_t *err = NULL;
+
+    /* Create content cache for efficient blob access */
+    keymanager_t *km = keymanager_get_global(NULL);
+    content_cache_t *cache = content_cache_create(repo, km);
+    if (!cache) {
+        return ERROR(ERR_MEMORY, "Failed to create content cache");
+    }
+
+    /* Iterate through all files in the historical manifest */
+    for (size_t i = 0; i < manifest->count; i++) {
+        const file_entry_t *entry = &manifest->entries[i];
+        const char *fs_path = entry->filesystem_path;
+        const char *storage_path = entry->storage_path;
+
+        /* Check file filter */
+        if (!matches_file_filter(fs_path, opts)) {
+            continue;
+        }
+
+        /* Name-only output */
+        if (opts->name_only) {
+            /* Check if file exists and differs */
+            struct stat st;
+            bool exists = (stat(fs_path, &st) == 0);
+
+            if (!exists) {
+                output_printf(out, OUTPUT_NORMAL, "%s\n", fs_path);
+                (*diff_count)++;
+                continue;
+            }
+
+            /* Get content from historical commit (cached) */
+            const buffer_t *hist_content = NULL;
+            err = content_cache_get_from_tree_entry(
+                cache, entry->entry, storage_path,
+                profile_name, metadata, &hist_content
+            );
+            if (err) {
+                content_cache_free(cache);
+                return error_wrap(err, "Failed to get historical content for '%s'", fs_path);
+            }
+
+            /* Compare with filesystem */
+            compare_result_t result;
+            git_filemode_t mode = git_tree_entry_filemode(entry->entry);
+            err = compare_buffer_to_disk(hist_content, fs_path, mode, NULL, &result, NULL);
+            if (err) {
+                content_cache_free(cache);
+                return error_wrap(err, "Failed to compare '%s'", fs_path);
+            }
+
+            if (result != CMP_EQUAL) {
+                output_printf(out, OUTPUT_NORMAL, "%s\n", fs_path);
+                (*diff_count)++;
+            }
+            continue;
+        }
+
+        /* Full diff output */
+        /* Get content from historical commit (cached) */
+        const buffer_t *hist_content = NULL;
+        err = content_cache_get_from_tree_entry(
+            cache, entry->entry, storage_path,
+            profile_name, metadata, &hist_content
+        );
+        if (err) {
+            content_cache_free(cache);
+            return error_wrap(err, "Failed to get historical content for '%s'", fs_path);
+        }
+
+        /* Compare with filesystem */
+        compare_result_t result;
+        git_filemode_t mode = git_tree_entry_filemode(entry->entry);
+        err = compare_buffer_to_disk(hist_content, fs_path, mode, NULL, &result, NULL);
+        if (err) {
+            content_cache_free(cache);
+            return error_wrap(err, "Failed to compare '%s'", fs_path);
+        }
+
+        /* Skip if identical */
+        if (result == CMP_EQUAL) {
+            continue;
+        }
+
+        /* Show file header */
+        if (output_colors_enabled(out)) {
+            output_printf(out, OUTPUT_NORMAL, "%sdiff --dotta a/%s b/%s%s\n",
+                    output_color_code(out, OUTPUT_COLOR_BOLD),
+                    storage_path, storage_path,
+                    output_color_code(out, OUTPUT_COLOR_RESET));
+
+            output_printf(out, OUTPUT_NORMAL, "profile: %s%s%s\n",
+                    output_color_code(out, OUTPUT_COLOR_CYAN),
+                    profile_name,
+                    output_color_code(out, OUTPUT_COLOR_RESET));
+        } else {
+            output_printf(out, OUTPUT_NORMAL, "diff --dotta a/%s b/%s\n", storage_path, storage_path);
+            output_printf(out, OUTPUT_NORMAL, "profile: %s\n", profile_name);
+        }
+
+        /* Show status message */
+        const char *status_msg = NULL;
+        output_color_t status_color = OUTPUT_COLOR_YELLOW;
+
+        switch (result) {
+            case CMP_MISSING:
+                status_msg = "deleted locally (file missing)";
+                status_color = OUTPUT_COLOR_RED;
+                break;
+            case CMP_DIFFERENT:
+                status_msg = "modified locally since commit";
+                status_color = OUTPUT_COLOR_YELLOW;
+                break;
+            case CMP_TYPE_DIFF:
+                status_msg = "type changed locally";
+                status_color = OUTPUT_COLOR_RED;
+                break;
+            default:
+                status_msg = "unknown";
+                break;
+        }
+
+        if (output_colors_enabled(out)) {
+            output_printf(out, OUTPUT_NORMAL, "status: %s%s%s\n",
+                    output_color_code(out, status_color),
+                    status_msg,
+                    output_color_code(out, OUTPUT_COLOR_RESET));
+        } else {
+            output_printf(out, OUTPUT_NORMAL, "status: %s\n", status_msg);
+        }
+
+        /* For missing files or type changes, no content diff */
+        if (result == CMP_MISSING || result == CMP_TYPE_DIFF) {
+            (*diff_count)++;
+            continue;
+        }
+
+        /* Generate and show content diff (mode already declared above) */
+        file_diff_t *diff = NULL;
+
+        err = compare_generate_diff(
+            hist_content, fs_path, storage_path,
+            mode, NULL, CMP_DIR_DOWNSTREAM, &diff
+        );
+        if (err) {
+            content_cache_free(cache);
+            return error_wrap(err, "Failed to generate diff for '%s'", fs_path);
+        }
+
+        /* Print diff with colors */
+        if (diff && diff->diff_text) {
+            if (output_colors_enabled(out)) {
+                /* Colorize diff output line by line */
+                char *line = diff->diff_text;
+                char *next_line;
+
+                while (line && *line) {
+                    next_line = strchr(line, '\n');
+                    size_t line_len = next_line ? (size_t)(next_line - line) : strlen(line);
+
+                    const char *color = NULL;
+                    if (line_len > 0 && line[0] == '+' && (line_len == 1 || line[1] != '+')) {
+                        color = output_color_code(out, OUTPUT_COLOR_GREEN);
+                    } else if (line_len > 0 && line[0] == '-' && (line_len == 1 || line[1] != '-')) {
+                        color = output_color_code(out, OUTPUT_COLOR_RED);
+                    } else if (line_len > 1 && line[0] == '@' && line[1] == '@') {
+                        color = output_color_code(out, OUTPUT_COLOR_CYAN);
+                    }
+
+                    if (color) {
+                        output_printf(out, OUTPUT_NORMAL, "%s%.*s%s\n",
+                                color, (int)line_len, line,
+                                output_color_code(out, OUTPUT_COLOR_RESET));
+                    } else {
+                        output_printf(out, OUTPUT_NORMAL, "%.*s\n", (int)line_len, line);
+                    }
+
+                    line = next_line ? next_line + 1 : NULL;
+                }
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "%s\n", diff->diff_text);
+            }
+        }
+
+        compare_free_diff(diff);
+        (*diff_count)++;
+    }
+
+    content_cache_free(cache);
+    return NULL;
+}
+
+/**
+ * Diff commit to workspace - Compare historical commit with filesystem
+ *
+ * This is the NEW, CORRECT implementation that actually compares the
+ * specified commit (not HEAD!) against the current filesystem.
+ *
+ * Fixes critical bug: Old implementation compared HEAD instead of the
+ * user-specified commit, making the feature completely broken.
+ *
+ * CURRENT LIMITATION: Single-profile comparison only.
+ * When multiple profiles are enabled, this function compares only the
+ * profile that contains the specified commit (first match in precedence order)
+ *
+ * @param repo Repository (must not be NULL)
+ * @param commit_ref Commit reference to compare (must not be NULL)
+ * @param profiles Profile list (must not be NULL)
+ * @param opts Command options (must not be NULL)
+ * @param out Output context (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *diff_commit_to_workspace_new(
+    git_repository *repo,
+    const char *commit_ref,
+    profile_list_t *profiles,
+    const cmd_diff_options_t *opts,
+    output_ctx_t *out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(commit_ref);
+    CHECK_NULL(profiles);
+    CHECK_NULL(opts);
+    CHECK_NULL(out);
+
+    error_t *err = NULL;
+    git_oid commit_oid;
+    git_commit *commit = NULL;
+    char *profile_name = NULL;
+    git_tree *tree = NULL;
+    manifest_t *manifest = NULL;
+    metadata_t *metadata = NULL;
+
+    /* Step 1: Resolve commit to find which profile contains it */
+    err = resolve_commit_in_profiles(repo, profiles, commit_ref,
+                                     &commit_oid, &commit, &profile_name);
+    if (err) {
+        goto cleanup;
+    }
+
+    /* Step 2: Print commit header */
+    char oid_str[8];
+    git_oid_tostr(oid_str, sizeof(oid_str), &commit_oid);
+
+    if (output_colors_enabled(out)) {
+        output_printf(out, OUTPUT_NORMAL, "%sdiff --dotta %s..workspace%s\n\n",
+                output_color_code(out, OUTPUT_COLOR_BOLD),
+                oid_str,
+                output_color_code(out, OUTPUT_COLOR_RESET));
+    } else {
+        output_printf(out, OUTPUT_NORMAL, "diff --dotta %s..workspace\n\n", oid_str);
+    }
+
+    print_commit_header(out, commit, &commit_oid, profile_name);
+
+    /* Step 3: Get tree from THE HISTORICAL COMMIT (not HEAD!) */
+    int git_err = git_commit_tree(&tree, commit);
+    if (git_err < 0) {
+        err = error_from_git(git_err);
+        err = error_wrap(err, "Failed to get tree from commit");
+        goto cleanup;
+    }
+
+    /* Step 4: Load metadata from that historical tree */
+    err = metadata_load_from_tree(repo, tree, profile_name, &metadata);
+    if (err) {
+        /* Graceful: if no metadata in commit, use empty metadata */
+        error_free(err);
+        err = metadata_create_empty(&metadata);
+        if (err) {
+            goto cleanup;
+        }
+    }
+
+    /* Step 5: Build manifest from historical tree
+     * We need to traverse the tree and create file entries */
+    err = profile_build_manifest_from_tree(repo, tree, profile_name, &manifest);
+    if (err) {
+        err = error_wrap(err, "Failed to build manifest from commit");
+        goto cleanup;
+    }
+
+    /* Step 6: Compare historical manifest against current filesystem */
+    size_t diff_count = 0;
+    err = compare_manifest_to_filesystem(
+        repo, manifest, metadata, profile_name,
+        opts, out, &diff_count
+    );
+    if (err) {
+        goto cleanup;
+    }
+
+    if (diff_count == 0 && !opts->name_only) {
+        output_info(out, "No differences between commit and workspace\n");
+    }
+
+cleanup:
+    metadata_free(metadata);
+    manifest_free(manifest);
+    git_tree_free(tree);
+    git_commit_free(commit);
+    free(profile_name);
+
+    return err;
+}
+
+/**
  * Diff two commits
  */
 static error_t *diff_commits(
@@ -843,72 +1209,132 @@ cleanup:
 }
 
 /**
- * Diff commit to workspace
+ * Workspace diff - Compare current profiles with filesystem using workspace module
+ *
+ * Optimized implementation using workspace_load() for efficient, pre-analyzed
+ * divergence detection. Eliminates N+1 metadata loading and redundant comparisons.
+ *
+ * Performance: O(P) metadata loads + O(F) file analysis (where P=profiles, F=files)
+ *
+ * @param repo Repository (must not be NULL)
+ * @param profiles Profile list (must not be NULL)
+ * @param config Configuration (can be NULL)
+ * @param opts Command options (must not be NULL)
+ * @param out Output context (must not be NULL)
+ * @return Error or NULL on success
  */
-static error_t *diff_commit_to_workspace(
+static error_t *diff_workspace(
     git_repository *repo,
-    const char *commit_ref,
     profile_list_t *profiles,
+    const dotta_config_t *config,
     const cmd_diff_options_t *opts,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(commit_ref);
     CHECK_NULL(profiles);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
     error_t *err = NULL;
-    git_oid commit_oid;
-    git_commit *commit = NULL;
-    char *profile_name = NULL;
-    manifest_t *manifest = NULL;
+    workspace_t *ws = NULL;
+    content_cache_t *cache = NULL;
 
-    /* Resolve commit */
-    err = resolve_commit_in_profiles(repo, profiles, commit_ref,
-                                     &commit_oid, &commit, &profile_name);
+    /* Step 1: Load workspace with full file analysis */
+    workspace_load_t ws_opts = {
+        .analyze_files = true,        /* File content divergence detection */
+        .analyze_orphans = true,      /* Orphaned state entries */
+        .analyze_untracked = false,   /* Not needed for diff (expensive) */
+        .analyze_directories = false, /* Not needed for diff */
+        .analyze_encryption = false   /* Not needed for diff */
+    };
+
+    err = workspace_load(repo, profiles, config, &ws_opts, &ws);
     if (err) {
+        return error_wrap(err, "Failed to load workspace");
+    }
+
+    /* Step 2: Get pre-analyzed divergence from workspace */
+    size_t diverged_count = 0;
+    const workspace_item_t *diverged = workspace_get_all_diverged(ws, &diverged_count);
+
+    /* Step 3: Get cached resources from workspace */
+    const manifest_t *manifest = workspace_get_manifest(ws);
+    const hashmap_t *metadata_cache = workspace_get_metadata_cache(ws);
+    keymanager_t *km = workspace_get_keymanager(ws);
+
+    /* Step 4: Create content cache for diff generation
+     * Note: Could use workspace_get_content_cache(ws) if we want to reuse
+     * the workspace's cache, but creating a fresh one is also fine */
+    cache = content_cache_create(repo, km);
+    if (!cache) {
+        err = ERROR(ERR_MEMORY, "Failed to create content cache");
         goto cleanup;
     }
 
-    /* Print commit header */
-    char oid_str[8];
-    git_oid_tostr(oid_str, sizeof(oid_str), &commit_oid);
+    /* Step 5: Filter and present diffs based on direction */
+    size_t total_diff_count = 0;
 
-    if (output_colors_enabled(out)) {
-        output_printf(out, OUTPUT_NORMAL, "%sdiff --dotta %s..workspace%s\n\n",
-                output_color_code(out, OUTPUT_COLOR_BOLD),
-                oid_str,
-                output_color_code(out, OUTPUT_COLOR_RESET));
+    if (opts->direction == DIFF_BOTH) {
+        /* Show both directions with headers */
+        size_t upstream_count = 0, downstream_count = 0;
+
+        /* Upstream section */
+        output_section(out, "Upstream (repository → filesystem)");
+        output_info(out, "Shows what 'dotta apply' would change\n");
+
+        err = present_diffs_for_direction(
+            diverged, diverged_count,
+            manifest, metadata_cache, cache,
+            DIFF_UPSTREAM, opts, out,
+            &upstream_count
+        );
+        if (err) goto cleanup;
+
+        if (upstream_count == 0 && !opts->name_only) {
+            output_info(out, "No upstream differences\n");
+        }
+
+        /* Downstream section */
+        output_newline(out);
+        output_section(out, "Downstream (filesystem → repository)");
+        output_info(out, "Shows what 'dotta update' would commit\n");
+
+        err = present_diffs_for_direction(
+            diverged, diverged_count,
+            manifest, metadata_cache, cache,
+            DIFF_DOWNSTREAM, opts, out,
+            &downstream_count
+        );
+        if (err) goto cleanup;
+
+        if (downstream_count == 0 && !opts->name_only) {
+            output_info(out, "No downstream differences\n");
+        }
+
+        total_diff_count = upstream_count + downstream_count;
+
     } else {
-        output_printf(out, OUTPUT_NORMAL, "diff --dotta %s..workspace\n\n", oid_str);
-    }
+        /* Single direction */
+        err = present_diffs_for_direction(
+            diverged, diverged_count,
+            manifest, metadata_cache, cache,
+            opts->direction, opts, out,
+            &total_diff_count
+        );
+        if (err) goto cleanup;
 
-    print_commit_header(out, commit, &commit_oid, profile_name);
-
-    /* Build manifest from current profiles */
-    err = profile_build_manifest(repo, profiles, &manifest);
-    if (err) {
-        err = error_wrap(err, "Failed to build manifest");
-        goto cleanup;
-    }
-
-    /* Show workspace diffs */
-    size_t diff_count = 0;
-    err = show_diffs_for_direction(repo, manifest, DIFF_BOTH, opts, out, &diff_count);
-    if (err) {
-        goto cleanup;
-    }
-
-    if (diff_count == 0 && !opts->name_only) {
-        output_info(out, "No differences between commit and workspace\n");
+        if (total_diff_count == 0 && !opts->name_only) {
+            if (opts->direction == DIFF_UPSTREAM) {
+                output_info(out, "No differences (repository and filesystem in sync)");
+            } else {
+                output_info(out, "No local changes to commit");
+            }
+        }
     }
 
 cleanup:
-    if (manifest) manifest_free(manifest);
-    if (commit) git_commit_free(commit);
-    free(profile_name);
-
+    content_cache_free(cache);
+    workspace_free(ws);
     return err;
 }
 
@@ -923,7 +1349,6 @@ error_t *cmd_diff(git_repository *repo, const cmd_diff_options_t *opts) {
     dotta_config_t *config = NULL;
     output_ctx_t *out = NULL;
     profile_list_t *profiles = NULL;
-    manifest_t *manifest = NULL;
 
     /* Load configuration */
     err = config_load(NULL, &config);
@@ -962,77 +1387,17 @@ error_t *cmd_diff(git_repository *repo, const cmd_diff_options_t *opts) {
             goto cleanup;
 
         case DIFF_COMMIT_TO_WORKSPACE:
-            /* Diff commit to workspace */
-            err = diff_commit_to_workspace(repo, opts->commit1, profiles, opts, out);
+            /* Use new commit-to-workspace diff (fixes critical bug) */
+            err = diff_commit_to_workspace_new(repo, opts->commit1, profiles, opts, out);
             goto cleanup;
 
         case DIFF_WORKSPACE:
-            /* Fall through to workspace diff below */
-            break;
-    }
-
-    /* Workspace diff */
-    /* Build manifest */
-    err = profile_build_manifest(repo, profiles, &manifest);
-    if (err) {
-        err = error_wrap(err, "Failed to build manifest");
-        goto cleanup;
-    }
-
-    /* Show diffs based on direction */
-    size_t total_diff_count = 0;
-
-    if (opts->direction == DIFF_BOTH) {
-        /* Show both directions with headers */
-        size_t upstream_count = 0, downstream_count = 0;
-
-        /* Upstream section */
-        output_section(out, "Upstream (repository \u2192 filesystem)");
-        output_info(out, "Shows what 'dotta apply' would change\n");
-
-        err = show_diffs_for_direction(repo, manifest, DIFF_UPSTREAM, opts, out, &upstream_count);
-        if (err) {
+            /* Workspace-based diff using workspace module */
+            err = diff_workspace(repo, profiles, config, opts, out);
             goto cleanup;
-        }
-
-        if (upstream_count == 0 && !opts->name_only) {
-            output_info(out, "No upstream differences\n");
-        }
-
-        /* Downstream section */
-        output_newline(out);
-        output_section(out, "Downstream (filesystem \u2192 repository)");
-        output_info(out, "Shows what 'dotta update' would commit\n");
-
-        err = show_diffs_for_direction(repo, manifest, DIFF_DOWNSTREAM, opts, out, &downstream_count);
-        if (err) {
-            goto cleanup;
-        }
-
-        if (downstream_count == 0 && !opts->name_only) {
-            output_info(out, "No downstream differences\n");
-        }
-
-        total_diff_count = upstream_count + downstream_count;
-
-    } else {
-        /* Show single direction */
-        err = show_diffs_for_direction(repo, manifest, opts->direction, opts, out, &total_diff_count);
-        if (err) {
-            goto cleanup;
-        }
-
-        if (total_diff_count == 0 && !opts->name_only) {
-            if (opts->direction == DIFF_UPSTREAM) {
-                output_info(out, "No differences (repository and filesystem in sync)");
-            } else {
-                output_info(out, "No local changes to commit");
-            }
-        }
     }
 
 cleanup:
-    if (manifest) manifest_free(manifest);
     if (profiles) profile_list_free(profiles);
     if (out) output_free(out);
     if (config) config_free(config);

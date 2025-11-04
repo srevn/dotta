@@ -1503,6 +1503,94 @@ cleanup:
 }
 
 /**
+ * Load metadata from a Git tree
+ *
+ * Loads metadata.json from a specific Git tree. This is useful for
+ * loading metadata from historical commits or arbitrary tree objects.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param tree Git tree to load from (must not be NULL)
+ * @param profile_name Profile name for error messages (must not be NULL)
+ * @param out Metadata (must not be NULL, caller must free with metadata_free)
+ * @return Error or NULL on success (ERR_NOT_FOUND if file doesn't exist in tree)
+ */
+error_t *metadata_load_from_tree(
+    git_repository *repo,
+    git_tree *tree,
+    const char *profile_name,
+    metadata_t **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(tree);
+    CHECK_NULL(profile_name);
+    CHECK_NULL(out);
+
+    error_t *err = NULL;
+    git_tree_entry *entry = NULL;
+    git_blob *blob = NULL;
+    char *json_str = NULL;
+    metadata_t *metadata = NULL;
+
+    /* Look for .dotta/metadata.json (use bypath for nested paths) */
+    int git_err = git_tree_entry_bypath(&entry, tree, METADATA_FILE_PATH);
+    if (git_err < 0) {
+        if (git_err == GIT_ENOTFOUND) {
+            err = ERROR(ERR_NOT_FOUND, "Metadata file not found in profile: %s", profile_name);
+        } else {
+            err = error_from_git(git_err);
+        }
+        goto cleanup;
+    }
+
+    /* Get OID */
+    const git_oid *oid = git_tree_entry_id(entry);
+    if (!oid) {
+        err = ERROR(ERR_INTERNAL, "Failed to get metadata file OID");
+        goto cleanup;
+    }
+
+    /* Get blob */
+    git_err = git_blob_lookup(&blob, repo, oid);
+    if (git_err < 0) {
+        err = error_from_git(git_err);
+        goto cleanup;
+    }
+
+    /* Get content */
+    const char *content = (const char *)git_blob_rawcontent(blob);
+    git_object_size_t size = git_blob_rawsize(blob);
+
+    /* Null-terminate content (cJSON requires null-terminated string) */
+    json_str = malloc(size + 1);
+    if (!json_str) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate JSON buffer");
+        goto cleanup;
+    }
+
+    memcpy(json_str, content, size);
+    json_str[size] = '\0';
+
+    /* Parse JSON */
+    err = metadata_from_json(json_str, &metadata);
+    if (err) {
+        err = error_wrap(err, "Failed to parse metadata from profile: %s", profile_name);
+        goto cleanup;
+    }
+
+    /* Success - transfer ownership to caller */
+    *out = metadata;
+    metadata = NULL;
+
+cleanup:
+    if (json_str) free(json_str);
+    if (blob) git_blob_free(blob);
+    if (entry) git_tree_entry_free(entry);
+    if (metadata) metadata_free(metadata);
+
+    return err;
+}
+
+/**
  * Load metadata from file path
  *
  * Reads and parses metadata from filesystem.

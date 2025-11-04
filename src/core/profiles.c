@@ -1267,6 +1267,213 @@ cleanup:
 }
 
 /**
+ * Build manifest from a single Git tree
+ *
+ * Creates a manifest from a specific Git tree. This is used for historical diffs
+ * where we need to build a manifest from a past commit's tree.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param tree Git tree to build manifest from (must not be NULL)
+ * @param profile_name Profile name for entries (must not be NULL)
+ * @param out Manifest (must not be NULL, caller must free with manifest_free)
+ * @return Error or NULL on success
+ */
+error_t *profile_build_manifest_from_tree(
+    git_repository *repo,
+    git_tree *tree,
+    const char *profile_name,
+    manifest_t **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(tree);
+    CHECK_NULL(profile_name);
+    CHECK_NULL(out);
+
+    error_t *err = NULL;
+    manifest_t *manifest = NULL;
+    hashmap_t *path_map = NULL;
+    string_array_t *files = NULL;
+    char *filesystem_path = NULL;
+    git_tree_entry *entry = NULL;
+    char *dup_storage_path = NULL;
+
+    /* Allocate manifest */
+    manifest = calloc(1, sizeof(manifest_t));
+    if (!manifest) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate manifest");
+        goto cleanup;
+    }
+
+    /* Allocate entries array */
+    size_t capacity = 64;
+    manifest->entries = calloc(capacity, sizeof(file_entry_t));
+    if (!manifest->entries) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate manifest entries");
+        goto cleanup;
+    }
+    manifest->count = 0;
+    manifest->index = NULL;
+    manifest->owned_profile = NULL;
+
+    /* Create hash map for O(1) duplicate detection */
+    path_map = hashmap_create(128);
+    if (!path_map) {
+        err = ERROR(ERR_MEMORY, "Failed to create hashmap");
+        goto cleanup;
+    }
+
+    /* List files in tree (using recursive traversal) */
+    struct walk_data walk_data = {0};
+    walk_data.paths = string_array_create();
+    if (!walk_data.paths) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate paths array");
+        goto cleanup;
+    }
+    walk_data.error = NULL;
+
+    err = gitops_tree_walk(tree, tree_walk_callback, &walk_data);
+    if (err || walk_data.error) {
+        string_array_free(walk_data.paths);
+        if (walk_data.error) {
+            error_free(err);
+            err = walk_data.error;
+        }
+        err = error_wrap(err, "Failed to walk tree");
+        goto cleanup;
+    }
+
+    files = walk_data.paths;
+
+    /* Create a heap-allocated profile_t for the manifest entries
+     * This prevents dangling pointers when file_entry_t.source_profile is accessed.
+     * The profile is owned by the manifest and freed in manifest_free(). */
+    profile_t *temp_profile = calloc(1, sizeof(profile_t));
+    if (!temp_profile) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate profile");
+        goto cleanup;
+    }
+
+    temp_profile->name = strdup(profile_name);
+    if (!temp_profile->name) {
+        free(temp_profile);
+        temp_profile = NULL;
+        err = ERROR(ERR_MEMORY, "Failed to duplicate profile name");
+        goto cleanup;
+    }
+    temp_profile->ref = NULL;
+    temp_profile->tree = tree;  /* Borrowed - caller owns tree lifetime */
+    temp_profile->auto_detected = false;
+
+    /* Store in manifest for cleanup */
+    manifest->owned_profile = temp_profile;
+
+    /* Process each file */
+    for (size_t i = 0; i < string_array_size(files); i++) {
+        const char *storage_path = string_array_get(files, i);
+
+        /* Skip repository metadata files */
+        if (strcmp(storage_path, ".dottaignore") == 0 ||
+            strcmp(storage_path, ".bootstrap") == 0 ||
+            strcmp(storage_path, ".gitignore") == 0 ||
+            strcmp(storage_path, "README.md") == 0 ||
+            strcmp(storage_path, "README") == 0 ||
+            str_starts_with(storage_path, ".git/") ||
+            str_starts_with(storage_path, ".dotta/")) {
+            continue;
+        }
+
+        /* Convert to filesystem path */
+        filesystem_path = NULL;
+        err = path_from_storage(storage_path, &filesystem_path);
+        if (err) {
+            err = error_wrap(err, "Failed to convert path '%s'", storage_path);
+            goto cleanup;
+        }
+
+        /* Get tree entry */
+        entry = NULL;
+        int git_err = git_tree_entry_bypath(&entry, tree, storage_path);
+        if (git_err != 0) {
+            err = error_from_git(git_err);
+            free(filesystem_path);
+            goto cleanup;
+        }
+
+        /* Grow array if needed */
+        if (manifest->count >= capacity) {
+            size_t new_capacity = capacity * 2;
+            file_entry_t *new_entries = realloc(manifest->entries,
+                                                new_capacity * sizeof(file_entry_t));
+            if (!new_entries) {
+                err = ERROR(ERR_MEMORY, "Failed to grow manifest entries");
+                free(filesystem_path);
+                git_tree_entry_free(entry);
+                goto cleanup;
+            }
+            manifest->entries = new_entries;
+            capacity = new_capacity;
+        }
+
+        /* Add new entry */
+        file_entry_t *new_entry = &manifest->entries[manifest->count];
+        memset(new_entry, 0, sizeof(file_entry_t));
+
+        /* Duplicate storage path for entry */
+        dup_storage_path = strdup(storage_path);
+        if (!dup_storage_path) {
+            err = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
+            free(filesystem_path);
+            git_tree_entry_free(entry);
+            goto cleanup;
+        }
+
+        new_entry->storage_path = dup_storage_path;
+        new_entry->filesystem_path = filesystem_path;
+        new_entry->entry = entry;
+        new_entry->source_profile = temp_profile;  /* Points to manifest->owned_profile */
+        new_entry->all_profiles = NULL;  /* Single profile - no list needed */
+
+        /* Store index in hashmap */
+        err = hashmap_set(path_map, filesystem_path,
+                        (void *)(uintptr_t)(manifest->count + 1));
+        if (err) {
+            err = error_wrap(err, "Failed to update hashmap");
+            free(new_entry->storage_path);
+            free(new_entry->filesystem_path);
+            git_tree_entry_free(entry);
+            goto cleanup;
+        }
+
+        manifest->count++;
+
+        /* Clear temporary variables (ownership transferred) */
+        dup_storage_path = NULL;
+        filesystem_path = NULL;
+        entry = NULL;
+    }
+
+    /* Success - transfer index ownership to manifest */
+    manifest->index = path_map;
+    *out = manifest;
+    string_array_free(files);
+    return NULL;
+
+cleanup:
+    free(filesystem_path);
+    free(dup_storage_path);
+    if (entry) {
+        git_tree_entry_free(entry);
+    }
+    string_array_free(files);
+    hashmap_free(path_map, NULL);
+    if (err) {
+        manifest_free(manifest);
+    }
+
+    return err;
+}
+
+/**
  * Free profile
  */
 void profile_free(profile_t *profile) {
@@ -1331,6 +1538,11 @@ void manifest_free(manifest_t *manifest) {
     /* Free index if present */
     if (manifest->index) {
         hashmap_free(manifest->index, NULL);
+    }
+
+    /* Free owned profile if present (used by profile_build_manifest_from_tree) */
+    if (manifest->owned_profile) {
+        profile_free(manifest->owned_profile);
     }
 
     free(manifest);

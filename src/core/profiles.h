@@ -72,11 +72,17 @@ typedef struct {
  * filesystem_path -> array index (offset by 1 to distinguish NULL from index 0).
  * The index is populated by profile_build_manifest() and can be NULL for
  * manifests built by other means (e.g., workspace_build_manifest_from_state).
+ *
+ * The owned_profile field stores a heap-allocated profile_t used by
+ * profile_build_manifest_from_tree() to prevent dangling pointers in
+ * file_entry_t.source_profile. This is NULL for manifests created by
+ * profile_build_manifest() (which use borrowed profile pointers).
  */
 typedef struct {
     file_entry_t *entries;
     size_t count;
-    hashmap_t *index;  /* Maps filesystem_path -> index in entries array (offset by 1), can be NULL */
+    hashmap_t *index;      /* Maps filesystem_path -> index in entries array (offset by 1), can be NULL */
+    profile_t *owned_profile;  /* Owned profile for single-profile manifests, NULL otherwise */
 } manifest_t;
 
 /**
@@ -253,6 +259,25 @@ error_t *profile_list_files(
 error_t *profile_build_manifest(
     git_repository *repo,
     profile_list_t *profiles,
+    manifest_t **out
+);
+
+/**
+ * Build manifest from a single Git tree
+ *
+ * Creates a manifest from a specific Git tree, useful for historical diffs.
+ * This is a simplified version of profile_build_manifest() for a single tree.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param tree Git tree to build manifest from (must not be NULL)
+ * @param profile_name Profile name for entries (must not be NULL)
+ * @param out Manifest (must not be NULL, caller must free with manifest_free)
+ * @return Error or NULL on success
+ */
+error_t *profile_build_manifest_from_tree(
+    git_repository *repo,
+    git_tree *tree,
+    const char *profile_name,
     manifest_t **out
 );
 

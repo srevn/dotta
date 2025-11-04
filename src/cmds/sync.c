@@ -463,9 +463,15 @@ static error_t *sync_push_phase(
     CHECK_NULL(enabled_profiles);
     CHECK_NULL(ws);
 
-    /* Extract cached resources from workspace for manifest operations */
+    /* Extract cached resources from workspace for manifest operations
+     *
+     * IMPORTANT: metadata_cache is NOT used during sync operations (see below).
+     * The cache was built from Git state BEFORE fetch/pull operations, making it
+     * stale after branch updates. We pass NULL to manifest_sync_diff() to force
+     * fresh metadata loading from the updated Git state. */
     keymanager_t *km = workspace_get_keymanager(ws);
     const hashmap_t *metadata_cache = workspace_get_metadata_cache(ws);
+    (void)metadata_cache;  /* Explicitly unused - see comment above */
     content_cache_t *content_cache = workspace_get_content_cache(ws);
 
     output_section(out, "Syncing with remote");
@@ -569,12 +575,16 @@ static error_t *sync_push_phase(
                             results->need_pull_count--;
                         }
 
-                        /* Update manifest with changes from pull */
+                        /* Update manifest with changes from pull
+                         *
+                         * Note: Pass NULL for metadata_cache (not the cached value).
+                         * The cache was built before fetch and contains stale metadata.
+                         * manifest_sync_diff will load fresh metadata from the new commit. */
                         size_t synced = 0, removed = 0, fallbacks = 0;
                         error_t *manifest_err = manifest_sync_diff(
                             repo, state, result->profile_name,
                             &old_oid, &new_oid, enabled_profiles,
-                            km, metadata_cache, content_cache,
+                            km, NULL /* metadata_cache */, content_cache,
                             &synced, &removed, &fallbacks
                         );
 
@@ -718,12 +728,16 @@ static error_t *sync_push_phase(
                                     result->pushed = true;
                                     results->pushed_count++;
 
-                                    /* Update manifest with changes from rebase */
+                                    /* Update manifest with changes from rebase
+                                     *
+                                     * Note: Pass NULL for metadata_cache (not the cached value).
+                                     * The cache was built before fetch and contains stale metadata.
+                                     * manifest_sync_diff will load fresh metadata from the new commit. */
                                     size_t synced = 0, removed = 0, fallbacks = 0;
                                     error_t *manifest_err = manifest_sync_diff(
                                         repo, state, result->profile_name,
                                         &ctx.saved_oid, &new_oid, enabled_profiles,
-                                        km, metadata_cache, content_cache,
+                                        km, NULL /* metadata_cache */, content_cache,
                                         &synced, &removed, &fallbacks
                                     );
 
@@ -821,12 +835,16 @@ static error_t *sync_push_phase(
                                     result->pushed = true;
                                     results->pushed_count++;
 
-                                    /* Update manifest with changes from merge */
+                                    /* Update manifest with changes from merge
+                                     *
+                                     * Note: Pass NULL for metadata_cache (not the cached value).
+                                     * The cache was built before fetch and contains stale metadata.
+                                     * manifest_sync_diff will load fresh metadata from the new commit. */
                                     size_t synced = 0, removed = 0, fallbacks = 0;
                                     error_t *manifest_err = manifest_sync_diff(
                                         repo, state, result->profile_name,
                                         &ctx.saved_oid, &new_oid, enabled_profiles,
-                                        km, metadata_cache, content_cache,
+                                        km, NULL /* metadata_cache */, content_cache,
                                         &synced, &removed, &fallbacks
                                     );
 
@@ -956,12 +974,16 @@ static error_t *sync_push_phase(
                                 output_success(out, "   Reset to remote (local commits discarded)");
                                 /* No push needed - local is now at remote */
 
-                                /* Update manifest with changes from reset */
+                                /* Update manifest with changes from reset
+                                 *
+                                 * Note: Pass NULL for metadata_cache (not the cached value).
+                                 * The cache was built before fetch and contains stale metadata.
+                                 * manifest_sync_diff will load fresh metadata from the new commit. */
                                 size_t synced = 0, removed = 0, fallbacks = 0;
                                 error_t *manifest_err = manifest_sync_diff(
                                     repo, state, result->profile_name,
                                     &ctx.saved_oid, &new_oid, enabled_profiles,
-                                    km, metadata_cache, content_cache,
+                                    km, NULL /* metadata_cache */, content_cache,
                                     &synced, &removed, &fallbacks
                                 );
 
@@ -1013,11 +1035,13 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     }
 
     if (strcmp(current_branch, "dotta-worktree") != 0) {
-        free(current_branch);
-        return ERROR(ERR_STATE_INVALID,
+        /* Create error before freeing current_branch to avoid use-after-free */
+        err = ERROR(ERR_STATE_INVALID,
                     "Main worktree must be on 'dotta-worktree' branch (currently on '%s')\n"
                     "Hint: Run 'git checkout dotta-worktree' to fix",
                     current_branch);
+        free(current_branch);
+        return err;
     }
     free(current_branch);
 
@@ -1195,8 +1219,6 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         output_info(out, "Run 'dotta status' for details.");
         output_newline(out);
     }
-
-    /* NOTE: Keep workspace alive - needed for manifest sync resources */
 
     /* Exit early if dry run */
     if (opts->dry_run) {

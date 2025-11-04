@@ -1592,8 +1592,14 @@ error_t *manifest_sync_diff(
             goto cleanup;
         }
         if (err) {
+            /* No metadata file exists - create empty metadata (old profiles without metadata.json)
+             * This is required because content_hash_from_tree_entry requires non-NULL metadata */
             error_free(err);
-            err = NULL;
+            err = metadata_create_empty(&metadata_merged);
+            if (err) {
+                err = error_wrap(err, "Failed to create empty metadata");
+                goto cleanup;
+            }
         }
     }
 

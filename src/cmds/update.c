@@ -1124,79 +1124,6 @@ cleanup:
 }
 
 /**
- * Context for update_profile_callback
- */
-typedef struct {
-    worktree_handle_t *wt;       /* Shared worktree for all profiles */
-    hashmap_t *profile_index;
-    const cmd_update_options_t *opts;
-    output_ctx_t *out;
-    const dotta_config_t *config;
-    workspace_t *ws;
-    size_t *total_updated;
-    error_t **err_out;
-} update_profile_context_t;
-
-/**
- * Callback for hashmap_foreach in update_execute_for_all_profiles
- */
-static bool update_profile_callback(const char *profile_name, void *value, void *user_data) {
-    update_profile_context_t *ctx = (update_profile_context_t *)user_data;
-    item_array_t *array = (item_array_t *)value;
-
-    /* Look up profile pointer */
-    profile_t *profile = hashmap_get(ctx->profile_index, profile_name);
-
-    if (!profile) {
-        /* Profile not in enabled set - skip (shouldn't happen due to filtering) */
-        output_warning(ctx->out, "Profile '%s' not found in enabled profiles, skipping",
-                      profile_name);
-        return true;  /* Continue iteration */
-    }
-
-    if (array->count == 0) {
-        return true;  /* Continue iteration */
-    }
-
-    /* Display profile header */
-    char *colored_name = output_colorize(ctx->out, OUTPUT_COLOR_CYAN, profile->name);
-    if (colored_name) {
-        output_info(ctx->out, "Updating profile '%s':", colored_name);
-        free(colored_name);
-    } else {
-        output_info(ctx->out, "Updating profile '%s':", profile->name);
-    }
-
-    /* Checkout profile branch in shared worktree */
-    error_t *err = worktree_checkout_branch(ctx->wt, profile->name);
-    if (err) {
-        *(ctx->err_out) = error_wrap(err, "Failed to checkout profile '%s'", profile->name);
-        return false;  /* Stop iteration */
-    }
-
-    /* Update this profile using shared worktree */
-    err = update_profile(
-        ctx->wt, profile,
-        array->items, array->count,
-        ctx->opts, ctx->out, ctx->config, ctx->ws
-    );
-
-    if (err) {
-        *(ctx->err_out) = error_wrap(err, "Failed to update profile '%s'", profile->name);
-        return false;  /* Stop iteration */
-    }
-
-    *(ctx->total_updated) += array->count;
-
-    if (!ctx->opts->verbose) {
-        output_success(ctx->out, "  Updated %zu item%s",
-                      array->count, array->count == 1 ? "" : "s");
-    }
-
-    return true;  /* Continue iteration */
-}
-
-/**
  * Flatten items_by_profile hashmap into single array
  *
  * Converts hashmap<profile → item_array> into flat array of item pointers.
@@ -1505,20 +1432,64 @@ static error_t *update_execute_for_all_profiles(
         }
     }
 
-    /* Update each profile using hashmap_foreach callback */
-    update_profile_context_t ctx = {
-        .wt = wt,
-        .profile_index = profile_index,
-        .opts = opts,
-        .out = out,
-        .config = config,
-        .ws = ws,
-        .total_updated = total_updated,
-        .err_out = &err
-    };
+    /* Update each profile using iterator */
+    hashmap_iter_t iter;
+    hashmap_iter_init(&iter, by_profile);
+    const char *profile_name;
+    void *value;
 
-    /* Execute foreach with callback */
-    hashmap_foreach(by_profile, update_profile_callback, &ctx);
+    while (hashmap_iter_next(&iter, &profile_name, &value)) {
+        item_array_t *array = (item_array_t *)value;
+
+        /* Look up profile pointer */
+        profile_t *profile = hashmap_get(profile_index, profile_name);
+
+        if (!profile) {
+            /* Profile not in enabled set - skip (shouldn't happen due to filtering) */
+            output_warning(out, "Profile '%s' not found in enabled profiles, skipping",
+                          profile_name);
+            continue;
+        }
+
+        if (array->count == 0) {
+            continue;
+        }
+
+        /* Display profile header */
+        char *colored_name = output_colorize(out, OUTPUT_COLOR_CYAN, profile->name);
+        if (colored_name) {
+            output_info(out, "Updating profile '%s':", colored_name);
+            free(colored_name);
+        } else {
+            output_info(out, "Updating profile '%s':", profile->name);
+        }
+
+        /* Checkout profile branch in shared worktree */
+        err = worktree_checkout_branch(wt, profile->name);
+        if (err) {
+            err = error_wrap(err, "Failed to checkout profile '%s'", profile->name);
+            break;
+        }
+
+        /* Update this profile using shared worktree */
+        err = update_profile(
+            wt, profile,
+            array->items, array->count,
+            opts, out, config, ws
+        );
+
+        if (err) {
+            err = error_wrap(err, "Failed to update profile '%s'", profile->name);
+            break;
+        }
+
+        *total_updated += array->count;
+
+        if (!opts->verbose) {
+            output_success(out, "  Updated %zu item%s",
+                          array->count, array->count == 1 ? "" : "s");
+        }
+    }
 
 cleanup:
     /* Cleanup resources in reverse order */

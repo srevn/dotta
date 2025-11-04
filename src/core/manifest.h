@@ -284,6 +284,78 @@ error_t *manifest_sync_files_bulk(
 );
 
 /**
+ * Sync multiple files to manifest in bulk - simplified for add command
+ *
+ * Optimized bulk operation for adding newly-committed files to manifest.
+ * Simpler than manifest_sync_files_bulk() because:
+ * - All files are from the same profile
+ * - No deletions (only additions/updates)
+ * - All files have the same commit OID
+ * - Status is always MANIFEST_STATUS_DEPLOYED (captured from filesystem)
+ *
+ * CRITICAL DESIGN: Like manifest_sync_files_bulk(), this builds a FRESH
+ * manifest from Git (post-commit state). This ensures all newly-added files
+ * are found during precedence checks, avoiding O(N×M) fallback to
+ * manifest_sync_file().
+ *
+ * Algorithm:
+ *   1. Load enabled profiles from Git (current HEAD, post-commit)
+ *   2. Build fresh manifest with profile_build_manifest() (ONCE)
+ *   3. Build hashmap index for O(1) precedence lookups
+ *   4. Build profile→oid map for git_oid field
+ *   5. For each file:
+ *      - Convert filesystem_path → storage_path
+ *      - Lookup in fresh manifest
+ *      - If precedence matches: sync to state with DEPLOYED status
+ *      - If lower precedence or filtered: skip silently
+ *   6. All operations within caller's transaction
+ *
+ * Preconditions:
+ *   - state MUST have active transaction (via state_load_for_update)
+ *   - commit_oid MUST reference the commit that added these files
+ *   - filesystem_paths MUST be valid, canonical paths
+ *   - profile_name SHOULD be enabled (function gracefully handles if not)
+ *
+ * Postconditions:
+ *   - Files synced to manifest with MANIFEST_STATUS_DEPLOYED
+ *   - Lower-precedence files skipped (not an error)
+ *   - Filtered files skipped (not an error)
+ *   - Transaction remains open (caller commits via state_save)
+ *
+ * Performance:
+ *   - O(M + N) where M = total files in all profiles, N = files to add
+ *   - Single fresh manifest build from Git
+ *   - Batch-optimized state operations
+ *
+ * Error Handling:
+ *   - Transactional: on error, entire batch fails
+ *   - Returns error on first failure (fail-fast)
+ *   - Path resolution errors are fatal
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param state State handle (with active transaction, must not be NULL)
+ * @param profile_name Profile files were added to (must not be NULL)
+ * @param filesystem_paths Array of filesystem paths (must not be NULL)
+ * @param commit_oid Commit OID from Git commit (must not be NULL)
+ * @param enabled_profiles All enabled profiles (must not be NULL)
+ * @param km Keymanager for content hashing (can be NULL if no encryption)
+ * @param metadata_cache Hashmap: profile_name → metadata_t* (must not be NULL)
+ * @param out_synced Output: count of files synced (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *manifest_sync_files_bulk_simple(
+    git_repository *repo,
+    state_t *state,
+    const char *profile_name,
+    const string_array_t *filesystem_paths,
+    const git_oid *commit_oid,
+    const string_array_t *enabled_profiles,
+    keymanager_t *km,
+    const hashmap_t *metadata_cache,
+    size_t *out_synced
+);
+
+/**
  * Sync changes from git diff to manifest
  *
  * Called after sync pulls remote changes. Updates manifest based on

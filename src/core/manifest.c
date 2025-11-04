@@ -25,6 +25,7 @@
 #include "core/state.h"
 #include "infra/content.h"
 #include "infra/path.h"
+#include "utils/array.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
 
@@ -1363,6 +1364,211 @@ error_t *manifest_sync_files_bulk(
 
             (*out_synced)++;
         }
+    }
+
+cleanup:
+    if (profile_oids) {
+        hashmap_free(profile_oids, free);  /* Free oid strings */
+    }
+    if (manifest_index) {
+        hashmap_free(manifest_index, NULL);  /* Don't free entries (borrowed from manifest) */
+    }
+    if (fresh_manifest) {
+        manifest_free(fresh_manifest);
+    }
+    if (profiles) {
+        profile_list_free(profiles);
+    }
+
+    return err;
+}
+
+/**
+ * Sync multiple files to manifest in bulk - simplified for add command
+ *
+ * Optimized bulk operation for adding newly-committed files to manifest.
+ * Simpler than manifest_sync_files_bulk() because:
+ * - All files are from the same profile
+ * - No deletions (only additions/updates)
+ * - All files have the same commit OID
+ * - Status is always MANIFEST_STATUS_DEPLOYED (captured from filesystem)
+ *
+ * CRITICAL DESIGN: Like manifest_sync_files_bulk(), this builds a FRESH
+ * manifest from Git (post-commit state). This ensures all newly-added files
+ * are found during precedence checks, avoiding O(N×M) fallback to
+ * manifest_sync_file().
+ *
+ * Algorithm:
+ *   1. Load enabled profiles from Git (current HEAD, post-commit)
+ *   2. Build fresh manifest with profile_build_manifest() (ONCE)
+ *   3. Build hashmap index for O(1) precedence lookups
+ *   4. Build profile→oid map for git_oid field
+ *   5. For each file:
+ *      - Convert filesystem_path → storage_path
+ *      - Lookup in fresh manifest
+ *      - If precedence matches: sync to state with DEPLOYED status
+ *      - If lower precedence or filtered: skip silently
+ *   6. All operations within caller's transaction
+ *
+ * Preconditions:
+ *   - state MUST have active transaction (via state_load_for_update)
+ *   - commit_oid MUST reference the commit that added these files
+ *   - filesystem_paths MUST be valid, canonical paths
+ *   - profile_name SHOULD be enabled (function gracefully handles if not)
+ *
+ * Postconditions:
+ *   - Files synced to manifest with MANIFEST_STATUS_DEPLOYED
+ *   - Lower-precedence files skipped (not an error)
+ *   - Filtered files skipped (not an error)
+ *   - Transaction remains open (caller commits via state_save)
+ *
+ * Performance:
+ *   - O(M + N) where M = total files in all profiles, N = files to add
+ *   - Single fresh manifest build from Git
+ *   - Batch-optimized state operations
+ *
+ * Error Handling:
+ *   - Transactional: on error, entire batch fails
+ *   - Returns error on first failure (fail-fast)
+ *   - Path resolution errors are fatal
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param state State handle (with active transaction, must not be NULL)
+ * @param profile_name Profile files were added to (must not be NULL)
+ * @param filesystem_paths Array of filesystem paths (must not be NULL)
+ * @param commit_oid Commit OID from Git commit (must not be NULL)
+ * @param enabled_profiles All enabled profiles (must not be NULL)
+ * @param km Keymanager for content hashing (can be NULL if no encryption)
+ * @param metadata_cache Hashmap: profile_name → metadata_t* (must not be NULL)
+ * @param out_synced Output: count of files synced (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *manifest_sync_files_bulk_simple(
+    git_repository *repo,
+    state_t *state,
+    const char *profile_name,
+    const string_array_t *filesystem_paths,
+    const git_oid *commit_oid,
+    const string_array_t *enabled_profiles,
+    keymanager_t *km,
+    const hashmap_t *metadata_cache,
+    size_t *out_synced
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(state);
+    CHECK_NULL(profile_name);
+    CHECK_NULL(filesystem_paths);
+    CHECK_NULL(commit_oid);
+    CHECK_NULL(enabled_profiles);
+    CHECK_NULL(metadata_cache);
+    CHECK_NULL(out_synced);
+
+    /* Initialize output */
+    *out_synced = 0;
+
+    if (string_array_size(filesystem_paths) == 0) {
+        return NULL;  /* Nothing to do */
+    }
+
+    error_t *err = NULL;
+    profile_list_t *profiles = NULL;
+    manifest_t *fresh_manifest = NULL;
+    hashmap_t *manifest_index = NULL;
+    hashmap_t *profile_oids = NULL;
+    char git_oid_str[GIT_OID_HEXSZ + 1];
+
+    /* Convert commit OID to string once */
+    git_oid_tostr(git_oid_str, sizeof(git_oid_str), commit_oid);
+
+    /* 1. Load enabled profiles from Git */
+    err = profile_list_load(repo, enabled_profiles->items,
+                           enabled_profiles->count, false, &profiles);
+    if (err) {
+        return error_wrap(err, "Failed to load profiles for bulk sync");
+    }
+
+    /* 2. Build FRESH manifest from Git (post-commit state) */
+    err = profile_build_manifest(repo, profiles, &fresh_manifest);
+    if (err) {
+        profile_list_free(profiles);
+        return error_wrap(err, "Failed to build fresh manifest for bulk sync");
+    }
+
+    /* 3. Build hashmap index for O(1) lookups (storage_path -> file_entry_t*) */
+    manifest_index = hashmap_create(fresh_manifest->count);
+    if (!manifest_index) {
+        err = ERROR(ERR_MEMORY, "Failed to create manifest index");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < fresh_manifest->count; i++) {
+        file_entry_t *entry = &fresh_manifest->entries[i];
+        err = hashmap_set(manifest_index, entry->storage_path, entry);
+        if (err) {
+            err = error_wrap(err, "Failed to build manifest index");
+            goto cleanup;
+        }
+    }
+
+    /* 4. Build profile oid map (profile_name -> git_oid string) */
+    err = build_profile_oid_map(repo, profiles, &profile_oids);
+    if (err) {
+        err = error_wrap(err, "Failed to build profile oid map");
+        goto cleanup;
+    }
+
+    /* 5. Process each file */
+    for (size_t i = 0; i < string_array_size(filesystem_paths); i++) {
+        const char *filesystem_path = string_array_get(filesystem_paths, i);
+        char *storage_path = NULL;
+        path_prefix_t prefix;
+
+        /* Convert filesystem path to storage path */
+        err = path_to_storage(filesystem_path, &storage_path, &prefix);
+        if (err) {
+            err = error_wrap(err, "Failed to convert path '%s' for manifest sync",
+                           filesystem_path);
+            goto cleanup;
+        }
+
+        /* Lookup in fresh manifest */
+        file_entry_t *entry = hashmap_get(manifest_index, storage_path);
+
+        if (!entry) {
+            /* File not in fresh manifest - filtered/excluded
+             * This is expected behavior (e.g., .dottaignore, README.md) - skip gracefully */
+            free(storage_path);
+            continue;
+        }
+
+        /* Check precedence matches */
+        if (entry->source_profile &&
+            strcmp(entry->source_profile->name, profile_name) != 0) {
+            /* Different profile won precedence - skip this file
+             * (higher precedence profile owns it) */
+            free(storage_path);
+            continue;
+        }
+
+        /* Sync to state with DEPLOYED status
+         *
+         * Key insight: ADD captures files FROM filesystem, so they're
+         * already deployed. Setting PENDING_DEPLOYMENT would be misleading. */
+        const char *profile_git_oid = hashmap_get(profile_oids, entry->source_profile->name);
+        const metadata_t *metadata = hashmap_get(metadata_cache, entry->source_profile->name);
+
+        err = sync_entry_to_state(repo, state, entry, profile_git_oid, metadata,
+                                 MANIFEST_STATUS_DEPLOYED, km);
+
+        free(storage_path);
+
+        if (err) {
+            err = error_wrap(err, "Failed to sync '%s' to manifest",
+                           filesystem_path);
+            goto cleanup;
+        }
+
+        (*out_synced)++;
     }
 
 cleanup:

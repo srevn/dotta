@@ -599,7 +599,7 @@ static error_t *profile_enable(
         enabled_count++;
 
         /* Sync profile to manifest */
-        err = manifest_sync_profile(repo, state, profile_name, enabled);
+        err = manifest_enable_profile(repo, state, profile_name, enabled);
         if (err) {
             err = error_wrap(err, "Failed to sync profile '%s' to manifest", profile_name);
             goto cleanup;
@@ -856,7 +856,7 @@ static error_t *profile_disable(
 
             if (was_enabled) {
                 /* Unsync from manifest (updates to fallback or marks for removal) */
-                err = manifest_unsync_profile(repo, state, profile_name, new_enabled);
+                err = manifest_disable_profile(repo, state, profile_name, new_enabled);
                 if (err) {
                     err = error_wrap(err, "Failed to unsync profile '%s' from manifest",
                                    profile_name);
@@ -1094,7 +1094,7 @@ static error_t *profile_reorder(
         goto cleanup;
     }
 
-    err = manifest_update_for_precedence_change(repo, state, new_order);
+    err = manifest_reorder_profiles(repo, state, new_order);
     string_array_free(new_order);
     if (err) {
         err = error_wrap(err, "Failed to update manifest with new precedence");

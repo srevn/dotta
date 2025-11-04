@@ -727,7 +727,7 @@ cleanup:
  *      a. Build precedence context from Git ONCE (fresh manifest)
  *      b. Create keymanager for content hashing
  *      c. Open transaction (state_load_for_update)
- *      d. Call manifest_sync_files_bulk_simple() with pre-built context
+ *      d. Call manifest_add_files() with pre-built context
  *      e. Commit transaction (state_save)
  *
  * Status Semantics:
@@ -849,7 +849,7 @@ static error_t *update_manifest_after_add(
 
     /* STEP 5: Bulk sync operation (NEW - O(M+N) instead of O(N*M)) */
     size_t synced_count = 0;
-    err = manifest_sync_files_bulk_simple(
+    err = manifest_add_files(
         repo,
         state,
         profile_name,

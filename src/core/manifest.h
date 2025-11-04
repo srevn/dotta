@@ -31,7 +31,7 @@
 #include <git2.h>
 
 /**
- * Sync entire profile to manifest (bulk population)
+ * Enable profile in manifest
  *
  * Called when a profile is enabled. Populates manifest from Git branch
  * with precedence resolution across all enabled profiles.
@@ -72,7 +72,7 @@
  * @param enabled_profiles All enabled profiles (including profile_name)
  * @return Error or NULL on success
  */
-error_t *manifest_sync_profile(
+error_t *manifest_enable_profile(
     git_repository *repo,
     state_t *state,
     const char *profile_name,
@@ -80,7 +80,7 @@ error_t *manifest_sync_profile(
 );
 
 /**
- * Remove profile from manifest (bulk cleanup)
+ * Disable profile in manifest
  *
  * Called when a profile is disabled. Handles fallback to lower-precedence
  * profiles for files that exist in multiple profiles.
@@ -107,7 +107,7 @@ error_t *manifest_sync_profile(
  *   - ERR_GIT: Git operation failed
  *   - ERR_NOMEM: Memory allocation failed
  *
- * Performance: O(N*M) where N = files in profile, M = remaining profiles
+ * Performance: O(F + N) where F = files in fallback profiles, N = files in disabled profile
  *
  * @param repo Git repository
  * @param state State handle (with active transaction)
@@ -115,7 +115,7 @@ error_t *manifest_sync_profile(
  * @param remaining_enabled Remaining enabled profiles (excluding profile_name)
  * @return Error or NULL on success
  */
-error_t *manifest_unsync_profile(
+error_t *manifest_disable_profile(
     git_repository *repo,
     state_t *state,
     const char *profile_name,
@@ -123,7 +123,7 @@ error_t *manifest_unsync_profile(
 );
 
 /**
- * Sync multiple files to manifest in bulk (optimized for update command)
+ * Update files in manifest (update command)
  *
  * High-performance batch operation that builds a FRESH manifest from Git
  * (post-commit state) instead of using stale workspace manifest. Designed
@@ -138,7 +138,7 @@ error_t *manifest_unsync_profile(
  * Algorithm:
  *   1. Load enabled profiles from Git
  *   2. Build FRESH manifest via profile_build_manifest() (O(M))
- *   3. Build hashmap index for O(1) lookups
+ *   3. Use transferred index for O(1) lookups
  *   4. Build profile→oid map for git_oid field
  *   5. For each item (O(N)):
  *      - If DELETED: check fresh manifest for fallback
@@ -174,7 +174,7 @@ error_t *manifest_unsync_profile(
  * @param out_fallbacks Output: count of fallback resolutions (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *manifest_sync_files_bulk(
+error_t *manifest_update_files(
     git_repository *repo,
     state_t *state,
     const workspace_item_t **items,
@@ -188,24 +188,23 @@ error_t *manifest_sync_files_bulk(
 );
 
 /**
- * Sync multiple files to manifest in bulk - simplified for add command
+ * Add files to manifest (add command)
  *
- * Optimized bulk operation for adding newly-committed files to manifest.
- * Simpler than manifest_sync_files_bulk() because:
+ * Optimized batch operation for adding newly-committed files to manifest.
+ * Simpler than manifest_update_files() because:
  * - All files are from the same profile
  * - No deletions (only additions/updates)
  * - All files have the same commit OID
  * - Status is always MANIFEST_STATUS_DEPLOYED (captured from filesystem)
  *
- * CRITICAL DESIGN: Like manifest_sync_files_bulk(), this builds a FRESH
+ * CRITICAL DESIGN: Like manifest_update_files(), this builds a FRESH
  * manifest from Git (post-commit state). This ensures all newly-added files
- * are found during precedence checks, avoiding O(N×M) fallback to
- * manifest_sync_file().
+ * are found during precedence checks, maintaining O(M+N) performance.
  *
  * Algorithm:
  *   1. Load enabled profiles from Git (current HEAD, post-commit)
  *   2. Build fresh manifest with profile_build_manifest() (ONCE)
- *   3. Build hashmap index for O(1) precedence lookups
+ *   3. Use transferred index for O(1) precedence lookups
  *   4. Build profile→oid map for git_oid field
  *   5. For each file:
  *      - Convert filesystem_path → storage_path
@@ -247,7 +246,7 @@ error_t *manifest_sync_files_bulk(
  * @param out_synced Output: count of files synced (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *manifest_sync_files_bulk_simple(
+error_t *manifest_add_files(
     git_repository *repo,
     state_t *state,
     const char *profile_name,
@@ -303,7 +302,7 @@ error_t *manifest_rebuild(
 );
 
 /**
- * Update manifest after profile precedence change
+ * Reorder profiles in manifest
  *
  * Called when profiles are reordered. Intelligently updates ownership
  * and status only for files that change owner, preserving DEPLOYED
@@ -311,12 +310,12 @@ error_t *manifest_rebuild(
  *
  * Algorithm:
  *   1. Build manifest from new profile order (precedence oracle)
- *   2. Get all current manifest entries
+ *   2. Get all current manifest entries and build hashmap for O(1) lookups
  *   3. For each file in new manifest:
  *      - If not in old manifest: add with PENDING_DEPLOYMENT (rare)
  *      - If owner changed: update source_profile + git_oid, mark PENDING_DEPLOYMENT
  *      - If owner unchanged: skip (preserve existing status)
- *   4. For files in old manifest but not new: mark PENDING_REMOVAL
+ *   4. For files in old manifest but not new: mark PENDING_REMOVAL (O(1) index lookup)
  *
  * Key Benefit: Unlike manifest_rebuild(), this preserves DEPLOYED status
  * for files whose ownership doesn't change, providing better UX when
@@ -338,26 +337,25 @@ error_t *manifest_rebuild(
  *   - ERR_STATE: Database operation failed
  *   - ERR_NOMEM: Memory allocation failed
  *
- * Performance: O(N*M) where N = files in manifest, M = enabled profiles
+ * Performance: O(N + M) where N = files in old manifest, M = files in new manifest
  *
  * @param repo Git repository
  * @param state State handle (with active transaction)
  * @param new_profile_order New profile order (determines precedence)
  * @return Error or NULL on success
  */
-error_t *manifest_update_for_precedence_change(
+error_t *manifest_reorder_profiles(
     git_repository *repo,
     state_t *state,
     const string_array_t *new_profile_order
 );
 
 /**
- * Sync manifest from Git diff (bulk operation)
+ * Sync manifest from Git diff (sync command)
  *
  * Updates manifest table based on changes between old_oid and new_oid for a
  * single profile. This is the core function for updating the manifest after
- * sync operations (pull, rebase, merge). Uses O(M+D) bulk pattern instead of
- * O(D×M) per-file operations.
+ * sync operations (pull, rebase, merge).
  *
  * Called by sync command after:
  *   - Fast-forward pull (REMOTE_AHEAD case)
@@ -367,7 +365,7 @@ error_t *manifest_update_for_precedence_change(
  *   Phase 1: Build Context (O(M))
  *     - Load all enabled profiles
  *     - Build fresh manifest from current Git state (post-sync)
- *     - Create hashmap index for O(1) file lookups
+ *     - Use transferred index for O(1) file lookups
  *     - Build profile→oid map
  *     - Load or use cached metadata and keymanager
  *
@@ -409,8 +407,6 @@ error_t *manifest_update_for_precedence_change(
  *   - ERR_NOMEM: Memory allocation failed
  *
  * Performance: O(M + D) where M = total files in all profiles, D = changed files
- *   Old implementation (manifest_sync_changes): O(D × M) with repeated manifest builds
- *   Speedup: ~50-100x for typical workloads (50 changes, 2000 total files)
  *
  * Status Semantics:
  *   All changes marked PENDING_DEPLOYMENT because sync updates Git but doesn't
@@ -429,7 +425,7 @@ error_t *manifest_update_for_precedence_change(
  * @param out_fallbacks Output: number of fallback resolutions (can be NULL)
  * @return Error or NULL on success
  */
-error_t *manifest_sync_diff_bulk(
+error_t *manifest_sync_diff(
     git_repository *repo,
     state_t *state,
     const char *profile_name,

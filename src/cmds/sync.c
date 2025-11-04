@@ -570,7 +570,7 @@ static error_t *sync_push_phase(
 
                         /* Update manifest with changes from pull */
                         size_t synced = 0, removed = 0, fallbacks = 0;
-                        error_t *manifest_err = manifest_sync_diff_bulk(
+                        error_t *manifest_err = manifest_sync_diff(
                             repo, state, result->profile_name,
                             &old_oid, &new_oid, enabled_profiles,
                             km, metadata_cache,
@@ -719,7 +719,7 @@ static error_t *sync_push_phase(
 
                                     /* Update manifest with changes from rebase */
                                     size_t synced = 0, removed = 0, fallbacks = 0;
-                                    error_t *manifest_err = manifest_sync_diff_bulk(
+                                    error_t *manifest_err = manifest_sync_diff(
                                         repo, state, result->profile_name,
                                         &ctx.saved_oid, &new_oid, enabled_profiles,
                                         km, metadata_cache,
@@ -822,7 +822,7 @@ static error_t *sync_push_phase(
 
                                     /* Update manifest with changes from merge */
                                     size_t synced = 0, removed = 0, fallbacks = 0;
-                                    error_t *manifest_err = manifest_sync_diff_bulk(
+                                    error_t *manifest_err = manifest_sync_diff(
                                         repo, state, result->profile_name,
                                         &ctx.saved_oid, &new_oid, enabled_profiles,
                                         km, metadata_cache,
@@ -957,7 +957,7 @@ static error_t *sync_push_phase(
 
                                 /* Update manifest with changes from reset */
                                 size_t synced = 0, removed = 0, fallbacks = 0;
-                                error_t *manifest_err = manifest_sync_diff_bulk(
+                                error_t *manifest_err = manifest_sync_diff(
                                     repo, state, result->profile_name,
                                     &ctx.saved_oid, &new_oid, enabled_profiles,
                                     km, metadata_cache,

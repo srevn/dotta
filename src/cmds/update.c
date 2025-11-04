@@ -1313,7 +1313,7 @@ static error_t *flatten_items_to_array(
  *   2. If none enabled: return NULL (skip manifest update gracefully)
  *   3. Open transaction (state_load_for_update)
  *   4. Flatten items_by_profile hashmap into single array
- *   5. Call manifest_sync_files_bulk() ONCE (O(M+N))
+ *   5. Call manifest_update_files() ONCE (O(M+N))
  *   6. Commit transaction (state_save)
  *   7. Set *out_updated = true
  *
@@ -1414,7 +1414,7 @@ static error_t *update_manifest_after_update(
 
     /* Use bulk sync operation (O(M + N) - optimal!) */
     size_t synced = 0, removed = 0, fallbacks = 0;
-    err = manifest_sync_files_bulk(
+    err = manifest_update_files(
         repo,
         state,
         all_items,

@@ -84,7 +84,7 @@ static char *mode_to_string(mode_t mode) {
 }
 
 /**
- * Build manifest from profiles and optionally find specific file
+ * Build manifest from profiles
  *
  * This is the "precedence oracle" pattern - we use profile_build_manifest()
  * to determine who should own what files, then use that authoritative answer.
@@ -95,17 +95,13 @@ static char *mode_to_string(mode_t mode) {
  *
  * @param repo Git repository (must not be NULL)
  * @param profile_names Profile names to build from (must not be NULL)
- * @param storage_path Optional storage path to find (NULL to skip)
- * @param out_entry Optional output for found entry (borrowed, don't free)
  * @param out_manifest Output manifest (caller must free with manifest_free)
  * @param out_profiles Output profile list (caller must free with profile_list_free, must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *build_manifest_and_find(
+static error_t *build_manifest(
     git_repository *repo,
     const string_array_t *profile_names,
-    const char *storage_path,
-    file_entry_t **out_entry,
     manifest_t **out_manifest,
     profile_list_t **out_profiles
 ) {
@@ -133,11 +129,6 @@ static error_t *build_manifest_and_find(
     }
 
     /* DO NOT free profiles here - caller must keep them alive while using manifest */
-
-    /* Find entry if requested */
-    if (storage_path && out_entry) {
-        *out_entry = find_file_in_manifest(manifest, storage_path);
-    }
 
     *out_manifest = manifest;
     *out_profiles = profiles;
@@ -325,7 +316,7 @@ cleanup:
  *      - Extract metadata
  *      - Sync to state
  */
-error_t *manifest_sync_profile(
+error_t *manifest_enable_profile(
     git_repository *repo,
     state_t *state,
     const char *profile_name,
@@ -353,7 +344,7 @@ error_t *manifest_sync_profile(
     git_oid_tostr(head_oid_str, sizeof(head_oid_str), &head_oid);
 
     /* 2. Build manifest from all enabled profiles (precedence oracle) */
-    err = build_manifest_and_find(repo, enabled_profiles, NULL, NULL, &manifest, &profiles);
+    err = build_manifest(repo, enabled_profiles, &manifest, &profiles);
     if (err) {
         return error_wrap(err, "Failed to build manifest for profile sync");
     }
@@ -429,7 +420,7 @@ cleanup:
  *      - If found in fallback: update source + mark PENDING_DEPLOYMENT
  *      - If not found: mark PENDING_REMOVAL
  */
-error_t *manifest_unsync_profile(
+error_t *manifest_disable_profile(
     git_repository *repo,
     state_t *state,
     const char *profile_name,
@@ -459,8 +450,8 @@ error_t *manifest_unsync_profile(
 
     /* 2. Build manifest from remaining profiles (fallback check) */
     if (remaining_enabled->count > 0) {
-        err = build_manifest_and_find(repo, remaining_enabled, NULL, NULL,
-                                      &fallback_manifest, &fallback_profiles);
+        err = build_manifest(repo, remaining_enabled,
+                            &fallback_manifest, &fallback_profiles);
         if (err) {
             state_free_all_files(entries, count);
             return error_wrap(err, "Failed to build fallback manifest");
@@ -529,367 +520,6 @@ cleanup:
 }
 
 /**
- * Sync single file to manifest
- *
- * Implementation uses precedence oracle:
- *   1. Build manifest to check if this profile should own the file
- *   2. If yes: compute hash, get metadata, sync to state
- *   3. If no: skip (lower precedence)
- */
-error_t *manifest_sync_file(
-    git_repository *repo,
-    state_t *state,
-    const char *profile_name,
-    const char *storage_path,
-    const char *filesystem_path,
-    const char *git_oid,
-    const string_array_t *enabled_profiles,
-    manifest_status_t initial_status
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(profile_name);
-    CHECK_NULL(storage_path);
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(git_oid);
-    CHECK_NULL(enabled_profiles);
-
-    error_t *err = NULL;
-    manifest_t *manifest = NULL;
-    profile_list_t *profiles = NULL;
-    file_entry_t *manifest_entry = NULL;
-    metadata_t *metadata = NULL;
-    keymanager_t *km = NULL;
-    dotta_config_t *config = NULL;
-
-    /* 1. Build manifest and find file (precedence check) */
-    err = build_manifest_and_find(repo, enabled_profiles, storage_path,
-                                  &manifest_entry, &manifest, &profiles);
-    if (err) {
-        return error_wrap(err, "Failed to build manifest for file sync");
-    }
-
-    /* 2. Check precedence */
-    if (manifest_entry) {
-        /* File exists in manifest - check if this profile owns it */
-        if (strcmp(manifest_entry->source_profile->name, profile_name) != 0) {
-            /* Different profile owns it (higher precedence) - skip */
-            goto cleanup;
-        }
-    } else {
-        /* File not in manifest - shouldn't happen if profile is enabled */
-        /* This can occur if file was just added and manifest not yet built */
-        /* We'll handle by loading the profile and getting the entry directly */
-        profile_t *profile = NULL;
-        git_tree_entry *entry = NULL;
-
-        err = profile_load(repo, profile_name, &profile);
-        if (err) {
-            goto cleanup;
-        }
-
-        err = profile_load_tree(repo, profile);
-        if (err) {
-            profile_free(profile);
-            goto cleanup;
-        }
-
-        int ret = git_tree_entry_bypath(&entry, profile->tree, storage_path);
-        if (ret != 0) {
-            profile_free(profile);
-            err = ERROR(ERR_GIT, "File not found in profile tree: %s", storage_path);
-            goto cleanup;
-        }
-
-        /* Create temporary manifest entry */
-        file_entry_t temp_entry = {
-            .storage_path = (char *)storage_path,
-            .filesystem_path = (char *)filesystem_path,
-            .entry = entry,
-            .source_profile = profile,
-            .all_profiles = NULL
-        };
-
-        /* Load metadata and sync */
-        err = metadata_load_from_profiles(repo, enabled_profiles, &metadata);
-        if (err && err->code != ERR_NOT_FOUND) {
-            git_tree_entry_free(entry);
-            profile_free(profile);
-            goto cleanup;
-        }
-        if (err) {
-            error_free(err);
-            err = NULL;
-        }
-
-        err = config_load(NULL, &config);
-        if (err) {
-            git_tree_entry_free(entry);
-            profile_free(profile);
-            goto cleanup;
-        }
-
-        err = keymanager_create(config, &km);
-        if (err) {
-            git_tree_entry_free(entry);
-            profile_free(profile);
-            goto cleanup;
-        }
-
-        err = sync_entry_to_state(repo, state, &temp_entry, git_oid, metadata,
-                                  initial_status, km);
-
-        git_tree_entry_free(entry);
-        profile_free(profile);
-        goto cleanup;
-    }
-
-    /* 3. Load metadata and keymanager */
-    err = metadata_load_from_profiles(repo, enabled_profiles, &metadata);
-    if (err && err->code != ERR_NOT_FOUND) {
-        goto cleanup;
-    }
-    if (err) {
-        error_free(err);
-        err = NULL;
-    }
-
-    err = config_load(NULL, &config);
-    if (err) {
-        goto cleanup;
-    }
-
-    err = keymanager_create(config, &km);
-    if (err) {
-        goto cleanup;
-    }
-
-    /* 4. Sync entry to state */
-    err = sync_entry_to_state(repo, state, manifest_entry, git_oid, metadata,
-                              initial_status, km);
-
-cleanup:
-    if (profiles) {
-        profile_list_free(profiles);
-    }
-    if (km) {
-        keymanager_free(km);
-    }
-    if (config) {
-        config_free(config);
-    }
-    if (metadata) {
-        metadata_free(metadata);
-    }
-    if (manifest) {
-        manifest_free(manifest);
-    }
-
-    return err;
-}
-
-/**
- * Remove file from manifest
- *
- * Similar to unsync_profile but for single file:
- *   1. Get entry from state
- *   2. Build manifest from enabled profiles (fallback check)
- *   3. Update to fallback OR mark PENDING_REMOVAL
- */
-error_t *manifest_remove_file(
-    git_repository *repo,
-    state_t *state,
-    const char *filesystem_path,
-    const string_array_t *enabled_profiles
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(enabled_profiles);
-
-    error_t *err = NULL;
-    state_file_entry_t *existing = NULL;
-    manifest_t *fallback_manifest = NULL;
-    profile_list_t *fallback_profiles = NULL;
-    file_entry_t *fallback = NULL;
-
-    /* 1. Get existing entry */
-    err = state_get_file(state, filesystem_path, &existing);
-    if (err) {
-        return error_wrap(err, "File not in manifest: %s", filesystem_path);
-    }
-
-    /* 2. Build manifest from enabled profiles (fallback check) */
-    if (enabled_profiles->count > 0) {
-        err = build_manifest_and_find(repo, enabled_profiles,
-                                      existing->storage_path, &fallback,
-                                      &fallback_manifest, &fallback_profiles);
-        if (err) {
-            state_free_entry(existing);
-            return error_wrap(err, "Failed to build fallback manifest");
-        }
-    }
-
-    /* 3. Check for fallback */
-    if (fallback) {
-        /* File exists in enabled profile - update to fallback */
-        git_oid fallback_oid;
-        char fallback_oid_str[GIT_OID_HEXSZ + 1];
-
-        err = get_branch_head_oid(repo, fallback->source_profile->name,
-                                  &fallback_oid);
-        if (err) {
-            goto cleanup;
-        }
-        git_oid_tostr(fallback_oid_str, sizeof(fallback_oid_str), &fallback_oid);
-
-        /* Update to fallback profile */
-        existing->profile = fallback->source_profile->name;
-        existing->git_oid = fallback_oid_str;
-        existing->status = MANIFEST_STATUS_PENDING_DEPLOYMENT;
-        existing->staged_at = time(NULL);
-
-        err = state_update_entry(state, existing);
-        if (err) {
-            err = error_wrap(err, "Failed to update entry to fallback");
-        }
-    } else {
-        /* No fallback - mark for removal */
-        err = state_update_entry_status(state, filesystem_path,
-                                        MANIFEST_STATUS_PENDING_REMOVAL);
-        if (err) {
-            err = error_wrap(err, "Failed to mark entry for removal");
-        }
-    }
-
-cleanup:
-    if (fallback_profiles) {
-        profile_list_free(fallback_profiles);
-    }
-    if (fallback_manifest) {
-        manifest_free(fallback_manifest);
-    }
-    if (existing) {
-        state_free_entry(existing);
-    }
-
-    return err;
-}
-
-/**
- * Sync changes from git diff to manifest
- *
- * Implementation uses git diff API:
- *   1. Get old and new trees
- *   2. Diff trees to get added/modified/deleted files
- *   3. For each change: call appropriate manifest function
- */
-error_t *manifest_sync_changes(
-    git_repository *repo,
-    state_t *state,
-    const char *profile_name,
-    const git_oid *old_oid,
-    const git_oid *new_oid,
-    const string_array_t *enabled_profiles
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(profile_name);
-    CHECK_NULL(old_oid);
-    CHECK_NULL(new_oid);
-    CHECK_NULL(enabled_profiles);
-
-    error_t *err = NULL;
-    git_tree *old_tree = NULL;
-    git_tree *new_tree = NULL;
-    git_diff *diff = NULL;
-    char new_oid_str[GIT_OID_HEXSZ + 1];
-
-    /* Get new oid as string */
-    git_oid_tostr(new_oid_str, sizeof(new_oid_str), new_oid);
-
-    /* 1. Lookup trees */
-    int ret = git_tree_lookup(&old_tree, repo, old_oid);
-    if (ret != 0) {
-        err = ERROR(ERR_GIT, "Failed to lookup old tree: %s",
-                   git_error_last()->message);
-        goto cleanup;
-    }
-
-    ret = git_tree_lookup(&new_tree, repo, new_oid);
-    if (ret != 0) {
-        err = ERROR(ERR_GIT, "Failed to lookup new tree: %s",
-                   git_error_last()->message);
-        goto cleanup;
-    }
-
-    /* 2. Diff trees */
-    ret = git_diff_tree_to_tree(&diff, repo, old_tree, new_tree, NULL);
-    if (ret != 0) {
-        err = ERROR(ERR_GIT, "Failed to diff trees: %s",
-                   git_error_last()->message);
-        goto cleanup;
-    }
-
-    /* 3. Process each delta */
-    size_t num_deltas = git_diff_num_deltas(diff);
-    for (size_t i = 0; i < num_deltas; i++) {
-        const git_diff_delta *delta = git_diff_get_delta(diff, i);
-        if (!delta) {
-            continue;
-        }
-
-        const char *storage_path = delta->new_file.path;
-        if (delta->status == GIT_DELTA_DELETED) {
-            storage_path = delta->old_file.path;
-        }
-
-        /* Resolve filesystem path */
-        char *filesystem_path = NULL;
-        error_t *path_err = path_from_storage(storage_path, &filesystem_path);
-        if (path_err) {
-            error_free(path_err);
-            continue;  /* Skip files we can't resolve */
-        }
-
-        /* Handle based on change type */
-        if (delta->status == GIT_DELTA_ADDED || delta->status == GIT_DELTA_MODIFIED) {
-            /* Added or modified - sync file */
-            err = manifest_sync_file(
-                repo, state, profile_name, storage_path, filesystem_path,
-                new_oid_str, enabled_profiles,
-                MANIFEST_STATUS_PENDING_DEPLOYMENT
-            );
-        } else if (delta->status == GIT_DELTA_DELETED) {
-            /* Deleted - remove file */
-            err = manifest_remove_file(repo, state, filesystem_path,
-                                       enabled_profiles);
-        }
-
-        free(filesystem_path);
-
-        if (err) {
-            /* Log error but continue with other files */
-            error_free(err);
-            err = NULL;
-        }
-    }
-
-cleanup:
-    if (diff) {
-        git_diff_free(diff);
-    }
-    if (new_tree) {
-        git_tree_free(new_tree);
-    }
-    if (old_tree) {
-        git_tree_free(old_tree);
-    }
-
-    return err;
-}
-
-/**
  * Rebuild manifest from scratch
  *
  * Nuclear option for recovery:
@@ -917,7 +547,7 @@ error_t *manifest_rebuild(
     for (size_t i = 0; i < enabled_profiles->count; i++) {
         const char *profile_name = enabled_profiles->items[i];
 
-        err = manifest_sync_profile(repo, state, profile_name, enabled_profiles);
+        err = manifest_enable_profile(repo, state, profile_name, enabled_profiles);
         if (err) {
             return error_wrap(err, "Failed to sync profile '%s' during rebuild",
                             profile_name);
@@ -936,7 +566,7 @@ error_t *manifest_rebuild(
  *   3. Update only changed files (preserves DEPLOYED status for unchanged)
  *   4. Handle orphaned files (mark PENDING_REMOVAL)
  */
-error_t *manifest_update_for_precedence_change(
+error_t *manifest_reorder_profiles(
     git_repository *repo,
     state_t *state,
     const string_array_t *new_profile_order
@@ -956,7 +586,7 @@ error_t *manifest_update_for_precedence_change(
     dotta_config_t *config = NULL;
 
     /* 1. Build new manifest with new precedence order (precedence oracle) */
-    err = build_manifest_and_find(repo, new_profile_order, NULL, NULL, &new_manifest, &profiles);
+    err = build_manifest(repo, new_profile_order, &new_manifest, &profiles);
     if (err) {
         return error_wrap(err, "Failed to build manifest for precedence update");
     }
@@ -1218,7 +848,7 @@ static error_t *build_profile_oid_map(
  * @param out_fallbacks Output: count of fallback resolutions (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *manifest_sync_files_bulk(
+error_t *manifest_update_files(
     git_repository *repo,
     state_t *state,
     const workspace_item_t **items,
@@ -1386,13 +1016,13 @@ cleanup:
  * Sync multiple files to manifest in bulk - simplified for add command
  *
  * Optimized bulk operation for adding newly-committed files to manifest.
- * Simpler than manifest_sync_files_bulk() because:
+ * Simpler than manifest_update_files() because:
  * - All files are from the same profile
  * - No deletions (only additions/updates)
  * - All files have the same commit OID
  * - Status is always MANIFEST_STATUS_DEPLOYED (captured from filesystem)
  *
- * CRITICAL DESIGN: Like manifest_sync_files_bulk(), this builds a FRESH
+ * CRITICAL DESIGN: Like manifest_update_files(), this builds a FRESH
  * manifest from Git (post-commit state). This ensures all newly-added files
  * are found during precedence checks, avoiding O(N×M) fallback to
  * manifest_sync_file().
@@ -1442,7 +1072,7 @@ cleanup:
  * @param out_synced Output: count of files synced (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *manifest_sync_files_bulk_simple(
+error_t *manifest_add_files(
     git_repository *repo,
     state_t *state,
     const char *profile_name,
@@ -1618,7 +1248,7 @@ cleanup:
  * @param out_fallbacks Output: number of fallback resolutions (can be NULL)
  * @return Error or NULL on success
  */
-error_t *manifest_sync_diff_bulk(
+error_t *manifest_sync_diff(
     git_repository *repo,
     state_t *state,
     const char *profile_name,

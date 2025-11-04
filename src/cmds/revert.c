@@ -12,8 +12,10 @@
 
 #include "base/error.h"
 #include "base/gitops.h"
+#include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
+#include "core/state.h"
 #include "core/stats.h"
 #include "crypto/keymanager.h"
 #include "infra/content.h"
@@ -1216,6 +1218,20 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
 
     output_print(out, OUTPUT_VERBOSE, "\nReverting file...\n");
 
+    /* Capture old HEAD OID before revert (needed for manifest sync) */
+    git_oid old_head_oid;
+    git_commit *old_head_commit = NULL;
+    err = gitops_resolve_commit_in_branch(repo, profile_name, "HEAD", &old_head_oid, &old_head_commit);
+    if (err) {
+        err = error_wrap(err, "Failed to get current HEAD");
+        goto cleanup;
+    }
+    if (old_head_commit) {
+        git_commit_free(old_head_commit);
+        old_head_commit = NULL;
+    }
+
+    /* Perform revert */
     err = revert_file_in_branch(
         repo,
         config,
@@ -1229,6 +1245,122 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
         goto cleanup;
     }
 
+    /* Step 9: Update manifest if profile is enabled */
+    output_print(out, OUTPUT_VERBOSE, "Updating manifest...\n");
+
+    /* Initialize manifest sync counters */
+    size_t synced = 0, removed = 0, fallbacks = 0;
+
+    /* Check if profile is enabled */
+    state_t *read_state = NULL;
+    bool profile_enabled = false;
+
+    err = state_load(repo, &read_state);
+    if (!err && read_state) {
+        profile_enabled = state_has_profile(read_state, profile_name);
+        state_free(read_state);
+        read_state = NULL;
+    } else if (err) {
+        /* State doesn't exist - treat as not enabled */
+        error_free(err);
+        err = NULL;
+    }
+
+    if (!profile_enabled) {
+        /* Profile not enabled - manifest update not needed */
+        if (output_colors_enabled(out)) {
+            output_printf(out, OUTPUT_NORMAL, "%s✓%s Reverted %s in profile '%s'\n",
+                    output_color_code(out, OUTPUT_COLOR_GREEN),
+                    output_color_code(out, OUTPUT_COLOR_RESET),
+                    resolved_path, profile_name);
+        } else {
+            output_printf(out, OUTPUT_NORMAL, "✓ Reverted %s in profile '%s'\n", resolved_path, profile_name);
+        }
+        output_info(out, "\nNote: Profile '%s' is not enabled on this machine", profile_name);
+        goto cleanup;
+    }
+
+    /* Get new HEAD OID (after revert) */
+    git_oid new_head_oid;
+    git_commit *new_head_commit = NULL;
+    err = gitops_resolve_commit_in_branch(repo, profile_name, "HEAD", &new_head_oid, &new_head_commit);
+    if (err) {
+        /* Non-fatal: Git succeeded, manifest can recover */
+        output_warning(out, "Failed to get new HEAD for manifest update: %s", error_message(err));
+        output_hint(out, "Run 'dotta status' or 'dotta apply' to resync manifest");
+        error_free(err);
+        err = NULL;
+        goto success_output;
+    }
+    if (new_head_commit) {
+        git_commit_free(new_head_commit);
+        new_head_commit = NULL;
+    }
+
+    /* Open transaction for manifest update */
+    state_t *state = NULL;
+    err = state_load_for_update(repo, &state);
+    if (err) {
+        /* Non-fatal */
+        output_warning(out, "Failed to open transaction for manifest update: %s", error_message(err));
+        output_hint(out, "Run 'dotta status' or 'dotta apply' to resync manifest");
+        error_free(err);
+        err = NULL;
+        goto success_output;
+    }
+
+    /* Get enabled profiles for manifest sync */
+    string_array_t *enabled_profiles = NULL;
+    err = state_get_profiles(state, &enabled_profiles);
+    if (err) {
+        output_warning(out, "Failed to get enabled profiles: %s", error_message(err));
+        state_free(state);
+        error_free(err);
+        err = NULL;
+        goto success_output;
+    }
+
+    /* Sync manifest via diff */
+    error_t *manifest_err = manifest_sync_diff(
+        repo,
+        state,
+        profile_name,
+        &old_head_oid,      /* Before revert */
+        &new_head_oid,      /* After revert */
+        enabled_profiles,
+        NULL,               /* km - will create if needed */
+        NULL,               /* metadata_cache - will load if needed */
+        &synced,
+        &removed,
+        &fallbacks
+    );
+
+    if (manifest_err) {
+        /* Non-fatal: Git succeeded, manifest can recover */
+        output_warning(out, "Manifest sync failed: %s", error_message(manifest_err));
+        output_hint(out, "Run 'dotta status' or 'dotta apply' to resync manifest");
+        error_free(manifest_err);
+        state_free(state);
+        string_array_free(enabled_profiles);
+        goto success_output;
+    }
+
+    /* Commit transaction */
+    err = state_save(repo, state);
+    state_free(state);
+    string_array_free(enabled_profiles);
+
+    if (err) {
+        /* Non-fatal */
+        output_warning(out, "Failed to save manifest updates: %s", error_message(err));
+        output_hint(out, "Run 'dotta status' or 'dotta apply' to resync manifest");
+        error_free(err);
+        err = NULL;
+        goto success_output;
+    }
+
+success_output:
+    /* Display success message */
     if (output_colors_enabled(out)) {
         output_printf(out, OUTPUT_NORMAL, "%s✓%s Reverted %s in profile '%s'\n",
                 output_color_code(out, OUTPUT_COLOR_GREEN),
@@ -1236,6 +1368,12 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
                 resolved_path, profile_name);
     } else {
         output_printf(out, OUTPUT_NORMAL, "✓ Reverted %s in profile '%s'\n", resolved_path, profile_name);
+    }
+
+    /* Show manifest sync results if available */
+    if (synced > 0 || removed > 0 || fallbacks > 0) {
+        output_info(out, "Manifest: %zu staged, %zu removed, %zu fallback%s",
+                   synced, removed, fallbacks, fallbacks == 1 ? "" : "s");
     }
 
     /* Guide user to deploy changes */

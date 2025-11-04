@@ -256,6 +256,63 @@ error_t *manifest_add_files(
 );
 
 /**
+ * Remove files from manifest (remove command)
+ *
+ * Called after remove command deletes files from a profile branch.
+ * Handles fallback to lower-precedence profiles or marks for removal.
+ *
+ * Algorithm:
+ *   1. Build fresh manifest from enabled profiles (precedence oracle)
+ *   2. Build profile→oid map for git_oid field
+ *   3. For each removed file:
+ *      a. Resolve to filesystem path
+ *      b. Lookup current manifest entry
+ *      c. Check if removed profile owns it (precedence check)
+ *      d. If yes:
+ *         - Check fresh manifest for fallback
+ *         - Fallback exists: Update to fallback profile, mark PENDING_DEPLOYMENT
+ *         - No fallback: Mark PENDING_REMOVAL
+ *      e. If no (different profile owns): Skip
+ *
+ * Preconditions:
+ *   - state MUST have active transaction
+ *   - Git commit MUST be completed (files removed from branch)
+ *   - removed_storage_paths MUST be in storage format (home/.bashrc)
+ *   - enabled_profiles MUST be current enabled set
+ *
+ * Postconditions:
+ *   - Files with fallback updated to fallback profile (PENDING_DEPLOYMENT)
+ *   - Files without fallback marked PENDING_REMOVAL
+ *   - Files not owned by removed_profile unchanged
+ *   - Transaction remains open (caller commits)
+ *
+ * Error Conditions:
+ *   - ERR_GIT: Git operation failed
+ *   - ERR_STATE: Database operation failed
+ *   - ERR_NOMEM: Memory allocation failed
+ *
+ * Performance: O(M + N) where M = total files in profiles, N = files removed
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param state State handle (with active transaction, must not be NULL)
+ * @param removed_profile Profile files were removed from (must not be NULL)
+ * @param removed_storage_paths Storage paths of removed files (must not be NULL)
+ * @param enabled_profiles All enabled profiles (must not be NULL)
+ * @param out_removed Output: files marked PENDING_REMOVAL (can be NULL)
+ * @param out_fallbacks Output: files updated to fallback (can be NULL)
+ * @return Error or NULL on success
+ */
+error_t *manifest_remove_files(
+    git_repository *repo,
+    state_t *state,
+    const char *removed_profile,
+    const string_array_t *removed_storage_paths,
+    const string_array_t *enabled_profiles,
+    size_t *out_removed,
+    size_t *out_fallbacks
+);
+
+/**
  * Rebuild manifest from scratch
  *
  * Nuclear option: Clear and rebuild entire manifest from Git.

@@ -13,6 +13,7 @@
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "base/gitops.h"
+#include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
@@ -1019,6 +1020,93 @@ static error_t *remove_files_from_profile(
      * deletion of files still needed by higher-priority profiles).
      */
 
+    /* Update manifest if profile is enabled */
+    size_t manifest_removed_count = 0, manifest_fallback_count = 0;
+
+    /* Check if profile is enabled */
+    state_t *read_state = NULL;
+    bool profile_enabled = false;
+
+    err = state_load(repo, &read_state);
+    if (!err && read_state) {
+        profile_enabled = state_has_profile(read_state, opts->profile);
+        state_free(read_state);
+        read_state = NULL;
+    } else if (err) {
+        /* State doesn't exist - treat as not enabled */
+        error_free(err);
+        err = NULL;
+    }
+
+    if (profile_enabled) {
+        /* Open transaction for manifest update */
+        state_t *state = NULL;
+        err = state_load_for_update(repo, &state);
+        if (err) {
+            /* Non-fatal */
+            if (out) {
+                output_warning(out, "Failed to open transaction for manifest update: %s", error_message(err));
+                output_hint(out, "Run 'dotta status' or 'dotta apply' to resync manifest");
+            }
+            error_free(err);
+            err = NULL;
+        } else {
+            /* Get enabled profiles for manifest sync */
+            string_array_t *enabled_profiles = NULL;
+            err = state_get_profiles(state, &enabled_profiles);
+            if (err) {
+                if (out) {
+                    output_warning(out, "Failed to get enabled profiles: %s", error_message(err));
+                    output_hint(out, "Run 'dotta status' or 'dotta apply' to resync manifest");
+                }
+                error_free(err);
+                err = NULL;
+                state_free(state);
+            } else {
+                /* Update manifest with fallback logic */
+                error_t *manifest_err = manifest_remove_files(
+                    repo,
+                    state,
+                    opts->profile,
+                    storage_paths,      /* Storage paths of removed files */
+                    enabled_profiles,
+                    &manifest_removed_count,
+                    &manifest_fallback_count
+                );
+
+                if (manifest_err) {
+                    /* Non-fatal: Git succeeded, manifest can recover */
+                    if (out) {
+                        output_warning(out, "Manifest update failed: %s", error_message(manifest_err));
+                        output_hint(out, "Run 'dotta status' or 'dotta apply' to resync manifest");
+                    }
+                    error_free(manifest_err);
+                } else {
+                    /* Commit transaction */
+                    err = state_save(repo, state);
+                    if (err) {
+                        if (out) {
+                            output_warning(out, "Failed to save manifest updates: %s", error_message(err));
+                            output_hint(out, "Run 'dotta status' or 'dotta apply' to resync manifest");
+                        }
+                        error_free(err);
+                        err = NULL;
+                    } else {
+                        /* Display manifest sync results */
+                        if ((manifest_removed_count > 0 || manifest_fallback_count > 0) && out && opts->verbose) {
+                            output_info(out, "Manifest: %zu staged for removal, %zu fallback%s",
+                                       manifest_removed_count, manifest_fallback_count,
+                                       manifest_fallback_count == 1 ? "" : "s");
+                        }
+                    }
+                }
+
+                state_free(state);
+                string_array_free(enabled_profiles);
+            }
+        }
+    }
+
     /* Execute post-remove hook */
     if (hook_ctx && !opts->dry_run) {
         hook_result_t *hook_result = NULL;
@@ -1291,7 +1379,120 @@ static error_t *delete_profile_branch(
      * This ensures proper global context when determining file removal.
      */
 
-    /* Delete local branch */
+    /* Update manifest if profile is enabled (BEFORE deleting branch) */
+    bool profile_was_enabled = false;
+
+    /* Check if profile is enabled */
+    state_t *check_state = NULL;
+    err = state_load(repo, &check_state);
+    if (!err && check_state) {
+        profile_was_enabled = state_has_profile(check_state, opts->profile);
+        state_free(check_state);
+        check_state = NULL;
+    } else if (err) {
+        error_free(err);
+        err = NULL;
+    }
+
+    if (profile_was_enabled) {
+        output_print(out, OUTPUT_VERBOSE, "Disabling profile in manifest before deletion...\n");
+
+        /* Open transaction */
+        state_t *state = NULL;
+        err = state_load_for_update(repo, &state);
+        if (err) {
+            err = error_wrap(err, "Failed to open transaction for profile disable");
+            goto cleanup;
+        }
+
+        /* Get enabled profiles */
+        string_array_t *enabled_profiles = NULL;
+        err = state_get_profiles(state, &enabled_profiles);
+        if (err) {
+            state_free(state);
+            err = error_wrap(err, "Failed to get enabled profiles");
+            goto cleanup;
+        }
+
+        /* Build list of remaining profiles (exclude opts->profile) */
+        string_array_t *remaining = string_array_create();
+        if (!remaining) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate remaining profiles array");
+            state_free(state);
+            string_array_free(enabled_profiles);
+            goto cleanup;
+        }
+
+        for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
+            const char *profile = string_array_get(enabled_profiles, i);
+            if (strcmp(profile, opts->profile) != 0) {
+                error_t *push_err = string_array_push(remaining, profile);
+                if (push_err) {
+                    error_free(push_err);
+                    /* Non-fatal, continue */
+                }
+            }
+        }
+
+        /* Disable profile (handles fallback logic, marks for removal)
+         * CRITICAL: This MUST happen BEFORE git_branch_delete() because
+         * manifest_disable_profile() needs to read from Git branches to
+         * detect fallbacks */
+        err = manifest_disable_profile(
+            repo,
+            state,
+            opts->profile,
+            remaining
+        );
+
+        if (err) {
+            err = error_wrap(err, "Failed to disable profile in manifest");
+            state_free(state);
+            string_array_free(enabled_profiles);
+            string_array_free(remaining);
+            goto cleanup;
+        }
+
+        /* Remove from enabled_profiles in state */
+        char **updated_profiles = malloc(sizeof(char *) * string_array_size(remaining));
+        if (!updated_profiles) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate updated profiles array");
+            state_free(state);
+            string_array_free(enabled_profiles);
+            string_array_free(remaining);
+            goto cleanup;
+        }
+
+        for (size_t i = 0; i < string_array_size(remaining); i++) {
+            updated_profiles[i] = (char *)string_array_get(remaining, i);
+        }
+
+        err = state_set_profiles(state, updated_profiles, string_array_size(remaining));
+        free(updated_profiles);
+
+        if (err) {
+            err = error_wrap(err, "Failed to update enabled profiles in state");
+            state_free(state);
+            string_array_free(enabled_profiles);
+            string_array_free(remaining);
+            goto cleanup;
+        }
+
+        /* Commit transaction */
+        err = state_save(repo, state);
+        state_free(state);
+        string_array_free(enabled_profiles);
+        string_array_free(remaining);
+
+        if (err) {
+            err = error_wrap(err, "Failed to save manifest updates");
+            goto cleanup;
+        }
+
+        output_print(out, OUTPUT_VERBOSE, "✓ Cleaned up manifest entries\n");
+    }
+
+    /* Delete local branch (NOW safe - manifest already cleaned up) */
     err = gitops_delete_branch(repo, opts->profile);
     if (err) {
         err = error_wrap(err, "Failed to delete profile '%s'", opts->profile);

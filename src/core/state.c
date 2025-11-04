@@ -727,6 +727,39 @@ error_t *state_get_profiles(const state_t *state, string_array_t **out) {
 }
 
 /**
+ * Check if a profile is enabled
+ *
+ * Fast O(n) check where n = number of enabled profiles (typically < 10).
+ * Useful for commands that need to conditionally update manifest based on
+ * whether a profile is enabled.
+ *
+ * @param state State (must not be NULL)
+ * @param profile_name Profile name to check (must not be NULL)
+ * @return true if profile is enabled, false otherwise
+ */
+bool state_has_profile(const state_t *state, const char *profile_name) {
+    if (!state || !profile_name) {
+        return false;
+    }
+
+    /* Load if not cached (cast away const for internal mutation) */
+    error_t *err = load_profiles((state_t *)state);
+    if (err) {
+        error_free(err);
+        return false;
+    }
+
+    /* Check if profile exists in enabled list */
+    for (size_t i = 0; i < string_array_size(state->profiles); i++) {
+        if (strcmp(string_array_get(state->profiles, i), profile_name) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
  * Get unique profiles that have deployed files
  *
  * Extracts all unique profile names from the deployed_files table.

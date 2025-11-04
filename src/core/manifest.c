@@ -520,6 +520,241 @@ cleanup:
 }
 
 /**
+ * Remove files from manifest (remove command)
+ *
+ * Called after remove command deletes files from a profile branch.
+ * Handles fallback to lower-precedence profiles or marks for removal.
+ *
+ * Algorithm:
+ *   1. Build fresh manifest from enabled profiles (precedence oracle)
+ *   2. Build profile→oid map for git_oid field
+ *   3. For each removed file:
+ *      a. Resolve to filesystem path
+ *      b. Lookup current manifest entry
+ *      c. Check if removed profile owns it (precedence check)
+ *      d. If yes:
+ *         - Check fresh manifest for fallback
+ *         - Fallback exists: Update to fallback profile, mark PENDING_DEPLOYMENT
+ *         - No fallback: Mark PENDING_REMOVAL
+ *      e. If no (different profile owns): Skip
+ *
+ * Preconditions:
+ *   - state MUST have active transaction
+ *   - Git commit MUST be completed (files removed from branch)
+ *   - removed_storage_paths MUST be in storage format (home/.bashrc)
+ *   - enabled_profiles MUST be current enabled set
+ *
+ * Postconditions:
+ *   - Files with fallback updated to fallback profile (PENDING_DEPLOYMENT)
+ *   - Files without fallback marked PENDING_REMOVAL
+ *   - Files not owned by removed_profile unchanged
+ *   - Transaction remains open (caller commits)
+ *
+ * Error Conditions:
+ *   - ERR_GIT: Git operation failed
+ *   - ERR_STATE: Database operation failed
+ *   - ERR_NOMEM: Memory allocation failed
+ *
+ * Performance: O(M + N) where M = total files in profiles, N = files removed
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param state State handle (with active transaction, must not be NULL)
+ * @param removed_profile Profile files were removed from (must not be NULL)
+ * @param removed_storage_paths Storage paths of removed files (must not be NULL)
+ * @param enabled_profiles All enabled profiles (must not be NULL)
+ * @param out_removed Output: files marked PENDING_REMOVAL (can be NULL)
+ * @param out_fallbacks Output: files updated to fallback (can be NULL)
+ * @return Error or NULL on success
+ */
+error_t *manifest_remove_files(
+    git_repository *repo,
+    state_t *state,
+    const char *removed_profile,
+    const string_array_t *removed_storage_paths,
+    const string_array_t *enabled_profiles,
+    size_t *out_removed,
+    size_t *out_fallbacks
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(state);
+    CHECK_NULL(removed_profile);
+    CHECK_NULL(removed_storage_paths);
+    CHECK_NULL(enabled_profiles);
+
+    error_t *err = NULL;
+    manifest_t *fresh_manifest = NULL;
+    profile_list_t *profiles = NULL;
+    hashmap_t *profile_oids = NULL;
+    size_t removed_count = 0;
+    size_t fallback_count = 0;
+
+    /* 1. Build fresh manifest from current Git state (post-removal) */
+    err = build_manifest(repo, enabled_profiles, &fresh_manifest, &profiles);
+    if (err) {
+        return error_wrap(err, "Failed to build manifest for fallback detection");
+    }
+
+    /* 2. Build hashmap: profile_name → git_oid for fast lookups */
+    profile_oids = hashmap_create(string_array_size(enabled_profiles));
+    if (!profile_oids) {
+        err = ERROR(ERR_MEMORY, "Failed to create profile OID map");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
+        const char *profile = string_array_get(enabled_profiles, i);
+        git_oid *oid = malloc(sizeof(git_oid));
+        if (!oid) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate OID");
+            goto cleanup;
+        }
+
+        err = get_branch_head_oid(repo, profile, oid);
+        if (err) {
+            free(oid);
+            err = error_wrap(err, "Failed to get HEAD for profile '%s'", profile);
+            goto cleanup;
+        }
+
+        err = hashmap_set(profile_oids, profile, oid);
+        if (err) {
+            free(oid);
+            goto cleanup;
+        }
+    }
+
+    /* 3. Process each removed file */
+    for (size_t i = 0; i < string_array_size(removed_storage_paths); i++) {
+        const char *storage_path = string_array_get(removed_storage_paths, i);
+
+        /* Resolve to filesystem path */
+        char *filesystem_path = NULL;
+        err = path_from_storage(storage_path, &filesystem_path);
+        if (err) {
+            err = error_wrap(err, "Failed to resolve path: %s", storage_path);
+            goto cleanup;
+        }
+
+        /* Lookup current manifest entry */
+        state_file_entry_t *current_entry = NULL;
+        error_t *get_err = state_get_file(state, filesystem_path, &current_entry);
+
+        if (get_err || !current_entry) {
+            /* Not in manifest (profile was disabled or file never deployed) */
+            if (get_err) {
+                error_free(get_err);
+            }
+            free(filesystem_path);
+            continue;
+        }
+
+        /* Check ownership: does removed_profile own this file? */
+        if (strcmp(current_entry->profile, removed_profile) != 0) {
+            /* Different profile owns it, skip */
+            state_free_entry(current_entry);
+            free(filesystem_path);
+            continue;
+        }
+
+        /* removed_profile owns it, need to update */
+
+        /* Check for fallback in fresh manifest using O(1) index lookup */
+        file_entry_t *fallback = NULL;
+        if (fresh_manifest && fresh_manifest->index) {
+            void *idx_ptr = hashmap_get(fresh_manifest->index, filesystem_path);
+            if (idx_ptr) {
+                size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+                fallback = &fresh_manifest->entries[idx];
+            }
+        }
+
+        if (fallback) {
+            /* Fallback found: update to use fallback profile */
+            const char *fallback_profile = fallback->source_profile->name;
+
+            /* Get HEAD oid for fallback profile */
+            git_oid *fallback_oid = (git_oid *)hashmap_get(profile_oids, fallback_profile);
+            if (!fallback_oid) {
+                err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'", fallback_profile);
+                state_free_entry(current_entry);
+                free(filesystem_path);
+                goto cleanup;
+            }
+
+            char fallback_oid_str[GIT_OID_HEXSZ + 1];
+            git_oid_tostr(fallback_oid_str, sizeof(fallback_oid_str), fallback_oid);
+
+            /* Update manifest entry to use fallback */
+            char *profile_dup = strdup(fallback_profile);
+            char *oid_dup = strdup(fallback_oid_str);
+            if (!profile_dup || !oid_dup) {
+                free(profile_dup);
+                free(oid_dup);
+                err = ERROR(ERR_MEMORY, "Failed to allocate profile/oid strings");
+                state_free_entry(current_entry);
+                free(filesystem_path);
+                goto cleanup;
+            }
+
+            current_entry->profile = profile_dup;
+            current_entry->git_oid = oid_dup;
+            current_entry->status = MANIFEST_STATUS_PENDING_DEPLOYMENT;
+            current_entry->staged_at = time(NULL);
+
+            err = state_update_entry(state, current_entry);
+            if (err) {
+                state_free_entry(current_entry);
+                free(filesystem_path);
+                goto cleanup;
+            }
+
+            fallback_count++;
+        } else {
+            /* No fallback: mark for removal */
+            err = state_update_entry_status(state, filesystem_path,
+                                            MANIFEST_STATUS_PENDING_REMOVAL);
+            if (err) {
+                state_free_entry(current_entry);
+                free(filesystem_path);
+                goto cleanup;
+            }
+
+            removed_count++;
+        }
+
+        state_free_entry(current_entry);
+        free(filesystem_path);
+    }
+
+    /* Set output counts */
+    if (out_removed) *out_removed = removed_count;
+    if (out_fallbacks) *out_fallbacks = fallback_count;
+
+cleanup:
+    if (profile_oids) {
+        /* Free allocated OIDs */
+        hashmap_iter_t iter;
+        hashmap_iter_init(&iter, profile_oids);
+        const char *key;
+        void *value;
+        while (hashmap_iter_next(&iter, &key, &value)) {
+            free(value);
+        }
+        hashmap_free(profile_oids, NULL);
+    }
+
+    if (fresh_manifest) {
+        manifest_free(fresh_manifest);
+    }
+
+    if (profiles) {
+        profile_list_free(profiles);
+    }
+
+    return err;
+}
+
+/**
  * Rebuild manifest from scratch
  *
  * Nuclear option for recovery:

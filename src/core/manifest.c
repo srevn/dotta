@@ -1019,7 +1019,6 @@ cleanup:
  * Simpler than manifest_update_files() because:
  * - All files are from the same profile
  * - No deletions (only additions/updates)
- * - All files have the same commit OID
  * - Status is always MANIFEST_STATUS_DEPLOYED (captured from filesystem)
  *
  * CRITICAL DESIGN: Like manifest_update_files(), this builds a FRESH
@@ -1041,7 +1040,7 @@ cleanup:
  *
  * Preconditions:
  *   - state MUST have active transaction (via state_load_for_update)
- *   - commit_oid MUST reference the commit that added these files
+ *   - Git commits MUST be completed (branches at final state)
  *   - filesystem_paths MUST be valid, canonical paths
  *   - profile_name SHOULD be enabled (function gracefully handles if not)
  *
@@ -1065,7 +1064,6 @@ cleanup:
  * @param state State handle (with active transaction, must not be NULL)
  * @param profile_name Profile files were added to (must not be NULL)
  * @param filesystem_paths Array of filesystem paths (must not be NULL)
- * @param commit_oid Commit OID from Git commit (must not be NULL)
  * @param enabled_profiles All enabled profiles (must not be NULL)
  * @param km Keymanager for content hashing (can be NULL if no encryption)
  * @param metadata_cache Hashmap: profile_name → metadata_t* (must not be NULL)
@@ -1077,7 +1075,6 @@ error_t *manifest_add_files(
     state_t *state,
     const char *profile_name,
     const string_array_t *filesystem_paths,
-    const git_oid *commit_oid,
     const string_array_t *enabled_profiles,
     keymanager_t *km,
     const hashmap_t *metadata_cache,
@@ -1087,7 +1084,6 @@ error_t *manifest_add_files(
     CHECK_NULL(state);
     CHECK_NULL(profile_name);
     CHECK_NULL(filesystem_paths);
-    CHECK_NULL(commit_oid);
     CHECK_NULL(enabled_profiles);
     CHECK_NULL(metadata_cache);
     CHECK_NULL(out_synced);
@@ -1103,10 +1099,6 @@ error_t *manifest_add_files(
     profile_list_t *profiles = NULL;
     manifest_t *fresh_manifest = NULL;
     hashmap_t *profile_oids = NULL;
-    char git_oid_str[GIT_OID_HEXSZ + 1];
-
-    /* Convert commit OID to string once */
-    git_oid_tostr(git_oid_str, sizeof(git_oid_str), commit_oid);
 
     /* 1. Load enabled profiles from Git */
     err = profile_list_load(repo, enabled_profiles->items,

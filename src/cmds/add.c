@@ -614,7 +614,6 @@ static error_t *create_commit(
  *
  * @param repo Git repository
  * @param profile_name Profile that files were added to
- * @param commit_oid Commit OID from Git commit (for git_oid field)
  * @param added_files Filesystem paths that were added
  * @param out Output context for verbose logging (can be NULL)
  * @param out_updated Output flag: true if manifest was updated (must not be NULL)
@@ -623,14 +622,12 @@ static error_t *create_commit(
 static error_t *update_manifest_after_add(
     git_repository *repo,
     const char *profile_name,
-    const git_oid *commit_oid,
     const string_array_t *added_files,
     output_ctx_t *out,
     bool *out_updated
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile_name);
-    CHECK_NULL(commit_oid);
     CHECK_NULL(added_files);
     CHECK_NULL(out_updated);
 
@@ -740,7 +737,6 @@ static error_t *update_manifest_after_add(
         state,
         profile_name,
         added_files,
-        commit_oid,
         enabled_profiles,
         km,
         metadata_cache,
@@ -1329,8 +1325,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     }
 
     /* Create commit */
-    git_oid commit_oid;
-    err = create_commit(repo, wt, opts, all_files, config, &commit_oid);
+    err = create_commit(repo, wt, opts, all_files, config, NULL);
     if (err) {
         goto cleanup;
     }
@@ -1346,7 +1341,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
      */
     bool manifest_updated = false;
     error_t *manifest_err = update_manifest_after_add(
-        repo, opts->profile, &commit_oid, all_files, out, &manifest_updated
+        repo, opts->profile, all_files, out, &manifest_updated
     );
 
     if (manifest_err) {

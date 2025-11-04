@@ -194,7 +194,6 @@ error_t *manifest_update_files(
  * Simpler than manifest_update_files() because:
  * - All files are from the same profile
  * - No deletions (only additions/updates)
- * - All files have the same commit OID
  * - Status is always MANIFEST_STATUS_DEPLOYED (captured from filesystem)
  *
  * CRITICAL DESIGN: Like manifest_update_files(), this builds a FRESH
@@ -215,7 +214,7 @@ error_t *manifest_update_files(
  *
  * Preconditions:
  *   - state MUST have active transaction (via state_load_for_update)
- *   - commit_oid MUST reference the commit that added these files
+ *   - Git commits MUST be completed (branches at final state)
  *   - filesystem_paths MUST be valid, canonical paths
  *   - profile_name SHOULD be enabled (function gracefully handles if not)
  *
@@ -239,7 +238,6 @@ error_t *manifest_update_files(
  * @param state State handle (with active transaction, must not be NULL)
  * @param profile_name Profile files were added to (must not be NULL)
  * @param filesystem_paths Array of filesystem paths (must not be NULL)
- * @param commit_oid Commit OID from Git commit (must not be NULL)
  * @param enabled_profiles All enabled profiles (must not be NULL)
  * @param km Keymanager for content hashing (can be NULL if no encryption)
  * @param metadata_cache Hashmap: profile_name → metadata_t* (must not be NULL)
@@ -251,7 +249,6 @@ error_t *manifest_add_files(
     state_t *state,
     const char *profile_name,
     const string_array_t *filesystem_paths,
-    const git_oid *commit_oid,
     const string_array_t *enabled_profiles,
     keymanager_t *km,
     const hashmap_t *metadata_cache,

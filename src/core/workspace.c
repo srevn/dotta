@@ -1237,139 +1237,6 @@ static error_t *analyze_untracked_files(
 }
 
 /**
- * Context for directory metadata checking callback
- */
-typedef struct {
-    workspace_t *ws;
-    error_t *error;  /* Set on first error, stops iteration */
-} directory_check_context_t;
-
-/**
- * Callback to check one directory for metadata divergence
- *
- * Called by hashmap_foreach for each item in merged_metadata.
- * Filters for DIRECTORY kind and checks against filesystem.
- *
- * @param key Unused (item->key contains the actual key)
- * @param value Pointer to merged_metadata_entry_t
- * @param user_data Pointer to directory_check_context_t
- * @return true to continue iteration, false to stop on error
- */
-static bool check_directory_callback(const char *key, void *value, void *user_data) {
-    (void)key;  /* Unused - item has the key */
-
-    const merged_metadata_entry_t *entry = (const merged_metadata_entry_t *)value;
-    const metadata_item_t *item = entry->item;
-    directory_check_context_t *ctx = (directory_check_context_t *)user_data;
-    workspace_t *ws = ctx->ws;
-
-    /* Filter: Only process directories */
-    if (item->kind != METADATA_ITEM_DIRECTORY) {
-        return true;  /* Continue iteration */
-    }
-
-    /* For directories: key = filesystem_path (absolute) */
-    const char *filesystem_path = item->key;
-    const char *storage_prefix = item->directory.storage_prefix;
-
-    /* Check if directory still exists */
-    if (!fs_exists(filesystem_path)) {
-        /* Directory deleted - record divergence */
-        error_t *err = workspace_add_diverged(
-            ws,
-            filesystem_path,
-            storage_prefix,
-            entry->profile_name,
-            NULL, NULL,  /* No old_profile or all_profiles for directories */
-            WORKSPACE_STATE_DELETED,  /* State: was in profile, removed from filesystem */
-            DIVERGENCE_NONE,          /* Divergence: none (file is gone) */
-            WORKSPACE_ITEM_DIRECTORY,
-            MANIFEST_STATUS_DEPLOYED,  /* N/A for directories (not in manifest table) */
-            true,   /* in_profile */
-            false,  /* in_state */
-            false,  /* on_filesystem (deleted) */
-            true,   /* profile_enabled */
-            false   /* No profile change */
-        );
-
-        if (err) {
-            ctx->error = error_wrap(err, "Failed to record deleted directory '%s'",
-                                   filesystem_path);
-            return false;  /* Stop iteration on error */
-        }
-        return true;  /* Continue with next directory */
-    }
-
-    /* Stat directory to get current metadata */
-    struct stat dir_stat;
-    if (stat(filesystem_path, &dir_stat) != 0) {
-        /* Stat failed but exists: race condition or permission issue */
-        fprintf(stderr, "warning: failed to stat directory '%s': %s\n",
-                filesystem_path, strerror(errno));
-        return true;  /* Non-fatal, continue */
-    }
-
-    /* Verify it's actually a directory (type may have changed) */
-    if (!S_ISDIR(dir_stat.st_mode)) {
-        fprintf(stderr, "warning: '%s' is no longer a directory (type changed)\n",
-                filesystem_path);
-        return true;  /* Non-fatal, skip - apply/revert don't handle type changes */
-    }
-
-    /* Check metadata divergence using unified helper */
-    bool mode_differs = false;
-    bool ownership_differs = false;
-
-    error_t *err = check_item_metadata_divergence(
-        item,
-        filesystem_path,
-        &dir_stat,
-        &mode_differs,
-        &ownership_differs
-    );
-
-    if (err) {
-        ctx->error = error_wrap(err, "Failed to check metadata for directory '%s'",
-                               filesystem_path);
-        return false;  /* Stop iteration on error */
-    }
-
-    /* Record divergence if any metadata differs */
-    if (mode_differs || ownership_differs) {
-        /* Accumulate divergence flags */
-        divergence_type_t divergence = DIVERGENCE_NONE;
-        if (mode_differs) divergence |= DIVERGENCE_MODE;
-        if (ownership_differs) divergence |= DIVERGENCE_OWNERSHIP;
-
-        err = workspace_add_diverged(
-            ws,
-            filesystem_path,
-            storage_prefix,
-            entry->profile_name,
-            NULL, NULL,  /* No old_profile or all_profiles for directories */
-            WORKSPACE_STATE_DEPLOYED,  /* State: directory exists as expected */
-            divergence,                /* Divergence: mode/ownership flags */
-            WORKSPACE_ITEM_DIRECTORY,
-            MANIFEST_STATUS_DEPLOYED,  /* N/A for directories (not in manifest table) */
-            true,   /* in_profile */
-            false,  /* in_state */
-            true,   /* on_filesystem */
-            true,   /* profile_enabled */
-            false   /* No profile change */
-        );
-
-        if (err) {
-            ctx->error = error_wrap(err,
-                                   "Failed to record directory metadata divergence for '%s'",
-                                   filesystem_path);
-            return false;  /* Stop iteration on error */
-        }
-    }
-
-    return true;  /* Continue with next directory */
-}
-
-/**
  * Analyze directory metadata for divergence
  *
  * Detects:
@@ -1384,19 +1251,117 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->merged_metadata);
 
-    /* Setup context for callback iteration */
-    directory_check_context_t ctx = {
-        .ws = ws,
-        .error = NULL
-    };
+    /* Iterate merged metadata to find and check tracked directories */
+    hashmap_iter_t iter;
+    hashmap_iter_init(&iter, ws->merged_metadata);
+    void *value;
 
-    /* Iterate merged metadata to find and check tracked directories.
-     * No need to build temporary map - merged_metadata already has what we need
-     * with precedence applied. Callback filters for DIRECTORY kind. */
-    hashmap_foreach(ws->merged_metadata, check_directory_callback, &ctx);
+    while (hashmap_iter_next(&iter, NULL, &value)) {
+        const merged_metadata_entry_t *entry = value;
+        const metadata_item_t *item = entry->item;
 
-    /* Return any error that occurred during iteration */
-    return ctx.error;
+        /* Filter: Only process directories */
+        if (item->kind != METADATA_ITEM_DIRECTORY) {
+            continue;
+        }
+
+        /* For directories: key = filesystem_path (absolute) */
+        const char *filesystem_path = item->key;
+        const char *storage_prefix = item->directory.storage_prefix;
+
+        /* Check if directory still exists */
+        if (!fs_exists(filesystem_path)) {
+            /* Directory deleted - record divergence */
+            error_t *err = workspace_add_diverged(
+                ws,
+                filesystem_path,
+                storage_prefix,
+                entry->profile_name,
+                NULL, NULL,  /* No old_profile or all_profiles for directories */
+                WORKSPACE_STATE_DELETED,  /* State: was in profile, removed from filesystem */
+                DIVERGENCE_NONE,          /* Divergence: none (file is gone) */
+                WORKSPACE_ITEM_DIRECTORY,
+                MANIFEST_STATUS_DEPLOYED,  /* N/A for directories (not in manifest table) */
+                true,   /* in_profile */
+                false,  /* in_state */
+                false,  /* on_filesystem (deleted) */
+                true,   /* profile_enabled */
+                false   /* No profile change */
+            );
+
+            if (err) {
+                return error_wrap(err, "Failed to record deleted directory '%s'",
+                                filesystem_path);
+            }
+            continue;  /* Successfully recorded, check next directory */
+        }
+
+        /* Stat directory to get current metadata */
+        struct stat dir_stat;
+        if (stat(filesystem_path, &dir_stat) != 0) {
+            /* Stat failed but exists: race condition or permission issue */
+            fprintf(stderr, "warning: failed to stat directory '%s': %s\n",
+                    filesystem_path, strerror(errno));
+            continue;  /* Non-fatal, skip this directory */
+        }
+
+        /* Verify it's actually a directory (type may have changed) */
+        if (!S_ISDIR(dir_stat.st_mode)) {
+            fprintf(stderr, "warning: '%s' is no longer a directory (type changed)\n",
+                    filesystem_path);
+            continue;  /* Non-fatal, skip - apply/revert don't handle type changes */
+        }
+
+        /* Check metadata divergence using unified helper */
+        bool mode_differs = false;
+        bool ownership_differs = false;
+
+        error_t *err = check_item_metadata_divergence(
+            item,
+            filesystem_path,
+            &dir_stat,
+            &mode_differs,
+            &ownership_differs
+        );
+
+        if (err) {
+            return error_wrap(err, "Failed to check metadata for directory '%s'",
+                            filesystem_path);
+        }
+
+        /* Record divergence if any metadata differs */
+        if (mode_differs || ownership_differs) {
+            /* Accumulate divergence flags */
+            divergence_type_t divergence = DIVERGENCE_NONE;
+            if (mode_differs) divergence |= DIVERGENCE_MODE;
+            if (ownership_differs) divergence |= DIVERGENCE_OWNERSHIP;
+
+            err = workspace_add_diverged(
+                ws,
+                filesystem_path,
+                storage_prefix,
+                entry->profile_name,
+                NULL, NULL,  /* No old_profile or all_profiles for directories */
+                WORKSPACE_STATE_DEPLOYED,  /* State: directory exists as expected */
+                divergence,                /* Divergence: mode/ownership flags */
+                WORKSPACE_ITEM_DIRECTORY,
+                MANIFEST_STATUS_DEPLOYED,  /* N/A for directories (not in manifest table) */
+                true,   /* in_profile */
+                false,  /* in_state */
+                true,   /* on_filesystem */
+                true,   /* profile_enabled */
+                false   /* No profile change */
+            );
+
+            if (err) {
+                return error_wrap(err,
+                                "Failed to record directory metadata divergence for '%s'",
+                                filesystem_path);
+            }
+        }
+    }
+
+    return NULL;  /* Success - all directories checked */
 }
 
 /**

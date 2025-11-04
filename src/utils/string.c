@@ -159,6 +159,24 @@ error_t *str_dup(const char *str, char **out) {
     return NULL;
 }
 
+error_t *str_replace_owned(char **target, const char *new_value) {
+    CHECK_NULL(target);
+
+    /* Free old value (safe for NULL) */
+    free(*target);
+    *target = NULL;
+
+    /* Allocate new copy if provided */
+    if (new_value) {
+        *target = strdup(new_value);
+        if (!*target) {
+            return error_create(ERR_MEMORY, "Failed to allocate string");
+        }
+    }
+
+    return NULL;
+}
+
 bool str_looks_like_git_ref(const char *str) {
     if (!str || !*str) {
         return false;

@@ -28,6 +28,7 @@
 #include "utils/array.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
+#include "utils/string.h"
 
 /**
  * Get current HEAD oid for branch
@@ -488,9 +489,22 @@ error_t *manifest_disable_profile(
             }
             git_oid_tostr(fallback_oid_str, sizeof(fallback_oid_str), &fallback_oid);
 
-            /* Update entry to use fallback profile */
-            entry->profile = fallback->source_profile->name;
-            entry->git_oid = fallback_oid_str;
+            /* Update entry to use fallback profile
+             * MEMORY SAFETY: Must use str_replace_owned() to properly free old
+             * strings and allocate independent copies. Direct assignment would cause:
+             * 1. Memory leak (old values not freed)
+             * 2. Use-after-free (aliasing memory freed with fallback_profiles)
+             * 3. Double-free crash (cleanup path tries to free already-freed memory) */
+            err = str_replace_owned(&entry->profile, fallback->source_profile->name);
+            if (err) {
+                goto cleanup;
+            }
+
+            err = str_replace_owned(&entry->git_oid, fallback_oid_str);
+            if (err) {
+                goto cleanup;
+            }
+
             entry->status = MANIFEST_STATUS_PENDING_DEPLOYMENT;
             entry->staged_at = time(NULL);
 
@@ -688,20 +702,24 @@ error_t *manifest_remove_files(
             char fallback_oid_str[GIT_OID_HEXSZ + 1];
             git_oid_tostr(fallback_oid_str, sizeof(fallback_oid_str), fallback_oid);
 
-            /* Update manifest entry to use fallback */
-            char *profile_dup = strdup(fallback_profile);
-            char *oid_dup = strdup(fallback_oid_str);
-            if (!profile_dup || !oid_dup) {
-                free(profile_dup);
-                free(oid_dup);
-                err = ERROR(ERR_MEMORY, "Failed to allocate profile/oid strings");
+            /* Update manifest entry to use fallback
+             * MEMORY SAFETY: Use str_replace_owned() to properly free old strings
+             * before replacing them with new values. Direct assignment would leak
+             * the old allocated strings. */
+            err = str_replace_owned(&current_entry->profile, fallback_profile);
+            if (err) {
                 state_free_entry(current_entry);
                 free(filesystem_path);
                 goto cleanup;
             }
 
-            current_entry->profile = profile_dup;
-            current_entry->git_oid = oid_dup;
+            err = str_replace_owned(&current_entry->git_oid, fallback_oid_str);
+            if (err) {
+                state_free_entry(current_entry);
+                free(filesystem_path);
+                goto cleanup;
+            }
+
             current_entry->status = MANIFEST_STATUS_PENDING_DEPLOYMENT;
             current_entry->staged_at = time(NULL);
 

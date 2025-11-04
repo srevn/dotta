@@ -67,6 +67,29 @@ char *str_format(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 error_t *str_dup(const char *str, char **out);
 
 /**
+ * Replace owned string pointer with copy of new value
+ *
+ * Safely replaces a heap-allocated string pointer by:
+ * 1. Freeing the old value (safe if NULL or uninitialized)
+ * 2. Allocating a copy of the new value (NULL if new_value is NULL)
+ * 3. Returning error if allocation fails (target left as NULL)
+ *
+ * Use this when you own a string pointer and need to replace it with a
+ * different value while ensuring proper memory management.
+ *
+ * Example:
+ *   char *name = strdup("Alice");
+ *   err = str_replace_owned(&name, "Bob");  // Frees "Alice", allocates "Bob"
+ *   err = str_replace_owned(&name, NULL);   // Frees "Bob", sets to NULL
+ *   free(name);  // Safe even if replace failed
+ *
+ * @param target Pointer to owned string pointer (must not be NULL)
+ * @param new_value New value to copy (can be NULL to free without replacing)
+ * @return Error or NULL on success
+ */
+error_t *str_replace_owned(char **target, const char *new_value);
+
+/**
  * Check if string looks like a Git reference
  *
  * Recognizes:

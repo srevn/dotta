@@ -1654,6 +1654,9 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             for (size_t j = 0; j < manifest_idx; j++) {
                 free(ws->manifest->entries[j].storage_path);
                 free(ws->manifest->entries[j].filesystem_path);
+                if (ws->manifest->entries[j].entry) {
+                    git_tree_entry_free(ws->manifest->entries[j].entry);
+                }
             }
             hashmap_free(path_map, NULL);
             free(ws->manifest->entries);
@@ -1663,8 +1666,73 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             return ERROR(ERR_MEMORY, "Failed to allocate manifest entry paths");
         }
 
-        /* Tree entry is NULL (lazy-loaded when needed for content display) */
-        entry->entry = NULL;
+        /* Load profile tree (lazy-loaded, cached in profile structure) */
+        err = profile_load_tree(ws->repo, entry->source_profile);
+        if (err) {
+            /* Cleanup allocated paths for current entry */
+            free(entry->storage_path);
+            free(entry->filesystem_path);
+
+            /* Free previously allocated entries */
+            for (size_t j = 0; j < manifest_idx; j++) {
+                free(ws->manifest->entries[j].storage_path);
+                free(ws->manifest->entries[j].filesystem_path);
+                if (ws->manifest->entries[j].entry) {
+                    git_tree_entry_free(ws->manifest->entries[j].entry);
+                }
+            }
+            hashmap_free(path_map, NULL);
+            free(ws->manifest->entries);
+            free(ws->manifest);
+            ws->manifest = NULL;
+            state_free_all_files(state_entries, state_count);
+            return error_wrap(err, "Failed to load tree for profile '%s'",
+                            entry->source_profile->name);
+        }
+
+        /* Lookup tree entry from Git (creates owned reference) */
+        int git_err = git_tree_entry_bypath(&entry->entry,
+                                             entry->source_profile->tree,
+                                             entry->storage_path);
+        if (git_err != 0) {
+            if (git_err == GIT_ENOTFOUND) {
+                /* File in state but not in Git - data inconsistency.
+                 * Skip with warning, similar to orphan profile handling.
+                 * Apply will reconcile state with Git reality. */
+                fprintf(stderr,
+                    "warning: manifest entry '%s' not found in profile '%s' - "
+                    "skipping (state inconsistency, will be cleaned up)\n",
+                    entry->filesystem_path,
+                    entry->source_profile->name);
+
+                /* Free allocated paths and skip this entry */
+                free(entry->storage_path);
+                free(entry->filesystem_path);
+                continue;  /* Don't increment manifest_idx */
+            } else {
+                /* Other Git errors - propagate */
+                free(entry->storage_path);
+                free(entry->filesystem_path);
+
+                /* Free previously allocated entries */
+                for (size_t j = 0; j < manifest_idx; j++) {
+                    free(ws->manifest->entries[j].storage_path);
+                    free(ws->manifest->entries[j].filesystem_path);
+                    if (ws->manifest->entries[j].entry) {
+                        git_tree_entry_free(ws->manifest->entries[j].entry);
+                    }
+                }
+                hashmap_free(path_map, NULL);
+                free(ws->manifest->entries);
+                free(ws->manifest);
+                ws->manifest = NULL;
+                state_free_all_files(state_entries, state_count);
+
+                err = error_from_git(git_err);
+                return error_wrap(err, "Failed to lookup tree entry for '%s' in profile '%s'",
+                                entry->storage_path, entry->source_profile->name);
+            }
+        }
 
         /* all_profiles not populated (not needed for hash-based divergence detection) */
         entry->all_profiles = NULL;
@@ -1684,6 +1752,9 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             for (size_t j = 0; j <= manifest_idx; j++) {
                 free(ws->manifest->entries[j].storage_path);
                 free(ws->manifest->entries[j].filesystem_path);
+                if (ws->manifest->entries[j].entry) {
+                    git_tree_entry_free(ws->manifest->entries[j].entry);
+                }
             }
             free(ws->manifest->entries);
             free(ws->manifest);

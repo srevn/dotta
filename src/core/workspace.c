@@ -66,7 +66,6 @@ struct workspace {
     manifest_t *manifest;            /* Profile state (owned) */
     state_t *state;                  /* Deployment state (owned) */
     profile_list_t *profiles;        /* Selected profiles for this workspace (borrowed) */
-    hashmap_t *manifest_index;       /* Maps filesystem_path -> file_entry_t* */
     hashmap_t *profile_index;        /* Maps profile_name -> profile_t* (for O(1) lookup) */
 
     /* Encryption and caching infrastructure */
@@ -131,15 +130,8 @@ static error_t *workspace_create_empty(
     ws->repo = repo;
     ws->profiles = profiles;  /* Borrowed reference */
 
-    ws->manifest_index = hashmap_create(256);  /* Initial capacity */
-    if (!ws->manifest_index) {
-        free(ws);
-        return ERROR(ERR_MEMORY, "Failed to create manifest index");
-    }
-
     ws->profile_index = hashmap_create(32);  /* Initial capacity for profiles */
     if (!ws->profile_index) {
-        hashmap_free(ws->manifest_index, NULL);
         free(ws);
         return ERROR(ERR_MEMORY, "Failed to create profile index");
     }
@@ -147,7 +139,6 @@ static error_t *workspace_create_empty(
     ws->diverged_index = hashmap_create(256);  /* Initial capacity */
     if (!ws->diverged_index) {
         hashmap_free(ws->profile_index, NULL);
-        hashmap_free(ws->manifest_index, NULL);
         free(ws);
         return ERROR(ERR_MEMORY, "Failed to create diverged index");
     }
@@ -159,7 +150,6 @@ static error_t *workspace_create_empty(
         if (err) {
             hashmap_free(ws->diverged_index, NULL);
             hashmap_free(ws->profile_index, NULL);
-            hashmap_free(ws->manifest_index, NULL);
             free(ws);
             return error_wrap(err, "Failed to index profile");
         }
@@ -394,26 +384,6 @@ static error_t *workspace_add_diverged(
     }
 
     ws->diverged_count++;
-
-    return NULL;
-}
-
-/**
- * Build manifest index for O(1) lookups
- */
-static error_t *workspace_build_manifest_index(workspace_t *ws) {
-    CHECK_NULL(ws);
-    CHECK_NULL(ws->manifest);
-
-    for (size_t i = 0; i < ws->manifest->count; i++) {
-        file_entry_t *entry = &ws->manifest->entries[i];
-        error_t *err = hashmap_set(ws->manifest_index,
-                                   entry->filesystem_path,
-                                   entry);
-        if (err) {
-            return error_wrap(err, "Failed to index manifest entry");
-        }
-    }
 
     return NULL;
 }
@@ -692,7 +662,8 @@ static error_t *analyze_file_divergence(
 static error_t *analyze_orphaned_files(workspace_t *ws) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->state);
-    CHECK_NULL(ws->manifest_index);
+    CHECK_NULL(ws->manifest);
+    CHECK_NULL(ws->manifest->index);
     CHECK_NULL(ws->profile_index);
 
     error_t *err = NULL;
@@ -718,8 +689,13 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
         const char *storage_path = state_entry->storage_path;
         const char *profile = state_entry->profile;
 
-        /* Check if file exists in manifest (O(1) lookup) */
-        file_entry_t *manifest_entry = hashmap_get(ws->manifest_index, fs_path);
+        /* Check if file exists in manifest (O(1) lookup using index) */
+        void *idx_ptr = hashmap_get(ws->manifest->index, fs_path);
+        file_entry_t *manifest_entry = NULL;
+        if (idx_ptr) {
+            size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+            manifest_entry = &ws->manifest->entries[idx];
+        }
 
         if (!manifest_entry) {
             /* Orphaned: in state, not in manifest */
@@ -1043,14 +1019,12 @@ static error_t *scan_directory_for_untracked(
     const char *dir_path,
     const char *storage_prefix,
     const char *profile,
-    const hashmap_t *manifest_index,
     ignore_context_t *ignore_ctx,
     workspace_t *ws
 ) {
     CHECK_NULL(dir_path);
     CHECK_NULL(storage_prefix);
     CHECK_NULL(profile);
-    CHECK_NULL(manifest_index);
     CHECK_NULL(ws);
 
     DIR *dir = opendir(dir_path);
@@ -1106,7 +1080,6 @@ static error_t *scan_directory_for_untracked(
                 full_path,
                 sub_storage_prefix,
                 profile,
-                manifest_index,
                 ignore_ctx,
                 ws
             );
@@ -1119,8 +1092,13 @@ static error_t *scan_directory_for_untracked(
                 return err;
             }
         } else {
-            /* Check if this file is already in manifest */
-            file_entry_t *manifest_entry = hashmap_get(manifest_index, full_path);
+            /* Check if this file is already in manifest (O(1) lookup using index) */
+            void *idx_ptr = hashmap_get(ws->manifest->index, full_path);
+            file_entry_t *manifest_entry = NULL;
+            if (idx_ptr) {
+                size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+                manifest_entry = &ws->manifest->entries[idx];
+            }
 
             if (!manifest_entry) {
                 /* This is an untracked file! */
@@ -1235,7 +1213,6 @@ static error_t *analyze_untracked_files(
                 dir_entry->key,                         /* filesystem_path */
                 dir_entry->directory.storage_prefix,    /* storage_prefix (union field) */
                 profile_name,
-                ws->manifest_index,
                 ignore_ctx,
                 ws
             );
@@ -1661,6 +1638,20 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         return ERROR(ERR_MEMORY, "Failed to allocate manifest entries");
     }
 
+    /*
+     * Create hash map for O(1) lookups
+     * Maps: filesystem_path -> index in entries array (offset by 1)
+     * Use state_count as initial capacity (optimal sizing, no rehashing needed)
+     */
+    hashmap_t *path_map = hashmap_create(state_count > 0 ? state_count : 64);
+    if (!path_map) {
+        free(ws->manifest->entries);
+        free(ws->manifest);
+        ws->manifest = NULL;
+        state_free_all_files(state_entries, state_count);
+        return ERROR(ERR_MEMORY, "Failed to create manifest index");
+    }
+
     size_t manifest_idx = 0;
 
     /* Build manifest entries from state */
@@ -1699,6 +1690,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 free(ws->manifest->entries[j].storage_path);
                 free(ws->manifest->entries[j].filesystem_path);
             }
+            hashmap_free(path_map, NULL);
             free(ws->manifest->entries);
             free(ws->manifest);
             ws->manifest = NULL;
@@ -1712,8 +1704,34 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         /* all_profiles not populated (not needed for hash-based divergence detection) */
         entry->all_profiles = NULL;
 
+        /* Store index in hashmap (offset by 1 to distinguish from NULL).
+         * We cast the index through uintptr_t to store it as a void pointer.
+         * This is safe because:
+         * 1. Array indices are always much smaller than SIZE_MAX
+         * 2. uintptr_t can hold any pointer value (by definition)
+         * 3. We never dereference these "pointers" - they're just tagged integers
+         */
+        err = hashmap_set(path_map, entry->filesystem_path,
+                         (void *)(uintptr_t)(manifest_idx + 1));
+        if (err) {
+            /* Cleanup: free hashmap and all allocated entries */
+            hashmap_free(path_map, NULL);
+            for (size_t j = 0; j <= manifest_idx; j++) {
+                free(ws->manifest->entries[j].storage_path);
+                free(ws->manifest->entries[j].filesystem_path);
+            }
+            free(ws->manifest->entries);
+            free(ws->manifest);
+            ws->manifest = NULL;
+            state_free_all_files(state_entries, state_count);
+            return error_wrap(err, "Failed to populate manifest index");
+        }
+
         manifest_idx++;
     }
+
+    /* Transfer index ownership to manifest */
+    ws->manifest->index = path_map;
 
     /* Set final count (may be less than state_count due to filtering) */
     ws->manifest->count = manifest_idx;
@@ -1899,11 +1917,14 @@ error_t *workspace_load(
         return error_wrap(err, "Failed to build manifest from state");
     }
 
-    /* Build manifest index for O(1) lookups */
-    err = workspace_build_manifest_index(ws);
-    if (err) {
+    /* Verify manifest index was populated (architectural invariant)
+     * This check ensures workspace_build_manifest_from_state() correctly
+     * built the index, maintaining consistency with the write path pattern. */
+    if (!ws->manifest->index) {
         workspace_free(ws);
-        return error_wrap(err, "Failed to build manifest index");
+        return ERROR(ERR_INTERNAL,
+            "Manifest index not populated by workspace_build_manifest_from_state() - "
+            "this is a programming error");
     }
 
     /* Execute analyses based on resolved_opts flags. Each analysis is
@@ -2180,7 +2201,6 @@ void workspace_free(workspace_t *ws) {
     free(ws->diverged);
 
     /* Free indices (values are borrowed, so pass NULL for value free function) */
-    hashmap_free(ws->manifest_index, NULL);
     hashmap_free(ws->profile_index, NULL);
     hashmap_free(ws->diverged_index, NULL);
 

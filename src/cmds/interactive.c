@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "base/error.h"
+#include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "utils/array.h"
@@ -328,16 +329,44 @@ static error_t *interactive_save_profile_order(
         return err;
     }
 
-    /* Set profiles in new order */
+    /* Set profiles in new order (updates enabled_profiles table) */
     err = state_set_profiles(deploy_state, profile_names, state->enabled_count);
-    if (!err) {
-        err = state_save(repo, deploy_state);
+    if (err) {
+        state_free(deploy_state);
+        free(profile_names);
+        return error_wrap(err, "Failed to update profile order in state");
     }
+
+    /* Get new profile order as string_array_t for manifest sync */
+    string_array_t *new_order = NULL;
+    err = state_get_profiles(deploy_state, &new_order);
+    if (err) {
+        state_free(deploy_state);
+        free(profile_names);
+        return error_wrap(err, "Failed to get new profile order");
+    }
+
+    /* Update manifest to reflect new precedence order
+     *
+     * This synchronizes the virtual_manifest table with the new profile order.
+     * Files whose ownership changes will be marked PENDING_DEPLOYMENT, while
+     * files whose ownership remains unchanged preserve their existing status. */
+    err = manifest_reorder_profiles(repo, deploy_state, new_order);
+    string_array_free(new_order);
+
+    if (err) {
+        state_free(deploy_state);
+        free(profile_names);
+        return error_wrap(err, "Failed to update manifest with new precedence");
+    }
+
+    /* Commit transaction */
+    err = state_save(repo, deploy_state);
 
     state_free(deploy_state);
     free(profile_names);
 
-    /* Update state on success */
+    /* Update interactive state on success */
     if (!err) {
         state->modified = false;
     }

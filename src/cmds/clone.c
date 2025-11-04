@@ -20,6 +20,7 @@
 #include "base/gitops.h"
 #include "base/transfer.h"
 #include "core/bootstrap.h"
+#include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "core/upstream.h"
@@ -367,6 +368,36 @@ static error_t *initialize_state(
         if (err) {
             state_free(state);
             return error_wrap(err, "Failed to set profiles in state");
+        }
+
+        /* Build string_array_t for manifest_rebuild */
+        string_array_t *profiles_array = string_array_create_with_capacity(count);
+        if (!profiles_array) {
+            state_free(state);
+            return ERROR(ERR_MEMORY, "Failed to allocate profile array");
+        }
+
+        for (size_t i = 0; i < count; i++) {
+            err = string_array_push(profiles_array, profile_names[i]);
+            if (err) {
+                string_array_free(profiles_array);
+                state_free(state);
+                return error_wrap(err, "Failed to build profile array");
+            }
+        }
+
+        /* Populate manifest from enabled profiles
+         *
+         * This populates the virtual_manifest table by walking through all
+         * enabled profiles and adding their files with correct precedence.
+         * Without this, the manifest would be empty and 'dotta apply' would
+         * have nothing to deploy. */
+        err = manifest_rebuild(repo, state, profiles_array);
+        string_array_free(profiles_array);
+
+        if (err) {
+            state_free(state);
+            return error_wrap(err, "Failed to populate manifest");
         }
     }
 

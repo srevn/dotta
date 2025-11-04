@@ -15,12 +15,15 @@
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "base/gitops.h"
+#include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
+#include "core/state.h"
 #include "core/workspace.h"
 #include "crypto/keymanager.h"
 #include "crypto/policy.h"
 #include "infra/content.h"
+#include "infra/path.h"
 #include "infra/worktree.h"
 #include "utils/array.h"
 #include "utils/buffer.h"
@@ -1195,6 +1198,332 @@ static bool update_profile_callback(const char *profile_name, void *value, void 
 }
 
 /**
+ * Context for manifest sync callback
+ */
+typedef struct {
+    git_repository *repo;
+    state_t *state;
+    string_array_t *enabled_profiles;
+    const cmd_update_options_t *opts;
+    output_ctx_t *out;
+    size_t synced_count;
+    error_t **err_out;
+} manifest_sync_context_t;
+
+/**
+ * Callback to sync manifest for one profile
+ *
+ * Called for each profile that was updated. Syncs all items from that profile
+ * to the manifest if the profile is enabled.
+ *
+ * Algorithm:
+ *   1. Check if profile is enabled (skip if not)
+ *   2. Get branch HEAD oid for git_oid field
+ *   3. For each item in profile:
+ *      - Skip directories (not in manifest)
+ *      - If deleted: call manifest_remove_file()
+ *      - Else: call manifest_sync_file() with DEPLOYED status
+ *
+ * @param profile_name Profile name (hashmap key)
+ * @param value item_array_t* with items for this profile
+ * @param user_data manifest_sync_context_t* context
+ * @return true to continue iteration, false to stop on error
+ */
+static bool sync_profile_callback(
+    const char *profile_name,
+    void *value,
+    void *user_data
+) {
+    manifest_sync_context_t *ctx = user_data;
+    item_array_t *items = value;
+    error_t *err = NULL;
+
+    /* Stop iteration if previous error */
+    if (*(ctx->err_out)) {
+        return false;
+    }
+
+    /* Check if this profile is enabled (optimization: skip entire profile) */
+    bool profile_enabled = false;
+    for (size_t i = 0; i < string_array_size(ctx->enabled_profiles); i++) {
+        if (strcmp(string_array_get(ctx->enabled_profiles, i), profile_name) == 0) {
+            profile_enabled = true;
+            break;
+        }
+    }
+
+    if (!profile_enabled) {
+        /* Profile not enabled - skip gracefully */
+        if (ctx->opts->verbose) {
+            output_info(ctx->out,
+                "  Manifest: skipped profile '%s' (not enabled)",
+                profile_name);
+        }
+        return true;  /* Continue to next profile */
+    }
+
+    /* Get branch HEAD oid for this profile */
+    git_reference *branch_ref = NULL;
+
+    /* Build branch reference name */
+    size_t ref_name_size = strlen("refs/heads/") + strlen(profile_name) + 1;
+    char *ref_name = malloc(ref_name_size);
+    if (!ref_name) {
+        *(ctx->err_out) = ERROR(ERR_MEMORY, "Failed to allocate reference name");
+        return false;  /* Stop iteration */
+    }
+    snprintf(ref_name, ref_name_size, "refs/heads/%s", profile_name);
+
+    int ret = git_reference_lookup(&branch_ref, ctx->repo, ref_name);
+    free(ref_name);
+
+    if (ret < 0) {
+        *(ctx->err_out) = error_from_git(ret);
+        return false;  /* Stop iteration */
+    }
+
+    const git_oid *commit_oid = git_reference_target(branch_ref);
+    if (!commit_oid) {
+        git_reference_free(branch_ref);
+        *(ctx->err_out) = ERROR(ERR_GIT, "Branch '%s' has no target", profile_name);
+        return false;  /* Stop iteration */
+    }
+
+    char git_oid_str[GIT_OID_HEXSZ + 1];
+    git_oid_tostr(git_oid_str, sizeof(git_oid_str), commit_oid);
+    git_reference_free(branch_ref);
+
+    /* Sync each file item in this profile */
+    for (size_t i = 0; i < items->count; i++) {
+        const workspace_item_t *item = items->items[i];
+
+        /* Skip directories (not in manifest table) */
+        if (item->item_kind != WORKSPACE_ITEM_FILE) {
+            continue;
+        }
+
+        /* Handle deleted files differently */
+        if (item->state == WORKSPACE_STATE_DELETED) {
+            /* Use manifest_remove_file() - handles fallback automatically */
+            err = manifest_remove_file(
+                ctx->repo,
+                ctx->state,
+                item->filesystem_path,
+                ctx->enabled_profiles
+            );
+
+            if (err) {
+                *(ctx->err_out) = error_wrap(err,
+                    "Failed to remove '%s' from manifest",
+                    item->filesystem_path);
+                return false;  /* Stop iteration */
+            }
+
+            if (ctx->opts->verbose) {
+                output_info(ctx->out, "  Manifest: removed %s",
+                           item->filesystem_path);
+            }
+            ctx->synced_count++;
+            continue;
+        }
+
+        /* Convert filesystem path to storage path */
+        char *storage_path = NULL;
+        path_prefix_t prefix;
+        err = path_to_storage(item->filesystem_path, &storage_path, &prefix);
+        if (err) {
+            *(ctx->err_out) = error_wrap(err,
+                "Failed to convert path '%s'", item->filesystem_path);
+            return false;  /* Stop iteration */
+        }
+
+        /* Sync modified/new file with DEPLOYED status
+         *
+         * Key insight: UPDATE captures files FROM filesystem, so they're
+         * already deployed. Setting PENDING_DEPLOYMENT would be misleading.
+         */
+        err = manifest_sync_file(
+            ctx->repo,
+            ctx->state,
+            profile_name,
+            storage_path,
+            item->filesystem_path,
+            git_oid_str,
+            ctx->enabled_profiles,
+            MANIFEST_STATUS_DEPLOYED  /* File already on filesystem */
+        );
+
+        free(storage_path);
+
+        if (err) {
+            *(ctx->err_out) = error_wrap(err,
+                "Failed to sync '%s' to manifest", item->filesystem_path);
+            return false;  /* Stop iteration */
+        }
+
+        if (ctx->opts->verbose) {
+            output_info(ctx->out, "  Manifest: synced %s (DEPLOYED)",
+                       item->filesystem_path);
+        }
+        ctx->synced_count++;
+    }
+
+    return true;  /* Continue to next profile */
+}
+
+/**
+ * Update manifest after successful update operation
+ *
+ * Called after ALL profile updates succeed. Updates manifest for files
+ * that were modified/added/deleted, maintaining the manifest as a
+ * Virtual Working Directory.
+ *
+ * This function implements the VWD integration for the update command.
+ * After Git commits succeed, the manifest is synced to reflect the new
+ * state. This keeps the three-way consistency: Git ↔ Manifest ↔ Filesystem.
+ *
+ * Status Semantics:
+ *   - Modified/New files: DEPLOYED (already on filesystem)
+ *   - Deleted files: handled by manifest_remove_file() (PENDING_REMOVAL or fallback)
+ *
+ * Algorithm:
+ *   1. Check if any profiles enabled (read-only, upfront optimization)
+ *   2. If none enabled: return NULL (skip manifest update gracefully)
+ *   3. Open transaction (state_load_for_update)
+ *   4. Get enabled profiles list
+ *   5. For each updated profile:
+ *      a. Check if profile is in enabled list (skip if not)
+ *      b. Get branch HEAD oid for git_oid field
+ *      c. For each item in profile:
+ *         - Skip directories (not in manifest)
+ *         - If DELETED: manifest_remove_file()
+ *         - Else: manifest_sync_file() with DEPLOYED status
+ *   6. Commit transaction (state_save)
+ *   7. Set *out_updated = true
+ *
+ * Preconditions:
+ *   - All profile updates already succeeded (Git commits done)
+ *   - items_by_profile contains profile_name → item_array_t mappings
+ *
+ * Postconditions:
+ *   - Manifest entries synced for enabled profiles only
+ *   - Transaction committed or rolled back atomically
+ *   - out_updated flag reflects whether manifest was updated
+ *
+ * Error Handling:
+ *   - Non-fatal: Git commits succeeded, manifest is a cache
+ *   - Caller should warn user and suggest repair options
+ *
+ * Performance:
+ *   - O(N*M) where N = updated files, M = total files in profiles
+ *   - Acceptable: profile enable already O(N*M)
+ *   - Future optimization: cache precedence manifest per profile
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param items_by_profile Hashmap: profile_name → item_array_t* (must not be NULL)
+ * @param opts Update options for verbose flag (must not be NULL)
+ * @param out Output context for verbose logging (can be NULL)
+ * @param out_updated Output flag: true if manifest was updated (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *update_manifest_after_update(
+    git_repository *repo,
+    const hashmap_t *items_by_profile,
+    const cmd_update_options_t *opts,
+    output_ctx_t *out,
+    bool *out_updated
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(items_by_profile);
+    CHECK_NULL(opts);
+    CHECK_NULL(out_updated);
+
+    error_t *err = NULL;
+    state_t *state = NULL;
+    string_array_t *enabled_profiles = NULL;
+
+    /* Initialize output */
+    *out_updated = false;
+
+    /* OPTIMIZATION: Check if ANY profiles enabled (upfront, read-only) */
+    err = state_load(repo, &state);
+    if (err) {
+        if (err->code == ERR_NOT_FOUND) {
+            /* State file doesn't exist yet - no profiles enabled */
+            error_free(err);
+            return NULL;  /* Success - nothing to do */
+        }
+        return error_wrap(err, "Failed to load state for manifest check");
+    }
+
+    err = state_get_profiles(state, &enabled_profiles);
+    if (err) {
+        state_free(state);
+        return error_wrap(err, "Failed to get enabled profiles");
+    }
+
+    if (string_array_size(enabled_profiles) == 0) {
+        /* No profiles enabled - skip manifest update gracefully */
+        string_array_free(enabled_profiles);
+        state_free(state);
+        return NULL;  /* Success - nothing to do */
+    }
+
+    /* Free read-only state, will reopen for update */
+    state_free(state);
+    state = NULL;
+
+    /* Open transaction for manifest updates */
+    err = state_load_for_update(repo, &state);
+    if (err) {
+        string_array_free(enabled_profiles);
+        return error_wrap(err, "Failed to open state transaction for manifest update");
+    }
+
+    /* Context for hashmap iteration */
+    manifest_sync_context_t sync_ctx = {
+        .repo = repo,
+        .state = state,
+        .enabled_profiles = enabled_profiles,
+        .opts = opts,
+        .out = out,
+        .synced_count = 0,
+        .err_out = &err
+    };
+
+    /* Sync all updated profiles */
+    hashmap_foreach(items_by_profile, sync_profile_callback, &sync_ctx);
+
+    /* Commit transaction if no errors */
+    if (!err) {
+        err = state_save(repo, state);
+        if (err) {
+            err = error_wrap(err, "Failed to save manifest updates");
+            goto cleanup;
+        }
+
+        *out_updated = true;
+
+        /* Verbose summary */
+        if (opts->verbose && sync_ctx.synced_count > 0) {
+            output_info(out, "Manifest synced %zu file%s",
+                       sync_ctx.synced_count,
+                       sync_ctx.synced_count == 1 ? "" : "s");
+        }
+    }
+
+cleanup:
+    if (enabled_profiles) {
+        string_array_free(enabled_profiles);
+    }
+    if (state) {
+        state_free(state);  /* Rolls back if err != NULL */
+    }
+
+    return err;
+}
+
+/**
  * Execute profile updates for all profiles
  *
  * PERFORMANCE NOTE: This function creates a single shared worktree and reuses it
@@ -1210,6 +1539,7 @@ static bool update_profile_callback(const char *profile_name, void *value, void 
  * @param config Configuration (can be NULL)
  * @param ws Workspace for metadata cache access (can be NULL)
  * @param total_updated Output: total items updated across all profiles (must not be NULL)
+ * @param out_by_profile Output: hashmap of items grouped by profile (must not be NULL, freed by caller)
  * @return Error or NULL on success
  */
 static error_t *update_execute_for_all_profiles(
@@ -1221,7 +1551,8 @@ static error_t *update_execute_for_all_profiles(
     output_ctx_t *out,
     const dotta_config_t *config,
     workspace_t *ws,
-    size_t *total_updated
+    size_t *total_updated,
+    hashmap_t **out_by_profile
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profiles);
@@ -1229,8 +1560,10 @@ static error_t *update_execute_for_all_profiles(
     CHECK_NULL(opts);
     CHECK_NULL(out);
     CHECK_NULL(total_updated);
+    CHECK_NULL(out_by_profile);
 
     *total_updated = 0;
+    *out_by_profile = NULL;
 
     if (update_count == 0) {
         return NULL;
@@ -1291,8 +1624,15 @@ cleanup:
     if (profile_index) {
         hashmap_free(profile_index, NULL);
     }
+    /* Pass by_profile to caller (for manifest sync), or free on error */
     if (by_profile) {
-        hashmap_free(by_profile, item_array_free);
+        if (err) {
+            /* Error path: free resources */
+            hashmap_free(by_profile, item_array_free);
+        } else {
+            /* Success path: pass to caller */
+            *out_by_profile = by_profile;
+        }
     }
     if (wt) {
         worktree_cleanup(wt);
@@ -2078,8 +2418,9 @@ error_t *cmd_update(
     }
 
     /* Execute profile updates - workspace provides metadata cache for O(1) lookups */
+    hashmap_t *by_profile = NULL;
     err = update_execute_for_all_profiles(repo, profiles, update_items, update_count,
-                                             opts, out, config, ws, &total_updated);
+                                             opts, out, config, ws, &total_updated, &by_profile);
 
     /* Free update_items array (items themselves are owned by workspace) */
     if (update_items) {
@@ -2087,7 +2428,41 @@ error_t *cmd_update(
         update_items = NULL;
     }
     if (err) {
+        if (by_profile) {
+            hashmap_free(by_profile, item_array_free);
+        }
         goto cleanup;
+    }
+
+    /* Update manifest if any profiles enabled
+     *
+     * This maintains the manifest as a Virtual Working Directory - a staging
+     * area between Git and the filesystem. Files are marked DEPLOYED because
+     * UPDATE captures them FROM the filesystem (already at target locations).
+     *
+     * Non-fatal: If manifest update fails, Git commits still succeeded.
+     * User can repair manifest by running 'dotta profile enable <profile>'.
+     */
+    bool manifest_updated = false;
+    error_t *manifest_err = update_manifest_after_update(
+        repo, by_profile, opts, out, &manifest_updated
+    );
+
+    /* Free by_profile hashmap after manifest sync */
+    if (by_profile) {
+        hashmap_free(by_profile, item_array_free);
+        by_profile = NULL;
+    }
+
+    if (manifest_err) {
+        /* Non-fatal: commits succeeded but manifest update failed */
+        output_warning(out, "Failed to update manifest: %s",
+                      error_message(manifest_err));
+        output_info(out, "Files committed to Git successfully");
+        output_hint(out, "Run 'dotta status' to check manifest state");
+        output_hint(out, "Or run 'dotta profile enable <profile>' to repair");
+        error_free(manifest_err);
+        /* Continue to post-update hook and success output */
     }
 
     /* Execute post-update hook */
@@ -2111,6 +2486,18 @@ error_t *cmd_update(
     output_success(out, "Updated %zu item%s across %zu profile%s",
                    total_updated, total_updated == 1 ? "" : "s",
                    profiles->count, profiles->count == 1 ? "" : "s");
+
+    /* Manifest status feedback */
+    output_newline(out);
+    if (manifest_updated) {
+        output_info(out, "Manifest updated (%zu item%s synced)",
+                   total_updated, total_updated == 1 ? "" : "s");
+        output_hint(out, "Files committed from filesystem (marked as DEPLOYED)");
+        output_hint(out, "Run 'dotta status' to verify manifest state");
+    } else {
+        output_info(out, "No enabled profiles - manifest not updated");
+        output_hint(out, "Run 'dotta profile enable <profile>' to activate manifest tracking");
+    }
 
 cleanup:
     /* Free all resources in reverse order */

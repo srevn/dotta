@@ -1197,55 +1197,6 @@ static bool update_profile_callback(const char *profile_name, void *value, void 
 }
 
 /**
- * Context for counting items in hashmap
- */
-typedef struct {
-    size_t count;
-} count_items_context_t;
-
-/**
- * Callback to count total items across all profiles
- */
-static bool count_items_callback(
-    const char *key,
-    void *value,
-    void *user_data
-) {
-    (void)key;
-    item_array_t *items = value;
-    count_items_context_t *ctx = user_data;
-    ctx->count += items->count;
-    return true;
-}
-
-/**
- * Context for flattening items into array
- */
-typedef struct {
-    const workspace_item_t **items;
-    size_t index;
-} flatten_items_context_t;
-
-/**
- * Callback to flatten items from hashmap into array
- */
-static bool flatten_items_callback(
-    const char *key,
-    void *value,
-    void *user_data
-) {
-    (void)key;
-    item_array_t *items = value;
-    flatten_items_context_t *ctx = user_data;
-
-    for (size_t i = 0; i < items->count; i++) {
-        ctx->items[ctx->index++] = items->items[i];
-    }
-
-    return true;
-}
-
-/**
  * Flatten items_by_profile hashmap into single array
  *
  * Converts hashmap<profile → item_array> into flat array of item pointers.
@@ -1265,28 +1216,42 @@ static error_t *flatten_items_to_array(
     CHECK_NULL(out_items);
     CHECK_NULL(out_count);
 
-    /* Count total items */
-    count_items_context_t count_ctx = { .count = 0 };
-    hashmap_foreach(items_by_profile, count_items_callback, &count_ctx);
+    /* First pass: count total items across all profiles */
+    size_t total_count = 0;
+    hashmap_iter_t iter;
+    hashmap_iter_init(&iter, items_by_profile);
+    void *value;
 
-    if (count_ctx.count == 0) {
+    while (hashmap_iter_next(&iter, NULL, &value)) {
+        item_array_t *arr = value;
+        total_count += arr->count;
+    }
+
+    if (total_count == 0) {
         *out_items = NULL;
         *out_count = 0;
         return NULL;
     }
 
-    /* Allocate array */
-    const workspace_item_t **items = calloc(count_ctx.count, sizeof(workspace_item_t *));
+    /* Allocate array for flattened items */
+    const workspace_item_t **items = calloc(total_count, sizeof(workspace_item_t *));
     if (!items) {
         return ERROR(ERR_MEMORY, "Failed to allocate items array");
     }
 
-    /* Fill array */
-    flatten_items_context_t flatten_ctx = { .items = items, .index = 0 };
-    hashmap_foreach(items_by_profile, flatten_items_callback, &flatten_ctx);
+    /* Second pass: collect all items into flat array */
+    size_t idx = 0;
+    hashmap_iter_init(&iter, items_by_profile);
+
+    while (hashmap_iter_next(&iter, NULL, &value)) {
+        item_array_t *arr = value;
+        for (size_t i = 0; i < arr->count; i++) {
+            items[idx++] = arr->items[i];
+        }
+    }
 
     *out_items = items;
-    *out_count = count_ctx.count;
+    *out_count = total_count;
     return NULL;
 }
 

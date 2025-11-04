@@ -292,21 +292,23 @@ static void display_workspace_status(
             size_t all_count = 0;
             const workspace_item_t *all_items = workspace_get_all_diverged(ws, &all_count);
 
-            /* Single allocation for all category pointers (4 categories × all_count slots)
-             * Memory layout: [uncommitted...][undeployed...][new_files...][orphaned...]
+            /* Single allocation for all category pointers (5 categories × all_count slots)
+             * Memory layout: [pending_removal...][uncommitted...][undeployed...][new_files...][orphaned...]
              * This provides cache-friendly contiguous memory with single malloc/free. */
-            const workspace_item_t **categorized = malloc(all_count * 4 * sizeof(workspace_item_t *));
+            const workspace_item_t **categorized = malloc(all_count * 5 * sizeof(workspace_item_t *));
             if (!categorized) {
                 output_error(out, "Failed to allocate memory for status display (%zu items)", all_count);
                 return;
             }
 
             /* Category arrays (pointer arithmetic into single allocation) */
-            const workspace_item_t **uncommitted = categorized;
-            const workspace_item_t **undeployed = categorized + all_count;
-            const workspace_item_t **new_files = categorized + all_count * 2;
-            const workspace_item_t **orphaned = categorized + all_count * 3;
+            const workspace_item_t **pending_removal = categorized;
+            const workspace_item_t **uncommitted = categorized + all_count;
+            const workspace_item_t **undeployed = categorized + all_count * 2;
+            const workspace_item_t **new_files = categorized + all_count * 3;
+            const workspace_item_t **orphaned = categorized + all_count * 4;
 
+            size_t pending_removal_count = 0;
             size_t uncommitted_count = 0;
             size_t undeployed_count = 0;
             size_t new_count = 0;
@@ -315,6 +317,15 @@ static void display_workspace_status(
             for (size_t i = 0; i < all_count; i++) {
                 const workspace_item_t *item = &all_items[i];
 
+                /* Priority 1: Check manifest_status for staging operations
+                 * Files with PENDING_REMOVAL status take precedence over workspace_state
+                 * categorization since they represent explicit staging intent. */
+                if (item->manifest_status == MANIFEST_STATUS_PENDING_REMOVAL) {
+                    pending_removal[pending_removal_count++] = item;
+                    continue;  /* Skip workspace_state categorization */
+                }
+
+                /* Priority 2: Categorize by workspace_state (existing logic) */
                 switch (item->state) {
                     case WORKSPACE_STATE_DEPLOYED:
                         /* Deployed with divergence → uncommitted changes */
@@ -342,7 +353,46 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 1: Uncommitted Changes */
+            /* Section 1: Changes to be removed (staging operations) */
+            if (pending_removal_count > 0) {
+                output_newline(out);
+                char header[256];
+                snprintf(header, sizeof(header), "Changes to be removed (%zu item%s)",
+                         pending_removal_count, pending_removal_count == 1 ? "" : "s");
+                output_printf(out, OUTPUT_NORMAL, "%s%s%s %s%s%s\n",
+                             output_color_code(out, OUTPUT_COLOR_BOLD), header,
+                             output_color_code(out, OUTPUT_COLOR_RESET),
+                             output_color_code(out, OUTPUT_COLOR_DIM),
+                             "(use \"dotta apply\" to remove these files)",
+                             output_color_code(out, OUTPUT_COLOR_RESET));
+                output_newline(out);
+
+                for (size_t i = 0; i < pending_removal_count; i++) {
+                    const workspace_item_t *item = pending_removal[i];
+                    char info[1024];
+
+                    /* Build info string with profile and file status */
+                    if (!item->on_filesystem) {
+                        /* File already deleted by user - note this edge case */
+                        snprintf(info, sizeof(info), "%s %s(from %s, already removed)%s",
+                                item->filesystem_path,
+                                output_color_code(out, OUTPUT_COLOR_DIM),
+                                item->profile,
+                                output_color_code(out, OUTPUT_COLOR_RESET));
+                    } else {
+                        /* File still exists, will be removed on apply */
+                        snprintf(info, sizeof(info), "%s %s(from %s)%s",
+                                item->filesystem_path,
+                                output_color_code(out, OUTPUT_COLOR_DIM),
+                                item->profile,
+                                output_color_code(out, OUTPUT_COLOR_RESET));
+                    }
+
+                    output_item(out, "[pending removal]", OUTPUT_COLOR_RED, info);
+                }
+            }
+
+            /* Section 2: Uncommitted Changes */
             if (uncommitted_count > 0) {
                 output_newline(out);
                 char header[256];
@@ -365,7 +415,7 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 2: Undeployed Files */
+            /* Section 3: Undeployed Files */
             if (undeployed_count > 0) {
                 output_newline(out);
                 char header[256];
@@ -389,7 +439,7 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 3: New Files */
+            /* Section 4: New Files */
             if (new_count > 0) {
                 output_newline(out);
                 char header[256];
@@ -413,7 +463,7 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 4: Issues (orphaned) */
+            /* Section 5: Issues (orphaned) */
             if (orphaned_count > 0) {
                 output_newline(out);
                 char header[256];

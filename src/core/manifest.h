@@ -493,4 +493,96 @@ error_t *manifest_update_for_precedence_change(
     const string_array_t *new_profile_order
 );
 
+/**
+ * Sync manifest from Git diff (bulk operation)
+ *
+ * Updates manifest table based on changes between old_oid and new_oid for a
+ * single profile. This is the core function for updating the manifest after
+ * sync operations (pull, rebase, merge). Uses O(M+D) bulk pattern instead of
+ * O(D×M) per-file operations.
+ *
+ * Called by sync command after:
+ *   - Fast-forward pull (REMOTE_AHEAD case)
+ *   - Divergence resolution (REBASE/MERGE/THEIRS strategies)
+ *
+ * Algorithm:
+ *   Phase 1: Build Context (O(M))
+ *     - Load all enabled profiles
+ *     - Build fresh manifest from current Git state (post-sync)
+ *     - Create hashmap index for O(1) file lookups
+ *     - Build profile→oid map
+ *     - Load or use cached metadata and keymanager
+ *
+ *   Phase 2: Compute Diff (O(D))
+ *     - Lookup old and new trees
+ *     - Generate Git diff between them
+ *
+ *   Phase 3: Process Deltas (O(D))
+ *     - For additions/modifications: sync with PENDING_DEPLOYMENT status
+ *     - For deletions: check for fallbacks, mark PENDING_REMOVAL if none
+ *     - Handle precedence: only sync if profile won the file
+ *
+ * Deletion & Fallback Logic:
+ *   When a file is deleted from profile-A:
+ *     1. Check new precedence manifest (built from post-sync state)
+ *     2. If another profile (profile-B) now wins: update to profile-B (fallback)
+ *     3. If no other profile has it: check current state
+ *     4. If profile-A owns it in state: mark PENDING_REMOVAL
+ *     5. Otherwise: skip (file wasn't ours to begin with)
+ *
+ * Preconditions:
+ *   - state MUST have active transaction (via state_load_for_update)
+ *   - old_oid and new_oid MUST be valid commits for profile_name's branch
+ *   - profile_name MUST be in enabled_profiles
+ *   - Branch HEAD for profile_name MUST point to new_oid (post-sync state)
+ *
+ * Postconditions:
+ *   - Added/modified files marked PENDING_DEPLOYMENT
+ *   - Deleted files with fallbacks updated to new owner, marked PENDING_DEPLOYMENT
+ *   - Deleted files without fallbacks marked PENDING_REMOVAL
+ *   - Files filtered by .dottaignore are skipped (expected behavior)
+ *   - Files won by other profiles are skipped (they'll sync when their changes arrive)
+ *   - Transaction remains open (caller commits)
+ *
+ * Error Conditions:
+ *   - ERR_GIT: Git tree lookup or diff failed
+ *   - ERR_CRYPTO: Encrypted file but key unavailable
+ *   - ERR_STATE: Database operation failed
+ *   - ERR_NOMEM: Memory allocation failed
+ *
+ * Performance: O(M + D) where M = total files in all profiles, D = changed files
+ *   Old implementation (manifest_sync_changes): O(D × M) with repeated manifest builds
+ *   Speedup: ~50-100x for typical workloads (50 changes, 2000 total files)
+ *
+ * Status Semantics:
+ *   All changes marked PENDING_DEPLOYMENT because sync updates Git but doesn't
+ *   deploy to filesystem. User must run 'dotta apply' to actually deploy changes.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param state State with active transaction (must not be NULL)
+ * @param profile_name Profile being synced (must not be NULL)
+ * @param old_oid Old commit before sync (must not be NULL)
+ * @param new_oid New commit after sync (must not be NULL)
+ * @param enabled_profiles All enabled profiles for precedence (must not be NULL)
+ * @param km Keymanager for content hashing (can be NULL, will create if needed)
+ * @param metadata_cache Pre-loaded metadata (can be NULL, will load if needed)
+ * @param out_synced Output: number of files synced (can be NULL)
+ * @param out_removed Output: number of files removed (can be NULL)
+ * @param out_fallbacks Output: number of fallback resolutions (can be NULL)
+ * @return Error or NULL on success
+ */
+error_t *manifest_sync_diff_bulk(
+    git_repository *repo,
+    state_t *state,
+    const char *profile_name,
+    const git_oid *old_oid,
+    const git_oid *new_oid,
+    const string_array_t *enabled_profiles,
+    keymanager_t *km,
+    const hashmap_t *metadata_cache,
+    size_t *out_synced,
+    size_t *out_removed,
+    size_t *out_fallbacks
+);
+
 #endif /* DOTTA_MANIFEST_H */

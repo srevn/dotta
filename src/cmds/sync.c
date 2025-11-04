@@ -15,9 +15,12 @@
 #include "base/gitops.h"
 #include "base/transfer.h"
 #include "core/divergence.h"
+#include "core/manifest.h"
 #include "core/profiles.h"
+#include "core/state.h"
 #include "core/upstream.h"
 #include "core/workspace.h"
+#include "utils/array.h"
 #include "utils/config.h"
 #include "utils/output.h"
 
@@ -172,13 +175,15 @@ static error_t *force_push_branch(
 
 /**
  * Pull branch with fast-forward only
- * Returns true if branch was updated
+ * Returns true if branch was updated, and optionally returns old/new OIDs
  */
 static error_t *pull_branch_ff(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
-    bool *updated
+    bool *updated,
+    git_oid *old_oid,  /* Can be NULL */
+    git_oid *new_oid   /* Can be NULL */
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
@@ -251,6 +256,14 @@ static error_t *pull_branch_ff(
     }
 
     /* git_err == 1 means local IS an ancestor of remote - can fast-forward */
+
+    /* Capture OIDs before updating (if caller wants them) */
+    if (old_oid) {
+        git_oid_cpy(old_oid, local_oid);
+    }
+    if (new_oid) {
+        git_oid_cpy(new_oid, remote_oid);
+    }
 
     /* Perform fast-forward */
     git_reference *updated_ref = NULL;
@@ -423,6 +436,10 @@ static error_t *sync_analyze_phase(
 
 /**
  * Phase 3: Sync branches with remote (push/pull/divergence handling)
+ *
+ * Now includes manifest synchronization when branches are updated via
+ * pull/rebase/merge/reset operations. This maintains the VWD architecture
+ * by keeping the manifest table in sync with Git branches.
  */
 static error_t *sync_push_phase(
     git_repository *repo,
@@ -433,12 +450,22 @@ static error_t *sync_push_phase(
     bool auto_pull,
     sync_divergence_strategy_t diverged_strategy,
     transfer_context_t *xfer,
-    bool confirm_destructive
+    bool confirm_destructive,
+    state_t *state,                           /* For manifest updates */
+    const string_array_t *enabled_profiles,   /* For precedence resolution */
+    workspace_t *ws                           /* For cached resources */
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(results);
     CHECK_NULL(out);
+    CHECK_NULL(state);
+    CHECK_NULL(enabled_profiles);
+    CHECK_NULL(ws);
+
+    /* Extract cached resources from workspace for manifest operations */
+    keymanager_t *km = workspace_get_keymanager(ws);
+    const hashmap_t *metadata_cache = workspace_get_metadata_cache(ws);
 
     output_section(out, "Syncing with remote");
 
@@ -526,7 +553,8 @@ static error_t *sync_push_phase(
                     }
 
                     bool pulled = false;
-                    error_t *err = pull_branch_ff(repo, remote_name, result->profile_name, &pulled);
+                    git_oid old_oid, new_oid;
+                    error_t *err = pull_branch_ff(repo, remote_name, result->profile_name, &pulled, &old_oid, &new_oid);
                     if (err) {
                         result->failed = true;
                         result->error_message = strdup(error_message(err));
@@ -540,10 +568,33 @@ static error_t *sync_push_phase(
                             results->need_pull_count--;
                         }
 
+                        /* Update manifest with changes from pull */
+                        size_t synced = 0, removed = 0, fallbacks = 0;
+                        error_t *manifest_err = manifest_sync_diff_bulk(
+                            repo, state, result->profile_name,
+                            &old_oid, &new_oid, enabled_profiles,
+                            km, metadata_cache,
+                            &synced, &removed, &fallbacks
+                        );
+
+                        if (manifest_err) {
+                            /* Log warning but don't fail - Git succeeded, manifest can be recovered */
+                            output_warning(out, "   Manifest sync failed: %s", error_message(manifest_err));
+                            output_hint(out, "   Run 'dotta status' or 'dotta apply' to resync manifest");
+                            error_free(manifest_err);
+                        }
+
                         char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
-                        output_success(out, "%s: pulled %zu commit%s (fast-forward)",
-                               colored ? colored : result->profile_name,
-                               result->behind, result->behind == 1 ? "" : "s");
+                        if (manifest_err) {
+                            output_success(out, "%s: pulled %zu commit%s (manifest sync failed)",
+                                   colored ? colored : result->profile_name,
+                                   result->behind, result->behind == 1 ? "" : "s");
+                        } else {
+                            output_success(out, "%s: pulled %zu commit%s (%zu staged, %zu removed, %zu fallback%s)",
+                                   colored ? colored : result->profile_name,
+                                   result->behind, result->behind == 1 ? "" : "s",
+                                   synced, removed, fallbacks, fallbacks == 1 ? "" : "s");
+                        }
                         free(colored);
                     } else {
                         /* Already up-to-date - report in verbose mode */
@@ -602,7 +653,8 @@ static error_t *sync_push_phase(
                         }
 
                         /* Perform in-memory rebase (never modifies HEAD) */
-                        err = divergence_resolve(&ctx, NULL);
+                        git_oid new_oid;
+                        err = divergence_resolve(&ctx, &new_oid);
                         if (err) {
                             result->failed = true;
                             result->error_message = strdup(error_message(err));
@@ -664,6 +716,24 @@ static error_t *sync_push_phase(
                                     output_success(out, "   Pushed rebased commits");
                                     result->pushed = true;
                                     results->pushed_count++;
+
+                                    /* Update manifest with changes from rebase */
+                                    size_t synced = 0, removed = 0, fallbacks = 0;
+                                    error_t *manifest_err = manifest_sync_diff_bulk(
+                                        repo, state, result->profile_name,
+                                        &ctx.saved_oid, &new_oid, enabled_profiles,
+                                        km, metadata_cache,
+                                        &synced, &removed, &fallbacks
+                                    );
+
+                                    if (manifest_err) {
+                                        output_warning(out, "   Manifest sync failed: %s", error_message(manifest_err));
+                                        output_hint(out, "   Run 'dotta status' or 'dotta apply' to resync manifest");
+                                        error_free(manifest_err);
+                                    } else if (synced > 0 || removed > 0 || fallbacks > 0) {
+                                        output_info(out, "   Manifest: %zu staged, %zu removed, %zu fallback%s",
+                                                   synced, removed, fallbacks, fallbacks == 1 ? "" : "s");
+                                    }
                                 }
                             }
                         }
@@ -686,7 +756,8 @@ static error_t *sync_push_phase(
                         }
 
                         /* Perform tree-based merge (never modifies HEAD) */
-                        err = divergence_resolve(&ctx, NULL);
+                        git_oid new_oid;
+                        err = divergence_resolve(&ctx, &new_oid);
                         if (err) {
                             result->failed = true;
                             result->error_message = strdup(error_message(err));
@@ -748,6 +819,24 @@ static error_t *sync_push_phase(
                                     output_success(out, "   Pushed merge commit");
                                     result->pushed = true;
                                     results->pushed_count++;
+
+                                    /* Update manifest with changes from merge */
+                                    size_t synced = 0, removed = 0, fallbacks = 0;
+                                    error_t *manifest_err = manifest_sync_diff_bulk(
+                                        repo, state, result->profile_name,
+                                        &ctx.saved_oid, &new_oid, enabled_profiles,
+                                        km, metadata_cache,
+                                        &synced, &removed, &fallbacks
+                                    );
+
+                                    if (manifest_err) {
+                                        output_warning(out, "   Manifest sync failed: %s", error_message(manifest_err));
+                                        output_hint(out, "   Run 'dotta status' or 'dotta apply' to resync manifest");
+                                        error_free(manifest_err);
+                                    } else if (synced > 0 || removed > 0 || fallbacks > 0) {
+                                        output_info(out, "   Manifest: %zu staged, %zu removed, %zu fallback%s",
+                                                   synced, removed, fallbacks, fallbacks == 1 ? "" : "s");
+                                    }
                                 }
                             }
                         }
@@ -844,7 +933,8 @@ static error_t *sync_push_phase(
                         }
 
                         /* Resolve divergence (resets local branch to remote) */
-                        err = divergence_resolve(&ctx, NULL);
+                        git_oid new_oid;
+                        err = divergence_resolve(&ctx, &new_oid);
                         if (err) {
                             result->failed = true;
                             result->error_message = strdup(error_message(err));
@@ -864,6 +954,24 @@ static error_t *sync_push_phase(
                             } else {
                                 output_success(out, "   Reset to remote (local commits discarded)");
                                 /* No push needed - local is now at remote */
+
+                                /* Update manifest with changes from reset */
+                                size_t synced = 0, removed = 0, fallbacks = 0;
+                                error_t *manifest_err = manifest_sync_diff_bulk(
+                                    repo, state, result->profile_name,
+                                    &ctx.saved_oid, &new_oid, enabled_profiles,
+                                    km, metadata_cache,
+                                    &synced, &removed, &fallbacks
+                                );
+
+                                if (manifest_err) {
+                                    output_warning(out, "   Manifest sync failed: %s", error_message(manifest_err));
+                                    output_hint(out, "   Run 'dotta status' or 'dotta apply' to resync manifest");
+                                    error_free(manifest_err);
+                                } else if (synced > 0 || removed > 0 || fallbacks > 0) {
+                                    output_info(out, "   Manifest: %zu staged, %zu removed, %zu fallback%s",
+                                               synced, removed, fallbacks, fallbacks == 1 ? "" : "s");
+                                }
                             }
                         }
                         break;
@@ -1087,11 +1195,12 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         output_newline(out);
     }
 
-    workspace_free(ws);
+    /* NOTE: Keep workspace alive - needed for manifest sync resources */
 
     /* Exit early if dry run */
     if (opts->dry_run) {
         output_info(out, "Dry run: no changes made");
+        workspace_free(ws);
         sync_results_free(results);
         profile_list_free(profiles);
         config_free(config);
@@ -1157,20 +1266,53 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     if (err) {
         transfer_context_free(xfer);
         free(remote_name);
+        workspace_free(ws);
         sync_results_free(results);
         profile_list_free(profiles);
         config_free(config);
         output_free(out);
         return err;
+    }
+
+    /* Open state transaction for manifest updates during sync */
+    state_t *state = NULL;
+    err = state_load_for_update(repo, &state);
+    if (err) {
+        transfer_context_free(xfer);
+        free(remote_name);
+        workspace_free(ws);
+        sync_results_free(results);
+        profile_list_free(profiles);
+        config_free(config);
+        output_free(out);
+        return error_wrap(err, "Failed to open state transaction");
+    }
+
+    /* Build enabled profiles array for manifest operations */
+    string_array_t *enabled_profiles = NULL;
+    err = state_get_profiles(state, &enabled_profiles);
+    if (err) {
+        state_free(state);
+        transfer_context_free(xfer);
+        free(remote_name);
+        workspace_free(ws);
+        sync_results_free(results);
+        profile_list_free(profiles);
+        config_free(config);
+        output_free(out);
+        return error_wrap(err, "Failed to get enabled profiles");
     }
 
     /* Phase 3: Sync with remote (push/pull/divergence handling) */
     err = sync_push_phase(repo, remote_name, results, out, opts->verbose,
                           auto_pull, diverged_strategy, xfer,
-                          config->confirm_destructive);
+                          config->confirm_destructive, state, enabled_profiles, ws);
     if (err) {
+        string_array_free(enabled_profiles);
+        state_free(state);  /* Rolls back transaction on error */
         transfer_context_free(xfer);
         free(remote_name);
+        workspace_free(ws);
         sync_results_free(results);
         profile_list_free(profiles);
         config_free(config);
@@ -1178,6 +1320,25 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         return err;
     }
 
+    /* Commit manifest changes */
+    err = state_save(repo, state);
+    if (err) {
+        string_array_free(enabled_profiles);
+        state_free(state);  /* Rolls back transaction on save failure */
+        transfer_context_free(xfer);
+        free(remote_name);
+        workspace_free(ws);
+        sync_results_free(results);
+        profile_list_free(profiles);
+        config_free(config);
+        output_free(out);
+        return error_wrap(err, "Failed to save manifest changes");
+    }
+
+    /* Cleanup */
+    string_array_free(enabled_profiles);
+    state_free(state);
+    workspace_free(ws);
     transfer_context_free(xfer);
     free(remote_name);
 
@@ -1224,6 +1385,15 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         output_error(out, "%zu authentication failure%s",
                     results->auth_failed_count,
                     results->auth_failed_count == 1 ? "" : "s");
+    }
+
+    /* Provide guidance on next steps if profiles were updated */
+    size_t updated_count = results->pushed_count + (profiles->count - results->need_pull_count - results->diverged_count - results->failed_count - results->up_to_date_count);
+    if (updated_count > 0 && results->failed_count == 0) {
+        output_newline(out);
+        output_info(out, "Manifest updated with changes from sync.");
+        output_hint(out, "   Run 'dotta status' to review staged changes");
+        output_hint(out, "   Run 'dotta apply' to deploy changes to filesystem");
     }
 
     /* Cleanup */

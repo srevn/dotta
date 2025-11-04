@@ -1013,7 +1013,8 @@ error_t *cmd_status(
         .analyze_directories = true,
         .analyze_encryption = true
     };
-    err = workspace_load(repo, profiles, config, &ws_opts, &ws);
+    /* Pass NULL for state - status is read-only, workspace allocates its own state */
+    err = workspace_load(repo, NULL, profiles, config, &ws_opts, &ws);
     if (err) {
         err = error_wrap(err, "Failed to load workspace");
         goto cleanup;

@@ -1107,7 +1107,9 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         .analyze_directories = false,  /* Don't block sync on directory metadata */
         .analyze_encryption = false    /* Encryption checked during deployment, not here */
     };
-    err = workspace_load(repo, profiles, config, &ws_opts, &ws);
+    /* Pass NULL for state - this is read-only validation, not a transactional operation.
+     * State transaction opened later for manifest updates after sync completes. */
+    err = workspace_load(repo, NULL, profiles, config, &ws_opts, &ws);
     if (err) {
         sync_results_free(results);
         profile_list_free(profiles);

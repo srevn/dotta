@@ -1248,7 +1248,8 @@ static error_t *diff_workspace(
         .analyze_encryption = false   /* Not needed for diff */
     };
 
-    err = workspace_load(repo, profiles, config, &ws_opts, &ws);
+    /* Pass NULL for state - diff is read-only, workspace allocates its own state */
+    err = workspace_load(repo, NULL, profiles, config, &ws_opts, &ws);
     if (err) {
         return error_wrap(err, "Failed to load workspace");
     }

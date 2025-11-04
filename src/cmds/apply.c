@@ -1034,6 +1034,9 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
      * The workspace builds the manifest internally during initialization,
      * eliminating redundant manifest building. We extract the manifest
      * immediately after loading for use throughout the command.
+     *
+     * Pass state handle to workspace so it analyzes within our write transaction.
+     * This ensures consistency and eliminates redundant database connections.
      */
     output_print(out, OUTPUT_VERBOSE, "\nLoading workspace...\n");
 
@@ -1045,7 +1048,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         .analyze_directories = false,  /* Not needed for deployment */
         .analyze_encryption = false    /* Not needed for deployment */
     };
-    err = workspace_load(repo, profiles, config, &ws_opts, &ws);
+    err = workspace_load(repo, state, profiles, config, &ws_opts, &ws);
     if (err) {
         err = error_wrap(err, "Failed to load workspace");
         goto cleanup;

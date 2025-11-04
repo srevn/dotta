@@ -130,7 +130,21 @@ typedef struct {
  * that operations like `dotta status -p global` only report divergence for the
  * specified profile, not the entire repository.
  *
+ * State Ownership:
+ * - If state is NULL: Workspace allocates its own state via state_load() and
+ *   owns it (will free it in workspace_free). Use this for read-only operations
+ *   like status and diff.
+ * - If state is non-NULL: Workspace borrows the provided state and does NOT
+ *   free it (caller remains responsible). Use this for transactional operations
+ *   where the command has already opened a write transaction via
+ *   state_load_for_update(). This ensures the workspace analyzes the state
+ *   within the active transaction, not a stale committed snapshot.
+ *
  * @param repo Git repository (must not be NULL)
+ * @param state State handle (can be NULL)
+ *              - NULL: Allocate read-only state internally (workspace owns it)
+ *              - non-NULL: Borrow existing state (caller owns it, typically from
+ *                state_load_for_update for transactional operations)
  * @param profiles Profile list to analyze (must not be NULL)
  * @param config Configuration (for ignore patterns, can be NULL)
  * @param options Analysis options (must not be NULL)
@@ -139,6 +153,7 @@ typedef struct {
  */
 error_t *workspace_load(
     git_repository *repo,
+    state_t *state,
     profile_list_t *profiles,
     const struct dotta_config *config,
     const workspace_load_t *options,

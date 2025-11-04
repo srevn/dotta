@@ -2151,6 +2151,9 @@ error_t *cmd_update(
      * - --include-new flag
      * - config auto_detect_new_files
      * - MODE_DIFF/OWNERSHIP for both files AND directories
+     *
+     * Pass NULL for state - this is read-only analysis phase. The transaction
+     * for manifest updates is opened later in update_manifest_after_update().
      */
     workspace_load_t ws_opts = {
         .analyze_files = true,                              /* Need to see file changes */
@@ -2160,7 +2163,7 @@ error_t *cmd_update(
         .analyze_directories = true,                        /* Detect directory metadata changes */
         .analyze_encryption = true                          /* Detect encryption policy violations */
     };
-    err = workspace_load(repo, profiles, config, &ws_opts, &ws);
+    err = workspace_load(repo, NULL, profiles, config, &ws_opts, &ws);
     if (err) {
         err = error_wrap(err, "Failed to analyze workspace");
         goto cleanup;

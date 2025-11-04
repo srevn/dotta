@@ -64,7 +64,8 @@ struct workspace {
 
     /* State data */
     manifest_t *manifest;            /* Profile state (owned) */
-    state_t *state;                  /* Deployment state (owned) */
+    state_t *state;                  /* Deployment state (owned or borrowed) */
+    bool owns_state;                 /* True if state is owned, false if borrowed */
     profile_list_t *profiles;        /* Selected profiles for this workspace (borrowed) */
     hashmap_t *profile_index;        /* Maps profile_name -> profile_t* (for O(1) lookup) */
 
@@ -1781,6 +1782,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
  */
 error_t *workspace_load(
     git_repository *repo,
+    state_t *state,
     profile_list_t *profiles,
     const dotta_config_t *config,
     const workspace_load_t *options,
@@ -1936,11 +1938,22 @@ error_t *workspace_load(
         }
     }
 
-    /* Load deployment state (must load before building manifest from it) */
-    err = state_load(repo, &ws->state);
-    if (err) {
-        workspace_free(ws);
-        return error_wrap(err, "Failed to load state");
+    /* Load or borrow deployment state */
+    if (state) {
+        /* Borrow caller's state (typically from state_load_for_update).
+         * This ensures workspace analyzes state within the active transaction,
+         * not a stale committed snapshot. Caller retains ownership. */
+        ws->state = state;
+        ws->owns_state = false;
+    } else {
+        /* Allocate our own state (read-only mode for status/diff commands).
+         * Workspace owns this and will free it in workspace_free(). */
+        err = state_load(repo, &ws->state);
+        if (err) {
+            workspace_free(ws);
+            return error_wrap(err, "Failed to load state");
+        }
+        ws->owns_state = true;
     }
 
     /* Build manifest from state (Virtual Working Directory architecture)
@@ -2272,7 +2285,12 @@ void workspace_free(workspace_t *ws) {
 
     /* Free owned state */
     manifest_free(ws->manifest);
-    state_free(ws->state);
+
+    /* Only free state if we own it (allocated via state_load).
+     * If borrowed from caller (state_load_for_update), caller is responsible. */
+    if (ws->owns_state) {
+        state_free(ws->state);
+    }
 
     free(ws);
 }

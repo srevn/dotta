@@ -754,6 +754,68 @@ static error_t *apply_update_deployment_status(
                     deploy_result->deployed_count == 1 ? "" : "s");
     }
 
+    /* Update status for skipped files based on skip reason
+     *
+     * Files skipped with reason "unchanged" were verified by workspace to match
+     * Git content (full comparison including decryption). These are semantically
+     * deployed and should transition to DEPLOYED status.
+     *
+     * Files skipped with reason "exists" were NOT verified (--skip-existing flag),
+     * so their status remains PENDING_DEPLOYMENT until actually deployed or verified.
+     */
+    if (deploy_result->skipped && deploy_result->skipped_count > 0) {
+        /* Defensive check: ensure parallel arrays are synchronized */
+        if (string_array_size(deploy_result->skipped) !=
+            string_array_size(deploy_result->skipped_reasons)) {
+            return ERROR(ERR_INTERNAL,
+                        "Deploy result corruption: skipped arrays misaligned (%zu paths vs %zu reasons)",
+                        string_array_size(deploy_result->skipped),
+                        string_array_size(deploy_result->skipped_reasons));
+        }
+
+        size_t unchanged_count = 0;
+
+        for (size_t i = 0; i < string_array_size(deploy_result->skipped); i++) {
+            const char *path = string_array_get(deploy_result->skipped, i);
+            const char *reason = string_array_get(deploy_result->skipped_reasons, i);
+
+            if (strcmp(reason, "unchanged") == 0) {
+                /* File is already on filesystem with correct content.
+                 * Workspace verified content matches Git (full comparison including decryption).
+                 * Transition: PENDING_DEPLOYMENT → DEPLOYED */
+                err = state_update_entry_status(state, path, MANIFEST_STATUS_DEPLOYED);
+                if (err) {
+                    return error_wrap(err, "Failed to update status for '%s'", path);
+                }
+
+                /* Update deployed_at timestamp to reflect verification */
+                state_file_entry_t *entry = NULL;
+                err = state_get_file(state, path, &entry);
+                if (err) {
+                    return error_wrap(err, "Failed to get entry for '%s'", path);
+                }
+
+                entry->deployed_at = now;
+                err = state_update_entry(state, entry);
+                state_free_entry(entry);
+
+                if (err) {
+                    return error_wrap(err, "Failed to update timestamp for '%s'", path);
+                }
+
+                unchanged_count++;
+            }
+            /* Skip reason "exists": Leave as PENDING_DEPLOYMENT (not verified, status unknown) */
+        }
+
+        if (unchanged_count > 0) {
+            output_print(out, OUTPUT_VERBOSE,
+                        "  Updated %zu skipped file%s to DEPLOYED status (unchanged)\n",
+                        unchanged_count,
+                        unchanged_count == 1 ? "" : "s");
+        }
+    }
+
     /* Files in deploy_result->failed remain PENDING_DEPLOYMENT (retry later) */
     if (deploy_result->failed && string_array_size(deploy_result->failed) > 0) {
         size_t failed_count = string_array_size(deploy_result->failed);

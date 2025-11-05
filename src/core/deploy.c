@@ -635,12 +635,13 @@ error_t *deploy_execute(
 
     result->deployed = string_array_create();
     result->skipped = string_array_create();
+    result->skipped_reasons = string_array_create();
     result->failed = string_array_create();
     result->deployed_count = 0;
     result->skipped_count = 0;
     result->error_message = NULL;
 
-    if (!result->deployed || !result->skipped || !result->failed) {
+    if (!result->deployed || !result->skipped || !result->skipped_reasons || !result->failed) {
         deploy_result_free(result);
         return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
     }
@@ -708,8 +709,9 @@ error_t *deploy_execute(
         }
 
         if (should_skip) {
-            /* Record skip */
+            /* Record skip with reason (parallel arrays) */
             string_array_push(result->skipped, entry->filesystem_path);
+            string_array_push(result->skipped_reasons, skip_reason);
             result->skipped_count++;
             if (opts->verbose) {
                 printf("Skipped: %s (%s)\n", entry->filesystem_path, skip_reason);
@@ -772,6 +774,7 @@ void deploy_result_free(deploy_result_t *result) {
 
     string_array_free(result->deployed);
     string_array_free(result->skipped);
+    string_array_free(result->skipped_reasons);
     string_array_free(result->failed);
     free(result->error_message);
     free(result);

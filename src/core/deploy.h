@@ -68,6 +68,7 @@ typedef struct {
     size_t skipped_count;        /* Skipped files */
     string_array_t *deployed;    /* List of deployed files */
     string_array_t *skipped;     /* List of skipped files */
+    string_array_t *skipped_reasons;  /* Parallel array: skip reasons ("unchanged" | "exists") */
     string_array_t *failed;      /* List of failed files */
     char *error_message;         /* Error message if deployment failed */
 } deploy_result_t;

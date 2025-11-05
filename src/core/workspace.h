@@ -258,6 +258,46 @@ error_t *check_item_metadata_divergence(
 );
 
 /**
+ * Analyze if a file from a profile matches filesystem reality
+ *
+ * Lightweight analysis function that determines the appropriate manifest status
+ * for a single file without requiring a full workspace build. This is used by
+ * manifest_enable_profile() to set intelligent status values based on actual
+ * filesystem state rather than blindly marking everything as pending deployment.
+ *
+ * The function performs comprehensive reality analysis:
+ * - Checks if file exists on filesystem
+ * - Verifies type compatibility (regular file vs symlink)
+ * - Compares content hashes (with transparent decryption)
+ * - Checks Git executable bit (always, even without metadata)
+ * - Checks full metadata if available (mode + ownership)
+ *
+ * Returns DEPLOYED if everything matches, PENDING_DEPLOYMENT otherwise.
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param entry Tree entry from Git (must not be NULL)
+ * @param filesystem_path Target path on filesystem (must not be NULL)
+ * @param storage_path Path in profile, e.g., "home/.bashrc" (must not be NULL)
+ * @param profile_name Profile name for encryption key derivation (must not be NULL)
+ * @param git_oid Git commit OID (40-char hex, for reference, must not be NULL)
+ * @param metadata Merged metadata (can be NULL for old profiles)
+ * @param km Keymanager for content hashing (can be NULL if no encryption)
+ * @param out_status Output: DEPLOYED or PENDING_DEPLOYMENT (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *analyze_file_for_manifest_status(
+    git_repository *repo,
+    const git_tree_entry *entry,
+    const char *filesystem_path,
+    const char *storage_path,
+    const char *profile_name,
+    const char *git_oid,
+    const metadata_t *metadata,
+    keymanager_t *km,
+    manifest_status_t *out_status
+);
+
+/**
  * Get the repository associated with the workspace
  *
  * Returns borrowed reference to the git_repository that the workspace

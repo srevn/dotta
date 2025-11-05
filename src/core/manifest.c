@@ -23,6 +23,7 @@
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
+#include "core/workspace.h"
 #include "infra/content.h"
 #include "infra/path.h"
 #include "utils/array.h"
@@ -539,6 +540,12 @@ error_t *manifest_enable_profile(
     }
 
     /* 6. Sync entries owned by this profile (highest precedence) */
+
+    /* Track counts for user feedback */
+    size_t total_files = 0;
+    size_t already_deployed = 0;
+    size_t needs_deployment = 0;
+
     for (size_t i = 0; i < manifest->count; i++) {
         file_entry_t *entry = &manifest->entries[i];
 
@@ -547,13 +554,58 @@ error_t *manifest_enable_profile(
             continue;
         }
 
-        /* Sync to state with PENDING_DEPLOYMENT status */
-        err = sync_entry_to_state(
-            repo, state, entry, head_oid_str, metadata,
-            MANIFEST_STATUS_PENDING_DEPLOYMENT, km, NULL
+        total_files++;
+
+        /* Analyze filesystem reality to determine intelligent status */
+        manifest_status_t status = MANIFEST_STATUS_PENDING_DEPLOYMENT;
+
+        err = analyze_file_for_manifest_status(
+            repo,
+            entry->entry,              /* git_tree_entry* */
+            entry->filesystem_path,
+            entry->storage_path,
+            profile_name,
+            head_oid_str,
+            metadata,
+            km,
+            &status                    /* Output: DEPLOYED or PENDING_DEPLOYMENT */
         );
         if (err) {
             goto cleanup;
+        }
+
+        /* Track counts for summary */
+        if (status == MANIFEST_STATUS_DEPLOYED) {
+            already_deployed++;
+        } else {
+            needs_deployment++;
+        }
+
+        /* Sync to state with intelligent status */
+        err = sync_entry_to_state(
+            repo, state, entry, head_oid_str, metadata,
+            status, km, NULL
+        );
+        if (err) {
+            goto cleanup;
+        }
+    }
+
+    /* Display informative summary */
+    if (total_files > 0) {
+        printf("Analyzing %s profile...\n", profile_name);
+        printf("  %zu files found:\n", total_files);
+        if (already_deployed > 0) {
+            printf("    - %zu already deployed and correct\n", already_deployed);
+        }
+        if (needs_deployment > 0) {
+            printf("    - %zu need deployment\n", needs_deployment);
+        }
+
+        if (needs_deployment > 0) {
+            printf("Staged %zu files for deployment.\n", needs_deployment);
+        } else {
+            printf("All files already deployed.\n");
         }
     }
 

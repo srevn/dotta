@@ -849,6 +849,17 @@ static error_t *auto_enable_and_sync_profile(
         goto cleanup;
     }
 
+    /* STEP 6.5: Sync tracked directories
+     *
+     * Completes the Virtual Working Directory (VWD) by syncing directory
+     * tracking for all enabled profiles. This ensures the newly-enabled
+     * profile's tracked directories are included in the state. */
+    err = manifest_sync_directories(repo, state, enabled_profiles);
+    if (err) {
+        err = error_wrap(err, "Failed to sync tracked directories");
+        goto cleanup;
+    }
+
     /* STEP 7: Persist updated enabled profiles */
     size_t profile_count = string_array_size(enabled_profiles);
     profile_names = malloc(profile_count * sizeof(char *));

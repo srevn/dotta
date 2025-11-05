@@ -499,4 +499,53 @@ error_t *manifest_sync_diff(
     size_t *out_fallbacks
 );
 
+/**
+ * Sync tracked directories from enabled profiles
+ *
+ * Rebuilds the tracked_directories table from profile metadata.
+ * Part of the Virtual Working Directory (VWD) consistency model.
+ *
+ * Called by profile operations (enable/disable/reorder) to keep directory
+ * tracking synchronized with the enabled profile set.
+ *
+ * Unlike files (which have lifecycle states: pending/deployed/removal),
+ * directories are simply tracked for profile attribution and metadata
+ * preservation. This function uses a rebuild pattern (clear + repopulate)
+ * rather than incremental updates.
+ *
+ * Algorithm:
+ *   1. Clear all tracked directories
+ *   2. For each enabled profile:
+ *      a. Load metadata from Git (skip if not found)
+ *      b. Extract directories from metadata
+ *      c. Add to state with profile attribution
+ *   3. All within caller's active transaction
+ *
+ * Preconditions:
+ *   - state MUST have active transaction (via state_load_for_update)
+ *   - enabled_profiles MUST be current enabled set
+ *
+ * Postconditions:
+ *   - tracked_directories table reflects enabled_profiles
+ *   - Transaction remains open (caller commits)
+ *   - Missing metadata handled gracefully (not an error)
+ *
+ * Error Conditions:
+ *   - ERR_GIT: Git operation failed
+ *   - ERR_STATE: Database operation failed
+ *   - ERR_NOMEM: Memory allocation failed
+ *
+ * Performance: O(D) where D = total directories (typically < 50)
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param state State with active transaction (must not be NULL)
+ * @param enabled_profiles Current enabled profiles (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *manifest_sync_directories(
+    git_repository *repo,
+    state_t *state,
+    const string_array_t *enabled_profiles
+);
+
 #endif /* DOTTA_MANIFEST_H */

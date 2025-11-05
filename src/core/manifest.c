@@ -494,6 +494,12 @@ error_t *manifest_enable_profile(
         }
     }
 
+    /* 7. Sync tracked directories */
+    err = manifest_sync_directories(repo, state, enabled_profiles);
+    if (err) {
+        goto cleanup;
+    }
+
 cleanup:
     if (profiles) profile_list_free(profiles);
     if (km) keymanager_free(km);
@@ -613,6 +619,12 @@ error_t *manifest_disable_profile(
                 goto cleanup;
             }
         }
+    }
+
+    /* 4. Sync tracked directories */
+    err = manifest_sync_directories(repo, state, remaining_enabled);
+    if (err) {
+        goto cleanup;
     }
 
 cleanup:
@@ -891,6 +903,18 @@ error_t *manifest_rebuild(
         }
     }
 
+    /* 3. Sync tracked directories (final consistency check)
+     *
+     * Note: manifest_enable_profile() already syncs directories during each
+     * iteration above. This final sync is redundant but ensures correctness
+     * as a defensive measure. Since rebuild is a rare recovery operation and
+     * directory sync is fast (typically < 50 directories), the overhead is
+     * acceptable. */
+    err = manifest_sync_directories(repo, state, enabled_profiles);
+    if (err) {
+        return error_wrap(err, "Failed to sync directories during rebuild");
+    }
+
     return NULL;
 }
 
@@ -1044,6 +1068,12 @@ error_t *manifest_reorder_profiles(
                 goto cleanup;
             }
         }
+    }
+
+    /* 7. Sync tracked directories with new profile order */
+    err = manifest_sync_directories(repo, state, new_profile_order);
+    if (err) {
+        goto cleanup;
     }
 
 cleanup:
@@ -1915,4 +1945,120 @@ cleanup:
     if (profiles) profile_list_free(profiles);
 
     return err;
+}
+
+/**
+ * Sync tracked directories from enabled profiles
+ *
+ * Rebuilds the tracked_directories table from metadata.
+ * Called after profile enable/disable/reorder to maintain directory tracking.
+ *
+ * This is part of the Virtual Working Directory (VWD) consistency model.
+ * While files in the manifest have lifecycle states (pending/deployed/removal),
+ * directories are simply tracked for profile attribution and metadata preservation.
+ *
+ * Algorithm:
+ *   1. Clear all tracked directories (idempotent start)
+ *   2. For each enabled profile:
+ *      a. Load metadata from Git (or skip if doesn't exist)
+ *      b. Extract directories via metadata_get_items_by_kind()
+ *      c. Add to state via state_add_directory() with profile attribution
+ *   3. All within caller's active transaction
+ *
+ * Pattern: Rebuild (not incremental)
+ *   - Directories have no lifecycle states to preserve
+ *   - Clear + repopulate is simple, correct, and fast
+ *   - Already idempotent via INSERT OR REPLACE
+ *
+ * Preconditions:
+ *   - state MUST have active transaction (via state_load_for_update)
+ *   - enabled_profiles MUST be current enabled set
+ *
+ * Postconditions:
+ *   - tracked_directories table reflects enabled_profiles
+ *   - Transaction remains open (caller commits)
+ *   - Missing metadata handled gracefully (not an error)
+ *
+ * Performance: O(D) where D = total directories across enabled profiles
+ *              (typically < 50 even for large configs)
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param state State with active transaction (must not be NULL)
+ * @param enabled_profiles Current enabled profiles (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *manifest_sync_directories(
+    git_repository *repo,
+    state_t *state,
+    const string_array_t *enabled_profiles
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(state);
+    CHECK_NULL(enabled_profiles);
+
+    error_t *err = NULL;
+
+    /* 1. Clear all tracked directories */
+    err = state_clear_directories(state);
+    if (err) {
+        return error_wrap(err, "Failed to clear tracked directories");
+    }
+
+    /* 2. Rebuild from each enabled profile */
+    for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
+        const char *profile_name = string_array_get(enabled_profiles, i);
+        metadata_t *metadata = NULL;
+
+        /* Load metadata (may not exist for old profiles - gracefully skip) */
+        err = metadata_load_from_branch(repo, profile_name, &metadata);
+        if (err) {
+            if (err->code == ERR_NOT_FOUND) {
+                /* No metadata file - old profile or no directories tracked */
+                error_free(err);
+                err = NULL;
+                continue;
+            }
+            /* Other error - fatal */
+            return error_wrap(err, "Failed to load metadata for profile '%s'", profile_name);
+        }
+
+        /* Extract directories from metadata */
+        size_t dir_count = 0;
+        const metadata_item_t **directories =
+            metadata_get_items_by_kind(metadata, METADATA_ITEM_DIRECTORY, &dir_count);
+
+        /* Add each directory to state with profile attribution */
+        for (size_t j = 0; j < dir_count; j++) {
+            state_directory_entry_t *state_dir = NULL;
+
+            err = state_directory_entry_create_from_metadata(
+                directories[j],
+                profile_name,  /* Profile attribution */
+                &state_dir
+            );
+
+            if (err) {
+                free(directories);
+                metadata_free(metadata);
+                return error_wrap(err, "Failed to create state directory entry for '%s'",
+                                directories[j]->key);
+            }
+
+            err = state_add_directory(state, state_dir);
+            state_free_directory_entry(state_dir);
+
+            if (err) {
+                free(directories);
+                metadata_free(metadata);
+                return error_wrap(err, "Failed to add directory '%s' to state",
+                                directories[j]->key);
+            }
+        }
+
+        /* Free the pointer array (items themselves are owned by metadata) */
+        free(directories);
+        metadata_free(metadata);
+    }
+
+    return NULL;
 }

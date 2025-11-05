@@ -1617,7 +1617,17 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             goto cleanup;
         }
 
-        /* Sync tracked directories to state (unchanged from old logic) */
+        /* Sync tracked directories to state (defensive refresh)
+         *
+         * Note: The manifest layer (manifest_enable_profile, manifest_disable_profile,
+         * etc.) is the primary authority for directory syncing and should keep tracked
+         * directories synchronized with enabled profiles. This refresh serves as a
+         * defensive measure to ensure consistency in case manifest operations were
+         * incomplete or state was manually modified.
+         *
+         * The operation is idempotent (state_add_directory uses INSERT OR REPLACE),
+         * so redundant syncing is safe. Performance impact is negligible since there
+         * are typically fewer than 50 tracked directories even in large configurations. */
         output_print(out, OUTPUT_VERBOSE, "\nSyncing tracked directories to state...\n");
 
         err = state_clear_directories(state);

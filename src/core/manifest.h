@@ -328,10 +328,18 @@ error_t *manifest_remove_files(
  * Nuclear option: Clear and rebuild entire manifest from Git.
  * Used for repair/recovery operations only.
  *
- * Algorithm:
+ * Algorithm (optimized O(M) approach):
  *   1. Clear all file entries from manifest
- *   2. For each enabled profile:
- *      - Call manifest_sync_profile()
+ *   2. Build manifest ONCE from all enabled profiles (precedence oracle)
+ *   3. Build profile→oid map for git_oid field
+ *   4. Load merged metadata from all profiles
+ *   5. Create keymanager for content hashing
+ *   6. Sync ALL entries from manifest to state (single pass, no filtering)
+ *   7. Sync tracked directories
+ *
+ * Key optimization: Builds manifest once and syncs all entries directly,
+ * rather than calling manifest_enable_profile() N times (which would rebuild
+ * the manifest N times). This reduces complexity from O(N × M) to O(M).
  *
  * WARNING: This is a destructive operation. All status tracking is lost.
  * All entries reset to PENDING_DEPLOYMENT.
@@ -352,7 +360,7 @@ error_t *manifest_remove_files(
  *   - ERR_CRYPTO: Encrypted file but key unavailable
  *   - ERR_NOMEM: Memory allocation failed
  *
- * Performance: O(N) where N = total files across all enabled profiles
+ * Performance: O(M) where M = total files across all enabled profiles
  *
  * @param repo Git repository
  * @param state State handle (with active transaction)

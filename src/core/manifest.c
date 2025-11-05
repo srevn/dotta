@@ -72,6 +72,69 @@ static error_t *get_branch_head_oid(
 }
 
 /**
+ * Build hashmap of profile names to their current HEAD oids
+ *
+ * Helper for bulk operations that need git_oid for multiple profiles.
+ * Creates a map: profile_name (string) -> git_oid (40-char hex string).
+ *
+ * @param repo Git repository
+ * @param profiles Profile list (with loaded references)
+ * @param out_map Output hashmap (caller must free with hashmap_free(map, free))
+ * @return Error or NULL on success
+ */
+static error_t *build_profile_oid_map(
+    git_repository *repo,
+    const profile_list_t *profiles,
+    hashmap_t **out_map
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(profiles);
+    CHECK_NULL(out_map);
+
+    error_t *err = NULL;
+
+    /* Create hashmap */
+    hashmap_t *map = hashmap_create(profiles->count);
+    if (!map) {
+        return ERROR(ERR_MEMORY, "Failed to create profile oid map");
+    }
+
+    /* Get HEAD oid for each profile */
+    for (size_t i = 0; i < profiles->count; i++) {
+        const profile_t *profile = &profiles->profiles[i];
+        git_oid oid;
+
+        /* Get branch HEAD */
+        err = get_branch_head_oid(repo, profile->name, &oid);
+        if (err) {
+            hashmap_free(map, free);
+            return error_wrap(err, "Failed to get HEAD for profile '%s'",
+                            profile->name);
+        }
+
+        /* Convert to hex string */
+        char *oid_str = malloc(GIT_OID_HEXSZ + 1);
+        if (!oid_str) {
+            hashmap_free(map, free);
+            return ERROR(ERR_MEMORY, "Failed to allocate oid string");
+        }
+
+        git_oid_tostr(oid_str, GIT_OID_HEXSZ + 1, &oid);
+
+        /* Store in map */
+        err = hashmap_set(map, profile->name, oid_str);
+        if (err) {
+            free(oid_str);
+            hashmap_free(map, free);
+            return error_wrap(err, "Failed to add oid to map");
+        }
+    }
+
+    *out_map = map;
+    return NULL;
+}
+
+/**
  * Convert mode_t to string
  */
 static char *mode_to_string(mode_t mode) {
@@ -871,9 +934,24 @@ cleanup:
 /**
  * Rebuild manifest from scratch
  *
- * Nuclear option for recovery:
- *   1. Clear all file entries
- *   2. Sync each enabled profile
+ * Nuclear option for recovery operations. Clears all manifest state and
+ * rebuilds from Git by building a complete manifest once and syncing all
+ * entries.
+ *
+ * Algorithm (optimized O(M) approach):
+ *   1. Clear all file entries from state
+ *   2. Build manifest ONCE from all enabled profiles (precedence oracle)
+ *   3. Build profile→oid map for git_oid field
+ *   4. Load merged metadata from all profiles
+ *   5. Create keymanager for content hashing
+ *   6. Sync ALL entries from manifest to state (single pass, no filtering)
+ *   7. Sync tracked directories
+ *
+ * Performance: O(M) where M = total files across all enabled profiles
+ *
+ * Previous implementation: O(N × M) - called manifest_enable_profile() N times,
+ * each rebuilding the full manifest. This version builds once and syncs all
+ * entries directly, following the pattern from manifest_reorder_profiles().
  */
 error_t *manifest_rebuild(
     git_repository *repo,
@@ -885,6 +963,12 @@ error_t *manifest_rebuild(
     CHECK_NULL(enabled_profiles);
 
     error_t *err = NULL;
+    manifest_t *manifest = NULL;
+    profile_list_t *profiles = NULL;
+    hashmap_t *profile_oids = NULL;
+    metadata_t *metadata = NULL;
+    keymanager_t *km = NULL;
+    dotta_config_t *config = NULL;
 
     /* 1. Clear all file entries */
     err = state_clear_files(state);
@@ -892,30 +976,87 @@ error_t *manifest_rebuild(
         return error_wrap(err, "Failed to clear manifest for rebuild");
     }
 
-    /* 2. Sync each enabled profile */
-    for (size_t i = 0; i < enabled_profiles->count; i++) {
-        const char *profile_name = enabled_profiles->items[i];
+    /* Early return if no profiles (only sync directories which will be empty) */
+    if (enabled_profiles->count == 0) {
+        return manifest_sync_directories(repo, state, enabled_profiles);
+    }
 
-        err = manifest_enable_profile(repo, state, profile_name, enabled_profiles);
+    /* 2. Build manifest ONCE from all enabled profiles (precedence oracle) */
+    err = build_manifest(repo, enabled_profiles, &manifest, &profiles);
+    if (err) {
+        return error_wrap(err, "Failed to build manifest for rebuild");
+    }
+
+    /* 3. Build profile→oid map for git_oid field */
+    err = build_profile_oid_map(repo, profiles, &profile_oids);
+    if (err) {
+        err = error_wrap(err, "Failed to build profile oid map");
+        goto cleanup;
+    }
+
+    /* 4. Load merged metadata from all profiles */
+    err = metadata_load_from_profiles(repo, enabled_profiles, &metadata);
+    if (err) {
+        /* Metadata may not exist for old profiles - continue with NULL */
+        if (err->code != ERR_NOT_FOUND) {
+            goto cleanup;
+        }
+        error_free(err);
+        err = NULL;
+    }
+
+    /* 5. Create keymanager for content hashing */
+    err = config_load(NULL, &config);
+    if (err) {
+        goto cleanup;
+    }
+
+    err = keymanager_create(config, &km);
+    if (err) {
+        goto cleanup;
+    }
+
+    /* 6. Sync ALL entries from manifest to state (single pass, no filtering)
+     *
+     * Key difference from manifest_enable_profile: We sync ALL entries because
+     * the state is empty (cleared in step 1). No filtering needed - every file
+     * in the manifest belongs in the rebuilt state. */
+    for (size_t i = 0; i < manifest->count; i++) {
+        file_entry_t *entry = &manifest->entries[i];
+
+        /* Get git_oid for this entry's source profile */
+        const char *git_oid = hashmap_get(profile_oids, entry->source_profile->name);
+        if (!git_oid) {
+            err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'",
+                       entry->source_profile->name);
+            goto cleanup;
+        }
+
+        /* Sync to state with PENDING_DEPLOYMENT status */
+        err = sync_entry_to_state(
+            repo, state, entry, git_oid, metadata,
+            MANIFEST_STATUS_PENDING_DEPLOYMENT, km, NULL
+        );
         if (err) {
-            return error_wrap(err, "Failed to sync profile '%s' during rebuild",
-                            profile_name);
+            goto cleanup;
         }
     }
 
-    /* 3. Sync tracked directories (final consistency check)
-     *
-     * Note: manifest_enable_profile() already syncs directories during each
-     * iteration above. This final sync is redundant but ensures correctness
-     * as a defensive measure. Since rebuild is a rare recovery operation and
-     * directory sync is fast (typically < 50 directories), the overhead is
-     * acceptable. */
+    /* 7. Sync tracked directories */
     err = manifest_sync_directories(repo, state, enabled_profiles);
     if (err) {
-        return error_wrap(err, "Failed to sync directories during rebuild");
+        goto cleanup;
     }
 
-    return NULL;
+cleanup:
+    if (profile_oids) hashmap_free(profile_oids, free);  /* Free OID strings */
+    if (profiles) profile_list_free(profiles);
+    if (km) keymanager_free(km);
+    if (config) config_free(config);
+    if (metadata) metadata_free(metadata);
+    if (manifest) manifest_free(manifest);
+
+    return err;
 }
 
 /**
@@ -1086,69 +1227,6 @@ cleanup:
     if (new_manifest) manifest_free(new_manifest);
 
     return err;
-}
-
-/**
- * Build hashmap of profile names to their current HEAD oids
- *
- * Helper for bulk operations that need git_oid for multiple profiles.
- * Creates a map: profile_name (string) -> git_oid (40-char hex string).
- *
- * @param repo Git repository
- * @param profiles Profile list (with loaded references)
- * @param out_map Output hashmap (caller must free with hashmap_free(map, free))
- * @return Error or NULL on success
- */
-static error_t *build_profile_oid_map(
-    git_repository *repo,
-    const profile_list_t *profiles,
-    hashmap_t **out_map
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(profiles);
-    CHECK_NULL(out_map);
-
-    error_t *err = NULL;
-
-    /* Create hashmap */
-    hashmap_t *map = hashmap_create(profiles->count);
-    if (!map) {
-        return ERROR(ERR_MEMORY, "Failed to create profile oid map");
-    }
-
-    /* Get HEAD oid for each profile */
-    for (size_t i = 0; i < profiles->count; i++) {
-        const profile_t *profile = &profiles->profiles[i];
-        git_oid oid;
-
-        /* Get branch HEAD */
-        err = get_branch_head_oid(repo, profile->name, &oid);
-        if (err) {
-            hashmap_free(map, free);
-            return error_wrap(err, "Failed to get HEAD for profile '%s'",
-                            profile->name);
-        }
-
-        /* Convert to hex string */
-        char *oid_str = malloc(GIT_OID_HEXSZ + 1);
-        if (!oid_str) {
-            hashmap_free(map, free);
-            return ERROR(ERR_MEMORY, "Failed to allocate oid string");
-        }
-
-        git_oid_tostr(oid_str, GIT_OID_HEXSZ + 1, &oid);
-
-        /* Store in map */
-        err = hashmap_set(map, profile->name, oid_str);
-        if (err) {
-            free(oid_str);
-            hashmap_free(map, free);
-            return error_wrap(err, "Failed to add oid to map");
-        }
-    }
-
-    *out_map = map;
-    return NULL;
 }
 
 /**

@@ -85,6 +85,90 @@ static char *mode_to_string(mode_t mode) {
 }
 
 /**
+ * Extract file metadata from Git tree entry
+ *
+ * Authoritative extraction of file type and mode from Git tree entry.
+ * This implements the VWD principle: Git is the single source of truth.
+ *
+ * File TYPE is always derived from Git filemode (authoritative).
+ * File MODE is extracted as fallback for when metadata is unavailable.
+ *
+ * Metadata mode can override the returned mode, but NOT the type.
+ *
+ * Algorithm:
+ *   1. Extract git_filemode via git_tree_entry_filemode()
+ *   2. Map to state_file_type_t (blob → regular, blob_executable → executable, link → symlink)
+ *   3. Extract permission bits (0755, 0644, 0777)
+ *
+ * Error Handling:
+ *   - GIT_FILEMODE_TREE: Returns ERR_INTERNAL (directories never in manifest)
+ *   - Unknown filemode: Returns ERR_INTERNAL (defensive programming)
+ *   - NULL inputs: Returns ERR_INVALID_ARG via CHECK_NULL
+ *
+ * @param entry Git tree entry (must not be NULL)
+ * @param out_type File type (must not be NULL)
+ * @param out_mode Permission mode (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *extract_file_metadata_from_tree_entry(
+    const git_tree_entry *entry,
+    state_file_type_t *out_type,
+    mode_t *out_mode
+) {
+    CHECK_NULL(entry);
+    CHECK_NULL(out_type);
+    CHECK_NULL(out_mode);
+
+    /* Extract authoritative filemode from Git tree entry */
+    git_filemode_t filemode = git_tree_entry_filemode(entry);
+
+    /* Map Git filemode to state file type and mode
+     *
+     * This is the ONLY place where Git filemode is converted to state type.
+     * Precedence: Git is authoritative for TYPE, metadata can override MODE. */
+    state_file_type_t type;
+    mode_t mode;
+
+    switch (filemode) {
+        case GIT_FILEMODE_BLOB:
+            /* Regular non-executable file */
+            type = STATE_FILE_REGULAR;
+            mode = 0644;
+            break;
+
+        case GIT_FILEMODE_BLOB_EXECUTABLE:
+            /* Executable file */
+            type = STATE_FILE_EXECUTABLE;
+            mode = 0755;
+            break;
+
+        case GIT_FILEMODE_LINK:
+            /* Symbolic link */
+            type = STATE_FILE_SYMLINK;
+            mode = 0777;  /* Conventional, not actually used by filesystem */
+            break;
+
+        case GIT_FILEMODE_TREE:
+            /* Directories should never appear in manifest entries.
+             * File entries are extracted from tree walks which skip directories.
+             * If we see this, it indicates a bug in the tree traversal logic. */
+            return ERROR(ERR_INTERNAL,
+                "Unexpected directory in manifest tree entry (bug in tree traversal)");
+
+        default:
+            /* Unknown/unsupported filemode - defensive programming.
+             * Git may add new filemodes in future versions. Fail explicitly
+             * rather than silently mishandling. */
+            return ERROR(ERR_INTERNAL,
+                "Unknown or unsupported git filemode: 0%o", filemode);
+    }
+
+    *out_type = type;
+    *out_mode = mode;
+    return NULL;
+}
+
+/**
  * Build manifest from profiles
  *
  * This is the "precedence oracle" pattern - we use profile_build_manifest()
@@ -246,12 +330,29 @@ static error_t *sync_entry_to_state(
         }
     }
 
-    /* 3. Build mode string */
+    /* 3. Extract file type and mode from Git tree entry (authoritative source) */
+    state_file_type_t file_type;
+    mode_t git_mode;
+
+    err = extract_file_metadata_from_tree_entry(
+        manifest_entry->entry,
+        &file_type,
+        &git_mode
+    );
+    if (err) {
+        goto cleanup;
+    }
+
+    /* 4. Build mode string with metadata precedence
+     *
+     * Precedence Rules:
+     *   1. Metadata mode (if present) - explicit user intent, may differ from Git
+     *      Example: User wants 0600 (private) instead of Git's 0644
+     *   2. Git mode (fallback) - authoritative for type, good default for permissions */
     if (meta_item) {
         mode_str = mode_to_string(meta_item->mode);
     } else {
-        /* Default: 0644 for files */
-        mode_str = strdup("0644");
+        mode_str = mode_to_string(git_mode);
     }
 
     if (!mode_str) {
@@ -259,12 +360,12 @@ static error_t *sync_entry_to_state(
         goto cleanup;
     }
 
-    /* 4. Build state entry */
+    /* 5. Build state entry */
     state_file_entry_t state_entry = {
         .storage_path = manifest_entry->storage_path,
         .filesystem_path = manifest_entry->filesystem_path,
         .profile = manifest_entry->source_profile->name,
-        .type = STATE_FILE_REGULAR,
+        .type = file_type,
         .status = status,
         .git_oid = (char *)git_oid,
         .content_hash = content_hash,
@@ -276,7 +377,7 @@ static error_t *sync_entry_to_state(
         .deployed_at = 0  /* Not deployed yet (or preserved by update) */
     };
 
-    /* 5. Check if entry exists (to preserve deployed_at) */
+    /* 6. Check if entry exists (to preserve deployed_at) */
     err = state_get_file(state, manifest_entry->filesystem_path, &existing);
     if (err == NULL && existing != NULL) {
         /* Preserve deployed_at for existing entries */

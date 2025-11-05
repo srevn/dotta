@@ -44,27 +44,23 @@ typedef enum {
 } state_file_type_t;
 
 /**
- * Manifest status - lifecycle tracking for virtual working directory
- */
-typedef enum {
-    MANIFEST_STATUS_PENDING_DEPLOYMENT,  /* File staged for deployment */
-    MANIFEST_STATUS_DEPLOYED,            /* File deployed to filesystem */
-    MANIFEST_STATUS_PENDING_REMOVAL      /* File staged for removal */
-} manifest_status_t;
-
-/**
  * State file entry (virtual manifest entry)
  *
- * Represents the virtual working directory - the staged deployment plan
- * that sits between Git (authoritative source) and filesystem (reality).
+ * Represents the manifest (scope definition) - which files should exist
+ * based on enabled profiles. The manifest defines scope, not operations.
  *
- * BREAKING CHANGE from previous API:
- * - Added 'status' field for lifecycle tracking
- * - Added 'git_oid' for Git commit reference
- * - Split 'hash' → 'content_hash' (separate from git_oid)
- * - Added 'owner'/'group' for root/ files
- * - Added 'encrypted' flag
- * - Added 'staged_at'/'deployed_at' timestamps
+ * SCOPE-BASED ARCHITECTURE:
+ * - Manifest existence = file should be managed
+ * - deployed_at = lifecycle tracking (see SCOPE_BASED_ARCHITECTURE_PLAN.md)
+ *   - 0 = file never deployed by dotta (shows as [undeployed] if missing)
+ *   - > 0 = file known to dotta (either deployed or existed when profile enabled)
+ *
+ * Key fields:
+ * - git_oid: Git commit reference
+ * - content_hash: Blake2b content hash for comparison
+ * - owner/group: For root/ files
+ * - encrypted: Encryption flag
+ * - deployed_at: Lifecycle tracking timestamp (NOT operational control)
  */
 typedef struct {
     /* Paths */
@@ -72,9 +68,8 @@ typedef struct {
     char *filesystem_path;      /* Deployed path (/home/user/.bashrc) */
     char *profile;              /* Source profile name */
 
-    /* Type and status */
+    /* Type */
     state_file_type_t type;     /* File type */
-    manifest_status_t status;   /* Lifecycle status */
 
     /* Git tracking */
     char *git_oid;              /* Git commit reference (40-char hex) */
@@ -86,9 +81,8 @@ typedef struct {
     char *group;                /* Group name (root/ files only, can be NULL) */
     bool encrypted;             /* Encryption flag */
 
-    /* Timestamps */
-    time_t staged_at;           /* When added to manifest (Unix timestamp) */
-    time_t deployed_at;         /* When deployed to filesystem (0 if pending) */
+    /* Lifecycle tracking */
+    time_t deployed_at;         /* Lifecycle timestamp (0 = never deployed, >0 = known) */
 } state_file_entry_t;
 
 /**
@@ -340,13 +334,13 @@ error_t *state_clear_files(state_t *state);
  * @param filesystem_path Filesystem path (must not be NULL)
  * @param profile Profile name (must not be NULL)
  * @param type File type
- * @param status Manifest status
  * @param git_oid Git commit reference (can be NULL)
  * @param content_hash Content hash (can be NULL)
  * @param mode Permission mode (can be NULL)
  * @param owner Owner username (can be NULL)
  * @param group Group name (can be NULL)
  * @param encrypted Encryption flag
+ * @param deployed_at Lifecycle timestamp (0 = never deployed, >0 = known)
  * @param out Entry (must not be NULL, caller must free with state_free_entry)
  * @return Error or NULL on success
  */
@@ -355,13 +349,13 @@ error_t *state_create_entry(
     const char *filesystem_path,
     const char *profile,
     state_file_type_t type,
-    manifest_status_t status,
     const char *git_oid,
     const char *content_hash,
     const char *mode,
     const char *owner,
     const char *group,
     bool encrypted,
+    time_t deployed_at,
     state_file_entry_t **out
 );
 
@@ -373,20 +367,20 @@ error_t *state_create_entry(
 void state_free_entry(state_file_entry_t *entry);
 
 /**
- * Update entry status (optimized hot path for apply)
+ * Update deployed_at timestamp (optimized hot path for apply)
  *
- * Updates only the status field of a manifest entry.
- * Used during apply to transition from pending_deployment → deployed.
+ * Updates only the deployed_at field of a manifest entry.
+ * Used during apply after successful deployment to record lifecycle state.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param filesystem_path File path to update (must not be NULL)
- * @param new_status New status value
+ * @param deployed_at New deployed_at timestamp (use time(NULL) for current time)
  * @return Error or NULL on success (not found is an error)
  */
-error_t *state_update_entry_status(
+error_t *state_update_deployed_at(
     state_t *state,
     const char *filesystem_path,
-    manifest_status_t new_status
+    time_t deployed_at
 );
 
 /**
@@ -402,27 +396,6 @@ error_t *state_update_entry_status(
 error_t *state_update_entry(
     state_t *state,
     const state_file_entry_t *entry
-);
-
-/**
- * Get entries by status
- *
- * Returns all manifest entries matching the specified status.
- * Used by apply to get pending_deployment and pending_removal entries.
- *
- * Returns allocated array that caller must free with state_free_all_files().
- *
- * @param state State (must not be NULL)
- * @param status Status to filter by
- * @param out Output array (must not be NULL, caller must free with state_free_all_files)
- * @param count Output count (must not be NULL)
- * @return Error or NULL on success (empty array if no matches)
- */
-error_t *state_get_entries_by_status(
-    const state_t *state,
-    manifest_status_t status,
-    state_file_entry_t **out,
-    size_t *count
 );
 
 /**

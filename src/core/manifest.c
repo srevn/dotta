@@ -336,7 +336,10 @@ static error_t *compute_content_hash_from_entry(
  * @param manifest_entry Entry from in-memory manifest (borrowed)
  * @param git_oid Git commit reference (40-char hex)
  * @param metadata Merged metadata from all profiles
- * @param status Initial status for entry
+ * @param deployed_at Lifecycle timestamp for entry:
+ *       - 0: File never deployed (new, undeployed)
+ *       - time(NULL): File known to dotta (exists or just captured)
+ *       - existing->deployed_at: Preserve history (updates)
  * @param km Keymanager for content hashing
  * @param cache Content cache (can be NULL)
  * @return Error or NULL on success
@@ -347,7 +350,7 @@ static error_t *sync_entry_to_state(
     const file_entry_t *manifest_entry,
     const char *git_oid,
     const metadata_t *metadata,
-    manifest_status_t status,
+    time_t deployed_at,
     keymanager_t *km,
     content_cache_t *cache
 ) {
@@ -431,15 +434,13 @@ static error_t *sync_entry_to_state(
         .filesystem_path = manifest_entry->filesystem_path,
         .profile = manifest_entry->source_profile->name,
         .type = file_type,
-        .status = status,
         .git_oid = (char *)git_oid,
         .content_hash = content_hash,
         .mode = mode_str,
         .owner = meta_item ? meta_item->owner : NULL,
         .group = meta_item ? meta_item->group : NULL,
         .encrypted = meta_item ? meta_item->file.encrypted : false,
-        .staged_at = time(NULL),
-        .deployed_at = (status == MANIFEST_STATUS_DEPLOYED) ? time(NULL) : 0
+        .deployed_at = deployed_at
     };
 
     /* 6. Check if entry exists (to preserve deployed_at) */
@@ -558,28 +559,62 @@ error_t *manifest_enable_profile(
 
         total_files++;
 
-        /* Determine status based on filesystem existence */
-        manifest_status_t status;
+        /* Determine deployed_at timestamp for lifecycle tracking
+         *
+         * For NEW entries: Check filesystem to set initial deployed_at
+         * For EXISTING entries: Preserve existing deployed_at (handled in sync_entry_to_state)
+         *
+         * deployed_at = 0   → File never deployed by dotta
+         * deployed_at > 0   → File known to dotta (either deployed or existed when profile enabled)
+         */
+        time_t deployed_at;
         struct stat st;
 
-        if (lstat(entry->filesystem_path, &st) == 0) {
-            /* File exists on filesystem - mark as deployed */
-            status = MANIFEST_STATUS_DEPLOYED;
-            already_deployed++;
-        } else if (errno == ENOENT) {
-            /* File doesn't exist - needs deployment */
-            status = MANIFEST_STATUS_PENDING_DEPLOYMENT;
-            needs_deployment++;
+        /* Check if entry already exists in state (to preserve deployed_at) */
+        state_file_entry_t *existing_entry = NULL;
+        error_t *check_err = state_get_file(state, entry->filesystem_path, &existing_entry);
+
+        if (check_err == NULL && existing_entry != NULL) {
+            /* File already in manifest - preserve existing timestamp */
+            deployed_at = existing_entry->deployed_at;
+
+            /* Check filesystem to update stats only */
+            if (lstat(entry->filesystem_path, &st) == 0) {
+                already_deployed++;
+            } else {
+                needs_deployment++;
+            }
+
+            state_free_entry(existing_entry);
         } else {
-            /* Unexpected error (permission denied, I/O error, etc.) */
-            err = error_from_errno(errno);
-            goto cleanup;
+            /* New entry - check if file exists on filesystem */
+            if (check_err && check_err->code == ERR_NOT_FOUND) {
+                error_free(check_err);
+                check_err = NULL;
+            } else if (check_err) {
+                err = check_err;
+                goto cleanup;
+            }
+
+            if (lstat(entry->filesystem_path, &st) == 0) {
+                /* File exists - mark as "known to dotta" */
+                deployed_at = time(NULL);
+                already_deployed++;
+            } else if (errno == ENOENT) {
+                /* File doesn't exist - mark as "never deployed" */
+                deployed_at = 0;
+                needs_deployment++;
+            } else {
+                /* Unexpected error (permission denied, I/O error, etc.) */
+                err = error_from_errno(errno);
+                goto cleanup;
+            }
         }
 
-        /* Sync to state with intelligent status */
+        /* Sync entry with deployed_at timestamp */
         err = sync_entry_to_state(
             repo, state, entry, head_oid_str, metadata,
-            status, km, NULL
+            deployed_at, km, NULL
         );
         if (err) {
             goto cleanup;
@@ -716,9 +751,6 @@ error_t *manifest_disable_profile(
                 goto cleanup;
             }
 
-            entry->status = MANIFEST_STATUS_PENDING_DEPLOYMENT;
-            entry->staged_at = time(NULL);
-
             err = state_update_entry(state, entry);
             if (err) {
                 err = error_wrap(err, "Failed to update entry to fallback for %s",
@@ -728,16 +760,34 @@ error_t *manifest_disable_profile(
 
             fallback_count++;
         } else {
-            /* No fallback - mark for removal */
-            err = state_update_entry_status(state, entry->filesystem_path,
-                                            MANIFEST_STATUS_PENDING_REMOVAL);
-            if (err) {
-                err = error_wrap(err, "Failed to mark entry for removal: %s",
-                               entry->storage_path);
-                goto cleanup;
-            }
-
-            removed_count++;
+            /* No fallback - entry becomes orphaned (cleanup deferred to apply)
+             *
+             * ARCHITECTURE: Separation of concerns for orphan cleanup.
+             *
+             * The entry remains in state for workspace orphan detection:
+             *   1. Entry stays in state with profile=<disabled_profile_name>
+             *   2. Workspace filters manifest by enabled profiles (skips this entry)
+             *   3. Workspace detects: entry in state, NOT in manifest → orphaned
+             *   4. Apply removes: file from filesystem + entry from state
+             *
+             * This design enables:
+             *   - Safe re-enable: Profile can be re-enabled without data loss
+             *   - Orphan detection: Workspace analysis works as documented (workspace.c:629)
+             *   - User visibility: Status shows orphans before removal
+             *   - Explicit action: User runs apply to execute destructive cleanup
+             *
+             * Why not delete immediately?
+             *   - Breaks orphan detection (entry gone → can't detect)
+             *   - Prevents safe re-enable (data lost → must re-apply)
+             *   - Violates separation (profile cmd shouldn't do filesystem ops)
+             *
+             * This follows the Git staging model:
+             *   profile disable = git rm (staging)
+             *   apply = git commit (execution)
+             *
+             * Cleanup deferred to apply - DO NOT call state_remove_file() here.
+             */
+            removed_count++;  /* Stats: file marked for removal (user visibility) */
         }
     }
 
@@ -945,9 +995,6 @@ error_t *manifest_remove_files(
                 goto cleanup;
             }
 
-            current_entry->status = MANIFEST_STATUS_PENDING_DEPLOYMENT;
-            current_entry->staged_at = time(NULL);
-
             err = state_update_entry(state, current_entry);
             if (err) {
                 state_free_entry(current_entry);
@@ -957,15 +1004,18 @@ error_t *manifest_remove_files(
 
             fallback_count++;
         } else {
-            /* No fallback: mark for removal */
-            err = state_update_entry_status(state, filesystem_path,
-                                            MANIFEST_STATUS_PENDING_REMOVAL);
-            if (err) {
-                state_free_entry(current_entry);
-                free(filesystem_path);
-                goto cleanup;
-            }
-
+            /* No fallback - entry becomes orphaned (cleanup deferred to apply)
+             *
+             * Entry remains in state for orphan detection. See manifest_disable_profile()
+             * for detailed architectural rationale.
+             *
+             * The orphan cleanup flow:
+             *   1. Entry stays in state (this function)
+             *   2. Workspace detects orphan (in state, not in manifest)
+             *   3. Apply removes (filesystem + state cleanup)
+             *
+             * Cleanup deferred to apply - DO NOT call state_remove_file() here.
+             */
             removed_count++;
         }
 
@@ -1097,11 +1147,34 @@ error_t *manifest_rebuild(
             goto cleanup;
         }
 
-        /* Sync to state with PENDING_DEPLOYMENT status */
-        err = sync_entry_to_state(
-            repo, state, entry, git_oid, metadata,
-            MANIFEST_STATUS_PENDING_DEPLOYMENT, km, NULL
-        );
+        /* Check if entry already exists in state (preserve deployed_at for lifecycle tracking) */
+        state_file_entry_t *existing_entry = NULL;
+        error_t *check_err = state_get_file(state, entry->filesystem_path, &existing_entry);
+
+        time_t deployed_at;
+        if (check_err == NULL && existing_entry != NULL) {
+            /* Existing entry - preserve deployed_at (lifecycle history) */
+            deployed_at = existing_entry->deployed_at;
+            state_free_entry(existing_entry);
+        } else {
+            /* New entry - check filesystem for initial deployed_at value */
+            struct stat st;
+            if (lstat(entry->filesystem_path, &st) == 0) {
+                /* File exists - mark as known to dotta */
+                deployed_at = time(NULL);
+            } else {
+                /* File doesn't exist - mark as never deployed */
+                deployed_at = 0;
+            }
+
+            /* Free error if state_get_file failed (NOT_FOUND is expected for new entries) */
+            if (check_err) {
+                error_free(check_err);
+            }
+        }
+
+        /* Sync to state with preserved/computed deployed_at */
+        err = sync_entry_to_state(repo, state, entry, git_oid, metadata, deployed_at, km, NULL);
         if (err) {
             goto cleanup;
         }
@@ -1232,8 +1305,8 @@ error_t *manifest_reorder_profiles(
                 goto cleanup;
             }
 
-            err = sync_entry_to_state(repo, state, new_entry, oid_str, metadata,
-                                      MANIFEST_STATUS_PENDING_DEPLOYMENT, km, NULL);
+            /* New file - deployed_at=0 (never deployed) */
+            err = sync_entry_to_state(repo, state, new_entry, oid_str, metadata, 0, km, NULL);
             if (err) {
                 goto cleanup;
             }
@@ -1253,14 +1326,14 @@ error_t *manifest_reorder_profiles(
                     goto cleanup;
                 }
 
-                /* Sync with new owner (status = PENDING_DEPLOYMENT) */
+                /* Sync with new owner, preserve existing deployed_at */
                 err = sync_entry_to_state(repo, state, new_entry, oid_str, metadata,
-                                          MANIFEST_STATUS_PENDING_DEPLOYMENT, km, NULL);
+                                          old_entry->deployed_at, km, NULL);
                 if (err) {
                     goto cleanup;
                 }
             }
-            /* else: owner unchanged, preserve existing entry status */
+            /* else: owner unchanged, preserve existing entry */
         }
     }
 
@@ -1277,12 +1350,15 @@ error_t *manifest_reorder_profiles(
         }
 
         if (!new_entry) {
-            /* File no longer in any profile - mark for removal */
-            err = state_update_entry_status(state, old_entry->filesystem_path,
-                                            MANIFEST_STATUS_PENDING_REMOVAL);
-            if (err) {
-                goto cleanup;
-            }
+            /* File no longer in any profile - entry becomes orphaned
+             *
+             * Entry remains in state for orphan detection. Profile reordering
+             * can cause a file to lose all coverage (all profiles reordered above
+             * it, or removed from all profiles).
+             *
+             * The orphan cleanup flow applies (see manifest_disable_profile()).
+             * Cleanup deferred to apply - DO NOT call state_remove_file() here.
+             */
         }
     }
 
@@ -1479,8 +1555,24 @@ error_t *manifest_update_files(
                     metadata = metadata_merged;
                 }
 
+                /* Preserve existing deployed_at when falling back */
+                time_t deployed_at = 0;
+                state_file_entry_t *existing_entry = NULL;
+                error_t *get_err = state_get_file(state, item->filesystem_path, &existing_entry);
+                if (get_err == NULL && existing_entry != NULL) {
+                    deployed_at = existing_entry->deployed_at;
+                    state_free_entry(existing_entry);
+                } else if (get_err) {
+                    if (get_err->code == ERR_NOT_FOUND) {
+                        error_free(get_err);
+                    } else {
+                        err = get_err;
+                        goto cleanup;
+                    }
+                }
+
                 err = sync_entry_to_state(repo, state, fallback, git_oid, metadata,
-                                         MANIFEST_STATUS_PENDING_DEPLOYMENT, km, content_cache);
+                                         deployed_at, km, content_cache);
                 if (err) {
                     err = error_wrap(err, "Failed to sync fallback for '%s'",
                                    item->filesystem_path);
@@ -1489,15 +1581,15 @@ error_t *manifest_update_files(
 
                 (*out_fallbacks)++;
             } else {
-                /* No fallback - mark for removal */
-                err = state_update_entry_status(state, item->filesystem_path,
-                                               MANIFEST_STATUS_PENDING_REMOVAL);
-                if (err) {
-                    err = error_wrap(err, "Failed to mark '%s' for removal",
-                                   item->filesystem_path);
-                    goto cleanup;
-                }
-
+                /* No fallback - entry becomes orphaned (cleanup deferred to apply)
+                 *
+                 * Entry remains in state for orphan detection. This bulk operation
+                 * may process multiple files simultaneously, but the architectural
+                 * principle remains: deferred cleanup via apply.
+                 *
+                 * See manifest_disable_profile() for detailed rationale.
+                 * Cleanup deferred to apply - DO NOT call state_remove_file() here.
+                 */
                 (*out_removed)++;
             }
         } else {
@@ -1523,10 +1615,10 @@ error_t *manifest_update_files(
                 continue;
             }
 
-            /* Sync to state with DEPLOYED status
+            /* Sync to state with deployed_at = now()
              *
              * Key insight: UPDATE captures files FROM filesystem, so they're
-             * already deployed. Setting PENDING_DEPLOYMENT would be misleading. */
+             * already deployed. We set deployed_at to mark them as known. */
             const char *git_oid = hashmap_get(profile_oids, item->profile);
 
             /* Get metadata - from cache if available, otherwise use merged */
@@ -1538,7 +1630,7 @@ error_t *manifest_update_files(
             }
 
             err = sync_entry_to_state(repo, state, entry, git_oid, metadata,
-                                     MANIFEST_STATUS_DEPLOYED, km, content_cache);
+                                     time(NULL), km, content_cache);
             if (err) {
                 err = error_wrap(err, "Failed to sync '%s' to manifest",
                                item->filesystem_path);
@@ -1565,7 +1657,7 @@ cleanup:
  * Simpler than manifest_update_files() because:
  * - All files are from the same profile
  * - No deletions (only additions/updates)
- * - Status is always MANIFEST_STATUS_DEPLOYED (captured from filesystem)
+ * - Files marked with deployed_at = time(NULL) (captured from filesystem)
  *
  * CRITICAL DESIGN: Like manifest_update_files(), this builds a FRESH
  * manifest from Git (post-commit state). This ensures all newly-added files
@@ -1580,7 +1672,7 @@ cleanup:
  *   5. For each file:
  *      - Convert filesystem_path → storage_path
  *      - Lookup in fresh manifest
- *      - If precedence matches: sync to state with DEPLOYED status
+ *      - If precedence matches: sync to state with deployed_at = time(NULL)
  *      - If lower precedence or filtered: skip silently
  *   6. All operations within caller's transaction
  *
@@ -1591,7 +1683,7 @@ cleanup:
  *   - profile_name SHOULD be enabled (function gracefully handles if not)
  *
  * Postconditions:
- *   - Files synced to manifest with MANIFEST_STATUS_DEPLOYED
+ *   - Files synced to manifest with deployed_at = time(NULL)
  *   - Lower-precedence files skipped (not an error)
  *   - Filtered files skipped (not an error)
  *   - Transaction remains open (caller commits via state_save)
@@ -1728,10 +1820,10 @@ error_t *manifest_add_files(
             continue;
         }
 
-        /* Sync to state with DEPLOYED status
+        /* Sync to state with deployed_at = now()
          *
          * Key insight: ADD captures files FROM filesystem, so they're
-         * already deployed. Setting PENDING_DEPLOYMENT would be misleading. */
+         * already deployed. We set deployed_at to mark them as known. */
         const char *profile_git_oid = hashmap_get(profile_oids, entry->source_profile->name);
 
         /* Get metadata - from cache if available, otherwise use merged */
@@ -1743,7 +1835,7 @@ error_t *manifest_add_files(
         }
 
         err = sync_entry_to_state(repo, state, entry, profile_git_oid, metadata,
-                                 MANIFEST_STATUS_DEPLOYED, km, content_cache);
+                                 time(NULL), km, content_cache);
 
         if (err) {
             err = error_wrap(err, "Failed to sync '%s' to manifest",
@@ -2038,11 +2130,11 @@ error_t *manifest_sync_diff(
                 continue;
             }
 
-            /* Sync entry to state with PENDING_DEPLOYMENT status
+            /* Sync entry to state, preserving deployed_at for existing files
              *
-             * Key: We use PENDING_DEPLOYMENT (not DEPLOYED) because sync only updates
-             * Git, it doesn't deploy to filesystem. User must run 'dotta apply' to
-             * actually deploy these changes. */
+             * Key: Sync only updates Git, it doesn't deploy to filesystem.
+             * User must run 'dotta apply' to actually deploy these changes.
+             * We preserve deployed_at to maintain lifecycle tracking. */
             const char *git_oid_str = hashmap_get(profile_oids, profile_name);
 
             /* Get metadata - from cache if available, otherwise use merged */
@@ -2053,9 +2145,26 @@ error_t *manifest_sync_diff(
                 profile_metadata = metadata_merged;
             }
 
+            /* Preserve existing deployed_at if file already in manifest */
+            time_t deployed_at = 0;
+            state_file_entry_t *existing = NULL;
+            error_t *get_err = state_get_file(state, filesystem_path, &existing);
+            if (get_err == NULL && existing != NULL) {
+                deployed_at = existing->deployed_at;
+                state_free_entry(existing);
+            } else if (get_err) {
+                if (get_err->code == ERR_NOT_FOUND) {
+                    error_free(get_err);
+                } else {
+                    err = get_err;
+                    free(filesystem_path);
+                    goto cleanup;
+                }
+            }
+
             err = sync_entry_to_state(
                 repo, state, entry, git_oid_str, profile_metadata,
-                MANIFEST_STATUS_PENDING_DEPLOYMENT,
+                deployed_at,
                 km, content_cache
             );
 
@@ -2087,7 +2196,7 @@ error_t *manifest_sync_diff(
                 /* File exists in another profile (fallback found!)
                  *
                  * Update manifest entry to point to the new profile owner.
-                 * Mark as PENDING_DEPLOYMENT because ownership changed. */
+                 * Preserve deployed_at to maintain lifecycle tracking. */
 
                 const char *fallback_git_oid = hashmap_get(profile_oids,
                                                            entry->source_profile->name);
@@ -2100,9 +2209,26 @@ error_t *manifest_sync_diff(
                     fallback_metadata = metadata_merged;
                 }
 
+                /* Preserve existing deployed_at when falling back */
+                time_t deployed_at = 0;
+                state_file_entry_t *existing_fb = NULL;
+                error_t *get_err_fb = state_get_file(state, filesystem_path, &existing_fb);
+                if (get_err_fb == NULL && existing_fb != NULL) {
+                    deployed_at = existing_fb->deployed_at;
+                    state_free_entry(existing_fb);
+                } else if (get_err_fb) {
+                    if (get_err_fb->code == ERR_NOT_FOUND) {
+                        error_free(get_err_fb);
+                    } else {
+                        err = get_err_fb;
+                        free(filesystem_path);
+                        goto cleanup;
+                    }
+                }
+
                 err = sync_entry_to_state(
                     repo, state, entry, fallback_git_oid, fallback_metadata,
-                    MANIFEST_STATUS_PENDING_DEPLOYMENT,
+                    deployed_at,
                     km, content_cache
                 );
 
@@ -2132,21 +2258,18 @@ error_t *manifest_sync_diff(
 
                 /* Check if profile_name owns this file */
                 if (strcmp(state_entry->profile, profile_name) == 0) {
-                    /* We own it and no fallback exists - mark for removal
+                    /* We own it and no fallback exists - entry becomes orphaned
                      *
-                     * Set status to PENDING_REMOVAL. When user runs 'dotta apply',
-                     * the file will be removed from filesystem and deleted from manifest. */
-
-                    state_entry->status = MANIFEST_STATUS_PENDING_REMOVAL;
-                    err = state_update_entry(state, state_entry);
-
-                    if (err) {
-                        err = error_wrap(err, "Failed to mark '%s' for removal", filesystem_path);
-                        state_free_entry(state_entry);
-                        free(filesystem_path);
-                        goto cleanup;
-                    }
-
+                     * File deleted from Git during sync (pull/rebase/merge), with no
+                     * fallback coverage. Entry becomes orphaned and requires cleanup.
+                     *
+                     * Entry remains in state for orphan detection. This maintains
+                     * consistency with other manifest operations: sync updates scope
+                     * (what's in Git), apply executes cleanup (orphan removal).
+                     *
+                     * The orphan cleanup flow applies (see manifest_disable_profile()).
+                     * Cleanup deferred to apply - DO NOT call state_remove_file() here.
+                     */
                     removed++;
                 }
 

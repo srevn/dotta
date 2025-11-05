@@ -219,7 +219,7 @@ error_t *manifest_update_files(
  * Simpler than manifest_update_files() because:
  * - All files are from the same profile
  * - No deletions (only additions/updates)
- * - Status is always MANIFEST_STATUS_DEPLOYED (captured from filesystem)
+ * - Files marked with deployed_at = time(NULL) (captured from filesystem)
  *
  * CRITICAL DESIGN: Like manifest_update_files(), this builds a FRESH
  * manifest from Git (post-commit state). This ensures all newly-added files
@@ -233,7 +233,7 @@ error_t *manifest_update_files(
  *   5. For each file:
  *      - Convert filesystem_path → storage_path
  *      - Lookup in fresh manifest
- *      - If precedence matches: sync to state with DEPLOYED status
+ *      - If precedence matches: sync to state with deployed_at = time(NULL)
  *      - If lower precedence or filtered: skip silently
  *   6. All operations within caller's transaction
  *
@@ -244,7 +244,7 @@ error_t *manifest_update_files(
  *   - profile_name SHOULD be enabled (function gracefully handles if not)
  *
  * Postconditions:
- *   - Files synced to manifest with MANIFEST_STATUS_DEPLOYED
+ *   - Files synced to manifest with deployed_at = time(NULL)
  *   - Lower-precedence files skipped (not an error)
  *   - Filtered files skipped (not an error)
  *   - Transaction remains open (caller commits via state_save)

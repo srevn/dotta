@@ -263,7 +263,6 @@ error_t *check_item_metadata_divergence(
  * @param state Where the item exists (deployed/undeployed/etc.)
  * @param divergence What's wrong with it (bit flags, can combine)
  * @param item_kind FILE or DIRECTORY (explicit type)
- * @param manifest_status Manifest status from VWD (pending/deployed/pending_removal)
  * @param in_profile Exists in profile branch
  * @param in_state Exists in deployment state (must be false for directories)
  * @param on_filesystem Exists on actual filesystem
@@ -280,7 +279,6 @@ static error_t *workspace_add_diverged(
     workspace_state_t state,
     divergence_type_t divergence,
     workspace_item_kind_t item_kind,
-    manifest_status_t manifest_status,
     bool in_profile,
     bool in_state,
     bool on_filesystem,
@@ -324,7 +322,6 @@ static error_t *workspace_add_diverged(
     entry->state = state;
     entry->divergence = divergence;
     entry->item_kind = item_kind;
-    entry->manifest_status = manifest_status;
     entry->in_profile = in_profile;
     entry->in_state = in_state;
     entry->on_filesystem = on_filesystem;
@@ -477,11 +474,6 @@ static error_t *analyze_file_divergence(
 
             free(fs_content_hash);
         }
-        /* If no state_entry or no content_hash: skip content comparison.
-         * This can happen for:
-         * - New files being added (not in state yet)
-         * - Corrupted state (missing hash)
-         * In these cases, file will show as UNDEPLOYED or other state, which is correct. */
 
         /* PERMISSION CHECKING: Two-phase approach
          *
@@ -493,10 +485,6 @@ static error_t *analyze_file_divergence(
          * PHASE B: Full metadata (all permission bits + ownership)
          *   - Only if metadata exists for this file
          *   - Catches: granular changes like 0600→0644, ownership changes
-         *
-         * Both phases use the SAME file_stat (already captured above), so no
-         * extra syscalls. Flags are accumulated with |=, so detecting the same
-         * divergence twice is idempotent and harmless.
          */
 
         /* PHASE A: Check filemode (executable bit) from state entry */
@@ -556,51 +544,38 @@ static error_t *analyze_file_divergence(
         }
     }
 
-    /* PHASE 2: State-based classification
-     * VWD: Determine state based on manifest_status and filesystem reality.
+    /* PHASE 2: Reality-based classification
      *
-     * The manifest status reflects staging intent:
-     * - PENDING_DEPLOYMENT: File staged for deployment (not deployed yet)
-     * - DEPLOYED: File deployed to filesystem
-     * - PENDING_REMOVAL: File staged for removal
+     * SCOPE-BASED ARCHITECTURE:
+     * Use deployed_at timestamp to distinguish lifecycle states.
      *
-     * We combine this with filesystem reality to determine workspace state.
+     * deployed_at semantics (from SCOPE_BASED_ARCHITECTURE_PLAN.md Annex A):
+     * - deployed_at = 0 → File never deployed by dotta
+     * - deployed_at > 0 → File known to dotta (deployed or pre-existing)
+     *
+     * Classification:
+     * 1. File missing + deployed_at = 0 → UNDEPLOYED (needs initial deployment)
+     * 2. File missing + deployed_at > 0 → DELETED (was deployed, needs restoration)
+     * 3. File present → DEPLOYED (may have divergence)
      */
-    manifest_status_t manifest_status = MANIFEST_STATUS_PENDING_DEPLOYMENT;  /* Default for files not in state */
+    if (!on_filesystem) {
+        /* File in manifest but missing from filesystem */
 
-    if (!in_state || !state_entry) {
-        /* File not in manifest table yet (shouldn't happen with VWD, but be defensive) */
-        state = WORKSPACE_STATE_UNDEPLOYED;
-        /* Keep accumulated divergence flags */
-    } else {
-        /* Get manifest status from state entry */
-        manifest_status = state_entry->status;
-
-        switch (manifest_status) {
-            case MANIFEST_STATUS_PENDING_DEPLOYMENT:
-                /* File staged for deployment but not deployed yet */
-                state = WORKSPACE_STATE_UNDEPLOYED;
-                /* Keep accumulated divergence flags (may have CONTENT from conflict check) */
-                break;
-
-            case MANIFEST_STATUS_DEPLOYED:
-                /* File was deployed - check if still on filesystem */
-                if (!on_filesystem) {
-                    state = WORKSPACE_STATE_DELETED;
-                    divergence = DIVERGENCE_NONE;  /* No divergence for deleted files */
-                } else {
-                    state = WORKSPACE_STATE_DEPLOYED;
-                    /* Keep accumulated divergence flags */
-                }
-                break;
-
-            case MANIFEST_STATUS_PENDING_REMOVAL:
-                /* File staged for removal - will be deleted on next apply.
-                 * Technically still deployed until apply runs.
-                 * Note: This case is handled separately by analyze_pending_removals(). */
-                state = WORKSPACE_STATE_DEPLOYED;
-                break;
+        /* Use deployed_at to distinguish never-deployed vs deleted */
+        if (state_entry && state_entry->deployed_at > 0) {
+            /* File was deployed/known (deployed_at > 0), now deleted */
+            state = WORKSPACE_STATE_DELETED;
+        } else {
+            /* File never deployed (deployed_at = 0 or missing state_entry) */
+            state = WORKSPACE_STATE_UNDEPLOYED;
         }
+
+        /* Clear divergence flags - can't detect divergence on missing files */
+        divergence = DIVERGENCE_NONE;
+    } else {
+        /* File in manifest and on filesystem */
+        state = WORKSPACE_STATE_DEPLOYED;
+        /* Keep accumulated divergence flags from Phase 1 */
     }
 
     /* PHASE 3: Profile ownership change detection
@@ -628,7 +603,6 @@ static error_t *analyze_file_divergence(
                                               old_profile, manifest_entry->all_profiles,
                                               state, divergence,
                                               WORKSPACE_ITEM_FILE,
-                                              manifest_status,
                                               in_profile, in_state,
                                               on_filesystem,
                                               true, profile_changed);
@@ -687,27 +661,6 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
     for (size_t i = 0; i < state_count; i++) {
         const state_file_entry_t *state_entry = &state_files[i];
 
-        /* STATUS-BASED DISCRIMINATION
-         *
-         * "Not in manifest" has two distinct meanings based on status:
-         *
-         * 1. DEPLOYED/PENDING_DEPLOYMENT + not in manifest = TRUE ORPHAN
-         *    - File removed from Git branch
-         *    - Profile disabled unexpectedly
-         *    - Data inconsistency requiring cleanup
-         *
-         * 2. PENDING_REMOVAL + not in manifest = INTENTIONAL STAGING
-         *    - File staged for removal (via profile disable or file remove)
-         *    - Expected VWD state transition
-         *    - Handled by analyze_pending_removals(), not an orphan
-         *
-         * The status field is the semantic discriminator. Orphan detection
-         * should ONLY handle case #1 (unexpected absences).
-         */
-        if (state_entry->status == MANIFEST_STATUS_PENDING_REMOVAL) {
-            continue;  /* Not an orphan - staged for removal */
-        }
-
         const char *fs_path = state_entry->filesystem_path;
         const char *storage_path = state_entry->storage_path;
         const char *profile = state_entry->profile;
@@ -721,7 +674,7 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
         }
 
         if (!manifest_entry) {
-            /* Orphaned: in state, not in manifest */
+            /* Orphaned: in state, not in manifest (out of scope) */
             bool profile_enabled = (hashmap_get(ws->profile_index, profile) != NULL);
             bool on_filesystem = fs_lexists(fs_path);
 
@@ -734,7 +687,6 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
                 WORKSPACE_STATE_ORPHANED,  /* State: in deployment state, not in profile */
                 DIVERGENCE_NONE,           /* Divergence: none */
                 WORKSPACE_ITEM_FILE,
-                state_entry->status,       /* Preserve manifest status from state */
                 false,            /* not in profile */
                 true,             /* in state (was deployed) */
                 on_filesystem,
@@ -817,7 +769,6 @@ static error_t *analyze_orphaned_directories(workspace_t *ws) {
                 WORKSPACE_STATE_ORPHANED,  /* State: in state, not in profile */
                 DIVERGENCE_NONE,           /* Divergence: none */
                 WORKSPACE_ITEM_DIRECTORY,
-                MANIFEST_STATUS_DEPLOYED,  /* N/A for directories (not in manifest table) */
                 false,            /* not in profile */
                 false,            /* NOT in state (semantic: directories never deployed) */
                 on_filesystem,
@@ -860,90 +811,6 @@ static error_t *analyze_orphaned_state(workspace_t *ws) {
         return error_wrap(err, "Failed to analyze orphaned directories");
     }
 
-    return NULL;
-}
-
-/**
- * Analyze files with PENDING_REMOVAL status
- *
- * Files with status=PENDING_REMOVAL are staged for deletion (via profile disable
- * or file remove). They appear in the manifest table but should be shown
- * separately in status output as "Changes to be removed."
- *
- * These files are in a transition state:
- * - They're in the manifest table (PENDING_REMOVAL status)
- * - They may still exist on filesystem (until apply removes them)
- * - They're NOT in the regular manifest loaded by workspace_build_manifest_from_state()
- *   (that function filters to only include enabled profiles)
- *
- * This function queries state directly to find PENDING_REMOVAL entries and adds
- * them to the diverged list so they appear in status output.
- */
-static error_t *analyze_pending_removals(workspace_t *ws) {
-    CHECK_NULL(ws);
-    CHECK_NULL(ws->state);
-
-    error_t *err = NULL;
-    state_file_entry_t *entries = NULL;
-    size_t count = 0;
-
-    /* Get all entries with PENDING_REMOVAL status */
-    err = state_get_entries_by_status(ws->state, MANIFEST_STATUS_PENDING_REMOVAL,
-                                       &entries, &count);
-    if (err) {
-        return error_wrap(err, "Failed to get pending removal entries");
-    }
-
-    /* No pending removals - early exit */
-    if (count == 0) {
-        state_free_all_files(entries, count);
-        return NULL;
-    }
-
-    /* Add each pending removal to diverged list */
-    for (size_t i = 0; i < count; i++) {
-        state_file_entry_t *entry = &entries[i];
-
-        /* Check if profile is enabled (might have been disabled) */
-        bool profile_enabled = (hashmap_get(ws->profile_index, entry->profile) != NULL);
-
-        /* Check if file still exists on filesystem */
-        bool on_filesystem = fs_lexists(entry->filesystem_path);
-
-        /* Add to diverged list with PENDING_REMOVAL state
-         *
-         * State interpretation:
-         * - in_profile: false (file was removed from profile or profile disabled)
-         * - in_state: true (still in manifest table, waiting for apply)
-         * - on_filesystem: varies (may still exist until apply removes it)
-         * - workspace_state: DEPLOYED (semantically deployed until apply removes)
-         *   but manifest_status distinguishes this as PENDING_REMOVAL
-         */
-        err = workspace_add_diverged(
-            ws,
-            entry->filesystem_path,
-            entry->storage_path,
-            entry->profile,
-            NULL, NULL,  /* No old_profile or all_profiles */
-            WORKSPACE_STATE_DEPLOYED,  /* Still deployed until apply removes */
-            DIVERGENCE_NONE,           /* No content divergence for pending removal */
-            WORKSPACE_ITEM_FILE,
-            MANIFEST_STATUS_PENDING_REMOVAL,  /* Key: this is what makes it special */
-            false,           /* not in profile (was removed) */
-            true,            /* in state (still in manifest table) */
-            on_filesystem,   /* may or may not exist */
-            profile_enabled, /* profile may still be enabled */
-            false            /* No profile change */
-        );
-
-        if (err) {
-            state_free_all_files(entries, count);
-            return error_wrap(err, "Failed to add pending removal '%s'",
-                            entry->filesystem_path);
-        }
-    }
-
-    state_free_all_files(entries, count);
     return NULL;
 }
 
@@ -1005,21 +872,6 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
 
     for (size_t i = 0; i < ws->diverged_count; i++) {
         const workspace_item_t *item = &ws->diverged[i];
-
-        /* PRIORITY CHECK: PENDING_REMOVAL items represent pending changes
-         *
-         * Files staged for removal (via profile disable or file remove) should
-         * make workspace status DIRTY, even though they have:
-         * - state = WORKSPACE_STATE_DEPLOYED (still deployed until apply)
-         * - divergence = DIVERGENCE_NONE (no content/mode/ownership changes)
-         *
-         * The manifest_status field distinguishes them from truly clean deployed files.
-         * Check this BEFORE the state-based switch to ensure correct status computation.
-         */
-        if (item->manifest_status == MANIFEST_STATUS_PENDING_REMOVAL) {
-            has_warnings = true;
-            continue;
-        }
 
         switch (item->state) {
             case WORKSPACE_STATE_ORPHANED:
@@ -1156,7 +1008,6 @@ static error_t *scan_directory_for_untracked(
                     WORKSPACE_STATE_UNTRACKED,  /* State: on filesystem in tracked dir */
                     DIVERGENCE_NONE,            /* Divergence: none */
                     WORKSPACE_ITEM_FILE,
-                    MANIFEST_STATUS_PENDING_DEPLOYMENT,  /* Not in manifest yet */
                     false,  /* not in profile */
                     false,  /* not in state */
                     true,   /* on filesystem */
@@ -1319,7 +1170,6 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 WORKSPACE_STATE_DELETED,  /* State: was in profile, removed from filesystem */
                 DIVERGENCE_NONE,          /* Divergence: none (file is gone) */
                 WORKSPACE_ITEM_DIRECTORY,
-                MANIFEST_STATUS_DEPLOYED,  /* N/A for directories (not in manifest table) */
                 true,   /* in_profile */
                 false,  /* in_state */
                 false,  /* on_filesystem (deleted) */
@@ -1383,7 +1233,6 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 WORKSPACE_STATE_DEPLOYED,  /* State: directory exists as expected */
                 divergence,                /* Divergence: mode/ownership flags */
                 WORKSPACE_ITEM_DIRECTORY,
-                MANIFEST_STATUS_DEPLOYED,  /* N/A for directories (not in manifest table) */
                 true,   /* in_profile */
                 false,  /* in_state */
                 true,   /* on_filesystem */
@@ -1547,14 +1396,12 @@ static error_t *analyze_encryption_policy_mismatch(
                 /* File has NO other divergence - encryption policy is the only issue.
                  * Determine state: if in state, it's deployed; otherwise undeployed. */
                 bool in_state = false;
-                manifest_status_t status = MANIFEST_STATUS_PENDING_DEPLOYMENT;  /* Default for files not in state */
 
                 if (ws->state) {
                     state_file_entry_t *state_entry = NULL;
                     error_t *state_err = state_get_file(ws->state, manifest_entry->filesystem_path, &state_entry);
                     if (state_err == NULL && state_entry) {
                         in_state = true;
-                        status = state_entry->status;  /* Preserve status from state */
                         state_free_entry(state_entry);
                     }
                     error_free(state_err);
@@ -1572,7 +1419,6 @@ static error_t *analyze_encryption_policy_mismatch(
                     item_state,            /* State: deployed or undeployed */
                     DIVERGENCE_ENCRYPTION, /* Divergence: encryption policy violated */
                     WORKSPACE_ITEM_FILE,
-                    status,                /* Manifest status from state or default */
                     true,  /* in profile */
                     in_state,
                     false, /* on_filesystem (unknown, encryption check is in-repo only) */
@@ -1667,18 +1513,10 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
 
         if (!entry->source_profile) {
             /* Profile not in workspace scope - this can happen if:
-             * 1. Profile was disabled but manifest has DEPLOYED orphaned entries (unexpected)
-             * 2. Profile branch was deleted outside dotta (unexpected)
-             * 3. Profile was disabled and entries marked PENDING_REMOVAL (expected)
-             */
-            if (state_entry->status == MANIFEST_STATUS_PENDING_REMOVAL) {
-                /* Expected: profile disable workflow marks files for removal.
-                 * analyze_pending_removals() will handle display to user.
-                 * Skip silently - no warning needed. */
-                continue;
-            }
-
-            /* Unexpected orphan - warn user */
+             * 1. Profile was disabled but manifest has orphaned entries
+             * 2. Profile branch was deleted outside dotta
+             *
+             * Skip with warning. Orphan detection will handle cleanup. */
             fprintf(stderr,
                 "warning: manifest entry '%s' references profile '%s' not in workspace - "
                 "run 'dotta apply' to clean up orphans\n",
@@ -2039,17 +1877,6 @@ error_t *workspace_load(
         if (err) {
             workspace_free(ws);
             return error_wrap(err, "Failed to analyze orphaned state");
-        }
-    }
-
-    /* Analyze pending removals (files staged for deletion)
-     * This should run when analyze_files is enabled since pending removals
-     * are part of the file staging workflow. */
-    if (resolved_opts.analyze_files) {
-        err = analyze_pending_removals(ws);
-        if (err) {
-            workspace_free(ws);
-            return error_wrap(err, "Failed to analyze pending removals");
         }
     }
 

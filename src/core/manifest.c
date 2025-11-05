@@ -14,8 +14,10 @@
 
 #include "manifest.h"
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 
 #include "base/error.h"
@@ -23,7 +25,6 @@
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "core/workspace.h"
 #include "infra/content.h"
 #include "infra/path.h"
 #include "utils/array.h"
@@ -557,29 +558,22 @@ error_t *manifest_enable_profile(
 
         total_files++;
 
-        /* Analyze filesystem reality to determine intelligent status */
-        manifest_status_t status = MANIFEST_STATUS_PENDING_DEPLOYMENT;
+        /* Determine status based on filesystem existence */
+        manifest_status_t status;
+        struct stat st;
 
-        err = analyze_file_for_manifest_status(
-            repo,
-            entry->entry,              /* git_tree_entry* */
-            entry->filesystem_path,
-            entry->storage_path,
-            profile_name,
-            head_oid_str,
-            metadata,
-            km,
-            &status                    /* Output: DEPLOYED or PENDING_DEPLOYMENT */
-        );
-        if (err) {
-            goto cleanup;
-        }
-
-        /* Track counts for summary */
-        if (status == MANIFEST_STATUS_DEPLOYED) {
+        if (lstat(entry->filesystem_path, &st) == 0) {
+            /* File exists on filesystem - mark as deployed */
+            status = MANIFEST_STATUS_DEPLOYED;
             already_deployed++;
-        } else {
+        } else if (errno == ENOENT) {
+            /* File doesn't exist - needs deployment */
+            status = MANIFEST_STATUS_PENDING_DEPLOYMENT;
             needs_deployment++;
+        } else {
+            /* Unexpected error (permission denied, I/O error, etc.) */
+            err = error_from_errno(errno);
+            goto cleanup;
         }
 
         /* Sync to state with intelligent status */

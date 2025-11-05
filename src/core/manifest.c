@@ -599,6 +599,7 @@ error_t *manifest_disable_profile(
     size_t count = 0;
     manifest_t *fallback_manifest = NULL;
     profile_list_t *fallback_profiles = NULL;
+    hashmap_t *profile_oids = NULL;
 
     /* 1. Get all entries from disabled profile */
     err = state_get_entries_by_profile(state, profile_name, &entries, &count);
@@ -621,6 +622,15 @@ error_t *manifest_disable_profile(
         }
     }
 
+    /* Build profile→oid map for O(1) lookups in fallback processing */
+    if (fallback_profiles) {
+        err = build_profile_oid_map(repo, fallback_profiles, &profile_oids);
+        if (err) {
+            err = error_wrap(err, "Failed to build profile OID map");
+            goto cleanup;
+        }
+    }
+
     /* 3. Process each entry */
     for (size_t i = 0; i < count; i++) {
         state_file_entry_t *entry = &entries[i];
@@ -637,15 +647,15 @@ error_t *manifest_disable_profile(
 
         if (fallback) {
             /* File exists in lower-precedence profile - update to fallback */
-            git_oid fallback_oid;
-            char fallback_oid_str[GIT_OID_HEXSZ + 1];
 
-            err = get_branch_head_oid(repo, fallback->source_profile->name,
-                                      &fallback_oid);
-            if (err) {
+            /* Get OID from pre-built map (O(1) lookup) */
+            const char *fallback_oid_str = hashmap_get(profile_oids,
+                                                       fallback->source_profile->name);
+            if (!fallback_oid_str) {
+                err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'",
+                           fallback->source_profile->name);
                 goto cleanup;
             }
-            git_oid_tostr(fallback_oid_str, sizeof(fallback_oid_str), &fallback_oid);
 
             /* Update entry to use fallback profile
              * MEMORY SAFETY: Must use str_replace_owned() to properly free old
@@ -691,6 +701,7 @@ error_t *manifest_disable_profile(
     }
 
 cleanup:
+    if (profile_oids) hashmap_free(profile_oids, free);
     if (fallback_profiles) profile_list_free(fallback_profiles);
     if (fallback_manifest) manifest_free(fallback_manifest);
     state_free_all_files(entries, count);
@@ -1083,6 +1094,7 @@ error_t *manifest_reorder_profiles(
     state_file_entry_t *old_entries = NULL;
     size_t old_count = 0;
     hashmap_t *old_map = NULL;
+    hashmap_t *profile_oids = NULL;
     metadata_t *metadata = NULL;
     keymanager_t *km = NULL;
     dotta_config_t *config = NULL;
@@ -1140,6 +1152,13 @@ error_t *manifest_reorder_profiles(
         goto cleanup;
     }
 
+    /* Build profile→oid map for O(1) lookups in reorder processing */
+    err = build_profile_oid_map(repo, profiles, &profile_oids);
+    if (err) {
+        err = error_wrap(err, "Failed to build profile OID map");
+        goto cleanup;
+    }
+
     /* 5. Process each file in new manifest */
     for (size_t i = 0; i < new_manifest->count; i++) {
         file_entry_t *new_entry = &new_manifest->entries[i];
@@ -1150,14 +1169,14 @@ error_t *manifest_reorder_profiles(
         if (!old_entry) {
             /* New file (rare in reorder, but handle it) */
 
-            /* Add new entry with PENDING_DEPLOYMENT */
-            git_oid oid;
-            char oid_str[GIT_OID_HEXSZ + 1];
-            err = get_branch_head_oid(repo, new_entry->source_profile->name, &oid);
-            if (err) {
+            /* Get OID from pre-built map (O(1) lookup) */
+            const char *oid_str = hashmap_get(profile_oids,
+                                              new_entry->source_profile->name);
+            if (!oid_str) {
+                err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'",
+                           new_entry->source_profile->name);
                 goto cleanup;
             }
-            git_oid_tostr(oid_str, sizeof(oid_str), &oid);
 
             err = sync_entry_to_state(repo, state, new_entry, oid_str, metadata,
                                       MANIFEST_STATUS_PENDING_DEPLOYMENT, km, NULL);
@@ -1170,13 +1189,15 @@ error_t *manifest_reorder_profiles(
 
             if (owner_changed) {
                 /* Owner changed - update entry to new owner */
-                git_oid oid;
-                char oid_str[GIT_OID_HEXSZ + 1];
-                err = get_branch_head_oid(repo, new_entry->source_profile->name, &oid);
-                if (err) {
+
+                /* Get OID from pre-built map (O(1) lookup) */
+                const char *oid_str = hashmap_get(profile_oids,
+                                                  new_entry->source_profile->name);
+                if (!oid_str) {
+                    err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'",
+                               new_entry->source_profile->name);
                     goto cleanup;
                 }
-                git_oid_tostr(oid_str, sizeof(oid_str), &oid);
 
                 /* Sync with new owner (status = PENDING_DEPLOYMENT) */
                 err = sync_entry_to_state(repo, state, new_entry, oid_str, metadata,
@@ -1218,6 +1239,7 @@ error_t *manifest_reorder_profiles(
     }
 
 cleanup:
+    if (profile_oids) hashmap_free(profile_oids, free);
     if (old_map) hashmap_free(old_map, NULL);
     if (profiles) profile_list_free(profiles);
     if (km) keymanager_free(km);

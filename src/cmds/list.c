@@ -35,21 +35,6 @@
 #define LIST_HEADER_BUFFER_SIZE 512
 
 /**
- * Format file size for display
- */
-static void format_size(size_t bytes, char *buffer, size_t buffer_size) {
-    if (bytes < 1024) {
-        snprintf(buffer, buffer_size, "%zu B", bytes);
-    } else if (bytes < 1024 * 1024) {
-        snprintf(buffer, buffer_size, "%.1f KB", bytes / 1024.0);
-    } else if (bytes < 1024 * 1024 * 1024) {
-        snprintf(buffer, buffer_size, "%.1f MB", bytes / (1024.0 * 1024.0));
-    } else {
-        snprintf(buffer, buffer_size, "%.1f GB", bytes / (1024.0 * 1024.0 * 1024.0));
-    }
-}
-
-/**
  * Check if file is encrypted
  *
  * Strategy:
@@ -248,7 +233,7 @@ static error_t *list_profiles(
             err = stats_get_profile_stats(repo, profile->tree, &stats);
             if (!err) {
                 char size_str[32];
-                format_size(stats.total_size, size_str, sizeof(size_str));
+                output_format_size(stats.total_size, size_str, sizeof(size_str));
                 output_printf(out, OUTPUT_NORMAL, " %2zu file%s, %8s",
                        stats.file_count,
                        stats.file_count == 1 ? " " : "s",
@@ -489,7 +474,7 @@ static error_t *list_files(
                 error_t *stats_err = stats_get_blob_size(repo, git_tree_entry_id(entry), &size);
                 if (!stats_err) {
                     char size_str[32];
-                    format_size(size, size_str, sizeof(size_str));
+                    output_format_size(size, size_str, sizeof(size_str));
                     output_printf(out, OUTPUT_NORMAL, " %8s", size_str);
                     total_size += size;
                 }
@@ -532,7 +517,7 @@ static error_t *list_files(
     output_newline(out);
     if (opts->verbose) {
         char size_str[32];
-        format_size(total_size, size_str, sizeof(size_str));
+        output_format_size(total_size, size_str, sizeof(size_str));
         output_printf(out, OUTPUT_NORMAL, "Total: %zu file%s, %s\n",
                string_array_size(files),
                string_array_size(files) == 1 ? "" : "s",

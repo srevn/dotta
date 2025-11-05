@@ -579,6 +579,22 @@ void output_progress(
     }
 }
 
+void output_format_size(size_t bytes, char *buffer, size_t buffer_size) {
+    if (!buffer || buffer_size == 0) {
+        return;
+    }
+
+    if (bytes < 1024) {
+        snprintf(buffer, buffer_size, "%zu B", bytes);
+    } else if (bytes < 1024 * 1024) {
+        snprintf(buffer, buffer_size, "%.1f KB", bytes / 1024.0);
+    } else if (bytes < 1024 * 1024 * 1024) {
+        snprintf(buffer, buffer_size, "%.1f MB", bytes / (1024.0 * 1024.0));
+    } else {
+        snprintf(buffer, buffer_size, "%.1f GB", bytes / (1024.0 * 1024.0 * 1024.0));
+    }
+}
+
 /* JSON Output Helpers */
 
 void output_json_begin(const output_ctx_t *ctx) {

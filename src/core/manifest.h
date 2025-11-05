@@ -31,6 +31,24 @@
 #include <git2.h>
 
 /**
+ * Statistics from profile enable operation
+ */
+typedef struct {
+    size_t total_files;         /* Total files owned by profile (after precedence) */
+    size_t already_deployed;    /* Files marked DEPLOYED (match filesystem) */
+    size_t needs_deployment;    /* Files marked PENDING_DEPLOYMENT */
+} manifest_enable_stats_t;
+
+/**
+ * Statistics from profile disable operation
+ */
+typedef struct {
+    size_t total_files;         /* Total files owned by disabled profile */
+    size_t files_with_fallback; /* Files updated to fallback profile */
+    size_t files_removed;       /* Files marked PENDING_REMOVAL */
+} manifest_disable_stats_t;
+
+/**
  * Enable profile in manifest
  *
  * Called when a profile is enabled. Populates manifest from Git branch
@@ -76,7 +94,8 @@ error_t *manifest_enable_profile(
     git_repository *repo,
     state_t *state,
     const char *profile_name,
-    const string_array_t *enabled_profiles
+    const string_array_t *enabled_profiles,
+    manifest_enable_stats_t *out_stats
 );
 
 /**
@@ -119,7 +138,8 @@ error_t *manifest_disable_profile(
     git_repository *repo,
     state_t *state,
     const char *profile_name,
-    const string_array_t *remaining_enabled
+    const string_array_t *remaining_enabled,
+    manifest_disable_stats_t *out_stats
 );
 
 /**

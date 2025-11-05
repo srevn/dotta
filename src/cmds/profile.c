@@ -56,6 +56,138 @@ static error_t *count_profile_files(git_repository *repo, const char *profile_na
 }
 
 /**
+ * Print manifest enable statistics
+ *
+ * Shows deployment analysis from manifest enable operation.
+ * Verbose mode shows detailed breakdown, normal mode shows summary.
+ */
+static void print_manifest_enable_stats(
+    const output_ctx_t *out,
+    const char *profile_name,
+    const manifest_enable_stats_t *stats,
+    bool verbose
+) {
+    if (!stats || stats->total_files == 0) {
+        return;
+    }
+
+    if (verbose) {
+        /* Detailed breakdown */
+        output_section(out, "Manifest Analysis");
+        output_printf(out, OUTPUT_NORMAL, "  Profile: %s\n", profile_name);
+        output_printf(out, OUTPUT_NORMAL, "  Total files: %zu\n", stats->total_files);
+
+        if (stats->already_deployed > 0) {
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "    - %s%zu%s already deployed and correct\n",
+                             output_color_code(out, OUTPUT_COLOR_GREEN),
+                             stats->already_deployed,
+                             output_color_code(out, OUTPUT_COLOR_RESET));
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "    - %zu already deployed and correct\n",
+                             stats->already_deployed);
+            }
+        }
+
+        if (stats->needs_deployment > 0) {
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "    - %s%zu%s need deployment\n",
+                             output_color_code(out, OUTPUT_COLOR_YELLOW),
+                             stats->needs_deployment,
+                             output_color_code(out, OUTPUT_COLOR_RESET));
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "    - %zu need deployment\n",
+                             stats->needs_deployment);
+            }
+        }
+        output_newline(out);
+    } else {
+        /* Compact summary */
+        if (stats->needs_deployment > 0) {
+            if (stats->already_deployed > 0) {
+                output_printf(out, OUTPUT_NORMAL, "  Staged %zu file%s for deployment (%zu already up-to-date)\n",
+                             stats->needs_deployment,
+                             stats->needs_deployment == 1 ? "" : "s",
+                             stats->already_deployed);
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "  Staged %zu file%s for deployment\n",
+                             stats->needs_deployment,
+                             stats->needs_deployment == 1 ? "" : "s");
+            }
+        } else if (stats->already_deployed > 0) {
+            output_printf(out, OUTPUT_NORMAL, "  All %zu file%s already deployed\n",
+                         stats->already_deployed,
+                         stats->already_deployed == 1 ? "" : "s");
+        }
+    }
+}
+
+/**
+ * Print manifest disable statistics
+ *
+ * Shows impact analysis from manifest disable operation.
+ */
+static void print_manifest_disable_stats(
+    const output_ctx_t *out,
+    const char *profile_name,
+    const manifest_disable_stats_t *stats,
+    bool verbose
+) {
+    if (!stats || stats->total_files == 0) {
+        return;
+    }
+
+    if (verbose) {
+        /* Detailed breakdown */
+        output_section(out, "Manifest Analysis");
+        output_printf(out, OUTPUT_NORMAL, "  Profile: %s\n", profile_name);
+        output_printf(out, OUTPUT_NORMAL, "  Total files affected: %zu\n", stats->total_files);
+
+        if (stats->files_with_fallback > 0) {
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "    - %s%zu%s file%s with fallback (will revert)\n",
+                             output_color_code(out, OUTPUT_COLOR_GREEN),
+                             stats->files_with_fallback,
+                             output_color_code(out, OUTPUT_COLOR_RESET),
+                             stats->files_with_fallback == 1 ? "" : "s");
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "    - %zu file%s with fallback (will revert)\n",
+                             stats->files_with_fallback,
+                             stats->files_with_fallback == 1 ? "" : "s");
+            }
+        }
+
+        if (stats->files_removed > 0) {
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "    - %s%zu%s file%s without fallback (will be removed)\n",
+                             output_color_code(out, OUTPUT_COLOR_RED),
+                             stats->files_removed,
+                             output_color_code(out, OUTPUT_COLOR_RESET),
+                             stats->files_removed == 1 ? "" : "s");
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "    - %zu file%s without fallback (will be removed)\n",
+                             stats->files_removed,
+                             stats->files_removed == 1 ? "" : "s");
+            }
+        }
+        output_newline(out);
+    } else {
+        /* Compact summary */
+        if (stats->files_removed > 0) {
+            output_printf(out, OUTPUT_NORMAL, "  Staged %zu file%s for removal\n",
+                         stats->files_removed,
+                         stats->files_removed == 1 ? "" : "s");
+        }
+
+        if (stats->files_with_fallback > 0) {
+            output_printf(out, OUTPUT_NORMAL, "  %zu file%s reverted to lower precedence\n",
+                         stats->files_with_fallback,
+                         stats->files_with_fallback == 1 ? "" : "s");
+        }
+    }
+}
+
+/**
  * Profile list subcommand
  *
  * Shows enabled vs available profiles with clear visual distinction.
@@ -598,24 +730,21 @@ static error_t *profile_enable(
         }
         enabled_count++;
 
-        /* Sync profile to manifest */
-        err = manifest_enable_profile(repo, state, profile_name, enabled);
+        /* Sync profile to manifest and capture stats */
+        manifest_enable_stats_t stats = {0};
+        err = manifest_enable_profile(repo, state, profile_name, enabled, &stats);
         if (err) {
             err = error_wrap(err, "Failed to sync profile '%s' to manifest", profile_name);
             goto cleanup;
         }
 
+        /* Show manifest analysis if verbose, otherwise show compact summary */
         if (opts->verbose) {
-            size_t file_count = 0;
-            error_t *count_err = count_profile_files(repo, profile_name, &file_count);
-
-            if (count_err) {
-                output_success(out, "  ✓ Enabled %s (staged for deployment)", profile_name);
-                error_free(count_err);
-            } else {
-                output_success(out, "  ✓ Enabled %s (%zu file%s staged)",
-                              profile_name, file_count, file_count == 1 ? "" : "s");
-            }
+            print_manifest_enable_stats(out, profile_name, &stats, true);
+            output_success(out, "  ✓ Enabled %s", profile_name);
+        } else {
+            output_success(out, "  ✓ Enabled %s", profile_name);
+            print_manifest_enable_stats(out, profile_name, &stats, false);
         }
     }
 
@@ -856,11 +985,20 @@ static error_t *profile_disable(
 
             if (was_enabled) {
                 /* Unsync from manifest (updates to fallback or marks for removal) */
-                err = manifest_disable_profile(repo, state, profile_name, new_enabled);
+                manifest_disable_stats_t stats = {0};
+                err = manifest_disable_profile(repo, state, profile_name, new_enabled, &stats);
                 if (err) {
                     err = error_wrap(err, "Failed to unsync profile '%s' from manifest",
                                    profile_name);
                     goto cleanup;
+                }
+
+                /* Show manifest analysis (verbose mode shows details earlier in first loop) */
+                if (opts->verbose) {
+                    print_manifest_disable_stats(out, profile_name, &stats, true);
+                } else {
+                    /* In non-verbose, show compact summary per-profile */
+                    print_manifest_disable_stats(out, profile_name, &stats, false);
                 }
             }
         }

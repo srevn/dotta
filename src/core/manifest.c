@@ -488,7 +488,8 @@ error_t *manifest_enable_profile(
     git_repository *repo,
     state_t *state,
     const char *profile_name,
-    const string_array_t *enabled_profiles
+    const string_array_t *enabled_profiles,
+    manifest_enable_stats_t *out_stats
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -591,22 +592,11 @@ error_t *manifest_enable_profile(
         }
     }
 
-    /* Display informative summary */
-    if (total_files > 0) {
-        printf("Analyzing %s profile...\n", profile_name);
-        printf("  %zu files found:\n", total_files);
-        if (already_deployed > 0) {
-            printf("    - %zu already deployed and correct\n", already_deployed);
-        }
-        if (needs_deployment > 0) {
-            printf("    - %zu need deployment\n", needs_deployment);
-        }
-
-        if (needs_deployment > 0) {
-            printf("Staged %zu files for deployment.\n", needs_deployment);
-        } else {
-            printf("All files already deployed.\n");
-        }
+    /* Populate output stats if requested */
+    if (out_stats) {
+        out_stats->total_files = total_files;
+        out_stats->already_deployed = already_deployed;
+        out_stats->needs_deployment = needs_deployment;
     }
 
     /* 7. Sync tracked directories */
@@ -639,7 +629,8 @@ error_t *manifest_disable_profile(
     git_repository *repo,
     state_t *state,
     const char *profile_name,
-    const string_array_t *remaining_enabled
+    const string_array_t *remaining_enabled,
+    manifest_disable_stats_t *out_stats
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -652,6 +643,11 @@ error_t *manifest_disable_profile(
     manifest_t *fallback_manifest = NULL;
     profile_list_t *fallback_profiles = NULL;
     hashmap_t *profile_oids = NULL;
+
+    /* Track stats for output */
+    size_t total_files = 0;
+    size_t fallback_count = 0;
+    size_t removed_count = 0;
 
     /* 1. Get all entries from disabled profile */
     err = state_get_entries_by_profile(state, profile_name, &entries, &count);
@@ -686,6 +682,7 @@ error_t *manifest_disable_profile(
     /* 3. Process each entry */
     for (size_t i = 0; i < count; i++) {
         state_file_entry_t *entry = &entries[i];
+        total_files++;
 
         /* Check for fallback in remaining profiles using O(1) index lookup */
         file_entry_t *fallback = NULL;
@@ -734,6 +731,8 @@ error_t *manifest_disable_profile(
                                entry->storage_path);
                 goto cleanup;
             }
+
+            fallback_count++;
         } else {
             /* No fallback - mark for removal */
             err = state_update_entry_status(state, entry->filesystem_path,
@@ -743,7 +742,16 @@ error_t *manifest_disable_profile(
                                entry->storage_path);
                 goto cleanup;
             }
+
+            removed_count++;
         }
+    }
+
+    /* Populate output stats if requested */
+    if (out_stats) {
+        out_stats->total_files = total_files;
+        out_stats->files_with_fallback = fallback_count;
+        out_stats->files_removed = removed_count;
     }
 
     /* 4. Sync tracked directories */

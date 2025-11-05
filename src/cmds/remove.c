@@ -1442,7 +1442,8 @@ static error_t *delete_profile_branch(
             repo,
             state,
             opts->profile,
-            remaining
+            remaining,
+            NULL  /* No stats needed for remove command */
         );
 
         if (err) {

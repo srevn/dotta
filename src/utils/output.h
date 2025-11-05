@@ -280,6 +280,18 @@ void output_progress(
 );
 
 /**
+ * Format file size in human-readable form
+ *
+ * Formats byte sizes into human-readable strings (B, KB, MB, GB).
+ * The buffer must be at least 32 bytes to accommodate all formats.
+ *
+ * @param bytes Size in bytes
+ * @param buffer Output buffer for formatted string
+ * @param buffer_size Size of output buffer (minimum 32 bytes)
+ */
+void output_format_size(size_t bytes, char *buffer, size_t buffer_size);
+
+/**
  * Begin JSON output
  */
 void output_json_begin(const output_ctx_t *ctx);

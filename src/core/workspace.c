@@ -686,6 +686,28 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
     /* Identify orphans: in state, not in manifest */
     for (size_t i = 0; i < state_count; i++) {
         const state_file_entry_t *state_entry = &state_files[i];
+
+        /* STATUS-BASED DISCRIMINATION
+         *
+         * "Not in manifest" has two distinct meanings based on status:
+         *
+         * 1. DEPLOYED/PENDING_DEPLOYMENT + not in manifest = TRUE ORPHAN
+         *    - File removed from Git branch
+         *    - Profile disabled unexpectedly
+         *    - Data inconsistency requiring cleanup
+         *
+         * 2. PENDING_REMOVAL + not in manifest = INTENTIONAL STAGING
+         *    - File staged for removal (via profile disable or file remove)
+         *    - Expected VWD state transition
+         *    - Handled by analyze_pending_removals(), not an orphan
+         *
+         * The status field is the semantic discriminator. Orphan detection
+         * should ONLY handle case #1 (unexpected absences).
+         */
+        if (state_entry->status == MANIFEST_STATUS_PENDING_REMOVAL) {
+            continue;  /* Not an orphan - staged for removal */
+        }
+
         const char *fs_path = state_entry->filesystem_path;
         const char *storage_path = state_entry->storage_path;
         const char *profile = state_entry->profile;
@@ -983,6 +1005,21 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
 
     for (size_t i = 0; i < ws->diverged_count; i++) {
         const workspace_item_t *item = &ws->diverged[i];
+
+        /* PRIORITY CHECK: PENDING_REMOVAL items represent pending changes
+         *
+         * Files staged for removal (via profile disable or file remove) should
+         * make workspace status DIRTY, even though they have:
+         * - state = WORKSPACE_STATE_DEPLOYED (still deployed until apply)
+         * - divergence = DIVERGENCE_NONE (no content/mode/ownership changes)
+         *
+         * The manifest_status field distinguishes them from truly clean deployed files.
+         * Check this BEFORE the state-based switch to ensure correct status computation.
+         */
+        if (item->manifest_status == MANIFEST_STATUS_PENDING_REMOVAL) {
+            has_warnings = true;
+            continue;
+        }
 
         switch (item->state) {
             case WORKSPACE_STATE_ORPHANED:
@@ -1630,10 +1667,18 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
 
         if (!entry->source_profile) {
             /* Profile not in workspace scope - this can happen if:
-             * 1. Profile was disabled but manifest has orphaned entries
-             * 2. Profile branch was deleted outside dotta
-             *
-             * Skip with warning. Orphan detection will handle cleanup. */
+             * 1. Profile was disabled but manifest has DEPLOYED orphaned entries (unexpected)
+             * 2. Profile branch was deleted outside dotta (unexpected)
+             * 3. Profile was disabled and entries marked PENDING_REMOVAL (expected)
+             */
+            if (state_entry->status == MANIFEST_STATUS_PENDING_REMOVAL) {
+                /* Expected: profile disable workflow marks files for removal.
+                 * analyze_pending_removals() will handle display to user.
+                 * Skip silently - no warning needed. */
+                continue;
+            }
+
+            /* Unexpected orphan - warn user */
             fprintf(stderr,
                 "warning: manifest entry '%s' references profile '%s' not in workspace - "
                 "run 'dotta apply' to clean up orphans\n",

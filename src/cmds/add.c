@@ -578,25 +578,23 @@ static error_t *create_commit(
 /**
  * Prepare manifest sync context
  *
- * Builds the metadata cache, keymanager, and content cache needed for
- * manifest sync operations (manifest_add_files, manifest_update_files, etc.).
+ * Creates the keymanager and content cache needed for manifest sync operations.
+ * Metadata is now loaded internally by manifest functions (manifest_add_files,
+ * manifest_update_files) to ensure fresh, post-commit metadata is used.
  *
  * This helper eliminates code duplication between update_manifest_after_add()
  * and auto_enable_and_sync_profile(), providing a single source of truth for
  * context preparation.
  *
  * Algorithm:
- *   1. Build metadata cache from all enabled profiles
- *   2. Load config and create keymanager
- *   3. Create content cache for batch operations
+ *   1. Load config and create keymanager
+ *   2. Create content cache for batch operations
  *
  * Resource Management:
  *   All resources are owned by the caller and must be freed after use.
  *   On error, all allocated resources are cleaned up before returning.
  *
  * @param repo Git repository (must not be NULL)
- * @param enabled_profiles Profiles to include in metadata cache (must not be NULL)
- * @param out_metadata_cache Output: metadata cache (must not be NULL, caller must free)
  * @param out_km Output: keymanager (must not be NULL, caller must free)
  * @param out_content_cache Output: content cache (must not be NULL, caller must free)
  * @param out_config Output: config (must not be NULL, caller must free)
@@ -604,57 +602,21 @@ static error_t *create_commit(
  */
 static error_t *prepare_manifest_sync_context(
     git_repository *repo,
-    const string_array_t *enabled_profiles,
-    hashmap_t **out_metadata_cache,
     keymanager_t **out_km,
     content_cache_t **out_content_cache,
     dotta_config_t **out_config
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(enabled_profiles);
-    CHECK_NULL(out_metadata_cache);
     CHECK_NULL(out_km);
     CHECK_NULL(out_content_cache);
     CHECK_NULL(out_config);
 
     error_t *err = NULL;
-    hashmap_t *metadata_cache = NULL;
     keymanager_t *km = NULL;
     content_cache_t *content_cache = NULL;
     dotta_config_t *config = NULL;
 
-    /* STEP 1: Build metadata cache for all enabled profiles */
-    metadata_cache = hashmap_create(string_array_size(enabled_profiles));
-    if (!metadata_cache) {
-        return ERROR(ERR_MEMORY, "Failed to create metadata cache");
-    }
-
-    for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
-        const char *profile = string_array_get(enabled_profiles, i);
-        metadata_t *metadata = NULL;
-
-        /* Load metadata from branch (may not exist for old profiles) */
-        error_t *meta_err = metadata_load_from_branch(repo, profile, &metadata);
-        if (meta_err) {
-            if (meta_err->code == ERR_NOT_FOUND) {
-                /* Profile has no metadata - not an error, skip */
-                error_free(meta_err);
-                continue;
-            }
-            /* Other error - fatal */
-            err = meta_err;
-            goto cleanup;
-        }
-
-        /* Store in cache */
-        err = hashmap_set(metadata_cache, profile, metadata);
-        if (err) {
-            metadata_free(metadata);
-            goto cleanup;
-        }
-    }
-
-    /* STEP 2: Create keymanager for content hashing */
+    /* STEP 1: Create keymanager for content hashing */
     err = config_load(NULL, &config);
     if (err) {
         goto cleanup;
@@ -665,7 +627,7 @@ static error_t *prepare_manifest_sync_context(
         goto cleanup;
     }
 
-    /* STEP 3: Create content cache for batch operations */
+    /* STEP 2: Create content cache for batch operations */
     content_cache = content_cache_create(repo, km);
     if (!content_cache) {
         err = ERROR(ERR_MEMORY, "Failed to create content cache");
@@ -673,7 +635,6 @@ static error_t *prepare_manifest_sync_context(
     }
 
     /* Success - transfer ownership to caller */
-    *out_metadata_cache = metadata_cache;
     *out_km = km;
     *out_content_cache = content_cache;
     *out_config = config;
@@ -689,17 +650,6 @@ cleanup:
     }
     if (config) {
         config_free(config);
-    }
-    if (metadata_cache) {
-        /* Free metadata stored in cache */
-        for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
-            metadata_t *metadata = hashmap_get(metadata_cache,
-                                              string_array_get(enabled_profiles, i));
-            if (metadata) {
-                metadata_free(metadata);
-            }
-        }
-        hashmap_free(metadata_cache, NULL);
     }
 
     return err;
@@ -753,7 +703,6 @@ static error_t *auto_enable_and_sync_profile(
     state_t *state = NULL;
     string_array_t *enabled_profiles = NULL;
     char **profile_names = NULL;
-    hashmap_t *metadata_cache = NULL;
     keymanager_t *km = NULL;
     dotta_config_t *config = NULL;
     content_cache_t *content_cache = NULL;
@@ -806,11 +755,9 @@ static error_t *auto_enable_and_sync_profile(
         return error_wrap(err, "Failed to add profile to enabled list");
     }
 
-    /* STEP 4: Prepare sync context (metadata cache + keymanager + content cache) */
+    /* STEP 4: Prepare sync context (keymanager + content cache) */
     err = prepare_manifest_sync_context(
         repo,
-        enabled_profiles,
-        &metadata_cache,
         &km,
         &content_cache,
         &config
@@ -831,8 +778,7 @@ static error_t *auto_enable_and_sync_profile(
      *
      * manifest_add_files handles precedence resolution automatically.
      * If this profile has lower precedence than existing enabled profiles,
-     * some files may be skipped (synced_count < added_files).
-     */
+     * some files may be skipped (synced_count < added_files). */
     err = manifest_add_files(
         repo,
         state,
@@ -840,7 +786,7 @@ static error_t *auto_enable_and_sync_profile(
         added_files,
         enabled_profiles,
         km,
-        metadata_cache,
+        NULL,  /* metadata_cache - pass NULL for fresh load */
         content_cache,
         &synced_count
     );
@@ -849,7 +795,7 @@ static error_t *auto_enable_and_sync_profile(
         goto cleanup;
     }
 
-    /* STEP 6.5: Sync tracked directories
+    /* STEP 7: Sync tracked directories
      *
      * Completes the Virtual Working Directory (VWD) by syncing directory
      * tracking for all enabled profiles. This ensures the newly-enabled
@@ -860,7 +806,7 @@ static error_t *auto_enable_and_sync_profile(
         goto cleanup;
     }
 
-    /* STEP 7: Persist updated enabled profiles */
+    /* STEP 8: Persist updated enabled profiles */
     size_t profile_count = string_array_size(enabled_profiles);
     profile_names = malloc(profile_count * sizeof(char *));
     if (!profile_names) {
@@ -909,17 +855,6 @@ cleanup:
     }
     if (config) {
         config_free(config);
-    }
-    if (metadata_cache) {
-        /* Free metadata stored in cache */
-        for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
-            metadata_t *metadata = hashmap_get(metadata_cache,
-                                              string_array_get(enabled_profiles, i));
-            if (metadata) {
-                metadata_free(metadata);
-            }
-        }
-        hashmap_free(metadata_cache, NULL);
     }
     if (enabled_profiles) {
         string_array_free(enabled_profiles);
@@ -990,7 +925,6 @@ static error_t *update_manifest_after_add(
     error_t *err = NULL;
     state_t *state = NULL;
     string_array_t *enabled_profiles = NULL;
-    hashmap_t *metadata_cache = NULL;
     keymanager_t *km = NULL;
     dotta_config_t *config = NULL;
     content_cache_t *content_cache = NULL;
@@ -1034,11 +968,9 @@ static error_t *update_manifest_after_add(
         return NULL;
     }
 
-    /* STEP 2: Prepare sync context (metadata cache, keymanager, content cache) */
+    /* STEP 2: Prepare sync context (keymanager, content cache) */
     err = prepare_manifest_sync_context(
         repo,
-        enabled_profiles,
-        &metadata_cache,
         &km,
         &content_cache,
         &config
@@ -1064,7 +996,7 @@ static error_t *update_manifest_after_add(
         added_files,
         enabled_profiles,
         km,
-        metadata_cache,
+        NULL,  /* metadata_cache - pass NULL for fresh load */
         content_cache,
         &synced_count
     );
@@ -1101,17 +1033,6 @@ cleanup:
     }
     if (config) {
         config_free(config);
-    }
-    if (metadata_cache) {
-        /* Free metadata in cache */
-        for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
-            metadata_t *metadata = hashmap_get(metadata_cache,
-                                              string_array_get(enabled_profiles, i));
-            if (metadata) {
-                metadata_free(metadata);
-            }
-        }
-        hashmap_free(metadata_cache, NULL);
     }
     if (enabled_profiles) {
         string_array_free(enabled_profiles);

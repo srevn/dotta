@@ -168,7 +168,10 @@ error_t *manifest_disable_profile(
  * @param item_count Number of items
  * @param enabled_profiles All enabled profiles (must not be NULL)
  * @param km Keymanager for content hashing (can be NULL if no encryption)
- * @param metadata_cache Hashmap: profile_name → metadata_t* (must not be NULL)
+ * @param metadata_cache Hashmap: profile_name → metadata_t* (optional).
+ *                       Pass NULL to load fresh metadata from Git automatically.
+ *                       Pass a hashmap for performance optimization if you have
+ *                       fresh per-profile metadata already loaded.
  * @param content_cache Content cache (can be NULL for non-cached operation)
  * @param out_synced Output: count of files synced (must not be NULL)
  * @param out_removed Output: count of files removed (must not be NULL)
@@ -242,7 +245,10 @@ error_t *manifest_update_files(
  * @param filesystem_paths Array of filesystem paths (must not be NULL)
  * @param enabled_profiles All enabled profiles (must not be NULL)
  * @param km Keymanager for content hashing (can be NULL if no encryption)
- * @param metadata_cache Hashmap: profile_name → metadata_t* (must not be NULL)
+ * @param metadata_cache Hashmap: profile_name → metadata_t* (optional).
+ *                       Pass NULL to load fresh metadata from Git automatically.
+ *                       Pass a hashmap for performance optimization if you have
+ *                       fresh per-profile metadata already loaded.
  * @param content_cache Content cache (can be NULL for non-cached operation)
  * @param out_synced Output: count of files synced (must not be NULL)
  * @return Error or NULL on success

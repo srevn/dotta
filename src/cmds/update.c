@@ -1300,9 +1300,12 @@ static error_t *update_manifest_after_update(
         goto cleanup;
     }
 
-    /* Get workspace resources (still valid after Git commits) */
+    /* Get workspace resources
+     *
+     * IMPORTANT: Do NOT use workspace metadata cache - it was loaded before
+     * Git commits and is now stale. Pass NULL to manifest_update_files() to
+     * force fresh metadata loading from the updated Git state. */
     keymanager_t *km = workspace_get_keymanager(ws);
-    const hashmap_t *metadata_cache = workspace_get_metadata_cache(ws);
     content_cache_t *content_cache = workspace_get_content_cache(ws);
 
     /* Use bulk sync operation (O(M + N) - optimal!) */
@@ -1314,7 +1317,7 @@ static error_t *update_manifest_after_update(
         item_count,
         enabled_profiles,
         km,
-        metadata_cache,
+        NULL,  /* metadata_cache - pass NULL for fresh load */
         content_cache,
         &synced,
         &removed,

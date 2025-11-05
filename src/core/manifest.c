@@ -1220,7 +1220,6 @@ error_t *manifest_update_files(
     CHECK_NULL(state);
     CHECK_NULL(items);
     CHECK_NULL(enabled_profiles);
-    CHECK_NULL(metadata_cache);
     CHECK_NULL(out_synced);
     CHECK_NULL(out_removed);
     CHECK_NULL(out_fallbacks);
@@ -1238,6 +1237,8 @@ error_t *manifest_update_files(
     profile_list_t *profiles = NULL;
     manifest_t *fresh_manifest = NULL;
     hashmap_t *profile_oids = NULL;
+    metadata_t *metadata_merged = NULL;
+    bool using_cache = (metadata_cache != NULL);
 
     /* 1. Load enabled profiles from Git */
     err = profile_list_load(repo, enabled_profiles->items,
@@ -1266,7 +1267,34 @@ error_t *manifest_update_files(
         goto cleanup;
     }
 
-    /* 5. Process each item */
+    /* 5. Load fresh metadata if not provided (NULL handling)
+     *
+     * CRITICAL: If metadata_cache is NULL, load merged metadata from Git.
+     * This ensures we have current metadata including all newly-committed files.
+     *
+     * Pattern: Same as manifest_sync_diff() (lines 1671-1688).
+     * Merged metadata contains all enabled profiles with precedence applied.
+     */
+    if (!metadata_cache) {
+        /* No cache provided - load merged metadata for all enabled profiles */
+        err = metadata_load_from_profiles(repo, enabled_profiles, &metadata_merged);
+        if (err && err->code != ERR_NOT_FOUND) {
+            err = error_wrap(err, "Failed to load metadata for manifest sync");
+            goto cleanup;
+        }
+        if (err) {
+            /* No metadata file exists - create empty metadata (old profiles without metadata.json)
+             * This is required because content_hash_from_tree_entry requires non-NULL metadata */
+            error_free(err);
+            err = metadata_create_empty(&metadata_merged);
+            if (err) {
+                err = error_wrap(err, "Failed to create empty metadata");
+                goto cleanup;
+            }
+        }
+    }
+
+    /* 6. Process each item */
     for (size_t i = 0; i < item_count; i++) {
         const workspace_item_t *item = items[i];
 
@@ -1288,8 +1316,14 @@ error_t *manifest_update_files(
                 /* Fallback exists - update to fallback profile */
                 const char *git_oid = hashmap_get(profile_oids,
                                                  fallback->source_profile->name);
-                const metadata_t *metadata = hashmap_get(metadata_cache,
-                                                        fallback->source_profile->name);
+
+                /* Get metadata - from cache if available, otherwise use merged */
+                const metadata_t *metadata = NULL;
+                if (using_cache) {
+                    metadata = hashmap_get(metadata_cache, fallback->source_profile->name);
+                } else {
+                    metadata = metadata_merged;
+                }
 
                 err = sync_entry_to_state(repo, state, fallback, git_oid, metadata,
                                          MANIFEST_STATUS_PENDING_DEPLOYMENT, km, content_cache);
@@ -1340,7 +1374,14 @@ error_t *manifest_update_files(
              * Key insight: UPDATE captures files FROM filesystem, so they're
              * already deployed. Setting PENDING_DEPLOYMENT would be misleading. */
             const char *git_oid = hashmap_get(profile_oids, item->profile);
-            const metadata_t *metadata = hashmap_get(metadata_cache, item->profile);
+
+            /* Get metadata - from cache if available, otherwise use merged */
+            const metadata_t *metadata = NULL;
+            if (using_cache) {
+                metadata = hashmap_get(metadata_cache, item->profile);
+            } else {
+                metadata = metadata_merged;
+            }
 
             err = sync_entry_to_state(repo, state, entry, git_oid, metadata,
                                      MANIFEST_STATUS_DEPLOYED, km, content_cache);
@@ -1355,6 +1396,7 @@ error_t *manifest_update_files(
     }
 
 cleanup:
+    if (metadata_merged) metadata_free(metadata_merged);
     if (profile_oids) hashmap_free(profile_oids, free);  /* Free oid strings */
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);
@@ -1436,7 +1478,6 @@ error_t *manifest_add_files(
     CHECK_NULL(profile_name);
     CHECK_NULL(filesystem_paths);
     CHECK_NULL(enabled_profiles);
-    CHECK_NULL(metadata_cache);
     CHECK_NULL(out_synced);
 
     /* Initialize output */
@@ -1450,6 +1491,8 @@ error_t *manifest_add_files(
     profile_list_t *profiles = NULL;
     manifest_t *fresh_manifest = NULL;
     hashmap_t *profile_oids = NULL;
+    metadata_t *metadata_merged = NULL;
+    bool using_cache = (metadata_cache != NULL);
 
     /* 1. Load enabled profiles from Git */
     err = profile_list_load(repo, enabled_profiles->items,
@@ -1478,7 +1521,34 @@ error_t *manifest_add_files(
         goto cleanup;
     }
 
-    /* 5. Process each file */
+    /* 5. Load fresh metadata if not provided (NULL handling)
+     *
+     * CRITICAL: If metadata_cache is NULL, load merged metadata from Git.
+     * This ensures we have current metadata including all newly-committed files.
+     *
+     * Pattern: Same as manifest_sync_diff() (lines 1671-1688).
+     * Merged metadata contains all enabled profiles with precedence applied.
+     */
+    if (!metadata_cache) {
+        /* No cache provided - load merged metadata for all enabled profiles */
+        err = metadata_load_from_profiles(repo, enabled_profiles, &metadata_merged);
+        if (err && err->code != ERR_NOT_FOUND) {
+            err = error_wrap(err, "Failed to load metadata for manifest sync");
+            goto cleanup;
+        }
+        if (err) {
+            /* No metadata file exists - create empty metadata (old profiles without metadata.json)
+             * This is required because content_hash_from_tree_entry requires non-NULL metadata */
+            error_free(err);
+            err = metadata_create_empty(&metadata_merged);
+            if (err) {
+                err = error_wrap(err, "Failed to create empty metadata");
+                goto cleanup;
+            }
+        }
+    }
+
+    /* 6. Process each file */
     for (size_t i = 0; i < string_array_size(filesystem_paths); i++) {
         const char *filesystem_path = string_array_get(filesystem_paths, i);
 
@@ -1509,7 +1579,14 @@ error_t *manifest_add_files(
          * Key insight: ADD captures files FROM filesystem, so they're
          * already deployed. Setting PENDING_DEPLOYMENT would be misleading. */
         const char *profile_git_oid = hashmap_get(profile_oids, entry->source_profile->name);
-        const metadata_t *metadata = hashmap_get(metadata_cache, entry->source_profile->name);
+
+        /* Get metadata - from cache if available, otherwise use merged */
+        const metadata_t *metadata = NULL;
+        if (using_cache) {
+            metadata = hashmap_get(metadata_cache, entry->source_profile->name);
+        } else {
+            metadata = metadata_merged;
+        }
 
         err = sync_entry_to_state(repo, state, entry, profile_git_oid, metadata,
                                  MANIFEST_STATUS_DEPLOYED, km, content_cache);
@@ -1524,6 +1601,7 @@ error_t *manifest_add_files(
     }
 
 cleanup:
+    if (metadata_merged) metadata_free(metadata_merged);
     if (profile_oids) hashmap_free(profile_oids, free);  /* Free oid strings */
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);

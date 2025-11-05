@@ -374,7 +374,7 @@ static error_t *sync_entry_to_state(
         .group = meta_item ? meta_item->group : NULL,
         .encrypted = meta_item ? meta_item->file.encrypted : false,
         .staged_at = time(NULL),
-        .deployed_at = 0  /* Not deployed yet (or preserved by update) */
+        .deployed_at = (status == MANIFEST_STATUS_DEPLOYED) ? time(NULL) : 0
     };
 
     /* 6. Check if entry exists (to preserve deployed_at) */

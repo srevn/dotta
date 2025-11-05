@@ -576,6 +576,351 @@ static error_t *create_commit(
 }
 
 /**
+ * Prepare manifest sync context
+ *
+ * Builds the metadata cache, keymanager, and content cache needed for
+ * manifest sync operations (manifest_add_files, manifest_update_files, etc.).
+ *
+ * This helper eliminates code duplication between update_manifest_after_add()
+ * and auto_enable_and_sync_profile(), providing a single source of truth for
+ * context preparation.
+ *
+ * Algorithm:
+ *   1. Build metadata cache from all enabled profiles
+ *   2. Load config and create keymanager
+ *   3. Create content cache for batch operations
+ *
+ * Resource Management:
+ *   All resources are owned by the caller and must be freed after use.
+ *   On error, all allocated resources are cleaned up before returning.
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param enabled_profiles Profiles to include in metadata cache (must not be NULL)
+ * @param out_metadata_cache Output: metadata cache (must not be NULL, caller must free)
+ * @param out_km Output: keymanager (must not be NULL, caller must free)
+ * @param out_content_cache Output: content cache (must not be NULL, caller must free)
+ * @param out_config Output: config (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+static error_t *prepare_manifest_sync_context(
+    git_repository *repo,
+    const string_array_t *enabled_profiles,
+    hashmap_t **out_metadata_cache,
+    keymanager_t **out_km,
+    content_cache_t **out_content_cache,
+    dotta_config_t **out_config
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(enabled_profiles);
+    CHECK_NULL(out_metadata_cache);
+    CHECK_NULL(out_km);
+    CHECK_NULL(out_content_cache);
+    CHECK_NULL(out_config);
+
+    error_t *err = NULL;
+    hashmap_t *metadata_cache = NULL;
+    keymanager_t *km = NULL;
+    content_cache_t *content_cache = NULL;
+    dotta_config_t *config = NULL;
+
+    /* STEP 1: Build metadata cache for all enabled profiles */
+    metadata_cache = hashmap_create(string_array_size(enabled_profiles));
+    if (!metadata_cache) {
+        return ERROR(ERR_MEMORY, "Failed to create metadata cache");
+    }
+
+    for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
+        const char *profile = string_array_get(enabled_profiles, i);
+        metadata_t *metadata = NULL;
+
+        /* Load metadata from branch (may not exist for old profiles) */
+        error_t *meta_err = metadata_load_from_branch(repo, profile, &metadata);
+        if (meta_err) {
+            if (meta_err->code == ERR_NOT_FOUND) {
+                /* Profile has no metadata - not an error, skip */
+                error_free(meta_err);
+                continue;
+            }
+            /* Other error - fatal */
+            err = meta_err;
+            goto cleanup;
+        }
+
+        /* Store in cache */
+        err = hashmap_set(metadata_cache, profile, metadata);
+        if (err) {
+            metadata_free(metadata);
+            goto cleanup;
+        }
+    }
+
+    /* STEP 2: Create keymanager for content hashing */
+    err = config_load(NULL, &config);
+    if (err) {
+        goto cleanup;
+    }
+
+    err = keymanager_create(config, &km);
+    if (err) {
+        goto cleanup;
+    }
+
+    /* STEP 3: Create content cache for batch operations */
+    content_cache = content_cache_create(repo, km);
+    if (!content_cache) {
+        err = ERROR(ERR_MEMORY, "Failed to create content cache");
+        goto cleanup;
+    }
+
+    /* Success - transfer ownership to caller */
+    *out_metadata_cache = metadata_cache;
+    *out_km = km;
+    *out_content_cache = content_cache;
+    *out_config = config;
+    return NULL;
+
+cleanup:
+    /* Free resources in reverse order of allocation */
+    if (content_cache) {
+        content_cache_free(content_cache);
+    }
+    if (km) {
+        keymanager_free(km);
+    }
+    if (config) {
+        config_free(config);
+    }
+    if (metadata_cache) {
+        /* Free metadata stored in cache */
+        for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
+            metadata_t *metadata = hashmap_get(metadata_cache,
+                                              string_array_get(enabled_profiles, i));
+            if (metadata) {
+                metadata_free(metadata);
+            }
+        }
+        hashmap_free(metadata_cache, NULL);
+    }
+
+    return err;
+}
+
+/**
+ * Auto-enable newly created profile and sync files to manifest
+ *
+ * Called when `dotta add -p <profile>` creates a NEW profile branch for the first
+ * time. Combines profile enabling with manifest sync in a single atomic transaction.
+ *
+ * WHY manifest_add_files (not manifest_enable_profile):
+ * - Files captured FROM filesystem (already deployed) → status = DEPLOYED
+ * - manifest_enable_profile marks files PENDING_DEPLOYMENT (wrong semantic)
+ * - Matches VWD architecture specification (ARCHITECTURE_MANIFEST_VWD.md:569)
+ *
+ * Algorithm:
+ *   1. Load current enabled profiles (or create empty list if no state)
+ *   2. Check if already enabled (defensive, shouldn't happen)
+ *   3. Add new profile to enabled list (in-memory only)
+ *   4. Prepare sync context (metadata cache, keymanager, content cache)
+ *   5. Open transaction
+ *   6. Sync files to manifest with DEPLOYED status
+ *   7. Persist updated enabled profiles list
+ *   8. Commit transaction atomically
+ *
+ * Transaction atomicity ensures: enable + sync succeed together or fail together.
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param profile_name Profile to auto-enable (must not be NULL, must exist in Git)
+ * @param added_files Filesystem paths that were added (must not be NULL)
+ * @param out Output context for user feedback (can be NULL)
+ * @param out_updated Output flag: true if successful (must not be NULL)
+ * @param out_synced Output: count of files synced (can be NULL)
+ * @return Error or NULL on success (non-fatal - caller treats as warning)
+ */
+static error_t *auto_enable_and_sync_profile(
+    git_repository *repo,
+    const char *profile_name,
+    const string_array_t *added_files,
+    output_ctx_t *out,
+    bool *out_updated,
+    size_t *out_synced
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(profile_name);
+    CHECK_NULL(added_files);
+    CHECK_NULL(out_updated);
+
+    error_t *err = NULL;
+    state_t *state = NULL;
+    string_array_t *enabled_profiles = NULL;
+    char **profile_names = NULL;
+    hashmap_t *metadata_cache = NULL;
+    keymanager_t *km = NULL;
+    dotta_config_t *config = NULL;
+    content_cache_t *content_cache = NULL;
+    size_t synced_count = 0;
+
+    *out_updated = false;
+    if (out_synced) {
+        *out_synced = 0;
+    }
+
+    /* STEP 1: Load current enabled profiles (read-only, no transaction) */
+    err = state_load(repo, &state);
+    if (err) {
+        if (err->code == ERR_NOT_FOUND) {
+            /* No state file yet - create empty enabled list */
+            error_free(err);
+            err = NULL;
+            enabled_profiles = string_array_create();
+            if (!enabled_profiles) {
+                return ERROR(ERR_MEMORY, "Failed to create enabled profiles list");
+            }
+        } else {
+            return error_wrap(err, "Failed to load state");
+        }
+    } else {
+        /* State exists - get enabled profiles */
+        err = state_get_profiles(state, &enabled_profiles);
+        if (err) {
+            state_free(state);
+            return error_wrap(err, "Failed to get enabled profiles");
+        }
+        state_free(state);
+        state = NULL;
+    }
+
+    /* STEP 2: Check if already enabled (defensive) */
+    for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
+        if (strcmp(string_array_get(enabled_profiles, i), profile_name) == 0) {
+            /* Already enabled - idempotent success */
+            string_array_free(enabled_profiles);
+            *out_updated = true;
+            return NULL;
+        }
+    }
+
+    /* STEP 3: Add new profile to enabled list (in-memory) */
+    err = string_array_push(enabled_profiles, profile_name);
+    if (err) {
+        string_array_free(enabled_profiles);
+        return error_wrap(err, "Failed to add profile to enabled list");
+    }
+
+    /* STEP 4: Prepare sync context (metadata cache + keymanager + content cache) */
+    err = prepare_manifest_sync_context(
+        repo,
+        enabled_profiles,
+        &metadata_cache,
+        &km,
+        &content_cache,
+        &config
+    );
+    if (err) {
+        err = error_wrap(err, "Failed to prepare sync context");
+        goto cleanup;
+    }
+
+    /* STEP 5: Open write transaction */
+    err = state_load_for_update(repo, &state);
+    if (err) {
+        err = error_wrap(err, "Failed to open transaction");
+        goto cleanup;
+    }
+
+    /* STEP 6: Sync files to manifest with DEPLOYED status
+     *
+     * manifest_add_files handles precedence resolution automatically.
+     * If this profile has lower precedence than existing enabled profiles,
+     * some files may be skipped (synced_count < added_files).
+     */
+    err = manifest_add_files(
+        repo,
+        state,
+        profile_name,
+        added_files,
+        enabled_profiles,
+        km,
+        metadata_cache,
+        content_cache,
+        &synced_count
+    );
+    if (err) {
+        err = error_wrap(err, "Failed to sync files to manifest");
+        goto cleanup;
+    }
+
+    /* STEP 7: Persist updated enabled profiles */
+    size_t profile_count = string_array_size(enabled_profiles);
+    profile_names = malloc(profile_count * sizeof(char *));
+    if (!profile_names) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate profile names");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < profile_count; i++) {
+        profile_names[i] = (char *)string_array_get(enabled_profiles, i);
+    }
+
+    err = state_set_profiles(state, profile_names, profile_count);
+    if (err) {
+        err = error_wrap(err, "Failed to update state profiles");
+        goto cleanup;
+    }
+
+    /* STEP 8: Commit transaction atomically */
+    err = state_save(repo, state);
+    if (err) {
+        err = error_wrap(err, "Failed to commit transaction");
+        goto cleanup;
+    }
+
+    /* Success */
+    *out_updated = true;
+    if (out_synced) {
+        *out_synced = synced_count;
+    }
+
+    if (out && synced_count > 0) {
+        if (synced_count < string_array_size(added_files)) {
+            output_info(out, "Auto-enabled '%s' (%zu/%zu files synced, precedence applied)",
+                       profile_name, synced_count, string_array_size(added_files));
+        }
+    }
+
+cleanup:
+    /* Free resources in reverse order */
+    free(profile_names);
+    if (content_cache) {
+        content_cache_free(content_cache);
+    }
+    if (km) {
+        keymanager_free(km);
+    }
+    if (config) {
+        config_free(config);
+    }
+    if (metadata_cache) {
+        /* Free metadata stored in cache */
+        for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
+            metadata_t *metadata = hashmap_get(metadata_cache,
+                                              string_array_get(enabled_profiles, i));
+            if (metadata) {
+                metadata_free(metadata);
+            }
+        }
+        hashmap_free(metadata_cache, NULL);
+    }
+    if (enabled_profiles) {
+        string_array_free(enabled_profiles);
+    }
+    if (state) {
+        state_free(state);  /* Auto-rolls back if err != NULL */
+    }
+
+    return err;
+}
+
+/**
  * Update manifest after successful add operation
  *
  * Called after Git commit succeeds. Updates manifest for all added files
@@ -678,67 +1023,28 @@ static error_t *update_manifest_after_add(
         return NULL;
     }
 
-    /* STEP 2: Build metadata cache for all enabled profiles
-     *
-     * This is the only context manifest_add_files needs from us.
-     * The function builds its own fresh manifest from Git internally. */
-    metadata_cache = hashmap_create(string_array_size(enabled_profiles));
-    if (!metadata_cache) {
-        err = ERROR(ERR_MEMORY, "Failed to create metadata cache");
-        goto cleanup;
-    }
-
-    for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
-        const char *profile = string_array_get(enabled_profiles, i);
-        metadata_t *metadata = NULL;
-
-        /* Load metadata from branch (may not exist for old profiles) */
-        error_t *meta_err = metadata_load_from_branch(repo, profile, &metadata);
-        if (meta_err) {
-            if (meta_err->code == ERR_NOT_FOUND) {
-                /* Profile has no metadata - not an error, skip */
-                error_free(meta_err);
-                continue;
-            }
-            /* Other error - fatal */
-            err = meta_err;
-            goto cleanup;
-        }
-
-        /* Store in cache */
-        err = hashmap_set(metadata_cache, profile, metadata);
-        if (err) {
-            metadata_free(metadata);
-            goto cleanup;
-        }
-    }
-
-    /* STEP 3: Create keymanager for content hashing */
-    err = config_load(NULL, &config);
+    /* STEP 2: Prepare sync context (metadata cache, keymanager, content cache) */
+    err = prepare_manifest_sync_context(
+        repo,
+        enabled_profiles,
+        &metadata_cache,
+        &km,
+        &content_cache,
+        &config
+    );
     if (err) {
+        err = error_wrap(err, "Failed to prepare manifest sync context");
         goto cleanup;
     }
 
-    err = keymanager_create(config, &km);
-    if (err) {
-        goto cleanup;
-    }
-
-    /* STEP 4: Create content cache for batch operations */
-    content_cache = content_cache_create(repo, km);
-    if (!content_cache) {
-        err = ERROR(ERR_MEMORY, "Failed to create content cache");
-        goto cleanup;
-    }
-
-    /* STEP 5: Open transaction */
+    /* STEP 3: Open transaction */
     err = state_load_for_update(repo, &state);
     if (err) {
         err = error_wrap(err, "Failed to open state transaction for manifest update");
         goto cleanup;
     }
 
-    /* STEP 6: Bulk sync operation (O(M+N)) */
+    /* STEP 4: Bulk sync operation (O(M+N)) */
     size_t synced_count = 0;
     err = manifest_add_files(
         repo,
@@ -757,7 +1063,7 @@ static error_t *update_manifest_after_add(
         goto cleanup;
     }
 
-    /* STEP 6: Commit transaction */
+    /* STEP 5: Commit transaction */
     err = state_save(repo, state);
     if (err) {
         err = error_wrap(err, "Failed to save manifest updates");
@@ -1342,31 +1648,73 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Update manifest if profile enabled
+    /* Update manifest - auto-enable new profiles, sync existing enabled profiles
      *
-     * This maintains the manifest as a Virtual Working Directory - a staging
-     * area between Git and the filesystem. Files are marked DEPLOYED because
-     * ADD captures them FROM the filesystem (already at target locations).
+     * VWD Architecture: When files are committed to an enabled profile, the manifest
+     * (virtual working directory) must be updated immediately to maintain consistency.
+     *
+     * For NEW profiles: Auto-enable provides intuitive UX (creating via 'add' enables it).
+     * For EXISTING profiles: Standard behavior (sync only if already enabled).
      *
      * Non-fatal: If manifest update fails, Git commit still succeeded.
      * User can repair manifest by running 'dotta profile enable <profile>'.
      */
     bool manifest_updated = false;
-    error_t *manifest_err = update_manifest_after_add(
-        repo, opts->profile, all_files, out, &manifest_updated
-    );
+    size_t manifest_synced_count = 0;
 
-    if (manifest_err) {
-        /* Non-fatal: commit succeeded but manifest update failed */
-        if (out) {
-            output_warning(out, "Failed to update manifest: %s",
-                          error_message(manifest_err));
-            output_info(out, "Files committed to Git successfully");
-            output_hint(out, "Run 'dotta profile enable %s' to sync manifest",
-                        opts->profile);
+    if (profile_was_new) {
+        /* AUTO-ENABLE NEW PROFILE
+         *
+         * UX Decision: Creating a profile via 'add' should enable it automatically.
+         * This matches user expectations: "I just added a file, it should be active."
+         *
+         * Uses manifest_add_files (not manifest_enable_profile) because:
+         * - Files captured FROM filesystem (already deployed)
+         * - Should be marked DEPLOYED, not PENDING_DEPLOYMENT
+         * - Matches VWD architecture specification
+         */
+        error_t *enable_err = auto_enable_and_sync_profile(
+            repo, opts->profile, all_files, out,
+            &manifest_updated, &manifest_synced_count
+        );
+
+        if (enable_err) {
+            /* Non-fatal: Git commit succeeded, user can manually enable later */
+            if (out) {
+                output_warning(out, "Failed to auto-enable profile: %s",
+                              error_message(enable_err));
+                output_hint(out, "Run 'dotta profile enable %s' to enable manually",
+                           opts->profile);
+            }
+            error_free(enable_err);
+            manifest_updated = false;
+            manifest_synced_count = 0;
         }
-        error_free(manifest_err);
-        /* Continue to cleanup and show success */
+    } else {
+        /* EXISTING PROFILE - Standard manifest update
+         *
+         * Checks if profile is enabled and syncs if so.
+         * If not enabled, skips manifest update (user must explicitly enable).
+         */
+        error_t *manifest_err = update_manifest_after_add(
+            repo, opts->profile, all_files, out, &manifest_updated
+        );
+
+        if (manifest_err) {
+            /* Non-fatal: Git commit succeeded */
+            if (out) {
+                output_warning(out, "Failed to update manifest: %s",
+                              error_message(manifest_err));
+                output_info(out, "Files committed to Git successfully");
+                output_hint(out, "Run 'dotta profile enable %s' to sync manifest",
+                           opts->profile);
+            }
+            error_free(manifest_err);
+            manifest_updated = false;
+        } else if (manifest_updated) {
+            /* For existing enabled profiles, all files are synced (all or nothing) */
+            manifest_synced_count = added_count;
+        }
     }
 
     /* Cleanup worktree before post-processing */
@@ -1397,7 +1745,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                       added_count, added_count == 1 ? "" : "s", opts->profile);
 
         if (profile_was_new) {
-            output_success(out, "Profile '%s' created", opts->profile);
+            output_success(out, "Profile '%s' created and enabled", opts->profile);
         }
 
         if (tracked_dir_count > 0) {
@@ -1409,11 +1757,35 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
 
         /* Manifest status feedback */
         if (manifest_updated) {
-            output_info(out, "Manifest updated (%zu file%s marked as DEPLOYED)",
-                       added_count, added_count == 1 ? "" : "s");
-            output_hint(out, "Files captured from filesystem (already deployed)");
-            output_hint(out, "Run 'dotta status' to verify");
+            if (profile_was_new) {
+                /* New profile - show sync results with precedence awareness */
+                if (manifest_synced_count == added_count) {
+                    output_info(out, "Manifest updated (%zu file%s marked as DEPLOYED)",
+                               manifest_synced_count,
+                               manifest_synced_count == 1 ? "" : "s");
+                } else {
+                    output_info(out, "Manifest updated (%zu/%zu file%s marked as DEPLOYED)",
+                               manifest_synced_count, added_count,
+                               added_count == 1 ? "" : "s");
+
+                    if (manifest_synced_count < added_count) {
+                        size_t skipped = added_count - manifest_synced_count;
+                        output_info(out, "Note: %zu file%s overridden by higher-precedence profiles",
+                                   skipped, skipped == 1 ? "" : "s");
+                    }
+                }
+
+                output_hint(out, "Files captured from filesystem (already deployed)");
+                output_hint(out, "Run 'dotta status' to verify");
+            } else {
+                /* Existing enabled profile */
+                output_info(out, "Manifest updated (%zu file%s marked as DEPLOYED)",
+                           added_count, added_count == 1 ? "" : "s");
+                output_hint(out, "Files captured from filesystem (already deployed)");
+                output_hint(out, "Run 'dotta status' to verify");
+            }
         } else {
+            /* Existing disabled profile - original behavior */
             output_info(out, "Profile not enabled - manifest not updated");
             output_hint(out, "Run 'dotta profile enable %s' to activate", opts->profile);
             output_hint(out, "Run 'dotta apply -p %s' to deploy files", opts->profile);

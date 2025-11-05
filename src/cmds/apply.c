@@ -557,341 +557,6 @@ static void print_cleanup_preflight_results(
 }
 
 /**
- * Build manifest containing only PENDING_DEPLOYMENT files
- *
- * Filters the workspace manifest to include only files staged for deployment.
- * Uses single database query for optimal performance (O(P) + O(M) where
- * P = pending count, M = manifest size).
- *
- * Algorithm:
- *   1. Query all PENDING_DEPLOYMENT entries (single indexed DB query)
- *   2. Build hashmap for O(1) lookups
- *   3. Filter workspace manifest (shallow copy, preserves all metadata)
- *
- * The filtered manifest contains shallow copies of file_entry_t structures
- * from the workspace manifest, preserving all metadata (tree entries, profile
- * pointers, overlap tracking). Memory is owned by workspace, so filtered
- * manifest must be freed with simple structure cleanup only.
- *
- * @param ws Workspace (must not be NULL)
- * @param out Filtered manifest (must not be NULL, caller must free structure only)
- * @return Error or NULL on success
- */
-static error_t *build_pending_manifest(
-    const workspace_t *ws,
-    manifest_t **out
-) {
-    CHECK_NULL(ws);
-    CHECK_NULL(out);
-
-    const manifest_t *full_manifest = workspace_get_manifest(ws);
-    const state_t *state = workspace_get_state(ws);
-
-    if (!full_manifest || !state) {
-        return ERROR(ERR_INTERNAL, "Workspace missing manifest or state");
-    }
-
-    error_t *err = NULL;
-    state_file_entry_t *pending_entries = NULL;
-    size_t pending_count = 0;
-    hashmap_t *pending_map = NULL;
-    manifest_t *filtered = NULL;
-
-    /* Query all PENDING_DEPLOYMENT entries (single indexed query - fast!) */
-    err = state_get_entries_by_status(
-        state,
-        MANIFEST_STATUS_PENDING_DEPLOYMENT,
-        &pending_entries,
-        &pending_count
-    );
-    if (err) {
-        return error_wrap(err, "Failed to query pending entries");
-    }
-
-    /* Allocate filtered manifest structure */
-    filtered = malloc(sizeof(manifest_t));
-    if (!filtered) {
-        state_free_all_files(pending_entries, pending_count);
-        return ERROR(ERR_MEMORY, "Failed to allocate filtered manifest");
-    }
-
-    filtered->entries = NULL;
-    filtered->count = 0;
-
-    /* Quick exit if no pending files */
-    if (pending_count == 0) {
-        state_free_all_files(pending_entries, pending_count);
-        *out = filtered;
-        return NULL;
-    }
-
-    /* Allocate entries array */
-    filtered->entries = calloc(pending_count, sizeof(file_entry_t));
-    if (!filtered->entries) {
-        free(filtered);
-        state_free_all_files(pending_entries, pending_count);
-        return ERROR(ERR_MEMORY, "Failed to allocate filtered entries");
-    }
-
-    /* Build hashmap for O(1) pending lookups */
-    pending_map = hashmap_create(0);  /* Default capacity */
-    if (!pending_map) {
-        free(filtered->entries);
-        free(filtered);
-        state_free_all_files(pending_entries, pending_count);
-        return ERROR(ERR_MEMORY, "Failed to create pending hashmap");
-    }
-
-    for (size_t i = 0; i < pending_count; i++) {
-        err = hashmap_set(pending_map, pending_entries[i].filesystem_path, (void*)1);
-        if (err) {
-            hashmap_free(pending_map, NULL);
-            free(filtered->entries);
-            free(filtered);
-            state_free_all_files(pending_entries, pending_count);
-            return error_wrap(err, "Failed to populate pending hashmap");
-        }
-    }
-
-    /* Filter manifest: copy only pending entries (shallow copy - pointers borrowed) */
-    for (size_t i = 0; i < full_manifest->count; i++) {
-        const file_entry_t *entry = &full_manifest->entries[i];
-
-        if (hashmap_has(pending_map, entry->filesystem_path)) {
-            /* Shallow copy: all pointers borrowed from workspace manifest */
-            filtered->entries[filtered->count++] = *entry;
-        }
-    }
-
-    /* Cleanup temporary structures */
-    hashmap_free(pending_map, NULL);
-    state_free_all_files(pending_entries, pending_count);
-
-    *out = filtered;
-    return NULL;
-}
-
-/**
- * Free filtered manifest structure
- *
- * Only frees the manifest structure and entries array, not the borrowed
- * pointers inside (those are owned by workspace).
- *
- * @param manifest Filtered manifest (can be NULL)
- */
-static void manifest_free_filtered(manifest_t *manifest) {
-    if (!manifest) return;
-
-    /* Don't free entry contents - they're borrowed from workspace */
-    free(manifest->entries);
-    free(manifest);
-}
-
-/**
- * Update manifest status after deployment
- *
- * Incrementally updates status for successfully deployed files instead of
- * rebuilding entire state. This preserves lifecycle tracking.
- *
- * Algorithm:
- *   1. For each successfully deployed file:
- *      - Transition status: PENDING_DEPLOYMENT → DEPLOYED
- *      - Update deployed_at timestamp
- *   2. Failed files remain PENDING_DEPLOYMENT (user can retry)
- *   3. Files with status=DEPLOYED remain unchanged (not deployed this run)
- *
- * All updates are batched in the active transaction for atomicity.
- *
- * @param state State with active transaction (must not be NULL)
- * @param deploy_result Deployment results (must not be NULL)
- * @param out Output context (must not be NULL)
- * @return Error or NULL on success
- */
-static error_t *apply_update_deployment_status(
-    state_t *state,
-    const deploy_result_t *deploy_result,
-    output_ctx_t *out
-) {
-    CHECK_NULL(state);
-    CHECK_NULL(deploy_result);
-    CHECK_NULL(out);
-
-    error_t *err = NULL;
-    time_t now = time(NULL);
-
-    output_print(out, OUTPUT_VERBOSE, "\nUpdating manifest status...\n");
-
-    /* Update status for successfully deployed files */
-    if (deploy_result->deployed && deploy_result->deployed_count > 0) {
-        for (size_t i = 0; i < string_array_size(deploy_result->deployed); i++) {
-            const char *path = string_array_get(deploy_result->deployed, i);
-
-            /* Transition: PENDING_DEPLOYMENT → DEPLOYED */
-            err = state_update_entry_status(state, path, MANIFEST_STATUS_DEPLOYED);
-            if (err) {
-                return error_wrap(err, "Failed to update status for '%s'", path);
-            }
-
-            /* Update deployed_at timestamp */
-            state_file_entry_t *entry = NULL;
-            err = state_get_file(state, path, &entry);
-            if (err) {
-                return error_wrap(err, "Failed to get entry for '%s'", path);
-            }
-
-            entry->deployed_at = now;
-            err = state_update_entry(state, entry);
-            state_free_entry(entry);
-
-            if (err) {
-                return error_wrap(err, "Failed to update timestamp for '%s'", path);
-            }
-        }
-
-        output_print(out, OUTPUT_VERBOSE,
-                    "  Updated %zu file%s to DEPLOYED status\n",
-                    deploy_result->deployed_count,
-                    deploy_result->deployed_count == 1 ? "" : "s");
-    }
-
-    /* Update status for skipped files based on skip reason
-     *
-     * Files skipped with reason "unchanged" were verified by workspace to match
-     * Git content (full comparison including decryption). These are semantically
-     * deployed and should transition to DEPLOYED status.
-     *
-     * Files skipped with reason "exists" were NOT verified (--skip-existing flag),
-     * so their status remains PENDING_DEPLOYMENT until actually deployed or verified.
-     */
-    if (deploy_result->skipped && deploy_result->skipped_count > 0) {
-        /* Defensive check: ensure parallel arrays are synchronized */
-        if (string_array_size(deploy_result->skipped) !=
-            string_array_size(deploy_result->skipped_reasons)) {
-            return ERROR(ERR_INTERNAL,
-                        "Deploy result corruption: skipped arrays misaligned (%zu paths vs %zu reasons)",
-                        string_array_size(deploy_result->skipped),
-                        string_array_size(deploy_result->skipped_reasons));
-        }
-
-        size_t unchanged_count = 0;
-
-        for (size_t i = 0; i < string_array_size(deploy_result->skipped); i++) {
-            const char *path = string_array_get(deploy_result->skipped, i);
-            const char *reason = string_array_get(deploy_result->skipped_reasons, i);
-
-            if (strcmp(reason, "unchanged") == 0) {
-                /* File is already on filesystem with correct content.
-                 * Workspace verified content matches Git (full comparison including decryption).
-                 * Transition: PENDING_DEPLOYMENT → DEPLOYED */
-                err = state_update_entry_status(state, path, MANIFEST_STATUS_DEPLOYED);
-                if (err) {
-                    return error_wrap(err, "Failed to update status for '%s'", path);
-                }
-
-                /* Update deployed_at timestamp to reflect verification */
-                state_file_entry_t *entry = NULL;
-                err = state_get_file(state, path, &entry);
-                if (err) {
-                    return error_wrap(err, "Failed to get entry for '%s'", path);
-                }
-
-                entry->deployed_at = now;
-                err = state_update_entry(state, entry);
-                state_free_entry(entry);
-
-                if (err) {
-                    return error_wrap(err, "Failed to update timestamp for '%s'", path);
-                }
-
-                unchanged_count++;
-            }
-            /* Skip reason "exists": Leave as PENDING_DEPLOYMENT (not verified, status unknown) */
-        }
-
-        if (unchanged_count > 0) {
-            output_print(out, OUTPUT_VERBOSE,
-                        "  Updated %zu skipped file%s to DEPLOYED status (unchanged)\n",
-                        unchanged_count,
-                        unchanged_count == 1 ? "" : "s");
-        }
-    }
-
-    /* Files in deploy_result->failed remain PENDING_DEPLOYMENT (retry later) */
-    if (deploy_result->failed && string_array_size(deploy_result->failed) > 0) {
-        size_t failed_count = string_array_size(deploy_result->failed);
-        output_print(out, OUTPUT_VERBOSE,
-                    "  %zu file%s remain PENDING_DEPLOYMENT (failed)\n",
-                    failed_count,
-                    failed_count == 1 ? "" : "s");
-    }
-
-    /* Files with status=DEPLOYED remain unchanged (not in pending_manifest) */
-
-    return NULL;
-}
-
-/**
- * Remove PENDING_REMOVAL entries from manifest
- *
- * Called after cleanup_execute() removes files from filesystem.
- * Completes the VWD state machine: PENDING_REMOVAL → [deleted from manifest].
- *
- * This is the final step of the removal process:
- *   1. profile disable / remove marks files PENDING_REMOVAL
- *   2. cleanup_execute() removes from filesystem
- *   3. This function deletes entries from manifest table
- *
- * @param state State with active transaction (must not be NULL)
- * @param out Output context (must not be NULL)
- * @return Error or NULL on success
- */
-static error_t *apply_cleanup_pending_removals(
-    state_t *state,
-    output_ctx_t *out
-) {
-    CHECK_NULL(state);
-    CHECK_NULL(out);
-
-    error_t *err = NULL;
-    state_file_entry_t *removal_entries = NULL;
-    size_t removal_count = 0;
-
-    /* Get all PENDING_REMOVAL entries */
-    err = state_get_entries_by_status(
-        state,
-        MANIFEST_STATUS_PENDING_REMOVAL,
-        &removal_entries,
-        &removal_count
-    );
-    if (err) {
-        return error_wrap(err, "Failed to query PENDING_REMOVAL entries");
-    }
-
-    if (removal_count > 0) {
-        output_print(out, OUTPUT_VERBOSE,
-                    "\nRemoving %zu file%s from manifest...\n",
-                    removal_count,
-                    removal_count == 1 ? "" : "s");
-
-        /* Delete each entry from manifest table */
-        for (size_t i = 0; i < removal_count; i++) {
-            err = state_remove_file(state, removal_entries[i].filesystem_path);
-            if (err) {
-                state_free_all_files(removal_entries, removal_count);
-                return error_wrap(err,
-                                "Failed to remove '%s' from manifest",
-                                removal_entries[i].filesystem_path);
-            }
-        }
-
-        output_print(out, OUTPUT_VERBOSE, "  Manifest cleanup complete\n");
-    }
-
-    state_free_all_files(removal_entries, removal_count);
-    return NULL;
-}
-
-/**
  * Check privileges for complete apply operation
  *
  * Examines manifest (files being deployed), file orphans (files being removed),
@@ -1001,7 +666,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     state_t *state = NULL;
     profile_list_t *profiles = NULL;
     const manifest_t *manifest = NULL;
-    manifest_t *pending_manifest = NULL;
+    manifest_t *deploy_manifest = NULL;
     workspace_t *ws = NULL;
     const workspace_item_t **file_orphans = NULL;
     size_t file_orphan_count = 0;
@@ -1128,29 +793,106 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                     manifest->count, manifest->count == 1 ? "" : "s");
     }
 
-    /* Filter manifest to only PENDING_DEPLOYMENT files
+    /* CONVERGENCE MODEL: Analyze files for divergence and build deployment list
      *
-     * The workspace manifest contains all files (PENDING + DEPLOYED).
-     * Apply should only deploy pending changes (VWD principle: respect staging).
+     * Two-pass algorithm for exact memory allocation:
+     *   Pass 1: Count divergent files (O(N) with O(1) divergence lookups)
+     *   Pass 2: Allocate exact size and populate (O(D) where D = divergent count)
      *
-     * This filtering step transforms apply from "re-deploy everything" to
-     * "deploy staged changes only", matching Git's commit behavior.
+     * Architecture:
+     * - workspace_load() already computed fresh divergence for ALL files
+     * - workspace_get_item() returns NULL for clean files (no divergence)
+     * - workspace_get_item() returns workspace_item_t* for divergent files
+     * - We deploy only files where divergence != DIVERGENCE_NONE
      */
-    err = build_pending_manifest(ws, &pending_manifest);
-    if (err) {
-        err = error_wrap(err, "Failed to filter manifest for pending files");
-        goto cleanup;
+    output_print(out, OUTPUT_VERBOSE, "\nAnalyzing files for convergence...\n");
+
+    /* Pass 1: Count divergent and clean files */
+    size_t divergent_count = 0;
+    size_t clean_count = 0;
+
+    for (size_t i = 0; i < manifest->count; i++) {
+        const file_entry_t *entry = &manifest->entries[i];
+
+        /* Query fresh divergence analysis (O(1) hashmap lookup) */
+        const workspace_item_t *ws_item = workspace_get_item(ws, entry->filesystem_path);
+
+        if (ws_item == NULL || ws_item->divergence == DIVERGENCE_NONE) {
+            /* Clean file - matches Git perfectly */
+            clean_count++;
+        } else {
+            /* Divergent file - needs deployment */
+            divergent_count++;
+        }
     }
 
-    /* Report pending file count */
-    if (opts->verbose) {
-        if (pending_manifest->count == 0) {
-            output_print(out, OUTPUT_VERBOSE, "  No files pending deployment\n");
-        } else {
-            output_print(out, OUTPUT_VERBOSE, "  %zu file%s pending deployment\n",
-                        pending_manifest->count,
-                        pending_manifest->count == 1 ? "" : "s");
+    /* Allocate deployment manifest structure (always, for consistency) */
+    deploy_manifest = calloc(1, sizeof(manifest_t));
+    if (!deploy_manifest) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate deployment manifest");
+        goto cleanup;
+    }
+    deploy_manifest->count = 0;
+
+    /* Pass 2: Allocate entries array and populate (only if divergent files exist)
+     *
+     * If no divergent files, entries remains NULL. This saves memory when
+     * workspace is clean (common case after initial apply).
+     */
+    if (divergent_count > 0) {
+        deploy_manifest->entries = calloc(divergent_count, sizeof(file_entry_t));
+        if (!deploy_manifest->entries) {
+            free(deploy_manifest);
+            deploy_manifest = NULL;
+            err = ERROR(ERR_MEMORY, "Failed to allocate deployment entries");
+            goto cleanup;
         }
+
+        /* Populate with divergent files */
+        for (size_t i = 0; i < manifest->count; i++) {
+            const file_entry_t *entry = &manifest->entries[i];
+
+            /* Query fresh divergence analysis (O(1) hashmap lookup)
+             *
+             * workspace_get_item() returns:
+             *   - NULL if file is clean (no divergence, not in index)
+             *   - workspace_item_t* if file has divergence
+             *
+             * Defensive check: Also verify divergence != DIVERGENCE_NONE to handle
+             * edge case where workspace might index clean files for other reasons.
+             */
+            const workspace_item_t *ws_item = workspace_get_item(ws, entry->filesystem_path);
+
+            if (ws_item != NULL && ws_item->divergence != DIVERGENCE_NONE) {
+                /* Divergent file - needs deployment
+                 *
+                 * Possible divergence types (bit flags, can be combined):
+                 *   - DIVERGENCE_CONTENT: File content differs from Git
+                 *   - DIVERGENCE_MODE: Permissions changed
+                 *   - DIVERGENCE_OWNERSHIP: Owner/group changed (root/ files)
+                 *   - DIVERGENCE_TYPE: Type changed (file→symlink, etc.)
+                 *   - DIVERGENCE_ENCRYPTION: Encryption policy violation
+                 *
+                 * Shallow copy: All pointers (tree entries, profile pointers) are
+                 * borrowed from workspace manifest. Memory owned by workspace.
+                 */
+                deploy_manifest->entries[deploy_manifest->count++] = *entry;
+            }
+        }
+    } else {
+        /* No divergent files - entries array remains NULL (saves memory) */
+        deploy_manifest->entries = NULL;
+    }
+
+    if (opts->verbose) {
+        output_print(out, OUTPUT_VERBOSE,
+                    "  %zu file%s need deployment (divergent from Git)\n",
+                    deploy_manifest->count,
+                    deploy_manifest->count == 1 ? "" : "s");
+        output_print(out, OUTPUT_VERBOSE,
+                    "  %zu file%s already up-to-date (skipped)\n",
+                    clean_count,
+                    clean_count == 1 ? "" : "s");
     }
 
     /* Extract orphans from workspace (unless --keep-orphans)
@@ -1242,16 +984,11 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Check if there's anything to do
-     *
-     * After filtering to pending files and extracting orphans, check if
-     * there's any work to do. If not, exit early with clean message.
-     */
-    if (pending_manifest->count == 0 &&
+    /* Check if there's anything to do */
+    if (deploy_manifest->count == 0 &&
         (opts->keep_orphans || (file_orphan_count == 0 && dir_orphan_count == 0))) {
-        /* No pending files and (keeping orphans OR no orphans to clean) */
-        output_info(out, "Nothing to deploy (no pending changes)");
-        output_info(out, "Workspace is clean");
+        /* No divergent files and (keeping orphans OR no orphans to clean) */
+        output_info(out, "Nothing to deploy (workspace is clean)");
         err = NULL;
         goto cleanup;
     }
@@ -1297,7 +1034,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         output_print(out, OUTPUT_VERBOSE, "\nChecking privilege requirements...\n");
 
         err = ensure_complete_apply_privileges(
-            pending_manifest,
+            deploy_manifest,
             file_orphans,
             file_orphan_count,
             dir_orphans,
@@ -1483,13 +1220,13 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             /* Enhanced prompt: mentions both deployment and orphan removal */
             snprintf(prompt, sizeof(prompt),
                     "Deploy %zu file%s and remove %zu orphaned file%s?",
-                    manifest->count, manifest->count == 1 ? "" : "s",
+                    deploy_manifest->count, deploy_manifest->count == 1 ? "" : "s",
                     cleanup_preflight->orphaned_files_count,
                     cleanup_preflight->orphaned_files_count == 1 ? "" : "s");
         } else {
             /* Standard prompt: only deployment */
             snprintf(prompt, sizeof(prompt), "Deploy %zu file%s to filesystem?",
-                    manifest->count, manifest->count == 1 ? "" : "s");
+                    deploy_manifest->count, deploy_manifest->count == 1 ? "" : "s");
         }
 
         if (!output_confirm(out, prompt, false)) {
@@ -1499,35 +1236,41 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Execute deployment (only if there are pending files)
-     *
-     * Deploy only PENDING_DEPLOYMENT files (filtered manifest).
-     * If pending_manifest is empty, skip deployment phase entirely.
-     */
-    if (pending_manifest->count > 0) {
+    /* Execute deployment (only if there are divergent files) */
+    if (deploy_manifest->count > 0) {
         if (opts->dry_run) {
-            output_print(out, OUTPUT_VERBOSE, "Dry-run mode - no files will be modified\n");
+            output_print(out, OUTPUT_VERBOSE, "\nDry-run mode - no files will be modified\n");
         } else {
-            output_print(out, OUTPUT_VERBOSE, "Deploying %zu pending file%s...\n",
-                        pending_manifest->count,
-                        pending_manifest->count == 1 ? "" : "s");
+            output_print(out, OUTPUT_VERBOSE, "\nDeploying %zu divergent file%s...\n",
+                        deploy_manifest->count,
+                        deploy_manifest->count == 1 ? "" : "s");
         }
 
-        err = deploy_execute(repo, ws, pending_manifest, merged_metadata, &deploy_opts, km, cache, &deploy_res);
+        err = deploy_execute(repo, ws, deploy_manifest, merged_metadata, &deploy_opts, km, cache, &deploy_res);
         if (err) {
             if (deploy_res) {
                 print_deploy_results(out, deploy_res, opts->verbose);
             }
+            /* Free deploy_manifest before error exit */
+            free(deploy_manifest->entries);
+            free(deploy_manifest);
+            deploy_manifest = NULL;
             err = error_wrap(err, "Deployment failed");
             goto cleanup;
         }
 
         print_deploy_results(out, deploy_res, opts->verbose);
-    } else {
-        /* No files to deploy, but continue to cleanup phase */
-        output_print(out, OUTPUT_VERBOSE, "Skipping deployment (no pending files)\n");
 
-        /* Create empty deploy result for status update logic */
+        /* Free deploy_manifest after successful deployment */
+        free(deploy_manifest->entries);
+        free(deploy_manifest);
+        deploy_manifest = NULL;
+
+    } else {
+        /* No divergent files - workspace is clean */
+        output_print(out, OUTPUT_VERBOSE, "\nNo files need deployment (workspace is clean)\n");
+
+        /* Create empty deploy result for consistency */
         deploy_res = calloc(1, sizeof(deploy_result_t));
         if (!deploy_res) {
             err = ERROR(ERR_MEMORY, "Failed to allocate deploy result");
@@ -1600,21 +1343,91 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                 goto cleanup;
             }
 
+            /* CRITICAL: Remove orphaned entries from state database
+             *
+             * This completes the orphan cleanup process. Without this step,
+             * orphaned entries accumulate forever in virtual_manifest.
+             *
+             * The flow for orphaned files:
+             *   1. Profile disabled → entry stays in state (manifest_disable_profile)
+             *   2. Workspace detects orphan → entry in state, profile not enabled
+             *   3. cleanup_execute() → file removed from filesystem (just happened)
+             *   4. THIS CODE → entry removed from state (completing the cycle)
+             */
+            if (cleanup_res && cleanup_res->removed_files &&
+                string_array_size(cleanup_res->removed_files) > 0) {
+
+                output_print(out, OUTPUT_VERBOSE, "\nRemoving orphaned entries from state...\n");
+
+                for (size_t i = 0; i < string_array_size(cleanup_res->removed_files); i++) {
+                    const char *path = string_array_get(cleanup_res->removed_files, i);
+
+                    /* Delete entry from virtual_manifest table
+                     *
+                     * The file was already removed from filesystem by cleanup_execute().
+                     * Now we remove the database record to complete the cleanup.
+                     */
+                    err = state_remove_file(state, path);
+                    if (err) {
+                        /* Non-fatal - file already removed from filesystem
+                         *
+                         * The important operation (filesystem removal) already succeeded.
+                         * State cleanup failure is a warning, not a fatal error.
+                         */
+                        output_warning(out, "Failed to remove state entry for %s: %s",
+                                      path, error_message(err));
+                        error_free(err);
+                        err = NULL;  /* Don't propagate - continue operation */
+                    }
+                }
+
+                output_print(out, OUTPUT_VERBOSE,
+                            "  Removed %zu orphaned entr%s from state\n",
+                            string_array_size(cleanup_res->removed_files),
+                            string_array_size(cleanup_res->removed_files) == 1 ? "y" : "ies");
+            }
+
             cleanup_result_free(cleanup_res);
         }
 
-        /* Update manifest status for deployed files (incremental, not rebuild) */
-        output_print(out, OUTPUT_VERBOSE, "\nUpdating deployment state...\n");
+        /* Update deployed_at timestamp for successfully deployed files
+         *
+         * This marks files as "known to dotta" and records deployment time.
+         * The deployed_at field is used for lifecycle tracking (see state.h:85):
+         *   - 0 = file never deployed by dotta
+         *   - > 0 = file known to dotta (deployed or pre-existing)
+         *
+         * This operation is non-critical - deployment already succeeded, so
+         * timestamp update failures are non-fatal warnings.
+         */
+        if (deploy_res && deploy_res->deployed && string_array_size(deploy_res->deployed) > 0) {
+            time_t now = time(NULL);
 
-        err = apply_update_deployment_status(state, deploy_res, out);
-        if (err) {
-            goto cleanup;
-        }
+            output_print(out, OUTPUT_VERBOSE, "\nUpdating deployment timestamps...\n");
 
-        /* Delete PENDING_REMOVAL entries from manifest table */
-        err = apply_cleanup_pending_removals(state, out);
-        if (err) {
-            goto cleanup;
+            for (size_t i = 0; i < string_array_size(deploy_res->deployed); i++) {
+                const char *path = string_array_get(deploy_res->deployed, i);
+
+                /* Update deployed_at to mark file as deployed */
+                err = state_update_deployed_at(state, path, now);
+                if (err) {
+                    /* Non-fatal warning - deployment succeeded, just timestamp update failed
+                     *
+                     * The file is already on the filesystem with correct content.
+                     * The timestamp is metadata for display and lifecycle tracking.
+                     * Failure here should not abort the entire operation.
+                     */
+                    output_warning(out, "Failed to update timestamp for %s: %s",
+                                  path, error_message(err));
+                    error_free(err);
+                    err = NULL;  /* Don't propagate - continue operation */
+                }
+            }
+
+            output_print(out, OUTPUT_VERBOSE,
+                        "  Updated %zu timestamp%s\n",
+                        string_array_size(deploy_res->deployed),
+                        string_array_size(deploy_res->deployed) == 1 ? "" : "s");
         }
 
         /* Sync tracked directories to state (defensive refresh)
@@ -1730,7 +1543,11 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
 cleanup:
     /* Free resources in reverse order of allocation */
     if (deploy_res) deploy_result_free(deploy_res);
-    if (pending_manifest) manifest_free_filtered(pending_manifest);
+    if (deploy_manifest) {
+        /* Free deploy_manifest structure */
+        free(deploy_manifest->entries);
+        free(deploy_manifest);
+    }
     if (cleanup_preflight) cleanup_preflight_result_free(cleanup_preflight);
     if (preflight) preflight_result_free(preflight);
     if (hook_ctx) hook_context_free(hook_ctx);

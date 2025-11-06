@@ -1559,6 +1559,13 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                         string_array_size(deploy_res->deployed),
                         string_array_size(deploy_res->deployed) == 1 ? "" : "s");
         }
+
+        /* Commit state transaction */
+        err = state_save(repo, state);
+        if (err) {
+            err = error_wrap(err, "Failed to commit state changes");
+            goto cleanup;
+        }
     }
 
     /* Execute post-apply hook */

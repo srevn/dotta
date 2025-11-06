@@ -1527,16 +1527,14 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         entry->source_profile = hashmap_get(ws->profile_index, state_entry->profile);
 
         if (!entry->source_profile) {
-            /* Profile not in workspace scope - this can happen if:
+            /* Profile not in workspace scope - this is expected when:
              * 1. Profile was disabled but manifest has orphaned entries
              * 2. Profile branch was deleted outside dotta
              *
-             * Skip with warning. Orphan detection will handle cleanup. */
-            fprintf(stderr,
-                "warning: manifest entry '%s' references profile '%s' not in workspace - "
-                "run 'dotta apply' to clean up orphans\n",
-                state_entry->filesystem_path,
-                state_entry->profile);
+             * Skip silently. Orphan detection (analyze_orphaned_files) will identify
+             * these entries and status will show them clearly to the user. This
+             * follows the Git staging model where profile disable stages removal
+             * and apply executes it. */
             continue;
         }
 

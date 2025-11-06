@@ -652,6 +652,76 @@ static error_t *ensure_complete_apply_privileges(
 }
 
 /**
+ * Check if file needs deployment
+ *
+ * Determines whether a file requires deployment based on workspace analysis.
+ * Uses two-dimensional model: state (existence) + divergence (quality).
+ *
+ * Architecture:
+ * - State dimension (primary): Where does the file exist? (Git/DB/filesystem)
+ * - Divergence dimension (secondary): For files on filesystem, what's wrong?
+ *
+ * @param ws_item Workspace item from divergence analysis (can be NULL)
+ * @return true if file needs deployment, false if clean
+ */
+static bool needs_deployment(const workspace_item_t *ws_item) {
+    if (ws_item == NULL) {
+        /* Not in workspace divergence index → file is clean */
+        return false;
+    }
+
+    /* Decision tree: state (existence) determines baseline, then check divergence (quality) */
+    switch (ws_item->state) {
+        case WORKSPACE_STATE_UNDEPLOYED:
+            /* File exists in Git but has never been deployed to filesystem.
+             * Needs initial deployment.
+             *
+             * Note: divergence is always NONE for missing files (can't compare
+             * properties of non-existent files). */
+            return true;
+
+        case WORKSPACE_STATE_DELETED:
+            /* File exists in Git and was previously deployed (deployed_at > 0),
+             * but has been removed from filesystem. Needs restoration.
+             *
+             * Note: divergence is always NONE for missing files. */
+            return true;
+
+        case WORKSPACE_STATE_DEPLOYED:
+            /* File exists on filesystem and is tracked in Git.
+             * Needs deployment only if properties diverged (content, mode, ownership, etc.).
+             *
+             * If divergence == NONE: file is clean, matches Git perfectly.
+             * If divergence != NONE: file has property mismatches, needs redeployment. */
+            return (ws_item->divergence != DIVERGENCE_NONE);
+
+        case WORKSPACE_STATE_ORPHANED:
+            /* File exists in deployment state but not in any enabled profile.
+             *
+             * Architectural invariant: Orphaned files should NOT appear in the manifest
+             * (manifest only contains files from enabled profiles). If we reach here,
+             * it's a programming error in workspace or manifest building.
+             *
+             * Defensive: Return false (don't deploy orphans, cleanup handles removal). */
+            return false;
+
+        case WORKSPACE_STATE_UNTRACKED:
+            /* File exists on filesystem in a tracked directory but not in Git.
+             *
+             * Architectural invariant: Untracked files should NOT appear in the manifest
+             * (manifest is built from Git, not filesystem). If we reach here, it's a
+             * programming error.
+             *
+             * Defensive: Return false (don't deploy untracked files, user must 'add' them). */
+            return false;
+    }
+
+    /* Unreachable if all enum values handled.
+     * Defensive fallback for unknown states (forward compatibility). */
+    return false;
+}
+
+/**
  * Apply command implementation
  */
 error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
@@ -817,12 +887,12 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         /* Query fresh divergence analysis (O(1) hashmap lookup) */
         const workspace_item_t *ws_item = workspace_get_item(ws, entry->filesystem_path);
 
-        if (ws_item == NULL || ws_item->divergence == DIVERGENCE_NONE) {
+        if (needs_deployment(ws_item)) {
+            /* File needs deployment (missing or divergent from Git) */
+            divergent_count++;
+        } else {
             /* Clean file - matches Git perfectly */
             clean_count++;
-        } else {
-            /* Divergent file - needs deployment */
-            divergent_count++;
         }
     }
 
@@ -848,7 +918,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             goto cleanup;
         }
 
-        /* Populate with divergent files */
+        /* Populate with files that need deployment */
         for (size_t i = 0; i < manifest->count; i++) {
             const file_entry_t *entry = &manifest->entries[i];
 
@@ -856,17 +926,18 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
              *
              * workspace_get_item() returns:
              *   - NULL if file is clean (no divergence, not in index)
-             *   - workspace_item_t* if file has divergence
-             *
-             * Defensive check: Also verify divergence != DIVERGENCE_NONE to handle
-             * edge case where workspace might index clean files for other reasons.
+             *   - workspace_item_t* if file has state/divergence issues
              */
             const workspace_item_t *ws_item = workspace_get_item(ws, entry->filesystem_path);
 
-            if (ws_item != NULL && ws_item->divergence != DIVERGENCE_NONE) {
-                /* Divergent file - needs deployment
+            if (needs_deployment(ws_item)) {
+                /* File needs deployment - either missing or has property divergence
                  *
-                 * Possible divergence types (bit flags, can be combined):
+                 * Missing files (state-based):
+                 *   - UNDEPLOYED: File in Git, never deployed to filesystem
+                 *   - DELETED: File in Git, was deployed, removed from filesystem
+                 *
+                 * Divergent files (property-based, bit flags can be combined):
                  *   - DIVERGENCE_CONTENT: File content differs from Git
                  *   - DIVERGENCE_MODE: Permissions changed
                  *   - DIVERGENCE_OWNERSHIP: Owner/group changed (root/ files)
@@ -886,7 +957,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
 
     if (opts->verbose) {
         output_print(out, OUTPUT_VERBOSE,
-                    "  %zu file%s need deployment (divergent from Git)\n",
+                    "  %zu file%s need deployment (missing or divergent)\n",
                     deploy_manifest->count,
                     deploy_manifest->count == 1 ? "" : "s");
         output_print(out, OUTPUT_VERBOSE,

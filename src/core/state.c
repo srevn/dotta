@@ -158,7 +158,7 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    blob_oid TEXT NOT NULL,"
         "    "
         "    type TEXT NOT NULL CHECK(type IN ('file', 'symlink', 'executable')),"
-        "    mode TEXT,"
+        "    mode INTEGER,"
         "    owner TEXT,"
         "    \"group\" TEXT,"
         "    encrypted INTEGER NOT NULL DEFAULT 0,"
@@ -179,7 +179,7 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    storage_prefix TEXT NOT NULL,"
         "    profile TEXT NOT NULL,"
         "    added_at INTEGER NOT NULL,"
-        "    mode TEXT,"
+        "    mode INTEGER,"
         "    owner TEXT,"
         "    \"group\" TEXT,"
         "    deployed_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))"
@@ -927,9 +927,8 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
     sqlite3_bind_text(state->stmt_insert_file, 7, type_str, -1, SQLITE_STATIC);
 
     /* 8. mode */
-    if (entry->mode) {
-        sqlite3_bind_text(state->stmt_insert_file, 8,
-                         entry->mode, -1, SQLITE_TRANSIENT);
+    if (entry->mode > 0) {
+        sqlite3_bind_int(state->stmt_insert_file, 8, entry->mode);
     } else {
         sqlite3_bind_null(state->stmt_insert_file, 8);
     }
@@ -1076,7 +1075,13 @@ error_t *state_get_file(
     const char *git_oid = (const char *)sqlite3_column_text(stmt, 3);
     const char *blob_oid = (const char *)sqlite3_column_text(stmt, 4);
     const char *type_str = (const char *)sqlite3_column_text(stmt, 5);
-    const char *mode = (const char *)sqlite3_column_text(stmt, 6);
+
+    /* Read mode as integer (0 if NULL) */
+    mode_t mode = 0;
+    if (sqlite3_column_type(stmt, 6) != SQLITE_NULL) {
+        mode = (mode_t)sqlite3_column_int(stmt, 6);
+    }
+
     const char *owner = (const char *)sqlite3_column_text(stmt, 7);
     const char *group = (const char *)sqlite3_column_text(stmt, 8);
     int encrypted = sqlite3_column_int(stmt, 9);
@@ -1198,7 +1203,13 @@ error_t *state_get_all_files(
         const char *git_oid = (const char *)sqlite3_column_text(stmt, 4);
         const char *blob_oid = (const char *)sqlite3_column_text(stmt, 5);
         const char *type_str = (const char *)sqlite3_column_text(stmt, 6);
-        const char *mode = (const char *)sqlite3_column_text(stmt, 7);
+
+        /* Read mode as integer (0 if NULL) */
+        mode_t mode = 0;
+        if (sqlite3_column_type(stmt, 7) != SQLITE_NULL) {
+            mode = (mode_t)sqlite3_column_int(stmt, 7);
+        }
+
         const char *owner = (const char *)sqlite3_column_text(stmt, 8);
         const char *group = (const char *)sqlite3_column_text(stmt, 9);
         int encrypted = sqlite3_column_int(stmt, 10);
@@ -1220,7 +1231,7 @@ error_t *state_get_all_files(
         entries[i].old_profile = old_profile ? strdup(old_profile) : NULL;
         entries[i].git_oid = strdup(git_oid);
         entries[i].blob_oid = strdup(blob_oid);
-        entries[i].mode = mode ? strdup(mode) : NULL;
+        entries[i].mode = mode;
         entries[i].owner = owner ? strdup(owner) : NULL;
         entries[i].group = group ? strdup(group) : NULL;
 
@@ -1276,7 +1287,6 @@ void state_free_all_files(state_file_entry_t *entries, size_t count) {
         free(entries[i].old_profile);
         free(entries[i].git_oid);
         free(entries[i].blob_oid);
-        free(entries[i].mode);
         free(entries[i].owner);
         free(entries[i].group);
     }
@@ -1436,10 +1446,8 @@ error_t *state_add_directory(state_t *state, const state_directory_entry_t *entr
     sqlite3_bind_int64(stmt, 4, entry->added_at);
 
     /* Mode (optional) */
-    if (entry->mode != 0) {
-        char mode_str[5];
-        snprintf(mode_str, sizeof(mode_str), "%04o", (unsigned int)(entry->mode & 0777));
-        sqlite3_bind_text(stmt, 5, mode_str, -1, SQLITE_TRANSIENT);
+    if (entry->mode > 0) {
+        sqlite3_bind_int(stmt, 5, entry->mode);
     } else {
         sqlite3_bind_null(stmt, 5);
     }
@@ -1580,12 +1588,10 @@ error_t *state_get_all_directories(
         entry->added_at = sqlite3_column_int64(stmt, 3);
 
         /* mode (column 4, optional) */
-        const char *mode_str = (const char *)sqlite3_column_text(stmt, 4);
-        if (mode_str) {
-            unsigned int mode_val;
-            if (sscanf(mode_str, "%o", &mode_val) == 1) {
-                entry->mode = (mode_t)(mode_val & 0777);
-            }
+        if (sqlite3_column_type(stmt, 4) != SQLITE_NULL) {
+            entry->mode = (mode_t)sqlite3_column_int(stmt, 4);
+        } else {
+            entry->mode = 0;
         }
 
         /* owner (column 5, optional) */
@@ -1733,12 +1739,10 @@ error_t *state_get_directories_by_profile(
         entry->added_at = sqlite3_column_int64(stmt, 3);
 
         /* mode (column 4, optional) */
-        const char *mode_str = (const char *)sqlite3_column_text(stmt, 4);
-        if (mode_str) {
-            unsigned int mode_val;
-            if (sscanf(mode_str, "%o", &mode_val) == 1) {
-                entry->mode = (mode_t)(mode_val & 0777);
-            }
+        if (sqlite3_column_type(stmt, 4) != SQLITE_NULL) {
+            entry->mode = (mode_t)sqlite3_column_int(stmt, 4);
+        } else {
+            entry->mode = 0;
         }
 
         /* owner (column 5, optional) */
@@ -1819,10 +1823,8 @@ error_t *state_update_directory(
     sqlite3_bind_int64(stmt, 3, entry->added_at);
 
     /* Mode (optional) */
-    if (entry->mode != 0) {
-        char mode_str[5];
-        snprintf(mode_str, sizeof(mode_str), "%04o", (unsigned int)(entry->mode & 0777));
-        sqlite3_bind_text(stmt, 4, mode_str, -1, SQLITE_TRANSIENT);
+    if (entry->mode > 0) {
+        sqlite3_bind_int(stmt, 4, entry->mode);
     } else {
         sqlite3_bind_null(stmt, 4);
     }
@@ -2317,7 +2319,7 @@ error_t *state_create_entry(
     state_file_type_t type,
     const char *git_oid,
     const char *blob_oid,
-    const char *mode,
+    mode_t mode,
     const char *owner,
     const char *group,
     bool encrypted,
@@ -2345,11 +2347,11 @@ error_t *state_create_entry(
 
     /* Copy optional string fields */
     entry->old_profile = old_profile ? strdup(old_profile) : NULL;
-    entry->mode = mode ? strdup(mode) : NULL;
     entry->owner = owner ? strdup(owner) : NULL;
     entry->group = group ? strdup(group) : NULL;
 
     /* Set non-string fields */
+    entry->mode = mode;
     entry->type = type;
     entry->encrypted = encrypted;
     entry->deployed_at = deployed_at;
@@ -2494,8 +2496,8 @@ error_t *state_update_entry(
     sqlite3_bind_text(state->stmt_update_entry, 5, entry->blob_oid, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(state->stmt_update_entry, 6, type_str, -1, SQLITE_STATIC);
 
-    if (entry->mode) {
-        sqlite3_bind_text(state->stmt_update_entry, 7, entry->mode, -1, SQLITE_TRANSIENT);
+    if (entry->mode > 0) {
+        sqlite3_bind_int(state->stmt_update_entry, 7, entry->mode);
     } else {
         sqlite3_bind_null(state->stmt_update_entry, 7);
     }
@@ -2608,7 +2610,13 @@ error_t *state_get_entries_by_profile(
         const char *git_oid = (const char *)sqlite3_column_text(stmt, 4);
         const char *blob_oid = (const char *)sqlite3_column_text(stmt, 5);
         const char *type_str = (const char *)sqlite3_column_text(stmt, 6);
-        const char *mode = (const char *)sqlite3_column_text(stmt, 7);
+
+        /* Read mode as integer (0 if NULL) */
+        mode_t mode = 0;
+        if (sqlite3_column_type(stmt, 7) != SQLITE_NULL) {
+            mode = (mode_t)sqlite3_column_int(stmt, 7);
+        }
+
         const char *owner = (const char *)sqlite3_column_text(stmt, 8);
         const char *group = (const char *)sqlite3_column_text(stmt, 9);
         int encrypted = sqlite3_column_int(stmt, 10);
@@ -2626,7 +2634,7 @@ error_t *state_get_entries_by_profile(
         entries[i].old_profile = old_profile ? strdup(old_profile) : NULL;
         entries[i].git_oid = strdup(git_oid);
         entries[i].blob_oid = strdup(blob_oid);
-        entries[i].mode = mode ? strdup(mode) : NULL;
+        entries[i].mode = mode;
         entries[i].owner = owner ? strdup(owner) : NULL;
         entries[i].group = group ? strdup(group) : NULL;
 
@@ -2713,7 +2721,6 @@ void state_free_entry(state_file_entry_t *entry) {
     free(entry->old_profile);
     free(entry->git_oid);
     free(entry->blob_oid);
-    free(entry->mode);
     free(entry->owner);
     free(entry->group);
     free(entry);

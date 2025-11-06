@@ -169,29 +169,35 @@ static error_t *workspace_create_empty(
 }
 
 /**
- * Check for metadata (mode and ownership) divergence (optimized with stat propagation)
+ * Check for metadata (mode and ownership) divergence (data-centric design)
  *
- * Compares filesystem metadata with stored metadata to detect changes in
+ * Compares filesystem metadata with expected values to detect changes in
  * permissions (mode) and ownership (user/group). Always checks both mode and
  * ownership independently, setting flags for each.
  *
- * Works for both FILE and DIRECTORY kinds - uses only common fields (mode, owner, group).
+ * Data-centric approach: Accepts values directly instead of structs, enabling use with
+ * both VWD cache (file_entry_t) and metadata (metadata_item_t) without conversion.
+ * This eliminates Git loads for files (uses VWD cache) while preserving metadata
+ * functionality for directories.
  *
- * @param item Metadata item (FILE or DIRECTORY, must not be NULL)
- * @param fs_path Filesystem path to check (must not be NULL)
+ * @param expected_mode Expected permission mode (0 = skip mode check, no metadata tracked)
+ * @param expected_owner Expected owner username (NULL = skip owner check)
+ * @param expected_group Expected group name (NULL = skip group check)
+ * @param fs_path Filesystem path to check (must not be NULL, for error messages)
  * @param st File stat data (must not be NULL, pre-captured by caller)
  * @param out_mode_differs Output flag for mode divergence (must not be NULL)
  * @param out_ownership_differs Output flag for ownership divergence (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *check_item_metadata_divergence(
-    const metadata_item_t *item,
+    mode_t expected_mode,
+    const char *expected_owner,
+    const char *expected_group,
     const char *fs_path,
     const struct stat *st,
     bool *out_mode_differs,
     bool *out_ownership_differs
 ) {
-    CHECK_NULL(item);
     CHECK_NULL(fs_path);
     CHECK_NULL(st);
     CHECK_NULL(out_mode_differs);
@@ -201,30 +207,30 @@ error_t *check_item_metadata_divergence(
     *out_mode_differs = false;
     *out_ownership_differs = false;
 
-    /* Use provided stat (no syscall - caller already stat'd via compare) */
-    mode_t actual_mode = st->st_mode & 0777;
-
     /* Check full mode (all permission bits, not just executable) */
-    if (actual_mode != item->mode) {
-        *out_mode_differs = true;
+    if (expected_mode > 0) {
+        mode_t actual_mode = st->st_mode & 0777;
+        if (actual_mode != expected_mode) {
+            *out_mode_differs = true;
+        }
     }
 
     /* Check ownership (always check, no early return).
-     * Only when running as root AND item has ownership.
+     * Only when running as root AND expected values provided.
      * Use effective UID (geteuid) to check privilege, not real UID (getuid).
      * This correctly detects whether we have the capability to read ownership. */
     bool running_as_root = (geteuid() == 0);
-    bool has_ownership = (item->owner != NULL || item->group != NULL);
+    bool has_ownership = (expected_owner != NULL || expected_group != NULL);
 
     if (running_as_root && has_ownership) {
         bool owner_differs = false;
         bool group_differs = false;
 
         /* Check owner independently */
-        if (item->owner) {
+        if (expected_owner) {
             struct passwd *pwd = getpwuid(st->st_uid);
             if (pwd && pwd->pw_name) {
-                if (strcmp(item->owner, pwd->pw_name) != 0) {
+                if (strcmp(expected_owner, pwd->pw_name) != 0) {
                     owner_differs = true;
                 }
             }
@@ -232,10 +238,10 @@ error_t *check_item_metadata_divergence(
         }
 
         /* Check group independently - no short-circuit */
-        if (item->group) {
+        if (expected_group) {
             struct group *grp = getgrgid(st->st_gid);
             if (grp && grp->gr_name) {
-                if (strcmp(item->group, grp->gr_name) != 0) {
+                if (strcmp(expected_group, grp->gr_name) != 0) {
                     group_differs = true;
                 }
             }
@@ -580,45 +586,36 @@ static error_t *analyze_file_divergence(
                 }
             }
 
-            /* PHASE B: Check full metadata (mode and ownership) if available */
-            const metadata_item_t *meta_entry = NULL;
-            error_t *meta_err = metadata_get_item(metadata, storage_path, &meta_entry);
+            /* PHASE B: Check full metadata using VWD cache
+             *
+             * Mode sentinel: manifest_entry->mode == 0 means "no metadata tracked",
+             * check will be skipped by check_item_metadata_divergence().
+             */
+            bool mode_differs = false;
+            bool ownership_differs = false;
 
-            if (meta_err == NULL && meta_entry) {
-                /* Validate kind (should be FILE) */
-                if (meta_entry->kind != METADATA_ITEM_FILE) {
-                    error_free(meta_err);
-                    return ERROR(ERR_INTERNAL,
-                        "Expected FILE metadata for '%s', got DIRECTORY",
-                        storage_path);
-                }
+            error_t *check_err = check_item_metadata_divergence(
+                manifest_entry->mode,     /* From VWD cache (mode_t, 0 = no metadata) */
+                manifest_entry->owner,    /* From VWD cache (can be NULL) */
+                manifest_entry->group,    /* From VWD cache (can be NULL) */
+                fs_path,
+                &file_stat,
+                &mode_differs,
+                &ownership_differs
+            );
 
-                /* Check FULL mode (all 9 permission bits) and ownership.
-                 * This may detect additional divergence beyond executable bit.
-                 *
-                 * Examples:
-                 * - Phase A passed (both non-exec), but file is 0600 in metadata, 0644 on disk
-                 * - Phase A detected exec bit diff, metadata also detects group/other bits differ
-                 *
-                 * The |= operator means we accumulate flags, never lose information. */
-                bool mode_differs = false;
-                bool ownership_differs = false;
-                error_t *check_err = check_item_metadata_divergence(
-                    meta_entry, fs_path, &file_stat,
-                    &mode_differs, &ownership_differs);
-
-                if (check_err) {
-                    error_free(meta_err);
-                    return error_wrap(check_err,
-                        "Failed to check metadata for '%s'", fs_path);
-                }
-
-                /* Accumulate metadata divergence flags */
-                if (mode_differs) divergence |= DIVERGENCE_MODE;
-                if (ownership_differs) divergence |= DIVERGENCE_OWNERSHIP;
+            if (check_err) {
+                return error_wrap(check_err,
+                    "Failed to check metadata for '%s'", fs_path);
             }
 
-            error_free(meta_err);
+            /* Accumulate metadata divergence flags
+             *
+             * Examples of detected divergence:
+             * - Phase A passed (both non-exec), but file is 0600 in VWD, 0644 on disk
+             * - Phase A detected exec bit diff, also detects group/other bits differ */
+            if (mode_differs) divergence |= DIVERGENCE_MODE;
+            if (ownership_differs) divergence |= DIVERGENCE_OWNERSHIP;
         }
     }
 
@@ -1269,7 +1266,9 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
         bool ownership_differs = false;
 
         error_t *err = check_item_metadata_divergence(
-            item,
+            item->mode,      /* Extract mode from metadata_item_t */
+            item->owner,     /* Extract owner from metadata_item_t */
+            item->group,     /* Extract group from metadata_item_t */
             filesystem_path,
             &dir_stat,
             &mode_differs,
@@ -1603,7 +1602,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 free(ws->manifest->entries[j].old_profile);
                 free(ws->manifest->entries[j].git_oid);
                 free(ws->manifest->entries[j].blob_oid);
-                free(ws->manifest->entries[j].mode);
                 free(ws->manifest->entries[j].owner);
                 free(ws->manifest->entries[j].group);
                 if (ws->manifest->entries[j].entry) {
@@ -1631,7 +1629,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         entry->git_oid = state_entry->git_oid ? strdup(state_entry->git_oid) : NULL;
         entry->blob_oid = state_entry->blob_oid ? strdup(state_entry->blob_oid) : NULL;
         entry->type = state_entry->type;
-        entry->mode = state_entry->mode ? strdup(state_entry->mode) : NULL;
+        entry->mode = state_entry->mode;
         entry->owner = state_entry->owner ? strdup(state_entry->owner) : NULL;
         entry->group = state_entry->group ? strdup(state_entry->group) : NULL;
         entry->encrypted = state_entry->encrypted;
@@ -1641,7 +1639,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         if ((state_entry->old_profile && !entry->old_profile) ||
             (state_entry->git_oid && !entry->git_oid) ||
             (state_entry->blob_oid && !entry->blob_oid) ||
-            (state_entry->mode && !entry->mode) ||
             (state_entry->owner && !entry->owner) ||
             (state_entry->group && !entry->group)) {
 
@@ -1651,7 +1648,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             free(entry->old_profile);
             free(entry->git_oid);
             free(entry->blob_oid);
-            free(entry->mode);
             free(entry->owner);
             free(entry->group);
 
@@ -1662,7 +1658,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 free(ws->manifest->entries[j].old_profile);
                 free(ws->manifest->entries[j].git_oid);
                 free(ws->manifest->entries[j].blob_oid);
-                free(ws->manifest->entries[j].mode);
                 free(ws->manifest->entries[j].owner);
                 free(ws->manifest->entries[j].group);
                 if (ws->manifest->entries[j].entry) {
@@ -1685,7 +1680,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             free(entry->filesystem_path);
             free(entry->git_oid);
             free(entry->blob_oid);
-            free(entry->mode);
             free(entry->owner);
             free(entry->group);
 
@@ -1696,7 +1690,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 free(ws->manifest->entries[j].old_profile);
                 free(ws->manifest->entries[j].git_oid);
                 free(ws->manifest->entries[j].blob_oid);
-                free(ws->manifest->entries[j].mode);
                 free(ws->manifest->entries[j].owner);
                 free(ws->manifest->entries[j].group);
                 if (ws->manifest->entries[j].entry) {
@@ -1732,7 +1725,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 free(entry->filesystem_path);
                 free(entry->git_oid);
                 free(entry->blob_oid);
-                free(entry->mode);
                 free(entry->owner);
                 free(entry->group);
                 continue;  /* Don't increment manifest_idx */
@@ -1742,7 +1734,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 free(entry->filesystem_path);
                 free(entry->git_oid);
                 free(entry->blob_oid);
-                free(entry->mode);
                 free(entry->owner);
                 free(entry->group);
 
@@ -1752,7 +1743,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                     free(ws->manifest->entries[j].filesystem_path);
                     free(ws->manifest->entries[j].git_oid);
                     free(ws->manifest->entries[j].blob_oid);
-                    free(ws->manifest->entries[j].mode);
                     free(ws->manifest->entries[j].owner);
                     free(ws->manifest->entries[j].group);
                     if (ws->manifest->entries[j].entry) {
@@ -1791,7 +1781,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 free(ws->manifest->entries[j].filesystem_path);
                 free(ws->manifest->entries[j].git_oid);
                 free(ws->manifest->entries[j].blob_oid);
-                free(ws->manifest->entries[j].mode);
                 free(ws->manifest->entries[j].owner);
                 free(ws->manifest->entries[j].group);
                 if (ws->manifest->entries[j].entry) {

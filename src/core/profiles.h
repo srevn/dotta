@@ -100,7 +100,7 @@ typedef struct {
     char *git_oid;                   /* Git commit reference (40-char hex, can be NULL) */
     char *blob_oid;                  /* Git blob OID (40-char hex, can be NULL) */
     state_file_type_t type;          /* File type (REGULAR, SYMLINK, EXECUTABLE) */
-    char *mode;                      /* Permission mode string (e.g., "0644", can be NULL) */
+    mode_t mode;                     /* Permission mode (e.g., 0644), 0 if no metadata tracked */
     char *owner;                     /* Owner username (root/ files only, can be NULL) */
     char *group;                     /* Group name (root/ files only, can be NULL) */
     bool encrypted;                  /* Encryption flag */

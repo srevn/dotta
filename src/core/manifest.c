@@ -137,19 +137,6 @@ static error_t *build_profile_oid_map(
 }
 
 /**
- * Convert mode_t to string
- */
-static char *mode_to_string(mode_t mode) {
-    char *mode_str = malloc(8);
-    if (!mode_str) {
-        return NULL;
-    }
-
-    snprintf(mode_str, 8, "%04o", mode & 07777);
-    return mode_str;
-}
-
-/**
  * Extract file metadata from Git tree entry
  *
  * Authoritative extraction of file type and mode from Git tree entry.
@@ -335,7 +322,6 @@ static error_t *sync_entry_to_state(
     error_t *err = NULL;
     char *blob_oid = NULL;
     metadata_item_t *meta_item = NULL;
-    char *mode_str = NULL;
 
     /* 1. Extract blob_oid from tree entry */
     const struct git_oid *blob_oid_obj = git_tree_entry_id(manifest_entry->entry);
@@ -382,22 +368,13 @@ static error_t *sync_entry_to_state(
         goto cleanup;
     }
 
-    /* 4. Build mode string with metadata precedence
+    /* 4. Determine mode with metadata precedence (no allocation needed!)
      *
      * Precedence Rules:
      *   1. Metadata mode (if present) - explicit user intent, may differ from Git
      *      Example: User wants 0600 (private) instead of Git's 0644
      *   2. Git mode (fallback) - authoritative for type, good default for permissions */
-    if (meta_item) {
-        mode_str = mode_to_string(meta_item->mode);
-    } else {
-        mode_str = mode_to_string(git_mode);
-    }
-
-    if (!mode_str) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate mode string");
-        goto cleanup;
-    }
+    mode_t mode = meta_item ? meta_item->mode : git_mode;
 
     /* 5. Build state entry */
     state_file_entry_t state_entry = {
@@ -407,7 +384,7 @@ static error_t *sync_entry_to_state(
         .type = file_type,
         .git_oid = (char *)git_oid,
         .blob_oid = blob_oid,
-        .mode = mode_str,
+        .mode = mode,
         .owner = meta_item ? meta_item->owner : NULL,
         .group = meta_item ? meta_item->group : NULL,
         .encrypted = meta_item ? meta_item->file.encrypted : false,
@@ -427,7 +404,6 @@ static error_t *sync_entry_to_state(
     }
 
 cleanup:
-    free(mode_str);
     free(blob_oid);
     return err;
 }

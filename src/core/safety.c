@@ -359,7 +359,8 @@ static bool try_fast_path_check(
                 bool mode_differs = false;
                 bool ownership_differs = false;
                 error_t *check_err = check_item_metadata_divergence(
-                    meta_entry, filesystem_path, &file_stat,
+                    meta_entry->mode, meta_entry->owner, meta_entry->group,
+                    filesystem_path, &file_stat,
                     &mode_differs, &ownership_differs);
 
                 if (check_err == NULL && (mode_differs || ownership_differs)) {
@@ -556,7 +557,8 @@ static error_t *check_file_with_tree(
                 bool mode_differs = false;
                 bool ownership_differs = false;
                 error_t *check_err = check_item_metadata_divergence(
-                    meta_entry, filesystem_path, &file_stat,
+                    meta_entry->mode, meta_entry->owner, meta_entry->group,
+                    filesystem_path, &file_stat,
                     &mode_differs, &ownership_differs);
 
                 if (check_err == NULL && (mode_differs || ownership_differs)) {

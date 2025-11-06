@@ -77,7 +77,7 @@ typedef struct {
     char *blob_oid;             /* Git blob OID (40-char hex) */
 
     /* Metadata */
-    char *mode;                 /* Permission mode (e.g., "0644") */
+    mode_t mode;                /* Permission mode (e.g., 0644), 0 if no metadata tracked */
     char *owner;                /* Owner username (root/ files only, can be NULL) */
     char *group;                /* Group name (root/ files only, can be NULL) */
     bool encrypted;             /* Encryption flag */
@@ -340,7 +340,7 @@ error_t *state_clear_files(state_t *state);
  * @param type File type
  * @param git_oid Git commit reference (can be NULL)
  * @param blob_oid Git blob OID (can be NULL)
- * @param mode Permission mode (can be NULL)
+ * @param mode Permission mode (0 if no metadata tracked)
  * @param owner Owner username (can be NULL)
  * @param group Group name (can be NULL)
  * @param encrypted Encryption flag
@@ -356,7 +356,7 @@ error_t *state_create_entry(
     state_file_type_t type,
     const char *git_oid,
     const char *blob_oid,
-    const char *mode,
+    mode_t mode,
     const char *owner,
     const char *group,
     bool encrypted,

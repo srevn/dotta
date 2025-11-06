@@ -1133,7 +1133,7 @@ error_t *profile_build_manifest(
                         break;
                 }
 
-                manifest->entries[manifest->count].mode = NULL;
+                manifest->entries[manifest->count].mode = 0;
                 manifest->entries[manifest->count].owner = NULL;
                 manifest->entries[manifest->count].group = NULL;
                 manifest->entries[manifest->count].encrypted = false;
@@ -1587,10 +1587,9 @@ void manifest_free(manifest_t *manifest) {
         free(manifest->entries[i].old_profile);
         free(manifest->entries[i].git_oid);
         free(manifest->entries[i].blob_oid);
-        free(manifest->entries[i].mode);
         free(manifest->entries[i].owner);
         free(manifest->entries[i].group);
-        /* Note: type, encrypted, deployed_at are not pointers, no cleanup needed */
+        /* Note: type, mode, encrypted, deployed_at are not pointers, no cleanup needed */
     }
 
     free(manifest->entries);

@@ -231,17 +231,20 @@ const metadata_t *workspace_get_metadata(
 );
 
 /**
- * Check for metadata (mode and ownership) divergence
+ * Check for metadata (mode and ownership) divergence (data-centric design)
  *
- * Compares filesystem metadata with stored metadata to detect changes in
+ * Compares filesystem metadata with expected values to detect changes in
  * permissions (mode) and ownership (user/group). Checks both independently.
  *
- * Works for both FILE and DIRECTORY metadata kinds.
+ * Data-centric approach: Accepts values directly instead of structs, enabling use with
+ * both VWD cache (file_entry_t) and metadata (metadata_item_t) without conversion.
  *
  * Stat propagation: Caller must provide pre-captured stat to avoid redundant
  * syscalls. This function performs zero filesystem operations.
  *
- * @param item Metadata item (FILE or DIRECTORY, must not be NULL)
+ * @param expected_mode Expected permission mode (0 = skip mode check, no metadata tracked)
+ * @param expected_owner Expected owner username (NULL = skip owner check)
+ * @param expected_group Expected group name (NULL = skip group check)
  * @param fs_path Filesystem path (for error messages, must not be NULL)
  * @param st File stat data (must not be NULL, pre-captured by caller)
  * @param out_mode_differs Output flag for mode divergence (must not be NULL)
@@ -249,7 +252,9 @@ const metadata_t *workspace_get_metadata(
  * @return Error or NULL on success
  */
 error_t *check_item_metadata_divergence(
-    const metadata_item_t *item,
+    mode_t expected_mode,
+    const char *expected_owner,
+    const char *expected_group,
     const char *fs_path,
     const struct stat *st,
     bool *out_mode_differs,

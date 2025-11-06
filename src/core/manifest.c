@@ -321,25 +321,34 @@ static error_t *compute_content_hash_from_entry(
 /**
  * Sync single entry from in-memory manifest to state
  *
- * This is the central translation function that converts from the in-memory
- * manifest representation (file_entry_t from profile_build_manifest) to the
+ * Translates from in-memory manifest representation (file_entry_t) to
  * persistent state representation (state_file_entry_t in SQLite).
+ *
+ * RESPONSIBILITY CONTRACT ("Dumb Writer" Pattern):
+ *   - Caller MUST determine the correct deployed_at value
+ *   - Function writes exactly what caller provides (no preservation)
+ *   - Uses INSERT OR REPLACE for atomic upsert
+ *
+ * To preserve existing deployed_at:
+ *   1. Caller calls state_get_file() to fetch existing entry
+ *   2. Caller passes existing->deployed_at to this function
+ *   3. Function writes that exact value
  *
  * Responsibilities:
  *   - Compute content hash (with transparent decryption)
  *   - Extract metadata (mode, owner, group, encrypted flag)
- *   - Build state entry structure
- *   - Insert or update in state database
+ *   - Build state entry structure with caller-provided deployed_at
+ *   - Write to state database (INSERT OR REPLACE)
  *
  * @param repo Git repository
  * @param state State handle (with active transaction)
  * @param manifest_entry Entry from in-memory manifest (borrowed)
  * @param git_oid Git commit reference (40-char hex)
  * @param metadata Merged metadata from all profiles
- * @param deployed_at Lifecycle timestamp for entry:
- *       - 0: File never deployed (new, undeployed)
- *       - time(NULL): File known to dotta (exists or just captured)
- *       - existing->deployed_at: Preserve history (updates)
+ * @param deployed_at Caller-determined lifecycle timestamp (NOT modified):
+ *       - 0: File never deployed (shows as [undeployed] if missing)
+ *       - time(NULL): File exists on filesystem (initial capture)
+ *       - existing->deployed_at: Preserve history (caller must fetch)
  * @param km Keymanager for content hashing
  * @param cache Content cache (can be NULL)
  * @return Error or NULL on success
@@ -364,7 +373,6 @@ static error_t *sync_entry_to_state(
     char *content_hash = NULL;
     metadata_item_t *meta_item = NULL;
     char *mode_str = NULL;
-    state_file_entry_t *existing = NULL;
 
     /* 1. Compute content hash (plaintext, with decryption if needed) */
     err = compute_content_hash_from_entry(
@@ -443,34 +451,19 @@ static error_t *sync_entry_to_state(
         .deployed_at = deployed_at
     };
 
-    /* 6. Check if entry exists (to preserve deployed_at) */
-    err = state_get_file(state, manifest_entry->filesystem_path, &existing);
-    if (err == NULL && existing != NULL) {
-        /* Preserve deployed_at for existing entries */
-        state_entry.deployed_at = existing->deployed_at;
-
-        /* Update existing entry */
-        err = state_update_entry(state, &state_entry);
-        if (err) {
-            err = error_wrap(err, "Failed to update manifest entry for %s",
-                           manifest_entry->storage_path);
-        }
-    } else {
-        /* Insert new entry */
-        if (err && err->code == ERR_NOT_FOUND) {
-            error_free(err);
-            err = NULL;
-        }
-
-        err = state_add_file(state, &state_entry);
-        if (err) {
-            err = error_wrap(err, "Failed to add manifest entry for %s",
-                           manifest_entry->storage_path);
-        }
+    /* 6. Write entry to state (INSERT OR REPLACE with caller's deployed_at)
+     *
+     * Uses INSERT OR REPLACE for atomic upsert - handles both new entries
+     * and updates to existing entries. The deployed_at value comes directly
+     * from the caller, who is responsible for preservation logic.
+     */
+    err = state_add_file(state, &state_entry);
+    if (err) {
+        err = error_wrap(err, "Failed to sync manifest entry for %s",
+                       manifest_entry->storage_path);
     }
 
 cleanup:
-    if (existing) state_free_entry(existing);
     free(mode_str);
     free(content_hash);
     return err;

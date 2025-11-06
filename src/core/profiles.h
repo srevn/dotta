@@ -38,8 +38,10 @@
 #define DOTTA_PROFILES_H
 
 #include <git2.h>
+#include <time.h>
 
 #include "types.h"
+#include "state.h"
 #include "utils/hashmap.h"
 
 /**
@@ -55,14 +57,53 @@ typedef struct {
 /**
  * File entry in manifest
  *
- * Represents a single file to be deployed.
+ * Represents a single file to be deployed. This structure serves as the
+ * Virtual Working Directory (VWD) cache, storing both Git tree information
+ * and expected state from the database for efficient divergence detection.
+ *
+ * VWD Architecture:
+ * - The manifest is the authoritative cache of expected state
+ * - Fields are populated from state database during workspace load
+ * - Enables O(1) divergence checking without N database queries
+ * - For manifests built from Git (not state), VWD fields are NULL/0
+ *
+ * Memory ownership:
+ * - All string fields are owned and must be freed in manifest_free()
+ * - git_tree_entry is owned and must be freed
+ * - profile_t pointers are borrowed (except owned_profile in manifest_t)
  */
 typedef struct {
+    /* Paths */
     char *storage_path;              /* Path in profile (home/.bashrc) */
     char *filesystem_path;           /* Deployed path (/home/user/.bashrc) */
-    git_tree_entry *entry;           /* Git tree entry (borrowed from tree) */
-    profile_t *source_profile;       /* Which profile provides this file (highest precedence) */
-    string_array_t *all_profiles;    /* All profile names containing this file (for overlap detection) */
+
+    /* Git tree reference */
+    git_tree_entry *entry;           /* Git tree entry (owned, must free) */
+
+    /* Profile ownership */
+    profile_t *source_profile;       /* Which profile provides this file (borrowed) */
+    string_array_t *all_profiles;    /* All profile names containing this file (owned) */
+
+    /* VWD Expected State Cache (populated from state database)
+     *
+     * These fields cache the expected state from the manifest table,
+     * eliminating N+1 queries during divergence analysis. They represent
+     * what the file SHOULD be according to enabled profiles.
+     *
+     * Lifecycle:
+     * - Populated in workspace_build_manifest_from_state()
+     * - Used in analyze_file_divergence() for comparison
+     * - NULL/0 for manifests built from Git trees (not state)
+     * - Freed in manifest_free()
+     */
+    char *git_oid;                   /* Git commit reference (40-char hex, can be NULL) */
+    char *content_hash;              /* Blake2b hash for content comparison (can be NULL) */
+    state_file_type_t type;          /* File type (REGULAR, SYMLINK, EXECUTABLE) */
+    char *mode;                      /* Permission mode string (e.g., "0644", can be NULL) */
+    char *owner;                     /* Owner username (root/ files only, can be NULL) */
+    char *group;                     /* Group name (root/ files only, can be NULL) */
+    bool encrypted;                  /* Encryption flag */
+    time_t deployed_at;              /* Lifecycle timestamp (0 = never deployed, >0 = known) */
 } file_entry_t;
 
 /**

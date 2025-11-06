@@ -400,10 +400,21 @@ static error_t *workspace_add_diverged(
  * - Old logic: UNDEPLOYED state (no comparison!) → would overwrite on deploy
  * - New logic: UNDEPLOYED state + DIVERGENCE_CONTENT flag → blocks deploy
  */
+/**
+ * Analyze divergence for a single file using VWD cache
+ *
+ * This function uses the VWD (Virtual Working Directory) cache stored in
+ * manifest_entry to perform divergence detection without database queries.
+ * All expected state (content_hash, type, deployed_at, etc.) is cached in
+ * the manifest entry during workspace load.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @param manifest_entry Manifest entry with VWD cache (must not be NULL)
+ * @return Error or NULL on success
+ */
 static error_t *analyze_file_divergence(
     workspace_t *ws,
-    const file_entry_t *manifest_entry,
-    const state_file_entry_t *state_entry
+    const file_entry_t *manifest_entry
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(manifest_entry);
@@ -413,7 +424,17 @@ static error_t *analyze_file_divergence(
     const char *profile = manifest_entry->source_profile->name;
 
     bool in_profile = true;  /* By definition - we're iterating manifest */
-    bool in_state = (state_entry != NULL);
+
+    /* Determine if entry came from state database using VWD cache
+     *
+     * If manifest was built from state, VWD fields are populated (content_hash != NULL).
+     * If manifest was built from Git, VWD fields are NULL/0.
+     *
+     * content_hash is the most reliable indicator because it's always populated
+     * during sync_entry_to_state() when writing to the manifest table.
+     */
+    bool in_state = (manifest_entry->content_hash != NULL);
+
     bool on_filesystem = fs_lexists(fs_path);
 
     /* Divergence accumulator (bit flags, can combine) */
@@ -452,8 +473,11 @@ static error_t *analyze_file_divergence(
                 manifest_entry->source_profile->name);
         }
 
-        /* Hash-based content comparison (only if we have state entry with hash) */
-        if (state_entry && state_entry->content_hash) {
+        /* Hash-based content comparison using VWD cache
+         *
+         * The content_hash from VWD cache represents expected state from the
+         * manifest table. We compare it against the filesystem file's hash. */
+        if (manifest_entry->content_hash) {
             /* Compute hash from filesystem file (with transparent decryption) */
             char *fs_content_hash = NULL;
             error_t *err = content_hash_file(
@@ -469,8 +493,8 @@ static error_t *analyze_file_divergence(
                 return error_wrap(err, "Failed to compute content hash for '%s'", fs_path);
             }
 
-            /* Compare hashes */
-            if (strcmp(state_entry->content_hash, fs_content_hash) != 0) {
+            /* Compare hashes: VWD cache (expected) vs filesystem (actual) */
+            if (strcmp(manifest_entry->content_hash, fs_content_hash) != 0) {
                 /* Content differs - accumulate CONTENT flag */
                 divergence |= DIVERGENCE_CONTENT;
             }
@@ -490,19 +514,19 @@ static error_t *analyze_file_divergence(
          *   - Catches: granular changes like 0600→0644, ownership changes
          */
 
-        /* PHASE A: Check filemode (executable bit) from state entry */
-        if (state_entry) {
-            /* Get executable bit from state entry type instead of Git tree entry.
-             * state_entry->type is STATE_FILE_EXECUTABLE or STATE_FILE_REGULAR. */
-            bool expect_exec = (state_entry->type == STATE_FILE_EXECUTABLE);
+        /* PHASE A: Check filemode (executable bit) from VWD cache */
+        if (in_state) {
+            /* Get executable bit from VWD cache type field.
+             * manifest_entry->type is STATE_FILE_EXECUTABLE or STATE_FILE_REGULAR. */
+            bool expect_exec = (manifest_entry->type == STATE_FILE_EXECUTABLE);
             bool is_exec = fs_stat_is_executable(&file_stat);
 
             if (expect_exec != is_exec) {
-                /* Executable bit differs between manifest and filesystem */
+                /* Executable bit differs between expected (VWD cache) and filesystem */
                 divergence |= DIVERGENCE_MODE;
             }
         }
-        /* If no state_entry: skip exec bit check (file not in manifest, will show as UNDEPLOYED) */
+        /* If not in_state: skip exec bit check (manifest from Git, not state) */
 
         /* PHASE B: Check full metadata (mode and ownership) if available */
         if (metadata) {
@@ -564,12 +588,16 @@ static error_t *analyze_file_divergence(
     if (!on_filesystem) {
         /* File in manifest but missing from filesystem */
 
-        /* Use deployed_at to distinguish never-deployed vs deleted */
-        if (state_entry && state_entry->deployed_at > 0) {
+        /* Use deployed_at from VWD cache to distinguish never-deployed vs deleted
+         *
+         * The VWD cache stores the lifecycle timestamp:
+         * - deployed_at = 0: File never deployed by dotta
+         * - deployed_at > 0: File was deployed or known to dotta */
+        if (in_state && manifest_entry->deployed_at > 0) {
             /* File was deployed/known (deployed_at > 0), now deleted */
             state = WORKSPACE_STATE_DELETED;
         } else {
-            /* File never deployed (deployed_at = 0 or missing state_entry) */
+            /* File never deployed (deployed_at = 0) or not in state (manifest from Git) */
             state = WORKSPACE_STATE_UNDEPLOYED;
         }
 
@@ -582,23 +610,25 @@ static error_t *analyze_file_divergence(
     }
 
     /* PHASE 3: Profile ownership change detection
-     * Detect when a file moves from one profile to another.
-     * Example: file was in 'global', now in 'darwin'.
+     *
+     * With VWD cache architecture, the manifest is rebuilt from current state
+     * on every workspace load. There is no "previous state" to compare against
+     * for profile ownership changes within a single workspace session.
+     *
+     * Profile ownership changes are naturally reflected when the manifest is
+     * rebuilt: files now show their current owning profile from the manifest table.
+     *
+     * For example, if a file moved from 'global' to 'darwin':
+     * - Old workspace: manifest shows source_profile='global'
+     * - New workspace: manifest shows source_profile='darwin'
+     * - No transition tracking needed within single workspace
      */
     bool profile_changed = false;
     char *old_profile = NULL;
 
-    if (in_state && state_entry) {
-        /* Compare state profile vs manifest profile */
-        if (strcmp(state_entry->profile, manifest_entry->source_profile->name) != 0) {
-            profile_changed = true;
-            old_profile = strdup(state_entry->profile);
-            if (!old_profile) {
-                return ERROR(ERR_MEMORY,
-                    "Failed to allocate old_profile for '%s'", fs_path);
-            }
-        }
-    }
+    /* Note: With current VWD architecture, profile_changed is always false
+     * because manifest reflects current state only. Future enhancement could
+     * add old_profile field to VWD cache if cross-session change tracking needed. */
 
     /* Add to workspace if there's any state change or divergence */
     if (state != WORKSPACE_STATE_DEPLOYED || divergence != DIVERGENCE_NONE || profile_changed) {
@@ -818,41 +848,31 @@ static error_t *analyze_orphaned_state(workspace_t *ws) {
 }
 
 /**
- * Analyze divergence for all files in manifest
+ * Analyze divergence for all files in manifest using VWD cache
  *
- * Compares each file in the manifest against deployment state and filesystem
- * reality to detect modifications, deletions, and undeployed files.
+ * Compares each file in the manifest against filesystem reality to detect
+ * modifications, deletions, and undeployed files.
+ *
+ * Performance: O(N) where N = manifest count. No database queries needed
+ * because all expected state is cached in the manifest entries (VWD cache).
+ * This eliminates the previous N+1 query problem.
  */
 static error_t *analyze_files_divergence(workspace_t *ws) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->manifest);
     CHECK_NULL(ws->state);
 
-    /* Analyze each file in manifest */
+    /* Analyze each file in manifest using VWD cache
+     *
+     * The manifest_entry contains all necessary state information in its
+     * VWD cache fields (content_hash, type, deployed_at, etc.), so we
+     * don't need to query the database for each file. This eliminates
+     * N individual state_get_file() queries. */
     for (size_t i = 0; i < ws->manifest->count; i++) {
         const file_entry_t *manifest_entry = &ws->manifest->entries[i];
 
-        /* Check if file is in deployment state */
-        state_file_entry_t *state_entry = NULL;
-        error_t *lookup_err = state_get_file(ws->state,
-                                             manifest_entry->filesystem_path,
-                                             &state_entry);
-
-        if (lookup_err && lookup_err->code != ERR_NOT_FOUND) {
-            /* Real error */
-            state_free_entry(state_entry);
-            return lookup_err;
-        }
-
-        /* Not found is OK - means not deployed */
-        if (lookup_err) {
-            error_free(lookup_err);
-            state_entry = NULL;
-        }
-
-        /* Analyze this file */
-        error_t *err = analyze_file_divergence(ws, manifest_entry, state_entry);
-        state_free_entry(state_entry);  /* Free owned memory from SQLite */
+        /* Analyze this file using VWD cache (no database query needed) */
+        error_t *err = analyze_file_divergence(ws, manifest_entry);
 
         if (err) {
             return err;
@@ -1541,6 +1561,11 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             for (size_t j = 0; j < manifest_idx; j++) {
                 free(ws->manifest->entries[j].storage_path);
                 free(ws->manifest->entries[j].filesystem_path);
+                free(ws->manifest->entries[j].git_oid);
+                free(ws->manifest->entries[j].content_hash);
+                free(ws->manifest->entries[j].mode);
+                free(ws->manifest->entries[j].owner);
+                free(ws->manifest->entries[j].group);
                 if (ws->manifest->entries[j].entry) {
                     git_tree_entry_free(ws->manifest->entries[j].entry);
                 }
@@ -1553,17 +1578,84 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             return ERROR(ERR_MEMORY, "Failed to allocate manifest entry paths");
         }
 
-        /* Load profile tree (lazy-loaded, cached in profile structure) */
-        err = profile_load_tree(ws->repo, entry->source_profile);
-        if (err) {
-            /* Cleanup allocated paths for current entry */
+        /* Populate VWD expected state cache from database
+         *
+         * These fields enable O(1) divergence checking without N database queries.
+         * They represent the cached expected state that workspace divergence
+         * analysis will compare against filesystem reality.
+         *
+         * NULL fields: Some optional fields (mode, owner, group, git_oid, content_hash)
+         * may be NULL in state database. Use conditional strdup to handle gracefully.
+         */
+        entry->git_oid = state_entry->git_oid ? strdup(state_entry->git_oid) : NULL;
+        entry->content_hash = state_entry->content_hash ? strdup(state_entry->content_hash) : NULL;
+        entry->type = state_entry->type;
+        entry->mode = state_entry->mode ? strdup(state_entry->mode) : NULL;
+        entry->owner = state_entry->owner ? strdup(state_entry->owner) : NULL;
+        entry->group = state_entry->group ? strdup(state_entry->group) : NULL;
+        entry->encrypted = state_entry->encrypted;
+        entry->deployed_at = state_entry->deployed_at;
+
+        /* Check for allocation failures in VWD fields
+         * Note: NULL is valid for optional fields (mode, owner, group), but if the
+         * source had a value and strdup failed, that's an allocation failure. */
+        if ((state_entry->git_oid && !entry->git_oid) ||
+            (state_entry->content_hash && !entry->content_hash) ||
+            (state_entry->mode && !entry->mode) ||
+            (state_entry->owner && !entry->owner) ||
+            (state_entry->group && !entry->group)) {
+
+            /* Cleanup current entry's allocated fields */
             free(entry->storage_path);
             free(entry->filesystem_path);
+            free(entry->git_oid);
+            free(entry->content_hash);
+            free(entry->mode);
+            free(entry->owner);
+            free(entry->group);
 
             /* Free previously allocated entries */
             for (size_t j = 0; j < manifest_idx; j++) {
                 free(ws->manifest->entries[j].storage_path);
                 free(ws->manifest->entries[j].filesystem_path);
+                free(ws->manifest->entries[j].git_oid);
+                free(ws->manifest->entries[j].content_hash);
+                free(ws->manifest->entries[j].mode);
+                free(ws->manifest->entries[j].owner);
+                free(ws->manifest->entries[j].group);
+                if (ws->manifest->entries[j].entry) {
+                    git_tree_entry_free(ws->manifest->entries[j].entry);
+                }
+            }
+            hashmap_free(path_map, NULL);
+            free(ws->manifest->entries);
+            free(ws->manifest);
+            ws->manifest = NULL;
+            state_free_all_files(state_entries, state_count);
+            return ERROR(ERR_MEMORY, "Failed to allocate VWD cache fields");
+        }
+
+        /* Load profile tree (lazy-loaded, cached in profile structure) */
+        err = profile_load_tree(ws->repo, entry->source_profile);
+        if (err) {
+            /* Cleanup allocated fields for current entry */
+            free(entry->storage_path);
+            free(entry->filesystem_path);
+            free(entry->git_oid);
+            free(entry->content_hash);
+            free(entry->mode);
+            free(entry->owner);
+            free(entry->group);
+
+            /* Free previously allocated entries */
+            for (size_t j = 0; j < manifest_idx; j++) {
+                free(ws->manifest->entries[j].storage_path);
+                free(ws->manifest->entries[j].filesystem_path);
+                free(ws->manifest->entries[j].git_oid);
+                free(ws->manifest->entries[j].content_hash);
+                free(ws->manifest->entries[j].mode);
+                free(ws->manifest->entries[j].owner);
+                free(ws->manifest->entries[j].group);
                 if (ws->manifest->entries[j].entry) {
                     git_tree_entry_free(ws->manifest->entries[j].entry);
                 }
@@ -1592,19 +1684,34 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                     entry->filesystem_path,
                     entry->source_profile->name);
 
-                /* Free allocated paths and skip this entry */
+                /* Free allocated fields and skip this entry */
                 free(entry->storage_path);
                 free(entry->filesystem_path);
+                free(entry->git_oid);
+                free(entry->content_hash);
+                free(entry->mode);
+                free(entry->owner);
+                free(entry->group);
                 continue;  /* Don't increment manifest_idx */
             } else {
                 /* Other Git errors - propagate */
                 free(entry->storage_path);
                 free(entry->filesystem_path);
+                free(entry->git_oid);
+                free(entry->content_hash);
+                free(entry->mode);
+                free(entry->owner);
+                free(entry->group);
 
                 /* Free previously allocated entries */
                 for (size_t j = 0; j < manifest_idx; j++) {
                     free(ws->manifest->entries[j].storage_path);
                     free(ws->manifest->entries[j].filesystem_path);
+                    free(ws->manifest->entries[j].git_oid);
+                    free(ws->manifest->entries[j].content_hash);
+                    free(ws->manifest->entries[j].mode);
+                    free(ws->manifest->entries[j].owner);
+                    free(ws->manifest->entries[j].group);
                     if (ws->manifest->entries[j].entry) {
                         git_tree_entry_free(ws->manifest->entries[j].entry);
                     }
@@ -1639,6 +1746,11 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             for (size_t j = 0; j <= manifest_idx; j++) {
                 free(ws->manifest->entries[j].storage_path);
                 free(ws->manifest->entries[j].filesystem_path);
+                free(ws->manifest->entries[j].git_oid);
+                free(ws->manifest->entries[j].content_hash);
+                free(ws->manifest->entries[j].mode);
+                free(ws->manifest->entries[j].owner);
+                free(ws->manifest->entries[j].group);
                 if (ws->manifest->entries[j].entry) {
                     git_tree_entry_free(ws->manifest->entries[j].entry);
                 }

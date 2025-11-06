@@ -1060,6 +1060,11 @@ error_t *profile_build_manifest(
                 manifest->entries[existing_idx].entry = entry;
                 manifest->entries[existing_idx].source_profile = profile;
 
+                /* VWD fields remain NULL/0 (not populated for Git-based manifests)
+                 * The existing entry already has VWD fields initialized to NULL/0
+                 * from initial creation, so no action needed here. This comment
+                 * documents that we're intentionally preserving the NULL/0 state. */
+
                 /* Clear temporary variables (ownership transferred) */
                 dup_storage_path = NULL;
                 filesystem_path = NULL;
@@ -1096,6 +1101,43 @@ error_t *profile_build_manifest(
                 manifest->entries[manifest->count].entry = entry;
                 manifest->entries[manifest->count].source_profile = profile;
                 manifest->entries[manifest->count].all_profiles = NULL;  /* Initialize to NULL (single profile) */
+
+                /* Initialize VWD expected state cache to NULL/0
+                 *
+                 * These fields are only populated when manifest is built from state database.
+                 * For manifests built from Git (this function), they remain NULL/0 except for
+                 * the type field which we derive from the Git tree entry's filemode.
+                 *
+                 * IMPORTANT: After realloc(), new memory is NOT zero-initialized, so we must
+                 * explicitly initialize these fields to prevent use of uninitialized memory. */
+                manifest->entries[manifest->count].git_oid = NULL;
+                manifest->entries[manifest->count].content_hash = NULL;
+
+                /* Derive type from Git filemode (executable bit detection)
+                 * This ensures the type field is accurate even for Git-based manifests.
+                 * Uses same logic as extract_file_metadata_from_tree_entry() in manifest.c */
+                git_filemode_t filemode = git_tree_entry_filemode(entry);
+                switch (filemode) {
+                    case GIT_FILEMODE_BLOB:
+                        manifest->entries[manifest->count].type = STATE_FILE_REGULAR;
+                        break;
+                    case GIT_FILEMODE_BLOB_EXECUTABLE:
+                        manifest->entries[manifest->count].type = STATE_FILE_EXECUTABLE;
+                        break;
+                    case GIT_FILEMODE_LINK:
+                        manifest->entries[manifest->count].type = STATE_FILE_SYMLINK;
+                        break;
+                    default:
+                        /* Should never happen (tree walk filters directories) */
+                        manifest->entries[manifest->count].type = STATE_FILE_REGULAR;
+                        break;
+                }
+
+                manifest->entries[manifest->count].mode = NULL;
+                manifest->entries[manifest->count].owner = NULL;
+                manifest->entries[manifest->count].group = NULL;
+                manifest->entries[manifest->count].encrypted = false;
+                manifest->entries[manifest->count].deployed_at = 0;
 
                 /* Store index in hashmap (offset by 1 to distinguish from NULL).
                  * We cast the index through uintptr_t to store it as a void pointer.
@@ -1523,14 +1565,31 @@ void manifest_free(manifest_t *manifest) {
     }
 
     for (size_t i = 0; i < manifest->count; i++) {
+        /* Free path fields */
         free(manifest->entries[i].storage_path);
         free(manifest->entries[i].filesystem_path);
+
+        /* Free Git tree entry */
         if (manifest->entries[i].entry) {
             git_tree_entry_free(manifest->entries[i].entry);
         }
+
+        /* Free profile overlap tracking */
         if (manifest->entries[i].all_profiles) {
             string_array_free(manifest->entries[i].all_profiles);
         }
+
+        /* Free VWD expected state cache fields
+         *
+         * These fields are populated when manifest is built from state database
+         * (workspace_build_manifest_from_state). For manifests built from Git
+         * trees (profile_build_manifest), these will be NULL and free() is safe. */
+        free(manifest->entries[i].git_oid);
+        free(manifest->entries[i].content_hash);
+        free(manifest->entries[i].mode);
+        free(manifest->entries[i].owner);
+        free(manifest->entries[i].group);
+        /* Note: type, encrypted, deployed_at are not pointers, no cleanup needed */
     }
 
     free(manifest->entries);

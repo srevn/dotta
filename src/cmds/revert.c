@@ -1326,9 +1326,7 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
         &old_head_oid,      /* Before revert */
         &new_head_oid,      /* After revert */
         enabled_profiles,
-        NULL,               /* km - will create if needed */
         NULL,               /* metadata_cache - will load if needed */
-        NULL,               /* content_cache - will create if needed */
         &synced,
         &removed,
         &fallbacks

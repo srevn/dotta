@@ -216,7 +216,7 @@ static bool try_fast_path_check(
     const char *filesystem_path,
     const char *storage_path,
     const char *source_profile,
-    const char *state_hash,
+    const char *state_blob_oid,
     const metadata_t *metadata,
     keymanager_t *keymanager,
     content_cache_t *cache,
@@ -225,15 +225,15 @@ static bool try_fast_path_check(
 ) {
     *out_err = NULL;
 
-    /* No hash - must use slow path */
-    if (!state_hash) {
+    /* No blob_oid - must use slow path */
+    if (!state_blob_oid) {
         return false;
     }
 
-    /* Parse blob OID from hash */
+    /* Parse blob OID from string */
     git_oid blob_oid;
-    if (git_oid_fromstr(&blob_oid, state_hash) != 0) {
-        /* Invalid hash - use slow path */
+    if (git_oid_fromstr(&blob_oid, state_blob_oid) != 0) {
+        /* Invalid OID - use slow path */
         return false;
     }
 
@@ -286,29 +286,7 @@ static bool try_fast_path_check(
         }
 
         if (err) {
-            /* Distinguish blob not found from real errors
-             *
-             * ERR_NOT_FOUND occurs in two scenarios:
-             *
-             * 1. Encrypted files (expected behavior):
-             *    - content_hash = SHA-1(plaintext)
-             *    - blob_oid     = SHA-1(ciphertext)
-             *    - Lookup fails because plaintext hash ≠ ciphertext hash
-             *    - Solution: Fall back to slow path (tree walk + decrypt + compare)
-             *
-             * 2. Profile/file deleted:
-             *    - Blob genuinely doesn't exist in Git object database
-             *    - Solution: Slow path will detect missing entry and handle correctly
-             *
-             * For both cases, slow path provides correct behavior via tree-based lookup.
-             */
-            if (err->code == ERR_NOT_FOUND) {
-                error_free(err);
-                return false;  /* Use slow path (check_file_with_tree) */
-            }
-
-            /* Real errors: I/O failure, corruption, permission denied, etc.
-             * Conservative approach: cannot verify → block removal to prevent data loss */
+            /* Loading/decryption failed - conservative: cannot verify */
             error_free(err);
             *out_err = add_violation(result, filesystem_path, storage_path,
                                     source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
@@ -857,7 +835,7 @@ error_t *safety_check_removal(
         error_t *check_err = NULL;
         bool fast_path_succeeded = try_fast_path_check(
             repo, fs_path, storage_path, source_profile,
-            state_entry->content_hash,
+            state_entry->blob_oid,
             resolved_metadata,   /* ← Use resolved metadata (enabled OR loaded on-demand) */
             keymanager,          /* Pass keymanager for decryption */
             cache,               /* Pass cache for performance */

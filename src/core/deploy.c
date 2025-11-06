@@ -295,9 +295,21 @@ error_t *deploy_file(
     if (mode == GIT_FILEMODE_LINK) {
         /* For symlinks, we need to load the blob directly since content layer
          * is designed for regular files with potential encryption */
+
+        /* Parse cached blob_oid */
+        git_oid oid;
+        if (!entry->blob_oid) {
+            err = ERROR(ERR_INTERNAL, "Missing blob_oid for symlink '%s'", entry->storage_path);
+            goto cleanup;
+        }
+
+        if (git_oid_fromstr(&oid, entry->blob_oid) != 0) {
+            err = ERROR(ERR_INTERNAL, "Invalid blob_oid for symlink '%s'", entry->storage_path);
+            goto cleanup;
+        }
+
         git_blob *blob = NULL;
-        const git_oid *oid = git_tree_entry_id(entry->entry);
-        int git_err = git_blob_lookup(&blob, repo, oid);
+        int git_err = git_blob_lookup(&blob, repo, &oid);
         if (git_err < 0) {
             err = error_from_git(git_err);
             goto cleanup;

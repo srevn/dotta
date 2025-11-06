@@ -1305,9 +1305,6 @@ static error_t *update_manifest_after_update(
      * IMPORTANT: Do NOT use workspace metadata cache - it was loaded before
      * Git commits and is now stale. Pass NULL to manifest_update_files() to
      * force fresh metadata loading from the updated Git state. */
-    keymanager_t *km = workspace_get_keymanager(ws);
-    content_cache_t *content_cache = workspace_get_content_cache(ws);
-
     /* Use bulk sync operation (O(M + N) - optimal!) */
     size_t synced = 0, removed = 0, fallbacks = 0;
     err = manifest_update_files(
@@ -1316,9 +1313,7 @@ static error_t *update_manifest_after_update(
         all_items,
         item_count,
         enabled_profiles,
-        km,
         NULL,  /* metadata_cache - pass NULL for fresh load */
-        content_cache,
         &synced,
         &removed,
         &fallbacks

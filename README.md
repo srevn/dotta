@@ -39,13 +39,13 @@ Filesystem (Deployed Files)
 
 **How It Works**:
 
-1. **Profile enable** → Reads Git branches, populates VWD with expected state (scope + git_oid + content_hash + metadata)
+1. **Profile enable** → Reads Git branches, populates VWD with expected state (scope + git_oid + blob_oid + metadata)
 2. **Status** → Reads VWD scope, loads workspace to analyze runtime divergence (compares VWD expected state vs filesystem)
 3. **Apply** → Iterates VWD entries, checks workspace divergence at runtime, deploys only divergent files, updates lifecycle timestamps
 
 **Manifest Table (VWD)** (in `.git/dotta.db`):
 - **Scope authority**: Defines which files are managed (based on enabled profiles)
-- **Expected state cache**: Stores `git_oid`, `content_hash`, `type`, `mode`, `owner`, `group`, `encrypted` from Git
+- **Expected state cache**: Stores `git_oid`, `blob_oid`, `type`, `mode`, `owner`, `group`, `encrypted` from Git
   - Enables fast comparison without Git tree walks
   - Precedence already resolved (which profile wins for each path)
 - **Lifecycle tracking**: `deployed_at` timestamp (0 = never deployed, >0 = known to dotta)
@@ -216,7 +216,7 @@ dotta apply  # Restores both content and permissions (0644, root:root)
 
 Dotta uses a **Virtual Working Directory** with **runtime convergence** for safe, efficient deployment:
 
-- **VWD (Manifest)** - Caches expected state from Git (scope + git_oid + content_hash + metadata)
+- **VWD (Manifest)** - Caches expected state from Git (scope + git_oid + blob_oid + metadata)
   - Eliminates redundant Git tree walks
   - Precedence already resolved
   - Automatically updated when profiles or files change

@@ -475,10 +475,8 @@ static error_t *sync_push_phase(
      * The cache was built from Git state BEFORE fetch/pull operations, making it
      * stale after branch updates. We pass NULL to manifest_sync_diff() to force
      * fresh metadata loading from the updated Git state. */
-    keymanager_t *km = workspace_get_keymanager(ws);
     const hashmap_t *metadata_cache = workspace_get_metadata_cache(ws);
     (void)metadata_cache;  /* Explicitly unused - see comment above */
-    content_cache_t *content_cache = workspace_get_content_cache(ws);
 
     output_section(out, "Syncing with remote");
 
@@ -590,7 +588,7 @@ static error_t *sync_push_phase(
                         error_t *manifest_err = manifest_sync_diff(
                             repo, state, result->profile_name,
                             &old_oid, &new_oid, enabled_profiles,
-                            km, NULL /* metadata_cache */, content_cache,
+                            NULL /* metadata_cache */,
                             &synced, &removed, &fallbacks
                         );
 
@@ -743,7 +741,7 @@ static error_t *sync_push_phase(
                                     error_t *manifest_err = manifest_sync_diff(
                                         repo, state, result->profile_name,
                                         &ctx.saved_oid, &new_oid, enabled_profiles,
-                                        km, NULL /* metadata_cache */, content_cache,
+                                        NULL /* metadata_cache */,
                                         &synced, &removed, &fallbacks
                                     );
 
@@ -850,7 +848,7 @@ static error_t *sync_push_phase(
                                     error_t *manifest_err = manifest_sync_diff(
                                         repo, state, result->profile_name,
                                         &ctx.saved_oid, &new_oid, enabled_profiles,
-                                        km, NULL /* metadata_cache */, content_cache,
+                                        NULL /* metadata_cache */,
                                         &synced, &removed, &fallbacks
                                     );
 
@@ -989,7 +987,7 @@ static error_t *sync_push_phase(
                                 error_t *manifest_err = manifest_sync_diff(
                                     repo, state, result->profile_name,
                                     &ctx.saved_oid, &new_oid, enabled_profiles,
-                                    km, NULL /* metadata_cache */, content_cache,
+                                    NULL /* metadata_cache */,
                                     &synced, &removed, &fallbacks
                                 );
 

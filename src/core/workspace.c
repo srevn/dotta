@@ -36,6 +36,7 @@
 #include "crypto/encryption.h"
 #include "crypto/keymanager.h"
 #include "crypto/policy.h"
+#include "infra/compare.h"
 #include "infra/content.h"
 #include "utils/array.h"
 #include "utils/config.h"
@@ -405,7 +406,7 @@ static error_t *workspace_add_diverged(
  *
  * This function uses the VWD (Virtual Working Directory) cache stored in
  * manifest_entry to perform divergence detection without database queries.
- * All expected state (content_hash, type, deployed_at, etc.) is cached in
+ * All expected state (blob_oid, type, deployed_at, etc.) is cached in
  * the manifest entry during workspace load.
  *
  * @param ws Workspace (must not be NULL)
@@ -427,13 +428,13 @@ static error_t *analyze_file_divergence(
 
     /* Determine if entry came from state database using VWD cache
      *
-     * If manifest was built from state, VWD fields are populated (content_hash != NULL).
+     * If manifest was built from state, VWD fields are populated (blob_oid != NULL).
      * If manifest was built from Git, VWD fields are NULL/0.
      *
-     * content_hash is the most reliable indicator because it's always populated
+     * blob_oid is the most reliable indicator because it's always populated
      * during sync_entry_to_state() when writing to the manifest table.
      */
-    bool in_state = (manifest_entry->content_hash != NULL);
+    bool in_state = (manifest_entry->blob_oid != NULL);
 
     bool on_filesystem = fs_lexists(fs_path);
 
@@ -443,29 +444,24 @@ static error_t *analyze_file_divergence(
     /* State will be determined in PHASE 2 based on deployment status */
     workspace_state_t state = WORKSPACE_STATE_DEPLOYED;
 
-    /* PHASE 1: Filesystem content analysis (if file exists)
-     * Hash-based comparison for fast divergence detection.
+    /* PHASE 1: Content and type analysis (if file exists and in state)
+     * Buffer-based comparison for accurate divergence detection.
      *
-     * VWD Architecture: The manifest table stores expected state from Git
-     * (content_hash computed during profile enable). We compute the hash from
-     * the filesystem file and compare.
+     * Architecture:
+     * - Use blob_oid from VWD cache (when in_state) for content loading
+     * - Extract expected mode from VWD cache type field
+     * - Compare directly to filesystem file (compare_buffer_to_disk)
+     * - Capture stat for permission checking (zero extra syscalls)
      *
      * This provides:
-     * - O(1) comparison (hash comparison vs buffer comparison)
-     * - No redundant Git tree walking (expected state pre-cached in manifest)
-     * - Transparent decryption (content_hash_file handles encrypted files)
-     *
-     * Note: For orphan detection, we DO load git_tree_entry from Git to get
-     * file metadata, but for divergence analysis we use cached content_hash.
+     * - Architectural consistency (blob_oid unification)
+     * - Accurate byte-level comparison with early exit
+     * - Transparent encryption handling via content cache
+     * - Stat propagation (single stat used for all checks)
+     * - TOCTOU-aware (handles files deleted during analysis)
      */
-    if (on_filesystem) {
-        /* Capture stat early for metadata checking and permission analysis */
-        struct stat file_stat;
-        if (lstat(fs_path, &file_stat) != 0) {
-            return ERROR(ERR_FS, "Failed to stat '%s': %s", fs_path, strerror(errno));
-        }
-
-        /* Get metadata for hash computation (needed for decryption) and metadata checking */
+    if (on_filesystem && in_state && manifest_entry->blob_oid) {
+        /* Get metadata for decryption and permission checking */
         const metadata_t *metadata = ws_get_metadata(ws, manifest_entry->source_profile->name);
         if (!metadata) {
             return ERROR(ERR_INTERNAL,
@@ -473,63 +469,118 @@ static error_t *analyze_file_divergence(
                 manifest_entry->source_profile->name);
         }
 
-        /* Hash-based content comparison using VWD cache
-         *
-         * The content_hash from VWD cache represents expected state from the
-         * manifest table. We compare it against the filesystem file's hash. */
-        if (manifest_entry->content_hash) {
-            /* Compute hash from filesystem file (with transparent decryption) */
-            char *fs_content_hash = NULL;
-            error_t *err = content_hash_file(
-                fs_path,
-                storage_path,
-                profile,
-                metadata,
-                ws->keymanager,
-                &fs_content_hash
-            );
+        /* Parse blob_oid from VWD cache (defensive validation) */
+        git_oid blob_oid;
+        if (git_oid_fromstr(&blob_oid, manifest_entry->blob_oid) != 0) {
+            return ERROR(ERR_INTERNAL,
+                "Invalid blob_oid '%s' for '%s' (database corruption?)",
+                manifest_entry->blob_oid, fs_path);
+        }
 
-            if (err) {
-                return error_wrap(err, "Failed to compute content hash for '%s'", fs_path);
-            }
+        /* Load expected content from Git (cached, automatic decryption) */
+        const buffer_t *expected_content = NULL;
+        error_t *err = content_cache_get_from_blob_oid(
+            ws->content_cache,
+            &blob_oid,
+            storage_path,
+            profile,
+            metadata,
+            &expected_content
+        );
 
-            /* Compare hashes: VWD cache (expected) vs filesystem (actual) */
-            if (strcmp(manifest_entry->content_hash, fs_content_hash) != 0) {
+        if (err) {
+            return error_wrap(err, "Failed to get content for '%s'", fs_path);
+        }
+
+        /* Extract expected filemode from VWD cache type field */
+        git_filemode_t expected_mode;
+        if (manifest_entry->type == STATE_FILE_SYMLINK) {
+            expected_mode = GIT_FILEMODE_LINK;
+        } else if (manifest_entry->type == STATE_FILE_EXECUTABLE) {
+            expected_mode = GIT_FILEMODE_BLOB_EXECUTABLE;
+        } else {
+            expected_mode = GIT_FILEMODE_BLOB;
+        }
+
+        /* Compare expected content to filesystem with stat capture */
+        struct stat file_stat;
+        memset(&file_stat, 0, sizeof(file_stat));
+
+        compare_result_t cmp_result;
+        err = compare_buffer_to_disk(
+            expected_content,
+            fs_path,
+            expected_mode,
+            NULL,           /* in_stat: let compare_buffer_to_disk stat the file */
+            &cmp_result,
+            &file_stat      /* out_stat: capture for permission checking */
+        );
+
+        if (err) {
+            return error_wrap(err, "Failed to compare '%s'", fs_path);
+        }
+
+        /* Note: Don't free expected_content - cache owns it! */
+
+        /* Set divergence flags based on comparison result */
+        switch (cmp_result) {
+            case CMP_EQUAL:
+                /* Content and type match - no divergence from content comparison.
+                 * Permission checking happens below. */
+                break;
+
+            case CMP_DIFFERENT:
                 /* Content differs - accumulate CONTENT flag */
                 divergence |= DIVERGENCE_CONTENT;
-            }
+                break;
 
-            free(fs_content_hash);
+            case CMP_TYPE_DIFF:
+                /* Type differs (file vs symlink) - this is a blocking condition.
+                 * Return immediately with TYPE divergence. */
+                return workspace_add_diverged(ws, fs_path, storage_path, profile,
+                                              NULL, manifest_entry->all_profiles,
+                                              WORKSPACE_STATE_DEPLOYED, DIVERGENCE_TYPE,
+                                              WORKSPACE_ITEM_FILE, in_profile, in_state,
+                                              on_filesystem, true, false);
+
+            case CMP_MISSING:
+                /* TOCTOU race condition: File deleted between fs_lexists() and compare.
+                 * Update flag and skip permission checks below. */
+                on_filesystem = false;
+                break;
         }
 
         /* PERMISSION CHECKING: Two-phase approach
          *
+         * Only check permissions if file still exists and no critical divergence.
+         * Guards against TOCTOU race (file deleted during compare) and avoids
+         * redundant checks on files with type mismatches.
+         *
          * PHASE A: Git filemode (executable bit)
-         *   - Always check, even without metadata
+         *   - Check using VWD cache type field (converted to expected_mode)
+         *   - Skip symlinks (exec bit doesn't apply)
          *   - Catches: file is 0755 in git but 0644 on disk (or vice versa)
-         *   - Fixes bug: files without metadata losing exec bit divergence
          *
          * PHASE B: Full metadata (all permission bits + ownership)
          *   - Only if metadata exists for this file
          *   - Catches: granular changes like 0600→0644, ownership changes
+         *
+         * Both phases use the SAME file_stat (captured above), so no
+         * extra syscalls. Flags are accumulated with |=.
          */
+        if (on_filesystem && cmp_result != CMP_TYPE_DIFF && cmp_result != CMP_MISSING) {
+            /* PHASE A: Check executable bit (skip symlinks) */
+            if (expected_mode != GIT_FILEMODE_LINK) {
+                bool expect_exec = (expected_mode == GIT_FILEMODE_BLOB_EXECUTABLE);
+                bool is_exec = fs_stat_is_executable(&file_stat);
 
-        /* PHASE A: Check filemode (executable bit) from VWD cache */
-        if (in_state) {
-            /* Get executable bit from VWD cache type field.
-             * manifest_entry->type is STATE_FILE_EXECUTABLE or STATE_FILE_REGULAR. */
-            bool expect_exec = (manifest_entry->type == STATE_FILE_EXECUTABLE);
-            bool is_exec = fs_stat_is_executable(&file_stat);
-
-            if (expect_exec != is_exec) {
-                /* Executable bit differs between expected (VWD cache) and filesystem */
-                divergence |= DIVERGENCE_MODE;
+                if (expect_exec != is_exec) {
+                    /* Executable bit differs between git and filesystem */
+                    divergence |= DIVERGENCE_MODE;
+                }
             }
-        }
-        /* If not in_state: skip exec bit check (manifest from Git, not state) */
 
-        /* PHASE B: Check full metadata (mode and ownership) if available */
-        if (metadata) {
+            /* PHASE B: Check full metadata (mode and ownership) if available */
             const metadata_item_t *meta_entry = NULL;
             error_t *meta_err = metadata_get_item(metadata, storage_path, &meta_entry);
 
@@ -626,10 +677,8 @@ static error_t *analyze_file_divergence(
     if (state != WORKSPACE_STATE_DEPLOYED || divergence != DIVERGENCE_NONE || profile_changed) {
         error_t *err = workspace_add_diverged(ws, fs_path, storage_path, profile,
                                               old_profile, manifest_entry->all_profiles,
-                                              state, divergence,
-                                              WORKSPACE_ITEM_FILE,
-                                              in_profile, in_state,
-                                              on_filesystem,
+                                              state, divergence, WORKSPACE_ITEM_FILE,
+                                              in_profile, in_state, on_filesystem,
                                               true, profile_changed);
         if (err) {
             /* On error, free old_profile since workspace_add_diverged didn't take ownership */
@@ -857,7 +906,7 @@ static error_t *analyze_files_divergence(workspace_t *ws) {
     /* Analyze each file in manifest using VWD cache
      *
      * The manifest_entry contains all necessary state information in its
-     * VWD cache fields (content_hash, type, deployed_at, etc.), so we
+     * VWD cache fields (blob_oid, type, deployed_at, etc.), so we
      * don't need to query the database for each file. This eliminates
      * N individual state_get_file() queries. */
     for (size_t i = 0; i < ws->manifest->count; i++) {
@@ -1553,7 +1602,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 free(ws->manifest->entries[j].filesystem_path);
                 free(ws->manifest->entries[j].old_profile);
                 free(ws->manifest->entries[j].git_oid);
-                free(ws->manifest->entries[j].content_hash);
+                free(ws->manifest->entries[j].blob_oid);
                 free(ws->manifest->entries[j].mode);
                 free(ws->manifest->entries[j].owner);
                 free(ws->manifest->entries[j].group);
@@ -1575,12 +1624,12 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
          * They represent the cached expected state that workspace divergence
          * analysis will compare against filesystem reality.
          *
-         * NULL fields: Some optional fields (mode, owner, group, git_oid, content_hash)
+         * NULL fields: Some optional fields (mode, owner, group, git_oid, blob_oid)
          * may be NULL in state database. Use conditional strdup to handle gracefully.
          */
         entry->old_profile = state_entry->old_profile ? strdup(state_entry->old_profile) : NULL;
         entry->git_oid = state_entry->git_oid ? strdup(state_entry->git_oid) : NULL;
-        entry->content_hash = state_entry->content_hash ? strdup(state_entry->content_hash) : NULL;
+        entry->blob_oid = state_entry->blob_oid ? strdup(state_entry->blob_oid) : NULL;
         entry->type = state_entry->type;
         entry->mode = state_entry->mode ? strdup(state_entry->mode) : NULL;
         entry->owner = state_entry->owner ? strdup(state_entry->owner) : NULL;
@@ -1591,7 +1640,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         /* Check for allocation failures in VWD fields */
         if ((state_entry->old_profile && !entry->old_profile) ||
             (state_entry->git_oid && !entry->git_oid) ||
-            (state_entry->content_hash && !entry->content_hash) ||
+            (state_entry->blob_oid && !entry->blob_oid) ||
             (state_entry->mode && !entry->mode) ||
             (state_entry->owner && !entry->owner) ||
             (state_entry->group && !entry->group)) {
@@ -1601,7 +1650,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             free(entry->filesystem_path);
             free(entry->old_profile);
             free(entry->git_oid);
-            free(entry->content_hash);
+            free(entry->blob_oid);
             free(entry->mode);
             free(entry->owner);
             free(entry->group);
@@ -1612,7 +1661,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 free(ws->manifest->entries[j].filesystem_path);
                 free(ws->manifest->entries[j].old_profile);
                 free(ws->manifest->entries[j].git_oid);
-                free(ws->manifest->entries[j].content_hash);
+                free(ws->manifest->entries[j].blob_oid);
                 free(ws->manifest->entries[j].mode);
                 free(ws->manifest->entries[j].owner);
                 free(ws->manifest->entries[j].group);
@@ -1635,7 +1684,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             free(entry->storage_path);
             free(entry->filesystem_path);
             free(entry->git_oid);
-            free(entry->content_hash);
+            free(entry->blob_oid);
             free(entry->mode);
             free(entry->owner);
             free(entry->group);
@@ -1646,7 +1695,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 free(ws->manifest->entries[j].filesystem_path);
                 free(ws->manifest->entries[j].old_profile);
                 free(ws->manifest->entries[j].git_oid);
-                free(ws->manifest->entries[j].content_hash);
+                free(ws->manifest->entries[j].blob_oid);
                 free(ws->manifest->entries[j].mode);
                 free(ws->manifest->entries[j].owner);
                 free(ws->manifest->entries[j].group);
@@ -1682,7 +1731,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 free(entry->storage_path);
                 free(entry->filesystem_path);
                 free(entry->git_oid);
-                free(entry->content_hash);
+                free(entry->blob_oid);
                 free(entry->mode);
                 free(entry->owner);
                 free(entry->group);
@@ -1692,7 +1741,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 free(entry->storage_path);
                 free(entry->filesystem_path);
                 free(entry->git_oid);
-                free(entry->content_hash);
+                free(entry->blob_oid);
                 free(entry->mode);
                 free(entry->owner);
                 free(entry->group);
@@ -1702,7 +1751,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                     free(ws->manifest->entries[j].storage_path);
                     free(ws->manifest->entries[j].filesystem_path);
                     free(ws->manifest->entries[j].git_oid);
-                    free(ws->manifest->entries[j].content_hash);
+                    free(ws->manifest->entries[j].blob_oid);
                     free(ws->manifest->entries[j].mode);
                     free(ws->manifest->entries[j].owner);
                     free(ws->manifest->entries[j].group);
@@ -1722,7 +1771,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             }
         }
 
-        /* all_profiles not populated (not needed for hash-based divergence detection) */
+        /* all_profiles not populated (not needed for buffer-based divergence detection) */
         entry->all_profiles = NULL;
 
         /* Store index in hashmap (offset by 1 to distinguish from NULL).
@@ -1741,7 +1790,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 free(ws->manifest->entries[j].storage_path);
                 free(ws->manifest->entries[j].filesystem_path);
                 free(ws->manifest->entries[j].git_oid);
-                free(ws->manifest->entries[j].content_hash);
+                free(ws->manifest->entries[j].blob_oid);
                 free(ws->manifest->entries[j].mode);
                 free(ws->manifest->entries[j].owner);
                 free(ws->manifest->entries[j].group);

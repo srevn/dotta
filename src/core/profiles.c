@@ -1111,7 +1111,7 @@ error_t *profile_build_manifest(
                  * IMPORTANT: After realloc(), new memory is NOT zero-initialized, so we must
                  * explicitly initialize these fields to prevent use of uninitialized memory. */
                 manifest->entries[manifest->count].git_oid = NULL;
-                manifest->entries[manifest->count].content_hash = NULL;
+                manifest->entries[manifest->count].blob_oid = NULL;
 
                 /* Derive type from Git filemode (executable bit detection)
                  * This ensures the type field is accurate even for Git-based manifests.
@@ -1586,7 +1586,7 @@ void manifest_free(manifest_t *manifest) {
          * trees (profile_build_manifest), these will be NULL and free() is safe. */
         free(manifest->entries[i].old_profile);
         free(manifest->entries[i].git_oid);
-        free(manifest->entries[i].content_hash);
+        free(manifest->entries[i].blob_oid);
         free(manifest->entries[i].mode);
         free(manifest->entries[i].owner);
         free(manifest->entries[i].group);

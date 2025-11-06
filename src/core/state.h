@@ -57,7 +57,7 @@ typedef enum {
  *
  * Key fields:
  * - git_oid: Git commit reference
- * - content_hash: Git blob hash (SHA-1) for comparison and fast path lookups
+ * - blob_oid: Git blob OID for content identity and fast path lookups
  * - owner/group: For root/ files
  * - encrypted: Encryption flag
  * - deployed_at: Lifecycle tracking timestamp (NOT operational control)
@@ -74,7 +74,7 @@ typedef struct {
 
     /* Git tracking */
     char *git_oid;              /* Git commit reference (40-char hex) */
-    char *content_hash;         /* Git blob hash: SHA-1("blob N\0" + plaintext) */
+    char *blob_oid;             /* Git blob OID (40-char hex) */
 
     /* Metadata */
     char *mode;                 /* Permission mode (e.g., "0644") */
@@ -339,7 +339,7 @@ error_t *state_clear_files(state_t *state);
  * @param profile Profile name (must not be NULL)
  * @param type File type
  * @param git_oid Git commit reference (can be NULL)
- * @param content_hash Content hash (can be NULL)
+ * @param blob_oid Git blob OID (can be NULL)
  * @param mode Permission mode (can be NULL)
  * @param owner Owner username (can be NULL)
  * @param group Group name (can be NULL)
@@ -355,7 +355,7 @@ error_t *state_create_entry(
     const char *old_profile,
     state_file_type_t type,
     const char *git_oid,
-    const char *content_hash,
+    const char *blob_oid,
     const char *mode,
     const char *owner,
     const char *group,

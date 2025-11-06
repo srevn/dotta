@@ -616,7 +616,7 @@ static error_t *prepare_manifest_sync_context(
     content_cache_t *content_cache = NULL;
     dotta_config_t *config = NULL;
 
-    /* STEP 1: Create keymanager for content hashing */
+    /* STEP 1: Create keymanager */
     err = config_load(NULL, &config);
     if (err) {
         goto cleanup;
@@ -785,9 +785,7 @@ static error_t *auto_enable_and_sync_profile(
         profile_name,
         added_files,
         enabled_profiles,
-        km,
         NULL,  /* metadata_cache - pass NULL for fresh load */
-        content_cache,
         &synced_count
     );
     if (err) {
@@ -871,7 +869,7 @@ cleanup:
  *   2. If not enabled: return NULL (skip manifest update)
  *   3. If enabled:
  *      a. Build metadata cache for all enabled profiles
- *      b. Create keymanager for content hashing
+ *      b. Create keymanager for encryption handling
  *      c. Open transaction (state_load_for_update)
  *      d. Call manifest_add_files() (builds fresh manifest internally)
  *      e. Commit transaction (state_save)
@@ -984,9 +982,7 @@ static error_t *update_manifest_after_add(
         profile_name,
         added_files,
         enabled_profiles,
-        km,
         NULL,  /* metadata_cache - pass NULL for fresh load */
-        content_cache,
         &synced_count
     );
 

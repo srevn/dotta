@@ -98,7 +98,7 @@ typedef struct {
      */
     char *old_profile;               /* Previous owner if changed, NULL otherwise (VWD cache) */
     char *git_oid;                   /* Git commit reference (40-char hex, can be NULL) */
-    char *content_hash;              /* Git blob hash (SHA-1) for content comparison (40-char hex, can be NULL) */
+    char *blob_oid;                  /* Git blob OID (40-char hex, can be NULL) */
     state_file_type_t type;          /* File type (REGULAR, SYMLINK, EXECUTABLE) */
     char *mode;                      /* Permission mode string (e.g., "0644", can be NULL) */
     char *owner;                     /* Owner username (root/ files only, can be NULL) */

@@ -8,7 +8,7 @@
  * Key patterns:
  *   - Precedence Oracle: Reuses profile_build_manifest() for correctness
  *   - Transaction Management: Caller manages transactions, we operate within them
- *   - Content Hashing: Uses content_hash_*() which handles decryption transparently
+ *   - Blob OID Extraction: Uses git_tree_entry_id() for O(1) content identity
  *   - Metadata Integration: Uses metadata_load_from_profiles() for merged view
  */
 
@@ -286,39 +286,6 @@ static error_t *build_manifest(
 }
 
 /**
- * Compute content hash from tree entry
- *
- * Wrapper around content_hash_from_tree_entry with proper error handling.
- * Content hash is Git blob hash (SHA-1) of plaintext content (decrypted if needed).
- */
-static error_t *compute_content_hash_from_entry(
-    git_repository *repo,
-    const git_tree_entry *entry,
-    const char *storage_path,
-    const char *profile_name,
-    const metadata_t *metadata,
-    keymanager_t *km,
-    content_cache_t *cache,
-    char **out_hash
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(entry);
-    CHECK_NULL(storage_path);
-    CHECK_NULL(profile_name);
-    CHECK_NULL(out_hash);
-
-    error_t *err = content_hash_from_tree_entry(
-        repo, entry, storage_path, profile_name, metadata, km, cache, out_hash
-    );
-
-    if (err) {
-        return error_wrap(err, "Failed to compute content hash for %s", storage_path);
-    }
-
-    return NULL;
-}
-
-/**
  * Sync single entry from in-memory manifest to state
  *
  * Translates from in-memory manifest representation (file_entry_t) to
@@ -335,7 +302,7 @@ static error_t *compute_content_hash_from_entry(
  *   3. Function writes that exact value
  *
  * Responsibilities:
- *   - Compute content hash (with transparent decryption)
+ *   - Extract blob_oid from tree entry
  *   - Extract metadata (mode, owner, group, encrypted flag)
  *   - Build state entry structure with caller-provided deployed_at
  *   - Write to state database (INSERT OR REPLACE)
@@ -349,8 +316,6 @@ static error_t *compute_content_hash_from_entry(
  *       - 0: File never deployed (shows as [undeployed] if missing)
  *       - time(NULL): File exists on filesystem (initial capture)
  *       - existing->deployed_at: Preserve history (caller must fetch)
- * @param km Keymanager for content hashing
- * @param cache Content cache (can be NULL)
  * @return Error or NULL on success
  */
 static error_t *sync_entry_to_state(
@@ -359,9 +324,7 @@ static error_t *sync_entry_to_state(
     const file_entry_t *manifest_entry,
     const char *git_oid,
     const metadata_t *metadata,
-    time_t deployed_at,
-    keymanager_t *km,
-    content_cache_t *cache
+    time_t deployed_at
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -370,23 +333,23 @@ static error_t *sync_entry_to_state(
     CHECK_NULL(manifest_entry->source_profile);
 
     error_t *err = NULL;
-    char *content_hash = NULL;
+    char *blob_oid = NULL;
     metadata_item_t *meta_item = NULL;
     char *mode_str = NULL;
 
-    /* 1. Compute content hash (plaintext, with decryption if needed) */
-    err = compute_content_hash_from_entry(
-        repo,
-        manifest_entry->entry,
-        manifest_entry->storage_path,
-        manifest_entry->source_profile->name,
-        metadata,
-        km,
-        cache,
-        &content_hash
-    );
-    if (err) {
-        goto cleanup;
+    /* 1. Extract blob_oid from tree entry */
+    const struct git_oid *blob_oid_obj = git_tree_entry_id(manifest_entry->entry);
+    if (!blob_oid_obj) {
+        return ERROR(ERR_INTERNAL, "Tree entry has no OID for '%s'",
+                     manifest_entry->storage_path);
+    }
+
+    char oid_str[GIT_OID_HEXSZ + 1];
+    git_oid_tostr(oid_str, sizeof(oid_str), blob_oid_obj);
+
+    blob_oid = strdup(oid_str);
+    if (!blob_oid) {
+        return ERROR(ERR_MEMORY, "Failed to allocate blob_oid string");
     }
 
     /* 2. Get metadata item (may not exist for old profiles) */
@@ -443,7 +406,7 @@ static error_t *sync_entry_to_state(
         .profile = manifest_entry->source_profile->name,
         .type = file_type,
         .git_oid = (char *)git_oid,
-        .content_hash = content_hash,
+        .blob_oid = blob_oid,
         .mode = mode_str,
         .owner = meta_item ? meta_item->owner : NULL,
         .group = meta_item ? meta_item->group : NULL,
@@ -465,7 +428,7 @@ static error_t *sync_entry_to_state(
 
 cleanup:
     free(mode_str);
-    free(content_hash);
+    free(blob_oid);
     return err;
 }
 
@@ -605,10 +568,7 @@ error_t *manifest_enable_profile(
         }
 
         /* Sync entry with deployed_at timestamp */
-        err = sync_entry_to_state(
-            repo, state, entry, head_oid_str, metadata,
-            deployed_at, km, NULL
-        );
+        err = sync_entry_to_state(repo, state, entry, head_oid_str, metadata, deployed_at);
         if (err) {
             goto cleanup;
         }
@@ -1376,7 +1336,7 @@ error_t *manifest_rebuild(
         }
 
         /* Sync to state with preserved/computed deployed_at */
-        err = sync_entry_to_state(repo, state, entry, git_oid, metadata, deployed_at, km, NULL);
+        err = sync_entry_to_state(repo, state, entry, git_oid, metadata, deployed_at);
         if (err) {
             goto cleanup;
         }
@@ -1508,7 +1468,7 @@ error_t *manifest_reorder_profiles(
             }
 
             /* New file - deployed_at=0 (never deployed) */
-            err = sync_entry_to_state(repo, state, new_entry, oid_str, metadata, 0, km, NULL);
+            err = sync_entry_to_state(repo, state, new_entry, oid_str, metadata, 0);
             if (err) {
                 goto cleanup;
             }
@@ -1530,7 +1490,7 @@ error_t *manifest_reorder_profiles(
 
                 /* Sync with new owner, preserve existing deployed_at */
                 err = sync_entry_to_state(repo, state, new_entry, oid_str, metadata,
-                                          old_entry->deployed_at, km, NULL);
+                                          old_entry->deployed_at);
                 if (err) {
                     goto cleanup;
                 }
@@ -1641,9 +1601,7 @@ error_t *manifest_update_files(
     const workspace_item_t **items,
     size_t item_count,
     const string_array_t *enabled_profiles,
-    keymanager_t *km,
     const hashmap_t *metadata_cache,
-    content_cache_t *content_cache,
     size_t *out_synced,
     size_t *out_removed,
     size_t *out_fallbacks
@@ -1716,7 +1674,7 @@ error_t *manifest_update_files(
         }
         if (err) {
             /* No metadata file exists - create empty metadata (old profiles without metadata.json)
-             * This is required because content_hash_from_tree_entry requires non-NULL metadata */
+             * This is required for metadata resolution (even if file has no custom metadata) */
             error_free(err);
             err = metadata_create_empty(&metadata_merged);
             if (err) {
@@ -1778,8 +1736,7 @@ error_t *manifest_update_files(
                     }
                 }
 
-                err = sync_entry_to_state(repo, state, fallback, git_oid, metadata,
-                                         deployed_at, km, content_cache);
+                err = sync_entry_to_state(repo, state, fallback, git_oid, metadata, deployed_at);
                 if (err) {
                     free(old_profile_name);
                     err = error_wrap(err, "Failed to sync fallback for '%s'",
@@ -1860,8 +1817,7 @@ error_t *manifest_update_files(
                 metadata = metadata_merged;
             }
 
-            err = sync_entry_to_state(repo, state, entry, git_oid, metadata,
-                                     time(NULL), km, content_cache);
+            err = sync_entry_to_state(repo, state, entry, git_oid, metadata, time(NULL));
             if (err) {
                 err = error_wrap(err, "Failed to sync '%s' to manifest",
                                item->filesystem_path);
@@ -1951,9 +1907,7 @@ error_t *manifest_add_files(
     const char *profile_name,
     const string_array_t *filesystem_paths,
     const string_array_t *enabled_profiles,
-    keymanager_t *km,
     const hashmap_t *metadata_cache,
-    content_cache_t *content_cache,
     size_t *out_synced
 ) {
     CHECK_NULL(repo);
@@ -2021,7 +1975,7 @@ error_t *manifest_add_files(
         }
         if (err) {
             /* No metadata file exists - create empty metadata (old profiles without metadata.json)
-             * This is required because content_hash_from_tree_entry requires non-NULL metadata */
+             * This is required for metadata resolution (even if file has no custom metadata) */
             error_free(err);
             err = metadata_create_empty(&metadata_merged);
             if (err) {
@@ -2071,8 +2025,7 @@ error_t *manifest_add_files(
             metadata = metadata_merged;
         }
 
-        err = sync_entry_to_state(repo, state, entry, profile_git_oid, metadata,
-                                 time(NULL), km, content_cache);
+        err = sync_entry_to_state(repo, state, entry, profile_git_oid, metadata, time(NULL));
 
         if (err) {
             err = error_wrap(err, "Failed to sync '%s' to manifest",
@@ -2135,7 +2088,7 @@ cleanup:
  *              (state_save) after calling. This function works within an active
  *              transaction.
  *
- * Convergence Semantics: Sync updates VWD expected state (git_oid, content_hash) but doesn't
+ * Convergence Semantics: Sync updates VWD expected state (git_oid, blob_oid) but doesn't
  *                        deploy to filesystem. User must run 'dotta apply' which uses runtime
  *                        divergence analysis to deploy changes.
  *
@@ -2159,9 +2112,7 @@ error_t *manifest_sync_diff(
     const git_oid *old_oid,
     const git_oid *new_oid,
     const string_array_t *enabled_profiles,
-    keymanager_t *km,
     const hashmap_t *metadata_cache,
-    content_cache_t *content_cache,
     size_t *out_synced,
     size_t *out_removed,
     size_t *out_fallbacks
@@ -2244,7 +2195,7 @@ error_t *manifest_sync_diff(
         }
         if (err) {
             /* No metadata file exists - create empty metadata (old profiles without metadata.json)
-             * This is required because content_hash_from_tree_entry requires non-NULL metadata */
+             * This is required for metadata resolution (even if file has no custom metadata) */
             error_free(err);
             err = metadata_create_empty(&metadata_merged);
             if (err) {
@@ -2254,22 +2205,17 @@ error_t *manifest_sync_diff(
         }
     }
 
-    /* 1.6. Create or use provided keymanager */
-    if (!km) {
-        /* No keymanager provided - create one */
-        err = config_load(NULL, &config);
-        if (err) {
-            err = error_wrap(err, "Failed to create config");
-            goto cleanup;
-        }
+    /* 1.6. Create keymanager */
+    err = config_load(NULL, &config);
+    if (err) {
+        err = error_wrap(err, "Failed to create config");
+        goto cleanup;
+    }
 
-        err = keymanager_create(config, &km_owned);
-        if (err) {
-            err = error_wrap(err, "Failed to create keymanager");
-            goto cleanup;
-        }
-
-        km = km_owned;
+    err = keymanager_create(config, &km_owned);
+    if (err) {
+        err = error_wrap(err, "Failed to create keymanager");
+        goto cleanup;
     }
 
     /* PHASE 2: COMPUTE DIFF (O(D)) */
@@ -2406,10 +2352,7 @@ error_t *manifest_sync_diff(
             }
 
             err = sync_entry_to_state(
-                repo, state, entry, git_oid_str, profile_metadata,
-                deployed_at,
-                km, content_cache
-            );
+                repo, state, entry, git_oid_str, profile_metadata, deployed_at);
 
             if (err) {
                 err = error_wrap(err, "Failed to sync '%s' to manifest", filesystem_path);
@@ -2470,10 +2413,7 @@ error_t *manifest_sync_diff(
                 }
 
                 err = sync_entry_to_state(
-                    repo, state, entry, fallback_git_oid, fallback_metadata,
-                    deployed_at,
-                    km, content_cache
-                );
+                    repo, state, entry, fallback_git_oid, fallback_metadata, deployed_at);
 
                 if (err) {
                     err = error_wrap(err, "Failed to sync fallback for '%s'", filesystem_path);

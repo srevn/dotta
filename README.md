@@ -21,37 +21,44 @@ Manage a single repository with independent, versioned profiles across laptops, 
 └── dotta.db               # State database (manifest + metadata)
 ```
 
-### The Virtual Working Directory (Manifest)
+### The Virtual Working Directory (VWD) with Runtime Convergence
 
-Dotta uses a **Virtual Working Directory** (manifest) as the authoritative source of deployment intent. This is a key architectural innovation that provides explicit staging and fast operations.
+Dotta uses a **Virtual Working Directory** (manifest) that caches expected state from Git and employs **runtime convergence** to determine what needs deployment. This is a key architectural innovation that provides both performance and correctness.
 
 **The Three-Tree Model** (analogous to Git):
 
 ```
 Git Branches (History)
      ↓
-Manifest (Virtual Working Directory / Staging)
+Manifest (VWD - Expected State Cache)
+     ↓
+Workspace (Runtime Divergence Analysis)
      ↓
 Filesystem (Deployed Files)
 ```
 
 **How It Works**:
 
-1. **Profile enable** → Reads Git branches, stages all files in manifest with status `pending_deployment`
-2. **Status** → Reads manifest (O(1) per file), compares to filesystem
-3. **Apply** → Queries manifest for `pending_deployment` entries, deploys them, updates status to `deployed`
+1. **Profile enable** → Reads Git branches, populates VWD with expected state (scope + git_oid + content_hash + metadata)
+2. **Status** → Reads VWD scope, loads workspace to analyze runtime divergence (compares VWD expected state vs filesystem)
+3. **Apply** → Iterates VWD entries, checks workspace divergence at runtime, deploys only divergent files, updates lifecycle timestamps
 
-**Manifest Table** (in `.git/dotta.db`):
-- **Status tracking**: Three-state machine (`pending_deployment`, `deployed`, `pending_removal`)
-- **Git references**: Each entry stores `git_oid` (commit hash) and `content_hash` (file content hash)
+**Manifest Table (VWD)** (in `.git/dotta.db`):
+- **Scope authority**: Defines which files are managed (based on enabled profiles)
+- **Expected state cache**: Stores `git_oid`, `content_hash`, `type`, `mode`, `owner`, `group`, `encrypted` from Git
+  - Enables fast comparison without Git tree walks
+  - Precedence already resolved (which profile wins for each path)
+- **Lifecycle tracking**: `deployed_at` timestamp (0 = never deployed, >0 = known to dotta)
 - **Always current**: Updated immediately when profiles/files change (eager consistency)
-- **Indexed**: SQLite indexes on status, profile, storage_path for instant queries
+- **No cached decisions**: Does NOT store operational state (apply uses runtime workspace analysis)
+- **Indexed**: SQLite indexes on profile and storage_path for instant queries
 
 **Benefits**:
-- **Explicit staging**: See exactly what will be deployed/removed before applying
-- **Performance**: 10-100x faster status checks (no Git tree walks)
+- **VWD caching**: Expected state pre-cached from Git (no redundant tree walks)
+- **Runtime convergence**: Apply always analyzes current filesystem state (no stale cached decisions)
+- **Performance**: O(1) divergence lookups via workspace hashmap
 - **Safety**: Preview destructive operations (profile disable shows what will be removed/reverted)
-- **Correctness**: Manifest never stale (automatically synchronized with Git)
+- **Correctness**: VWD never stale (automatically synchronized with Git), convergence always uses current reality
 
 ### File Storage Model
 
@@ -143,26 +150,34 @@ Dotta uses **explicit profile management** with **immediate staging** to provide
 - **Enabled Profiles**: Tracked in `.git/dotta.db` with files staged in manifest - participate in all operations (apply, update, sync, status)
 
 ```bash
-# Enable profiles for this machine (shows explicit staging preview)
+# Enable profiles for this machine (shows preview of what needs deployment)
 $ dotta profile enable global darwin
-Staged 23 files for deployment from 'global'
-Staged 47 files for deployment from 'darwin'
+✓ Enabled 'global' (23 files in scope, 12 need deployment)
+✓ Enabled 'darwin' (47 files in scope, 35 need deployment)
   5 files override lower precedence (global)
 
 # View enabled vs available profiles
 dotta profile list
 
-# Status shows staged files (fast: reads from manifest, no Git operations)
+# Status performs runtime divergence analysis (fast: O(1) workspace lookups)
 $ dotta status
-Staged for deployment:
-  [pending] home/.bashrc (darwin)
-  [pending] home/.vimrc (global)
-  ... (65 more)
+Undeployed files (47 items):
+  [undeployed] home/.bashrc (darwin)
+  [undeployed] home/.vimrc (global)
+  ... (45 more)
 
-# Apply deploys staged files
+Clean files (23 items):
+  [clean] home/.profile (global)
+  ... (22 more)
+
+# Apply analyzes divergence and deploys only changed files
 $ dotta apply
-Deploying 68 files...
-✓ Deployed 68 files
+Analyzing files for convergence...
+  47 files need deployment (divergent from Git)
+  23 files already up-to-date (skipped)
+
+Deploying 47 divergent files...
+✓ Deployed 47 files
 
 # Operations use enabled profiles
 dotta apply   # Deploys: global, darwin
@@ -172,10 +187,12 @@ dotta sync    # Syncs: global, darwin
 
 **Clone automatically enables** detected profiles: `global`, OS base and sub-profiles (`darwin`, `darwin/*`), and host base and sub-profiles (`hosts/<hostname>`, `hosts/<hostname>/*`).
 
-**Explicit Staging Benefits**:
-- See exactly what enabling/disabling a profile will do **before** applying
-- `status` command is 10-100x faster (reads manifest, not Git trees)
-- Safe profile changes with preview of removals and fallbacks
+**Virtual Working Directory with Runtime Convergence Benefits**:
+- **Manifest caching**: Expected state pre-cached from Git (no redundant tree walks)
+- **Runtime analysis**: Apply always uses current filesystem state (no stale cached decisions)
+- **Explicit preview**: See exactly what enabling/disabling a profile will do before applying
+- **Performance**: O(1) workspace divergence lookups
+- **Safety**: Profile changes preview removals and fallbacks
 
 ### 3. Metadata Preservation
 
@@ -195,18 +212,23 @@ dotta add --profile linux /etc/systemd/system/myservice.service
 dotta apply  # Restores both content and permissions (0644, root:root)
 ```
 
-### 4. Smart Deployment with Manifest Tracking
+### 4. Smart Deployment with VWD and Runtime Convergence
 
-Dotta uses a **Virtual Working Directory (manifest)** to optimize and safeguard deployment:
+Dotta uses a **Virtual Working Directory** with **runtime convergence** for safe, efficient deployment:
 
-- **Three-state tracking** - Files tracked through lifecycle: `pending_deployment` → `deployed` → `pending_removal`
-- **Explicit staging** - See what will be deployed/removed before applying
+- **VWD (Manifest)** - Caches expected state from Git (scope + git_oid + content_hash + metadata)
+  - Eliminates redundant Git tree walks
+  - Precedence already resolved
+  - Automatically updated when profiles or files change
+- **Runtime convergence** - Apply analyzes current filesystem state at execution time
+  - Workspace compares VWD expected state vs filesystem
+  - Only deploys files with divergence (content, mode, ownership, encryption)
+  - No stale cached decisions - always uses current reality
+- **Lifecycle tracking** - `deployed_at` timestamp distinguishes never-deployed vs known files
 - **Pre-flight checks** - Detects conflicts before making changes
 - **Overlap detection** - Warns when files appear in multiple profiles
-- **Smart skipping** - Avoids rewriting unchanged files (enabled by default)
+- **Efficient skipping** - O(1) workspace divergence lookups
 - **Conflict resolution** - Clear error messages with `--force` override option
-- **Fast status checks** - Instant manifest lookup (O(1) per file, no Git tree walks)
-- **Always current** - Manifest automatically synchronized when profiles or files change
 
 ### 5. Automatic Synchronization
 
@@ -426,33 +448,37 @@ dotta add --profile darwin/work ~/.ssh/work_config
 # Add host-specific files
 dotta add --profile hosts/$(hostname) ~/.local/machine_specific
 
-# Enable profiles for this machine (explicit staging)
+# Enable profiles for this machine (adds to scope, shows preview)
 $ dotta profile enable global darwin/base darwin/work hosts/$(hostname)
-Staged 12 files for deployment from 'global'
-Staged 23 files for deployment from 'darwin/base'
-Staged 8 files for deployment from 'darwin/work'
+✓ Enabled 'global' (12 files in scope, 12 need deployment)
+✓ Enabled 'darwin/base' (23 files in scope, 23 need deployment)
+✓ Enabled 'darwin/work' (8 files in scope, 8 need deployment)
   2 files override lower precedence (darwin/base)
-Staged 3 files for deployment from 'hosts/laptop'
+✓ Enabled 'hosts/laptop' (3 files in scope, 3 need deployment)
 
-# View status (fast: reads from manifest)
+# View status (performs runtime divergence analysis)
 $ dotta status
-Staged for deployment:
-  [pending] home/.bashrc (global)
-  [pending] home/.vimrc (global)
-  [pending] home/.config/fish/config.fish (darwin/base)
+Undeployed files (46 items):
+  [undeployed] home/.bashrc (global)
+  [undeployed] home/.vimrc (global)
+  [undeployed] home/.config/fish/config.fish (darwin/base)
   ... (43 more)
 
 # Apply configurations (layers: global → darwin/base → darwin/work → hosts/hostname)
 $ dotta apply
-Deploying 46 files...
+Analyzing files for convergence...
+  46 files need deployment (divergent from Git)
+  0 files already up-to-date (skipped)
+
+Deploying 46 divergent files...
 ✓ Deployed 46 files
-✓ Filesystem synchronized with manifest
+✓ Filesystem synchronized with Git
 ```
 
 ### Clone an Existing Repository
 
 ```bash
-# Clone dotfiles repository (auto-detects, enables, and stages profiles)
+# Clone dotfiles repository (auto-detects, enables profiles, shows preview)
 $ dotta clone git@github.com:username/dotfiles.git
 
 Cloning repository...
@@ -460,14 +486,14 @@ Detecting profiles...
   Found: global, darwin, darwin/work, hosts/laptop
 
 Enabling detected profiles...
-Staged 23 files for deployment from 'global'
-Staged 47 files for deployment from 'darwin'
-Staged 12 files for deployment from 'darwin/work'
+✓ Enabled 'global' (23 files in scope, 18 need deployment)
+✓ Enabled 'darwin' (47 files in scope, 35 need deployment)
+✓ Enabled 'darwin/work' (12 files in scope, 8 need deployment)
   3 files override lower precedence (darwin)
-Staged 8 files for deployment from 'hosts/laptop'
+✓ Enabled 'hosts/laptop' (8 files in scope, 5 need deployment)
 
 ✓ Clone complete
-✓ 90 files staged for deployment
+✓ 90 files in scope (66 need deployment)
 
 # Cloning automatically:
 # 1. Detects relevant profiles:
@@ -475,7 +501,7 @@ Staged 8 files for deployment from 'hosts/laptop'
 #    - OS base and sub-profiles (darwin, darwin/work, darwin/personal)
 #    - Host base and sub-profiles (hosts/<hostname>, hosts/<hostname>/*)
 # 2. Fetches detected profiles
-# 3. Enables them and stages all files in manifest
+# 3. Enables them and adds all files to manifest scope
 
 # Example auto-detection on macOS "laptop" with profiles:
 # → Selects: global, darwin, darwin/work, hosts/laptop
@@ -486,11 +512,15 @@ dotta profile fetch work/project1 work/project2
 # Run bootstrap scripts if present (prompts for confirmation)
 dotta bootstrap
 
-# Apply staged configurations
+# Apply configurations
 $ dotta apply
-Deploying 90 files...
-✓ Deployed 90 files
-✓ Filesystem synchronized with manifest
+Analyzing files for convergence...
+  66 files need deployment (divergent from Git)
+  24 files already up-to-date (skipped)
+
+Deploying 66 divergent files...
+✓ Deployed 66 files
+✓ Filesystem synchronized with Git
 
 # Or clone with auto-bootstrap
 dotta clone <url> --bootstrap
@@ -746,15 +776,15 @@ dotta revert --commit -m "Fix config" ~/.bashrc@HEAD~1
 
 Dotta is designed for efficiency and scalability:
 
-- **Virtual Working Directory (Manifest)** - Pre-computed deployment state eliminates expensive Git tree walks
+- **Virtual Working Directory** - Pre-caches expected state from Git (eliminates redundant tree walks)
 - **Streaming tree walks** - Uses callback-based iteration; never loads entire repository into memory
 - **Size-first blob comparison** - Checks file size before content (short-circuits on mismatch, uses mmap when needed)
 - **Three-tier deployment optimization** - OID hash comparison → profile version check → content comparison (only if needed)
-- **Incremental operations** - `update` processes only diverged files; `apply` uses smart skip with O(1) hashmap lookups
+- **Incremental operations** - `update` processes only diverged files; `apply` skips clean files with O(1) lookups
 - **Content caching** - Preflight safety checks populate cache reused during deployment (avoids redundant decryption)
-- **O(1) lookups** - Hashmaps throughout for state, metadata, manifest, and file index operations
+- **O(1) lookups** - Hashmaps throughout for state, metadata, manifest, workspace, and file index operations
 - **Load-once, query-many** - State and metadata loaded once per operation, queried via hashmap
-- **Indexed manifest queries** - SQLite indexes on status, profile, and storage_path for instant lookups
+- **Indexed manifest queries** - SQLite indexes on profile and storage_path for instant lookups
 
 Operations scale linearly with tracked files, not repository history depth.
 

@@ -1020,6 +1020,12 @@ error_t *manifest_remove_files(
     if (out_removed) *out_removed = removed_count;
     if (out_fallbacks) *out_fallbacks = fallback_count;
 
+    /* 4. Sync tracked directories */
+    err = manifest_sync_directories(repo, state, enabled_profiles);
+    if (err) {
+        goto cleanup;
+    }
+
 cleanup:
     if (profile_oids) {
         /* Free allocated OIDs */
@@ -1634,6 +1640,12 @@ error_t *manifest_update_files(
         }
     }
 
+    /* 7. Sync tracked directories */
+    err = manifest_sync_directories(repo, state, enabled_profiles);
+    if (err) {
+        goto cleanup;
+    }
+
 cleanup:
     if (metadata_merged) metadata_free(metadata_merged);
     if (profile_oids) hashmap_free(profile_oids, free);  /* Free oid strings */
@@ -1837,6 +1849,12 @@ error_t *manifest_add_files(
         }
 
         (*out_synced)++;
+    }
+
+    /* 7. Sync tracked directories */
+    err = manifest_sync_directories(repo, state, enabled_profiles);
+    if (err) {
+        goto cleanup;
     }
 
 cleanup:
@@ -2277,6 +2295,12 @@ error_t *manifest_sync_diff(
     if (out_synced) *out_synced = synced;
     if (out_removed) *out_removed = removed;
     if (out_fallbacks) *out_fallbacks = fallbacks;
+
+    /* 4. Sync tracked directories */
+    err = manifest_sync_directories(repo, state, enabled_profiles);
+    if (err) {
+        goto cleanup;
+    }
 
 cleanup:
     /* Free resources in reverse order of acquisition */

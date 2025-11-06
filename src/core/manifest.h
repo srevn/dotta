@@ -179,6 +179,7 @@ error_t *manifest_disable_profile(
  * Postconditions:
  *   - Modified/new files synced with deployed_at set based on lstat()
  *   - Deleted files fallback or entries remain for orphan detection
+ *   - Tracked directories synced from all enabled profiles
  *   - Transaction remains open (caller commits)
  *
  * Performance: O(M + N) where M = total files in profiles, N = items to sync
@@ -248,6 +249,7 @@ error_t *manifest_update_files(
  *   - Files synced to manifest with deployed_at = time(NULL)
  *   - Lower-precedence files skipped (not an error)
  *   - Filtered files skipped (not an error)
+ *   - Tracked directories synced from all enabled profiles
  *   - Transaction remains open (caller commits via state_save)
  *
  * Performance:
@@ -315,6 +317,7 @@ error_t *manifest_add_files(
  *   - Files with fallback updated to fallback profile (deployed_at preserved)
  *   - Files without fallback: entries remain for orphan detection (apply removes)
  *   - Files not owned by removed_profile unchanged
+ *   - Tracked directories synced from all enabled profiles
  *   - Transaction remains open (caller commits)
  *
  * Error Conditions:
@@ -491,6 +494,7 @@ error_t *manifest_reorder_profiles(
  *   - Deleted files without fallbacks: entries remain for orphan detection (apply removes)
  *   - Files filtered by .dottaignore are skipped (expected behavior)
  *   - Files won by other profiles are skipped (they'll sync when their changes arrive)
+ *   - Tracked directories synced from all enabled profiles
  *   - Transaction remains open (caller commits)
  *
  * Error Conditions:

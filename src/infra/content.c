@@ -520,53 +520,59 @@ error_t *content_store_to_blob(
 }
 
 /**
- * Hash buffer content using Blake2b and return hex string
+ * Hash buffer content using Git's blob hash algorithm (SHA-1)
  *
- * Internal helper for content hashing.
+ * Internal helper for content hashing. Computes the exact hash Git uses for
+ * blob objects: SHA-1("blob <size>\0" + content).
+ *
+ * This enables SHA-1 unification with Git's object model, where content_hash
+ * equals blob OID for plaintext files (enabling O(1) fast path lookups).
  *
  * @param content Buffer to hash (must not be NULL)
- * @param out_hash Output hex string (must not be NULL, caller must free)
+ * @param out_hash Output hex string (40 chars, must not be NULL, caller must free)
  * @return Error or NULL on success
  */
 static error_t *hash_buffer_to_hex(const buffer_t *content, char **out_hash) {
     CHECK_NULL(content);
     CHECK_NULL(out_hash);
 
-    /* Blake2b produces 32 bytes, which becomes 64 hex chars + null terminator */
-    uint8_t hash_bytes[32];
-    char *hex = NULL;
-
-    /* Compute Blake2b hash
-     * Context: "dottahsh" (8 bytes) for domain separation
-     * Key: NULL (no keyed hashing needed for content addressing)
+    /* Compute Git blob hash: SHA-1("blob <size>\0" + content)
+     *
+     * Architecture: SHA-1 unification with Git's object model
+     *
+     * For plaintext files:
+     *   content_hash = SHA-1("blob N\0" + plaintext)
+     *   blob_oid     = SHA-1("blob N\0" + plaintext)
+     *   Result: content_hash == blob_oid → Enables O(1) fast path lookups
+     *
+     * For encrypted files:
+     *   content_hash = SHA-1("blob N\0" + plaintext)
+     *   blob_oid     = SHA-1("blob N\0" + ciphertext)
+     *   Result: content_hash ≠ blob_oid → Graceful fallback to slow path
+     *
+     * This unification optimizes the common case (plaintext dotfiles) while
+     * maintaining correctness for encrypted files via fallback mechanism.
      */
-    int result = hydro_hash_hash(
-        hash_bytes,
-        32,
-        buffer_data(content),
-        buffer_size(content),
-        "dottahsh",
-        NULL
-    );
+    git_oid oid;
+    int ret = git_odb_hash(&oid,
+                           buffer_data(content),
+                           buffer_size(content),
+                           GIT_OBJECT_BLOB);
 
-    if (result != 0) {
-        return ERROR(ERR_CRYPTO, "Failed to compute Blake2b hash");
+    if (ret < 0) {
+        const git_error *git_err = git_error_last();
+        return ERROR(ERR_GIT, "Failed to compute Git blob hash: %s",
+                     git_err ? git_err->message : "unknown error");
     }
 
-    /* Convert to hex string */
-    hex = malloc(65);  /* 64 hex chars + null terminator */
+    /* Allocate hex string (40 chars + null terminator) */
+    char *hex = malloc(GIT_OID_SHA1_HEXSIZE + 1);
     if (!hex) {
-        hydro_memzero(hash_bytes, sizeof(hash_bytes));
-        return ERROR(ERR_MEMORY, "Failed to allocate hex string");
+        return ERROR(ERR_MEMORY, "Failed to allocate hex string for content hash");
     }
 
-    for (size_t i = 0; i < 32; i++) {
-        snprintf(hex + (i * 2), 3, "%02x", hash_bytes[i]);
-    }
-    hex[64] = '\0';
-
-    /* Clear sensitive hash bytes */
-    hydro_memzero(hash_bytes, sizeof(hash_bytes));
+    /* Convert OID to hex string (git_oid_tostr writes exactly 40 chars + null) */
+    git_oid_tostr(hex, GIT_OID_SHA1_HEXSIZE + 1, &oid);
 
     *out_hash = hex;
     return NULL;

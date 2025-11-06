@@ -304,15 +304,15 @@ error_t *content_store_file_to_worktree(
 /**
  * Compute content hash from filesystem file
  *
- * Computes Blake2b hash of file content with transparent decryption.
+ * Computes Git blob hash (SHA-1) of file content with transparent decryption.
  * This is used by the virtual manifest system for divergence detection.
  *
  * Process:
  * 1. Read file from filesystem
  * 2. Detect encryption from magic header
  * 3. Decrypt if needed (transparent to caller)
- * 4. Hash plaintext content using Blake2b
- * 5. Return hex string (64 chars)
+ * 4. Hash plaintext content using Git's blob algorithm: SHA-1
+ * 5. Return hex string (40 chars)
  *
  * The hash is computed over PLAINTEXT content, ensuring consistent
  * hashes regardless of encryption status. This allows the manifest
@@ -345,15 +345,15 @@ error_t *content_hash_file(
 /**
  * Compute content hash from Git tree entry
  *
- * Computes Blake2b hash of Git blob content with transparent decryption.
+ * Computes Git blob hash (SHA-1) of Git blob content with transparent decryption.
  * This is the Git counterpart to content_hash_file().
  *
  * Process:
  * 1. Load blob from Git tree entry (cached if cache provided)
  * 2. Detect encryption from magic header
  * 3. Decrypt if needed (transparent to caller)
- * 4. Hash plaintext content using Blake2b
- * 5. Return hex string (64 chars)
+ * 4. Hash plaintext content using Git's blob algorithm: SHA-1
+ * 5. Return hex string (40 chars)
  *
  * Performance: With cache, avoids redundant blob loads and decryption.
  * Without cache (NULL), falls back to direct Git operations.

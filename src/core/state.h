@@ -57,7 +57,7 @@ typedef enum {
  *
  * Key fields:
  * - git_oid: Git commit reference
- * - content_hash: Blake2b content hash for comparison
+ * - content_hash: Git blob hash (SHA-1) for comparison and fast path lookups
  * - owner/group: For root/ files
  * - encrypted: Encryption flag
  * - deployed_at: Lifecycle tracking timestamp (NOT operational control)
@@ -74,7 +74,7 @@ typedef struct {
 
     /* Git tracking */
     char *git_oid;              /* Git commit reference (40-char hex) */
-    char *content_hash;         /* Blake2b content hash for comparison */
+    char *content_hash;         /* Git blob hash: SHA-1("blob N\0" + plaintext) */
 
     /* Metadata */
     char *mode;                 /* Permission mode (e.g., "0644") */

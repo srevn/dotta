@@ -289,7 +289,7 @@ static error_t *build_manifest(
  * Compute content hash from tree entry
  *
  * Wrapper around content_hash_from_tree_entry with proper error handling.
- * Content hash is Blake2b of **plaintext** content (decrypted if needed).
+ * Content hash is Git blob hash (SHA-1) of plaintext content (decrypted if needed).
  */
 static error_t *compute_content_hash_from_entry(
     git_repository *repo,

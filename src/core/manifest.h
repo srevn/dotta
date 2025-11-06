@@ -44,9 +44,11 @@ typedef struct {
  * Statistics from profile disable operation
  */
 typedef struct {
-    size_t total_files;         /* Total files owned by disabled profile */
-    size_t files_with_fallback; /* Files updated to fallback profile */
-    size_t files_removed;       /* Files marked as orphaned (entry remains for detection) */
+    size_t total_files;                /* Total files owned by disabled profile */
+    size_t files_with_fallback;        /* Files updated to fallback profile */
+    size_t files_removed;              /* Files marked as orphaned (entry remains for detection) */
+    size_t directories_with_fallback;  /* Directories updated to fallback profile */
+    size_t directories_removed;        /* Directories marked as orphaned */
 } manifest_disable_stats_t;
 
 /**

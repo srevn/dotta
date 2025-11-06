@@ -8,8 +8,8 @@
  *
  * Schema:
  *   - schema_meta: Schema versioning
- *   - enabled_profiles: User's profile management (authority: profile commands)
- *   - deployed_files: Deployed file manifest (authority: apply/revert)
+ *   - enabled_profiles: User's profile management
+ *   - virtual_manifest: Deployed file manifest
  *   - tracked_directories: Tracked directories from metadata
  *
  * Design principles:
@@ -97,6 +97,9 @@ typedef struct {
     mode_t mode;              /* Permissions */
     char *owner;              /* Owner (optional) */
     char *group;              /* Group (optional) */
+
+    /* Lifecycle tracking */
+    time_t deployed_at;       /* Lifecycle timestamp (0 = never deployed, >0 = known) */
 } state_directory_entry_t;
 
 /**
@@ -249,7 +252,7 @@ void state_free_all_files(state_file_entry_t *entries, size_t count);
  * Set enabled profiles
  *
  * Hot path - must be fast even with 10,000 deployed files.
- * Only modifies enabled_profiles table (deployed_files table untouched).
+ * Only modifies enabled_profiles table (virtual_manifest table untouched).
  *
  * @param state State (must not be NULL)
  * @param profiles Array of profile names (must not be NULL)
@@ -289,7 +292,7 @@ bool state_has_profile(const state_t *state, const char *profile_name);
 /**
  * Get unique profiles that have deployed files
  *
- * Extracts all unique profile names from the deployed_files table.
+ * Extracts all unique profile names from the virtual_manifest table.
  * This represents "all profiles we've ever applied on this machine",
  * including both enabled and disabled profiles.
  *
@@ -321,7 +324,7 @@ time_t state_get_profile_timestamp(const state_t *state, const char *profile_nam
 /**
  * Clear all file entries (keeps profiles)
  *
- * Efficiently truncates deployed_files table.
+ * Efficiently truncates virtual_manifest table.
  *
  * @param state State (must not be NULL)
  * @return Error or NULL on success
@@ -478,6 +481,57 @@ error_t *state_get_all_directories(
     state_directory_entry_t **out,
     size_t *count
 );
+
+/**
+ * Get directories by profile
+ *
+ * Returns all directory entries from the specified profile.
+ * Used by profile disable to determine impact on directories.
+ *
+ * Returns allocated array that caller must free with state_free_all_directories().
+ *
+ * @param state State (must not be NULL)
+ * @param profile Profile name to filter by (must not be NULL)
+ * @param out Output array (must not be NULL, caller must free)
+ * @param count Output count (must not be NULL)
+ * @return Error or NULL on success (empty array if no matches)
+ */
+error_t *state_get_directories_by_profile(
+    const state_t *state,
+    const char *profile,
+    state_directory_entry_t **out,
+    size_t *count
+);
+
+/**
+ * Update directory entry
+ *
+ * Updates all fields except directory_path (primary key) and deployed_at.
+ * The deployed_at field is preserved to maintain lifecycle tracking.
+ *
+ * This is used during profile disable to update directory entries to their
+ * fallback profiles while preserving the original deployment timestamp.
+ *
+ * @param state State (must not be NULL)
+ * @param entry Entry to update (must not be NULL, directory_path must exist)
+ * @return Error or NULL on success
+ */
+error_t *state_update_directory(
+    state_t *state,
+    const state_directory_entry_t *entry
+);
+
+/**
+ * Remove directory entry by path
+ *
+ * Deletes directory entry from state. Used during orphan cleanup after
+ * the directory has been removed from the filesystem.
+ *
+ * @param state State (must not be NULL)
+ * @param directory_path Directory path (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_remove_directory(state_t *state, const char *directory_path);
 
 /**
  * Clear all tracked directories

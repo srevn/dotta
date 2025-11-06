@@ -791,10 +791,197 @@ error_t *manifest_disable_profile(
         out_stats->files_removed = removed_count;
     }
 
-    /* 4. Sync tracked directories */
-    err = manifest_sync_directories(repo, state, remaining_enabled);
+    /* 4. Process directories from disabled profile (mirrors file handling above)
+     *
+     * CRITICAL ARCHITECTURE CHANGE: Use incremental fallback/orphan pattern instead
+     * of rebuild pattern to preserve orphan detection.
+     *
+     * Iterate directories from disabled profile, find fallback in remaining profiles,
+     * update to fallback OR leave for orphan detection. Deferred cleanup via apply.
+     */
+
+    /* 4a. Get directories from disabled profile */
+    state_directory_entry_t *dir_entries = NULL;
+    size_t dir_count = 0;
+    hashmap_t *fallback_dirs = NULL;          /* directory_path -> metadata_item_t* */
+    hashmap_t *fallback_dir_profiles = NULL;  /* directory_path -> profile_name */
+    metadata_t **loaded_metadata = NULL;      /* Array of loaded metadata (for cleanup) */
+    size_t loaded_metadata_count = 0;
+
+    err = state_get_directories_by_profile(state, profile_name, &dir_entries, &dir_count);
     if (err) {
-        goto cleanup;
+        goto directory_cleanup;
+    }
+
+    /* Early exit: no directories in this profile */
+    if (dir_count == 0) {
+        goto directory_cleanup;
+    }
+
+    /* 4b. Build fallback directory index from remaining enabled profiles
+     *
+     * Strategy: Load metadata from each remaining enabled profile and build
+     * O(1) lookup hashmaps for directories. Precedence: earlier profiles win.
+     */
+    fallback_dirs = hashmap_create(64);  /* Initial capacity: 64 directories */
+    fallback_dir_profiles = hashmap_create(64);
+
+    /* Allocate array to track loaded metadata (for proper cleanup) */
+    loaded_metadata = malloc(string_array_size(remaining_enabled) * sizeof(metadata_t*));
+    if (!loaded_metadata) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate metadata array");
+        goto directory_cleanup;
+    }
+
+    for (size_t i = 0; i < string_array_size(remaining_enabled); i++) {
+        const char *profile = string_array_get(remaining_enabled, i);
+        metadata_t *metadata = NULL;
+
+        /* Load metadata (may not exist for old profiles - gracefully skip) */
+        err = metadata_load_from_branch(repo, profile, &metadata);
+        if (err) {
+            if (err->code == ERR_NOT_FOUND) {
+                /* No metadata file - old profile or no directories tracked */
+                error_free(err);
+                err = NULL;
+                continue;
+            }
+            /* Other error - fatal */
+            err = error_wrap(err, "Failed to load metadata for profile '%s'", profile);
+            goto directory_cleanup;
+        }
+
+        /* Track loaded metadata for cleanup */
+        loaded_metadata[loaded_metadata_count++] = metadata;
+
+        /* Extract directories from metadata */
+        size_t meta_dir_count = 0;
+        const metadata_item_t **directories =
+            metadata_get_items_by_kind(metadata, METADATA_ITEM_DIRECTORY, &meta_dir_count);
+
+        /* Add each directory to fallback index (precedence: earlier profiles win) */
+        for (size_t j = 0; j < meta_dir_count; j++) {
+            const metadata_item_t *dir_item = directories[j];
+            const char *dir_path = dir_item->key;  /* Filesystem path */
+
+            /* Only add if not already present (precedence: first enabled profile wins) */
+            if (!hashmap_get(fallback_dirs, dir_path)) {
+                hashmap_set(fallback_dirs, dir_path, (void*)dir_item);
+                hashmap_set(fallback_dir_profiles, dir_path, (void*)profile);
+            }
+        }
+
+        /* Free the pointer array (items themselves are owned by metadata) */
+        free(directories);
+    }
+
+    /* 4c. Process each directory entry */
+    size_t dir_fallback_count = 0;
+    size_t dir_removed_count = 0;
+
+    for (size_t i = 0; i < dir_count; i++) {
+        state_directory_entry_t *entry = &dir_entries[i];
+
+        /* Check for fallback in remaining profiles using O(1) index lookup */
+        const metadata_item_t *fallback = hashmap_get(fallback_dirs, entry->directory_path);
+        const char *fallback_profile = hashmap_get(fallback_dir_profiles, entry->directory_path);
+
+        if (fallback && fallback_profile) {
+            /* Directory exists in lower-precedence profile - update to fallback */
+
+            /* MEMORY SAFETY: Must use str_replace_owned() to properly free old
+             * strings and allocate independent copies. Direct assignment would cause:
+             * 1. Memory leak (old values not freed)
+             * 2. Use-after-free (aliasing memory freed with loaded_metadata)
+             * 3. Double-free crash (cleanup path tries to free already-freed memory)
+             *
+             * This mirrors file handling pattern (manifest.c:736-745).
+             */
+            err = str_replace_owned(&entry->profile, fallback_profile);
+            if (err) {
+                goto directory_cleanup;
+            }
+
+            /* Update metadata from fallback */
+            entry->mode = fallback->mode;
+            entry->added_at = fallback->directory.added_at;
+
+            err = str_replace_owned(&entry->owner, fallback->owner);
+            if (err) {
+                goto directory_cleanup;
+            }
+
+            err = str_replace_owned(&entry->group, fallback->group);
+            if (err) {
+                goto directory_cleanup;
+            }
+
+            err = str_replace_owned(&entry->storage_prefix, fallback->directory.storage_prefix);
+            if (err) {
+                goto directory_cleanup;
+            }
+
+            /* Update in state (preserves deployed_at) */
+            err = state_update_directory(state, entry);
+            if (err) {
+                err = error_wrap(err, "Failed to update directory to fallback for %s",
+                               entry->directory_path);
+                goto directory_cleanup;
+            }
+
+            dir_fallback_count++;
+        } else {
+            /* No fallback - entry becomes orphaned (cleanup deferred to apply)
+             *
+             * ARCHITECTURE: Separation of concerns for directory orphan cleanup.
+             *
+             * The entry remains in state for workspace orphan detection:
+             *   1. Entry stays in state with profile=<disabled_profile_name>
+             *   2. Workspace filters merged_metadata by enabled profiles (skips this entry)
+             *   3. Workspace detects: entry in state, NOT in merged_metadata → orphaned
+             *   4. Apply removes: directory from filesystem + entry from state
+             *
+             * This design enables:
+             *   - Safe re-enable: Profile can be re-enabled without data loss
+             *   - Orphan detection: Workspace analysis works (workspace.c:767-799)
+             *   - User visibility: Status shows orphans before removal
+             *   - Explicit action: User runs apply to execute destructive cleanup
+             *
+             * Why not delete immediately?
+             *   - Breaks orphan detection (entry gone → can't detect)
+             *   - Prevents safe re-enable (data lost → must recreate)
+             *   - Violates separation (profile cmd shouldn't do filesystem ops)
+             *
+             * This mirrors file orphan handling (manifest.c:756-782).
+             * Cleanup deferred to apply - DO NOT call state_remove_directory() here.
+             */
+            dir_removed_count++;  /* Stats: directory marked for removal (user visibility) */
+        }
+    }
+
+    /* Populate directory stats if requested */
+    if (out_stats) {
+        out_stats->directories_with_fallback = dir_fallback_count;
+        out_stats->directories_removed = dir_removed_count;
+    }
+
+directory_cleanup:
+    /* Free directory-specific resources */
+    if (fallback_dirs) hashmap_free(fallback_dirs, NULL);  /* Values are borrowed */
+    if (fallback_dir_profiles) hashmap_free(fallback_dir_profiles, NULL);  /* Values are borrowed */
+
+    /* Free loaded metadata */
+    if (loaded_metadata) {
+        for (size_t i = 0; i < loaded_metadata_count; i++) {
+            metadata_free(loaded_metadata[i]);
+        }
+        free(loaded_metadata);
+    }
+
+    state_free_all_directories(dir_entries, dir_count);
+
+    if (err) {
+        goto cleanup;  /* Jump to existing cleanup in manifest_disable_profile */
     }
 
 cleanup:

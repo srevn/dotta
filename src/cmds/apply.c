@@ -1458,6 +1458,53 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                             string_array_size(cleanup_res->removed_files) == 1 ? "y" : "ies");
             }
 
+            /* Remove orphaned directory entries from state
+             *
+             * After cleanup_execute() removes directories from filesystem,
+             * we need to remove their entries from state to prevent accumulation.
+             *
+             * The flow for orphaned directories:
+             *   1. Profile disabled → entry stays in state (manifest_disable_profile)
+             *   2. Workspace detects orphan → entry in state, profile not enabled
+             *   3. cleanup_execute() → directory removed from filesystem (just happened)
+             *   4. THIS CODE → entry removed from state (completing the cycle)
+             *
+             * This mirrors file orphan cleanup (lines 1428-1459) and prevents
+             * orphaned entries from accumulating forever in tracked_directories.
+             */
+            if (cleanup_res && cleanup_res->removed_dirs &&
+                string_array_size(cleanup_res->removed_dirs) > 0) {
+
+                output_print(out, OUTPUT_VERBOSE, "\nRemoving orphaned directory entries from state...\n");
+
+                for (size_t i = 0; i < string_array_size(cleanup_res->removed_dirs); i++) {
+                    const char *path = string_array_get(cleanup_res->removed_dirs, i);
+
+                    /* Delete entry from tracked_directories table
+                     *
+                     * The directory was already removed from filesystem by cleanup_execute().
+                     * Now we remove the database record to complete the cleanup.
+                     */
+                    err = state_remove_directory(state, path);
+                    if (err) {
+                        /* Non-fatal - directory already removed from filesystem
+                         *
+                         * The important operation (filesystem removal) already succeeded.
+                         * State cleanup failure is a warning, not a fatal error.
+                         */
+                        output_warning(out, "Failed to remove directory state entry for %s: %s",
+                                      path, error_message(err));
+                        error_free(err);
+                        err = NULL;  /* Don't propagate - continue operation */
+                    }
+                }
+
+                output_print(out, OUTPUT_VERBOSE,
+                            "  Removed %zu orphaned directory entr%s from state\n",
+                            string_array_size(cleanup_res->removed_dirs),
+                            string_array_size(cleanup_res->removed_dirs) == 1 ? "y" : "ies");
+            }
+
             cleanup_result_free(cleanup_res);
         }
 

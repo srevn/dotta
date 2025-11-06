@@ -1353,17 +1353,17 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
 
     /* Save state (only if not dry-run) */
     if (!opts->dry_run) {
-        /* Prune orphaned files BEFORE updating state (unless --keep-orphans)
+        /* Prune orphaned files and remove from state (unless --keep-orphans)
          *
          * Architecture:
-         * 1. Pruning identifies orphaned files by comparing OLD state against NEW manifest
-         * 2. Pruning removes orphaned files from filesystem ONLY (no state modification)
-         * 3. State is rebuilt atomically from manifest (orphaned files naturally absent)
+         * 1. cleanup_execute() removes orphaned files from filesystem
+         * 2. For each successfully removed file, state_remove_file() deletes entry from state
+         * 3. State updates are surgical (DELETE operations), not full rebuilds
          *
          * This separation ensures:
-         * - Single source of truth: state updated once, atomically
          * - Clear responsibility: filesystem ops separate from state tracking
-         * - Better atomicity: all-or-nothing state update
+         * - Transactional safety: filesystem changes committed before state changes
+         * - Incremental updates: only modified entries updated in state
          *
          * Apply is a synchronization operation - it ensures the filesystem matches
          * the declared state by both deploying new/updated files AND removing orphaned ones.

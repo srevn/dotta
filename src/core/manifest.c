@@ -2,8 +2,8 @@
  * manifest.c - Manifest transparent layer implementation
  *
  * The manifest module is the single authority for all manifest table modifications.
- * It maintains the manifest as a Virtual Working Directory (VWD) - a staging area
- * between Git branches and the filesystem.
+ * It maintains the manifest as a Virtual Working Directory (VWD) - an expected state
+ * cache between Git branches and the filesystem, enabling runtime convergence.
  *
  * Key patterns:
  *   - Precedence Oracle: Reuses profile_build_manifest() for correctness
@@ -651,8 +651,8 @@ cleanup:
  *   1. Get all entries owned by disabled profile
  *   2. Build manifest from remaining profiles (fallback check)
  *   3. For each entry:
- *      - If found in fallback: update source + mark PENDING_DEPLOYMENT
- *      - If not found: mark PENDING_REMOVAL
+ *      - If found in fallback: update source (deployed_at preserved)
+ *      - If not found: entry remains for orphan detection (apply removes)
  */
 error_t *manifest_disable_profile(
     git_repository *repo,
@@ -827,8 +827,8 @@ cleanup:
  *      c. Check if removed profile owns it (precedence check)
  *      d. If yes:
  *         - Check fresh manifest for fallback
- *         - Fallback exists: Update to fallback profile, mark PENDING_DEPLOYMENT
- *         - No fallback: Mark PENDING_REMOVAL
+ *         - Fallback exists: Update to fallback profile (deployed_at preserved)
+ *         - No fallback: Entry remains for orphan detection (apply removes)
  *      e. If no (different profile owns): Skip
  *
  * Preconditions:
@@ -838,8 +838,8 @@ cleanup:
  *   - enabled_profiles MUST be current enabled set
  *
  * Postconditions:
- *   - Files with fallback updated to fallback profile (PENDING_DEPLOYMENT)
- *   - Files without fallback marked PENDING_REMOVAL
+ *   - Files with fallback updated to fallback profile (deployed_at preserved)
+ *   - Files without fallback: entries remain for orphan detection (apply removes)
  *   - Files not owned by removed_profile unchanged
  *   - Transaction remains open (caller commits)
  *
@@ -855,7 +855,7 @@ cleanup:
  * @param removed_profile Profile files were removed from (must not be NULL)
  * @param removed_storage_paths Storage paths of removed files (must not be NULL)
  * @param enabled_profiles All enabled profiles (must not be NULL)
- * @param out_removed Output: files marked PENDING_REMOVAL (can be NULL)
+ * @param out_removed Output: files without fallback (entries remain for orphan detection) (can be NULL)
  * @param out_fallbacks Output: files updated to fallback (can be NULL)
  * @return Error or NULL on success
  */
@@ -1203,8 +1203,8 @@ cleanup:
  * Implementation strategy:
  *   1. Build new manifest with precedence oracle
  *   2. Compare with current state to detect ownership changes
- *   3. Update only changed files (preserves DEPLOYED status for unchanged)
- *   4. Handle orphaned files (mark PENDING_REMOVAL)
+ *   3. Update only changed files (preserves deployed_at for unchanged)
+ *   4. Handle orphaned files (entries remain for orphan detection, apply removes)
  */
 error_t *manifest_reorder_profiles(
     git_repository *repo,
@@ -1402,9 +1402,9 @@ cleanup:
  *   5. For each item (O(N)):
  *      - If DELETED: check fresh manifest for fallback
  *        → Fallback exists: update to fallback profile
- *        → No fallback: mark PENDING_REMOVAL
+ *        → No fallback: entry remains for orphan detection (apply removes)
  *      - Else (modified/new): lookup in fresh manifest
- *        → Found + precedence matches: sync to state (DEPLOYED status)
+ *        → Found + precedence matches: sync to state (deployed_at set based on lstat())
  *        → Not found: file filtered/excluded (skip gracefully)
  *   6. All operations within caller's transaction
  *
@@ -1415,8 +1415,8 @@ cleanup:
  *   - enabled_profiles MUST be current enabled set
  *
  * Postconditions:
- *   - Modified/new files synced with status=DEPLOYED
- *   - Deleted files fallback or marked PENDING_REMOVAL
+ *   - Modified/new files synced with deployed_at set based on lstat()
+ *   - Deleted files fallback or entries remain for orphan detection
  *   - Transaction remains open (caller commits)
  *
  * Performance: O(M + N) where M = total files in profiles, N = items to sync
@@ -1880,8 +1880,8 @@ cleanup:
  *     - Generate Git diff between them
  *
  *   Phase 3: Process Deltas
- *     - For additions/modifications: sync with PENDING_DEPLOYMENT status
- *     - For deletions: check for fallbacks, mark PENDING_REMOVAL if none
+ *     - For additions/modifications: sync (deployed_at preserved if exists, else set based on lstat())
+ *     - For deletions: check for fallbacks, entries remain for orphan detection if none
  *     - Handle precedence: only sync if profile won the file
  *
  * Performance: O(M + D) where M = total files in all profiles, D = changed files
@@ -1892,9 +1892,9 @@ cleanup:
  *              (state_save) after calling. This function works within an active
  *              transaction.
  *
- * Status Semantics: All changes marked PENDING_DEPLOYMENT because sync updates
- *                   Git but doesn't deploy to filesystem. User must run 'dotta apply'
- *                   to actually deploy changes.
+ * Convergence Semantics: Sync updates VWD expected state (git_oid, content_hash) but doesn't
+ *                        deploy to filesystem. User must run 'dotta apply' which uses runtime
+ *                        divergence analysis to deploy changes.
  *
  * @param repo Repository (must not be NULL)
  * @param state State with active transaction (must not be NULL)

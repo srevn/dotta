@@ -1196,9 +1196,9 @@ static error_t *flatten_items_to_array(
  * After Git commits succeed, the manifest is synced to reflect the new
  * state. This keeps the three-way consistency: Git ↔ Manifest ↔ Filesystem.
  *
- * Status Semantics:
- *   - Modified/New files: DEPLOYED (already on filesystem)
- *   - Deleted files: handled by bulk function (PENDING_REMOVAL or fallback)
+ * Lifecycle Tracking:
+ *   - Modified/New files: deployed_at set based on lstat() (already on filesystem)
+ *   - Deleted files: handled by bulk function (entries remain for orphan detection or fallback)
  *
  * Algorithm:
  *   1. Check if any profiles enabled (read-only, upfront optimization)
@@ -2316,9 +2316,9 @@ error_t *cmd_update(
 
     /* Update manifest if any profiles enabled
      *
-     * This maintains the manifest as a Virtual Working Directory - a staging
-     * area between Git and the filesystem. Files are marked DEPLOYED because
-     * UPDATE captures them FROM the filesystem (already at target locations).
+     * This maintains the manifest as a Virtual Working Directory - an expected
+     * state cache between Git and the filesystem. Files get deployed_at set based
+     * on lstat() because UPDATE captures them FROM the filesystem (already at target locations).
      *
      * Non-fatal: If manifest update fails, Git commits still succeeded.
      * User can repair manifest by running 'dotta profile enable <profile>'.

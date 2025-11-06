@@ -662,8 +662,8 @@ cleanup:
  * time. Combines profile enabling with manifest sync in a single atomic transaction.
  *
  * WHY manifest_add_files (not manifest_enable_profile):
- * - Files captured FROM filesystem (already deployed) → status = DEPLOYED
- * - manifest_enable_profile marks files PENDING_DEPLOYMENT (wrong semantic)
+ * - Files captured FROM filesystem (already deployed) → deployed_at = time(NULL)
+ * - manifest_enable_profile uses lstat() check which may set deployed_at = 0 for missing files
  * - Matches VWD architecture specification (ARCHITECTURE_MANIFEST_VWD.md:569)
  *
  * Algorithm:
@@ -871,7 +871,7 @@ cleanup:
  *
  * Called after Git commit succeeds. Updates manifest for all added files
  * if the profile is enabled. This is part of the Virtual Working Directory
- * integration - maintaining the manifest as a staging area.
+ * integration - maintaining the manifest as an expected state cache.
  *
  * OPTIMIZED: Uses bulk manifest sync (manifest_add_files) with O(M+N) complexity.
  * manifest_add_files builds its own fresh manifest from Git (post-commit state),
@@ -887,10 +887,10 @@ cleanup:
  *      d. Call manifest_add_files() (builds fresh manifest internally)
  *      e. Commit transaction (state_save)
  *
- * Status Semantics:
- *   Files are marked DEPLOYED (not PENDING_DEPLOYMENT) because ADD
- *   captures files FROM the filesystem. They're already at their target
- *   locations, so they're "deployed" by definition.
+ * Lifecycle Tracking:
+ *   Files get deployed_at = time(NULL) because ADD captures files FROM the
+ *   filesystem. They're already at their target locations, so deployed_at
+ *   is set to indicate dotta knows about them.
  *
  * Error Handling:
  *   - State doesn't exist → treat as "not enabled" (return NULL)
@@ -1602,7 +1602,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
          *
          * Uses manifest_add_files (not manifest_enable_profile) because:
          * - Files captured FROM filesystem (already deployed)
-         * - Should be marked DEPLOYED, not PENDING_DEPLOYMENT
+         * - Should have deployed_at = time(NULL), not deployed_at = 0
          * - Matches VWD architecture specification
          */
         error_t *enable_err = auto_enable_and_sync_profile(

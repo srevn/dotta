@@ -425,14 +425,17 @@ static error_t *analyze_file_divergence(
     /* PHASE 1: Filesystem content analysis (if file exists)
      * Hash-based comparison for fast divergence detection.
      *
-     * VWD Architecture: Instead of loading full content from Git and comparing buffers,
-     * we compare content hashes. The manifest table stores content_hash (computed during
-     * profile enable), and we compute the hash from the filesystem file.
+     * VWD Architecture: The manifest table stores expected state from Git
+     * (content_hash computed during profile enable). We compute the hash from
+     * the filesystem file and compare.
      *
      * This provides:
      * - O(1) comparison (hash comparison vs buffer comparison)
-     * - No Git tree walking (manifest_entry->entry is NULL)
+     * - No redundant Git tree walking (expected state pre-cached in manifest)
      * - Transparent decryption (content_hash_file handles encrypted files)
+     *
+     * Note: For orphan detection, we DO load git_tree_entry from Git to get
+     * file metadata, but for divergence analysis we use cached content_hash.
      */
     if (on_filesystem) {
         /* Capture stat early for metadata checking and permission analysis */
@@ -1444,7 +1447,7 @@ static error_t *analyze_encryption_policy_mismatch(
  * lazy-loaded only when needed for content display (diffs, conflict resolution).
  *
  * This is the core of the Virtual Working Directory architecture - we read
- * the staging area (manifest table) instead of walking Git trees. This makes
+ * the expected state cache (manifest table) instead of walking Git trees. This makes
  * status operations O(M) where M = entries in manifest, not O(N) where N =
  * all files across all enabled profiles.
  *
@@ -1841,7 +1844,7 @@ error_t *workspace_load(
 
     /* Build manifest from state (Virtual Working Directory architecture)
      * This replaces the old profile_build_manifest() which walked Git trees.
-     * Now we read from the manifest table (staging area) for O(M) performance
+     * Now we read from the manifest table (expected state cache) for O(M) performance
      * where M = entries in manifest, not O(N) where N = all files in Git. */
     err = workspace_build_manifest_from_state(ws);
     if (err) {

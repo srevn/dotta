@@ -970,11 +970,27 @@ error_t *manifest_remove_files(
             char fallback_oid_str[GIT_OID_HEXSZ + 1];
             git_oid_tostr(fallback_oid_str, sizeof(fallback_oid_str), fallback_oid);
 
+            /* Track ownership change: save old profile before updating
+             *
+             * Profile ownership change occurs when a file is removed from
+             * high-precedence profile and falls back to lower-precedence.
+             * Track old_profile to inform user via workspace divergence analysis.
+             */
+            const char *old_profile_name = current_entry->profile;
+
             /* Update manifest entry to use fallback
              * MEMORY SAFETY: Use str_replace_owned() to properly free old strings
              * before replacing them with new values. Direct assignment would leak
              * the old allocated strings. */
             err = str_replace_owned(&current_entry->profile, fallback_profile);
+            if (err) {
+                state_free_entry(current_entry);
+                free(filesystem_path);
+                goto cleanup;
+            }
+
+            /* Set old_profile to track the ownership change */
+            err = str_replace_owned(&current_entry->old_profile, old_profile_name);
             if (err) {
                 state_free_entry(current_entry);
                 free(filesystem_path);
@@ -1554,12 +1570,17 @@ error_t *manifest_update_files(
                     metadata = metadata_merged;
                 }
 
-                /* Preserve existing deployed_at when falling back */
+                /* Preserve existing deployed_at and track old_profile when falling back */
                 time_t deployed_at = 0;
+                char *old_profile_name = NULL;
                 state_file_entry_t *existing_entry = NULL;
                 error_t *get_err = state_get_file(state, item->filesystem_path, &existing_entry);
                 if (get_err == NULL && existing_entry != NULL) {
                     deployed_at = existing_entry->deployed_at;
+                    /* Save old profile for ownership change tracking */
+                    if (existing_entry->profile) {
+                        old_profile_name = strdup(existing_entry->profile);
+                    }
                     state_free_entry(existing_entry);
                 } else if (get_err) {
                     if (get_err->code == ERR_NOT_FOUND) {
@@ -1573,9 +1594,33 @@ error_t *manifest_update_files(
                 err = sync_entry_to_state(repo, state, fallback, git_oid, metadata,
                                          deployed_at, km, content_cache);
                 if (err) {
+                    free(old_profile_name);
                     err = error_wrap(err, "Failed to sync fallback for '%s'",
                                    item->filesystem_path);
                     goto cleanup;
+                }
+
+                /* Update old_profile if ownership changed */
+                if (old_profile_name) {
+                    state_file_entry_t *updated_entry = NULL;
+                    error_t *get_err2 = state_get_file(state, item->filesystem_path, &updated_entry);
+                    if (get_err2 == NULL && updated_entry != NULL) {
+                        /* Set old_profile to track ownership change */
+                        err = str_replace_owned(&updated_entry->old_profile, old_profile_name);
+                        if (!err) {
+                            err = state_update_entry(state, updated_entry);
+                        }
+                        state_free_entry(updated_entry);
+                    } else if (get_err2) {
+                        error_free(get_err2);
+                    }
+                    free(old_profile_name);
+
+                    if (err) {
+                        err = error_wrap(err, "Failed to track ownership change for '%s'",
+                                       item->filesystem_path);
+                        goto cleanup;
+                    }
                 }
 
                 (*out_fallbacks)++;

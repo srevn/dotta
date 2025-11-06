@@ -96,6 +96,7 @@ typedef struct {
      * - NULL/0 for manifests built from Git trees (not state)
      * - Freed in manifest_free()
      */
+    char *old_profile;               /* Previous owner if changed, NULL otherwise (VWD cache) */
     char *git_oid;                   /* Git commit reference (40-char hex, can be NULL) */
     char *content_hash;              /* Blake2b hash for content comparison (can be NULL) */
     state_file_type_t type;          /* File type (REGULAR, SYMLINK, EXECUTABLE) */

@@ -611,24 +611,16 @@ static error_t *analyze_file_divergence(
 
     /* PHASE 3: Profile ownership change detection
      *
-     * With VWD cache architecture, the manifest is rebuilt from current state
-     * on every workspace load. There is no "previous state" to compare against
-     * for profile ownership changes within a single workspace session.
+     * Check VWD cache for old_profile to detect ownership changes.
+     * old_profile is set by manifest layer when file ownership changes
+     * (e.g., removed from high-precedence profile, fell back to lower).
      *
-     * Profile ownership changes are naturally reflected when the manifest is
-     * rebuilt: files now show their current owning profile from the manifest table.
-     *
-     * For example, if a file moved from 'global' to 'darwin':
-     * - Old workspace: manifest shows source_profile='global'
-     * - New workspace: manifest shows source_profile='darwin'
-     * - No transition tracking needed within single workspace
+     * The old_profile field is persisted in the database and populated
+     * into the VWD cache during workspace_build_manifest_from_state().
+     * It remains set until acknowledged by successful deployment.
      */
-    bool profile_changed = false;
-    char *old_profile = NULL;
-
-    /* Note: With current VWD architecture, profile_changed is always false
-     * because manifest reflects current state only. Future enhancement could
-     * add old_profile field to VWD cache if cross-session change tracking needed. */
+    bool profile_changed = (manifest_entry->old_profile != NULL);
+    char *old_profile = profile_changed ? strdup(manifest_entry->old_profile) : NULL;
 
     /* Add to workspace if there's any state change or divergence */
     if (state != WORKSPACE_STATE_DEPLOYED || divergence != DIVERGENCE_NONE || profile_changed) {
@@ -1561,6 +1553,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             for (size_t j = 0; j < manifest_idx; j++) {
                 free(ws->manifest->entries[j].storage_path);
                 free(ws->manifest->entries[j].filesystem_path);
+                free(ws->manifest->entries[j].old_profile);
                 free(ws->manifest->entries[j].git_oid);
                 free(ws->manifest->entries[j].content_hash);
                 free(ws->manifest->entries[j].mode);
@@ -1587,6 +1580,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
          * NULL fields: Some optional fields (mode, owner, group, git_oid, content_hash)
          * may be NULL in state database. Use conditional strdup to handle gracefully.
          */
+        entry->old_profile = state_entry->old_profile ? strdup(state_entry->old_profile) : NULL;
         entry->git_oid = state_entry->git_oid ? strdup(state_entry->git_oid) : NULL;
         entry->content_hash = state_entry->content_hash ? strdup(state_entry->content_hash) : NULL;
         entry->type = state_entry->type;
@@ -1596,10 +1590,9 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         entry->encrypted = state_entry->encrypted;
         entry->deployed_at = state_entry->deployed_at;
 
-        /* Check for allocation failures in VWD fields
-         * Note: NULL is valid for optional fields (mode, owner, group), but if the
-         * source had a value and strdup failed, that's an allocation failure. */
-        if ((state_entry->git_oid && !entry->git_oid) ||
+        /* Check for allocation failures in VWD fields */
+        if ((state_entry->old_profile && !entry->old_profile) ||
+            (state_entry->git_oid && !entry->git_oid) ||
             (state_entry->content_hash && !entry->content_hash) ||
             (state_entry->mode && !entry->mode) ||
             (state_entry->owner && !entry->owner) ||
@@ -1608,6 +1601,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             /* Cleanup current entry's allocated fields */
             free(entry->storage_path);
             free(entry->filesystem_path);
+            free(entry->old_profile);
             free(entry->git_oid);
             free(entry->content_hash);
             free(entry->mode);
@@ -1618,6 +1612,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             for (size_t j = 0; j < manifest_idx; j++) {
                 free(ws->manifest->entries[j].storage_path);
                 free(ws->manifest->entries[j].filesystem_path);
+                free(ws->manifest->entries[j].old_profile);
                 free(ws->manifest->entries[j].git_oid);
                 free(ws->manifest->entries[j].content_hash);
                 free(ws->manifest->entries[j].mode);
@@ -1651,6 +1646,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             for (size_t j = 0; j < manifest_idx; j++) {
                 free(ws->manifest->entries[j].storage_path);
                 free(ws->manifest->entries[j].filesystem_path);
+                free(ws->manifest->entries[j].old_profile);
                 free(ws->manifest->entries[j].git_oid);
                 free(ws->manifest->entries[j].content_hash);
                 free(ws->manifest->entries[j].mode);

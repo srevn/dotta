@@ -1493,6 +1493,18 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                     error_free(err);
                     err = NULL;  /* Don't propagate - continue operation */
                 }
+
+                /* Clear old_profile if ownership changed (acknowledge change after deployment) */
+                const workspace_item_t *ws_item = workspace_get_item(ws, path);
+                if (ws_item && ws_item->profile_changed) {
+                    error_t *clear_err = state_clear_old_profile(state, path);
+                    if (clear_err) {
+                        /* Non-fatal warning - deployment succeeded, just clearing flag failed */
+                        output_warning(out, "Failed to clear ownership change flag for %s: %s",
+                                      path, error_message(clear_err));
+                        error_free(clear_err);
+                    }
+                }
             }
 
             output_print(out, OUTPUT_VERBOSE,

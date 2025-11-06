@@ -1584,6 +1584,7 @@ void manifest_free(manifest_t *manifest) {
          * These fields are populated when manifest is built from state database
          * (workspace_build_manifest_from_state). For manifests built from Git
          * trees (profile_build_manifest), these will be NULL and free() is safe. */
+        free(manifest->entries[i].old_profile);
         free(manifest->entries[i].git_oid);
         free(manifest->entries[i].content_hash);
         free(manifest->entries[i].mode);

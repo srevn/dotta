@@ -233,6 +233,29 @@ error_t *fs_ensure_parent_dirs(const char *path);
  */
 
 /**
+ * Make path absolute without resolving symlinks
+ *
+ * Unlike fs_canonicalize_path() which uses realpath() and resolves all symlinks,
+ * this function makes a path absolute while preserving symlink locations.
+ *
+ * Converts relative paths to absolute by prepending current working directory.
+ * Validates existence using lstat() (doesn't follow final symlink component).
+ *
+ * This preserves symlink locations for storage path determination, preventing
+ * accidental tracking of symlink targets at unintended locations.
+ *
+ * Examples:
+ *   /home/user/mylink -> /home/user/mylink (even if mylink is a symlink)
+ *   mylink            -> /current/dir/mylink (if exists in cwd)
+ *   relative/path     -> /current/dir/relative/path
+ *
+ * @param path Input path (must not be NULL, must not contain ~)
+ * @param out Absolute path (caller frees, must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *fs_make_absolute(const char *path, char **out);
+
+/**
  * Canonicalize path (resolve symlinks, . and ..)
  *
  * Path must exist.

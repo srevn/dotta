@@ -222,9 +222,9 @@ error_t *path_to_storage(
         filesystem_path = expanded;
     }
 
-    /* Canonicalize path */
-    char *canonical = NULL;
-    err = fs_canonicalize_path(filesystem_path, &canonical);
+    /* Make absolute without following symlinks */
+    char *absolute = NULL;
+    err = fs_make_absolute(filesystem_path, &absolute);
     if (expanded) {
         free(expanded);
     }
@@ -236,19 +236,19 @@ error_t *path_to_storage(
     char *home = NULL;
     err = path_get_home(&home);
     if (err) {
-        free(canonical);
+        free(absolute);
         return err;
     }
 
     size_t home_len = strlen(home);
     path_prefix_t prefix;
 
-    if (str_starts_with(canonical, home)) {
+    if (str_starts_with(absolute, home)) {
         /* Path is under $HOME */
         prefix = PREFIX_HOME;
 
         /* Extract relative part */
-        const char *rel = canonical + home_len;
+        const char *rel = absolute + home_len;
         if (rel[0] == '/') {
             rel++;  /* Skip leading slash */
         }
@@ -256,7 +256,7 @@ error_t *path_to_storage(
         if (rel[0] == '\0') {
             /* Home directory itself - not supported */
             free(home);
-            free(canonical);
+            free(absolute);
             return ERROR(ERR_INVALID_ARG,
                         "Cannot store HOME directory itself");
         }
@@ -265,7 +265,7 @@ error_t *path_to_storage(
         *storage_path = str_format("home/%s", rel);
         if (!*storage_path) {
             free(home);
-            free(canonical);
+            free(absolute);
             return ERROR(ERR_MEMORY, "Failed to format storage path");
         }
     } else {
@@ -273,16 +273,16 @@ error_t *path_to_storage(
         prefix = PREFIX_ROOT;
 
         /* Build storage path: root/... */
-        *storage_path = str_format("root%s", canonical);
+        *storage_path = str_format("root%s", absolute);
         if (!*storage_path) {
             free(home);
-            free(canonical);
+            free(absolute);
             return ERROR(ERR_MEMORY, "Failed to format storage path");
         }
     }
 
     free(home);
-    free(canonical);
+    free(absolute);
 
     /* Validate generated storage path */
     err = path_validate_storage(*storage_path);
@@ -495,9 +495,9 @@ error_t *path_resolve_input(
                 }
             }
 
-            /* Canonicalize: resolves symlinks and verifies existence */
-            char *canonical = NULL;
-            err = fs_canonicalize_path(expanded, &canonical);
+            /* Make absolute without following symlinks and verify existence */
+            char *absolute = NULL;
+            err = fs_make_absolute(expanded, &absolute);
             free(expanded);
             if (err) {
                 return error_wrap(err,
@@ -507,8 +507,8 @@ error_t *path_resolve_input(
 
             /* Convert to storage format */
             path_prefix_t prefix;
-            err = path_to_storage(canonical, &storage_path, &prefix);
-            free(canonical);
+            err = path_to_storage(absolute, &storage_path, &prefix);
+            free(absolute);
             if (err) {
                 return error_wrap(err, "Failed to convert path '%s'", input);
             }

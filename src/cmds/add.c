@@ -1249,7 +1249,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     /* Process each input path */
     for (size_t i = 0; i < opts->file_count; i++) {
         const char *file = opts->files[i];
-        char *canonical = NULL;
+        char *absolute = NULL;
 
         /* Check if input is a storage path */
         if (str_starts_with(file, "home/") || str_starts_with(file, "root/")) {
@@ -1261,37 +1261,37 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                 goto cleanup;
             }
 
-            /* Canonicalize the filesystem path */
-            err = fs_canonicalize_path(fs_path, &canonical);
+            /* Make absolute without following symlinks */
+            err = fs_make_absolute(fs_path, &absolute);
             free(fs_path);
             if (err) {
                 err = error_wrap(err, "Failed to resolve path '%s'", file);
                 goto cleanup;
             }
         } else {
-            /* Regular filesystem path - canonicalize directly */
-            err = fs_canonicalize_path(file, &canonical);
+            /* Regular filesystem path - make absolute directly */
+            err = fs_make_absolute(file, &absolute);
             if (err) {
                 err = error_wrap(err, "Failed to resolve path '%s'", file);
                 goto cleanup;
             }
         }
 
-        /* Check path exists */
-        if (!fs_exists(canonical)) {
-            free(canonical);
+        /* Check path exists (use lexists to allow broken symlinks) */
+        if (!fs_lexists(absolute)) {
+            free(absolute);
             err = ERROR(ERR_NOT_FOUND, "Path not found: %s", file);
             goto cleanup;
         }
 
-        /* Handle directories vs files */
-        if (fs_is_directory(canonical)) {
+        /* Handle symlinks, directories, and files */
+        if (!fs_is_symlink(absolute) && fs_is_directory(absolute)) {
             /* Recursively collect files from directory */
             string_array_t *dir_files = NULL;
-            err = collect_files_from_dir(canonical, opts, ignore_ctx, out, &dir_files);
+            err = collect_files_from_dir(absolute, opts, ignore_ctx, out, &dir_files);
 
             if (err) {
-                free(canonical);
+                free(absolute);
                 err = error_wrap(err, "Failed to collect files from '%s'", file);
                 goto cleanup;
             }
@@ -1305,16 +1305,16 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             /* Track this directory for new file detection */
             char *storage_prefix = NULL;
             path_prefix_t prefix;
-            err = path_to_storage(canonical, &storage_prefix, &prefix);
+            err = path_to_storage(absolute, &storage_prefix, &prefix);
             if (err) {
                 /* Non-fatal: just log warning */
                 if (opts->verbose && out) {
                     output_warning(out, "Failed to compute storage prefix for directory '%s': %s",
-                                  canonical, error_message(err));
+                                  absolute, error_message(err));
                 }
                 error_free(err);
                 err = NULL;
-                free(canonical);
+                free(absolute);
                 continue;
             }
 
@@ -1324,7 +1324,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                 tracked_dir_t *new_dirs = realloc(tracked_dirs, new_capacity * sizeof(tracked_dir_t));
                 if (!new_dirs) {
                     free(storage_prefix);
-                    free(canonical);
+                    free(absolute);
                     err = ERROR(ERR_MEMORY, "Failed to allocate tracked directories");
                     goto cleanup;
                 }
@@ -1332,28 +1332,28 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                 tracked_dir_capacity = new_capacity;
             }
 
-            tracked_dirs[tracked_dir_count].filesystem_path = strdup(canonical);
+            tracked_dirs[tracked_dir_count].filesystem_path = strdup(absolute);
             tracked_dirs[tracked_dir_count].storage_prefix = storage_prefix;
             tracked_dir_count++;
 
             if (opts->verbose && out) {
-                output_info(out, "Added directory: %s", canonical);
+                output_info(out, "Added directory: %s", absolute);
             }
         } else {
-            /* Single file - check if excluded */
-            if (is_excluded(canonical, false, ignore_ctx, opts, out)) {
+            /* Single file or symlink - check if excluded */
+            if (is_excluded(absolute, false, ignore_ctx, opts, out)) {
                 if (opts->verbose && out) {
-                    output_info(out, "Excluded: %s", canonical);
+                    output_info(out, "Excluded: %s", absolute);
                 }
-                free(canonical);
+                free(absolute);
                 continue;
             }
 
             /* Add to list */
-            string_array_push(all_files, canonical);
+            string_array_push(all_files, absolute);
         }
 
-        free(canonical);
+        free(absolute);
     }
 
     /* Check if we have any files to add */

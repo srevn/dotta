@@ -1951,7 +1951,7 @@ error_t *manifest_update_files(
 
 cleanup:
     if (metadata_merged) metadata_free(metadata_merged);
-    if (profile_oids) hashmap_free(profile_oids, free);  /* Free oid strings */
+    if (profile_oids) hashmap_free(profile_oids, free);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);
 
@@ -2159,7 +2159,7 @@ error_t *manifest_add_files(
 
 cleanup:
     if (metadata_merged) metadata_free(metadata_merged);
-    if (profile_oids) hashmap_free(profile_oids, free);  /* Free oid strings */
+    if (profile_oids) hashmap_free(profile_oids, free);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);
 
@@ -2599,7 +2599,7 @@ cleanup:
     if (config) config_free(config);
     if (km_owned) keymanager_free(km_owned);
     if (metadata_merged) metadata_free(metadata_merged);
-    if (profile_oids) hashmap_free(profile_oids, free);  /* Free oid strings */
+    if (profile_oids) hashmap_free(profile_oids, free);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);
 

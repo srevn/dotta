@@ -638,6 +638,42 @@ error_t *fs_list_dir(const char *path, string_array_t **out) {
  * Path operations
  */
 
+error_t *fs_make_absolute(const char *path, char **out) {
+    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(out);
+
+    char *absolute = NULL;
+
+    /* Check if already absolute */
+    if (path[0] == '/') {
+        absolute = strdup(path);
+        if (!absolute) {
+            return ERROR(ERR_MEMORY, "Failed to duplicate path");
+        }
+    } else {
+        /* Relative path - prepend current working directory */
+        char cwd[PATH_MAX];
+        if (getcwd(cwd, sizeof(cwd)) == NULL) {
+            return ERROR(ERR_FS, "Failed to get current directory: %s",
+                        strerror(errno));
+        }
+
+        error_t *err = fs_path_join(cwd, path, &absolute);
+        if (err) {
+            return error_wrap(err, "Failed to join paths");
+        }
+    }
+
+    /* Verify path exists (without following final symlink) */
+    if (!fs_lexists(absolute)) {
+        free(absolute);
+        return ERROR(ERR_NOT_FOUND, "Path does not exist: %s", path);
+    }
+
+    *out = absolute;
+    return NULL;
+}
+
 error_t *fs_canonicalize_path(const char *path, char **out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);

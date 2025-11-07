@@ -138,32 +138,8 @@ $(TARGET): $(LIB_OBJ) $(MAIN_OBJ) | $(BIN_DIR)
 
 # Debug build
 .PHONY: debug
-debug: CFLAGS := -std=c11 -Wall -Wextra -Wpedantic $(DEBUG_FLAGS)
+debug: CFLAGS := -std=c11 -Wall -Wextra -Wpedantic $(DEBUG_FLAGS) $(FEATURE_MACROS)
 debug: clean $(TARGET)
-
-# Valgrind memory testing
-.PHONY: valgrind memcheck
-VALGRIND_FLAGS ?= --leak-check=full --show-leak-kinds=all --track-origins=yes --verbose
-VALGRIND_CMD ?= init
-
-valgrind: memcheck
-memcheck:
-	@if ! command -v valgrind >/dev/null 2>&1; then \
-		echo "Error: valgrind not found"; \
-		echo ""; \
-		echo "Install valgrind:"; \
-		echo "  macOS:  brew install valgrind"; \
-		echo "  Linux:  apt-get install valgrind  (Debian/Ubuntu)"; \
-		echo "          dnf install valgrind      (Fedora/RHEL)"; \
-		echo ""; \
-		exit 1; \
-	fi
-	@echo "Building debug binary for valgrind..."
-	@$(MAKE) debug CC=gcc CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -g -O0 $(FEATURE_MACROS)"
-	@echo ""
-	@echo "Running: valgrind $(VALGRIND_FLAGS) $(TARGET) $(VALGRIND_CMD)"
-	@echo ""
-	@valgrind $(VALGRIND_FLAGS) $(TARGET) $(VALGRIND_CMD)
 
 # Static build (with libgit2 statically linked for portability)
 .PHONY: static
@@ -259,8 +235,7 @@ check-deps:
 help:
 	@echo "Dotta Makefile targets:"
 	@echo "  all          - Build main executable (default)"
-	@echo "  debug        - Build with debug symbols and sanitizers"
-	@echo "  valgrind     - Run valgrind memory checks (alias: memcheck)"
+	@echo "  debug        - Build with debug symbols"
 	@echo "  static       - Build with libgit2 statically linked (portable)"
 	@echo "  clean        - Remove build artifacts"
 	@echo "  install      - Install binary, configs, and hooks to $(PREFIX)"
@@ -268,12 +243,6 @@ help:
 	@echo "  format       - Format code with clang-format"
 	@echo "  check-deps   - Check for required dependencies"
 	@echo "  help         - Show this help message"
-	@echo ""
-	@echo "Valgrind usage:"
-	@echo "  make valgrind                                 - Test 'dotta init'"
-	@echo "  make valgrind VALGRIND_CMD='status'           - Test 'dotta status'"
-	@echo "  make valgrind VALGRIND_CMD='add ~/.bashrc'    - Test 'dotta add ~/.bashrc'"
-	@echo "  make valgrind VALGRIND_FLAGS='--leak-check=full --log-file=valgrind.log'"
 	@echo ""
 	@echo "Installation paths:"
 	@echo "  Binary:      $(BINDIR)/dotta"

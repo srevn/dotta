@@ -352,11 +352,9 @@ static error_t *show_diff_preview(
         NULL  /* options */
     );
 
-    /* Free plaintext buffers - no longer needed after patch creation */
-    buffer_free(current_plaintext);
-    buffer_free(target_plaintext);
-
     if (ret < 0) {
+        buffer_free(current_plaintext);
+        buffer_free(target_plaintext);
         return error_from_git(ret);
     }
 
@@ -440,6 +438,10 @@ static error_t *show_diff_preview(
 
     git_buf_dispose(&buf);
     git_patch_free(patch);
+
+    /* Free plaintext buffers */
+    buffer_free(current_plaintext);
+    buffer_free(target_plaintext);
 
     return NULL;
 }

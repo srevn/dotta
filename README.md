@@ -21,44 +21,36 @@ Manage a single repository with independent, versioned profiles across laptops, 
 └── dotta.db               # State database (manifest + metadata)
 ```
 
-### The Virtual Working Directory (VWD) with Runtime Convergence
+### Virtual Working Directory with Runtime Convergence
 
-Dotta uses a **Virtual Working Directory** (manifest) that caches expected state from Git and employs **runtime convergence** to determine what needs deployment. This is a key architectural innovation that provides both performance and correctness.
+Dotta uses a **Virtual Working Directory** (VWD) that caches expected state derived from Git and relies on **runtime convergence** to determine what needs deployment.
 
-**The Three-Tree Model** (analogous to Git):
+**The Three-Tree Model**: Dotta mirrors Git's layered approach, but replaces Git's index with a virtual manifest representing complete desired state.
 
 ```
-Git Branches (History)
+Git Branches (Source of Truth)
      ↓
-Manifest (VWD - Expected State Cache)
+Manifest (Virtual Working Directory)
      ↓
-Workspace (Runtime Divergence Analysis)
+Workspace (Runtime Analysis)
      ↓
-Filesystem (Deployed Files)
+Filesystem (Live System)
 ```
 
-**How It Works**:
+**Workflow**:
 
-1. **Profile enable** → Reads Git branches, populates VWD with expected state (scope + git_oid + blob_oid + metadata)
+1. **Profile enable** → Reads Git branches, populates VWD with expected state (scope + git_oid + blob_oid + metadata) and with precedence resolved
 2. **Status** → Reads VWD scope, loads workspace to analyze runtime divergence (compares VWD expected state vs filesystem)
 3. **Apply** → Iterates VWD entries, checks workspace divergence at runtime, deploys only divergent files, updates lifecycle timestamps
 
-**Manifest Table (VWD)** (in `.git/dotta.db`):
+**Manifest Database** (in `.git/dotta.db`):
 - **Scope authority**: Defines which files are managed (based on enabled profiles)
 - **Expected state cache**: Stores `git_oid`, `blob_oid`, `type`, `mode`, `owner`, `group`, `encrypted` from Git
   - Enables fast comparison without Git tree walks
   - Precedence already resolved (which profile wins for each path)
 - **Lifecycle tracking**: `deployed_at` timestamp (0 = never deployed, >0 = known to dotta)
-- **Always current**: Updated immediately when profiles/files change (eager consistency)
-- **No cached decisions**: Does NOT store operational state (apply uses runtime workspace analysis)
+- **Eager Consistency**: Updated immediately when profiles/files change
 - **Indexed**: SQLite indexes on profile and storage_path for instant queries
-
-**Benefits**:
-- **VWD caching**: Expected state pre-cached from Git (no redundant tree walks)
-- **Runtime convergence**: Apply always analyzes current filesystem state (no stale cached decisions)
-- **Performance**: O(1) divergence lookups via workspace hashmap
-- **Safety**: Preview destructive operations (profile disable shows what will be removed/reverted)
-- **Correctness**: VWD never stale (automatically synchronized with Git), convergence always uses current reality
 
 ### File Storage Model
 
@@ -159,16 +151,12 @@ $ dotta profile enable global darwin
 # View enabled vs available profiles
 dotta profile list
 
-# Status performs runtime divergence analysis (fast: O(1) workspace lookups)
+# Status performs runtime divergence analysis
 $ dotta status
 Undeployed files (47 items):
   [undeployed] home/.bashrc (darwin)
   [undeployed] home/.vimrc (global)
   ... (45 more)
-
-Clean files (23 items):
-  [clean] home/.profile (global)
-  ... (22 more)
 
 # Apply analyzes divergence and deploys only changed files
 $ dotta apply

@@ -165,10 +165,10 @@ error_t *manifest_disable_profile(
  *   4. Build profile→oid map for git_oid field
  *   5. For each item (O(N)):
  *      - If DELETED: check fresh manifest for fallback
- *        → Fallback exists: update to fallback profile
+ *        → Fallback exists: update to fallback profile (deployed_at preserved)
  *        → No fallback: entry remains for orphan detection (apply removes)
  *      - Else (modified/new): lookup in fresh manifest
- *        → Found + precedence matches: sync to state (deployed_at set based on lstat())
+ *        → Found + precedence matches: sync to state (deployed_at = time(NULL))
  *        → Not found: file filtered/excluded (skip gracefully)
  *   6. All operations within caller's transaction
  *
@@ -179,8 +179,8 @@ error_t *manifest_disable_profile(
  *   - enabled_profiles MUST be current enabled set
  *
  * Postconditions:
- *   - Modified/new files synced with deployed_at set based on lstat()
- *   - Deleted files fallback or entries remain for orphan detection
+ *   - Modified/new files synced with deployed_at = time(NULL) (files captured from filesystem)
+ *   - Deleted files fallback (deployed_at preserved) or entries remain for orphan detection
  *   - Tracked directories synced from all enabled profiles
  *   - Transaction remains open (caller commits)
  *
@@ -359,17 +359,20 @@ error_t *manifest_remove_files(
  * rather than calling manifest_enable_profile() N times (which would rebuild
  * the manifest N times). This reduces complexity from O(N × M) to O(M).
  *
- * WARNING: This is a destructive operation. All lifecycle tracking is lost.
- * All entries reset: deployed_at set based on filesystem lstat().
+ * WARNING: This is a destructive operation that clears all manifest entries.
+ * However, lifecycle tracking is preserved: existing entries retain their deployed_at,
+ * new entries use lstat() to check filesystem (deployed_at = time(NULL) if exists, else 0).
  *
  * Preconditions:
  *   - state MUST have active transaction
  *   - enabled_profiles MUST be current enabled set
+ *   - Empty profile list supported (clears manifest, syncs empty directories)
  *
  * Postconditions:
- *   - Manifest cleared
- *   - All files from enabled profiles re-added
- *   - All entries have deployed_at set based on filesystem lstat()
+ *   - Manifest cleared and rebuilt from enabled profiles
+ *   - Existing entries preserve deployed_at (lifecycle history maintained)
+ *   - New entries set deployed_at based on filesystem lstat() check
+ *   - Empty profile list results in empty manifest
  *   - Transaction remains open (caller commits)
  *
  * Error Conditions:
@@ -402,7 +405,7 @@ error_t *manifest_rebuild(
  *   1. Build manifest from new profile order (precedence oracle)
  *   2. Get all current manifest entries and build hashmap for O(1) lookups
  *   3. For each file in new manifest:
- *      - If not in old manifest: add with deployed_at based on lstat() (rare)
+ *      - If not in old manifest: add with deployed_at = 0 (rare, file never deployed)
  *      - If owner changed: update source_profile + git_oid (deployed_at preserved)
  *      - If owner unchanged: skip (preserve existing entry)
  *   4. For files in old manifest but not new: entries remain for orphan detection (apply removes)
@@ -464,7 +467,7 @@ error_t *manifest_reorder_profiles(
  *     - Generate Git diff between them
  *
  *   Phase 3: Process Deltas (O(D))
- *     - For additions/modifications: sync (deployed_at preserved if exists, else set based on lstat())
+ *     - For additions/modifications: sync (deployed_at preserved if exists, else 0 for new files)
  *     - For deletions: check for fallbacks, entries remain for orphan detection if none
  *     - Handle precedence: only sync if profile won the file
  *
@@ -483,7 +486,7 @@ error_t *manifest_reorder_profiles(
  *   - Branch HEAD for profile_name MUST point to new_oid (post-sync state)
  *
  * Postconditions:
- *   - Added/modified files synced (deployed_at preserved if exists, else set based on lstat())
+ *   - Added/modified files synced (deployed_at preserved if exists, else 0 for new files)
  *   - Deleted files with fallbacks updated to new owner (deployed_at preserved)
  *   - Deleted files without fallbacks: entries remain for orphan detection (apply removes)
  *   - Files filtered by .dottaignore are skipped (expected behavior)

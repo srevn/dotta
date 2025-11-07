@@ -513,7 +513,21 @@ error_t *manifest_enable_profile(
             /* Check filesystem to update stats only */
             if (lstat(entry->filesystem_path, &st) == 0) {
                 already_deployed++;
+            } else if (errno == ENOENT) {
+                /* File doesn't exist - needs deployment */
+                needs_deployment++;
             } else {
+                /* Access error (permission denied, I/O error, etc.)
+                 *
+                 * Conservative approach: Count as needs_deployment rather than
+                 * blocking the entire enable operation. The apply command will
+                 * perform fresh divergence analysis with proper error handling.
+                 *
+                 * Rationale: For existing entries, deployed_at is already known
+                 * from state. The lstat() check here is purely for statistics.
+                 * Statistics inaccuracy is acceptable to avoid blocking manifest
+                 * updates in scenarios like non-root users managing root-owned files.
+                 */
                 needs_deployment++;
             }
 
@@ -537,7 +551,18 @@ error_t *manifest_enable_profile(
                 deployed_at = 0;
                 needs_deployment++;
             } else {
-                /* Unexpected error (permission denied, I/O error, etc.) */
+                /* Unexpected error (permission denied, I/O error, etc.)
+                 *
+                 * Fatal error for new entries: We cannot determine the correct
+                 * deployed_at value without successful lstat(). The deployed_at
+                 * timestamp is critical for workspace divergence analysis:
+                 *   deployed_at = 0   → Never deployed (file missing)
+                 *   deployed_at > 0   → Known to dotta (file exists)
+                 *
+                 * This is intentionally stricter than the existing entry path,
+                 * where deployed_at is already known from state. For new entries,
+                 * we must fail fast rather than proceed with incorrect assumptions.
+                 */
                 err = error_from_errno(errno);
                 goto cleanup;
             }
@@ -1003,33 +1028,11 @@ error_t *manifest_remove_files(
         return error_wrap(err, "Failed to build manifest for fallback detection");
     }
 
-    /* 2. Build hashmap: profile_name → git_oid for fast lookups */
-    profile_oids = hashmap_create(string_array_size(enabled_profiles));
-    if (!profile_oids) {
-        err = ERROR(ERR_MEMORY, "Failed to create profile OID map");
+    /* 2. Build profile→oid map (profile_name → git_oid string) for fast lookups */
+    err = build_profile_oid_map(repo, profiles, &profile_oids);
+    if (err) {
+        err = error_wrap(err, "Failed to build profile OID map");
         goto cleanup;
-    }
-
-    for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
-        const char *profile = string_array_get(enabled_profiles, i);
-        git_oid *oid = malloc(sizeof(git_oid));
-        if (!oid) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate OID");
-            goto cleanup;
-        }
-
-        err = get_branch_head_oid(repo, profile, oid);
-        if (err) {
-            free(oid);
-            err = error_wrap(err, "Failed to get HEAD for profile '%s'", profile);
-            goto cleanup;
-        }
-
-        err = hashmap_set(profile_oids, profile, oid);
-        if (err) {
-            free(oid);
-            goto cleanup;
-        }
     }
 
     /* 3. Process each removed file */
@@ -1081,17 +1084,14 @@ error_t *manifest_remove_files(
             /* Fallback found: update to use fallback profile */
             const char *fallback_profile = fallback->source_profile->name;
 
-            /* Get HEAD oid for fallback profile */
-            git_oid *fallback_oid = (git_oid *)hashmap_get(profile_oids, fallback_profile);
-            if (!fallback_oid) {
+            /* Get HEAD oid for fallback profile (hex string) */
+            const char *fallback_oid_str = hashmap_get(profile_oids, fallback_profile);
+            if (!fallback_oid_str) {
                 err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'", fallback_profile);
                 state_free_entry(current_entry);
                 free(filesystem_path);
                 goto cleanup;
             }
-
-            char fallback_oid_str[GIT_OID_HEXSZ + 1];
-            git_oid_tostr(fallback_oid_str, sizeof(fallback_oid_str), fallback_oid);
 
             /* Track ownership change: save old profile before updating
              *
@@ -1167,15 +1167,7 @@ error_t *manifest_remove_files(
 
 cleanup:
     if (profile_oids) {
-        /* Free allocated OIDs */
-        hashmap_iter_t iter;
-        hashmap_iter_init(&iter, profile_oids);
-        const char *key;
-        void *value;
-        while (hashmap_iter_next(&iter, &key, &value)) {
-            free(value);
-        }
-        hashmap_free(profile_oids, NULL);
+        hashmap_free(profile_oids, free);
     }
 
     if (fresh_manifest) manifest_free(fresh_manifest);

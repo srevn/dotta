@@ -1616,6 +1616,25 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             return ERROR(ERR_MEMORY, "Failed to allocate manifest entry paths");
         }
 
+        /* Check if this entry is inactive (marked for removal)
+         *
+         * Inactive entries are explicitly marked by the manifest layer when a file
+         * is removed or a profile is disabled with no fallback. These entries are
+         * intentionally out of scope and should not be validated against Git.
+         *
+         * They remain in the manifest table for orphan detection. The orphan
+         * detection phase (analyze_orphaned_files) will load these entries and
+         * mark them as ORPHANED for cleanup by apply.
+         *
+         * This check eliminates false-positive warnings for expected removals.
+         */
+        if (state_entry->state && strcmp(state_entry->state, STATE_INACTIVE) == 0) {
+            /* Inactive entry - skip silently, don't add to manifest */
+            free(entry->storage_path);
+            free(entry->filesystem_path);
+            continue;  /* Don't increment manifest_idx */
+        }
+
         /* Populate VWD expected state cache from database
          *
          * These fields enable O(1) divergence checking without N database queries.
@@ -1711,14 +1730,25 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                                              entry->storage_path);
         if (git_err != 0) {
             if (git_err == GIT_ENOTFOUND) {
-                /* File in state but not in Git - data inconsistency.
-                 * Skip with warning, similar to orphan profile handling.
-                 * Apply will reconcile state with Git reality. */
+                /* UNEXPECTED INCONSISTENCY!
+                 *
+                 * Entry is marked 'active' (state=%s), meaning the manifest layer
+                 * believes it should exist in Git. But Git lookup failed - this indicates:
+                 *   - External Git modification (git rm, filter-repo, etc.)
+                 *   - Repository corruption
+                 *   - Bug in manifest layer
+                 *
+                 * Emit warning and skip. Orphan detection will mark it for removal.
+                 * We do NOT mark as inactive here - let user see it in status
+                 * before removal, and keep state transitions explicit.
+                 */
                 fprintf(stderr,
-                    "warning: manifest entry '%s' not found in profile '%s' - "
-                    "skipping (state inconsistency, will be cleaned up)\n",
+                    "warning: expected '%s' in profile '%s' (state=active, git_oid=%s)\n"
+                    "         but file missing from Git tree. Possible external modification.\n"
+                    "         Run 'dotta status' to see orphaned files, 'dotta apply' to clean up.\n",
                     entry->filesystem_path,
-                    entry->source_profile->name);
+                    entry->source_profile->name,
+                    state_entry->git_oid ? state_entry->git_oid : "(null)");
 
                 /* Free allocated fields and skip this entry */
                 free(entry->storage_path);

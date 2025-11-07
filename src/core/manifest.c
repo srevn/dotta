@@ -881,26 +881,26 @@ error_t *manifest_disable_profile(
 
             fallback_count++;
         } else {
-            /* No fallback - entry becomes orphaned (cleanup deferred to apply)
+            /* No fallback - mark as inactive (staged for removal)
              *
              * ARCHITECTURE: Separation of concerns for orphan cleanup.
              *
-             * The entry remains in state for workspace orphan detection:
-             *   1. Entry stays in state with profile=<disabled_profile_name>
-             *   2. Workspace filters manifest by enabled profiles (skips this entry)
-             *   3. Workspace detects: entry in state, NOT in manifest → orphaned
+             * The entry is marked STATE_INACTIVE and remains in state for orphan detection:
+             *   1. Entry marked inactive with profile=<disabled_profile_name>
+             *   2. Workspace skips inactive entries during manifest building (no Git validation)
+             *   3. Workspace orphan detection loads inactive entries → marks as ORPHANED
              *   4. Apply removes: file from filesystem + entry from state
              *
              * This design enables:
-             *   - Safe re-enable: Profile can be re-enabled without data loss
-             *   - Orphan detection: Workspace analysis works as documented (workspace.c:629)
+             *   - Silent handling: No false warnings during workspace operations
+             *   - Safe re-enable: Profile can be re-enabled (marks active again)
+             *   - Orphan detection: Workspace analysis detects for cleanup
              *   - User visibility: Status shows orphans before removal
              *   - Explicit action: User runs apply to execute destructive cleanup
              *
-             * Why not delete immediately?
-             *   - Breaks orphan detection (entry gone → can't detect)
-             *   - Prevents safe re-enable (data lost → must re-apply)
-             *   - Violates separation (profile cmd shouldn't do filesystem ops)
+             * The state field makes the lifecycle explicit:
+             *   STATE_ACTIVE → file should exist in Git (validate)
+             *   STATE_INACTIVE → file staged for removal (skip validation)
              *
              * This follows the Git staging model:
              *   profile disable = git rm (staging)
@@ -908,6 +908,19 @@ error_t *manifest_disable_profile(
              *
              * Cleanup deferred to apply - DO NOT call state_remove_file() here.
              */
+
+            /* Mark entry as inactive for silent workspace handling */
+            err = state_set_file_state(state, entry->filesystem_path, STATE_INACTIVE);
+            if (err) {
+                /* Non-fatal: log warning but continue. Even if marking fails,
+                 * orphan detection still works (Git validation warning will appear,
+                 * but orphan will be detected and can be cleaned up). */
+                fprintf(stderr, "warning: failed to mark '%s' as inactive: %s\n",
+                        entry->filesystem_path, error_message(err));
+                error_free(err);
+                err = NULL;  /* Clear error, continue operation */
+            }
+
             removed_count++;  /* Stats: file marked for removal (user visibility) */
         }
     }
@@ -1259,18 +1272,30 @@ error_t *manifest_remove_files(
 
             fallback_count++;
         } else {
-            /* No fallback - entry becomes orphaned (cleanup deferred to apply)
+            /* No fallback - mark as inactive (staged for removal)
              *
-             * Entry remains in state for orphan detection. See manifest_disable_profile()
-             * for detailed architectural rationale.
+             * Entry marked STATE_INACTIVE and remains in state for orphan detection.
+             * See manifest_disable_profile() for detailed architectural rationale.
              *
              * The orphan cleanup flow:
-             *   1. Entry stays in state (this function)
-             *   2. Workspace detects orphan (in state, not in manifest)
-             *   3. Apply removes (filesystem + state cleanup)
+             *   1. Entry marked inactive (this function)
+             *   2. Workspace skips inactive entries (no Git validation)
+             *   3. Workspace orphan detection loads inactive entries → marks as ORPHANED
+             *   4. Apply removes (filesystem + state cleanup)
              *
              * Cleanup deferred to apply - DO NOT call state_remove_file() here.
              */
+
+            /* Mark entry as inactive for silent workspace handling */
+            err = state_set_file_state(state, filesystem_path, STATE_INACTIVE);
+            if (err) {
+                /* Non-fatal: log warning but continue */
+                fprintf(stderr, "warning: failed to mark '%s' as inactive: %s\n",
+                        filesystem_path, error_message(err));
+                error_free(err);
+                err = NULL;  /* Clear error, continue operation */
+            }
+
             removed_count++;
         }
 
@@ -1884,15 +1909,26 @@ error_t *manifest_update_files(
 
                 (*out_fallbacks)++;
             } else {
-                /* No fallback - entry becomes orphaned (cleanup deferred to apply)
+                /* No fallback - mark as inactive (staged for removal)
                  *
-                 * Entry remains in state for orphan detection. This bulk operation
-                 * may process multiple files simultaneously, but the architectural
-                 * principle remains: deferred cleanup via apply.
+                 * Entry marked STATE_INACTIVE and remains in state for orphan detection.
+                 * This bulk operation may process multiple files simultaneously, but the
+                 * architectural principle remains: deferred cleanup via apply.
                  *
                  * See manifest_disable_profile() for detailed rationale.
                  * Cleanup deferred to apply - DO NOT call state_remove_file() here.
                  */
+
+                /* Mark entry as inactive for silent workspace handling */
+                err = state_set_file_state(state, item->filesystem_path, STATE_INACTIVE);
+                if (err) {
+                    /* Non-fatal: log warning but continue */
+                    fprintf(stderr, "warning: failed to mark '%s' as inactive: %s\n",
+                            item->filesystem_path, error_message(err));
+                    error_free(err);
+                    err = NULL;  /* Clear error, continue operation */
+                }
+
                 (*out_removed)++;
             }
         } else {
@@ -2556,18 +2592,29 @@ error_t *manifest_sync_diff(
 
                 /* Check if profile_name owns this file */
                 if (strcmp(state_entry->profile, profile_name) == 0) {
-                    /* We own it and no fallback exists - entry becomes orphaned
+                    /* We own it and no fallback exists - mark as inactive
                      *
                      * File deleted from Git during sync (pull/rebase/merge), with no
-                     * fallback coverage. Entry becomes orphaned and requires cleanup.
+                     * fallback coverage. Entry marked STATE_INACTIVE for cleanup.
                      *
-                     * Entry remains in state for orphan detection. This maintains
-                     * consistency with other manifest operations: sync updates scope
-                     * (what's in Git), apply executes cleanup (orphan removal).
+                     * Entry marked inactive and remains in state for orphan detection.
+                     * This maintains consistency with other manifest operations: sync
+                     * updates scope (what's in Git), apply executes cleanup (removal).
                      *
                      * The orphan cleanup flow applies (see manifest_disable_profile()).
                      * Cleanup deferred to apply - DO NOT call state_remove_file() here.
                      */
+
+                    /* Mark entry as inactive for silent workspace handling */
+                    err = state_set_file_state(state, filesystem_path, STATE_INACTIVE);
+                    if (err) {
+                        /* Non-fatal: log warning but continue */
+                        fprintf(stderr, "warning: failed to mark '%s' as inactive: %s\n",
+                                filesystem_path, error_message(err));
+                        error_free(err);
+                        err = NULL;  /* Clear error, continue operation */
+                    }
+
                     removed++;
                 }
 

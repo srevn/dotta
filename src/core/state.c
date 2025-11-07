@@ -163,6 +163,7 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    \"group\" TEXT,"
         "    encrypted INTEGER NOT NULL DEFAULT 0,"
         "    "
+        "    state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active', 'inactive')),"
         "    deployed_at INTEGER NOT NULL DEFAULT 0"
         ");"
 
@@ -413,8 +414,8 @@ static error_t *prepare_statements(state_t *state) {
     const char *sql_insert =
         "INSERT OR REPLACE INTO virtual_manifest "
         "(filesystem_path, storage_path, profile, old_profile, git_oid, blob_oid, "
-        " type, mode, owner, \"group\", encrypted, deployed_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
+        " type, mode, owner, \"group\", encrypted, state, deployed_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
 
     rc = sqlite3_prepare_v2(state->db, sql_insert, -1,
                            &state->stmt_insert_file, NULL);
@@ -439,7 +440,7 @@ static error_t *prepare_statements(state_t *state) {
         "UPDATE virtual_manifest SET "
         "storage_path = ?, profile = ?, old_profile = ?, git_oid = ?, blob_oid = ?, "
         "type = ?, mode = ?, owner = ?, \"group\" = ?, encrypted = ?, "
-        "deployed_at = ? "
+        "state = ?, deployed_at = ? "
         "WHERE filesystem_path = ?;";
 
     rc = sqlite3_prepare_v2(state->db, sql_update_entry, -1,
@@ -466,7 +467,7 @@ static error_t *prepare_statements(state_t *state) {
     /* Get file (used in workspace analysis) */
     const char *sql_get =
         "SELECT storage_path, profile, old_profile, git_oid, blob_oid, "
-        "type, mode, owner, \"group\", encrypted, deployed_at "
+        "type, mode, owner, \"group\", encrypted, state, deployed_at "
         "FROM virtual_manifest WHERE filesystem_path = ?;";
 
     rc = sqlite3_prepare_v2(state->db, sql_get, -1,
@@ -482,7 +483,7 @@ static error_t *prepare_statements(state_t *state) {
     /* Get entries by profile (used by profile disable) */
     const char *sql_by_profile =
         "SELECT filesystem_path, storage_path, profile, old_profile, git_oid, blob_oid, "
-        "type, mode, owner, \"group\", encrypted, deployed_at "
+        "type, mode, owner, \"group\", encrypted, state, deployed_at "
         "FROM virtual_manifest WHERE profile = ?;";
 
     rc = sqlite3_prepare_v2(state->db, sql_by_profile, -1,
@@ -828,9 +829,8 @@ error_t *state_set_profiles(
     int rc = sqlite3_exec(state->db, "DELETE FROM enabled_profiles;",
                          NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(ERR_STATE_INVALID,
-            "Failed to clear profiles: %s",
-            errmsg ? errmsg : sqlite3_errstr(rc));
+        error_t *err = ERROR(ERR_STATE_INVALID, "Failed to clear profiles: %s",
+                            errmsg ? errmsg : sqlite3_errstr(rc));
         sqlite3_free(errmsg);
         return err;
     }
@@ -891,7 +891,7 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
     sqlite3_reset(state->stmt_insert_file);
     sqlite3_clear_bindings(state->stmt_insert_file);
 
-    /* Bind parameters - all 12 fields for scope-based schema */
+    /* Bind parameters */
     /* 1. filesystem_path */
     sqlite3_bind_text(state->stmt_insert_file, 1,
                      entry->filesystem_path, -1, SQLITE_TRANSIENT);
@@ -952,8 +952,15 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
     /* 11. encrypted */
     sqlite3_bind_int(state->stmt_insert_file, 11, entry->encrypted ? 1 : 0);
 
-    /* 12. deployed_at */
-    sqlite3_bind_int64(state->stmt_insert_file, 12, (sqlite3_int64)entry->deployed_at);
+    /* 12. state */
+    if (entry->state && entry->state[0] != '\0') {
+        sqlite3_bind_text(state->stmt_insert_file, 12, entry->state, -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_text(state->stmt_insert_file, 12, STATE_ACTIVE, -1, SQLITE_STATIC);
+    }
+
+    /* 13. deployed_at */
+    sqlite3_bind_int64(state->stmt_insert_file, 13, (sqlite3_int64)entry->deployed_at);
 
     /* Execute (don't finalize - statement is reused) */
     int rc = sqlite3_step(state->stmt_insert_file);
@@ -1068,7 +1075,7 @@ error_t *state_get_file(
         return sqlite_error(state->db, "Failed to query file");
     }
 
-    /* Extract all 11 columns from scope-based schema */
+    /* Extract all 13 columns from scope-based schema */
     const char *storage_path = (const char *)sqlite3_column_text(stmt, 0);
     const char *profile = (const char *)sqlite3_column_text(stmt, 1);
     const char *old_profile = (const char *)sqlite3_column_text(stmt, 2);
@@ -1085,7 +1092,8 @@ error_t *state_get_file(
     const char *owner = (const char *)sqlite3_column_text(stmt, 7);
     const char *group = (const char *)sqlite3_column_text(stmt, 8);
     int encrypted = sqlite3_column_int(stmt, 9);
-    sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 10);
+    const char *state_str = (const char *)sqlite3_column_text(stmt, 10);
+    sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 11);
 
     /* Validate required columns */
     if (!storage_path || !profile || !git_oid || !blob_oid || !type_str) {
@@ -1115,6 +1123,7 @@ error_t *state_get_file(
         owner,
         group,
         encrypted != 0,
+        state_str,
         (time_t)deployed_at,
         &entry
     );
@@ -1180,10 +1189,10 @@ error_t *state_get_all_files(
         return ERROR(ERR_MEMORY, "Failed to allocate file array");
     }
 
-    /* Query all files with scope-based schema (12 columns) */
+    /* Query all files with scope-based schema (13 columns) */
     const char *sql_files =
         "SELECT filesystem_path, storage_path, profile, old_profile, git_oid, blob_oid, "
-        "type, mode, owner, \"group\", encrypted, deployed_at "
+        "type, mode, owner, \"group\", encrypted, state, deployed_at "
         "FROM virtual_manifest ORDER BY filesystem_path;";
 
     sqlite3_stmt *stmt = NULL;
@@ -1195,7 +1204,7 @@ error_t *state_get_all_files(
 
     size_t i = 0;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < file_count) {
-        /* Get all 12 columns with NULL checking (scope-based schema) */
+        /* Get all 13 columns with NULL checking (scope-based schema) */
         const char *fs_path = (const char *)sqlite3_column_text(stmt, 0);
         const char *storage_path = (const char *)sqlite3_column_text(stmt, 1);
         const char *profile = (const char *)sqlite3_column_text(stmt, 2);
@@ -1213,15 +1222,15 @@ error_t *state_get_all_files(
         const char *owner = (const char *)sqlite3_column_text(stmt, 8);
         const char *group = (const char *)sqlite3_column_text(stmt, 9);
         int encrypted = sqlite3_column_int(stmt, 10);
-        sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 11);
+        const char *state_str = (const char *)sqlite3_column_text(stmt, 11);
+        sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 12);
 
         /* Validate non-nullable columns */
         if (!fs_path || !storage_path || !profile ||
             !git_oid || !blob_oid || !type_str) {
             sqlite3_finalize(stmt);
             state_free_all_files(entries, i);
-            return ERROR(ERR_STATE_INVALID,
-                "NULL value in required column at row %zu", i);
+            return ERROR(ERR_STATE_INVALID, "NULL value in required column at row %zu", i);
         }
 
         /* Copy strings */
@@ -1246,11 +1255,12 @@ error_t *state_get_all_files(
 
         /* Set other fields */
         entries[i].encrypted = (encrypted != 0);
+        entries[i].state = state_str ? strdup(state_str) : strdup(STATE_ACTIVE);
         entries[i].deployed_at = (time_t)deployed_at;
 
         /* Check allocation success */
-        if (!entries[i].filesystem_path || !entries[i].storage_path ||
-            !entries[i].profile || !entries[i].git_oid || !entries[i].blob_oid) {
+        if (!entries[i].filesystem_path || !entries[i].storage_path || !entries[i].profile ||
+            !entries[i].git_oid || !entries[i].blob_oid || !entries[i].state) {
             sqlite3_finalize(stmt);
             state_free_all_files(entries, i + 1);
             return ERROR(ERR_MEMORY, "Failed to copy entry strings");
@@ -1916,8 +1926,7 @@ error_t *state_clear_directories(state_t *state) {
     char *errmsg = NULL;
     int rc = sqlite3_exec(state->db, "DELETE FROM tracked_directories;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(ERR_STATE_INVALID,
-            "Failed to clear tracked directories: %s",
+        error_t *err = ERROR(ERR_STATE_INVALID, "Failed to clear tracked directories: %s",
             errmsg ? errmsg : sqlite3_errstr(rc));
         sqlite3_free(errmsg);
         return err;
@@ -2119,8 +2128,7 @@ error_t *state_save(git_repository *repo, state_t *state) {
         char *errmsg = NULL;
         int rc = sqlite3_exec(state->db, "COMMIT;", NULL, NULL, &errmsg);
         if (rc != SQLITE_OK) {
-            err = ERROR(ERR_STATE_INVALID,
-                "Failed to commit transaction: %s",
+            err = ERROR(ERR_STATE_INVALID, "Failed to commit transaction: %s",
                 errmsg ? errmsg : sqlite3_errstr(rc));
             sqlite3_free(errmsg);
             return err;
@@ -2160,9 +2168,8 @@ error_t *state_save(git_repository *repo, state_t *state) {
         char *errmsg = NULL;
         int rc = sqlite3_exec(db, "BEGIN IMMEDIATE;", NULL, NULL, &errmsg);
         if (rc != SQLITE_OK) {
-            err = ERROR(ERR_CONFLICT,
-                "Failed to acquire write lock: %s",
-                errmsg ? errmsg : sqlite3_errstr(rc));
+            err = ERROR(ERR_CONFLICT, "Failed to acquire write lock: %s",
+                        errmsg ? errmsg : sqlite3_errstr(rc));
             sqlite3_free(errmsg);
             finalize_statements(state);
             sqlite3_close(db);
@@ -2200,9 +2207,8 @@ error_t *state_save(git_repository *repo, state_t *state) {
         /* Commit transaction */
         rc = sqlite3_exec(db, "COMMIT;", NULL, NULL, &errmsg);
         if (rc != SQLITE_OK) {
-            err = ERROR(ERR_STATE_INVALID,
-                "Failed to commit transaction: %s",
-                errmsg ? errmsg : sqlite3_errstr(rc));
+            err = ERROR(ERR_STATE_INVALID, "Failed to commit transaction: %s",
+                        errmsg ? errmsg : sqlite3_errstr(rc));
             sqlite3_free(errmsg);
             finalize_statements(state);
             sqlite3_close(db);
@@ -2323,6 +2329,7 @@ error_t *state_create_entry(
     const char *owner,
     const char *group,
     bool encrypted,
+    const char *state_value,
     time_t deployed_at,
     state_file_entry_t **out
 ) {
@@ -2349,6 +2356,7 @@ error_t *state_create_entry(
     entry->old_profile = old_profile ? strdup(old_profile) : NULL;
     entry->owner = owner ? strdup(owner) : NULL;
     entry->group = group ? strdup(group) : NULL;
+    entry->state = state_value ? strdup(state_value) : strdup(STATE_ACTIVE);
 
     /* Set non-string fields */
     entry->mode = mode;
@@ -2358,7 +2366,7 @@ error_t *state_create_entry(
 
     /* Validate required allocations */
     if (!entry->storage_path || !entry->filesystem_path ||
-        !entry->profile || !entry->git_oid || !entry->blob_oid) {
+        !entry->profile || !entry->git_oid || !entry->blob_oid || !entry->state) {
         state_free_entry(entry);
         return ERROR(ERR_MEMORY, "Failed to copy entry fields");
     }
@@ -2456,6 +2464,68 @@ error_t *state_clear_old_profile(
 }
 
 /**
+ * Set file entry state (active/inactive)
+ *
+ * Updates the state column for a manifest entry. Used by manifest layer
+ * to mark files as inactive when they become orphaned (removed with no fallback).
+ *
+ * Valid states:
+ *   - STATE_ACTIVE   - Normal entry, file is in scope
+ *   - STATE_INACTIVE - Marked for removal, awaiting cleanup by apply
+ *
+ * Preconditions:
+ *   - state MUST have active transaction (via state_load_for_update)
+ *   - filesystem_path MUST exist in virtual_manifest
+ *   - new_state MUST be STATE_ACTIVE or STATE_INACTIVE
+ *
+ * @param state State handle (must not be NULL, must have active transaction)
+ * @param filesystem_path File to update (must not be NULL)
+ * @param new_state New state value (must not be NULL)
+ * @return Error or NULL on success (not found returns ERR_NOT_FOUND)
+ */
+error_t *state_set_file_state(
+    state_t *state,
+    const char *filesystem_path,
+    const char *new_state
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(state->db);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(new_state);
+
+    /* Validate state value */
+    if (strcmp(new_state, STATE_ACTIVE) != 0 && strcmp(new_state, STATE_INACTIVE) != 0) {
+        return ERROR(ERR_INVALID_ARG, "Invalid state '%s' (must be 'active' or 'inactive')",
+                    new_state);
+    }
+
+    const char *sql = "UPDATE virtual_manifest SET state = ? WHERE filesystem_path = ?";
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return sqlite_error(state->db, "Failed to prepare state update");
+    }
+
+    sqlite3_bind_text(stmt, 1, new_state, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, filesystem_path, -1, SQLITE_TRANSIENT);
+
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to update file state");
+    }
+
+    int changes = sqlite3_changes(state->db);
+    if (changes == 0) {
+        return ERROR(ERR_NOT_FOUND, "File '%s' not found in manifest", filesystem_path);
+    }
+
+    return NULL;
+}
+
+/**
  * Update full entry
  *
  * Updates all fields of a manifest entry.
@@ -2479,7 +2549,7 @@ error_t *state_update_entry(
                           entry->type == STATE_FILE_SYMLINK ? "symlink" :
                           "executable";
 
-    /* Reset and bind all 11 fields + filesystem_path for WHERE clause */
+    /* Reset and bind all 13 fields + filesystem_path for WHERE clause */
     sqlite3_reset(state->stmt_update_entry);
     sqlite3_clear_bindings(state->stmt_update_entry);
 
@@ -2515,8 +2585,19 @@ error_t *state_update_entry(
     }
 
     sqlite3_bind_int(state->stmt_update_entry, 10, entry->encrypted ? 1 : 0);
-    sqlite3_bind_int64(state->stmt_update_entry, 11, (sqlite3_int64)entry->deployed_at);
-    sqlite3_bind_text(state->stmt_update_entry, 12, entry->filesystem_path, -1, SQLITE_TRANSIENT);
+
+    /* 11. state */
+    if (entry->state && entry->state[0] != '\0') {
+        sqlite3_bind_text(state->stmt_update_entry, 11, entry->state, -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_text(state->stmt_update_entry, 11, STATE_ACTIVE, -1, SQLITE_STATIC);
+    }
+
+    /* 12. deployed_at */
+    sqlite3_bind_int64(state->stmt_update_entry, 12, (sqlite3_int64)entry->deployed_at);
+
+    /* 13. filesystem_path for WHERE clause */
+    sqlite3_bind_text(state->stmt_update_entry, 13, entry->filesystem_path, -1, SQLITE_TRANSIENT);
 
     /* Execute */
     int rc = sqlite3_step(state->stmt_update_entry);
@@ -2620,7 +2701,8 @@ error_t *state_get_entries_by_profile(
         const char *owner = (const char *)sqlite3_column_text(stmt, 8);
         const char *group = (const char *)sqlite3_column_text(stmt, 9);
         int encrypted = sqlite3_column_int(stmt, 10);
-        sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 11);
+        const char *state_str = (const char *)sqlite3_column_text(stmt, 11);
+        sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 12);
 
         if (!fs_path || !storage_path || !profile ||
             !git_oid || !blob_oid || !type_str) {
@@ -2647,10 +2729,11 @@ error_t *state_get_entries_by_profile(
         }
 
         entries[i].encrypted = (encrypted != 0);
+        entries[i].state = state_str ? strdup(state_str) : strdup(STATE_ACTIVE);
         entries[i].deployed_at = (time_t)deployed_at;
 
-        if (!entries[i].filesystem_path || !entries[i].storage_path ||
-            !entries[i].profile || !entries[i].git_oid || !entries[i].blob_oid) {
+        if (!entries[i].filesystem_path || !entries[i].storage_path || !entries[i].profile ||
+            !entries[i].git_oid || !entries[i].blob_oid || !entries[i].state) {
             state_free_all_files(entries, i + 1);
             return ERROR(ERR_MEMORY, "Failed to copy entry strings");
         }
@@ -2723,5 +2806,6 @@ void state_free_entry(state_file_entry_t *entry) {
     free(entry->blob_oid);
     free(entry->owner);
     free(entry->group);
+    free(entry->state);
     free(entry);
 }

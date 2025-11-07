@@ -46,7 +46,7 @@ typedef struct {
 typedef struct {
     size_t total_files;                /* Total files owned by disabled profile */
     size_t files_with_fallback;        /* Files updated to fallback profile */
-    size_t files_removed;              /* Files marked as orphaned (entry remains for detection) */
+    size_t files_removed;              /* Files marked inactive (staged for removal) */
     size_t directories_with_fallback;  /* Directories updated to fallback profile */
     size_t directories_removed;        /* Directories marked as orphaned */
 } manifest_disable_stats_t;
@@ -112,14 +112,14 @@ error_t *manifest_enable_profile(
  *   2. Build manifest from remaining profiles (fallback check)
  *   3. For each entry:
  *      - If fallback found: update source_profile + git_oid (file ownership changes)
- *      - If no fallback: entry remains for orphan detection (removed by apply)
+ *      - If no fallback: mark as STATE_INACTIVE (staged for removal by apply)
  *
  * Preconditions:
  *   - profile_name MUST NOT be in remaining_enabled
  *   - state MUST have active transaction
  *
  * Postconditions:
- *   - Files unique to profile remain for orphan detection (apply will remove)
+ *   - Files unique to profile marked STATE_INACTIVE (apply will remove)
  *   - Files with fallback updated to fallback profile (source and git_oid changed)
  *   - Entries with fallbacks keep same deployed_at timestamp
  *   - Transaction remains open (caller commits)
@@ -166,7 +166,7 @@ error_t *manifest_disable_profile(
  *   5. For each item (O(N)):
  *      - If DELETED: check fresh manifest for fallback
  *        → Fallback exists: update to fallback profile (deployed_at preserved)
- *        → No fallback: entry remains for orphan detection (apply removes)
+ *        → No fallback: mark as STATE_INACTIVE (staged for removal)
  *      - Else (modified/new): lookup in fresh manifest
  *        → Found + precedence matches: sync to state (deployed_at = time(NULL))
  *        → Not found: file filtered/excluded (skip gracefully)
@@ -180,7 +180,7 @@ error_t *manifest_disable_profile(
  *
  * Postconditions:
  *   - Modified/new files synced with deployed_at = time(NULL) (files captured from filesystem)
- *   - Deleted files fallback (deployed_at preserved) or entries remain for orphan detection
+ *   - Deleted files fallback (deployed_at preserved) or marked STATE_INACTIVE
  *   - Tracked directories synced from all enabled profiles
  *   - Transaction remains open (caller commits)
  *
@@ -298,7 +298,7 @@ error_t *manifest_add_files(
  *      d. If yes:
  *         - Check fresh manifest for fallback
  *         - Fallback exists: Update to fallback profile (deployed_at preserved)
- *         - No fallback: Entry remains for orphan detection (apply removes)
+ *         - No fallback: Mark as STATE_INACTIVE (staged for removal)
  *      e. If no (different profile owns): Skip
  *
  * Preconditions:
@@ -309,7 +309,7 @@ error_t *manifest_add_files(
  *
  * Postconditions:
  *   - Files with fallback updated to fallback profile (deployed_at preserved)
- *   - Files without fallback: entries remain for orphan detection (apply removes)
+ *   - Files without fallback marked STATE_INACTIVE (staged for removal)
  *   - Files not owned by removed_profile unchanged
  *   - Tracked directories synced from all enabled profiles
  *   - Transaction remains open (caller commits)
@@ -326,7 +326,7 @@ error_t *manifest_add_files(
  * @param removed_profile Profile files were removed from (must not be NULL)
  * @param removed_storage_paths Storage paths of removed files (must not be NULL)
  * @param enabled_profiles All enabled profiles (must not be NULL)
- * @param out_removed Output: files without fallback (entries remain for orphan detection) (can be NULL)
+ * @param out_removed Output: files without fallback (marked inactive) (can be NULL)
  * @param out_fallbacks Output: files updated to fallback (can be NULL)
  * @return Error or NULL on success
  */
@@ -408,7 +408,7 @@ error_t *manifest_rebuild(
  *      - If not in old manifest: add with deployed_at = 0 (rare, file never deployed)
  *      - If owner changed: update source_profile + git_oid (deployed_at preserved)
  *      - If owner unchanged: skip (preserve existing entry)
- *   4. For files in old manifest but not new: entries remain for orphan detection (apply removes)
+ *   4. For files in old manifest but not new: remain for orphan detection (apply removes)
  *
  * Key Benefit: Unlike manifest_rebuild(), this preserves deployed_at timestamps
  * for files whose ownership doesn't change, providing better UX when
@@ -421,7 +421,7 @@ error_t *manifest_rebuild(
  * Postconditions:
  *   - Files with changed ownership updated (deployed_at preserved)
  *   - Files with unchanged ownership preserve existing entry
- *   - Orphaned files: entries remain for orphan detection (apply removes)
+ *   - Orphaned files remain for orphan detection (apply removes)
  *   - Transaction remains open (caller commits)
  *
  * Error Conditions:
@@ -468,7 +468,7 @@ error_t *manifest_reorder_profiles(
  *
  *   Phase 3: Process Deltas (O(D))
  *     - For additions/modifications: sync (deployed_at preserved if exists, else 0 for new files)
- *     - For deletions: check for fallbacks, entries remain for orphan detection if none
+ *     - For deletions: check for fallbacks, mark STATE_INACTIVE if none
  *     - Handle precedence: only sync if profile won the file
  *
  * Deletion & Fallback Logic:
@@ -488,7 +488,7 @@ error_t *manifest_reorder_profiles(
  * Postconditions:
  *   - Added/modified files synced (deployed_at preserved if exists, else 0 for new files)
  *   - Deleted files with fallbacks updated to new owner (deployed_at preserved)
- *   - Deleted files without fallbacks: entries remain for orphan detection (apply removes)
+ *   - Deleted files without fallbacks marked STATE_INACTIVE (staged for removal)
  *   - Files filtered by .dottaignore are skipped (expected behavior)
  *   - Files won by other profiles are skipped (they'll sync when their changes arrive)
  *   - Tracked directories synced from all enabled profiles

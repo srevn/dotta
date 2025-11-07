@@ -44,6 +44,15 @@ typedef enum {
 } state_file_type_t;
 
 /**
+ * State lifecycle constants
+ *
+ * These constants define the lifecycle state of manifest entries.
+ * The state field implements an explicit state machine for file management.
+ */
+#define STATE_ACTIVE "active"       /* Normal entry, file is in scope and should be managed */
+#define STATE_INACTIVE "inactive"   /* Marked for removal, awaiting cleanup by apply */
+
+/**
  * State file entry (virtual manifest entry)
  *
  * Represents the manifest (scope definition) - which files should exist
@@ -60,6 +69,7 @@ typedef enum {
  * - blob_oid: Git blob OID for content identity and fast path lookups
  * - owner/group: For root/ files
  * - encrypted: Encryption flag
+ * - state: Lifecycle state (STATE_ACTIVE or STATE_INACTIVE)
  * - deployed_at: Lifecycle tracking timestamp (NOT operational control)
  */
 typedef struct {
@@ -83,6 +93,7 @@ typedef struct {
     bool encrypted;             /* Encryption flag */
 
     /* Lifecycle tracking */
+    char *state;                /* Lifecycle state (STATE_ACTIVE or STATE_INACTIVE) */
     time_t deployed_at;         /* Lifecycle timestamp (0 = never deployed, >0 = known) */
 } state_file_entry_t;
 
@@ -337,6 +348,7 @@ error_t *state_clear_files(state_t *state);
  * @param storage_path Storage path (must not be NULL)
  * @param filesystem_path Filesystem path (must not be NULL)
  * @param profile Profile name (must not be NULL)
+ * @param old_profile Previous profile (can be NULL)
  * @param type File type
  * @param git_oid Git commit reference (can be NULL)
  * @param blob_oid Git blob OID (can be NULL)
@@ -344,6 +356,7 @@ error_t *state_clear_files(state_t *state);
  * @param owner Owner username (can be NULL)
  * @param group Group name (can be NULL)
  * @param encrypted Encryption flag
+ * @param state Lifecycle state (STATE_ACTIVE or STATE_INACTIVE, can be NULL for default)
  * @param deployed_at Lifecycle timestamp (0 = never deployed, >0 = known)
  * @param out Entry (must not be NULL, caller must free with state_free_entry)
  * @return Error or NULL on success
@@ -360,6 +373,7 @@ error_t *state_create_entry(
     const char *owner,
     const char *group,
     bool encrypted,
+    const char *state,
     time_t deployed_at,
     state_file_entry_t **out
 );
@@ -402,6 +416,32 @@ error_t *state_update_deployed_at(
 error_t *state_clear_old_profile(
     state_t *state,
     const char *filesystem_path
+);
+
+/**
+ * Set file entry state (active/inactive)
+ *
+ * Updates the state column for a manifest entry. Used by manifest layer
+ * to mark files as inactive when they become orphaned (removed with no fallback).
+ *
+ * Valid states:
+ *   - STATE_ACTIVE   - Normal entry, file is in scope
+ *   - STATE_INACTIVE - Marked for removal, awaiting cleanup by apply
+ *
+ * Preconditions:
+ *   - state MUST have active transaction (via state_load_for_update)
+ *   - filesystem_path MUST exist in virtual_manifest
+ *   - new_state MUST be STATE_ACTIVE or STATE_INACTIVE
+ *
+ * @param state State handle (must not be NULL, must have active transaction)
+ * @param filesystem_path File to update (must not be NULL)
+ * @param new_state New state value (must not be NULL)
+ * @return Error or NULL on success (not found returns ERR_NOT_FOUND)
+ */
+error_t *state_set_file_state(
+    state_t *state,
+    const char *filesystem_path,
+    const char *new_state
 );
 
 /**

@@ -385,6 +385,9 @@ static error_t *workspace_add_diverged(
         free(entry->filesystem_path);
         free(entry->storage_path);
         free(entry->profile);
+        free(entry->old_profile);
+        free(entry->metadata_profile);
+        string_array_free(entry->all_profiles);
         return error_wrap(err, "Failed to index diverged entry");
     }
 
@@ -1746,13 +1749,13 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                     "warning: expected '%s' in profile '%s' (state=active, git_oid=%s)\n"
                     "         but file missing from Git tree. Possible external modification.\n"
                     "         Run 'dotta status' to see orphaned files, 'dotta apply' to clean up.\n",
-                    entry->filesystem_path,
-                    entry->source_profile->name,
+                    entry->filesystem_path, entry->source_profile->name,
                     state_entry->git_oid ? state_entry->git_oid : "(null)");
 
                 /* Free allocated fields and skip this entry */
                 free(entry->storage_path);
                 free(entry->filesystem_path);
+                free(entry->old_profile);
                 free(entry->git_oid);
                 free(entry->blob_oid);
                 free(entry->owner);
@@ -1762,6 +1765,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 /* Other Git errors - propagate */
                 free(entry->storage_path);
                 free(entry->filesystem_path);
+                free(entry->old_profile);
                 free(entry->git_oid);
                 free(entry->blob_oid);
                 free(entry->owner);
@@ -1771,6 +1775,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 for (size_t j = 0; j < manifest_idx; j++) {
                     free(ws->manifest->entries[j].storage_path);
                     free(ws->manifest->entries[j].filesystem_path);
+                    free(ws->manifest->entries[j].old_profile);
                     free(ws->manifest->entries[j].git_oid);
                     free(ws->manifest->entries[j].blob_oid);
                     free(ws->manifest->entries[j].owner);
@@ -1809,6 +1814,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             for (size_t j = 0; j <= manifest_idx; j++) {
                 free(ws->manifest->entries[j].storage_path);
                 free(ws->manifest->entries[j].filesystem_path);
+                free(ws->manifest->entries[j].old_profile);
                 free(ws->manifest->entries[j].git_oid);
                 free(ws->manifest->entries[j].blob_oid);
                 free(ws->manifest->entries[j].owner);

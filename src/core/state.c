@@ -1299,6 +1299,7 @@ void state_free_all_files(state_file_entry_t *entries, size_t count) {
         free(entries[i].blob_oid);
         free(entries[i].owner);
         free(entries[i].group);
+        free(entries[i].state);
     }
 
     free(entries);

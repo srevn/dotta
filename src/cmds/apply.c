@@ -1376,7 +1376,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             cleanup_options_t cleanup_opts = {
                 .enabled_metadata = merged_metadata,
                 .enabled_profiles = profiles,
-                .cache = cache,                           /* Pass cache for performance (avoids re-decryption) */
+                .cache = cache,                           /* Pass cache for performance */
                 .orphaned_files = file_orphans,           /* Workspace item array */
                 .orphaned_files_count = file_orphan_count,
                 .orphaned_directories = dir_orphans,      /* Workspace item array */

@@ -37,6 +37,7 @@ typedef struct {
     size_t total_files;         /* Total files owned by profile (after precedence) */
     size_t already_deployed;    /* Files that exist on filesystem (deployed_at set) */
     size_t needs_deployment;    /* Files that don't exist on filesystem (deployed_at = 0) */
+    size_t access_errors;       /* Files with lstat errors (counted in needs_deployment) */
 } manifest_enable_stats_t;
 
 /**

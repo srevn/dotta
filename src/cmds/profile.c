@@ -100,6 +100,15 @@ static void print_manifest_enable_stats(
                              stats->needs_deployment);
             }
         }
+
+        if (stats->access_errors > 0) {
+            output_newline(out);
+            output_warning(out, "Could not access %zu file%s during profile enable",
+                          stats->access_errors,
+                          stats->access_errors == 1 ? "" : "s");
+            output_hint(out, "These files are marked as needing deployment. Run 'dotta status' for details.");
+        }
+
         output_newline(out);
     } else {
         /* Compact summary */
@@ -118,6 +127,13 @@ static void print_manifest_enable_stats(
             output_printf(out, OUTPUT_NORMAL, "  All %zu file%s already deployed\n",
                          stats->already_deployed,
                          stats->already_deployed == 1 ? "" : "s");
+        }
+
+        if (stats->access_errors > 0) {
+            output_warning(out, "Could not access %zu file%s during profile enable",
+                          stats->access_errors,
+                          stats->access_errors == 1 ? "" : "s");
+            output_hint(out, "These files are marked as needing deployment. Run 'dotta status' for details.");
         }
     }
 }

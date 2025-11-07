@@ -553,18 +553,29 @@ error_t *manifest_enable_profile(
             } else {
                 /* Unexpected error (permission denied, I/O error, etc.)
                  *
-                 * Fatal error for new entries: We cannot determine the correct
-                 * deployed_at value without successful lstat(). The deployed_at
-                 * timestamp is critical for workspace divergence analysis:
-                 *   deployed_at = 0   → Never deployed (file missing)
-                 *   deployed_at > 0   → Known to dotta (file exists)
+                 * Non-fatal approach: Use conservative default (deployed_at = 0) and
+                 * count as needs_deployment rather than blocking the entire operation.
+                 * This maintains the VWD scope invariant (all profile files in manifest)
+                 * while deferring deployment decisions to runtime convergence.
                  *
-                 * This is intentionally stricter than the existing entry path,
-                 * where deployed_at is already known from state. For new entries,
-                 * we must fail fast rather than proceed with incorrect assumptions.
+                 * Rationale: The deployed_at timestamp is only an initial guess for
+                 * statistics. The real divergence is determined at runtime during
+                 * status/apply commands via workspace divergence analysis. Using a
+                 * conservative default (0) allows the operation to proceed while
+                 * signaling to the user that these files need attention.
+                 *
+                 * This matches the approach for existing entries (lines 519-531) where
+                 * lstat() failures are tolerated for statistics. The consistency ensures
+                 * that a single inaccessible file cannot prevent enabling a profile
+                 * containing hundreds of other valid files.
                  */
-                err = error_from_errno(errno);
-                goto cleanup;
+                deployed_at = 0;
+                needs_deployment++;
+
+                /* Track access errors for user feedback */
+                if (out_stats) {
+                    out_stats->access_errors++;
+                }
             }
         }
 

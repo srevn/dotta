@@ -28,7 +28,6 @@
 #include "types.h"
 #include "core/state.h"
 #include "core/workspace.h"
-#include "crypto/keymanager.h"
 #include <git2.h>
 
 /**

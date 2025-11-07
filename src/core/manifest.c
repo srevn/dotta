@@ -599,6 +599,162 @@ cleanup:
 }
 
 /**
+ * Build directory fallback index from remaining enabled profiles
+ *
+ * Loads metadata from each remaining profile and builds O(1) lookup hashmaps
+ * for directory fallback resolution. This implements "last wins" precedence,
+ * matching the file fallback pattern (build_manifest()) and workspace metadata
+ * merge pattern (workspace.c:1936-1939).
+ *
+ * PRECEDENCE MODEL (profiles.h:6-14):
+ * - Profiles iterated in precedence order (low→high): global < OS < host
+ * - Later profiles override earlier ones ("last wins")
+ * - Result: Highest precedence profile wins for each directory
+ *
+ * MEMORY MODEL:
+ * - Returns borrowed pointers into loaded_metadata array
+ * - Caller MUST keep loaded_metadata alive while using hashmaps
+ * - Caller responsible for cleanup via provided pattern (see manifest_disable_profile)
+ *
+ * EDGE CASES HANDLED:
+ * - Empty remaining_enabled: Returns empty hashmaps (not an error)
+ * - No directories in any profile: Returns empty hashmaps
+ * - Metadata file missing: Skips gracefully (continues to next profile)
+ * - Memory allocation failure: Cleans up loaded metadata and returns error
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param remaining_enabled Profile names in precedence order (must not be NULL)
+ * @param out_fallback_dirs Directory path → metadata_item_t* hashmap (caller must free)
+ * @param out_fallback_profiles Directory path → profile name hashmap (caller must free)
+ * @param out_loaded_metadata Array of loaded metadata for cleanup (caller must free all)
+ * @param out_loaded_count Number of loaded metadata instances
+ * @return Error or NULL on success
+ */
+static error_t *build_directory_fallback_index(
+    git_repository *repo,
+    const string_array_t *remaining_enabled,
+    hashmap_t **out_fallback_dirs,
+    hashmap_t **out_fallback_profiles,
+    metadata_t ***out_loaded_metadata,
+    size_t *out_loaded_count
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(remaining_enabled);
+    CHECK_NULL(out_fallback_dirs);
+    CHECK_NULL(out_fallback_profiles);
+    CHECK_NULL(out_loaded_metadata);
+    CHECK_NULL(out_loaded_count);
+
+    error_t *err = NULL;
+    hashmap_t *fallback_dirs = NULL;
+    hashmap_t *fallback_dir_profiles = NULL;
+    metadata_t **loaded_metadata = NULL;
+    size_t loaded_metadata_count = 0;
+
+    /* Handle empty profile list (edge case: all profiles disabled) */
+    if (string_array_size(remaining_enabled) == 0) {
+        *out_fallback_dirs = hashmap_create(1);  /* Empty hashmap */
+        *out_fallback_profiles = hashmap_create(1);
+        if (!*out_fallback_dirs || !*out_fallback_profiles) {
+            if (*out_fallback_dirs) hashmap_free(*out_fallback_dirs, NULL);
+            if (*out_fallback_profiles) hashmap_free(*out_fallback_profiles, NULL);
+            return ERROR(ERR_MEMORY, "Failed to create empty hashmaps");
+        }
+        *out_loaded_metadata = NULL;
+        *out_loaded_count = 0;
+        return NULL;
+    }
+
+    /* Initialize hashmaps */
+    fallback_dirs = hashmap_create(64);  /* Initial capacity: 64 directories */
+    fallback_dir_profiles = hashmap_create(64);
+
+    if (!fallback_dirs || !fallback_dir_profiles) {
+        if (fallback_dirs) hashmap_free(fallback_dirs, NULL);
+        if (fallback_dir_profiles) hashmap_free(fallback_dir_profiles, NULL);
+        return ERROR(ERR_MEMORY, "Failed to create fallback hashmaps");
+    }
+
+    /* Allocate array to track loaded metadata (for proper cleanup) */
+    loaded_metadata = malloc(string_array_size(remaining_enabled) * sizeof(metadata_t*));
+    if (!loaded_metadata) {
+        hashmap_free(fallback_dirs, NULL);
+        hashmap_free(fallback_dir_profiles, NULL);
+        return ERROR(ERR_MEMORY, "Failed to allocate metadata array");
+    }
+
+    /* Load metadata from each profile and build index with "last wins" precedence */
+    for (size_t i = 0; i < string_array_size(remaining_enabled); i++) {
+        const char *profile = string_array_get(remaining_enabled, i);
+        metadata_t *metadata = NULL;
+
+        /* Load metadata (may not exist for old profiles - gracefully skip) */
+        err = metadata_load_from_branch(repo, profile, &metadata);
+        if (err) {
+            if (err->code == ERR_NOT_FOUND) {
+                /* No metadata file - old profile or no directories tracked */
+                error_free(err);
+                err = NULL;
+                continue;
+            }
+            /* Other error - fatal */
+            err = error_wrap(err, "Failed to load metadata for profile '%s'", profile);
+            goto cleanup;
+        }
+
+        /* Track loaded metadata for cleanup */
+        loaded_metadata[loaded_metadata_count++] = metadata;
+
+        /* Extract directories from metadata */
+        size_t meta_dir_count = 0;
+        const metadata_item_t **directories =
+            metadata_get_items_by_kind(metadata, METADATA_ITEM_DIRECTORY, &meta_dir_count);
+
+        /* Add each directory to fallback index (precedence: LAST profile wins)
+         *
+         * Unconditionally set/update - later profiles override (last wins).
+         * This implements the same precedence as:
+         *   - File fallback: build_manifest() (manifest.c:646-681)
+         *   - Workspace merge: (workspace.c:1936-1939)
+         *   - Metadata merge: metadata_merge() (metadata.c:1816)
+         *
+         * Precedence order: global < OS < host (profiles.h:6-14)
+         * Iteration order: same as precedence (low→high)
+         * Result: Later iterations override earlier ones → highest precedence wins
+         */
+        for (size_t j = 0; j < meta_dir_count; j++) {
+            const metadata_item_t *dir_item = directories[j];
+            const char *dir_path = dir_item->key;  /* Filesystem path */
+
+            /* Unconditionally set/update - later profiles override (last wins) */
+            hashmap_set(fallback_dirs, dir_path, (void*)dir_item);
+            hashmap_set(fallback_dir_profiles, dir_path, (void*)profile);
+        }
+
+        /* Free the pointer array (items themselves are owned by metadata) */
+        free(directories);
+    }
+
+    /* Success - transfer ownership to caller */
+    *out_fallback_dirs = fallback_dirs;
+    *out_fallback_profiles = fallback_dir_profiles;
+    *out_loaded_metadata = loaded_metadata;
+    *out_loaded_count = loaded_metadata_count;
+    return NULL;
+
+cleanup:
+    if (fallback_dirs) hashmap_free(fallback_dirs, NULL);
+    if (fallback_dir_profiles) hashmap_free(fallback_dir_profiles, NULL);
+    if (loaded_metadata) {
+        for (size_t i = 0; i < loaded_metadata_count; i++) {
+            metadata_free(loaded_metadata[i]);
+        }
+        free(loaded_metadata);
+    }
+    return err;
+}
+
+/**
  * Remove profile from manifest (bulk cleanup)
  *
  * Implementation handles fallback:
@@ -781,59 +937,15 @@ error_t *manifest_disable_profile(
 
     /* 4b. Build fallback directory index from remaining enabled profiles
      *
-     * Strategy: Load metadata from each remaining enabled profile and build
-     * O(1) lookup hashmaps for directories. Precedence: earlier profiles win.
+     * Uses helper function that implements "last wins" precedence (matching file
+     * fallback pattern). See build_directory_fallback_index() for details.
      */
-    fallback_dirs = hashmap_create(64);  /* Initial capacity: 64 directories */
-    fallback_dir_profiles = hashmap_create(64);
-
-    /* Allocate array to track loaded metadata (for proper cleanup) */
-    loaded_metadata = malloc(string_array_size(remaining_enabled) * sizeof(metadata_t*));
-    if (!loaded_metadata) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate metadata array");
+    err = build_directory_fallback_index(repo, remaining_enabled,
+                                        &fallback_dirs, &fallback_dir_profiles,
+                                        &loaded_metadata, &loaded_metadata_count);
+    if (err) {
+        err = error_wrap(err, "Failed to build directory fallback index");
         goto directory_cleanup;
-    }
-
-    for (size_t i = 0; i < string_array_size(remaining_enabled); i++) {
-        const char *profile = string_array_get(remaining_enabled, i);
-        metadata_t *metadata = NULL;
-
-        /* Load metadata (may not exist for old profiles - gracefully skip) */
-        err = metadata_load_from_branch(repo, profile, &metadata);
-        if (err) {
-            if (err->code == ERR_NOT_FOUND) {
-                /* No metadata file - old profile or no directories tracked */
-                error_free(err);
-                err = NULL;
-                continue;
-            }
-            /* Other error - fatal */
-            err = error_wrap(err, "Failed to load metadata for profile '%s'", profile);
-            goto directory_cleanup;
-        }
-
-        /* Track loaded metadata for cleanup */
-        loaded_metadata[loaded_metadata_count++] = metadata;
-
-        /* Extract directories from metadata */
-        size_t meta_dir_count = 0;
-        const metadata_item_t **directories =
-            metadata_get_items_by_kind(metadata, METADATA_ITEM_DIRECTORY, &meta_dir_count);
-
-        /* Add each directory to fallback index (precedence: earlier profiles win) */
-        for (size_t j = 0; j < meta_dir_count; j++) {
-            const metadata_item_t *dir_item = directories[j];
-            const char *dir_path = dir_item->key;  /* Filesystem path */
-
-            /* Only add if not already present (precedence: first enabled profile wins) */
-            if (!hashmap_get(fallback_dirs, dir_path)) {
-                hashmap_set(fallback_dirs, dir_path, (void*)dir_item);
-                hashmap_set(fallback_dir_profiles, dir_path, (void*)profile);
-            }
-        }
-
-        /* Free the pointer array (items themselves are owned by metadata) */
-        free(directories);
     }
 
     /* 4c. Process each directory entry */
@@ -856,7 +968,7 @@ error_t *manifest_disable_profile(
              * 2. Use-after-free (aliasing memory freed with loaded_metadata)
              * 3. Double-free crash (cleanup path tries to free already-freed memory)
              *
-             * This mirrors file handling pattern (manifest.c:736-745).
+             * This mirrors file handling pattern (see file fallback section above).
              */
             err = str_replace_owned(&entry->profile, fallback_profile);
             if (err) {

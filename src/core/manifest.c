@@ -1210,36 +1210,65 @@ error_t *manifest_rebuild(
     error_t *err = NULL;
     manifest_t *manifest = NULL;
     profile_list_t *profiles = NULL;
+    state_file_entry_t *old_entries = NULL;
+    size_t old_count = 0;
+    hashmap_t *old_map = NULL;
     hashmap_t *profile_oids = NULL;
     metadata_t *metadata = NULL;
     keymanager_t *km = NULL;
     dotta_config_t *config = NULL;
 
-    /* 1. Clear all file entries */
+    /* 1. Snapshot existing entries BEFORE clearing (for deployed_at preservation) */
+    err = state_get_all_files(state, &old_entries, &old_count);
+    if (err) {
+        return error_wrap(err, "Failed to snapshot manifest for rebuild");
+    }
+
+    /* Build hashmap for O(1) old entry lookups */
+    old_map = hashmap_create(old_count > 0 ? old_count : 16);
+    if (!old_map) {
+        state_free_all_files(old_entries, old_count);
+        return ERROR(ERR_MEMORY, "Failed to create old entries hashmap");
+    }
+
+    for (size_t i = 0; i < old_count; i++) {
+        err = hashmap_set(old_map, old_entries[i].filesystem_path, &old_entries[i]);
+        if (err) {
+            err = error_wrap(err, "Failed to populate old entries hashmap");
+            hashmap_free(old_map, NULL);  /* Don't free values - they're in old_entries */
+            state_free_all_files(old_entries, old_count);
+            return err;
+        }
+    }
+
+    /* 2. Clear all file entries (snapshot is independent) */
     err = state_clear_files(state);
     if (err) {
-        return error_wrap(err, "Failed to clear manifest for rebuild");
+        err = error_wrap(err, "Failed to clear manifest for rebuild");
+        goto cleanup;
     }
 
-    /* Early return if no profiles (only sync directories which will be empty) */
+    /* Early exit if no profiles (only sync directories which will be empty) */
     if (enabled_profiles->count == 0) {
-        return manifest_sync_directories(repo, state, enabled_profiles);
+        err = manifest_sync_directories(repo, state, enabled_profiles);
+        goto cleanup;
     }
 
-    /* 2. Build manifest ONCE from all enabled profiles (precedence oracle) */
+    /* 3. Build manifest ONCE from all enabled profiles (precedence oracle) */
     err = build_manifest(repo, enabled_profiles, &manifest, &profiles);
     if (err) {
-        return error_wrap(err, "Failed to build manifest for rebuild");
+        err = error_wrap(err, "Failed to build manifest for rebuild");
+        goto cleanup;
     }
 
-    /* 3. Build profile→oid map for git_oid field */
+    /* 4. Build profile→oid map for git_oid field */
     err = build_profile_oid_map(repo, profiles, &profile_oids);
     if (err) {
         err = error_wrap(err, "Failed to build profile oid map");
         goto cleanup;
     }
 
-    /* 4. Load merged metadata from all profiles */
+    /* 5. Load merged metadata from all profiles */
     err = metadata_load_from_profiles(repo, enabled_profiles, &metadata);
     if (err) {
         /* Metadata may not exist for old profiles - continue with NULL */
@@ -1250,7 +1279,7 @@ error_t *manifest_rebuild(
         err = NULL;
     }
 
-    /* 5. Create keymanager for content hashing */
+    /* 6. Create keymanager for content hashing */
     err = config_load(NULL, &config);
     if (err) {
         goto cleanup;
@@ -1261,7 +1290,7 @@ error_t *manifest_rebuild(
         goto cleanup;
     }
 
-    /* 6. Sync ALL entries from manifest to state (single pass, no filtering)
+    /* 7. Sync ALL entries from manifest to state (single pass, no filtering)
      *
      * Key difference from manifest_enable_profile: We sync ALL entries because
      * the state is empty (cleared in step 1). No filtering needed - every file
@@ -1277,15 +1306,13 @@ error_t *manifest_rebuild(
             goto cleanup;
         }
 
-        /* Check if entry already exists in state (preserve deployed_at for lifecycle tracking) */
-        state_file_entry_t *existing_entry = NULL;
-        error_t *check_err = state_get_file(state, entry->filesystem_path, &existing_entry);
+        /* Check if entry existed before rebuild (preserve deployed_at for lifecycle tracking) */
+        state_file_entry_t *old_entry = hashmap_get(old_map, entry->filesystem_path);
 
         time_t deployed_at;
-        if (check_err == NULL && existing_entry != NULL) {
+        if (old_entry) {
             /* Existing entry - preserve deployed_at (lifecycle history) */
-            deployed_at = existing_entry->deployed_at;
-            state_free_entry(existing_entry);
+            deployed_at = old_entry->deployed_at;
         } else {
             /* New entry - check filesystem for initial deployed_at value */
             struct stat st;
@@ -1296,11 +1323,6 @@ error_t *manifest_rebuild(
                 /* File doesn't exist - mark as never deployed */
                 deployed_at = 0;
             }
-
-            /* Free error if state_get_file failed (NOT_FOUND is expected for new entries) */
-            if (check_err) {
-                error_free(check_err);
-            }
         }
 
         /* Sync to state with preserved/computed deployed_at */
@@ -1310,14 +1332,16 @@ error_t *manifest_rebuild(
         }
     }
 
-    /* 7. Sync tracked directories */
+    /* 8. Sync tracked directories */
     err = manifest_sync_directories(repo, state, enabled_profiles);
     if (err) {
         goto cleanup;
     }
 
 cleanup:
-    if (profile_oids) hashmap_free(profile_oids, free);  /* Free OID strings */
+    if (old_map) hashmap_free(old_map, NULL);
+    state_free_all_files(old_entries, old_count);
+    if (profile_oids) hashmap_free(profile_oids, free);
     if (profiles) profile_list_free(profiles);
     if (km) keymanager_free(km);
     if (config) config_free(config);

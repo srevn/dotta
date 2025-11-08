@@ -37,16 +37,12 @@
  *     },
  *     {
  *       "kind": "directory",
- *       "key": "/home/user/.config/nvim",
- *       "storage_prefix": "home/.config/nvim",
- *       "added_at": "2025-01-15T10:30:00Z",
+ *       "key": "home/.config/nvim",
  *       "mode": "0700"
  *     },
  *     {
  *       "kind": "directory",
- *       "key": "/etc/nginx",
- *       "storage_prefix": "root/etc/nginx",
- *       "added_at": "2025-01-15T10:30:00Z",
+ *       "key": "root/etc/nginx",
  *       "mode": "0755",
  *       "owner": "root",
  *       "group": "wheel"
@@ -83,22 +79,20 @@ typedef enum {
  * metadata efficiently. Common fields (mode, owner, group) are shared, while
  * kind-specific fields are stored in the union.
  *
- * Key interpretation (depends on kind):
- * - FILES: key = storage_path (e.g., "home/.bashrc")
- * - DIRECTORIES: key = filesystem_path (e.g., "/home/user/.config")
+ * Key interpretation (unified for all kinds):
+ * - ALL ITEMS: key = storage_path (e.g., "home/.bashrc", "home/.config/nvim")
  *
- * The dual-key approach is necessary because:
- * - Files need storage path for manifest lookups
- * - Directories need filesystem path for stat operations
- * - Storage prefix stored separately for directories in union
+ * This ensures metadata portability across machines.
+ * Filesystem paths are derived on-demand using path_from_storage() when needed
+ * for deployment or stat operations.
  */
 typedef struct {
     metadata_item_kind_t kind;       /* Discriminator: FILE or DIRECTORY */
 
-    /* Lookup key (interpretation depends on kind) */
-    char *key;                       /* storage_path for FILE, filesystem_path for DIRECTORY */
+    /* Lookup key */
+    char *key;                       /* storage_path for both files and directories */
 
-    /* Common metadata fields (all items have these) */
+    /* Common metadata fields */
     mode_t mode;                     /* Permission mode (e.g., 0600, 0644, 0755) */
     char *owner;                     /* Owner username (optional, only for root/ prefix) */
     char *group;                     /* Group name (optional, only for root/ prefix) */
@@ -110,8 +104,7 @@ typedef struct {
         } file;
 
         struct {
-            char *storage_prefix;    /* Storage path in profile (e.g., "home/.config/nvim") */
-            time_t added_at;         /* Timestamp when added */
+            char _reserved;          /* Reserved for C11 compliance */
         } directory;
     };
 } metadata_item_t;
@@ -129,7 +122,7 @@ typedef struct metadata {
     metadata_item_t *items;          /* Unified array of files and directories */
     size_t count;                    /* Number of items */
     size_t capacity;                 /* Array capacity */
-    int version;                     /* Schema version (4) */
+    int version;                     /* Schema version */
     hashmap_t *index;                /* Maps key -> item* (O(1) lookup for both kinds) */
 } metadata_t;
 
@@ -173,17 +166,13 @@ error_t *metadata_item_create_file(
 /**
  * Create directory metadata item
  *
- * @param filesystem_path Directory path on disk (must not be NULL)
- * @param storage_prefix Storage prefix in profile (must not be NULL)
- * @param added_at Timestamp when added
+ * @param storage_path Storage path in profile (must not be NULL, e.g., "home/.config/nvim")
  * @param mode Permission mode (e.g., 0700, 0755)
  * @param out Item (must not be NULL, caller must free with metadata_item_free)
  * @return Error or NULL on success
  */
 error_t *metadata_item_create_directory(
-    const char *filesystem_path,
-    const char *storage_prefix,
-    time_t added_at,
+    const char *storage_path,
     mode_t mode,
     metadata_item_t **out
 );
@@ -236,7 +225,7 @@ error_t *metadata_add_item(
  * Caller should check item->kind after retrieval if type matters.
  *
  * @param metadata Metadata collection (must not be NULL)
- * @param key Lookup key (storage_path for files, filesystem_path for directories)
+ * @param key Lookup key (storage_path for both files and directories)
  * @param out Item pointer (must not be NULL, borrowed reference - do not free)
  * @return Error or NULL on success (not found returns ERR_NOT_FOUND)
  */
@@ -252,7 +241,7 @@ error_t *metadata_get_item(
  * Works for both files and directories.
  *
  * @param metadata Metadata collection (must not be NULL)
- * @param key Lookup key (storage_path for files, filesystem_path for directories)
+ * @param key Lookup key (storage_path for both files and directories)
  * @return Error or NULL on success (not found returns ERR_NOT_FOUND)
  */
 error_t *metadata_remove_item(
@@ -266,7 +255,7 @@ error_t *metadata_remove_item(
  * Works for both files and directories.
  *
  * @param metadata Metadata collection (must not be NULL)
- * @param key Lookup key (storage_path for files, filesystem_path for directories)
+ * @param key Lookup key (storage_path for both files and directories)
  * @return true if item exists
  */
 bool metadata_has_item(
@@ -351,15 +340,13 @@ error_t *metadata_capture_from_file(
  * - home/ prefix directories: ownership never captured (always current user)
  * - Regular users: ownership never captured (can't chown anyway)
  *
- * @param filesystem_path Path to directory on disk (must not be NULL)
- * @param storage_prefix Storage prefix in profile (must not be NULL)
+ * @param storage_path Storage path in profile (must not be NULL, e.g., "home/.config/nvim")
  * @param st Directory stat data (must not be NULL)
  * @param out Item (must not be NULL, caller must free with metadata_item_free)
  * @return Error or NULL on success
  */
 error_t *metadata_capture_from_directory(
-    const char *filesystem_path,
-    const char *storage_prefix,
+    const char *storage_path,
     const struct stat *st,
     metadata_item_t **out
 );
@@ -427,7 +414,7 @@ error_t *metadata_load_from_tree(
 /**
  * Convert metadata to JSON string
  *
- * Serializes metadata to JSON format (version 4).
+ * Serializes metadata to JSON format
  *
  * @param metadata Metadata to serialize (must not be NULL)
  * @param out JSON buffer (must not be NULL, caller must free with buffer_free)

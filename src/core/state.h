@@ -101,13 +101,12 @@ typedef struct {
  * State directory entry
  */
 typedef struct {
-    char *directory_path;     /* Filesystem path */
-    char *storage_prefix;     /* Storage prefix */
+    char *filesystem_path;    /* Deployed path (PRIMARY KEY, e.g., /home/user/.config/fish) */
+    char *storage_path;       /* Portable path (e.g., home/.config/fish) */
     char *profile;            /* Source profile */
-    time_t added_at;          /* When added (from metadata) */
     mode_t mode;              /* Permissions */
-    char *owner;              /* Owner (optional) */
-    char *group;              /* Group (optional) */
+    char *owner;              /* Owner (optional, root/ prefix only) */
+    char *group;              /* Group (optional, root/ prefix only) */
 
     /* Lifecycle tracking */
     time_t deployed_at;       /* Lifecycle timestamp (0 = never deployed, >0 = known) */
@@ -483,6 +482,9 @@ error_t *state_get_entries_by_profile(
 /**
  * Create state directory entry from metadata item
  *
+ * Converts portable metadata (storage_path) to state entry (both paths).
+ * Derives filesystem_path from metadata's storage_path using path_from_storage().
+ *
  * @param meta_item Metadata item (must not be NULL, must be DIRECTORY kind)
  * @param profile_name Source profile name (must not be NULL)
  * @param out State directory entry (must not be NULL, caller must free)
@@ -546,14 +548,17 @@ error_t *state_get_directories_by_profile(
 /**
  * Update directory entry
  *
- * Updates all fields except directory_path (primary key) and deployed_at.
+ * Updates all fields except filesystem_path (primary key) and deployed_at.
  * The deployed_at field is preserved to maintain lifecycle tracking.
+ *
+ * Updated fields: storage_path, profile, mode, owner, group
+ * Preserved fields: filesystem_path (WHERE clause), deployed_at (lifecycle)
  *
  * This is used during profile disable to update directory entries to their
  * fallback profiles while preserving the original deployment timestamp.
  *
  * @param state State (must not be NULL)
- * @param entry Entry to update (must not be NULL, directory_path must exist)
+ * @param entry Entry to update (must not be NULL, filesystem_path must exist)
  * @return Error or NULL on success
  */
 error_t *state_update_directory(
@@ -568,10 +573,10 @@ error_t *state_update_directory(
  * the directory has been removed from the filesystem.
  *
  * @param state State (must not be NULL)
- * @param directory_path Directory path (must not be NULL)
+ * @param filesystem_path Filesystem path (PRIMARY KEY, must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_remove_directory(state_t *state, const char *directory_path);
+error_t *state_remove_directory(state_t *state, const char *filesystem_path);
 
 /**
  * Clear all tracked directories

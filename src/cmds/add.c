@@ -456,7 +456,7 @@ static error_t *init_profile_dottaignore(
  */
 typedef struct {
     char *filesystem_path;
-    char *storage_prefix;
+    char *storage_path;
 } tracked_dir_t;
 
 /**
@@ -1333,7 +1333,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             }
 
             tracked_dirs[tracked_dir_count].filesystem_path = strdup(absolute);
-            tracked_dirs[tracked_dir_count].storage_prefix = storage_prefix;
+            tracked_dirs[tracked_dir_count].storage_path = storage_prefix;
             tracked_dir_count++;
 
             if (opts->verbose && out) {
@@ -1467,8 +1467,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         /* Capture directory metadata using stat data */
         metadata_item_t *dir_item = NULL;
         err = metadata_capture_from_directory(
-            dir->filesystem_path,
-            dir->storage_prefix,
+            dir->storage_path,
             &dir_stat,
             &dir_item
         );
@@ -1514,7 +1513,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             dir_tracked_count++;
             if (opts->verbose && out) {
                 output_info(out, "Tracked directory: %s -> %s",
-                           dir->filesystem_path, dir->storage_prefix);
+                           dir->filesystem_path, dir->storage_path);
             }
         }
     }
@@ -1714,7 +1713,7 @@ cleanup:
     if (tracked_dirs) {
         for (size_t i = 0; i < tracked_dir_count; i++) {
             free(tracked_dirs[i].filesystem_path);
-            free(tracked_dirs[i].storage_prefix);
+            free(tracked_dirs[i].storage_path);
         }
         free(tracked_dirs);
     }

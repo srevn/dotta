@@ -635,8 +635,8 @@ cleanup:
  *
  * @param repo Git repository (must not be NULL)
  * @param remaining_enabled Profile names in precedence order (must not be NULL)
- * @param out_fallback_dirs Directory path → metadata_item_t* hashmap (caller must free)
- * @param out_fallback_profiles Directory path → profile name hashmap (caller must free)
+ * @param out_fallback_dirs Storage path → metadata_item_t* hashmap (caller must free)
+ * @param out_fallback_profiles Storage path → profile name hashmap (caller must free)
  * @param out_loaded_metadata Array of loaded metadata for cleanup (caller must free all)
  * @param out_loaded_count Number of loaded metadata instances
  * @return Error or NULL on success
@@ -735,11 +735,11 @@ static error_t *build_directory_fallback_index(
          */
         for (size_t j = 0; j < meta_dir_count; j++) {
             const metadata_item_t *dir_item = directories[j];
-            const char *dir_path = dir_item->key;  /* Filesystem path */
+            const char *storage_path = dir_item->key;  /* Storage path (portable) */
 
             /* Unconditionally set/update - later profiles override (last wins) */
-            hashmap_set(fallback_dirs, dir_path, (void*)dir_item);
-            hashmap_set(fallback_dir_profiles, dir_path, (void*)profile);
+            hashmap_set(fallback_dirs, storage_path, (void*)dir_item);
+            hashmap_set(fallback_dir_profiles, storage_path, (void*)profile);
         }
 
         /* Free the pointer array (items themselves are owned by metadata) */
@@ -944,8 +944,8 @@ error_t *manifest_disable_profile(
     /* 4a. Get directories from disabled profile */
     state_directory_entry_t *dir_entries = NULL;
     size_t dir_count = 0;
-    hashmap_t *fallback_dirs = NULL;          /* directory_path -> metadata_item_t* */
-    hashmap_t *fallback_dir_profiles = NULL;  /* directory_path -> profile_name */
+    hashmap_t *fallback_dirs = NULL;          /* storage_path -> metadata_item_t* */
+    hashmap_t *fallback_dir_profiles = NULL;  /* storage_path -> profile_name */
     metadata_t **loaded_metadata = NULL;      /* Array of loaded metadata (for cleanup) */
     size_t loaded_metadata_count = 0;
 
@@ -979,9 +979,10 @@ error_t *manifest_disable_profile(
     for (size_t i = 0; i < dir_count; i++) {
         state_directory_entry_t *entry = &dir_entries[i];
 
-        /* Check for fallback in remaining profiles using O(1) index lookup */
-        const metadata_item_t *fallback = hashmap_get(fallback_dirs, entry->directory_path);
-        const char *fallback_profile = hashmap_get(fallback_dir_profiles, entry->directory_path);
+        /* Check for fallback in remaining profiles using O(1) index lookup
+         * IMPORTANT: Hashmap is indexed by storage_path (portable), not filesystem_path */
+        const metadata_item_t *fallback = hashmap_get(fallback_dirs, entry->storage_path);
+        const char *fallback_profile = hashmap_get(fallback_dir_profiles, entry->storage_path);
 
         if (fallback && fallback_profile) {
             /* Directory exists in lower-precedence profile - update to fallback */
@@ -1001,7 +1002,6 @@ error_t *manifest_disable_profile(
 
             /* Update metadata from fallback */
             entry->mode = fallback->mode;
-            entry->added_at = fallback->directory.added_at;
 
             err = str_replace_owned(&entry->owner, fallback->owner);
             if (err) {
@@ -1013,7 +1013,7 @@ error_t *manifest_disable_profile(
                 goto directory_cleanup;
             }
 
-            err = str_replace_owned(&entry->storage_prefix, fallback->directory.storage_prefix);
+            err = str_replace_owned(&entry->storage_path, fallback->key);
             if (err) {
                 goto directory_cleanup;
             }
@@ -1022,7 +1022,7 @@ error_t *manifest_disable_profile(
             err = state_update_directory(state, entry);
             if (err) {
                 err = error_wrap(err, "Failed to update directory to fallback for %s",
-                               entry->directory_path);
+                               entry->filesystem_path);
                 goto directory_cleanup;
             }
 

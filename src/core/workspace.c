@@ -14,7 +14,7 @@
  * Key Design:
  * - merged_metadata: Single hashmap with precedence already applied
  * - Maps: key -> metadata_item_t* (borrowed pointers from metadata_cache)
- * - Key interpretation: FILES use storage_path, DIRECTORIES use filesystem_path
+ * - Key interpretation: Both FILES and DIRECTORIES use storage_path (portable)
  * - Built once in workspace_load(), used by all analysis functions
  */
 
@@ -38,6 +38,7 @@
 #include "crypto/policy.h"
 #include "infra/compare.h"
 #include "infra/content.h"
+#include "infra/path.h"
 #include "utils/array.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
@@ -357,11 +358,10 @@ static error_t *workspace_add_diverged(
         return ERROR(ERR_MEMORY, "Failed to allocate diverged entry");
     }
 
-    /* Check if this item has metadata in merged_metadata and populate provenance */
+    /* Check if this item has metadata in merged_metadata and populate provenance
+     * Both files and directories use storage_path as key (portable) */
     if (ws->merged_metadata) {
-        const char *lookup_key = (item_kind == WORKSPACE_ITEM_FILE)
-            ? storage_path
-            : filesystem_path;
+        const char *lookup_key = storage_path;
 
         if (lookup_key) {
             const merged_metadata_entry_t *meta_entry = hashmap_get(ws->merged_metadata, lookup_key);
@@ -816,14 +816,14 @@ static error_t *analyze_orphaned_directories(workspace_t *ws) {
     /* Identify orphans: in state, not in merged_metadata */
     for (size_t i = 0; i < state_count; i++) {
         const state_directory_entry_t *state_entry = &state_dirs[i];
-        const char *dir_path = state_entry->directory_path;
-        const char *storage_prefix = state_entry->storage_prefix;
+        const char *dir_path = state_entry->filesystem_path;
+        const char *storage_path = state_entry->storage_path;
         const char *profile = state_entry->profile;
 
         /* Check if directory exists in merged_metadata (O(1) lookup)
-         * For directories: key in merged_metadata = filesystem_path */
+         * For directories: key in merged_metadata = storage_path (portable) */
         const merged_metadata_entry_t *meta_entry =
-            hashmap_get(ws->merged_metadata, dir_path);
+            hashmap_get(ws->merged_metadata, storage_path);
 
         /* Orphaned if: not in metadata OR wrong kind (defensive check) */
         bool is_orphaned = (!meta_entry ||
@@ -837,7 +837,7 @@ static error_t *analyze_orphaned_directories(workspace_t *ws) {
             err = workspace_add_diverged(
                 ws,
                 dir_path,
-                storage_prefix,
+                storage_path,
                 profile,
                 NULL, NULL,       /* No old_profile or all_profiles for orphans */
                 WORKSPACE_STATE_ORPHANED,  /* State: in state, not in profile */
@@ -1155,16 +1155,28 @@ static error_t *analyze_untracked_files(
         for (size_t i = 0; i < dir_count; i++) {
             const metadata_item_t *dir_entry = directories[i];
 
-            /* Check if directory still exists
-             * For directories: key = filesystem_path (absolute path) */
-            if (!fs_exists(dir_entry->key)) {
+            /* For directories: key = storage_path (e.g., "home/.config/fish")
+             * Derive filesystem path for existence check and scanning */
+            char *filesystem_path = NULL;
+            err = path_from_storage(dir_entry->key, &filesystem_path);
+            if (err) {
+                fprintf(stderr, "warning: failed to derive path for '%s' in profile '%s': %s\n",
+                        dir_entry->key, profile_name, err->message);
+                error_free(err);
+                err = NULL;
+                continue;
+            }
+
+            /* Check if directory still exists */
+            if (!fs_exists(filesystem_path)) {
+                free(filesystem_path);
                 continue;
             }
 
             /* Scan this directory for untracked files */
             err = scan_directory_for_untracked(
-                dir_entry->key,                         /* filesystem_path */
-                dir_entry->directory.storage_prefix,    /* storage_prefix (union field) */
+                filesystem_path,     /* filesystem_path (derived) */
+                dir_entry->key,      /* storage_path (now in key field) */
                 profile_name,
                 ignore_ctx,
                 ws
@@ -1173,10 +1185,12 @@ static error_t *analyze_untracked_files(
             if (err) {
                 /* Non-fatal: continue with other directories */
                 fprintf(stderr, "warning: failed to scan directory '%s' in profile '%s': %s\n",
-                        dir_entry->key, profile_name, err->message);
+                        filesystem_path, profile_name, err->message);
                 error_free(err);
                 err = NULL;
             }
+
+            free(filesystem_path);
         }
 
         /* Free ignore context after scanning all directories in this profile */
@@ -1218,17 +1232,25 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
             continue;
         }
 
-        /* For directories: key = filesystem_path (absolute) */
-        const char *filesystem_path = item->key;
-        const char *storage_prefix = item->directory.storage_prefix;
+        /* For directories: key = storage_path (e.g., "home/.config/fish")
+         * Derive filesystem path for stat operations */
+        const char *storage_path = item->key;
+        char *filesystem_path = NULL;
+        error_t *err = path_from_storage(storage_path, &filesystem_path);
+        if (err) {
+            fprintf(stderr, "warning: failed to derive filesystem path for directory '%s': %s\n",
+                    storage_path, err->message);
+            error_free(err);
+            continue;
+        }
 
         /* Check if directory still exists */
         if (!fs_exists(filesystem_path)) {
             /* Directory deleted - record divergence */
-            error_t *err = workspace_add_diverged(
+            err = workspace_add_diverged(
                 ws,
                 filesystem_path,
-                storage_prefix,
+                storage_path,
                 entry->profile_name,
                 NULL, NULL,  /* No old_profile or all_profiles for directories */
                 WORKSPACE_STATE_DELETED,  /* State: was in profile, removed from filesystem */
@@ -1242,9 +1264,11 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
             );
 
             if (err) {
+                free(filesystem_path);
                 return error_wrap(err, "Failed to record deleted directory '%s'",
                                 filesystem_path);
             }
+            free(filesystem_path);
             continue;  /* Successfully recorded, check next directory */
         }
 
@@ -1254,6 +1278,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
             /* Stat failed but exists: race condition or permission issue */
             fprintf(stderr, "warning: failed to stat directory '%s': %s\n",
                     filesystem_path, strerror(errno));
+            free(filesystem_path);
             continue;  /* Non-fatal, skip this directory */
         }
 
@@ -1261,6 +1286,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
         if (!S_ISDIR(dir_stat.st_mode)) {
             fprintf(stderr, "warning: '%s' is no longer a directory (type changed)\n",
                     filesystem_path);
+            free(filesystem_path);
             continue;  /* Non-fatal, skip - apply/revert don't handle type changes */
         }
 
@@ -1268,7 +1294,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
         bool mode_differs = false;
         bool ownership_differs = false;
 
-        error_t *err = check_item_metadata_divergence(
+        err = check_item_metadata_divergence(
             item->mode,      /* Extract mode from metadata_item_t */
             item->owner,     /* Extract owner from metadata_item_t */
             item->group,     /* Extract group from metadata_item_t */
@@ -1279,6 +1305,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
         );
 
         if (err) {
+            free(filesystem_path);
             return error_wrap(err, "Failed to check metadata for directory '%s'",
                             filesystem_path);
         }
@@ -1293,7 +1320,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
             err = workspace_add_diverged(
                 ws,
                 filesystem_path,
-                storage_prefix,
+                storage_path,
                 entry->profile_name,
                 NULL, NULL,  /* No old_profile or all_profiles for directories */
                 WORKSPACE_STATE_DEPLOYED,  /* State: directory exists as expected */
@@ -1307,11 +1334,14 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
             );
 
             if (err) {
+                free(filesystem_path);
                 return error_wrap(err,
                                 "Failed to record directory metadata divergence for '%s'",
                                 filesystem_path);
             }
         }
+
+        free(filesystem_path);
     }
 
     return NULL;  /* Success - all directories checked */
@@ -1962,9 +1992,16 @@ error_t *workspace_load(
             const metadata_item_t *item = &items[i];
 
             /* Use item's key field as map key.
-             * - For FILES: key = storage_path (relative, e.g., "home/.bashrc")
-             * - For DIRECTORIES: key = filesystem_path (absolute, e.g., "/home/user/.config")
-             * No collision risk: different namespaces (relative vs absolute paths). */
+             * - For FILES: key = storage_path (e.g., "home/.bashrc")
+             * - For DIRECTORIES: key = storage_path (e.g., "home/.config")
+             *
+             * COLLISION HANDLING: A real filesystem cannot have both a file and directory
+             * at the same path, so collisions should never occur in practice. However,
+             * if different profiles track the same path with different kinds (file vs directory),
+             * the last profile wins (precedence). This is safe because:
+             * 1. Git enforces this constraint (a tree entry is either blob or tree, not both)
+             * 2. Filesystem enforces this constraint (path is either file or dir, not both)
+             * 3. The winning entry represents current filesystem reality */
 
             /* Check if entry exists (for updating profile_name on override) */
             merged_metadata_entry_t *existing = hashmap_get(ws->merged_metadata, item->key);

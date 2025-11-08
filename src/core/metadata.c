@@ -23,7 +23,6 @@
 #include "utils/buffer.h"
 #include "utils/hashmap.h"
 #include "utils/string.h"
-#include "utils/timeutil.h"
 
 #define INITIAL_CAPACITY 16
 
@@ -77,13 +76,6 @@ void metadata_item_free(metadata_item_t *item) {
     free(item->owner);
     free(item->group);
 
-    /* Free kind-specific union fields */
-    if (item->kind == METADATA_ITEM_DIRECTORY) {
-        /* Directory has storage_prefix in union */
-        free(item->directory.storage_prefix);
-    }
-    /* File kind has no allocated fields in union (only bool encrypted) */
-
     free(item);
 }
 
@@ -111,12 +103,6 @@ void metadata_free(void *ptr) {
         free(item->key);
         free(item->owner);
         free(item->group);
-
-        /* Free kind-specific union fields */
-        if (item->kind == METADATA_ITEM_DIRECTORY) {
-            free(item->directory.storage_prefix);
-        }
-        /* File kind has no allocated fields in union */
     }
 
     free(metadata->items);
@@ -174,14 +160,11 @@ error_t *metadata_item_create_file(
  * Create directory metadata item
  */
 error_t *metadata_item_create_directory(
-    const char *filesystem_path,
-    const char *storage_prefix,
-    time_t added_at,
+    const char *storage_path,
     mode_t mode,
     metadata_item_t **out
 ) {
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(storage_prefix);
+    CHECK_NULL(storage_path);
     CHECK_NULL(out);
 
     /* Validate mode */
@@ -196,25 +179,18 @@ error_t *metadata_item_create_directory(
 
     item->kind = METADATA_ITEM_DIRECTORY;
 
-    item->key = strdup(filesystem_path);
+    item->key = strdup(storage_path);
     if (!item->key) {
         free(item);
-        return ERROR(ERR_MEMORY, "Failed to duplicate filesystem path");
+        return ERROR(ERR_MEMORY, "Failed to duplicate storage path");
     }
 
     item->mode = mode;
     item->owner = NULL;  /* Optional, set by caller if needed */
     item->group = NULL;  /* Optional, set by caller if needed */
 
-    /* Set directory-specific union fields */
-    item->directory.storage_prefix = strdup(storage_prefix);
-    if (!item->directory.storage_prefix) {
-        free(item->key);
-        free(item);
-        return ERROR(ERR_MEMORY, "Failed to duplicate storage prefix");
-    }
-
-    item->directory.added_at = added_at;
+    /* Initialize directory union */
+    item->directory._reserved = 0;
 
     *out = item;
     return NULL;
@@ -280,16 +256,8 @@ error_t *metadata_item_clone(const metadata_item_t *source, metadata_item_t **ou
         /* File: copy encrypted flag */
         item->file.encrypted = source->file.encrypted;
     } else {
-        /* Directory: copy storage_prefix and added_at */
-        item->directory.storage_prefix = strdup(source->directory.storage_prefix);
-        if (!item->directory.storage_prefix) {
-            free(item->group);
-            free(item->owner);
-            free(item->key);
-            free(item);
-            return ERROR(ERR_MEMORY, "Failed to duplicate storage prefix");
-        }
-        item->directory.added_at = source->directory.added_at;
+        /* Directory: initialize reserved field */
+        item->directory._reserved = 0;
     }
 
     *out = item;
@@ -418,7 +386,6 @@ error_t *metadata_add_item(
         /* Allocate new strings first (fail-fast before modifying anything) */
         char *new_owner = NULL;
         char *new_group = NULL;
-        char *new_storage_prefix = NULL;  /* For directories only */
 
         if (source->owner) {
             new_owner = strdup(source->owner);
@@ -435,21 +402,7 @@ error_t *metadata_add_item(
             }
         }
 
-        if (source->kind == METADATA_ITEM_DIRECTORY) {
-            if (!source->directory.storage_prefix) {
-                free(new_owner);
-                free(new_group);
-                return ERROR(ERR_INVALID_ARG, "Directory item missing storage_prefix");
-            }
-            new_storage_prefix = strdup(source->directory.storage_prefix);
-            if (!new_storage_prefix) {
-                free(new_owner);
-                free(new_group);
-                return ERROR(ERR_MEMORY, "Failed to duplicate storage_prefix");
-            }
-        }
-
-        /* All allocations succeeded - now update (no failure paths beyond this point) */
+        /* All allocations succeeded - now update */
 
         /* Free old strings */
         free(existing->owner);
@@ -461,24 +414,14 @@ error_t *metadata_add_item(
         existing->mode = source->mode;
 
         /* Update kind (can change from file to directory or vice versa) */
-        if (existing->kind != source->kind) {
-            /* Free old union fields before changing kind */
-            if (existing->kind == METADATA_ITEM_DIRECTORY) {
-                free(existing->directory.storage_prefix);
-            }
-            existing->kind = source->kind;
-        }
+        existing->kind = source->kind;
 
         /* Update kind-specific union fields */
         if (source->kind == METADATA_ITEM_FILE) {
             existing->file.encrypted = source->file.encrypted;
         } else {
-            /* Free old storage_prefix if we're updating a directory */
-            if (existing->kind == METADATA_ITEM_DIRECTORY) {
-                free(existing->directory.storage_prefix);
-            }
-            existing->directory.storage_prefix = new_storage_prefix;
-            existing->directory.added_at = source->directory.added_at;
+            /* Directory: initialize reserved field */
+            existing->directory._reserved = 0;
         }
 
         return NULL;
@@ -527,20 +470,8 @@ error_t *metadata_add_item(
     if (source->kind == METADATA_ITEM_FILE) {
         item->file.encrypted = source->file.encrypted;
     } else {
-        if (!source->directory.storage_prefix) {
-            free(item->key);
-            free(item->owner);
-            free(item->group);
-            return ERROR(ERR_INVALID_ARG, "Directory item missing storage_prefix");
-        }
-        item->directory.storage_prefix = strdup(source->directory.storage_prefix);
-        if (!item->directory.storage_prefix) {
-            free(item->key);
-            free(item->owner);
-            free(item->group);
-            return ERROR(ERR_MEMORY, "Failed to duplicate storage_prefix");
-        }
-        item->directory.added_at = source->directory.added_at;
+        /* Directory: _reserved already zeroed by memset */
+        item->directory._reserved = 0;
     }
 
     /* Add to hashmap (if available) */
@@ -551,9 +482,6 @@ error_t *metadata_add_item(
             free(item->key);
             free(item->owner);
             free(item->group);
-            if (item->kind == METADATA_ITEM_DIRECTORY) {
-                free(item->directory.storage_prefix);
-            }
             return error_wrap(err, "Failed to update index");
         }
     }
@@ -646,9 +574,6 @@ error_t *metadata_remove_item(
     free(item->key);
     free(item->owner);
     free(item->group);
-    if (item->kind == METADATA_ITEM_DIRECTORY) {
-        free(item->directory.storage_prefix);
-    }
 
     /* Shift array left to fill gap (if not last item) */
     if ((size_t)index < metadata->count - 1) {
@@ -907,22 +832,19 @@ error_t *metadata_capture_from_file(
  * - Regular users: ownership never captured (can't chown anyway)
  *
  * This function creates a metadata_item_t with kind=DIRECTORY.
- * The added_at timestamp is set to current time (time(NULL)).
  */
 error_t *metadata_capture_from_directory(
-    const char *filesystem_path,
-    const char *storage_prefix,
+    const char *storage_path,
     const struct stat *st,
     metadata_item_t **out
 ) {
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(storage_prefix);
+    CHECK_NULL(storage_path);
     CHECK_NULL(st);
     CHECK_NULL(out);
 
     /* Verify it's actually a directory */
     if (!S_ISDIR(st->st_mode)) {
-        return ERROR(ERR_INVALID_ARG, "Path is not a directory: %s", filesystem_path);
+        return ERROR(ERR_INVALID_ARG, "Path is not a directory: %s", storage_path);
     }
 
     /* Extract mode (permissions only, not file type bits) */
@@ -936,30 +858,23 @@ error_t *metadata_capture_from_directory(
 
     item->kind = METADATA_ITEM_DIRECTORY;
 
-    item->key = strdup(filesystem_path);
+    item->key = strdup(storage_path);
     if (!item->key) {
         free(item);
-        return ERROR(ERR_MEMORY, "Failed to duplicate filesystem path");
+        return ERROR(ERR_MEMORY, "Failed to duplicate storage path");
     }
 
     item->mode = mode;
     item->owner = NULL;  /* Set below if applicable */
     item->group = NULL;  /* Set below if applicable */
 
-    /* Set directory-specific union fields */
-    item->directory.storage_prefix = strdup(storage_prefix);
-    if (!item->directory.storage_prefix) {
-        free(item->key);
-        free(item);
-        return ERROR(ERR_MEMORY, "Failed to duplicate storage prefix");
-    }
-
-    item->directory.added_at = time(NULL);
+    /* Initialize directory union */
+    item->directory._reserved = 0;
 
     /* Capture ownership ONLY for root/ prefix directories when running as root
      * Use effective UID (geteuid) to check privilege, not real UID (getuid).
      * This ensures correct behavior for both sudo and setuid binaries. */
-    bool is_root_prefix = str_starts_with(storage_prefix, "root/");
+    bool is_root_prefix = str_starts_with(storage_path, "root/");
     bool running_as_root = (geteuid() == 0);
 
     if (is_root_prefix && running_as_root) {
@@ -1012,7 +927,7 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t **out) {
         goto cleanup;
     }
 
-    /* Add version 4 */
+    /* Add version */
     if (!cJSON_AddNumberToObject(root, "version", METADATA_VERSION)) {
         err = ERROR(ERR_MEMORY, "Failed to add version to JSON");
         goto cleanup;
@@ -1044,7 +959,7 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t **out) {
             goto cleanup;
         }
 
-        /* Add key (storage_path for files, filesystem_path for directories) */
+        /* Add key (storage_path for both files and directories) */
         if (!cJSON_AddStringToObject(item_obj, "key", item->key)) {
             cJSON_Delete(item_obj);
             err = ERROR(ERR_MEMORY, "Failed to add key to item object");
@@ -1095,40 +1010,8 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t **out) {
                     goto cleanup;
                 }
             }
-        } else {
-            /* DIRECTORY: Add storage_prefix and added_at */
-
-            /* Add storage_prefix */
-            if (!cJSON_AddStringToObject(item_obj, "storage_prefix", item->directory.storage_prefix)) {
-                cJSON_Delete(item_obj);
-                err = ERROR(ERR_MEMORY, "Failed to add storage_prefix to item object");
-                goto cleanup;
-            }
-
-            /* Format timestamp as ISO 8601 UTC */
-            char time_str[64];
-            struct tm tm_info;
-
-            /* Use thread-safe gmtime_r instead of gmtime */
-            if (gmtime_r(&item->directory.added_at, &tm_info) == NULL) {
-                cJSON_Delete(item_obj);
-                err = ERROR(ERR_INTERNAL, "Failed to convert timestamp to UTC");
-                goto cleanup;
-            }
-
-            /* Format timestamp - validate return value */
-            if (strftime(time_str, sizeof(time_str), "%Y-%m-%dT%H:%M:%SZ", &tm_info) == 0) {
-                cJSON_Delete(item_obj);
-                err = ERROR(ERR_INTERNAL, "Failed to format timestamp");
-                goto cleanup;
-            }
-
-            if (!cJSON_AddStringToObject(item_obj, "added_at", time_str)) {
-                cJSON_Delete(item_obj);
-                err = ERROR(ERR_MEMORY, "Failed to add added_at to item object");
-                goto cleanup;
-            }
         }
+        /* DIRECTORY: No additional fields */
 
         /* Add item object to items array (ownership transferred to array) */
         cJSON_AddItemToArray(items_array, item_obj);
@@ -1318,59 +1201,8 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
             /* FILE: Parse optional encrypted flag */
             cJSON *encrypted_obj = cJSON_GetObjectItem(item_obj, "encrypted");
             item->file.encrypted = (encrypted_obj && cJSON_IsTrue(encrypted_obj));
-        } else {
-            /* DIRECTORY: Parse required storage_prefix and added_at */
-
-            /* Get storage_prefix (required for directories) */
-            cJSON *prefix_obj = cJSON_GetObjectItem(item_obj, "storage_prefix");
-            if (!prefix_obj || !cJSON_IsString(prefix_obj)) {
-                metadata_item_free(item);
-                metadata_free(metadata);
-                cJSON_Delete(root);
-                return ERROR(ERR_INVALID_ARG, "Directory item missing storage_prefix field (key: %s)",
-                            key_obj->valuestring);
-            }
-
-            item->directory.storage_prefix = strdup(prefix_obj->valuestring);
-            if (!item->directory.storage_prefix) {
-                metadata_item_free(item);
-                metadata_free(metadata);
-                cJSON_Delete(root);
-                return ERROR(ERR_MEMORY, "Failed to duplicate storage_prefix string");
-            }
-
-            /* Get added_at timestamp (required for directories) */
-            cJSON *added_obj = cJSON_GetObjectItem(item_obj, "added_at");
-            if (!added_obj || !cJSON_IsString(added_obj)) {
-                metadata_item_free(item);
-                metadata_free(metadata);
-                cJSON_Delete(root);
-                return ERROR(ERR_INVALID_ARG, "Directory item missing added_at field (key: %s)",
-                            key_obj->valuestring);
-            }
-
-            /* Parse ISO 8601 timestamp */
-            struct tm tm_info = {0};
-            if (strptime(added_obj->valuestring, "%Y-%m-%dT%H:%M:%SZ", &tm_info) == NULL) {
-                metadata_item_free(item);
-                metadata_free(metadata);
-                cJSON_Delete(root);
-                return ERROR(ERR_INVALID_ARG, "Invalid timestamp format for directory (key: %s, value: %s)",
-                            key_obj->valuestring, added_obj->valuestring);
-            }
-
-            /* Convert UTC time to time_t using portable function */
-            time_t added_at = portable_timegm(&tm_info);
-            if (added_at == (time_t)-1) {
-                metadata_item_free(item);
-                metadata_free(metadata);
-                cJSON_Delete(root);
-                return ERROR(ERR_INVALID_ARG, "Invalid timestamp value for directory (key: %s)",
-                            key_obj->valuestring);
-            }
-
-            item->directory.added_at = added_at;
         }
+        /* DIRECTORY: No fields to parse */
 
         /* Add item to metadata collection (copies item internally) */
         err = metadata_add_item(metadata, item);

@@ -715,8 +715,7 @@ static error_t *update_metadata_for_profile(
                 /* Capture directory metadata */
                 metadata_item_t *meta_item = NULL;
                 err = metadata_capture_from_directory(
-                    item->filesystem_path,
-                    item->storage_path,  /* storage_prefix for directories */
+                    item->storage_path,
                     &dir_stat,
                     &meta_item
                 );

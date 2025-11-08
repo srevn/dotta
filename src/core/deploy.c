@@ -16,6 +16,7 @@
 #include "core/metadata.h"
 #include "core/workspace.h"
 #include "infra/content.h"
+#include "infra/path.h"
 #include "utils/array.h"
 #include "utils/buffer.h"
 #include "utils/hashmap.h"
@@ -517,16 +518,25 @@ static error_t *deploy_tracked_directories(
         const metadata_item_t *dir_entry = directories[i];
 
         /* For directory items:
-         * - key field contains filesystem_path
-         * - directory.storage_prefix contains storage_prefix (union field)
+         * - key field contains storage_path (e.g., "home/.config/fish")
          * - mode, owner, group are common fields
+         * - Filesystem path is derived from storage_path using path_from_storage()
          */
 
+        /* Derive filesystem path from storage path */
+        char *filesystem_path = NULL;
+        error_t *err = path_from_storage(dir_entry->key, &filesystem_path);
+        if (err) {
+            return error_wrap(err,
+                "Failed to derive filesystem path for directory: %s", dir_entry->key);
+        }
+
         /* Skip if directory already exists and we're not forcing */
-        if (fs_is_directory(dir_entry->key) && !opts->force) {
+        if (fs_is_directory(filesystem_path) && !opts->force) {
             if (opts->verbose) {
-                printf("  Skipped: %s (already exists)\n", dir_entry->key);
+                printf("  Skipped: %s (already exists)\n", filesystem_path);
             }
+            free(filesystem_path);
             continue;
         }
 
@@ -535,14 +545,15 @@ static error_t *deploy_tracked_directories(
             if (opts->verbose) {
                 if (dir_entry->owner || dir_entry->group) {
                     printf("  Would create: %s (mode: %04o, owner: %s:%s)\n",
-                          dir_entry->key, dir_entry->mode,
+                          filesystem_path, dir_entry->mode,
                           dir_entry->owner ? dir_entry->owner : "?",
                           dir_entry->group ? dir_entry->group : "?");
                 } else {
                     printf("  Would create: %s (mode: %04o)\n",
-                          dir_entry->key, dir_entry->mode);
+                          filesystem_path, dir_entry->mode);
                 }
             }
+            free(filesystem_path);
             continue;
         }
 
@@ -555,8 +566,8 @@ static error_t *deploy_tracked_directories(
          * Uses unified helper that handles home/, root/, and default cases.
          */
         uid_t target_uid, target_gid;
-        error_t *err = resolve_deployment_ownership(
-            dir_entry->directory.storage_prefix,
+        err = resolve_deployment_ownership(
+            dir_entry->key,  /* storage_path - determines home/ vs root/ */
             dir_entry->owner,
             dir_entry->group,
             &target_uid,
@@ -564,6 +575,7 @@ static error_t *deploy_tracked_directories(
             opts->verbose
         );
         if (err) {
+            free(filesystem_path);
             return error_wrap(err,
                 "Failed to resolve ownership for directory: %s", dir_entry->key);
         }
@@ -572,7 +584,7 @@ static error_t *deploy_tracked_directories(
          * SECURITY: fs_create_dir_with_ownership uses fchown() and fchmod() on the
          * directory fd, ensuring no security window exists */
         err = fs_create_dir_with_ownership(
-            dir_entry->key,
+            filesystem_path,
             dir_entry->mode,
             target_uid,
             target_gid,
@@ -580,8 +592,9 @@ static error_t *deploy_tracked_directories(
         );
 
         if (err) {
+            free(filesystem_path);
             return error_wrap(err, "Failed to create tracked directory: %s",
-                            dir_entry->key);
+                            filesystem_path);
         }
 
         /* Verbose output */
@@ -590,17 +603,19 @@ static error_t *deploy_tracked_directories(
 
             if (has_ownership && dir_entry->owner) {
                 printf("  Created: %s (mode: %04o, owner: %s:%s)\n",
-                      dir_entry->key, dir_entry->mode,
+                      filesystem_path, dir_entry->mode,
                       dir_entry->owner ? dir_entry->owner : "?",
                       dir_entry->group ? dir_entry->group : "?");
             } else if (has_ownership) {
                 printf("  Created: %s (mode: %04o, owner: actual user)\n",
-                      dir_entry->key, dir_entry->mode);
+                      filesystem_path, dir_entry->mode);
             } else {
                 printf("  Created: %s (mode: %04o)\n",
-                      dir_entry->key, dir_entry->mode);
+                      filesystem_path, dir_entry->mode);
             }
         }
+
+        free(filesystem_path);
     }
 
     /* Free the pointer array (items themselves remain in metadata) */

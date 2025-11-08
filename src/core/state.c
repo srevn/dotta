@@ -25,6 +25,7 @@
 #include "base/filesystem.h"
 #include "infra/path.h"
 #include "utils/array.h"
+#include "utils/hashmap.h"
 
 /* Schema version - must match database */
 #define STATE_SCHEMA_VERSION "4"
@@ -141,7 +142,8 @@ static error_t *initialize_schema(sqlite3 *db) {
         "CREATE TABLE IF NOT EXISTS enabled_profiles ("
         "    position INTEGER PRIMARY KEY,"
         "    name TEXT NOT NULL UNIQUE,"
-        "    enabled_at INTEGER NOT NULL"
+        "    enabled_at INTEGER NOT NULL,"
+        "    custom_prefix TEXT"
         ");"
 
         /* Index for existence checks */
@@ -513,10 +515,10 @@ static error_t *prepare_statements(state_t *state) {
         return sqlite_error(state->db, "Failed to prepare remove statement");
     }
 
-    /* Insert profile (used in profile enable) */
+    /* Insert profile (used in state_set_profiles) */
     const char *sql_profile =
-        "INSERT INTO enabled_profiles (position, name, enabled_at) "
-        "VALUES (?, ?, ?);";
+        "INSERT INTO enabled_profiles (position, name, enabled_at, custom_prefix) "
+        "VALUES (?, ?, ?, ?);";
 
     rc = sqlite3_prepare_v2(state->db, sql_profile, -1,
                            &state->stmt_insert_profile, NULL);
@@ -805,7 +807,166 @@ error_t *state_get_deployed_profiles(const state_t *state, string_array_t **out)
 }
 
 /**
- * Set enabled profiles
+ * Enable profile with optional custom prefix
+ */
+error_t *state_enable_profile(
+    state_t *state,
+    const char *profile_name,
+    const char *custom_prefix
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(profile_name);
+
+    if (profile_name[0] == '\0') {
+        return ERROR(ERR_INVALID_ARG, "Profile name cannot be empty");
+    }
+
+    /* UPSERT: Insert or update on conflict */
+    const char *sql =
+        "INSERT INTO enabled_profiles (name, custom_prefix, enabled_at, position) "
+        "VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(position), 0) + 1 FROM enabled_profiles)) "
+        "ON CONFLICT(name) DO UPDATE SET custom_prefix = ?2, enabled_at = ?3";
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return sqlite_error(state->db, "Failed to prepare enable profile statement");
+    }
+
+    /* Bind parameters */
+    sqlite3_bind_text(stmt, 1, profile_name, -1, SQLITE_STATIC);
+    if (custom_prefix && custom_prefix[0] != '\0') {
+        sqlite3_bind_text(stmt, 2, custom_prefix, -1, SQLITE_STATIC);
+    } else {
+        sqlite3_bind_null(stmt, 2);
+    }
+    sqlite3_bind_int64(stmt, 3, time(NULL));
+
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to enable profile");
+    }
+
+    /* Invalidate cache */
+    state->profiles_loaded = false;
+
+    return NULL;
+}
+
+/**
+ * Disable profile
+ */
+error_t *state_disable_profile(
+    state_t *state,
+    const char *profile_name
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(profile_name);
+
+    const char *sql = "DELETE FROM enabled_profiles WHERE name = ?1";
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return sqlite_error(state->db, "Failed to prepare disable profile statement");
+    }
+
+    sqlite3_bind_text(stmt, 1, profile_name, -1, SQLITE_STATIC);
+
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to disable profile");
+    }
+
+    /* Invalidate cache */
+    state->profiles_loaded = false;
+
+    /* Not an error if profile wasn't enabled (DELETE with 0 rows affected is OK) */
+    return NULL;
+}
+
+/**
+ * Get custom prefix map
+ */
+error_t *state_get_prefix_map(
+    const state_t *state,
+    hashmap_t **out_map
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(out_map);
+
+    /* Create map */
+    hashmap_t *map = hashmap_create(16);
+    if (!map) {
+        return ERROR(ERR_MEMORY, "Failed to create prefix map");
+    }
+
+    /* Query: Only select profiles with custom_prefix set
+     * This is efficient - most profiles won't have custom prefixes */
+    const char *sql =
+        "SELECT name, custom_prefix "
+        "FROM enabled_profiles "
+        "WHERE custom_prefix IS NOT NULL "
+        "ORDER BY position ASC";
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        hashmap_free(map, NULL);
+        return sqlite_error(state->db, "Failed to prepare prefix map query");
+    }
+
+    /* Populate map */
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        const char *name_db = (const char *)sqlite3_column_text(stmt, 0);
+        const char *prefix_db = (const char *)sqlite3_column_text(stmt, 1);
+
+        /* Allocate owned copies (map owns these strings) */
+        char *name = strdup(name_db);
+        char *prefix = strdup(prefix_db);
+
+        if (!name || !prefix) {
+            free(name);
+            free(prefix);
+            sqlite3_finalize(stmt);
+            hashmap_free(map, free);  /* Free all allocated strings */
+            return ERROR(ERR_MEMORY, "Failed to allocate prefix map entry");
+        }
+
+        /* Store in map (ownership transferred) */
+        error_t *err = hashmap_set(map, name, prefix);
+        if (err) {
+            free(name);
+            free(prefix);
+            sqlite3_finalize(stmt);
+            hashmap_free(map, free);
+            return err;
+        }
+    }
+
+    if (rc != SQLITE_DONE) {
+        sqlite3_finalize(stmt);
+        hashmap_free(map, free);
+        return sqlite_error(state->db, "Failed to query prefix map");
+    }
+
+    sqlite3_finalize(stmt);
+    *out_map = map;
+    return NULL;
+}
+
+/**
+ * Set enabled profiles (bulk operation)
+ *
+ * Bulk API for atomic profile list replacement (clone, reorder, interactive).
+ * Automatically preserves custom_prefix values for profiles that remain enabled.
+ *
+ * For individual profile changes, prefer state_enable_profile()/state_disable_profile()
+ * which provide explicit custom prefix management.
  *
  * Hot path - must be fast even with 10,000 deployed files.
  * Only modifies enabled_profiles table (virtual_manifest untouched).
@@ -824,33 +985,56 @@ error_t *state_set_profiles(
     CHECK_NULL(profiles);
     CHECK_NULL(state->db);
 
+    /* Load current custom_prefix values before DELETE to preserve them.
+     * This enables safe profile reordering without losing custom prefix associations.
+     * New profiles get NULL custom_prefix (use state_enable_profile() to set). */
+    hashmap_t *prefix_map = NULL;
+    error_t *err = state_get_prefix_map(state, &prefix_map);
+    if (err) {
+        return error_wrap(err, "Failed to load custom prefix map");
+    }
+
     /* Delete all existing profiles */
     char *errmsg = NULL;
     int rc = sqlite3_exec(state->db, "DELETE FROM enabled_profiles;",
                          NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(ERR_STATE_INVALID, "Failed to clear profiles: %s",
-                            errmsg ? errmsg : sqlite3_errstr(rc));
+        hashmap_free(prefix_map, free);
+        err = ERROR(ERR_STATE_INVALID, "Failed to clear profiles: %s",
+                    errmsg ? errmsg : sqlite3_errstr(rc));
         sqlite3_free(errmsg);
         return err;
     }
 
-    /* Insert new profiles */
+    /* Insert new profiles with preserved custom_prefix values */
     time_t now = time(NULL);
     for (size_t i = 0; i < count; i++) {
         /* Reset and bind statement */
         sqlite3_reset(state->stmt_insert_profile);
         sqlite3_clear_bindings(state->stmt_insert_profile);
 
+        /* Bind parameters: position, name, enabled_at, custom_prefix */
         sqlite3_bind_int64(state->stmt_insert_profile, 1, (sqlite3_int64)i);
         sqlite3_bind_text(state->stmt_insert_profile, 2, profiles[i], -1, SQLITE_TRANSIENT);
         sqlite3_bind_int64(state->stmt_insert_profile, 3, (sqlite3_int64)now);
 
+        /* Lookup and bind preserved custom_prefix (or NULL if not set) */
+        const char *custom_prefix = (const char *)hashmap_get(prefix_map, profiles[i]);
+        if (custom_prefix) {
+            sqlite3_bind_text(state->stmt_insert_profile, 4, custom_prefix, -1, SQLITE_STATIC);
+        } else {
+            sqlite3_bind_null(state->stmt_insert_profile, 4);
+        }
+
         rc = sqlite3_step(state->stmt_insert_profile);
         if (rc != SQLITE_DONE) {
+            hashmap_free(prefix_map, free);
             return sqlite_error(state->db, "Failed to insert profile");
         }
     }
+
+    /* Free the prefix map */
+    hashmap_free(prefix_map, free);
 
     /* Update cache */
     if (state->profiles) {
@@ -863,7 +1047,7 @@ error_t *state_set_profiles(
     }
 
     for (size_t i = 0; i < count; i++) {
-        error_t *err = string_array_push(state->profiles, profiles[i]);
+        err = string_array_push(state->profiles, profiles[i]);
         if (err) return err;
     }
 
@@ -1338,12 +1522,14 @@ error_t *state_clear_files(state_t *state) {
  *
  * @param meta_item Metadata item (must not be NULL, must be DIRECTORY kind)
  * @param profile_name Source profile name (must not be NULL)
+ * @param custom_prefix Custom prefix for this profile (NULL for home/root)
  * @param out State directory entry (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
 error_t *state_directory_entry_create_from_metadata(
     const metadata_item_t *meta_item,
     const char *profile_name,
+    const char *custom_prefix,
     state_directory_entry_t **out
 ) {
     CHECK_NULL(meta_item);
@@ -1361,8 +1547,8 @@ error_t *state_directory_entry_create_from_metadata(
         return ERROR(ERR_MEMORY, "Failed to allocate state directory entry");
     }
 
-    /* Derive filesystem path from storage path */
-    error_t *err = path_from_storage(meta_item->key, &entry->filesystem_path);
+    /* Derive filesystem path from storage path with appropriate prefix */
+    error_t *err = path_from_storage(meta_item->key, custom_prefix, &entry->filesystem_path);
     if (err) {
         free(entry);
         return error_wrap(err, "Failed to derive filesystem path from storage path: %s",

@@ -64,6 +64,8 @@ static error_t *validate_options(const cmd_remove_options_t *opts) {
  *
  * Complexity: O(M) to build index + O(N) to process inputs = O(M+N)
  * Old implementation: O(N×M) with nested loops
+ *
+ * @param state Optional state for custom prefix resolution (improves UX, can be NULL)
  */
 static error_t *resolve_paths_to_remove(
     git_repository *repo,
@@ -73,7 +75,8 @@ static error_t *resolve_paths_to_remove(
     string_array_t **storage_paths_out,
     string_array_t **filesystem_paths_out,
     const cmd_remove_options_t *opts,
-    output_ctx_t *out
+    output_ctx_t *out,
+    state_t *state
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile_name);
@@ -89,6 +92,19 @@ static error_t *resolve_paths_to_remove(
     profile_t *profile = NULL;
     string_array_t *profile_files = NULL;
     hashmap_t *profile_files_map = NULL;
+    hashmap_t *prefix_map = NULL;
+    const char *custom_prefix = NULL;
+
+    /* Load prefix map for custom/ path resolution (optional, improves UX) */
+    if (state) {
+        error_t *map_err = state_get_prefix_map(state, &prefix_map);
+        if (!map_err && prefix_map) {
+            custom_prefix = (const char *)hashmap_get(prefix_map, profile_name);
+        } else if (map_err) {
+            /* Non-fatal: if prefix map loading fails, just degrade to showing storage paths */
+            error_free(map_err);
+        }
+    }
 
     /* Allocate arrays */
     storage_paths = string_array_create();
@@ -151,10 +167,10 @@ static error_t *resolve_paths_to_remove(
         }
 
         /* Try to get filesystem path for output (non-fatal if it fails) */
-        error_t *conv_err = path_from_storage(storage_path, &canonical);
-        if (conv_err) {
+        error_t *err = path_from_storage(storage_path, custom_prefix, &canonical);
+        if (err) {
             /* Can still work with storage path only */
-            error_free(conv_err);
+            error_free(err);
             canonical = NULL;
         }
 
@@ -199,7 +215,7 @@ static error_t *resolve_paths_to_remove(
                 if (profile_file[storage_path_len] == '/') {
                     /* Reconstruct filesystem path for this file */
                     char *file_fs_path = NULL;
-                    err = path_from_storage(profile_file, &file_fs_path);
+                    err = path_from_storage(profile_file, custom_prefix, &file_fs_path);
                     if (err) {
                         if ((opts->verbose || !opts->force) && out) {
                             output_warning(out, "Failed to resolve filesystem path for '%s': %s",
@@ -264,6 +280,7 @@ static error_t *resolve_paths_to_remove(
 
 cleanup:
     /* Free all resources */
+    if (prefix_map) hashmap_free(prefix_map, free);
     if (profile_files_map) hashmap_free(profile_files_map, NULL);
     if (profile_files) string_array_free(profile_files);
     if (profile) profile_free(profile);
@@ -822,6 +839,7 @@ static error_t *remove_files_from_profile(
     char *repo_dir = NULL;
     hook_context_t *hook_ctx = NULL;
     worktree_handle_t *wt = NULL;
+    state_t *state = NULL;
 
     *removed_count_out = 0;
 
@@ -846,9 +864,17 @@ static error_t *remove_files_from_profile(
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
+    /* Load state for custom prefix resolution (read-only, optional for UX) */
+    error_t *state_err = state_load(repo, &state);
+    if (state_err) {
+        /* Non-fatal: if state loading fails, path resolution degrades gracefully */
+        error_free(state_err);
+        state = NULL;
+    }
+
     /* Resolve paths */
     err = resolve_paths_to_remove(repo, opts->profile, opts->paths, opts->path_count,
-                                   &storage_paths, &filesystem_paths, opts, out);
+                                   &storage_paths, &filesystem_paths, opts, out, state);
     if (err) {
         goto cleanup;
     }
@@ -1137,6 +1163,7 @@ cleanup:
     if (other_profiles) free_multi_profile_tracking(other_profiles, multi_profile_count);
     if (filesystem_paths) string_array_free(filesystem_paths);
     if (storage_paths) string_array_free(storage_paths);
+    if (state) state_free(state);
     if (out) output_free(out);
     if (config) config_free(config);
 
@@ -1455,24 +1482,9 @@ static error_t *delete_profile_branch(
         }
 
         /* Remove from enabled_profiles in state */
-        char **updated_profiles = malloc(sizeof(char *) * string_array_size(remaining));
-        if (!updated_profiles) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate updated profiles array");
-            state_free(state);
-            string_array_free(enabled_profiles);
-            string_array_free(remaining);
-            goto cleanup;
-        }
-
-        for (size_t i = 0; i < string_array_size(remaining); i++) {
-            updated_profiles[i] = (char *)string_array_get(remaining, i);
-        }
-
-        err = state_set_profiles(state, updated_profiles, string_array_size(remaining));
-        free(updated_profiles);
-
+        err = state_disable_profile(state, opts->profile);
         if (err) {
-            err = error_wrap(err, "Failed to update enabled profiles in state");
+            err = error_wrap(err, "Failed to remove profile from state");
             state_free(state);
             string_array_free(enabled_profiles);
             string_array_free(remaining);

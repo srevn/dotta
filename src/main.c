@@ -79,6 +79,7 @@ static int cmd_add_main(int argc, char **argv) {
         .profile = NULL,
         .files = NULL,
         .file_count = 0,
+        .custom_prefix = NULL,
         .message = NULL,
         .exclude_patterns = NULL,
         .exclude_count = 0,
@@ -137,6 +138,14 @@ static int cmd_add_main(int argc, char **argv) {
             opts.force = true;
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             opts.verbose = true;
+        } else if (strcmp(argv[i], "--prefix") == 0) {
+            if (i + 1 >= argc) {
+                free(files);
+                free(excludes);
+                fprintf(stderr, "Error: --prefix requires a path argument\n");
+                return 1;
+            }
+            opts.custom_prefix = argv[++i];
         } else if (strcmp(argv[i], "--encrypt") == 0) {
             opts.encrypt = true;
         } else if (strcmp(argv[i], "--no-encrypt") == 0) {
@@ -627,6 +636,7 @@ static int cmd_profile_main(int argc, char **argv) {
         .subcommand = PROFILE_LIST,  /* Default subcommand */
         .profiles = NULL,
         .profile_count = 0,
+        .custom_prefix = NULL,
         .show_remote = false,
         .show_available = true,  /* Default: show available profiles */
         .fetch_all = false,
@@ -716,6 +726,14 @@ static int cmd_profile_main(int argc, char **argv) {
                 opts.verbose = true;
             } else if (strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--quiet") == 0) {
                 opts.quiet = true;
+            } else if (strcmp(argv[i], "--prefix") == 0) {
+                if (i + 1 >= argc) {
+                    fprintf(stderr, "Error: --prefix requires a path argument\n");
+                    free(profiles);
+                    print_profile_help(argv[0]);
+                    return 1;
+                }
+                opts.custom_prefix = argv[++i];
             } else if (argv[i][0] != '-') {
                 profiles[profile_count++] = argv[i];
             } else {

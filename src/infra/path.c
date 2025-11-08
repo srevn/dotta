@@ -6,10 +6,12 @@
 
 #include "path.h"
 
+#include <errno.h>
 #include <limits.h>
 #include <pwd.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "base/error.h"
@@ -64,11 +66,12 @@ error_t *path_validate_storage(const char *storage_path) {
                     "Storage path must be relative (got '%s')", storage_path);
     }
 
-    /* SECURITY: Must start with home/ or root/ */
+    /* SECURITY: Must start with home/, root/, or custom/ */
     if (!str_starts_with(storage_path, "home/") &&
-        !str_starts_with(storage_path, "root/")) {
+        !str_starts_with(storage_path, "root/") &&
+        !str_starts_with(storage_path, "custom/")) {
         return ERROR(ERR_INVALID_ARG,
-                    "Storage path must start with 'home/' or 'root/' (got '%s')",
+                    "Storage path must start with 'home/', 'root/', or 'custom/' (got '%s')",
                     storage_path);
     }
 
@@ -196,24 +199,93 @@ error_t *path_expand_home(const char *path, char **out) {
 }
 
 /**
+ * Extract relative path after stripping prefix
+ *
+ * Checks if absolute path starts with prefix (with proper boundary verification),
+ * and extracts the relative part after the prefix.
+ *
+ * Boundary verification ensures prefix matches a complete path component:
+ *   /home/user matches /home/user/.bashrc ✓
+ *   /home/user does NOT match /home/username/.bashrc ✗
+ *
+ * Returns:
+ *   >0 : Match succeeded, returns length of relative part, sets *out_relative
+ *    0 : Prefix matched but relative part is empty (directory itself)
+ *   -1 : No match (prefix doesn't match or boundary violation)
+ *
+ * @param absolute Absolute filesystem path
+ * @param prefix Prefix to match against
+ * @param out_relative Output relative part (points into absolute, caller doesn't own)
+ * @return Match status (see above)
+ */
+static int extract_relative_after_prefix(
+    const char *absolute,
+    const char *prefix,
+    const char **out_relative
+) {
+    size_t prefix_len = strlen(prefix);
+
+    /* Check if absolute starts with prefix */
+    if (!str_starts_with(absolute, prefix)) {
+        return -1;
+    }
+
+    /* Verify boundary: next character must be '/' or '\0' */
+    char boundary = absolute[prefix_len];
+    if (boundary != '/' && boundary != '\0') {
+        return -1;  /* False match: /home/user vs /home/username */
+    }
+
+    /* Extract relative part, skipping leading slash */
+    const char *relative = absolute + prefix_len;
+    if (relative[0] == '/') {
+        relative++;
+    }
+
+    /* Check if relative part is empty (would be storing directory itself) */
+    if (relative[0] == '\0') {
+        return 0;
+    }
+
+    *out_relative = relative;
+    return (int)strlen(relative);
+}
+
+/**
  * Convert filesystem path to storage path
+ *
+ * Detection order (CANONICAL REPRESENTATION):
+ *  1. $HOME (canonical for user files) - FIRST
+ *  2. Custom prefix (if provided and matches) - SECOND
+ *  3. Root (fallback for system files)
+ *
+ * This ensures files under $HOME ALWAYS use home/ prefix,
+ * even if --prefix matches $HOME (canonical representation).
  */
 error_t *path_to_storage(
     const char *filesystem_path,
+    const char *custom_prefix,
     char **storage_path,
     path_prefix_t *prefix_out
 ) {
     CHECK_NULL(filesystem_path);
     CHECK_NULL(storage_path);
 
-    /* Validate input */
-    error_t *err = path_validate_filesystem(filesystem_path);
+    /* Initialize all resources to NULL for safe cleanup */
+    error_t *err = NULL;
+    char *expanded = NULL;
+    char *absolute = NULL;
+    char *home = NULL;
+    char *result = NULL;
+    path_prefix_t detected_prefix;
+
+    /* Validate input filesystem path */
+    err = path_validate_filesystem(filesystem_path);
     if (err) {
         return err;
     }
 
     /* Expand ~ if needed */
-    char *expanded = NULL;
     if (filesystem_path[0] == '~') {
         err = path_expand_home(filesystem_path, &expanded);
         if (err) {
@@ -222,81 +294,94 @@ error_t *path_to_storage(
         filesystem_path = expanded;
     }
 
-    /* Make absolute without following symlinks */
-    char *absolute = NULL;
+    /* Convert to absolute path without following symlinks */
     err = fs_make_absolute(filesystem_path, &absolute);
-    if (expanded) {
-        free(expanded);
-    }
     if (err) {
-        return err;
+        goto cleanup;
     }
 
-    /* Check if under $HOME */
-    char *home = NULL;
+    /* Try $HOME prefix first (most canonical) */
     err = path_get_home(&home);
     if (err) {
-        free(absolute);
-        return err;
+        goto cleanup;
     }
 
-    size_t home_len = strlen(home);
-    path_prefix_t prefix;
+    const char *relative;
+    int match = extract_relative_after_prefix(absolute, home, &relative);
 
-    if (str_starts_with(absolute, home)) {
-        /* Path is under $HOME */
-        prefix = PREFIX_HOME;
-
-        /* Extract relative part */
-        const char *rel = absolute + home_len;
-        if (rel[0] == '/') {
-            rel++;  /* Skip leading slash */
+    if (match > 0) {
+        /* HOME prefix matched with non-empty relative part */
+        result = str_format("home/%s", relative);
+        if (!result) {
+            err = ERROR(ERR_MEMORY, "Failed to format home storage path");
+            goto cleanup;
         }
+        detected_prefix = PREFIX_HOME;
+        goto validate;
 
-        if (rel[0] == '\0') {
-            /* Home directory itself - not supported */
-            free(home);
-            free(absolute);
-            return ERROR(ERR_INVALID_ARG,
-                        "Cannot store HOME directory itself");
-        }
+    } else if (match == 0) {
+        /* HOME directory itself - not supported */
+        err = ERROR(ERR_INVALID_ARG, "Cannot store HOME directory itself");
+        goto cleanup;
+    }
 
-        /* Build storage path: home/... */
-        *storage_path = str_format("home/%s", rel);
-        if (!*storage_path) {
-            free(home);
-            free(absolute);
-            return ERROR(ERR_MEMORY, "Failed to format storage path");
-        }
-    } else {
-        /* Path is outside $HOME - use root/ prefix */
-        prefix = PREFIX_ROOT;
+    /* Try custom prefix second (if provided) */
+    if (custom_prefix && custom_prefix[0] != '\0') {
+        match = extract_relative_after_prefix(absolute, custom_prefix, &relative);
 
-        /* Build storage path: root/... */
-        *storage_path = str_format("root%s", absolute);
-        if (!*storage_path) {
-            free(home);
-            free(absolute);
-            return ERROR(ERR_MEMORY, "Failed to format storage path");
+        if (match > 0) {
+            /* Custom prefix matched with non-empty relative part */
+            result = str_format("custom/%s", relative);
+            if (!result) {
+                err = ERROR(ERR_MEMORY, "Failed to format custom storage path");
+                goto cleanup;
+            }
+            detected_prefix = PREFIX_CUSTOM;
+            goto validate;
+
+        } else if (match == 0) {
+            /* Custom prefix directory itself - not supported */
+            err = ERROR(ERR_INVALID_ARG,
+                "Cannot store custom prefix directory itself");
+            goto cleanup;
         }
     }
 
-    free(home);
-    free(absolute);
+    /* Fallback to ROOT prefix for absolute paths */
+    /* Note: For root, we include the leading slash in the relative part */
+    relative = absolute;
+    if (relative[0] == '/') {
+        relative++;  /* Skip leading slash for consistency */
+    }
 
-    /* Validate generated storage path */
-    err = path_validate_storage(*storage_path);
+    result = str_format("root/%s", relative);
+    if (!result) {
+        err = ERROR(ERR_MEMORY, "Failed to format root storage path");
+        goto cleanup;
+    }
+    detected_prefix = PREFIX_ROOT;
+
+validate:
+    /* Validate generated storage path format */
+    err = path_validate_storage(result);
     if (err) {
-        free(*storage_path);
-        *storage_path = NULL;
-        return err;
+        free(result);
+        result = NULL;
+        goto cleanup;
     }
 
+    /* Success: set outputs */
     if (prefix_out) {
-        *prefix_out = prefix;
+        *prefix_out = detected_prefix;
     }
+    *storage_path = result;
+    err = NULL;
 
-    return NULL;
+cleanup:
+    free(expanded);
+    free(absolute);
+    free(home);
+    return err;
 }
 
 /**
@@ -304,6 +389,7 @@ error_t *path_to_storage(
  */
 error_t *path_from_storage(
     const char *storage_path,
+    const char *custom_prefix,
     char **filesystem_path
 ) {
     CHECK_NULL(storage_path);
@@ -335,6 +421,30 @@ error_t *path_from_storage(
         if (!*filesystem_path) {
             return ERROR(ERR_MEMORY, "Failed to allocate filesystem path");
         }
+        return NULL;
+
+    } else if (str_starts_with(storage_path, "custom/")) {
+        /* custom/etc/nginx.conf -> <prefix>/etc/nginx.conf */
+
+        /* Require custom_prefix parameter */
+        if (!custom_prefix || custom_prefix[0] == '\0') {
+            return ERROR(ERR_INVALID_ARG,
+                "Storage path '%s' requires custom_prefix parameter\n"
+                "This is a custom/ path - provide --prefix flag when enabling profile",
+                storage_path);
+        }
+
+        /* Strip "custom" prefix and prepend custom_prefix
+         * storage_path = "custom/etc/nginx.conf"
+         * After strlen("custom"): "/etc/nginx.conf" (with leading slash)
+         * Build: <prefix> + <rel> = "/mnt/jail" + "/etc/nginx.conf" */
+        const char *rel = storage_path + strlen("custom");
+
+        *filesystem_path = str_format("%s%s", custom_prefix, rel);
+        if (!*filesystem_path) {
+            return ERROR(ERR_MEMORY, "Failed to format custom filesystem path");
+        }
+
         return NULL;
 
     } else {
@@ -507,7 +617,7 @@ error_t *path_resolve_input(
 
             /* Convert to storage format */
             path_prefix_t prefix;
-            err = path_to_storage(absolute, &storage_path, &prefix);
+            err = path_to_storage(absolute, NULL, &storage_path, &prefix);
             free(absolute);
             if (err) {
                 return error_wrap(err, "Failed to convert path '%s'", input);
@@ -607,5 +717,64 @@ error_t *path_resolve_input(
 
     /* Success - transfer ownership */
     *out_storage_path = storage_path;
+    return NULL;
+}
+
+/**
+ * Validate custom prefix parameter
+ */
+error_t *path_validate_custom_prefix(const char *prefix) {
+    CHECK_NULL(prefix);
+
+    /* 1. Must be absolute path */
+    if (prefix[0] != '/') {
+        return ERROR(ERR_INVALID_ARG,
+            "Custom prefix must be absolute path (got '%s')\n"
+            "Example: --prefix /mnt/jails/web", prefix);
+    }
+
+    /* 2. No path traversal components */
+    if (strstr(prefix, "/./") || strstr(prefix, "/../") || strstr(prefix, "//")) {
+        return ERROR(ERR_INVALID_ARG,
+            "Custom prefix contains invalid path components: '%s'\n"
+            "Components like '..', '.', or '//' are not allowed", prefix);
+    }
+
+    /* 3. Must not end with slash (normalize) */
+    size_t len = strlen(prefix);
+    if (len > 1 && prefix[len - 1] == '/') {
+        return ERROR(ERR_INVALID_ARG,
+            "Custom prefix must not end with slash: '%s'\n"
+            "Use: %.*s", prefix, (int)(len - 1), prefix);
+    }
+
+    /* 4. Normalize and validate with realpath() */
+    char *resolved = realpath(prefix, NULL);
+    if (!resolved) {
+        if (errno == ENOENT) {
+            return ERROR(ERR_INVALID_ARG,
+                "Custom prefix directory does not exist: '%s'\n"
+                "Create it first: mkdir -p '%s'", prefix, prefix);
+        } else {
+            return ERROR(ERR_INVALID_ARG,
+                "Cannot resolve custom prefix '%s': %s", prefix, strerror(errno));
+        }
+    }
+
+    /* 5. Verify it's a directory */
+    struct stat st;
+    if (stat(resolved, &st) != 0) {
+        free(resolved);
+        return ERROR(ERR_INVALID_ARG,
+            "Cannot stat custom prefix: %s", strerror(errno));
+    }
+
+    if (!S_ISDIR(st.st_mode)) {
+        free(resolved);
+        return ERROR(ERR_INVALID_ARG,
+            "Custom prefix must be a directory: '%s'", prefix);
+    }
+
+    free(resolved);
     return NULL;
 }

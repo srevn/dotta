@@ -44,10 +44,10 @@ bool privilege_is_sudo(void);
 /**
  * Check if a storage path requires root privileges
  *
- * Paths with root/ prefix require root privileges for complete metadata
- * capture (ownership information). Paths with home/ prefix do not.
+ * Paths with root/ or custom/ prefix require root privileges for complete
+ * metadata capture (ownership information). Paths with home/ prefix do not.
  *
- * @param storage_path Storage path (e.g., "home/.bashrc" or "root/etc/hosts")
+ * @param storage_path Storage path (e.g., "home/.bashrc", "root/etc/hosts", "custom/etc/nginx.conf")
  * @return true if path requires root privileges, false otherwise
  */
 bool privilege_path_requires_root(const char *storage_path);

@@ -52,16 +52,18 @@ typedef struct {
 } manifest_disable_stats_t;
 
 /**
- * Enable profile in manifest
+ * Enable profile in manifest with optional custom prefix
  *
  * Called when a profile is enabled. Populates manifest from Git branch
  * with precedence resolution across all enabled profiles.
  *
  * Algorithm:
  *   1. Get HEAD oid for profile
- *   2. Build manifest from all enabled profiles (precedence oracle)
- *   3. Load merged metadata from all profiles
- *   4. For each file owned by this profile (highest precedence):
+ *   2. Load prefix map from state (state_get_prefix_map)
+ *   3. Add new profile's custom prefix to map (if provided)
+ *   4. Build manifest from all enabled profiles with prefix context (precedence oracle)
+ *   5. Load merged metadata from all profiles
+ *   6. For each file owned by this profile (highest precedence):
  *      - Compute content hash
  *      - Extract metadata
  *      - Insert/update manifest entry
@@ -90,6 +92,7 @@ typedef struct {
  * @param repo Git repository
  * @param state State handle (with active transaction)
  * @param profile_name Profile being enabled
+ * @param custom_prefix Custom prefix for this profile (NULL for home/root profiles)
  * @param enabled_profiles All enabled profiles (including profile_name)
  * @return Error or NULL on success
  */
@@ -97,6 +100,7 @@ error_t *manifest_enable_profile(
     git_repository *repo,
     state_t *state,
     const char *profile_name,
+    const char *custom_prefix,
     const string_array_t *enabled_profiles,
     manifest_enable_stats_t *out_stats
 );

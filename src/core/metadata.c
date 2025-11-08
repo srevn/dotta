@@ -22,6 +22,7 @@
 #include "utils/array.h"
 #include "utils/buffer.h"
 #include "utils/hashmap.h"
+#include "utils/privilege.h"
 #include "utils/string.h"
 
 #define INITIAL_CAPACITY 16
@@ -739,7 +740,7 @@ const metadata_item_t **metadata_get_items_by_kind(
  * Symlinks are skipped (returns NULL with no error - caller should check *out).
  *
  * Ownership capture (user/group):
- * - ONLY captured for root/ prefix files when running as root (UID 0)
+ * - ONLY captured for root/ and custom/ prefix files when running as root (UID 0)
  * - home/ prefix files: ownership never captured (always current user)
  * - Regular users: ownership never captured (can't chown anyway)
  *
@@ -787,13 +788,14 @@ error_t *metadata_capture_from_file(
     /* Set file-specific union field (caller may update this) */
     item->file.encrypted = false;
 
-    /* Capture ownership ONLY for root/ prefix files when running as root
-     * Use effective UID (geteuid) to check privilege, not real UID (getuid).
-     * This ensures correct behavior for both sudo and setuid binaries. */
-    bool is_root_prefix = str_starts_with(storage_path, "root/");
+    /* Capture ownership for paths requiring root privileges (root/ and custom/)
+     * when running as root. Use effective UID (geteuid) to check privilege,
+     * not real UID (getuid). This ensures correct behavior for both sudo and
+     * setuid binaries. */
+    bool requires_root_privileges = privilege_path_requires_root(storage_path);
     bool running_as_root = (geteuid() == 0);
 
-    if (is_root_prefix && running_as_root) {
+    if (requires_root_privileges && running_as_root) {
         /* Resolve UID to username */
         struct passwd *pwd = getpwuid(st->st_uid);
         if (pwd && pwd->pw_name) {
@@ -827,7 +829,7 @@ error_t *metadata_capture_from_file(
  * Follows the same ownership rules as file capture.
  *
  * Ownership capture (user/group):
- * - ONLY captured for root/ prefix directories when running as root (UID 0)
+ * - ONLY captured for root/ and custom/ prefix directories when running as root (UID 0)
  * - home/ prefix directories: ownership never captured (always current user)
  * - Regular users: ownership never captured (can't chown anyway)
  *
@@ -871,13 +873,14 @@ error_t *metadata_capture_from_directory(
     /* Initialize directory union */
     item->directory._reserved = 0;
 
-    /* Capture ownership ONLY for root/ prefix directories when running as root
-     * Use effective UID (geteuid) to check privilege, not real UID (getuid).
-     * This ensures correct behavior for both sudo and setuid binaries. */
-    bool is_root_prefix = str_starts_with(storage_path, "root/");
+    /* Capture ownership for paths requiring root privileges (root/ and custom/)
+     * when running as root. Use effective UID (geteuid) to check privilege,
+     * not real UID (getuid). This ensures correct behavior for both sudo and
+     * setuid binaries. */
+    bool requires_root_privileges = privilege_path_requires_root(storage_path);
     bool running_as_root = (geteuid() == 0);
 
-    if (is_root_prefix && running_as_root) {
+    if (requires_root_privileges && running_as_root) {
         /* Resolve UID to username */
         struct passwd *pwd = getpwuid(st->st_uid);
         if (pwd && pwd->pw_name) {

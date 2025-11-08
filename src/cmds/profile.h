@@ -35,6 +35,9 @@ typedef struct {
     char **profiles;
     size_t profile_count;
 
+    /* Custom prefix (for enable with custom/ files) */
+    const char *custom_prefix;
+
     /* List options */
     bool show_remote;       /* Show remote profiles */
     bool show_available;    /* Show available (non-enabled) profiles */

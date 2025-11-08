@@ -1115,21 +1115,26 @@ static error_t *analyze_untracked_files(
         return NULL;  /* No profiles to analyze */
     }
 
-    /* Scan tracked directories from each enabled profile's metadata */
+    /* Scan tracked directories from each enabled profile's state database */
     for (size_t p = 0; p < ws->profiles->count; p++) {
         const char *profile_name = ws->profiles->profiles[p].name;
 
-        /* Get cached metadata for this profile */
-        const metadata_t *metadata = ws_get_metadata(ws, profile_name);
-        if (!metadata) {
-            /* Profile has no metadata - skip */
+        /* Get tracked directories from state database for this profile */
+        state_directory_entry_t *directories = NULL;
+        size_t dir_count = 0;
+        err = state_get_directories_by_profile(ws->state, profile_name, &directories, &dir_count);
+        if (err) {
+            fprintf(stderr, "warning: failed to load directories for profile '%s': %s\n",
+                    profile_name, err->message);
+            error_free(err);
+            err = NULL;
             continue;
         }
 
-        /* Get tracked directories from metadata (filtered by kind) */
-        size_t dir_count = 0;
-        const metadata_item_t **directories =
-            metadata_get_items_by_kind(metadata, METADATA_ITEM_DIRECTORY, &dir_count);
+        if (dir_count == 0) {
+            /* Profile has no tracked directories - skip */
+            continue;
+        }
 
         /* Create profile-specific ignore context once for all directories */
         ignore_context_t *ignore_ctx = NULL;
@@ -1153,30 +1158,25 @@ static error_t *analyze_untracked_files(
 
         /* Scan each tracked directory */
         for (size_t i = 0; i < dir_count; i++) {
-            const metadata_item_t *dir_entry = directories[i];
+            const state_directory_entry_t *dir_entry = &directories[i];
 
-            /* For directories: key = storage_path (e.g., "home/.config/fish")
-             * Derive filesystem path for existence check and scanning */
-            char *filesystem_path = NULL;
-            err = path_from_storage(dir_entry->key, &filesystem_path);
-            if (err) {
-                fprintf(stderr, "warning: failed to derive path for '%s' in profile '%s': %s\n",
-                        dir_entry->key, profile_name, err->message);
-                error_free(err);
-                err = NULL;
-                continue;
-            }
+            /* State directory entries contain:
+             * - filesystem_path: Already resolved with custom_prefix (VWD principle)
+             * - storage_path: Portable path for storage
+             */
+
+            /* Use filesystem path directly from state (already resolved) */
+            const char *filesystem_path = dir_entry->filesystem_path;
 
             /* Check if directory still exists */
             if (!fs_exists(filesystem_path)) {
-                free(filesystem_path);
                 continue;
             }
 
             /* Scan this directory for untracked files */
             err = scan_directory_for_untracked(
-                filesystem_path,     /* filesystem_path (derived) */
-                dir_entry->key,      /* storage_path (now in key field) */
+                filesystem_path,           /* Already resolved filesystem path */
+                dir_entry->storage_path,   /* Portable storage path */
                 profile_name,
                 ignore_ctx,
                 ws
@@ -1189,15 +1189,13 @@ static error_t *analyze_untracked_files(
                 error_free(err);
                 err = NULL;
             }
-
-            free(filesystem_path);
         }
 
         /* Free ignore context after scanning all directories in this profile */
         ignore_context_free(ignore_ctx);
 
-        /* Free the pointer array (items themselves remain in metadata) */
-        free(directories);
+        /* Free state directory entries for this profile */
+        state_free_all_directories(directories, dir_count);
     }
 
     return NULL;
@@ -1211,38 +1209,44 @@ static error_t *analyze_untracked_files(
  * - DIVERGENCE_MODE: Directory permissions changed
  * - DIVERGENCE_OWNERSHIP: Directory owner/group changed (requires root)
  *
- * @param ws Workspace (must not be NULL, merged_metadata must be initialized)
+ * ARCHITECTURE: Uses state (VWD) instead of metadata (Git) for directory resolution.
+ * State contains filesystem_path already resolved with custom_prefix, enabling
+ * correct divergence detection for custom/ prefix directories.
+ *
+ * @param ws Workspace (must not be NULL, state must be initialized)
  * @return Error or NULL on success
  */
 static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
     CHECK_NULL(ws);
-    CHECK_NULL(ws->merged_metadata);
+    CHECK_NULL(ws->state);
 
-    /* Iterate merged metadata to find and check tracked directories */
-    hashmap_iter_t iter;
-    hashmap_iter_init(&iter, ws->merged_metadata);
-    void *value;
+    /* Get all tracked directories from state database */
+    state_directory_entry_t *directories = NULL;
+    size_t dir_count = 0;
+    error_t *err = state_get_all_directories(ws->state, &directories, &dir_count);
+    if (err) {
+        return error_wrap(err, "Failed to load tracked directories from state");
+    }
 
-    while (hashmap_iter_next(&iter, NULL, &value)) {
-        const merged_metadata_entry_t *entry = value;
-        const metadata_item_t *item = entry->item;
+    if (dir_count == 0) {
+        return NULL;  /* No tracked directories */
+    }
 
-        /* Filter: Only process directories */
-        if (item->kind != METADATA_ITEM_DIRECTORY) {
-            continue;
-        }
+    /* Check each tracked directory for divergence */
+    for (size_t i = 0; i < dir_count; i++) {
+        const state_directory_entry_t *dir_entry = &directories[i];
 
-        /* For directories: key = storage_path (e.g., "home/.config/fish")
-         * Derive filesystem path for stat operations */
-        const char *storage_path = item->key;
-        char *filesystem_path = NULL;
-        error_t *err = path_from_storage(storage_path, &filesystem_path);
-        if (err) {
-            fprintf(stderr, "warning: failed to derive filesystem path for directory '%s': %s\n",
-                    storage_path, err->message);
-            error_free(err);
-            continue;
-        }
+        /* State directory entries contain:
+         * - filesystem_path: Already resolved with custom_prefix (VWD principle)
+         * - storage_path: Portable path
+         * - profile: Source profile
+         * - mode, owner, group: Expected metadata
+         */
+
+        /* Use filesystem path directly from state (already resolved) */
+        const char *filesystem_path = dir_entry->filesystem_path;
+        const char *storage_path = dir_entry->storage_path;
+        const char *profile_name = dir_entry->profile;
 
         /* Check if directory still exists */
         if (!fs_exists(filesystem_path)) {
@@ -1251,7 +1255,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 ws,
                 filesystem_path,
                 storage_path,
-                entry->profile_name,
+                profile_name,
                 NULL, NULL,  /* No old_profile or all_profiles for directories */
                 WORKSPACE_STATE_DELETED,  /* State: was in profile, removed from filesystem */
                 DIVERGENCE_NONE,          /* Divergence: none (file is gone) */
@@ -1264,11 +1268,10 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
             );
 
             if (err) {
-                free(filesystem_path);
+                state_free_all_directories(directories, dir_count);
                 return error_wrap(err, "Failed to record deleted directory '%s'",
                                 filesystem_path);
             }
-            free(filesystem_path);
             continue;  /* Successfully recorded, check next directory */
         }
 
@@ -1278,7 +1281,6 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
             /* Stat failed but exists: race condition or permission issue */
             fprintf(stderr, "warning: failed to stat directory '%s': %s\n",
                     filesystem_path, strerror(errno));
-            free(filesystem_path);
             continue;  /* Non-fatal, skip this directory */
         }
 
@@ -1286,7 +1288,6 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
         if (!S_ISDIR(dir_stat.st_mode)) {
             fprintf(stderr, "warning: '%s' is no longer a directory (type changed)\n",
                     filesystem_path);
-            free(filesystem_path);
             continue;  /* Non-fatal, skip - apply/revert don't handle type changes */
         }
 
@@ -1295,9 +1296,9 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
         bool ownership_differs = false;
 
         err = check_item_metadata_divergence(
-            item->mode,      /* Extract mode from metadata_item_t */
-            item->owner,     /* Extract owner from metadata_item_t */
-            item->group,     /* Extract group from metadata_item_t */
+            dir_entry->mode,   /* Expected mode from state */
+            dir_entry->owner,  /* Expected owner from state */
+            dir_entry->group,  /* Expected group from state */
             filesystem_path,
             &dir_stat,
             &mode_differs,
@@ -1305,7 +1306,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
         );
 
         if (err) {
-            free(filesystem_path);
+            state_free_all_directories(directories, dir_count);
             return error_wrap(err, "Failed to check metadata for directory '%s'",
                             filesystem_path);
         }
@@ -1321,7 +1322,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 ws,
                 filesystem_path,
                 storage_path,
-                entry->profile_name,
+                profile_name,
                 NULL, NULL,  /* No old_profile or all_profiles for directories */
                 WORKSPACE_STATE_DEPLOYED,  /* State: directory exists as expected */
                 divergence,                /* Divergence: mode/ownership flags */
@@ -1334,15 +1335,16 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
             );
 
             if (err) {
-                free(filesystem_path);
+                state_free_all_directories(directories, dir_count);
                 return error_wrap(err,
                                 "Failed to record directory metadata divergence for '%s'",
                                 filesystem_path);
             }
         }
-
-        free(filesystem_path);
     }
+
+    /* Free state directory entries */
+    state_free_all_directories(directories, dir_count);
 
     return NULL;  /* Success - all directories checked */
 }

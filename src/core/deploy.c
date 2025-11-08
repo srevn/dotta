@@ -16,10 +16,10 @@
 #include "core/metadata.h"
 #include "core/workspace.h"
 #include "infra/content.h"
-#include "infra/path.h"
 #include "utils/array.h"
 #include "utils/buffer.h"
 #include "utils/hashmap.h"
+#include "utils/privilege.h"
 #include "utils/string.h"
 
 /**
@@ -185,14 +185,14 @@ error_t *deploy_preflight_check_from_workspace(
  * Resolve deployment ownership for a path
  *
  * Unified ownership resolution logic for both files and directories.
- * Handles home/ vs root/ prefix logic and sudo detection.
+ * Handles home/ vs root/custom/ prefix logic and sudo detection.
  *
  * Resolution rules:
  * - home/ prefix when running as root (sudo): Use actual user's UID/GID
- * - root/ prefix with owner/group metadata: Resolve names to UID/GID
+ * - root/ or custom/ prefix with owner/group metadata: Resolve names to UID/GID
  * - All other cases: Return -1 (no ownership change)
  *
- * @param storage_path Path in profile (e.g., "home/.bashrc", "root/etc/nginx.conf")
+ * @param storage_path Path in profile (e.g., "home/.bashrc", "root/etc/hosts", "custom/etc/nginx.conf")
  * @param owner Owner username from metadata (can be NULL)
  * @param group Group name from metadata (can be NULL)
  * @param out_uid Resolved UID or -1 for no change (must not be NULL)
@@ -218,7 +218,7 @@ static error_t *resolve_deployment_ownership(
 
     /* Determine prefix type */
     bool is_home_prefix = str_starts_with(storage_path, "home/");
-    bool is_root_prefix = str_starts_with(storage_path, "root/");
+    bool requires_root_privileges = privilege_path_requires_root(storage_path);
 
     /* Case 1: home/ prefix when running as root → use actual user (sudo handling) */
     if (is_home_prefix && fs_is_running_as_root()) {
@@ -230,8 +230,8 @@ static error_t *resolve_deployment_ownership(
         return NULL;
     }
 
-    /* Case 2: root/ prefix with ownership metadata → resolve to UID/GID */
-    if (is_root_prefix && (owner || group)) {
+    /* Case 2: root/ or custom/ prefix with ownership metadata → resolve to UID/GID */
+    if (requires_root_privileges && (owner || group)) {
         error_t *err = metadata_resolve_ownership(owner, group, out_uid, out_gid);
         if (err) {
             /* Non-fatal: Log warning and continue with default ownership
@@ -481,28 +481,33 @@ cleanup:
 }
 
 /**
- * Deploy tracked directories with metadata
+ * Deploy tracked directories from state
  *
  * Creates all tracked directories with proper permissions and ownership before
  * deploying files. This ensures that directories are created with correct metadata
  * from the start, preventing security issues like world-readable sensitive dirs.
  *
- * @param metadata Merged metadata containing tracked directories (can be NULL)
+ * ARCHITECTURE: Uses state (VWD) instead of metadata (Git) for directory resolution.
+ * State contains filesystem_path already resolved with custom_prefix during manifest
+ * building, eliminating path conversion errors and enabling custom prefix support.
+ *
+ * @param state State database (can be NULL)
  * @param opts Deployment options (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *deploy_tracked_directories(
-    const metadata_t *metadata,
+    const state_t *state,
     const deploy_options_t *opts
 ) {
-    if (!metadata) {
-        return NULL;  /* No metadata, nothing to do */
-    }
+    CHECK_NULL(state);
 
-    /* Get all tracked directories (filtered by kind) */
+    /* Get all tracked directories from state database */
+    state_directory_entry_t *directories = NULL;
     size_t dir_count = 0;
-    const metadata_item_t **directories =
-        metadata_get_items_by_kind(metadata, METADATA_ITEM_DIRECTORY, &dir_count);
+    error_t *err = state_get_all_directories(state, &directories, &dir_count);
+    if (err) {
+        return error_wrap(err, "Failed to load tracked directories from state");
+    }
 
     if (dir_count == 0) {
         return NULL;  /* No tracked directories */
@@ -515,28 +520,22 @@ static error_t *deploy_tracked_directories(
 
     /* Deploy each tracked directory */
     for (size_t i = 0; i < dir_count; i++) {
-        const metadata_item_t *dir_entry = directories[i];
+        const state_directory_entry_t *dir_entry = &directories[i];
 
-        /* For directory items:
-         * - key field contains storage_path (e.g., "home/.config/fish")
-         * - mode, owner, group are common fields
-         * - Filesystem path is derived from storage_path using path_from_storage()
+        /* State directory entries contain:
+         * - filesystem_path: Already resolved with custom_prefix (VWD principle)
+         * - storage_path: Portable path (for ownership resolution)
+         * - mode, owner, group: Metadata for deployment
          */
 
-        /* Derive filesystem path from storage path */
-        char *filesystem_path = NULL;
-        error_t *err = path_from_storage(dir_entry->key, &filesystem_path);
-        if (err) {
-            return error_wrap(err,
-                "Failed to derive filesystem path for directory: %s", dir_entry->key);
-        }
+        /* Use filesystem path directly from state (already resolved) */
+        const char *filesystem_path = dir_entry->filesystem_path;
 
         /* Skip if directory already exists and we're not forcing */
         if (fs_is_directory(filesystem_path) && !opts->force) {
             if (opts->verbose) {
                 printf("  Skipped: %s (already exists)\n", filesystem_path);
             }
-            free(filesystem_path);
             continue;
         }
 
@@ -553,7 +552,6 @@ static error_t *deploy_tracked_directories(
                           filesystem_path, dir_entry->mode);
                 }
             }
-            free(filesystem_path);
             continue;
         }
 
@@ -563,11 +561,11 @@ static error_t *deploy_tracked_directories(
          * can atomically apply ownership via fchown() on the directory file descriptor.
          * This eliminates the security window where directories exist with incorrect ownership.
          *
-         * Uses unified helper that handles home/, root/, and default cases.
+         * Uses unified helper that handles home/, root/, and custom/ cases.
          */
         uid_t target_uid, target_gid;
         err = resolve_deployment_ownership(
-            dir_entry->key,  /* storage_path - determines home/ vs root/ */
+            dir_entry->storage_path,  /* Determines home/ vs root/ vs custom/ */
             dir_entry->owner,
             dir_entry->group,
             &target_uid,
@@ -575,9 +573,9 @@ static error_t *deploy_tracked_directories(
             opts->verbose
         );
         if (err) {
-            free(filesystem_path);
+            state_free_all_directories(directories, dir_count);
             return error_wrap(err,
-                "Failed to resolve ownership for directory: %s", dir_entry->key);
+                "Failed to resolve ownership for directory: %s", dir_entry->storage_path);
         }
 
         /* Create directory with ATOMIC ownership and permissions
@@ -592,7 +590,7 @@ static error_t *deploy_tracked_directories(
         );
 
         if (err) {
-            free(filesystem_path);
+            state_free_all_directories(directories, dir_count);
             return error_wrap(err, "Failed to create tracked directory: %s",
                             filesystem_path);
         }
@@ -614,12 +612,10 @@ static error_t *deploy_tracked_directories(
                       filesystem_path, dir_entry->mode);
             }
         }
-
-        free(filesystem_path);
     }
 
-    /* Free the pointer array (items themselves remain in metadata) */
-    free(directories);
+    /* Free state directory entries */
+    state_free_all_directories(directories, dir_count);
 
     return NULL;
 }
@@ -631,6 +627,7 @@ error_t *deploy_execute(
     git_repository *repo,
     const workspace_t *ws,
     const manifest_t *manifest,
+    const state_t *state,
     const metadata_t *metadata,
     const deploy_options_t *opts,
     keymanager_t *km,
@@ -673,8 +670,8 @@ error_t *deploy_execute(
         return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
     }
 
-    /* Deploy tracked directories with metadata first */
-    err = deploy_tracked_directories(metadata, opts);
+    /* Deploy tracked directories from state database first */
+    err = deploy_tracked_directories(state, opts);
     if (err) {
         deploy_result_free(result);
         return error_wrap(err, "Failed to deploy tracked directories");

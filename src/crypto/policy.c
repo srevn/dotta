@@ -221,12 +221,12 @@ error_t *encryption_policy_matches_auto_patterns(
         return NULL;
     }
 
-    /* Strip "home/" or "root/" prefix for pattern matching
+    /* Strip prefix for pattern matching
      *
      * This allows patterns like ".ssh/id_*" to match "home/.ssh/id_rsa"
      * without requiring users to write "home/.ssh/id_*" in their config.
      *
-     * Both prefixes are exactly 5 characters ("home/" and "root/").
+     * Prefixes: "home/" (5 chars), "root/" (5 chars), "custom/" (7 chars)
      */
     const char *path_for_matching = storage_path;
 
@@ -234,6 +234,8 @@ error_t *encryption_policy_matches_auto_patterns(
         path_for_matching = storage_path + 5;  /* Skip "home/" */
     } else if (str_starts_with(storage_path, "root/")) {
         path_for_matching = storage_path + 5;  /* Skip "root/" */
+    } else if (str_starts_with(storage_path, "custom/")) {
+        path_for_matching = storage_path + 7;  /* Skip "custom/" */
     }
 
     /* Check if path matches any auto-encrypt pattern

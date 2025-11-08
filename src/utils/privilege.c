@@ -57,8 +57,10 @@ bool privilege_path_requires_root(const char *storage_path) {
         return false;  /* Defensive: empty path doesn't require root */
     }
 
-    /* Only root/ prefix files require root privileges for ownership capture */
-    return str_starts_with(storage_path, "root/");
+    /* Both root/ and custom/ prefix files may require root privileges for ownership capture
+     * home/ prefix files always use current user (never need root) */
+    return str_starts_with(storage_path, "root/") ||
+           str_starts_with(storage_path, "custom/");
 }
 
 /**

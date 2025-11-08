@@ -11,7 +11,6 @@
 #include <time.h>
 
 #include "base/error.h"
-#include "base/filesystem.h"
 #include "base/gitops.h"
 #include "core/metadata.h"
 #include "core/profiles.h"

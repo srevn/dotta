@@ -221,7 +221,7 @@ static error_t *extract_file_metadata_from_tree_entry(
 }
 
 /**
- * Build manifest from profiles
+ * Build manifest from profiles with custom prefix support
  *
  * This is the "precedence oracle" pattern - we use profile_build_manifest()
  * to determine who should own what files, then use that authoritative answer.
@@ -232,6 +232,7 @@ static error_t *extract_file_metadata_from_tree_entry(
  *
  * @param repo Git repository (must not be NULL)
  * @param profile_names Profile names to build from (must not be NULL)
+ * @param prefix_map Map of profile_name → custom_prefix (can be NULL)
  * @param out_manifest Output manifest (caller must free with manifest_free)
  * @param out_profiles Output profile list (caller must free with profile_list_free, must not be NULL)
  * @return Error or NULL on success
@@ -239,6 +240,7 @@ static error_t *extract_file_metadata_from_tree_entry(
 static error_t *build_manifest(
     git_repository *repo,
     const string_array_t *profile_names,
+    hashmap_t *prefix_map,
     manifest_t **out_manifest,
     profile_list_t **out_profiles
 ) {
@@ -258,8 +260,8 @@ static error_t *build_manifest(
         return error_wrap(err, "Failed to load profiles for manifest build");
     }
 
-    /* Build manifest (applies precedence rules) */
-    err = profile_build_manifest(repo, profiles, &manifest);
+    /* Build manifest with custom prefix context (applies precedence rules) */
+    err = profile_build_manifest(repo, profiles, prefix_map, &manifest);
     if (err) {
         profile_list_free(profiles);
         return error_wrap(err, "Failed to build manifest from profiles");
@@ -422,6 +424,7 @@ error_t *manifest_enable_profile(
     git_repository *repo,
     state_t *state,
     const char *profile_name,
+    const char *custom_prefix,
     const string_array_t *enabled_profiles,
     manifest_enable_stats_t *out_stats
 ) {
@@ -431,6 +434,7 @@ error_t *manifest_enable_profile(
     CHECK_NULL(enabled_profiles);
 
     error_t *err = NULL;
+    hashmap_t *prefix_map = NULL;
     manifest_t *manifest = NULL;
     profile_list_t *profiles = NULL;
     metadata_t *metadata = NULL;
@@ -446,13 +450,43 @@ error_t *manifest_enable_profile(
     }
     git_oid_tostr(head_oid_str, sizeof(head_oid_str), &head_oid);
 
-    /* 2. Build manifest from all enabled profiles (precedence oracle) */
-    err = build_manifest(repo, enabled_profiles, &manifest, &profiles);
+    /* 2. Load prefix map from state */
+    err = state_get_prefix_map(state, &prefix_map);
     if (err) {
+        return error_wrap(err, "Failed to load prefix map from state");
+    }
+
+    /* 3. Add new profile's custom prefix to map (if provided) */
+    if (custom_prefix && custom_prefix[0] != '\0') {
+        /* Temporarily add to map for this manifest build
+         * Note: Map already owns keys/values from state_get_prefix_map,
+         * but we need to allocate for this temporary addition */
+        char *name_copy = strdup(profile_name);
+        char *prefix_copy = strdup(custom_prefix);
+        if (!name_copy || !prefix_copy) {
+            free(name_copy);
+            free(prefix_copy);
+            hashmap_free(prefix_map, free);
+            return ERROR(ERR_MEMORY, "Failed to allocate prefix map entry");
+        }
+
+        err = hashmap_set(prefix_map, name_copy, prefix_copy);
+        if (err) {
+            free(name_copy);
+            free(prefix_copy);
+            hashmap_free(prefix_map, free);
+            return error_wrap(err, "Failed to add custom prefix to map");
+        }
+    }
+
+    /* 4. Build manifest from all enabled profiles with prefix context (precedence oracle) */
+    err = build_manifest(repo, enabled_profiles, prefix_map, &manifest, &profiles);
+    if (err) {
+        hashmap_free(prefix_map, free);
         return error_wrap(err, "Failed to build manifest for profile sync");
     }
 
-    /* 3. Load merged metadata from all profiles */
+    /* 5. Load merged metadata from all profiles */
     err = metadata_load_from_profiles(repo, enabled_profiles, &metadata);
     if (err) {
         /* Metadata may not exist for old profiles - continue with NULL */
@@ -463,7 +497,7 @@ error_t *manifest_enable_profile(
         err = NULL;
     }
 
-    /* 4. Create keymanager for content hashing */
+    /* 6. Create keymanager for content hashing */
     err = config_load(NULL, &config);
     if (err) {
         goto cleanup;
@@ -474,7 +508,7 @@ error_t *manifest_enable_profile(
         goto cleanup;
     }
 
-    /* 6. Sync entries owned by this profile (highest precedence) */
+    /* 7. Sync entries owned by this profile (highest precedence) */
 
     /* Track counts for user feedback */
     size_t total_files = 0;
@@ -600,6 +634,7 @@ error_t *manifest_enable_profile(
     }
 
 cleanup:
+    if (prefix_map) hashmap_free(prefix_map, free);
     if (profiles) profile_list_free(profiles);
     if (km) keymanager_free(km);
     if (config) config_free(config);
@@ -788,6 +823,7 @@ error_t *manifest_disable_profile(
     CHECK_NULL(remaining_enabled);
 
     error_t *err = NULL;
+    hashmap_t *prefix_map = NULL;
     state_file_entry_t *entries = NULL;
     size_t count = 0;
     manifest_t *fallback_manifest = NULL;
@@ -810,9 +846,16 @@ error_t *manifest_disable_profile(
         return NULL;
     }
 
-    /* 2. Build manifest from remaining profiles (fallback check) */
+    /* 2. Load prefix map from state */
+    err = state_get_prefix_map(state, &prefix_map);
+    if (err) {
+        state_free_all_files(entries, count);
+        return error_wrap(err, "Failed to load prefix map from state");
+    }
+
+    /* 3. Build manifest from remaining profiles (fallback check) */
     if (remaining_enabled->count > 0) {
-        err = build_manifest(repo, remaining_enabled,
+        err = build_manifest(repo, remaining_enabled, prefix_map,
                             &fallback_manifest, &fallback_profiles);
         if (err) {
             state_free_all_files(entries, count);
@@ -829,7 +872,7 @@ error_t *manifest_disable_profile(
         }
     }
 
-    /* 3. Process each entry */
+    /* 4. Process each entry */
     for (size_t i = 0; i < count; i++) {
         state_file_entry_t *entry = &entries[i];
         total_files++;
@@ -932,7 +975,7 @@ error_t *manifest_disable_profile(
         out_stats->files_removed = removed_count;
     }
 
-    /* 4. Process directories from disabled profile (mirrors file handling above)
+    /* 5. Process directories from disabled profile (mirrors file handling above)
      *
      * CRITICAL ARCHITECTURE CHANGE: Use incremental fallback/orphan pattern instead
      * of rebuild pattern to preserve orphan detection.
@@ -941,7 +984,7 @@ error_t *manifest_disable_profile(
      * update to fallback OR leave for orphan detection. Deferred cleanup via apply.
      */
 
-    /* 4a. Get directories from disabled profile */
+    /* 5a. Get directories from disabled profile */
     state_directory_entry_t *dir_entries = NULL;
     size_t dir_count = 0;
     hashmap_t *fallback_dirs = NULL;          /* storage_path -> metadata_item_t* */
@@ -959,7 +1002,7 @@ error_t *manifest_disable_profile(
         goto directory_cleanup;
     }
 
-    /* 4b. Build fallback directory index from remaining enabled profiles
+    /* 5b. Build fallback directory index from remaining enabled profiles
      *
      * Uses helper function that implements "last wins" precedence (matching file
      * fallback pattern). See build_directory_fallback_index() for details.
@@ -972,7 +1015,7 @@ error_t *manifest_disable_profile(
         goto directory_cleanup;
     }
 
-    /* 4c. Process each directory entry */
+    /* 5c. Process each directory entry */
     size_t dir_fallback_count = 0;
     size_t dir_removed_count = 0;
 
@@ -1082,6 +1125,7 @@ directory_cleanup:
     }
 
 cleanup:
+    if (prefix_map) hashmap_free(prefix_map, free);
     if (profile_oids) hashmap_free(profile_oids, free);
     if (fallback_profiles) profile_list_free(fallback_profiles);
     if (fallback_manifest) manifest_free(fallback_manifest);
@@ -1152,32 +1196,46 @@ error_t *manifest_remove_files(
     CHECK_NULL(enabled_profiles);
 
     error_t *err = NULL;
+    hashmap_t *prefix_map = NULL;
     manifest_t *fresh_manifest = NULL;
     profile_list_t *profiles = NULL;
     hashmap_t *profile_oids = NULL;
     size_t removed_count = 0;
     size_t fallback_count = 0;
 
-    /* 1. Build fresh manifest from current Git state (post-removal) */
-    err = build_manifest(repo, enabled_profiles, &fresh_manifest, &profiles);
+    /* 1. Load prefix map from state */
+    err = state_get_prefix_map(state, &prefix_map);
     if (err) {
+        return error_wrap(err, "Failed to load prefix map from state");
+    }
+
+    /* 2. Build fresh manifest from current Git state (post-removal) */
+    err = build_manifest(repo, enabled_profiles, prefix_map, &fresh_manifest, &profiles);
+    if (err) {
+        hashmap_free(prefix_map, free);
         return error_wrap(err, "Failed to build manifest for fallback detection");
     }
 
-    /* 2. Build profile→oid map (profile_name → git_oid string) for fast lookups */
+    /* 3. Build profile→oid map (profile_name → git_oid string) for fast lookups */
     err = build_profile_oid_map(repo, profiles, &profile_oids);
     if (err) {
         err = error_wrap(err, "Failed to build profile OID map");
         goto cleanup;
     }
 
-    /* 3. Process each removed file */
+    /* 4. Process each removed file */
     for (size_t i = 0; i < string_array_size(removed_storage_paths); i++) {
         const char *storage_path = string_array_get(removed_storage_paths, i);
 
-        /* Resolve to filesystem path */
+        /* Lookup custom prefix for the removed profile */
+        const char *custom_prefix = NULL;
+        if (prefix_map) {
+            custom_prefix = (const char *)hashmap_get(prefix_map, removed_profile);
+        }
+
+        /* Resolve to filesystem path with appropriate prefix */
         char *filesystem_path = NULL;
-        err = path_from_storage(storage_path, &filesystem_path);
+        err = path_from_storage(storage_path, custom_prefix, &filesystem_path);
         if (err) {
             err = error_wrap(err, "Failed to resolve path: %s", storage_path);
             goto cleanup;
@@ -1314,10 +1372,8 @@ error_t *manifest_remove_files(
     }
 
 cleanup:
-    if (profile_oids) {
-        hashmap_free(profile_oids, free);
-    }
-
+    if (prefix_map) hashmap_free(prefix_map, free);
+    if (profile_oids) hashmap_free(profile_oids, free);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);
 
@@ -1356,6 +1412,7 @@ error_t *manifest_rebuild(
     CHECK_NULL(enabled_profiles);
 
     error_t *err = NULL;
+    hashmap_t *prefix_map = NULL;
     manifest_t *manifest = NULL;
     profile_list_t *profiles = NULL;
     state_file_entry_t *old_entries = NULL;
@@ -1402,8 +1459,15 @@ error_t *manifest_rebuild(
         goto cleanup;
     }
 
-    /* 3. Build manifest ONCE from all enabled profiles (precedence oracle) */
-    err = build_manifest(repo, enabled_profiles, &manifest, &profiles);
+    /* 3. Load prefix map from state */
+    err = state_get_prefix_map(state, &prefix_map);
+    if (err) {
+        err = error_wrap(err, "Failed to load prefix map from state");
+        goto cleanup;
+    }
+
+    /* 4. Build manifest ONCE from all enabled profiles (precedence oracle) */
+    err = build_manifest(repo, enabled_profiles, prefix_map, &manifest, &profiles);
     if (err) {
         err = error_wrap(err, "Failed to build manifest for rebuild");
         goto cleanup;
@@ -1487,6 +1551,7 @@ error_t *manifest_rebuild(
     }
 
 cleanup:
+    if (prefix_map) hashmap_free(prefix_map, free);
     if (old_map) hashmap_free(old_map, NULL);
     state_free_all_files(old_entries, old_count);
     if (profile_oids) hashmap_free(profile_oids, free);
@@ -1518,6 +1583,7 @@ error_t *manifest_reorder_profiles(
     CHECK_NULL(new_profile_order);
 
     error_t *err = NULL;
+    hashmap_t *prefix_map = NULL;
     manifest_t *new_manifest = NULL;
     profile_list_t *profiles = NULL;
     state_file_entry_t *old_entries = NULL;
@@ -1528,19 +1594,26 @@ error_t *manifest_reorder_profiles(
     keymanager_t *km = NULL;
     dotta_config_t *config = NULL;
 
-    /* 1. Build new manifest with new precedence order (precedence oracle) */
-    err = build_manifest(repo, new_profile_order, &new_manifest, &profiles);
+    /* 1. Load prefix map from state */
+    err = state_get_prefix_map(state, &prefix_map);
     if (err) {
+        return error_wrap(err, "Failed to load prefix map from state");
+    }
+
+    /* 2. Build new manifest with new precedence order (precedence oracle) */
+    err = build_manifest(repo, new_profile_order, prefix_map, &new_manifest, &profiles);
+    if (err) {
+        hashmap_free(prefix_map, free);
         return error_wrap(err, "Failed to build manifest for precedence update");
     }
 
-    /* 2. Verify new manifest has index */
+    /* 3. Verify new manifest has index */
     if (!new_manifest->index) {
         err = ERROR(ERR_INTERNAL, "New manifest missing index");
         goto cleanup;
     }
 
-    /* 3. Get all current manifest entries and build hashmap for O(1) lookups */
+    /* 4. Get all current manifest entries and build hashmap for O(1) lookups */
     err = state_get_all_files(state, &old_entries, &old_count);
     if (err) {
         goto cleanup;
@@ -1561,7 +1634,7 @@ error_t *manifest_reorder_profiles(
         }
     }
 
-    /* 4. Load metadata and keymanager (needed for content hash computation) */
+    /* 5. Load metadata and keymanager (needed for content hash computation) */
     err = metadata_load_from_profiles(repo, new_profile_order, &metadata);
     if (err && err->code != ERR_NOT_FOUND) {
         goto cleanup;
@@ -1588,7 +1661,7 @@ error_t *manifest_reorder_profiles(
         goto cleanup;
     }
 
-    /* 5. Process each file in new manifest */
+    /* 6. Process each file in new manifest */
     for (size_t i = 0; i < new_manifest->count; i++) {
         file_entry_t *new_entry = &new_manifest->entries[i];
 
@@ -1639,7 +1712,7 @@ error_t *manifest_reorder_profiles(
         }
     }
 
-    /* 6. Check for files in old manifest but not in new (mark for removal) */
+    /* 7. Check for files in old manifest but not in new (mark for removal) */
     for (size_t i = 0; i < old_count; i++) {
         state_file_entry_t *old_entry = &old_entries[i];
 
@@ -1664,13 +1737,14 @@ error_t *manifest_reorder_profiles(
         }
     }
 
-    /* 7. Sync tracked directories with new profile order */
+    /* 8. Sync tracked directories with new profile order */
     err = manifest_sync_directories(repo, state, new_profile_order);
     if (err) {
         goto cleanup;
     }
 
 cleanup:
+    if (prefix_map) hashmap_free(prefix_map, free);
     if (profile_oids) hashmap_free(profile_oids, free);
     if (old_map) hashmap_free(old_map, NULL);
     if (profiles) profile_list_free(profiles);
@@ -1764,40 +1838,49 @@ error_t *manifest_update_files(
     }
 
     error_t *err = NULL;
+    hashmap_t *prefix_map = NULL;
     profile_list_t *profiles = NULL;
     manifest_t *fresh_manifest = NULL;
     hashmap_t *profile_oids = NULL;
     metadata_t *metadata_merged = NULL;
     bool using_cache = (metadata_cache != NULL);
 
-    /* 1. Load enabled profiles from Git */
+    /* 1. Load prefix map from state */
+    err = state_get_prefix_map(state, &prefix_map);
+    if (err) {
+        return error_wrap(err, "Failed to load prefix map from state");
+    }
+
+    /* 2. Load enabled profiles from Git */
     err = profile_list_load(repo, enabled_profiles->items,
                            enabled_profiles->count, false, &profiles);
     if (err) {
+        hashmap_free(prefix_map, free);
         return error_wrap(err, "Failed to load profiles for bulk sync");
     }
 
-    /* 2. Build FRESH manifest from Git (post-commit state) */
-    err = profile_build_manifest(repo, profiles, &fresh_manifest);
+    /* 3. Build FRESH manifest from Git (post-commit state) */
+    err = profile_build_manifest(repo, profiles, prefix_map, &fresh_manifest);
     if (err) {
+        hashmap_free(prefix_map, free);
         profile_list_free(profiles);
         return error_wrap(err, "Failed to build fresh manifest for bulk sync");
     }
 
-    /* 3. Verify manifest has index (should be populated by profile_build_manifest) */
+    /* 4. Verify manifest has index (should be populated by profile_build_manifest) */
     if (!fresh_manifest->index) {
         err = ERROR(ERR_INTERNAL, "Fresh manifest missing index");
         goto cleanup;
     }
 
-    /* 4. Build profile oid map (profile_name -> git_oid string) */
+    /* 5. Build profile oid map (profile_name -> git_oid string) */
     err = build_profile_oid_map(repo, profiles, &profile_oids);
     if (err) {
         err = error_wrap(err, "Failed to build profile oid map");
         goto cleanup;
     }
 
-    /* 5. Load fresh metadata if not provided (NULL handling)
+    /* 6. Load fresh metadata if not provided (NULL handling)
      *
      * CRITICAL: If metadata_cache is NULL, load merged metadata from Git.
      * This ensures we have current metadata including all newly-committed files.
@@ -1824,7 +1907,7 @@ error_t *manifest_update_files(
         }
     }
 
-    /* 6. Process each item */
+    /* 7. Process each item */
     for (size_t i = 0; i < item_count; i++) {
         const workspace_item_t *item = items[i];
 
@@ -1979,13 +2062,14 @@ error_t *manifest_update_files(
         }
     }
 
-    /* 7. Sync tracked directories */
+    /* 8. Sync tracked directories */
     err = manifest_sync_directories(repo, state, enabled_profiles);
     if (err) {
         goto cleanup;
     }
 
 cleanup:
+    if (prefix_map) hashmap_free(prefix_map, free);
     if (metadata_merged) metadata_free(metadata_merged);
     if (profile_oids) hashmap_free(profile_oids, free);
     if (fresh_manifest) manifest_free(fresh_manifest);
@@ -2076,22 +2160,31 @@ error_t *manifest_add_files(
     }
 
     error_t *err = NULL;
+    hashmap_t *prefix_map = NULL;
     profile_list_t *profiles = NULL;
     manifest_t *fresh_manifest = NULL;
     hashmap_t *profile_oids = NULL;
     metadata_t *metadata_merged = NULL;
     bool using_cache = (metadata_cache != NULL);
 
-    /* 1. Load enabled profiles from Git */
+    /* 1. Load prefix map from state */
+    err = state_get_prefix_map(state, &prefix_map);
+    if (err) {
+        return error_wrap(err, "Failed to load prefix map from state");
+    }
+
+    /* 2. Load enabled profiles from Git */
     err = profile_list_load(repo, enabled_profiles->items,
                            enabled_profiles->count, false, &profiles);
     if (err) {
+        hashmap_free(prefix_map, free);
         return error_wrap(err, "Failed to load profiles for bulk sync");
     }
 
-    /* 2. Build FRESH manifest from Git (post-commit state) */
-    err = profile_build_manifest(repo, profiles, &fresh_manifest);
+    /* 3. Build FRESH manifest from Git (post-commit state) */
+    err = profile_build_manifest(repo, profiles, prefix_map, &fresh_manifest);
     if (err) {
+        hashmap_free(prefix_map, free);
         profile_list_free(profiles);
         return error_wrap(err, "Failed to build fresh manifest for bulk sync");
     }
@@ -2194,6 +2287,7 @@ error_t *manifest_add_files(
     }
 
 cleanup:
+    if (prefix_map) hashmap_free(prefix_map, free);
     if (metadata_merged) metadata_free(metadata_merged);
     if (profile_oids) hashmap_free(profile_oids, free);
     if (fresh_manifest) manifest_free(fresh_manifest);
@@ -2278,6 +2372,7 @@ error_t *manifest_sync_diff(
     error_t *err = NULL;
 
     /* Resources to clean up */
+    hashmap_t *prefix_map = NULL;
     profile_list_t *profiles = NULL;
     manifest_t *fresh_manifest = NULL;
     hashmap_t *profile_oids = NULL;
@@ -2293,6 +2388,12 @@ error_t *manifest_sync_diff(
     size_t synced = 0, removed = 0, fallbacks = 0;
 
     /* PHASE 1: BUILD CONTEXT (O(M)) */
+    /* 1.0. Load prefix map from state */
+    err = state_get_prefix_map(state, &prefix_map);
+    if (err) {
+        return error_wrap(err, "Failed to load prefix map from state");
+    }
+
     /* 1.1. Load all enabled profiles from Git (current state) */
     err = profile_list_load(
         repo,
@@ -2312,7 +2413,7 @@ error_t *manifest_sync_diff(
      * not from specific OIDs, because profile_build_manifest() reads current state.
      * This is correct because after pull/rebase/merge, branch HEAD already points
      * to the new commit. */
-    err = profile_build_manifest(repo, profiles, &fresh_manifest);
+    err = profile_build_manifest(repo, profiles, prefix_map, &fresh_manifest);
     if (err) {
         err = error_wrap(err, "Failed to build fresh manifest");
         goto cleanup;
@@ -2430,12 +2531,18 @@ error_t *manifest_sync_diff(
             storage_path = delta->old_file.path;
         }
 
-        /* Resolve filesystem path */
+        /* Lookup custom prefix for this profile */
+        const char *custom_prefix = NULL;
+        if (prefix_map) {
+            custom_prefix = (const char *)hashmap_get(prefix_map, profile_name);
+        }
+
+        /* Resolve filesystem path with appropriate prefix */
         char *filesystem_path = NULL;
-        error_t *path_err = path_from_storage(storage_path, &filesystem_path);
-        if (path_err) {
+        error_t *err = path_from_storage(storage_path, custom_prefix, &filesystem_path);
+        if (err) {
             /* Skip files we can't resolve (invalid paths) */
-            error_free(path_err);
+            error_free(err);
             continue;
         }
 
@@ -2649,6 +2756,7 @@ cleanup:
     if (profile_oids) hashmap_free(profile_oids, free);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);
+    if (prefix_map) hashmap_free(prefix_map, free);
 
     return err;
 }
@@ -2703,6 +2811,7 @@ error_t *manifest_sync_directories(
     CHECK_NULL(enabled_profiles);
 
     error_t *err = NULL;
+    hashmap_t *prefix_map = NULL;
 
     /* 1. Clear all tracked directories */
     err = state_clear_directories(state);
@@ -2710,7 +2819,13 @@ error_t *manifest_sync_directories(
         return error_wrap(err, "Failed to clear tracked directories");
     }
 
-    /* 2. Rebuild from each enabled profile */
+    /* 2. Load prefix map from state for custom prefix resolution */
+    err = state_get_prefix_map(state, &prefix_map);
+    if (err) {
+        return error_wrap(err, "Failed to load prefix map from state");
+    }
+
+    /* 3. Rebuild from each enabled profile */
     for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
         const char *profile_name = string_array_get(enabled_profiles, i);
         metadata_t *metadata = NULL;
@@ -2725,7 +2840,14 @@ error_t *manifest_sync_directories(
                 continue;
             }
             /* Other error - fatal */
+            hashmap_free(prefix_map, free);
             return error_wrap(err, "Failed to load metadata for profile '%s'", profile_name);
+        }
+
+        /* Lookup custom prefix for this profile */
+        const char *custom_prefix = NULL;
+        if (prefix_map) {
+            custom_prefix = (const char *)hashmap_get(prefix_map, profile_name);
         }
 
         /* Extract directories from metadata */
@@ -2740,12 +2862,14 @@ error_t *manifest_sync_directories(
             err = state_directory_entry_create_from_metadata(
                 directories[j],
                 profile_name,  /* Profile attribution */
+                custom_prefix, /* Custom prefix for path resolution */
                 &state_dir
             );
 
             if (err) {
                 free(directories);
                 metadata_free(metadata);
+                hashmap_free(prefix_map, free);
                 return error_wrap(err, "Failed to create state directory entry for '%s'",
                                 directories[j]->key);
             }
@@ -2756,6 +2880,7 @@ error_t *manifest_sync_directories(
             if (err) {
                 free(directories);
                 metadata_free(metadata);
+                hashmap_free(prefix_map, free);
                 return error_wrap(err, "Failed to add directory '%s' to state",
                                 directories[j]->key);
             }
@@ -2766,5 +2891,6 @@ error_t *manifest_sync_directories(
         metadata_free(metadata);
     }
 
+    hashmap_free(prefix_map, free);
     return NULL;
 }

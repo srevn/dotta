@@ -142,6 +142,8 @@ void print_add_help(const char *prog_name) {
     printf("  <file|dir>...             Files or directories to add\n");
     printf("\nOptions:\n");
     printf("  -p, --profile <name>      Profile name\n");
+    printf("  --prefix <path>           Custom prefix for custom/ storage paths\n");
+    printf("                            Example: --prefix /mnt/jails/web\n");
     printf("  -m, --message <msg>       Commit message\n");
     printf("  -e, --exclude <pattern>   Exclude pattern (glob, can be repeated)\n");
     printf("  -f, --force               Overwrite existing files in profile\n");
@@ -371,6 +373,8 @@ void print_profile_help(const char *prog_name) {
     printf("  -v, --verbose            Show detailed progress\n");
     printf("\nOptions (enable):\n");
     printf("  --all                    Enable all local profiles\n");
+    printf("  --prefix <path>          Custom prefix for profiles with custom/ files\n");
+    printf("                           Example: --prefix /mnt/jails/web\n");
     printf("  -v, --verbose            Show detailed progress\n");
     printf("  -q, --quiet              Suppress non-error output\n");
     printf("\nOptions (disable):\n");

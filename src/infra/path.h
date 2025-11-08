@@ -24,34 +24,52 @@
 /**
  * Convert filesystem path to storage path
  *
- * Examples:
- *   /home/user/.bashrc  -> home/.bashrc (PREFIX_HOME)
- *   /etc/hosts          -> root/etc/hosts (PREFIX_ROOT)
+ * Detection order (CANONICAL REPRESENTATION):
+ * 1. $HOME (canonical for user files) - FIRST
+ * 2. Custom prefix (if provided and matches) - SECOND
+ * 3. Root (fallback for system files)
  *
- * @param filesystem_path Absolute filesystem path (must not be NULL)
- * @param storage_path Output storage path (must not be NULL, caller must free)
- * @param prefix Output prefix type (can be NULL if not needed)
+ * This ensures files under $HOME ALWAYS use home/ prefix,
+ * even if --prefix matches $HOME (canonical representation).
+ *
+ * Examples:
+ *   ~/.bashrc (NULL)              -> home/.bashrc (PREFIX_HOME)
+ *   ~/.bashrc ($HOME)             -> home/.bashrc (PREFIX_HOME, prefix ignored)
+ *   /jail/etc/nginx.conf (/jail) -> custom/etc/nginx.conf (PREFIX_CUSTOM)
+ *   /etc/hosts (NULL)             -> root/etc/hosts (PREFIX_ROOT)
+ *
+ * @param filesystem_path Filesystem path (e.g., "/mnt/jail/etc/nginx.conf")
+ * @param custom_prefix Custom prefix to detect (NULL if not using custom/)
+ * @param storage_path Output storage path (caller must free)
+ * @param prefix_out Output prefix type (can be NULL)
  * @return Error or NULL on success
  */
 error_t *path_to_storage(
     const char *filesystem_path,
+    const char *custom_prefix,
     char **storage_path,
-    path_prefix_t *prefix
+    path_prefix_t *prefix_out
 );
 
 /**
  * Convert storage path to filesystem path
  *
- * Examples:
- *   home/.bashrc     -> /home/user/.bashrc
- *   root/etc/hosts   -> /etc/hosts
+ * For custom/ paths, requires custom_prefix parameter.
+ * For home/ and root/ paths, custom_prefix is ignored (can be NULL).
  *
- * @param storage_path Storage path (must not be NULL, must start with home/ or root/)
- * @param filesystem_path Output filesystem path (must not be NULL, caller must free)
+ * Examples:
+ *   home/.bashrc (NULL)           -> $HOME/.bashrc
+ *   root/etc/hosts (NULL)         -> /etc/hosts
+ *   custom/etc/nginx.conf (/jail) -> /jail/etc/nginx.conf
+ *
+ * @param storage_path Storage path (e.g., "custom/etc/nginx.conf")
+ * @param custom_prefix Custom prefix for custom/ paths (NULL for home/root)
+ * @param filesystem_path Output filesystem path (caller must free)
  * @return Error or NULL on success
  */
 error_t *path_from_storage(
     const char *storage_path,
+    const char *custom_prefix,
     char **filesystem_path
 );
 
@@ -162,5 +180,27 @@ error_t *path_resolve_input(
     bool require_exists,
     char **out_storage_path
 );
+
+/**
+ * Validate custom prefix parameter
+ *
+ * Validates that a user-provided custom prefix is safe to use.
+ *
+ * Checks:
+ * - Absolute path (starts with /)
+ * - No path traversal (no ../, ./, //)
+ * - No trailing slash (normalized)
+ * - Directory exists (via realpath)
+ * - Is a directory (not a file)
+ *
+ * Security Notes:
+ * - Uses realpath() to normalize and verify existence
+ * - Follows symlinks (documented behavior)
+ * - Prevents path traversal attacks
+ *
+ * @param prefix Custom prefix to validate (must not be NULL)
+ * @return Error or NULL if valid
+ */
+error_t *path_validate_custom_prefix(const char *prefix);
 
 #endif /* DOTTA_PATH_H */

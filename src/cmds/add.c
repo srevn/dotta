@@ -521,7 +521,7 @@ static error_t *create_commit(
         char *storage_path = NULL;
         path_prefix_t prefix;
 
-        derr = path_to_storage(file_path, &storage_path, &prefix);
+        derr = path_to_storage(file_path, opts->custom_prefix, &storage_path, &prefix);
         if (derr) {
             /* Skip if conversion fails (shouldn't happen at this point) */
             error_free(derr);
@@ -680,6 +680,7 @@ cleanup:
  *
  * @param repo Git repository (must not be NULL)
  * @param profile_name Profile to auto-enable (must not be NULL, must exist in Git)
+ * @param custom_prefix Custom prefix for custom/ files (can be NULL)
  * @param added_files Filesystem paths that were added (must not be NULL)
  * @param out Output context for user feedback (can be NULL)
  * @param out_updated Output flag: true if successful (must not be NULL)
@@ -689,6 +690,7 @@ cleanup:
 static error_t *auto_enable_and_sync_profile(
     git_repository *repo,
     const char *profile_name,
+    const char *custom_prefix,
     const string_array_t *added_files,
     output_ctx_t *out,
     bool *out_updated,
@@ -702,7 +704,6 @@ static error_t *auto_enable_and_sync_profile(
     error_t *err = NULL;
     state_t *state = NULL;
     string_array_t *enabled_profiles = NULL;
-    char **profile_names = NULL;
     keymanager_t *km = NULL;
     dotta_config_t *config = NULL;
     content_cache_t *content_cache = NULL;
@@ -793,21 +794,10 @@ static error_t *auto_enable_and_sync_profile(
         goto cleanup;
     }
 
-    /* STEP 7: Persist updated enabled profiles */
-    size_t profile_count = string_array_size(enabled_profiles);
-    profile_names = malloc(profile_count * sizeof(char *));
-    if (!profile_names) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate profile names");
-        goto cleanup;
-    }
-
-    for (size_t i = 0; i < profile_count; i++) {
-        profile_names[i] = (char *)string_array_get(enabled_profiles, i);
-    }
-
-    err = state_set_profiles(state, profile_names, profile_count);
+    /* STEP 7: Enable profile in state with custom prefix (if provided) */
+    err = state_enable_profile(state, profile_name, custom_prefix);
     if (err) {
-        err = error_wrap(err, "Failed to update state profiles");
+        err = error_wrap(err, "Failed to enable profile in state");
         goto cleanup;
     }
 
@@ -833,7 +823,6 @@ static error_t *auto_enable_and_sync_profile(
 
 cleanup:
     /* Free resources in reverse order */
-    free(profile_names);
     if (content_cache) {
         content_cache_free(content_cache);
     }
@@ -1078,6 +1067,14 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
+    /* Validate custom prefix if provided */
+    if (opts->custom_prefix) {
+        err = path_validate_custom_prefix(opts->custom_prefix);
+        if (err) {
+            goto cleanup;
+        }
+    }
+
     /* PRE-FLIGHT PRIVILEGE CHECK
      *
      * This check happens BEFORE any operations begin to ensure we have required
@@ -1109,7 +1106,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             char *storage_path = NULL;
             path_prefix_t prefix;
 
-            err = path_to_storage(file_path, &storage_path, &prefix);
+            err = path_to_storage(file_path, opts->custom_prefix, &storage_path, &prefix);
             if (err) {
                 /* Cleanup allocated paths on error */
                 for (size_t j = 0; j < i; j++) {
@@ -1119,6 +1116,11 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                 free(allocated_paths);
                 err = error_wrap(err, "Failed to resolve path '%s'", file_path);
                 goto cleanup;
+            }
+
+            /* Optional: Warn if file under $HOME but custom prefix provided */
+            if (prefix == PREFIX_HOME && opts->custom_prefix) {
+                output_warning(out, "File '%s' is under $HOME, using portable 'home/' prefix", file_path);
             }
 
             allocated_paths[i] = storage_path;
@@ -1252,10 +1254,31 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         char *absolute = NULL;
 
         /* Check if input is a storage path */
-        if (str_starts_with(file, "home/") || str_starts_with(file, "root/")) {
+        if (str_starts_with(file, "home/") ||
+            str_starts_with(file, "root/") ||
+            str_starts_with(file, "custom/")) {
+
+            /* Determine if we need custom prefix for this storage path */
+            const char *prefix_for_conversion = NULL;
+
+            if (str_starts_with(file, "custom/")) {
+                /* custom/ paths require --prefix flag */
+                prefix_for_conversion = opts->custom_prefix;
+
+                if (!prefix_for_conversion || prefix_for_conversion[0] == '\0') {
+                    free(absolute);
+                    err = ERROR(ERR_INVALID_ARG,
+                        "Storage path '%s' requires --prefix flag\n"
+                        "Usage: dotta add -p %s --prefix /path/to/target %s",
+                        file, opts->profile, file);
+                    goto cleanup;
+                }
+            }
+            /* home/ and root/ don't need custom prefix (pass NULL) */
+
             /* Convert storage path to filesystem path */
             char *fs_path = NULL;
-            err = path_from_storage(file, &fs_path);
+            err = path_from_storage(file, prefix_for_conversion, &fs_path);
             if (err) {
                 err = error_wrap(err, "Failed to convert storage path '%s'", file);
                 goto cleanup;
@@ -1305,7 +1328,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             /* Track this directory for new file detection */
             char *storage_prefix = NULL;
             path_prefix_t prefix;
-            err = path_to_storage(absolute, &storage_prefix, &prefix);
+            err = path_to_storage(absolute, opts->custom_prefix, &storage_prefix, &prefix);
             if (err) {
                 /* Non-fatal: just log warning */
                 if (opts->verbose && out) {
@@ -1421,7 +1444,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         /* Compute storage path once */
         char *storage_path = NULL;
         path_prefix_t prefix;
-        err = path_to_storage(file_path, &storage_path, &prefix);
+        err = path_to_storage(file_path, opts->custom_prefix, &storage_path, &prefix);
         if (err) {
             err = error_wrap(err, "Failed to convert path '%s'", file_path);
             goto cleanup;
@@ -1590,7 +1613,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
          * - Matches VWD architecture specification
          */
         error_t *enable_err = auto_enable_and_sync_profile(
-            repo, opts->profile, all_files, out,
+            repo, opts->profile, opts->custom_prefix, all_files, out,
             &manifest_updated, &manifest_synced_count
         );
 

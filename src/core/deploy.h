@@ -111,12 +111,14 @@ error_t *deploy_preflight_check_from_workspace(
  * Architecture:
  * - Workspace: Single source of truth for divergence (already computed)
  * - Deploy: Pure execution engine, queries workspace for skip decisions
+ * - State: Source of truth for directory entries (VWD principle)
  * - State management: Handled by caller after deployment succeeds
  *
  * @param repo Repository (must not be NULL)
  * @param ws Workspace with pre-computed divergence analysis (must not be NULL)
  * @param manifest Manifest to deploy (must not be NULL)
- * @param metadata Merged metadata for permission restoration (can be NULL)
+ * @param state State database for tracked directories (can be NULL)
+ * @param metadata Merged metadata for file permission restoration (can be NULL)
  * @param opts Deployment options (must not be NULL)
  * @param km Key manager for encryption (can be NULL for plaintext-only)
  * @param cache Content cache for batch operations (must not be NULL)
@@ -127,6 +129,7 @@ error_t *deploy_execute(
     git_repository *repo,
     const workspace_t *ws,
     const manifest_t *manifest,
+    const state_t *state,
     const metadata_t *metadata,
     const deploy_options_t *opts,
     keymanager_t *km,

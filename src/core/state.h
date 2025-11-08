@@ -259,10 +259,109 @@ error_t *state_get_all_files(
 void state_free_all_files(state_file_entry_t *entries, size_t count);
 
 /**
- * Set enabled profiles
+ * Enable profile with optional custom prefix
+ *
+ * If profile already enabled, updates its custom_prefix (UPSERT behavior).
+ * Position assigned automatically as MAX(position) + 1 for new profiles.
+ *
+ * Preconditions:
+ *   - state MUST have active transaction (via state_load_for_update)
+ *   - profile_name MUST NOT be NULL or empty
+ *
+ * Postconditions:
+ *   - Profile added to enabled_profiles or existing entry updated
+ *   - custom_prefix column set to prefix (or NULL if not provided)
+ *   - enabled_at timestamp updated to current time
+ *   - Transaction remains open (caller commits)
+ *
+ * @param state State handle (must not be NULL, must have active transaction)
+ * @param profile_name Profile name (must not be NULL)
+ * @param custom_prefix Custom prefix or NULL for home/root profiles
+ * @return Error or NULL on success
+ */
+error_t *state_enable_profile(
+    state_t *state,
+    const char *profile_name,
+    const char *custom_prefix
+);
+
+/**
+ * Disable profile
+ *
+ * Removes profile from enabled_profiles table.
+ *
+ * Preconditions:
+ *   - state MUST have active transaction
+ *
+ * Postconditions:
+ *   - Profile removed from enabled_profiles (if exists)
+ *   - Transaction remains open (caller commits)
+ *   - Not an error if profile wasn't enabled
+ *
+ * @param state State handle (must not be NULL, must have active transaction)
+ * @param profile_name Profile name (must not be NULL)
+ * @return Error or NULL on success (not found is OK)
+ */
+error_t *state_disable_profile(
+    state_t *state,
+    const char *profile_name
+);
+
+/**
+ * Get custom prefix map
+ *
+ * Builds a hashmap of profile_name → custom_prefix for all enabled profiles
+ * that have a custom prefix set (WHERE custom_prefix IS NOT NULL).
+ *
+ * Returns empty map if no custom prefixes exist (not an error).
+ *
+ * Map values are dynamically allocated strings (caller must free map with
+ * hashmap_free(map, free) to free both keys and values).
+ *
+ * Performance: Single SQL query, O(N) where N = profiles with custom prefixes
+ *
+ * @param state State handle (must not be NULL)
+ * @param out_map Output hashmap (caller must free with hashmap_free(..., free))
+ * @return Error or NULL on success (empty map if no custom prefixes)
+ */
+error_t *state_get_prefix_map(
+    const state_t *state,
+    hashmap_t **out_map
+);
+
+/**
+ * Set enabled profiles (bulk operation)
+ *
+ * BULK API: For atomic profile list replacement (clone, reorder, interactive).
+ * For individual profile enable/disable, prefer state_enable_profile() and
+ * state_disable_profile() which provide explicit custom prefix management.
+ *
+ * Custom Prefix Preservation:
+ *   Automatically preserves custom_prefix values for profiles that remain
+ *   enabled after the operation. This enables safe profile reordering without
+ *   losing custom prefix associations.
+ *
+ * Use Cases:
+ *   - Clone: Initial profile list setup (no custom prefixes exist yet)
+ *   - Reorder: Change precedence order while preserving custom_prefix values
+ *   - Interactive: Bulk enable/disable selection with prefix preservation
+ *
+ * Position Assignment:
+ *   Profiles are assigned sequential positions starting from 0.
+ *   Any gaps in position numbering from previous operations are eliminated.
  *
  * Hot path - must be fast even with 10,000 deployed files.
  * Only modifies enabled_profiles table (virtual_manifest table untouched).
+ *
+ * Preconditions:
+ *   - state MUST have active transaction (via state_load_for_update)
+ *
+ * Postconditions:
+ *   - enabled_profiles table replaced with new profile list
+ *   - Positions assigned as 0, 1, 2, ... (n-1)
+ *   - custom_prefix values preserved for matching profile names
+ *   - enabled_at timestamp updated to current time for all profiles
+ *   - Transaction remains open (caller commits)
  *
  * @param state State (must not be NULL)
  * @param profiles Array of profile names (must not be NULL)
@@ -487,12 +586,14 @@ error_t *state_get_entries_by_profile(
  *
  * @param meta_item Metadata item (must not be NULL, must be DIRECTORY kind)
  * @param profile_name Source profile name (must not be NULL)
+ * @param custom_prefix Custom prefix for this profile (NULL for home/root)
  * @param out State directory entry (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
 error_t *state_directory_entry_create_from_metadata(
     const metadata_item_t *meta_item,
     const char *profile_name,
+    const char *custom_prefix,
     state_directory_entry_t **out
 );
 

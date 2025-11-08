@@ -19,6 +19,7 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "core/upstream.h"
+#include "infra/path.h"
 #include "utils/array.h"
 #include "utils/config.h"
 #include "utils/output.h"
@@ -644,7 +645,6 @@ static error_t *profile_enable(
     string_array_t *enabled = NULL;
     string_array_t *to_enable = NULL;
     string_array_t *all_branches = NULL;
-    char **profile_names = NULL;
     error_t *err = NULL;
 
     /* Counters for summary (not cleaned up) */
@@ -694,8 +694,7 @@ static error_t *profile_enable(
     } else {
         /* Enable specified profiles */
         if (opts->profile_count == 0) {
-            err = ERROR(ERR_INVALID_ARG,
-                       "No profiles specified\n"
+            err = ERROR(ERR_INVALID_ARG, "No profiles specified\n"
                        "Hint: Use 'dotta profile enable <name>' or '--all'");
             goto cleanup;
         }
@@ -707,6 +706,18 @@ static error_t *profile_enable(
                 goto cleanup;
             }
         }
+    }
+
+    /* Validation: --prefix requires exactly ONE profile */
+    if (opts->custom_prefix && string_array_size(to_enable) > 1) {
+        output_error(out, "Cannot use --prefix with multiple profiles");
+        output_hint(out, "Enable each profile separately:");
+        for (size_t i = 0; i < string_array_size(to_enable); i++) {
+            output_hint(out, "  dotta profile enable %s --prefix <path>",
+                       string_array_get(to_enable, i));
+        }
+        err = ERROR(ERR_INVALID_ARG, "Ambiguous --prefix usage");
+        goto cleanup;
     }
 
     /* Process each profile */
@@ -738,7 +749,45 @@ static error_t *profile_enable(
             continue;
         }
 
-        /* Add to enabled list */
+        /* Check if profile contains custom/ files */
+        bool has_custom = false;
+        err = profile_has_custom_files(repo, profile_name, &has_custom);
+        if (err) {
+            /* Non-fatal: assume no custom files */
+            error_free(err);
+            err = NULL;
+        }
+
+        /* Validate custom prefix requirement */
+        if (has_custom && !opts->custom_prefix) {
+            output_error(out, "Profile '%s' contains custom/ files but --prefix not provided",
+                        profile_name);
+            output_hint(out, "  Usage: dotta profile enable %s --prefix /path/to/target",
+                       profile_name);
+            not_found++;
+            continue;
+        }
+
+        /* Validate custom prefix if provided */
+        if (opts->custom_prefix) {
+            err = path_validate_custom_prefix(opts->custom_prefix);
+            if (err) {
+                output_error(out, "Invalid custom prefix: %s", error_message(err));
+                error_free(err);
+                err = NULL;
+                not_found++;
+                continue;
+            }
+        }
+
+        /* Enable profile in state with custom prefix */
+        err = state_enable_profile(state, profile_name, opts->custom_prefix);
+        if (err) {
+            err = error_wrap(err, "Failed to enable profile in state");
+            goto cleanup;
+        }
+
+        /* Add to enabled list (for manifest building) */
         err = string_array_push(enabled, profile_name);
         if (err) {
             err = error_wrap(err, "Failed to add profile to enabled list");
@@ -748,7 +797,7 @@ static error_t *profile_enable(
 
         /* Sync profile to manifest and capture stats */
         manifest_enable_stats_t stats = {0};
-        err = manifest_enable_profile(repo, state, profile_name, enabled, &stats);
+        err = manifest_enable_profile(repo, state, profile_name, opts->custom_prefix, enabled, &stats);
         if (err) {
             err = error_wrap(err, "Failed to sync profile '%s' to manifest", profile_name);
             goto cleanup;
@@ -764,25 +813,8 @@ static error_t *profile_enable(
         }
     }
 
-    /* Update state with new enabled profiles */
+    /* Save state (profiles already updated via state_enable_profile in loop) */
     if (enabled_count > 0) {
-        profile_names = malloc(string_array_size(enabled) * sizeof(char *));
-        if (!profile_names) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate profile names");
-            goto cleanup;
-        }
-
-        for (size_t i = 0; i < string_array_size(enabled); i++) {
-            profile_names[i] = (char *)string_array_get(enabled, i);
-        }
-
-        err = state_set_profiles(state, profile_names, string_array_size(enabled));
-        if (err) {
-            err = error_wrap(err, "Failed to update state");
-            goto cleanup;
-        }
-
-        /* Save state */
         err = state_save(repo, state);
         if (err) {
             err = error_wrap(err, "Failed to save state");
@@ -792,7 +824,6 @@ static error_t *profile_enable(
 
 cleanup:
     /* Cleanup all resources */
-    free(profile_names);
     string_array_free(all_branches);
     string_array_free(to_enable);
     string_array_free(enabled);
@@ -809,8 +840,8 @@ cleanup:
     }
 
     if (enabled_count > 0) {
-        output_success(out, "Enabled %zu profile%s",
-                      enabled_count, enabled_count == 1 ? "" : "s");
+        output_success(out, "Enabled %zu profile%s", enabled_count,
+                      enabled_count == 1 ? "" : "s");
         output_info(out, "Files staged for deployment in manifest");
         output_info(out, "Run 'dotta status' to review or 'dotta apply' to deploy");
     }
@@ -849,7 +880,6 @@ static error_t *profile_disable(
     string_array_t *enabled = NULL;
     string_array_t *to_disable = NULL;
     string_array_t *new_enabled = NULL;
-    char **profile_names = NULL;
     error_t *err = NULL;
 
     /* Counters for summary (not cleaned up) */
@@ -889,8 +919,7 @@ static error_t *profile_disable(
     } else {
         /* Disable specified profiles */
         if (opts->profile_count == 0) {
-            err = ERROR(ERR_INVALID_ARG,
-                       "No profiles specified\n"
+            err = ERROR(ERR_INVALID_ARG, "No profiles specified\n"
                        "Hint: Use 'dotta profile disable <name>' or '--all'");
             goto cleanup;
         }
@@ -904,35 +933,35 @@ static error_t *profile_disable(
         }
     }
 
-    /* Build new enabled list (excluding disabled) */
+    /* Count profiles and build new_enabled for manifest operations */
     new_enabled = string_array_create();
     if (!new_enabled) {
         err = ERROR(ERR_MEMORY, "Failed to create array");
         goto cleanup;
     }
 
-    /* Build new enabled list and count profiles */
+    /* Build new_enabled list (for manifest_disable_profile) and count */
     for (size_t i = 0; i < string_array_size(enabled); i++) {
         const char *profile_name = string_array_get(enabled, i);
 
-        /* Check if should be disabled */
+        /* Check if this profile should be disabled */
         bool should_disable = false;
         for (size_t j = 0; j < string_array_size(to_disable); j++) {
             if (strcmp(string_array_get(to_disable, j), profile_name) == 0) {
                 should_disable = true;
+                disabled_count++;
+                if (opts->verbose) {
+                    output_success(out, "  ✓ Disabling %s", profile_name);
+                }
                 break;
             }
         }
 
-        if (should_disable) {
-            disabled_count++;
-            if (opts->verbose) {
-                output_success(out, "  ✓ Disabled %s", profile_name);
-            }
-        } else {
+        /* Add to new_enabled if NOT being disabled (needed for manifest fallback) */
+        if (!should_disable) {
             err = string_array_push(new_enabled, profile_name);
             if (err) {
-                err = error_wrap(err, "Failed to add profile to new enabled list");
+                err = error_wrap(err, "Failed to build remaining profiles list");
                 goto cleanup;
             }
         }
@@ -962,8 +991,8 @@ static error_t *profile_disable(
     if (opts->dry_run) {
         if (disabled_count > 0) {
             output_newline(out);
-            output_info(out, "Would disable %zu profile%s:",
-                       disabled_count, disabled_count == 1 ? "" : "s");
+            output_info(out, "Would disable %zu profile%s:", disabled_count,
+                        disabled_count == 1 ? "" : "s");
             for (size_t i = 0; i < string_array_size(to_disable); i++) {
                 const char *profile_name = string_array_get(to_disable, i);
                 /* Check if it was actually enabled */
@@ -984,9 +1013,9 @@ static error_t *profile_disable(
         goto cleanup;
     }
 
-    /* Update state with new enabled profiles */
+    /* Update state with disabled profiles */
     if (disabled_count > 0) {
-        /* Unsync each disabled profile from manifest (handle fallback) */
+        /* Process each disabled profile */
         for (size_t i = 0; i < string_array_size(to_disable); i++) {
             const char *profile_name = string_array_get(to_disable, i);
 
@@ -1009,30 +1038,21 @@ static error_t *profile_disable(
                     goto cleanup;
                 }
 
-                /* Show manifest analysis (verbose mode shows details earlier in first loop) */
+                /* Show manifest analysis */
                 if (opts->verbose) {
                     print_manifest_disable_stats(out, profile_name, &stats, true);
                 } else {
                     /* In non-verbose, show compact summary per-profile */
                     print_manifest_disable_stats(out, profile_name, &stats, false);
                 }
+
+                /* Remove from state */
+                err = state_disable_profile(state, profile_name);
+                if (err) {
+                    err = error_wrap(err, "Failed to remove profile '%s' from state", profile_name);
+                    goto cleanup;
+                }
             }
-        }
-
-        profile_names = malloc(string_array_size(new_enabled) * sizeof(char *));
-        if (!profile_names) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate profile names");
-            goto cleanup;
-        }
-
-        for (size_t i = 0; i < string_array_size(new_enabled); i++) {
-            profile_names[i] = (char *)string_array_get(new_enabled, i);
-        }
-
-        err = state_set_profiles(state, profile_names, string_array_size(new_enabled));
-        if (err) {
-            err = error_wrap(err, "Failed to update state");
-            goto cleanup;
         }
 
         /* Save state (profile disabling only - filesystem cleanup via 'apply') */
@@ -1045,7 +1065,6 @@ static error_t *profile_disable(
 
 cleanup:
     /* Cleanup all resources */
-    free(profile_names);
     string_array_free(new_enabled);
     string_array_free(to_disable);
     string_array_free(enabled);
@@ -1062,14 +1081,12 @@ cleanup:
     }
 
     if (disabled_count > 0) {
-        output_success(out, "Disabled %zu profile%s",
-                      disabled_count, disabled_count == 1 ? "" : "s");
+        output_success(out, "Disabled %zu profile%s", disabled_count, disabled_count == 1 ? "" : "s");
         output_info(out, "Files updated in manifest (fallback or marked for removal)");
         output_info(out, "Run 'dotta status' to review or 'dotta apply' to execute changes");
     }
     if (not_enabled > 0 && !opts->quiet) {
-        output_info(out, "%zu profile%s were not enabled",
-                   not_enabled, not_enabled == 1 ? "" : "s");
+        output_info(out, "%zu profile%s were not enabled", not_enabled, not_enabled == 1 ? "" : "s");
     }
 
     /* Return success if profiles were already disabled (idempotent) */
@@ -1106,8 +1123,7 @@ static error_t *profile_reorder(
 
     /* Validation: at least one profile specified */
     if (opts->profile_count == 0) {
-        err = ERROR(ERR_INVALID_ARG,
-                    "No profiles specified\n"
+        err = ERROR(ERR_INVALID_ARG, "No profiles specified\n"
                     "Hint: Provide profiles in desired order: dotta profile reorder <p1> <p2> ...");
         goto cleanup;
     }
@@ -1128,8 +1144,7 @@ static error_t *profile_reorder(
 
     /* Edge case: no enabled profiles */
     if (string_array_size(current_enabled) == 0) {
-        err = ERROR(ERR_VALIDATION,
-                   "No enabled profiles to reorder\n"
+        err = ERROR(ERR_VALIDATION, "No enabled profiles to reorder\n"
                    "Hint: Run 'dotta profile enable <name>' first");
         goto cleanup;
     }
@@ -1164,9 +1179,9 @@ static error_t *profile_reorder(
             }
         }
         if (!is_enabled) {
-            err = ERROR(ERR_VALIDATION,
-                       "Profile '%s' is not enabled\n"
-                       "Hint: Only enabled profiles can be reordered. Run 'dotta profile list' to see enabled profiles",
+            err = ERROR(ERR_VALIDATION, "Profile '%s' is not enabled\n"
+                       "Hint: Only enabled profiles can be reordered."
+                       " Run 'dotta profile list' to see enabled profiles",
                        opts->profiles[i]);
             goto cleanup;
         }
@@ -1174,11 +1189,9 @@ static error_t *profile_reorder(
 
     /* Validation 3: Profile count must match */
     if (opts->profile_count != string_array_size(current_enabled)) {
-        err = ERROR(ERR_VALIDATION,
-                   "Profile count mismatch: %zu enabled, %zu provided\n"
+        err = ERROR(ERR_VALIDATION, "Profile count mismatch: %zu enabled, %zu provided\n"
                    "Hint: All enabled profiles must be included in reorder",
-                   string_array_size(current_enabled),
-                   opts->profile_count);
+                   string_array_size(current_enabled), opts->profile_count);
         goto cleanup;
     }
 
@@ -1193,10 +1206,8 @@ static error_t *profile_reorder(
             }
         }
         if (!found) {
-            err = ERROR(ERR_VALIDATION,
-                       "Missing enabled profile '%s' from reorder list\n"
-                       "Hint: All enabled profiles must be included",
-                       enabled_profile);
+            err = ERROR(ERR_VALIDATION, "Missing enabled profile '%s' from reorder list\n"
+                       "Hint: All enabled profiles must be included", enabled_profile);
             goto cleanup;
         }
     }
@@ -1265,8 +1276,7 @@ static error_t *profile_reorder(
     /* Success message */
     if (!opts->quiet) {
         output_newline(out);
-        output_success(out, "Reordered %zu profile%s",
-                      opts->profile_count,
+        output_success(out, "Reordered %zu profile%s", opts->profile_count,
                       opts->profile_count == 1 ? "" : "s");
         output_info(out, "Manifest updated to reflect new precedence");
         output_info(out, "Run 'dotta status' to review changes");
@@ -1299,8 +1309,6 @@ static error_t *profile_validate(
     state_t *state = NULL;
     string_array_t *enabled = NULL;
     string_array_t *missing = NULL;
-    string_array_t *valid = NULL;
-    char **profile_names = NULL;
     error_t *err = NULL;
 
     /* State for reporting (not cleaned up) */
@@ -1360,37 +1368,13 @@ static error_t *profile_validate(
 
         if (opts->fix) {
             /* Remove missing profiles from state */
-            valid = string_array_create();
-            if (!valid) {
-                err = ERROR(ERR_MEMORY, "Failed to create array");
-                goto cleanup;
-            }
-
-            for (size_t i = 0; i < string_array_size(enabled); i++) {
-                const char *name = string_array_get(enabled, i);
-                if (profile_exists(repo, name)) {
-                    err = string_array_push(valid, name);
-                    if (err) {
-                        err = error_wrap(err, "Failed to add profile to valid list");
-                        goto cleanup;
-                    }
+            for (size_t i = 0; i < string_array_size(missing); i++) {
+                const char *name = string_array_get(missing, i);
+                err = state_disable_profile(state, name);
+                if (err) {
+                    err = error_wrap(err, "Failed to remove missing profile '%s' from state", name);
+                    goto cleanup;
                 }
-            }
-
-            profile_names = malloc(string_array_size(valid) * sizeof(char *));
-            if (!profile_names) {
-                err = ERROR(ERR_MEMORY, "Failed to allocate profile names");
-                goto cleanup;
-            }
-
-            for (size_t i = 0; i < string_array_size(valid); i++) {
-                profile_names[i] = (char *)string_array_get(valid, i);
-            }
-
-            err = state_set_profiles(state, profile_names, string_array_size(valid));
-            if (err) {
-                err = error_wrap(err, "Failed to update state");
-                goto cleanup;
             }
 
             err = state_save(repo, state);
@@ -1427,16 +1411,13 @@ static error_t *profile_validate(
 
     if (orphaned_files > 0) {
         output_warning(out, "Found %zu orphaned file entr%s in state",
-                      orphaned_files,
-                      orphaned_files == 1 ? "y" : "ies");
+                      orphaned_files, orphaned_files == 1 ? "y" : "ies");
         output_info(out, "  These reference non-existent profiles");
         output_hint(out, "  Run 'dotta apply' to clean up");
     }
 
 cleanup:
     /* Cleanup all resources */
-    free(profile_names);
-    string_array_free(valid);
     string_array_free(missing);
     string_array_free(enabled);
     state_free(state);

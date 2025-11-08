@@ -912,14 +912,59 @@ error_t *profile_list_files(
 }
 
 /**
- * Build manifest from profiles
+ * Check if profile contains any custom/ files
+ */
+error_t *profile_has_custom_files(
+    git_repository *repo,
+    const char *profile_name,
+    bool *out_has_custom
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(profile_name);
+    CHECK_NULL(out_has_custom);
+
+    *out_has_custom = false;
+
+    /* Load profile */
+    profile_t *profile = NULL;
+    error_t *err = profile_load(repo, profile_name, &profile);
+    if (err) {
+        return error_wrap(err, "Failed to load profile");
+    }
+
+    /* List files in profile */
+    string_array_t *files = NULL;
+    err = profile_list_files(repo, profile, &files);
+    profile_free(profile);
+    if (err) {
+        return error_wrap(err, "Failed to list files");
+    }
+
+    /* Check for custom/ prefix */
+    for (size_t i = 0; i < string_array_size(files); i++) {
+        const char *storage_path = string_array_get(files, i);
+        if (str_starts_with(storage_path, "custom/")) {
+            *out_has_custom = true;
+            break;
+        }
+    }
+
+    string_array_free(files);
+    return NULL;
+}
+
+/**
+ * Build manifest from profiles with custom prefix support
  *
  * Uses a hashmap for O(1) lookups when checking for duplicates.
  * This changes overall complexity from O(n*m) to O(n) where n is total files.
+ *
+ * prefix_map is optional and provides custom prefixes for profiles with custom/ files.
  */
 error_t *profile_build_manifest(
     git_repository *repo,
     profile_list_t *profiles,
+    hashmap_t *prefix_map,
     manifest_t **out
 ) {
     CHECK_NULL(repo);
@@ -993,11 +1038,18 @@ error_t *profile_build_manifest(
                 continue;
             }
 
-            /* Convert to filesystem path */
+            /* Determine custom prefix for this profile */
+            const char *custom_prefix = NULL;
+            if (prefix_map) {
+                custom_prefix = (const char *)hashmap_get(prefix_map, profile->name);
+            }
+
+            /* Convert to filesystem path with appropriate prefix */
             filesystem_path = NULL;
-            err = path_from_storage(storage_path, &filesystem_path);
+            err = path_from_storage(storage_path, custom_prefix, &filesystem_path);
             if (err) {
-                err = error_wrap(err, "Failed to convert path '%s'", storage_path);
+                err = error_wrap(err, "Failed to convert path '%s' from profile '%s'",
+                                storage_path, profile->name);
                 goto cleanup;
             }
 
@@ -1426,7 +1478,7 @@ error_t *profile_build_manifest_from_tree(
 
         /* Convert to filesystem path */
         filesystem_path = NULL;
-        err = path_from_storage(storage_path, &filesystem_path);
+        err = path_from_storage(storage_path, NULL, &filesystem_path);
         if (err) {
             err = error_wrap(err, "Failed to convert path '%s'", storage_path);
             goto cleanup;

@@ -288,19 +288,45 @@ error_t *profile_list_files(
 );
 
 /**
- * Build manifest from profiles
+ * Check if profile contains any custom/ files
+ *
+ * Loads profile and scans for files with custom/ prefix.
+ * Used by command layer to validate --prefix requirement.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param profile_name Profile name (must not be NULL)
+ * @param out_has_custom Output flag (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *profile_has_custom_files(
+    git_repository *repo,
+    const char *profile_name,
+    bool *out_has_custom
+);
+
+/**
+ * Build manifest from profiles with custom prefix support
  *
  * Merges files from all profiles according to precedence rules.
  * Later profiles override earlier ones.
  *
+ * For profiles with custom/ files, uses prefix from map.
+ *
+ * The prefix_map is optional:
+ * - If NULL: custom/ files will fail to resolve (error)
+ * - If provided: custom/ files resolved with mapped prefix
+ * - Profiles not in map: assumed to have no custom prefix
+ *
  * @param repo Repository (must not be NULL)
  * @param profiles Profile list (must not be NULL)
+ * @param prefix_map Map of profile_name → custom_prefix (can be NULL)
  * @param out Manifest (must not be NULL, caller must free with manifest_free)
  * @return Error or NULL on success
  */
 error_t *profile_build_manifest(
     git_repository *repo,
     profile_list_t *profiles,
+    hashmap_t *prefix_map,
     manifest_t **out
 );
 

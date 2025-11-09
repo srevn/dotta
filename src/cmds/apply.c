@@ -1186,7 +1186,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             .orphaned_files_count = file_orphan_count,
             .orphaned_directories = dir_orphans,      /* Workspace item array */
             .orphaned_directories_count = dir_orphan_count,
-            .preflight_violations = NULL,             /* No preflight violations yet (this IS the preflight) */
+            .preflight_violations = NULL,             /* No preflight violations yet */
             .verbose = opts->verbose,
             .dry_run = false,  /* Preflight is always read-only */
             .force = opts->force,
@@ -1406,10 +1406,8 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                 /* Safety violations detected and displayed by print_cleanup_results() */
                 size_t violation_count = cleanup_res->safety_violations->count;
                 cleanup_result_free(cleanup_res);
-                err = ERROR(ERR_CONFLICT,
-                           "Cannot remove %zu orphaned file%s with uncommitted changes",
-                           violation_count,
-                           violation_count == 1 ? "" : "s");
+                err = ERROR(ERR_CONFLICT, "Cannot remove %zu orphaned file%s with uncommitted changes",
+                           violation_count, violation_count == 1 ? "" : "s");
                 goto cleanup;
             }
 
@@ -1553,8 +1551,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                 }
             }
 
-            output_print(out, OUTPUT_VERBOSE,
-                        "  Updated %zu timestamp%s\n",
+            output_print(out, OUTPUT_VERBOSE, "  Updated %zu timestamp%s\n",
                         string_array_size(deploy_res->deployed),
                         string_array_size(deploy_res->deployed) == 1 ? "" : "s");
         }

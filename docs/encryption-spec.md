@@ -21,7 +21,7 @@ The implementation uses [libhydrogen](https://github.com/jedisct1/libhydrogen), 
 - **Gimli** - Cryptographic permutation for hashing and encryption
 
 **Rationale:**
-- Small, auditable codebase (~4000 LOC)
+- Small, auditable codebase (~3000 LOC)
 - Zero dynamic memory allocation
 - Hard-to-misuse high-level API
 - Portable C99 implementation

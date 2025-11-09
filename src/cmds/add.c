@@ -1713,11 +1713,11 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             if (profile_was_new) {
                 /* New profile - show sync results with precedence awareness */
                 if (manifest_synced_count == added_count) {
-                    output_info(out, "Manifest updated (%zu file%s marked as DEPLOYED)",
+                    output_info(out, "Manifest updated (%zu file%s marked as deployed)",
                                manifest_synced_count,
                                manifest_synced_count == 1 ? "" : "s");
                 } else {
-                    output_info(out, "Manifest updated (%zu/%zu file%s marked as DEPLOYED)",
+                    output_info(out, "Manifest updated (%zu/%zu file%s marked as deployed)",
                                manifest_synced_count, added_count,
                                added_count == 1 ? "" : "s");
 
@@ -1728,11 +1728,10 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                     }
                 }
 
-                output_hint(out, "Files captured from filesystem (already deployed)");
                 output_hint(out, "Run 'dotta status' to verify");
             } else {
                 /* Existing enabled profile */
-                output_info(out, "Manifest updated (%zu file%s marked as DEPLOYED)",
+                output_info(out, "Manifest updated (%zu file%s marked as deployed)",
                            added_count, added_count == 1 ? "" : "s");
                 output_hint(out, "Files captured from filesystem (already deployed)");
                 output_hint(out, "Run 'dotta status' to verify");

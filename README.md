@@ -811,16 +811,6 @@ Dotta is designed for efficiency and scalability:
 
 Operations scale linearly with tracked files, not repository history depth.
 
-## License
-
-[Specify your license]
-
-## Resources
-
-- **Repository**: https://github.com/srevn/dotta
-- **Documentation**: [Link to docs if available]
-- **Issues**: https://github.com/srevn/dotta/issues
-
 ## Acknowledgments
 
 Built with libgit2 for robust Git operations. Inspired by YADM's simplicity and Chezmoi's declarative approach, but designed from the ground up for the orphan branch model.

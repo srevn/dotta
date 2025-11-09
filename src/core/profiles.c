@@ -912,6 +912,9 @@ error_t *profile_list_files(
 
 /**
  * Check if profile contains any custom/ files
+ *
+ * Uses direct tree lookup instead of full tree walk for O(log k) performance
+ * where k is the number of top-level entries (typically <20).
  */
 error_t *profile_has_custom_files(
     git_repository *repo,
@@ -931,24 +934,22 @@ error_t *profile_has_custom_files(
         return error_wrap(err, "Failed to load profile");
     }
 
-    /* List files in profile */
-    string_array_t *files = NULL;
-    err = profile_list_files(repo, profile, &files);
-    profile_free(profile);
+    /* Load tree if not loaded (lazy loading) */
+    err = profile_load_tree(repo, profile);
     if (err) {
-        return error_wrap(err, "Failed to list files");
+        profile_free(profile);
+        return error_wrap(err, "Failed to load tree");
     }
 
-    /* Check for custom/ prefix */
-    for (size_t i = 0; i < string_array_size(files); i++) {
-        const char *storage_path = string_array_get(files, i);
-        if (str_starts_with(storage_path, "custom/")) {
-            *out_has_custom = true;
-            break;
-        }
+    /* Check for custom/ directory using O(log k) lookup */
+    const git_tree_entry *entry = git_tree_entry_byname(profile->tree, "custom");
+    if (entry) {
+        /* Verify it's a tree (directory), not a blob (file) */
+        git_object_t type = git_tree_entry_type(entry);
+        *out_has_custom = (type == GIT_OBJECT_TREE);
     }
 
-    string_array_free(files);
+    profile_free(profile);
     return NULL;
 }
 

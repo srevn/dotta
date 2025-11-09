@@ -74,6 +74,7 @@ Profile branch "darwin":
 **Prefix rules:**
 - Path starts with `$HOME` → stored as `home/<relative_path>`
 - Absolute path → stored as `root/<relative_path>`
+- Custom prefix path → stored as `custom/<relative_path>`
 
 ### Main Worktree
 
@@ -638,6 +639,40 @@ DOTTA_EDITOR         # Editor for bootstrap/ignore (fallback: VISUAL → EDITOR 
 ```
 
 ## Advanced Features
+
+### Custom Prefix (Containers/Jails/Chroots)
+
+Deploy configuration files to arbitrary filesystem locations beyond `$HOME` and system root using custom prefixes:
+
+```bash
+# Use case: Container/jail configuration from host
+mkdir -p /mnt/jails/web
+
+# Add files with custom prefix (smart resolution - both forms work)
+dotta add --profile jail/web --prefix /mnt/jails/web /mnt/jails/web/etc/nginx.conf
+# Automatically resolves to /mnt/jails/web/etc/nginx.conf if exists
+dotta add --profile jail/web --prefix /mnt/jails/web /etc/nginx.conf
+# Both stored as: custom/etc/nginx.conf
+
+# Enable profile with custom prefix (required for custom/ files)
+dotta profile enable jail/web --prefix /mnt/jails/web
+# Deploys to: /mnt/jails/web/etc/nginx.conf
+
+# Files deployed to correct location
+dotta apply
+```
+
+**Use cases:**
+- Container/jail rootfs deployment from host
+- Chroot environment configuration
+- Mounted filesystem management (NFS, SMB)
+- Alternative root hierarchies
+- Multi-tenancy configuration
+
+**Restrictions:**
+- Custom prefix requires exactly one profile (cannot use with `--all` or multiple profiles)
+- Profiles with `custom/` files require `--prefix` when enabling (error if omitted)
+- Custom prefix must be absolute path to existing directory
 
 ### Custom Commit Messages
 

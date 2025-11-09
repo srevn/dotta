@@ -22,6 +22,35 @@
 #include "types.h"
 
 /**
+ * Normalize user input path to absolute filesystem path
+ *
+ * Transformation order:
+ * 1. Tilde expansion (~/ → $HOME)
+ * 2. Custom prefix joining (relative + prefix)
+ * 3. Absolute path pass-through
+ * 4. CWD joining (relative, no prefix)
+ *
+ * Security: Rejects path traversal (..) in relative paths with custom_prefix.
+ *
+ * Examples:
+ *   ("~/file", NULL)        → "$HOME/file"
+ *   ("rel/file", "/jail")   → "/jail/rel/file"
+ *   ("/abs/file", "/jail")  → "/abs/file"
+ *   ("rel/file", NULL)      → "$CWD/rel/file"
+ *   ("../escape", "/jail")  → ERROR
+ *
+ * @param user_path User-provided path (filesystem or tilde)
+ * @param custom_prefix Optional custom prefix for relative paths (can be NULL)
+ * @param out Normalized absolute path (caller must free)
+ * @return Error or NULL on success
+ */
+error_t *path_normalize_input(
+    const char *user_path,
+    const char *custom_prefix,
+    char **out
+);
+
+/**
  * Convert filesystem path to storage path
  *
  * Detection order (CANONICAL REPRESENTATION):

@@ -664,12 +664,6 @@ error_t *fs_make_absolute(const char *path, char **out) {
         }
     }
 
-    /* Verify path exists (without following final symlink) */
-    if (!fs_lexists(absolute)) {
-        free(absolute);
-        return ERROR(ERR_NOT_FOUND, "Path does not exist: %s", path);
-    }
-
     *out = absolute;
     return NULL;
 }

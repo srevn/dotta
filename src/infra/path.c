@@ -310,6 +310,79 @@ static char *try_prepend_custom_prefix(
 }
 
 /**
+ * Normalize user input path to absolute filesystem path.
+ *
+ * Transformation order:
+ *   1. Tilde expansion (~/ → $HOME)
+ *   2. Custom prefix joining (relative + prefix)
+ *   3. Absolute path pass-through
+ *   4. CWD joining (relative, no prefix)
+ *
+ * Security: Rejects path traversal (..) in relative paths with custom_prefix.
+ *
+ * Examples:
+ *   ("~/file", NULL)        → "$HOME/file"
+ *   ("rel/file", "/jail")   → "/jail/rel/file"
+ *   ("/abs/file", "/jail")  → "/abs/file" (absolute unchanged)
+ *   ("rel/file", NULL)      → "$CWD/rel/file"
+ *   ("../escape", "/jail")  → ERROR
+ *
+ * @param user_path User-provided path (filesystem or tilde)
+ * @param custom_prefix Optional custom prefix for relative path context (can be NULL)
+ * @param out Normalized absolute path (caller frees)
+ * @return Error or NULL on success
+ */
+error_t *path_normalize_input(
+    const char *user_path,
+    const char *custom_prefix,
+    char **out
+) {
+    CHECK_NULL(user_path);
+    CHECK_NULL(out);
+
+    error_t *err = NULL;
+    char *expanded = NULL;
+    char *joined = NULL;
+    const char *path_to_make_absolute = user_path;
+
+    /* Step 1: Expand tilde (highest priority - canonical) */
+    if (user_path[0] == '~') {
+        err = path_expand_home(user_path, &expanded);
+        if (err) {
+            return err;
+        }
+        path_to_make_absolute = expanded;
+    }
+
+    /* Step 2: Join relative paths with custom prefix */
+    else if (custom_prefix && custom_prefix[0] != '\0' && user_path[0] != '/') {
+        /* Security: Block path traversal in relative paths with custom prefix */
+        if (strstr(user_path, "..") != NULL) {
+            free(expanded);
+            return ERROR(ERR_INVALID_ARG,
+                "Path traversal (..) not allowed in relative paths with --prefix.\n"
+                "  Use absolute paths if you need to reference files outside the prefix.");
+        }
+
+        err = fs_path_join(custom_prefix, user_path, &joined);
+        if (err) {
+            free(expanded);
+            return error_wrap(err, "Failed to join custom prefix with relative path");
+        }
+        path_to_make_absolute = joined;
+    }
+
+    /* Step 3: Make absolute (handles absolute pass-through and CWD joining) */
+    err = fs_make_absolute(path_to_make_absolute, out);
+
+    /* Cleanup */
+    free(expanded);
+    free(joined);
+
+    return err;
+}
+
+/**
  * Convert filesystem path to storage path
  *
  * Detection order (CANONICAL REPRESENTATION):
@@ -331,31 +404,15 @@ error_t *path_to_storage(
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
-    char *expanded = NULL;
     char *absolute = NULL;
     char *home = NULL;
     char *result = NULL;
     path_prefix_t detected_prefix;
 
-    /* Validate input filesystem path */
-    err = path_validate_filesystem(filesystem_path);
+    /* Normalize user input path (handles tilde, relative+prefix, etc.) */
+    err = path_normalize_input(filesystem_path, custom_prefix, &absolute);
     if (err) {
         return err;
-    }
-
-    /* Expand ~ if needed */
-    if (filesystem_path[0] == '~') {
-        err = path_expand_home(filesystem_path, &expanded);
-        if (err) {
-            return err;
-        }
-        filesystem_path = expanded;
-    }
-
-    /* Convert to absolute path without following symlinks */
-    err = fs_make_absolute(filesystem_path, &absolute);
-    if (err) {
-        goto cleanup;
     }
 
     /* Try $HOME prefix first (most canonical) */
@@ -369,6 +426,12 @@ error_t *path_to_storage(
 
     if (match > 0) {
         /* HOME prefix matched with non-empty relative part */
+        /* Validate file exists */
+        if (!fs_lexists(absolute)) {
+            err = ERROR(ERR_NOT_FOUND, "File not found: %s", absolute);
+            goto cleanup;
+        }
+
         result = str_format("home/%s", relative);
         if (!result) {
             err = ERROR(ERR_MEMORY, "Failed to format home storage path");
@@ -393,6 +456,14 @@ error_t *path_to_storage(
 
         if (match > 0) {
             /* Custom prefix matched with non-empty relative part */
+            /* Validate file exists (either via smart resolution or already under prefix) */
+            if (!resolved && !fs_lexists(path_to_check)) {
+                /* Path was already under prefix but doesn't exist */
+                free(resolved);
+                err = ERROR(ERR_NOT_FOUND, "File not found: %s", path_to_check);
+                goto cleanup;
+            }
+
             result = str_format("custom/%s", relative);
             free(resolved);  /* Free prepended path if allocated */
             if (!result) {
@@ -421,6 +492,12 @@ error_t *path_to_storage(
     }
 
     /* Fallback to ROOT prefix for absolute paths */
+    /* Validate file exists before storing */
+    if (!fs_lexists(absolute)) {
+        err = ERROR(ERR_NOT_FOUND, "File not found: %s", absolute);
+        goto cleanup;
+    }
+
     /* Note: For root, we include the leading slash in the relative part */
     relative = absolute;
     if (relative[0] == '/') {
@@ -451,7 +528,6 @@ validate:
     err = NULL;
 
 cleanup:
-    free(expanded);
     free(absolute);
     free(home);
     return err;

@@ -1292,8 +1292,8 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                 goto cleanup;
             }
         } else {
-            /* Regular filesystem path - make absolute directly */
-            err = fs_make_absolute(file, &absolute);
+            /* Regular filesystem path - normalize it */
+            err = path_normalize_input(file, opts->custom_prefix, &absolute);
             if (err) {
                 err = error_wrap(err, "Failed to resolve path '%s'", file);
                 goto cleanup;

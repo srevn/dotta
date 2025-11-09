@@ -409,30 +409,6 @@ bool fs_stat_is_directory(const struct stat *st);
 bool fs_stat_is_executable(const struct stat *st);
 
 /**
- * Privilege and ownership operations
- */
-
-/**
- * Get the actual user's UID/GID when running under sudo
- *
- * When dotta is run via sudo, this returns the original user's credentials
- * (from SUDO_UID/SUDO_GID environment variables). When not running under sudo,
- * returns the current process's UID/GID.
- *
- * @param uid Output for user ID (must not be NULL)
- * @param gid Output for group ID (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *fs_get_actual_user(uid_t *uid, gid_t *gid);
-
-/**
- * Check if running as root (effective UID is 0)
- *
- * @return true if effective UID is 0
- */
-bool fs_is_running_as_root(void);
-
-/**
  * Fix ownership recursively for a directory tree
  *
  * Recursively changes ownership of all files and directories under path

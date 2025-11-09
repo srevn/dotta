@@ -220,8 +220,8 @@ static error_t *resolve_deployment_ownership(
     bool requires_root_privileges = privilege_path_requires_root(storage_path);
 
     /* Case 1: home/ prefix when running as root → use actual user (sudo handling) */
-    if (is_home_prefix && fs_is_running_as_root()) {
-        error_t *err = fs_get_actual_user(out_uid, out_gid);
+    if (is_home_prefix && privilege_is_elevated()) {
+        error_t *err = privilege_get_actual_user(out_uid, out_gid);
         if (err) {
             return error_wrap(err,
                 "Failed to determine actual user for home/ path: %s", storage_path);

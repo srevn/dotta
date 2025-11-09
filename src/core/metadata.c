@@ -833,12 +833,9 @@ error_t *metadata_capture_from_file(
     /* Set file-specific union field (caller may update this) */
     item->file.encrypted = false;
 
-    /* Capture ownership for paths requiring root privileges (root/ and custom/)
-     * when running as root. Use effective UID (geteuid) to check privilege,
-     * not real UID (getuid). This ensures correct behavior for both sudo and
-     * setuid binaries. */
+    /* Capture ownership for paths requiring root privileges (root/ and custom/) */
     bool requires_root_privileges = privilege_path_requires_root(storage_path);
-    bool running_as_root = (geteuid() == 0);
+    bool running_as_root = privilege_is_elevated();
 
     if (requires_root_privileges && running_as_root) {
         /* Resolve UID to username */
@@ -918,12 +915,9 @@ error_t *metadata_capture_from_directory(
     /* Initialize directory union */
     item->directory._reserved = 0;
 
-    /* Capture ownership for paths requiring root privileges (root/ and custom/)
-     * when running as root. Use effective UID (geteuid) to check privilege,
-     * not real UID (getuid). This ensures correct behavior for both sudo and
-     * setuid binaries. */
+    /* Capture ownership for paths requiring root privileges (root/ and custom/) */
     bool requires_root_privileges = privilege_path_requires_root(storage_path);
-    bool running_as_root = (geteuid() == 0);
+    bool running_as_root = privilege_is_elevated();
 
     if (requires_root_privileges && running_as_root) {
         /* Resolve UID to username */
@@ -1797,10 +1791,8 @@ error_t *metadata_resolve_ownership(
         return NULL;
     }
 
-    /* Only works when running as root
-     * Use effective UID (geteuid) to check privilege level, not real UID (getuid).
-     * This correctly handles both sudo (real=0, effective=0) and setuid scenarios. */
-    if (geteuid() != 0) {
+    /* Commands enforce privileges upfront to prevent partial operations */
+    if (!privilege_is_elevated()) {
         return ERROR(ERR_PERMISSION,
                     "Cannot resolve ownership (not running as root)");
     }

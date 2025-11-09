@@ -986,60 +986,6 @@ error_t *fs_ensure_parent_dirs(const char *path) {
 }
 
 /**
- * Privilege and ownership operations
- */
-
-bool fs_is_running_as_root(void) {
-    return geteuid() == 0;
-}
-
-error_t *fs_get_actual_user(uid_t *uid, gid_t *gid) {
-    CHECK_NULL(uid);
-    CHECK_NULL(gid);
-
-    /* Check if running under sudo by examining SUDO_UID environment variable */
-    const char *sudo_uid_str = getenv("SUDO_UID");
-    const char *sudo_gid_str = getenv("SUDO_GID");
-
-    if (sudo_uid_str && sudo_gid_str) {
-        /* Running under sudo - parse the environment variables */
-        char *endptr;
-
-        /* Parse UID */
-        errno = 0;
-        long parsed_uid = strtol(sudo_uid_str, &endptr, 10);
-        if (errno != 0 || *endptr != '\0' || parsed_uid < 0) {
-            return ERROR(ERR_INVALID_ARG,
-                        "Invalid SUDO_UID environment variable: %s", sudo_uid_str);
-        }
-
-        /* Parse GID */
-        errno = 0;
-        long parsed_gid = strtol(sudo_gid_str, &endptr, 10);
-        if (errno != 0 || *endptr != '\0' || parsed_gid < 0) {
-            return ERROR(ERR_INVALID_ARG,
-                        "Invalid SUDO_GID environment variable: %s", sudo_gid_str);
-        }
-
-        /* Validate that the UID actually exists in the system */
-        struct passwd *pw = getpwuid((uid_t)parsed_uid);
-        if (!pw) {
-            return ERROR(ERR_NOT_FOUND,
-                        "User with UID %ld (from SUDO_UID) not found in system", parsed_uid);
-        }
-
-        *uid = (uid_t)parsed_uid;
-        *gid = (gid_t)parsed_gid;
-        return NULL;
-    }
-
-    /* Not running under sudo - return current effective UID/GID */
-    *uid = geteuid();
-    *gid = getegid();
-    return NULL;
-}
-
-/**
  * Context for ownership fix callback
  *
  * Since nftw() doesn't support passing user data to the callback,

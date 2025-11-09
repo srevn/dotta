@@ -160,10 +160,11 @@ error_t *repo_fix_ownership_if_needed(const char *repo_path) {
 
     /* We're running under sudo - need to fix ownership */
 
-    /* Get the actual user's credentials (from SUDO_UID/SUDO_GID) */
+    /* Get the actual user's credentials (from SUDO_UID/SUDO_GID)
+     * Delegates to privilege module for consistent sudo handling. */
     uid_t actual_uid = 0;
     gid_t actual_gid = 0;
-    error_t *err = fs_get_actual_user(&actual_uid, &actual_gid);
+    error_t *err = privilege_get_actual_user(&actual_uid, &actual_gid);
     if (err) {
         return error_wrap(err, "Failed to determine actual user for ownership fix");
     }

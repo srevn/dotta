@@ -41,6 +41,7 @@
 #include "utils/array.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
+#include "utils/privilege.h"
 #include "utils/string.h"
 
 /**
@@ -215,11 +216,8 @@ error_t *check_item_metadata_divergence(
         }
     }
 
-    /* Check ownership (always check, no early return).
-     * Only when running as root AND expected values provided.
-     * Use effective UID (geteuid) to check privilege, not real UID (getuid).
-     * This correctly detects whether we have the capability to read ownership. */
-    bool running_as_root = (geteuid() == 0);
+    /* Check ownership - only when running as root AND expected values provided */
+    bool running_as_root = privilege_is_elevated();
     bool has_ownership = (expected_owner != NULL || expected_group != NULL);
 
     if (running_as_root && has_ownership) {

@@ -18,6 +18,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <sys/types.h>
 
 #include "base/error.h"
 #include "utils/output.h"
@@ -60,6 +61,29 @@ bool privilege_path_requires_root(const char *storage_path);
  * @return true if any path requires root, false otherwise
  */
 bool privilege_paths_require_root(const char **storage_paths, size_t count);
+
+/**
+ * Get actual user UID/GID (handling sudo context)
+ *
+ * When running under sudo, returns the original user's UID/GID from SUDO_UID/SUDO_GID
+ * environment variables. When not under sudo, returns effective UID/GID.
+ *
+ * Use Cases:
+ * - Deployment: home/ prefix files under sudo should be owned by actual user, not root
+ * - Repository: Fix repository ownership after sudo operations
+ *
+ * This is the single source of truth for "who is the real user" semantics.
+ * All sudo context detection is centralized in the privilege module.
+ *
+ * @param uid Output for user ID (must not be NULL)
+ * @param gid Output for group ID (must not be NULL)
+ * @return Error or NULL on success
+ *
+ * Errors:
+ * - ERR_INVALID_ARG: Invalid SUDO_UID/SUDO_GID format
+ * - ERR_NOT_FOUND: UID from SUDO_UID does not exist in system
+ */
+error_t *privilege_get_actual_user(uid_t *uid, gid_t *gid);
 
 /**
  * Ensure proper privileges for an operation

@@ -108,17 +108,17 @@ error_t *deploy_preflight_check_from_workspace(
  * analysis instead of re-analyzing files. This eliminates redundant content
  * comparisons and decryption operations.
  *
- * Architecture:
+ * Architecture (Manifest Authority):
  * - Workspace: Single source of truth for divergence (already computed)
  * - Deploy: Pure execution engine, queries workspace for skip decisions
- * - State: Source of truth for directory entries (VWD principle)
+ * - State: Source of truth for directory entries and file metadata (VWD principle)
+ * - File entries: Self-contained (mode, owner, group, encrypted from state cache)
  * - State management: Handled by caller after deployment succeeds
  *
  * @param repo Repository (must not be NULL)
  * @param ws Workspace with pre-computed divergence analysis (must not be NULL)
  * @param manifest Manifest to deploy (must not be NULL)
  * @param state State database for tracked directories (can be NULL)
- * @param metadata Merged metadata for file permission restoration (can be NULL)
  * @param opts Deployment options (must not be NULL)
  * @param km Key manager for encryption (can be NULL for plaintext-only)
  * @param cache Content cache for batch operations (must not be NULL)
@@ -130,7 +130,6 @@ error_t *deploy_execute(
     const workspace_t *ws,
     const manifest_t *manifest,
     const state_t *state,
-    const metadata_t *metadata,
     const deploy_options_t *opts,
     keymanager_t *km,
     content_cache_t *cache,
@@ -141,13 +140,20 @@ error_t *deploy_execute(
  * Deploy single file
  *
  * Deploys a single file from the manifest to its target location.
- * Encryption is handled transparently by the content cache, which reuses
- * previously decrypted content from preflight/smart-skip for performance.
+ *
+ * Architecture (VWD Authority):
+ * - file_entry_t is self-contained (contains mode, owner, group, encrypted from state)
+ * - No separate metadata parameter needed (eliminated redundant O(n) lookup)
+ * - Encryption handled transparently by content cache
+ *
+ * VWD Model:
+ * - entry->mode: Permission mode from state database (0 = use git mode fallback)
+ * - entry->owner/group: Ownership strings for root/ prefix files (NULL for home/)
+ * - entry->encrypted: Encryption flag from state (validated at manifest sync)
  *
  * @param repo Repository (must not be NULL)
  * @param cache Content cache for batch operations (must not be NULL)
- * @param entry File entry to deploy (must not be NULL)
- * @param metadata Metadata for permission restoration (can be NULL)
+ * @param entry File entry to deploy (must not be NULL, contains all deployment metadata)
  * @param opts Deployment options (must not be NULL)
  * @return Error or NULL on success
  */
@@ -155,7 +161,6 @@ error_t *deploy_file(
     git_repository *repo,
     content_cache_t *cache,
     const file_entry_t *entry,
-    const metadata_t *metadata,
     const deploy_options_t *opts
 );
 

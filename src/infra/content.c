@@ -14,7 +14,6 @@
 
 #include "base/error.h"
 #include "base/filesystem.h"
-#include "core/bootstrap.h"
 #include "core/metadata.h"
 #include "crypto/encryption.h"
 #include "crypto/keymanager.h"
@@ -78,9 +77,14 @@ static void buffer_free_secure(void *buf_ptr) {
  * This function handles the core logic of loading a blob and
  * transparently decrypting it if needed.
  *
+ * Architecture:
+ * - VWD operations: expected_encrypted comes from entry->encrypted (state cache)
+ * - Historical operations: expected_encrypted extracted from metadata by caller
+ * - Defense-in-depth: Validates magic header matches expected state
+ *
  * Process:
  * 1. Check magic header for encryption (source of truth)
- * 2. Validate consistency with metadata (defense in depth)
+ * 2. Validate encryption matches expectation (defense in depth)
  * 3. Decrypt if needed
  * 4. Return plaintext buffer
  *
@@ -88,10 +92,9 @@ static void buffer_free_secure(void *buf_ptr) {
  * @param blob Loaded git blob (must not be NULL)
  * @param storage_path File path in profile
  * @param profile_name Profile name
- * @param metadata Metadata for validation (must not be NULL)
+ * @param expected_encrypted Expected encryption state (from VWD cache or metadata)
  * @param km Key manager (can be NULL for plaintext files)
  * @param out_content Output buffer (caller owns)
- * @param out_was_encrypted Optional flag - set to true if file was encrypted (can be NULL)
  * @return Error or NULL on success
  */
 static error_t *get_plaintext_from_blob(
@@ -99,16 +102,14 @@ static error_t *get_plaintext_from_blob(
     git_blob *blob,
     const char *storage_path,
     const char *profile_name,
-    const metadata_t *metadata,
+    bool expected_encrypted,
     keymanager_t *km,
-    buffer_t **out_content,
-    bool *out_was_encrypted
+    buffer_t **out_content
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(blob);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile_name);
-    CHECK_NULL(metadata);
     CHECK_NULL(out_content);
 
     const unsigned char *blob_data = git_blob_rawcontent(blob);
@@ -117,79 +118,28 @@ static error_t *get_plaintext_from_blob(
     /* Step 1: Check magic header for encryption (source of truth) */
     bool is_encrypted = encryption_is_encrypted(blob_data, blob_size);
 
-    /* Set output flag if caller wants it */
-    if (out_was_encrypted) {
-        *out_was_encrypted = is_encrypted;
-    }
-
-    /* Skip metadata validation for special system files that don't track themselves
-     * These files are critical for dotta operations and live at profile root:
-     * - .bootstrap (executable script for profile setup)
-     * - .dottaignore (ignore patterns for the profile)
-     * - .dotta/metadata.json (file permissions and encryption state)
+    /* Step 2: Validate encryption state matches expectation (defense in depth)
+     *
+     * This cross-check detects:
+     * - Manifest operations: State database out of sync with Git (corruption)
+     * - Historical operations: Metadata corruption or manual tampering
+     * - All operations: Magic header vs expected state mismatch
+     *
+     * The magic header is the source of truth, but we validate against the
+     * expected state to catch inconsistencies early.
      */
-    bool is_special_file = (strcmp(storage_path, BOOTSTRAP_DEFAULT_SCRIPT_NAME) == 0 ||
-                            strcmp(storage_path, METADATA_FILE_PATH) == 0 ||
-                            strcmp(storage_path, ".dottaignore") == 0);
-
-    if (!is_special_file) {
-        /* Step 2: Validate consistency with metadata (defense in depth)
-         * SECURITY: Metadata must contain entry for this file. Missing entries indicate:
-         * - Metadata corruption (desync between git and metadata)
-         * - File added to git without using dotta add/update (manual tampering)
-         * - Serious bug in add/update/remove commands
-         *
-         * We require metadata entry to detect these error conditions.
-         * Magic header alone is not sufficient for integrity verification.
-         */
-        const metadata_item_t *meta_entry = NULL;
-        error_t *err = metadata_get_item(metadata, storage_path, &meta_entry);
-
-        if (err) {
-            /* Entry not found - this is now an error (metadata corruption) */
-            error_free(err);
-            return ERROR(ERR_STATE_INVALID,
-                "File '%s' exists in git but not in metadata.\n"
-                "This indicates metadata corruption or manual git manipulation.\n"
-                "\n"
-                "To fix:\n"
-                "  1. If this is a legitimate file: dotta update -p %s '%s'\n"
-                "  2. If this is corruption: inspect git history and restore metadata",
-                storage_path, profile_name, storage_path);
-        }
-
-        if (!meta_entry) {
-            /* Should never happen - metadata_get_item returns error if not found */
-            return ERROR(ERR_INTERNAL,
-                "metadata_get_item returned NULL without error for '%s'",
-                storage_path);
-        }
-
-        /* Validate this is a file entry (union safety)
-         * SECURITY: Accessing wrong union member is undefined behavior.
-         * Storage paths should only map to files, but we validate defensively. */
-        if (meta_entry->kind != METADATA_ITEM_FILE) {
-            return ERROR(ERR_STATE_INVALID,
-                "Metadata entry for '%s' is a directory, expected file.\n"
-                "This indicates severe metadata corruption.",
-                storage_path);
-        }
-
-        /* Cross-validate magic header against metadata encryption flag */
-        if (is_encrypted && !meta_entry->file.encrypted) {
-            return ERROR(ERR_STATE_INVALID,
-                "File '%s' is encrypted in git but metadata says plaintext.\n"
-                "This indicates metadata corruption.\n"
-                "To fix, run: dotta update -p %s '%s'",
-                storage_path, profile_name, storage_path);
-        }
-        if (!is_encrypted && meta_entry->file.encrypted) {
-            return ERROR(ERR_STATE_INVALID,
-                "File '%s' is marked as encrypted in metadata but stored as plaintext in git.\n"
-                "This indicates metadata corruption.\n"
-                "To fix, run: dotta update -p %s '%s'",
-                storage_path, profile_name, storage_path);
-        }
+    if (is_encrypted != expected_encrypted) {
+        return ERROR(ERR_STATE_INVALID,
+            "Encryption state mismatch for '%s':\n"
+            "  Magic header indicates: %s\n"
+            "  Expected state indicates: %s\n"
+            "\n"
+            "This indicates state corruption or manual git manipulation.\n"
+            "To fix, run: dotta update -p %s '%s'",
+            storage_path,
+            is_encrypted ? "encrypted" : "plaintext",
+            expected_encrypted ? "encrypted" : "plaintext",
+            profile_name, storage_path);
     }
 
     /* Step 3: Handle encrypted files */
@@ -257,7 +207,7 @@ error_t *content_get_from_blob_oid(
     const git_oid *blob_oid,
     const char *storage_path,
     const char *profile_name,
-    const metadata_t *metadata,
+    bool expected_encrypted,
     keymanager_t *km,
     buffer_t **out_content
 ) {
@@ -265,7 +215,6 @@ error_t *content_get_from_blob_oid(
     CHECK_NULL(blob_oid);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile_name);
-    CHECK_NULL(metadata);
     CHECK_NULL(out_content);
 
     /* Load blob from repository */
@@ -277,8 +226,7 @@ error_t *content_get_from_blob_oid(
 
     /* Get plaintext content */
     error_t *err = get_plaintext_from_blob(
-        repo, blob, storage_path, profile_name, metadata, km, out_content,
-        NULL  /* Don't track encryption status in simple API */
+        repo, blob, storage_path, profile_name, expected_encrypted, km, out_content
     );
 
     git_blob_free(blob);
@@ -290,7 +238,7 @@ error_t *content_get_from_tree_entry(
     const git_tree_entry *entry,
     const char *storage_path,
     const char *profile_name,
-    const metadata_t *metadata,
+    bool expected_encrypted,
     keymanager_t *km,
     buffer_t **out_content
 ) {
@@ -298,7 +246,6 @@ error_t *content_get_from_tree_entry(
     CHECK_NULL(entry);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile_name);
-    CHECK_NULL(metadata);
     CHECK_NULL(out_content);
 
     /* Get OID from tree entry */
@@ -309,7 +256,7 @@ error_t *content_get_from_tree_entry(
 
     /* Delegate to blob OID variant */
     return content_get_from_blob_oid(
-        repo, blob_oid, storage_path, profile_name, metadata, km, out_content
+        repo, blob_oid, storage_path, profile_name, expected_encrypted, km, out_content
     );
 }
 
@@ -343,14 +290,13 @@ error_t *content_cache_get_from_blob_oid(
     const git_oid *blob_oid,
     const char *storage_path,
     const char *profile_name,
-    const metadata_t *metadata,
+    bool expected_encrypted,
     const buffer_t **out_content
 ) {
     CHECK_NULL(cache);
     CHECK_NULL(blob_oid);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile_name);
-    CHECK_NULL(metadata);
     CHECK_NULL(out_content);
 
     /* Convert OID to hex string (cache key) */
@@ -377,8 +323,8 @@ error_t *content_cache_get_from_blob_oid(
     /* Get plaintext content */
     buffer_t *content = NULL;
     error_t *err = get_plaintext_from_blob(
-        cache->repo, blob, storage_path, profile_name, metadata, cache->km,
-        &content, NULL  /* Don't track encryption status */
+        cache->repo, blob, storage_path, profile_name, expected_encrypted, cache->km,
+        &content
     );
 
     git_blob_free(blob);
@@ -405,14 +351,13 @@ error_t *content_cache_get_from_tree_entry(
     const git_tree_entry *entry,
     const char *storage_path,
     const char *profile_name,
-    const metadata_t *metadata,
+    bool expected_encrypted,
     const buffer_t **out_content
 ) {
     CHECK_NULL(cache);
     CHECK_NULL(entry);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile_name);
-    CHECK_NULL(metadata);
     CHECK_NULL(out_content);
 
     /* Get OID from tree entry */
@@ -423,7 +368,7 @@ error_t *content_cache_get_from_tree_entry(
 
     /* Delegate to blob OID variant */
     return content_cache_get_from_blob_oid(
-        cache, blob_oid, storage_path, profile_name, metadata, out_content
+        cache, blob_oid, storage_path, profile_name, expected_encrypted, out_content
     );
 }
 

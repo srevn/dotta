@@ -8,7 +8,6 @@
 #include <git2.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
 #include "base/error.h"
@@ -260,7 +259,6 @@ error_t *deploy_file(
     git_repository *repo,
     content_cache_t *cache,
     const file_entry_t *entry,
-    const metadata_t *metadata,
     const deploy_options_t *opts
 ) {
     CHECK_NULL(repo);
@@ -272,7 +270,6 @@ error_t *deploy_file(
     error_t *err = NULL;
     const buffer_t *content_buffer = NULL;  /* Borrowed from cache (const) */
     char *target_str = NULL;
-    const metadata_item_t *meta_entry = NULL;
 
     if (opts->dry_run) {
         /* Dry-run mode - just print */
@@ -361,7 +358,7 @@ error_t *deploy_file(
         entry->entry,
         entry->storage_path,
         entry->source_profile ? entry->source_profile->name : "unknown",
-        metadata,
+        entry->encrypted,
         &content_buffer
     );
 
@@ -374,40 +371,26 @@ error_t *deploy_file(
     const unsigned char *content = buffer_data(content_buffer);
     size_t size = buffer_size(content_buffer);
 
-    /* Determine permissions - use metadata if available, otherwise fallback to git mode */
-    mode_t file_mode;
-    bool used_metadata = false;
-
-    if (metadata) {
-        error_t *meta_err = metadata_get_item(metadata, entry->storage_path, &meta_entry);
-
-        if (meta_err == NULL && meta_entry != NULL) {
-            /* Validate this is a file entry (storage_path should only map to files) */
-            if (meta_entry->kind != METADATA_ITEM_FILE) {
-                /* Metadata corruption - storage_path mapped to directory
-                 * Fallback to git mode for safety */
-                if (opts->verbose) {
-                    fprintf(stderr, "Warning: Metadata corruption for '%s' (expected file, got directory)\n",
-                            entry->storage_path);
-                }
-                meta_entry = NULL;
-                file_mode = (mode == GIT_FILEMODE_BLOB_EXECUTABLE) ? 0755 : 0644;
-            } else {
-                /* Use mode from metadata (common field) */
-                file_mode = meta_entry->mode;
-                used_metadata = true;
-            }
-        } else {
-            /* Fallback to git mode */
-            if (meta_err) {
-                error_free(meta_err);
-            }
-            meta_entry = NULL;  /* Ensure it's NULL if not found */
-            file_mode = (mode == GIT_FILEMODE_BLOB_EXECUTABLE) ? 0755 : 0644;
-        }
-    } else {
-        /* No metadata available - use git mode */
+    /* Determine permissions from manifest cache
+     *
+     * In VWD operations, state database should always have mode populated
+     * by manifest layer. If mode==0, this indicates state corruption or
+     * manifest sync failure. Fall back to git mode defensively.
+     */
+    mode_t file_mode = entry->mode;
+    if (file_mode == 0) {
+        /* Defensive fallback - indicates unexpected state corruption */
         file_mode = (mode == GIT_FILEMODE_BLOB_EXECUTABLE) ? 0755 : 0644;
+
+        if (opts->verbose) {
+            fprintf(stderr,
+                "Warning: Missing mode in state for '%s', using git mode %04o\n"
+                "         This may indicate state database corruption. Consider running:\n"
+                "         dotta profile disable %s && dotta profile enable %s\n",
+                entry->filesystem_path, file_mode,
+                entry->source_profile ? entry->source_profile->name : "<profile>",
+                entry->source_profile ? entry->source_profile->name : "<profile>");
+        }
     }
 
     /* Resolve ownership for the file based on prefix - RESOLVED BEFORE WRITING
@@ -416,16 +399,20 @@ error_t *deploy_file(
      * atomic ownership via fchown() on the file descriptor. This eliminates
      * the security window where files exist with incorrect ownership.
      *
-     * Uses unified helper that handles:
+     * VWD Authority: Uses entry->owner and entry->group from state cache.
+     * - root/ prefix files: owner/group are username/groupname strings from state
+     * - home/ prefix files: owner/group are NULL (current user ownership)
+     *
+     * Unified helper handles:
      * - home/ files when running as root: Use actual user's UID/GID (sudo handling)
-     * - root/ files with metadata: Resolve owner/group → UID/GID
+     * - root/ files with owner/group: Resolve username/groupname → UID/GID
      * - All other cases: Return -1 (preserve current user/root ownership)
      */
     uid_t target_uid, target_gid;
     err = resolve_deployment_ownership(
         entry->storage_path,
-        meta_entry ? meta_entry->owner : NULL,
-        meta_entry ? meta_entry->group : NULL,
+        entry->owner,  /* From manifest cache */
+        entry->group,  /* From manifest cache */
         &target_uid,
         &target_gid,
         opts->verbose
@@ -455,18 +442,15 @@ error_t *deploy_file(
 
     /* Verbose output */
     if (opts->verbose) {
-        bool has_ownership = (meta_entry && (meta_entry->owner || meta_entry->group) &&
-                             target_uid != (uid_t)-1);  /* Check if we actually resolved ownership */
+        bool has_ownership = (entry->owner || entry->group) && target_uid != (uid_t)-1;
 
-        if (used_metadata && has_ownership) {
+        if (has_ownership) {
             printf("Deployed: %s (mode: %04o, owner: %s:%s)\n",
                    entry->filesystem_path, file_mode,
-                   meta_entry->owner ? meta_entry->owner : "?",
-                   meta_entry->group ? meta_entry->group : "?");
-        } else if (used_metadata) {
-            printf("Deployed: %s (mode: %04o from metadata)\n", entry->filesystem_path, file_mode);
+                   entry->owner ? entry->owner : "?",
+                   entry->group ? entry->group : "?");
         } else {
-            printf("Deployed: %s (mode: %04o default)\n", entry->filesystem_path, file_mode);
+            printf("Deployed: %s (mode: %04o)\n", entry->filesystem_path, file_mode);
         }
     }
 
@@ -491,7 +475,7 @@ cleanup:
  * State contains filesystem_path already resolved with custom_prefix during manifest
  * building, eliminating path conversion errors and enabling custom prefix support.
  *
- * @param state State database (can be NULL)
+ * @param state State database (can be NULL - returns immediately if NULL)
  * @param opts Deployment options (must not be NULL)
  * @return Error or NULL on success
  */
@@ -499,7 +483,12 @@ static error_t *deploy_tracked_directories(
     const state_t *state,
     const deploy_options_t *opts
 ) {
-    CHECK_NULL(state);
+    CHECK_NULL(opts);
+
+    /* Gracefully handle NULL state (no database = no tracked directories) */
+    if (!state) {
+        return NULL;
+    }
 
     /* Get all tracked directories from state database */
     state_directory_entry_t *directories = NULL;
@@ -531,6 +520,28 @@ static error_t *deploy_tracked_directories(
         /* Use filesystem path directly from state (already resolved) */
         const char *filesystem_path = dir_entry->filesystem_path;
 
+        /* Validate directory mode from state (before skip/dry-run checks)
+         *
+         * In VWD operations, state database should always have mode populated
+         * by manifest layer. If mode==0, this indicates state corruption or
+         * manifest sync failure. Warn and use safe default (0755 for directories).
+         */
+        mode_t dir_mode = dir_entry->mode;
+        if (dir_mode == 0) {
+            /* Defensive fallback - indicates unexpected state corruption */
+            dir_mode = 0755;  /* Safe default for directories */
+
+            if (opts->verbose) {
+                fprintf(stderr,
+                    "Warning: Missing mode in state for directory '%s', using default %04o\n"
+                    "         This may indicate state database corruption. Consider running:\n"
+                    "         dotta profile disable %s && dotta profile enable %s\n",
+                    filesystem_path, dir_mode,
+                    dir_entry->profile ? dir_entry->profile : "<profile>",
+                    dir_entry->profile ? dir_entry->profile : "<profile>");
+            }
+        }
+
         /* Skip if directory already exists and we're not forcing */
         if (fs_is_directory(filesystem_path) && !opts->force) {
             if (opts->verbose) {
@@ -544,12 +555,12 @@ static error_t *deploy_tracked_directories(
             if (opts->verbose) {
                 if (dir_entry->owner || dir_entry->group) {
                     printf("  Would create: %s (mode: %04o, owner: %s:%s)\n",
-                          filesystem_path, dir_entry->mode,
+                          filesystem_path, dir_mode,
                           dir_entry->owner ? dir_entry->owner : "?",
                           dir_entry->group ? dir_entry->group : "?");
                 } else {
                     printf("  Would create: %s (mode: %04o)\n",
-                          filesystem_path, dir_entry->mode);
+                          filesystem_path, dir_mode);
                 }
             }
             continue;
@@ -583,7 +594,7 @@ static error_t *deploy_tracked_directories(
          * directory fd, ensuring no security window exists */
         err = fs_create_dir_with_ownership(
             filesystem_path,
-            dir_entry->mode,
+            dir_mode,
             target_uid,
             target_gid,
             true  /* create parents */
@@ -597,19 +608,16 @@ static error_t *deploy_tracked_directories(
 
         /* Verbose output */
         if (opts->verbose) {
-            bool has_ownership = (target_uid != (uid_t)-1 || target_gid != (gid_t)-1);
+            bool has_ownership = (dir_entry->owner || dir_entry->group) && target_uid != (uid_t)-1;
 
-            if (has_ownership && dir_entry->owner) {
+            if (has_ownership) {
                 printf("  Created: %s (mode: %04o, owner: %s:%s)\n",
-                      filesystem_path, dir_entry->mode,
+                      filesystem_path, dir_mode,
                       dir_entry->owner ? dir_entry->owner : "?",
                       dir_entry->group ? dir_entry->group : "?");
-            } else if (has_ownership) {
-                printf("  Created: %s (mode: %04o, owner: actual user)\n",
-                      filesystem_path, dir_entry->mode);
             } else {
                 printf("  Created: %s (mode: %04o)\n",
-                      filesystem_path, dir_entry->mode);
+                      filesystem_path, dir_mode);
             }
         }
     }
@@ -628,7 +636,6 @@ error_t *deploy_execute(
     const workspace_t *ws,
     const manifest_t *manifest,
     const state_t *state,
-    const metadata_t *metadata,
     const deploy_options_t *opts,
     keymanager_t *km,
     content_cache_t *cache,
@@ -744,7 +751,7 @@ error_t *deploy_execute(
         }
 
         /* Deploy the file */
-        err = deploy_file(repo, cache, entry, metadata, opts);
+        err = deploy_file(repo, cache, entry, opts);
         if (err) {
             /* Record failure and return partial results */
             string_array_push(result->failed, entry->filesystem_path);

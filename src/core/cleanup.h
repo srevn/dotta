@@ -50,9 +50,7 @@
 
 #include <git2.h>
 #include <stdbool.h>
-#include <stddef.h>
 
-#include "base/error.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/safety.h"

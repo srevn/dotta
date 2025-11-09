@@ -20,14 +20,13 @@
 #define DOTTA_WORKSPACE_H
 
 #include <git2.h>
+#include "types.h"
 
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "crypto/keymanager.h"
 #include "infra/content.h"
-#include "types.h"
-#include "utils/config.h"
 
 /**
  * Diverged item entry

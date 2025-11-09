@@ -15,7 +15,6 @@
 #include "safety.h"
 
 #include <git2.h>
-#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -263,15 +262,21 @@ static bool try_fast_path_check(
         }
         error_free(mode_err);  /* Non-fatal if not found */
 
-        /* Get plaintext content via content layer (handles encryption transparently) */
+        /* Get plaintext content via content layer (handles encryption transparently)
+         *
+         * Extract encrypted flag from metadata for content layer.
+         * This works for both VWD and historical operations since metadata
+         * is always provided for safety checks. */
+        bool encrypted = metadata_get_file_encrypted(metadata, storage_path);
+
         const buffer_t *plaintext = NULL;
         bool owns_buffer = false;
 
         if (cache) {
             /* Optimal: Use cache (avoids re-decryption for encrypted, avoids re-load for plaintext) */
             err = content_cache_get_from_blob_oid(
-                cache, &blob_oid, storage_path, source_profile,
-                metadata, &plaintext
+                cache, &blob_oid, storage_path,
+                source_profile, encrypted, &plaintext
             );
         } else {
             /* Fallback: Load/decrypt directly (content layer handles both types) */
@@ -279,7 +284,7 @@ static bool try_fast_path_check(
             keymanager_t *km = keymanager ? keymanager : keymanager_get_global(NULL);
             err = content_get_from_blob_oid(
                 repo, &blob_oid, storage_path, source_profile,
-                metadata, km, &temp
+                encrypted, km, &temp
             );
             plaintext = temp;
             owns_buffer = (err == NULL);  /* Only own if successful */

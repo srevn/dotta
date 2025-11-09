@@ -18,7 +18,6 @@
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "base/gitops.h"
-#include "utils/string.h"
 
 /**
  * Worktree handle structure

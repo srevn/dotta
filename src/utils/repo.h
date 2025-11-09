@@ -14,7 +14,6 @@
 #define DOTTA_REPO_H
 
 #include <git2.h>
-#include <stdbool.h>
 
 #include "types.h"
 

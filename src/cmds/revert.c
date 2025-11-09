@@ -309,14 +309,18 @@ static error_t *show_diff_preview(
      *
      * This transparently decrypts encrypted files so we can show readable diffs.
      * For plaintext files, this just returns the raw content.
+     *
+     * Extract encrypted flag from metadata for content layer validation.
      */
+    bool encrypted = metadata_get_file_encrypted(metadata, file_path);
+
     buffer_t *current_plaintext = NULL;
     error_t *err = content_get_from_blob_oid(
         repo,
         current_oid,
         file_path,
         profile_name,
-        metadata,
+        encrypted,
         km,
         &current_plaintext
     );
@@ -330,7 +334,7 @@ static error_t *show_diff_preview(
         target_oid,
         file_path,
         profile_name,
-        metadata,
+        encrypted,
         km,
         &target_plaintext
     );

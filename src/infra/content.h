@@ -25,7 +25,7 @@
  *   content_cache_t *cache = content_cache_create(repo, km);
  *   for (each file) {
  *       const buffer_t *content;  // Note: const
- *       content_cache_get_from_tree_entry(cache, entry, path, profile, meta, &content);
+ *       content_cache_get_from_tree_entry(cache, entry, path, profile, encrypted, &content);
  *       // ... use content (don't free - cache owns it) ...
  *   }
  *   content_cache_free(cache);  // Frees all cached buffers
@@ -72,7 +72,7 @@ typedef struct content_cache content_cache_t;
  * Process:
  * 1. Load blob from tree entry
  * 2. Check magic header for encryption
- * 3. Validate consistency with metadata
+ * 3. Validate encryption matches expectation (defense in depth)
  * 4. If encrypted:
  *    a. Get master key from keymanager
  *    b. Derive profile key
@@ -82,10 +82,12 @@ typedef struct content_cache content_cache_t;
  * @param repo Git repository (must not be NULL)
  * @param entry Tree entry to read (must not be NULL)
  * @param storage_path Path in profile (e.g., "home/.bashrc", must not be NULL)
- *                     SECURITY: Used as AAD in encryption. Must be actual Git tree path
- *                     (from tree traversal). Wrong path causes decrypt failure (by design).
+ *          SECURITY: Used as AAD in encryption. Must be actual Git tree path
+ *          (from tree traversal). Wrong path causes decrypt failure (by design).
  * @param profile_name Profile name for key derivation (must not be NULL)
- * @param metadata Metadata for validation (must not be NULL)
+ * @param expected_encrypted Expected encryption state (for validation)
+ *          Manifest operations: pass entry->encrypted (from state cache)
+ *          Historical operations: extract from metadata before calling
  * @param km Key manager (can be NULL if file is known to be plaintext)
  * @param out_content Output buffer (CALLER OWNS - must free with buffer_free)
  * @return Error or NULL on success
@@ -93,7 +95,7 @@ typedef struct content_cache content_cache_t;
  * Errors:
  * - ERR_CRYPTO: File is encrypted but no keymanager provided
  * - ERR_CRYPTO: Decryption failed (wrong key, corruption, or path mismatch)
- * - ERR_STATE_INVALID: Magic header and metadata disagree
+ * - ERR_STATE_INVALID: Magic header doesn't match expected encryption state
  * - ERR_NOT_FOUND: Blob not found
  * - ERR_INVALID_ARG: Required arguments are NULL
  */
@@ -102,7 +104,7 @@ error_t *content_get_from_tree_entry(
     const git_tree_entry *entry,
     const char *storage_path,
     const char *profile_name,
-    const metadata_t *metadata,
+    bool expected_encrypted,
     keymanager_t *km,
     buffer_t **out_content
 );
@@ -116,9 +118,9 @@ error_t *content_get_from_tree_entry(
  * @param repo Git repository (must not be NULL)
  * @param blob_oid Blob OID (must not be NULL)
  * @param storage_path Path in profile (must not be NULL)
- *                     SECURITY: Used as AAD in encryption. Must match Git tree path.
+ *          SECURITY: Used as AAD in encryption. Must match Git tree path.
  * @param profile_name Profile name for key derivation (must not be NULL)
- * @param metadata Metadata for validation (must not be NULL)
+ * @param expected_encrypted Expected encryption state (for validation)
  * @param km Key manager (can be NULL if file is known to be plaintext)
  * @param out_content Output buffer (CALLER OWNS - must free with buffer_free)
  * @return Error or NULL on success
@@ -128,7 +130,7 @@ error_t *content_get_from_blob_oid(
     const git_oid *blob_oid,
     const char *storage_path,
     const char *profile_name,
-    const metadata_t *metadata,
+    bool expected_encrypted,
     keymanager_t *km,
     buffer_t **out_content
 );
@@ -166,7 +168,7 @@ content_cache_t *content_cache_create(
  * @param entry Tree entry to read (must not be NULL)
  * @param storage_path Path in profile (must not be NULL, used as AAD for encryption)
  * @param profile_name Profile name (must not be NULL)
- * @param metadata Metadata for validation (must not be NULL)
+ * @param expected_encrypted Expected encryption state (for validation)
  * @param out_content Output buffer (BORROWED - cache owns, don't free)
  * @return Error or NULL on success
  */
@@ -175,7 +177,7 @@ error_t *content_cache_get_from_tree_entry(
     const git_tree_entry *entry,
     const char *storage_path,
     const char *profile_name,
-    const metadata_t *metadata,
+    bool expected_encrypted,
     const buffer_t **out_content
 );
 
@@ -188,7 +190,7 @@ error_t *content_cache_get_from_tree_entry(
  * @param blob_oid Blob OID (must not be NULL)
  * @param storage_path Path in profile (must not be NULL, used as AAD for encryption)
  * @param profile_name Profile name (must not be NULL)
- * @param metadata Metadata for validation (must not be NULL)
+ * @param expected_encrypted Expected encryption state (for validation)
  * @param out_content Output buffer (BORROWED - cache owns, don't free)
  * @return Error or NULL on success
  */
@@ -197,7 +199,7 @@ error_t *content_cache_get_from_blob_oid(
     const git_oid *blob_oid,
     const char *storage_path,
     const char *profile_name,
-    const metadata_t *metadata,
+    bool expected_encrypted,
     const buffer_t **out_content
 );
 

@@ -43,13 +43,15 @@ static error_t *print_blob_content(
     CHECK_NULL(metadata);
 
     /* Get plaintext content (handles encryption transparently) */
+    bool encrypted = metadata_get_file_encrypted(metadata, storage_path);
+
     buffer_t *content = NULL;
     error_t *err = content_get_from_blob_oid(
         repo,
         blob_oid,
         storage_path,
         profile_name,
-        metadata,
+        encrypted,
         km,    /* Prompt for password only if file is encrypted */
         &content
     );

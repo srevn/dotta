@@ -56,7 +56,6 @@
 
 #include <git2.h>
 #include <sys/stat.h>
-#include <sys/types.h>
 #include <time.h>
 
 #include "types.h"
@@ -261,6 +260,33 @@ error_t *metadata_remove_item(
 bool metadata_has_item(
     const metadata_t *metadata,
     const char *key
+);
+
+/**
+ * Get encrypted flag for file from metadata
+ *
+ * Convenience accessor that safely extracts the encrypted flag for a specific
+ * file entry. This is a type-safe accessor that validates the item is a file
+ * (not a directory) before accessing the file-specific encrypted field.
+ *
+ * Gracefully handles all error conditions by returning false:
+ * - NULL metadata or storage_path
+ * - Item not found in metadata
+ * - Item exists but is a directory (not a file)
+ *
+ * Common usage pattern for historical operations:
+ *   bool encrypted = metadata_get_file_encrypted(metadata, storage_path);
+ *   err = content_get_from_blob_oid(..., encrypted, ...);
+ *
+ * Note: VWD operations use entry->encrypted directly from state database.
+ *
+ * @param metadata Metadata collection (can be NULL)
+ * @param storage_path Storage path to lookup (can be NULL)
+ * @return Encrypted flag (false if not found, error, or not a file)
+ */
+bool metadata_get_file_encrypted(
+    const metadata_t *metadata,
+    const char *storage_path
 );
 
 /**

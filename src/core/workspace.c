@@ -38,7 +38,6 @@
 #include "crypto/policy.h"
 #include "infra/compare.h"
 #include "infra/content.h"
-#include "infra/path.h"
 #include "utils/array.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
@@ -470,20 +469,11 @@ static error_t *analyze_file_divergence(
      * - TOCTOU-aware (handles files deleted during analysis)
      */
     if (on_filesystem && in_state && manifest_entry->blob_oid) {
-        /* Get metadata for decryption and permission checking */
-        const metadata_t *metadata = ws_get_metadata(ws, manifest_entry->source_profile->name);
-        if (!metadata) {
-            return ERROR(ERR_INTERNAL,
-                "Metadata cache missing entry for profile '%s' (invariant violation)",
-                manifest_entry->source_profile->name);
-        }
-
         /* Parse blob_oid from VWD cache (defensive validation) */
         git_oid blob_oid;
         if (git_oid_fromstr(&blob_oid, manifest_entry->blob_oid) != 0) {
-            return ERROR(ERR_INTERNAL,
-                "Invalid blob_oid '%s' for '%s' (database corruption?)",
-                manifest_entry->blob_oid, fs_path);
+            return ERROR(ERR_INTERNAL, "Invalid blob_oid '%s' for '%s' (database corruption?)",
+                        manifest_entry->blob_oid, fs_path);
         }
 
         /* Load expected content from Git (cached, automatic decryption) */
@@ -493,7 +483,7 @@ static error_t *analyze_file_divergence(
             &blob_oid,
             storage_path,
             profile,
-            metadata,
+            manifest_entry->encrypted,
             &expected_content
         );
 

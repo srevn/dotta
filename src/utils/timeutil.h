@@ -8,7 +8,6 @@
 #define DOTTA_TIMEUTIL_H
 
 #include <time.h>
-#include <stddef.h>
 
 /**
  * Format timestamp as relative time string

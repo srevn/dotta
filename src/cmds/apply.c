@@ -21,7 +21,6 @@
 #include "infra/content.h"
 #include "utils/array.h"
 #include "utils/config.h"
-#include "utils/hashmap.h"
 #include "utils/hooks.h"
 #include "utils/output.h"
 #include "utils/privilege.h"
@@ -1317,7 +1316,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                         deploy_manifest->count == 1 ? "" : "s");
         }
 
-        err = deploy_execute(repo, ws, deploy_manifest, state, merged_metadata, &deploy_opts, km, cache, &deploy_res);
+        err = deploy_execute(repo, ws, deploy_manifest, state, &deploy_opts, km, cache, &deploy_res);
         if (err) {
             if (deploy_res) {
                 print_deploy_results(out, deploy_res, opts->verbose);

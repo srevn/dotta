@@ -5,7 +5,6 @@
 #include "error.h"
 
 #include <errno.h>
-#include <git2.h>
 #include <git2/errors.h>
 #include <stdlib.h>
 #include <string.h>

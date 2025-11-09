@@ -25,7 +25,6 @@
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "infra/content.h"
 #include "infra/path.h"
 #include "utils/array.h"
 #include "utils/config.h"

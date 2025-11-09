@@ -176,8 +176,7 @@ static const char *get_status_message_from_item(
  * from workspace analysis. Doesn't re-analyze - just formats and displays.
  *
  * @param item Workspace item with divergence info (must not be NULL)
- * @param entry Manifest entry with tree entry (must not be NULL)
- * @param metadata Cached metadata (must not be NULL)
+ * @param entry Manifest entry with VWD cache fields (must not be NULL)
  * @param cache Content cache (must not be NULL)
  * @param direction Diff direction
  * @param opts Command options (must not be NULL)
@@ -187,7 +186,6 @@ static const char *get_status_message_from_item(
 static error_t *show_file_diff_from_workspace(
     const workspace_item_t *item,
     const file_entry_t *entry,
-    const metadata_t *metadata,
     content_cache_t *cache,
     diff_direction_t direction,
     const cmd_diff_options_t *opts,
@@ -195,7 +193,6 @@ static error_t *show_file_diff_from_workspace(
 ) {
     CHECK_NULL(item);
     CHECK_NULL(entry);
-    CHECK_NULL(metadata);
     CHECK_NULL(cache);
     CHECK_NULL(opts);
     CHECK_NULL(out);
@@ -292,7 +289,8 @@ static error_t *show_file_diff_from_workspace(
     const buffer_t *content = NULL;
     error_t *err = content_cache_get_from_tree_entry(
         cache, entry->entry, entry->storage_path,
-        entry->source_profile->name, metadata, &content
+        entry->source_profile->name, entry->encrypted,
+        &content
     );
     if (err) {
         return error_wrap(err, "Failed to get content for '%s'", item->filesystem_path);
@@ -368,7 +366,6 @@ static error_t *show_file_diff_from_workspace(
  * @param diverged Array of diverged items from workspace (must not be NULL)
  * @param diverged_count Number of diverged items
  * @param manifest Manifest for tree entry lookup (must not be NULL)
- * @param metadata_cache Pre-loaded metadata cache (must not be NULL)
  * @param content_cache Content cache for blob access (must not be NULL)
  * @param direction Diff direction (UPSTREAM or DOWNSTREAM)
  * @param opts Command options (must not be NULL)
@@ -380,7 +377,6 @@ static error_t *present_diffs_for_direction(
     const workspace_item_t *diverged,
     size_t diverged_count,
     const manifest_t *manifest,
-    const hashmap_t *metadata_cache,
     content_cache_t *content_cache,
     diff_direction_t direction,
     const cmd_diff_options_t *opts,
@@ -389,7 +385,6 @@ static error_t *present_diffs_for_direction(
 ) {
     CHECK_NULL(diverged);
     CHECK_NULL(manifest);
-    CHECK_NULL(metadata_cache);
     CHECK_NULL(content_cache);
     CHECK_NULL(opts);
     CHECK_NULL(out);
@@ -397,13 +392,6 @@ static error_t *present_diffs_for_direction(
 
     *diff_count = 0;
     error_t *err = NULL;
-
-    /* Create single empty metadata for fallback cases (addresses memory leak concern) */
-    metadata_t *fallback_metadata = NULL;
-    err = metadata_create_empty(&fallback_metadata);
-    if (err) {
-        return error_wrap(err, "Failed to create fallback metadata");
-    }
 
     for (size_t i = 0; i < diverged_count; i++) {
         const workspace_item_t *item = &diverged[i];
@@ -431,7 +419,6 @@ static error_t *present_diffs_for_direction(
         /* Lookup manifest entry using O(1) index */
         if (!manifest->index) {
             /* Manifest must have index for O(1) lookup */
-            metadata_free(fallback_metadata);
             return ERROR(ERR_INTERNAL, "Manifest missing index");
         }
 
@@ -450,27 +437,17 @@ static error_t *present_diffs_for_direction(
 
         const file_entry_t *entry = &manifest->entries[idx];
 
-        /* Get metadata from cache (O(1) lookup) */
-        const metadata_t *metadata = hashmap_get(metadata_cache, item->profile);
-        if (!metadata) {
-            /* Graceful fallback: use empty metadata */
-            metadata = fallback_metadata;
-        }
-
         /* Show the diff (content already analyzed by workspace) */
         err = show_file_diff_from_workspace(
-            item, entry, metadata,
-            content_cache, direction, opts, out
+            item, entry, content_cache, direction, opts, out
         );
         if (err) {
-            metadata_free(fallback_metadata);
             return err;
         }
 
         (*diff_count)++;
     }
 
-    metadata_free(fallback_metadata);
     return NULL;
 }
 
@@ -825,10 +802,11 @@ static error_t *compare_manifest_to_filesystem(
             }
 
             /* Get content from historical commit (cached) */
+            bool encrypted = metadata_get_file_encrypted(metadata, storage_path);
             const buffer_t *hist_content = NULL;
             err = content_cache_get_from_tree_entry(
                 cache, entry->entry, storage_path,
-                profile_name, metadata, &hist_content
+                profile_name, encrypted, &hist_content
             );
             if (err) {
                 content_cache_free(cache);
@@ -853,10 +831,11 @@ static error_t *compare_manifest_to_filesystem(
 
         /* Full diff output */
         /* Get content from historical commit (cached) */
+        bool encrypted = metadata_get_file_encrypted(metadata, storage_path);
         const buffer_t *hist_content = NULL;
         err = content_cache_get_from_tree_entry(
             cache, entry->entry, storage_path,
-            profile_name, metadata, &hist_content
+            profile_name, encrypted, &hist_content
         );
         if (err) {
             content_cache_free(cache);
@@ -1259,7 +1238,6 @@ static error_t *diff_workspace(
 
     /* Step 3: Get cached resources from workspace */
     const manifest_t *manifest = workspace_get_manifest(ws);
-    const hashmap_t *metadata_cache = workspace_get_metadata_cache(ws);
     keymanager_t *km = workspace_get_keymanager(ws);
 
     /* Step 4: Create content cache for diff generation
@@ -1284,7 +1262,7 @@ static error_t *diff_workspace(
 
         err = present_diffs_for_direction(
             diverged, diverged_count,
-            manifest, metadata_cache, cache,
+            manifest, cache,
             DIFF_UPSTREAM, opts, out,
             &upstream_count
         );
@@ -1301,7 +1279,7 @@ static error_t *diff_workspace(
 
         err = present_diffs_for_direction(
             diverged, diverged_count,
-            manifest, metadata_cache, cache,
+            manifest, cache,
             DIFF_DOWNSTREAM, opts, out,
             &downstream_count
         );
@@ -1317,7 +1295,7 @@ static error_t *diff_workspace(
         /* Single direction */
         err = present_diffs_for_direction(
             diverged, diverged_count,
-            manifest, metadata_cache, cache,
+            manifest, cache,
             opts->direction, opts, out,
             &total_diff_count
         );

@@ -345,6 +345,13 @@ static error_t *walk_commits(
             if (git_err == 0) {
                 git_err = git_commit_tree(&parent_tree, parent);
                 git_commit_free(parent);
+                if (git_err < 0) {
+                    stats_free_commit_info(current_commit_info);
+                    git_tree_free(tree);
+                    git_commit_free(commit);
+                    err = error_from_git(git_err);
+                    goto cleanup;
+                }
             }
         }
 

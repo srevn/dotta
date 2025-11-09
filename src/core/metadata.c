@@ -5,7 +5,6 @@
 #include "metadata.h"
 
 #include <cJSON.h>
-#include <errno.h>
 #include <git2.h>
 #include <grp.h>
 #include <pwd.h>
@@ -624,6 +623,52 @@ bool metadata_has_item(
     }
 
     return false;
+}
+
+/**
+ * Get encrypted flag for file from metadata
+ *
+ * Convenience accessor that safely extracts the encrypted flag for a specific
+ * file entry. This is a type-safe accessor that validates the item is a file
+ * (not a directory) before accessing the file-specific encrypted field.
+ *
+ * Gracefully handles all error conditions by returning false:
+ * - NULL metadata or storage_path
+ * - Item not found in metadata
+ * - Item exists but is a directory (not a file)
+ *
+ * This function is used by historical operations (diff, show, revert) to
+ * extract the encrypted flag from metadata loaded from Git commits.
+ * VWD operations use entry->encrypted directly from the state database.
+ *
+ * @param metadata Metadata collection (can be NULL)
+ * @param storage_path Storage path to lookup (can be NULL)
+ * @return Encrypted flag (false if not found, error, or not a file)
+ */
+bool metadata_get_file_encrypted(
+    const metadata_t *metadata,
+    const char *storage_path
+) {
+    /* Graceful handling - return safe default for invalid input */
+    if (!metadata || !storage_path) {
+        return false;
+    }
+
+    /* Lookup item using existing accessor (reuse lookup logic) */
+    const metadata_item_t *item = NULL;
+    error_t *err = metadata_get_item(metadata, storage_path, &item);
+
+    /* Extract encrypted flag with type safety */
+    bool encrypted = false;
+    if (err == NULL && item && item->kind == METADATA_ITEM_FILE) {
+        /* Safe to access file union member */
+        encrypted = item->file.encrypted;
+    }
+
+    /* Cleanup - free error if lookup failed (not found is expected) */
+    error_free(err);
+
+    return encrypted;
 }
 
 /**

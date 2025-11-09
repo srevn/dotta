@@ -5,7 +5,6 @@
 #include "profiles.h"
 
 #include <ctype.h>
-#include <errno.h>
 #include <git2.h>
 #include <stdint.h>
 #include <stdlib.h>

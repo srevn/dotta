@@ -671,11 +671,14 @@ cleanup:
  *   3. Add new profile to enabled list (in-memory only)
  *   4. Prepare sync context (metadata cache, keymanager, content cache)
  *   5. Open transaction
- *   6. Sync files to manifest with DEPLOYED status
- *   7. Persist updated enabled profiles list
+ *   6. Enable profile in state with custom prefix (makes prefix available)
+ *   7. Sync files to manifest with DEPLOYED status (uses custom_prefix)
  *   8. Commit transaction atomically
  *
- * Transaction atomicity ensures: enable + sync succeed together or fail together.
+ * CRITICAL ORDER: Step 6 must precede step 7. The custom_prefix stored in step 6
+ * is required by state_get_prefix_map() during manifest_add_files() in step 7 to
+ * resolve custom/ storage paths. Transaction atomicity ensures: enable + sync
+ * succeed together or fail together (automatic rollback on error).
  *
  * @param repo Git repository (must not be NULL)
  * @param profile_name Profile to auto-enable (must not be NULL, must exist in Git)
@@ -774,11 +777,29 @@ static error_t *auto_enable_and_sync_profile(
         goto cleanup;
     }
 
-    /* STEP 6: Sync files to manifest with DEPLOYED status
+    /* STEP 6: Enable profile in state with custom prefix (if provided)
      *
-     * manifest_add_files handles precedence resolution automatically.
-     * If this profile has lower precedence than existing enabled profiles,
-     * some files may be skipped (synced_count < added_files). */
+     * CRITICAL ORDER: Must enable BEFORE manifest sync so custom_prefix
+     * is available in state for path resolution during manifest_add_files().
+     * The custom prefix is stored in the enabled_profiles table and used
+     * by state_get_prefix_map() to resolve custom/ storage paths.
+     *
+     * Transaction Safety: If manifest sync (STEP 7) fails, state_free()
+     * automatically rolls back this change (see cleanup handler at line 838). */
+    err = state_enable_profile(state, profile_name, custom_prefix);
+    if (err) {
+        err = error_wrap(err, "Failed to enable profile in state");
+        goto cleanup;
+    }
+
+    /* STEP 7: Sync files to manifest with DEPLOYED status
+     *
+     * manifest_add_files() calls state_get_prefix_map() internally to build
+     * the manifest. The custom_prefix stored in STEP 6 is now available for
+     * resolving custom/ storage paths via path_from_storage().
+     *
+     * Precedence: If this profile has lower precedence than existing enabled
+     * profiles, some files may be skipped (synced_count < added_files). */
     err = manifest_add_files(
         repo,
         state,
@@ -790,13 +811,6 @@ static error_t *auto_enable_and_sync_profile(
     );
     if (err) {
         err = error_wrap(err, "Failed to sync files to manifest");
-        goto cleanup;
-    }
-
-    /* STEP 7: Enable profile in state with custom prefix (if provided) */
-    err = state_enable_profile(state, profile_name, custom_prefix);
-    if (err) {
-        err = error_wrap(err, "Failed to enable profile in state");
         goto cleanup;
     }
 

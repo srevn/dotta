@@ -250,6 +250,66 @@ static int extract_relative_after_prefix(
 }
 
 /**
+ * Try prepending custom prefix to absolute path.
+ *
+ * Resolution strategy:
+ *   1. If path already under prefix → return NULL (use as-is)
+ *   2. Try prepending prefix → if exists on filesystem, return prepended
+ *   3. Otherwise → return NULL (fallback to original)
+ *
+ * This enables intuitive smart resolution where both explicit and implicit
+ * forms work correctly:
+ *   --prefix /jail /jail/etc/nginx.conf  (explicit, already under prefix)
+ *   --prefix /jail /etc/nginx.conf       (implicit, prepends if file exists)
+ *
+ * When both files exist (/etc/nginx.conf and /jail/etc/nginx.conf), the
+ * prefixed version is preferred to honor the user's explicit --prefix intent.
+ *
+ * Example:
+ *   Input: absolute="/etc/nginx.conf", custom_prefix="/jail"
+ *   Check: Is /etc/nginx.conf already under /jail? NO
+ *   Try: Does /jail/etc/nginx.conf exist? YES
+ *   Return: "/jail/etc/nginx.conf" (caller must free)
+ *
+ * @param absolute Absolute filesystem path (must not be NULL)
+ * @param custom_prefix Custom prefix to try (must not be NULL)
+ * @return Prepended path if resolution succeeded (caller frees), or NULL
+ */
+static char *try_prepend_custom_prefix(
+    const char *absolute,
+    const char *custom_prefix
+) {
+    const char *relative;
+
+    /* Check if path is already under prefix */
+    int match = extract_relative_after_prefix(absolute, custom_prefix, &relative);
+    if (match >= 0) {
+        /*
+         * Already under prefix (match > 0) or IS the prefix directory (match == 0).
+         * Use original path as-is - no prepending needed.
+         */
+        return NULL;
+    }
+
+    /* Try prepending custom prefix to the path */
+    char *prefixed = str_format("%s%s", custom_prefix, absolute);
+    if (!prefixed) {
+        /* Allocation failed - gracefully fallback to original path */
+        return NULL;
+    }
+
+    /* Check if prefixed version exists on filesystem */
+    if (fs_exists(prefixed)) {
+        /* File exists under prefix - use this version */
+        return prefixed;  /* Caller takes ownership */
+    }
+
+    /* Prefixed path doesn't exist - fallback to original */
+    free(prefixed);
+    return NULL;
+}
+
+/**
  * Convert filesystem path to storage path
  *
  * Detection order (CANONICAL REPRESENTATION):
@@ -325,11 +385,16 @@ error_t *path_to_storage(
 
     /* Try custom prefix second (if provided) */
     if (custom_prefix && custom_prefix[0] != '\0') {
-        match = extract_relative_after_prefix(absolute, custom_prefix, &relative);
+        /* Smart resolution: try prepending prefix if path not already under it */
+        char *resolved = try_prepend_custom_prefix(absolute, custom_prefix);
+        const char *path_to_check = resolved ? resolved : absolute;
+
+        match = extract_relative_after_prefix(path_to_check, custom_prefix, &relative);
 
         if (match > 0) {
             /* Custom prefix matched with non-empty relative part */
             result = str_format("custom/%s", relative);
+            free(resolved);  /* Free prepended path if allocated */
             if (!result) {
                 err = ERROR(ERR_MEMORY, "Failed to format custom storage path");
                 goto cleanup;
@@ -339,10 +404,20 @@ error_t *path_to_storage(
 
         } else if (match == 0) {
             /* Custom prefix directory itself - not supported */
+            free(resolved);  /* Free prepended path if allocated */
             err = ERROR(ERR_INVALID_ARG,
                 "Cannot store custom prefix directory itself");
             goto cleanup;
         }
+
+        /* No match - custom prefix provided but cannot be satisfied */
+        free(resolved);  /* Free prepended path if allocated */
+        err = ERROR(ERR_INVALID_ARG,
+            "File '%s' not found under custom prefix '%s'.\n"
+            "  Checked: %s%s\n"
+            "  Either create the file at that location first, or omit --prefix to use system file.",
+            absolute, custom_prefix, custom_prefix, absolute);
+        goto cleanup;
     }
 
     /* Fallback to ROOT prefix for absolute paths */

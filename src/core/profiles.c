@@ -1023,6 +1023,12 @@ error_t *profile_build_manifest(
             goto cleanup;
         }
 
+        /* Determine custom prefix for this profile */
+        const char *custom_prefix = NULL;
+        if (prefix_map) {
+            custom_prefix = (const char *)hashmap_get(prefix_map, profile->name);
+        }
+
         /* Process each file */
         for (size_t j = 0; j < string_array_size(files); j++) {
             const char *storage_path = string_array_get(files, j);
@@ -1036,12 +1042,6 @@ error_t *profile_build_manifest(
                 str_starts_with(storage_path, ".git/") ||
                 str_starts_with(storage_path, ".dotta/")) {
                 continue;
-            }
-
-            /* Determine custom prefix for this profile */
-            const char *custom_prefix = NULL;
-            if (prefix_map) {
-                custom_prefix = (const char *)hashmap_get(prefix_map, profile->name);
             }
 
             /* Convert to filesystem path with appropriate prefix */

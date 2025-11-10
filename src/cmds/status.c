@@ -94,140 +94,6 @@ static void display_enabled_profiles(
 }
 
 /**
- * Format a diverged item entry for display
- *
- * Returns the label, color, and formatted info string for an item (file or directory).
- * Supports composite labels showing multiple metadata divergences (e.g., "[mode] [ownership]").
- */
-static void format_diverged_item(
-    output_ctx_t *out,
-    const workspace_item_t *item,
-    const char **out_label,
-    output_color_t *out_color,
-    char *info_buffer,
-    size_t buffer_size
-) {
-    if (!out || !item || !out_label || !out_color || !info_buffer) {
-        return;
-    }
-
-    /* Static buffer for composite label (reused across calls, safe for single-threaded CLI) */
-    static char label_buffer[256];
-    size_t offset = 0;
-
-    /* Primary label from state */
-    switch (item->state) {
-        case WORKSPACE_STATE_UNDEPLOYED:
-            offset += snprintf(label_buffer, sizeof(label_buffer), "[undeployed]");
-            *out_color = OUTPUT_COLOR_CYAN;
-            snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
-                    item->filesystem_path,
-                    output_color_code(out, OUTPUT_COLOR_DIM),
-                    item->profile,
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-            break;
-
-        case WORKSPACE_STATE_DELETED:
-            offset += snprintf(label_buffer, sizeof(label_buffer), "[deleted]");
-            *out_color = OUTPUT_COLOR_RED;
-            snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
-                    item->filesystem_path,
-                    output_color_code(out, OUTPUT_COLOR_DIM),
-                    item->profile,
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-            break;
-
-        case WORKSPACE_STATE_DEPLOYED:
-            /* For deployed items, prioritize divergence flags */
-            if (item->divergence & DIVERGENCE_TYPE) {
-                offset += snprintf(label_buffer, sizeof(label_buffer), "[type]");
-                *out_color = OUTPUT_COLOR_RED;
-            } else if (item->divergence & DIVERGENCE_CONTENT) {
-                offset += snprintf(label_buffer, sizeof(label_buffer), "[modified]");
-                *out_color = OUTPUT_COLOR_YELLOW;
-            } else if (item->divergence & DIVERGENCE_MODE) {
-                offset += snprintf(label_buffer, sizeof(label_buffer), "[mode]");
-                *out_color = OUTPUT_COLOR_YELLOW;
-            } else if (item->divergence & DIVERGENCE_OWNERSHIP) {
-                offset += snprintf(label_buffer, sizeof(label_buffer), "[ownership]");
-                *out_color = OUTPUT_COLOR_YELLOW;
-            } else if (item->divergence & DIVERGENCE_ENCRYPTION) {
-                offset += snprintf(label_buffer, sizeof(label_buffer), "[unencrypted]");
-                *out_color = OUTPUT_COLOR_MAGENTA;
-            }
-
-            /* Show metadata provenance for mode/ownership if available */
-            if ((item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) &&
-                item->metadata_profile) {
-                snprintf(info_buffer, buffer_size, "%s %s(metadata from %s)%s",
-                        item->filesystem_path,
-                        output_color_code(out, OUTPUT_COLOR_DIM),
-                        item->metadata_profile,
-                        output_color_code(out, OUTPUT_COLOR_RESET));
-            } else {
-                snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
-                        item->filesystem_path,
-                        output_color_code(out, OUTPUT_COLOR_DIM),
-                        item->profile,
-                        output_color_code(out, OUTPUT_COLOR_RESET));
-            }
-            break;
-
-        case WORKSPACE_STATE_ORPHANED:
-            offset += snprintf(label_buffer, sizeof(label_buffer), "[orphaned]");
-            *out_color = OUTPUT_COLOR_RED;
-            snprintf(info_buffer, buffer_size, "%s %s(from %s)%s",
-                    item->filesystem_path,
-                    output_color_code(out, OUTPUT_COLOR_DIM),
-                    item->profile,
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-            break;
-
-        case WORKSPACE_STATE_UNTRACKED:
-            offset += snprintf(label_buffer, sizeof(label_buffer), "[new]");
-            *out_color = OUTPUT_COLOR_CYAN;
-            snprintf(info_buffer, buffer_size, "%s %s(in %s)%s",
-                    item->filesystem_path,
-                    output_color_code(out, OUTPUT_COLOR_DIM),
-                    item->profile,
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-            break;
-    }
-
-    /* Add secondary divergence labels if not already shown as primary */
-    /* Only for DEPLOYED state with multiple divergences */
-    if (item->state == WORKSPACE_STATE_DEPLOYED && offset < sizeof(label_buffer)) {
-        /* Check each bit and add label if not the primary one shown */
-        if ((item->divergence & DIVERGENCE_CONTENT) &&
-            !strstr(label_buffer, "[modified]")) {
-            offset += snprintf(label_buffer + offset,
-                              sizeof(label_buffer) - offset, " [modified]");
-        }
-
-        if ((item->divergence & DIVERGENCE_MODE) &&
-            !strstr(label_buffer, "[mode]")) {
-            offset += snprintf(label_buffer + offset,
-                              sizeof(label_buffer) - offset, " [mode]");
-        }
-
-        if ((item->divergence & DIVERGENCE_OWNERSHIP) &&
-            !strstr(label_buffer, "[ownership]")) {
-            offset += snprintf(label_buffer + offset,
-                              sizeof(label_buffer) - offset, " [ownership]");
-        }
-
-        if ((item->divergence & DIVERGENCE_ENCRYPTION) &&
-            !strstr(label_buffer, "[unencrypted]")) {
-            offset += snprintf(label_buffer + offset,
-                              sizeof(label_buffer) - offset, " [unencrypted]");
-        }
-    }
-
-    /* Point out_label to the composite buffer */
-    *out_label = label_buffer;
-}
-
-/**
  * Display workspace status
  *
  * Shows the consistency between profile state, deployment state, and filesystem.
@@ -345,102 +211,107 @@ static void display_workspace_status(
             /* Section 1: Uncommitted Changes */
             if (uncommitted_count > 0) {
                 output_newline(out);
-                char header[256];
-                snprintf(header, sizeof(header), "Uncommitted changes (%zu item%s)",
-                         uncommitted_count, uncommitted_count == 1 ? "" : "s");
-                output_printf(out, OUTPUT_NORMAL, "%s%s%s %s%s%s\n",
-                             output_color_code(out, OUTPUT_COLOR_BOLD), header,
-                             output_color_code(out, OUTPUT_COLOR_RESET),
-                             output_color_code(out, OUTPUT_COLOR_DIM),
-                             "(use \"dotta update\" to commit these changes)",
-                             output_color_code(out, OUTPUT_COLOR_RESET));
-                output_newline(out);
 
-                for (size_t i = 0; i < uncommitted_count; i++) {
-                    char info[1024];
-                    const char *label = NULL;
-                    output_color_t color = OUTPUT_COLOR_YELLOW;
-                    format_diverged_item(out, uncommitted[i], &label, &color, info, sizeof(info));
-                    output_item(out, label, color, info);
+                output_list_t *list = output_list_create(out,
+                    "Uncommitted changes",
+                    "use \"dotta update\" to commit these changes");
+
+                if (list) {
+                    for (size_t i = 0; i < uncommitted_count; i++) {
+                        const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                        size_t tag_count;
+                        output_color_t color;
+                        char metadata[256];
+
+                        if (workspace_item_extract_display_info(uncommitted[i],
+                                tags, &tag_count, &color, metadata, sizeof(metadata))) {
+                            output_list_add_multi(list, tags, tag_count, color,
+                                                 uncommitted[i]->filesystem_path, metadata);
+                        }
+                    }
+
+                    output_list_render(list);
+                    output_list_free(list);
                 }
             }
 
             /* Section 2: Undeployed Files */
             if (undeployed_count > 0) {
-                output_newline(out);
-                char header[256];
-                snprintf(header, sizeof(header), "Undeployed files (%zu item%s)",
-                         undeployed_count, undeployed_count == 1 ? "" : "s");
-                output_printf(out, OUTPUT_NORMAL, "%s%s%s %s%s%s\n",
-                             output_color_code(out, OUTPUT_COLOR_BOLD), header,
-                             output_color_code(out, OUTPUT_COLOR_RESET),
-                             output_color_code(out, OUTPUT_COLOR_DIM),
-                             "(use \"dotta apply\" to deploy these files)",
-                             output_color_code(out, OUTPUT_COLOR_RESET));
-                output_newline(out);
+                output_list_t *list = output_list_create(out,
+                    "Undeployed files",
+                    "use \"dotta apply\" to deploy these files");
 
-                for (size_t i = 0; i < undeployed_count; i++) {
-                    char info[1024];
-                    const char *label = NULL;
-                    output_color_t color = OUTPUT_COLOR_CYAN;
-                    format_diverged_item(out, undeployed[i], &label, &color,
-                                       info, sizeof(info));
-                    output_item(out, label, color, info);
+                if (list) {
+                    for (size_t i = 0; i < undeployed_count; i++) {
+                        const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                        size_t tag_count;
+                        output_color_t color;
+                        char metadata[256];
+
+                        if (workspace_item_extract_display_info(undeployed[i],
+                                tags, &tag_count, &color, metadata, sizeof(metadata))) {
+                            output_list_add_multi(list, tags, tag_count, color,
+                                                 undeployed[i]->filesystem_path, metadata);
+                        }
+                    }
+
+                    output_list_render(list);
+                    output_list_free(list);
                 }
             }
 
             /* Section 3: New Files */
             if (new_count > 0) {
-                output_newline(out);
-                char header[256];
-                snprintf(header, sizeof(header), "New files (%zu item%s)",
-                         new_count, new_count == 1 ? "" : "s");
-                output_printf(out, OUTPUT_NORMAL, "%s%s%s %s%s%s\n",
-                             output_color_code(out, OUTPUT_COLOR_BOLD), header,
-                             output_color_code(out, OUTPUT_COLOR_RESET),
-                             output_color_code(out, OUTPUT_COLOR_DIM),
-                             "(use \"dotta update --include-new\" to track these files)",
-                             output_color_code(out, OUTPUT_COLOR_RESET));
-                output_newline(out);
+                output_list_t *list = output_list_create(out,
+                    "New files",
+                    "use \"dotta update --include-new\" to track these files");
 
-                for (size_t i = 0; i < new_count; i++) {
-                    char info[1024];
-                    const char *label = NULL;
-                    output_color_t color = OUTPUT_COLOR_CYAN;
-                    format_diverged_item(out, new_files[i], &label, &color,
-                                       info, sizeof(info));
-                    output_item(out, label, color, info);
+                if (list) {
+                    for (size_t i = 0; i < new_count; i++) {
+                        const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                        size_t tag_count;
+                        output_color_t color;
+                        char metadata[256];
+
+                        if (workspace_item_extract_display_info(new_files[i],
+                                tags, &tag_count, &color, metadata, sizeof(metadata))) {
+                            output_list_add_multi(list, tags, tag_count, color,
+                                                 new_files[i]->filesystem_path, metadata);
+                        }
+                    }
+
+                    output_list_render(list);
+                    output_list_free(list);
                 }
             }
 
             /* Section 4: Issues (orphaned) */
             if (orphaned_count > 0) {
-                output_newline(out);
-                char header[256];
-                snprintf(header, sizeof(header), "Issues (%zu item%s)",
-                         orphaned_count, orphaned_count == 1 ? "" : "s");
-                output_printf(out, OUTPUT_NORMAL, "%s%s%s %s%s%s\n",
-                             output_color_code(out, OUTPUT_COLOR_BOLD), header,
-                             output_color_code(out, OUTPUT_COLOR_RESET),
-                             output_color_code(out, OUTPUT_COLOR_DIM),
-                             "(run \"dotta apply\" to remove orphaned files)",
-                             output_color_code(out, OUTPUT_COLOR_RESET));
-                output_newline(out);
+                output_list_t *list = output_list_create(out,
+                    "Issues",
+                    "run \"dotta apply\" to remove orphaned files");
 
-                for (size_t i = 0; i < orphaned_count; i++) {
-                    char info[1024];
-                    const char *label = NULL;
-                    output_color_t color = OUTPUT_COLOR_RED;
-                    format_diverged_item(out, orphaned[i], &label, &color,
-                                       info, sizeof(info));
-                    output_item(out, label, color, info);
+                if (list) {
+                    for (size_t i = 0; i < orphaned_count; i++) {
+                        const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                        size_t tag_count;
+                        output_color_t color;
+                        char metadata[256];
+
+                        if (workspace_item_extract_display_info(orphaned[i],
+                                tags, &tag_count, &color, metadata, sizeof(metadata))) {
+                            output_list_add_multi(list, tags, tag_count, color,
+                                                 orphaned[i]->filesystem_path, metadata);
+                        }
+                    }
+
+                    output_list_render(list);
+                    output_list_free(list);
                 }
             }
 
             /* Cleanup (single free for all category arrays) */
             free(categorized);
-
-            output_newline(out);
         }
     }
 }

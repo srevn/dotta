@@ -7,6 +7,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <git2.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,7 +26,6 @@
 #include "infra/content.h"
 #include "infra/worktree.h"
 #include "utils/array.h"
-#include "utils/buffer.h"
 #include "utils/commit.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
@@ -1619,137 +1619,67 @@ static error_t *update_display_summary(
 
     /* Display modified files section */
     if (modified_count > 0) {
-        output_section(out, "Modified files");
-        output_newline(out);
+        output_list_t *list = output_list_create(out,
+            "Modified files",
+            "use \"dotta update\" to commit these changes");
 
-        for (size_t i = 0; i < item_count; i++) {
-            const workspace_item_t *item = items[i];
+        if (list) {
+            for (size_t i = 0; i < item_count; i++) {
+                const workspace_item_t *item = items[i];
 
-            if (item->item_kind != WORKSPACE_ITEM_FILE) {
-                continue;
-            }
+                if (item->item_kind != WORKSPACE_ITEM_FILE) {
+                    continue;
+                }
 
-            /* Check if file is deployed and has any divergence */
-            bool is_modified = (item->state == WORKSPACE_STATE_DEPLOYED &&
-                               item->divergence != DIVERGENCE_NONE);
+                /* Check if file is deployed and has any divergence */
+                bool is_modified = (item->state == WORKSPACE_STATE_DEPLOYED &&
+                                   item->divergence != DIVERGENCE_NONE);
 
-            if (!is_modified) {
-                continue;
-            }
+                if (!is_modified) {
+                    continue;
+                }
 
-            /* Check if file exists in multiple profiles (multi-profile overlap).
-             * item->all_profiles contains ALL profiles with this file (if >1),
-             * with the winning profile as the last entry. Extract other profiles
-             * for display (all except the winning one).
-             */
-            string_array_t *other_profiles = NULL;
-            if (item->all_profiles && item->all_profiles->count > 1) {
-                /* Multi-profile: extract all except the winner (last entry) */
-                other_profiles = string_array_create();
-                if (other_profiles) {
+                /* Extract tags using shared helper */
+                const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                size_t tag_count;
+                output_color_t color;
+                char base_metadata[256];
+
+                if (!workspace_item_extract_display_info(item,
+                        tags, &tag_count, &color, base_metadata, sizeof(base_metadata))) {
+                    continue;
+                }
+
+                /* Check if file exists in multiple profiles (multi-profile overlap).
+                 * item->all_profiles contains ALL profiles with this file (if >1),
+                 * with the winning profile as the last entry. Build extended metadata
+                 * showing other profiles.
+                 */
+                char metadata[512];
+                if (item->all_profiles && item->all_profiles->count > 1) {
+                    /* Multi-profile: build metadata with "also in" list */
                     size_t count = item->all_profiles->count;
+                    size_t offset = snprintf(metadata, sizeof(metadata), "%s, also in:",
+                                            base_metadata);
+
                     /* Include all profiles except the last one (winner) */
-                    for (size_t j = 0; j < count - 1; j++) {
-                        string_array_push(other_profiles, item->all_profiles->items[j]);
+                    for (size_t j = 0; j < count - 1 && offset < sizeof(metadata) - 1; j++) {
+                        offset += snprintf(metadata + offset, sizeof(metadata) - offset,
+                                          " %s", item->all_profiles->items[j]);
                     }
-                }
-            }
 
-            /* Build info string */
-            buffer_t *info_buf = buffer_create();
-            if (!info_buf) {
-                string_array_free(other_profiles);
-                continue;
-            }
-
-            if (other_profiles && string_array_size(other_profiles) > 0) {
-                buffer_append_string(info_buf, item->filesystem_path);
-                buffer_append_string(info_buf, " (from ");
-                buffer_append_string(info_buf, item->profile);
-                buffer_append_string(info_buf, ") ");
-                buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_DIM));
-                buffer_append_string(info_buf, "[also in:");
-
-                for (size_t j = 0; j < string_array_size(other_profiles); j++) {
-                    buffer_append_string(info_buf, " ");
-                    buffer_append_string(info_buf, string_array_get(other_profiles, j));
+                    multi_profile_count++;
+                } else {
+                    /* Single profile: use base metadata as-is */
+                    snprintf(metadata, sizeof(metadata), "%s", base_metadata);
                 }
 
-                buffer_append_string(info_buf, "]");
-                buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_RESET));
-
-                multi_profile_count++;
-            } else {
-                buffer_append_string(info_buf, item->filesystem_path);
-                buffer_append_string(info_buf, " (from ");
-                buffer_append_string(info_buf, item->profile);
-                buffer_append_string(info_buf, ")");
+                output_list_add_multi(list, tags, tag_count, color,
+                                     item->filesystem_path, metadata);
             }
 
-            /* In verbose mode, show detailed divergence flags */
-            if (opts && opts->verbose) {
-                bool first_flag = true;
-                buffer_append_string(info_buf, " ");
-                buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_DIM));
-
-                if (item->divergence & DIVERGENCE_CONTENT) {
-                    buffer_append_string(info_buf, "[content]");
-                    first_flag = false;
-                }
-                if (item->divergence & DIVERGENCE_MODE) {
-                    if (!first_flag) buffer_append_string(info_buf, " ");
-                    buffer_append_string(info_buf, "[mode]");
-                    first_flag = false;
-                }
-                if (item->divergence & DIVERGENCE_OWNERSHIP) {
-                    if (!first_flag) buffer_append_string(info_buf, " ");
-                    buffer_append_string(info_buf, "[ownership]");
-                    first_flag = false;
-                }
-                if (item->divergence & DIVERGENCE_ENCRYPTION) {
-                    if (!first_flag) buffer_append_string(info_buf, " ");
-                    buffer_append_string(info_buf, "[encryption]");
-                    first_flag = false;
-                }
-
-                buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_RESET));
-            }
-
-            char *info = NULL;
-            error_t *release_err = buffer_release_data(info_buf, &info);
-            if (release_err) {
-                error_free(release_err);
-                string_array_free(other_profiles);
-                continue;
-            }
-
-            /* Determine label and color (prioritize by severity) */
-            const char *status_label = NULL;
-            output_color_t color = OUTPUT_COLOR_YELLOW;
-
-            /* Prioritize TYPE (most severe), then CONTENT, then metadata */
-            if (item->divergence & DIVERGENCE_TYPE) {
-                status_label = "[type]";
-                color = OUTPUT_COLOR_RED;
-            } else if (item->divergence & DIVERGENCE_CONTENT) {
-                status_label = "[modified]";
-            } else if (item->divergence & DIVERGENCE_MODE) {
-                status_label = "[mode]";
-            } else if (item->divergence & DIVERGENCE_OWNERSHIP) {
-                status_label = "[ownership]";
-                color = OUTPUT_COLOR_MAGENTA;
-            } else if (item->divergence & DIVERGENCE_ENCRYPTION) {
-                status_label = "[encryption]";
-                color = OUTPUT_COLOR_MAGENTA;
-            } else {
-                /* Should not happen for filtered deployed items, but be defensive */
-                status_label = "[modified]";
-            }
-
-            output_item(out, status_label, color, info);
-
-            free(info);
-            string_array_free(other_profiles);
+            output_list_render(list);
+            output_list_free(list);
         }
     }
 
@@ -1766,163 +1696,143 @@ static error_t *update_display_summary(
 
     /* Display new files section */
     if (new_count > 0) {
-        output_section(out, "New files");
-        output_newline(out);
+        output_list_t *list = output_list_create(out,
+            "New files",
+            "use \"dotta update --include-new\" to track these files");
 
-        for (size_t i = 0; i < item_count; i++) {
-            const workspace_item_t *item = items[i];
+        if (list) {
+            for (size_t i = 0; i < item_count; i++) {
+                const workspace_item_t *item = items[i];
 
-            if (item->item_kind == WORKSPACE_ITEM_FILE && item->state == WORKSPACE_STATE_UNTRACKED) {
-                char info[1024];
-                snprintf(info, sizeof(info), "%s (in %s)",
-                        item->filesystem_path, item->profile);
-                output_item(out, "[new]", OUTPUT_COLOR_CYAN, info);
+                if (item->item_kind == WORKSPACE_ITEM_FILE && item->state == WORKSPACE_STATE_UNTRACKED) {
+                    const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                    size_t tag_count;
+                    output_color_t color;
+                    char metadata[256];
+
+                    if (workspace_item_extract_display_info(item,
+                            tags, &tag_count, &color, metadata, sizeof(metadata))) {
+                        output_list_add_multi(list, tags, tag_count, color,
+                                             item->filesystem_path, metadata);
+                    }
+                }
             }
+
+            output_list_render(list);
+            output_list_free(list);
         }
     }
 
     /* Display deleted files section (if any - rare in update context) */
     if (deleted_count > 0) {
-        output_section(out, "Deleted files");
-        output_newline(out);
+        output_list_t *list = output_list_create(out,
+            "Deleted files",
+            "these files will be removed from the profile");
 
-        for (size_t i = 0; i < item_count; i++) {
-            const workspace_item_t *item = items[i];
+        if (list) {
+            for (size_t i = 0; i < item_count; i++) {
+                const workspace_item_t *item = items[i];
 
-            if (item->item_kind == WORKSPACE_ITEM_FILE && item->state == WORKSPACE_STATE_DELETED) {
-                char info[1024];
-                snprintf(info, sizeof(info), "%s (from %s)",
-                        item->filesystem_path, item->profile);
-                output_item(out, "[deleted]", OUTPUT_COLOR_RED, info);
+                if (item->item_kind == WORKSPACE_ITEM_FILE && item->state == WORKSPACE_STATE_DELETED) {
+                    const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                    size_t tag_count;
+                    output_color_t color;
+                    char metadata[256];
+
+                    if (workspace_item_extract_display_info(item,
+                            tags, &tag_count, &color, metadata, sizeof(metadata))) {
+                        output_list_add_multi(list, tags, tag_count, color,
+                                             item->filesystem_path, metadata);
+                    }
+                }
             }
+
+            output_list_render(list);
+            output_list_free(list);
         }
     }
 
     /* Display modified directories section */
     if (dir_count > 0) {
-        output_section(out, "Modified directories");
-        output_newline(out);
+        output_list_t *list = output_list_create(out,
+            "Modified directories",
+            "directory metadata will be updated");
 
-        for (size_t i = 0; i < item_count; i++) {
-            const workspace_item_t *item = items[i];
+        if (list) {
+            for (size_t i = 0; i < item_count; i++) {
+                const workspace_item_t *item = items[i];
 
-            if (item->item_kind != WORKSPACE_ITEM_DIRECTORY) {
-                continue;
-            }
-
-            /* Determine label and color based on divergence */
-            const char *label = NULL;
-            output_color_t color = OUTPUT_COLOR_YELLOW;
-
-            /* Directories can have mode and/or ownership divergence */
-            if (item->divergence & DIVERGENCE_MODE) {
-                label = "[mode]";
-                color = OUTPUT_COLOR_YELLOW;
-            } else if (item->divergence & DIVERGENCE_OWNERSHIP) {
-                label = "[ownership]";
-                color = OUTPUT_COLOR_MAGENTA;
-            } else {
-                /* Should not happen for filtered directories, but be defensive */
-                label = "[metadata]";
-                color = OUTPUT_COLOR_YELLOW;
-            }
-
-            /* Build info string with trailing slash */
-            buffer_t *info_buf = buffer_create();
-            if (!info_buf) {
-                continue;
-            }
-
-            buffer_append_string(info_buf, item->filesystem_path);
-            buffer_append_string(info_buf, "/ ");
-            buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_DIM));
-            buffer_append_string(info_buf, "(directory from ");
-            buffer_append_string(info_buf, item->profile);
-            buffer_append_string(info_buf, ")");
-            buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_RESET));
-
-            /* In verbose mode, show detailed divergence flags for directories */
-            if (opts && opts->verbose) {
-                bool first_flag = true;
-                buffer_append_string(info_buf, " ");
-                buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_DIM));
-
-                if (item->divergence & DIVERGENCE_MODE) {
-                    buffer_append_string(info_buf, "[mode]");
-                    first_flag = false;
-                }
-                if (item->divergence & DIVERGENCE_OWNERSHIP) {
-                    if (!first_flag) buffer_append_string(info_buf, " ");
-                    buffer_append_string(info_buf, "[ownership]");
-                    first_flag = false;
-                }
-                if (item->divergence & DIVERGENCE_ENCRYPTION) {
-                    if (!first_flag) buffer_append_string(info_buf, " ");
-                    buffer_append_string(info_buf, "[encryption]");
+                if (item->item_kind != WORKSPACE_ITEM_DIRECTORY) {
+                    continue;
                 }
 
-                buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_RESET));
+                /* Extract tags and metadata using helper */
+                const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                size_t tag_count;
+                output_color_t color;
+                char base_metadata[256];
+
+                if (workspace_item_extract_display_info(item,
+                        tags, &tag_count, &color, base_metadata, sizeof(base_metadata))) {
+                    /* Build custom content with trailing slash for directories */
+                    char path_with_slash[PATH_MAX + 2];
+                    snprintf(path_with_slash, sizeof(path_with_slash), "%s/",
+                            item->filesystem_path);
+
+                    /* Build custom metadata with explicit "directory" indicator */
+                    char metadata[256];
+                    if (strstr(base_metadata, "metadata from")) {
+                        /* For split metadata: "directory metadata from profile" */
+                        snprintf(metadata, sizeof(metadata), "directory %s", base_metadata);
+                    } else {
+                        /* For normal case: "directory from profile" */
+                        snprintf(metadata, sizeof(metadata), "directory %s", base_metadata);
+                    }
+
+                    output_list_add_multi(list, tags, tag_count, color,
+                                         path_with_slash, metadata);
+                }
             }
 
-            char *info = NULL;
-            error_t *release_err = buffer_release_data(info_buf, &info);
-            if (release_err) {
-                error_free(release_err);
-                continue;
-            }
-
-            output_item(out, label, color, info);
-            free(info);
+            output_list_render(list);
+            output_list_free(list);
         }
     }
 
     /* Display encryption policy violations section */
     if (encryption_count > 0) {
-        output_section(out, "Encryption policy violations");
-        output_newline(out);
-
         output_warning(out,
             "The following files match auto-encrypt patterns but are stored as plaintext:");
         output_newline(out);
 
-        for (size_t i = 0; i < item_count; i++) {
-            const workspace_item_t *item = items[i];
+        output_list_t *list = output_list_create(out,
+            "Encryption policy violations",
+            NULL);
 
-            if (item->item_kind != WORKSPACE_ITEM_FILE ||
-                !(item->divergence & DIVERGENCE_ENCRYPTION)) {
-                continue;
+        if (list) {
+            for (size_t i = 0; i < item_count; i++) {
+                const workspace_item_t *item = items[i];
+
+                if (item->item_kind != WORKSPACE_ITEM_FILE ||
+                    !(item->divergence & DIVERGENCE_ENCRYPTION)) {
+                    continue;
+                }
+
+                /* Build metadata with profile and resolution status */
+                char metadata[512];
+                const char *status = item->on_filesystem ?
+                    "will be encrypted" : "file missing - cannot fix";
+                snprintf(metadata, sizeof(metadata), "from %s, %s",
+                        item->profile, status);
+
+                /* Single tag for policy violation */
+                const char *tags[] = {"plaintext"};
+                output_list_add_multi(list, tags, 1, OUTPUT_COLOR_RED,
+                                     item->filesystem_path, metadata);
             }
 
-            /* Build info string with security context and resolution status */
-            buffer_t *info_buf = buffer_create();
-            if (!info_buf) {
-                continue;
-            }
-
-            buffer_append_string(info_buf, item->filesystem_path);
-            buffer_append_string(info_buf, " (from ");
-            buffer_append_string(info_buf, item->profile);
-            buffer_append_string(info_buf, ") ");
-            buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_DIM));
-
-            /* Show resolution status based on filesystem presence */
-            if (item->on_filesystem) {
-                buffer_append_string(info_buf, "[will be encrypted]");
-            } else {
-                buffer_append_string(info_buf, "[file missing - cannot fix]");
-            }
-
-            buffer_append_string(info_buf, output_color_code(out, OUTPUT_COLOR_RESET));
-
-            char *info = NULL;
-            error_t *release_err = buffer_release_data(info_buf, &info);
-            if (release_err) {
-                error_free(release_err);
-                continue;
-            }
-
-            output_item(out, "[plaintext]", OUTPUT_COLOR_RED, info);
-            free(info);
+            output_list_render(list);
+            output_list_free(list);
         }
 
         output_newline(out);
@@ -1932,7 +1842,6 @@ static error_t *update_display_summary(
             "To keep a file as plaintext, use: dotta update --no-encrypt <file>");
     }
 
-    output_newline(out);
     return NULL;
 }
 

@@ -414,4 +414,118 @@ bool output_confirm_destructive(
     bool force_flag
 );
 
+/**
+ * List builder - opaque structure for building aligned lists
+ *
+ * Provides a generic list rendering utility that automatically calculates
+ * alignment based on tag widths. Suitable for any module that needs to
+ * display lists of items with variable-width labels.
+ *
+ * Usage pattern:
+ *   1. Create list with title and optional hint
+ *   2. Add items with tags, content, and metadata
+ *   3. Render (calculates alignment automatically)
+ */
+typedef struct output_list output_list_t;
+
+/**
+ * Create list builder with section title
+ *
+ * Creates a new list builder for rendering aligned items. The builder
+ * will display a section header with item count and optional hint text.
+ *
+ * @param ctx Output context (must not be NULL, borrowed reference)
+ * @param title Section title (e.g., "Uncommitted changes")
+ * @param hint Optional hint text shown after title (NULL if none)
+ * @return List builder or NULL on allocation failure
+ */
+output_list_t *output_list_create(
+    output_ctx_t *ctx,
+    const char *title,
+    const char *hint
+);
+
+/**
+ * Add item to list with single tag
+ *
+ * Adds an item with a single tag (e.g., "modified"). The tag will be
+ * automatically wrapped in brackets: [modified]
+ *
+ * All strings are copied internally - caller retains ownership of inputs.
+ *
+ * @param list List builder (must not be NULL)
+ * @param tag Tag string (will be wrapped in brackets, NULL treated as empty)
+ * @param color Color for the tag
+ * @param content Main content text (NULL treated as empty)
+ * @param metadata Optional metadata shown dimmed in parentheses (NULL if none)
+ * @return 0 on success, -1 on allocation failure
+ */
+int output_list_add(
+    output_list_t *list,
+    const char *tag,
+    output_color_t color,
+    const char *content,
+    const char *metadata
+);
+
+/**
+ * Add item to list with multiple tags
+ *
+ * Adds an item with multiple tags (e.g., ["modified", "mode"]).
+ * Tags will be formatted as: [modified] [mode]
+ *
+ * All strings are copied internally - caller retains ownership of inputs.
+ *
+ * @param list List builder (must not be NULL)
+ * @param tags Array of tag strings (must not be NULL if tag_count > 0)
+ * @param tag_count Number of tags
+ * @param color Color for the tags
+ * @param content Main content text (NULL treated as empty)
+ * @param metadata Optional metadata shown dimmed in parentheses (NULL if none)
+ * @return 0 on success, -1 on allocation failure
+ */
+int output_list_add_multi(
+    output_list_t *list,
+    const char **tags,
+    size_t tag_count,
+    output_color_t color,
+    const char *content,
+    const char *metadata
+);
+
+/**
+ * Render list with auto-calculated alignment
+ *
+ * Performs two-pass rendering:
+ *   Pass 1: Calculate maximum tag width across all items
+ *   Pass 2: Render all items with tags aligned to max width
+ *
+ * Does nothing if list is empty (count == 0).
+ * Respects output context verbosity and color settings.
+ *
+ * @param list List builder (must not be NULL)
+ */
+void output_list_render(output_list_t *list);
+
+/**
+ * Get item count
+ *
+ * Returns the number of items currently in the list.
+ * Useful for conditional rendering (only render if count > 0).
+ *
+ * @param list List builder (must not be NULL)
+ * @return Number of items added to list
+ */
+size_t output_list_count(const output_list_t *list);
+
+/**
+ * Free list builder and all associated memory
+ *
+ * Frees the list builder and all internal allocations (tags, content,
+ * metadata strings). Safe to call with NULL.
+ *
+ * @param list List builder (NULL-safe)
+ */
+void output_list_free(output_list_t *list);
+
 #endif /* DOTTA_OUTPUT_H */

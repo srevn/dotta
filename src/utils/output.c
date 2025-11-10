@@ -827,3 +827,372 @@ bool output_confirm_destructive(
 
     return output_confirm(ctx, message, false);  /* Default to NO for destructive ops */
 }
+
+/* List Builder Implementation */
+
+/**
+ * Internal list item structure
+ */
+typedef struct {
+    char **tags;           /* Array of owned tag strings */
+    size_t tag_count;      /* Number of tags */
+    output_color_t color;  /* Color for tags */
+    char *content;         /* Owned content string */
+    char *metadata;        /* Owned metadata string (nullable) */
+} list_item_t;
+
+/**
+ * List builder structure
+ */
+struct output_list {
+    output_ctx_t *ctx;     /* Borrowed reference (caller owns) */
+    char *title;           /* Owned section title */
+    char *hint;            /* Owned hint text (nullable) */
+    list_item_t *items;    /* Dynamic array of items */
+    size_t count;          /* Current item count */
+    size_t capacity;       /* Allocated capacity */
+};
+
+/**
+ * Free a single list item and its internal allocations
+ */
+static void free_list_item(list_item_t *item) {
+    if (!item) {
+        return;
+    }
+
+    if (item->tags) {
+        for (size_t i = 0; i < item->tag_count; i++) {
+            free(item->tags[i]);
+        }
+        free(item->tags);
+    }
+
+    free(item->content);
+    free(item->metadata);
+
+    memset(item, 0, sizeof(list_item_t));
+}
+
+/**
+ * Format tags with brackets and spacing
+ */
+static void format_tags_with_brackets(
+    char **tags,
+    size_t tag_count,
+    char *buffer,
+    size_t buffer_size
+) {
+    if (!tags || tag_count == 0 || !buffer || buffer_size == 0) {
+        if (buffer && buffer_size > 0) {
+            buffer[0] = '\0';
+        }
+        return;
+    }
+
+    size_t offset = 0;
+    for (size_t i = 0; i < tag_count && offset < buffer_size - 1; i++) {
+        if (i > 0 && offset < buffer_size - 1) {
+            offset += snprintf(buffer + offset, buffer_size - offset, " ");
+        }
+        offset += snprintf(buffer + offset, buffer_size - offset,
+                          "[%s]", tags[i]);
+    }
+}
+
+output_list_t *output_list_create(
+    output_ctx_t *ctx,
+    const char *title,
+    const char *hint
+) {
+    if (!ctx || !title) {
+        return NULL;
+    }
+
+    output_list_t *list = calloc(1, sizeof(output_list_t));
+    if (!list) {
+        return NULL;
+    }
+
+    list->ctx = ctx;
+
+    list->title = strdup(title);
+    if (!list->title) {
+        goto cleanup_list;
+    }
+
+    if (hint) {
+        list->hint = strdup(hint);
+        if (!list->hint) {
+            goto cleanup_title;
+        }
+    }
+
+    /* Start with capacity 16 */
+    list->capacity = 16;
+    list->items = calloc(16, sizeof(list_item_t));
+    if (!list->items) {
+        goto cleanup_hint;
+    }
+
+    return list;
+
+cleanup_hint:
+    free(list->hint);
+cleanup_title:
+    free(list->title);
+cleanup_list:
+    free(list);
+    return NULL;
+}
+
+int output_list_add(
+    output_list_t *list,
+    const char *tag,
+    output_color_t color,
+    const char *content,
+    const char *metadata
+) {
+    if (!list) {
+        return -1;
+    }
+
+    /* Grow array if needed (double capacity) */
+    if (list->count >= list->capacity) {
+        size_t new_capacity = list->capacity * 2;
+        list_item_t *new_items = realloc(list->items,
+                                         new_capacity * sizeof(list_item_t));
+        if (!new_items) {
+            return -1;
+        }
+        list->items = new_items;
+        list->capacity = new_capacity;
+
+        /* Zero out new slots */
+        memset(&list->items[list->count], 0,
+               (new_capacity - list->count) * sizeof(list_item_t));
+    }
+
+    list_item_t *item = &list->items[list->count];
+
+    /* Build single-tag array */
+    item->tags = calloc(1, sizeof(char *));
+    if (!item->tags) {
+        return -1;
+    }
+
+    item->tags[0] = tag ? strdup(tag) : strdup("");
+    if (!item->tags[0]) {
+        goto error;
+    }
+
+    item->tag_count = 1;
+    item->color = color;
+
+    item->content = content ? strdup(content) : strdup("");
+    if (!item->content) {
+        goto error;
+    }
+
+    if (metadata) {
+        item->metadata = strdup(metadata);
+        if (!item->metadata) {
+            goto error;
+        }
+    }
+
+    list->count++;
+    return 0;
+
+error:
+    free_list_item(item);
+    return -1;
+}
+
+int output_list_add_multi(
+    output_list_t *list,
+    const char **tags,
+    size_t tag_count,
+    output_color_t color,
+    const char *content,
+    const char *metadata
+) {
+    if (!list) {
+        return -1;
+    }
+
+    if (tag_count > 0 && !tags) {
+        return -1;
+    }
+
+    /* Grow array if needed (double capacity) */
+    if (list->count >= list->capacity) {
+        size_t new_capacity = list->capacity * 2;
+        list_item_t *new_items = realloc(list->items,
+                                         new_capacity * sizeof(list_item_t));
+        if (!new_items) {
+            return -1;
+        }
+        list->items = new_items;
+        list->capacity = new_capacity;
+
+        /* Zero out new slots */
+        memset(&list->items[list->count], 0,
+               (new_capacity - list->count) * sizeof(list_item_t));
+    }
+
+    list_item_t *item = &list->items[list->count];
+
+    /* Build multi-tag array */
+    if (tag_count > 0) {
+        item->tags = calloc(tag_count, sizeof(char *));
+        if (!item->tags) {
+            return -1;
+        }
+
+        for (size_t i = 0; i < tag_count; i++) {
+            item->tags[i] = tags[i] ? strdup(tags[i]) : strdup("");
+            if (!item->tags[i]) {
+                /* Free previously allocated tags */
+                for (size_t j = 0; j < i; j++) {
+                    free(item->tags[j]);
+                }
+                free(item->tags);
+                item->tags = NULL;
+                goto error;
+            }
+        }
+
+        item->tag_count = tag_count;
+    }
+
+    item->color = color;
+
+    item->content = content ? strdup(content) : strdup("");
+    if (!item->content) {
+        goto error;
+    }
+
+    if (metadata) {
+        item->metadata = strdup(metadata);
+        if (!item->metadata) {
+            goto error;
+        }
+    }
+
+    list->count++;
+    return 0;
+
+error:
+    free_list_item(item);
+    return -1;
+}
+
+void output_list_render(output_list_t *list) {
+    if (!list || list->count == 0) {
+        return;
+    }
+
+    output_ctx_t *ctx = list->ctx;
+
+    if (ctx->verbosity < OUTPUT_NORMAL) {
+        return;
+    }
+
+    /* Pass 1: Calculate maximum tag width across all items */
+    size_t max_tag_width = 0;
+
+    for (size_t i = 0; i < list->count; i++) {
+        list_item_t *item = &list->items[i];
+
+        /* Calculate formatted tag width: "[tag1] [tag2] ..." */
+        size_t tag_width = 0;
+        for (size_t j = 0; j < item->tag_count; j++) {
+            tag_width += strlen(item->tags[j]) + 2;  /* +2 for brackets */
+            if (j > 0) {
+                tag_width += 1;  /* +1 for space separator */
+            }
+        }
+
+        if (tag_width > max_tag_width) {
+            max_tag_width = tag_width;
+        }
+    }
+
+    /* Pass 2: Render header with count and optional hint */
+    if (ctx->color_enabled) {
+        fprintf(ctx->stream, "%s%s (%zu item%s)%s",
+                ANSI_BOLD, list->title, list->count,
+                list->count == 1 ? "" : "s", ANSI_RESET);
+
+        if (list->hint) {
+            fprintf(ctx->stream, " %s(%s)%s", ANSI_DIM, list->hint, ANSI_RESET);
+        }
+
+        fprintf(ctx->stream, "\n");
+    } else {
+        fprintf(ctx->stream, "%s (%zu item%s)",
+                list->title, list->count, list->count == 1 ? "" : "s");
+
+        if (list->hint) {
+            fprintf(ctx->stream, " (%s)", list->hint);
+        }
+
+        fprintf(ctx->stream, "\n");
+    }
+
+    output_newline(ctx);
+
+    /* Pass 3: Render items with alignment */
+    for (size_t i = 0; i < list->count; i++) {
+        list_item_t *item = &list->items[i];
+
+        /* Format tags into buffer */
+        char tag_buffer[256];
+        format_tags_with_brackets(item->tags, item->tag_count,
+                                  tag_buffer, sizeof(tag_buffer));
+
+        /* Get color codes */
+        const char *color = output_color_code(ctx, item->color);
+        const char *dim = output_color_code(ctx, OUTPUT_COLOR_DIM);
+        const char *reset = output_color_code(ctx, OUTPUT_COLOR_RESET);
+
+        /* Print: "  [colored tags padded to max_width] content" */
+        fprintf(ctx->stream, "  %s%-*s%s %s",
+                color,
+                (int)max_tag_width,
+                tag_buffer,
+                reset,
+                item->content);
+
+        /* Print metadata if present */
+        if (item->metadata) {
+            fprintf(ctx->stream, " %s(%s)%s", dim, item->metadata, reset);
+        }
+
+        fprintf(ctx->stream, "\n");
+    }
+
+    output_newline(ctx);
+}
+
+size_t output_list_count(const output_list_t *list) {
+    return list ? list->count : 0;
+}
+
+void output_list_free(output_list_t *list) {
+    if (!list) {
+        return;
+    }
+
+    if (list->items) {
+        for (size_t i = 0; i < list->count; i++) {
+            free_list_item(&list->items[i]);
+        }
+        free(list->items);
+    }
+
+    free(list->hint);
+    free(list->title);
+    free(list);
+}

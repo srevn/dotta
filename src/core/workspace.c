@@ -2330,6 +2330,157 @@ error_t *workspace_get_merged_metadata(
 }
 
 /**
+ * Extract display tags and metadata from workspace item
+ */
+bool workspace_item_extract_display_info(
+    const workspace_item_t *item,
+    const char **tags_out,
+    size_t *tag_count_out,
+    output_color_t *color_out,
+    char *metadata_buf,
+    size_t metadata_size
+) {
+    /* Initialize all outputs defensively before validation */
+    if (tag_count_out) {
+        *tag_count_out = 0;
+    }
+    if (color_out) {
+        *color_out = OUTPUT_COLOR_RESET;
+    }
+    if (metadata_buf && metadata_size > 0) {
+        metadata_buf[0] = '\0';
+    }
+
+    /* Validate required parameters */
+    if (!item || !tags_out || !tag_count_out || !color_out ||
+        !metadata_buf || metadata_size < 32) {
+        return false;
+    }
+
+    /* Validate item has a profile name (critical for metadata formatting) */
+    if (!item->profile || item->profile[0] == '\0') {
+        return false;
+    }
+
+    size_t tag_count = 0;
+    *color_out = OUTPUT_COLOR_YELLOW;  /* Default color for most states */
+
+    switch (item->state) {
+        case WORKSPACE_STATE_UNDEPLOYED:
+            if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                tags_out[tag_count++] = "undeployed";
+            }
+            *color_out = OUTPUT_COLOR_CYAN;
+            snprintf(metadata_buf, metadata_size, "from %s", item->profile);
+            break;
+
+        case WORKSPACE_STATE_DELETED:
+            if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                tags_out[tag_count++] = "deleted";
+            }
+            *color_out = OUTPUT_COLOR_RED;
+            snprintf(metadata_buf, metadata_size, "from %s", item->profile);
+            break;
+
+        case WORKSPACE_STATE_DEPLOYED: {
+            /* Primary tag based on most severe divergence
+             *
+             * Priority order (by severity):
+             *   TYPE > CONTENT > MODE/OWNERSHIP/ENCRYPTION
+             */
+            if (item->divergence & DIVERGENCE_TYPE) {
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    tags_out[tag_count++] = "type";
+                }
+                *color_out = OUTPUT_COLOR_RED;
+            } else if (item->divergence & DIVERGENCE_CONTENT) {
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    tags_out[tag_count++] = "modified";
+                }
+                /* Keep default YELLOW color */
+            }
+
+            /* Secondary tags for other divergence
+             *
+             * MODE: Skip if TYPE divergence present (type change makes mode irrelevant)
+             *       The condition !((item->divergence & DIVERGENCE_TYPE) && tag_count > 0)
+             *       prevents MODE from showing when TYPE is the primary tag
+             * OWNERSHIP: Always show if present
+             * ENCRYPTION: Always show if present
+             */
+            if ((item->divergence & DIVERGENCE_MODE) &&
+                !((item->divergence & DIVERGENCE_TYPE) && tag_count > 0)) {
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    tags_out[tag_count++] = "mode";
+                }
+            }
+
+            if (item->divergence & DIVERGENCE_OWNERSHIP) {
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    tags_out[tag_count++] = "ownership";
+                }
+            }
+
+            if (item->divergence & DIVERGENCE_ENCRYPTION) {
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    tags_out[tag_count++] = "unencrypted";
+                }
+                /* Upgrade color to MAGENTA if still default (not TYPE divergence)
+                 * This gives encryption issues special visual treatment */
+                if (*color_out == OUTPUT_COLOR_YELLOW) {
+                    *color_out = OUTPUT_COLOR_MAGENTA;
+                }
+            }
+
+            /* Format metadata based on divergence type
+             *
+             * For mode/ownership divergence, show metadata profile if different
+             * from content profile. This indicates metadata comes from a different
+             * profile than the file content (split metadata scenario).
+             */
+            const char *meta_profile = item->metadata_profile ?
+                item->metadata_profile : item->profile;
+
+            if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
+                snprintf(metadata_buf, metadata_size, "metadata from %s", meta_profile);
+            } else {
+                snprintf(metadata_buf, metadata_size, "from %s", item->profile);
+            }
+            break;
+        }
+
+        case WORKSPACE_STATE_ORPHANED:
+            if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                tags_out[tag_count++] = "orphaned";
+            }
+            *color_out = OUTPUT_COLOR_RED;
+            snprintf(metadata_buf, metadata_size, "from %s", item->profile);
+            break;
+
+        case WORKSPACE_STATE_UNTRACKED:
+            if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                tags_out[tag_count++] = "new";
+            }
+            *color_out = OUTPUT_COLOR_CYAN;
+            snprintf(metadata_buf, metadata_size, "in %s", item->profile);
+            break;
+
+        default:
+            /* Unknown state - defensive fallback
+             * Should never happen in normal operation, but handle gracefully */
+            if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                tags_out[tag_count++] = "unknown";
+            }
+            *color_out = OUTPUT_COLOR_DIM;
+            snprintf(metadata_buf, metadata_size, "from %s", item->profile);
+            break;
+    }
+
+    *tag_count_out = tag_count;
+    return true;
+}
+
+/**
  * Free workspace
  */
 void workspace_free(workspace_t *ws) {

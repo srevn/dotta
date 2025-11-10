@@ -27,6 +27,7 @@
 #include "core/state.h"
 #include "crypto/keymanager.h"
 #include "infra/content.h"
+#include "utils/output.h"
 
 /**
  * Diverged item entry
@@ -76,6 +77,11 @@ typedef struct {
     bool profile_enabled;       /* Is source profile in workspace's enabled list? */
     bool profile_changed;       /* Profile differs from state (ownership changed) */
 } workspace_item_t;
+
+/**
+ * Maximum number of display tags that can be extracted from a workspace item
+ */
+#define WORKSPACE_ITEM_MAX_DISPLAY_TAGS 5
 
 /**
  * Workspace structure (opaque)
@@ -378,6 +384,49 @@ const hashmap_t *workspace_get_metadata_cache(const workspace_t *ws);
 error_t *workspace_get_merged_metadata(
     const workspace_t *ws,
     metadata_t **out
+);
+
+/**
+ * Extract display tags and metadata from workspace item
+ *
+ * Translates workspace item state and divergence flags into presentation
+ * tags, colors, and metadata strings for use with output_list builder.
+ * Provides consistent item visualization across all commands.
+ *
+ * Tag Priority (for DEPLOYED state with divergence):
+ *   1. "type" (RED) - File type changed (symlink ↔ regular), most severe
+ *   2. "modified" (YELLOW) - Content divergence from profile
+ *   3. Secondary: "mode", "ownership", "unencrypted" - Metadata divergence
+ *
+ * The function handles special cases:
+ *   - TYPE divergence suppresses MODE tag (type change makes mode irrelevant)
+ *   - ENCRYPTION divergence upgrades color to MAGENTA if not already RED
+ *   - Metadata from different profile shows "metadata from X" instead of "from X"
+ *
+ * Metadata Format:
+ *   - "from {profile}" - Standard source profile
+ *   - "metadata from {profile}" - Metadata-specific profile (differs from content)
+ *   - "in {profile}" - For untracked items
+ *
+ * Thread Safety: Uses only stack variables and string literals. Safe for
+ * concurrent calls with different items.
+ *
+ * @param item Workspace item (must not be NULL)
+ * @param tags_out Array to receive tag string pointers
+ * @param tag_count_out Receives number of tags extracted (must not be NULL)
+ * @param color_out Receives color for tags (must not be NULL)
+ * @param metadata_buf Buffer for formatted metadata (must not be NULL)
+ * @param metadata_size Size of metadata buffer (minimum 32 bytes, 256 recommended
+ *                      for safety with long profile names)
+ * @return true on success, false on error (invalid parameters)
+ */
+bool workspace_item_extract_display_info(
+    const workspace_item_t *item,
+    const char **tags_out,
+    size_t *tag_count_out,
+    output_color_t *color_out,
+    char *metadata_buf,
+    size_t metadata_size
 );
 
 /**

@@ -11,7 +11,6 @@
 #include "version.h"
 
 void print_usage(const char *prog_name) {
-    printf("dotta - dotfile manager\n\n");
     printf("Usage: %s <command> [options]\n\n", prog_name);
     printf("Commands:\n");
     printf("  init         Initialize a new dotta repository\n");

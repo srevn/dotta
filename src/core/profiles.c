@@ -53,17 +53,6 @@ error_t *profile_load(
     error_t *err = NULL;
     profile_t *profile = NULL;
 
-    /* Check if profile exists */
-    bool exists;
-    err = gitops_branch_exists(repo, name, &exists);
-    if (err) {
-        return err;
-    }
-
-    if (!exists) {
-        return ERROR(ERR_NOT_FOUND, "Profile not found: %s", name);
-    }
-
     /* Allocate profile */
     profile = calloc(1, sizeof(profile_t));
     if (!profile) {
@@ -87,7 +76,7 @@ error_t *profile_load(
 
     err = gitops_lookup_reference(repo, refname, &profile->ref);
     if (err) {
-        err = error_wrap(err, "Failed to load profile '%s'", name);
+        err = error_wrap(err, "Profile not found: %s", name);
         goto cleanup;
     }
 
@@ -347,15 +336,16 @@ error_t *profile_detect_auto(
     list->count = 0;
 
     /* 1. Try "global" profile */
-    if (profile_exists(repo, "global")) {
-        profile_t *profile = NULL;
-        err = profile_load(repo, "global", &profile);
-        if (err) {
-            goto cleanup;
-        }
+    profile_t *profile = NULL;
+    err = profile_load(repo, "global", &profile);
+    if (!err) {
         profile->auto_detected = true;
         list->profiles[list->count++] = *profile;
         free(profile);  /* Shallow copy of internals to list, only free struct */
+    } else {
+        /* Non-fatal: skip global profile if it doesn't exist or fails to load */
+        error_free(err);
+        err = NULL;
     }
 
     /* Fetch all branches once for efficient hierarchical profile detection.

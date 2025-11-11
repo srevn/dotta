@@ -1141,8 +1141,6 @@ void output_list_render(output_list_t *list) {
         fprintf(ctx->stream, "\n");
     }
 
-    output_newline(ctx);
-
     /* Pass 3: Render items with alignment */
     for (size_t i = 0; i < list->count; i++) {
         list_item_t *item = &list->items[i];

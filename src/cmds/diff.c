@@ -1326,7 +1326,8 @@ error_t *cmd_diff(git_repository *repo, const cmd_diff_options_t *opts) {
     error_t *err = NULL;
     dotta_config_t *config = NULL;
     output_ctx_t *out = NULL;
-    profile_list_t *profiles = NULL;
+    profile_list_t *workspace_profiles = NULL;
+    profile_list_t *diff_profiles = NULL;
 
     /* Load configuration */
     err = config_load(NULL, &config);
@@ -1344,39 +1345,68 @@ error_t *cmd_diff(git_repository *repo, const cmd_diff_options_t *opts) {
         goto cleanup;
     }
 
-    /* Load profiles */
-    err = profile_resolve(repo, opts->profiles, opts->profile_count,
-                         config->strict_mode, &profiles, NULL);
+    /* Load profiles
+     *
+     * Separate workspace scope (persistent) from diff filter (temporary):
+     *   - workspace_profiles: Persistent enabled profiles (VWD scope)
+     *   - diff_profiles: CLI filter or shared pointer
+     *
+     * Workspace operations use persistent profiles. Diff operations filter
+     * by CLI profiles when specified.
+     */
+    err = profile_resolve_for_workspace(repo, config->strict_mode, &workspace_profiles);
     if (err) {
-        err = error_wrap(err, "Failed to load profiles");
+        err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
     }
 
-    if (profiles->count == 0) {
-        output_info(out, "No profiles found");
+    if (workspace_profiles->count == 0) {
+        output_info(out, "No enabled profiles found");
+        output_hint(out, "Run 'dotta profile enable <name>' to enable profiles");
         goto cleanup;
     }
 
-    /* Route based on mode */
+    /* Load diff profiles (CLI filter or shared pointer) */
+    if (opts->profiles && opts->profile_count > 0) {
+        err = profile_resolve_for_operations(repo, opts->profiles, opts->profile_count,
+                                            config->strict_mode, &diff_profiles);
+        if (err) {
+            err = error_wrap(err, "Failed to resolve diff profiles");
+            goto cleanup;
+        }
+
+        err = profile_validate_filter(workspace_profiles, diff_profiles);
+        if (err) {
+            goto cleanup;
+        }
+    } else {
+        diff_profiles = workspace_profiles;
+    }
+
+    /* Route to diff implementation based on mode */
     switch (opts->mode) {
         case DIFF_COMMIT_TO_COMMIT:
             /* Diff two commits */
-            err = diff_commits(repo, opts->commit1, opts->commit2, profiles, opts, out);
+            err = diff_commits(repo, opts->commit1, opts->commit2, diff_profiles, opts, out);
             goto cleanup;
 
         case DIFF_COMMIT_TO_WORKSPACE:
-            /* Use new commit-to-workspace diff (fixes critical bug) */
-            err = diff_commit_to_workspace_new(repo, opts->commit1, profiles, opts, out);
+            /* Use commit-to-workspace diff */
+            err = diff_commit_to_workspace_new(repo, opts->commit1, diff_profiles, opts, out);
             goto cleanup;
 
         case DIFF_WORKSPACE:
-            /* Workspace-based diff using workspace module */
-            err = diff_workspace(repo, profiles, config, opts, out);
+            /* Workspace diff uses workspace_profiles for accurate analysis,
+             * diff_profiles for filtering output */
+            err = diff_workspace(repo, workspace_profiles, config, opts, out);
             goto cleanup;
     }
 
 cleanup:
-    if (profiles) profile_list_free(profiles);
+    if (diff_profiles && diff_profiles != workspace_profiles) {
+        profile_list_free(diff_profiles);
+    }
+    if (workspace_profiles) profile_list_free(workspace_profiles);
     if (out) output_free(out);
     if (config) config_free(config);
 

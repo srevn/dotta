@@ -235,6 +235,94 @@ error_t *profile_resolve(
 );
 
 /**
+ * Resolve enabled profiles for workspace validation (VWD scope)
+ *
+ * ALWAYS returns persistent enabled profiles from state database,
+ * ignoring any CLI overrides. This ensures workspace scope matches
+ * state scope, which is required for accurate orphan detection.
+ *
+ * Use this for ALL workspace_load() calls.
+ *
+ * Architectural note: The VWD (Virtual Working Directory) must always
+ * reflect persistent enabled profiles to maintain the invariant that
+ * manifest scope equals state scope.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param strict_mode Strict mode flag
+ * @param out Output profile list (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+error_t *profile_resolve_for_workspace(
+    git_repository *repo,
+    bool strict_mode,
+    profile_list_t **out
+);
+
+/**
+ * Resolve CLI profiles for operation filtering
+ *
+ * Loads explicitly specified CLI profiles for use as operation filter.
+ * This function should ONLY be called when user provides CLI profile
+ * arguments. If no CLI profiles, use workspace_profiles directly
+ * (pointer sharing optimization).
+ *
+ * Use this when opts->profiles != NULL && opts->profile_count > 0.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param cli_profiles CLI profile arguments (must not be NULL)
+ * @param cli_count Number of CLI profiles (must be > 0)
+ * @param strict_mode Strict mode flag
+ * @param out Output profile list (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+error_t *profile_resolve_for_operations(
+    git_repository *repo,
+    char **cli_profiles,
+    size_t cli_count,
+    bool strict_mode,
+    profile_list_t **out
+);
+
+/**
+ * Validate that filter profiles are enabled
+ *
+ * Ensures CLI filter only references profiles that are actually enabled
+ * in the workspace. This prevents confusing behavior where user filters
+ * to a disabled profile.
+ *
+ * Call this after loading both workspace_profiles and operation_profiles
+ * to provide clear error messages when user specifies disabled profiles.
+ *
+ * @param workspace_profiles Enabled profiles from state (must not be NULL)
+ * @param filter_profiles CLI filter profiles (NULL is valid = no filter)
+ * @return Error if any filter profile is not enabled, NULL on success
+ */
+error_t *profile_validate_filter(
+    const profile_list_t *workspace_profiles,
+    const profile_list_t *filter_profiles
+);
+
+/**
+ * Check if profile name matches operation filter
+ *
+ * Helper for filtering operations by profile. Use in loops to skip
+ * items not matching the filter.
+ *
+ * NULL filter semantics: Returns true (no filter = match all profiles).
+ * This enables clean code: if (!profile_filter_matches(...)) continue;
+ *
+ * NULL name semantics: Returns false (defensive, NULL name never matches).
+ *
+ * @param profile_name Profile name to check (NULL returns false)
+ * @param filter Operation filter (NULL returns true - matches all)
+ * @return true if profile matches filter, false otherwise
+ */
+bool profile_filter_matches(
+    const char *profile_name,
+    const profile_list_t *filter
+);
+
+/**
  * List all local profile branches
  *
  * Returns all local branches except 'dotta-worktree'.

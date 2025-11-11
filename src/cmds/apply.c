@@ -733,7 +733,8 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     output_ctx_t *out = NULL;
     char *repo_dir = NULL;
     state_t *state = NULL;
-    profile_list_t *profiles = NULL;
+    profile_list_t *workspace_profiles = NULL;
+    profile_list_t *operation_profiles = NULL;
     const manifest_t *manifest = NULL;
     manifest_t *deploy_manifest = NULL;
     workspace_t *ws = NULL;
@@ -788,39 +789,61 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    /* Load profiles */
+    /* Load profiles
+     *
+     * Separate workspace scope (persistent) from operation filter (temporary).
+     *   - workspace_profiles: ALWAYS persistent enabled profiles (for VWD scope)
+     *   - operation_profiles: CLI filter or shared pointer (for filtering operations)
+     *
+     * This ensures accurate orphan detection while supporting CLI filtering.
+     */
     output_print(out, OUTPUT_VERBOSE, "Loading profiles...\n");
 
-    /*
-     * Resolve profiles using priority hierarchy:
-     * 1. CLI -p flag (temporary override)
-     * 2. State enabled_profiles (persistent management via 'dotta profile enable')
-     */
-    profile_source_t profile_source;  /* For informational purposes only */
-    err = profile_resolve(repo, opts->profiles, opts->profile_count,
-                         config->strict_mode, &profiles, &profile_source);
-
+    /* Phase 1: Load workspace profiles (ALWAYS persistent, ignore CLI overrides) */
+    err = profile_resolve_for_workspace(repo, config->strict_mode, &workspace_profiles);
     if (err) {
-        err = error_wrap(err, "Failed to load profiles");
+        err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
     }
 
-    if (profiles->count == 0) {
-        err = ERROR(ERR_NOT_FOUND, "No profiles found");
+    if (workspace_profiles->count == 0) {
+        err = ERROR(ERR_NOT_FOUND,
+                   "No enabled profiles found\n"
+                   "Hint: Run 'dotta profile enable <name>' to enable profiles");
         goto cleanup;
+    }
+
+    /* Phase 2: Load operation profiles */
+    if (opts->profiles && opts->profile_count > 0) {
+        /* User specified CLI filter - load filter profiles */
+        err = profile_resolve_for_operations(repo, opts->profiles, opts->profile_count,
+                                            config->strict_mode, &operation_profiles);
+        if (err) {
+            err = error_wrap(err, "Failed to resolve operation profiles");
+            goto cleanup;
+        }
+
+        /* Validate: filter profiles must be enabled in workspace */
+        err = profile_validate_filter(workspace_profiles, operation_profiles);
+        if (err) {
+            goto cleanup;
+        }
+    } else {
+        /* No CLI filter - share workspace profiles */
+        operation_profiles = workspace_profiles;
     }
 
     if (opts->verbose) {
         output_print(out, OUTPUT_VERBOSE, "Using %zu profile%s:\n",
-                    profiles->count, profiles->count == 1 ? "" : "s");
-        for (size_t i = 0; i < profiles->count; i++) {
+                    operation_profiles->count, operation_profiles->count == 1 ? "" : "s");
+        for (size_t i = 0; i < operation_profiles->count; i++) {
             if (output_colors_enabled(out)) {
                 output_printf(out, OUTPUT_NORMAL, "  %s•%s %s\n",
                        output_color_code(out, OUTPUT_COLOR_CYAN),
                        output_color_code(out, OUTPUT_COLOR_RESET),
-                       profiles->profiles[i].name);
+                       operation_profiles->profiles[i].name);
             } else {
-                output_printf(out, OUTPUT_NORMAL, "  • %s\n", profiles->profiles[i].name);
+                output_printf(out, OUTPUT_NORMAL, "  • %s\n", operation_profiles->profiles[i].name);
             }
         }
     }
@@ -836,7 +859,11 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
      */
     output_print(out, OUTPUT_VERBOSE, "\nLoading workspace...\n");
 
-    /* Apply needs file divergence + orphan detection for deployment and cleanup */
+    /* Apply needs file divergence + orphan detection for deployment and cleanup
+     *
+     * Use workspace_profiles (persistent) for VWD scope, NOT operation_profiles.
+     * This ensures manifest scope matches state scope for accurate orphan detection.
+     */
     workspace_load_t ws_opts = {
         .analyze_files = true,
         .analyze_orphans = true,
@@ -844,7 +871,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         .analyze_directories = false,  /* Not needed for deployment */
         .analyze_encryption = false    /* Not needed for deployment */
     };
-    err = workspace_load(repo, state, profiles, config, &ws_opts, &ws);
+    err = workspace_load(repo, state, workspace_profiles, config, &ws_opts, &ws);
     if (err) {
         err = error_wrap(err, "Failed to load workspace");
         goto cleanup;
@@ -876,12 +903,18 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
      */
     output_print(out, OUTPUT_VERBOSE, "\nAnalyzing files for convergence...\n");
 
-    /* Pass 1: Count divergent and clean files */
+    /* Pass 1: Count divergent and clean files (with operation filter) */
     size_t divergent_count = 0;
     size_t clean_count = 0;
 
     for (size_t i = 0; i < manifest->count; i++) {
         const file_entry_t *entry = &manifest->entries[i];
+
+        /* Filter by operation profiles (skip files not in filter) */
+        if (entry->source_profile &&
+            !profile_filter_matches(entry->source_profile->name, operation_profiles)) {
+            continue;
+        }
 
         /* Query fresh divergence analysis (O(1) hashmap lookup) */
         const workspace_item_t *ws_item = workspace_get_item(ws, entry->filesystem_path);
@@ -917,9 +950,15 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             goto cleanup;
         }
 
-        /* Populate with files that need deployment */
+        /* Populate with files that need deployment (with operation filter) */
         for (size_t i = 0; i < manifest->count; i++) {
             const file_entry_t *entry = &manifest->entries[i];
+
+            /* Filter by operation profiles (skip files not in filter) */
+            if (entry->source_profile &&
+                !profile_filter_matches(entry->source_profile->name, operation_profiles)) {
+                continue;
+            }
 
             /* Query fresh divergence analysis (O(1) hashmap lookup)
              *
@@ -986,14 +1025,26 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     if (!opts->keep_orphans) {
         output_print(out, OUTPUT_VERBOSE, "\nExtracting orphans from workspace...\n");
 
-        /* Get ALL diverged items and filter for orphans */
+        /* Get ALL diverged items and filter for orphans
+         *
+         * Without filtering: `dotta apply work` would remove files from `global`
+         * profile, destroying base configuration.  With filtering: Only orphans 
+         * matching operation filter are removed.
+         */
         size_t all_diverged_count = 0;
         const workspace_item_t *all_diverged = workspace_get_all_diverged(ws, &all_diverged_count);
 
-        /* First pass: count orphaned files vs directories */
+        /* First pass: count orphaned files vs directories (FILTERED) */
         for (size_t i = 0; i < all_diverged_count; i++) {
-            if (all_diverged[i].state == WORKSPACE_STATE_ORPHANED) {
-                if (all_diverged[i].item_kind == WORKSPACE_ITEM_FILE) {
+            const workspace_item_t *item = &all_diverged[i];
+
+            if (item->state == WORKSPACE_STATE_ORPHANED) {
+                /* Only count orphans matching operation filter */
+                if (!profile_filter_matches(item->profile, operation_profiles)) {
+                    continue;  /* Skip orphans not in filter */
+                }
+
+                if (item->item_kind == WORKSPACE_ITEM_FILE) {
                     file_orphan_count++;
                 } else {
                     dir_orphan_count++;
@@ -1009,12 +1060,19 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                 goto cleanup;
             }
 
-            /* Second pass: populate file orphans array */
+            /* Second pass: populate file orphans array (FILTERED) */
             size_t f_idx = 0;
             for (size_t i = 0; i < all_diverged_count; i++) {
-                if (all_diverged[i].state == WORKSPACE_STATE_ORPHANED &&
-                    all_diverged[i].item_kind == WORKSPACE_ITEM_FILE) {
-                    file_orphans[f_idx++] = &all_diverged[i];
+                const workspace_item_t *item = &all_diverged[i];
+
+                if (item->state == WORKSPACE_STATE_ORPHANED &&
+                    item->item_kind == WORKSPACE_ITEM_FILE) {
+                    /* CRITICAL: Only extract orphans matching operation filter */
+                    if (!profile_filter_matches(item->profile, operation_profiles)) {
+                        continue;  /* Skip orphans not in filter */
+                    }
+
+                    file_orphans[f_idx++] = item;
                 }
             }
         }
@@ -1028,12 +1086,19 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                 goto cleanup;
             }
 
-            /* Second pass: populate directory orphans array */
+            /* Second pass: populate directory orphans array (FILTERED) */
             size_t d_idx = 0;
             for (size_t i = 0; i < all_diverged_count; i++) {
-                if (all_diverged[i].state == WORKSPACE_STATE_ORPHANED &&
-                    all_diverged[i].item_kind == WORKSPACE_ITEM_DIRECTORY) {
-                    dir_orphans[d_idx++] = &all_diverged[i];
+                const workspace_item_t *item = &all_diverged[i];
+
+                if (item->state == WORKSPACE_STATE_ORPHANED &&
+                    item->item_kind == WORKSPACE_ITEM_DIRECTORY) {
+                    /* Only extract orphans matching operation filter */
+                    if (!profile_filter_matches(item->profile, operation_profiles)) {
+                        continue;  /* Skip orphans not in filter */
+                    }
+
+                    dir_orphans[d_idx++] = item;
                 }
             }
         }
@@ -1180,7 +1245,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
 
         cleanup_options_t cleanup_opts = {
             .enabled_metadata = merged_metadata,
-            .enabled_profiles = profiles,
+            .enabled_profiles = operation_profiles,   /* Use filtered profiles for preflight */
             .cache = cache,
             .orphaned_files = file_orphans,           /* Workspace item array */
             .orphaned_files_count = file_orphan_count,
@@ -1188,9 +1253,9 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             .orphaned_directories_count = dir_orphan_count,
             .preflight_violations = NULL,             /* No preflight violations yet */
             .verbose = opts->verbose,
-            .dry_run = false,  /* Preflight is always read-only */
+            .dry_run = false,                         /* Preflight is always read-only */
             .force = opts->force,
-            .skip_safety_check = false  /* Run safety check in preflight */
+            .skip_safety_check = false                /* Run safety check in preflight */
         };
 
         err = cleanup_preflight_check(repo, state, manifest, &cleanup_opts, &cleanup_preflight);
@@ -1236,9 +1301,9 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     if (config && repo_dir) {
         /* Join all profile names into a space-separated string */
         size_t total_len = 0;
-        for (size_t i = 0; i < profiles->count; i++) {
-            total_len += strlen(profiles->profiles[i].name);
-            if (i < profiles->count - 1) {
+        for (size_t i = 0; i < operation_profiles->count; i++) {
+            total_len += strlen(operation_profiles->profiles[i].name);
+            if (i < operation_profiles->count - 1) {
                 total_len++; /* For space separator */
             }
         }
@@ -1250,11 +1315,11 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
 
         char *p = profiles_str;
-        for (size_t i = 0; i < profiles->count; i++) {
-            const char *name = profiles->profiles[i].name;
+        for (size_t i = 0; i < operation_profiles->count; i++) {
+            const char *name = operation_profiles->profiles[i].name;
             strcpy(p, name);
             p += strlen(name);
-            if (i < profiles->count - 1) {
+            if (i < operation_profiles->count - 1) {
                 *p++ = ' ';
             }
         }
@@ -1374,7 +1439,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             cleanup_result_t *cleanup_res = NULL;
             cleanup_options_t cleanup_opts = {
                 .enabled_metadata = merged_metadata,
-                .enabled_profiles = profiles,
+                .enabled_profiles = operation_profiles,   /* Use filtered profiles for cleanup */
                 .cache = cache,                           /* Pass cache for performance */
                 .orphaned_files = file_orphans,           /* Workspace item array */
                 .orphaned_files_count = file_orphan_count,
@@ -1382,9 +1447,9 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                 .orphaned_directories_count = dir_orphan_count,
                 .preflight_violations = cleanup_preflight ? cleanup_preflight->safety_violations : NULL,
                 .verbose = opts->verbose,
-                .dry_run = false,  /* Dry-run handled at deployment level */
+                .dry_run = false,                         /* Dry-run handled at deployment level */
                 .force = opts->force,
-                .skip_safety_check = true  /* Trust preflight data (performance optimization) */
+                .skip_safety_check = true                 /* Trust preflight data */
             };
 
             err = cleanup_execute(repo, state, manifest, &cleanup_opts, &cleanup_res);
@@ -1600,7 +1665,10 @@ cleanup:
     if (dir_orphans) free(dir_orphans);
     if (file_orphans) free(file_orphans);
     if (ws) workspace_free(ws);
-    if (profiles) profile_list_free(profiles);
+    if (operation_profiles && operation_profiles != workspace_profiles) {
+        profile_list_free(operation_profiles);
+    }
+    if (workspace_profiles) profile_list_free(workspace_profiles);
     if (state) state_free(state);
     if (repo_dir) free(repo_dir);
     if (config) config_free(config);

@@ -1027,7 +1027,8 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
 
     error_t *err = NULL;
     dotta_config_t *config = NULL;
-    profile_list_t *profiles = NULL;
+    profile_list_t *workspace_profiles = NULL;  /* Persistent enabled profiles */
+    profile_list_t *sync_profiles = NULL;       /* CLI filter or shared pointer */
     sync_results_t *results = NULL;
     char *remote_name = NULL;
 
@@ -1070,21 +1071,21 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* Load enabled profiles using standard profile resolution
-     * Priority: CLI -p (temporary) > state (persistent management)
+    /* Load profiles
+     * - workspace_profiles: ALWAYS persistent enabled profiles (for VWD scope)
+     * - sync_profiles: CLI filter or shared pointer (for sync operations)
      */
-    profile_source_t source;
-    err = profile_resolve(repo, opts->profiles, opts->profile_count,
-                         config->strict_mode, &profiles, &source);
+
+    /* Phase 1: Load workspace profiles (ALWAYS persistent) */
+    err = profile_resolve_for_workspace(repo, config->strict_mode, &workspace_profiles);
     if (err) {
         config_free(config);
         output_free(out);
         return error_wrap(err, "Failed to resolve enabled profiles");
     }
 
-    /* Provide helpful error when no enabled profiles */
-    if (profiles->count == 0) {
-        profile_list_free(profiles);
+    if (workspace_profiles->count == 0) {
+        profile_list_free(workspace_profiles);
         config_free(config);
         output_free(out);
         return ERROR(ERR_NOT_FOUND,
@@ -1093,16 +1094,49 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
                     "      Or run 'dotta profile list --remote' to see available profiles");
     }
 
+    /* Phase 2: Load sync profiles (CLI filter or shared pointer) */
+    if (opts->profiles && opts->profile_count > 0) {
+        /* User specified CLI filter */
+        err = profile_resolve_for_operations(repo, opts->profiles, opts->profile_count,
+                                            config->strict_mode, &sync_profiles);
+        if (err) {
+            profile_list_free(workspace_profiles);
+            config_free(config);
+            output_free(out);
+            return error_wrap(err, "Failed to resolve sync profiles");
+        }
+
+        /* Validate: filter profiles must be enabled in workspace */
+        err = profile_validate_filter(workspace_profiles, sync_profiles);
+        if (err) {
+            profile_list_free(sync_profiles);
+            profile_list_free(workspace_profiles);
+            config_free(config);
+            output_free(out);
+            return err;
+        }
+    } else {
+        /* No CLI filter - share workspace profiles */
+        sync_profiles = workspace_profiles;
+    }
+
     /* Create results tracker */
-    results = sync_results_create(profiles->count);
+    results = sync_results_create(sync_profiles->count);
     if (!results) {
-        profile_list_free(profiles);
+        if (sync_profiles != workspace_profiles) {
+            profile_list_free(sync_profiles);
+        }
+        profile_list_free(workspace_profiles);
         config_free(config);
         output_free(out);
         return ERROR(ERR_MEMORY, "Failed to create results");
     }
 
-    /* Validate workspace - sync requires clean workspace (no uncommitted changes) */
+    /* Validate workspace - sync requires clean workspace (no uncommitted changes)
+     *
+     * CRITICAL: Use workspace_profiles (persistent) for VWD scope, NOT sync_profiles.
+     * This ensures manifest scope matches state scope for accurate orphan detection.
+     */
     workspace_t *ws = NULL;
     workspace_load_t ws_opts = {
         .analyze_files = true,         /* Validate file state */
@@ -1113,10 +1147,13 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     };
     /* Pass NULL for state - this is read-only validation, not a transactional operation.
      * State transaction opened later for manifest updates after sync completes. */
-    err = workspace_load(repo, NULL, profiles, config, &ws_opts, &ws);
+    err = workspace_load(repo, NULL, workspace_profiles, config, &ws_opts, &ws);
     if (err) {
         sync_results_free(results);
-        profile_list_free(profiles);
+        if (sync_profiles != workspace_profiles) {
+            profile_list_free(sync_profiles);
+        }
+        profile_list_free(workspace_profiles);
         config_free(config);
         output_free(out);
         return error_wrap(err, "Failed to load workspace");
@@ -1200,7 +1237,8 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
 
         workspace_free(ws);
         sync_results_free(results);
-        profile_list_free(profiles);
+        if (sync_profiles != workspace_profiles) profile_list_free(sync_profiles);
+        profile_list_free(workspace_profiles);
         config_free(config);
         output_free(out);
         return ERROR(ERR_VALIDATION,
@@ -1231,7 +1269,8 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         output_info(out, "Dry run: no changes made");
         workspace_free(ws);
         sync_results_free(results);
-        profile_list_free(profiles);
+        if (sync_profiles != workspace_profiles) profile_list_free(sync_profiles);
+        profile_list_free(workspace_profiles);
         config_free(config);
         output_free(out);
         return NULL;
@@ -1241,7 +1280,8 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     err = upstream_detect_remote(repo, &remote_name);
     if (err) {
         sync_results_free(results);
-        profile_list_free(profiles);
+        if (sync_profiles != workspace_profiles) profile_list_free(sync_profiles);
+        profile_list_free(workspace_profiles);
         config_free(config);
         output_free(out);
         return err;
@@ -1263,7 +1303,8 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     if (!xfer) {
         free(remote_name);
         sync_results_free(results);
-        profile_list_free(profiles);
+        if (sync_profiles != workspace_profiles) profile_list_free(sync_profiles);
+        profile_list_free(workspace_profiles);
         config_free(config);
         output_free(out);
         return ERROR(ERR_MEMORY, "Failed to create transfer context");
@@ -1278,26 +1319,32 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         out
     );
 
-    /* Phase 1: Fetch enabled profiles from remote */
-    err = sync_fetch_enabled_profiles(repo, remote_name, profiles, results, out, opts->verbose, xfer);
+    /* Phase 1: Fetch enabled profiles from remote (use sync_profiles for operations) */
+    err = sync_fetch_enabled_profiles(repo, remote_name, sync_profiles, results, out, opts->verbose, xfer);
     if (err) {
         transfer_context_free(xfer);
         free(remote_name);
         sync_results_free(results);
-        profile_list_free(profiles);
+        if (sync_profiles != workspace_profiles) {
+            profile_list_free(sync_profiles);
+        }
+        profile_list_free(workspace_profiles);
         config_free(config);
         output_free(out);
         return err;
     }
 
-    /* Phase 2: Analyze branch states */
-    err = sync_analyze_phase(repo, remote_name, profiles, results, out);
+    /* Phase 2: Analyze branch states (use sync_profiles for operations) */
+    err = sync_analyze_phase(repo, remote_name, sync_profiles, results, out);
     if (err) {
         transfer_context_free(xfer);
         free(remote_name);
         workspace_free(ws);
         sync_results_free(results);
-        profile_list_free(profiles);
+        if (sync_profiles != workspace_profiles) {
+            profile_list_free(sync_profiles);
+        }
+        profile_list_free(workspace_profiles);
         config_free(config);
         output_free(out);
         return err;
@@ -1311,13 +1358,14 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         free(remote_name);
         workspace_free(ws);
         sync_results_free(results);
-        profile_list_free(profiles);
+        if (sync_profiles != workspace_profiles) profile_list_free(sync_profiles);
+        profile_list_free(workspace_profiles);
         config_free(config);
         output_free(out);
         return error_wrap(err, "Failed to open state transaction");
     }
 
-    /* Build enabled profiles array for manifest operations */
+    /* Build enabled profiles array for manifest operations (use workspace_profiles) */
     string_array_t *enabled_profiles = NULL;
     err = state_get_profiles(state, &enabled_profiles);
     if (err) {
@@ -1326,7 +1374,10 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         free(remote_name);
         workspace_free(ws);
         sync_results_free(results);
-        profile_list_free(profiles);
+        if (sync_profiles != workspace_profiles) {
+            profile_list_free(sync_profiles);
+        }
+        profile_list_free(workspace_profiles);
         config_free(config);
         output_free(out);
         return error_wrap(err, "Failed to get enabled profiles");
@@ -1343,7 +1394,8 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         free(remote_name);
         workspace_free(ws);
         sync_results_free(results);
-        profile_list_free(profiles);
+        if (sync_profiles != workspace_profiles) profile_list_free(sync_profiles);
+        profile_list_free(workspace_profiles);
         config_free(config);
         output_free(out);
         return err;
@@ -1358,7 +1410,8 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         free(remote_name);
         workspace_free(ws);
         sync_results_free(results);
-        profile_list_free(profiles);
+        if (sync_profiles != workspace_profiles) profile_list_free(sync_profiles);
+        profile_list_free(workspace_profiles);
         config_free(config);
         output_free(out);
         return error_wrap(err, "Failed to save manifest changes");
@@ -1417,17 +1470,24 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     }
 
     /* Provide guidance on next steps if profiles were updated */
-    size_t updated_count = results->pushed_count + (profiles->count - results->need_pull_count - results->diverged_count - results->failed_count - results->up_to_date_count);
+    size_t updated_count = results->pushed_count + (sync_profiles->count -
+                                                    results->need_pull_count -
+                                                    results->diverged_count -
+                                                    results->failed_count -
+                                                    results->up_to_date_count);
     if (updated_count > 0 && results->failed_count == 0) {
         output_newline(out);
-        output_info(out, "Manifest updated with changes from sync.");
-        output_hint(out, "   Run 'dotta status' to review staged changes");
-        output_hint(out, "   Run 'dotta apply' to deploy changes to filesystem");
+        output_info(out, "Manifest updated with changes from remote");
+        output_hint(out, "Run 'dotta status' to review staged changes");
+        output_hint(out, "Run 'dotta apply' to deploy changes to filesystem");
     }
 
     /* Cleanup */
     sync_results_free(results);
-    profile_list_free(profiles);
+    if (sync_profiles != workspace_profiles) {
+        profile_list_free(sync_profiles);
+    }
+    profile_list_free(workspace_profiles);
     config_free(config);
         output_free(out);
 

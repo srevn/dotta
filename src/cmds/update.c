@@ -1685,13 +1685,13 @@ static error_t *update_display_summary(
 
     /* Show multi-profile warning if needed */
     if (multi_profile_count > 0) {
-        output_newline(out);
         output_warning(out, "%zu file%s exist%s in multiple profiles",
                       multi_profile_count,
                       multi_profile_count == 1 ? "" : "s",
                       multi_profile_count == 1 ? "s" : "");
         output_info(out, "  Updates will be committed to the profile that deployed them (shown above).");
         output_info(out, "  To update a different profile, remove the file from the current profile first.");
+        output_newline(out);
     }
 
     /* Display new files section */
@@ -1961,7 +1961,8 @@ error_t *cmd_update(
     error_t *err = NULL;
     dotta_config_t *config = NULL;
     output_ctx_t *out = NULL;
-    profile_list_t *profiles = NULL;
+    profile_list_t *workspace_profiles = NULL;
+    profile_list_t *operation_profiles = NULL;
     workspace_t *ws = NULL;
     hook_context_t *hook_ctx = NULL;
     char *repo_dir = NULL;
@@ -1993,18 +1994,48 @@ error_t *cmd_update(
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* Load profiles */
-    err = profile_resolve(repo, opts->profiles, opts->profile_count,
-                         config->strict_mode, &profiles, NULL);
+    /* Load profiles
+     *
+     * Dual-list pattern ensures workspace scope consistency:
+     * - workspace_profiles: Persistent enabled profiles for VWD scope and orphan detection
+     * - operation_profiles: CLI filter or shared pointer for update operations
+     *
+     * This separation maintains accurate workspace analysis while supporting
+     * selective update operations via CLI filtering.
+     */
 
+    /* Phase 1: Load workspace profiles (persistent enabled profiles) */
+    err = profile_resolve_for_workspace(repo, config->strict_mode, &workspace_profiles);
     if (err) {
-        err = error_wrap(err, "Failed to load profiles");
+        err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
     }
 
-    if (profiles->count == 0) {
-        err = ERROR(ERR_NOT_FOUND, "No profiles found");
+    if (workspace_profiles->count == 0) {
+        err = ERROR(ERR_NOT_FOUND,
+                   "No enabled profiles found\n"
+                   "Hint: Run 'dotta profile enable <name>' to enable profiles");
         goto cleanup;
+    }
+
+    /* Phase 2: Load operation profiles (CLI filter or shared pointer) */
+    if (opts->profiles && opts->profile_count > 0) {
+        /* CLI filter specified - load operation filter profiles */
+        err = profile_resolve_for_operations(repo, opts->profiles, opts->profile_count,
+                                            config->strict_mode, &operation_profiles);
+        if (err) {
+            err = error_wrap(err, "Failed to resolve operation profiles");
+            goto cleanup;
+        }
+
+        /* Validate: filter profiles must be enabled in workspace */
+        err = profile_validate_filter(workspace_profiles, operation_profiles);
+        if (err) {
+            goto cleanup;
+        }
+    } else {
+        /* No CLI filter - share workspace profiles (optimization) */
+        operation_profiles = workspace_profiles;
     }
 
     /* Get repository directory for hooks */
@@ -2013,20 +2044,20 @@ error_t *cmd_update(
         goto cleanup;
     }
 
-    /* Execute pre-update hook */
+    /* Execute pre-update hook (using operation profiles for context) */
     if (config && repo_dir) {
         /* Build array of profile names and join with spaces */
-        char **profile_names_array = malloc(profiles->count * sizeof(char *));
+        char **profile_names_array = malloc(operation_profiles->count * sizeof(char *));
         if (profile_names_array) {
-            for (size_t i = 0; i < profiles->count; i++) {
-                profile_names_array[i] = profiles->profiles[i].name;
+            for (size_t i = 0; i < operation_profiles->count; i++) {
+                profile_names_array[i] = operation_profiles->profiles[i].name;
             }
-            profiles_str = str_join(profile_names_array, profiles->count, " ");
+            profiles_str = str_join(profile_names_array, operation_profiles->count, " ");
             free(profile_names_array);
         }
 
         if (profiles_str) {
-            /* Create hook context with all profiles */
+            /* Create hook context with operation profiles */
             hook_ctx = hook_context_create(repo_dir, "update", profiles_str);
             if (hook_ctx) {
                 hook_ctx->dry_run = opts->dry_run;
@@ -2049,27 +2080,33 @@ error_t *cmd_update(
         }
     }
 
-    /* Load workspace and filter items in one step
+    /* Load workspace for update analysis
      *
-     * workspace_load() provides the unified three-state analysis
-     * filter_items_for_update() handles ALL filtering logic internally:
-     * - --only-new flag
-     * - --include-new flag
-     * - config auto_detect_new_files
-     * - MODE_DIFF/OWNERSHIP for both files AND directories
+     * Update processes files from the filesystem (either modified tracked files or new files)
+     * and commits them to Git profiles. Analysis configuration:
      *
-     * Pass NULL for state - this is read-only analysis phase. The transaction
-     * for manifest updates is opened later in update_manifest_after_update().
+     * - analyze_files: Detects content and metadata changes in tracked files
+     * - analyze_orphans: Disabled - update doesn't process orphaned state entries
+     * - analyze_untracked: Discovers new files in tracked directories (when enabled)
+     * - analyze_directories: Detects directory metadata changes for update
+     * - analyze_encryption: Validates encryption policy for files being updated
+     *
+     * Orphan detection is unnecessary because update operates on manifest entries
+     * (files from enabled profiles) and new files. Orphaned files (in state but not
+     * in any enabled profile) are out of scope for update operations.
+     *
+     * State is NULL - this is read-only analysis. The transaction for manifest updates
+     * opens later in update_manifest_after_update().
      */
     workspace_load_t ws_opts = {
-        .analyze_files = true,                              /* Need to see file changes */
-        .analyze_orphans = false,                           /* Update doesn't do cleanup */
+        .analyze_files = true,        /* Detect content and metadata changes */
+        .analyze_orphans = false,     /* Update doesn't process orphaned files */
         .analyze_untracked = (opts->include_new || opts->only_new ||      /* Explicit flags */
                              (config && config->auto_detect_new_files)),  /* Or config auto-detect */
-        .analyze_directories = true,                        /* Detect directory metadata changes */
-        .analyze_encryption = true                          /* Detect encryption policy violations */
+        .analyze_directories = true,  /* Directory metadata change detection */
+        .analyze_encryption = true    /* Encryption policy validation */
     };
-    err = workspace_load(repo, NULL, profiles, config, &ws_opts, &ws);
+    err = workspace_load(repo, NULL, workspace_profiles, config, &ws_opts, &ws);
     if (err) {
         err = error_wrap(err, "Failed to analyze workspace");
         goto cleanup;
@@ -2200,9 +2237,13 @@ error_t *cmd_update(
             break;
     }
 
-    /* Execute profile updates - workspace provides metadata cache for O(1) lookups */
+    /* Execute profile updates - workspace provides metadata cache for O(1) lookups
+     *
+     * Use operation_profiles to determine which profiles to update. This allows
+     * CLI filtering while maintaining accurate workspace analysis with persistent profiles.
+     */
     hashmap_t *by_profile = NULL;
-    err = update_execute_for_all_profiles(repo, profiles, update_items, update_count,
+    err = update_execute_for_all_profiles(repo, operation_profiles, update_items, update_count,
                                              opts, out, config, ws, &total_updated, &by_profile);
 
     /* Free update_items array (items themselves are owned by workspace) */
@@ -2264,11 +2305,11 @@ error_t *cmd_update(
         hook_result_free(hook_result);
     }
 
-    /* Summary */
+    /* Summary (report operation profile count) */
     output_newline(out);
     output_success(out, "Updated %zu item%s across %zu profile%s",
                    total_updated, total_updated == 1 ? "" : "s",
-                   profiles->count, profiles->count == 1 ? "" : "s");
+                   operation_profiles->count, operation_profiles->count == 1 ? "" : "s");
 
     /* Manifest status feedback */
     output_newline(out);
@@ -2288,7 +2329,11 @@ cleanup:
     if (ws) workspace_free(ws);
     if (profiles_str) free(profiles_str);
     if (repo_dir) free(repo_dir);
-    if (profiles) profile_list_free(profiles);
+    /* Free operation profiles only if not shared with workspace profiles */
+    if (operation_profiles && operation_profiles != workspace_profiles) {
+        profile_list_free(operation_profiles);
+    }
+    if (workspace_profiles) profile_list_free(workspace_profiles);
     if (out) output_free(out);
     if (config) config_free(config);
 

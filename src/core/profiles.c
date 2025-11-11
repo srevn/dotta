@@ -698,6 +698,120 @@ cleanup:
 }
 
 /**
+ * Resolve enabled profiles for workspace validation (VWD scope)
+ *
+ * Wrapper around profile_resolve() that always loads persistent enabled
+ * profiles from state database, ignoring CLI overrides. This ensures
+ * workspace scope matches state scope for accurate orphan detection.
+ */
+error_t *profile_resolve_for_workspace(
+    git_repository *repo,
+    bool strict_mode,
+    profile_list_t **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(out);
+
+    /* Always load persistent enabled profiles (ignore CLI overrides) */
+    return profile_resolve(repo, NULL, 0, strict_mode, out, NULL);
+}
+
+/**
+ * Resolve CLI profiles for operation filtering
+ *
+ * Loads explicitly specified CLI profiles for use as operation filter.
+ * Validates inputs and delegates to profile_list_load().
+ */
+error_t *profile_resolve_for_operations(
+    git_repository *repo,
+    char **cli_profiles,
+    size_t cli_count,
+    bool strict_mode,
+    profile_list_t **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(cli_profiles);
+    CHECK_NULL(out);
+
+    if (cli_count == 0) {
+        return ERROR(ERR_INVALID_ARG, "CLI profile count cannot be zero");
+    }
+
+    /* Load explicitly specified profiles */
+    return profile_list_load(repo, cli_profiles, cli_count, strict_mode, out);
+}
+
+/**
+ * Validate that filter profiles are enabled
+ *
+ * Ensures CLI filter only references profiles that are actually enabled
+ * in the workspace.
+ */
+error_t *profile_validate_filter(
+    const profile_list_t *workspace_profiles,
+    const profile_list_t *filter_profiles
+) {
+    CHECK_NULL(workspace_profiles);
+
+    /* NULL filter is valid (no filter) */
+    if (!filter_profiles) {
+        return NULL;
+    }
+
+    /* Check each filter profile is in workspace */
+    for (size_t i = 0; i < filter_profiles->count; i++) {
+        const char *filter_name = filter_profiles->profiles[i].name;
+        bool found = false;
+
+        for (size_t j = 0; j < workspace_profiles->count; j++) {
+            if (strcmp(workspace_profiles->profiles[j].name, filter_name) == 0) {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            return ERROR(ERR_INVALID_ARG,
+                        "Profile '%s' is not enabled\n"
+                        "Hint: Run 'dotta profile enable %s' first",
+                        filter_name, filter_name);
+        }
+    }
+
+    return NULL;
+}
+
+/**
+ * Check if profile name matches operation filter
+ *
+ * Helper for filtering operations by profile. NULL filter matches all,
+ * NULL name never matches.
+ */
+bool profile_filter_matches(
+    const char *profile_name,
+    const profile_list_t *filter
+) {
+    /* NULL name never matches (defensive) */
+    if (!profile_name) {
+        return false;
+    }
+
+    /* NULL filter matches all (no filter = match all) */
+    if (!filter) {
+        return true;
+    }
+
+    /* Check if name is in filter list */
+    for (size_t i = 0; i < filter->count; i++) {
+        if (strcmp(profile_name, filter->profiles[i].name) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
  * List all local profile branches
  *
  * Similar to what clone does, but returns profiles instead of just creating branches.

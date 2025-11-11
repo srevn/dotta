@@ -778,7 +778,8 @@ error_t *cmd_status(
     /* Declare all resources at top and initialize to NULL */
     error_t *err = NULL;
     dotta_config_t *config = NULL;
-    profile_list_t *profiles = NULL;
+    profile_list_t *workspace_profiles = NULL;
+    profile_list_t *display_profiles = NULL;
     const manifest_t *manifest = NULL;
     workspace_t *ws = NULL;
     output_ctx_t *out = NULL;
@@ -808,28 +809,48 @@ error_t *cmd_status(
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* Load profiles */
-    err = profile_resolve(repo, opts->profiles, opts->profile_count,
-                         config->strict_mode, &profiles, NULL);
-
+    /* Load profiles
+     *
+     * Separate workspace scope (persistent) from display filter (temporary):
+     *   - workspace_profiles: Persistent enabled profiles (VWD scope)
+     *   - display_profiles: CLI filter or shared pointer
+     *
+     * Workspace always loads with persistent profiles to maintain accurate
+     * orphan detection. Display operations filter by CLI profiles if specified.
+     */
+    err = profile_resolve_for_workspace(repo, config->strict_mode, &workspace_profiles);
     if (err) {
-        err = error_wrap(err, "Failed to load profiles");
+        err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
     }
 
-    if (profiles->count == 0) {
-        output_info(out, "No profiles found");
+    if (workspace_profiles->count == 0) {
+        output_info(out, "No enabled profiles found");
+        output_hint(out, "Run 'dotta profile enable <name>' to enable profiles");
         goto cleanup;
     }
 
-    /* Load workspace (includes manifest building and divergence analysis)
+    /* Load display profiles (CLI filter or shared pointer) */
+    if (opts->profiles && opts->profile_count > 0) {
+        err = profile_resolve_for_operations(repo, opts->profiles, opts->profile_count,
+                                            config->strict_mode, &display_profiles);
+        if (err) {
+            err = error_wrap(err, "Failed to resolve display profiles");
+            goto cleanup;
+        }
+
+        err = profile_validate_filter(workspace_profiles, display_profiles);
+        if (err) {
+            goto cleanup;
+        }
+    } else {
+        display_profiles = workspace_profiles;
+    }
+
+    /* Load workspace for divergence analysis
      *
-     * The workspace builds the manifest internally during initialization,
-     * eliminating redundant manifest building. We extract the manifest
-     * immediately for use in privilege checking and display functions.
-     *
-     * This pattern ensures single manifest build per command invocation,
-     * matching the optimization in apply.c.
+     * Uses persistent enabled profiles to ensure accurate orphan detection.
+     * Manifest scope matches state scope, preventing false orphan reports.
      */
     workspace_load_t ws_opts = {
         .analyze_files = true,
@@ -838,8 +859,7 @@ error_t *cmd_status(
         .analyze_directories = true,
         .analyze_encryption = true
     };
-    /* Pass NULL for state - status is read-only, workspace allocates its own state */
-    err = workspace_load(repo, NULL, profiles, config, &ws_opts, &ws);
+    err = workspace_load(repo, NULL, workspace_profiles, config, &ws_opts, &ws);
     if (err) {
         err = error_wrap(err, "Failed to load workspace");
         goto cleanup;
@@ -901,17 +921,22 @@ error_t *cmd_status(
     }
 
     /* Display enabled profiles and last deployment info */
-    display_enabled_profiles(out, profiles, manifest, state, opts->verbose);
+    display_enabled_profiles(out, display_profiles, manifest, state, opts->verbose);
 
-    /* Display workspace status (workspace provides divergence analysis) */
+    /* Display workspace status
+     *
+     * The workspace was loaded with persistent profiles (workspace_profiles)
+     * for accurate divergence analysis. Display functions filter output based
+     * on display_profiles when CLI filter is specified.
+     */
     display_workspace_status(ws, out, opts->verbose);
 
-    /* Display multi-profile files (if verbose mode or if there are any) */
-    display_multi_profile_files(repo, profiles, manifest, out);
+    /* Display multi-profile files */
+    display_multi_profile_files(repo, display_profiles, manifest, out);
 
     /* Show remote sync status (if requested) */
     if (opts->show_remote) {
-        err = display_remote_status(repo, profiles, out, opts->all_profiles,
+        err = display_remote_status(repo, display_profiles, out, opts->all_profiles,
                                     opts->verbose, opts->no_fetch);
         if (err) {
             /* Non-fatal: might not have remote configured */
@@ -923,7 +948,10 @@ error_t *cmd_status(
 cleanup:
     /* Free all resources (safe with NULL pointers) */
     workspace_free(ws);
-    profile_list_free(profiles);
+    if (display_profiles && display_profiles != workspace_profiles) {
+        profile_list_free(display_profiles);
+    }
+    profile_list_free(workspace_profiles);
     config_free(config);
     output_free(out);
 

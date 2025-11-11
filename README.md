@@ -82,12 +82,12 @@ The repository's main worktree always points to `dotta-worktree` (an empty branc
 
 ### Profile Resolution & Layering
 
-Profile resolution follows a strict priority order:
+Enabled profiles are managed through `dotta profile enable/disable/reorder` commands and stored in `.git/dotta.db`. The state database is the single source of truth for which profiles are enabled on each machine.
 
-1. **Explicit CLI** (`-p/--profile flags`) - Temporary override for testing
-2. **State file** (`profiles` array in `.git/dotta.db`) - Persistent management via `dotta profile enable`
-
-Enabled profiles are managed exclusively through `dotta profile enable/disable/reorder` commands. The state file is the single source of truth for which profiles are enabled on each machine.
+**CLI profile arguments** (`-p/--profile` flags) act as **operation filters**:
+- Workspace scope always uses persistent enabled profiles
+- CLI arguments filter which files to deploy/sync/display
+- Example: `dotta apply work` deploys only work's files while preserving files from other enabled profiles
 
 When profiles are applied, later profiles override earlier ones following this precedence:
 

@@ -2056,6 +2056,17 @@ static int cmd_key_main(int argc, char **argv) {
  * Ensures that the global keymanager is properly cleaned up (master key
  * zeroed in memory) when the user interrupts the program with Ctrl+C
  * or when the process receives a termination signal.
+ *
+ * Cleanup Architecture:
+ * - Keymanager: Cleaned here (security-critical, global state)
+ * - Worktrees: Self-healing on next invocation
+ * - Temp files: Minor impact, OS cleans eventually
+ * - Transactions: Auto-rollback by SQLite (WAL mode)
+ *
+ * Rationale: Signal handlers are heavily restricted (async-signal-safety).
+ * We cannot safely clean worktrees here (requires malloc/free via libgit2).
+ * Instead, worktree.c implements transparent orphan cleanup on next run,
+ * which is more robust and handles all failure modes (Ctrl-C, crashes, kill -9).
  */
 static void signal_cleanup_handler(int signum) {
     /* Clean up global keymanager (securely zero master key) */

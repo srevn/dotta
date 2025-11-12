@@ -9,7 +9,9 @@
 
 #include "worktree.h"
 
+#include <errno.h>
 #include <git2.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
@@ -68,12 +70,125 @@ static error_t *generate_temp_path_from_name(const char *name, char **out) {
     return fs_path_join(tmpdir, name, out);
 }
 
+/**
+ * Cleanup orphaned worktrees from dead processes
+ *
+ * Scans .git/worktrees/ for dotta-temp-* entries from processes that
+ * are no longer running and cleans up both Git metadata and filesystem
+ * directories.
+ *
+ * This extends the existing self-healing pattern (worktree.c:103-112)
+ * to handle cross-process orphans from interrupted operations (Ctrl-C),
+ * crashes, and kill -9.
+ *
+ * Design principles:
+ * - Silent operation (best-effort cleanup, ignores all errors)
+ * - Uses Git worktree API as source of truth
+ * - Checks process liveness via kill(pid, 0)
+ * - Cleans Git metadata, branches, and filesystem directories
+ * - Idempotent (safe to call multiple times)
+ *
+ * This is called automatically before creating new worktrees to ensure
+ * no stale resources from previous interrupted operations block the
+ * creation of new worktrees.
+ *
+ * @param repo Main repository (must not be NULL)
+ */
+static void cleanup_orphaned_worktrees(git_repository *repo) {
+    if (!repo) {
+        return;
+    }
+
+    /* Get worktree list from Git (source of truth for what exists) */
+    git_strarray worktree_names = {0};
+    if (git_worktree_list(&worktree_names, repo) < 0) {
+        return; /* Non-fatal - continue with worktree creation */
+    }
+
+    /* Scan for orphaned dotta temp worktrees */
+    for (size_t i = 0; i < worktree_names.count; i++) {
+        const char *name = worktree_names.strings[i];
+
+        /* Only process our temp worktrees */
+        if (strncmp(name, "dotta-temp-", 11) != 0) {
+            continue;
+        }
+
+        /* Extract PID from name: dotta-temp-{pid}-{timestamp} */
+        pid_t pid = 0;
+        if (sscanf(name, "dotta-temp-%d-", &pid) != 1) {
+            continue; /* Invalid format - skip */
+        }
+
+        /* Skip PID 0 or negative (invalid) */
+        if (pid <= 0) {
+            continue;
+        }
+
+        /* Check if process is alive
+         * kill(pid, 0) performs error checking without sending a signal */
+        if (kill(pid, 0) == 0) {
+            continue; /* Process still running - not an orphan */
+        }
+
+        if (errno != ESRCH) {
+            continue; /* Permission denied or other error - skip to be safe */
+        }
+
+        /* Process is dead (ESRCH = No such process) - this is an orphaned worktree
+         * Clean it up using the same steps as normal cleanup (see worktree_cleanup) */
+
+        /* Step 1: Prune Git metadata (.git/worktrees/{name}/)
+         * This is the critical step that unblocks subsequent operations */
+        git_worktree *wt = NULL;
+        if (git_worktree_lookup(&wt, repo, name) == 0) {
+            git_worktree_prune_options opts = {0};
+            opts.version = 1;
+            opts.flags = GIT_WORKTREE_PRUNE_VALID; /* Prune even if valid */
+            git_worktree_prune(wt, &opts);
+            git_worktree_free(wt);
+        }
+
+        /* Step 2: Delete temporary branch (refs/heads/{name}) */
+        char refname[DOTTA_REFNAME_MAX];
+        error_t *err_build = gitops_build_refname(refname, sizeof(refname),
+                                                   "refs/heads/%s", name);
+        if (!err_build) {
+            git_reference *ref = NULL;
+            if (git_reference_lookup(&ref, repo, refname) == 0) {
+                git_branch_delete(ref);
+                git_reference_free(ref);
+            }
+        }
+        /* Silently ignore refname build errors during cleanup */
+        error_free(err_build);
+
+        /* Step 3: Remove filesystem directory (/tmp/{name}/)
+         * This is best-effort cleanup of the working tree directory */
+        char *path = NULL;
+        error_t *err_path = generate_temp_path_from_name(name, &path);
+        if (!err_path) {
+            /* Ignore errors - best effort cleanup */
+            fs_remove_dir(path, true);
+            free(path);
+        }
+        error_free(err_path);
+    }
+
+    git_strarray_dispose(&worktree_names);
+}
+
 error_t *worktree_create_temp(
     git_repository *repo,
     worktree_handle_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
+
+    /* Cleanup orphaned worktrees from dead processes (self-healing)
+     * This is transparent, best-effort cleanup that ensures no stale
+     * worktrees from interrupted operations block this creation. */
+    cleanup_orphaned_worktrees(repo);
 
     /* Allocate handle */
     worktree_handle_t *wt = calloc(1, sizeof(worktree_handle_t));

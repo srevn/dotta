@@ -376,6 +376,7 @@ static error_t *list_files(
     char header[LIST_MESSAGE_BUFFER_SIZE];
     snprintf(header, sizeof(header), "Files in profile '%s'", opts->profile);
     output_section(out, header);
+    output_newline(out);
 
     /* Sort for consistent output */
     string_array_sort(files);

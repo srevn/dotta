@@ -411,12 +411,17 @@ static error_t *initialize_state(
     state_free(state);
 
     if (output_colors_enabled(out)) {
-        output_success(out, "Initialized enabled profiles: ");
-        for (size_t i = 0; i < count; i++) {
-            output_printf(out, OUTPUT_NORMAL, "%s%s",
-                   profile_names[i],
-                   (i < count - 1) ? ", " : "\n");
+        /* Build profile list string */
+        char profiles_str[1024] = {0};
+        size_t offset = 0;
+        for (size_t i = 0; i < count && offset < sizeof(profiles_str) - 1; i++) {
+            int written = snprintf(profiles_str + offset, sizeof(profiles_str) - offset,
+                                  "%s%s", profile_names[i], (i < count - 1) ? ", " : "");
+            if (written > 0) {
+                offset += written;
+            }
         }
+        output_success(out, "Initialized enabled profiles: %s", profiles_str);
     }
 
     return NULL;

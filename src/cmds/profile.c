@@ -294,11 +294,28 @@ static error_t *profile_list(
 
             /* Show file counts if available, otherwise indicate error */
             if (count_err) {
-                output_printf(out, OUTPUT_NORMAL, "  %zu. %s (file count unavailable)\n", i + 1, name);
+                if (output_colors_enabled(out)) {
+                    output_printf(out, OUTPUT_NORMAL, "  %zu. %s%s%s (file count unavailable)\n",
+                           i + 1,
+                           output_color_code(out, OUTPUT_COLOR_CYAN),
+                           name,
+                           output_color_code(out, OUTPUT_COLOR_RESET));
+                } else {
+                    output_printf(out, OUTPUT_NORMAL, "  %zu. %s (file count unavailable)\n", i + 1, name);
+                }
                 error_free(count_err);
             } else {
-                output_printf(out, OUTPUT_NORMAL, "  %zu. %s (%zu file%s)\n",
-                       i + 1, name, file_count, file_count == 1 ? "" : "s");
+                if (output_colors_enabled(out)) {
+                    output_printf(out, OUTPUT_NORMAL, "  %zu. %s%s%s (%zu file%s)\n",
+                           i + 1,
+                           output_color_code(out, OUTPUT_COLOR_CYAN),
+                           name,
+                           output_color_code(out, OUTPUT_COLOR_RESET),
+                           file_count, file_count == 1 ? "" : "s");
+                } else {
+                    output_printf(out, OUTPUT_NORMAL, "  %zu. %s (%zu file%s)\n",
+                           i + 1, name, file_count, file_count == 1 ? "" : "s");
+                }
             }
         }
         output_newline(out);
@@ -317,11 +334,26 @@ static error_t *profile_list(
 
             /* Show file counts if available, otherwise indicate error */
             if (count_err) {
-                output_printf(out, OUTPUT_NORMAL, "  • %s (file count unavailable)\n", name);
+                if (output_colors_enabled(out)) {
+                    output_printf(out, OUTPUT_NORMAL, "  • %s%s%s (file count unavailable)\n",
+                           output_color_code(out, OUTPUT_COLOR_CYAN),
+                           name,
+                           output_color_code(out, OUTPUT_COLOR_RESET));
+                } else {
+                    output_printf(out, OUTPUT_NORMAL, "  • %s (file count unavailable)\n", name);
+                }
                 error_free(count_err);
             } else {
-                output_printf(out, OUTPUT_NORMAL, "  • %s (%zu file%s)\n",
-                       name, file_count, file_count == 1 ? "" : "s");
+                if (output_colors_enabled(out)) {
+                    output_printf(out, OUTPUT_NORMAL, "  • %s%s%s (%zu file%s)\n",
+                           output_color_code(out, OUTPUT_COLOR_CYAN),
+                           name,
+                           output_color_code(out, OUTPUT_COLOR_RESET),
+                           file_count, file_count == 1 ? "" : "s");
+                } else {
+                    output_printf(out, OUTPUT_NORMAL, "  • %s (%zu file%s)\n",
+                           name, file_count, file_count == 1 ? "" : "s");
+                }
             }
         }
         output_newline(out);

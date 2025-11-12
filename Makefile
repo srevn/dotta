@@ -33,7 +33,7 @@ GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unkno
 BUILD_ARCH := $(shell uname -m)
 CC_VERSION := $(shell $(CC) --version | head -n1)
 
-# Vendor libraries (must be defined before INCLUDES)
+# Vendor libraries
 LIB_DIR := lib
 CJSON_SRC := $(LIB_DIR)/cjson/cJSON.c
 TOML_SRC := $(LIB_DIR)/toml/tomlc17.c
@@ -57,7 +57,6 @@ LIBGIT2_LIBS := $(shell pkg-config --libs libgit2)
 LIBGIT2_LIBDIR := $(shell pkg-config --variable=libdir libgit2)
 LIBGIT2_STATIC_LIB := $(LIBGIT2_LIBDIR)/libgit2.a
 LIBGIT2_STATIC_DEPS := $(shell pkg-config --libs --static libgit2 | sed 's/-lgit2//')
-
 SQLITE3_CFLAGS := $(shell pkg-config --cflags sqlite3)
 SQLITE3_LIBS := $(shell pkg-config --libs sqlite3)
 

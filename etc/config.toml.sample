@@ -435,6 +435,8 @@ auto_encrypt = [
 #   -  50000 = ~5 seconds  (high security, reasonable for important data)
 #   - 100000 = ~10 seconds (very high security, for maximum protection)
 #
+# Note: This value must be identical across all machines (affects key derivation).
+#
 # Default: 10000
 opslimit = 10000
 

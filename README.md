@@ -312,7 +312,7 @@ dotta key clear    # Clear cached passphrase
 - **Deterministic AEAD** - SIV (Synthetic IV) construction for Git-friendly encryption
 - **Path-bound encryption** - Files tied to specific storage paths (authenticated associated data)
 - **Per-profile key isolation** - Each profile uses a derived encryption key
-- **Passphrase-based key derivation** - No key files to manage (PBKDF2-based)
+- **Passphrase-based key derivation** - No key files to manage (PBKDF2-based with configurable `opslimit`)
 - **Persistent key caching** - Cache persists across commands (default: 1 hour, machine-bound)
 - **Automatic decryption** - Transparent during `apply` and `show` operations
 
@@ -453,8 +453,10 @@ auto_encrypt = [                          # Patterns for automatic encryption
     ".aws/credentials",                   # AWS credentials
 ]
 session_timeout = 3600                    # Cache timeout in seconds (0=always prompt, -1=never expire)
-opslimit = 10000                          # KDF CPU cost
+opslimit = 10000                          # KDF CPU cost (higher = more secure, slower)
 ```
+
+**Note:** The `opslimit` parameter must be identical across all machines. Different values produce different encryption keys even with the same passphrase, causing decryption failures.
 
 ### Environment Variables
 

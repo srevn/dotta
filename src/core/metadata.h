@@ -57,8 +57,7 @@
 #include <git2.h>
 #include <sys/stat.h>
 #include <time.h>
-
-#include "types.h"
+#include <types.h>
 
 #define METADATA_FILE_PATH ".dotta/metadata.json"
 #define METADATA_VERSION 4

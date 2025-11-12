@@ -16,8 +16,7 @@
 
 #include <git2.h>
 #include <stdbool.h>
-
-#include "types.h"
+#include <types.h>
 
 /* Forward declarations */
 struct profile_list;

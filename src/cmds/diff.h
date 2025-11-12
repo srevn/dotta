@@ -16,8 +16,7 @@
 #define DOTTA_CMD_DIFF_H
 
 #include <git2.h>
-
-#include "types.h"
+#include <types.h>
 
 /**
  * Diff mode

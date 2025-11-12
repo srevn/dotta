@@ -15,8 +15,7 @@
 #define DOTTA_CMD_REMOVE_H
 
 #include <git2.h>
-
-#include "types.h"
+#include <types.h>
 
 /**
  * Command options

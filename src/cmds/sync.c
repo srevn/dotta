@@ -636,8 +636,7 @@ static error_t *sync_push_phase(
                 break;
             }
 
-            case UPSTREAM_DIVERGED: 
-            {
+            case UPSTREAM_DIVERGED: {
                 /* Handle divergence based on strategy */
                 char *colored = output_colorize(out, OUTPUT_COLOR_RED, result->profile_name);
                 output_warning(out, "⚠ %s: diverged (%zu local, %zu remote commits)",
@@ -760,8 +759,7 @@ static error_t *sync_push_phase(
                         break;
                     }
 
-                    case DIVERGE_MERGE:
-                    {
+                    case DIVERGE_MERGE: {
                         output_info(out, "   Resolving with merge strategy...");
 
                         /* Initialize divergence context */
@@ -867,8 +865,7 @@ static error_t *sync_push_phase(
                         break;
                     }
 
-                    case DIVERGE_OURS:
-                    {
+                    case DIVERGE_OURS: {
                         output_info(out, "   Resolving with 'ours' strategy (force push)...");
 
                         /* Get user confirmation for destructive operation */
@@ -925,8 +922,7 @@ static error_t *sync_push_phase(
                         break;
                     }
 
-                    case DIVERGE_THEIRS:
-                    {
+                    case DIVERGE_THEIRS: {
                         output_info(out, "   Resolving with 'theirs' strategy (reset to remote)...");
 
                         /* Get user confirmation for destructive operation */

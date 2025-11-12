@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <types.h>
 
 #include "base/error.h"
 #include "base/refspec.h"
@@ -33,7 +34,6 @@
 #include "cmds/update.h"
 #include "crypto/encryption.h"
 #include "crypto/keymanager.h"
-#include "types.h"
 #include "utils/help.h"
 #include "utils/privilege.h"
 #include "utils/repo.h"

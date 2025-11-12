@@ -28,8 +28,8 @@
 
 #include <git2.h>
 #include <stdbool.h>
+#include <types.h>
 
-#include "types.h"
 #include "utils/config.h"
 
 /**

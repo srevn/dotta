@@ -9,9 +9,9 @@
 #define DOTTA_HOOKS_H
 
 #include <stdbool.h>
+#include <types.h>
 
 #include "config.h"
-#include "types.h"
 
 /**
  * Hook types

@@ -41,8 +41,7 @@
 
 #include <git2.h>
 #include <sys/stat.h>
-
-#include "types.h"
+#include <types.h>
 
 /* Forward declarations */
 typedef struct keymanager keymanager_t;

@@ -13,8 +13,7 @@
 #define DOTTA_CMD_LIST_H
 
 #include <git2.h>
-
-#include "types.h"
+#include <types.h>
 
 /**
  * List mode (determined by arguments)

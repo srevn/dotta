@@ -21,8 +21,7 @@
 
 #include <git2.h>
 #include <sys/stat.h>
-
-#include "types.h"
+#include <types.h>
 
 /**
  * Comparison result

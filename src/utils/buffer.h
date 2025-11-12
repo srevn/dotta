@@ -7,7 +7,7 @@
 #ifndef DOTTA_BUFFER_H
 #define DOTTA_BUFFER_H
 
-#include "types.h"
+#include <types.h>
 
 /**
  * Create a new buffer

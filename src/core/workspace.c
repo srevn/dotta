@@ -4,8 +4,7 @@
  * Manages three-state consistency: Profile (git), Deployment (state.db), Filesystem (disk).
  * Detects and categorizes divergence to prevent data loss and enable safe operations.
  *
- * METADATA ARCHITECTURE:
- * ===================================
+ * Metadata Architecture:
  * Profiles layer with precedence (global < OS < host). The merged_metadata map
  * pre-applies precedence during workspace_load(), ensuring all analysis functions
  * compare against the "winning" metadata. This prevents false divergence when
@@ -1485,7 +1484,8 @@ static error_t *analyze_encryption_policy_mismatch(
 
                 if (ws->state) {
                     state_file_entry_t *state_entry = NULL;
-                    error_t *state_err = state_get_file(ws->state, manifest_entry->filesystem_path, &state_entry);
+                    error_t *state_err = state_get_file(ws->state,
+                                            manifest_entry->filesystem_path, &state_entry);
                     if (state_err == NULL && state_entry) {
                         in_state = true;
                         state_free_entry(state_entry);

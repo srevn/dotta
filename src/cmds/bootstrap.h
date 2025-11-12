@@ -8,8 +8,7 @@
 #define DOTTA_CMD_BOOTSTRAP_H
 
 #include <stdbool.h>
-
-#include "types.h"
+#include <types.h>
 
 /**
  * Bootstrap command options

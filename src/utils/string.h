@@ -9,8 +9,7 @@
 
 #include <stdbool.h>
 #include <stdlib.h>
-
-#include "types.h"
+#include <types.h>
 
 /**
  * Check if string starts with prefix

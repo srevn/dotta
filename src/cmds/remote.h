@@ -9,8 +9,7 @@
 #define DOTTA_CMD_REMOTE_H
 
 #include <git2.h>
-
-#include "types.h"
+#include <types.h>
 
 /**
  * Remote subcommand type

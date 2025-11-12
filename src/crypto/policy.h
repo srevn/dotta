@@ -33,8 +33,7 @@
 #define DOTTA_CRYPTO_POLICY_H
 
 #include <stdbool.h>
-
-#include "types.h"
+#include <types.h>
 
 /* Forward declarations */
 typedef struct dotta_config dotta_config_t;

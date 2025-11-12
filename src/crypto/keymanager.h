@@ -34,8 +34,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <time.h>
-
-#include "types.h"
+#include <types.h>
 
 /* Forward declarations */
 typedef struct dotta_config dotta_config_t;

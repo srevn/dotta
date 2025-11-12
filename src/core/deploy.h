@@ -15,10 +15,10 @@
 #define DOTTA_DEPLOY_H
 
 #include <git2.h>
+#include <types.h>
 
 #include "metadata.h"
 #include "profiles.h"
-#include "types.h"
 
 /* Forward declarations */
 typedef struct hashmap hashmap_t;

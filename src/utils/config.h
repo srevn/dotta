@@ -9,8 +9,7 @@
 #define DOTTA_CONFIG_H
 
 #include <stdbool.h>
-
-#include "types.h"
+#include <types.h>
 
 /**
  * Configuration structure

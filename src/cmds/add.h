@@ -8,8 +8,7 @@
 #define DOTTA_CMD_ADD_H
 
 #include <git2.h>
-
-#include "types.h"
+#include <types.h>
 
 /**
  * Command options

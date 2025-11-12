@@ -17,8 +17,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <termios.h>
-
-#include "types.h"
+#include <types.h>
 
 /**
  * ANSI escape codes

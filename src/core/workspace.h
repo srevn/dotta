@@ -20,7 +20,7 @@
 #define DOTTA_WORKSPACE_H
 
 #include <git2.h>
-#include "types.h"
+#include <types.h>
 
 #include "core/metadata.h"
 #include "core/profiles.h"

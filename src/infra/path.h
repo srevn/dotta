@@ -19,7 +19,7 @@
 #ifndef DOTTA_PATH_H
 #define DOTTA_PATH_H
 
-#include "types.h"
+#include <types.h>
 
 /**
  * Normalize user input path to absolute filesystem path

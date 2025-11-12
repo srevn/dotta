@@ -19,8 +19,7 @@
 #define DOTTA_STATS_H
 
 #include <git2.h>
-
-#include "types.h"
+#include <types.h>
 
 /**
  * Profile statistics

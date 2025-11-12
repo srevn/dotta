@@ -13,8 +13,7 @@
 #define DOTTA_CORE_DIVERGENCE_H
 
 #include <git2.h>
-
-#include "types.h"
+#include <types.h>
 
 /**
  * Divergence resolution strategies

@@ -843,7 +843,7 @@ error_t *safety_check_removal(
         bool fast_path_succeeded = try_fast_path_check(
             repo, fs_path, storage_path, source_profile,
             state_entry->blob_oid,
-            resolved_metadata,   /* ← Use resolved metadata (enabled OR loaded on-demand) */
+            resolved_metadata,   /* Use resolved metadata (enabled OR loaded on-demand) */
             keymanager,          /* Pass keymanager for decryption */
             cache,               /* Pass cache for performance */
             result, &check_err

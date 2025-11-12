@@ -25,10 +25,11 @@
 #ifndef DOTTA_MANIFEST_H
 #define DOTTA_MANIFEST_H
 
-#include "types.h"
+#include <git2.h>
+#include <types.h>
+
 #include "core/state.h"
 #include "core/workspace.h"
-#include <git2.h>
 
 /**
  * Statistics from profile enable operation

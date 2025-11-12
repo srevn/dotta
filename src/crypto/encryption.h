@@ -44,8 +44,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-
-#include "types.h"
+#include <types.h>
 
 /* Magic header for encrypted files */
 #define ENCRYPTION_MAGIC "DOTTA"

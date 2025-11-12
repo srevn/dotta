@@ -18,8 +18,7 @@
 #define DOTTA_WORKTREE_H
 
 #include <git2.h>
-
-#include "types.h"
+#include <types.h>
 
 /**
  * Worktree handle (opaque)

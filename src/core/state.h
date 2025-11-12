@@ -18,11 +18,6 @@
  * - Prepared statements (100x faster for bulk operations)
  * - Persistent indexes (O(1) lookups without rebuilding)
  * - Separate tables enforce authority model at storage level
- *
- * Performance targets:
- * - Profile enable: < 10ms (even with 10,000 deployed files)
- * - File existence check: < 0.1ms
- * - Apply 1000 files: < 200ms
  */
 
 #ifndef DOTTA_STATE_H
@@ -30,9 +25,9 @@
 
 #include <git2.h>
 #include <time.h>
+#include <types.h>
 
 #include "metadata.h"
-#include "types.h"
 
 /**
  * File type in state

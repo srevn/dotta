@@ -104,8 +104,7 @@ static error_t *sqlite_error(sqlite3 *db, const char *context) {
     const char *errmsg = db ? sqlite3_errmsg(db) : "unknown error";
     int errcode = db ? sqlite3_errcode(db) : SQLITE_ERROR;
 
-    return ERROR(ERR_STATE_INVALID,
-        "%s: %s (SQLite error %d)",
+    return ERROR(ERR_STATE_INVALID, "%s: %s (SQLite error %d)",
         context, errmsg, errcode);
 }
 
@@ -1504,9 +1503,8 @@ error_t *state_clear_files(state_t *state) {
     char *errmsg = NULL;
     int rc = sqlite3_exec(state->db, "DELETE FROM virtual_manifest;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(ERR_STATE_INVALID,
-            "Failed to clear virtual manifest: %s",
-            errmsg ? errmsg : sqlite3_errstr(rc));
+        error_t *err = ERROR(ERR_STATE_INVALID, "Failed to clear virtual manifest: %s",
+                            errmsg ? errmsg : sqlite3_errstr(rc));
         sqlite3_free(errmsg);
         return err;
     }
@@ -1600,7 +1598,7 @@ error_t *state_directory_entry_create_from_metadata(
         }
     }
 
-    /* Initialize lifecycle tracking (will be set when deployed) */
+    /* Initialize lifecycle tracking */
     entry->deployed_at = 0;
 
     *out = entry;
@@ -1749,8 +1747,8 @@ error_t *state_get_all_directories(
         /* Grow array if needed */
         if (entry_count >= capacity) {
             capacity *= 2;
-            state_directory_entry_t *new_entries = realloc(entries,
-                                                            capacity * sizeof(state_directory_entry_t));
+            state_directory_entry_t *new_entries =
+                            realloc(entries, capacity * sizeof(state_directory_entry_t));
             if (!new_entries) {
                 /* Cleanup on error */
                 for (size_t i = 0; i < entry_count; i++) {
@@ -1897,8 +1895,8 @@ error_t *state_get_directories_by_profile(
         /* Grow array if needed */
         if (entry_count >= capacity) {
             capacity *= 2;
-            state_directory_entry_t *new_entries = realloc(entries,
-                                                            capacity * sizeof(state_directory_entry_t));
+            state_directory_entry_t *new_entries =
+                            realloc(entries, capacity * sizeof(state_directory_entry_t));
             if (!new_entries) {
                 /* Cleanup on error */
                 for (size_t i = 0; i < entry_count; i++) {
@@ -2051,7 +2049,8 @@ error_t *state_update_directory(
     /* Check if row was actually updated */
     int changes = sqlite3_changes(state->db);
     if (changes == 0) {
-        return ERROR(ERR_NOT_FOUND, "Directory not found in state: %s", entry->filesystem_path);
+        return ERROR(ERR_NOT_FOUND, "Directory not found in state: %s",
+                    entry->filesystem_path);
     }
 
     return NULL;

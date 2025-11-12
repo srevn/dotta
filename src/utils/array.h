@@ -7,7 +7,7 @@
 #ifndef DOTTA_ARRAY_H
 #define DOTTA_ARRAY_H
 
-#include "types.h"
+#include <types.h>
 
 /**
  * Create a new string array

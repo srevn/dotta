@@ -713,7 +713,7 @@ static error_t *profile_enable(
         output_error(out, "Cannot use --prefix with multiple profiles");
         output_hint(out, "Enable each profile separately:");
         for (size_t i = 0; i < string_array_size(to_enable); i++) {
-            output_hint(out, "  dotta profile enable %s --prefix <path>",
+            output_hint(out, "dotta profile enable %s --prefix <path>",
                        string_array_get(to_enable, i));
         }
         err = ERROR(ERR_INVALID_ARG, "Ambiguous --prefix usage");
@@ -744,7 +744,7 @@ static error_t *profile_enable(
         /* Check if profile exists */
         if (!profile_exists(repo, profile_name)) {
             output_warning(out, "Profile '%s' does not exist locally", profile_name);
-            output_hint(out, "  Run 'dotta profile fetch %s' first", profile_name);
+            output_hint(out, "Run 'dotta profile fetch %s' first", profile_name);
             not_found++;
             continue;
         }
@@ -762,7 +762,7 @@ static error_t *profile_enable(
         if (has_custom && !opts->custom_prefix) {
             output_error(out, "Profile '%s' contains custom/ files but --prefix not provided",
                         profile_name);
-            output_hint(out, "  Usage: dotta profile enable %s --prefix /path/to/target",
+            output_hint(out, "dotta profile enable %s --prefix /path/to/target",
                        profile_name);
             not_found++;
             continue;

@@ -11,8 +11,7 @@
 #include <git2.h>
 #include <stdbool.h>
 #include <time.h>
-
-#include "types.h"
+#include <types.h>
 
 /**
  * Sync state for a profile relative to remote

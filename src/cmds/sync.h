@@ -10,9 +10,9 @@
 #define DOTTA_CMD_SYNC_H
 
 #include <git2.h>
+#include <types.h>
 
 #include "core/upstream.h"
-#include "types.h"
 
 /* Use upstream module's state tracking */
 typedef upstream_state_t sync_branch_state_t;

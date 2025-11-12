@@ -39,9 +39,9 @@
 
 #include <git2.h>
 #include <time.h>
+#include <types.h>
 
-#include "types.h"
-#include "state.h"
+#include "core/state.h"
 #include "utils/hashmap.h"
 
 /**
@@ -89,12 +89,6 @@ typedef struct {
      * These fields cache the expected state from the manifest table,
      * eliminating N+1 queries during divergence analysis. They represent
      * what the file SHOULD be according to enabled profiles.
-     *
-     * Lifecycle:
-     * - Populated in workspace_build_manifest_from_state()
-     * - Used in analyze_file_divergence() for comparison
-     * - NULL/0 for manifests built from Git trees (not state)
-     * - Freed in manifest_free()
      */
     char *old_profile;               /* Previous owner if changed, NULL otherwise (VWD cache) */
     char *git_oid;                   /* Git commit reference (40-char hex, can be NULL) */

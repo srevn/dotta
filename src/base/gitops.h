@@ -14,8 +14,7 @@
 #define DOTTA_GITOPS_H
 
 #include <git2.h>
-
-#include "types.h"
+#include <types.h>
 
 /**
  * Common buffer size constants for Git operations

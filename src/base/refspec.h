@@ -8,7 +8,7 @@
 #ifndef DOTTA_UTILS_REFSPEC_H
 #define DOTTA_UTILS_REFSPEC_H
 
-#include "types.h"
+#include <types.h>
 
 /**
  * Parse refspec: [profile:]<path>[@commit]

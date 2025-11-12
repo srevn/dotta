@@ -1134,7 +1134,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             /* Warn if file under $HOME but custom prefix provided */
             if (prefix == PREFIX_HOME && opts->custom_prefix) {
                 output_warning(out, "File '%s' is under $HOME, using portable 'home/' prefix", file_path);
-                output_hint(out, "  The --prefix flag is ignored for files under $HOME");
+                output_hint(out, "The --prefix flag is ignored for files under $HOME");
             }
 
             allocated_paths[i] = storage_path;

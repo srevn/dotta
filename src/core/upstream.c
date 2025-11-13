@@ -46,17 +46,19 @@ error_t *upstream_analyze_profile(
     char remote_refname[256];
     error_t *err;
 
-    err = gitops_build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", profile_name);
+    err = gitops_build_refname(local_refname, sizeof(local_refname),
+                    "refs/heads/%s", profile_name);
     if (err) {
         upstream_info_free(info);
         return error_wrap(err, "Invalid profile name '%s'", profile_name);
     }
 
-    err = gitops_build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
-                       remote_name, profile_name);
+    err = gitops_build_refname(remote_refname, sizeof(remote_refname),
+                    "refs/remotes/%s/%s", remote_name, profile_name);
     if (err) {
         upstream_info_free(info);
-        return error_wrap(err, "Invalid remote/profile name '%s/%s'", remote_name, profile_name);
+        return error_wrap(err, "Invalid remote/profile name '%s/%s'",
+                    remote_name, profile_name);
     }
 
     /* Check local branch exists */
@@ -265,7 +267,8 @@ static int discover_branches_callback(const char *refname, void *payload) {
     const char *branch_name = refname + ctx->prefix_len;
 
     /* Skip special refs */
-    if (strcmp(branch_name, "dotta-worktree") == 0 || strcmp(branch_name, "HEAD") == 0) {
+    if (strcmp(branch_name, "dotta-worktree") == 0 ||
+        strcmp(branch_name, "HEAD") == 0) {
         return 0;
     }
 
@@ -315,7 +318,8 @@ error_t *upstream_discover_branches(
 
     /* Build glob pattern for remote refs */
     char glob_pattern[256];
-    err = gitops_build_refname(glob_pattern, sizeof(glob_pattern), "refs/remotes/%s/*", remote_name);
+    err = gitops_build_refname(glob_pattern, sizeof(glob_pattern),
+                    "refs/remotes/%s/*", remote_name);
     if (err) {
         string_array_free(branches);
         return error_wrap(err, "Invalid remote name '%s'", remote_name);
@@ -323,7 +327,8 @@ error_t *upstream_discover_branches(
 
     /* Build prefix for extracting branch names */
     char remote_prefix[256];
-    err = gitops_build_refname(remote_prefix, sizeof(remote_prefix), "refs/remotes/%s/", remote_name);
+    err = gitops_build_refname(remote_prefix, sizeof(remote_prefix),
+                    "refs/remotes/%s/", remote_name);
     if (err) {
         string_array_free(branches);
         return error_wrap(err, "Invalid remote name '%s'", remote_name);
@@ -339,7 +344,8 @@ error_t *upstream_discover_branches(
     };
 
     /* Use git_reference_foreach_glob for efficient pattern matching */
-    int git_err = git_reference_foreach_glob(repo, glob_pattern, discover_branches_callback, &ctx);
+    int git_err = git_reference_foreach_glob(repo, glob_pattern,
+                    discover_branches_callback, &ctx);
     if (git_err < 0) {
         if (ctx.error) {
             /* Error from our callback */
@@ -395,7 +401,8 @@ error_t *upstream_query_remote_branches(
     }
 
     /* Connect to remote (network operation) */
-    git_err = git_remote_connect(remote, GIT_DIRECTION_FETCH, &callbacks, NULL, NULL);
+    git_err = git_remote_connect(remote, GIT_DIRECTION_FETCH,
+                    &callbacks, NULL, NULL);
     if (git_err < 0) {
         if (cred_ctx) {
             credential_context_reject(cred_ctx);
@@ -437,7 +444,8 @@ error_t *upstream_query_remote_branches(
         const char *branch_name = refname + prefix_len;
 
         /* Skip dotta-worktree and any empty names */
-        if (strcmp(branch_name, "dotta-worktree") == 0 || strlen(branch_name) == 0) {
+        if (strcmp(branch_name, "dotta-worktree") == 0 ||
+            strlen(branch_name) == 0) {
             continue;
         }
 
@@ -473,9 +481,12 @@ error_t *upstream_create_tracking_branch(
 
     /* Get remote ref */
     char remote_refname[256];
-    error_t *err = gitops_build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
+    error_t *err = gitops_build_refname(remote_refname,
+                    sizeof(remote_refname), "refs/remotes/%s/%s",
+                    remote_name, branch_name);
     if (err) {
-        return error_wrap(err, "Invalid remote/branch name '%s/%s'", remote_name, branch_name);
+        return error_wrap(err, "Invalid remote/branch name '%s/%s'",
+                    remote_name, branch_name);
     }
 
     git_reference *remote_ref = NULL;
@@ -487,19 +498,22 @@ error_t *upstream_create_tracking_branch(
     const git_oid *target_oid = git_reference_target(remote_ref);
     if (!target_oid) {
         git_reference_free(remote_ref);
-        return ERROR(ERR_GIT, "Remote ref '%s' has no target", remote_refname);
+        return ERROR(ERR_GIT, "Remote ref '%s' has no target",
+                    remote_refname);
     }
 
     /* Create local branch */
     char local_refname[256];
-    err = gitops_build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
+    err = gitops_build_refname(local_refname, sizeof(local_refname),
+                    "refs/heads/%s", branch_name);
     if (err) {
         git_reference_free(remote_ref);
         return error_wrap(err, "Invalid branch name '%s'", branch_name);
     }
 
     git_reference *local_ref = NULL;
-    git_err = git_reference_create(&local_ref, repo, local_refname, target_oid, 0, NULL);
+    git_err = git_reference_create(&local_ref, repo, local_refname,
+                    target_oid, 0, NULL);
     git_reference_free(remote_ref);
 
     if (git_err < 0) {

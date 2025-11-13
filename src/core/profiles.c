@@ -1058,17 +1058,14 @@ error_t *profile_has_custom_files(
 }
 
 /**
- * Build manifest from profiles with custom prefix support
+ * Build manifest from profiles
  *
  * Uses a hashmap for O(1) lookups when checking for duplicates.
  * This changes overall complexity from O(n*m) to O(n) where n is total files.
- *
- * prefix_map is optional and provides custom prefixes for profiles with custom/ files.
  */
 error_t *profile_build_manifest(
     git_repository *repo,
     profile_list_t *profiles,
-    hashmap_t *prefix_map,
     manifest_t **out
 ) {
     CHECK_NULL(repo);
@@ -1127,11 +1124,8 @@ error_t *profile_build_manifest(
             goto cleanup;
         }
 
-        /* Determine custom prefix for this profile */
-        const char *custom_prefix = NULL;
-        if (prefix_map) {
-            custom_prefix = (const char *)hashmap_get(prefix_map, profile->name);
-        }
+        /* Get custom prefix from profile */
+        const char *custom_prefix = profile->custom_prefix;
 
         /* Process each file */
         for (size_t j = 0; j < string_array_size(files); j++) {
@@ -1680,6 +1674,7 @@ void profile_free(profile_t *profile) {
     }
 
     free(profile->name);
+    free(profile->custom_prefix);
     if (profile->ref) {
         git_reference_free(profile->ref);
     }
@@ -1700,6 +1695,7 @@ void profile_list_free(profile_list_t *list) {
     for (size_t i = 0; i < list->count; i++) {
         profile_t *profile = &list->profiles[i];
         free(profile->name);
+        free(profile->custom_prefix);
         if (profile->ref) {
             git_reference_free(profile->ref);
         }

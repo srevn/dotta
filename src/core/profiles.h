@@ -52,6 +52,7 @@ typedef struct {
     git_reference *ref;      /* Branch reference */
     git_tree *tree;          /* Profile tree (loaded lazily) */
     bool auto_detected;      /* Auto-detected vs manually specified */
+    char *custom_prefix;     /* Custom deployment root (NULL for home/root profiles) */
 } profile_t;
 
 /**
@@ -387,28 +388,22 @@ error_t *profile_has_custom_files(
 );
 
 /**
- * Build manifest from profiles with custom prefix support
+ * Build manifest from profiles
  *
  * Merges files from all profiles according to precedence rules.
  * Later profiles override earlier ones.
  *
- * For profiles with custom/ files, uses prefix from map.
- *
- * The prefix_map is optional:
- * - If NULL: custom/ files will fail to resolve (error)
- * - If provided: custom/ files resolved with mapped prefix
- * - Profiles not in map: assumed to have no custom prefix
+ * For profiles with custom/ files, uses profile->custom_prefix.
+ * Profiles without custom prefix (NULL) deploy to home/root normally.
  *
  * @param repo Repository (must not be NULL)
  * @param profiles Profile list (must not be NULL)
- * @param prefix_map Map of profile_name → custom_prefix (can be NULL)
  * @param out Manifest (must not be NULL, caller must free with manifest_free)
  * @return Error or NULL on success
  */
 error_t *profile_build_manifest(
     git_repository *repo,
     profile_list_t *profiles,
-    hashmap_t *prefix_map,
     manifest_t **out
 );
 

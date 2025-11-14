@@ -499,6 +499,7 @@ static error_t *deploy_tracked_directories(
     }
 
     if (dir_count == 0) {
+        state_free_all_directories(directories, dir_count);
         return NULL;  /* No tracked directories */
     }
 

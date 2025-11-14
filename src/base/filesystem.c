@@ -745,7 +745,22 @@ error_t *fs_path_join(const char *base, const char *component, char **out) {
     /* Calculate length */
     size_t base_len = strlen(base);
     size_t comp_len = strlen(component);
-    bool needs_slash = (base_len > 0 && base[base_len - 1] != '/');
+    
+    /* Determine if we need a separator slash:
+     * - Don't add if base ends with '/' 
+     * - Don't add if component starts with '/'
+     * - Don't add if base is empty
+     * - Otherwise add one */
+    bool needs_slash = (base_len > 0 && base[base_len - 1] != '/' &&
+                       (comp_len == 0 || component[0] != '/'));
+    
+    /* Special case: if base is "/" and component starts with "/" */
+    size_t comp_offset = 0;
+    if (base_len == 1 && base[0] == '/' && comp_len > 0 && component[0] == '/') {
+        comp_offset = 1;  /* Skip leading slash in component */
+        comp_len--;
+    }
+    
     size_t total_len = base_len + comp_len + (needs_slash ? 1 : 0);
 
     /* Allocate */
@@ -763,7 +778,7 @@ error_t *fs_path_join(const char *base, const char *component, char **out) {
         *ptr++ = '/';
     }
 
-    memcpy(ptr, component, comp_len);
+    memcpy(ptr, component + comp_offset, comp_len);
     ptr[comp_len] = '\0';
 
     *out = result;

@@ -1216,6 +1216,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
     }
 
     if (dir_count == 0) {
+        state_free_all_directories(directories, dir_count);
         return NULL;  /* No tracked directories */
     }
 

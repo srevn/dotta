@@ -936,7 +936,7 @@ error_t *state_get_prefix_map(
             return ERROR(ERR_MEMORY, "Failed to allocate prefix map entry");
         }
 
-        /* Store in map (ownership transferred) */
+        /* Store in map (prefix ownership transferred) */
         error_t *err = hashmap_set(map, name, prefix);
         if (err) {
             free(name);
@@ -945,6 +945,9 @@ error_t *state_get_prefix_map(
             hashmap_free(map, free);
             return err;
         }
+        
+        /* Free name - hashmap made its own copy of the key */
+        free(name);
     }
 
     if (rc != SQLITE_DONE) {

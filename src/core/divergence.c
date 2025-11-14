@@ -233,15 +233,17 @@ static error_t *resolve_merge_trees(divergence_context_t *ctx, git_oid *out_oid)
  *
  * This strategy doesn't modify the local branch - it stays at saved_oid.
  * The actual force push to remote is handled by the caller.
+ *
+ * This is a no-op strategy that always succeeds - there's no work to do.
+ * Caller (divergence_resolve) validates all pointers before calling.
  */
 static error_t *resolve_ours(divergence_context_t *ctx, git_oid *out_oid) {
-    CHECK_NULL(ctx);
-
     /* Local branch remains unchanged at its current position */
     if (out_oid) {
         git_oid_cpy(out_oid, &ctx->saved_oid);
     }
 
+    /* Always succeeds - this is a no-op strategy */
     return NULL;
 }
 

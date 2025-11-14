@@ -126,6 +126,7 @@ static error_t *add_profiles_to_list(
     CHECK_NULL(repo);
     CHECK_NULL(profile_names);
     CHECK_NULL(list);
+    CHECK_NULL(list->profiles);
 
     for (size_t i = 0; i < string_array_size(profile_names); i++) {
         const char *profile_name = string_array_get(profile_names, i);
@@ -240,20 +241,26 @@ static error_t *detect_hierarchical_profiles(
 
     /* Ensure capacity with overflow check */
     size_t needed_capacity = list->count + total_to_add;
-    if (needed_capacity > *capacity) {
+    if (needed_capacity > *capacity || !list->profiles) {
         /* Check for overflow in doubling loop */
         if (*capacity > SIZE_MAX / 2) {
             err = ERROR(ERR_INTERNAL, "Profile capacity overflow");
             goto cleanup;
         }
 
-        size_t new_capacity = *capacity * 2;
-        while (new_capacity < needed_capacity) {
-            if (new_capacity > SIZE_MAX / 2) {
-                err = ERROR(ERR_INTERNAL, "Profile capacity overflow");
-                goto cleanup;
+        /* Start with needed capacity or reasonable minimum */
+        size_t new_capacity;
+        if (*capacity == 0) {
+            new_capacity = (needed_capacity > 8) ? needed_capacity : 8;
+        } else {
+            new_capacity = *capacity * 2;
+            while (new_capacity < needed_capacity) {
+                if (new_capacity > SIZE_MAX / 2) {
+                    err = ERROR(ERR_INTERNAL, "Profile capacity overflow");
+                    goto cleanup;
+                }
+                new_capacity *= 2;
             }
-            new_capacity *= 2;
         }
 
         profile_t *new_profiles = realloc(list->profiles, new_capacity * sizeof(profile_t));
@@ -1692,15 +1699,17 @@ void profile_list_free(profile_list_t *list) {
         return;
     }
 
-    for (size_t i = 0; i < list->count; i++) {
-        profile_t *profile = &list->profiles[i];
-        free(profile->name);
-        free(profile->custom_prefix);
-        if (profile->ref) {
-            git_reference_free(profile->ref);
-        }
-        if (profile->tree) {
-            git_tree_free(profile->tree);
+    if (list->profiles) {
+        for (size_t i = 0; i < list->count; i++) {
+            profile_t *profile = &list->profiles[i];
+            free(profile->name);
+            free(profile->custom_prefix);
+            if (profile->ref) {
+                git_reference_free(profile->ref);
+            }
+            if (profile->tree) {
+                git_tree_free(profile->tree);
+            }
         }
     }
 

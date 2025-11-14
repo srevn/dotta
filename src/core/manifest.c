@@ -2577,10 +2577,11 @@ error_t *manifest_sync_diff(
 
         /* Resolve filesystem path with appropriate prefix */
         char *filesystem_path = NULL;
-        error_t *err = path_from_storage(storage_path, custom_prefix, &filesystem_path);
+        err = path_from_storage(storage_path, custom_prefix, &filesystem_path);
         if (err) {
             /* Skip files we can't resolve (invalid paths) */
             error_free(err);
+            err = NULL;  /* Clear for next iteration */
             continue;
         }
 
@@ -2904,22 +2905,24 @@ error_t *manifest_sync_directories(
             );
 
             if (err) {
+                error_t *wrapped_err = error_wrap(err,
+                    "Failed to create state directory entry for '%s'", directories[j]->key);
                 free(directories);
                 metadata_free(metadata);
                 hashmap_free(prefix_map, free);
-                return error_wrap(err, "Failed to create state directory entry for '%s'",
-                                directories[j]->key);
+                return wrapped_err;
             }
 
             err = state_add_directory(state, state_dir);
             state_free_directory_entry(state_dir);
 
             if (err) {
+                error_t *wrapped_err = error_wrap(err,
+                    "Failed to add directory '%s' to state", directories[j]->key);
                 free(directories);
                 metadata_free(metadata);
                 hashmap_free(prefix_map, free);
-                return error_wrap(err, "Failed to add directory '%s' to state",
-                                directories[j]->key);
+                return wrapped_err;
             }
         }
 

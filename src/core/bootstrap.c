@@ -701,8 +701,8 @@ error_t *bootstrap_execute(
 
             /* Check if process terminated */
             int status;
-            pid_t result = waitpid(pid, &status, WNOHANG);
-            if (result == 0) {
+            pid_t wait_result = waitpid(pid, &status, WNOHANG);
+            if (wait_result == 0) {
                 /* Still running - force kill */
                 fprintf(stderr, "Warning: Forcefully terminating bootstrap script\n");
                 kill(pid, SIGKILL);
@@ -733,12 +733,12 @@ error_t *bootstrap_execute(
         if (select_result == 0) {
             /* Timeout - check if process is still running */
             int status;
-            pid_t result = waitpid(pid, &status, WNOHANG);
-            if (result == pid) {
+            pid_t wait_result = waitpid(pid, &status, WNOHANG);
+            if (wait_result == pid) {
                 /* Process exited */
                 process_exited = true;
                 break;
-            } else if (result < 0) {
+            } else if (wait_result < 0) {
                 /* waitpid error */
                 break;
             }

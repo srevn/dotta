@@ -167,10 +167,10 @@ static error_t *resolve_paths_to_remove(
         }
 
         /* Try to get filesystem path for output (non-fatal if it fails) */
-        error_t *err = path_from_storage(storage_path, custom_prefix, &canonical);
-        if (err) {
+        error_t *convert_err = path_from_storage(storage_path, custom_prefix, &canonical);
+        if (convert_err) {
             /* Can still work with storage path only */
-            error_free(err);
+            error_free(convert_err);
             canonical = NULL;
         }
 

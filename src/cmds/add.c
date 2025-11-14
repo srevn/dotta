@@ -216,11 +216,11 @@ static error_t *add_file_to_worktree(
     /* Handle existing files */
     if (fs_lexists(dest_path)) {
         if (!opts->force) {
-            error_t *err = ERROR(ERR_EXISTS,
+            error_t *exists_err = ERROR(ERR_EXISTS,
                         "File '%s' (as '%s') already exists in profile '%s'. Use --force to overwrite.",
                         filesystem_path, storage_path, opts->profile);
             free(dest_path);
-            return err;
+            return exists_err;
         }
         err = fs_remove_file(dest_path);
         if (err) {

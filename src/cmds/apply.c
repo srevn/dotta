@@ -1007,13 +1007,18 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     /* Extract orphans from workspace (unless --keep-orphans)
      *
      * Architecture: workspace_load() already detected ALL orphans (enabled + disabled
-     * profiles) during analyze_orphaned_state(). We extract them here using
-     * enabled_only=false to get complete picture for cleanup.
+     * profiles) during analyze_orphaned_state(). We extract them here for cleanup.
      *
-     * Why enabled_only=false?
-     * - When a profile is disabled, its files become orphans that MUST be cleaned up
-     * - apply is responsible for removing files from disabled profiles
-     * - status uses enabled_only=true to show only relevant divergence
+     * CRITICAL: Orphan removal is UNCONDITIONAL and does NOT respect operation filter.
+     * - Operation filter applies to deployment (which files to deploy)
+     * - Orphan removal is housekeeping (removing files outside VWD scope)
+     * - The manifest layer already decided orphan status based on enabled profiles
+     * - Apply must respect that authority regardless of CLI filter
+     *
+     * Why unconditional?
+     * - Disabled profile orphans: User disabled profile → files must be removed
+     * - Enabled profile orphans: File deleted from Git → filesystem must converge
+     * - VWD invariant: manifest is authoritative source for scope decisions
      *
      * Extracted orphans are used for:
      * 1. Privilege checking (filter root/ paths)
@@ -1025,25 +1030,26 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     if (!opts->keep_orphans) {
         output_print(out, OUTPUT_VERBOSE, "\nExtracting orphans from workspace...\n");
 
-        /* Get ALL diverged items and filter for orphans
+        /* Get ALL diverged items and extract orphans
          *
-         * Without filtering: `dotta apply work` would remove files from `global`
-         * profile, destroying base configuration.  With filtering: Only orphans 
-         * matching operation filter are removed.
+         * Orphan removal is UNCONDITIONAL (does not respect operation filter):
+         * - Operation filter applies to deployment (which managed files to deploy)
+         * - Orphan removal is housekeeping (removing files outside VWD scope)
+         * - Manifest (VWD) already determined orphan status via enabled profiles
+         * - Apply must respect that authority regardless of CLI filter
+         *
+         * Note: Files from enabled profiles cannot be orphans (they're in manifest).
+         * Only files from disabled profiles or deleted from Git become orphans.
          */
         size_t all_diverged_count = 0;
         const workspace_item_t *all_diverged = workspace_get_all_diverged(ws, &all_diverged_count);
 
-        /* First pass: count orphaned files vs directories (FILTERED) */
+        /* First pass: count orphaned files vs directories */
         for (size_t i = 0; i < all_diverged_count; i++) {
             const workspace_item_t *item = &all_diverged[i];
 
             if (item->state == WORKSPACE_STATE_ORPHANED) {
-                /* Only count orphans matching operation filter */
-                if (!profile_filter_matches(item->profile, operation_profiles)) {
-                    continue;  /* Skip orphans not in filter */
-                }
-
+                /* Count all orphans unconditionally (VWD authority) */
                 if (item->item_kind == WORKSPACE_ITEM_FILE) {
                     file_orphan_count++;
                 } else {
@@ -1060,18 +1066,14 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                 goto cleanup;
             }
 
-            /* Second pass: populate file orphans array (FILTERED) */
+            /* Second pass: populate file orphans array (unconditional) */
             size_t f_idx = 0;
             for (size_t i = 0; i < all_diverged_count; i++) {
                 const workspace_item_t *item = &all_diverged[i];
 
                 if (item->state == WORKSPACE_STATE_ORPHANED &&
                     item->item_kind == WORKSPACE_ITEM_FILE) {
-                    /* CRITICAL: Only extract orphans matching operation filter */
-                    if (!profile_filter_matches(item->profile, operation_profiles)) {
-                        continue;  /* Skip orphans not in filter */
-                    }
-
+                    /* Extract all orphans unconditionally (VWD authority) */
                     file_orphans[f_idx++] = item;
                 }
             }
@@ -1086,18 +1088,14 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                 goto cleanup;
             }
 
-            /* Second pass: populate directory orphans array (FILTERED) */
+            /* Second pass: populate directory orphans array (unconditional) */
             size_t d_idx = 0;
             for (size_t i = 0; i < all_diverged_count; i++) {
                 const workspace_item_t *item = &all_diverged[i];
 
                 if (item->state == WORKSPACE_STATE_ORPHANED &&
                     item->item_kind == WORKSPACE_ITEM_DIRECTORY) {
-                    /* Only extract orphans matching operation filter */
-                    if (!profile_filter_matches(item->profile, operation_profiles)) {
-                        continue;  /* Skip orphans not in filter */
-                    }
-
+                    /* Extract all orphans unconditionally (VWD authority) */
                     dir_orphans[d_idx++] = item;
                 }
             }
@@ -1115,6 +1113,40 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                             "Found %zu orphaned director%s\n",
                             dir_orphan_count,
                             dir_orphan_count == 1 ? "y" : "ies");
+            }
+
+            /* Show breakdown by profile status */
+            if (file_orphan_count > 0 || dir_orphan_count > 0) {
+                size_t disabled_count = 0;
+                size_t enabled_count = 0;
+
+                /* Count using already-extracted orphan arrays */
+                for (size_t i = 0; i < file_orphan_count; i++) {
+                    if (file_orphans[i]->profile_enabled) {
+                        enabled_count++;
+                    } else {
+                        disabled_count++;
+                    }
+                }
+                for (size_t i = 0; i < dir_orphan_count; i++) {
+                    if (dir_orphans[i]->profile_enabled) {
+                        enabled_count++;
+                    } else {
+                        disabled_count++;
+                    }
+                }
+
+                if (disabled_count > 0) {
+                    output_print(out, OUTPUT_VERBOSE,
+                                "  %zu from disabled profile%s\n",
+                                disabled_count,
+                                disabled_count == 1 ? "" : "s");
+                }
+                if (enabled_count > 0) {
+                    output_print(out, OUTPUT_VERBOSE,
+                                "  %zu from enabled profiles (deleted from Git)\n",
+                                enabled_count);
+                }
             }
         }
     }

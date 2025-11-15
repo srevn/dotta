@@ -939,6 +939,7 @@ error_t *manifest_disable_profile(
     manifest_t *fallback_manifest = NULL;
     profile_list_t *fallback_profiles = NULL;
     hashmap_t *profile_oids = NULL;
+    metadata_t *fallback_metadata = NULL;
 
     /* Track stats for output */
     size_t total_files = 0;
@@ -975,6 +976,32 @@ error_t *manifest_disable_profile(
         }
     }
 
+    /* Load merged metadata from remaining profiles for fallback resolution
+     *
+     * When files fall back to lower-precedence profiles, we need their metadata
+     * (.dotta/metadata.json) to correctly set mode, owner, group, encrypted.
+     *
+     * This is the authoritative source for file metadata - NOT the Git tree.
+     * Git tree provides basic type and default permissions, but metadata.json
+     * contains the user's explicit intent (custom mode, ownership, encryption).
+     *
+     * Pattern: Same as manifest_sync_diff, manifest_add_files, manifest_update_files.
+     * All operations that handle fallbacks use this metadata-loading pattern.
+     */
+    if (remaining_enabled->count > 0) {
+        err = metadata_load_from_profiles(repo, remaining_enabled, &fallback_metadata);
+        if (err && err->code != ERR_NOT_FOUND) {
+            /* Fatal error - cannot proceed without metadata for correctness */
+            goto cleanup;
+        }
+        if (err) {
+            /* Non-fatal: Old profiles may not have metadata.json
+             * sync_entry_to_state handles NULL metadata gracefully (uses Git defaults) */
+            error_free(err);
+            err = NULL;
+        }
+    }
+
     /* 3. Process each entry */
     for (size_t i = 0; i < count; i++) {
         state_file_entry_t *entry = &entries[i];
@@ -991,9 +1018,28 @@ error_t *manifest_disable_profile(
         }
 
         if (fallback) {
-            /* File exists in lower-precedence profile - update to fallback */
+            /* File exists in lower-precedence profile - update to fallback
+             *
+             * CRITICAL: Use sync_entry_to_state to ensure consistent, correct metadata
+             * handling. This reuses the proven logic for:
+             *
+             * 1. Extracting blob_oid from Git tree entry (content hash)
+             * 2. Loading rich metadata from .dotta/metadata.json:
+             *    - Custom mode (user's intended permissions, not Git's default)
+             *    - Ownership (owner/group for root/ files)
+             *    - Encryption flag (from metadata, not Git)
+             * 3. Applying metadata precedence (metadata.mode overrides git.mode)
+             * 4. Handling NULL values (non-root files, missing metadata)
+             * 5. Writing complete, consistent state entry
+             *
+             * We preserve entry->deployed_at to maintain the file's lifecycle history.
+             * The file was deployed under the disabled profile; fallback doesn't change
+             * that historical fact.
+             *
+             * VWD Invariant: Entry metadata must match source profile's Git tree + metadata.json.
+             */
 
-            /* Get OID from pre-built map (O(1) lookup) */
+            /* Get git_oid from pre-built map (O(1) lookup) */
             const char *fallback_oid_str = hashmap_get(profile_oids,
                                                        fallback->source_profile->name);
             if (!fallback_oid_str) {
@@ -1002,25 +1048,11 @@ error_t *manifest_disable_profile(
                 goto cleanup;
             }
 
-            /* Update entry to use fallback profile
-             * MEMORY SAFETY: Must use str_replace_owned() to properly free old
-             * strings and allocate independent copies. Direct assignment would cause:
-             * 1. Memory leak (old values not freed)
-             * 2. Use-after-free (aliasing memory freed with fallback_profiles)
-             * 3. Double-free crash (cleanup path tries to free already-freed memory) */
-            err = str_replace_owned(&entry->profile, fallback->source_profile->name);
+            /* Sync to state using proven, tested logic */
+            err = sync_entry_to_state(repo, state, fallback, fallback_oid_str,
+                                      fallback_metadata, entry->deployed_at);
             if (err) {
-                goto cleanup;
-            }
-
-            err = str_replace_owned(&entry->git_oid, fallback_oid_str);
-            if (err) {
-                goto cleanup;
-            }
-
-            err = state_update_entry(state, entry);
-            if (err) {
-                err = error_wrap(err, "Failed to update entry to fallback for %s",
+                err = error_wrap(err, "Failed to sync entry to fallback for %s",
                                entry->storage_path);
                 goto cleanup;
             }
@@ -1228,6 +1260,7 @@ directory_cleanup:
     }
 
 cleanup:
+    if (fallback_metadata) metadata_free(fallback_metadata);
     if (profile_oids) hashmap_free(profile_oids, free);
     if (fallback_profiles) profile_list_free(fallback_profiles);
     if (fallback_manifest) manifest_free(fallback_manifest);
@@ -2155,9 +2188,11 @@ error_t *manifest_update_files(
     /* After updating files, synchronize git_oid for ALL files from affected profiles.
      * Each profile that had files updated has a new HEAD commit.
      * Build set of unique profile names from items and sync each. */
-    string_array_t *updated_profiles = NULL;
-    err = string_array_create(&updated_profiles);
-    if (err) goto cleanup;
+    string_array_t *updated_profiles = string_array_create();
+    if (!updated_profiles) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate updated_profiles array");
+        goto cleanup;
+    }
 
     for (size_t i = 0; i < item_count; i++) {
         const char *prof = items[i]->profile;

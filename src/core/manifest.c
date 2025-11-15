@@ -1421,27 +1421,25 @@ error_t *manifest_remove_files(
                 goto cleanup;
             }
 
-            /* Track ownership change: save old profile before updating
+            /* Track ownership change: save old profile BEFORE updating current profile
+             *
+             * MEMORY SAFETY: Must set old_profile BEFORE replacing profile to avoid
+             * use-after-free. str_replace_owned() creates an independent copy of the
+             * current profile name, then we can safely free and replace the original.
              *
              * Profile ownership change occurs when a file is removed from
              * high-precedence profile and falls back to lower-precedence.
              * Track old_profile to inform user via workspace divergence analysis.
              */
-            const char *old_profile_name = current_entry->profile;
-
-            /* Update manifest entry to use fallback
-             * MEMORY SAFETY: Use str_replace_owned() to properly free old strings
-             * before replacing them with new values. Direct assignment would leak
-             * the old allocated strings. */
-            err = str_replace_owned(&current_entry->profile, fallback_profile);
+            err = str_replace_owned(&current_entry->old_profile, current_entry->profile);
             if (err) {
                 state_free_entry(current_entry);
                 free(filesystem_path);
                 goto cleanup;
             }
 
-            /* Set old_profile to track the ownership change */
-            err = str_replace_owned(&current_entry->old_profile, old_profile_name);
+            /* Update manifest entry to use fallback */
+            err = str_replace_owned(&current_entry->profile, fallback_profile);
             if (err) {
                 state_free_entry(current_entry);
                 free(filesystem_path);

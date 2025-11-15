@@ -553,6 +553,32 @@ error_t *state_update_entry(
 );
 
 /**
+ * Update git_oid for all manifest entries from a specific profile
+ *
+ * Synchronizes git_oid to match the profile's current branch HEAD.
+ * Maintains invariant: all files from profile P have git_oid = P's HEAD.
+ *
+ * Called after operations that move branch HEAD:
+ * - manifest_sync_diff (after pull/merge)
+ * - manifest_add_files (after commit)
+ * - manifest_update_files (after commit)
+ * - manifest_remove_files (after commit)
+ *
+ * Updates ALL entries (active and inactive) for consistency.
+ * Inactive entries will be removed by apply, but should stay current.
+ *
+ * @param state State (must not be NULL, must have active transaction)
+ * @param profile_name Profile name (must not be NULL)
+ * @param new_git_oid New commit OID for profile HEAD (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_update_git_oid_for_profile(
+    state_t *state,
+    const char *profile_name,
+    const git_oid *new_git_oid
+);
+
+/**
  * Get entries by profile
  *
  * Returns all manifest entries from the specified profile.

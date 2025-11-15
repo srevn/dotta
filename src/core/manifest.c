@@ -73,6 +73,42 @@ static error_t *get_branch_head_oid(
 }
 
 /**
+ * Synchronize git_oid for all files in a profile to match branch HEAD
+ *
+ * Maintains critical invariant: all files from profile P have git_oid = P's HEAD.
+ *
+ * Called after any operation that moves a profile's branch HEAD:
+ * - After sync (remote changes pulled)
+ * - After add (new files committed)
+ * - After update (file changes committed)
+ * - After remove (file deletions committed)
+ *
+ * @param repo Repository (must not be NULL)
+ * @param state State (must not be NULL, must have active transaction)
+ * @param profile_name Profile name (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *sync_profile_git_oids(
+    git_repository *repo,
+    state_t *state,
+    const char *profile_name
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(state);
+    CHECK_NULL(profile_name);
+
+    /* Get current HEAD for profile */
+    git_oid head_oid;
+    error_t *err = get_branch_head_oid(repo, profile_name, &head_oid);
+    if (err) {
+        return error_wrap(err, "Failed to get HEAD for profile '%s'", profile_name);
+    }
+
+    /* Update all entries from this profile */
+    return state_update_git_oid_for_profile(state, profile_name, &head_oid);
+}
+
+/**
  * Build hashmap of profile names to their current HEAD oids
  *
  * Helper for bulk operations that need git_oid for multiple profiles.
@@ -1430,6 +1466,15 @@ error_t *manifest_remove_files(
     if (out_removed) *out_removed = removed_count;
     if (out_fallbacks) *out_fallbacks = fallback_count;
 
+    /* After removing files, the profile's branch HEAD has moved to a new commit.
+     * ALL files from this profile must have their git_oid updated to match the new HEAD,
+     * not just the removed files. */
+    err = sync_profile_git_oids(repo, state, removed_profile);
+    if (err) {
+        err = error_wrap(err, "Failed to sync git_oid for profile '%s'", removed_profile);
+        goto cleanup;
+    }
+
     /* 5. Sync tracked directories */
     err = manifest_sync_directories(repo, state, enabled_profiles);
     if (err) {
@@ -2107,6 +2152,47 @@ error_t *manifest_update_files(
         }
     }
 
+    /* After updating files, synchronize git_oid for ALL files from affected profiles.
+     * Each profile that had files updated has a new HEAD commit.
+     * Build set of unique profile names from items and sync each. */
+    string_array_t *updated_profiles = NULL;
+    err = string_array_create(&updated_profiles);
+    if (err) goto cleanup;
+
+    for (size_t i = 0; i < item_count; i++) {
+        const char *prof = items[i]->profile;
+
+        /* Check if already processed */
+        bool found = false;
+        for (size_t j = 0; j < string_array_size(updated_profiles); j++) {
+            if (strcmp(string_array_get(updated_profiles, j), prof) == 0) {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            err = string_array_push(updated_profiles, prof);
+            if (err) {
+                string_array_free(updated_profiles);
+                goto cleanup;
+            }
+        }
+    }
+
+    /* Sync git_oid for each unique profile */
+    for (size_t i = 0; i < string_array_size(updated_profiles); i++) {
+        const char *prof = string_array_get(updated_profiles, i);
+        err = sync_profile_git_oids(repo, state, prof);
+        if (err) {
+            string_array_free(updated_profiles);
+            err = error_wrap(err, "Failed to sync git_oid for profile '%s'", prof);
+            goto cleanup;
+        }
+    }
+
+    string_array_free(updated_profiles);
+
     /* 8. Sync tracked directories */
     err = manifest_sync_directories(repo, state, enabled_profiles);
     if (err) {
@@ -2320,6 +2406,15 @@ error_t *manifest_add_files(
         }
 
         (*out_synced)++;
+    }
+
+    /* After adding files, the profile's branch HEAD has moved to a new commit.
+     * ALL files from this profile must have their git_oid updated to match the new HEAD,
+     * not just the newly added files. */
+    err = sync_profile_git_oids(repo, state, profile_name);
+    if (err) {
+        err = error_wrap(err, "Failed to sync git_oid for profile '%s'", profile_name);
+        goto cleanup;
     }
 
     /* 8. Sync tracked directories */
@@ -2784,6 +2879,16 @@ error_t *manifest_sync_diff(
     if (out_synced) *out_synced = synced;
     if (out_removed) *out_removed = removed;
     if (out_fallbacks) *out_fallbacks = fallbacks;
+
+    /* Synchronize git_oid for ALL files from this profile.
+     * After sync, the branch HEAD has moved to new_oid. ALL files from this
+     * profile must have their git_oid updated to match, not just files in the diff.
+     * This maintains the invariant: all files from profile P have git_oid = P's HEAD. */
+    err = sync_profile_git_oids(repo, state, profile_name);
+    if (err) {
+        err = error_wrap(err, "Failed to sync git_oid for profile '%s'", profile_name);
+        goto cleanup;
+    }
 
     /* 4. Sync tracked directories */
     err = manifest_sync_directories(repo, state, enabled_profiles);

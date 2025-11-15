@@ -2803,6 +2803,68 @@ error_t *state_update_entry(
 }
 
 /**
+ * Update git_oid for all manifest entries from a specific profile
+ *
+ * Synchronizes git_oid to match the profile's current branch HEAD.
+ * Maintains invariant: all files from profile P have git_oid = P's HEAD.
+ *
+ * Called after operations that move branch HEAD:
+ * - manifest_sync_diff (after pull/merge)
+ * - manifest_add_files (after commit)
+ * - manifest_update_files (after commit)
+ * - manifest_remove_files (after commit)
+ *
+ * Updates ALL entries (active and inactive) for consistency.
+ * Inactive entries will be removed by apply, but should stay current.
+ *
+ * @param state State (must not be NULL, must have active transaction)
+ * @param profile_name Profile name (must not be NULL)
+ * @param new_git_oid New commit OID for profile HEAD (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_update_git_oid_for_profile(
+    state_t *state,
+    const char *profile_name,
+    const git_oid *new_git_oid
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(state->db);
+    CHECK_NULL(profile_name);
+    CHECK_NULL(new_git_oid);
+
+    /* Convert OID to string */
+    char oid_str[GIT_OID_HEXSZ + 1];
+    git_oid_tostr(oid_str, sizeof(oid_str), new_git_oid);
+
+    /* Update ALL entries for this profile (active and inactive).
+     * Maintains invariant: all files from profile P have git_oid = P's HEAD.
+     * Inactive entries will be removed by apply, but should stay consistent. */
+    const char *sql = "UPDATE virtual_manifest SET git_oid = ?1 WHERE profile = ?2";
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return ERROR(ERR_STATE_INVALID, "Failed to prepare git_oid update: %s",
+                    sqlite3_errmsg(state->db));
+    }
+
+    /* Bind parameters */
+    sqlite3_bind_text(stmt, 1, oid_str, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, profile_name, -1, SQLITE_TRANSIENT);
+
+    /* Execute */
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    if (rc != SQLITE_DONE) {
+        return ERROR(ERR_STATE_INVALID, "Failed to update git_oid for profile '%s': %s",
+                    profile_name, sqlite3_errmsg(state->db));
+    }
+
+    return NULL;
+}
+
+/**
  * Get entries by profile
  *
  * Returns all manifest entries from the specified profile.

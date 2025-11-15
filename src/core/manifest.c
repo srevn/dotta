@@ -1057,6 +1057,70 @@ error_t *manifest_disable_profile(
                 goto cleanup;
             }
 
+            /* Track profile ownership transition (old_profile metadata)
+             *
+             * ARCHITECTURE: Separation of concerns between Git-sync and profile transitions.
+             *
+             * sync_entry_to_state() is a low-level Git→State sync primitive used across
+             * the codebase. It correctly writes the fallback entry but does NOT set
+             * old_profile (Git-sync concern, not profile management semantics).
+             *
+             * Profile ownership tracking is a higher-level semantic that provides user
+             * visibility into transitions (e.g., "file moved from darwin to global").
+             * This layered approach maintains clean separation:
+             *   Layer 1: Git→State sync (proven metadata extraction, blob_oid, etc.)
+             *   Layer 2: Profile transition tracking (ownership change attribution)
+             *
+             * The old_profile field enables:
+             *   - User visibility: status shows "home/.bashrc (darwin → global)"
+             *   - Informed decisions: user sees why file is modified before apply
+             *   - Audit trail: track ownership history until deployment acknowledges it
+             *
+             * Post-deployment: apply clears old_profile after successful deployment,
+             * acknowledging the transition is complete.
+             */
+            state_file_entry_t *updated_entry = NULL;
+            err = state_get_file(state, entry->filesystem_path, &updated_entry);
+            if (err) {
+                err = error_wrap(err, "Failed to read entry for old_profile tracking: %s",
+                                 entry->filesystem_path);
+                goto cleanup;
+            }
+
+            /* Set old_profile to the disabled profile name (ownership transition)
+             *
+             * MEMORY SAFETY:
+             * - entry->profile is owned by entries[] array (valid until cleanup)
+             * - str_replace_owned() creates independent copy in updated_entry
+             * - updated_entry is heap-allocated by state_get_file()
+             *
+             * INVARIANT: entry->profile is never NULL for manifest entries
+             */
+            if (!entry->profile) {
+                /* Should never happen - defensive check */
+                state_free_entry(updated_entry);
+                err = ERROR(ERR_INTERNAL, "Manifest entry missing profile field: %s",
+                           entry->storage_path);
+                goto cleanup;
+            }
+
+            err = str_replace_owned(&updated_entry->old_profile, entry->profile);
+            if (err) {
+                state_free_entry(updated_entry);
+                err = error_wrap(err, "Failed to set old_profile for %s",
+                                 entry->storage_path);
+                goto cleanup;
+            }
+
+            /* Persist the ownership transition tracking */
+            err = state_update_entry(state, updated_entry);
+            state_free_entry(updated_entry);  /* Always free, even on success */
+            if (err) {
+                err = error_wrap(err, "Failed to persist old_profile for %s",
+                                 entry->storage_path);
+                goto cleanup;
+            }
+
             fallback_count++;
         } else {
             /* No fallback - mark as inactive (staged for removal)

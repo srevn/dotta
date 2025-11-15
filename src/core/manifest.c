@@ -546,8 +546,17 @@ error_t *manifest_enable_profile(
     }
     git_oid_tostr(head_oid_str, sizeof(head_oid_str), &head_oid);
 
-    /* 2. Build manifest with transient prefix for profile being enabled */
-    err = build_manifest(repo, state, enabled_profiles, profile_name, custom_prefix,
+    /* 2. Build manifest with proper transient parameter handling
+     *
+     * Transient parameters are for temporary custom prefix operations (e.g., dotta add -p temp --prefix /opt),
+     * NOT for normal profile enable (which modifies persistent state).
+     *
+     * Validator requires "both or neither" - only pass transient override when custom_prefix is non-NULL.
+     */
+    const char *transient_prof = custom_prefix ? profile_name : NULL;
+    const char *transient_pfx = custom_prefix;
+
+    err = build_manifest(repo, state, enabled_profiles, transient_prof, transient_pfx,
                          &manifest, &profiles);
     if (err) {
         return error_wrap(err, "Failed to build manifest for profile sync");

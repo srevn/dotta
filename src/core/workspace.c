@@ -1120,6 +1120,7 @@ static error_t *analyze_untracked_files(
 
         if (dir_count == 0) {
             /* Profile has no tracked directories - skip */
+            state_free_all_directories(directories, dir_count);
             continue;
         }
 

@@ -5,6 +5,7 @@
 #include "revert.h"
 
 #include <git2.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -229,6 +230,11 @@ static error_t *discover_file(
 
     if (!matching_profiles || string_array_size(matching_profiles) == 0) {
         /* Not found in any profile's current HEAD */
+
+        /* Save storage_path for error message before freeing */
+        char error_storage_path[PATH_MAX];
+        snprintf(error_storage_path, sizeof(error_storage_path), "%s", storage_path);
+
         hashmap_free(profile_index, string_array_free);
         profile_list_free(profiles);
         config_free(config);
@@ -238,7 +244,7 @@ static error_t *discover_file(
                     "If you are trying to revert a deleted file, specify the profile:\n"
                     "  dotta revert --profile <name> %s <commit>\n\n"
                     "Use 'dotta list --all' to see all profiles.",
-                    storage_path, file_path);
+                    error_storage_path, file_path);
     }
 
     if (string_array_size(matching_profiles) == 1) {

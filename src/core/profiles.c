@@ -1595,6 +1595,7 @@ error_t *profile_build_manifest_from_tree(
         if (git_err != 0) {
             err = error_from_git(git_err);
             free(filesystem_path);
+            filesystem_path = NULL;  /* Prevent double-free in cleanup */
             goto cleanup;
         }
 
@@ -1606,6 +1607,7 @@ error_t *profile_build_manifest_from_tree(
             if (!new_entries) {
                 err = ERROR(ERR_MEMORY, "Failed to grow manifest entries");
                 free(filesystem_path);
+                filesystem_path = NULL;  /* Prevent double-free in cleanup */
                 git_tree_entry_free(entry);
                 goto cleanup;
             }
@@ -1622,6 +1624,7 @@ error_t *profile_build_manifest_from_tree(
         if (!dup_storage_path) {
             err = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
             free(filesystem_path);
+            filesystem_path = NULL;  /* Prevent double-free in cleanup */
             git_tree_entry_free(entry);
             goto cleanup;
         }

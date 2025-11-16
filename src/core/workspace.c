@@ -22,6 +22,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <grp.h>
+#include <limits.h>
 #include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1596,6 +1597,12 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         const state_file_entry_t *state_entry = &state_entries[i];
         file_entry_t *entry = &ws->manifest->entries[manifest_idx];
 
+        /* Defensive: Local buffers for error messages.
+         * Save entry fields BEFORE freeing manifest in error paths, since
+         * entry points into ws->manifest->entries array which gets freed. */
+        char error_profile_name[256] = {0};
+        char error_storage_path[PATH_MAX] = {0};
+
         /* Find profile in workspace's profile list (O(1) hashmap lookup) */
         entry->source_profile = hashmap_get(ws->profile_index, state_entry->profile);
 
@@ -1719,6 +1726,10 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         /* Load profile tree (lazy-loaded, cached in profile structure) */
         err = profile_load_tree(ws->repo, entry->source_profile);
         if (err) {
+            /* Save data for error message BEFORE freeing manifest */
+            snprintf(error_profile_name, sizeof(error_profile_name), "%s",
+                    entry->source_profile->name);
+
             /* Cleanup allocated fields for current entry */
             free(entry->storage_path);
             free(entry->filesystem_path);
@@ -1746,7 +1757,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             ws->manifest = NULL;
             state_free_all_files(state_entries, state_count);
             return error_wrap(err, "Failed to load tree for profile '%s'",
-                            entry->source_profile->name);
+                            error_profile_name);
         }
 
         /* Lookup tree entry from Git (creates owned reference) */
@@ -1785,6 +1796,13 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 continue;  /* Don't increment manifest_idx */
             } else {
                 /* Other Git errors - propagate */
+
+                /* Save data for error message BEFORE freeing manifest */
+                snprintf(error_storage_path, sizeof(error_storage_path), "%s",
+                        entry->storage_path);
+                snprintf(error_profile_name, sizeof(error_profile_name), "%s",
+                        entry->source_profile->name);
+
                 free(entry->storage_path);
                 free(entry->filesystem_path);
                 free(entry->old_profile);
@@ -1814,7 +1832,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
 
                 err = error_from_git(git_err);
                 return error_wrap(err, "Failed to lookup tree entry for '%s' in profile '%s'",
-                                entry->storage_path, entry->source_profile->name);
+                                error_storage_path, error_profile_name);
             }
         }
 

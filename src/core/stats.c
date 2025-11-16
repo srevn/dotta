@@ -465,6 +465,7 @@ static error_t *walk_commits(
                     if (!new_commits) {
                         git_diff_free(diff);
                         stats_free_commit_info(current_commit_info);
+                        current_commit_info = NULL;  /* Prevent double-free in cleanup */
                         git_commit_free(commit);
                         err = ERROR(ERR_MEMORY, "Failed to grow commits array");
                         goto cleanup;
@@ -480,6 +481,7 @@ static error_t *walk_commits(
                 if (!info->summary) {
                     git_diff_free(diff);
                     stats_free_commit_info(current_commit_info);
+                    current_commit_info = NULL;  /* Prevent double-free in cleanup */
                     git_commit_free(commit);
                     err = ERROR(ERR_MEMORY, "Failed to duplicate commit summary");
                     goto cleanup;

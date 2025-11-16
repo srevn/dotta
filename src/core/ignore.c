@@ -635,22 +635,26 @@ error_t *ignore_context_create(
         for (size_t i = 0; i < config->ignore_pattern_count; i++) {
             /* Validate pattern length to prevent excessive memory use and DoS */
             if (config->ignore_patterns[i] && strlen(config->ignore_patterns[i]) > MAX_PATTERN_LENGTH) {
-                /* Clean up */
+                /* Clean up - set to NULL to prevent double-free in ignore_context_free() */
                 for (size_t j = 0; j < i; j++) {
                     free(ctx->config_patterns[j]);
                 }
                 free(ctx->config_patterns);
+                ctx->config_patterns = NULL;
+                ctx->config_pattern_count = 0;
                 ignore_context_free(ctx);
                 return ERROR(ERR_VALIDATION, "Config ignore pattern too long (max 4096 chars)");
             }
 
             ctx->config_patterns[i] = strdup(config->ignore_patterns[i]);
             if (!ctx->config_patterns[i]) {
-                /* Clean up */
+                /* Clean up - set to NULL to prevent double-free in ignore_context_free() */
                 for (size_t j = 0; j < i; j++) {
                     free(ctx->config_patterns[j]);
                 }
                 free(ctx->config_patterns);
+                ctx->config_patterns = NULL;
+                ctx->config_pattern_count = 0;
                 ignore_context_free(ctx);
                 return ERROR(ERR_MEMORY, "Failed to copy config pattern");
             }

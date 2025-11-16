@@ -5,6 +5,7 @@
 #include "remove.h"
 
 #include <git2.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -247,12 +248,16 @@ static error_t *resolve_paths_to_remove(
 
         if (matches_found == 0) {
             if (!opts->force) {
+                /* Save storage_path for error message before freeing */
+                char error_storage_path[PATH_MAX];
+                snprintf(error_storage_path, sizeof(error_storage_path), "%s", storage_path);
+
                 free(storage_path);
                 free(canonical);
                 err = ERROR(ERR_NOT_FOUND,
                             "File '%s' not found in profile '%s'\n"
                             "Hint: Use 'dotta list --profile %s' to see tracked files",
-                            storage_path, profile_name, profile_name);
+                            error_storage_path, profile_name, profile_name);
                 goto cleanup;
             }
             /* With --force, warn and skip */

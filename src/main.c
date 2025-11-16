@@ -1556,6 +1556,12 @@ static int cmd_show_main(int argc, char **argv) {
         .raw = false
     };
 
+    /* Track allocated memory from parse_refspec */
+    char *allocated_profile = NULL;
+    char *allocated_file = NULL;
+    char *allocated_commit = NULL;
+    int ret = 0;
+
     /* Collect positional arguments */
     const char *positional_args[3] = {NULL};
     size_t positional_count = 0;
@@ -1617,8 +1623,14 @@ static int cmd_show_main(int argc, char **argv) {
                 fprintf(stderr, "Error parsing file specification: ");
                 error_print(err, stderr);
                 error_free(err);
-                return 1;
+                ret = 1;
+                goto cleanup;
             }
+
+            /* Track allocations for cleanup */
+            allocated_profile = profile;
+            allocated_file = file;
+            allocated_commit = commit;
 
             if (profile) {
                 opts.profile = profile;
@@ -1650,8 +1662,14 @@ static int cmd_show_main(int argc, char **argv) {
                 fprintf(stderr, "Error parsing file specification: ");
                 error_print(err, stderr);
                 error_free(err);
-                return 1;
+                ret = 1;
+                goto cleanup;
             }
+
+            /* Track allocations for cleanup */
+            allocated_profile = profile;
+            allocated_file = file;
+            allocated_commit = commit;
 
             /* Profile from refspec overrides positional if present */
             if (profile) {
@@ -1676,7 +1694,8 @@ static int cmd_show_main(int argc, char **argv) {
     if (err) {
         error_print(err, stderr);
         error_free(err);
-        return 1;
+        ret = 1;
+        goto cleanup;
     }
 
     /* Execute command */
@@ -1686,10 +1705,17 @@ static int cmd_show_main(int argc, char **argv) {
     if (err) {
         error_print(err, stderr);
         error_free(err);
-        return 1;
+        ret = 1;
+        goto cleanup;
     }
 
-    return 0;
+    ret = 0;
+
+cleanup:
+    free(allocated_profile);
+    free(allocated_file);
+    free(allocated_commit);
+    return ret;
 }
 
 /**
@@ -1705,6 +1731,12 @@ static int cmd_revert_main(int argc, char **argv) {
         .dry_run = false,
         .verbose = false
     };
+
+    /* Track allocated memory from parse_refspec */
+    char *allocated_profile = NULL;
+    char *allocated_file = NULL;
+    char *allocated_commit = NULL;
+    int ret = 0;
 
     /* Collect positional arguments */
     const char *positional_args[3] = {NULL};
@@ -1770,8 +1802,14 @@ static int cmd_revert_main(int argc, char **argv) {
             fprintf(stderr, "Error parsing file specification: ");
             error_print(err, stderr);
             error_free(err);
-            return 1;
+            ret = 1;
+            goto cleanup;
         }
+
+        /* Track allocations for cleanup */
+        allocated_profile = profile;
+        allocated_file = file;
+        allocated_commit = commit;
 
         if (profile) {
             opts.profile = profile;
@@ -1799,8 +1837,14 @@ static int cmd_revert_main(int argc, char **argv) {
                 fprintf(stderr, "Error parsing file specification: ");
                 error_print(err, stderr);
                 error_free(err);
-                return 1;
+                ret = 1;
+                goto cleanup;
             }
+
+            /* Track allocations for cleanup */
+            allocated_profile = profile;
+            allocated_file = file;
+            allocated_commit = commit;
 
             /* Profile from refspec overrides positional if present */
             if (profile) {
@@ -1822,7 +1866,8 @@ static int cmd_revert_main(int argc, char **argv) {
     /* Validate required fields */
     if (!opts.file_path) {
         fprintf(stderr, "Error: file path is required\n");
-        return 1;
+        ret = 1;
+        goto cleanup;
     }
 
     if (!opts.commit) {
@@ -1835,7 +1880,8 @@ static int cmd_revert_main(int argc, char **argv) {
         fprintf(stderr, "  %s revert home/.bashrc@HEAD~1\n", argv[0]);
         fprintf(stderr, "  %s revert darwin home/.bashrc@a4f2c8e\n", argv[0]);
         fprintf(stderr, "  %s revert darwin home/.bashrc HEAD~1\n", argv[0]);
-        return 1;
+        ret = 1;
+        goto cleanup;
     }
 
     /* Open resolved repository */
@@ -1844,7 +1890,8 @@ static int cmd_revert_main(int argc, char **argv) {
     if (err) {
         error_print(err, stderr);
         error_free(err);
-        return 1;
+        ret = 1;
+        goto cleanup;
     }
 
     /* Execute command */
@@ -1854,10 +1901,17 @@ static int cmd_revert_main(int argc, char **argv) {
     if (err) {
         error_print(err, stderr);
         error_free(err);
-        return 1;
+        ret = 1;
+        goto cleanup;
     }
 
-    return 0;
+    ret = 0;
+
+cleanup:
+    free(allocated_profile);
+    free(allocated_file);
+    free(allocated_commit);
+    return ret;
 }
 
 /**

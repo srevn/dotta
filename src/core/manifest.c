@@ -492,7 +492,7 @@ static error_t *sync_entry_to_state(
 
     /* 3. Extract file type and mode from Git tree entry (authoritative source) */
     state_file_type_t file_type;
-    mode_t git_mode;
+    mode_t git_mode = 0;
 
     err = extract_file_metadata_from_tree_entry(
         manifest_entry->entry,
@@ -596,6 +596,12 @@ error_t *manifest_enable_profile(
                          &manifest, &profiles);
     if (err) {
         return error_wrap(err, "Failed to build manifest for profile sync");
+    }
+
+    /* Defensive: build_manifest should always set outputs on success */
+    if (!manifest || !profiles) {
+        err = ERROR(ERR_INTERNAL, "build_manifest succeeded but returned NULL outputs");
+        goto cleanup;
     }
 
     /* 3. Load merged metadata from all profiles */
@@ -1408,6 +1414,12 @@ error_t *manifest_remove_files(
         return error_wrap(err, "Failed to build manifest for fallback detection");
     }
 
+    /* Defensive: build_manifest should always set outputs on success */
+    if (!fresh_manifest || !profiles) {
+        err = ERROR(ERR_INTERNAL, "build_manifest succeeded but returned NULL outputs");
+        goto cleanup;
+    }
+
     /* 2. Build profile→oid map (profile_name → git_oid string) for fast lookups */
     err = build_profile_oid_map(repo, profiles, &profile_oids);
     if (err) {
@@ -1669,6 +1681,12 @@ error_t *manifest_rebuild(
         goto cleanup;
     }
 
+    /* Defensive: build_manifest should always set outputs on success */
+    if (!manifest || !profiles) {
+        err = ERROR(ERR_INTERNAL, "build_manifest succeeded but returned NULL outputs");
+        goto cleanup;
+    }
+
     /* 4. Build profile→oid map for git_oid field */
     err = build_profile_oid_map(repo, profiles, &profile_oids);
     if (err) {
@@ -1793,6 +1811,12 @@ error_t *manifest_reorder_profiles(
                          &new_manifest, &profiles);
     if (err) {
         return error_wrap(err, "Failed to build manifest for precedence update");
+    }
+
+    /* Defensive: build_manifest should always set outputs on success */
+    if (!new_manifest || !profiles) {
+        err = ERROR(ERR_INTERNAL, "build_manifest succeeded but returned NULL outputs");
+        goto cleanup;
     }
 
     /* 2. Verify new manifest has index */
@@ -2472,9 +2496,16 @@ error_t *manifest_add_files(
             continue;
         }
 
+        /* Defensive: Verify entry has source profile (should never be NULL) */
+        if (!entry->source_profile) {
+            /* Should never happen - indicates data corruption or manifest bug */
+            err = ERROR(ERR_INTERNAL, "Manifest entry '%s' has NULL source_profile",
+                       filesystem_path);
+            goto cleanup;
+        }
+
         /* Check precedence matches */
-        if (entry->source_profile &&
-            strcmp(entry->source_profile->name, profile_name) != 0) {
+        if (strcmp(entry->source_profile->name, profile_name) != 0) {
             /* Different profile won precedence - skip this file
              * (higher precedence profile owns it) */
             continue;

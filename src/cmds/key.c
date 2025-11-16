@@ -89,7 +89,7 @@ static error_t *cmd_key_set(
     if (config->session_timeout == 0) {
         printf("✓ Passphrase set (will be prompted on each use)\n");
     } else if (config->session_timeout > 0) {
-        printf("✓ Passphrase cached for %u seconds\n", config->session_timeout);
+        printf("✓ Passphrase cached for %d seconds\n", config->session_timeout);
     } else {
         printf("✓ Passphrase cached (no expiration)\n");
     }

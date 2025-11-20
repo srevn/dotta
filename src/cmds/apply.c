@@ -22,6 +22,7 @@
 #include "utils/array.h"
 #include "utils/config.h"
 #include "utils/hooks.h"
+#include "utils/match.h"
 #include "utils/output.h"
 #include "utils/privilege.h"
 
@@ -651,6 +652,39 @@ static error_t *ensure_complete_apply_privileges(
 }
 
 /**
+ * Check if filesystem path should be excluded by CLI patterns
+ *
+ * Helper function for manifest filtering during convergence analysis
+ * and orphan removal. Uses gitignore-style pattern matching.
+ *
+ * @param path Filesystem path (VWD format: "home/.bashrc", "root/etc/hosts")
+ * @param opts Command options containing exclusion patterns
+ * @return true if path matches any exclusion pattern, false otherwise
+ */
+static bool matches_exclude_pattern(
+    const char *path,
+    const cmd_apply_options_t *opts
+) {
+    if (!path || !opts->exclude_patterns || opts->exclude_count == 0) {
+        return false;
+    }
+
+    /* Use match module for gitignore-style pattern matching
+     *
+     * MATCH_DOUBLESTAR enables doublestar recursive wildcards:
+     *   home/.config/doublestar         → matches all descendants
+     *   *.conf                          → matches any .conf file
+     *   home/.*                         → matches dotfiles in home/
+     */
+    return match_any(
+        opts->exclude_patterns,
+        opts->exclude_count,
+        path,
+        MATCH_DOUBLESTAR  /* Enable doublestar support */
+    );
+}
+
+/**
  * Check if file needs deployment
  *
  * Determines whether a file requires deployment based on workspace analysis.
@@ -903,9 +937,11 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
      */
     output_print(out, OUTPUT_VERBOSE, "\nAnalyzing files for convergence...\n");
 
-    /* Pass 1: Count divergent and clean files (with operation filter) */
+    /* Pass 1: Count divergent and clean files (with filters) */
     size_t divergent_count = 0;
     size_t clean_count = 0;
+    size_t excluded_deploy_count = 0;  /* Track deployment exclusions */
+    size_t excluded_orphan_count = 0;  /* Track orphan exclusions */
 
     for (size_t i = 0; i < manifest->count; i++) {
         const file_entry_t *entry = &manifest->entries[i];
@@ -913,6 +949,12 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         /* Filter by operation profiles (skip files not in filter) */
         if (entry->source_profile &&
             !profile_filter_matches(entry->source_profile->name, operation_profiles)) {
+            continue;
+        }
+
+        /* Filter by exclusion pattern (skip excluded files) */
+        if (matches_exclude_pattern(entry->filesystem_path, opts)) {
+            excluded_deploy_count++;
             continue;
         }
 
@@ -950,13 +992,24 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             goto cleanup;
         }
 
-        /* Populate with files that need deployment (with operation filter) */
+        /* Populate with files that need deployment (with filters) */
         for (size_t i = 0; i < manifest->count; i++) {
             const file_entry_t *entry = &manifest->entries[i];
 
             /* Filter by operation profiles (skip files not in filter) */
             if (entry->source_profile &&
                 !profile_filter_matches(entry->source_profile->name, operation_profiles)) {
+                continue;
+            }
+
+            /* Filter by exclusion pattern (skip excluded files) */
+            if (matches_exclude_pattern(entry->filesystem_path, opts)) {
+                /* Already counted in Pass 1, just skip */
+                if (opts->verbose) {
+                    output_print(out, OUTPUT_VERBOSE,
+                                "  Skipping (excluded): %s\n",
+                                entry->filesystem_path);
+                }
                 continue;
             }
 
@@ -1044,12 +1097,23 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         size_t all_diverged_count = 0;
         const workspace_item_t *all_diverged = workspace_get_all_diverged(ws, &all_diverged_count);
 
-        /* First pass: count orphaned files vs directories */
+        /* First pass: count orphaned files vs directories (with exclusion filter) */
         for (size_t i = 0; i < all_diverged_count; i++) {
             const workspace_item_t *item = &all_diverged[i];
 
             if (item->state == WORKSPACE_STATE_ORPHANED) {
-                /* Count all orphans unconditionally (VWD authority) */
+                /* Check exclusion pattern before counting */
+                if (matches_exclude_pattern(item->filesystem_path, opts)) {
+                    excluded_orphan_count++;
+                    if (opts->verbose) {
+                        output_print(out, OUTPUT_VERBOSE,
+                                    "  Preserving orphan (excluded): %s\n",
+                                    item->filesystem_path);
+                    }
+                    continue;
+                }
+
+                /* Count non-excluded orphans */
                 if (item->item_kind == WORKSPACE_ITEM_FILE) {
                     file_orphan_count++;
                 } else {
@@ -1066,14 +1130,18 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                 goto cleanup;
             }
 
-            /* Second pass: populate file orphans array (unconditional) */
+            /* Second pass: populate file orphans array (with exclusion filter) */
             size_t f_idx = 0;
             for (size_t i = 0; i < all_diverged_count; i++) {
                 const workspace_item_t *item = &all_diverged[i];
 
                 if (item->state == WORKSPACE_STATE_ORPHANED &&
                     item->item_kind == WORKSPACE_ITEM_FILE) {
-                    /* Extract all orphans unconditionally (VWD authority) */
+                    /* Apply same exclusion filter as Pass 1 */
+                    if (matches_exclude_pattern(item->filesystem_path, opts)) {
+                        continue;  /* Skip excluded orphans (preserve) */
+                    }
+
                     file_orphans[f_idx++] = item;
                 }
             }
@@ -1088,14 +1156,18 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                 goto cleanup;
             }
 
-            /* Second pass: populate directory orphans array (unconditional) */
+            /* Second pass: populate directory orphans array (with exclusion filter) */
             size_t d_idx = 0;
             for (size_t i = 0; i < all_diverged_count; i++) {
                 const workspace_item_t *item = &all_diverged[i];
 
                 if (item->state == WORKSPACE_STATE_ORPHANED &&
                     item->item_kind == WORKSPACE_ITEM_DIRECTORY) {
-                    /* Extract all orphans unconditionally (VWD authority) */
+                    /* Apply same exclusion filter as Pass 1 */
+                    if (matches_exclude_pattern(item->filesystem_path, opts)) {
+                        continue;  /* Skip excluded orphans (preserve) */
+                    }
+
                     dir_orphans[d_idx++] = item;
                 }
             }
@@ -1247,7 +1319,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         .skip_unchanged = opts->skip_unchanged
     };
 
-    err = deploy_preflight_check_from_workspace(ws, manifest, &deploy_opts, &preflight);
+    err = deploy_preflight_check_from_workspace(ws, deploy_manifest, &deploy_opts, &preflight);
     if (err) {
         err = error_wrap(err, "Pre-flight checks failed");
         goto cleanup;
@@ -1427,6 +1499,45 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
 
         print_deploy_results(out, deploy_res, opts->verbose);
+
+        /* Report exclusion statistics */
+        size_t total_excluded = excluded_deploy_count + excluded_orphan_count;
+        if (total_excluded > 0) {
+            if (opts->verbose) {
+                /* Detailed breakdown */
+                output_printf(out, OUTPUT_NORMAL,
+                             "Skipped %zu file%s (--exclude patterns):\n",
+                             total_excluded,
+                             total_excluded == 1 ? "" : "s");
+                if (excluded_deploy_count > 0) {
+                    output_printf(out, OUTPUT_NORMAL,
+                                 "  • %zu divergent file%s not deployed\n",
+                                 excluded_deploy_count,
+                                 excluded_deploy_count == 1 ? "" : "s");
+                }
+                if (excluded_orphan_count > 0) {
+                    output_printf(out, OUTPUT_NORMAL,
+                                 "  • %zu orphaned file%s not removed\n",
+                                 excluded_orphan_count,
+                                 excluded_orphan_count == 1 ? "" : "s");
+                }
+            } else {
+                /* Simple summary */
+                if (output_colors_enabled(out)) {
+                    output_printf(out, OUTPUT_NORMAL,
+                                 "Skipped %s%zu%s file%s (--exclude patterns)\n",
+                                 output_color_code(out, OUTPUT_COLOR_CYAN),
+                                 total_excluded,
+                                 output_color_code(out, OUTPUT_COLOR_RESET),
+                                 total_excluded == 1 ? "" : "s");
+                } else {
+                    output_printf(out, OUTPUT_NORMAL,
+                                 "Skipped %zu file%s (--exclude patterns)\n",
+                                 total_excluded,
+                                 total_excluded == 1 ? "" : "s");
+                }
+            }
+        }
 
         /* Free deploy_manifest after successful deployment */
         free(deploy_manifest->entries);

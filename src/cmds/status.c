@@ -208,10 +208,13 @@ static void display_workspace_status(
                 }
             }
 
+            /* Add spacing between status message and section lists */
+            if (all_count > 0) {
+                output_newline(out);
+            }
+
             /* Section 1: Uncommitted Changes */
             if (uncommitted_count > 0) {
-                output_newline(out);
-
                 output_list_t *list = output_list_create(out,
                     "Uncommitted changes",
                     "use \"dotta update\" to commit these changes");

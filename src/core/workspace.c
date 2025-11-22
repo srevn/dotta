@@ -44,9 +44,6 @@
 #include "utils/privilege.h"
 #include "utils/string.h"
 
-/* Maximum file size for orphan divergence checking */
-#define MAX_ORPHAN_DIVERGENCE_CHECK_SIZE (100 * 1024 * 1024)  /* 100MB */
-
 /**
  * Merged metadata entry (internal structure)
  *

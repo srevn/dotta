@@ -712,13 +712,13 @@ error_t *deploy_execute(
         bool should_skip = false;
         const char *skip_reason = NULL;
 
-        /* Use Case 2: Skip existing files if requested */
+        /* Skip existing files if requested */
         if (opts->skip_existing && fs_exists(entry->filesystem_path) && !opts->force) {
             should_skip = true;
             skip_reason = "exists";
         }
 
-        /* Use Case 1: Smart skip - file already up-to-date
+        /* Smart skip - file already up-to-date
          *
          * Architecture: Query workspace for pre-computed divergence instead of
          * re-analyzing. The workspace already performed full content comparison
@@ -738,25 +738,38 @@ error_t *deploy_execute(
             /* Query workspace for pre-computed divergence (O(1) hashmap lookup) */
             const workspace_item_t *ws_item = workspace_get_item(ws, entry->filesystem_path);
 
-            /* Case 1: The workspace found NO divergence. The file is CLEAN.
-             * CLEAN items are not stored in the divergence index, so ws_item is NULL. */
+            /* The workspace found NO divergence. The file is CLEAN.
+             * CLEAN items are not stored in the divergence index, so ws_item is NULL.
+             *
+             * CLEAN files can be in two states:
+             * 1. Adoption: File exists with correct content but dotta never tracked it (deployed_at = 0)
+             * 2. Already tracked: File previously deployed/acknowledged by dotta (deployed_at > 0)
+             */
             if (ws_item == NULL) {
-                should_skip = true;
-                skip_reason = "unchanged";
+                /* Check VWD cache to distinguish adoption from already-tracked */
+                if (entry->deployed_at == 0) {
+                    /* ADOPTION: File exists with correct content but never tracked by dotta.
+                     *
+                     * Skip deployment (file is already correct on filesystem), but
+                     * signal to apply.c that state update is needed to acknowledge file.
+                     *
+                     * This typically happens when:
+                     * - User manually created file before enabling profile
+                     * - Content happens to match Git
+                     * - File needs dotta's acknowledgment (deployed_at = now)
+                     */
+                    should_skip = true;
+                    skip_reason = "adopted";
+                } else {
+                    /* ALREADY TRACKED: File was previously deployed/acknowledged.
+                     *
+                     * Skip deployment (file already correct), no state update needed.
+                     * The deployed_at timestamp is already set from previous apply.
+                     */
+                    should_skip = true;
+                    skip_reason = "unchanged";
+                }
             }
-            /* Case 2 (Optimization): The file is UNDEPLOYED but already exists on disk
-             * with the correct content. We can safely skip the initial deployment. */
-            else if (ws_item->state == WORKSPACE_STATE_UNDEPLOYED &&
-                     ws_item->on_filesystem &&
-                     !(ws_item->divergence & DIVERGENCE_CONTENT)) {
-                should_skip = true;
-                skip_reason = "unchanged";
-            }
-            /* All other cases (DEPLOYED with divergence, DELETED, etc.) will
-             * result in ws_item being non-NULL and the conditions above being false,
-             * correctly leading to a deployment. This ensures metadata divergence
-             * (mode, ownership) is always fixed by redeploying with correct
-             * permissions/ownership atomically. */
         }
 
         if (should_skip) {
@@ -765,7 +778,12 @@ error_t *deploy_execute(
             string_array_push(result->skipped_reasons, skip_reason);
             result->skipped_count++;
             if (opts->verbose) {
-                printf("Skipped: %s (%s)\n", entry->filesystem_path, skip_reason);
+                /* Distinguish adoption from other skip reasons in output */
+                if (strcmp(skip_reason, "adopted") == 0) {
+                    printf("Adopted: %s (already correct on filesystem)\n", entry->filesystem_path);
+                } else {
+                    printf("Skipped: %s (%s)\n", entry->filesystem_path, skip_reason);
+                }
             }
             continue;
         }

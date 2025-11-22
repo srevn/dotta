@@ -29,6 +29,12 @@
 #include "infra/content.h"
 #include "utils/output.h"
 
+/* Maximum number of display tags that can be extracted from a workspace item */
+#define WORKSPACE_ITEM_MAX_DISPLAY_TAGS 5
+
+/* Maximum file size for orphan divergence checking */
+#define MAX_ORPHAN_DIVERGENCE_CHECK_SIZE (100 * 1024 * 1024)  /* 100MB */
+
 /**
  * Diverged item entry
  *
@@ -77,11 +83,6 @@ typedef struct {
     bool profile_enabled;       /* Is source profile in workspace's enabled list? */
     bool profile_changed;       /* Profile differs from state (ownership changed) */
 } workspace_item_t;
-
-/**
- * Maximum number of display tags that can be extracted from a workspace item
- */
-#define WORKSPACE_ITEM_MAX_DISPLAY_TAGS 5
 
 /**
  * Workspace structure (opaque)

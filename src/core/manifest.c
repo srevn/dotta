@@ -27,7 +27,6 @@
 #include "core/state.h"
 #include "infra/path.h"
 #include "utils/array.h"
-#include "utils/config.h"
 #include "utils/hashmap.h"
 #include "utils/string.h"
 
@@ -570,8 +569,6 @@ error_t *manifest_enable_profile(
     manifest_t *manifest = NULL;
     profile_list_t *profiles = NULL;
     metadata_t *metadata = NULL;
-    keymanager_t *km = NULL;
-    dotta_config_t *config = NULL;
     git_oid head_oid;
     char head_oid_str[GIT_OID_HEXSZ + 1];
 
@@ -615,18 +612,7 @@ error_t *manifest_enable_profile(
         err = NULL;
     }
 
-    /* 4. Create keymanager for content hashing */
-    err = config_load(NULL, &config);
-    if (err) {
-        goto cleanup;
-    }
-
-    err = keymanager_create(config, &km);
-    if (err) {
-        goto cleanup;
-    }
-
-    /* 5. Sync entries owned by this profile (highest precedence) */
+    /* 4. Sync entries owned by this profile (highest precedence) */
 
     /* Track counts for user feedback */
     size_t total_files = 0;
@@ -745,7 +731,7 @@ error_t *manifest_enable_profile(
         out_stats->needs_deployment = needs_deployment;
     }
 
-    /* 6. Sync tracked directories */
+    /* 5. Sync tracked directories */
     err = manifest_sync_directories(repo, state, enabled_profiles);
     if (err) {
         goto cleanup;
@@ -753,8 +739,6 @@ error_t *manifest_enable_profile(
 
 cleanup:
     if (profiles) profile_list_free(profiles);
-    if (km) keymanager_free(km);
-    if (config) config_free(config);
     if (metadata) metadata_free(metadata);
     if (manifest) manifest_free(manifest);
 
@@ -1608,9 +1592,8 @@ cleanup:
  *   2. Build manifest ONCE from all enabled profiles (precedence oracle)
  *   3. Build profile→oid map for git_oid field
  *   4. Load merged metadata from all profiles
- *   5. Create keymanager for content hashing
- *   6. Sync ALL entries from manifest to state (single pass, no filtering)
- *   7. Sync tracked directories
+ *   5. Sync ALL entries from manifest to state (single pass, no filtering)
+ *   6. Sync tracked directories
  *
  * Performance: O(M) where M = total files across all enabled profiles
  *
@@ -1635,8 +1618,6 @@ error_t *manifest_rebuild(
     hashmap_t *old_map = NULL;
     hashmap_t *profile_oids = NULL;
     metadata_t *metadata = NULL;
-    keymanager_t *km = NULL;
-    dotta_config_t *config = NULL;
 
     /* 1. Snapshot existing entries BEFORE clearing (for deployed_at preservation) */
     err = state_get_all_files(state, &old_entries, &old_count);
@@ -1705,18 +1686,7 @@ error_t *manifest_rebuild(
         err = NULL;
     }
 
-    /* 6. Create keymanager for content hashing */
-    err = config_load(NULL, &config);
-    if (err) {
-        goto cleanup;
-    }
-
-    err = keymanager_create(config, &km);
-    if (err) {
-        goto cleanup;
-    }
-
-    /* 7. Sync ALL entries from manifest to state (single pass, no filtering)
+    /* 6. Sync ALL entries from manifest to state (single pass, no filtering)
      *
      * Key difference from manifest_enable_profile: We sync ALL entries because
      * the state is empty (cleared in step 1). No filtering needed - every file
@@ -1758,7 +1728,7 @@ error_t *manifest_rebuild(
         }
     }
 
-    /* 8. Sync tracked directories */
+    /* 7. Sync tracked directories */
     err = manifest_sync_directories(repo, state, enabled_profiles);
     if (err) {
         goto cleanup;
@@ -1769,8 +1739,6 @@ cleanup:
     state_free_all_files(old_entries, old_count);
     if (profile_oids) hashmap_free(profile_oids, free);
     if (profiles) profile_list_free(profiles);
-    if (km) keymanager_free(km);
-    if (config) config_free(config);
     if (metadata) metadata_free(metadata);
     if (manifest) manifest_free(manifest);
 
@@ -1803,8 +1771,6 @@ error_t *manifest_reorder_profiles(
     hashmap_t *old_map = NULL;
     hashmap_t *profile_oids = NULL;
     metadata_t *metadata = NULL;
-    keymanager_t *km = NULL;
-    dotta_config_t *config = NULL;
 
     /* 1. Build new manifest with new precedence order (precedence oracle) */
     err = build_manifest(repo, state, new_profile_order, NULL, NULL,
@@ -1846,7 +1812,7 @@ error_t *manifest_reorder_profiles(
         }
     }
 
-    /* 4. Load metadata and keymanager (needed for content hash computation) */
+    /* 4. Load metadata and build profile→oid map */
     err = metadata_load_from_profiles(repo, new_profile_order, &metadata);
     if (err && err->code != ERR_NOT_FOUND) {
         goto cleanup;
@@ -1856,17 +1822,6 @@ error_t *manifest_reorder_profiles(
         err = NULL;
     }
 
-    err = config_load(NULL, &config);
-    if (err) {
-        goto cleanup;
-    }
-
-    err = keymanager_create(config, &km);
-    if (err) {
-        goto cleanup;
-    }
-
-    /* Build profile→oid map for O(1) lookups in reorder processing */
     err = build_profile_oid_map(repo, profiles, &profile_oids);
     if (err) {
         err = error_wrap(err, "Failed to build profile OID map");
@@ -1959,8 +1914,6 @@ cleanup:
     if (profile_oids) hashmap_free(profile_oids, free);
     if (old_map) hashmap_free(old_map, NULL);
     if (profiles) profile_list_free(profiles);
-    if (km) keymanager_free(km);
-    if (config) config_free(config);
     if (metadata) metadata_free(metadata);
     state_free_all_files(old_entries, old_count);
     if (new_manifest) manifest_free(new_manifest);
@@ -2013,7 +1966,6 @@ cleanup:
  * @param items Array of workspace items to sync (must not be NULL)
  * @param item_count Number of items
  * @param enabled_profiles All enabled profiles (must not be NULL)
- * @param km Keymanager for content hashing (can be NULL if no encryption)
  * @param metadata_cache Hashmap: profile_name → metadata_t* (must not be NULL)
  * @param out_synced Output: count of files synced (must not be NULL)
  * @param out_removed Output: count of files removed (must not be NULL)
@@ -2382,7 +2334,6 @@ cleanup:
  * @param profile_name Profile files were added to (must not be NULL)
  * @param filesystem_paths Array of filesystem paths (must not be NULL)
  * @param enabled_profiles All enabled profiles (must not be NULL)
- * @param km Keymanager for content hashing (can be NULL if no encryption)
  * @param metadata_cache Hashmap: profile_name → metadata_t* (must not be NULL)
  * @param out_synced Output: count of files synced (must not be NULL)
  * @return Error or NULL on success
@@ -2578,7 +2529,7 @@ cleanup:
  *     - Build fresh manifest from current Git state (post-sync)
  *     - Create hashmap index for O(1) file lookups
  *     - Build profile→oid map
- *     - Load or use cached metadata and keymanager
+ *     - Load or use cached metadata
  *
  *   Phase 2: Compute Diff
  *     - Lookup old and new trees
@@ -2607,7 +2558,6 @@ cleanup:
  * @param old_oid Old commit before sync (must not be NULL)
  * @param new_oid New commit after sync (must not be NULL)
  * @param enabled_profiles All enabled profiles for precedence (must not be NULL)
- * @param km Keymanager for content hashing (can be NULL, will create if needed)
  * @param metadata_cache Pre-loaded metadata (can be NULL, will load if needed)
  * @param out_synced Output: number of files synced (can be NULL)
  * @param out_removed Output: number of files removed (can be NULL)
@@ -2640,8 +2590,6 @@ error_t *manifest_sync_diff(
     manifest_t *fresh_manifest = NULL;
     hashmap_t *profile_oids = NULL;
     metadata_t *metadata_merged = NULL;
-    keymanager_t *km_owned = NULL;
-    dotta_config_t *config = NULL;
     git_commit *old_commit = NULL;
     git_commit *new_commit = NULL;
     git_tree *old_tree = NULL;
@@ -2719,19 +2667,6 @@ error_t *manifest_sync_diff(
                 goto cleanup;
             }
         }
-    }
-
-    /* 1.6. Create keymanager */
-    err = config_load(NULL, &config);
-    if (err) {
-        err = error_wrap(err, "Failed to create config");
-        goto cleanup;
-    }
-
-    err = keymanager_create(config, &km_owned);
-    if (err) {
-        err = error_wrap(err, "Failed to create keymanager");
-        goto cleanup;
     }
 
     /* PHASE 2: COMPUTE DIFF (O(D)) */
@@ -3031,8 +2966,6 @@ cleanup:
     if (old_tree) git_tree_free(old_tree);
     if (new_commit) git_commit_free(new_commit);
     if (old_commit) git_commit_free(old_commit);
-    if (config) config_free(config);
-    if (km_owned) keymanager_free(km_owned);
     if (metadata_merged) metadata_free(metadata_merged);
     if (profile_oids) hashmap_free(profile_oids, free);
     if (fresh_manifest) manifest_free(fresh_manifest);

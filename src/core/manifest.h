@@ -65,7 +65,7 @@ typedef struct {
  *   4. Build manifest from all enabled profiles with prefix context (precedence oracle)
  *   5. Load merged metadata from all profiles
  *   6. For each file owned by this profile (highest precedence):
- *      - Compute content hash
+ *      - Extract blob OID from Git tree entry (content identity)
  *      - Extract metadata
  *      - Insert/update manifest entry
  *
@@ -356,9 +356,8 @@ error_t *manifest_remove_files(
  *   2. Build manifest ONCE from all enabled profiles (precedence oracle)
  *   3. Build profile→oid map for git_oid field
  *   4. Load merged metadata from all profiles
- *   5. Create keymanager for content hashing
- *   6. Sync ALL entries from manifest to state (single pass, no filtering)
- *   7. Sync tracked directories
+ *   5. Sync ALL entries from manifest to state (single pass, no filtering)
+ *   6. Sync tracked directories
  *
  * Key optimization: Builds manifest once and syncs all entries directly,
  * rather than calling manifest_enable_profile() N times (which would rebuild
@@ -465,7 +464,7 @@ error_t *manifest_reorder_profiles(
  *     - Build fresh manifest from current Git state (post-sync)
  *     - Use transferred index for O(1) file lookups
  *     - Build profile→oid map
- *     - Load or use cached metadata and keymanager
+ *     - Load or use cached metadata
  *
  *   Phase 2: Compute Diff (O(D))
  *     - Lookup old and new trees

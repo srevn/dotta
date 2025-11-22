@@ -115,6 +115,44 @@ error_t *profile_load_tree(git_repository *repo, profile_t *profile) {
     return gitops_load_tree(repo, refname, &profile->tree);
 }
 
+error_t *file_entry_ensure_tree_entry(
+    file_entry_t *entry,
+    git_repository *repo
+) {
+    CHECK_NULL(entry);
+    CHECK_NULL(repo);
+    CHECK_NULL(entry->source_profile);
+    CHECK_NULL(entry->storage_path);
+
+    /* Idempotent: already loaded */
+    if (entry->entry) {
+        return NULL;
+    }
+
+    /* Load profile tree (cached in profile structure) */
+    error_t *err = profile_load_tree(repo, entry->source_profile);
+    if (err) {
+        return error_wrap(err, "Failed to load tree for profile '%s'",
+                          entry->source_profile->name);
+    }
+
+    /* Lookup tree entry from Git (creates owned reference) */
+    int git_err = git_tree_entry_bypath(&entry->entry,
+                                         entry->source_profile->tree,
+                                         entry->storage_path);
+    if (git_err != 0) {
+        if (git_err == GIT_ENOTFOUND) {
+            return ERROR(ERR_NOT_FOUND, "File '%s' not found in profile '%s' Git tree",
+                         entry->storage_path, entry->source_profile->name);
+        }
+        err = error_from_git(git_err);
+        return error_wrap(err, "Failed to lookup tree entry for '%s' in profile '%s'",
+                          entry->storage_path, entry->source_profile->name);
+    }
+
+    return NULL;
+}
+
 /**
  * Helper: Add profiles from array to list as auto-detected
  */

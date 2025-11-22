@@ -187,6 +187,7 @@ static error_t *show_file_diff_from_workspace(
     const workspace_item_t *item,
     const file_entry_t *entry,
     content_cache_t *cache,
+    git_repository *repo,
     diff_direction_t direction,
     const cmd_diff_options_t *opts,
     output_ctx_t *out
@@ -194,6 +195,7 @@ static error_t *show_file_diff_from_workspace(
     CHECK_NULL(item);
     CHECK_NULL(entry);
     CHECK_NULL(cache);
+    CHECK_NULL(repo);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
@@ -285,9 +287,18 @@ static error_t *show_file_diff_from_workspace(
         return NULL;
     }
 
+    /* Lazy-load tree entry for content and mode access.
+     * Note: Placed after early returns (name-only, missing files, mode-only)
+     * to avoid unnecessary Git operations when tree entry not needed. */
+    error_t *err = file_entry_ensure_tree_entry((file_entry_t *)entry, repo);
+    if (err) {
+        return error_wrap(err, "Failed to load tree entry for '%s'",
+                          item->filesystem_path);
+    }
+
     /* Get content from cache (borrowed reference - don't free) */
     const buffer_t *content = NULL;
-    error_t *err = content_cache_get_from_tree_entry(
+    err = content_cache_get_from_tree_entry(
         cache, entry->entry, entry->storage_path,
         entry->source_profile->name, entry->encrypted,
         &content
@@ -378,6 +389,7 @@ static error_t *present_diffs_for_direction(
     size_t diverged_count,
     const manifest_t *manifest,
     content_cache_t *content_cache,
+    git_repository *repo,
     diff_direction_t direction,
     const cmd_diff_options_t *opts,
     output_ctx_t *out,
@@ -386,6 +398,7 @@ static error_t *present_diffs_for_direction(
     CHECK_NULL(diverged);
     CHECK_NULL(manifest);
     CHECK_NULL(content_cache);
+    CHECK_NULL(repo);
     CHECK_NULL(opts);
     CHECK_NULL(out);
     CHECK_NULL(diff_count);
@@ -439,7 +452,7 @@ static error_t *present_diffs_for_direction(
 
         /* Show the diff (content already analyzed by workspace) */
         err = show_file_diff_from_workspace(
-            item, entry, content_cache, direction, opts, out
+            item, entry, content_cache, repo, direction, opts, out
         );
         if (err) {
             return err;
@@ -1262,7 +1275,7 @@ static error_t *diff_workspace(
 
         err = present_diffs_for_direction(
             diverged, diverged_count,
-            manifest, cache,
+            manifest, cache, repo,
             DIFF_UPSTREAM, opts, out,
             &upstream_count
         );
@@ -1279,7 +1292,7 @@ static error_t *diff_workspace(
 
         err = present_diffs_for_direction(
             diverged, diverged_count,
-            manifest, cache,
+            manifest, cache, repo,
             DIFF_DOWNSTREAM, opts, out,
             &downstream_count
         );
@@ -1295,7 +1308,7 @@ static error_t *diff_workspace(
         /* Single direction */
         err = present_diffs_for_direction(
             diverged, diverged_count,
-            manifest, cache,
+            manifest, cache, repo,
             opts->direction, opts, out,
             &total_diff_count
         );

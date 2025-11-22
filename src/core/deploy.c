@@ -279,6 +279,13 @@ error_t *deploy_file(
         return NULL;
     }
 
+    /* Lazy-load tree entry for blob content and file mode */
+    err = file_entry_ensure_tree_entry((file_entry_t *)entry, repo);
+    if (err) {
+        return error_wrap(err, "Failed to load tree entry for '%s'",
+                          entry->filesystem_path);
+    }
+
     /* Get file mode from tree entry */
     git_filemode_t mode = git_tree_entry_filemode(entry->entry);
     git_object_t type = git_tree_entry_type(entry->entry);

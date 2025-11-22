@@ -1410,6 +1410,16 @@ static error_t *analyze_encryption_policy_mismatch(
         /* Validate actual encryption state using two-tier validation */
         bool is_encrypted = false;
 
+        /* Lazy-load tree entry for encryption magic header check */
+        err = file_entry_ensure_tree_entry((file_entry_t *)manifest_entry, ws->repo);
+        if (err) {
+            /* Non-fatal: encryption analysis is advisory, skip if unavailable */
+            fprintf(stderr, "warning: failed to load tree entry for '%s' in profile '%s': %s\n",
+                    storage_path, profile_name, err->message ? err->message : "unknown error");
+            error_free(err);
+            continue;
+        }
+
         /* Tier 1: Check magic header in blob (source of truth) */
         const git_oid *blob_oid = git_tree_entry_id(manifest_entry->entry);
         git_blob *blob = NULL;
@@ -1537,13 +1547,12 @@ static error_t *analyze_encryption_policy_mismatch(
  *
  * This is the core of the Virtual Working Directory architecture - we read
  * the expected state cache (manifest table) instead of walking Git trees. This makes
- * status operations O(M) where M = entries in manifest, not O(N) where N =
- * all files across all enabled profiles.
+ * status operations O(M × DB) where M = entries in manifest.
  *
  * Files from profiles not in the workspace scope are filtered out with a warning.
  * This can happen if a profile is disabled but manifest still has orphaned entries.
  *
- * Performance: O(M) where M = entries in manifest table (typically much smaller than Git)
+ * Performance: O(M × DB) where M = entries in manifest table
  *
  * @param ws Workspace (must not be NULL, state must be loaded)
  * @return Error or NULL on success
@@ -1599,12 +1608,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
     for (size_t i = 0; i < state_count; i++) {
         const state_file_entry_t *state_entry = &state_entries[i];
         file_entry_t *entry = &ws->manifest->entries[manifest_idx];
-
-        /* Defensive: Local buffers for error messages.
-         * Save entry fields BEFORE freeing manifest in error paths, since
-         * entry points into ws->manifest->entries array which gets freed. */
-        char error_profile_name[256] = {0};
-        char error_storage_path[PATH_MAX] = {0};
 
         /* Find profile in workspace's profile list (O(1) hashmap lookup) */
         entry->source_profile = hashmap_get(ws->profile_index, state_entry->profile);
@@ -1726,118 +1729,12 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             return ERROR(ERR_MEMORY, "Failed to allocate VWD cache fields");
         }
 
-        /* Load profile tree (lazy-loaded, cached in profile structure) */
-        err = profile_load_tree(ws->repo, entry->source_profile);
-        if (err) {
-            /* Save data for error message BEFORE freeing manifest */
-            snprintf(error_profile_name, sizeof(error_profile_name), "%s",
-                    entry->source_profile->name);
-
-            /* Cleanup allocated fields for current entry */
-            free(entry->storage_path);
-            free(entry->filesystem_path);
-            free(entry->git_oid);
-            free(entry->blob_oid);
-            free(entry->owner);
-            free(entry->group);
-
-            /* Free previously allocated entries */
-            for (size_t j = 0; j < manifest_idx; j++) {
-                free(ws->manifest->entries[j].storage_path);
-                free(ws->manifest->entries[j].filesystem_path);
-                free(ws->manifest->entries[j].old_profile);
-                free(ws->manifest->entries[j].git_oid);
-                free(ws->manifest->entries[j].blob_oid);
-                free(ws->manifest->entries[j].owner);
-                free(ws->manifest->entries[j].group);
-                if (ws->manifest->entries[j].entry) {
-                    git_tree_entry_free(ws->manifest->entries[j].entry);
-                }
-            }
-            hashmap_free(path_map, NULL);
-            free(ws->manifest->entries);
-            free(ws->manifest);
-            ws->manifest = NULL;
-            state_free_all_files(state_entries, state_count);
-            return error_wrap(err, "Failed to load tree for profile '%s'",
-                            error_profile_name);
-        }
-
-        /* Lookup tree entry from Git (creates owned reference) */
-        int git_err = git_tree_entry_bypath(&entry->entry,
-                                             entry->source_profile->tree,
-                                             entry->storage_path);
-        if (git_err != 0) {
-            if (git_err == GIT_ENOTFOUND) {
-                /* UNEXPECTED INCONSISTENCY!
-                 *
-                 * Entry is marked 'active' (state=%s), meaning the manifest layer
-                 * believes it should exist in Git. But Git lookup failed - this indicates:
-                 *   - External Git modification (git rm, filter-repo, etc.)
-                 *   - Repository corruption
-                 *   - Bug in manifest layer
-                 *
-                 * Emit warning and skip. Orphan detection will mark it for removal.
-                 * We do NOT mark as inactive here - let user see it in status
-                 * before removal, and keep state transitions explicit.
-                 */
-                fprintf(stderr,
-                    "warning: expected '%s' in profile '%s' (state=active, git_oid=%s)\n"
-                    "         but file missing from Git tree. Possible external modification.\n"
-                    "         Run 'dotta status' to see orphaned files, 'dotta apply' to clean up.\n",
-                    entry->filesystem_path, entry->source_profile->name,
-                    state_entry->git_oid ? state_entry->git_oid : "(null)");
-
-                /* Free allocated fields and skip this entry */
-                free(entry->storage_path);
-                free(entry->filesystem_path);
-                free(entry->old_profile);
-                free(entry->git_oid);
-                free(entry->blob_oid);
-                free(entry->owner);
-                free(entry->group);
-                continue;  /* Don't increment manifest_idx */
-            } else {
-                /* Other Git errors - propagate */
-
-                /* Save data for error message BEFORE freeing manifest */
-                snprintf(error_storage_path, sizeof(error_storage_path), "%s",
-                        entry->storage_path);
-                snprintf(error_profile_name, sizeof(error_profile_name), "%s",
-                        entry->source_profile->name);
-
-                free(entry->storage_path);
-                free(entry->filesystem_path);
-                free(entry->old_profile);
-                free(entry->git_oid);
-                free(entry->blob_oid);
-                free(entry->owner);
-                free(entry->group);
-
-                /* Free previously allocated entries */
-                for (size_t j = 0; j < manifest_idx; j++) {
-                    free(ws->manifest->entries[j].storage_path);
-                    free(ws->manifest->entries[j].filesystem_path);
-                    free(ws->manifest->entries[j].old_profile);
-                    free(ws->manifest->entries[j].git_oid);
-                    free(ws->manifest->entries[j].blob_oid);
-                    free(ws->manifest->entries[j].owner);
-                    free(ws->manifest->entries[j].group);
-                    if (ws->manifest->entries[j].entry) {
-                        git_tree_entry_free(ws->manifest->entries[j].entry);
-                    }
-                }
-                hashmap_free(path_map, NULL);
-                free(ws->manifest->entries);
-                free(ws->manifest);
-                ws->manifest = NULL;
-                state_free_all_files(state_entries, state_count);
-
-                err = error_from_git(git_err);
-                return error_wrap(err, "Failed to lookup tree entry for '%s' in profile '%s'",
-                                error_storage_path, error_profile_name);
-            }
-        }
+        /* Set tree entry to NULL - lazy-loaded on demand.
+         *
+         * VWD Architecture: Manifest built from state DB, not Git trees.
+         * Tree entries loaded when needed via file_entry_ensure_tree_entry().
+         * This achieves true O(M × DB) performance for workspace loading. */
+        entry->entry = NULL;
 
         /* all_profiles not populated (not needed for buffer-based divergence detection) */
         entry->all_profiles = NULL;

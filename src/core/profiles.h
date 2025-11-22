@@ -66,11 +66,12 @@ typedef struct {
  * - The manifest is the authoritative cache of expected state
  * - Fields are populated from state database during workspace load
  * - Enables O(1) divergence checking without N database queries
- * - For manifests built from Git (not state), VWD fields are NULL/0
+ * - Tree entries are lazy-loaded on demand (NULL until needed)
+ * - For manifests built from Git trees, tree entries are pre-populated
  *
  * Memory ownership:
  * - All string fields are owned and must be freed in manifest_free()
- * - git_tree_entry is owned and must be freed
+ * - git_tree_entry is owned and must be freed (NULL is valid, means not loaded)
  * - profile_t pointers are borrowed (except owned_profile in manifest_t)
  */
 typedef struct {
@@ -79,7 +80,7 @@ typedef struct {
     char *filesystem_path;           /* Deployed path (/home/user/.bashrc) */
 
     /* Git tree reference */
-    git_tree_entry *entry;           /* Git tree entry (owned, must free) */
+    git_tree_entry *entry;           /* Git tree entry (owned, lazy-loaded, can be NULL) */
 
     /* Profile ownership */
     profile_t *source_profile;       /* Which profile provides this file (borrowed) */
@@ -354,6 +355,35 @@ bool profile_exists(git_repository *repo, const char *name);
 error_t *profile_load_tree(
     git_repository *repo,
     profile_t *profile
+);
+
+/**
+ * Ensure tree entry is loaded for file entry (lazy load if NULL)
+ *
+ * Loads the git_tree_entry for a file entry if not already loaded.
+ * Safe to call multiple times (idempotent). Profile tree loading is
+ * cached in profile structure, so redundant calls are cheap.
+ *
+ * This enables lazy loading for manifests built from state database
+ * (VWD architecture), where tree entries are only needed for specific
+ * operations (encryption analysis, content deployment, diff generation).
+ *
+ * PERFORMANCE: First call is O(Git tree lookup), potentially expensive.
+ * Only call when tree entry is actually needed. Callers should lazy-load
+ * as late as possible (after early returns) to avoid unnecessary work.
+ *
+ * ERROR SEMANTICS:
+ * - Returns ERR_NOT_FOUND if file doesn't exist in Git tree
+ * - Returns wrapped error if profile tree fails to load
+ * - Caller decides fatal (deploy/diff) vs non-fatal (encryption analysis)
+ *
+ * @param entry File entry (must not be NULL)
+ * @param repo Repository (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *file_entry_ensure_tree_entry(
+    file_entry_t *entry,
+    git_repository *repo
 );
 
 /**

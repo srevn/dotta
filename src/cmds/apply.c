@@ -1595,28 +1595,50 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                 .skip_safety_check = true                 /* Trust preflight data */
             };
 
-            err = cleanup_execute(repo, state, manifest, &cleanup_opts, &cleanup_res);
-            if (err) {
-                /* Display partial results before propagating error */
+            /* Execute cleanup (non-fatal - deployment already succeeded)
+             *
+             * Rationale:
+             * - Deployment already succeeded (files physically on filesystem)
+             * - Deployment state is orthogonal to cleanup state (independent concerns)
+             * - Partial success is valuable (preserve what worked, retry what failed)
+             * - Next 'dotta apply' will retry cleanup naturally (idempotent convergence)
+             *
+             * Error scenarios handled gracefully:
+             * - Permission denied on orphan removal → warn user, continue
+             * - Filesystem errors during cleanup → warn user, continue
+             * - Safety violations (uncommitted changes) → already warned in preflight
+             * - Partial cleanup (some succeed, some fail) → record successful removals
+             *
+             * State consistency guarantee:
+             * - Deployment state ALWAYS saved (deployment succeeded)
+             * - Cleanup state conditionally saved (only successful removals recorded)
+             * - Database remains consistent (VWD matches successful filesystem operations)
+             */
+            error_t *cleanup_err = cleanup_execute(repo, state, manifest, &cleanup_opts, &cleanup_res);
+            if (cleanup_err) {
+                /* Cleanup failed - warn but continue to save deployment state
+                 *
+                 * The deployment succeeded, so we MUST save deployment state regardless
+                 * of cleanup failure. Otherwise we create state desynchronization where:
+                 * - Filesystem has correct deployed files
+                 * - Database shows files as undeployed (deployed_at = 0)
+                 * - User sees confusing [undeployed] status on working files
+                 */
+                output_warning(out, "Deployment successful, but orphan cleanup failed: %s",
+                               error_message(cleanup_err));
+
+                /* Display partial results if available (cleanup_res may be partial or NULL) */
                 if (cleanup_res) {
                     print_cleanup_results(out, cleanup_res, opts->verbose);
                 }
-                cleanup_result_free(cleanup_res);
-                goto cleanup;
-            }
 
-            /* Display cleanup results */
-            print_cleanup_results(out, cleanup_res, opts->verbose);
-
-            /* Check if cleanup was blocked by safety violations */
-            if (cleanup_res && cleanup_res->safety_violations &&
-                cleanup_res->safety_violations->count > 0 && !opts->force) {
-                /* Safety violations detected and displayed by print_cleanup_results() */
-                size_t violation_count = cleanup_res->safety_violations->count;
-                cleanup_result_free(cleanup_res);
-                err = ERROR(ERR_CONFLICT, "Cannot remove %zu orphaned file%s with uncommitted changes",
-                           violation_count, violation_count == 1 ? "" : "s");
-                goto cleanup;
+                error_free(cleanup_err);
+                /* Continue to save deployment state (critical for consistency) */
+            } else {
+                /* Cleanup succeeded - display results */
+                if (cleanup_res) {
+                    print_cleanup_results(out, cleanup_res, opts->verbose);
+                }
             }
 
             /* CRITICAL: Remove orphaned entries from state database
@@ -1629,6 +1651,12 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
              *   2. Workspace detects orphan → entry in state, profile not enabled
              *   3. cleanup_execute() → file removed from filesystem (just happened)
              *   4. THIS CODE → entry removed from state (completing the cycle)
+             *
+             * DEFENSIVE: Only process if cleanup succeeded and returned results.
+             * - If cleanup_err occurred above, cleanup_res may be NULL or incomplete
+             * - Only record state updates for successfully removed files (partial success)
+             * - If cleanup failed completely, this section is safely skipped
+             * - Next 'apply' will retry full cleanup with fresh workspace analysis
              */
             if (cleanup_res && cleanup_res->removed_files &&
                 string_array_size(cleanup_res->removed_files) > 0) {
@@ -1674,8 +1702,14 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
              *   3. cleanup_execute() → directory removed from filesystem (just happened)
              *   4. THIS CODE → entry removed from state (completing the cycle)
              *
-             * This mirrors file orphan cleanup (lines 1428-1459) and prevents
+             * This mirrors file orphan cleanup (lines 1664-1712) and prevents
              * orphaned entries from accumulating forever in tracked_directories.
+             *
+             * DEFENSIVE: Only process if cleanup succeeded and returned results.
+             * - If cleanup_err occurred above, cleanup_res may be NULL or incomplete
+             * - Only record state updates for successfully removed directories (partial success)
+             * - If cleanup failed completely, this section is safely skipped
+             * - Next 'apply' will retry full cleanup with fresh workspace analysis
              */
             if (cleanup_res && cleanup_res->removed_dirs &&
                 string_array_size(cleanup_res->removed_dirs) > 0) {
@@ -1715,13 +1749,19 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
 
         /* Update deployed_at timestamp for successfully deployed files
          *
-         * This marks files as "known to dotta" and records deployment time.
+         * CRITICAL: This marks files as "known to dotta" and records deployment time.
          * The deployed_at field is used for lifecycle tracking (see state.h:85):
          *   - 0 = file never deployed by dotta
          *   - > 0 = file known to dotta (deployed or pre-existing)
          *
-         * This operation is non-critical - deployment already succeeded, so
-         * timestamp update failures are non-fatal warnings.
+         * IMPORTANT: This operation runs REGARDLESS of cleanup success/failure.
+         * - Deployment succeeded (files are physically on filesystem)
+         * - State must reflect deployment success
+         * - Cleanup failure does NOT invalidate deployment success
+         * - This prevents state desynchronization (deployed files marked as undeployed)
+         *
+         * Non-critical operation: deployment already succeeded physically, so
+         * timestamp update failures are non-fatal warnings (preserve consistency).
          */
         if (deploy_res && deploy_res->deployed && string_array_size(deploy_res->deployed) > 0) {
             time_t now = time(NULL);
@@ -1764,7 +1804,18 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                         string_array_size(deploy_res->deployed) == 1 ? "" : "s");
         }
 
-        /* Commit state transaction */
+        /* Commit state transaction (saves both deployment and cleanup state)
+         *
+         * This atomically commits all state changes made during apply:
+         * - Deployment state: deployed_at timestamps for newly deployed files
+         * - Cleanup state: removed orphan entries (if cleanup succeeded)
+         * - Ownership changes: cleared old_profile flags for transferred files
+         *
+         * If cleanup failed, only deployment state is saved (partial success model).
+         * If cleanup succeeded, both deployment and cleanup state are saved (full success).
+         *
+         * This ensures state database stays synchronized with filesystem reality.
+         */
         err = state_save(repo, state);
         if (err) {
             err = error_wrap(err, "Failed to commit state changes");

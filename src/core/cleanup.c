@@ -292,9 +292,25 @@ static error_t *prune_orphaned_files(
             continue;
         }
 
-        /* Skip if file doesn't exist (already deleted) */
+        /* Handle already-deleted files (state cleanup needed) */
         if (!fs_exists(path)) {
-            /* Don't count as skipped or failed - file is already gone */
+            /* File already deleted from filesystem (manually or by another process).
+             * We didn't remove it, but we still need to track it for state cleanup.
+             *
+             * The apply command uses removed_files to know which state entries to remove.
+             * Without this, orphaned files that are manually deleted accumulate forever
+             * in the state database as "ghost orphans".
+             */
+            if (!dry_run) {
+                result->orphaned_files_removed++;
+                err = string_array_push(result->removed_files, path);
+                if (err) {
+                    err = error_wrap(err, "Failed to track already-removed file");
+                    if (violations_map) hashmap_free(violations_map, NULL);
+                    free(filesystem_paths);
+                    return err;
+                }
+            }
             continue;
         }
 

@@ -86,7 +86,7 @@ struct workspace {
     workspace_item_t *diverged;      /* Array of diverged items (files and directories) */
     size_t diverged_count;
     size_t diverged_capacity;
-    hashmap_t *diverged_index;       /* Maps filesystem_path -> workspace_item_t* */
+    hashmap_t *diverged_index;       /* Maps filesystem_path -> array index+1 (as void*) */
 
     /* Status cache */
     workspace_status_t status;
@@ -376,8 +376,9 @@ static error_t *workspace_add_diverged(
         }
     }
 
-    /* Add to diverged index for O(1) lookup */
-    error_t *err = hashmap_set(ws->diverged_index, entry->filesystem_path, entry);
+    /* Store array index in hashmap for O(1) lookup */
+    error_t *err = hashmap_set(ws->diverged_index, entry->filesystem_path,
+                              (void *)(uintptr_t)(ws->diverged_count + 1));
     if (err) {
         free(entry->filesystem_path);
         free(entry->storage_path);
@@ -1465,13 +1466,15 @@ static error_t *analyze_encryption_policy_mismatch(
 
         /* Policy mismatch: should be encrypted but isn't */
         if (should_auto_encrypt && !is_encrypted) {
-            /* Check if file already has divergence (O(1) hashmap lookup).
+            /* Check if file already has divergence (O(1) index lookup).
              * This prevents last-write-wins bug when multiple analysis functions
              * detect different divergence types for the same file. */
-            workspace_item_t *existing = hashmap_get(
-                ws->diverged_index,
-                manifest_entry->filesystem_path
-            );
+            void *idx_ptr = hashmap_get(ws->diverged_index, manifest_entry->filesystem_path);
+            workspace_item_t *existing = NULL;
+            if (idx_ptr) {
+                size_t idx = (size_t)(uintptr_t)idx_ptr - 1;  /* Convert index+1 back to index */
+                existing = &ws->diverged[idx];
+            }
 
             if (existing) {
                 /* File already diverged - accumulate encryption flag
@@ -2186,8 +2189,15 @@ const workspace_item_t *workspace_get_item(
         return NULL;
     }
 
-    /* O(1) lookup via hashmap - returns NULL if not found or CLEAN */
-    return hashmap_get(ws->diverged_index, filesystem_path);
+    /* O(1) lookup via index - returns NULL if not found or CLEAN */
+    void *idx_ptr = hashmap_get(ws->diverged_index, filesystem_path);
+    if (!idx_ptr) {
+        return NULL;
+    }
+
+    /* Convert stored index+1 back to actual array index */
+    size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+    return &ws->diverged[idx];
 }
 
 /**

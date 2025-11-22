@@ -108,7 +108,8 @@ typedef enum {
     DIVERGENCE_MODE       = 1 << 1,  /* Permissions/mode changed */
     DIVERGENCE_OWNERSHIP  = 1 << 2,  /* Owner/group changed (requires root) */
     DIVERGENCE_ENCRYPTION = 1 << 3,  /* File violates encryption policy */
-    DIVERGENCE_TYPE       = 1 << 4   /* Type changed (file/symlink/dir) */
+    DIVERGENCE_TYPE       = 1 << 4,  /* Type changed (file/symlink/dir) */
+    DIVERGENCE_UNVERIFIED = 1 << 5   /* Cannot verify (missing key, error, large file) */
 } divergence_type_t;
 
 /**

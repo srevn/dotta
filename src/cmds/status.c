@@ -292,6 +292,13 @@ static void display_workspace_status(
                     "run \"dotta apply\" to remove orphaned files");
 
                 if (list) {
+                    /* Check if any orphans have divergence
+                     * Clean orphans (DIVERGENCE_NONE) are straightforward - they'll be removed.
+                     * Only show guidance hints for diverged orphans (modified, mode, unverified)
+                     * since those are the confusing cases where apply won't remove the file.
+                     */
+                    bool has_diverged_orphans = false;
+
                     for (size_t i = 0; i < orphaned_count; i++) {
                         const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
                         size_t tag_count;
@@ -303,10 +310,29 @@ static void display_workspace_status(
                             output_list_add_multi(list, tags, tag_count, color,
                                                  orphaned[i]->filesystem_path, metadata);
                         }
+
+                        /* Track if this orphan has divergence (not clean) */
+                        if (orphaned[i]->divergence != DIVERGENCE_NONE) {
+                            has_diverged_orphans = true;
+                        }
                     }
 
                     output_list_render(list);
                     output_list_free(list);
+
+                    /* Show detailed guidance only for diverged orphans */
+                    if (has_diverged_orphans) {
+                        output_hint(out, "Orphaned file states:");
+                        output_hint_line(out, "  [orphaned]              - Clean, will be removed by 'dotta apply'");
+                        output_hint_line(out, "  [orphaned] [modified]   - Has uncommitted changes, skipped by 'dotta apply'");
+                        output_hint_line(out, "  [orphaned] [mode]       - Permissions changed, skipped by 'dotta apply'");
+                        output_hint_line(out, "  [orphaned] [unverified] - Cannot verify (e.g., missing key), skipped by 'dotta apply'");
+                        output_newline(out);
+                        output_hint(out, "To resolve:");
+                        output_hint_line(out, "  • Keep changes: Re-enable profile and run 'dotta update <profile> <path>'");
+                        output_hint_line(out, "  • Discard changes: Manually revert file to match profile version");
+                        output_hint_line(out, "  • Force removal: 'dotta apply --force' (WARNING: DATA LOSS)");
+                    }
                 }
             }
 

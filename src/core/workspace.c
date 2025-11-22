@@ -44,6 +44,9 @@
 #include "utils/privilege.h"
 #include "utils/string.h"
 
+/* Maximum file size for orphan divergence checking */
+#define MAX_ORPHAN_DIVERGENCE_CHECK_SIZE (100 * 1024 * 1024)  /* 100MB */
+
 /**
  * Merged metadata entry (internal structure)
  *
@@ -683,6 +686,274 @@ static error_t *analyze_file_divergence(
 }
 
 /**
+ * Compute divergence for orphaned file
+ *
+ * Mirrors analyze_file_divergence() logic but optimized for orphan context.
+ * Compares filesystem state against expected state from state database entry.
+ *
+ * Architecture:
+ * - Uses VWD cached metadata (blob_oid, encrypted, mode, owner, group)
+ * - Leverages content cache with transparent encryption handling
+ * - Two-phase permission checking (exec bit + full metadata)
+ * - TOCTOU-aware (handles files deleted/modified during analysis)
+ *
+ * Performance Safeguards:
+ * - 100MB size limit (prevents loading huge files into memory)
+ * - Early return on missing files (no wasted work)
+ * - Content cache (reuses decrypted content across checks)
+ *
+ * @param ws Workspace (provides content_cache, repo)
+ * @param state_entry State database entry with expected state (VWD cache)
+ * @param fs_path Filesystem path
+ * @param storage_path Storage path (for AAD in encryption)
+ * @param profile Profile name
+ * @return Divergence flags or DIVERGENCE_UNVERIFIED on error
+ */
+static divergence_type_t compute_orphan_divergence(
+    workspace_t *ws,
+    const state_file_entry_t *state_entry,
+    const char *fs_path,
+    const char *storage_path,
+    const char *profile
+) {
+    /* Defensive NULL checks */
+    if (!ws || !state_entry || !fs_path) {
+        return DIVERGENCE_UNVERIFIED;
+    }
+
+    /* Step 1: Initial stat for existence and size check
+     *
+     * We stat early for two reasons:
+     * 1. Fast bail-out if file doesn't exist (no wasted content loading)
+     * 2. Size limit check (prevent OOM on huge files)
+     *
+     * Note: A fresh stat will be captured later by compare_buffer_to_disk()
+     * for TOCTOU safety. This initial stat is only for early validation.
+     */
+    struct stat initial_stat;
+    if (lstat(fs_path, &initial_stat) != 0) {
+        /* File doesn't exist - not an error, just means orphan was already removed */
+        return DIVERGENCE_NONE;
+    }
+
+    /* Step 2: Size limit check (Performance + UX safeguard)
+     *
+     * For files exceeding limit:
+     * - Return UNVERIFIED (conservative, prevents false "clean" indication)
+     * - User sees [orphaned, unverified] in magenta
+     * - Apply will run same check (consistent behavior)
+     */
+    if ((size_t)initial_stat.st_size > MAX_ORPHAN_DIVERGENCE_CHECK_SIZE) {
+        return DIVERGENCE_UNVERIFIED;
+    }
+
+    /* Step 3: Validate blob_oid (defensive programming)
+     *
+     * Every state entry SHOULD have blob_oid. If missing, it's data corruption.
+     * Handle gracefully rather than crashing.
+     */
+    if (!state_entry->blob_oid) {
+        /* Data corruption: state entry without blob_oid
+         * This should never happen, but handle gracefully */
+        return DIVERGENCE_UNVERIFIED;
+    }
+
+    /* Parse blob OID string to git_oid struct */
+    git_oid blob_oid;
+    if (git_oid_fromstr(&blob_oid, state_entry->blob_oid) != 0) {
+        /* Invalid OID string in state database (corruption) */
+        return DIVERGENCE_UNVERIFIED;
+    }
+
+    /* Step 4: Load expected content from Git
+     *
+     * Content cache provides:
+     * - Automatic decryption (uses state_entry->encrypted flag)
+     * - Caching (repeated checks for same blob don't re-decrypt)
+     * - Error handling (missing key, corrupt data, etc.)
+     *
+     * VWD Pattern: Use state_entry->encrypted directly (see metadata.h:280)
+     * This flag was set atomically with blob_oid when entry was synced to manifest.
+     */
+    const buffer_t *expected_content = NULL;
+    error_t *err = content_cache_get_from_blob_oid(
+        ws->content_cache,
+        &blob_oid,
+        storage_path,
+        profile,
+        state_entry->encrypted,  /* VWD pattern: use cached flag */
+        &expected_content
+    );
+
+    if (err) {
+        /* Cannot load/decrypt content
+         *
+         * Possible causes:
+         * - Encrypted file but no passphrase available (missing key)
+         * - Decryption failed (wrong passphrase, corrupted ciphertext)
+         * - I/O error reading blob from git
+         * - Blob missing from repository (corruption)
+         *
+         * Conservative approach: Return UNVERIFIED to prevent false "clean" indication.
+         * User will see [orphaned, unverified] and can investigate.
+         */
+        error_free(err);
+        return DIVERGENCE_UNVERIFIED;
+    }
+
+    /* Step 5: Extract expected filemode from type field
+     *
+     * Calculate once, use for both content comparison and mode checking.
+     * Conversion logic matches analyze_file_divergence() (lines 493-501).
+     */
+    git_filemode_t expected_mode;
+    if (state_entry->type == STATE_FILE_SYMLINK) {
+        expected_mode = GIT_FILEMODE_LINK;
+    } else if (state_entry->type == STATE_FILE_EXECUTABLE) {
+        expected_mode = GIT_FILEMODE_BLOB_EXECUTABLE;
+    } else {
+        expected_mode = GIT_FILEMODE_BLOB;
+    }
+
+    /* Step 6: Content and type comparison with stat capture
+     *
+     * compare_buffer_to_disk() performs:
+     * 1. Fresh lstat() (TOCTOU-safe, may detect file deleted/replaced)
+     * 2. Type checking (file vs symlink)
+     * 3. Content comparison (byte-by-byte)
+     *
+     * We pass NULL for in_stat to force fresh stat (catches TOCTOU races where
+     * file type changes between our initial stat and now).
+     *
+     * We capture out_stat for metadata checking (reuse stat, avoid redundant syscall).
+     */
+    struct stat fresh_stat;
+    memset(&fresh_stat, 0, sizeof(fresh_stat));
+
+    compare_result_t cmp_result;
+    err = compare_buffer_to_disk(
+        expected_content,
+        fs_path,
+        expected_mode,
+        NULL,         /* in_stat: Force fresh stat for TOCTOU safety */
+        &cmp_result,
+        &fresh_stat   /* out_stat: Capture for metadata checking */
+    );
+
+    if (err) {
+        /* Comparison failed (I/O error, permissions, etc.) */
+        error_free(err);
+        return DIVERGENCE_UNVERIFIED;
+    }
+
+    /* Step 7: Interpret comparison result
+     *
+     * Use switch statement (not if-else) for exhaustive handling.
+     * Pattern from analyze_file_divergence() lines 524-549.
+     */
+    divergence_type_t divergence = DIVERGENCE_NONE;
+    bool file_exists = true;  /* Track for permission checking guard */
+
+    switch (cmp_result) {
+        case CMP_EQUAL:
+            /* Content and type match - continue to permission checking */
+            break;
+
+        case CMP_DIFFERENT:
+            /* Content differs between Git and filesystem */
+            divergence |= DIVERGENCE_CONTENT;
+            break;
+
+        case CMP_TYPE_DIFF:
+            /* Type differs (file vs symlink vs directory)
+             *
+             * Note: analyze_file_divergence returns early here, but for orphans
+             * we accumulate divergence and check metadata too. This provides
+             * more information to the user (e.g., "type + mode divergence").
+             */
+            divergence |= DIVERGENCE_TYPE;
+            break;
+
+        case CMP_MISSING:
+            /* TOCTOU race: File deleted between initial lstat() and compare
+             *
+             * File no longer exists on filesystem. This is not an error - it just
+             * means the orphan was already manually removed. Safe to report as
+             * DIVERGENCE_NONE (apply will skip it, state will be pruned).
+             */
+            file_exists = false;
+            break;
+    }
+
+    /* Step 8: Permission checking (two-phase, if file still exists)
+     *
+     * Only check permissions if:
+     * 1. File still exists (not deleted in TOCTOU race)
+     * 2. No type divergence (type mismatch makes mode checking nonsensical)
+     * 3. Verification didn't fail (we have fresh_stat from compare)
+     *
+     * PHASE A: Git filemode (executable bit)
+     *   - Uses expected_mode from Step 5
+     *   - Skips symlinks (exec bit doesn't apply)
+     *   - Catches: file is 0755 in git but 0644 on disk (or vice versa)
+     *
+     * PHASE B: Full metadata (all permission bits + ownership)
+     *   - Uses check_item_metadata_divergence() helper
+     *   - Reuses fresh_stat from Step 6 (zero extra syscalls)
+     *   - Skipped if state_entry->mode == 0 (no metadata tracked)
+     *   - Separately tracks MODE and OWNERSHIP divergence
+     */
+    if (file_exists && !(divergence & DIVERGENCE_TYPE)) {
+        /* PHASE A: Check executable bit (skip symlinks) */
+        if (expected_mode != GIT_FILEMODE_LINK) {
+            bool expect_exec = (expected_mode == GIT_FILEMODE_BLOB_EXECUTABLE);
+            bool is_exec = fs_stat_is_executable(&fresh_stat);
+
+            if (expect_exec != is_exec) {
+                /* Executable bit differs between git and filesystem */
+                divergence |= DIVERGENCE_MODE;
+            }
+        }
+
+        /* PHASE B: Check full metadata using helper function
+         *
+         * Mode sentinel: state_entry->mode == 0 means "no metadata tracked",
+         * check will be skipped by check_item_metadata_divergence().
+         *
+         * Uses fresh_stat from compare (TOCTOU-safe, consistent view).
+         */
+        bool mode_differs = false;
+        bool ownership_differs = false;
+
+        error_t *check_err = check_item_metadata_divergence(
+            state_entry->mode,    /* From VWD cache (mode_t, 0 = no metadata) */
+            state_entry->owner,   /* From VWD cache (can be NULL) */
+            state_entry->group,   /* From VWD cache (can be NULL) */
+            fs_path,
+            &fresh_stat,          /* Reuse stat from compare (CRITICAL: not initial_stat!) */
+            &mode_differs,
+            &ownership_differs
+        );
+
+        if (check_err) {
+            /* Metadata check failed (rare: getpwuid/getgrgid failure)
+             * Treat as unverified rather than crashing */
+            error_free(check_err);
+            return DIVERGENCE_UNVERIFIED;
+        }
+
+        /* Accumulate metadata divergence flags
+         *
+         * OWNERSHIP is tracked separately for granular reporting.
+         */
+        if (mode_differs) divergence |= DIVERGENCE_MODE;
+        if (ownership_differs) divergence |= DIVERGENCE_OWNERSHIP;
+    }
+
+    return divergence;
+}
+
+/**
  * Analyze state for orphaned file entries
  *
  * Detects ALL orphaned files (enabled + disabled profiles) using cleanup
@@ -741,6 +1012,28 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
             bool profile_enabled = (hashmap_get(ws->profile_index, profile) != NULL);
             bool on_filesystem = fs_lexists(fs_path);
 
+            /* Compute divergence for orphaned file
+             *
+             * Only check divergence if file exists on filesystem. If file already
+             * deleted, divergence is meaningless (can't compare to non-existent file).
+             *
+             * This analysis enables status to predict apply behavior:
+             * - DIVERGENCE_NONE → Clean orphan, will be removed
+             * - DIVERGENCE_CONTENT/TYPE → Modified, apply will skip (safety check)
+             * - DIVERGENCE_MODE/OWNERSHIP → Metadata changed, apply will skip
+             * - DIVERGENCE_UNVERIFIED → Cannot verify, apply will skip
+             */
+            divergence_type_t divergence = DIVERGENCE_NONE;
+            if (on_filesystem) {
+                divergence = compute_orphan_divergence(
+                    ws,
+                    state_entry,
+                    fs_path,
+                    storage_path,
+                    profile
+                );
+            }
+
             err = workspace_add_diverged(
                 ws,
                 fs_path,
@@ -748,7 +1041,7 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
                 profile,
                 NULL, NULL,       /* No old_profile or all_profiles for orphans */
                 WORKSPACE_STATE_ORPHANED,  /* State: in deployment state, not in profile */
-                DIVERGENCE_NONE,           /* Divergence: none */
+                divergence,       /* Divergence: computed from filesystem comparison */
                 WORKSPACE_ITEM_FILE,
                 false,            /* not in profile */
                 true,             /* in state (was deployed) */
@@ -2402,13 +2695,48 @@ bool workspace_item_extract_display_info(
             break;
         }
 
-        case WORKSPACE_STATE_ORPHANED:
+        case WORKSPACE_STATE_ORPHANED: {
+            /* Primary tag (always shown) */
             if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                 tags_out[tag_count++] = "orphaned";
             }
-            *color_out = OUTPUT_COLOR_RED;
+
+            /* Determine color and secondary tags based on divergence */
+            if (item->divergence & DIVERGENCE_UNVERIFIED) {
+                /* Cannot verify state - could be large file, missing key, I/O error, etc.
+                 * Conservative: Treat as modified (apply will skip). */
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    tags_out[tag_count++] = "unverified";
+                }
+                *color_out = OUTPUT_COLOR_MAGENTA;
+
+            } else if (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE)) {
+                /* Content or type divergence - blocking issue
+                 * Apply will detect this via safety check and skip removal. */
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    tags_out[tag_count++] = "modified";
+                }
+                *color_out = OUTPUT_COLOR_RED;
+
+            } else if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
+                /* Metadata divergence only - warning level
+                 * File content matches but permissions changed.
+                 * Apply will skip (safety check considers this a modification). */
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    tags_out[tag_count++] = "mode";
+                }
+                *color_out = OUTPUT_COLOR_YELLOW;
+
+            } else {
+                /* No divergence - clean orphan
+                 * File exactly matches last known state. Apply will remove it.
+                 * Use RED to indicate action will be taken (file deletion). */
+                *color_out = OUTPUT_COLOR_RED;
+            }
+
             snprintf(metadata_buf, metadata_size, "from %s", item->profile);
             break;
+        }
 
         case WORKSPACE_STATE_UNTRACKED:
             if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {

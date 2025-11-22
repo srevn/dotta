@@ -22,7 +22,7 @@ else
     FEATURE_MACROS := -D_XOPEN_SOURCE=700 -D_DEFAULT_SOURCE
 endif
 
-CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror -O2 -Wno-missing-field-initializers $(FEATURE_MACROS)
+CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror -O2 -flto -Wno-missing-field-initializers $(FEATURE_MACROS)
 DEBUG_FLAGS := -g -O0 -fsanitize=address,undefined -DDEBUG
 
 # Version information (captured at build time)

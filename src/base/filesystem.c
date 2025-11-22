@@ -37,6 +37,57 @@ static inline error_t *validate_path(const char *path) {
 }
 
 /**
+ * Check if filename is OS metadata
+ *
+ * Detects OS-generated metadata files that should be transparent to dotta.
+ * These files are created automatically by operating systems and do not
+ * represent user content.
+ *
+ * - Takes basename only (not full path) for simplicity and efficiency
+ * - Uses exact string matching for safety (no regex overhead or complexity)
+ * - Ordered by frequency: most common zombies checked first
+ * - AppleDouble pattern (._*) requires special handling
+ */
+bool fs_is_os_metadata_file(const char *filename) {
+    /* Input validation */
+    if (!filename || filename[0] == '\0') {
+        return false;
+    }
+
+    /* macOS Finder metadata - by far the most common zombie */
+    if (strcmp(filename, ".DS_Store") == 0) {
+        return true;
+    }
+
+    /* Linux KDE folder settings - common on KDE systems */
+    if (strcmp(filename, ".directory") == 0) {
+        return true;
+    }
+
+    /* Windows metadata - dual-boot or network access scenarios */
+    if (strcmp(filename, "Thumbs.db") == 0) {
+        return true;
+    }
+    if (strcmp(filename, "desktop.ini") == 0) {
+        return true;
+    }
+    if (strcmp(filename, "Desktop.ini") == 0) {
+        return true;
+    }
+
+    /* Pattern match: AppleDouble resource fork files (._*)
+     *
+     * Safety check: Require at least one character after ._ to avoid
+     * matching malformed filenames like "._" (edge case but defensive).
+     */
+    if (filename[0] == '.' && filename[1] == '_' && filename[2] != '\0') {
+        return true;
+    }
+
+    return false;
+}
+
+/**
  * File operations
  */
 
@@ -567,7 +618,11 @@ bool fs_is_directory_empty(const char *path) {
         return false;
     }
 
-    /* Check if directory only contains . and .. entries */
+    /* Check if directory contains only metadata
+     *
+     * This prevents "zombie" directories that contain only OS-generated
+     * metadata (like .DS_Store on macOS) from blocking cleanup operations.
+     */
     bool is_empty = true;
     struct dirent *entry;
     errno = 0;
@@ -575,6 +630,11 @@ bool fs_is_directory_empty(const char *path) {
     while ((entry = readdir(dir)) != NULL) {
         /* Skip . and .. entries */
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        /* Skip OS metadata files */
+        if (fs_is_os_metadata_file(entry->d_name)) {
             continue;
         }
 

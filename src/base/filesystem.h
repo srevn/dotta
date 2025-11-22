@@ -94,6 +94,22 @@ error_t *fs_remove_file(const char *path);
 bool fs_file_exists(const char *path);
 
 /**
+ * Check if filename is OS metadata (should be ignored during cleanup)
+ *
+ * Detects OS-generated metadata files that are not user content and should
+ * be transparent to dotta operations (especially directory empty checks).
+ *
+ * Recognized metadata files:
+ * - macOS: .DS_Store, ._* (AppleDouble resource forks)
+ * - Linux: .directory (KDE folder settings)
+ * - Windows: Thumbs.db, desktop.ini, Desktop.ini
+ *
+ * @param filename Basename of file to check (e.g., ".DS_Store", not "/path/.DS_Store")
+ * @return true if filename matches known OS metadata pattern, false otherwise
+ */
+bool fs_is_os_metadata_file(const char *filename);
+
+/**
  * Directory operations
  */
 
@@ -196,14 +212,17 @@ error_t *fs_remove_dir(const char *path, bool recursive);
 bool fs_is_directory(const char *path);
 
 /**
- * Check if directory is empty
+ * Check if directory is empty (ignoring OS metadata)
  *
- * A directory is considered empty if it contains only "." and ".." entries.
+ * A directory is considered empty if it contains only:
+ * - "." and ".." entries (standard directory entries)
+ * - OS metadata files (.DS_Store, ._*, Thumbs.db, etc.)
+ *
  * Returns false if the directory cannot be opened (doesn't exist, not a directory,
  * permission denied, or read error) for safety (don't delete what we can't verify).
  *
  * @param path Directory path to check (can be NULL, treated as empty)
- * @return true if directory is empty and readable, false otherwise
+ * @return true if directory contains no user content, false otherwise
  */
 bool fs_is_directory_empty(const char *path);
 

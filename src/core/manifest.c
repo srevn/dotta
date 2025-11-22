@@ -1901,6 +1901,16 @@ error_t *manifest_reorder_profiles(
              * The orphan cleanup flow applies (see manifest_disable_profile()).
              * Cleanup deferred to apply - DO NOT call state_remove_file() here.
              */
+
+            /* Mark entry as inactive for silent workspace handling */
+            err = state_set_file_state(state, old_entry->filesystem_path, STATE_INACTIVE);
+            if (err) {
+                /* Non-fatal: log warning but continue */
+                fprintf(stderr, "warning: failed to mark '%s' as inactive: %s\n",
+                        old_entry->filesystem_path, error_message(err));
+                error_free(err);
+                err = NULL;  /* Clear error, continue operation */
+            }
         }
     }
 

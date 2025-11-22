@@ -519,6 +519,18 @@ static error_t *deploy_tracked_directories(
     for (size_t i = 0; i < dir_count; i++) {
         const state_directory_entry_t *dir_entry = &directories[i];
 
+        /* Skip STATE_INACTIVE directories - they're orphaned and awaiting cleanup
+         *
+         * ARCHITECTURE: STATE_INACTIVE directories are staged for removal by profile disable.
+         * They should NOT be deployed. Only STATE_ACTIVE directories participate in deployment.
+         */
+        if (dir_entry->state && strcmp(dir_entry->state, STATE_INACTIVE) == 0) {
+            if (opts->verbose) {
+                printf("  Skipped: %s (inactive - staged for removal)\n", dir_entry->filesystem_path);
+            }
+            continue;
+        }
+
         /* State directory entries contain:
          * - filesystem_path: Already resolved with custom_prefix (VWD principle)
          * - storage_path: Portable path (for ownership resolution)

@@ -1260,30 +1260,32 @@ error_t *manifest_disable_profile(
 
             dir_fallback_count++;
         } else {
-            /* No fallback - entry becomes orphaned (cleanup deferred to apply)
+            /* No fallback - mark as inactive (staged for removal)
              *
-             * ARCHITECTURE: Separation of concerns for directory orphan cleanup.
+             * ARCHITECTURE: Explicit state tracking for directory lifecycle.
              *
-             * The entry remains in state for workspace orphan detection:
-             *   1. Entry stays in state with profile=<disabled_profile_name>
-             *   2. Workspace filters merged_metadata by enabled profiles (skips this entry)
-             *   3. Workspace detects: entry in state, NOT in merged_metadata → orphaned
+             * The entry is marked STATE_INACTIVE and remains in state:
+             *   1. Entry marked inactive with profile=<disabled_profile_name>
+             *   2. Workspace skips inactive entries during manifest building
+             *   3. Workspace orphan detection loads inactive entries → ORPHANED
              *   4. Apply removes: directory from filesystem + entry from state
              *
-             * This design enables:
-             *   - Safe re-enable: Profile can be re-enabled without data loss
-             *   - Orphan detection: Workspace analysis works (workspace.c:767-799)
-             *   - User visibility: Status shows orphans before removal
-             *   - Explicit action: User runs apply to execute destructive cleanup
-             *
-             * Why not delete immediately?
-             *   - Breaks orphan detection (entry gone → can't detect)
-             *   - Prevents safe re-enable (data lost → must recreate)
-             *   - Violates separation (profile cmd shouldn't do filesystem ops)
-             *
-             * This mirrors file orphan handling (manifest.c:756-782).
-             * Cleanup deferred to apply - DO NOT call state_remove_directory() here.
+             * The state field makes the lifecycle explicit:
+             *   STATE_ACTIVE → directory should exist (check divergence)
+             *   STATE_INACTIVE → directory staged for removal (skip validation)
              */
+            err = state_set_directory_state(state, entry->filesystem_path, STATE_INACTIVE);
+            if (err) {
+                /* Non-fatal: log warning but continue. Even if marking fails,
+                 * orphan detection will still work (directory won't be in merged_metadata).
+                 * The explicit state just makes it cleaner. */
+                error_t *wrapped = error_wrap(err,
+                    "Failed to mark directory '%s' as inactive", entry->filesystem_path);
+                fprintf(stderr, "Warning: %s\n", error_message(wrapped));
+                error_free(wrapped);
+                error_free(err);
+                err = NULL;
+            }
             dir_removed_count++;  /* Stats: directory marked for removal (user visibility) */
         }
     }
@@ -3036,10 +3038,15 @@ error_t *manifest_sync_directories(
     error_t *err = NULL;
     hashmap_t *prefix_map = NULL;
 
-    /* 1. Clear all tracked directories */
-    err = state_clear_directories(state);
+    /* 1. Mark all directories as inactive (soft delete for orphan detection)
+     *
+     *
+     * This preserves directory entries for orphan detection instead of deleting them.
+     * Directories not reactivated during rebuild become orphaned and are cleaned by apply.
+     */
+    err = state_mark_all_directories_inactive(state);
     if (err) {
-        return error_wrap(err, "Failed to clear tracked directories");
+        return error_wrap(err, "Failed to mark directories inactive");
     }
 
     /* 2. Load prefix map from state for custom prefix resolution */
@@ -3078,7 +3085,16 @@ error_t *manifest_sync_directories(
         const metadata_item_t **directories =
             metadata_get_items_by_kind(metadata, METADATA_ITEM_DIRECTORY, &dir_count);
 
-        /* Add each directory to state with profile attribution */
+        /* Reactivate or add each directory to state
+         *
+         * ARCHITECTURE: Mark-inactive-then-reactivate pattern.
+         *
+         * For each directory in enabled profile metadata:
+         *   - If exists in state → reactivate (STATE_ACTIVE) and update metadata
+         *   - If not in state → add new entry with STATE_ACTIVE
+         *
+         * This preserves deployed_at timestamps and enables clean orphan detection.
+         */
         for (size_t j = 0; j < dir_count; j++) {
             state_directory_entry_t *state_dir = NULL;
 
@@ -3098,12 +3114,60 @@ error_t *manifest_sync_directories(
                 return wrapped_err;
             }
 
-            err = state_add_directory(state, state_dir);
+            /* Check if directory already exists in state (may be inactive) */
+            state_directory_entry_t *existing = NULL;
+            error_t *get_err = state_get_directory(state, state_dir->filesystem_path, &existing);
+
+            if (get_err && get_err->code != ERR_NOT_FOUND) {
+                /* Fatal error - failed to query state */
+                state_free_directory_entry(state_dir);
+                if (existing) state_free_directory_entry(existing);
+                error_free(get_err);
+                free(directories);
+                metadata_free(metadata);
+                hashmap_free(prefix_map, free);
+                return error_wrap(get_err, "Failed to check directory state");
+            }
+
+            if (get_err && get_err->code == ERR_NOT_FOUND) {
+                /* New directory - add with STATE_ACTIVE */
+                error_free(get_err);
+                state_dir->state = strdup(STATE_ACTIVE);
+                if (!state_dir->state) {
+                    state_free_directory_entry(state_dir);
+                    free(directories);
+                    metadata_free(metadata);
+                    hashmap_free(prefix_map, free);
+                    return ERROR(ERR_MEMORY, "Failed to allocate state string");
+                }
+                err = state_add_directory(state, state_dir);
+            } else {
+                /* Existing directory - reactivate and always update
+                 *
+                 * CRITICAL: Always call state_update_directory, not conditionally.
+                 *
+                 * Rationale:
+                 * - profile field may have changed (directory moved between profiles)
+                 * - storage_path may have changed (different profile conventions)
+                 * - UPDATE is cheap (single row, indexed by filesystem_path)
+                 * - Ensures state consistency regardless of metadata changes
+                 * - deployed_at is preserved (UPDATE excludes it, see state.c:2046)
+                 */
+                err = state_set_directory_state(state, state_dir->filesystem_path, STATE_ACTIVE);
+
+                /* Always update profile, storage_path, and metadata (preserves deployed_at) */
+                if (!err) {
+                    err = state_update_directory(state, state_dir);
+                }
+
+                state_free_directory_entry(existing);
+            }
+
             state_free_directory_entry(state_dir);
 
             if (err) {
                 error_t *wrapped_err = error_wrap(err,
-                    "Failed to add directory '%s' to state", directories[j]->key);
+                    "Failed to add/update directory '%s' in state", directories[j]->key);
                 free(directories);
                 metadata_free(metadata);
                 hashmap_free(prefix_map, free);
@@ -3117,5 +3181,13 @@ error_t *manifest_sync_directories(
     }
 
     hashmap_free(prefix_map, free);
+
+    /* After rebuild, any directories still in STATE_INACTIVE are orphaned
+     * (belonged to disabled profiles with no fallback).
+     *
+     * They will be detected by workspace orphan analysis and cleaned by apply.
+     * This completes the mark-inactive-then-reactivate lifecycle.
+     */
+
     return NULL;
 }

@@ -1150,6 +1150,20 @@ static error_t *analyze_untracked_files(
         for (size_t i = 0; i < dir_count; i++) {
             const state_directory_entry_t *dir_entry = &directories[i];
 
+            /* Skip STATE_INACTIVE directories - they're orphaned and shouldn't be scanned
+             *
+             * ARCHITECTURE: STATE_INACTIVE directories are staged for removal.
+             * We should NOT scan them for untracked files because:
+             * 1. The directory is being removed (profile disabled)
+             * 2. Scanning would report spurious untracked files
+             * 3. The profile may be re-enabled later (directories reactivated)
+             *
+             * This ensures untracked file detection only applies to active directories.
+             */
+            if (dir_entry->state && strcmp(dir_entry->state, STATE_INACTIVE) == 0) {
+                continue;  /* Skip silently - these will be handled by orphan detection */
+            }
+
             /* State directory entries contain:
              * - filesystem_path: Already resolved with custom_prefix (VWD principle)
              * - storage_path: Portable path for storage
@@ -1226,6 +1240,18 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
     /* Check each tracked directory for divergence */
     for (size_t i = 0; i < dir_count; i++) {
         const state_directory_entry_t *dir_entry = &directories[i];
+
+        /* Skip STATE_INACTIVE directories - they're staged for removal
+         *
+         * ARCHITECTURE: STATE_INACTIVE directories are orphaned and shouldn't
+         * participate in divergence analysis. They'll be detected as orphans
+         * by analyze_orphaned_directories() and cleaned by apply.
+         *
+         * This mirrors file handling pattern (workspace.c:1669-1674).
+         */
+        if (dir_entry->state && strcmp(dir_entry->state, STATE_INACTIVE) == 0) {
+            continue;  /* Skip silently - orphan detection will handle this */
+        }
 
         /* State directory entries contain:
          * - filesystem_path: Already resolved with custom_prefix (VWD principle)

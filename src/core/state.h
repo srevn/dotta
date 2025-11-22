@@ -104,6 +104,7 @@ typedef struct {
     char *group;              /* Group (optional, root/ prefix only) */
 
     /* Lifecycle tracking */
+    char *state;              /* Lifecycle state (STATE_ACTIVE or STATE_INACTIVE) */
     time_t deployed_at;       /* Lifecycle timestamp (0 = never deployed, >0 = known) */
 } state_directory_entry_t;
 
@@ -707,6 +708,51 @@ error_t *state_remove_directory(state_t *state, const char *filesystem_path);
  * @return Error or NULL on success
  */
 error_t *state_clear_directories(state_t *state);
+
+/**
+ * Get directory entry from state
+ *
+ * Retrieves single directory entry by filesystem path.
+ * Caller owns the returned entry and must free it with state_free_directory_entry().
+ *
+ * @param state State (must not be NULL)
+ * @param filesystem_path Directory path to lookup (must not be NULL)
+ * @param out Directory entry (must not be NULL, caller must free with state_free_directory_entry)
+ * @return Error or NULL on success (ERR_NOT_FOUND if doesn't exist)
+ */
+error_t *state_get_directory(
+    const state_t *state,
+    const char *filesystem_path,
+    state_directory_entry_t **out
+);
+
+/**
+ * Set directory lifecycle state
+ *
+ * Updates the state column for a directory entry.
+ * Used by manifest operations to mark directories as active/inactive.
+ *
+ * @param state State handle (must not be NULL, must have active transaction)
+ * @param filesystem_path Directory path (must not be NULL)
+ * @param new_state Lifecycle state (STATE_ACTIVE or STATE_INACTIVE)
+ * @return Error or NULL on success
+ */
+error_t *state_set_directory_state(
+    state_t *state,
+    const char *filesystem_path,
+    const char *new_state
+);
+
+/**
+ * Mark all directories as inactive
+ *
+ * Bulk operation for manifest_sync_directories to prepare for rebuild.
+ * Replaces the nuclear state_clear_directories() approach with mark-and-reactivate pattern.
+ *
+ * @param state State handle (must not be NULL, must have active transaction)
+ * @return Error or NULL on success
+ */
+error_t *state_mark_all_directories_inactive(state_t *state);
 
 /**
  * Free single directory entry

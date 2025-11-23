@@ -681,9 +681,11 @@ error_t *bootstrap_execute(
     gettimeofday(&start_time, NULL);
 
     ssize_t n;
-    char buf[1024];
+    char buf[8192];
     bool timed_out = false;
     bool process_exited = false;
+    int final_status = 0;           /* Shared status variable for all wait paths */
+    bool process_reaped = false;    /* Track if process already reaped via waitpid */
 
     while (!process_exited) {
         /* Check for timeout */
@@ -700,13 +702,16 @@ error_t *bootstrap_execute(
             sleep(2);
 
             /* Check if process terminated */
-            int status;
-            pid_t wait_result = waitpid(pid, &status, WNOHANG);
-            if (wait_result == 0) {
+            pid_t wait_result = waitpid(pid, &final_status, WNOHANG);
+            if (wait_result > 0) {
+                /* Process reaped successfully */
+                process_reaped = true;
+            } else if (wait_result == 0) {
                 /* Still running - force kill */
                 fprintf(stderr, "Warning: Forcefully terminating bootstrap script\n");
                 kill(pid, SIGKILL);
             }
+            /* If wait_result < 0, error will be caught by final wait below */
             break;
         }
 
@@ -715,9 +720,18 @@ error_t *bootstrap_execute(
         FD_ZERO(&read_fds);
         FD_SET(pipefd[0], &read_fds);
 
+        /* Calculate remaining time until timeout deadline */
+        double remaining_seconds = BOOTSTRAP_TIMEOUT_SECONDS - elapsed_seconds;
+
         struct timeval timeout;
-        timeout.tv_sec = 0;
-        timeout.tv_usec = TIMEOUT_POLL_INTERVAL_MS * 1000;
+        if (remaining_seconds > 0) {
+            timeout.tv_sec = (long)remaining_seconds;
+            timeout.tv_usec = (long)((remaining_seconds - timeout.tv_sec) * 1000000);
+        } else {
+            /* Should be caught by timeout check above, but handle defensively */
+            timeout.tv_sec = 0;
+            timeout.tv_usec = 1000;  /* 1ms minimum */
+        }
 
         int select_result = select(pipefd[0] + 1, &read_fds, NULL, NULL, &timeout);
 
@@ -732,10 +746,10 @@ error_t *bootstrap_execute(
 
         if (select_result == 0) {
             /* Timeout - check if process is still running */
-            int status;
-            pid_t wait_result = waitpid(pid, &status, WNOHANG);
+            pid_t wait_result = waitpid(pid, &final_status, WNOHANG);
             if (wait_result == pid) {
                 /* Process exited */
+                process_reaped = true;
                 process_exited = true;
                 break;
             } else if (wait_result < 0) {
@@ -777,33 +791,27 @@ error_t *bootstrap_execute(
     bool was_signaled = false;
     int signal_num = 0;
 
-    if (timed_out) {
-        /* Process was killed due to timeout - wait for it to terminate */
-        int wait_result = waitpid(pid, &status, 0);
+    if (!process_reaped) {
+        /* Process not yet reaped - do blocking wait */
+        int wait_result = waitpid(pid, &final_status, 0);
         if (wait_result == -1) {
             free_bootstrap_env(env, env_count);
-            return ERROR(ERR_FS, "Bootstrap script timed out and failed to terminate");
-        }
-        /* Mark as timeout error */
-        exit_code = EXIT_CODE_TIMEOUT;
-    } else if (process_exited) {
-        /* Process already exited - status was collected in WNOHANG call */
-        /* Need to do final blocking wait to reap zombie */
-        int wait_result = waitpid(pid, &status, 0);
-        if (wait_result == -1 && errno != ECHILD) {
-            free_bootstrap_env(env, env_count);
-            return ERROR(ERR_FS, "Failed to wait for bootstrap process");
-        }
-    } else {
-        /* Normal case - process hasn't exited yet, do blocking wait */
-        if (waitpid(pid, &status, 0) == -1) {
-            free_bootstrap_env(env, env_count);
-            return ERROR(ERR_FS, "Failed to wait for bootstrap process");
+            if (timed_out) {
+                return ERROR(ERR_FS, "Bootstrap script timed out and failed to terminate");
+            } else {
+                return ERROR(ERR_FS, "Failed to wait for bootstrap process");
+            }
         }
     }
 
-    /* Check exit status - handle both normal exit and signal termination */
-    if (!timed_out) {
+    /* At this point, final_status contains the exit status */
+    status = final_status;
+
+    if (timed_out) {
+        /* Mark as timeout error */
+        exit_code = EXIT_CODE_TIMEOUT;
+    } else {
+        /* Check exit status - handle both normal exit and signal termination */
         if (WIFEXITED(status)) {
             /* Normal exit */
             exit_code = WEXITSTATUS(status);
@@ -1038,4 +1046,3 @@ void bootstrap_result_free(bootstrap_result_t *result) {
 
     free(result);
 }
-

@@ -663,7 +663,7 @@ cleanup:
  * WHY manifest_add_files (not manifest_enable_profile):
  * - Files captured FROM filesystem (already deployed) → deployed_at = time(NULL)
  * - manifest_enable_profile uses lstat() check which may set deployed_at = 0 for missing files
- * - Matches VWD architecture specification (ARCHITECTURE_MANIFEST_VWD.md:569)
+ * - Matches VWD architecture specification
  *
  * Algorithm:
  *   1. Load current enabled profiles (or create empty list if no state)

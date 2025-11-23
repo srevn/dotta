@@ -641,21 +641,32 @@ error_t *gitops_update_file(
     git_tree *dir_tree = NULL;
     git_treebuilder *dir_builder = NULL;
 
-    if (dir_entry && git_tree_entry_type(dir_entry) == GIT_OBJECT_TREE) {
-        /* Load existing subdirectory tree */
-        const git_oid *dir_oid = git_tree_entry_id(dir_entry);
-        git_err = git_tree_lookup(&dir_tree, repo, dir_oid);
-        if (git_err < 0) {
+    if (dir_entry) {
+        /* Path exists - verify it's a directory, not a file */
+        if (git_tree_entry_type(dir_entry) == GIT_OBJECT_TREE) {
+            /* Load existing subdirectory tree */
+            const git_oid *dir_oid = git_tree_entry_id(dir_entry);
+            git_err = git_tree_lookup(&dir_tree, repo, dir_oid);
+            if (git_err < 0) {
+                free(dir_name);
+                git_tree_free(current_tree);
+                return error_from_git(git_err);
+            }
+
+            /* Create builder from existing subdirectory tree */
+            git_err = git_treebuilder_new(&dir_builder, repo, dir_tree);
+            git_tree_free(dir_tree);
+        } else {
+            /* Error: Path exists but is a file, not a directory */
             free(dir_name);
             git_tree_free(current_tree);
-            return error_from_git(git_err);
+            return ERROR(ERR_CONFLICT,
+                        "Cannot create directory '%s': path exists as a file in branch '%s'.\n"
+                        "To resolve: Remove or rename the conflicting file first.",
+                        dir_name, branch_name);
         }
-
-        /* Create builder from existing subdirectory tree */
-        git_err = git_treebuilder_new(&dir_builder, repo, dir_tree);
-        git_tree_free(dir_tree);
     } else {
-        /* Create new subdirectory */
+        /* Path doesn't exist - create new subdirectory */
         git_err = git_treebuilder_new(&dir_builder, repo, NULL);
     }
 

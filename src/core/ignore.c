@@ -43,9 +43,17 @@ struct ignore_context {
     char *baseline_dottaignore_content;    /* Baseline .dottaignore from dotta-worktree */
     char *profile_dottaignore_content;     /* Profile .dottaignore from profile branch */
 
+    /* Combined .dottaignore cache */
+    char *combined_dottaignore_content;    /* Pre-combined baseline + profile */
+    bool rules_loaded;                     /* Whether rules added to libgit2 */
+
     /* Config patterns (user-level) */
     char **config_patterns;
     size_t config_pattern_count;
+
+    /* Source .gitignore caching */
+    git_repository *cached_source_repo;    /* Owned reference, freed in context_free */
+    char *cached_source_workdir;           /* Workdir of cached repo for invalidation */
 
     /* Settings */
     bool respect_gitignore;
@@ -379,24 +387,55 @@ static bool matches_cli_patterns(
 }
 
 /**
+ * Ensure .dottaignore rules are loaded into libgit2 (lazy initialization)
+ *
+ * Adds combined .dottaignore rules to repository on first call.
+ * Subsequent calls are no-ops. Rules persist until context_free.
+ */
+static error_t *ensure_rules_loaded(ignore_context_t *ctx) {
+    CHECK_NULL(ctx);
+
+    /* Already loaded */
+    if (ctx->rules_loaded) {
+        return NULL;
+    }
+
+    /* No content to load */
+    if (!ctx->combined_dottaignore_content || !ctx->repo) {
+        return NULL;
+    }
+
+    /* Add rules to repository (happens once per context) */
+    int git_err = git_ignore_add_rule(
+        ctx->repo,
+        ctx->combined_dottaignore_content
+    );
+    if (git_err < 0) {
+        /* Clean up any partially-added rules */
+        git_ignore_clear_internal_rules(ctx->repo);
+        return error_from_git(git_err);
+    }
+
+    ctx->rules_loaded = true;
+    return NULL;
+}
+
+/**
  * Check if path matches .dottaignore patterns using libgit2
+ *
+ * Assumes rules already loaded by ensure_rules_loaded().
  */
 static error_t *matches_dottaignore(
     git_repository *repo,
-    const char *dottaignore_content,
     const char *path,
     bool is_directory,
     bool *matched
 ) {
+    CHECK_NULL(repo);
+    CHECK_NULL(path);
     CHECK_NULL(matched);
+
     *matched = false;
-
-    if (!repo || !dottaignore_content || !path) {
-        return NULL;
-    }
-
-    /* Use libgit2's ignore API */
-    int ignored = 0;
 
     /* Build path for checking - append / for directories */
     char *check_path = NULL;
@@ -404,34 +443,20 @@ static error_t *matches_dottaignore(
         size_t len = strlen(path);
         if (len > 0 && path[len - 1] != '/') {
             check_path = str_format("%s/", path);
-            if (!check_path) {
-                return ERROR(ERR_MEMORY, "Failed to allocate path");
-            }
         } else {
             check_path = strdup(path);
-            if (!check_path) {
-                return ERROR(ERR_MEMORY, "Failed to allocate path");
-            }
         }
     } else {
         check_path = strdup(path);
-        if (!check_path) {
-            return ERROR(ERR_MEMORY, "Failed to allocate path");
-        }
     }
 
-    /* Add rules to libgit2 ignore system */
-    int git_err = git_ignore_add_rule(repo, dottaignore_content);
-    if (git_err < 0) {
-        free(check_path);
-        return error_from_git(git_err);
+    if (!check_path) {
+        return ERROR(ERR_MEMORY, "Failed to allocate path");
     }
 
-    /* Check if path is ignored */
-    git_err = git_ignore_path_is_ignored(&ignored, repo, check_path);
-
-    /* Clean up the rule we just added */
-    git_ignore_clear_internal_rules(repo);
+    /* Check using pre-loaded rules */
+    int ignored = 0;
+    int git_err = git_ignore_path_is_ignored(&ignored, repo, check_path);
 
     free(check_path);
 
@@ -456,30 +481,65 @@ static bool matches_config_patterns(
 }
 
 /**
- * Check if path is ignored by source .gitignore
+ * Check if path is ignored by source .gitignore (with caching)
  *
- * Discovers if the path is within a git repository, and if so,
- * checks whether it's ignored by that repository's .gitignore.
- *
- * This prevents accidentally adding files that are already ignored
- * at the source location.
+ * Caches source repository handle to avoid repeated discovery.
+ * Fast path reuses cached repo when path is under same workdir.
  */
 static error_t *matches_source_gitignore(
+    ignore_context_t *ctx,
     const char *abs_path,
     bool *matched
 ) {
+    CHECK_NULL(ctx);
     CHECK_NULL(abs_path);
     CHECK_NULL(matched);
 
     *matched = false;
 
-    /* Discover git repository containing this path */
+    /* Fast path: Check if cached repo covers this path */
+    if (ctx->cached_source_repo && ctx->cached_source_workdir) {
+        if (str_starts_with(abs_path, ctx->cached_source_workdir)) {
+            /* Reuse cached repository */
+            const char *rel_path = abs_path + strlen(ctx->cached_source_workdir);
+
+            /* Skip leading slashes (workdir ends with /) */
+            while (*rel_path == '/') {
+                rel_path++;
+            }
+
+            if (*rel_path == '\0') {
+                return NULL;
+            }
+
+            int ignored = 0;
+            int git_err = git_ignore_path_is_ignored(
+                &ignored,
+                ctx->cached_source_repo,
+                rel_path
+            );
+            if (git_err < 0) {
+                return error_from_git(git_err);
+            }
+
+            *matched = (ignored == 1);
+            return NULL;
+        } else {
+            /* Path outside cached workdir - invalidate cache */
+            git_repository_free(ctx->cached_source_repo);
+            ctx->cached_source_repo = NULL;
+            free(ctx->cached_source_workdir);
+            ctx->cached_source_workdir = NULL;
+        }
+    }
+
+    /* Slow path: Discover and open new repository */
     git_buf discovered_path = GIT_BUF_INIT;
     int git_err = git_repository_discover(
         &discovered_path,
         abs_path,
-        0,  /* Don't cross filesystem boundaries */
-        NULL  /* No ceiling directories */
+        0, /* Don't cross filesystem boundaries */
+        NULL /* No ceiling directories */
     );
 
     if (git_err < 0) {
@@ -494,13 +554,11 @@ static error_t *matches_source_gitignore(
     /* Open the source git repository */
     git_repository *source_repo = NULL;
     git_err = git_repository_open(&source_repo, discovered_path.ptr);
+    git_buf_dispose(&discovered_path);
+
     if (git_err < 0) {
-        git_buf_dispose(&discovered_path);
         return error_from_git(git_err);
     }
-
-    /* Free the discovered path buffer */
-    git_buf_dispose(&discovered_path);
 
     /* Get the repository workdir to make path relative */
     const char *workdir = git_repository_workdir(source_repo);
@@ -510,7 +568,7 @@ static error_t *matches_source_gitignore(
         return NULL;
     }
 
-    /* Make path relative to the source repository workdir */
+    /* Make path relative to workdir */
     const char *rel_path = abs_path;
     size_t workdir_len = strlen(workdir);
 
@@ -529,17 +587,30 @@ static error_t *matches_source_gitignore(
         return NULL;
     }
 
-    /* Check if path is ignored in source repository */
+    /* Check if path is ignored */
     int ignored = 0;
-    git_err = git_ignore_path_is_ignored(&ignored, source_repo, rel_path);
-
-    git_repository_free(source_repo);
-
+    git_err = git_ignore_path_is_ignored(
+        &ignored,
+        source_repo,
+        rel_path
+    );
     if (git_err < 0) {
+        git_repository_free(source_repo);
         return error_from_git(git_err);
     }
 
     *matched = (ignored == 1);
+
+    /* Cache for future checks */
+    ctx->cached_source_repo = source_repo;
+    ctx->cached_source_workdir = strdup(workdir);
+    if (!ctx->cached_source_workdir) {
+        /* Can't cache without workdir - free repo and continue */
+        git_repository_free(source_repo);
+        ctx->cached_source_repo = NULL;
+        /* Result already computed - no error needed */
+    }
+
     return NULL;
 }
 
@@ -602,7 +673,11 @@ error_t *ignore_context_create(
 
     /* Load profile-specific .dottaignore (if profile specified) */
     if (repo && profile_name) {
-        error_t *err = load_profile_dottaignore(repo, profile_name, &ctx->profile_dottaignore_content);
+        error_t *err = load_profile_dottaignore(
+            repo,
+            profile_name,
+            &ctx->profile_dottaignore_content
+        );
         if (err) {
             /* Non-fatal - continue without profile .dottaignore */
             error_free(err);
@@ -611,19 +686,58 @@ error_t *ignore_context_create(
 
     /* Load baseline .dottaignore from repository */
     if (repo) {
-        error_t *err = load_baseline_dottaignore(repo, &ctx->baseline_dottaignore_content);
+        error_t *err = load_baseline_dottaignore(
+            repo,
+            &ctx->baseline_dottaignore_content
+        );
         if (err) {
             /* Non-fatal - continue without baseline .dottaignore */
             error_free(err);
         }
     }
 
+    /* Combine baseline + profile .dottaignore for efficient checking.
+     * Order matters: profile second allows negation to override baseline. */
+    ctx->combined_dottaignore_content = NULL;
+    ctx->rules_loaded = false;
+
+    if (ctx->baseline_dottaignore_content && ctx->profile_dottaignore_content) {
+        /* Both exist: combine with baseline first, profile second */
+        ctx->combined_dottaignore_content = str_format("%s\n%s",
+            ctx->baseline_dottaignore_content,
+            ctx->profile_dottaignore_content);
+        if (!ctx->combined_dottaignore_content) {
+            ignore_context_free(ctx);
+            return ERROR(ERR_MEMORY, "Failed to combine .dottaignore content");
+        }
+    } else if (ctx->profile_dottaignore_content) {
+        /* Only profile exists */
+        ctx->combined_dottaignore_content = strdup(ctx->profile_dottaignore_content);
+        if (!ctx->combined_dottaignore_content) {
+            ignore_context_free(ctx);
+            return ERROR(ERR_MEMORY, "Failed to copy .dottaignore content");
+        }
+    } else if (ctx->baseline_dottaignore_content) {
+        /* Only baseline exists */
+        ctx->combined_dottaignore_content = strdup(ctx->baseline_dottaignore_content);
+        if (!ctx->combined_dottaignore_content) {
+            ignore_context_free(ctx);
+            return ERROR(ERR_MEMORY, "Failed to copy .dottaignore content");
+        }
+    }
+    /* else: Neither exists, combined_content remains NULL */
+
+    /* Initialize source repository cache */
+    ctx->cached_source_repo = NULL;
+    ctx->cached_source_workdir = NULL;
+
     /* Copy config patterns */
     if (config && config->ignore_patterns && config->ignore_pattern_count > 0) {
         /* Validate pattern count to prevent overflow and DoS */
         if (config->ignore_pattern_count > MAX_PATTERN_COUNT) {
             ignore_context_free(ctx);
-            return ERROR(ERR_VALIDATION, "Too many config ignore patterns (max 10000)");
+            return ERROR(ERR_VALIDATION,
+                        "Too many config ignore patterns (max 10000)");
         }
 
         ctx->config_patterns = malloc(config->ignore_pattern_count * sizeof(char *));
@@ -634,7 +748,8 @@ error_t *ignore_context_create(
 
         for (size_t i = 0; i < config->ignore_pattern_count; i++) {
             /* Validate pattern length to prevent excessive memory use and DoS */
-            if (config->ignore_patterns[i] && strlen(config->ignore_patterns[i]) > MAX_PATTERN_LENGTH) {
+            if (config->ignore_patterns[i] &&
+                strlen(config->ignore_patterns[i]) > MAX_PATTERN_LENGTH) {
                 /* Clean up - set to NULL to prevent double-free in ignore_context_free() */
                 for (size_t j = 0; j < i; j++) {
                     free(ctx->config_patterns[j]);
@@ -643,7 +758,8 @@ error_t *ignore_context_create(
                 ctx->config_patterns = NULL;
                 ctx->config_pattern_count = 0;
                 ignore_context_free(ctx);
-                return ERROR(ERR_VALIDATION, "Config ignore pattern too long (max 4096 chars)");
+                return ERROR(ERR_VALIDATION,
+                            "Config ignore pattern too long (max 4096 chars)");
             }
 
             ctx->config_patterns[i] = strdup(config->ignore_patterns[i]);
@@ -682,9 +798,15 @@ void ignore_context_free(ignore_context_t *ctx) {
         free(ctx->cli_patterns);
     }
 
+    /* Clear libgit2 rules if loaded */
+    if (ctx->rules_loaded && ctx->repo) {
+        git_ignore_clear_internal_rules(ctx->repo);
+    }
+
     /* Free .dottaignore content */
     free(ctx->baseline_dottaignore_content);
     free(ctx->profile_dottaignore_content);
+    free(ctx->combined_dottaignore_content);
 
     /* Free config patterns */
     if (ctx->config_patterns) {
@@ -693,6 +815,12 @@ void ignore_context_free(ignore_context_t *ctx) {
         }
         free(ctx->config_patterns);
     }
+
+    /* Free cached source repository */
+    if (ctx->cached_source_repo) {
+        git_repository_free(ctx->cached_source_repo);
+    }
+    free(ctx->cached_source_workdir);
 
     free(ctx);
 }
@@ -724,71 +852,37 @@ error_t *ignore_should_ignore(
     }
 
     /* Layer 1: CLI patterns (highest priority) */
-    if (matches_cli_patterns(rel_path, ctx->cli_patterns, ctx->cli_pattern_count)) {
+    if (matches_cli_patterns(
+        rel_path,
+        ctx->cli_patterns,
+        ctx->cli_pattern_count)
+    ) {
         *ignored = true;
         return NULL;
     }
 
-    /* Layer 2+3: Combined baseline + profile .dottaignore patterns
-     *
-     * Profile .dottaignore extends baseline .dottaignore (from dotta-worktree).
-     * By combining them (baseline first, then profile), profile patterns can use
-     * negation (!) to override baseline patterns.
-     *
-     * Example:
-     *   Baseline: *.log          (ignore all logs)
-     *   Profile:  !important.log (un-ignore this specific file)
-     *   Result:   important.log is NOT ignored
-     *
-     * This matches git's .gitignore semantics where later patterns override earlier ones.
-     */
-    if (ctx->baseline_dottaignore_content || ctx->profile_dottaignore_content) {
-        bool matched = false;
-        error_t *err = NULL;
-        char *combined_content = NULL;
-
-        /* Combine baseline + profile if both exist */
-        if (ctx->baseline_dottaignore_content && ctx->profile_dottaignore_content) {
-            combined_content = str_format("%s\n%s",
-                ctx->baseline_dottaignore_content,
-                ctx->profile_dottaignore_content);
-            if (!combined_content) {
-                return ERROR(ERR_MEMORY, "Failed to combine .dottaignore patterns");
-            }
-            err = matches_dottaignore(
-                ctx->repo,
-                combined_content,
-                rel_path,
-                is_directory,
-                &matched
-            );
-            free(combined_content);
-        } else if (ctx->profile_dottaignore_content) {
-            /* Only profile .dottaignore exists */
-            err = matches_dottaignore(
-                ctx->repo,
-                ctx->profile_dottaignore_content,
-                rel_path,
-                is_directory,
-                &matched
-            );
-        } else {
-            /* Only baseline .dottaignore exists */
-            err = matches_dottaignore(
-                ctx->repo,
-                ctx->baseline_dottaignore_content,
-                rel_path,
-                is_directory,
-                &matched
-            );
-        }
-
+    /* Layer 2+3: Combined baseline + profile .dottaignore patterns */
+    if (ctx->combined_dottaignore_content) {
+        /* Lazy load rules on first use */
+        error_t *err = ensure_rules_loaded(ctx);
         if (err) {
             /* Non-fatal - continue without .dottaignore checking */
             error_free(err);
-        } else if (matched) {
-            *ignored = true;
-            return NULL;
+        } else {
+            bool matched = false;
+            err = matches_dottaignore(
+                ctx->repo,
+                rel_path,
+                is_directory,
+                &matched
+            );
+            if (err) {
+                /* Non-fatal - continue without .dottaignore checking */
+                error_free(err);
+            } else if (matched) {
+                *ignored = true;
+                return NULL;
+            }
         }
     }
 
@@ -801,7 +895,7 @@ error_t *ignore_should_ignore(
     /* Layer 5: Source .gitignore (lowest priority, when enabled) */
     if (ctx->respect_gitignore && abs_path[0] == '/') {
         bool matched = false;
-        error_t *err = matches_source_gitignore(abs_path, &matched);
+        error_t *err = matches_source_gitignore(ctx, abs_path, &matched);
         if (err) {
             /* Non-fatal - continue without source .gitignore checking */
             error_free(err);
@@ -863,65 +957,32 @@ error_t *ignore_test_path(
         return NULL;
     }
 
-    /* Layer 2+3: Combined baseline + profile .dottaignore patterns
-     *
-     * Profile .dottaignore extends baseline .dottaignore (from dotta-worktree).
-     * By combining them (baseline first, then profile), profile patterns can use
-     * negation (!) to override baseline patterns.
-     */
-    if (ctx->baseline_dottaignore_content || ctx->profile_dottaignore_content) {
-        bool matched = false;
-        error_t *err = NULL;
-        char *combined_content = NULL;
-        ignore_source_t source = IGNORE_SOURCE_NONE;
-
-        /* Combine baseline + profile if both exist */
-        if (ctx->baseline_dottaignore_content && ctx->profile_dottaignore_content) {
-            combined_content = str_format("%s\n%s",
-                ctx->baseline_dottaignore_content,
-                ctx->profile_dottaignore_content);
-            if (!combined_content) {
-                return ERROR(ERR_MEMORY, "Failed to combine .dottaignore patterns");
-            }
-            err = matches_dottaignore(
-                ctx->repo,
-                combined_content,
-                rel_path,
-                is_directory,
-                &matched
-            );
-            free(combined_content);
-            /* When combined, attribute to profile (it has final say via negation) */
-            source = IGNORE_SOURCE_PROFILE_DOTTAIGNORE;
-        } else if (ctx->profile_dottaignore_content) {
-            /* Only profile .dottaignore exists */
-            err = matches_dottaignore(
-                ctx->repo,
-                ctx->profile_dottaignore_content,
-                rel_path,
-                is_directory,
-                &matched
-            );
-            source = IGNORE_SOURCE_PROFILE_DOTTAIGNORE;
-        } else {
-            /* Only baseline .dottaignore exists */
-            err = matches_dottaignore(
-                ctx->repo,
-                ctx->baseline_dottaignore_content,
-                rel_path,
-                is_directory,
-                &matched
-            );
-            source = IGNORE_SOURCE_BASELINE_DOTTAIGNORE;
-        }
-
+    /* Layer 2+3: Combined baseline + profile .dottaignore patterns */
+    if (ctx->combined_dottaignore_content) {
+        /* Lazy load rules on first use */
+        error_t *err = ensure_rules_loaded(ctx);
         if (err) {
             /* Non-fatal - continue without .dottaignore checking */
             error_free(err);
-        } else if (matched) {
-            result->ignored = true;
-            result->source = source;
-            return NULL;
+        } else {
+            bool matched = false;
+            err = matches_dottaignore(
+                ctx->repo,
+                rel_path,
+                is_directory,
+                &matched
+            );
+            if (err) {
+                /* Non-fatal - continue without .dottaignore checking */
+                error_free(err);
+            } else if (matched) {
+                result->ignored = true;
+                /* Attribute to profile if profile content exists, otherwise baseline */
+                result->source = ctx->profile_dottaignore_content
+                    ? IGNORE_SOURCE_PROFILE_DOTTAIGNORE
+                    : IGNORE_SOURCE_BASELINE_DOTTAIGNORE;
+                return NULL;
+            }
         }
     }
 
@@ -935,7 +996,7 @@ error_t *ignore_test_path(
     /* Layer 5: Source .gitignore (lowest priority, when enabled) */
     if (ctx->respect_gitignore && abs_path[0] == '/') {
         bool matched = false;
-        error_t *err = matches_source_gitignore(abs_path, &matched);
+        error_t *err = matches_source_gitignore(ctx, abs_path, &matched);
         if (err) {
             /* Non-fatal - continue without source .gitignore checking */
             error_free(err);

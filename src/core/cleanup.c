@@ -488,7 +488,22 @@ static error_t *prune_orphaned_directories(
 
             /* Check if directory exists */
             if (!fs_exists(dir_path)) {
+                /* Directory already removed from filesystem (manually or by another process).
+                 * We didn't remove it, but we still need to track it for state cleanup.
+                 *
+                 * The apply command uses removed_dirs to know which state entries to remove.
+                 * Without this, orphaned directories that are manually deleted accumulate
+                 * forever in the state database as "ghost orphans".
+                 */
                 states[i] = DIR_STATE_NONEXISTENT;
+                if (!dry_run) {
+                    result->orphaned_directories_removed++;
+                    error_t *push_err = string_array_push(result->removed_dirs, dir_path);
+                    if (push_err) {
+                        free(states);
+                        return error_wrap(push_err, "Failed to track already-removed directory");
+                    }
+                }
                 continue;
             }
 

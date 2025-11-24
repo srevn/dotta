@@ -446,7 +446,14 @@ error_t *compare_generate_diff(
 
     /* Perform comparison using buffer with optional stat */
     struct stat file_stat;
-    error_t *err = compare_buffer_to_disk(content, disk_path, mode, in_stat, &diff->status, &file_stat);
+    error_t *err = compare_buffer_to_disk(
+        content,
+        disk_path,
+        mode,
+        in_stat,
+        &diff->status,
+        &file_stat
+    );
     if (err) {
         free(diff->path);
         free(diff);

@@ -18,6 +18,7 @@
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "base/gitops.h"
+#include "infra/path.h"
 #include "utils/array.h"
 #include "utils/buffer.h"
 #include "utils/hashmap.h"
@@ -1177,6 +1178,14 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
             metadata_free(metadata);
             cJSON_Delete(root);
             return ERROR(ERR_INVALID_ARG, "Item missing key field");
+        }
+
+        /* Validate key format (prevent path traversal) */
+        err = path_validate_storage(key_obj->valuestring);
+        if (err) {
+            metadata_free(metadata);
+            cJSON_Delete(root);
+            return error_wrap(err, "Invalid key in metadata: %s", key_obj->valuestring);
         }
 
         /* Get mode (required) */

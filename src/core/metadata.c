@@ -1153,7 +1153,7 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
 
         /* Get kind discriminator (required) */
         cJSON *kind_obj = cJSON_GetObjectItem(item_obj, "kind");
-        if (!kind_obj || !cJSON_IsString(kind_obj)) {
+        if (!kind_obj || !cJSON_IsString(kind_obj) || !kind_obj->valuestring) {
             metadata_free(metadata);
             cJSON_Delete(root);
             return ERROR(ERR_INVALID_ARG, "Item missing kind field");
@@ -1173,7 +1173,7 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
 
         /* Get key (required) */
         cJSON *key_obj = cJSON_GetObjectItem(item_obj, "key");
-        if (!key_obj || !cJSON_IsString(key_obj)) {
+        if (!key_obj || !cJSON_IsString(key_obj) || !key_obj->valuestring) {
             metadata_free(metadata);
             cJSON_Delete(root);
             return ERROR(ERR_INVALID_ARG, "Item missing key field");
@@ -1181,7 +1181,7 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
 
         /* Get mode (required) */
         cJSON *mode_obj = cJSON_GetObjectItem(item_obj, "mode");
-        if (!mode_obj || !cJSON_IsString(mode_obj)) {
+        if (!mode_obj || !cJSON_IsString(mode_obj) || !mode_obj->valuestring) {
             metadata_free(metadata);
             cJSON_Delete(root);
             return ERROR(ERR_INVALID_ARG, "Item missing mode field (key: %s)", key_obj->valuestring);

@@ -120,20 +120,29 @@ error_t *fs_read_file(const char *path, buffer_t **out) {
     unsigned char chunk[IO_BUFFER_SIZE];
     ssize_t bytes_read;
 
-    while ((bytes_read = read(fd, chunk, sizeof(chunk))) > 0) {
+    for (;;) {
+        bytes_read = read(fd, chunk, sizeof(chunk));
+
+        if (bytes_read < 0) {
+            if (errno == EINTR) {
+                continue;  /* Interrupted by signal, retry */
+            }
+            int saved_errno = errno;
+            close(fd);
+            buffer_free(buf);
+            return ERROR(ERR_FS, "Read error on '%s': %s", path, strerror(saved_errno));
+        }
+
+        if (bytes_read == 0) {
+            break;  /* EOF */
+        }
+
         error_t *err = buffer_append(buf, chunk, bytes_read);
         if (err) {
             close(fd);
             buffer_free(buf);
             return error_wrap(err, "Failed to read '%s'", path);
         }
-    }
-
-    if (bytes_read < 0) {
-        int saved_errno = errno;
-        close(fd);
-        buffer_free(buf);
-        return ERROR(ERR_FS, "Read error on '%s': %s", path, strerror(saved_errno));
     }
 
     close(fd);
@@ -449,8 +458,10 @@ error_t *fs_create_dir_with_ownership(
     /* Try to open existing directory first (eliminates TOCTOU race)
      * SECURITY: This open-first pattern prevents race conditions where
      * a directory is checked, then deleted/replaced before we operate on it.
-     * By attempting to open first, we either get a valid fd or a clear error. */
-    int dirfd = open(path, O_RDONLY | O_DIRECTORY);
+     * By attempting to open first, we either get a valid fd or a clear error.
+     * O_NOFOLLOW prevents symlink substitution attacks - if an attacker replaces
+     * the directory with a symlink, open() fails with ELOOP instead of following. */
+    int dirfd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
     if (dirfd >= 0) {
         /* Directory exists - update ownership and mode atomically */
         goto apply_metadata;
@@ -495,8 +506,11 @@ error_t *fs_create_dir_with_ownership(
                     path, strerror(errno));
     }
 
-    /* Open newly created directory for atomic operations */
-    dirfd = open(path, O_RDONLY | O_DIRECTORY);
+    /* Open newly created directory for atomic operations
+     * SECURITY: O_NOFOLLOW closes the TOCTOU window - if an attacker replaced
+     * the directory with a symlink between mkdir() and open(), this fails safely
+     * with ELOOP instead of applying ownership to the symlink target. */
+    dirfd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
     if (dirfd < 0) {
         return ERROR(ERR_FS, "Failed to open newly created directory '%s': %s",
                     path, strerror(errno));

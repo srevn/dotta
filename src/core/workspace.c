@@ -231,8 +231,11 @@ error_t *check_item_metadata_divergence(
                 if (strcmp(expected_owner, pwd->pw_name) != 0) {
                     owner_differs = true;
                 }
+            } else {
+                /* getpwuid failed - orphaned UID or system error
+                 * Treat as divergence: unknown ≠ expected (security-first) */
+                owner_differs = true;
             }
-            /* If getpwuid fails, skip check (graceful degradation) */
         }
 
         /* Check group independently - no short-circuit */
@@ -242,8 +245,11 @@ error_t *check_item_metadata_divergence(
                 if (strcmp(expected_group, grp->gr_name) != 0) {
                     group_differs = true;
                 }
+            } else {
+                /* getgrgid failed - orphaned GID or system error
+                 * Treat as divergence: unknown ≠ expected (security-first) */
+                group_differs = true;
             }
-            /* If getgrgid fails, skip check (graceful degradation) */
         }
 
         if (owner_differs || group_differs) {

@@ -204,6 +204,20 @@ error_t *fs_create_dir_with_ownership(
 error_t *fs_remove_dir(const char *path, bool recursive);
 
 /**
+ * Clear path for replacement (remove file, symlink, or directory)
+ *
+ * Removes whatever exists at the given path to prepare for deployment.
+ * Handles all filesystem entity types:
+ * - Regular files: removed via unlink()
+ * - Symlinks: removed via unlink() (does NOT follow to target)
+ * - Directories: removed via recursive rmdir
+ *
+ * @param path Path to clear (must not be NULL or empty)
+ * @return Error or NULL on success
+ */
+error_t *fs_clear_path(const char *path);
+
+/**
  * Check if path is a directory
  *
  * @param path Path to check (must not be NULL)

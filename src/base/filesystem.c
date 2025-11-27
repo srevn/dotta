@@ -604,6 +604,33 @@ error_t *fs_remove_dir(const char *path, bool recursive) {
     return NULL;
 }
 
+error_t *fs_clear_path(const char *path) {
+    RETURN_IF_ERROR(validate_path(path));
+
+    struct stat st;
+    if (lstat(path, &st) != 0) {
+        if (errno == ENOENT) {
+            return NULL;  /* Nothing to clear - success */
+        }
+        return ERROR(ERR_FS, "Failed to stat '%s': %s", path, strerror(errno));
+    }
+
+    if (S_ISDIR(st.st_mode)) {
+        /* Directory - remove recursively */
+        return fs_remove_dir(path, true);
+    }
+
+    /* File or symlink - use unlink */
+    if (unlink(path) != 0) {
+        if (errno == ENOENT) {
+            return NULL;  /* Race condition - already gone, success */
+        }
+        return ERROR(ERR_FS, "Failed to remove '%s': %s", path, strerror(errno));
+    }
+
+    return NULL;
+}
+
 bool fs_is_directory(const char *path) {
     if (!path || path[0] == '\0') {
         return false;

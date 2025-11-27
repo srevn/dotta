@@ -332,12 +332,19 @@ error_t *deploy_file(
 
         git_blob_free(blob);
 
-        /* Remove existing file/symlink */
-        if (fs_exists(entry->filesystem_path)) {
-            err = fs_remove_file(entry->filesystem_path);
-            if (err) {
-                goto cleanup;
-            }
+        /* Clear path for symlink deployment (handles files, symlinks, and directories)
+         *
+         * Uses fs_clear_path() instead of fs_remove_file() because:
+         * 1. fs_remove_file() fails with EISDIR if target is a directory
+         * 2. fs_clear_path() uses lstat() so broken symlinks are properly detected
+         * 3. Idempotent - succeeds if path doesn't exist
+         *
+         * Safety: Only reached with --force (preflight blocks DIVERGENCE_TYPE)
+         */
+        err = fs_clear_path(entry->filesystem_path);
+        if (err) {
+            err = error_wrap(err, "Failed to prepare path for symlink deployment");
+            goto cleanup;
         }
 
         /* Create symlink */
@@ -426,6 +433,27 @@ error_t *deploy_file(
     if (err) {
         err = error_wrap(err, "Failed to resolve ownership for '%s'", entry->filesystem_path);
         goto cleanup;
+    }
+
+    /* Clear directory at target path if present
+     *
+     * fs_write_file_raw() can overwrite existing files via O_TRUNC but cannot
+     * replace directories (open() fails with EISDIR). Directories must be
+     * cleared explicitly before writing.
+     *
+     * Uses lstat() to avoid following symlinks:
+     * - Symlink to directory: lstat returns S_IFLNK → O_CREAT handles correctly
+     * - Actual directory: lstat returns S_IFDIR → must clear before writing
+     *
+     * Safety: Only reached with --force (preflight blocks DIVERGENCE_TYPE)
+     */
+    struct stat target_stat;
+    if (lstat(entry->filesystem_path, &target_stat) == 0 && S_ISDIR(target_stat.st_mode)) {
+        err = fs_remove_dir(entry->filesystem_path, true);
+        if (err) {
+            err = error_wrap(err, "Failed to clear directory at '%s'", entry->filesystem_path);
+            goto cleanup;
+        }
     }
 
     /* Write directly from git blob to filesystem with atomic ownership and permissions

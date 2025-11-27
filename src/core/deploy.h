@@ -118,7 +118,6 @@ error_t *deploy_preflight_check_from_workspace(
  * @param manifest Manifest to deploy (must not be NULL)
  * @param state State database for tracked directories (can be NULL)
  * @param opts Deployment options (must not be NULL)
- * @param km Key manager for encryption (can be NULL for plaintext-only)
  * @param cache Content cache for batch operations (must not be NULL)
  * @param out Deployment results (must not be NULL, caller must free)
  * @return Error or NULL on success
@@ -129,7 +128,6 @@ error_t *deploy_execute(
     const manifest_t *manifest,
     const state_t *state,
     const deploy_options_t *opts,
-    keymanager_t *km,
     content_cache_t *cache,
     deploy_result_t **out
 );

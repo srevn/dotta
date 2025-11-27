@@ -622,7 +622,6 @@ error_t *deploy_execute(
     const manifest_t *manifest,
     const state_t *state,
     const deploy_options_t *opts,
-    keymanager_t *km,
     content_cache_t *cache,
     deploy_result_t **out
 ) {
@@ -632,12 +631,6 @@ error_t *deploy_execute(
     CHECK_NULL(opts);
     CHECK_NULL(cache);
     CHECK_NULL(out);
-
-    /* Note: km parameter provided for API consistency with other core operations.
-     * Encryption/decryption is handled via cache->km (set during cache creation).
-     * This design keeps the cache as the abstraction boundary while maintaining
-     * uniform function signatures across deploy, safety, and cleanup modules. */
-    (void)km;  /* Explicitly mark as intentionally unused */
 
     /* Declare all resources at top, initialized to NULL */
     error_t *err = NULL;

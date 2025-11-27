@@ -1254,7 +1254,7 @@ error_t *manifest_disable_profile(
             err = state_update_directory(state, entry);
             if (err) {
                 err = error_wrap(err, "Failed to update directory to fallback for %s",
-                               entry->filesystem_path);
+                                 entry->filesystem_path);
                 goto directory_cleanup;
             }
 

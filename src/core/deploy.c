@@ -473,22 +473,31 @@ cleanup:
 /**
  * Deploy tracked directories from state
  *
- * Creates all tracked directories with proper permissions and ownership before
- * deploying files. This ensures that directories are created with correct metadata
- * from the start, preventing security issues like world-readable sensitive dirs.
+ * Creates or updates tracked directories with proper permissions and ownership
+ * before deploying files. Uses workspace divergence analysis to determine which
+ * directories need updates, enabling convergence of directory metadata.
  *
  * ARCHITECTURE: Uses state (VWD) instead of metadata (Git) for directory resolution.
  * State contains filesystem_path already resolved with custom_prefix during manifest
  * building, eliminating path conversion errors and enabling custom prefix support.
  *
+ * Convergence model (matches file deployment pattern):
+ * - Query workspace for divergence (O(1) hashmap lookup)
+ * - Skip CLEAN directories (no divergence, already correct)
+ * - Create missing directories
+ * - Fix divergent directories (mode/ownership changes)
+ *
+ * @param ws Workspace with divergence analysis (must not be NULL)
  * @param state State database (can be NULL - returns immediately if NULL)
  * @param opts Deployment options (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *deploy_tracked_directories(
+    const workspace_t *ws,
     const state_t *state,
     const deploy_options_t *opts
 ) {
+    CHECK_NULL(ws);
     CHECK_NULL(opts);
 
     /* Gracefully handle NULL state (no database = no tracked directories) */
@@ -561,10 +570,31 @@ static error_t *deploy_tracked_directories(
             }
         }
 
-        /* Skip if directory already exists and we're not forcing */
-        if (fs_is_directory(filesystem_path) && !opts->force) {
+        /* Query workspace for divergence (O(1) hashmap lookup)
+         *
+         * Convergence model (matches file deployment pattern):
+         * - ws_item == NULL && exists → SKIP (directory CLEAN)
+         * - ws_item != NULL → FIX (has divergence: mode/ownership)
+         * - !exists → CREATE (missing or deleted)
+         */
+        const workspace_item_t *ws_item = workspace_get_item(ws, filesystem_path);
+
+        /* Type conflict: expected directory, found regular file
+         * This is a user error that requires manual resolution */
+        if (fs_exists(filesystem_path) && !fs_is_directory(filesystem_path)) {
+            fprintf(stderr, "  Warning: %s exists but is not a directory (skipping)\n",
+                    filesystem_path);
+            continue;
+        }
+
+        /* Track whether this is creation vs update for verbose output */
+        bool directory_existed = fs_is_directory(filesystem_path);
+
+        /* Skip if directory is CLEAN (no divergence and exists on filesystem)
+         * Force flag bypasses this check to allow manual re-application */
+        if (!ws_item && directory_existed && !opts->force) {
             if (opts->verbose) {
-                printf("  Skipped: %s (already exists)\n", filesystem_path);
+                printf("  Skipped: %s (unchanged)\n", filesystem_path);
             }
             continue;
         }
@@ -572,14 +602,15 @@ static error_t *deploy_tracked_directories(
         /* Dry-run: just print what would happen */
         if (opts->dry_run) {
             if (opts->verbose) {
+                const char *action = directory_existed ? "Would fix" : "Would create";
                 if (dir_entry->owner || dir_entry->group) {
-                    printf("  Would create: %s (mode: %04o, owner: %s:%s)\n",
-                          filesystem_path, dir_mode,
+                    printf("  %s: %s (mode: %04o, owner: %s:%s)\n",
+                          action, filesystem_path, dir_mode,
                           dir_entry->owner ? dir_entry->owner : "?",
                           dir_entry->group ? dir_entry->group : "?");
                 } else {
-                    printf("  Would create: %s (mode: %04o)\n",
-                          filesystem_path, dir_mode);
+                    printf("  %s: %s (mode: %04o)\n",
+                          action, filesystem_path, dir_mode);
                 }
             }
             continue;
@@ -627,18 +658,19 @@ static error_t *deploy_tracked_directories(
                             filesystem_path);
         }
 
-        /* Verbose output */
+        /* Verbose output - distinguish creation from metadata fix */
         if (opts->verbose) {
+            const char *action = directory_existed ? "Fixed" : "Created";
             bool has_ownership = (dir_entry->owner || dir_entry->group) && target_uid != (uid_t)-1;
 
             if (has_ownership) {
-                printf("  Created: %s (mode: %04o, owner: %s:%s)\n",
-                      filesystem_path, dir_mode,
+                printf("  %s: %s (mode: %04o, owner: %s:%s)\n",
+                      action, filesystem_path, dir_mode,
                       dir_entry->owner ? dir_entry->owner : "?",
                       dir_entry->group ? dir_entry->group : "?");
             } else {
-                printf("  Created: %s (mode: %04o)\n",
-                      filesystem_path, dir_mode);
+                printf("  %s: %s (mode: %04o)\n",
+                      action, filesystem_path, dir_mode);
             }
         }
     }
@@ -692,7 +724,7 @@ error_t *deploy_execute(
     }
 
     /* Deploy tracked directories from state database first */
-    err = deploy_tracked_directories(state, opts);
+    err = deploy_tracked_directories(ws, state, opts);
     if (err) {
         deploy_result_free(result);
         return error_wrap(err, "Failed to deploy tracked directories");

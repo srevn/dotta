@@ -872,7 +872,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         .analyze_files = true,
         .analyze_orphans = true,
         .analyze_untracked = false,    /* Skip expensive directory scan */
-        .analyze_directories = false,  /* Not needed for deployment */
+        .analyze_directories = true,   /* Directory metadata convergence */
         .analyze_encryption = false    /* Not needed for deployment */
     };
     err = workspace_load(repo, state, workspace_profiles, config, &ws_opts, &ws);

@@ -1286,7 +1286,8 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         .dry_run = opts->dry_run,
         .verbose = opts->verbose,
         .skip_existing = opts->skip_existing,
-        .skip_unchanged = opts->skip_unchanged
+        .skip_unchanged = opts->skip_unchanged,
+        .strict_ownership = config->strict_mode
     };
 
     err = deploy_preflight_check_from_workspace(ws, deploy_manifest, &deploy_opts, &preflight);

@@ -32,7 +32,7 @@ typedef struct workspace workspace_t;
  * Represents a file where the owning profile is changing.
  */
 typedef struct {
-    char *filesystem_path;       /* File path */
+    char *filesystem_path;      /* File path */
     char *old_profile;          /* Previous owning profile */
     char *new_profile;          /* New owning profile */
 } ownership_change_t;
@@ -52,11 +52,12 @@ typedef struct {
  * Deployment options
  */
 typedef struct {
-    bool force;           /* Overwrite modified files */
-    bool dry_run;         /* Don't actually deploy */
-    bool verbose;         /* Print verbose output */
-    bool skip_existing;   /* Skip files that already exist (don't overwrite) */
-    bool skip_unchanged;  /* Skip files that match profile content (smart skip) */
+    bool force;            /* Overwrite modified files */
+    bool dry_run;          /* Don't actually deploy */
+    bool verbose;          /* Print verbose output */
+    bool skip_existing;    /* Skip files that already exist (don't overwrite) */
+    bool skip_unchanged;   /* Skip files that match profile content (smart skip) */
+    bool strict_ownership; /* Fail if ownership cannot be resolved (strict_mode) */
 } deploy_options_t;
 
 /**
@@ -67,7 +68,7 @@ typedef struct {
     size_t skipped_count;        /* Skipped files */
     string_array_t *deployed;    /* List of deployed files */
     string_array_t *skipped;     /* List of skipped files */
-    string_array_t *skipped_reasons;  /* Parallel array: skip reasons ("unchanged" | "exists") */
+    string_array_t *skipped_reasons;  /* Skip reasons ("unchanged" | "exists") */
     string_array_t *failed;      /* List of failed files */
     char *error_message;         /* Error message if deployment failed */
 } deploy_result_t;

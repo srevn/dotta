@@ -156,11 +156,17 @@ error_t *deploy_preflight_check_from_workspace(
  * - root/ or custom/ prefix with owner/group metadata: Resolve names to UID/GID
  * - All other cases: Return -1 (no ownership change)
  *
+ * Strict ownership mode (strict_ownership=true):
+ * - ERR_NOT_FOUND (user/group missing): Fatal error, abort deployment
+ * - ERR_PERMISSION (not root): Warning only (can't chown anyway)
+ *
  * @param storage_path Path in profile (e.g., "home/.bashrc", "root/etc/hosts", "custom/etc/nginx.conf")
  * @param owner Owner username from metadata (can be NULL)
  * @param group Group name from metadata (can be NULL)
  * @param out_uid Resolved UID or -1 for no change (must not be NULL)
  * @param out_gid Resolved GID or -1 for no change (must not be NULL)
+ * @param strict_ownership Fail deployment if ownership cannot be resolved
+ * @param dry_run Dry-run mode (show "would fail" instead of failing)
  * @param verbose Enable verbose warning messages
  * @return Error on fatal failures, NULL on success (non-fatal errors logged and suppressed)
  */
@@ -170,6 +176,8 @@ static error_t *resolve_deployment_ownership(
     const char *group,
     uid_t *out_uid,
     gid_t *out_gid,
+    bool strict_ownership,
+    bool dry_run,
     bool verbose
 ) {
     CHECK_NULL(storage_path);
@@ -198,13 +206,37 @@ static error_t *resolve_deployment_ownership(
     if (requires_root_privileges && (owner || group)) {
         error_t *err = metadata_resolve_ownership(owner, group, out_uid, out_gid);
         if (err) {
-            /* Non-fatal: Log warning and continue with default ownership
-             * This allows deployment to proceed even if the user/group doesn't
-             * exist on this machine (e.g., deploying admin files as non-root) */
-            if (verbose || err->code != ERR_PERMISSION) {
+            /* Determine error type and whether it should be fatal
+             *
+             * ERR_NOT_FOUND: User/group doesn't exist on this system
+             *   - strict_ownership=true: Fatal (configuration/environment mismatch)
+             *   - strict_ownership=false: Warning, continue with default ownership
+             *
+             * ERR_PERMISSION: Not running as root (can't chown anyway)
+             *   - Always warning (user already warned about privileges)
+             */
+            bool is_resolution_failure = (err->code == ERR_NOT_FOUND);
+            bool should_fail = is_resolution_failure && strict_ownership && !dry_run;
+
+            if (should_fail) {
+                /* Fatal: Return error to abort deployment */
+                return error_wrap(err,
+                    "Ownership resolution failed for '%s' (strict_mode enabled)\n"
+                    "Hint: Create the user/group on this system, or disable strict_mode",
+                    storage_path);
+            }
+
+            /* Non-fatal: Log appropriate message and continue */
+            if (dry_run && is_resolution_failure && strict_ownership) {
+                /* Dry-run with strict mode: Show what would fail */
+                fprintf(stderr, "Would fail: %s - %s (strict_mode enabled)\n",
+                        storage_path, error_message(err));
+            } else if (verbose || err->code != ERR_PERMISSION) {
+                /* Standard warning (suppress ERR_PERMISSION unless verbose) */
                 fprintf(stderr, "Warning: Could not resolve ownership for %s: %s\n",
                         storage_path, error_message(err));
             }
+
             error_free(err);
             /* Reset to "no change" */
             *out_uid = (uid_t)-1;
@@ -387,6 +419,8 @@ error_t *deploy_file(
         entry->group,  /* From manifest cache */
         &target_uid,
         &target_gid,
+        opts->strict_ownership,
+        opts->dry_run,
         opts->verbose
     );
     if (err) {
@@ -566,6 +600,8 @@ static error_t *deploy_tracked_directories(
             dir_entry->group,
             &target_uid,
             &target_gid,
+            opts->strict_ownership,
+            opts->dry_run,
             opts->verbose
         );
         if (err) {

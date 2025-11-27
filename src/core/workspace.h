@@ -54,7 +54,6 @@
  *
  * Lifetime notes:
  * - filesystem_path, storage_path, profile, metadata_profile, old_profile: owned strings (must free)
- * - all_profiles: owned array, must free with string_array_free()
  * - source_profile: borrowed pointer, valid while workspace lives
  *   (workspace borrows profiles list from caller, so pointer is safe)
  */
@@ -64,9 +63,6 @@ typedef struct {
     char *profile;              /* Winning profile name (owned) */
     char *metadata_profile;     /* Which profile's metadata won, can differ from profile (owned) */
     char *old_profile;          /* Previous profile from state, NULL if unchanged (owned) */
-
-    /* All enabled profiles containing this file (multi-profile overlap tracking) */
-    string_array_t *all_profiles;
 
     /* Direct pointer to profile structure for convenience (borrowed, can be NULL if not enabled) */
     profile_t *source_profile;

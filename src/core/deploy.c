@@ -17,7 +17,6 @@
 #include "infra/content.h"
 #include "utils/array.h"
 #include "utils/buffer.h"
-#include "utils/hashmap.h"
 #include "utils/privilege.h"
 #include "utils/string.h"
 
@@ -52,49 +51,15 @@ error_t *deploy_preflight_check_from_workspace(
     result->has_errors = false;
     result->conflicts = string_array_create();
     result->permission_errors = string_array_create();
-    result->overlaps = string_array_create();
     result->ownership_changes = NULL;
     result->ownership_change_count = 0;
 
-    if (!result->conflicts || !result->permission_errors || !result->overlaps) {
+    if (!result->conflicts || !result->permission_errors) {
         preflight_result_free(result);
         return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
     }
 
-    /* CHECK 1: Overlap Detection (Manifest-level)
-     * Detect files appearing in multiple profiles. This is a manifest concern,
-     * not a divergence concern, so it stays in preflight.
-     */
-    hashmap_t *seen_paths = hashmap_create(manifest->count);
-    if (!seen_paths) {
-        preflight_result_free(result);
-        return ERROR(ERR_MEMORY, "Failed to create overlap detection map");
-    }
-
-    for (size_t i = 0; i < manifest->count; i++) {
-        const file_entry_t *entry = &manifest->entries[i];
-        void *state_val = hashmap_get(seen_paths, entry->filesystem_path);
-
-        if (state_val == NULL) {
-            /* First occurrence - mark as seen */
-            hashmap_set(seen_paths, entry->filesystem_path, (void *)1);
-        } else if (state_val == (void *)1) {
-            /* Second occurrence - record as overlap */
-            error_t *err = string_array_push(result->overlaps, entry->filesystem_path);
-            if (err) {
-                hashmap_free(seen_paths, NULL);
-                preflight_result_free(result);
-                return error_wrap(err, "Failed to record overlap");
-            }
-            /* Mark as already recorded to avoid duplicates */
-            hashmap_set(seen_paths, entry->filesystem_path, (void *)2);
-        }
-        /* (void *)2 means already recorded - skip */
-    }
-
-    hashmap_free(seen_paths, NULL);
-
-    /* CHECK 2: Conflict Detection + Ownership Changes + Writability
+    /* Conflict Detection + Ownership Changes + Writability
      * Query workspace for divergence (O(1) per file), map to preflight decisions.
      */
 
@@ -818,7 +783,6 @@ void preflight_result_free(preflight_result_t *result) {
 
     string_array_free(result->conflicts);
     string_array_free(result->permission_errors);
-    string_array_free(result->overlaps);
 
     /* Free ownership changes */
     if (result->ownership_changes) {

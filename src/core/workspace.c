@@ -38,7 +38,6 @@
 #include "crypto/policy.h"
 #include "infra/compare.h"
 #include "infra/content.h"
-#include "utils/array.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
 #include "utils/privilege.h"
@@ -270,7 +269,6 @@ error_t *check_item_metadata_divergence(
  * @param storage_path Path in profile (can be NULL for directories)
  * @param profile Source profile name (can be NULL for orphans)
  * @param old_profile Previous profile from state (can be NULL, takes ownership)
- * @param all_profiles All profiles containing file (can be NULL, deep copied)
  * @param state Where the item exists (deployed/undeployed/etc.)
  * @param divergence What's wrong with it (bit flags, can combine)
  * @param item_kind FILE or DIRECTORY (explicit type)
@@ -286,7 +284,6 @@ static error_t *workspace_add_diverged(
     const char *storage_path,
     const char *profile,
     char *old_profile,
-    const string_array_t *all_profiles,
     workspace_state_t state,
     divergence_type_t divergence,
     workspace_item_kind_t item_kind,
@@ -340,24 +337,13 @@ static error_t *workspace_add_diverged(
     entry->profile_changed = profile_changed;
     entry->old_profile = old_profile;  /* Takes ownership (can be NULL) */
 
-    /* Deep copy all_profiles if present (NULL optimization for single-profile files) */
-    entry->all_profiles = string_array_clone(all_profiles);
-    if (all_profiles && !entry->all_profiles) {
-        free(entry->filesystem_path);
-        free(entry->storage_path);
-        free(entry->profile);
-        free(entry->old_profile);
-        return ERROR(ERR_MEMORY, "Failed to clone all_profiles array");
-    }
-
     if (!entry->filesystem_path ||
         (storage_path && !entry->storage_path) ||
         (profile && !entry->profile)) {
         free(entry->filesystem_path);
         free(entry->storage_path);
         free(entry->profile);
-        free(entry->old_profile);  /* Clean up if early return */
-        string_array_free(entry->all_profiles);  /* Clean up all_profiles */
+        free(entry->old_profile);
         return ERROR(ERR_MEMORY, "Failed to allocate diverged entry");
     }
 
@@ -375,7 +361,6 @@ static error_t *workspace_add_diverged(
                     free(entry->storage_path);
                     free(entry->profile);
                     free(entry->old_profile);
-                    string_array_free(entry->all_profiles);
                     return ERROR(ERR_MEMORY, "Failed to allocate metadata_profile");
                 }
             }
@@ -391,7 +376,6 @@ static error_t *workspace_add_diverged(
         free(entry->profile);
         free(entry->old_profile);
         free(entry->metadata_profile);
-        string_array_free(entry->all_profiles);
         return error_wrap(err, "Failed to index diverged entry");
     }
 
@@ -541,8 +525,7 @@ static error_t *analyze_file_divergence(
             case CMP_TYPE_DIFF:
                 /* Type differs (file vs symlink) - this is a blocking condition.
                  * Return immediately with TYPE divergence. */
-                return workspace_add_diverged(ws, fs_path, storage_path, profile,
-                                              NULL, manifest_entry->all_profiles,
+                return workspace_add_diverged(ws, fs_path, storage_path, profile, NULL,
                                               WORKSPACE_STATE_DEPLOYED, DIVERGENCE_TYPE,
                                               WORKSPACE_ITEM_FILE, in_profile, in_state,
                                               on_filesystem, true, false);
@@ -670,8 +653,7 @@ static error_t *analyze_file_divergence(
 
     /* Add to workspace if there's any state change or divergence */
     if (state != WORKSPACE_STATE_DEPLOYED || divergence != DIVERGENCE_NONE || profile_changed) {
-        error_t *err = workspace_add_diverged(ws, fs_path, storage_path, profile,
-                                              old_profile, manifest_entry->all_profiles,
+        error_t *err = workspace_add_diverged(ws, fs_path, storage_path, profile, old_profile,
                                               state, divergence, WORKSPACE_ITEM_FILE,
                                               in_profile, in_state, on_filesystem,
                                               true, profile_changed);
@@ -1042,7 +1024,7 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
                 fs_path,
                 storage_path,
                 profile,
-                NULL, NULL,       /* No old_profile or all_profiles for orphans */
+                NULL,             /* No old_profile for orphans */
                 WORKSPACE_STATE_ORPHANED,  /* State: in deployment state, not in profile */
                 divergence,       /* Divergence: computed from filesystem comparison */
                 WORKSPACE_ITEM_FILE,
@@ -1124,7 +1106,7 @@ static error_t *analyze_orphaned_directories(workspace_t *ws) {
                 dir_path,
                 storage_path,
                 profile,
-                NULL, NULL,       /* No old_profile or all_profiles for orphans */
+                NULL,             /* No old_profile for orphans */
                 WORKSPACE_STATE_ORPHANED,  /* State: in state, not in profile */
                 DIVERGENCE_NONE,           /* Divergence: none */
                 WORKSPACE_ITEM_DIRECTORY,
@@ -1353,7 +1335,7 @@ static error_t *scan_directory_for_untracked(
                     full_path,
                     storage_path,
                     profile,
-                    NULL, NULL,  /* No old_profile or all_profiles for untracked */
+                    NULL,  /* No old_profile for untracked */
                     WORKSPACE_STATE_UNTRACKED,  /* State: on filesystem in tracked dir */
                     DIVERGENCE_NONE,            /* Divergence: none */
                     WORKSPACE_ITEM_FILE,
@@ -1569,7 +1551,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 filesystem_path,
                 storage_path,
                 profile_name,
-                NULL, NULL,  /* No old_profile or all_profiles for directories */
+                NULL,  /* No old_profile for directories */
                 WORKSPACE_STATE_DELETED,  /* State: was in profile, removed from filesystem */
                 DIVERGENCE_NONE,          /* Divergence: none (file is gone) */
                 WORKSPACE_ITEM_DIRECTORY,
@@ -1636,7 +1618,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 filesystem_path,
                 storage_path,
                 profile_name,
-                NULL, NULL,  /* No old_profile or all_profiles for directories */
+                NULL,  /* No old_profile for directories */
                 WORKSPACE_STATE_DEPLOYED,  /* State: directory exists as expected */
                 divergence,                /* Divergence: mode/ownership flags */
                 WORKSPACE_ITEM_DIRECTORY,
@@ -1839,7 +1821,7 @@ static error_t *analyze_encryption_policy_mismatch(
                     manifest_entry->filesystem_path,
                     storage_path,
                     profile_name,
-                    NULL, manifest_entry->all_profiles,
+                    NULL,
                     item_state,            /* State: deployed or undeployed */
                     DIVERGENCE_ENCRYPTION, /* Divergence: encryption policy violated */
                     WORKSPACE_ITEM_FILE,
@@ -2057,9 +2039,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
          * Tree entries loaded when needed via file_entry_ensure_tree_entry().
          * This achieves true O(M × DB) performance for workspace loading. */
         entry->entry = NULL;
-
-        /* all_profiles not populated (not needed for buffer-based divergence detection) */
-        entry->all_profiles = NULL;
 
         /* Store index in hashmap (offset by 1 to distinguish from NULL).
          * We cast the index through uintptr_t to store it as a void pointer.
@@ -2779,7 +2758,6 @@ void workspace_free(workspace_t *ws) {
         free(ws->diverged[i].profile);
         free(ws->diverged[i].metadata_profile);
         free(ws->diverged[i].old_profile);  /* Free profile change tracking */
-        string_array_free(ws->diverged[i].all_profiles);  /* Free multi-profile tracking */
     }
     free(ws->diverged);
 

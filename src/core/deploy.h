@@ -44,7 +44,6 @@ typedef struct {
     bool has_errors;             /* Are there any blocking errors? */
     string_array_t *conflicts;   /* Files modified locally */
     string_array_t *permission_errors; /* Files with permission issues */
-    string_array_t *overlaps;    /* Files in multiple profiles (warnings) */
     ownership_change_t *ownership_changes;  /* Files changing ownership */
     size_t ownership_change_count;         /* Number of ownership changes */
 } preflight_result_t;
@@ -81,13 +80,12 @@ typedef struct {
  * deployment decisions.
  *
  * Checks performed:
- * - Overlap detection (files in multiple profiles) - manifest-level
  * - Conflict detection (modified files) - from workspace divergence
  * - Ownership changes (profile switches) - from workspace tracking
  * - Writability checks - filesystem-level (not in workspace)
  *
  * @param ws Workspace with pre-loaded divergence analysis (must not be NULL)
- * @param manifest Manifest for overlap detection (must not be NULL)
+ * @param manifest Manifest for iteration (must not be NULL)
  * @param opts Deployment options (must not be NULL)
  * @param out Pre-flight results (must not be NULL, caller must free)
  * @return Error or NULL on success

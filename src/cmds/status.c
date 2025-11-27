@@ -14,7 +14,6 @@
 #include "core/state.h"
 #include "core/upstream.h"
 #include "core/workspace.h"
-#include "utils/array.h"
 #include "utils/config.h"
 #include "utils/output.h"
 #include "utils/privilege.h"
@@ -343,92 +342,6 @@ static void display_workspace_status(
             free(categorized);
         }
     }
-}
-
-/**
- * Display multi-profile files (files that exist in multiple profiles)
- *
- * Helps users understand which files have potential ownership ambiguity.
- */
-static void display_multi_profile_files(
-    git_repository *repo,
-    profile_list_t *profiles,
-    const manifest_t *manifest,
-    output_ctx_t *out
-) {
-    if (!repo || !profiles || !manifest || !out) {
-        return;
-    }
-
-    /* Count files that exist in multiple profiles */
-    size_t multi_profile_count = 0;
-    for (size_t i = 0; i < manifest->count; i++) {
-        if (manifest->entries[i].all_profiles &&
-            string_array_size(manifest->entries[i].all_profiles) > 0) {
-            multi_profile_count++;
-        }
-    }
-
-    /* Only display if there are multi-profile files */
-    if (multi_profile_count == 0) {
-        return;
-    }
-
-    output_newline(out);
-    output_section(out, "Multi-profile files");
-    output_info(out, "%zu file%s exist%s in multiple profiles:",
-               multi_profile_count,
-               multi_profile_count == 1 ? "" : "s",
-               multi_profile_count == 1 ? "s" : "");
-    output_newline(out);
-
-    for (size_t i = 0; i < manifest->count; i++) {
-        const file_entry_t *entry = &manifest->entries[i];
-        if (entry->all_profiles && string_array_size(entry->all_profiles) > 0) {
-            /* Show which profile currently "owns" (deployed) the file */
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s%s%s  deployed from: %s%s%s\n",
-                             output_color_code(out, OUTPUT_COLOR_RESET),
-                             entry->filesystem_path,
-                             output_color_code(out, OUTPUT_COLOR_RESET),
-                             output_color_code(out, OUTPUT_COLOR_CYAN),
-                             entry->source_profile->name,
-                             output_color_code(out, OUTPUT_COLOR_RESET));
-
-                /* Show all profiles containing this file */
-                output_printf(out, OUTPUT_NORMAL, "    %salso in:%s ",
-                             output_color_code(out, OUTPUT_COLOR_DIM),
-                             output_color_code(out, OUTPUT_COLOR_RESET));
-
-                for (size_t j = 0; j < string_array_size(entry->all_profiles); j++) {
-                    const char *profile_name = string_array_get(entry->all_profiles, j);
-                    /* Don't repeat the source profile */
-                    if (strcmp(profile_name, entry->source_profile->name) != 0) {
-                        output_printf(out, OUTPUT_NORMAL, "%s%s%s ",
-                                     output_color_code(out, OUTPUT_COLOR_CYAN),
-                                     profile_name,
-                                     output_color_code(out, OUTPUT_COLOR_RESET));
-                    }
-                }
-                output_newline(out);
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  %s  deployed from: %s\n",
-                             entry->filesystem_path,
-                             entry->source_profile->name);
-                output_printf(out, OUTPUT_NORMAL, "    also in: ");
-                for (size_t j = 0; j < string_array_size(entry->all_profiles); j++) {
-                    const char *profile_name = string_array_get(entry->all_profiles, j);
-                    if (strcmp(profile_name, entry->source_profile->name) != 0) {
-                        output_printf(out, OUTPUT_NORMAL, "%s ", profile_name);
-                    }
-                }
-                output_newline(out);
-            }
-        }
-    }
-
-    output_newline(out);
-    output_info(out, "Note: Updates to these files will be committed to the profile that deployed them.");
 }
 
 /**
@@ -958,9 +871,6 @@ error_t *cmd_status(
      * on display_profiles when CLI filter is specified.
      */
     display_workspace_status(ws, out, opts->verbose);
-
-    /* Display multi-profile files */
-    display_multi_profile_files(repo, display_profiles, manifest, out);
 
     /* Show remote sync status (if requested) */
     if (opts->show_remote) {

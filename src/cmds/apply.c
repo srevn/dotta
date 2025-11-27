@@ -29,38 +29,8 @@
 /**
  * Print pre-flight results
  */
-static void print_preflight_results(const output_ctx_t *out, const preflight_result_t *result, bool strict_mode) {
+static void print_preflight_results(const output_ctx_t *out, const preflight_result_t *result) {
     if (!result) return;
-
-    /* Print overlaps (warnings or errors depending on strict_mode) */
-    if (result->overlaps && string_array_size(result->overlaps) > 0) {
-        if (strict_mode) {
-            output_section(out, "Errors (strict mode)");
-        } else {
-            output_section(out, "Warnings");
-        }
-        for (size_t i = 0; i < string_array_size(result->overlaps); i++) {
-            FILE *stream = strict_mode ? stderr : out->stream;
-            output_color_t color = strict_mode ? OUTPUT_COLOR_RED : OUTPUT_COLOR_YELLOW;
-            const char *symbol = strict_mode ? "✗" : "•";
-
-            if (output_colors_enabled(out)) {
-                fprintf(stream, "  %s%s%s %s appears in multiple profiles\n",
-                       output_color_code(out, color),
-                       symbol,
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       string_array_get(result->overlaps, i));
-            } else {
-                fprintf(stream, "  %s %s appears in multiple profiles\n",
-                       symbol,
-                       string_array_get(result->overlaps, i));
-            }
-        }
-        if (strict_mode) {
-            fprintf(stderr, "\n");
-            output_error(out, "Strict mode enabled: overlapping files not allowed");
-        }
-    }
 
     /* Print conflicts */
     if (result->conflicts && string_array_size(result->conflicts) > 0) {
@@ -1325,17 +1295,11 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    print_preflight_results(out, preflight, config->strict_mode);
+    print_preflight_results(out, preflight);
 
     /* Check for errors (conflicts, permissions) */
     if (preflight->has_errors) {
         err = ERROR(ERR_CONFLICT, "Pre-flight checks failed");
-        goto cleanup;
-    }
-
-    /* In strict mode, overlaps are treated as errors */
-    if (config->strict_mode && preflight->overlaps && string_array_size(preflight->overlaps) > 0) {
-        err = ERROR(ERR_CONFLICT, "Overlapping files detected in strict mode");
         goto cleanup;
     }
 

@@ -1515,9 +1515,6 @@ cleanup:
 /**
  * Display summary of items to be updated
  *
- * Multi-profile overlap detection uses item->all_profiles directly,
- * which is computed during workspace load (no Git operations needed).
- *
  * @param out Output context (must not be NULL)
  * @param items Items to display (must not be NULL)
  * @param item_count Number of items
@@ -1614,9 +1611,6 @@ static error_t *update_display_summary(
         }
     }
 
-    /* Track multi-profile files for warning */
-    size_t multi_profile_count = 0;
-
     /* Display modified files section */
     if (modified_count > 0) {
         output_list_t *list = output_list_create(out,
@@ -1650,48 +1644,13 @@ static error_t *update_display_summary(
                     continue;
                 }
 
-                /* Check if file exists in multiple profiles (multi-profile overlap).
-                 * item->all_profiles contains ALL profiles with this file (if >1),
-                 * with the winning profile as the last entry. Build extended metadata
-                 * showing other profiles.
-                 */
-                char metadata[512];
-                if (item->all_profiles && item->all_profiles->count > 1) {
-                    /* Multi-profile: build metadata with "also in" list */
-                    size_t count = item->all_profiles->count;
-                    size_t offset = snprintf(metadata, sizeof(metadata), "%s, also in:",
-                                            base_metadata);
-
-                    /* Include all profiles except the last one (winner) */
-                    for (size_t j = 0; j < count - 1 && offset < sizeof(metadata) - 1; j++) {
-                        offset += snprintf(metadata + offset, sizeof(metadata) - offset,
-                                          " %s", item->all_profiles->items[j]);
-                    }
-
-                    multi_profile_count++;
-                } else {
-                    /* Single profile: use base metadata as-is */
-                    snprintf(metadata, sizeof(metadata), "%s", base_metadata);
-                }
-
                 output_list_add_multi(list, tags, tag_count, color,
-                                     item->filesystem_path, metadata);
+                                     item->filesystem_path, base_metadata);
             }
 
             output_list_render(list);
             output_list_free(list);
         }
-    }
-
-    /* Show multi-profile warning if needed */
-    if (multi_profile_count > 0) {
-        output_warning(out, "%zu file%s exist%s in multiple profiles",
-                      multi_profile_count,
-                      multi_profile_count == 1 ? "" : "s",
-                      multi_profile_count == 1 ? "s" : "");
-        output_info(out, "  Updates will be committed to the profile that deployed them (shown above).");
-        output_info(out, "  To update a different profile, remove the file from the current profile first.");
-        output_newline(out);
     }
 
     /* Display new files section */

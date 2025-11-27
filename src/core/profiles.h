@@ -84,7 +84,6 @@ typedef struct {
 
     /* Profile ownership */
     profile_t *source_profile;       /* Which profile provides this file (borrowed) */
-    string_array_t *all_profiles;    /* All profile names containing this file (owned) */
 
     /* VWD Expected State Cache (populated from state database)
      *

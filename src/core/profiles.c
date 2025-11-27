@@ -1217,27 +1217,6 @@ error_t *profile_build_manifest(
                  */
                 size_t existing_idx = (size_t)(uintptr_t)idx_ptr - 1;
 
-                /* Add current profile to all_profiles list (for overlap tracking) */
-                if (!manifest->entries[existing_idx].all_profiles) {
-                    manifest->entries[existing_idx].all_profiles = string_array_create();
-                    if (!manifest->entries[existing_idx].all_profiles) {
-                        err = ERROR(ERR_MEMORY, "Failed to create all_profiles array");
-                        goto cleanup;
-                    }
-                    /* Add the original profile that was there first */
-                    err = string_array_push(manifest->entries[existing_idx].all_profiles,
-                                           manifest->entries[existing_idx].source_profile->name);
-                    if (err) {
-                        goto cleanup;
-                    }
-                }
-
-                /* Add current profile (the one with higher precedence) */
-                err = string_array_push(manifest->entries[existing_idx].all_profiles, profile->name);
-                if (err) {
-                    goto cleanup;
-                }
-
                 /* Duplicate storage path before freeing old one */
                 dup_storage_path = strdup(storage_path);
                 if (!dup_storage_path) {
@@ -1295,7 +1274,6 @@ error_t *profile_build_manifest(
                 manifest->entries[manifest->count].filesystem_path = filesystem_path;
                 manifest->entries[manifest->count].entry = entry;
                 manifest->entries[manifest->count].source_profile = profile;
-                manifest->entries[manifest->count].all_profiles = NULL;  /* Initialize to NULL (single profile) */
 
                 /* Initialize VWD expected state cache to NULL/0
                  *
@@ -1671,7 +1649,6 @@ error_t *profile_build_manifest_from_tree(
         new_entry->filesystem_path = filesystem_path;
         new_entry->entry = entry;
         new_entry->source_profile = temp_profile;  /* Points to manifest->owned_profile */
-        new_entry->all_profiles = NULL;  /* Single profile - no list needed */
 
         /* Store index in hashmap */
         err = hashmap_set(path_map, filesystem_path,
@@ -1774,11 +1751,6 @@ void manifest_free(manifest_t *manifest) {
         /* Free Git tree entry */
         if (manifest->entries[i].entry) {
             git_tree_entry_free(manifest->entries[i].entry);
-        }
-
-        /* Free profile overlap tracking */
-        if (manifest->entries[i].all_profiles) {
-            string_array_free(manifest->entries[i].all_profiles);
         }
 
         /* Free VWD expected state cache fields

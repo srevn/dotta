@@ -1390,6 +1390,7 @@ error_t *manifest_remove_files(
     manifest_t *fresh_manifest = NULL;
     profile_list_t *profiles = NULL;
     hashmap_t *profile_oids = NULL;
+    metadata_t *metadata = NULL;
     size_t removed_count = 0;
     size_t fallback_count = 0;
 
@@ -1413,7 +1414,25 @@ error_t *manifest_remove_files(
         goto cleanup;
     }
 
-    /* 3. Lookup custom prefix for the removed profile (if in profiles list) */
+    /* 3. Load merged metadata from enabled profiles for fallback resolution
+     *
+     * Pattern: Same as manifest_disable_profile, manifest_sync_diff.
+     * Metadata is authoritative for mode, owner, group, encrypted fields.
+     * sync_entry_to_state uses this to correctly populate fallback entries.
+     */
+    err = metadata_load_from_profiles(repo, enabled_profiles, &metadata);
+    if (err && err->code != ERR_NOT_FOUND) {
+        err = error_wrap(err, "Failed to load metadata");
+        goto cleanup;
+    }
+    if (err) {
+        /* Non-fatal: Old profiles may not have metadata.json
+         * sync_entry_to_state handles NULL metadata gracefully (uses Git defaults) */
+        error_free(err);
+        err = NULL;
+    }
+
+    /* 4. Lookup custom prefix for the removed profile (if in profiles list) */
     const char *removed_profile_custom_prefix = NULL;
     for (size_t i = 0; i < profiles->count; i++) {
         if (strcmp(profiles->profiles[i].name, removed_profile) == 0) {
@@ -1422,7 +1441,7 @@ error_t *manifest_remove_files(
         }
     }
 
-    /* 4. Process each removed file */
+    /* 5. Process each removed file */
     for (size_t i = 0; i < string_array_size(removed_storage_paths); i++) {
         const char *storage_path = string_array_get(removed_storage_paths, i);
 
@@ -1471,7 +1490,12 @@ error_t *manifest_remove_files(
         }
 
         if (fallback) {
-            /* Fallback found: update to use fallback profile */
+            /* Fallback found: sync complete entry from fallback profile
+             *
+             * CRITICAL: Use sync_entry_to_state to ensure consistent metadata.
+             * This extracts blob_oid, type, mode from fallback's Git tree entry
+             * and applies metadata precedence from .dotta/metadata.json.
+             */
             const char *fallback_profile = fallback->source_profile->name;
 
             /* Get HEAD oid for fallback profile (hex string) */
@@ -1483,42 +1507,80 @@ error_t *manifest_remove_files(
                 goto cleanup;
             }
 
-            /* Track ownership change: save old profile BEFORE updating current profile
+            /* Preserve deployed_at (lifecycle history) before sync overwrites entry */
+            time_t preserved_deployed_at = current_entry->deployed_at;
+
+            /* Save old profile name for ownership transition tracking
              *
-             * MEMORY SAFETY: Must set old_profile BEFORE replacing profile to avoid
-             * use-after-free. str_replace_owned() creates an independent copy of the
-             * current profile name, then we can safely free and replace the original.
-             *
-             * Profile ownership change occurs when a file is removed from
-             * high-precedence profile and falls back to lower-precedence.
-             * Track old_profile to inform user via workspace divergence analysis.
+             * MEMORY SAFETY: Must copy before sync_entry_to_state, which uses
+             * state_add_file (INSERT OR REPLACE) and overwrites the entry.
+             * current_entry->profile is guaranteed non-NULL (ownership verified above).
              */
-            err = str_replace_owned(&current_entry->old_profile, current_entry->profile);
-            if (err) {
+            char *old_profile_name = strdup(current_entry->profile);
+            if (!old_profile_name) {
+                err = ERROR(ERR_MEMORY, "Failed to copy old profile name");
                 state_free_entry(current_entry);
                 free(filesystem_path);
                 goto cleanup;
             }
 
-            /* Update manifest entry to use fallback */
-            err = str_replace_owned(&current_entry->profile, fallback_profile);
+            /* Sync complete entry from fallback (proven pattern)
+             *
+             * sync_entry_to_state correctly:
+             * 1. Extracts blob_oid from fallback's Git tree entry
+             * 2. Gets metadata (mode, owner, group, encrypted) from merged metadata
+             * 3. Uses INSERT OR REPLACE for atomic, complete entry update
+             */
+            err = sync_entry_to_state(repo, state, fallback, fallback_oid_str,
+                                      metadata, preserved_deployed_at);
             if (err) {
+                free(old_profile_name);
+                state_free_entry(current_entry);
+                free(filesystem_path);
+                err = error_wrap(err, "Failed to sync fallback for %s", filesystem_path);
+                goto cleanup;
+            }
+
+            /* Track profile ownership transition (old_profile metadata)
+             *
+             * ARCHITECTURE: Separation of concerns between Git-sync and profile transitions.
+             *
+             * sync_entry_to_state() is a low-level Git→State sync primitive.
+             * Profile ownership tracking is higher-level semantic that provides user
+             * visibility into transitions (e.g., "file moved from darwin to global").
+             *
+             * The old_profile field enables:
+             *   - User visibility: status shows "home/.bashrc (darwin → global)"
+             *   - Informed decisions: user sees why file is modified before apply
+             *   - Audit trail: track ownership history until deployment acknowledges it
+             */
+            state_file_entry_t *updated_entry = NULL;
+            err = state_get_file(state, filesystem_path, &updated_entry);
+            if (err) {
+                free(old_profile_name);
+                state_free_entry(current_entry);
+                free(filesystem_path);
+                err = error_wrap(err, "Failed to read entry for old_profile tracking");
+                goto cleanup;
+            }
+
+            err = str_replace_owned(&updated_entry->old_profile, old_profile_name);
+            free(old_profile_name);
+            old_profile_name = NULL;
+
+            if (err) {
+                state_free_entry(updated_entry);
                 state_free_entry(current_entry);
                 free(filesystem_path);
                 goto cleanup;
             }
 
-            err = str_replace_owned(&current_entry->git_oid, fallback_oid_str);
+            err = state_update_entry(state, updated_entry);
+            state_free_entry(updated_entry);
             if (err) {
                 state_free_entry(current_entry);
                 free(filesystem_path);
-                goto cleanup;
-            }
-
-            err = state_update_entry(state, current_entry);
-            if (err) {
-                state_free_entry(current_entry);
-                free(filesystem_path);
+                err = error_wrap(err, "Failed to persist old_profile");
                 goto cleanup;
             }
 
@@ -1575,6 +1637,7 @@ error_t *manifest_remove_files(
     }
 
 cleanup:
+    if (metadata) metadata_free(metadata);
     if (profile_oids) hashmap_free(profile_oids, free);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);

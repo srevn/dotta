@@ -268,7 +268,7 @@ error_t *check_item_metadata_divergence(
  * @param filesystem_path Target path on filesystem (must not be NULL)
  * @param storage_path Path in profile (can be NULL for directories)
  * @param profile Source profile name (can be NULL for orphans)
- * @param old_profile Previous profile from state (can be NULL, takes ownership)
+ * @param old_profile Previous profile from state (can be NULL, caller must free on error)
  * @param state Where the item exists (deployed/undeployed/etc.)
  * @param divergence What's wrong with it (bit flags, can combine)
  * @param item_kind FILE or DIRECTORY (explicit type)
@@ -335,7 +335,7 @@ static error_t *workspace_add_diverged(
     entry->on_filesystem = on_filesystem;
     entry->profile_enabled = profile_enabled;
     entry->profile_changed = profile_changed;
-    entry->old_profile = old_profile;  /* Takes ownership (can be NULL) */
+    entry->old_profile = old_profile;  /* Ownership transfers on success (can be NULL) */
 
     if (!entry->filesystem_path ||
         (storage_path && !entry->storage_path) ||
@@ -343,7 +343,6 @@ static error_t *workspace_add_diverged(
         free(entry->filesystem_path);
         free(entry->storage_path);
         free(entry->profile);
-        free(entry->old_profile);
         return ERROR(ERR_MEMORY, "Failed to allocate diverged entry");
     }
 
@@ -360,7 +359,6 @@ static error_t *workspace_add_diverged(
                     free(entry->filesystem_path);
                     free(entry->storage_path);
                     free(entry->profile);
-                    free(entry->old_profile);
                     return ERROR(ERR_MEMORY, "Failed to allocate metadata_profile");
                 }
             }
@@ -374,7 +372,6 @@ static error_t *workspace_add_diverged(
         free(entry->filesystem_path);
         free(entry->storage_path);
         free(entry->profile);
-        free(entry->old_profile);
         free(entry->metadata_profile);
         return error_wrap(err, "Failed to index diverged entry");
     }
@@ -658,7 +655,7 @@ static error_t *analyze_file_divergence(
                                               in_profile, in_state, on_filesystem,
                                               true, profile_changed);
         if (err) {
-            /* On error, free old_profile since workspace_add_diverged didn't take ownership */
+            /* On error, free old_profile (ownership only transfers on success) */
             free(old_profile);
             return err;
         }

@@ -662,7 +662,7 @@ static error_t *deploy_tracked_directories(
             if (!opts->force) {
                 /* Without --force, skip (preflight should have blocked) */
                 fprintf(stderr, "  Conflict: %s is not a directory (skipping)\n", filesystem_path);
-                fprintf(stderr, "           Use --force to clear and recreate as directory\n");
+                fprintf(stderr, "  Use --force to clear and recreate as directory\n");
                 continue;
             }
 

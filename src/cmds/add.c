@@ -1394,12 +1394,12 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         free(absolute);
     }
 
-    /* Check if we have any files to add */
-    if (string_array_size(all_files) == 0) {
+    /* Check if we have anything to add (files or directories) */
+    if (string_array_size(all_files) == 0 && tracked_dir_count == 0) {
         if (opts->exclude_count > 0) {
-            err = ERROR(ERR_INVALID_ARG, "No files to add (all files excluded by patterns)");
+            err = ERROR(ERR_INVALID_ARG, "No files or directories to add (all excluded by patterns)");
         } else {
-            err = ERROR(ERR_INVALID_ARG, "No files to add");
+            err = ERROR(ERR_INVALID_ARG, "No files or directories to add");
         }
         goto cleanup;
     }
@@ -1694,49 +1694,60 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     }
 
     /* Show summary on success */
-    if (added_count > 0 && out) {
-        output_success(out, "Added %zu file%s to profile '%s'",
-                      added_count, added_count == 1 ? "" : "s", opts->profile);
-
+    if ((added_count > 0 || dir_tracked_count > 0) && out) {
+        /* Primary success message */
+        if (added_count > 0) {
+            output_success(out, "Added %zu file%s to profile '%s'",
+                          added_count, added_count == 1 ? "" : "s", opts->profile);
+        } else {
+            /* Directory-only add */
+            output_success(out, "Tracking %zu director%s in profile '%s'", dir_tracked_count,
+                          dir_tracked_count == 1 ? "y" : "ies", opts->profile);
+        }
+    
         if (profile_was_new) {
             output_success(out, "Profile '%s' created and enabled", opts->profile);
         }
-
-        if (tracked_dir_count > 0) {
+    
+        /* Show directory tracking info only when files were also added */
+        if (added_count > 0 && tracked_dir_count > 0) {
             output_info(out, "Tracking %zu director%s for change detection",
                        tracked_dir_count, tracked_dir_count == 1 ? "y" : "ies");
         }
-
+    
         output_newline(out);
-
+    
         /* Manifest status feedback */
         if (manifest_updated) {
-            if (profile_was_new) {
-                /* New profile - show sync results with precedence awareness */
-                if (manifest_synced_count == added_count) {
-                    output_info(out, "Manifest updated (%zu file%s marked as deployed)",
-                               manifest_synced_count,
-                               manifest_synced_count == 1 ? "" : "s");
-                } else {
-                    output_info(out, "Manifest updated (%zu/%zu file%s marked as deployed)",
-                               manifest_synced_count, added_count,
-                               added_count == 1 ? "" : "s");
-
-                    if (manifest_synced_count < added_count) {
-                        size_t skipped = added_count - manifest_synced_count;
-                        output_info(out, "Note: %zu file%s overridden by higher-precedence profiles",
-                                   skipped, skipped == 1 ? "" : "s");
+            if (added_count > 0) {
+                /* Files were added */
+                if (profile_was_new) {
+                    /* New profile - show sync results with precedence awareness */
+                    if (manifest_synced_count == added_count) {
+                        output_info(out, "Manifest updated (%zu file%s marked as deployed)",
+                                   manifest_synced_count, manifest_synced_count == 1 ? "" : "s");
+                    } else {
+                        output_info(out, "Manifest updated (%zu/%zu file%s marked as deployed)",
+                                   manifest_synced_count, added_count, added_count == 1 ? "" : "s");
+    
+                        if (manifest_synced_count < added_count) {
+                            size_t skipped = added_count - manifest_synced_count;
+                            output_info(out, "Note: %zu file%s overridden by higher-precedence profiles",
+                                       skipped, skipped == 1 ? "" : "s");
+                        }
                     }
+                } else {
+                    /* Existing enabled profile */
+                    output_info(out, "Manifest updated (%zu file%s marked as deployed)",
+                               added_count, added_count == 1 ? "" : "s");
+                    output_hint(out, "Files captured from filesystem (already deployed)");
                 }
-
-                output_hint(out, "Run 'dotta status' to verify");
             } else {
-                /* Existing enabled profile */
-                output_info(out, "Manifest updated (%zu file%s marked as deployed)",
-                           added_count, added_count == 1 ? "" : "s");
-                output_hint(out, "Files captured from filesystem (already deployed)");
-                output_hint(out, "Run 'dotta status' to verify");
+                /* Directory-only add */
+                output_info(out, "Manifest updated (%zu director%s synced)",
+                           dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies");
             }
+            output_hint(out, "Run 'dotta status' to verify");
         } else {
             /* Existing disabled profile - original behavior */
             output_info(out, "Profile not enabled - manifest not updated");

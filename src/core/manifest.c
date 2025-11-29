@@ -2068,7 +2068,9 @@ error_t *manifest_update_files(
     *out_fallbacks = 0;
 
     if (item_count == 0) {
-        return NULL;  /* Nothing to do */
+        /* No file items to process, but still sync directories.
+         * Handles cases where only directory metadata changed. */
+        return manifest_sync_directories(repo, state, enabled_profiles);
     }
 
     error_t *err = NULL;
@@ -2429,7 +2431,10 @@ error_t *manifest_add_files(
     *out_synced = 0;
 
     if (string_array_size(filesystem_paths) == 0) {
-        return NULL;  /* Nothing to do */
+        /* No files to add, but still sync directories.
+         * Handles directory-only adds where filesystem_paths
+         * is empty but metadata.json has tracked directories. */
+        return manifest_sync_directories(repo, state, enabled_profiles);
     }
 
     error_t *err = NULL;

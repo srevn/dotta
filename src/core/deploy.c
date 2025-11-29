@@ -141,6 +141,43 @@ error_t *deploy_preflight_check_from_workspace(
         }
     }
 
+    /* Check directories for type conflicts
+     *
+     * File preflight checks manifest entries, but directories are tracked
+     * separately in state database. Directory type divergence (dir replaced
+     * by file/symlink) must also block deployment unless --force.
+     *
+     * Architecture: Workspace uses lstat() for type detection, so symlinks
+     * are correctly identified as type changes even if they point to directories.
+     */
+    size_t diverged_count = 0;
+    const workspace_item_t *diverged = workspace_get_all_diverged(ws, &diverged_count);
+
+    for (size_t i = 0; i < diverged_count; i++) {
+        const workspace_item_t *item = &diverged[i];
+
+        /* Only check directories with TYPE divergence */
+        if (item->item_kind != WORKSPACE_ITEM_DIRECTORY) {
+            continue;
+        }
+        if (!(item->divergence & DIVERGENCE_TYPE)) {
+            continue;
+        }
+
+        /* With --force, let deploy handle it */
+        if (opts->force) {
+            continue;
+        }
+
+        /* Record as blocking conflict */
+        error_t *err = string_array_push(result->conflicts, item->filesystem_path);
+        if (err) {
+            preflight_result_free(result);
+            return error_wrap(err, "Failed to record directory type conflict");
+        }
+        result->has_errors = true;
+    }
+
     *out = result;
     return NULL;
 }
@@ -602,21 +639,52 @@ static error_t *deploy_tracked_directories(
          *
          * Convergence model (matches file deployment pattern):
          * - ws_item == NULL && exists → SKIP (directory CLEAN)
-         * - ws_item != NULL → FIX (has divergence: mode/ownership)
+         * - ws_item != NULL → FIX (has divergence: mode/ownership/type)
          * - !exists → CREATE (missing or deleted)
          */
         const workspace_item_t *ws_item = workspace_get_item(ws, filesystem_path);
 
-        /* Type conflict: expected directory, found regular file
-         * This is a user error that requires manual resolution */
-        if (fs_exists(filesystem_path) && !fs_is_directory(filesystem_path)) {
-            fprintf(stderr, "  Warning: %s exists but is not a directory (skipping)\n",
-                    filesystem_path);
-            continue;
-        }
-
-        /* Track whether this is creation vs update for verbose output */
+        /* Track existence for verbose output
+         *
+         * Using fs_is_directory is fine here - it determines "was there a directory"
+         * for messaging purposes. Type divergence detection uses workspace (lstat-based). */
         bool directory_existed = fs_is_directory(filesystem_path);
+
+        /* Type conflict: workspace detected directory replaced by file/symlink
+         *
+         * Uses ws_item->divergence instead of filesystem checks because:
+         * - Workspace uses lstat() for type detection (doesn't follow symlinks)
+         * - fs_is_directory() uses stat() (follows symlinks)
+         * - Symlink-to-directory would appear as "directory" to fs_is_directory()
+         * - Single source of truth: workspace already did the analysis
+         */
+        if (ws_item && (ws_item->divergence & DIVERGENCE_TYPE)) {
+            if (!opts->force) {
+                /* Without --force, skip (preflight should have blocked) */
+                fprintf(stderr, "  Conflict: %s is not a directory (skipping)\n", filesystem_path);
+                fprintf(stderr, "           Use --force to clear and recreate as directory\n");
+                continue;
+            }
+
+            /* With --force: clear the conflicting path
+             *
+             * fs_clear_path uses lstat() and handles files, symlinks, and
+             * directories uniformly. After clearing, normal directory creation
+             * proceeds below.
+             */
+            if (opts->verbose) {
+                printf("  Clearing type conflict at %s (recreating as directory)\n", filesystem_path);
+            }
+
+            error_t *clear_err = fs_clear_path(filesystem_path);
+            if (clear_err) {
+                state_free_all_directories(directories, dir_count);
+                return error_wrap(clear_err, "Failed to clear type conflict at '%s'", filesystem_path);
+            }
+
+            /* Path cleared - update tracking flag for verbose output */
+            directory_existed = false;
+        }
 
         /* Skip if directory is CLEAN (no divergence and exists on filesystem)
          * Force flag bypasses this check to allow manual re-application */

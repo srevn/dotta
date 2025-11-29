@@ -1540,47 +1540,80 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
         const char *storage_path = dir_entry->storage_path;
         const char *profile_name = dir_entry->profile;
 
-        /* Check if directory still exists */
-        if (!fs_exists(filesystem_path)) {
-            /* Directory deleted - record divergence */
+        /* Stat directory to get current metadata
+         *
+         * Use lstat() for both existence and type checking:
+         * - ENOENT: Directory truly deleted
+         * - Success + !S_ISDIR: Type changed (file, symlink - including broken ones)
+         * - Success + S_ISDIR: Actual directory, check metadata  */
+        struct stat dir_stat;
+        if (lstat(filesystem_path, &dir_stat) != 0) {
+            if (errno == ENOENT) {
+                /* Directory truly deleted - record divergence */
+                err = workspace_add_diverged(
+                    ws,
+                    filesystem_path,
+                    storage_path,
+                    profile_name,
+                    NULL,  /* No old_profile for directories */
+                    WORKSPACE_STATE_DELETED,  /* State: was in profile, removed from filesystem */
+                    DIVERGENCE_NONE,          /* Divergence: none (file is gone) */
+                    WORKSPACE_ITEM_DIRECTORY,
+                    true,   /* in_profile */
+                    false,  /* in_state */
+                    false,  /* on_filesystem (deleted) */
+                    true,   /* profile_enabled */
+                    false   /* No profile change */
+                );
+
+                if (err) {
+                    state_free_all_directories(directories, dir_count);
+                    return error_wrap(err, "Failed to record deleted directory '%s'",
+                                      filesystem_path);
+                }
+                continue;  /* Successfully recorded, check next directory */
+            }
+
+            /* Stat failed for other reason: race condition or permission issue */
+            fprintf(stderr, "warning: failed to stat directory '%s': %s\n",
+                    filesystem_path, strerror(errno));
+            continue;  /* Non-fatal, skip this directory */
+        }
+
+        /* Verify it's actually a directory (type may have changed)
+         *
+         * Type changes (dir → file, dir → symlink) are detected here because:
+         * 1. lstat() doesn't follow symlinks, so symlinks are caught
+         * 2. S_ISDIR() fails for regular files and symlinks
+         *
+         * Record DIVERGENCE_TYPE to enable:
+         * - status shows [type] divergence
+         * - preflight blocks without --force
+         * - apply clears and recreates with --force
+         */
+        if (!S_ISDIR(dir_stat.st_mode)) {
             err = workspace_add_diverged(
                 ws,
                 filesystem_path,
                 storage_path,
                 profile_name,
                 NULL,  /* No old_profile for directories */
-                WORKSPACE_STATE_DELETED,  /* State: was in profile, removed from filesystem */
-                DIVERGENCE_NONE,          /* Divergence: none (file is gone) */
+                WORKSPACE_STATE_DEPLOYED,  /* Path exists, just wrong type */
+                DIVERGENCE_TYPE,           /* Type changed (dir → file/symlink) */
                 WORKSPACE_ITEM_DIRECTORY,
-                true,   /* in_profile */
-                false,  /* in_state */
-                false,  /* on_filesystem (deleted) */
+                true,   /* in_profile (directory tracked in metadata) */
+                false,  /* in_state (directories never in deployment state) */
+                true,   /* on_filesystem (path exists, wrong type) */
                 true,   /* profile_enabled */
                 false   /* No profile change */
             );
 
             if (err) {
                 state_free_all_directories(directories, dir_count);
-                return error_wrap(err, "Failed to record deleted directory '%s'",
-                                filesystem_path);
+                return error_wrap(err, "Failed to record type change for directory '%s'",
+                                  filesystem_path);
             }
-            continue;  /* Successfully recorded, check next directory */
-        }
-
-        /* Stat directory to get current metadata */
-        struct stat dir_stat;
-        if (stat(filesystem_path, &dir_stat) != 0) {
-            /* Stat failed but exists: race condition or permission issue */
-            fprintf(stderr, "warning: failed to stat directory '%s': %s\n",
-                    filesystem_path, strerror(errno));
-            continue;  /* Non-fatal, skip this directory */
-        }
-
-        /* Verify it's actually a directory (type may have changed) */
-        if (!S_ISDIR(dir_stat.st_mode)) {
-            fprintf(stderr, "warning: '%s' is no longer a directory (type changed)\n",
-                    filesystem_path);
-            continue;  /* Non-fatal, skip - apply/revert don't handle type changes */
+            continue;  /* Recorded, move to next directory */
         }
 
         /* Check metadata divergence using unified helper */
@@ -1600,7 +1633,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
         if (err) {
             state_free_all_directories(directories, dir_count);
             return error_wrap(err, "Failed to check metadata for directory '%s'",
-                            filesystem_path);
+                              filesystem_path);
         }
 
         /* Record divergence if any metadata differs */
@@ -1628,9 +1661,8 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
 
             if (err) {
                 state_free_all_directories(directories, dir_count);
-                return error_wrap(err,
-                                "Failed to record directory metadata divergence for '%s'",
-                                filesystem_path);
+                return error_wrap(err, "Failed to record directory metadata divergence for '%s'",
+                                  filesystem_path);
             }
         }
     }

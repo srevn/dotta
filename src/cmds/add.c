@@ -128,8 +128,9 @@ static error_t *collect_files_from_dir(
             return ERROR(ERR_MEMORY, "Failed to allocate path");
         }
 
-        /* Check if directory or file (needed for ignore check) */
-        bool is_dir = fs_is_directory(full_path);
+        /* Determine entry type */
+        bool is_symlink = fs_is_symlink(full_path);
+        bool is_dir = !is_symlink && fs_is_directory(full_path);
 
         /* Check exclude patterns */
         if (is_excluded(full_path, is_dir, ignore_ctx, opts, out)) {

@@ -1283,6 +1283,7 @@ error_t *profile_build_manifest(
                  *
                  * IMPORTANT: After realloc(), new memory is NOT zero-initialized, so we must
                  * explicitly initialize these fields to prevent use of uninitialized memory. */
+                manifest->entries[manifest->count].old_profile = NULL;
                 manifest->entries[manifest->count].git_oid = NULL;
                 manifest->entries[manifest->count].blob_oid = NULL;
 

@@ -95,38 +95,88 @@ static void print_preflight_results(const output_ctx_t *out, const preflight_res
 
 /**
  * Print deployment results
+ *
+ * Handles all output for deployment results. The deploy layer only collects
+ * results; this function handles all presentation.
+ *
+ * Categories (each semantically distinct):
+ * - deployed: Files written to disk (green)
+ * - adopted: Existing files now managed by dotta (yellow - draws attention)
+ * - unchanged: Already tracked, no changes needed (cyan)
+ * - skipped_existing: --skip-existing flag applied (cyan)
+ * - failed: Deployment failures (red, always shown)
  */
 static void print_deploy_results(const output_ctx_t *out, const deploy_result_t *result, bool verbose) {
     if (!result) return;
 
-    if (verbose && result->deployed) {
-        output_section(out, "Deployed files");
-        for (size_t i = 0; i < string_array_size(result->deployed); i++) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s✓%s %s\n",
-                       output_color_code(out, OUTPUT_COLOR_GREEN),
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       string_array_get(result->deployed, i));
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  ✓ %s\n", string_array_get(result->deployed, i));
+    /* Verbose mode: show individual files per category */
+    if (verbose) {
+        /* Deployed files */
+        if (result->deployed && string_array_size(result->deployed) > 0) {
+            output_section(out, "Deployed files");
+            for (size_t i = 0; i < string_array_size(result->deployed); i++) {
+                if (output_colors_enabled(out)) {
+                    output_printf(out, OUTPUT_NORMAL, "  %s✓%s %s\n",
+                           output_color_code(out, OUTPUT_COLOR_GREEN),
+                           output_color_code(out, OUTPUT_COLOR_RESET),
+                           string_array_get(result->deployed, i));
+                } else {
+                    output_printf(out, OUTPUT_NORMAL, "  ✓ %s\n",
+                           string_array_get(result->deployed, i));
+                }
+            }
+        }
+
+        /* Adopted files - existing files now managed by dotta */
+        if (result->adopted && string_array_size(result->adopted) > 0) {
+            output_section(out, "Adopted files");
+            for (size_t i = 0; i < string_array_size(result->adopted); i++) {
+                if (output_colors_enabled(out)) {
+                    output_printf(out, OUTPUT_NORMAL, "  %s⊕%s %s\n",
+                           output_color_code(out, OUTPUT_COLOR_YELLOW),
+                           output_color_code(out, OUTPUT_COLOR_RESET),
+                           string_array_get(result->adopted, i));
+                } else {
+                    output_printf(out, OUTPUT_NORMAL, "  ⊕ %s\n",
+                           string_array_get(result->adopted, i));
+                }
+            }
+        }
+
+        /* Unchanged files - already tracked, still correct */
+        if (result->unchanged && string_array_size(result->unchanged) > 0) {
+            output_section(out, "Unchanged files");
+            for (size_t i = 0; i < string_array_size(result->unchanged); i++) {
+                if (output_colors_enabled(out)) {
+                    output_printf(out, OUTPUT_NORMAL, "  %s⊘%s %s\n",
+                           output_color_code(out, OUTPUT_COLOR_CYAN),
+                           output_color_code(out, OUTPUT_COLOR_RESET),
+                           string_array_get(result->unchanged, i));
+                } else {
+                    output_printf(out, OUTPUT_NORMAL, "  ⊘ %s\n",
+                           string_array_get(result->unchanged, i));
+                }
+            }
+        }
+
+        /* Skipped files (--skip-existing) */
+        if (result->skipped_existing && string_array_size(result->skipped_existing) > 0) {
+            output_section(out, "Skipped files (--skip-existing)");
+            for (size_t i = 0; i < string_array_size(result->skipped_existing); i++) {
+                if (output_colors_enabled(out)) {
+                    output_printf(out, OUTPUT_NORMAL, "  %s⊘%s %s\n",
+                           output_color_code(out, OUTPUT_COLOR_CYAN),
+                           output_color_code(out, OUTPUT_COLOR_RESET),
+                           string_array_get(result->skipped_existing, i));
+                } else {
+                    output_printf(out, OUTPUT_NORMAL, "  ⊘ %s\n",
+                           string_array_get(result->skipped_existing, i));
+                }
             }
         }
     }
 
-    if (verbose && result->skipped && string_array_size(result->skipped) > 0) {
-        output_section(out, "Skipped files");
-        for (size_t i = 0; i < string_array_size(result->skipped); i++) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s⊘%s %s\n",
-                       output_color_code(out, OUTPUT_COLOR_CYAN),
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       string_array_get(result->skipped, i));
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  ⊘ %s\n", string_array_get(result->skipped, i));
-            }
-        }
-    }
-
+    /* Failed files (always shown, regardless of verbose) */
     if (result->failed && string_array_size(result->failed) > 0) {
         output_section(out, "Failed to deploy");
         for (size_t i = 0; i < string_array_size(result->failed); i++) {
@@ -145,8 +195,9 @@ static void print_deploy_results(const output_ctx_t *out, const deploy_result_t 
         }
     }
 
+    /* Non-verbose: summary counts only */
     if (!verbose) {
-        /* Print summary */
+        /* Deployed count */
         if (result->deployed_count > 0) {
             if (output_colors_enabled(out)) {
                 output_printf(out, OUTPUT_NORMAL, "Deployed %s%zu%s file%s\n",
@@ -161,17 +212,50 @@ static void print_deploy_results(const output_ctx_t *out, const deploy_result_t 
             }
         }
 
-        if (result->skipped_count > 0) {
+        /* Adopted count */
+        if (result->adopted_count > 0) {
             if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "Skipped %s%zu%s file%s (up-to-date)\n",
-                       output_color_code(out, OUTPUT_COLOR_CYAN),
-                       result->skipped_count,
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       result->skipped_count == 1 ? "" : "s");
+                output_printf(out, OUTPUT_NORMAL,
+                    "Adopted %s%zu%s file%s (now tracked)\n",
+                    output_color_code(out, OUTPUT_COLOR_YELLOW),
+                    result->adopted_count,
+                    output_color_code(out, OUTPUT_COLOR_RESET),
+                    result->adopted_count == 1 ? "" : "s");
             } else {
-                output_printf(out, OUTPUT_NORMAL, "Skipped %zu file%s (up-to-date)\n",
-                       result->skipped_count,
-                       result->skipped_count == 1 ? "" : "s");
+                output_printf(out, OUTPUT_NORMAL,
+                    "Adopted %zu file%s (now tracked)\n",
+                    result->adopted_count,
+                    result->adopted_count == 1 ? "" : "s");
+            }
+        }
+
+        /* Unchanged count */
+        if (result->unchanged_count > 0) {
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "Skipped %s%zu%s file%s (unchanged)\n",
+                       output_color_code(out, OUTPUT_COLOR_CYAN),
+                       result->unchanged_count,
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       result->unchanged_count == 1 ? "" : "s");
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "Skipped %zu file%s (unchanged)\n",
+                       result->unchanged_count,
+                       result->unchanged_count == 1 ? "" : "s");
+            }
+        }
+
+        /* Skipped existing count (only shown if --skip-existing was used) */
+        if (result->skipped_existing_count > 0) {
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "Skipped %s%zu%s file%s (--skip-existing)\n",
+                       output_color_code(out, OUTPUT_COLOR_CYAN),
+                       result->skipped_existing_count,
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       result->skipped_existing_count == 1 ? "" : "s");
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "Skipped %zu file%s (--skip-existing)\n",
+                       result->skipped_existing_count,
+                       result->skipped_existing_count == 1 ? "" : "s");
             }
         }
     }
@@ -1519,8 +1603,6 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             err = ERROR(ERR_MEMORY, "Failed to allocate deploy result");
             goto cleanup;
         }
-        deploy_res->deployed_count = 0;
-        deploy_res->skipped_count = 0;
     }
 
     /* Save state (only if not dry-run) */
@@ -1769,84 +1851,37 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                         string_array_size(deploy_res->deployed) == 1 ? "" : "s");
         }
 
-        /* Update deployed_at for adopted files (skipped but need acknowledgment)
+        /* Update deployed_at for adopted files
          *
          * Adopted files are those that:
-         * - Exist in VWD with deployed_at = 0 (never tracked by dotta)
-         * - Exist on filesystem with correct content (CLEAN, no divergence)
-         * - Were skipped by deploy (no physical changes needed)
-         * - Need state update to record dotta's acknowledgment
-         *
-         * This completes the adoption flow started in deploy.c where files
-         * with deployed_at = 0 are skipped with reason "adopted".
+         * - Existed on filesystem with correct content
+         * - Were never tracked by dotta (deployed_at == 0)
+         * - Were added to deploy_res->adopted by deploy_execute
          */
-        if (deploy_res && deploy_res->skipped && deploy_res->skipped_reasons) {
-            /* Defensive: Validate parallel arrays are consistent */
-            size_t skipped_size = string_array_size(deploy_res->skipped);
-            size_t reasons_size = string_array_size(deploy_res->skipped_reasons);
+        if (deploy_res->adopted && string_array_size(deploy_res->adopted) > 0) {
+            time_t now = time(NULL);
 
-            if (skipped_size != reasons_size) {
-                /* Programming error - these arrays should always be parallel
-                 *
-                 * This indicates a bug in deploy.c where skipped and skipped_reasons
-                 * arrays weren't kept in sync. Log warning and use minimum size to
-                 * prevent crashes, but this should never happen in correct code.
-                 */
-                output_warning(out,
-                    "Internal error: skipped arrays size mismatch (%zu != %zu). "
-                    "This indicates a bug in deployment logic.",
-                    skipped_size, reasons_size);
+            output_print(out, OUTPUT_VERBOSE, "\nRecording adopted files in state...\n");
 
-                /* Use minimum size to avoid out-of-bounds access */
-                skipped_size = (skipped_size < reasons_size) ? skipped_size : reasons_size;
-            }
+            for (size_t i = 0; i < string_array_size(deploy_res->adopted); i++) {
+                const char *path = string_array_get(deploy_res->adopted, i);
 
-            if (skipped_size > 0) {
-                time_t now = time(NULL);
-                size_t adopted_count = 0;
-
-                /* Process each skipped file, updating state only for "adopted" reason */
-                for (size_t i = 0; i < skipped_size; i++) {
-                    const char *path = string_array_get(deploy_res->skipped, i);
-                    const char *reason = string_array_get(deploy_res->skipped_reasons, i);
-
-                    /* Filter: Only process "adopted" files (skip "unchanged" and "exists") */
-                    if (strcmp(reason, "adopted") == 0) {
-                        /* Adoption case - update deployed_at to acknowledge file
-                         *
-                         * The file is already correct on the filesystem (that's why
-                         * it was skipped). We just need to update the database to
-                         * record that dotta now knows about this file.
-                         */
-                        err = state_update_deployed_at(state, path, now);
-                        if (err) {
-                            /* Non-fatal warning - file is already correct on filesystem
-                             *
-                             * The important operation (verifying file is correct) already
-                             * succeeded. The timestamp is metadata for lifecycle tracking.
-                             * Failure here should not abort the entire operation.
-                             */
-                            output_warning(out, "Failed to update timestamp for adopted file %s: %s",
-                                          path, error_message(err));
-                            error_free(err);
-                            err = NULL;
-                        } else {
-                            adopted_count++;
-                        }
-                    }
-                    /* Skip reasons "unchanged" and "exists" don't need state updates:
-                     * - "unchanged": deployed_at already set (file previously tracked)
-                     * - "exists": User explicitly skipped with --skip-existing (no adoption)
+                err = state_update_deployed_at(state, path, now);
+                if (err) {
+                    /* Non-fatal: file is already correct on filesystem.
+                     * Log warning and continue - the important fact (file exists
+                     * with correct content) is true regardless of database state.
                      */
-                }
-
-                /* Report adoption statistics in verbose mode */
-                if (adopted_count > 0) {
-                    output_print(out, OUTPUT_VERBOSE,
-                                "  Adopted %zu file%s (already correct on filesystem)\n",
-                                adopted_count, adopted_count == 1 ? "" : "s");
+                    output_warning(out, "Failed to record adoption for %s: %s",
+                                  path, error_message(err));
+                    error_free(err);
+                    err = NULL;
                 }
             }
+
+            output_print(out, OUTPUT_VERBOSE, "  Recorded %zu adopted file%s\n",
+                        string_array_size(deploy_res->adopted),
+                        string_array_size(deploy_res->adopted) == 1 ? "" : "s");
         }
 
         /* Commit state transaction (saves both deployment and cleanup state)

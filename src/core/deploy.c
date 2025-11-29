@@ -739,14 +739,19 @@ error_t *deploy_execute(
     }
 
     result->deployed = string_array_create();
-    result->skipped = string_array_create();
-    result->skipped_reasons = string_array_create();
+    result->adopted = string_array_create();
+    result->unchanged = string_array_create();
+    result->skipped_existing = string_array_create();
     result->failed = string_array_create();
+
     result->deployed_count = 0;
-    result->skipped_count = 0;
+    result->adopted_count = 0;
+    result->unchanged_count = 0;
+    result->skipped_existing_count = 0;
     result->error_message = NULL;
 
-    if (!result->deployed || !result->skipped || !result->skipped_reasons || !result->failed) {
+    if (!result->deployed || !result->adopted || !result->unchanged ||
+        !result->skipped_existing || !result->failed) {
         deploy_result_free(result);
         return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
     }
@@ -762,84 +767,49 @@ error_t *deploy_execute(
     for (size_t i = 0; i < manifest->count; i++) {
         const file_entry_t *entry = &manifest->entries[i];
 
-        /* Check skip conditions before deploying */
-        bool should_skip = false;
-        const char *skip_reason = NULL;
-
-        /* Skip existing files if requested */
+        /* Check --skip-existing first (user explicitly chose not to overwrite) */
         if (opts->skip_existing && fs_exists(entry->filesystem_path) && !opts->force) {
-            should_skip = true;
-            skip_reason = "exists";
+            string_array_push(result->skipped_existing, entry->filesystem_path);
+            result->skipped_existing_count++;
+            continue;
         }
 
         /* Smart skip - file already up-to-date
          *
-         * Architecture: Query workspace for pre-computed divergence instead of
-         * re-analyzing. The workspace already performed full content comparison
-         * during workspace_load(), eliminating redundant:
-         * - content_cache_get_from_tree_entry() calls (decryption)
-         * - compare_buffer_to_disk() operations (filesystem I/O)
-         * - Git OID comparisons (workspace already knows)
+         * Query workspace for pre-computed divergence (O(1) hashmap lookup).
+         * ws_item == NULL means file is CLEAN (no divergence from expected state).
          *
-         * Skip conditions:
-         * 1. File is CLEAN (no divergence) → ws_item == NULL
-         * 2. File is UNDEPLOYED but exists with matching content → optimization
+         * For CLEAN files, distinguish based on deployed_at:
+         * - deployed_at == 0: ADOPTION (file exists correctly, never tracked)
+         * - deployed_at > 0: UNCHANGED (file previously tracked, still correct)
          *
          * All other divergence types (MODIFIED, MODE_DIFF, OWNERSHIP, DELETED)
          * naturally fall through to deployment, ensuring metadata is always fixed.
          */
-        if (!should_skip && opts->skip_unchanged && !opts->force) {
-            /* Query workspace for pre-computed divergence (O(1) hashmap lookup) */
+        if (opts->skip_unchanged && !opts->force) {
             const workspace_item_t *ws_item = workspace_get_item(ws, entry->filesystem_path);
 
-            /* The workspace found NO divergence. The file is CLEAN.
-             * CLEAN items are not stored in the divergence index, so ws_item is NULL.
-             *
-             * CLEAN files can be in two states:
-             * 1. Adoption: File exists with correct content but dotta never tracked it (deployed_at = 0)
-             * 2. Already tracked: File previously deployed/acknowledged by dotta (deployed_at > 0)
-             */
             if (ws_item == NULL) {
-                /* Check VWD cache to distinguish adoption from already-tracked */
+                /* File is CLEAN - no divergence from expected state */
                 if (entry->deployed_at == 0) {
-                    /* ADOPTION: File exists with correct content but never tracked by dotta.
-                     *
-                     * Skip deployment (file is already correct on filesystem), but
-                     * signal to apply.c that state update is needed to acknowledge file.
+                    /* ADOPTION: File exists with correct content but never tracked.
                      *
                      * This typically happens when:
                      * - User manually created file before enabling profile
                      * - Content happens to match Git
-                     * - File needs dotta's acknowledgment (deployed_at = now)
+                     * - File needs dotta's acknowledgment (deployed_at update)
                      */
-                    should_skip = true;
-                    skip_reason = "adopted";
+                    string_array_push(result->adopted, entry->filesystem_path);
+                    result->adopted_count++;
                 } else {
-                    /* ALREADY TRACKED: File was previously deployed/acknowledged.
-                     *
-                     * Skip deployment (file already correct), no state update needed.
-                     * The deployed_at timestamp is already set from previous apply.
+                    /* UNCHANGED: File previously deployed, still correct.
+                     * No state update needed - deployed_at already set.
                      */
-                    should_skip = true;
-                    skip_reason = "unchanged";
+                    string_array_push(result->unchanged, entry->filesystem_path);
+                    result->unchanged_count++;
                 }
+                continue;
             }
-        }
-
-        if (should_skip) {
-            /* Record skip with reason (parallel arrays) */
-            string_array_push(result->skipped, entry->filesystem_path);
-            string_array_push(result->skipped_reasons, skip_reason);
-            result->skipped_count++;
-            if (opts->verbose) {
-                /* Distinguish adoption from other skip reasons in output */
-                if (strcmp(skip_reason, "adopted") == 0) {
-                    printf("Adopted: %s (already correct on filesystem)\n", entry->filesystem_path);
-                } else {
-                    printf("Skipped: %s (%s)\n", entry->filesystem_path, skip_reason);
-                }
-            }
-            continue;
         }
 
         /* Deploy the file */
@@ -895,8 +865,9 @@ void deploy_result_free(deploy_result_t *result) {
     }
 
     string_array_free(result->deployed);
-    string_array_free(result->skipped);
-    string_array_free(result->skipped_reasons);
+    string_array_free(result->adopted);
+    string_array_free(result->unchanged);
+    string_array_free(result->skipped_existing);
     string_array_free(result->failed);
     free(result->error_message);
     free(result);

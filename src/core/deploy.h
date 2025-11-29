@@ -64,13 +64,20 @@ typedef struct {
  * Deployment result
  */
 typedef struct {
-    size_t deployed_count;       /* Successfully deployed files */
-    size_t skipped_count;        /* Skipped files */
-    string_array_t *deployed;    /* List of deployed files */
-    string_array_t *skipped;     /* List of skipped files */
-    string_array_t *skipped_reasons;  /* Skip reasons ("unchanged" | "exists") */
-    string_array_t *failed;      /* List of failed files */
-    char *error_message;         /* Error message if deployment failed */
+    /* Result arrays */
+    string_array_t *deployed;          /* Files written to disk */
+    string_array_t *adopted;           /* Existing files claimed by dotta */
+    string_array_t *unchanged;         /* Already tracked, no changes needed */
+    string_array_t *skipped_existing;  /* --skip-existing flag applied */
+    string_array_t *failed;            /* Deployment failures */
+
+    /* Summary counts */
+    size_t deployed_count;
+    size_t adopted_count;
+    size_t unchanged_count;
+    size_t skipped_existing_count;
+
+    char *error_message;               /* Error message if deployment failed */
 } deploy_result_t;
 
 /**

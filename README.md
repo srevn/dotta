@@ -183,6 +183,11 @@ dotta sync    # Syncs: global, darwin
 - **Performance**: O(1) workspace divergence lookups
 - **Safety**: Profile changes preview removals and fallbacks
 
+**Interactive Mode**: For visual profile management, run `dotta --interactive` to get a TUI interface:
+- Arrow keys navigate, `Space` toggles enable/disable
+- `J`/`K` reorders profiles (affects layering precedence)
+- `w` saves changes, `q` quits
+
 ### 3. Metadata Preservation
 
 Dotta automatically preserves file metadata across machines:

@@ -751,9 +751,9 @@ cleanup:
  * Loads metadata from each remaining profile and builds O(1) lookup hashmaps
  * for directory fallback resolution. This implements "last wins" precedence,
  * matching the file fallback pattern (build_manifest()) and workspace metadata
- * merge pattern (workspace.c:1936-1939).
+ * merge pattern.
  *
- * PRECEDENCE MODEL (profiles.h:6-14):
+ * PRECEDENCE MODEL:
  * - Profiles iterated in precedence order (low→high): global < OS < host
  * - Later profiles override earlier ones ("last wins")
  * - Result: Highest precedence profile wins for each directory
@@ -1652,7 +1652,7 @@ cleanup:
  * rebuilds from Git by building a complete manifest once and syncing all
  * entries.
  *
- * Algorithm (optimized O(M) approach):
+ * Algorithm:
  *   1. Clear all file entries from state
  *   2. Build manifest ONCE from all enabled profiles (precedence oracle)
  *   3. Build profile→oid map for git_oid field
@@ -1661,10 +1661,6 @@ cleanup:
  *   6. Sync tracked directories
  *
  * Performance: O(M) where M = total files across all enabled profiles
- *
- * Previous implementation: O(N × M) - called manifest_enable_profile() N times,
- * each rebuilding the full manifest. This version builds once and syncs all
- * entries directly, following the pattern from manifest_reorder_profiles().
  */
 error_t *manifest_rebuild(
     git_repository *repo,
@@ -2590,7 +2586,7 @@ cleanup:
  * Sync manifest from Git diff (bulk operation)
  *
  * Updates manifest table based on changes between old_oid and new_oid for a
- * single profile. Uses O(M+D) bulk pattern instead of O(D×M) per-file operations.
+ * single profile. Uses O(M+D) bulk pattern.
  *
  * This is the core function for updating the manifest after sync operations
  * (pull, rebase, merge). It efficiently processes an entire Git diff by:
@@ -2615,17 +2611,13 @@ cleanup:
  *     - For deletions: check for fallbacks, entries remain for orphan detection if none
  *     - Handle precedence: only sync if profile won the file
  *
- * Performance: O(M + D) where M = total files in all profiles, D = changed files
- *   Old implementation: O(D × M) with repeated manifest builds
- *   Speedup: ~50-100x for typical workloads
- *
  * Transaction: Caller must open transaction (state_load_for_update) and commit
  *              (state_save) after calling. This function works within an active
  *              transaction.
  *
- * Convergence Semantics: Sync updates VWD expected state (git_oid, blob_oid) but doesn't
- *                        deploy to filesystem. User must run 'dotta apply' which uses runtime
- *                        divergence analysis to deploy changes.
+ * Convergence: Sync updates VWD expected state (git_oid, blob_oid) but doesn't
+ * Semantics    deploy to filesystem. User must run 'dotta apply' which uses runtime
+ *              divergence analysis to deploy changes.
  *
  * @param repo Repository (must not be NULL)
  * @param state State with active transaction (must not be NULL)
@@ -3054,10 +3046,6 @@ cleanup:
  *
  * Rebuilds the tracked_directories table from metadata.
  * Called after profile enable/disable/reorder to maintain directory tracking.
- *
- * This is part of the Virtual Working Directory (VWD) consistency model.
- * While files in the manifest have lifecycle states (pending/deployed/removal),
- * directories are simply tracked for profile attribution and metadata preservation.
  *
  * Algorithm:
  *   1. Clear all tracked directories (idempotent start)

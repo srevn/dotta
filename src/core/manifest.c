@@ -229,9 +229,16 @@ static error_t *extract_file_metadata_from_tree_entry(
             break;
 
         case GIT_FILEMODE_LINK:
-            /* Symbolic link */
+            /* Symbolic link - mode=0 (no mode to track).
+             *
+             * Symlink permissions are not deployable:
+             * - symlink() syscall has no mode parameter
+             * - chmod() on symlink changes target or fails (OS-dependent)
+             * - lstat() st_mode varies by OS (Linux: 0777, BSD: 0755)
+             *
+             * Access control is determined by target, not symlink. */
             type = STATE_FILE_SYMLINK;
-            mode = 0777;  /* Conventional, not actually used by filesystem */
+            mode = 0;
             break;
 
         case GIT_FILEMODE_TREE:

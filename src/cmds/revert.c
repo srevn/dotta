@@ -747,7 +747,7 @@ static error_t *revert_file_in_branch(
     /* Get target blob OID and mode */
     git_oid_cpy(&target_blob_oid_copy, git_tree_entry_id(target_entry));
     target_mode = git_tree_entry_filemode(target_entry);
-    is_symlink = S_ISLNK(target_mode);
+    is_symlink = (target_mode == GIT_FILEMODE_LINK);
 
     /* Load metadata from target commit */
     err = load_metadata_from_commit(repo, target_commit, &target_metadata);

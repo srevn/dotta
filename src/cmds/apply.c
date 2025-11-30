@@ -1341,22 +1341,18 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Create content cache for batch operations (reused across preflight and deployment)
+    /* Reuse workspace's content cache for batch operations
      *
-     * Architecture: The cache is created once and shared between preflight and deploy phases.
-     * This provides significant performance benefits:
-     * - Preflight decrypts files for comparison (cache miss - populates cache)
-     * - Smart skip reuses cached content (cache hit - O(1) lookup)
-     * - Deploy reuses cached content (cache hit - O(1) lookup)
+     * Architecture: Workspace creates and owns the content cache during workspace_load().
+     * The cache is already populated with decrypted content from divergence analysis:
+     * - Encrypted deployed files: decrypted for content comparison
+     * - Encrypted orphaned files: decrypted for orphan divergence check
      *
-     * Result: Each blob is decrypted at most once, saving 2-3x redundant decryptions.
+     * By reusing the workspace cache, subsequent operations get cache hits:
+     * - Safety check for orphan removal: cache hit (already decrypted)
+     * - Deploy file content: cache hit (already decrypted)
      */
-    keymanager_t *km = keymanager_get_global(NULL);
-    cache = content_cache_create(repo, km);
-    if (!cache) {
-        err = ERROR(ERR_MEMORY, "Failed to create content cache for deployment");
-        goto cleanup;
-    }
+    cache = workspace_get_content_cache(ws);
 
     /* Run pre-flight checks (using workspace divergence analysis)
      *
@@ -1974,7 +1970,6 @@ cleanup:
     if (preflight) preflight_result_free(preflight);
     if (hook_ctx) hook_context_free(hook_ctx);
     if (profiles_str) free(profiles_str);
-    if (cache) content_cache_free(cache);
     if (merged_metadata) metadata_free(merged_metadata);
     if (dir_orphans) free(dir_orphans);
     if (file_orphans) free(file_orphans);

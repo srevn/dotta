@@ -157,7 +157,7 @@ static error_t *add_violation(
         }
 
         safety_violation_t *new_violations = realloc(result->violations,
-                                                       new_capacity * sizeof(safety_violation_t));
+                                                     new_capacity * sizeof(safety_violation_t));
         if (!new_violations) {
             return ERROR(ERR_MEMORY, "Failed to grow violations array");
         }
@@ -294,13 +294,13 @@ static bool try_fast_path_check(
             /* Loading/decryption failed - conservative: cannot verify */
             error_free(err);
             *out_err = add_violation(result, filesystem_path, storage_path,
-                                    source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
+                                     source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
             return true;  /* Handled (don't try slow path) */
         }
 
         /* Compare plaintext to disk (captures stat for reuse) */
         err = compare_buffer_to_disk(plaintext, filesystem_path, expected_mode, NULL,
-                                    &cmp_result, &file_stat);
+                                     &cmp_result, &file_stat);
 
         /* Free owned buffer if we allocated it */
         if (owns_buffer) {
@@ -311,7 +311,7 @@ static bool try_fast_path_check(
             /* Comparison failed - conservative */
             error_free(err);
             *out_err = add_violation(result, filesystem_path, storage_path,
-                                    source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
+                                     source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
             return true;
         }
     } else {
@@ -385,7 +385,7 @@ static bool try_fast_path_check(
 
     if (has_divergence && reason) {
         *out_err = add_violation(result, filesystem_path, storage_path,
-                                source_profile, reason, content_mod);
+                                 source_profile, reason, content_mod);
     }
 
     /* Fast path succeeded! */
@@ -416,13 +416,13 @@ static error_t *check_file_with_tree(
     /* Profile tree not available - profile might be deleted */
     if (!profile_tree) {
         return add_violation(result, filesystem_path, storage_path,
-                           source_profile, SAFETY_REASON_PROFILE_DELETED, false);
+                             source_profile, SAFETY_REASON_PROFILE_DELETED, false);
     }
 
     /* Need storage_path to look up in tree */
     if (!storage_path) {
         return add_violation(result, filesystem_path, storage_path,
-                           source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
+                             source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
     }
 
     /* Load tree entry from profile */
@@ -432,7 +432,7 @@ static error_t *check_file_with_tree(
     if (git_err < 0) {
         /* File not in profile tree - might have been removed from Git */
         return add_violation(result, filesystem_path, storage_path,
-                           source_profile, SAFETY_REASON_FILE_REMOVED, false);
+                             source_profile, SAFETY_REASON_FILE_REMOVED, false);
     }
 
     /* Get decrypted content from tree entry
@@ -460,7 +460,7 @@ static error_t *check_file_with_tree(
                 error_free(err);
                 git_tree_entry_free(tree_entry);
                 return add_violation(result, filesystem_path, storage_path,
-                                   source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
+                                     source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
             }
             error_free(err);
         }
@@ -474,12 +474,15 @@ static error_t *check_file_with_tree(
     /* Use passed-in keymanager OR global as fallback */
     keymanager_t *km_to_use = keymanager ? keymanager : keymanager_get_global(NULL);
 
+    /* Extract encrypted flag from metadata for content layer */
+    bool encrypted = metadata_get_file_encrypted(resolved_metadata, storage_path);
+
     error_t *err = content_get_from_tree_entry(
         repo,
         tree_entry,
         storage_path,
         source_profile,
-        resolved_metadata,
+        encrypted,
         km_to_use,
         &content
     );
@@ -498,7 +501,7 @@ static error_t *check_file_with_tree(
         if (fallback_metadata) metadata_free(fallback_metadata);
         git_tree_entry_free(tree_entry);
         return add_violation(result, filesystem_path, storage_path,
-                           source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
+                             source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
     }
 
     /* Compare decrypted content to disk file (capture stat for reuse) */
@@ -515,7 +518,7 @@ static error_t *check_file_with_tree(
         error_free(err);
         if (fallback_metadata) metadata_free(fallback_metadata);
         return add_violation(result, filesystem_path, storage_path,
-                           source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
+                             source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
     }
 
     /* Check comparison result */
@@ -583,7 +586,7 @@ static error_t *check_file_with_tree(
     if (reason) {
         if (fallback_metadata) metadata_free(fallback_metadata);
         return add_violation(result, filesystem_path, storage_path,
-                           source_profile, reason, content_mod);
+                             source_profile, reason, content_mod);
     }
 
     if (fallback_metadata) metadata_free(fallback_metadata);
@@ -682,7 +685,7 @@ error_t *safety_check_removal(
      * 2. Linear search cost exceeds hashmap overhead (path_count * state_count >= threshold²)
      *
      * This prevents O(n*m) blowup when checking few paths against many state entries.
-     * Example: 19 paths × 10,000 state entries = 190,000 comparisons → use hashmap
+     * Example: 19 paths × 10,000 state entries = 190,000 comparisons -> use hashmap
      *
      * Note: Overflow is not a concern here since HASHMAP_THRESHOLD² = 400, and the
      * multiplication is short-circuited by condition 1 when path_count >= 20.
@@ -826,8 +829,7 @@ error_t *safety_check_removal(
                     if (state_index) hashmap_free(state_index, NULL);
                     state_free_all_files(state_entries, state_count);
                     safety_result_free(result);
-                    return error_wrap(load_err, "Failed to load metadata from profile '%s'",
-                                    source_profile);
+                    return error_wrap(load_err, "Failed to load metadata from profile '%s'", source_profile);
                 }
             }
 
@@ -876,7 +878,7 @@ error_t *safety_check_removal(
             /* Check file using tree-based comparison WITH resolved metadata */
             err = check_file_with_tree(repo, fs_path, storage_path, source_profile,
                                       profile_tree,
-                                      resolved_metadata,   /* ← Use resolved metadata */
+                                      resolved_metadata,   /* Use resolved metadata */
                                       keymanager,          /* Pass keymanager */
                                       result);
             if (err) {

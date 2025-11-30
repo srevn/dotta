@@ -57,13 +57,15 @@ static error_t *create_result(cleanup_result_t **out) {
     result->removed_files = string_array_create();
     result->skipped_files = string_array_create();
     result->failed_files = string_array_create();
+    result->released_files = string_array_create();
     result->removed_dirs = string_array_create();
     result->skipped_dirs = string_array_create();
     result->failed_dirs = string_array_create();
 
     /* Check allocations */
-    if (!result->removed_files || !result->skipped_files || !result->failed_files ||
-        !result->removed_dirs || !result->skipped_dirs || !result->failed_dirs) {
+    if (!result->removed_files || !result->skipped_files ||
+        !result->failed_files || !result->released_files || !result->removed_dirs ||
+        !result->skipped_dirs || !result->failed_dirs) {
         cleanup_result_free(result);
         return ERROR(ERR_MEMORY, "Failed to allocate cleanup result arrays");
     }
@@ -87,6 +89,7 @@ void cleanup_result_free(cleanup_result_t *result) {
     if (result->removed_files) string_array_free(result->removed_files);
     if (result->skipped_files) string_array_free(result->skipped_files);
     if (result->failed_files) string_array_free(result->failed_files);
+    if (result->released_files) string_array_free(result->released_files);
     if (result->removed_dirs) string_array_free(result->removed_dirs);
     if (result->skipped_dirs) string_array_free(result->skipped_dirs);
     if (result->failed_dirs) string_array_free(result->failed_dirs);
@@ -214,7 +217,8 @@ static error_t *prune_orphaned_files(
 
             for (size_t i = 0; i < opts->preflight_violations->count; i++) {
                 const safety_violation_t *v = &opts->preflight_violations->violations[i];
-                err = hashmap_set(violations_map, v->filesystem_path, (void *)1);
+                /* Store violation pointer for O(1) reason lookup */
+                err = hashmap_set(violations_map, v->filesystem_path, (void *)v);
                 if (err) {
                     hashmap_free(violations_map, NULL);
                     free(filesystem_paths);
@@ -263,7 +267,8 @@ static error_t *prune_orphaned_files(
 
                 for (size_t i = 0; i < result->safety_violations->count; i++) {
                     const safety_violation_t *v = &result->safety_violations->violations[i];
-                    err = hashmap_set(violations_map, v->filesystem_path, (void *)1);
+                    /* Store violation pointer for O(1) reason lookup */
+                    err = hashmap_set(violations_map, v->filesystem_path, (void *)v);
                     if (err) {
                         hashmap_free(violations_map, NULL);
                         free(filesystem_paths);
@@ -278,8 +283,31 @@ static error_t *prune_orphaned_files(
     for (size_t i = 0; i < orphan_count; i++) {
         const char *path = orphans[i]->filesystem_path;
 
-        /* Skip if file has safety violation */
-        if (violations_map && hashmap_has(violations_map, path)) {
+        /* Check for safety violations using O(1) hashmap lookup */
+        const safety_violation_t *violation = violations_map ?
+            hashmap_get(violations_map, path) : NULL;
+
+        if (violation) {
+            if (strcmp(violation->reason, SAFETY_REASON_RELEASED) == 0) {
+                /* RELEASED: External profile deletion
+                 *
+                 * - DO NOT remove file (cannot verify safety)
+                 * - DO track for state cleanup (can't manage without profile)
+                 *
+                 * The file is "released" from dotta's management.
+                 */
+                result->orphaned_files_released++;
+                err = string_array_push(result->released_files, path);
+                if (err) {
+                    err = error_wrap(err, "Failed to track released file");
+                    if (violations_map) hashmap_free(violations_map, NULL);
+                    free(filesystem_paths);
+                    return err;
+                }
+                continue;
+            }
+
+            /* Other violations (MODIFIED, MODE_CHANGED, etc.): full skip */
             result->orphaned_files_skipped++;
             err = string_array_push(result->skipped_files, path);
             if (err) {
@@ -687,9 +715,22 @@ error_t *cleanup_preflight_check(
                 goto cleanup;
             }
 
-            /* Set blocking flag if violations found */
+            /* Set blocking flag if non-RELEASED violations found
+             *
+             * RELEASED violations are informational, not blocking:
+             * - File is left on filesystem (data safety)
+             * - State entry will be cleaned up
+             * - User is informed but operation proceeds
+             */
             if (result->safety_violations && result->safety_violations->count > 0) {
-                result->has_blocking_violations = true;
+                size_t blocking_count = 0;
+                for (size_t j = 0; j < result->safety_violations->count; j++) {
+                    if (strcmp(result->safety_violations->violations[j].reason,
+                               SAFETY_REASON_RELEASED) != 0) {
+                        blocking_count++;
+                    }
+                }
+                result->has_blocking_violations = (blocking_count > 0);
             }
         }
     }

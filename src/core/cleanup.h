@@ -112,7 +112,7 @@ typedef struct {
      * If provided: Files in violations list are skipped, no re-check performed.
      *
      * Typical flow:
-     * 1. apply.c runs cleanup_preflight_check() → produces safety_violations
+     * 1. apply.c runs cleanup_preflight_check() -> produces safety_violations
      * 2. apply.c passes violations to cleanup_execute() via this field
      * 3. cleanup_execute() uses violations to build skip list
      * 4. apply.c frees cleanup_preflight_result (owns the data)
@@ -138,6 +138,7 @@ typedef struct {
     size_t orphaned_files_removed;       /* Successfully removed */
     size_t orphaned_files_failed;        /* Failed to remove (I/O errors) */
     size_t orphaned_files_skipped;       /* Skipped due to safety violations */
+    size_t orphaned_files_released;      /* Released (profile deleted externally) */
 
     /* Orphaned directory statistics */
     size_t orphaned_directories_found;   /* Total orphaned directories detected */
@@ -152,6 +153,7 @@ typedef struct {
     string_array_t *removed_files;       /* Successfully removed file paths */
     string_array_t *skipped_files;       /* Skipped file paths (safety violations) */
     string_array_t *failed_files;        /* Failed file paths (with errors) */
+    string_array_t *released_files;      /* Released files (left on disk, state cleaned) */
 
     /* Detailed directory lists */
     string_array_t *removed_dirs;        /* Successfully removed directory paths */

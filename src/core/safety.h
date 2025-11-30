@@ -68,10 +68,10 @@ typedef struct {
  *
  * Used in safety_violation_t.reason field for programmatic handling and display.
  */
+#define SAFETY_REASON_RELEASED         "released"          /* Profile deleted externally, file released */
 #define SAFETY_REASON_MODIFIED         "modified"          /* Content changed */
 #define SAFETY_REASON_MODE_CHANGED     "mode_changed"      /* Permissions changed */
 #define SAFETY_REASON_TYPE_CHANGED     "type_changed"      /* File<->symlink conversion */
-#define SAFETY_REASON_PROFILE_DELETED  "profile_deleted"   /* Source profile branch deleted */
 #define SAFETY_REASON_FILE_REMOVED     "file_removed"      /* Removed from profile */
 #define SAFETY_REASON_CANNOT_VERIFY    "cannot_verify"     /* Unable to verify (I/O, permissions) */
 
@@ -117,7 +117,7 @@ typedef struct {
  * Edge Cases Handled:
  * - Encrypted files from deleted profiles: Uses state_entry->encrypted (always correct)
  * - Symlinks: Uses state_entry->type for correct GIT_FILEMODE_LINK detection
- * - Profile branch deleted: Reports "profile_deleted" from slow path
+ * - Profile branch deleted: Handled by precondition (controlled=safe, external=RELEASED)
  * - Content load failure: Falls to slow path (defense-in-depth)
  * - Decryption failure: Conservative "cannot_verify" violation
  * - Cannot read file: Conservative "cannot_verify" violation (blocks removal)

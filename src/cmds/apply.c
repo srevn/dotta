@@ -293,9 +293,9 @@ static void print_safety_violations(
         } else if (strcmp(v->reason, SAFETY_REASON_TYPE_CHANGED) == 0) {
             reason_display = "type changed";
             icon = "⚠";
-        } else if (strcmp(v->reason, SAFETY_REASON_PROFILE_DELETED) == 0) {
-            reason_display = "profile branch deleted";
-            icon = "!";
+        } else if (strcmp(v->reason, SAFETY_REASON_RELEASED) == 0) {
+            reason_display = "released (profile deleted externally)";
+            icon = "→";
         } else if (strcmp(v->reason, SAFETY_REASON_FILE_REMOVED) == 0) {
             reason_display = "removed from profile";
             icon = "!";
@@ -1736,6 +1736,46 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                             "  Removed %zu orphaned entr%s from state\n",
                             string_array_size(cleanup_res->removed_files),
                             string_array_size(cleanup_res->removed_files) == 1 ? "y" : "ies");
+            }
+
+            /* Remove released file entries from state
+             *
+             * Released files: profile deleted externally (git branch -D).
+             * - File left on filesystem (cannot verify safety, protect user data)
+             * - State entry removed (can't manage without profile)
+             *
+             * The user is informed via RELEASED violation display, but operation
+             * is non-blocking. These files are effectively "let go" - dotta stops
+             * tracking them and they become normal unmanaged files.
+             */
+            if (cleanup_res && cleanup_res->released_files &&
+                string_array_size(cleanup_res->released_files) > 0) {
+
+                output_print(out, OUTPUT_VERBOSE, "\nReleasing files from management...\n");
+
+                for (size_t i = 0; i < string_array_size(cleanup_res->released_files); i++) {
+                    const char *path = string_array_get(cleanup_res->released_files, i);
+
+                    /* Delete entry from virtual_manifest table
+                     *
+                     * The file is LEFT on filesystem (we can't verify it's safe to remove).
+                     * We remove only the database record since we can't manage this file
+                     * anymore (no profile branch to verify against).
+                     */
+                    err = state_remove_file(state, path);
+                    if (err) {
+                        /* Non-fatal - file is safe on filesystem */
+                        output_warning(out, "Failed to release state entry for %s: %s",
+                                      path, error_message(err));
+                        error_free(err);
+                        err = NULL;
+                    }
+                }
+
+                output_print(out, OUTPUT_VERBOSE,
+                            "  Released %zu file%s from management\n",
+                            string_array_size(cleanup_res->released_files),
+                            string_array_size(cleanup_res->released_files) == 1 ? "" : "s");
             }
 
             /* Remove orphaned directory entries from state

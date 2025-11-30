@@ -430,7 +430,7 @@ static bool try_fast_path_check(
  * - blob content <- git_tree_entry_id()
  *
  * Terminal Results:
- * - Profile tree NULL    -> PROFILE_DELETED
+ * - Profile tree NULL    -> CANNOT_VERIFY (defense-in-depth, unreachable with precondition)
  * - File not in tree     -> FILE_REMOVED
  * - Any verification failure -> CANNOT_VERIFY (conservative)
  *
@@ -438,7 +438,7 @@ static bool try_fast_path_check(
  * @param filesystem_path Path on disk (must not be NULL)
  * @param storage_path Path in profile tree (can be NULL -> CANNOT_VERIFY)
  * @param source_profile Profile name (can be NULL)
- * @param profile_tree Git tree for profile (NULL -> PROFILE_DELETED)
+ * @param profile_tree Git tree for profile (NULL -> CANNOT_VERIFY, defensive only)
  * @param tree_metadata_cache Cache of profile -> metadata_t* loaded from Git
  * @param keymanager Key manager for decryption (can be NULL, uses global)
  * @param result Safety result to populate (must not be NULL)
@@ -458,10 +458,16 @@ static error_t *check_file_with_tree(
     CHECK_NULL(filesystem_path);
     CHECK_NULL(result);
 
-    /* Profile tree not available - profile might be deleted */
+    /* Profile tree not available - defensive check
+     *
+     * With the branch existence check in the main loop, this path should
+     * be unreachable. Keep for defense-in-depth in case:
+     * - Future code changes break the invariant
+     * - Function called from different context
+     */
     if (!profile_tree) {
         return add_violation(result, filesystem_path, storage_path,
-                             source_profile, SAFETY_REASON_PROFILE_DELETED, false);
+                             source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
     }
 
     /* Need storage_path to look up in tree */
@@ -814,6 +820,88 @@ error_t *safety_check_removal(
             continue;
         }
 
+        /* BRANCH EXISTENCE PRECONDITION CHECK
+         *
+         * Must check branch existence BEFORE any verification. This determines:
+         * 1. Whether verification is meaningful (branch exists -> can verify)
+         * 2. What to do when branch is deleted (controlled vs external deletion)
+         *
+         * Key insight: Checking FIRST provides consistent behavior regardless of
+         * Git garbage collection timing. Without this, fast path might succeed
+         * (blob exists) or fail (blob GC'd), producing different results for
+         * the same semantic case — confusing and incoherent.
+         *
+         * Performance: Tree loading is cached per profile (hashmap lookup after
+         * first file). Most orphans are from the same profile, so this adds
+         * ~1 hashmap lookup per file, not a tree load per file.
+         */
+        git_tree *profile_tree = NULL;
+        err = get_or_load_profile_tree(repo, tree_cache,
+                                       state_entry->profile, &profile_tree);
+        if (err) {
+            /* Fatal error (memory allocation, etc.) */
+            hashmap_free(tree_metadata_cache, (void(*)(void*))metadata_free);
+            hashmap_free(tree_cache, free_profile_tree_cache);
+            if (state_index) hashmap_free(state_index, NULL);
+            state_free_all_files(state_entries, state_count);
+            safety_result_free(result);
+            return error_wrap(err, "Failed to load profile tree for '%s'", state_entry->profile);
+        }
+
+        if (!profile_tree) {
+            /* Branch deleted - determine action based on lifecycle state */
+            bool is_controlled_deletion = state_entry->state &&
+                                          strcmp(state_entry->state, STATE_INACTIVE) == 0;
+
+            if (is_controlled_deletion) {
+                /* CONTROLLED DELETION
+                 *
+                 * Entry marked STATE_INACTIVE by manifest_disable_profile() while
+                 * the branch still existed. The removal intent was recorded with
+                 * full verification capability at that time.
+                 *
+                 * Trust the recorded intent UNCONDITIONALLY:
+                 * - No verification needed (intent validated when recorded)
+                 * - No violation (removal is pre-approved)
+                 * - File will be removed by cleanup
+                 *
+                 * This provides consistent behavior regardless of Git GC timing.
+                 * The alternative (try fast path first) creates confusing violations
+                 * referencing deleted profiles when blob exists but content differs.
+                 *
+                 * Follows Git staging model:
+                 *   profile disable = git rm (staging)
+                 *   apply = git commit (execution)
+                 */
+                continue;  /* Safe to remove - no violation */
+            } else {
+                /* EXTERNAL DELETION
+                 *
+                 * Profile branch deleted outside dotta (e.g., git branch -D).
+                 * State entry is still ACTIVE (never went through controlled flow).
+                 *
+                 * Cannot verify: No branch = no reference to compare against.
+                 * Cannot trust intent: User didn't request deletion via dotta.
+                 *
+                 * Safe choice: "Release" the file from management
+                 * - Leave file on filesystem (protect user data)
+                 * - Track for state cleanup (can't manage without profile)
+                 * - Non-blocking (inform user, don't prevent operation)
+                 */
+                err = add_violation(result, fs_path, state_entry->storage_path,
+                                    state_entry->profile, SAFETY_REASON_RELEASED, false);
+                if (err) {
+                    hashmap_free(tree_metadata_cache, (void(*)(void*))metadata_free);
+                    hashmap_free(tree_cache, free_profile_tree_cache);
+                    if (state_index) hashmap_free(state_index, NULL);
+                    state_free_all_files(state_entries, state_count);
+                    safety_result_free(result);
+                    return error_wrap(err, "Failed to add released violation for '%s'", fs_path);
+                }
+                continue;
+            }
+        }
+
         /* Fast path: Trust state entry
          *
          * State entry contains all properties from deployment - persists even
@@ -837,22 +925,9 @@ error_t *safety_check_removal(
         /* Slow path: Trust Git only (defense-in-depth)
          *
          * Used when fast path can't verify (missing blob_oid, content failure).
-         * Loads all data from Git tree - completely independent source.
+         * profile_tree already loaded above, guaranteed non-NULL here.
          */
         if (!fast_path_succeeded) {
-            git_tree *profile_tree = NULL;
-            err = get_or_load_profile_tree(repo, tree_cache,
-                                           state_entry->profile, &profile_tree);
-            if (err) {
-                hashmap_free(tree_metadata_cache, (void(*)(void*))metadata_free);
-                hashmap_free(tree_cache, free_profile_tree_cache);
-                if (state_index) hashmap_free(state_index, NULL);
-                state_free_all_files(state_entries, state_count);
-                safety_result_free(result);
-                return error_wrap(err, "Failed to load profile tree for '%s'",
-                                  state_entry->profile);
-            }
-
             /* Check file using tree-based comparison (independent data source) */
             err = check_file_with_tree(
                 repo, fs_path, state_entry->storage_path, state_entry->profile,

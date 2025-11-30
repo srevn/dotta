@@ -307,7 +307,7 @@ static error_t *workspace_add_diverged(
     if (ws->diverged_count >= ws->diverged_capacity) {
         size_t new_capacity = ws->diverged_capacity == 0 ? 32 : ws->diverged_capacity * 2;
         workspace_item_t *new_diverged = realloc(ws->diverged,
-                                                  new_capacity * sizeof(workspace_item_t));
+                                                 new_capacity * sizeof(workspace_item_t));
         if (!new_diverged) {
             return ERROR(ERR_MEMORY, "Failed to grow diverged array");
         }
@@ -382,19 +382,129 @@ static error_t *workspace_add_diverged(
 }
 
 /**
- * Analyze single file for divergence
+ * Fast OID-based content verification for non-encrypted files
  *
- * ARCHITECTURE: Filesystem-first comparison logic.
- * Compares content for ALL files that exist on filesystem (deployed AND undeployed).
- * This prevents data loss by detecting conflicts before deployment.
+ * Computes SHA-1 hash of filesystem file and compares to expected blob OID.
+ * This optimization avoids expensive Git blob loading from pack files
  *
- * Example scenario this fixes:
- * - Profile has: home/.bashrc
- * - State: empty (never deployed)
- * - Filesystem: ~/.bashrc exists with different content
- * - Old logic: UNDEPLOYED state (no comparison!) → would overwrite on deploy
- * - New logic: UNDEPLOYED state + DIVERGENCE_CONTENT flag → blocks deploy
+ * IMPORTANT: Only call for NON-ENCRYPTED files. For encrypted files, the
+ * blob_oid is the hash of ciphertext, while the filesystem contains plaintext.
+ *
+ * Returns standard compare_result_t for seamless integration:
+ * - CMP_EQUAL:     Hash matches (file content unchanged)
+ * - CMP_DIFFERENT: Hash differs (content was modified)
+ * - CMP_TYPE_DIFF: Type mismatch (expected file but found symlink, or vice versa)
+ * - CMP_MISSING:   File doesn't exist (TOCTOU safety - deleted after initial check)
+ *
+ * STAT PROPAGATION: Always captures stat when file exists, enabling caller's
+ * permission checking without redundant syscall. This is critical for the
+ * two-phase permission checking in analyze_file_divergence().
+ *
+ * @param blob_oid Expected blob OID from manifest (must not be NULL)
+ * @param filesystem_path Path to file on disk (must not be NULL)
+ * @param expected_mode Expected git filemode (BLOB, BLOB_EXECUTABLE, or LINK)
+ * @param result Output: comparison result (must not be NULL)
+ * @param out_stat Output: captured stat for permission checking (can be NULL)
+ * @return Error or NULL on success
  */
+static error_t *verify_oid_matches_disk(
+    const git_oid *blob_oid,
+    const char *filesystem_path,
+    git_filemode_t expected_mode,
+    compare_result_t *result,
+    struct stat *out_stat
+) {
+    CHECK_NULL(blob_oid);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(result);
+
+    /* Step 1: Stat file for type check and stat propagation
+     *
+     * We must stat the file to:
+     * 1. Verify file type matches expected (file vs symlink)
+     * 2. Capture stat for caller's permission checking
+     *
+     * Using lstat() to not follow symlinks - we need to detect symlinks.
+     */
+    struct stat st;
+    if (lstat(filesystem_path, &st) != 0) {
+        if (errno == ENOENT) {
+            /* File doesn't exist - TOCTOU race: deleted after initial check */
+            *result = CMP_MISSING;
+            if (out_stat) {
+                memset(out_stat, 0, sizeof(*out_stat));
+            }
+            return NULL;
+        }
+        return ERROR(ERR_FS, "Failed to stat '%s': %s", filesystem_path, strerror(errno));
+    }
+
+    /* Propagate stat to caller for permission checking */
+    if (out_stat) {
+        memcpy(out_stat, &st, sizeof(struct stat));
+    }
+
+    /* Step 2: Type verification and hash computation */
+    git_oid computed;
+
+    if (expected_mode == GIT_FILEMODE_LINK) {
+        /* Expected symlink - verify type matches */
+        if (!S_ISLNK(st.st_mode)) {
+            *result = CMP_TYPE_DIFF;
+            return NULL;
+        }
+
+        /* Hash symlink target string
+         *
+         * Git stores symlinks as blobs containing the target path as raw bytes.
+         * We read the target and hash it identically to how Git would.
+         */
+        char *target = NULL;
+        error_t *err = fs_read_symlink(filesystem_path, &target);
+        if (err) {
+            return error_wrap(err, "Failed to read symlink '%s'", filesystem_path);
+        }
+
+        int ret = git_odb_hash(&computed, target, strlen(target), GIT_OBJECT_BLOB);
+        free(target);
+
+        if (ret != 0) {
+            const git_error *git_err = git_error_last();
+            return ERROR(ERR_GIT, "Failed to hash symlink target: %s",
+                         git_err ? git_err->message : "unknown error");
+        }
+    } else {
+        /* Expected regular file (BLOB or BLOB_EXECUTABLE) */
+        if (S_ISLNK(st.st_mode)) {
+            *result = CMP_TYPE_DIFF;
+            return NULL;
+        }
+
+        if (!S_ISREG(st.st_mode)) {
+            /* Not a regular file (directory, device, FIFO, socket, etc.) */
+            *result = CMP_TYPE_DIFF;
+            return NULL;
+        }
+
+        /* Hash file directly from path
+         *
+         * git_odb_hashfile() streams the file content and computes the
+         * standard Git blob hash: SHA-1("blob <size>\0" + content).
+         * This uses constant memory regardless of file size.
+         */
+        int ret = git_odb_hashfile(&computed, filesystem_path, GIT_OBJECT_BLOB);
+        if (ret != 0) {
+            const git_error *git_err = git_error_last();
+            return ERROR(ERR_GIT, "Failed to hash file '%s': %s", filesystem_path,
+                         git_err ? git_err->message : "unknown error");
+        }
+    }
+
+    /* Step 3: Compare computed hash to expected blob OID */
+    *result = git_oid_equal(blob_oid, &computed) ? CMP_EQUAL : CMP_DIFFERENT;
+    return NULL;
+}
+
 /**
  * Analyze divergence for a single file using VWD cache
  *
@@ -459,25 +569,14 @@ static error_t *analyze_file_divergence(
         git_oid blob_oid;
         if (git_oid_fromstr(&blob_oid, manifest_entry->blob_oid) != 0) {
             return ERROR(ERR_INTERNAL, "Invalid blob_oid '%s' for '%s' (database corruption?)",
-                        manifest_entry->blob_oid, fs_path);
+                         manifest_entry->blob_oid, fs_path);
         }
 
-        /* Load expected content from Git (cached, automatic decryption) */
-        const buffer_t *expected_content = NULL;
-        error_t *err = content_cache_get_from_blob_oid(
-            ws->content_cache,
-            &blob_oid,
-            storage_path,
-            profile,
-            manifest_entry->encrypted,
-            &expected_content
-        );
-
-        if (err) {
-            return error_wrap(err, "Failed to get content for '%s'", fs_path);
-        }
-
-        /* Extract expected filemode from VWD cache type field */
+        /* Extract expected filemode from VWD cache type field
+         *
+         * Extracted before comparison strategy selection because both paths
+         * need this value. Maps state_file_type_t to git_filemode_t.
+         */
         git_filemode_t expected_mode;
         if (manifest_entry->type == STATE_FILE_SYMLINK) {
             expected_mode = GIT_FILEMODE_LINK;
@@ -487,25 +586,60 @@ static error_t *analyze_file_divergence(
             expected_mode = GIT_FILEMODE_BLOB;
         }
 
-        /* Compare expected content to filesystem with stat capture */
+        /* Prepare for comparison - both paths capture stat for permission checking */
         struct stat file_stat;
         memset(&file_stat, 0, sizeof(file_stat));
-
         compare_result_t cmp_result;
-        err = compare_buffer_to_disk(
-            expected_content,
-            fs_path,
-            expected_mode,
-            NULL,           /* in_stat: let compare_buffer_to_disk stat the file */
-            &cmp_result,
-            &file_stat      /* out_stat: capture for permission checking */
-        );
+        error_t *err = NULL;
 
-        if (err) {
-            return error_wrap(err, "Failed to compare '%s'", fs_path);
+        /* Comparison strategy selection based on encryption status
+         *
+         * Non-encrypted: Hash filesystem file and compare OID directly.
+         * Encrypted: blob_oid is ciphertext hash; must load, decrypt, compare.
+         */
+        if (!manifest_entry->encrypted) {
+            /* Fast path: OID hash verification */
+            err = verify_oid_matches_disk(
+                &blob_oid,
+                fs_path,
+                expected_mode,
+                &cmp_result,
+                &file_stat
+            );
+        } else {
+            /* SLOW PATH: Content comparison for encrypted files
+             *
+             * Content cache provides:
+             * - Automatic decryption (uses encrypted flag from VWD cache)
+             * - Caching (repeated checks for same blob don't re-decrypt)
+             * - Error handling (missing key, corrupt data, etc.)
+             */
+            const buffer_t *expected_content = NULL;
+            err = content_cache_get_from_blob_oid(
+                ws->content_cache,
+                &blob_oid,
+                storage_path,
+                profile,
+                manifest_entry->encrypted,
+                &expected_content
+            );
+
+            if (!err) {
+                err = compare_buffer_to_disk(
+                    expected_content,
+                    fs_path,
+                    expected_mode,
+                    NULL,           /* in_stat: let compare_buffer_to_disk stat */
+                    &cmp_result,
+                    &file_stat      /* out_stat: capture for permission checking */
+                );
+            }
+            /* Note: Don't free expected_content - cache owns it! */
         }
 
-        /* Note: Don't free expected_content - cache owns it! */
+        if (err) {
+            return error_wrap(err, "Failed to verify '%s'", fs_path);
+        }
 
         /* Set divergence flags based on comparison result */
         switch (cmp_result) {
@@ -583,8 +717,7 @@ static error_t *analyze_file_divergence(
             );
 
             if (check_err) {
-                return error_wrap(check_err,
-                    "Failed to check metadata for '%s'", fs_path);
+                return error_wrap(check_err, "Failed to check metadata for '%s'", fs_path);
             }
 
             /* Accumulate metadata divergence flags
@@ -747,46 +880,10 @@ static divergence_type_t compute_orphan_divergence(
         return DIVERGENCE_UNVERIFIED;
     }
 
-    /* Step 4: Load expected content from Git
-     *
-     * Content cache provides:
-     * - Automatic decryption (uses state_entry->encrypted flag)
-     * - Caching (repeated checks for same blob don't re-decrypt)
-     * - Error handling (missing key, corrupt data, etc.)
-     *
-     * VWD Pattern: Use state_entry->encrypted directly (see metadata.h:280)
-     * This flag was set atomically with blob_oid when entry was synced to manifest.
-     */
-    const buffer_t *expected_content = NULL;
-    error_t *err = content_cache_get_from_blob_oid(
-        ws->content_cache,
-        &blob_oid,
-        storage_path,
-        profile,
-        state_entry->encrypted,  /* VWD pattern: use cached flag */
-        &expected_content
-    );
-
-    if (err) {
-        /* Cannot load/decrypt content
-         *
-         * Possible causes:
-         * - Encrypted file but no passphrase available (missing key)
-         * - Decryption failed (wrong passphrase, corrupted ciphertext)
-         * - I/O error reading blob from git
-         * - Blob missing from repository (corruption)
-         *
-         * Conservative approach: Return UNVERIFIED to prevent false "clean" indication.
-         * User will see [orphaned, unverified] and can investigate.
-         */
-        error_free(err);
-        return DIVERGENCE_UNVERIFIED;
-    }
-
-    /* Step 5: Extract expected filemode from type field
+    /* Step 4: Extract expected filemode from type field
      *
      * Calculate once, use for both content comparison and mode checking.
-     * Conversion logic matches analyze_file_divergence() (lines 493-501).
+     * Extracted before strategy selection because both paths need this value.
      */
     git_filemode_t expected_mode;
     if (state_entry->type == STATE_FILE_SYMLINK) {
@@ -797,35 +894,95 @@ static divergence_type_t compute_orphan_divergence(
         expected_mode = GIT_FILEMODE_BLOB;
     }
 
-    /* Step 6: Content and type comparison with stat capture
-     *
-     * compare_buffer_to_disk() performs:
-     * 1. Fresh lstat() (TOCTOU-safe, may detect file deleted/replaced)
-     * 2. Type checking (file vs symlink)
-     * 3. Content comparison (byte-by-byte)
-     *
-     * We pass NULL for in_stat to force fresh stat (catches TOCTOU races where
-     * file type changes between our initial stat and now).
-     *
-     * We capture out_stat for metadata checking (reuse stat, avoid redundant syscall).
-     */
+    /* Capture stat for permission checking */
     struct stat fresh_stat;
     memset(&fresh_stat, 0, sizeof(fresh_stat));
-
     compare_result_t cmp_result;
-    err = compare_buffer_to_disk(
-        expected_content,
-        fs_path,
-        expected_mode,
-        NULL,         /* in_stat: Force fresh stat for TOCTOU safety */
-        &cmp_result,
-        &fresh_stat   /* out_stat: Capture for metadata checking */
-    );
+    error_t *err = NULL;
 
-    if (err) {
-        /* Comparison failed (I/O error, permissions, etc.) */
-        error_free(err);
-        return DIVERGENCE_UNVERIFIED;
+    /* Step 5: Content and type comparison with strategy selection
+     *
+     * Non-encrypted: Hash filesystem file and compare OID directly.
+     * Encrypted: blob_oid is ciphertext hash; must load, decrypt, compare.
+     */
+    if (!state_entry->encrypted) {
+        /* Fast path: OID hash verification */
+        err = verify_oid_matches_disk(
+            &blob_oid,
+            fs_path,
+            expected_mode,
+            &cmp_result,
+            &fresh_stat
+        );
+
+        if (err) {
+            /* Hash verification failed (I/O error, permissions, etc.)
+             * Return UNVERIFIED to prevent false "clean" indication. */
+            error_free(err);
+            return DIVERGENCE_UNVERIFIED;
+        }
+    } else {
+        /* SLOW PATH: Content comparison for encrypted files
+         *
+         * Content cache provides:
+         * - Automatic decryption (uses state_entry->encrypted flag)
+         * - Caching (repeated checks for same blob don't re-decrypt)
+         * - Error handling (missing key, corrupt data, etc.)
+         *
+         * VWD Pattern: Use state_entry->encrypted directly.
+         * This flag was set atomically with blob_oid when entry was synced.
+         */
+        const buffer_t *expected_content = NULL;
+        err = content_cache_get_from_blob_oid(
+            ws->content_cache,
+            &blob_oid,
+            storage_path,
+            profile,
+            state_entry->encrypted, /* VWD pattern: use cached flag */
+            &expected_content
+        );
+
+        if (err) {
+            /* Cannot load/decrypt content
+             *
+             * Possible causes:
+             * - Encrypted file but no passphrase available (missing key)
+             * - Decryption failed (wrong passphrase, corrupted ciphertext)
+             * - I/O error reading blob from git
+             * - Blob missing from repository (corruption)
+             *
+             * Conservative approach: Return UNVERIFIED to prevent false "clean" indication.
+             * User will see [orphaned, unverified] and can investigate.
+             */
+            error_free(err);
+            return DIVERGENCE_UNVERIFIED;
+        }
+
+        /* Step 6: Content and type comparison with stat capture
+         *
+         * compare_buffer_to_disk() performs:
+         * 1. Fresh lstat() (TOCTOU-safe, may detect file deleted/replaced)
+         * 2. Type checking (file vs symlink)
+         * 3. Content comparison (byte-by-byte)
+         *
+         * We pass NULL for in_stat to force fresh stat (catches TOCTOU races).
+         * We capture out_stat for metadata checking (reuse stat).
+         */
+        err = compare_buffer_to_disk(
+            expected_content,
+            fs_path,
+            expected_mode,
+            NULL,         /* in_stat: Force fresh stat for TOCTOU safety */
+            &cmp_result,
+            &fresh_stat   /* out_stat: Capture for metadata checking */
+        );
+        /* Note: Don't free expected_content - cache owns it! */
+
+        if (err) {
+            /* Comparison failed (I/O error, permissions, etc.) */
+            error_free(err);
+            return DIVERGENCE_UNVERIFIED;
+        }
     }
 
     /* Step 7: Interpret comparison result
@@ -1091,7 +1248,7 @@ static error_t *analyze_orphaned_directories(workspace_t *ws) {
 
         /* Orphaned if: not in metadata OR wrong kind (defensive check) */
         bool is_orphaned = (!meta_entry ||
-                           meta_entry->item->kind != METADATA_ITEM_DIRECTORY);
+                            meta_entry->item->kind != METADATA_ITEM_DIRECTORY);
 
         if (is_orphaned) {
             /* Orphaned: in state, not in metadata */
@@ -1912,7 +2069,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         return ERROR(ERR_MEMORY, "Failed to allocate manifest");
     }
 
-    /* Allocate entries array (max size = state_count, actual may be smaller due to filtering) */
+    /* Allocate entries array (max size = state_count) */
     ws->manifest->entries = calloc(state_count, sizeof(file_entry_t));
     if (!ws->manifest->entries) {
         free(ws->manifest);

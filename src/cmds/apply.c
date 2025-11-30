@@ -328,6 +328,13 @@ static void print_safety_violations(
 
             output_printf(out, OUTPUT_NORMAL, ")%s\n",
                    output_color_code(out, OUTPUT_COLOR_RESET));
+
+            if (v->storage_path) {
+                output_printf(out, OUTPUT_NORMAL, "      %sstorage: %s%s\n",
+                       output_color_code(out, OUTPUT_COLOR_DIM),
+                       v->storage_path,
+                       output_color_code(out, OUTPUT_COLOR_RESET));
+            }
         } else {
             output_printf(out, OUTPUT_NORMAL, "  %s %s (%s",
                    icon, v->filesystem_path, reason_display);
@@ -337,6 +344,10 @@ static void print_safety_violations(
             }
 
             output_printf(out, OUTPUT_NORMAL, ")\n");
+
+            if (v->storage_path) {
+                output_printf(out, OUTPUT_NORMAL, "      storage: %s\n", v->storage_path);
+            }
         }
     }
     output_newline(out);
@@ -450,6 +461,21 @@ static void print_cleanup_results(
         }
     }
 
+    if (verbose && result->skipped_dirs && string_array_size(result->skipped_dirs) > 0) {
+        output_section(out, "Skipped directories (not empty)");
+        for (size_t i = 0; i < string_array_size(result->skipped_dirs); i++) {
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "  %s[skipped]%s %s\n",
+                       output_color_code(out, OUTPUT_COLOR_YELLOW),
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       string_array_get(result->skipped_dirs, i));
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "  [skipped] %s\n",
+                       string_array_get(result->skipped_dirs, i));
+            }
+        }
+    }
+
     if (verbose && result->failed_dirs && string_array_size(result->failed_dirs) > 0) {
         output_section(out, "Failed to remove empty directories");
         for (size_t i = 0; i < string_array_size(result->failed_dirs); i++) {
@@ -495,12 +521,33 @@ static void print_cleanup_results(
             }
         }
 
+        if (result->orphaned_files_released > 0) {
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "Released %s%zu%s file%s from management\n",
+                       output_color_code(out, OUTPUT_COLOR_CYAN),
+                       result->orphaned_files_released,
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       result->orphaned_files_released == 1 ? "" : "s");
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "Released %zu file%s from management\n",
+                       result->orphaned_files_released,
+                       result->orphaned_files_released == 1 ? "" : "s");
+            }
+        }
+
         if (result->orphaned_files_skipped > 0) {
             output_warning(out, "Skipped %zu orphaned file%s (uncommitted changes)",
                           result->orphaned_files_skipped,
                           result->orphaned_files_skipped == 1 ? "" : "s");
             output_print(out, OUTPUT_NORMAL, "Use --verbose to see which files were skipped.\n");
             output_print(out, OUTPUT_NORMAL, "To remove: commit/stash changes, or use --force.\n");
+        }
+
+        if (result->orphaned_directories_skipped > 0) {
+            output_info(out, "Skipped %zu orphaned director%s (not empty)",
+                       result->orphaned_directories_skipped,
+                       result->orphaned_directories_skipped == 1 ? "y" : "ies");
+            output_print(out, OUTPUT_NORMAL, "Use --verbose to see which directories were skipped.\n");
         }
 
         if (result->orphaned_files_failed > 0 || result->orphaned_directories_failed > 0) {

@@ -575,16 +575,9 @@ static error_t *analyze_file_divergence(
         /* Extract expected filemode from VWD cache type field
          *
          * Extracted before comparison strategy selection because both paths
-         * need this value. Maps state_file_type_t to git_filemode_t.
+         * need this value. Uses shared helper for consistent mapping.
          */
-        git_filemode_t expected_mode;
-        if (manifest_entry->type == STATE_FILE_SYMLINK) {
-            expected_mode = GIT_FILEMODE_LINK;
-        } else if (manifest_entry->type == STATE_FILE_EXECUTABLE) {
-            expected_mode = GIT_FILEMODE_BLOB_EXECUTABLE;
-        } else {
-            expected_mode = GIT_FILEMODE_BLOB;
-        }
+        git_filemode_t expected_mode = state_type_to_git_filemode(manifest_entry->type);
 
         /* Prepare for comparison - both paths capture stat for permission checking */
         struct stat file_stat;
@@ -883,16 +876,9 @@ static divergence_type_t compute_orphan_divergence(
     /* Step 4: Extract expected filemode from type field
      *
      * Calculate once, use for both content comparison and mode checking.
-     * Extracted before strategy selection because both paths need this value.
+     * Uses shared helper for consistent mapping across modules.
      */
-    git_filemode_t expected_mode;
-    if (state_entry->type == STATE_FILE_SYMLINK) {
-        expected_mode = GIT_FILEMODE_LINK;
-    } else if (state_entry->type == STATE_FILE_EXECUTABLE) {
-        expected_mode = GIT_FILEMODE_BLOB_EXECUTABLE;
-    } else {
-        expected_mode = GIT_FILEMODE_BLOB;
-    }
+    git_filemode_t expected_mode = state_type_to_git_filemode(state_entry->type);
 
     /* Capture stat for permission checking */
     struct stat fresh_stat;

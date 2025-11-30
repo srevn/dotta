@@ -48,6 +48,32 @@ typedef enum {
 #define STATE_INACTIVE "inactive"   /* Marked for removal, awaiting cleanup by apply */
 
 /**
+ * Convert state file type to git filemode
+ *
+ * Maps the internal state file type enum to the corresponding git filemode.
+ * This is the canonical conversion used by safety checks and workspace
+ * divergence analysis.
+ *
+ * Mapping:
+ *   STATE_FILE_SYMLINK    -> GIT_FILEMODE_LINK (0120000)
+ *   STATE_FILE_EXECUTABLE -> GIT_FILEMODE_BLOB_EXECUTABLE (0100755)
+ *   STATE_FILE_REGULAR    -> GIT_FILEMODE_BLOB (0100644)
+ *
+ * @param type State file type
+ * @return Corresponding git filemode
+ */
+static inline git_filemode_t state_type_to_git_filemode(state_file_type_t type) {
+    switch (type) {
+        case STATE_FILE_SYMLINK:
+            return GIT_FILEMODE_LINK;
+        case STATE_FILE_EXECUTABLE:
+            return GIT_FILEMODE_BLOB_EXECUTABLE;
+        default:
+            return GIT_FILEMODE_BLOB;
+    }
+}
+
+/**
  * State file entry (virtual manifest entry)
  *
  * Represents the manifest (scope definition) - which files should exist

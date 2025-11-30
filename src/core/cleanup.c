@@ -242,9 +242,8 @@ static error_t *prune_orphaned_files(
                 filesystem_paths,
                 orphan_count,
                 force,
-                opts->enabled_metadata,  /* Pass pre-loaded metadata */
-                keymanager,              /* Pass keymanager for decryption */
-                opts->cache,             /* Pass content cache for performance */
+                keymanager,
+                opts->cache,
                 &result->safety_violations
             );
 
@@ -678,7 +677,6 @@ error_t *cleanup_preflight_check(
                 filesystem_paths,
                 file_orphan_count,
                 opts->force,
-                opts->enabled_metadata,
                 keymanager,
                 opts->cache,
                 &result->safety_violations

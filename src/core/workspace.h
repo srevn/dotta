@@ -264,30 +264,6 @@ error_t *check_item_metadata_divergence(
 );
 
 /**
- * Get the repository associated with the workspace
- *
- * Returns borrowed reference to the git_repository that the workspace
- * was loaded from. The repository is owned by the caller of workspace_load()
- * and remains valid until that caller closes it.
- *
- * @param ws Workspace (must not be NULL)
- * @return Repository (borrowed reference, never NULL for valid workspace)
- */
-git_repository *workspace_get_repo(const workspace_t *ws);
-
-/**
- * Get the list of profiles managed by the workspace
- *
- * Returns borrowed reference to the profile_list_t that defines the
- * workspace scope. The profile list is owned by the caller of workspace_load()
- * and remains valid until that caller frees it.
- *
- * @param ws Workspace (must not be NULL)
- * @return Profile list (borrowed reference, never NULL for valid workspace)
- */
-const profile_list_t *workspace_get_profiles(const workspace_t *ws);
-
-/**
  * Get the manifest of files managed by the workspace
  *
  * Returns borrowed reference to the manifest built during workspace_load().
@@ -357,31 +333,6 @@ content_cache_t *workspace_get_content_cache(const workspace_t *ws);
  * @return Metadata cache hashmap (borrowed reference, do not free, can be NULL)
  */
 const hashmap_t *workspace_get_metadata_cache(const workspace_t *ws);
-
-/**
- * Get merged metadata from workspace
- *
- * Returns metadata merged across all profiles in precedence order (global → OS → host).
- * The workspace pre-computes merged metadata during workspace_load() by applying
- * profile precedence. This function efficiently builds a new metadata_t from that
- * pre-merged view, avoiding redundant merge operations.
- *
- * Convenience function for commands that need merged metadata (e.g., apply, deploy).
- * The returned metadata is a new allocation - caller receives ownership and must
- * free with metadata_free().
- *
- * Performance: O(N) where N = unique items across all profiles. This is significantly
- * more efficient than re-merging from scratch when profiles have overlapping items.
- * If you only need metadata for a specific profile, use workspace_get_metadata() instead.
- *
- * @param ws Workspace (must not be NULL)
- * @param out Merged metadata (must not be NULL, caller must free with metadata_free)
- * @return Error or NULL on success
- */
-error_t *workspace_get_merged_metadata(
-    const workspace_t *ws,
-    metadata_t **out
-);
 
 /**
  * Extract display tags and metadata from workspace item

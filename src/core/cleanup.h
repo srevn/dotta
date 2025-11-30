@@ -51,8 +51,6 @@
 #include <git2.h>
 #include <stdbool.h>
 
-#include "core/metadata.h"
-#include "core/profiles.h"
 #include "core/safety.h"
 #include "core/state.h"
 #include "core/workspace.h"
@@ -65,12 +63,6 @@
  */
 typedef struct {
     /* Pre-loaded data */
-    const metadata_t *enabled_metadata;      /* Metadata covering files to be checked.
-                                              * Safety module will load additional metadata
-                                              * on-demand for orphaned files from disabled
-                                              * profiles (with caching for efficiency).
-                                              * Can be NULL (safety module handles gracefully). */
-    const profile_list_t *enabled_profiles;  /* Currently enabled profiles (can be NULL) */
     content_cache_t *cache;                  /* Content cache for performance (can be NULL) */
 
     /**
@@ -120,7 +112,6 @@ typedef struct {
     const safety_result_t *preflight_violations;
 
     /* Control flags */
-    bool verbose;                           /* Kept for consistency (unused in module) */
     bool dry_run;                           /* Don't actually remove anything */
     bool force;                             /* Skip safety checks (dangerous) */
     bool skip_safety_check;                 /* Skip safety check (already done in preflight) */
@@ -196,7 +187,6 @@ typedef struct {
 
     /* Summary flags */
     bool has_blocking_violations;       /* True if file safety violations present */
-    bool has_blocking_directories;      /* True if non-empty orphaned dirs present */
     bool will_prune_orphans;            /* True if orphaned_files_count > 0 */
     bool will_prune_directories;        /* True if orphaned_directories_count > 0 */
 } cleanup_preflight_result_t;

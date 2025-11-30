@@ -830,7 +830,6 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     size_t file_orphan_count = 0;
     const workspace_item_t **dir_orphans = NULL;
     size_t dir_orphan_count = 0;
-    metadata_t *merged_metadata = NULL;
     content_cache_t *cache = NULL;
     preflight_result_t *preflight = NULL;
     cleanup_preflight_result_t *cleanup_preflight = NULL;
@@ -1286,31 +1285,6 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    /* Extract merged metadata from workspace
-     *
-     * workspace_get_merged_metadata() merges metadata across all profiles
-     * in precedence order (global → OS → host). The workspace was already
-     * loaded earlier, so we just extract the merged metadata here.
-     */
-    output_print(out, OUTPUT_VERBOSE, "\nExtracting merged metadata...\n");
-
-    err = workspace_get_merged_metadata(ws, &merged_metadata);
-    if (err) {
-        err = error_wrap(err, "Failed to get merged metadata from workspace");
-        goto cleanup;
-    }
-
-    if (opts->verbose) {
-        if (merged_metadata && merged_metadata->count > 0) {
-            output_print(out, OUTPUT_VERBOSE,
-                        "  Merged metadata: %zu entr%s total\n",
-                        merged_metadata->count,
-                        merged_metadata->count == 1 ? "y" : "ies");
-        } else {
-            output_print(out, OUTPUT_VERBOSE, "  No metadata found in any profile\n");
-        }
-    }
-
     /* Check privileges for root/ files AND directories BEFORE deployment begins
      *
      * This ensures we have required privileges upfront, preventing partial
@@ -1393,15 +1367,12 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         output_print(out, OUTPUT_VERBOSE, "\nChecking orphaned files...\n");
 
         cleanup_options_t cleanup_opts = {
-            .enabled_metadata = merged_metadata,
-            .enabled_profiles = operation_profiles,   /* Use filtered profiles for preflight */
             .cache = cache,
             .orphaned_files = file_orphans,           /* Workspace item array */
             .orphaned_files_count = file_orphan_count,
             .orphaned_directories = dir_orphans,      /* Workspace item array */
             .orphaned_directories_count = dir_orphan_count,
             .preflight_violations = NULL,             /* No preflight violations yet */
-            .verbose = opts->verbose,
             .dry_run = false,                         /* Preflight is always read-only */
             .force = opts->force,
             .skip_safety_check = false                /* Run safety check in preflight */
@@ -1624,15 +1595,12 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             /* Execute cleanup: remove orphaned files and prune empty directories */
             cleanup_result_t *cleanup_res = NULL;
             cleanup_options_t cleanup_opts = {
-                .enabled_metadata = merged_metadata,
-                .enabled_profiles = operation_profiles,   /* Use filtered profiles for cleanup */
                 .cache = cache,                           /* Pass cache for performance */
                 .orphaned_files = file_orphans,           /* Workspace item array */
                 .orphaned_files_count = file_orphan_count,
                 .orphaned_directories = dir_orphans,      /* Workspace item array */
                 .orphaned_directories_count = dir_orphan_count,
                 .preflight_violations = cleanup_preflight ? cleanup_preflight->safety_violations : NULL,
-                .verbose = opts->verbose,
                 .dry_run = false,                         /* Dry-run handled at deployment level */
                 .force = opts->force,
                 .skip_safety_check = true                 /* Trust preflight data */
@@ -1970,7 +1938,6 @@ cleanup:
     if (preflight) preflight_result_free(preflight);
     if (hook_ctx) hook_context_free(hook_ctx);
     if (profiles_str) free(profiles_str);
-    if (merged_metadata) metadata_free(merged_metadata);
     if (dir_orphans) free(dir_orphans);
     if (file_orphans) free(file_orphans);
     if (ws) workspace_free(ws);

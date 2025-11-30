@@ -2581,26 +2581,6 @@ const metadata_t *workspace_get_metadata(
 }
 
 /**
- * Get the repository associated with the workspace
- */
-git_repository *workspace_get_repo(const workspace_t *ws) {
-    if (!ws) {
-        return NULL;
-    }
-    return ws->repo;
-}
-
-/**
- * Get the list of profiles managed by the workspace
- */
-const profile_list_t *workspace_get_profiles(const workspace_t *ws) {
-    if (!ws) {
-        return NULL;
-    }
-    return ws->profiles;
-}
-
-/**
  * Get the manifest of files managed by the workspace
  */
 const manifest_t *workspace_get_manifest(const workspace_t *ws) {
@@ -2670,63 +2650,6 @@ const hashmap_t *workspace_get_metadata_cache(const workspace_t *ws) {
         return NULL;
     }
     return ws->metadata_cache;
-}
-
-/**
- * Get merged metadata from workspace
- *
- * Builds metadata_t from workspace's pre-merged view instead of re-merging
- * from scratch. This avoids redundant precedence resolution since workspace_load()
- * already applied profile precedence when building merged_metadata.
- */
-error_t *workspace_get_merged_metadata(
-    const workspace_t *ws,
-    metadata_t **out
-) {
-    CHECK_NULL(ws);
-    CHECK_NULL(out);
-
-    /* Validate workspace has merged metadata hashmap (invariant: created by workspace_load).
-     * The hashmap is always allocated even when empty, so NULL indicates incomplete initialization. */
-    if (!ws->merged_metadata) {
-        return ERROR(ERR_INTERNAL,
-            "Workspace missing merged metadata (invariant violation - workspace_load incomplete)");
-    }
-
-    /* Create empty metadata collection for result */
-    metadata_t *result = NULL;
-    error_t *err = metadata_create_empty(&result);
-    if (err) {
-        return error_wrap(err, "Failed to create merged metadata result");
-    }
-
-    /* Build metadata from workspace's pre-merged view.
-     *
-     * The merged_entries array contains all items with profile precedence
-     * already applied during workspace_load() (global → OS → host, last wins).
-     * We just need to copy them into a new metadata_t for the caller to own.
-     *
-     * Edge cases handled:
-     * - Empty workspace (merged_count=0): Creates empty metadata, loop skipped ✓
-     * - Profiles without metadata: Already filtered out during workspace_load ✓
-     * - No overlaps: All items copied (same as old behavior) ✓
-     * - Full overlaps: Only winning items copied (avoids redundant overwrites) ✓
-     */
-    for (size_t i = 0; i < ws->merged_count; i++) {
-        const merged_metadata_entry_t *entry = &ws->merged_entries[i];
-        const metadata_item_t *item = entry->item;
-
-        /* Copy item into result (metadata_add_item performs deep copy) */
-        err = metadata_add_item(result, item);
-        if (err) {
-            metadata_free(result);
-            return error_wrap(err, "Failed to copy merged metadata item: %s", item->key);
-        }
-    }
-
-    /* Success - transfer ownership to caller */
-    *out = result;
-    return NULL;
 }
 
 /**

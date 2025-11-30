@@ -17,8 +17,6 @@
 
 #include "base/error.h"
 #include "base/filesystem.h"
-#include "core/metadata.h"
-#include "core/profiles.h"
 #include "core/safety.h"
 #include "core/state.h"
 #include "crypto/keymanager.h"
@@ -650,7 +648,6 @@ error_t *cleanup_preflight_check(
     result->orphaned_directories_nonempty = 0;
     result->orphaned_directories = NULL;
     result->has_blocking_violations = false;
-    result->has_blocking_directories = false;
     result->will_prune_orphans = (file_orphan_count > 0);
     result->will_prune_directories = (dir_orphan_count > 0);
 
@@ -764,11 +761,6 @@ error_t *cleanup_preflight_check(
             /* Transfer ownership to result */
             result->orphaned_directories = orphaned_dirs_display;
             orphaned_dirs_display = NULL;  /* Prevent double-free */
-
-            /* Set blocking flag if non-empty orphaned directories found */
-            if (result->orphaned_directories_nonempty > 0 && !opts->force) {
-                result->has_blocking_directories = true;
-            }
         }
     }
 

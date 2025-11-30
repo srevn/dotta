@@ -140,7 +140,6 @@ void cleanup_preflight_result_free(cleanup_preflight_result_t *result) {
  *
  * @param repo Repository (must not be NULL)
  * @param state State for safety check lookups (must not be NULL)
- * @param manifest Current manifest (unused, kept for API consistency)
  * @param result Cleanup result to update (must not be NULL)
  * @param opts Cleanup options (must not be NULL, orphaned_files can be NULL when count is 0)
  * @return Error or NULL on success
@@ -148,13 +147,11 @@ void cleanup_preflight_result_free(cleanup_preflight_result_t *result) {
 static error_t *prune_orphaned_files(
     git_repository *repo,
     const state_t *state,
-    const manifest_t *manifest,
     cleanup_result_t *result,
     const cleanup_options_t *opts
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
-    CHECK_NULL(manifest);
     CHECK_NULL(result);
     CHECK_NULL(opts);
 
@@ -611,13 +608,11 @@ static error_t *prune_orphaned_directories(
 error_t *cleanup_preflight_check(
     git_repository *repo,
     const state_t *state,
-    const manifest_t *manifest,
     const cleanup_options_t *opts,
     cleanup_preflight_result_t **out_result
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
-    CHECK_NULL(manifest);
     CHECK_NULL(opts);
     CHECK_NULL(out_result);
 
@@ -788,13 +783,11 @@ cleanup:
 error_t *cleanup_execute(
     git_repository *repo,
     const state_t *state,
-    const manifest_t *manifest,
     const cleanup_options_t *opts,
     cleanup_result_t **out_result
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
-    CHECK_NULL(manifest);
     CHECK_NULL(opts);
     CHECK_NULL(out_result);
 
@@ -808,7 +801,7 @@ error_t *cleanup_execute(
     }
 
     /* Step 1: Remove orphaned files with safety validation */
-    err = prune_orphaned_files(repo, state, manifest, result, opts);
+    err = prune_orphaned_files(repo, state, result, opts);
     if (err) {
         cleanup_result_free(result);
         return error_wrap(err, "Failed to remove orphaned files");

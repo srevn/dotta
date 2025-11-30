@@ -118,9 +118,6 @@ typedef enum {
  * Distinguishes between files (which have content and are deployed to the
  * filesystem) and directories (which are metadata-only containers that exist
  * implicitly when files are deployed).
- *
- * This enum makes the type discrimination explicit and type-safe, replacing
- * the previous implicit pattern of using in_state==false to detect directories.
  */
 typedef enum {
     WORKSPACE_ITEM_FILE,       /* Regular file, symlink, or executable */

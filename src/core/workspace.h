@@ -45,9 +45,7 @@
  *   deployed to filesystem
  * - Directories (WORKSPACE_ITEM_DIRECTORY): Metadata-only, tracked in profile,
  *   never in deployment state (created implicitly when files are deployed)
- *
- * Use item_kind to distinguish between files and directories. Invariant:
- * directories always have in_state == false.
+ * - Use item_kind to distinguish between files and directories.
  *
  * Memory layout optimized for cache locality: pointers grouped together to
  * fit in first cache line (64 bytes), followed by scalars.
@@ -73,8 +71,6 @@ typedef struct {
     workspace_item_kind_t item_kind;     /* FILE or DIRECTORY (explicit type) */
 
     /* State flags */
-    bool in_profile;            /* Exists in profile branch */
-    bool in_state;              /* Exists in deployment state (only for FILES) */
     bool on_filesystem;         /* Exists on actual filesystem */
     bool profile_enabled;       /* Is source profile in workspace's enabled list? */
     bool profile_changed;       /* Profile differs from state (ownership changed) */
@@ -247,7 +243,6 @@ const metadata_t *workspace_get_metadata(
  * @param expected_mode Expected permission mode (0 = skip mode check, no metadata tracked)
  * @param expected_owner Expected owner username (NULL = skip owner check)
  * @param expected_group Expected group name (NULL = skip group check)
- * @param fs_path Filesystem path (for error messages, must not be NULL)
  * @param st File stat data (must not be NULL, pre-captured by caller)
  * @param out_mode_differs Output flag for mode divergence (must not be NULL)
  * @param out_ownership_differs Output flag for ownership divergence (must not be NULL)
@@ -257,7 +252,6 @@ error_t *check_item_metadata_divergence(
     mode_t expected_mode,
     const char *expected_owner,
     const char *expected_group,
-    const char *fs_path,
     const struct stat *st,
     bool *out_mode_differs,
     bool *out_ownership_differs

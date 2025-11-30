@@ -1425,7 +1425,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             .skip_safety_check = false                /* Run safety check in preflight */
         };
 
-        err = cleanup_preflight_check(repo, state, manifest, &cleanup_opts, &cleanup_preflight);
+        err = cleanup_preflight_check(repo, state, &cleanup_opts, &cleanup_preflight);
         if (err) {
             err = error_wrap(err, "Cleanup preflight checks failed");
             goto cleanup;
@@ -1672,7 +1672,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
              * - Cleanup state conditionally saved (only successful removals recorded)
              * - Database remains consistent (VWD matches successful filesystem operations)
              */
-            error_t *cleanup_err = cleanup_execute(repo, state, manifest, &cleanup_opts, &cleanup_res);
+            error_t *cleanup_err = cleanup_execute(repo, state, &cleanup_opts, &cleanup_res);
             if (cleanup_err) {
                 /* Cleanup failed - warn but continue to save deployment state
                  *

@@ -193,12 +193,10 @@ error_t *check_item_metadata_divergence(
     mode_t expected_mode,
     const char *expected_owner,
     const char *expected_group,
-    const char *fs_path,
     const struct stat *st,
     bool *out_mode_differs,
     bool *out_ownership_differs
 ) {
-    CHECK_NULL(fs_path);
     CHECK_NULL(st);
     CHECK_NULL(out_mode_differs);
     CHECK_NULL(out_ownership_differs);
@@ -272,8 +270,6 @@ error_t *check_item_metadata_divergence(
  * @param state Where the item exists (deployed/undeployed/etc.)
  * @param divergence What's wrong with it (bit flags, can combine)
  * @param item_kind FILE or DIRECTORY (explicit type)
- * @param in_profile Exists in profile branch
- * @param in_state Exists in deployment state (must be false for directories)
  * @param on_filesystem Exists on actual filesystem
  * @param profile_enabled Is source profile in enabled list?
  * @param profile_changed Has owning profile changed vs state?
@@ -287,21 +283,12 @@ static error_t *workspace_add_diverged(
     workspace_state_t state,
     divergence_type_t divergence,
     workspace_item_kind_t item_kind,
-    bool in_profile,
-    bool in_state,
     bool on_filesystem,
     bool profile_enabled,
     bool profile_changed
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(filesystem_path);
-
-    /* Validate invariant: directories never in deployment state */
-    if (item_kind == WORKSPACE_ITEM_DIRECTORY && in_state) {
-        return ERROR(ERR_INTERNAL,
-            "Invariant violation: directory '%s' marked as in_state (directories never in deployment state)",
-            filesystem_path);
-    }
 
     /* Grow array if needed */
     if (ws->diverged_count >= ws->diverged_capacity) {
@@ -330,8 +317,6 @@ static error_t *workspace_add_diverged(
     entry->state = state;
     entry->divergence = divergence;
     entry->item_kind = item_kind;
-    entry->in_profile = in_profile;
-    entry->in_state = in_state;
     entry->on_filesystem = on_filesystem;
     entry->profile_enabled = profile_enabled;
     entry->profile_changed = profile_changed;
@@ -528,8 +513,6 @@ static error_t *analyze_file_divergence(
     const char *storage_path = manifest_entry->storage_path;
     const char *profile = manifest_entry->source_profile->name;
 
-    bool in_profile = true;  /* By definition - we're iterating manifest */
-
     /* Determine if entry came from state database using VWD cache
      *
      * If manifest was built from state, VWD fields are populated (blob_oid != NULL).
@@ -651,8 +634,7 @@ static error_t *analyze_file_divergence(
                  * Return immediately with TYPE divergence. */
                 return workspace_add_diverged(ws, fs_path, storage_path, profile, NULL,
                                               WORKSPACE_STATE_DEPLOYED, DIVERGENCE_TYPE,
-                                              WORKSPACE_ITEM_FILE, in_profile, in_state,
-                                              on_filesystem, true, false);
+                                              WORKSPACE_ITEM_FILE, on_filesystem, true, false);
 
             case CMP_MISSING:
                 /* TOCTOU race condition: File deleted between fs_lexists() and compare.
@@ -703,7 +685,6 @@ static error_t *analyze_file_divergence(
                 manifest_entry->mode,     /* From VWD cache (mode_t, 0 = no metadata) */
                 manifest_entry->owner,    /* From VWD cache (can be NULL) */
                 manifest_entry->group,    /* From VWD cache (can be NULL) */
-                fs_path,
                 &file_stat,
                 &mode_differs,
                 &ownership_differs
@@ -778,8 +759,7 @@ static error_t *analyze_file_divergence(
     if (state != WORKSPACE_STATE_DEPLOYED || divergence != DIVERGENCE_NONE || profile_changed) {
         error_t *err = workspace_add_diverged(ws, fs_path, storage_path, profile, old_profile,
                                               state, divergence, WORKSPACE_ITEM_FILE,
-                                              in_profile, in_state, on_filesystem,
-                                              true, profile_changed);
+                                              on_filesystem, true, profile_changed);
         if (err) {
             /* On error, free old_profile (ownership only transfers on success) */
             free(old_profile);
@@ -1054,7 +1034,6 @@ static divergence_type_t compute_orphan_divergence(
             state_entry->mode,    /* From VWD cache (mode_t, 0 = no metadata) */
             state_entry->owner,   /* From VWD cache (can be NULL) */
             state_entry->group,   /* From VWD cache (can be NULL) */
-            fs_path,
             &fresh_stat,          /* Reuse stat from compare (CRITICAL: not initial_stat!) */
             &mode_differs,
             &ownership_differs
@@ -1168,8 +1147,6 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
                 WORKSPACE_STATE_ORPHANED,  /* State: in deployment state, not in profile */
                 divergence,       /* Divergence: computed from filesystem comparison */
                 WORKSPACE_ITEM_FILE,
-                false,            /* not in profile */
-                true,             /* in state (was deployed) */
                 on_filesystem,
                 profile_enabled,
                 false             /* No profile change for orphans */
@@ -1250,8 +1227,6 @@ static error_t *analyze_orphaned_directories(workspace_t *ws) {
                 WORKSPACE_STATE_ORPHANED,  /* State: in state, not in profile */
                 DIVERGENCE_NONE,           /* Divergence: none */
                 WORKSPACE_ITEM_DIRECTORY,
-                false,            /* not in profile */
-                false,            /* NOT in state (semantic: directories never deployed) */
                 on_filesystem,
                 profile_enabled,
                 false             /* No profile change for orphans */
@@ -1479,8 +1454,6 @@ static error_t *scan_directory_for_untracked(
                     WORKSPACE_STATE_UNTRACKED,  /* State: on filesystem in tracked dir */
                     DIVERGENCE_NONE,            /* Divergence: none */
                     WORKSPACE_ITEM_FILE,
-                    false,  /* not in profile */
-                    false,  /* not in state */
                     true,   /* on filesystem */
                     true,   /* profile_enabled */
                     false   /* No profile change */
@@ -1702,8 +1675,6 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                     WORKSPACE_STATE_DELETED,  /* State: was in profile, removed from filesystem */
                     DIVERGENCE_NONE,          /* Divergence: none (file is gone) */
                     WORKSPACE_ITEM_DIRECTORY,
-                    true,   /* in_profile */
-                    false,  /* in_state */
                     false,  /* on_filesystem (deleted) */
                     true,   /* profile_enabled */
                     false   /* No profile change */
@@ -1744,8 +1715,6 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 WORKSPACE_STATE_DEPLOYED,  /* Path exists, just wrong type */
                 DIVERGENCE_TYPE,           /* Type changed (dir → file/symlink) */
                 WORKSPACE_ITEM_DIRECTORY,
-                true,   /* in_profile (directory tracked in metadata) */
-                false,  /* in_state (directories never in deployment state) */
                 true,   /* on_filesystem (path exists, wrong type) */
                 true,   /* profile_enabled */
                 false   /* No profile change */
@@ -1767,7 +1736,6 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
             dir_entry->mode,   /* Expected mode from state */
             dir_entry->owner,  /* Expected owner from state */
             dir_entry->group,  /* Expected group from state */
-            filesystem_path,
             &dir_stat,
             &mode_differs,
             &ownership_differs
@@ -1795,8 +1763,6 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 WORKSPACE_STATE_DEPLOYED,  /* State: directory exists as expected */
                 divergence,                /* Divergence: mode/ownership flags */
                 WORKSPACE_ITEM_DIRECTORY,
-                true,   /* in_profile */
-                false,  /* in_state */
                 true,   /* on_filesystem */
                 true,   /* profile_enabled */
                 false   /* No profile change */
@@ -1997,8 +1963,6 @@ static error_t *analyze_encryption_policy_mismatch(
                     item_state,            /* State: deployed or undeployed */
                     DIVERGENCE_ENCRYPTION, /* Divergence: encryption policy violated */
                     WORKSPACE_ITEM_FILE,
-                    true,  /* in profile */
-                    in_state,
                     false, /* on_filesystem (unknown, encryption check is in-repo only) */
                     true,  /* profile_enabled */
                     false  /* No profile change */

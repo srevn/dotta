@@ -5,41 +5,35 @@
  * Orphan detection is performed by the workspace module; this module focuses on safe removal.
  *
  * Responsibilities:
- * ────────────────
  * 1. Removes orphaned files (validated by safety module)
  * 2. Prunes orphaned directories (iterative empty-directory removal)
  * 3. Provides preflight analysis (safety violations, removal preview)
  * 4. Reports detailed cleanup results
  *
  * Design Principles:
- * ─────────────────
  * - Separation: Cleanup is decoupled from orphan detection (workspace responsibility)
  * - Safety: Dual approach - safety module for files, inline check for directories
  * - Performance: Accepts pre-detected orphans from workspace (zero redundancy)
  * - Reporting: Rich result structure for detailed feedback
  *
  * Orphan Sources:
- * ──────────────
  * - Workspace module detects ALL orphans during workspace_load()
  * - Orphans extracted via inline filtering (state == WORKSPACE_STATE_ORPHANED)
  * - Passed to cleanup module as workspace_item_t** arrays
  * - See workspace.h for orphan detection algorithm details
  *
  * Safety Validation:
- * ─────────────────
  * - Files: safety_check_removal() - Complex Git comparison, hash checks, decryption
  * - Directories: Inline fs_is_directory_empty() - Simple filesystem check
  * - Rationale: Different complexity levels warrant different approaches
  *
  * Optimization Strategy:
- * ─────────────────────
  * - Zero redundancy: Orphans detected once by workspace, reused here
  * - Content cache: Reuse decrypted content from preflight checks (avoid re-decryption)
  * - Directory pruning: State tracking to avoid redundant filesystem checks
  * - Parent awareness: Reset parent directory state when child removed (iterative pruning)
  *
  * Integration Points:
- * ──────────────────
  * - workspace.h: Provides orphan detection and divergence analysis
  * - safety.h: Validates file removal (uncommitted change detection)
  * - filesystem.h: Low-level file/directory operations
@@ -159,14 +153,12 @@ typedef struct {
  * This enables informed consent by revealing the full impact of the apply operation.
  *
  * Design:
- * -------
  * - Identifies orphaned files without removing them
  * - Runs safety checks to detect uncommitted changes
  * - Previews empty directories that will be pruned
  * - Provides rich context for user decision-making
  *
  * Usage:
- * ------
  * Called by apply command BEFORE confirmation prompt to show users:
  * - "Will remove N orphaned files from disabled profiles"
  * - Safety violations (blocking unless --force)
@@ -199,7 +191,6 @@ typedef struct {
  * the full impact of orphan cleanup.
  *
  * Purpose:
- * --------
  * The apply command uses this to show users BEFORE confirmation:
  * - How many orphaned files will be removed
  * - Which profiles the orphans came from
@@ -207,7 +198,6 @@ typedef struct {
  * - Empty directories to be pruned
  *
  * Architecture:
- * ------------
  * Orphans are PRE-DETECTED by workspace module and passed via opts:
  * - opts->orphaned_files: workspace_item_t** array from workspace
  * - opts->orphaned_directories: workspace_item_t** array from workspace
@@ -215,27 +205,23 @@ typedef struct {
  * This function focuses on safety validation and preview, not detection.
  *
  * Algorithm:
- * ----------
  * 1. Use pre-detected orphans from opts (NO orphan detection here)
  * 2. Run safety checks on orphaned files (unless force=true)
  * 3. Preview which directories will be pruned (read-only check)
  * 4. Build result summary for user display
  *
  * Performance:
- * ------------
- * - Complexity: O(N) where N=orphan count (NOT O(state + manifest))
+ * - Complexity: O(N) where N=orphan count
  * - Zero redundancy: orphans detected once by workspace
  * - Reuses content cache from deploy preflight (no re-decryption)
  * - Typical: <50ms for 1,000 orphans
  *
  * Edge Cases:
- * -----------
  * - No orphans: Returns empty result (quick path)
  * - Safety violations: Returned in result, blocking (unless force=true)
  * - Empty orphan arrays: Valid, returns empty result
  *
  * Integration:
- * ------------
  * This function is READ-ONLY and does NOT modify:
  * - Filesystem (no files removed)
  * - State database (no changes)
@@ -245,7 +231,6 @@ typedef struct {
  *
  * @param repo Repository (must not be NULL)
  * @param state State for safety validation (must not be NULL, read-only)
- * @param manifest Current file manifest (must not be NULL)
  * @param opts Cleanup options with PRE-DETECTED orphans (must not be NULL)
  * @param out_result Preflight result (must not be NULL, caller must free)
  * @return Error or NULL on success (check result for details)
@@ -253,7 +238,6 @@ typedef struct {
 error_t *cleanup_preflight_check(
     git_repository *repo,
     const state_t *state,
-    const manifest_t *manifest,
     const cleanup_options_t *opts,
     cleanup_preflight_result_t **out_result
 );
@@ -270,7 +254,6 @@ error_t *cleanup_preflight_check(
  * 4. Prunes empty orphaned directories iteratively
  *
  * Architecture:
- * ────────────
  * Orphans are PRE-DETECTED by workspace module and passed via opts:
  * - opts->orphaned_files: workspace_item_t** array
  * - opts->orphaned_directories: workspace_item_t** array
@@ -278,13 +261,11 @@ error_t *cleanup_preflight_check(
  * This function focuses on removal operations, not detection.
  *
  * State Management:
- * ────────────────
  * This function ONLY modifies the filesystem. It does NOT modify state.
  * The caller (typically apply command) must update state separately to
  * reflect the new filesystem reality.
  *
  * Safety Integration:
- * ──────────────────
  * Before removing orphaned files, calls safety_check_removal() to detect
  * uncommitted changes. Files with violations are:
  * - Counted in orphaned_files_skipped
@@ -293,7 +274,6 @@ error_t *cleanup_preflight_check(
  * - Reported to user with guidance
  *
  * Directory Pruning Algorithm:
- * ───────────────────────────
  * Uses iterative approach with state tracking:
  * - Iteration 1: Remove deepest empty directories
  * - Iteration 2: Parent directories may now be empty, remove them
@@ -301,20 +281,17 @@ error_t *cleanup_preflight_check(
  * - State tracking avoids redundant filesystem checks
  *
  * Performance:
- * ───────────
- * - Complexity: O(N) where N=orphan count (NOT O(state + manifest))
+ * - Complexity: O(N) where N=orphan count
  * - Zero redundancy: orphans detected once by workspace
  * - Content cache reused (no re-decryption)
  *
  * Error Handling:
- * ──────────────
  * - Individual file/directory removal failures are NON-FATAL
  * - Tracked in failed counters and reported
  * - Fatal errors: memory allocation, safety module errors
  *
  * @param repo Repository (must not be NULL)
  * @param state State for safety validation (must not be NULL, read-only)
- * @param manifest Current file manifest (must not be NULL)
  * @param opts Cleanup options with PRE-DETECTED orphans (must not be NULL)
  * @param out_result Cleanup result (must not be NULL, caller must free with cleanup_result_free)
  * @return Error or NULL on success (check result for operation details)
@@ -322,7 +299,6 @@ error_t *cleanup_preflight_check(
 error_t *cleanup_execute(
     git_repository *repo,
     const state_t *state,
-    const manifest_t *manifest,
     const cleanup_options_t *opts,
     cleanup_result_t **out_result
 );

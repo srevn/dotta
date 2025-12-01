@@ -25,8 +25,12 @@
 repo_dir = "~/.local/share/dotta/repo"
 
 # Strict Mode
-# Fail operations if any validation errors occur
-# When false, warnings are shown but operations continue
+# Controls error handling behavior across operations:
+#   - Profile resolution: When true, fail on missing profiles; when false, skip them
+#   - Ownership resolution: When true, fail if user/group unknown; when false, warn and continue
+#   - Sync with uncommitted changes: When true, block sync; when false, warn and prompt for confirmation
+#
+# When false, dotta allows more flexibility with user confirmation for risky operations.
 # Default: false
 strict_mode = false
 

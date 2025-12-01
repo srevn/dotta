@@ -1130,14 +1130,14 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     /* Validate workspace - sync requires clean workspace (no uncommitted changes)
      *
      * CRITICAL: Use workspace_profiles (persistent) for VWD scope, NOT sync_profiles.
-     * This ensures manifest scope matches state scope for accurate orphan detection.
+     * This ensures manifest scope matches state scope for accurate divergence detection.
      */
     workspace_load_t ws_opts = {
-        .analyze_files = true,         /* Validate file state */
-        .analyze_orphans = true,       /* Validate no orphans */
+        .analyze_files = true,         /* Validate file state for uncommitted changes */
+        .analyze_orphans = false,      /* Orphans are apply's concern, not sync's */
         .analyze_untracked = (config && config->auto_detect_new_files), /* Respect config */
-        .analyze_directories = false,  /* Don't block sync on directory metadata */
-        .analyze_encryption = false    /* Encryption checked during deployment, not here */
+        .analyze_directories = false,  /* Directory metadata is apply's concern */
+        .analyze_encryption = false    /* Encryption is apply's concern */
     };
     /* Pass NULL for state - this is read-only validation, not a transactional operation.
      * State transaction opened later for manifest updates after sync completes. */
@@ -1156,8 +1156,6 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     size_t mode_diff_count = 0;   /* DEPLOYED with MODE divergence */
     size_t type_diff_count = 0;   /* DEPLOYED with TYPE divergence */
     size_t untracked_count = 0;   /* UNTRACKED state */
-    size_t undeployed_count = 0;  /* UNDEPLOYED state */
-    size_t orphaned_count = 0;    /* ORPHANED state */
 
     for (size_t i = 0; i < all_diverged_count; i++) {
         const workspace_item_t *item = &all_diverged[i];
@@ -1175,10 +1173,8 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
                 untracked_count++;
                 break;
             case WORKSPACE_STATE_UNDEPLOYED:
-                undeployed_count++;
-                break;
             case WORKSPACE_STATE_ORPHANED:
-                orphaned_count++;
+                /* Not sync's concern - handled by apply command */
                 break;
         }
     }
@@ -1186,64 +1182,103 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     size_t uncommitted_count = modified_count + deleted_count + mode_diff_count +
                                type_diff_count + untracked_count;
 
-    /* Check for uncommitted changes (fatal unless --force) */
+    /* Check for uncommitted changes (fatal unless --force or user confirms) */
     if (uncommitted_count > 0 && !opts->force) {
-        output_section(out, "Workspace has uncommitted changes");
+        if (config->strict_mode) {
+            /* Strict mode: Block with full diagnostic output */
+            output_section(out, "Workspace has uncommitted changes");
+            output_newline(out);
+
+            /* Show what's uncommitted */
+            if (modified_count > 0) {
+                output_info(out, "  %zu modified file%s", modified_count,
+                           modified_count == 1 ? "" : "s");
+            }
+            if (deleted_count > 0) {
+                output_info(out, "  %zu deleted file%s", deleted_count,
+                           deleted_count == 1 ? "" : "s");
+            }
+            if (mode_diff_count > 0) {
+                output_info(out, "  %zu file%s with permission changes", mode_diff_count,
+                           mode_diff_count == 1 ? "" : "s");
+            }
+            if (type_diff_count > 0) {
+                output_info(out, "  %zu file%s with type changes", type_diff_count,
+                           type_diff_count == 1 ? "" : "s");
+            }
+            if (untracked_count > 0) {
+                output_info(out, "  %zu new untracked file%s", untracked_count,
+                           untracked_count == 1 ? "" : "s");
+            }
+
+            output_newline(out);
+            output_info(out, "Sync requires a clean workspace to prevent data loss.");
+            output_newline(out);
+            output_info(out, "Next steps:");
+            output_info(out, "  1. Run 'dotta update' to commit these changes to profile branches");
+            output_info(out, "  2. Then run 'dotta sync' to synchronize with remote");
+            output_newline(out);
+            output_info(out, "Or run 'dotta sync --force' to sync without committing local changes.");
+            output_newline(out);
+
+            err = ERROR(ERR_VALIDATION,
+                        "Cannot sync with uncommitted changes (found %zu uncommitted file%s)",
+                        uncommitted_count, uncommitted_count == 1 ? "" : "s");
+            goto cleanup;
+        }
+
+        /* Non-strict mode: Warn and require user confirmation
+         *
+         * The risk: syncing before committing local changes can hide remote conflicts.
+         * If remote has changes to the same files, pulling those changes updates the
+         * manifest. Then 'update' commits local changes ON TOP of remote's version,
+         * silently overwriting remote changes without merge/conflict detection.
+         *
+         * Safe workflow: update → sync → resolve any divergence explicitly
+         */
+        output_warning(out, "Workspace has %zu uncommitted change%s",
+                      uncommitted_count, uncommitted_count == 1 ? "" : "s");
+
+        /* Show breakdown in verbose mode */
+        if (opts->verbose) {
+            if (modified_count > 0) {
+                output_info(out, "  %zu modified", modified_count);
+            }
+            if (deleted_count > 0) {
+                output_info(out, "  %zu deleted", deleted_count);
+            }
+            if (mode_diff_count > 0) {
+                output_info(out, "  %zu permission changes", mode_diff_count);
+            }
+            if (type_diff_count > 0) {
+                output_info(out, "  %zu type changes", type_diff_count);
+            }
+            if (untracked_count > 0) {
+                output_info(out, "  %zu untracked", untracked_count);
+            }
+        }
+
+        output_newline(out);
+        output_info(out, "Syncing before 'update' may hide remote conflicts.");
+        output_hint(out, "Remote changes to the same files will be silently overwritten");
+        output_hint_line(out, "when you run 'update'. Commit first to preserve conflict detection.");
         output_newline(out);
 
-        /* Show what's uncommitted */
-        if (modified_count > 0) {
-            output_info(out, "  %zu modified file%s", modified_count,
-                       modified_count == 1 ? "" : "s");
-        }
-        if (deleted_count > 0) {
-            output_info(out, "  %zu deleted file%s", deleted_count,
-                       deleted_count == 1 ? "" : "s");
-        }
-        if (mode_diff_count > 0) {
-            output_info(out, "  %zu file%s with permission changes", mode_diff_count,
-                       mode_diff_count == 1 ? "" : "s");
-        }
-        if (type_diff_count > 0) {
-            output_info(out, "  %zu file%s with type changes", type_diff_count,
-                       type_diff_count == 1 ? "" : "s");
-        }
-        if (untracked_count > 0) {
-            output_info(out, "  %zu new untracked file%s", untracked_count,
-                       untracked_count == 1 ? "" : "s");
+        /* Confirmation with safe defaults:
+         * - Interactive: defaults to NO (user must explicitly type 'y')
+         * - Non-interactive (CI/CD): refuses automatically
+         */
+        if (!output_confirm_or_default(out, "Continue anyway?", false, false)) {
+            output_info(out, "Sync cancelled");
+            output_hint(out, "Run 'dotta update' first to commit local changes");
+            err = NULL;  /* User cancelled - clean exit, not an error */
+            goto cleanup;
         }
 
-        output_newline(out);
-        output_info(out, "Sync requires a clean workspace to prevent data loss.");
-        output_newline(out);
-        output_info(out, "Next steps:");
-        output_info(out, "  1. Run 'dotta update' to commit these changes to profile branches");
-        output_info(out, "  2. Then run 'dotta sync' to synchronize with remote");
-        output_newline(out);
-        output_info(out, "Or run 'dotta sync --force' to sync without committing local changes.");
-        output_newline(out);
-
-        err = ERROR(ERR_VALIDATION,
-                    "Cannot sync with uncommitted changes (found %zu uncommitted file%s)",
-                    uncommitted_count, uncommitted_count == 1 ? "" : "s");
-        goto cleanup;
-    }
-
-    /* Warn about undeployed files (non-fatal) */
-    if (undeployed_count > 0) {
-        output_warning(out, "Workspace has %zu undeployed file%s",
-                      undeployed_count, undeployed_count == 1 ? "" : "s");
-        output_info(out, "These files exist in profiles but have never been deployed.");
-        output_info(out, "Run 'dotta apply' after sync to deploy them.");
-        output_newline(out);
-    }
-
-    /* Warn about orphaned state entries (non-fatal) */
-    if (orphaned_count > 0) {
-        output_warning(out, "Workspace has %zu orphaned state entr%s",
-                      orphaned_count, orphaned_count == 1 ? "y" : "ies");
-        output_info(out, "These are state entries for files no longer in any profile.");
-        output_info(out, "Run 'dotta status' for details.");
+        /* User confirmed - proceed with sync */
+        if (opts->verbose) {
+            output_info(out, "Proceeding with uncommitted changes (user confirmed)");
+        }
         output_newline(out);
     }
 

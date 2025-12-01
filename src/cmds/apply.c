@@ -1414,7 +1414,6 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         output_print(out, OUTPUT_VERBOSE, "\nChecking orphaned files...\n");
 
         cleanup_options_t cleanup_opts = {
-            .cache = cache,
             .orphaned_files = file_orphans,           /* Workspace item array */
             .orphaned_files_count = file_orphan_count,
             .orphaned_directories = dir_orphans,      /* Workspace item array */
@@ -1642,7 +1641,6 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             /* Execute cleanup: remove orphaned files and prune empty directories */
             cleanup_result_t *cleanup_res = NULL;
             cleanup_options_t cleanup_opts = {
-                .cache = cache,                           /* Pass cache for performance */
                 .orphaned_files = file_orphans,           /* Workspace item array */
                 .orphaned_files_count = file_orphan_count,
                 .orphaned_directories = dir_orphans,      /* Workspace item array */

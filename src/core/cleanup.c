@@ -133,10 +133,14 @@ void cleanup_preflight_result_free(cleanup_preflight_result_t *result) {
  * after safety validation. Integrates with safety module to prevent data loss.
  *
  * Algorithm:
- * 1. Use pre-computed orphan list (must not be NULL)
- * 2. Extract filesystem paths for safety check
- * 3. Run safety checks (unless force=true or skip_safety_check=true)
- * 4. Remove safe files, skip violated files, track failures
+ * 1. Use pre-computed orphan list (workspace items with divergence data)
+ * 2. Run safety checks using safety_check_orphans() (trusts workspace divergence)
+ * 3. Remove safe files, skip violated files, track failures
+ *
+ * Key Optimization:
+ *   Passes workspace items directly to safety_check_orphans() which trusts
+ *   workspace's pre-computed divergence. No path extraction or redundant
+ *   verification needed.
  *
  * @param repo Repository (must not be NULL)
  * @param state State for safety check lookups (must not be NULL)
@@ -156,7 +160,6 @@ static error_t *prune_orphaned_files(
     CHECK_NULL(opts);
 
     error_t *err = NULL;
-    char **filesystem_paths = NULL;
     hashmap_t *violations_map = NULL;
 
     bool dry_run = opts->dry_run;
@@ -169,16 +172,6 @@ static error_t *prune_orphaned_files(
     /* Early exit if no orphaned files */
     if (orphan_count == 0) {
         return NULL;
-    }
-
-    /* Extract filesystem paths for safety check */
-    filesystem_paths = calloc(orphan_count, sizeof(char *));
-    if (!filesystem_paths) {
-        return ERROR(ERR_MEMORY, "Failed to allocate filesystem paths array");
-    }
-
-    for (size_t i = 0; i < orphan_count; i++) {
-        filesystem_paths[i] = (char *)orphans[i]->filesystem_path;
     }
 
     /* Build violations map from preflight data or run safety check
@@ -206,7 +199,6 @@ static error_t *prune_orphaned_files(
              */
             violations_map = hashmap_create(opts->preflight_violations->count);
             if (!violations_map) {
-                free(filesystem_paths);
                 return ERROR(ERR_MEMORY, "Failed to create violations hashmap");
             }
 
@@ -216,7 +208,6 @@ static error_t *prune_orphaned_files(
                 err = hashmap_set(violations_map, v->filesystem_path, (void *)v);
                 if (err) {
                     hashmap_free(violations_map, NULL);
-                    free(filesystem_paths);
                     return error_wrap(err, "Failed to populate violations map");
                 }
             }
@@ -226,29 +217,31 @@ static error_t *prune_orphaned_files(
              * files will be tracked in result->skipped_files array for display. */
 
         } else if (!opts->skip_safety_check) {
-            /* Path 2: Run safety check now
+            /* Path 2: Run optimized safety check with workspace items
              *
              * This path is taken when:
              * - No preflight was run (e.g., different calling context)
              * - Preflight found no violations (optimization: no map needed)
              * - Called from context other than apply.c
+             *
+             * Uses safety_check_orphans() which trusts workspace divergence and
+             * focuses only on edge cases (branch existence, lifecycle state,
+             * UNVERIFIED recovery). This eliminates ~70% redundant verification.
              */
             keymanager_t *keymanager = keymanager_get_global(NULL);
 
-            err = safety_check_removal(
+            err = safety_check_orphans(
                 repo,
                 state,
-                filesystem_paths,
+                orphans,
                 orphan_count,
                 force,
                 keymanager,
-                opts->cache,
                 &result->safety_violations
             );
 
             if (err) {
                 /* Fatal error during safety check */
-                free(filesystem_paths);
                 return error_wrap(err, "Safety check failed");
             }
 
@@ -256,7 +249,6 @@ static error_t *prune_orphaned_files(
             if (result->safety_violations && result->safety_violations->count > 0) {
                 violations_map = hashmap_create(result->safety_violations->count);
                 if (!violations_map) {
-                    free(filesystem_paths);
                     return ERROR(ERR_MEMORY, "Failed to create violations hashmap");
                 }
 
@@ -266,7 +258,6 @@ static error_t *prune_orphaned_files(
                     err = hashmap_set(violations_map, v->filesystem_path, (void *)v);
                     if (err) {
                         hashmap_free(violations_map, NULL);
-                        free(filesystem_paths);
                         return error_wrap(err, "Failed to populate violations map");
                     }
                 }
@@ -296,7 +287,6 @@ static error_t *prune_orphaned_files(
                 if (err) {
                     err = error_wrap(err, "Failed to track released file");
                     if (violations_map) hashmap_free(violations_map, NULL);
-                    free(filesystem_paths);
                     return err;
                 }
                 continue;
@@ -308,7 +298,6 @@ static error_t *prune_orphaned_files(
             if (err) {
                 err = error_wrap(err, "Failed to track skipped file");
                 if (violations_map) hashmap_free(violations_map, NULL);
-                free(filesystem_paths);
                 return err;
             }
             continue;
@@ -329,7 +318,6 @@ static error_t *prune_orphaned_files(
                 if (err) {
                     err = error_wrap(err, "Failed to track already-removed file");
                     if (violations_map) hashmap_free(violations_map, NULL);
-                    free(filesystem_paths);
                     return err;
                 }
             }
@@ -353,7 +341,6 @@ static error_t *prune_orphaned_files(
                 error_free(remove_err);
                 err = error_wrap(err, "Failed to track failed file");
                 if (violations_map) hashmap_free(violations_map, NULL);
-                free(filesystem_paths);
                 return err;
             }
             error_free(remove_err);
@@ -364,7 +351,6 @@ static error_t *prune_orphaned_files(
             if (err) {
                 err = error_wrap(err, "Failed to track removed file");
                 if (violations_map) hashmap_free(violations_map, NULL);
-                free(filesystem_paths);
                 return err;
             }
         }
@@ -372,7 +358,6 @@ static error_t *prune_orphaned_files(
 
     /* Cleanup */
     if (violations_map) hashmap_free(violations_map, NULL);
-    free(filesystem_paths);
     return NULL;
 }
 
@@ -621,7 +606,6 @@ error_t *cleanup_preflight_check(
     cleanup_preflight_result_t *result = NULL;
     string_array_t *orphaned_files = NULL;
     string_array_t *orphaned_dirs_display = NULL;
-    char **filesystem_paths = NULL;
 
     const workspace_item_t **file_orphans = opts->orphaned_files;
     size_t file_orphan_count = opts->orphaned_files_count;
@@ -675,30 +659,22 @@ error_t *cleanup_preflight_check(
         result->orphaned_files = orphaned_files;
         orphaned_files = NULL;  /* Prevent double-free */
 
-        /* Run file safety checks (unless force=true) */
+        /* Run file safety checks (unless force=true)
+         *
+         * Uses optimized safety_check_orphans() which trusts workspace divergence
+         * and focuses only on edge cases (branch existence, lifecycle state,
+         * UNVERIFIED recovery).
+         */
         if (!opts->force) {
-            /* Extract filesystem paths for safety check */
-            filesystem_paths = calloc(file_orphan_count, sizeof(char *));
-            if (!filesystem_paths) {
-                err = ERROR(ERR_MEMORY, "Failed to allocate filesystem paths array");
-                goto cleanup;
-            }
-
-            for (size_t i = 0; i < file_orphan_count; i++) {
-                filesystem_paths[i] = (char *)file_orphans[i]->filesystem_path;
-            }
-
-            /* Get keymanager for decryption (if needed) */
             keymanager_t *keymanager = keymanager_get_global(NULL);
 
-            err = safety_check_removal(
+            err = safety_check_orphans(
                 repo,
                 state,
-                filesystem_paths,
+                file_orphans,
                 file_orphan_count,
                 opts->force,
                 keymanager,
-                opts->cache,
                 &result->safety_violations
             );
 
@@ -768,7 +744,6 @@ cleanup:
     /* Free resources in reverse order of allocation */
     if (orphaned_dirs_display) string_array_free(orphaned_dirs_display);
     if (orphaned_files) string_array_free(orphaned_files);
-    if (filesystem_paths) free(filesystem_paths);
     if (result) cleanup_preflight_result_free(result);
 
     return err;

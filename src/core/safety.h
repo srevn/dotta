@@ -1,39 +1,38 @@
 /**
  * safety.h - Data loss prevention for destructive filesystem operations
  *
- * This module provides safety validation before removing files from the filesystem.
- * It prevents data loss by detecting uncommitted changes in files scheduled for removal.
+ * This module validates orphaned file removal to prevent data loss.
+ * It trusts workspace divergence analysis and focuses on edge cases:
+ *
+ * 1. Branch existence checking (external deletion detection)
+ * 2. Lifecycle state verification (controlled vs external deletion)
+ * 3. Slow path recovery (for DIVERGENCE_UNVERIFIED cases)
  *
  * Primary Use Case:
  * The `apply` command uses this module to check orphaned files before pruning them.
  * When a profile is disabled, its files become orphaned. Before removing these files,
- * we verify they haven't been modified on the filesystem to prevent data loss.
- *
- * Design Principles:
- * - Performance: Fast path (VWD) + caching for large batches
- * - Safety: Two independent verification paths for defense-in-depth
- * - Clarity: Rich error context with actionable guidance
- * - Separation: Removal safety only (deploy conflicts in deploy.c)
+ * we validate edge cases that workspace cannot detect.
  *
  * Architecture:
- * Fast Path (Trust VWD/State):
- * - Uses state_entry as authoritative source
- * - Encryption flag from state_entry->encrypted (always correct!)
- * - File type from state_entry->type (handles symlinks correctly!)
- * - Permissions from state_entry->mode/owner/group
- * - Falls to slow path on content load failure (defense-in-depth)
+ * - Workspace performs comprehensive divergence analysis (trusted)
+ * - Safety trusts workspace for verified divergence types
+ * - Safety runs slow path only for DIVERGENCE_UNVERIFIED
+ * - Branch existence is safety's unique responsibility
  *
- * Slow Path (Trust Git Only):
- * - Loads all data directly from Git tree (independent source)
- * - Metadata loaded via metadata_load_from_tree()
- * - File mode from git_tree_entry_filemode()
- * - Provides true defense-in-depth if state is somehow corrupted
+ * Trust Model:
+ * - DIVERGENCE_NONE: Safe to remove (workspace verified clean)
+ * - DIVERGENCE_CONTENT/TYPE/MODE/OWNERSHIP: Map to violation directly
+ * - DIVERGENCE_UNVERIFIED: Run slow path for recovery
+ *
+ * Slow Path (Git-based recovery):
+ * - Used only when workspace returns DIVERGENCE_UNVERIFIED
+ * - Loads data directly from Git tree (independent verification)
+ * - Handles: corrupt state, large files, decryption failures
  *
  * Optimizations:
- * - Adaptive lookup: Linear for small batches, hashmap for large
+ * - Targeted O(1) state queries (no bulk loading)
  * - Profile tree caching: Each profile tree loaded once
  * - Tree metadata caching: Each profile's metadata loaded once
- * - Content cache integration: Reuses preflight-loaded content
  */
 
 #ifndef DOTTA_SAFETY_H
@@ -44,10 +43,7 @@
 
 #include "base/error.h"
 #include "core/state.h"
-
-/* Forward declarations */
-typedef struct keymanager keymanager_t;
-typedef struct content_cache content_cache_t;
+#include "core/workspace.h"
 
 /**
  * Safety violation details
@@ -88,59 +84,60 @@ typedef struct {
 } safety_result_t;
 
 /**
- * Check if files can be safely removed from filesystem
+ * Check removal safety for orphaned workspace items
  *
- * Purpose:
- *   Validates that files scheduled for removal don't have uncommitted changes.
- *   This prevents data loss during operations like orphan file pruning in `apply`.
+ * Validates that orphaned files can be safely removed by checking:
+ * 1. Branch existence (external deletion detection)
+ * 2. Lifecycle state (controlled vs external deletion)
+ * 3. Workspace divergence (trusted for verified cases)
+ * 4. Slow path recovery (for DIVERGENCE_UNVERIFIED only)
+ *
+ * Trusts workspace divergence analysis for DIVERGENCE_CONTENT/TYPE/MODE/OWNERSHIP.
+ * Only runs slow path verification for DIVERGENCE_UNVERIFIED cases.
  *
  * Algorithm:
- * 1. Lookup state entry from VWD (adaptive: hashmap or linear search)
- * 2. If file doesn't exist on disk: SAFE (already deleted)
- * 3. Try fast path using state_entry (VWD):
- *    - Encryption from state_entry->encrypted (handles deleted profiles!)
- *    - Type from state_entry->type (handles symlinks correctly!)
- *    - Permissions from state_entry->mode/owner/group
- * 4. If fast path can't verify: Fall to slow path (Git tree)
- *    - Loads data directly from Git (independent verification)
- *    - Provides defense-in-depth against state corruption
- * 5. If modified: Add violation with detailed reason
+ * 1. Skip if file not on filesystem (already deleted)
+ * 2. Check branch existence (MANDATORY - workspace cannot do this)
+ *    - Branch exists: proceed with divergence routing
+ *    - Branch deleted + STATE_INACTIVE: safe (controlled deletion)
+ *    - Branch deleted + STATE_ACTIVE: RELEASED violation (external deletion)
+ * 3. Route by divergence type (TRUST WORKSPACE):
+ *    - DIVERGENCE_NONE: safe to remove (no violation)
+ *    - DIVERGENCE_CONTENT: MODIFIED violation
+ *    - DIVERGENCE_TYPE: TYPE_CHANGED violation
+ *    - DIVERGENCE_MODE/OWNERSHIP: MODE_CHANGED violation
+ *    - DIVERGENCE_UNVERIFIED: run slow path recovery
+ * 4. Slow path: Load from Git tree for independent verification
  *
  * Performance:
- * - Best case (fast path + cache): O(n) where n = number of files
- * - With cache: Encrypted files use cached plaintext (no re-decryption)
- * - Without cache: Encrypted files decrypt on demand (slower but correct)
- * - Worst case (all fallback): O(n + p*log(t)) where p = profiles, t = tree size
- * - Typical: Fast path succeeds 99% of time
- * - Adaptive strategy: Uses hashmap when path_count >= 20 OR path_count * state_count >= 400
+ * - Typical: O(n) where n = orphan count (workspace already verified)
+ * - State queries: O(1) per orphan (targeted lookup, no bulk loading)
+ * - Slow path: Only for DIVERGENCE_UNVERIFIED (rare, ~1% of files)
+ * - Tree caching: Each profile tree loaded at most once
  *
- * Edge Cases Handled:
- * - Encrypted files from deleted profiles: Uses state_entry->encrypted (always correct)
- * - Symlinks: Uses state_entry->type for correct GIT_FILEMODE_LINK detection
- * - Profile branch deleted: Handled by precondition (controlled=safe, external=RELEASED)
- * - Content load failure: Falls to slow path (defense-in-depth)
- * - Decryption failure: Conservative "cannot_verify" violation
- * - Cannot read file: Conservative "cannot_verify" violation (blocks removal)
- * - File already deleted: Skipped (safe to prune from state)
+ * Edge Cases:
+ * - External branch deletion: RELEASED violation (protects user data)
+ * - Controlled deletion (profile disable): Safe to remove
+ * - Large files (>100MB): DIVERGENCE_UNVERIFIED → slow path
+ * - Decryption failure: DIVERGENCE_UNVERIFIED → slow path recovery
+ * - File deleted during check: Safe (no violation)
  *
- * @param repo Repository (must not be NULL)
- * @param state State for VWD lookups (must not be NULL)
- * @param filesystem_paths Array of filesystem paths to check (must not be NULL if path_count > 0)
- * @param path_count Number of paths to check
- * @param force If true, skip all checks and return empty result
- * @param keymanager Key manager for decryption (can be NULL, uses global if needed)
- * @param cache Content cache for performance (can be NULL, decrypts on demand)
- * @param out_result Safety result (must not be NULL, caller must free with safety_result_free)
- * @return NULL on success (check result->count for violations), error on fatal issues
+ * @param repo Git repository (must not be NULL)
+ * @param state State database for lifecycle queries (must not be NULL)
+ * @param orphans Workspace items marked as orphaned (can be NULL if count is 0)
+ * @param orphan_count Number of orphan items
+ * @param force If true, skip all checks (emergency override)
+ * @param keymanager Key manager for decryption (can be NULL, uses global)
+ * @param out_result Output safety result (must not be NULL, caller must free)
+ * @return Error on fatal failure, NULL on success
  */
-error_t *safety_check_removal(
+error_t *safety_check_orphans(
     git_repository *repo,
     const state_t *state,
-    char **filesystem_paths,
-    size_t path_count,
+    const workspace_item_t **orphans,
+    size_t orphan_count,
     bool force,
     keymanager_t *keymanager,
-    content_cache_t *cache,
     safety_result_t **out_result
 );
 

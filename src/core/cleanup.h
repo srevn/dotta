@@ -23,13 +23,13 @@
  * - See workspace.h for orphan detection algorithm details
  *
  * Safety Validation:
- * - Files: safety_check_removal() - Complex Git comparison, hash checks, decryption
+ * - Files: safety_check_orphans() - Trusts workspace divergence, handles edge cases
  * - Directories: Inline fs_is_directory_empty() - Simple filesystem check
  * - Rationale: Different complexity levels warrant different approaches
  *
  * Optimization Strategy:
  * - Zero redundancy: Orphans detected once by workspace, reused here
- * - Content cache: Reuse decrypted content from preflight checks (avoid re-decryption)
+ * - Trust workspace: Reuses pre-computed divergence (no redundant verification)
  * - Directory pruning: State tracking to avoid redundant filesystem checks
  * - Parent awareness: Reset parent directory state when child removed (iterative pruning)
  *
@@ -56,11 +56,8 @@
  * No presentation concerns, pure business logic flags.
  */
 typedef struct {
-    /* Pre-loaded data */
-    content_cache_t *cache;                  /* Content cache for performance (can be NULL) */
-
     /**
-     * Pre-computed file orphan array from workspace (REQUIRED)
+     * Pre-computed file orphan array from workspace
      *
      * Must be extracted by caller from workspace using workspace_get_diverged_filtered().
      * Treated as borrowed reference (cleanup does not free).
@@ -74,7 +71,7 @@ typedef struct {
     size_t orphaned_files_count;                 /* Number of orphaned files */
 
     /**
-     * Pre-computed directory orphan array from workspace (REQUIRED)
+     * Pre-computed directory orphan array from workspace
      *
      * Must be extracted by caller from workspace using workspace_get_diverged_filtered().
      * Treated as borrowed reference (cleanup does not free).
@@ -88,7 +85,7 @@ typedef struct {
     size_t orphaned_directories_count;              /* Number of orphaned directories */
 
     /**
-     * Pre-computed safety violations from preflight check (OPTIONAL)
+     * Pre-computed safety violations from preflight check
      *
      * If provided, files in this list will be skipped during cleanup without
      * re-running expensive safety checks. This is a performance optimization
@@ -266,7 +263,7 @@ error_t *cleanup_preflight_check(
  * reflect the new filesystem reality.
  *
  * Safety Integration:
- * Before removing orphaned files, calls safety_check_removal() to detect
+ * Before removing orphaned files, calls safety_check_orphans() to detect
  * uncommitted changes. Files with violations are:
  * - Counted in orphaned_files_skipped
  * - Detailed in result->safety_violations

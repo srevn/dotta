@@ -19,7 +19,6 @@
 #include "base/filesystem.h"
 #include "core/safety.h"
 #include "core/state.h"
-#include "crypto/keymanager.h"
 #include "utils/array.h"
 #include "utils/hashmap.h"
 
@@ -224,19 +223,16 @@ static error_t *prune_orphaned_files(
              * - Preflight found no violations (optimization: no map needed)
              * - Called from context other than apply.c
              *
-             * Uses safety_check_orphans() which trusts workspace divergence and
-             * focuses only on edge cases (branch existence, lifecycle state,
-             * UNVERIFIED recovery). This eliminates ~70% redundant verification.
+             * Uses safety_check_orphans() which trusts workspace divergence
+             * completely. Non-encrypted files use streaming OID verification
+             * (any size). Encrypted >100MB get CANNOT_VERIFY violation.
              */
-            keymanager_t *keymanager = keymanager_get_global(NULL);
-
             err = safety_check_orphans(
                 repo,
                 state,
                 orphans,
                 orphan_count,
                 force,
-                keymanager,
                 &result->safety_violations
             );
 
@@ -661,20 +657,17 @@ error_t *cleanup_preflight_check(
 
         /* Run file safety checks (unless force=true)
          *
-         * Uses optimized safety_check_orphans() which trusts workspace divergence
-         * and focuses only on edge cases (branch existence, lifecycle state,
-         * UNVERIFIED recovery).
+         * Uses safety_check_orphans() which trusts workspace divergence
+         * completely. Non-encrypted files use streaming OID verification
+         * (any size). Encrypted >100MB get CANNOT_VERIFY violation.
          */
         if (!opts->force) {
-            keymanager_t *keymanager = keymanager_get_global(NULL);
-
             err = safety_check_orphans(
                 repo,
                 state,
                 file_orphans,
                 file_orphan_count,
                 opts->force,
-                keymanager,
                 &result->safety_violations
             );
 

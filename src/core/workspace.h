@@ -32,9 +32,6 @@
 /* Maximum number of display tags that can be extracted from a workspace item */
 #define WORKSPACE_ITEM_MAX_DISPLAY_TAGS 5
 
-/* Maximum file size for orphan divergence checking */
-#define MAX_ORPHAN_DIVERGENCE_CHECK_SIZE (100 * 1024 * 1024)  /* 100MB */
-
 /**
  * Diverged item entry
  *
@@ -66,9 +63,9 @@ typedef struct {
     profile_t *source_profile;
 
     /* Item classification */
-    workspace_state_t state;             /* Where the item exists (deployed/undeployed/etc.) */
-    divergence_type_t divergence;        /* What's wrong with it (bit flags, can combine) */
-    workspace_item_kind_t item_kind;     /* FILE or DIRECTORY (explicit type) */
+    workspace_state_t state;          /* Where the item exists (deployed/undeployed/etc.) */
+    divergence_type_t divergence;     /* What's wrong with it (bit flags, can combine) */
+    workspace_item_kind_t item_kind;  /* FILE or DIRECTORY (explicit type) */
 
     /* State flags */
     bool on_filesystem;         /* Exists on actual filesystem */

@@ -6,33 +6,30 @@
  * when pruning orphaned files.
  *
  * Architecture:
- * - Trusts workspace divergence for verified cases (no re-verification)
+ * - Trusts workspace divergence completely (no re-verification)
  * - Branch existence check: Detects external profile deletion
  * - Lifecycle state query: Distinguishes controlled vs external deletion
- * - Slow path recovery: Git-based verification for DIVERGENCE_UNVERIFIED
+ * - UNVERIFIED treated conservatively: Don't delete what we can't verify
+ *
+ * Workspace provides accurate divergence for orphans:
+ * - Non-encrypted: Streaming OID verification (git_odb_hashfile, any size)
+ * - Encrypted ≤100MB: Content comparison
+ * - Encrypted >100MB: UNVERIFIED (OOM protection, maps to CANNOT_VERIFY)
  *
  * Key optimizations:
  * - Targeted O(1) state queries (no bulk loading)
  * - Profile tree caching: Each profile tree loaded at most once
- * - Metadata caching: Each profile's metadata loaded at most once (slow path)
  */
 
 #include "safety.h"
 
-#include <errno.h>
 #include <git2.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "base/filesystem.h"
 #include "base/gitops.h"
-#include "core/metadata.h"
 #include "core/state.h"
 #include "core/workspace.h"
-#include "crypto/keymanager.h"
-#include "infra/compare.h"
-#include "infra/content.h"
-#include "utils/buffer.h"
 #include "utils/hashmap.h"
 
 /* Initial capacity for dynamic arrays */
@@ -52,7 +49,7 @@
  */
 typedef enum {
     SAFETY_CHECK_CONTINUE,  /* Check passed - continue to next processing phase */
-    SAFETY_CHECK_DONE,      /* Item fully processed (safe or violation added) - skip to next item */
+    SAFETY_CHECK_DONE,      /* Item fully processed (safe or violation added) */
     SAFETY_CHECK_ERROR      /* Fatal error occurred - check error parameter */
 } check_result_t;
 
@@ -60,12 +57,11 @@ typedef enum {
  * Profile tree cache entry
  *
  * Caches loaded trees to avoid repeated Git operations in batch checks.
- * The `attempted` flag prevents repeated failed lookups for deleted profiles.
+ * Stores NULL for deleted profiles to prevent repeated failed Git lookups.
  */
 typedef struct {
-    char *profile_name;
+    char *profile_name;  /* Owned copy of profile name (hashmap key) */
     git_tree *tree;      /* NULL if profile doesn't exist */
-    bool attempted;      /* True if we tried to load (even if failed) */
 } profile_tree_cache_t;
 
 /**
@@ -131,7 +127,6 @@ static error_t *get_or_load_profile_tree(
     }
 
     cache_entry->tree = tree;  /* May be NULL */
-    cache_entry->attempted = true;
 
     /* Insert into cache */
     error_t *cache_err = hashmap_set(tree_cache, profile_name, cache_entry);
@@ -217,17 +212,24 @@ static error_t *add_violation(
  * This is the "trust workspace" path - no re-verification performed.
  *
  * Priority order (check in this order, return on first match):
- * 1. DIVERGENCE_UNVERIFIED - caller handles with slow path (CONTINUE)
- * 2. DIVERGENCE_CONTENT - content changed (MODIFIED violation, DONE or ERROR)
- * 3. DIVERGENCE_TYPE - file type changed (TYPE_CHANGED violation, DONE or ERROR)
- * 4. DIVERGENCE_MODE/OWNERSHIP - permissions changed (MODE_CHANGED violation, DONE or ERROR)
- * 5. DIVERGENCE_NONE - safe to remove (no violation, DONE)
+ * 1. DIVERGENCE_CONTENT - content changed (MODIFIED violation)
+ * 2. DIVERGENCE_TYPE - file type changed (TYPE_CHANGED violation)
+ * 3. DIVERGENCE_MODE/OWNERSHIP - permissions changed (MODE_CHANGED violation)
+ * 4. DIVERGENCE_UNVERIFIED - verification failed (CANNOT_VERIFY violation)
+ * 5. DIVERGENCE_NONE - safe to remove (no violation)
+ *
+ * Note: DIVERGENCE_UNVERIFIED now only occurs for:
+ * - Encrypted files > 100MB (AEAD requires full ciphertext, OOM protection)
+ * - Blob corruption (missing blob_oid, invalid OID format)
+ * - I/O errors during verification
+ *
+ * Non-encrypted files can be verified at any size using streaming OID
+ * verification (git_odb_hashfile), so they should not reach UNVERIFIED.
  *
  * @param orphan Workspace item with pre-computed divergence
  * @param result Safety result to populate (if violation found)
  * @param out_err Error output for allocation failures (only set on ERROR)
- * @return SAFETY_CHECK_CONTINUE if slow path needed
- *         SAFETY_CHECK_DONE if handled (violation added or safe)
+ * @return SAFETY_CHECK_DONE if handled (violation added or safe)
  *         SAFETY_CHECK_ERROR if violation allocation failed (check out_err)
  */
 static check_result_t map_divergence_to_violation(
@@ -236,11 +238,6 @@ static check_result_t map_divergence_to_violation(
     error_t **out_err
 ) {
     *out_err = NULL;
-
-    /* DIVERGENCE_UNVERIFIED: Caller must handle with slow path */
-    if (orphan->divergence & DIVERGENCE_UNVERIFIED) {
-        return SAFETY_CHECK_CONTINUE;  /* Signal caller to run slow path */
-    }
 
     /* DIVERGENCE_NONE: Safe to remove (workspace verified clean) */
     if (orphan->divergence == DIVERGENCE_NONE) {
@@ -268,6 +265,13 @@ static check_result_t map_divergence_to_violation(
         return *out_err ? SAFETY_CHECK_ERROR : SAFETY_CHECK_DONE;
     }
 
+    /* DIVERGENCE_UNVERIFIED: Verification failed */
+    if (orphan->divergence & DIVERGENCE_UNVERIFIED) {
+        *out_err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
+                                 orphan->profile, SAFETY_REASON_CANNOT_VERIFY, false);
+        return *out_err ? SAFETY_CHECK_ERROR : SAFETY_CHECK_DONE;
+    }
+
     /* Unrecognized divergence flags (future-proofing) - treat as safe */
     return SAFETY_CHECK_DONE;
 }
@@ -278,14 +282,14 @@ static check_result_t map_divergence_to_violation(
  * Two-phase check implementing precedence hierarchy:
  *
  * PHASE 1: Lifecycle State (highest precedence)
- * - STATE_INACTIVE: Controlled deletion (safe to remove, skip all verification)
+ * - STATE_INACTIVE: Controlled deletion (proceed to content verification)
  * - STATE_ACTIVE: Continue to phase 2
  *
  * PHASE 2: Branch Existence (only for STATE_ACTIVE orphans)
  * - Branch exists: Proceed to divergence routing
  * - Branch deleted: RELEASED violation (external deletion)
  *
- * Key Invariant: User intent (STATE_INACTIVE) overrides all other checks.
+ * Key Invariant: User intent (STATE_INACTIVE) overrides branch existence check.
  * This ensures consistent behavior regardless of branch existence (Git GC timing).
  *
  * @param repo Git repository
@@ -341,25 +345,20 @@ static check_result_t check_branch_existence(
     state_free_entry(state_entry);
 
     if (is_controlled_deletion) {
-        /* CONTROLLED DELETION
+        /* CONTROLLED DELETION WITH VERIFICATION
          *
          * Entry marked STATE_INACTIVE by manifest_disable_profile() while
-         * the branch still existed. The removal intent was recorded with
-         * full verification capability at that time.
+         * the branch still existed. User intent is to remove these files.
          *
-         * Trust the recorded intent unconditionally:
-         * - Bypass all safety checks (intent validated at disable time)
-         * - Remove file regardless of branch existence
-         * - Remove file regardless of modifications
+         * Behavior:
+         * - Clean files (DIVERGENCE_NONE): Safe to remove (no violation)
+         * - Modified files (DIVERGENCE_CONTENT): Violation added (user warned)
+         * - Force flag: Bypasses all checks (unchanged behavior)
          *
-         * This provides consistent behavior whether branch exists or deleted.
-         * Branch existence is an implementation detail; user intent is authoritative.
-         *
-         * Follows Git staging model:
-         *   profile disable = git rm (staging)
-         *   apply = git commit (execution)
+         * This provides defense-in-depth: user intent is respected for clean
+         * files, but post-disable modifications are protected.
          */
-        return SAFETY_CHECK_DONE;  /* Safe to remove - skip verification */
+        return SAFETY_CHECK_CONTINUE;  /* Proceed to divergence routing */
     }
 
     /* PHASE 2: Check branch existence (only for STATE_ACTIVE orphans)
@@ -403,267 +402,16 @@ static check_result_t check_branch_existence(
 }
 
 /**
- * Check file using tree-based comparison (fallback/slow path)
- *
- * Provides defense-in-depth by verifying files using Git tree directly,
- * completely independent of state database. This path is used when:
- * - Fast path cannot verify (missing blob_oid, content load failure)
- * - Profile tree needs to be consulted for definitive verification
- *
- * Trust Model:
- * - This path trusts Git only - all file properties are loaded from the
- * - Git tree and metadata file within that tree. This provides independent
- * - verification from the fast path (which trusts state/VWD).
- *
- * Data Sources (ALL from Git, NONE from state):
- * - encrypted    <- metadata_load_from_tree()
- * - file type    <- git_tree_entry_filemode()
- * - permissions  <- Git tree metadata
- * - blob content <- git_tree_entry_id()
- *
- * Terminal Results:
- * - Profile tree NULL        -> CANNOT_VERIFY (defense-in-depth)
- * - File not in tree         -> FILE_REMOVED
- * - Any verification failure -> CANNOT_VERIFY (conservative)
- *
- * @param repo Git repository (must not be NULL)
- * @param filesystem_path Path on disk (must not be NULL)
- * @param storage_path Path in profile tree (can be NULL -> CANNOT_VERIFY)
- * @param source_profile Profile name (can be NULL)
- * @param profile_tree Git tree for profile (NULL -> CANNOT_VERIFY, defensive only)
- * @param tree_metadata_cache Cache of profile -> metadata_t* loaded from Git
- * @param keymanager Key manager for decryption (can be NULL, uses global)
- * @param result Safety result to populate (must not be NULL)
- * @return NULL on success, error on fatal failure
- */
-static error_t *check_file_with_tree(
-    git_repository *repo,
-    const char *filesystem_path,
-    const char *storage_path,
-    const char *source_profile,
-    git_tree *profile_tree,
-    hashmap_t *tree_metadata_cache,
-    keymanager_t *keymanager,
-    safety_result_t *result
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(result);
-
-    /* Profile tree not available - defensive check
-     *
-     * With the branch existence check in the main loop, this path should
-     * be unreachable. Keep for defense-in-depth in case:
-     * - Future code changes break the invariant
-     * - Function called from different context
-     */
-    if (!profile_tree) {
-        return add_violation(result, filesystem_path, storage_path,
-                             source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
-    }
-
-    /* Need storage_path to look up in tree */
-    if (!storage_path) {
-        return add_violation(result, filesystem_path, storage_path,
-                             source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
-    }
-
-    /* Step 1: Load tree entry from Git */
-    git_tree_entry *tree_entry = NULL;
-    int git_err = git_tree_entry_bypath(&tree_entry, profile_tree, storage_path);
-
-    if (git_err < 0) {
-        /* File not in profile tree - might have been removed from Git */
-        return add_violation(result, filesystem_path, storage_path,
-                             source_profile, SAFETY_REASON_FILE_REMOVED, false);
-    }
-
-    /* Step 2: Load metadata from Git tree (defense-in-depth)
-     *
-     * Key to independence: fast path uses state, slow path uses Git.
-     * This provides two independent verification sources.
-     */
-    metadata_t *tree_metadata = NULL;
-    bool owns_metadata = false;
-    error_t *err = NULL;
-
-    /* Check cache first (O(1) lookup) */
-    if (tree_metadata_cache && source_profile) {
-        tree_metadata = hashmap_get(tree_metadata_cache, source_profile);
-    }
-
-    if (!tree_metadata && source_profile) {
-        /* Cache miss - load metadata from Git tree */
-        err = metadata_load_from_tree(repo, profile_tree, source_profile, &tree_metadata);
-
-        if (err) {
-            if (err->code == ERR_NOT_FOUND) {
-                /* No metadata file in tree - files are plaintext by default */
-                error_free(err);
-                error_t *create_err = metadata_create_empty(&tree_metadata);
-                if (create_err) {
-                    error_free(create_err);
-                    git_tree_entry_free(tree_entry);
-                    return add_violation(result, filesystem_path, storage_path,
-                                         source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
-                }
-            } else {
-                /* Real error loading metadata */
-                error_free(err);
-                git_tree_entry_free(tree_entry);
-                return add_violation(result, filesystem_path, storage_path,
-                                     source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
-            }
-        }
-
-        /* Cache for subsequent files from same profile */
-        if (tree_metadata_cache && tree_metadata) {
-            error_t *cache_err = hashmap_set(tree_metadata_cache, source_profile, tree_metadata);
-            if (cache_err) {
-                /* Cache failed - we still own metadata, proceed without caching */
-                error_free(cache_err);
-                owns_metadata = true;
-            }
-            /* If cache succeeded, cache now owns tree_metadata */
-        } else {
-            owns_metadata = true;
-        }
-    }
-
-    /* Step 3: Content verification (Git-based comparison)
-     *
-     * All properties come from Git tree - file mode, encryption flag, content.
-     */
-    buffer_t *content = NULL;
-    git_filemode_t tree_mode = git_tree_entry_filemode(tree_entry);
-
-    keymanager_t *km = keymanager ? keymanager : keymanager_get_global(NULL);
-
-    /* Extract encrypted flag from Git metadata */
-    bool encrypted = false;
-    if (tree_metadata) {
-        encrypted = metadata_get_file_encrypted(tree_metadata, storage_path);
-    }
-
-    err = content_get_from_tree_entry(
-        repo,
-        tree_entry,
-        storage_path,
-        source_profile,
-        encrypted,
-        km,
-        &content
-    );
-
-    if (err) {
-        /* Failed to get content - conservative: cannot verify */
-        error_free(err);
-        if (owns_metadata) metadata_free(tree_metadata);
-        git_tree_entry_free(tree_entry);
-        return add_violation(result, filesystem_path, storage_path,
-                             source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
-    }
-
-    /* Compare content to disk */
-    compare_result_t cmp_result;
-    struct stat file_stat;
-    err = compare_buffer_to_disk(content, filesystem_path, tree_mode, NULL,
-                                 &cmp_result, &file_stat);
-
-    buffer_free(content);
-    git_tree_entry_free(tree_entry);
-
-    if (err) {
-        error_free(err);
-        /* Check if file was deleted during comparison (race condition) */
-        if (!fs_exists(filesystem_path)) {
-            if (owns_metadata) metadata_free(tree_metadata);
-            return NULL;  /* File gone - safe */
-        }
-        /* Comparison failed for other reason - report CANNOT_VERIFY */
-        if (owns_metadata) metadata_free(tree_metadata);
-        return add_violation(result, filesystem_path, storage_path,
-                             source_profile, SAFETY_REASON_CANNOT_VERIFY, false);
-    }
-
-    /* Step 4: Result evaluation (comparison outcome) */
-    if (cmp_result == CMP_MISSING) {
-        if (owns_metadata) metadata_free(tree_metadata);
-        return NULL;  /* File deleted - safe */
-    }
-
-    if (cmp_result == CMP_DIFFERENT) {
-        if (owns_metadata) metadata_free(tree_metadata);
-        return add_violation(result, filesystem_path, storage_path,
-                             source_profile, SAFETY_REASON_MODIFIED, true);
-    }
-
-    if (cmp_result == CMP_TYPE_DIFF) {
-        if (owns_metadata) metadata_free(tree_metadata);
-        return add_violation(result, filesystem_path, storage_path,
-                             source_profile, SAFETY_REASON_TYPE_CHANGED, true);
-    }
-
-    /* Step 5: Permission verification (Git metadata source)
-     *
-     * Two-phase check:
-     * - Phase A: Git filemode (executable bit) - skip for symlinks
-     * - Phase B: Full metadata from Git tree
-     */
-    bool mode_changed = false;
-
-    /* Phase A: Git filemode - skip for symlinks */
-    if (tree_mode != GIT_FILEMODE_LINK) {
-        bool expect_exec = (tree_mode == GIT_FILEMODE_BLOB_EXECUTABLE);
-        bool is_exec = fs_stat_is_executable(&file_stat);
-        if (expect_exec != is_exec) {
-            mode_changed = true;
-        }
-    }
-
-    /* Phase B: Full metadata from Git tree */
-    if (!mode_changed && tree_metadata) {
-        const metadata_item_t *meta_entry = NULL;
-        error_t *meta_err = metadata_get_item(tree_metadata, storage_path, &meta_entry);
-
-        if (meta_err == NULL && meta_entry && meta_entry->kind == METADATA_ITEM_FILE) {
-            bool mode_differs = false;
-            bool ownership_differs = false;
-
-            error_t *check_err = check_item_metadata_divergence(
-                meta_entry->mode, meta_entry->owner, meta_entry->group,
-                &file_stat, &mode_differs, &ownership_differs
-            );
-
-            if (check_err == NULL && (mode_differs || ownership_differs)) {
-                mode_changed = true;
-            }
-            error_free(check_err);
-        }
-        error_free(meta_err);
-    }
-
-    if (owns_metadata) metadata_free(tree_metadata);
-
-    if (mode_changed) {
-        return add_violation(result, filesystem_path, storage_path,
-                             source_profile, SAFETY_REASON_MODE_CHANGED, false);
-    }
-
-    return NULL;  /* File verified safe */
-}
-
-/**
  * Check removal safety for orphaned workspace items
  *
  * Validates that orphaned files can be safely removed by checking:
  * 1. Branch existence (external deletion detection)
  * 2. Lifecycle state (controlled vs external deletion)
- * 3. Workspace divergence (trusted for verified cases)
- * 4. Slow path recovery (for DIVERGENCE_UNVERIFIED only)
+ * 3. Workspace divergence (trusted completely - no re-verification)
  *
- * Trusts workspace divergence analysis for verified cases, eliminating
- * redundant verification while preserving all data loss protections.
+ * Trusts workspace divergence analysis completely, eliminating redundant
+ * verification while preserving all data loss protections. DIVERGENCE_UNVERIFIED
+ * is treated conservatively as CANNOT_VERIFY (don't delete what we can't verify).
  */
 error_t *safety_check_orphans(
     git_repository *repo,
@@ -671,7 +419,6 @@ error_t *safety_check_orphans(
     const workspace_item_t **orphans,
     size_t orphan_count,
     bool force,
-    keymanager_t *keymanager,
     safety_result_t **out_result
 ) {
     CHECK_NULL(repo);
@@ -685,8 +432,7 @@ error_t *safety_check_orphans(
 
     error_t *err = NULL;
     safety_result_t *result = NULL;
-    hashmap_t *tree_cache = NULL;          /* Profile tree cache for slow path */
-    hashmap_t *tree_metadata_cache = NULL; /* Metadata cache for slow path (loaded from Git) */
+    hashmap_t *tree_cache = NULL;  /* Profile tree cache for branch existence checks */
 
     /* Allocate result */
     result = calloc(1, sizeof(safety_result_t));
@@ -707,14 +453,6 @@ error_t *safety_check_orphans(
         return ERROR(ERR_MEMORY, "Failed to create tree cache");
     }
 
-    /* Create metadata cache for slow path (only used for UNVERIFIED) */
-    tree_metadata_cache = hashmap_create(PROFILE_TREE_CACHE_SIZE);
-    if (!tree_metadata_cache) {
-        hashmap_free(tree_cache, free_profile_tree_cache);
-        safety_result_free(result);
-        return ERROR(ERR_MEMORY, "Failed to create metadata cache");
-    }
-
     /* Main processing loop */
     for (size_t i = 0; i < orphan_count; i++) {
         const workspace_item_t *orphan = orphans[i];
@@ -729,11 +467,6 @@ error_t *safety_check_orphans(
          * Must check branch existence before any verification. This determines:
          * 1. Whether verification is meaningful (branch exists -> can verify)
          * 2. What to do when branch is deleted (controlled vs external deletion)
-         *
-         * Key insight: Checking first provides consistent behavior regardless of
-         * Git garbage collection timing. Without this, fast path might succeed
-         * (blob exists) or fail (blob GC'd), producing different results for
-         * the same semantic case — confusing and incoherent.
          */
         check_result_t check_result = check_branch_existence(repo, state, orphan,
                                                              tree_cache, result, &err);
@@ -747,48 +480,28 @@ error_t *safety_check_orphans(
 
         /* PHASE 2: Divergence Routing
          *
-         * Workspace already performed comprehensive verification.
+         * Workspace already performed comprehensive verification:
+         * - Non-encrypted: Streaming OID verification
+         * - Encrypted ≤100MB: Content comparison
+         * - Encrypted >100MB: UNVERIFIED (OOM protection)
+         *
          * Route based on divergence type:
          * - NONE: Safe to remove (no violation)
          * - CONTENT/TYPE/MODE/OWNERSHIP: Map to violation directly
-         * - UNVERIFIED: Run slow path for recovery
+         * - UNVERIFIED: Map to CANNOT_VERIFY violation (conservative)
          */
         check_result = map_divergence_to_violation(orphan, result, &err);
         if (check_result == SAFETY_CHECK_ERROR) {
             goto cleanup;
         }
-
-        if (check_result == SAFETY_CHECK_DONE) {
-            continue;
-        }
-
-        /* PHASE 3: Slow Path Recovery (DIVERGENCE_UNVERIFIED only)
-         *
-         * Workspace couldn't verify - try using Git tree directly.
-         * Profile tree guaranteed to exist (checked in Phase 1).
-         */
-        git_tree *profile_tree = NULL;
-        err = get_or_load_profile_tree(repo, tree_cache, orphan->profile, &profile_tree);
-        if (err) {
-            goto cleanup;
-        }
-
-        err = check_file_with_tree(repo, orphan->filesystem_path, orphan->storage_path,
-                                   orphan->profile, profile_tree, tree_metadata_cache,
-                                   keymanager, result);
-        if (err) {
-            goto cleanup;
-        }
     }
 
     /* Success */
-    hashmap_free(tree_metadata_cache, (void(*)(void*))metadata_free);
     hashmap_free(tree_cache, free_profile_tree_cache);
     *out_result = result;
     return NULL;
 
 cleanup:
-    hashmap_free(tree_metadata_cache, (void(*)(void*))metadata_free);
     hashmap_free(tree_cache, free_profile_tree_cache);
     safety_result_free(result);
     return err;

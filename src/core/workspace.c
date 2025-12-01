@@ -641,6 +641,16 @@ static error_t *analyze_file_divergence(
                  * Update flag and skip permission checks below. */
                 on_filesystem = false;
                 break;
+
+            case CMP_UNVERIFIED:
+                /* Verification could not be completed.
+                 *
+                 * This is a defensive fallback for rare edge cases where
+                 * comparison could not determine file state. Accumulate
+                 * UNVERIFIED flag and continue to permission checks.
+                 */
+                divergence |= DIVERGENCE_UNVERIFIED;
+                break;
         }
 
         /* PERMISSION CHECKING: Two-phase approach
@@ -809,14 +819,10 @@ static divergence_type_t compute_orphan_divergence(
         return DIVERGENCE_UNVERIFIED;
     }
 
-    /* Step 1: Initial stat for existence and size check
-     *
-     * We stat early for two reasons:
-     * 1. Fast bail-out if file doesn't exist (no wasted content loading)
-     * 2. Size limit check (prevent OOM on huge files)
+    /* Step 1: Initial stat for existence check
      *
      * Note: A fresh stat will be captured later by compare_buffer_to_disk()
-     * for TOCTOU safety. This initial stat is only for early validation.
+     * for TOCTOU safety. This initial stat is only for existence validation.
      */
     struct stat initial_stat;
     if (lstat(fs_path, &initial_stat) != 0) {
@@ -824,18 +830,7 @@ static divergence_type_t compute_orphan_divergence(
         return DIVERGENCE_NONE;
     }
 
-    /* Step 2: Size limit check (Performance + UX safeguard)
-     *
-     * For files exceeding limit:
-     * - Return UNVERIFIED (conservative, prevents false "clean" indication)
-     * - User sees [orphaned, unverified] in magenta
-     * - Apply will run same check (consistent behavior)
-     */
-    if ((size_t)initial_stat.st_size > MAX_ORPHAN_DIVERGENCE_CHECK_SIZE) {
-        return DIVERGENCE_UNVERIFIED;
-    }
-
-    /* Step 3: Validate blob_oid (defensive programming)
+    /* Step 2: Validate blob_oid (defensive programming)
      *
      * Every state entry SHOULD have blob_oid. If missing, it's data corruption.
      * Handle gracefully rather than crashing.
@@ -853,7 +848,7 @@ static divergence_type_t compute_orphan_divergence(
         return DIVERGENCE_UNVERIFIED;
     }
 
-    /* Step 4: Extract expected filemode from type field
+    /* Step 3: Extract expected filemode from type field
      *
      * Calculate once, use for both content comparison and mode checking.
      * Uses shared helper for consistent mapping across modules.
@@ -866,7 +861,7 @@ static divergence_type_t compute_orphan_divergence(
     compare_result_t cmp_result;
     error_t *err = NULL;
 
-    /* Step 5: Content and type comparison with strategy selection
+    /* Step 4: Content and type comparison with strategy selection
      *
      * Non-encrypted: Hash filesystem file and compare OID directly.
      * Encrypted: blob_oid is ciphertext hash; must load, decrypt, compare.
@@ -924,7 +919,7 @@ static divergence_type_t compute_orphan_divergence(
             return DIVERGENCE_UNVERIFIED;
         }
 
-        /* Step 6: Content and type comparison with stat capture
+        /* Step 5: Content and type comparison with stat capture
          *
          * compare_buffer_to_disk() performs:
          * 1. Fresh lstat() (TOCTOU-safe, may detect file deleted/replaced)
@@ -951,7 +946,7 @@ static divergence_type_t compute_orphan_divergence(
         }
     }
 
-    /* Step 7: Interpret comparison result
+    /* Step 6: Interpret comparison result
      *
      * Use switch statement (not if-else) for exhaustive handling.
      * Pattern from analyze_file_divergence() lines 524-549.
@@ -988,9 +983,19 @@ static divergence_type_t compute_orphan_divergence(
              */
             file_exists = false;
             break;
+
+        case CMP_UNVERIFIED:
+            /* Verification could not be completed.
+             *
+             * This is a defensive fallback for rare edge cases where
+             * comparison could not determine file state. Accumulate
+             * UNVERIFIED flag and continue to permission checks.
+             */
+            divergence |= DIVERGENCE_UNVERIFIED;
+            break;
     }
 
-    /* Step 8: Permission checking (two-phase, if file still exists)
+    /* Step 7: Permission checking (two-phase, if file still exists)
      *
      * Only check permissions if:
      * 1. File still exists (not deleted in TOCTOU race)
@@ -2694,6 +2699,7 @@ bool workspace_item_extract_display_info(
              *       prevents MODE from showing when TYPE is the primary tag
              * OWNERSHIP: Always show if present
              * ENCRYPTION: Always show if present
+             * UNVERIFIED: Always show if present (file too large to verify)
              */
             if ((item->divergence & DIVERGENCE_MODE) &&
                 !((item->divergence & DIVERGENCE_TYPE) && tag_count > 0)) {
@@ -2714,6 +2720,21 @@ bool workspace_item_extract_display_info(
                 }
                 /* Upgrade color to MAGENTA if still default (not TYPE divergence)
                  * This gives encryption issues special visual treatment */
+                if (*color_out == OUTPUT_COLOR_YELLOW) {
+                    *color_out = OUTPUT_COLOR_MAGENTA;
+                }
+            }
+
+            if (item->divergence & DIVERGENCE_UNVERIFIED) {
+                /* Verification could not be completed (rare edge case).
+                 *
+                 * Cannot verify content match, so marked for conservative handling
+                 * (redeployment on apply, skipped removal for orphans).
+                 */
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    tags_out[tag_count++] = "unverified";
+                }
+                /* Upgrade color to MAGENTA (special visual treatment for unverifiable state) */
                 if (*color_out == OUTPUT_COLOR_YELLOW) {
                     *color_out = OUTPUT_COLOR_MAGENTA;
                 }

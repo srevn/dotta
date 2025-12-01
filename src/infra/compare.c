@@ -18,11 +18,12 @@
 
 const char *compare_result_string(compare_result_t result) {
     switch (result) {
-        case CMP_EQUAL:     return "equal";
-        case CMP_DIFFERENT: return "different";
-        case CMP_MISSING:   return "missing";
-        case CMP_TYPE_DIFF: return "type mismatch";
-        default:            return "unknown";
+        case CMP_EQUAL:      return "equal";
+        case CMP_DIFFERENT:  return "different";
+        case CMP_MISSING:    return "missing";
+        case CMP_TYPE_DIFF:  return "type mismatch";
+        case CMP_UNVERIFIED: return "unverified";
+        default:             return "unknown";
     }
 }
 

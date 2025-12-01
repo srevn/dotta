@@ -35,7 +35,8 @@ typedef enum {
     CMP_EQUAL,       /* Files are identical (content and type) */
     CMP_DIFFERENT,   /* Files have different content */
     CMP_MISSING,     /* File doesn't exist on disk */
-    CMP_TYPE_DIFF    /* Different types (file vs symlink) */
+    CMP_TYPE_DIFF,   /* Different types (file vs symlink) */
+    CMP_UNVERIFIED   /* Verification skipped (file too large or error) */
 } compare_result_t;
 
 /**

@@ -2,11 +2,9 @@
  * safety.h - Data loss prevention for destructive filesystem operations
  *
  * This module validates orphaned file removal to prevent data loss.
- * It trusts workspace divergence analysis and focuses on edge cases:
- *
+ * It trusts workspace divergence analysis completely and focuses on edge cases:
  * 1. Branch existence checking (external deletion detection)
  * 2. Lifecycle state verification (controlled vs external deletion)
- * 3. Slow path recovery (for DIVERGENCE_UNVERIFIED cases)
  *
  * Primary Use Case:
  * The `apply` command uses this module to check orphaned files before pruning them.
@@ -14,25 +12,21 @@
  * we validate edge cases that workspace cannot detect.
  *
  * Architecture:
- * - Workspace performs comprehensive divergence analysis (trusted)
- * - Safety trusts workspace for verified divergence types
- * - Safety runs slow path only for DIVERGENCE_UNVERIFIED
+ * - Workspace performs comprehensive divergence analysis (trusted completely)
+ * - Non-encrypted files: Streaming OID verification (any size, O(1) memory)
+ * - Encrypted ≤100MB: Content comparison
+ * - Encrypted >100MB: UNVERIFIED (OOM protection, maps to CANNOT_VERIFY)
+ * - Safety trusts workspace divergence and routes to violations
  * - Branch existence is safety's unique responsibility
  *
  * Trust Model:
  * - DIVERGENCE_NONE: Safe to remove (workspace verified clean)
  * - DIVERGENCE_CONTENT/TYPE/MODE/OWNERSHIP: Map to violation directly
- * - DIVERGENCE_UNVERIFIED: Run slow path for recovery
- *
- * Slow Path (Git-based recovery):
- * - Used only when workspace returns DIVERGENCE_UNVERIFIED
- * - Loads data directly from Git tree (independent verification)
- * - Handles: corrupt state, large files, decryption failures
+ * - DIVERGENCE_UNVERIFIED: Map to CANNOT_VERIFY (conservative)
  *
  * Optimizations:
  * - Targeted O(1) state queries (no bulk loading)
  * - Profile tree caching: Each profile tree loaded once
- * - Tree metadata caching: Each profile's metadata loaded once
  */
 
 #ifndef DOTTA_SAFETY_H
@@ -89,15 +83,16 @@ typedef struct {
  * Validates that orphaned files can be safely removed by checking:
  * 1. Branch existence (external deletion detection)
  * 2. Lifecycle state (controlled vs external deletion)
- * 3. Workspace divergence (trusted for verified cases)
- * 4. Slow path recovery (for DIVERGENCE_UNVERIFIED only)
+ * 3. Workspace divergence (trusted completely)
  *
- * Trusts workspace divergence analysis for DIVERGENCE_CONTENT/TYPE/MODE/OWNERSHIP.
- * Only runs slow path verification for DIVERGENCE_UNVERIFIED cases.
+ * Trusts workspace divergence analysis completely:
+ * - Non-encrypted: Streaming OID verification handles any file size
+ * - Encrypted ≤100MB: Content comparison
+ * - Encrypted >100MB: CANNOT_VERIFY violation (OOM protection)
  *
  * Algorithm:
  * 1. Skip if file not on filesystem (already deleted)
- * 2. Check branch existence (MANDATORY - workspace cannot do this)
+ * 2. Check branch existence (workspace cannot do this)
  *    - Branch exists: proceed with divergence routing
  *    - Branch deleted + STATE_INACTIVE: safe (controlled deletion)
  *    - Branch deleted + STATE_ACTIVE: RELEASED violation (external deletion)
@@ -106,20 +101,18 @@ typedef struct {
  *    - DIVERGENCE_CONTENT: MODIFIED violation
  *    - DIVERGENCE_TYPE: TYPE_CHANGED violation
  *    - DIVERGENCE_MODE/OWNERSHIP: MODE_CHANGED violation
- *    - DIVERGENCE_UNVERIFIED: run slow path recovery
- * 4. Slow path: Load from Git tree for independent verification
+ *    - DIVERGENCE_UNVERIFIED: CANNOT_VERIFY violation
  *
  * Performance:
- * - Typical: O(n) where n = orphan count (workspace already verified)
+ * - O(n) where n = orphan count (workspace already verified)
  * - State queries: O(1) per orphan (targeted lookup, no bulk loading)
- * - Slow path: Only for DIVERGENCE_UNVERIFIED (rare, ~1% of files)
  * - Tree caching: Each profile tree loaded at most once
  *
  * Edge Cases:
  * - External branch deletion: RELEASED violation (protects user data)
  * - Controlled deletion (profile disable): Safe to remove
- * - Large files (>100MB): DIVERGENCE_UNVERIFIED → slow path
- * - Decryption failure: DIVERGENCE_UNVERIFIED → slow path recovery
+ * - Large non-encrypted files: Verified (streaming OID, any size)
+ * - Large encrypted files (>100MB): CANNOT_VERIFY (OOM protection)
  * - File deleted during check: Safe (no violation)
  *
  * @param repo Git repository (must not be NULL)
@@ -127,7 +120,6 @@ typedef struct {
  * @param orphans Workspace items marked as orphaned (can be NULL if count is 0)
  * @param orphan_count Number of orphan items
  * @param force If true, skip all checks (emergency override)
- * @param keymanager Key manager for decryption (can be NULL, uses global)
  * @param out_result Output safety result (must not be NULL, caller must free)
  * @return Error on fatal failure, NULL on success
  */
@@ -137,7 +129,6 @@ error_t *safety_check_orphans(
     const workspace_item_t **orphans,
     size_t orphan_count,
     bool force,
-    keymanager_t *keymanager,
     safety_result_t **out_result
 );
 

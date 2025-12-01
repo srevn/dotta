@@ -196,7 +196,10 @@ void metadata_item_free(metadata_item_t *item);
  * @param out Cloned item (must not be NULL, caller must free with metadata_item_free)
  * @return Error or NULL on success
  */
-error_t *metadata_item_clone(const metadata_item_t *source, metadata_item_t **out);
+error_t *metadata_item_clone(
+    const metadata_item_t *source,
+    metadata_item_t **out
+);
 
 /**
  * Add or update metadata item

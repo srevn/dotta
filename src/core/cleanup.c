@@ -506,6 +506,14 @@ static error_t *prune_orphaned_directories(
                         free(states);
                         return error_wrap(push_err, "Failed to track already-removed directory");
                     }
+
+                    /* Parent might now be empty - enable recheck on next iteration.
+                     * This mirrors REMOVED logic: discovering a child is gone (whether
+                     * we removed it or it was already nonexistent) has the same effect
+                     * on the parent's emptiness.
+                     */
+                    made_progress = true;
+                    reset_parent_directory_state_orphans(orphans, dir_count, states, dir_path);
                 }
                 continue;
             }

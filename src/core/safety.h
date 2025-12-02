@@ -26,7 +26,7 @@
  *
  * Optimizations:
  * - Targeted O(1) state queries (no bulk loading)
- * - Profile tree caching: Each profile tree loaded once
+ * - Profile existence caching: O(1) ref lookup per profile
  */
 
 #ifndef DOTTA_SAFETY_H
@@ -106,7 +106,7 @@ typedef struct {
  * Performance:
  * - O(n) where n = orphan count (workspace already verified)
  * - State queries: O(1) per orphan (targeted lookup, no bulk loading)
- * - Tree caching: Each profile tree loaded at most once
+ * - Profile caching: O(1) ref lookup, each profile checked at most once
  *
  * Edge Cases:
  * - External branch deletion: RELEASED violation (protects user data)

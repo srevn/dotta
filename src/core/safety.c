@@ -18,7 +18,7 @@
  *
  * Key optimizations:
  * - Targeted O(1) state queries (no bulk loading)
- * - Profile tree caching: Each profile tree loaded at most once
+ * - Profile existence caching: Each profile checked at most once
  */
 
 #include "safety.h"
@@ -35,8 +35,8 @@
 /* Initial capacity for dynamic arrays */
 #define INITIAL_CAPACITY 16
 
-/* Initial size for profile tree cache */
-#define PROFILE_TREE_CACHE_SIZE 8
+/* Initial size for profile cache */
+#define PROFILE_CACHE_SIZE 8
 
 /**
  * Check result for orphan processing pipeline
@@ -54,91 +54,88 @@ typedef enum {
 } check_result_t;
 
 /**
- * Profile tree cache entry
+ * Profile cache entry
  *
- * Caches loaded trees to avoid repeated Git operations in batch checks.
- * Stores NULL for deleted profiles to prevent repeated failed Git lookups.
+ * Caches branch existence to avoid repeated Git lookups in batch checks.
+ * Uses lightweight boolean instead of loading full git_tree objects.
  */
 typedef struct {
     char *profile_name;  /* Owned copy of profile name (hashmap key) */
-    git_tree *tree;      /* NULL if profile doesn't exist */
-} profile_tree_cache_t;
+    bool exists;         /* true if profile branch exists */
+} profile_cache_t;
 
 /**
- * Free profile tree cache entry (hashmap callback)
+ * Free profile cache entry (hashmap callback)
  */
-static void free_profile_tree_cache(void *entry) {
+static void free_profile_cache(void *entry) {
     if (!entry) {
         return;
     }
-    profile_tree_cache_t *cache = (profile_tree_cache_t *)entry;
+    profile_cache_t *cache = (profile_cache_t *)entry;
     free(cache->profile_name);
-    if (cache->tree) {
-        git_tree_free(cache->tree);
-    }
     free(cache);
 }
 
 /**
- * Get or load profile tree from cache
+ * Check if profile branch exists (cached)
  *
- * Returns NULL if profile doesn't exist (not an error - expected case).
- * Returns error only for fatal issues (memory allocation, etc.).
+ * Uses gitops_branch_exists() for O(1) ref lookup instead of loading
+ * full git_tree objects. Caches results to avoid repeated Git lookups.
+ *
+ * @param repo Git repository
+ * @param cache Profile existence cache
+ * @param profile_name Profile to check
+ * @param out_exists Output: true if branch exists, false otherwise
+ * @return Error on fatal failure (memory), NULL on success
  */
-static error_t *get_or_load_profile_tree(
+static error_t *check_profile_exists(
     git_repository *repo,
-    hashmap_t *tree_cache,
+    hashmap_t *cache,
     const char *profile_name,
-    git_tree **out
+    bool *out_exists
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(tree_cache);
+    CHECK_NULL(cache);
     CHECK_NULL(profile_name);
-    CHECK_NULL(out);
+    CHECK_NULL(out_exists);
 
     /* Check cache first */
-    profile_tree_cache_t *cached = hashmap_get(tree_cache, profile_name);
+    profile_cache_t *cached = hashmap_get(cache, profile_name);
     if (cached) {
-        *out = cached->tree;  /* May be NULL if profile doesn't exist */
+        *out_exists = cached->exists;
         return NULL;
     }
 
-    /* Not cached - try to load tree */
-    git_tree *tree = NULL;
-    char refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(refname, sizeof(refname),
-                                        "refs/heads/%s", profile_name);
-    if (!err) {
-        err = gitops_load_tree(repo, refname, &tree);
+    /* Not cached - check branch existence via ref lookup */
+    bool exists = false;
+    error_t *err = gitops_branch_exists(repo, profile_name, &exists);
+    if (err) {
+        /* Treat lookup errors as "doesn't exist" (conservative) */
+        error_free(err);
+        exists = false;
     }
 
-    /* Cache the result (even if NULL - profile doesn't exist) */
-    profile_tree_cache_t *cache_entry = calloc(1, sizeof(profile_tree_cache_t));
-    if (!cache_entry) {
-        if (tree) git_tree_free(tree);
+    /* Cache the result */
+    profile_cache_t *entry = calloc(1, sizeof(profile_cache_t));
+    if (!entry) {
         return ERROR(ERR_MEMORY, "Failed to allocate cache entry");
     }
 
-    cache_entry->profile_name = strdup(profile_name);
-    if (!cache_entry->profile_name) {
-        if (tree) git_tree_free(tree);
-        free(cache_entry);
+    entry->profile_name = strdup(profile_name);
+    if (!entry->profile_name) {
+        free(entry);
         return ERROR(ERR_MEMORY, "Failed to allocate profile name");
     }
-
-    cache_entry->tree = tree;  /* May be NULL */
+    entry->exists = exists;
 
     /* Insert into cache */
-    error_t *cache_err = hashmap_set(tree_cache, profile_name, cache_entry);
-    if (cache_err) {
-        free_profile_tree_cache(cache_entry);
-        return cache_err;
+    err = hashmap_set(cache, profile_name, entry);
+    if (err) {
+        free_profile_cache(entry);
+        return err;
     }
 
-    /* Discard tree loading error (expected if profile deleted) */
-    error_free(err);
-
-    *out = tree;
+    *out_exists = exists;
     return NULL;
 }
 
@@ -295,7 +292,7 @@ static check_result_t map_divergence_to_violation(
  * @param repo Git repository
  * @param state State database (for targeted lookup)
  * @param orphan Workspace item
- * @param tree_cache Profile tree cache
+ * @param cache Profile existence cache
  * @param result Safety result to populate
  * @param out_err Error output for fatal failures (only set on ERROR)
  * @return SAFETY_CHECK_CONTINUE if branch exists (proceed to divergence routing)
@@ -306,7 +303,7 @@ static check_result_t check_branch_existence(
     git_repository *repo,
     const state_t *state,
     const workspace_item_t *orphan,
-    hashmap_t *tree_cache,
+    hashmap_t *cache,
     safety_result_t *result,
     error_t **out_err
 ) {
@@ -366,15 +363,15 @@ static check_result_t check_branch_existence(
      * At this point, lifecycle state is STATE_ACTIVE. Check if branch was
      * deleted externally (outside dotta).
      */
-    git_tree *profile_tree = NULL;
-    err = get_or_load_profile_tree(repo, tree_cache, orphan->profile, &profile_tree);
+    bool profile_exists = false;
+    err = check_profile_exists(repo, cache, orphan->profile, &profile_exists);
     if (err) {
-        *out_err = error_wrap(err, "Failed to load profile tree for '%s'", orphan->profile);
+        *out_err = error_wrap(err, "Failed to check profile existence for '%s'", orphan->profile);
         return SAFETY_CHECK_ERROR;
     }
 
     /* Branch exists - proceed with divergence routing */
-    if (profile_tree) {
+    if (profile_exists) {
         return SAFETY_CHECK_CONTINUE;
     }
 
@@ -432,7 +429,7 @@ error_t *safety_check_orphans(
 
     error_t *err = NULL;
     safety_result_t *result = NULL;
-    hashmap_t *tree_cache = NULL;  /* Profile tree cache for branch existence checks */
+    hashmap_t *cache = NULL;  /* Profile existence cache for branch checks */
 
     /* Allocate result */
     result = calloc(1, sizeof(safety_result_t));
@@ -446,11 +443,11 @@ error_t *safety_check_orphans(
         return NULL;
     }
 
-    /* Create profile tree cache for branch existence checks */
-    tree_cache = hashmap_create(PROFILE_TREE_CACHE_SIZE);
-    if (!tree_cache) {
+    /* Create profile cache for branch existence checks */
+    cache = hashmap_create(PROFILE_CACHE_SIZE);
+    if (!cache) {
         safety_result_free(result);
-        return ERROR(ERR_MEMORY, "Failed to create tree cache");
+        return ERROR(ERR_MEMORY, "Failed to create profile cache");
     }
 
     /* Main processing loop */
@@ -469,7 +466,8 @@ error_t *safety_check_orphans(
          * 2. What to do when branch is deleted (controlled vs external deletion)
          */
         check_result_t check_result = check_branch_existence(repo, state, orphan,
-                                                             tree_cache, result, &err);
+                                                             cache, result, &err);
+
         if (check_result == SAFETY_CHECK_ERROR) {
             goto cleanup;
         }
@@ -497,12 +495,12 @@ error_t *safety_check_orphans(
     }
 
     /* Success */
-    hashmap_free(tree_cache, free_profile_tree_cache);
+    hashmap_free(cache, free_profile_cache);
     *out_result = result;
     return NULL;
 
 cleanup:
-    hashmap_free(tree_cache, free_profile_tree_cache);
+    hashmap_free(cache, free_profile_cache);
     safety_result_free(result);
     return err;
 }

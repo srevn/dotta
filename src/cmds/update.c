@@ -280,6 +280,7 @@ static bool matches_exclude_pattern(
  * - opts->files: Only specific files (if provided)
  * - opts->exclude_patterns: Gitignore-style exclusions
  * - opts->only_new: Only untracked files (excludes modified)
+ * - operation_profiles: Only items from specified profiles (CLI -p filter)
  *
  * CRITICAL CORRECTNESS REQUIREMENTS:
  * 1. UNTRACKED state: Include when flags OR auto_detect is enabled
@@ -291,6 +292,7 @@ static bool matches_exclude_pattern(
  *
  * @param ws Workspace (must not be NULL)
  * @param opts Update options (must not be NULL)
+ * @param operation_profiles Profile filter (NULL = all profiles, filters by item->profile)
  * @param config Configuration (can be NULL, used for auto_detect_new_files)
  * @param out Output context (for verbose logging, can be NULL)
  * @param out_items Output array of pointers to workspace_item_t (must not be NULL, caller must free array)
@@ -300,6 +302,7 @@ static bool matches_exclude_pattern(
 static error_t *filter_items_for_update(
     const workspace_t *ws,
     const cmd_update_options_t *opts,
+    const profile_list_t *operation_profiles,
     const dotta_config_t *config,
     output_ctx_t *out,
     const workspace_item_t ***out_items,
@@ -378,6 +381,11 @@ static error_t *filter_items_for_update(
             continue;
         }
 
+        /* Apply profile filter (CLI -p filtering) */
+        if (!profile_filter_matches(item->profile, operation_profiles)) {
+            continue;
+        }
+
         match_count++;
     }
 
@@ -429,6 +437,11 @@ static error_t *filter_items_for_update(
         }
 
         if (matches_exclude_pattern(item->filesystem_path, opts)) {
+            continue;
+        }
+
+        /* Apply profile filter (CLI -p filtering) */
+        if (!profile_filter_matches(item->profile, operation_profiles)) {
             continue;
         }
 
@@ -2071,10 +2084,15 @@ error_t *cmd_update(
         goto cleanup;
     }
 
-    /* Filter items for update (handles all flags and edge cases internally) */
+    /* Filter items for update (handles all flags and edge cases internally)
+     *
+     * Uses operation_profiles for CLI -p filtering. This ensures display
+     * matches execution - only items from specified profiles are shown.
+     */
     const workspace_item_t **update_items = NULL;
     size_t update_count = 0;
-    err = filter_items_for_update(ws, opts, config, out, &update_items, &update_count);
+    err = filter_items_for_update(ws, opts, operation_profiles, config, out,
+                                  &update_items, &update_count);
     if (err) {
         err = error_wrap(err, "Failed to filter items for update");
         goto cleanup;

@@ -1184,12 +1184,15 @@ static int cmd_update_main(int argc, char **argv) {
         } else if (argv[i][0] != '-') {
             /* Positional argument */
             if (profile_count == 0 && file_count == 0) {
-                /* Heuristic: if it contains path separators, treat as file */
-                if (strchr(argv[i], '/') || argv[i][0] == '~' || argv[i][0] == '.') {
-                    /* Looks like a path - treat as file */
+                /* Classify first positional as file path or profile name */
+                bool is_file = argv[i][0] == '/' || argv[i][0] == '~' || argv[i][0] == '.' ||
+                               strncmp(argv[i], "home/", 5) == 0 ||
+                               strncmp(argv[i], "root/", 5) == 0 ||
+                               strncmp(argv[i], "custom/", 7) == 0;
+
+                if (is_file) {
                     files[file_count++] = argv[i];
                 } else {
-                    /* Looks like a profile name */
                     profiles[profile_count++] = argv[i];
                 }
             } else {

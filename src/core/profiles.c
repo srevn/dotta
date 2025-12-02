@@ -1024,6 +1024,243 @@ static int tree_walk_callback(const char *root,
 }
 
 /**
+ * Context for manifest building callback
+ *
+ * Passed to gitops_tree_walk() to build manifest entries directly during
+ * tree traversal, eliminating O(N×D) two-pass overhead. The callback
+ * uses git_tree_entry_dup() for O(1) owned copies instead of re-traversing
+ * from root via git_tree_entry_bypath().
+ *
+ * Memory ownership:
+ * - manifest: borrowed, caller retains ownership
+ * - path_map: borrowed, caller retains ownership
+ * - profile: borrowed, caller retains ownership
+ * - custom_prefix: borrowed, can be NULL
+ * - error: owned by callback, caller must free on error
+ */
+struct manifest_build_ctx {
+    manifest_t *manifest;       /* Target manifest (modified by callback) */
+    size_t capacity;            /* Current entries capacity (updated on growth) */
+    hashmap_t *path_map;        /* For O(1) dedup/override detection */
+    profile_t *profile;         /* Current profile (borrowed) */
+    const char *custom_prefix;  /* For path_from_storage (can be NULL) */
+    error_t *error;             /* Error propagation (set on failure) */
+};
+
+/**
+ * Tree walk callback that builds manifest entries directly
+ *
+ * Performance optimization: Instead of collecting paths in pass 1 then
+ * re-traversing via git_tree_entry_bypath() in pass 2 (O(N×D)), this
+ * callback builds file_entry_t directly using git_tree_entry_dup() (O(N)).
+ *
+ * Handles:
+ * - Metadata file filtering (.dotta/, .bootstrap, etc.)
+ * - Storage path to filesystem path conversion
+ * - Profile precedence override (higher precedence wins)
+ * - Array growth on demand
+ * - File type derivation from Git filemode
+ *
+ * @param root Directory path within tree (empty string for root level)
+ * @param entry Git tree entry (NOT owned - must dup for ownership)
+ * @param payload Pointer to manifest_build_ctx
+ * @return 0 to continue walk, -1 to stop on error
+ */
+static int manifest_build_callback(
+    const char *root,
+    const git_tree_entry *entry,
+    void *payload
+) {
+    struct manifest_build_ctx *ctx = (struct manifest_build_ctx *)payload;
+
+    /* Only process blobs (files), skip directories */
+    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
+        return 0;
+    }
+
+    /* Build full storage path from root + entry name */
+    const char *name = git_tree_entry_name(entry);
+    char storage_path[1024];
+    int ret;
+
+    if (root && root[0] != '\0') {
+        ret = snprintf(storage_path, sizeof(storage_path), "%s%s", root, name);
+    } else {
+        ret = snprintf(storage_path, sizeof(storage_path), "%s", name);
+    }
+
+    /* Check for path truncation */
+    if (ret < 0 || (size_t)ret >= sizeof(storage_path)) {
+        ctx->error = ERROR(ERR_INTERNAL, "Path exceeds maximum length: %s%s",
+                           root ? root : "", name);
+        return -1;
+    }
+
+    /* Skip repository metadata files */
+    if (strcmp(storage_path, ".dottaignore") == 0 ||
+        strcmp(storage_path, ".bootstrap") == 0 ||
+        strcmp(storage_path, ".gitignore") == 0 ||
+        strcmp(storage_path, "README.md") == 0 ||
+        strcmp(storage_path, "README") == 0 ||
+        str_starts_with(storage_path, ".git/") ||
+        str_starts_with(storage_path, ".dotta/")) {
+        return 0;  /* Skip, continue walk */
+    }
+
+    /* Convert storage path to filesystem path */
+    char *filesystem_path = NULL;
+    error_t *err = path_from_storage(storage_path, ctx->custom_prefix, &filesystem_path);
+    if (err) {
+        ctx->error = error_wrap(err, "Failed to convert path '%s' from profile '%s'",
+                                storage_path, ctx->profile->name);
+        return -1;
+    }
+
+    /* Get owned copy of tree entry */
+    git_tree_entry *dup_entry = NULL;
+    int git_err = git_tree_entry_dup(&dup_entry, entry);
+    if (git_err != 0) {
+        free(filesystem_path);
+        ctx->error = ERROR(ERR_GIT, "Failed to duplicate tree entry: %s",
+                          git_error_last() ? git_error_last()->message : "unknown");
+        return -1;
+    }
+
+    /* Check for existing entry (profile precedence override) */
+    void *idx_ptr = hashmap_get(ctx->path_map, filesystem_path);
+
+    if (idx_ptr) {
+        /* Override existing entry (profile with higher precedence) */
+        /*
+         * Convert pointer back to index. We offset by 1 when storing to
+         * distinguish NULL (not found) from index 0.
+         * Safe because: indices are always << SIZE_MAX, uintptr_t can hold
+         * any valid pointer value, and we never store actual pointers here.
+         */
+        size_t existing_idx = (size_t)(uintptr_t)idx_ptr - 1;
+
+        /* Duplicate storage path before freeing old */
+        char *dup_storage_path = strdup(storage_path);
+        if (!dup_storage_path) {
+            free(filesystem_path);
+            git_tree_entry_free(dup_entry);
+            ctx->error = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
+            return -1;
+        }
+
+        /* Free old resources */
+        free(ctx->manifest->entries[existing_idx].storage_path);
+        free(ctx->manifest->entries[existing_idx].filesystem_path);
+        git_tree_entry_free(ctx->manifest->entries[existing_idx].entry);
+
+        /* Update with new values */
+        ctx->manifest->entries[existing_idx].storage_path = dup_storage_path;
+        ctx->manifest->entries[existing_idx].filesystem_path = filesystem_path;
+        ctx->manifest->entries[existing_idx].entry = dup_entry;
+        ctx->manifest->entries[existing_idx].source_profile = ctx->profile;
+
+        /* VWD fields remain NULL/0 (not populated for Git-based manifests)
+         * The existing entry already has VWD fields initialized to NULL/0
+         * from initial creation, so no action needed here. This comment
+         * documents that we're intentionally preserving the NULL/0 state. */
+    } else {
+        /* Add new entry - grow array if needed */
+        if (ctx->manifest->count >= ctx->capacity) {
+            if (ctx->capacity > SIZE_MAX / 2) {
+                free(filesystem_path);
+                git_tree_entry_free(dup_entry);
+                ctx->error = ERROR(ERR_INTERNAL, "Manifest capacity overflow");
+                return -1;
+            }
+            size_t new_capacity = ctx->capacity * 2;
+
+            file_entry_t *new_entries = realloc(ctx->manifest->entries,
+                                                new_capacity * sizeof(file_entry_t));
+            if (!new_entries) {
+                free(filesystem_path);
+                git_tree_entry_free(dup_entry);
+                ctx->error = ERROR(ERR_MEMORY, "Failed to grow manifest");
+                return -1;
+            }
+            ctx->manifest->entries = new_entries;
+            ctx->capacity = new_capacity;
+        }
+
+        /* Duplicate storage path */
+        char *dup_storage_path = strdup(storage_path);
+        if (!dup_storage_path) {
+            free(filesystem_path);
+            git_tree_entry_free(dup_entry);
+            ctx->error = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
+            return -1;
+        }
+
+        /* Initialize entry */
+        file_entry_t *new_entry = &ctx->manifest->entries[ctx->manifest->count];
+        new_entry->storage_path = dup_storage_path;
+        new_entry->filesystem_path = filesystem_path;
+        new_entry->entry = dup_entry;
+        new_entry->source_profile = ctx->profile;
+
+        /* Initialize VWD expected state cache to NULL/0
+         *
+         * These fields are only populated when manifest is built from state database.
+         * For manifests built from Git (this callback), they remain NULL/0 except
+         * for the type field which we derive from the Git tree entry's filemode.
+         *
+         * IMPORTANT: After realloc(), new memory is NOT zero-initialized. */
+        new_entry->old_profile = NULL;
+        new_entry->git_oid = NULL;
+        new_entry->blob_oid = NULL;
+
+        /* Derive type from Git filemode (executable bit detection)
+         * Uses same logic as extract_file_metadata_from_tree_entry() in manifest.c */
+        git_filemode_t filemode = git_tree_entry_filemode(dup_entry);
+        switch (filemode) {
+            case GIT_FILEMODE_BLOB:
+                new_entry->type = STATE_FILE_REGULAR;
+                break;
+            case GIT_FILEMODE_BLOB_EXECUTABLE:
+                new_entry->type = STATE_FILE_EXECUTABLE;
+                break;
+            case GIT_FILEMODE_LINK:
+                new_entry->type = STATE_FILE_SYMLINK;
+                break;
+            default:
+                /* Should never happen (we filtered to blobs above) */
+                new_entry->type = STATE_FILE_REGULAR;
+                break;
+        }
+
+        new_entry->mode = 0;
+        new_entry->owner = NULL;
+        new_entry->group = NULL;
+        new_entry->encrypted = false;
+        new_entry->deployed_at = 0;
+
+        /* Store index in hashmap (offset by 1 to distinguish from NULL) */
+        err = hashmap_set(ctx->path_map, filesystem_path,
+                         (void *)(uintptr_t)(ctx->manifest->count + 1));
+        if (err) {
+            /* Entry already added to manifest, but hashmap failed.
+             * This is a partial state - we need to clean up the entry. */
+            free(new_entry->storage_path);
+            new_entry->storage_path = NULL;
+            free(new_entry->filesystem_path);
+            new_entry->filesystem_path = NULL;
+            git_tree_entry_free(new_entry->entry);
+            new_entry->entry = NULL;
+            ctx->error = error_wrap(err, "Failed to update hashmap");
+            return -1;
+        }
+
+        ctx->manifest->count++;
+    }
+
+    return 0;  /* Continue walk */
+}
+
+/**
  * List files in profile
  */
 error_t *profile_list_files(
@@ -1105,8 +1342,9 @@ error_t *profile_has_custom_files(
 /**
  * Build manifest from profiles
  *
- * Uses a hashmap for O(1) lookups when checking for duplicates.
- * This changes overall complexity from O(n*m) to O(n) where n is total files.
+ * Performance: O(N) where N is total files across all profiles.
+ * Uses manifest_build_callback for single-pass tree traversal with
+ * git_tree_entry_dup() instead of two-pass with git_tree_entry_bypath().
  */
 error_t *profile_build_manifest(
     git_repository *repo,
@@ -1120,10 +1358,6 @@ error_t *profile_build_manifest(
     error_t *err = NULL;
     manifest_t *manifest = NULL;
     hashmap_t *path_map = NULL;
-    string_array_t *files = NULL;
-    char *filesystem_path = NULL;
-    git_tree_entry *entry = NULL;
-    char *dup_storage_path = NULL;
 
     /* Allocate manifest */
     manifest = calloc(1, sizeof(manifest_t));
@@ -1151,193 +1385,40 @@ error_t *profile_build_manifest(
         goto cleanup;
     }
 
-    /* Process each profile in order */
+    /* Process each profile in order (later profiles override earlier) */
     for (size_t i = 0; i < profiles->count; i++) {
         profile_t *profile = &profiles->profiles[i];
 
-        /* Load tree */
+        /* Load tree (lazy loading - cached in profile struct) */
         err = profile_load_tree(repo, profile);
         if (err) {
             err = error_wrap(err, "Failed to load tree for profile '%s'", profile->name);
             goto cleanup;
         }
 
-        /* List files in profile */
-        err = profile_list_files(repo, profile, &files);
-        if (err) {
-            err = error_wrap(err, "Failed to list files for profile '%s'", profile->name);
+        /* Build manifest entries via single-pass tree traversal
+         *
+         * The callback captures owned tree entries with git_tree_entry_dup(),
+         * converts paths, handles precedence override, and populates
+         * file_entry_t directly—all in O(N) time. */
+        struct manifest_build_ctx ctx = {
+            .manifest = manifest,
+            .capacity = capacity,
+            .path_map = path_map,
+            .profile = profile,
+            .custom_prefix = profile->custom_prefix,
+            .error = NULL
+        };
+
+        err = gitops_tree_walk(profile->tree, manifest_build_callback, &ctx);
+        if (err || ctx.error) {
+            err = ctx.error ? ctx.error : err;
+            err = error_wrap(err, "Failed to build manifest for profile '%s'", profile->name);
             goto cleanup;
         }
 
-        /* Get custom prefix from profile */
-        const char *custom_prefix = profile->custom_prefix;
-
-        /* Process each file */
-        for (size_t j = 0; j < string_array_size(files); j++) {
-            const char *storage_path = string_array_get(files, j);
-
-            /* Skip repository metadata files */
-            if (strcmp(storage_path, ".dottaignore") == 0 ||
-                strcmp(storage_path, ".bootstrap") == 0 ||
-                strcmp(storage_path, ".gitignore") == 0 ||
-                strcmp(storage_path, "README.md") == 0 ||
-                strcmp(storage_path, "README") == 0 ||
-                str_starts_with(storage_path, ".git/") ||
-                str_starts_with(storage_path, ".dotta/")) {
-                continue;
-            }
-
-            /* Convert to filesystem path with appropriate prefix */
-            filesystem_path = NULL;
-            err = path_from_storage(storage_path, custom_prefix, &filesystem_path);
-            if (err) {
-                err = error_wrap(err, "Failed to convert path '%s' from profile '%s'",
-                                storage_path, profile->name);
-                goto cleanup;
-            }
-
-            /* Get tree entry */
-            entry = NULL;
-            int git_err = git_tree_entry_bypath(&entry, profile->tree, storage_path);
-            if (git_err != 0) {
-                err = error_from_git(git_err);
-                goto cleanup;
-            }
-
-            /* Check if file already in manifest using hashmap (O(1)) */
-            void *idx_ptr = hashmap_get(path_map, filesystem_path);
-
-            if (idx_ptr) {
-                /* Override existing entry (profile with higher precedence) */
-                /*
-                 * Convert pointer back to index. We offset by 1 when storing to
-                 * distinguish NULL (not found) from index 0.
-                 * Safe because: indices are always << SIZE_MAX, uintptr_t can hold
-                 * any valid pointer value, and we never store actual pointers here.
-                 */
-                size_t existing_idx = (size_t)(uintptr_t)idx_ptr - 1;
-
-                /* Duplicate storage path before freeing old one */
-                dup_storage_path = strdup(storage_path);
-                if (!dup_storage_path) {
-                    err = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
-                    goto cleanup;
-                }
-
-                /* Now safe to free old resources and update */
-                free(manifest->entries[existing_idx].storage_path);
-                free(manifest->entries[existing_idx].filesystem_path);
-                git_tree_entry_free(manifest->entries[existing_idx].entry);
-
-                manifest->entries[existing_idx].storage_path = dup_storage_path;
-                manifest->entries[existing_idx].filesystem_path = filesystem_path;
-                manifest->entries[existing_idx].entry = entry;
-                manifest->entries[existing_idx].source_profile = profile;
-
-                /* VWD fields remain NULL/0 (not populated for Git-based manifests)
-                 * The existing entry already has VWD fields initialized to NULL/0
-                 * from initial creation, so no action needed here. This comment
-                 * documents that we're intentionally preserving the NULL/0 state. */
-
-                /* Clear temporary variables (ownership transferred) */
-                dup_storage_path = NULL;
-                filesystem_path = NULL;
-                entry = NULL;
-            } else {
-                /* Add new entry */
-                if (manifest->count >= capacity) {
-                    /* Check for overflow before doubling */
-                    if (capacity > SIZE_MAX / 2) {
-                        err = ERROR(ERR_INTERNAL, "Manifest capacity overflow");
-                        goto cleanup;
-                    }
-                    capacity *= 2;
-
-                    file_entry_t *new_entries = realloc(manifest->entries,
-                                                        capacity * sizeof(file_entry_t));
-                    if (!new_entries) {
-                        err = ERROR(ERR_MEMORY, "Failed to grow manifest");
-                        goto cleanup;
-                    }
-                    manifest->entries = new_entries;
-                }
-
-                /* Duplicate storage path */
-                dup_storage_path = strdup(storage_path);
-                if (!dup_storage_path) {
-                    err = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
-                    goto cleanup;
-                }
-
-                /* Store in array */
-                manifest->entries[manifest->count].storage_path = dup_storage_path;
-                manifest->entries[manifest->count].filesystem_path = filesystem_path;
-                manifest->entries[manifest->count].entry = entry;
-                manifest->entries[manifest->count].source_profile = profile;
-
-                /* Initialize VWD expected state cache to NULL/0
-                 *
-                 * These fields are only populated when manifest is built from state database.
-                 * For manifests built from Git (this function), they remain NULL/0 except for
-                 * the type field which we derive from the Git tree entry's filemode.
-                 *
-                 * IMPORTANT: After realloc(), new memory is NOT zero-initialized, so we must
-                 * explicitly initialize these fields to prevent use of uninitialized memory. */
-                manifest->entries[manifest->count].old_profile = NULL;
-                manifest->entries[manifest->count].git_oid = NULL;
-                manifest->entries[manifest->count].blob_oid = NULL;
-
-                /* Derive type from Git filemode (executable bit detection)
-                 * This ensures the type field is accurate even for Git-based manifests.
-                 * Uses same logic as extract_file_metadata_from_tree_entry() in manifest.c */
-                git_filemode_t filemode = git_tree_entry_filemode(entry);
-                switch (filemode) {
-                    case GIT_FILEMODE_BLOB:
-                        manifest->entries[manifest->count].type = STATE_FILE_REGULAR;
-                        break;
-                    case GIT_FILEMODE_BLOB_EXECUTABLE:
-                        manifest->entries[manifest->count].type = STATE_FILE_EXECUTABLE;
-                        break;
-                    case GIT_FILEMODE_LINK:
-                        manifest->entries[manifest->count].type = STATE_FILE_SYMLINK;
-                        break;
-                    default:
-                        /* Should never happen (tree walk filters directories) */
-                        manifest->entries[manifest->count].type = STATE_FILE_REGULAR;
-                        break;
-                }
-
-                manifest->entries[manifest->count].mode = 0;
-                manifest->entries[manifest->count].owner = NULL;
-                manifest->entries[manifest->count].group = NULL;
-                manifest->entries[manifest->count].encrypted = false;
-                manifest->entries[manifest->count].deployed_at = 0;
-
-                /* Store index in hashmap (offset by 1 to distinguish from NULL).
-                 * We cast the index through uintptr_t to store it as a void pointer.
-                 * This is safe because:
-                 * 1. Array indices are always much smaller than SIZE_MAX
-                 * 2. uintptr_t can hold any pointer value (by definition)
-                 * 3. We never dereference these "pointers" - they're just tagged integers
-                 */
-                err = hashmap_set(path_map, filesystem_path,
-                                (void *)(uintptr_t)(manifest->count + 1));
-                if (err) {
-                    err = error_wrap(err, "Failed to update hashmap");
-                    goto cleanup;
-                }
-
-                manifest->count++;
-
-                /* Clear temporary variables (ownership transferred) */
-                dup_storage_path = NULL;
-                filesystem_path = NULL;
-                entry = NULL;
-            }
-        }
-
-        string_array_free(files);
-        files = NULL;
+        /* Update capacity (may have grown during callback) */
+        capacity = ctx.capacity;
     }
 
     /* Success - transfer index ownership to manifest */
@@ -1346,15 +1427,6 @@ error_t *profile_build_manifest(
     return NULL;
 
 cleanup:
-    /* Clean up temporary per-iteration resources */
-    free(filesystem_path);
-    free(dup_storage_path);
-    if (entry) {
-        git_tree_entry_free(entry);
-    }
-    string_array_free(files);
-
-    /* Clean up main resources */
     hashmap_free(path_map, NULL);
     if (err) {
         manifest_free(manifest);
@@ -1488,19 +1560,16 @@ cleanup:
  * Creates a manifest from a specific Git tree. This is used for historical diffs
  * where we need to build a manifest from a past commit's tree.
  *
- * @param repo Repository (must not be NULL)
  * @param tree Git tree to build manifest from (must not be NULL)
  * @param profile_name Profile name for entries (must not be NULL)
  * @param out Manifest (must not be NULL, caller must free with manifest_free)
  * @return Error or NULL on success
  */
 error_t *profile_build_manifest_from_tree(
-    git_repository *repo,
     git_tree *tree,
     const char *profile_name,
     manifest_t **out
 ) {
-    CHECK_NULL(repo);
     CHECK_NULL(tree);
     CHECK_NULL(profile_name);
     CHECK_NULL(out);
@@ -1508,10 +1577,7 @@ error_t *profile_build_manifest_from_tree(
     error_t *err = NULL;
     manifest_t *manifest = NULL;
     hashmap_t *path_map = NULL;
-    string_array_t *files = NULL;
-    char *filesystem_path = NULL;
-    git_tree_entry *entry = NULL;
-    char *dup_storage_path = NULL;
+    profile_t *temp_profile = NULL;
 
     /* Allocate manifest */
     manifest = calloc(1, sizeof(manifest_t));
@@ -1538,32 +1604,10 @@ error_t *profile_build_manifest_from_tree(
         goto cleanup;
     }
 
-    /* List files in tree (using recursive traversal) */
-    struct walk_data walk_data = {0};
-    walk_data.paths = string_array_create();
-    if (!walk_data.paths) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate paths array");
-        goto cleanup;
-    }
-    walk_data.error = NULL;
-
-    err = gitops_tree_walk(tree, tree_walk_callback, &walk_data);
-    if (err || walk_data.error) {
-        string_array_free(walk_data.paths);
-        if (walk_data.error) {
-            error_free(err);
-            err = walk_data.error;
-        }
-        err = error_wrap(err, "Failed to walk tree");
-        goto cleanup;
-    }
-
-    files = walk_data.paths;
-
     /* Create a heap-allocated profile_t for the manifest entries
      * This prevents dangling pointers when file_entry_t.source_profile is accessed.
      * The profile is owned by the manifest and freed in manifest_free(). */
-    profile_t *temp_profile = calloc(1, sizeof(profile_t));
+    temp_profile = calloc(1, sizeof(profile_t));
     if (!temp_profile) {
         err = ERROR(ERR_MEMORY, "Failed to allocate profile");
         goto cleanup;
@@ -1579,110 +1623,37 @@ error_t *profile_build_manifest_from_tree(
     temp_profile->ref = NULL;
     temp_profile->tree = tree;  /* Borrowed - caller owns tree lifetime */
     temp_profile->auto_detected = false;
+    temp_profile->custom_prefix = NULL;
 
     /* Store in manifest for cleanup */
     manifest->owned_profile = temp_profile;
 
-    /* Process each file */
-    for (size_t i = 0; i < string_array_size(files); i++) {
-        const char *storage_path = string_array_get(files, i);
+    /* Build manifest entries via single-pass tree traversal
+     *
+     * The callback captures owned tree entries with git_tree_entry_dup(),
+     * converts paths, and populates file_entry_t directly—all in O(N) time. */
+    struct manifest_build_ctx ctx = {
+        .manifest = manifest,
+        .capacity = capacity,
+        .path_map = path_map,
+        .profile = temp_profile,
+        .custom_prefix = NULL,  /* Single-tree manifests use NULL prefix */
+        .error = NULL
+    };
 
-        /* Skip repository metadata files */
-        if (strcmp(storage_path, ".dottaignore") == 0 ||
-            strcmp(storage_path, ".bootstrap") == 0 ||
-            strcmp(storage_path, ".gitignore") == 0 ||
-            strcmp(storage_path, "README.md") == 0 ||
-            strcmp(storage_path, "README") == 0 ||
-            str_starts_with(storage_path, ".git/") ||
-            str_starts_with(storage_path, ".dotta/")) {
-            continue;
-        }
-
-        /* Convert to filesystem path */
-        filesystem_path = NULL;
-        err = path_from_storage(storage_path, NULL, &filesystem_path);
-        if (err) {
-            err = error_wrap(err, "Failed to convert path '%s'", storage_path);
-            goto cleanup;
-        }
-
-        /* Get tree entry */
-        entry = NULL;
-        int git_err = git_tree_entry_bypath(&entry, tree, storage_path);
-        if (git_err != 0) {
-            err = error_from_git(git_err);
-            free(filesystem_path);
-            filesystem_path = NULL;  /* Prevent double-free in cleanup */
-            goto cleanup;
-        }
-
-        /* Grow array if needed */
-        if (manifest->count >= capacity) {
-            size_t new_capacity = capacity * 2;
-            file_entry_t *new_entries = realloc(manifest->entries,
-                                                new_capacity * sizeof(file_entry_t));
-            if (!new_entries) {
-                err = ERROR(ERR_MEMORY, "Failed to grow manifest entries");
-                free(filesystem_path);
-                filesystem_path = NULL;  /* Prevent double-free in cleanup */
-                git_tree_entry_free(entry);
-                goto cleanup;
-            }
-            manifest->entries = new_entries;
-            capacity = new_capacity;
-        }
-
-        /* Add new entry */
-        file_entry_t *new_entry = &manifest->entries[manifest->count];
-        memset(new_entry, 0, sizeof(file_entry_t));
-
-        /* Duplicate storage path for entry */
-        dup_storage_path = strdup(storage_path);
-        if (!dup_storage_path) {
-            err = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
-            free(filesystem_path);
-            filesystem_path = NULL;  /* Prevent double-free in cleanup */
-            git_tree_entry_free(entry);
-            goto cleanup;
-        }
-
-        new_entry->storage_path = dup_storage_path;
-        new_entry->filesystem_path = filesystem_path;
-        new_entry->entry = entry;
-        new_entry->source_profile = temp_profile;  /* Points to manifest->owned_profile */
-
-        /* Store index in hashmap */
-        err = hashmap_set(path_map, filesystem_path,
-                        (void *)(uintptr_t)(manifest->count + 1));
-        if (err) {
-            err = error_wrap(err, "Failed to update hashmap");
-            free(new_entry->storage_path);
-            free(new_entry->filesystem_path);
-            git_tree_entry_free(entry);
-            goto cleanup;
-        }
-
-        manifest->count++;
-
-        /* Clear temporary variables (ownership transferred) */
-        dup_storage_path = NULL;
-        filesystem_path = NULL;
-        entry = NULL;
+    err = gitops_tree_walk(tree, manifest_build_callback, &ctx);
+    if (err || ctx.error) {
+        err = ctx.error ? ctx.error : err;
+        err = error_wrap(err, "Failed to build manifest from tree");
+        goto cleanup;
     }
 
     /* Success - transfer index ownership to manifest */
     manifest->index = path_map;
     *out = manifest;
-    string_array_free(files);
     return NULL;
 
 cleanup:
-    free(filesystem_path);
-    free(dup_storage_path);
-    if (entry) {
-        git_tree_entry_free(entry);
-    }
-    string_array_free(files);
     hashmap_free(path_map, NULL);
     if (err) {
         manifest_free(manifest);

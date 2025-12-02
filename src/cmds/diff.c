@@ -1031,7 +1031,7 @@ static error_t *diff_commit_to_workspace_new(
 
     /* Step 5: Build manifest from historical tree
      * We need to traverse the tree and create file entries */
-    err = profile_build_manifest_from_tree(repo, tree, profile_name, &manifest);
+    err = profile_build_manifest_from_tree(tree, profile_name, &manifest);
     if (err) {
         err = error_wrap(err, "Failed to build manifest from commit");
         goto cleanup;

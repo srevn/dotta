@@ -442,14 +442,12 @@ error_t *profile_build_manifest(
  * Creates a manifest from a specific Git tree, useful for historical diffs.
  * This is a simplified version of profile_build_manifest() for a single tree.
  *
- * @param repo Repository (must not be NULL)
  * @param tree Git tree to build manifest from (must not be NULL)
  * @param profile_name Profile name for entries (must not be NULL)
  * @param out Manifest (must not be NULL, caller must free with manifest_free)
  * @return Error or NULL on success
  */
 error_t *profile_build_manifest_from_tree(
-    git_repository *repo,
     git_tree *tree,
     const char *profile_name,
     manifest_t **out

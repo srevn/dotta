@@ -194,10 +194,10 @@ static error_t *prune_orphaned_files(
              * This avoids re-running expensive safety checks (Git comparisons,
              * content decryption) that were already performed in preflight.
              *
-             * Race condition note: There is a small time window between preflight
-             * analysis and actual execution. If a file was modified after preflight,
-             * we still skip it (conservative approach - better to skip than risk
-             * data loss on a file that was recently unsafe).
+             * TOCTOU trust model: This function trusts preflight results completely.
+             * The CALLER is responsible for passing NULL when preflight results may
+             * be stale (e.g., after interactive confirmation prompts where user delay
+             * could allow file modifications). See cleanup.h for full contract.
              *
              * Memory ownership: opts->preflight_violations is a BORROWED reference.
              * We use it to build violations_map but do NOT store it in result.

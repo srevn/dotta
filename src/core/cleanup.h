@@ -91,16 +91,35 @@ typedef struct {
      * - Non-NULL: Preflight was performed, trust results completely
      *   - count > 0: Files in violations list will be skipped
      *   - count == 0: Preflight verified all files safe, none skipped
-     * - NULL: No preflight performed, behavior depends on skip_safety_check
+     * - NULL: No preflight performed (or invalidated), run fresh safety check
+     *   - Behavior depends on skip_safety_check flag
      *
      * This avoids re-running expensive safety checks (Git comparisons,
      * content decryption) that were already performed in preflight.
      *
-     * Typical flow:
+     * IMPORTANT - TOCTOU Considerations:
+     * Preflight results become STALE if time passes between preflight and
+     * execution. A file marked "safe" at preflight could be modified by
+     * the user before execution, making deletion dangerous.
+     *
+     * Callers MUST pass NULL when:
+     * - Interactive confirmation prompts introduce user delay
+     * - Any scenario where files could change between preflight and execute
+     *
+     * When NULL is passed, cleanup_execute() runs fresh safety validation
+     * at the moment of deletion, guaranteeing accurate protection.
+     *
+     * Typical flow (non-interactive):
      * 1. apply.c runs cleanup_preflight_check() -> produces safety_violations
      * 2. apply.c passes violations to cleanup_execute() via this field
      * 3. cleanup_execute() trusts preflight results (no re-verification)
      * 4. apply.c frees cleanup_preflight_result (owns the data)
+     *
+     * Typical flow (interactive):
+     * 1. apply.c runs cleanup_preflight_check() -> displays to user
+     * 2. User confirmation prompt (arbitrary delay)
+     * 3. apply.c passes NULL to cleanup_execute() (preflight invalidated)
+     * 4. cleanup_execute() runs fresh safety check at deletion time
      *
      * Memory: Borrowed reference. Caller owns and frees safety_result_t.
      */

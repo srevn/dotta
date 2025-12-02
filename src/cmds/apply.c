@@ -1643,15 +1643,35 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         if (!opts->keep_orphans) {
             /* Execute cleanup: remove orphaned files and prune empty directories */
             cleanup_result_t *cleanup_res = NULL;
+            /* TOCTOU Safety: Determine if preflight results can be trusted
+             *
+             * Preflight runs BEFORE user confirmation. When confirm_destructive is
+             * enabled and --force is not set, arbitrary time passes while user decides.
+             * During this window, a "safe" orphan could be modified by the user.
+             *
+             * Risk scenario:
+             *   1. Preflight: file X marked safe (no uncommitted changes)
+             *   2. User prompt: "Deploy N files and remove M orphans? [y/N]"
+             *   3. User edits file X (saves important work to it)
+             *   4. User confirms "y"
+             *   5. cleanup_execute trusts stale preflight → deletes file X → DATA LOSS
+             *
+             * Solution: Pass NULL to force fresh safety check when interactive delay
+             * occurred. Non-interactive paths (--force, confirm_destructive=false)
+             * still benefit from preflight optimization.
+             */
+            bool interactive_delay = config->confirm_destructive && !opts->force;
             cleanup_options_t cleanup_opts = {
                 .orphaned_files = file_orphans,           /* Workspace item array */
                 .orphaned_files_count = file_orphan_count,
                 .orphaned_directories = dir_orphans,      /* Workspace item array */
                 .orphaned_directories_count = dir_orphan_count,
-                .preflight_violations = cleanup_preflight ? cleanup_preflight->safety_violations : NULL,
+                .preflight_violations = interactive_delay
+                    ? NULL  /* Stale - force fresh safety check */
+                    : (cleanup_preflight ? cleanup_preflight->safety_violations : NULL),
                 .dry_run = false,                         /* Dry-run handled at deployment level */
                 .force = opts->force,
-                .skip_safety_check = false                /* Ignored when preflight_violations is non-NULL */
+                .skip_safety_check = false                /* Run safety when preflight_violations is NULL */
             };
 
             /* Execute cleanup (non-fatal - deployment already succeeded)

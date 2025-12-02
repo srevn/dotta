@@ -469,7 +469,7 @@ void print_revert_help(const char *prog_name) {
     printf("  -p, --profile <name>  Override profile (required if file is ambiguous)\n");
     printf("  -m, --message <msg>   Custom commit message\n");
     printf("  -f, --force           Skip confirmation and override conflicts\n");
-    printf("  --dry-run             Preview changes without modifying anything\n");
+    printf("  -n, --dry-run         Preview changes without modifying anything\n");
     printf("  -v, --verbose         Print verbose output\n");
     printf("  -h, --help            Show this help message\n");
     printf("\nBehavior:\n");
@@ -748,7 +748,7 @@ void print_key_help(const char *prog_name) {
     printf("  %s key status\n", prog_name);
     printf("    Displays:\n");
     printf("      - Whether encryption is enabled in configuration\n");
-    printf("      - KDF parameters (opslimit, memlimit, threads)\n");
+    printf("      - KDF work factor (opslimit)\n");
     printf("      - Session timeout setting\n");
     printf("      - Whether a key is currently cached\n");
     printf("      - Time until cache expiration\n");
@@ -760,8 +760,6 @@ void print_key_help(const char *prog_name) {
     printf("    enabled = true\n");
     printf("    session_timeout = 3600      # 1 hour\n");
     printf("    opslimit = 10000            # CPU cost\n");
-    printf("    memlimit = 67108864         # 64 MB memory\n");
-    printf("    threads = 1                 # Parallelization\n\n");
     printf("Security Notes:\n");
     printf("  - The passphrase is never stored on disk\n");
     printf("  - The derived key is cached in memory and encrypted on disk (~/.cache/dotta/session)\n");

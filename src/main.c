@@ -1788,7 +1788,7 @@ static int cmd_revert_main(int argc, char **argv) {
             opts.message = argv[++i];
         } else if (strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--force") == 0) {
             opts.force = true;
-        } else if (strcmp(argv[i], "--dry-run") == 0) {
+        } else if (strcmp(argv[i], "-n") == 0 || strcmp(argv[i], "--dry-run") == 0) {
             opts.dry_run = true;
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             opts.verbose = true;

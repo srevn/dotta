@@ -625,7 +625,7 @@ dotta list global <file>
 dotta revert ~/.bashrc@abc123
 
 # Revert with commit
-dotta revert --commit -m "Fix config" ~/.bashrc@HEAD~1
+dotta revert -m "Fix config" ~/.bashrc@HEAD~1
 ```
 
 ## Performance

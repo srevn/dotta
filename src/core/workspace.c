@@ -2515,6 +2515,95 @@ const workspace_item_t *workspace_get_all_diverged(
 }
 
 /**
+ * Extract orphaned files and directories from workspace
+ *
+ * Two-pass extraction: count by kind, then populate both arrays.
+ * Caller owns returned arrays; items are borrowed from workspace.
+ */
+error_t *workspace_extract_orphans(
+    const workspace_t *ws,
+    const workspace_item_t ***out_file_orphans,
+    size_t *out_file_count,
+    const workspace_item_t ***out_dir_orphans,
+    size_t *out_dir_count
+) {
+    CHECK_NULL(ws);
+
+    /* Initialize all outputs to safe defaults */
+    if (out_file_orphans) *out_file_orphans = NULL;
+    if (out_file_count) *out_file_count = 0;
+    if (out_dir_orphans) *out_dir_orphans = NULL;
+    if (out_dir_count) *out_dir_count = 0;
+
+    /* Early exit if nothing requested */
+    bool want_files = (out_file_orphans != NULL);
+    bool want_dirs = (out_dir_orphans != NULL);
+    if (!want_files && !want_dirs) {
+        return NULL;
+    }
+
+    /* Pass 1: Count orphans by kind */
+    size_t file_count = 0, dir_count = 0;
+    for (size_t i = 0; i < ws->diverged_count; i++) {
+        if (ws->diverged[i].state == WORKSPACE_STATE_ORPHANED) {
+            if (ws->diverged[i].item_kind == WORKSPACE_ITEM_FILE) {
+                file_count++;
+            } else {
+                dir_count++;
+            }
+        }
+    }
+
+    /* Early exit if no orphans found */
+    if (file_count == 0 && dir_count == 0) {
+        return NULL;
+    }
+
+    /* Allocate arrays for requested kinds */
+    const workspace_item_t **file_arr = NULL;
+    const workspace_item_t **dir_arr = NULL;
+
+    if (want_files && file_count > 0) {
+        file_arr = malloc(file_count * sizeof(workspace_item_t *));
+        if (!file_arr) {
+            return ERROR(ERR_MEMORY, "Failed to allocate file orphan array");
+        }
+    }
+
+    if (want_dirs && dir_count > 0) {
+        dir_arr = malloc(dir_count * sizeof(workspace_item_t *));
+        if (!dir_arr) {
+            free(file_arr);
+            return ERROR(ERR_MEMORY, "Failed to allocate directory orphan array");
+        }
+    }
+
+    /* Pass 2: Populate both arrays in single iteration */
+    size_t f_idx = 0, d_idx = 0;
+    for (size_t i = 0; i < ws->diverged_count; i++) {
+        if (ws->diverged[i].state == WORKSPACE_STATE_ORPHANED) {
+            if (ws->diverged[i].item_kind == WORKSPACE_ITEM_FILE) {
+                if (file_arr) {
+                    file_arr[f_idx++] = &ws->diverged[i];
+                }
+            } else {
+                if (dir_arr) {
+                    dir_arr[d_idx++] = &ws->diverged[i];
+                }
+            }
+        }
+    }
+
+    /* Set outputs */
+    if (out_file_orphans) *out_file_orphans = file_arr;
+    if (out_file_count) *out_file_count = file_count;
+    if (out_dir_orphans) *out_dir_orphans = dir_arr;
+    if (out_dir_count) *out_dir_count = dir_count;
+
+    return NULL;
+}
+
+/**
  * Get workspace item by filesystem path
  *
  * O(1) lookup via diverged_index hashmap. Returns NULL if item has no

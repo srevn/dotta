@@ -951,7 +951,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     if (opts->profiles && opts->profile_count > 0) {
         /* User specified CLI filter - load filter profiles */
         err = profile_resolve_for_operations(repo, opts->profiles, opts->profile_count,
-                                            config->strict_mode, &operation_profiles);
+                                             config->strict_mode, &operation_profiles);
         if (err) {
             err = error_wrap(err, "Failed to resolve operation profiles");
             goto cleanup;
@@ -1183,108 +1183,111 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     if (!opts->keep_orphans) {
         output_print(out, OUTPUT_VERBOSE, "\nExtracting orphans from workspace...\n");
 
-        /* Get ALL diverged items and extract orphans
+        /* Extract orphans via workspace API (2-pass internally: count, then populate)
          *
          * Orphan removal is UNCONDITIONAL (does not respect operation filter):
          * - Operation filter applies to deployment (which managed files to deploy)
          * - Orphan removal is housekeeping (removing files outside VWD scope)
          * - Manifest (VWD) already determined orphan status via enabled profiles
          * - Apply must respect that authority regardless of CLI filter
-         *
-         * Note: Files from enabled profiles cannot be orphans (they're in manifest).
-         * Only files from disabled profiles or deleted from Git become orphans.
          */
-        size_t all_diverged_count = 0;
-        const workspace_item_t *all_diverged = workspace_get_all_diverged(ws, &all_diverged_count);
+        const workspace_item_t **all_file_orphans = NULL;
+        const workspace_item_t **all_dir_orphans = NULL;
+        size_t total_file_orphans = 0, total_dir_orphans = 0;
 
-        /* First pass: count orphaned files vs directories (with exclusion filter) */
-        for (size_t i = 0; i < all_diverged_count; i++) {
-            const workspace_item_t *item = &all_diverged[i];
+        err = workspace_extract_orphans(ws, &all_file_orphans, &total_file_orphans,
+                                        &all_dir_orphans, &total_dir_orphans);
+        if (err) {
+            err = error_wrap(err, "Failed to extract orphans from workspace");
+            goto cleanup;
+        }
 
-            if (item->state == WORKSPACE_STATE_ORPHANED) {
-                /* Check exclusion pattern before counting */
-                if (matches_exclude_pattern(item->filesystem_path, opts)) {
+        /* Apply exclusion filter if patterns specified */
+        if (opts->exclude_count > 0 &&
+            (total_file_orphans > 0 || total_dir_orphans > 0)) {
+            /* Count non-excluded orphans */
+            size_t filtered_file_count = 0, filtered_dir_count = 0;
+
+            for (size_t i = 0; i < total_file_orphans; i++) {
+                if (matches_exclude_pattern(all_file_orphans[i]->filesystem_path, opts)) {
                     excluded_orphan_count++;
                     if (opts->verbose) {
-                        output_print(out, OUTPUT_VERBOSE,
-                                    "  Preserving orphan (excluded): %s\n",
-                                    item->filesystem_path);
+                        output_print(out, OUTPUT_VERBOSE, "  Preserving orphan (excluded): %s\n",
+                                     all_file_orphans[i]->filesystem_path);
                     }
-                    continue;
-                }
-
-                /* Count non-excluded orphans */
-                if (item->item_kind == WORKSPACE_ITEM_FILE) {
-                    file_orphan_count++;
                 } else {
-                    dir_orphan_count++;
+                    filtered_file_count++;
                 }
             }
-        }
 
-        /* Allocate separate arrays for files and directories */
-        if (file_orphan_count > 0) {
-            file_orphans = malloc(file_orphan_count * sizeof(workspace_item_t *));
-            if (!file_orphans) {
-                err = ERROR(ERR_MEMORY, "Failed to allocate file orphan array");
-                goto cleanup;
-            }
-
-            /* Second pass: populate file orphans array (with exclusion filter) */
-            size_t f_idx = 0;
-            for (size_t i = 0; i < all_diverged_count; i++) {
-                const workspace_item_t *item = &all_diverged[i];
-
-                if (item->state == WORKSPACE_STATE_ORPHANED &&
-                    item->item_kind == WORKSPACE_ITEM_FILE) {
-                    /* Apply same exclusion filter as Pass 1 */
-                    if (matches_exclude_pattern(item->filesystem_path, opts)) {
-                        continue;  /* Skip excluded orphans (preserve) */
+            for (size_t i = 0; i < total_dir_orphans; i++) {
+                if (matches_exclude_pattern(all_dir_orphans[i]->filesystem_path, opts)) {
+                    excluded_orphan_count++;
+                    if (opts->verbose) {
+                        output_print(out, OUTPUT_VERBOSE, "  Preserving orphan (excluded): %s\n",
+                                     all_dir_orphans[i]->filesystem_path);
                     }
-
-                    file_orphans[f_idx++] = item;
+                } else {
+                    filtered_dir_count++;
                 }
             }
-        }
 
-        if (dir_orphan_count > 0) {
-            dir_orphans = malloc(dir_orphan_count * sizeof(workspace_item_t *));
-            if (!dir_orphans) {
-                free(file_orphans);
-                file_orphans = NULL;
-                err = ERROR(ERR_MEMORY, "Failed to allocate directory orphan array");
-                goto cleanup;
-            }
-
-            /* Second pass: populate directory orphans array (with exclusion filter) */
-            size_t d_idx = 0;
-            for (size_t i = 0; i < all_diverged_count; i++) {
-                const workspace_item_t *item = &all_diverged[i];
-
-                if (item->state == WORKSPACE_STATE_ORPHANED &&
-                    item->item_kind == WORKSPACE_ITEM_DIRECTORY) {
-                    /* Apply same exclusion filter as Pass 1 */
-                    if (matches_exclude_pattern(item->filesystem_path, opts)) {
-                        continue;  /* Skip excluded orphans (preserve) */
+            /* Allocate filtered arrays */
+            if (filtered_file_count > 0) {
+                file_orphans = malloc(filtered_file_count * sizeof(workspace_item_t *));
+                if (!file_orphans) {
+                    free(all_file_orphans);
+                    free(all_dir_orphans);
+                    err = ERROR(ERR_MEMORY, "Failed to allocate filtered file orphan array");
+                    goto cleanup;
+                }
+                size_t f_idx = 0;
+                for (size_t i = 0; i < total_file_orphans; i++) {
+                    if (!matches_exclude_pattern(all_file_orphans[i]->filesystem_path, opts)) {
+                        file_orphans[f_idx++] = all_file_orphans[i];
                     }
-
-                    dir_orphans[d_idx++] = item;
                 }
+                file_orphan_count = filtered_file_count;
             }
+
+            if (filtered_dir_count > 0) {
+                dir_orphans = malloc(filtered_dir_count * sizeof(workspace_item_t *));
+                if (!dir_orphans) {
+                    free(all_file_orphans);
+                    free(all_dir_orphans);
+                    free(file_orphans);
+                    file_orphans = NULL;
+                    err = ERROR(ERR_MEMORY, "Failed to allocate filtered directory orphan array");
+                    goto cleanup;
+                }
+                size_t d_idx = 0;
+                for (size_t i = 0; i < total_dir_orphans; i++) {
+                    if (!matches_exclude_pattern(all_dir_orphans[i]->filesystem_path, opts)) {
+                        dir_orphans[d_idx++] = all_dir_orphans[i];
+                    }
+                }
+                dir_orphan_count = filtered_dir_count;
+            }
+
+            /* Free unfiltered arrays (filtered arrays now own the pointers) */
+            free(all_file_orphans);
+            free(all_dir_orphans);
+        } else {
+            /* No exclusion patterns - use extracted arrays directly */
+            file_orphans = all_file_orphans;
+            file_orphan_count = total_file_orphans;
+            dir_orphans = all_dir_orphans;
+            dir_orphan_count = total_dir_orphans;
         }
 
         if (opts->verbose) {
             if (file_orphan_count > 0) {
-                output_print(out, OUTPUT_VERBOSE,
-                            "Found %zu orphaned file%s\n",
-                            file_orphan_count,
-                            file_orphan_count == 1 ? "" : "s");
+                output_print(out, OUTPUT_VERBOSE, "Found %zu orphaned file%s\n",
+                            file_orphan_count, file_orphan_count == 1 ? "" : "s");
             }
             if (dir_orphan_count > 0) {
-                output_print(out, OUTPUT_VERBOSE,
-                            "Found %zu orphaned director%s\n",
-                            dir_orphan_count,
-                            dir_orphan_count == 1 ? "y" : "ies");
+                output_print(out, OUTPUT_VERBOSE, "Found %zu orphaned director%s\n",
+                            dir_orphan_count, dir_orphan_count == 1 ? "y" : "ies");
             }
 
             /* Show breakdown by profile status */

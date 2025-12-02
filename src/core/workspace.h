@@ -183,6 +183,43 @@ const workspace_item_t *workspace_get_all_diverged(
 );
 
 /**
+ * Extract orphaned files and directories from workspace
+ *
+ * On-demand extraction that produces separated file and directory arrays.
+ * Encapsulates orphan filtering logic within the workspace module.
+ *
+ * Algorithm:
+ * - Pass 1: Count orphans by kind (file vs directory)
+ * - Pass 2: Populate both arrays in single iteration
+ *
+ * Performance: O(N) where N = diverged count (2 passes total).
+ * Memory: Caller owns returned arrays and must free them.
+ *         Items in arrays are borrowed (point into workspace's diverged array).
+ *
+ * Selective extraction: Pass NULL for out_file_orphans or out_dir_orphans
+ * to skip that extraction. The corresponding count will be set to 0.
+ *
+ * Edge cases:
+ * - No orphans: Returns success with count=0, arrays=NULL
+ * - analyze_orphans=false during load: Returns success with count=0
+ * - Memory failure: Returns error, no partial allocation
+ *
+ * @param ws Workspace (must not be NULL)
+ * @param out_file_orphans Output file array (caller frees, NULL to skip)
+ * @param out_file_count Output file count (set to 0 if out_file_orphans is NULL)
+ * @param out_dir_orphans Output directory array (caller frees, NULL to skip)
+ * @param out_dir_count Output directory count (set to 0 if out_dir_orphans is NULL)
+ * @return Error or NULL on success
+ */
+error_t *workspace_extract_orphans(
+    const workspace_t *ws,
+    const workspace_item_t ***out_file_orphans,
+    size_t *out_file_count,
+    const workspace_item_t ***out_dir_orphans,
+    size_t *out_dir_count
+);
+
+/**
  * Get workspace item by filesystem path
  *
  * Returns the divergence information for a specific file or directory via

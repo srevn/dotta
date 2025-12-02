@@ -59,7 +59,7 @@ typedef struct {
     /**
      * Pre-computed file orphan array from workspace
      *
-     * Must be extracted by caller from workspace using workspace_get_diverged_filtered().
+     * Must be extracted by caller from workspace using workspace_extract_orphans().
      * Treated as borrowed reference (cleanup does not free).
      *
      * Rationale: Workspace already detected orphans during workspace_load().
@@ -73,7 +73,7 @@ typedef struct {
     /**
      * Pre-computed directory orphan array from workspace
      *
-     * Must be extracted by caller from workspace using workspace_get_diverged_filtered().
+     * Must be extracted by caller from workspace using workspace_extract_orphans().
      * Treated as borrowed reference (cleanup does not free).
      *
      * Rationale: Workspace already detected directory orphans during workspace_load().

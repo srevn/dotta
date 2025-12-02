@@ -87,25 +87,29 @@ typedef struct {
     /**
      * Pre-computed safety violations from preflight check
      *
-     * If provided, files in this list will be skipped during cleanup without
-     * re-running expensive safety checks. This is a performance optimization
-     * that avoids duplicate Git comparisons and content decryption.
+     * Semantic contract:
+     * - Non-NULL: Preflight was performed, trust results completely
+     *   - count > 0: Files in violations list will be skipped
+     *   - count == 0: Preflight verified all files safe, none skipped
+     * - NULL: No preflight performed, behavior depends on skip_safety_check
      *
-     * If NULL: Safety checks are run during cleanup (unless skip_safety_check=true).
-     * If provided: Files in violations list are skipped, no re-check performed.
+     * This avoids re-running expensive safety checks (Git comparisons,
+     * content decryption) that were already performed in preflight.
      *
      * Typical flow:
      * 1. apply.c runs cleanup_preflight_check() -> produces safety_violations
      * 2. apply.c passes violations to cleanup_execute() via this field
-     * 3. cleanup_execute() uses violations to build skip list
+     * 3. cleanup_execute() trusts preflight results (no re-verification)
      * 4. apply.c frees cleanup_preflight_result (owns the data)
+     *
+     * Memory: Borrowed reference. Caller owns and frees safety_result_t.
      */
     const safety_result_t *preflight_violations;
 
     /* Control flags */
     bool dry_run;                           /* Don't actually remove anything */
     bool force;                             /* Skip safety checks (dangerous) */
-    bool skip_safety_check;                 /* Skip safety check (already done in preflight) */
+    bool skip_safety_check;                 /* Skip safety when preflight_violations is NULL */
 } cleanup_options_t;
 
 /**

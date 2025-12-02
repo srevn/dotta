@@ -175,17 +175,24 @@ static error_t *prune_orphaned_files(
 
     /* Build violations map from preflight data or run safety check
      *
-     * Two paths for detecting files with uncommitted changes:
-     * 1. Use pre-computed violations from preflight (performance optimization)
-     * 2. Run safety check now (fallback when no preflight data available)
+     * Three paths for handling safety validation:
+     * 1. Preflight was run (preflight_violations != NULL) - trust completely
+     * 2. No preflight, run safety check (preflight_violations == NULL, !skip_safety_check)
+     * 3. No preflight, skip safety (preflight_violations == NULL, skip_safety_check)
+     *
+     * Key insight: Non-NULL preflight_violations means preflight was performed.
+     * Trust the results completely, even if count == 0 (means all files are safe).
+     * This eliminates redundant safety checks and makes the API self-documenting.
      */
     if (!force) {
-        if (opts->preflight_violations && opts->preflight_violations->count > 0) {
-            /* Path 1: Use pre-computed violations from preflight
+        if (opts->preflight_violations != NULL) {
+            /* Path 1: Preflight was run - trust results completely
+             *
+             * Non-NULL preflight_violations indicates preflight check was performed.
+             * Trust the results even if count == 0 (means all files verified safe).
              *
              * This avoids re-running expensive safety checks (Git comparisons,
              * content decryption) that were already performed in preflight.
-             * Files marked as unsafe will be skipped during removal.
              *
              * Race condition note: There is a small time window between preflight
              * analysis and actual execution. If a file was modified after preflight,
@@ -196,32 +203,31 @@ static error_t *prune_orphaned_files(
              * We use it to build violations_map but do NOT store it in result.
              * The caller (apply.c) owns and will free the safety_result_t.
              */
-            violations_map = hashmap_create(opts->preflight_violations->count);
-            if (!violations_map) {
-                return ERROR(ERR_MEMORY, "Failed to create violations hashmap");
-            }
+            if (opts->preflight_violations->count > 0) {
+                /* Build violations map for files to skip */
+                violations_map = hashmap_create(opts->preflight_violations->count);
+                if (!violations_map) {
+                    return ERROR(ERR_MEMORY, "Failed to create violations hashmap");
+                }
 
-            for (size_t i = 0; i < opts->preflight_violations->count; i++) {
-                const safety_violation_t *v = &opts->preflight_violations->violations[i];
-                /* Store violation pointer for O(1) reason lookup */
-                err = hashmap_set(violations_map, v->filesystem_path, (void *)v);
-                if (err) {
-                    hashmap_free(violations_map, NULL);
-                    return error_wrap(err, "Failed to populate violations map");
+                for (size_t i = 0; i < opts->preflight_violations->count; i++) {
+                    const safety_violation_t *v = &opts->preflight_violations->violations[i];
+                    /* Store violation pointer for O(1) reason lookup */
+                    err = hashmap_set(violations_map, v->filesystem_path, (void *)v);
+                    if (err) {
+                        hashmap_free(violations_map, NULL);
+                        return error_wrap(err, "Failed to populate violations map");
+                    }
                 }
             }
-
-            /* IMPORTANT: We do NOT store preflight_violations in result->safety_violations
-             * to avoid double-free (preflight owns the safety_result_t). The skipped
-             * files will be tracked in result->skipped_files array for display. */
+            /* count == 0: preflight verified all files are safe, no map needed */
 
         } else if (!opts->skip_safety_check) {
-            /* Path 2: Run optimized safety check with workspace items
+            /* Path 2: No preflight - run safety check now
              *
              * This path is taken when:
-             * - No preflight was run (e.g., different calling context)
-             * - Preflight found no violations (optimization: no map needed)
-             * - Called from context other than apply.c
+             * - No preflight was run (preflight_violations == NULL)
+             * - Caller wants safety validation (skip_safety_check == false)
              *
              * Uses safety_check_orphans() which trusts workspace divergence
              * completely. Non-encrypted files use streaming OID verification
@@ -259,6 +265,10 @@ static error_t *prune_orphaned_files(
                 }
             }
         }
+        /* Path 3 (implicit): preflight_violations == NULL && skip_safety_check == true
+         * No safety check runs, no violations map built.
+         * Used for emergency cleanup when caller explicitly skips safety.
+         */
     }
 
     /* Remove orphaned files and populate result arrays for caller display */

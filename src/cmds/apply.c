@@ -1648,7 +1648,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                 .preflight_violations = cleanup_preflight ? cleanup_preflight->safety_violations : NULL,
                 .dry_run = false,                         /* Dry-run handled at deployment level */
                 .force = opts->force,
-                .skip_safety_check = true                 /* Trust preflight data */
+                .skip_safety_check = false                /* Ignored when preflight_violations is non-NULL */
             };
 
             /* Execute cleanup (non-fatal - deployment already succeeded)

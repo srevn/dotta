@@ -950,12 +950,6 @@ static error_t *compare_manifest_to_filesystem(
 /**
  * Diff commit to workspace - Compare historical commit with filesystem
  *
- * This is the NEW, CORRECT implementation that actually compares the
- * specified commit (not HEAD!) against the current filesystem.
- *
- * Fixes critical bug: Old implementation compared HEAD instead of the
- * user-specified commit, making the feature completely broken.
- *
  * CURRENT LIMITATION: Single-profile comparison only.
  * When multiple profiles are enabled, this function compares only the
  * profile that contains the specified commit (first match in precedence order)
@@ -967,7 +961,7 @@ static error_t *compare_manifest_to_filesystem(
  * @param out Output context (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *diff_commit_to_workspace_new(
+static error_t *diff_commit_to_workspace(
     git_repository *repo,
     const char *commit_ref,
     profile_list_t *profiles,
@@ -1030,8 +1024,17 @@ static error_t *diff_commit_to_workspace_new(
     }
 
     /* Step 5: Build manifest from historical tree
-     * We need to traverse the tree and create file entries */
-    err = profile_build_manifest_from_tree(tree, profile_name, &manifest);
+     * We need to traverse the tree and create file entries.
+     * Find custom_prefix from matched profile for custom/ path resolution. */
+    const char *custom_prefix = NULL;
+    for (size_t i = 0; i < profiles->count; i++) {
+        if (strcmp(profiles->profiles[i].name, profile_name) == 0) {
+            custom_prefix = profiles->profiles[i].custom_prefix;
+            break;
+        }
+    }
+
+    err = profile_build_manifest_from_tree(tree, profile_name, custom_prefix, &manifest);
     if (err) {
         err = error_wrap(err, "Failed to build manifest from commit");
         goto cleanup;
@@ -1375,7 +1378,7 @@ error_t *cmd_diff(git_repository *repo, const cmd_diff_options_t *opts) {
 
         case DIFF_COMMIT_TO_WORKSPACE:
             /* Use commit-to-workspace diff */
-            err = diff_commit_to_workspace_new(repo, opts->commit1, diff_profiles, opts, out);
+            err = diff_commit_to_workspace(repo, opts->commit1, diff_profiles, opts, out);
             goto cleanup;
 
         case DIFF_WORKSPACE:

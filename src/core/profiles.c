@@ -1109,11 +1109,25 @@ static int manifest_build_callback(
 
     /* Convert storage path to filesystem path */
     char *filesystem_path = NULL;
-    error_t *err = path_from_storage(storage_path, ctx->custom_prefix, &filesystem_path);
-    if (err) {
-        ctx->error = error_wrap(err, "Failed to convert path '%s' from profile '%s'",
-                                storage_path, ctx->profile->name);
-        return -1;
+    error_t *err = NULL;
+
+    if (str_starts_with(storage_path, "custom/") && !ctx->custom_prefix) {
+        /* Graceful degradation: custom/ file without known prefix.
+         * Use storage_path as filesystem_path. This causes stat() to fail
+         * (not absolute path), showing the file as "missing on disk" -
+         * semantically correct when deployment location is unknown. */
+        filesystem_path = strdup(storage_path);
+        if (!filesystem_path) {
+            ctx->error = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
+            return -1;
+        }
+    } else {
+        err = path_from_storage(storage_path, ctx->custom_prefix, &filesystem_path);
+        if (err) {
+            ctx->error = error_wrap(err, "Failed to convert path '%s' from profile '%s'",
+                                    storage_path, ctx->profile->name);
+            return -1;
+        }
     }
 
     /* Get owned copy of tree entry */
@@ -1122,7 +1136,7 @@ static int manifest_build_callback(
     if (git_err != 0) {
         free(filesystem_path);
         ctx->error = ERROR(ERR_GIT, "Failed to duplicate tree entry: %s",
-                          git_error_last() ? git_error_last()->message : "unknown");
+                           git_error_last() ? git_error_last()->message : "unknown");
         return -1;
     }
 
@@ -1562,12 +1576,14 @@ cleanup:
  *
  * @param tree Git tree to build manifest from (must not be NULL)
  * @param profile_name Profile name for entries (must not be NULL)
+ * @param custom_prefix Custom prefix for custom/ paths (NULL for graceful degradation)
  * @param out Manifest (must not be NULL, caller must free with manifest_free)
  * @return Error or NULL on success
  */
 error_t *profile_build_manifest_from_tree(
     git_tree *tree,
     const char *profile_name,
+    const char *custom_prefix,
     manifest_t **out
 ) {
     CHECK_NULL(tree);
@@ -1637,7 +1653,7 @@ error_t *profile_build_manifest_from_tree(
         .capacity = capacity,
         .path_map = path_map,
         .profile = temp_profile,
-        .custom_prefix = NULL,  /* Single-tree manifests use NULL prefix */
+        .custom_prefix = custom_prefix,  /* May be NULL for graceful degradation */
         .error = NULL
     };
 

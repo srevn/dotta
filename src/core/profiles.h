@@ -444,12 +444,14 @@ error_t *profile_build_manifest(
  *
  * @param tree Git tree to build manifest from (must not be NULL)
  * @param profile_name Profile name for entries (must not be NULL)
+ * @param custom_prefix Custom prefix for custom/ paths (NULL for graceful degradation)
  * @param out Manifest (must not be NULL, caller must free with manifest_free)
  * @return Error or NULL on success
  */
 error_t *profile_build_manifest_from_tree(
     git_tree *tree,
     const char *profile_name,
+    const char *custom_prefix,
     manifest_t **out
 );
 

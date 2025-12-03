@@ -1201,7 +1201,7 @@ static error_t *diff_workspace(
 
     error_t *err = NULL;
     workspace_t *ws = NULL;
-    content_cache_t *cache = NULL;
+    content_cache_t *cache = NULL;  /* Borrowed from workspace, do not free */
 
     /* Step 1: Load workspace with full file analysis */
     workspace_load_t ws_opts = {
@@ -1224,14 +1224,17 @@ static error_t *diff_workspace(
 
     /* Step 3: Get cached resources from workspace */
     const manifest_t *manifest = workspace_get_manifest(ws);
-    keymanager_t *km = workspace_get_keymanager(ws);
 
-    /* Step 4: Create content cache for diff generation
-     * Note: Could use workspace_get_content_cache(ws) if we want to reuse
-     * the workspace's cache, but creating a fresh one is also fine */
-    cache = content_cache_create(repo, km);
+    /* Step 4: Borrow content cache from workspace
+     *
+     * Reuses the workspace's cache which was populated during file analysis.
+     * For encrypted files, this avoids redundant blob reads and decryption.
+     * The cache is borrowed (workspace owns it), so we don't free it manually.
+     */
+    cache = workspace_get_content_cache(ws);
     if (!cache) {
-        err = ERROR(ERR_MEMORY, "Failed to create content cache");
+        /* Workspace always creates cache during load, but handle gracefully */
+        err = ERROR(ERR_INTERNAL, "Workspace missing content cache");
         goto cleanup;
     }
 
@@ -1297,7 +1300,6 @@ static error_t *diff_workspace(
     }
 
 cleanup:
-    content_cache_free(cache);
     workspace_free(ws);
     return err;
 }

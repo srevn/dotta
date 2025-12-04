@@ -500,64 +500,270 @@ error_t *gitops_get_commit(
 }
 
 /**
+ * Split file path into segments for recursive tree building
+ *
+ * Normalizes path and splits into components:
+ * - Leading slashes skipped: "/foo/bar" -> ["foo", "bar"]
+ * - Double slashes collapsed: "foo//bar" -> ["foo", "bar"]
+ * - Trailing slash rejected: "foo/bar/" -> Error (not a file path)
+ * - Empty path rejected: "" -> Error
+ *
+ * @param file_path Path to split (must not be NULL)
+ * @param out_segments Output array (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+static error_t *split_path_to_segments(
+    const char *file_path,
+    string_array_t **out_segments
+) {
+    if (!file_path || !out_segments) {
+        return ERROR(ERR_INVALID_ARG, "file_path and out_segments cannot be NULL");
+    }
+
+    /* Skip leading slashes */
+    const char *p = file_path;
+    while (*p == '/') {
+        p++;
+    }
+
+    if (*p == '\0') {
+        return ERROR(ERR_INVALID_ARG, "File path cannot be empty or just slashes");
+    }
+
+    string_array_t *segments = string_array_create();
+    if (!segments) {
+        return ERROR(ERR_MEMORY, "Failed to allocate path segments array");
+    }
+
+    /* Parse segments */
+    const char *segment_start = p;
+    while (*p != '\0') {
+        if (*p == '/') {
+            /* End of segment */
+            size_t segment_len = (size_t)(p - segment_start);
+            if (segment_len > 0) {
+                /* Non-empty segment - add it */
+                char *segment = malloc(segment_len + 1);
+                if (!segment) {
+                    string_array_free(segments);
+                    return ERROR(ERR_MEMORY, "Failed to allocate path segment");
+                }
+                memcpy(segment, segment_start, segment_len);
+                segment[segment_len] = '\0';
+
+                error_t *err = string_array_push_take(segments, segment);
+                if (err) {
+                    free(segment);
+                    string_array_free(segments);
+                    return error_wrap(err, "Failed to add path segment");
+                }
+            }
+            /* Skip consecutive slashes */
+            while (*p == '/') {
+                p++;
+            }
+            segment_start = p;
+        } else {
+            p++;
+        }
+    }
+
+    /* Handle final segment (after last slash or entire path if no slashes) */
+    size_t segment_len = (size_t)(p - segment_start);
+    if (segment_len > 0) {
+        char *segment = malloc(segment_len + 1);
+        if (!segment) {
+            string_array_free(segments);
+            return ERROR(ERR_MEMORY, "Failed to allocate final path segment");
+        }
+        memcpy(segment, segment_start, segment_len);
+        segment[segment_len] = '\0';
+
+        error_t *err = string_array_push_take(segments, segment);
+        if (err) {
+            free(segment);
+            string_array_free(segments);
+            return error_wrap(err, "Failed to add final path segment");
+        }
+    } else {
+        /* Path ended with slash - not a valid file path */
+        string_array_free(segments);
+        return ERROR(ERR_INVALID_ARG,
+                    "File path '%s' ends with '/' (directory, not file)", file_path);
+    }
+
+    if (string_array_size(segments) == 0) {
+        string_array_free(segments);
+        return ERROR(ERR_INVALID_ARG, "File path contains no valid segments");
+    }
+
+    *out_segments = segments;
+    return NULL;
+}
+
+/**
+ * Recursively build tree structure for file at arbitrary depth
+ *
+ * Uses inside-out construction: builds innermost tree first, then works outward.
+ * Preserves existing tree entries at each level (siblings are copied).
+ *
+ * @param repo Repository (must not be NULL)
+ * @param parent_tree Existing tree at this level (NULL for new directories)
+ * @param segments Path segment array (must not be NULL, count > 0)
+ * @param depth Current segment index (0 = first segment)
+ * @param blob_oid File content blob OID (must not be NULL)
+ * @param file_mode File permissions
+ * @param out_tree_oid Output: OID of tree at this level (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *build_tree_for_path(
+    git_repository *repo,
+    git_tree *parent_tree,
+    const string_array_t *segments,
+    size_t depth,
+    const git_oid *blob_oid,
+    git_filemode_t file_mode,
+    git_oid *out_tree_oid
+) {
+    const char *segment = string_array_get(segments, depth);
+    bool is_final = (depth == string_array_size(segments) - 1);
+    int git_err;
+
+    if (is_final) {
+        /*
+         * Base case: Insert blob at this level
+         *
+         * Create treebuilder from parent (copies existing entries),
+         * insert/update the file, write tree.
+         */
+        git_treebuilder *builder = NULL;
+        git_err = git_treebuilder_new(&builder, repo, parent_tree);
+        if (git_err < 0) {
+            return error_from_git(git_err);
+        }
+
+        git_err = git_treebuilder_insert(NULL, builder, segment, blob_oid, file_mode);
+        if (git_err < 0) {
+            git_treebuilder_free(builder);
+            return error_from_git(git_err);
+        }
+
+        git_err = git_treebuilder_write(out_tree_oid, builder);
+        git_treebuilder_free(builder);
+
+        if (git_err < 0) {
+            return error_from_git(git_err);
+        }
+
+        return NULL;
+    }
+
+    /*
+     * Recursive case: Build child tree first, then insert tree entry
+     *
+     * 1. Check if segment exists in parent_tree
+     * 2. If exists as tree: load it as child context
+     * 3. If exists as blob: error (file/directory conflict)
+     * 4. If doesn't exist: child_tree = NULL (will create new directory)
+     * 5. Recurse to build child tree
+     * 6. Insert child tree OID into this level
+     */
+    git_tree *child_tree = NULL;
+    error_t *err = NULL;
+
+    if (parent_tree) {
+        const git_tree_entry *entry = git_tree_entry_byname(parent_tree, segment);
+        if (entry) {
+            git_object_t entry_type = git_tree_entry_type(entry);
+            if (entry_type == GIT_OBJECT_TREE) {
+                /* Existing directory - load it */
+                const git_oid *entry_oid = git_tree_entry_id(entry);
+                git_err = git_tree_lookup(&child_tree, repo, entry_oid);
+                if (git_err < 0) {
+                    return error_from_git(git_err);
+                }
+            } else {
+                /* Conflict: path component exists but is not a directory */
+                return ERROR(ERR_CONFLICT,
+                            "Cannot create path: '%s' exists as a file, not a directory",
+                            segment);
+            }
+        }
+        /* If entry is NULL, child_tree remains NULL (new directory) */
+    }
+
+    /* Recurse to build child tree */
+    git_oid child_tree_oid;
+    err = build_tree_for_path(repo, child_tree, segments, depth + 1,
+                               blob_oid, file_mode, &child_tree_oid);
+
+    /* Free child_tree if we loaded it */
+    if (child_tree) {
+        git_tree_free(child_tree);
+    }
+
+    if (err) {
+        return err;
+    }
+
+    /* Insert child tree into this level */
+    git_treebuilder *builder = NULL;
+    git_err = git_treebuilder_new(&builder, repo, parent_tree);
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    git_err = git_treebuilder_insert(NULL, builder, segment,
+                                     &child_tree_oid, GIT_FILEMODE_TREE);
+    if (git_err < 0) {
+        git_treebuilder_free(builder);
+        return error_from_git(git_err);
+    }
+
+    git_err = git_treebuilder_write(out_tree_oid, builder);
+    git_treebuilder_free(builder);
+
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    return NULL;
+}
+
+/**
  * Helper: Check if file exists in tree with matching OID
  *
- * Returns true if the file exists and its blob OID matches target_oid.
- * Returns false if file doesn't exist or OID doesn't match.
- * Supports one level of subdirectory nesting (e.g., ".dotta/metadata.json").
+ * Uses git_tree_entry_bypath for arbitrary depth path traversal.
+ * Returns true if file exists and blob OID matches target_oid.
  */
 static bool file_matches_oid(
-    git_repository *repo,
     git_tree *tree,
     const char *file_path,
     const git_oid *target_oid
 ) {
-    if (!repo || !tree || !file_path || !target_oid) {
+    if (!tree || !file_path || !target_oid) {
         return false;
     }
 
-    const char *slash = strchr(file_path, '/');
-
-    if (!slash) {
-        /* Root-level file */
-        const git_tree_entry *entry = git_tree_entry_byname(tree, file_path);
-        if (entry && git_tree_entry_type(entry) == GIT_OBJECT_BLOB) {
-            const git_oid *current_oid = git_tree_entry_id(entry);
-            return git_oid_equal(current_oid, target_oid);
-        }
+    /* Normalize: skip leading slash */
+    const char *path = file_path;
+    while (*path == '/') {
+        path++;
+    }
+    if (*path == '\0') {
         return false;
     }
 
-    /* File in subdirectory - extract directory and file names */
-    size_t dir_len = (size_t)(slash - file_path);
-    char *dir_name = malloc(dir_len + 1);
-    if (!dir_name) {
-        return false;
-    }
-    memcpy(dir_name, file_path, dir_len);
-    dir_name[dir_len] = '\0';
-    const char *file_name = slash + 1;
-
-    bool matches = false;
-
-    /* Look up subdirectory in tree */
-    const git_tree_entry *dir_entry = git_tree_entry_byname(tree, dir_name);
-    if (dir_entry && git_tree_entry_type(dir_entry) == GIT_OBJECT_TREE) {
-        /* Load subdirectory tree */
-        git_tree *dir_tree = NULL;
-        const git_oid *dir_oid = git_tree_entry_id(dir_entry);
-        if (git_tree_lookup(&dir_tree, repo, dir_oid) == 0) {
-            /* Look up file in subdirectory */
-            const git_tree_entry *file_entry = git_tree_entry_byname(dir_tree, file_name);
-            if (file_entry && git_tree_entry_type(file_entry) == GIT_OBJECT_BLOB) {
-                const git_oid *current_oid = git_tree_entry_id(file_entry);
-                matches = git_oid_equal(current_oid, target_oid);
-            }
-            git_tree_free(dir_tree);
-        }
+    /* git_tree_entry_bypath handles arbitrary depth internally */
+    git_tree_entry *entry = NULL;
+    int ret = git_tree_entry_bypath(&entry, tree, path);
+    if (ret < 0) {
+        return false;  /* Not found or error */
     }
 
-    free(dir_name);
+    bool matches = (git_tree_entry_type(entry) == GIT_OBJECT_BLOB &&
+                    git_oid_equal(git_tree_entry_id(entry), target_oid));
+    git_tree_entry_free(entry);
     return matches;
 }
 
@@ -597,7 +803,8 @@ error_t *gitops_update_file(
 
     /* Load current tree from branch */
     char ref_name[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", branch_name);
+    error_t *err = gitops_build_refname(ref_name, sizeof(ref_name),
+                                        "refs/heads/%s", branch_name);
     if (err) {
         return error_wrap(err, "Invalid branch name '%s'", branch_name);
     }
@@ -609,7 +816,7 @@ error_t *gitops_update_file(
     }
 
     /* Check for no-op: file exists with same content */
-    if (file_matches_oid(repo, current_tree, file_path, &blob_oid)) {
+    if (file_matches_oid(current_tree, file_path, &blob_oid)) {
         git_tree_free(current_tree);
         return NULL;  /* Success, no modification needed */
     }
@@ -619,157 +826,39 @@ error_t *gitops_update_file(
         *was_modified = true;
     }
 
-    /* Determine if file is in subdirectory */
-    const char *slash = strchr(file_path, '/');
+    /*
+     * Build tree structure using recursive helper
+     *
+     * This handles paths at any depth:
+     * - "file.txt" (root level)
+     * - ".dotta/metadata.json" (one level)
+     * - "a/b/c/d.txt" (arbitrary depth)
+     */
 
-    if (!slash) {
-        /* Simple case: root-level file */
-        git_treebuilder *builder = NULL;
-        git_err = git_treebuilder_new(&builder, repo, current_tree);
+    /* Split path into segments */
+    string_array_t *segments = NULL;
+    err = split_path_to_segments(file_path, &segments);
+    if (err) {
         git_tree_free(current_tree);
-
-        if (git_err < 0) {
-            return error_from_git(git_err);
-        }
-
-        /* Insert/update the file */
-        git_err = git_treebuilder_insert(NULL, builder, file_path, &blob_oid, file_mode);
-        if (git_err < 0) {
-            git_treebuilder_free(builder);
-            return error_from_git(git_err);
-        }
-
-        /* Write the new tree */
-        git_oid tree_oid;
-        git_err = git_treebuilder_write(&tree_oid, builder);
-        git_treebuilder_free(builder);
-
-        if (git_err < 0) {
-            return error_from_git(git_err);
-        }
-
-        /* Load the new tree */
-        git_tree *new_tree = NULL;
-        git_err = git_tree_lookup(&new_tree, repo, &tree_oid);
-        if (git_err < 0) {
-            return error_from_git(git_err);
-        }
-
-        /* Create commit */
-        err = gitops_create_commit(
-            repo,
-            branch_name,
-            new_tree,
-            commit_message,
-            NULL
-        );
-
-        git_tree_free(new_tree);
-
-        return err;
+        return error_wrap(err, "Invalid file path '%s'", file_path);
     }
 
-    /* Complex case: file in subdirectory */
+    /* Build tree recursively */
+    git_oid new_tree_oid;
+    err = build_tree_for_path(repo, current_tree, segments, 0,
+                              &blob_oid, file_mode, &new_tree_oid);
 
-    /* Extract directory name and filename */
-    size_t dir_len = (size_t)(slash - file_path);
-    char *dir_name = malloc(dir_len + 1);
-    if (!dir_name) {
-        git_tree_free(current_tree);
-        return ERROR(ERR_MEMORY, "Failed to allocate directory name");
-    }
-    memcpy(dir_name, file_path, dir_len);
-    dir_name[dir_len] = '\0';
-
-    const char *file_name = slash + 1;
-
-    /* Check if directory exists in the tree */
-    const git_tree_entry *dir_entry = git_tree_entry_byname(current_tree, dir_name);
-    git_tree *dir_tree = NULL;
-    git_treebuilder *dir_builder = NULL;
-
-    if (dir_entry) {
-        /* Path exists - verify it's a directory, not a file */
-        if (git_tree_entry_type(dir_entry) == GIT_OBJECT_TREE) {
-            /* Load existing subdirectory tree */
-            const git_oid *dir_oid = git_tree_entry_id(dir_entry);
-            git_err = git_tree_lookup(&dir_tree, repo, dir_oid);
-            if (git_err < 0) {
-                free(dir_name);
-                git_tree_free(current_tree);
-                return error_from_git(git_err);
-            }
-
-            /* Create builder from existing subdirectory tree */
-            git_err = git_treebuilder_new(&dir_builder, repo, dir_tree);
-            git_tree_free(dir_tree);
-        } else {
-            /* Error: Path exists but is a file, not a directory */
-            free(dir_name);
-            git_tree_free(current_tree);
-            return ERROR(ERR_CONFLICT,
-                        "Cannot create directory '%s': path exists as a file in branch '%s'.\n"
-                        "To resolve: Remove or rename the conflicting file first.",
-                        dir_name, branch_name);
-        }
-    } else {
-        /* Path doesn't exist - create new subdirectory */
-        git_err = git_treebuilder_new(&dir_builder, repo, NULL);
-    }
-
-    if (git_err < 0) {
-        free(dir_name);
-        git_tree_free(current_tree);
-        return error_from_git(git_err);
-    }
-
-    /* Insert file into subdirectory tree */
-    git_err = git_treebuilder_insert(NULL, dir_builder, file_name, &blob_oid, file_mode);
-    if (git_err < 0) {
-        git_treebuilder_free(dir_builder);
-        free(dir_name);
-        git_tree_free(current_tree);
-        return error_from_git(git_err);
-    }
-
-    /* Write the subdirectory tree */
-    git_oid dir_tree_oid;
-    git_err = git_treebuilder_write(&dir_tree_oid, dir_builder);
-    git_treebuilder_free(dir_builder);
-    if (git_err < 0) {
-        free(dir_name);
-        git_tree_free(current_tree);
-        return error_from_git(git_err);
-    }
-
-    /* Create root tree builder */
-    git_treebuilder *root_builder = NULL;
-    git_err = git_treebuilder_new(&root_builder, repo, current_tree);
+    /* Cleanup: segments and current_tree no longer needed */
+    string_array_free(segments);
     git_tree_free(current_tree);
-    if (git_err < 0) {
-        free(dir_name);
-        return error_from_git(git_err);
-    }
 
-    /* Insert/update subdirectory in root tree */
-    git_err = git_treebuilder_insert(NULL, root_builder, dir_name, &dir_tree_oid, GIT_FILEMODE_TREE);
-    free(dir_name);
-    if (git_err < 0) {
-        git_treebuilder_free(root_builder);
-        return error_from_git(git_err);
-    }
-
-    /* Write the root tree */
-    git_oid tree_oid;
-    git_err = git_treebuilder_write(&tree_oid, root_builder);
-    git_treebuilder_free(root_builder);
-    if (git_err < 0) {
-        return error_from_git(git_err);
+    if (err) {
+        return error_wrap(err, "Failed to build tree for path '%s'", file_path);
     }
 
     /* Load the new tree */
     git_tree *new_tree = NULL;
-    git_err = git_tree_lookup(&new_tree, repo, &tree_oid);
+    git_err = git_tree_lookup(&new_tree, repo, &new_tree_oid);
     if (git_err < 0) {
         return error_from_git(git_err);
     }

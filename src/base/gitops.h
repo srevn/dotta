@@ -284,11 +284,21 @@ error_t *gitops_resolve_commit_in_branch(
  * If the file already exists with identical content, no commit is created (no-op).
  * This avoids cluttering history with empty commits when nothing has changed.
  *
- * Subdirectory support:
- * - Supports files at root level (e.g., "README.md", ".bootstrap")
- * - Supports files in one subdirectory (e.g., ".dotta/metadata.json")
+ * Path support:
+ * - Supports files at any directory depth
  * - Creates intermediate directories as needed
- * - Does NOT support deeper nesting (e.g., "a/b/c/file")
+ * - Preserves existing sibling entries at each level
+ * - Detects file/directory conflicts (error if path component is a file)
+ *
+ * Path normalization:
+ * - Leading slashes stripped: "/foo/bar" -> "foo/bar"
+ * - Double slashes collapsed: "foo//bar" -> "foo/bar"
+ * - Trailing slashes rejected (not a file path)
+ *
+ * Examples:
+ * - Root level: "README.md", ".bootstrap"
+ * - One level: ".dotta/metadata.json"
+ * - Deep path: "home/.config/nvim/init.vim"
  *
  * File modes:
  * - GIT_FILEMODE_BLOB (0100644): Regular file
@@ -296,7 +306,7 @@ error_t *gitops_resolve_commit_in_branch(
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
- * @param file_path File path within branch (e.g., ".dottaignore" or ".bootstrap")
+ * @param file_path File path within branch (must not be NULL or empty)
  * @param content File content (must not be NULL)
  * @param content_size Size of content in bytes
  * @param commit_message Commit message (must not be NULL)

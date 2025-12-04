@@ -19,8 +19,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <sys/types.h>
+#include <types.h>
 
-#include "base/error.h"
 #include "utils/output.h"
 
 /**

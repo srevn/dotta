@@ -35,7 +35,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "base/error.h"
 #include "core/state.h"
 #include "core/workspace.h"
 

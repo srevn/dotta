@@ -24,6 +24,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/error.h"
 #include "utils/string.h"
 #include "utils/terminal.h"
 

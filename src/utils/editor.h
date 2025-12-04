@@ -8,7 +8,7 @@
 #ifndef DOTTA_EDITOR_H
 #define DOTTA_EDITOR_H
 
-#include "base/error.h"
+#include <types.h>
 
 /**
  * Get editor from environment with fallback chain

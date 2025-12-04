@@ -12,7 +12,6 @@
 #include "base/error.h"
 #include "core/cleanup.h"
 #include "core/deploy.h"
-#include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/safety.h"
 #include "core/state.h"

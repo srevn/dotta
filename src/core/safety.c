@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/error.h"
 #include "base/gitops.h"
 #include "core/state.h"
 #include "core/workspace.h"

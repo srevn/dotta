@@ -82,6 +82,16 @@ static error_t *init_branches(git_repository *repo) {
         return error_from_git(git_err);
     }
 
+    /*
+     * Sync working directory with the (empty) dotta-worktree branch.
+     * FORCE is safe here: this is a fresh init, no user data can exist yet.
+     * This ensures git status is clean after initialization.
+     */
+    err = gitops_sync_worktree(repo, GIT_CHECKOUT_FORCE);
+    if (err) {
+        return error_wrap(err, "Failed to checkout dotta-worktree");
+    }
+
     return NULL;
 }
 

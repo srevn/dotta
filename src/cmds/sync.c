@@ -1048,7 +1048,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         /* Create error before freeing current_branch to avoid use-after-free */
         err = ERROR(ERR_STATE_INVALID,
                     "Main worktree must be on 'dotta-worktree' branch (currently on '%s')\n"
-                    "Hint: Run 'git checkout dotta-worktree' to fix",
+                    "Hint: Run 'dotta git checkout dotta-worktree' to fix",
                     current_branch);
         goto cleanup;
     }

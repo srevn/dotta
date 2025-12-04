@@ -450,6 +450,31 @@ static error_t *edit_baseline_dottaignore(
         return error_wrap(err, "Failed to update .dottaignore");
     }
 
+    /*
+     * Sync working directory if dotta-worktree is the current branch.
+     * Use SAFE checkout to preserve any local modifications.
+     */
+    bool is_current = false;
+    error_t *branch_err = gitops_is_current_branch(repo, "dotta-worktree", &is_current);
+    if (!branch_err && is_current) {
+        error_t *sync_err = gitops_sync_worktree(repo, GIT_CHECKOUT_SAFE);
+        if (sync_err) {
+            /*
+             * Primary operation (pattern update) succeeded.
+             * Sync failed due to local modifications - warn but don't fail.
+             */
+            output_warning(out,
+                "Patterns saved to Git, but working directory sync failed.\n"
+                "  You may have local modifications to .dottaignore.\n"
+                "  To sync:  dotta git checkout .dottaignore\n"
+                "  To diff:  dotta git diff .dottaignore");
+            error_free(sync_err);
+        }
+    }
+    if (branch_err) {
+        error_free(branch_err);
+    }
+
     output_success(out, "Updated baseline .dottaignore in dotta-worktree branch");
     return NULL;
 }
@@ -803,6 +828,31 @@ static error_t *modify_baseline_dottaignore(
 
     if (err) {
         return error_wrap(err, "Failed to update .dottaignore");
+    }
+
+    /*
+     * Sync working directory if dotta-worktree is the current branch.
+     * Use SAFE checkout to preserve any local modifications.
+     */
+    bool is_current = false;
+    error_t *branch_err = gitops_is_current_branch(repo, "dotta-worktree", &is_current);
+    if (!branch_err && is_current) {
+        error_t *sync_err = gitops_sync_worktree(repo, GIT_CHECKOUT_SAFE);
+        if (sync_err) {
+            /*
+             * Primary operation (pattern update) succeeded.
+             * Sync failed due to local modifications - warn but don't fail.
+             */
+            output_warning(out,
+                "Patterns saved to Git, but working directory sync failed.\n"
+                "  You may have local modifications to .dottaignore.\n"
+                "  To sync:  dotta git checkout .dottaignore\n"
+                "  To diff:  dotta git diff .dottaignore");
+            error_free(sync_err);
+        }
+    }
+    if (branch_err) {
+        error_free(branch_err);
     }
 
     /* Report results */

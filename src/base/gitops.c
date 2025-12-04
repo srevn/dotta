@@ -278,6 +278,53 @@ error_t *gitops_current_branch(git_repository *repo, char **out) {
     return NULL;
 }
 
+error_t *gitops_is_current_branch(
+    git_repository *repo,
+    const char *branch_name,
+    bool *is_current
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(branch_name);
+    CHECK_NULL(is_current);
+
+    /* Default to false */
+    *is_current = false;
+
+    /* Bare repositories have no working directory or checked-out branch */
+    if (git_repository_is_bare(repo)) {
+        return NULL;
+    }
+
+    /* Get HEAD reference */
+    git_reference *head = NULL;
+    int err = git_repository_head(&head, repo);
+    if (err < 0) {
+        if (err == GIT_EUNBORNBRANCH || err == GIT_ENOTFOUND) {
+            /* Unborn branch or no HEAD - not an error, just not current */
+            return NULL;
+        }
+        return error_from_git(err);
+    }
+
+    /* Get branch name from HEAD (handles detached HEAD gracefully) */
+    const char *current_name = NULL;
+    err = git_branch_name(&current_name, head);
+    if (err < 0) {
+        git_reference_free(head);
+        /* Detached HEAD - not pointing to any branch */
+        if (err == GIT_ENOTFOUND) {
+            return NULL;
+        }
+        return error_from_git(err);
+    }
+
+    /* Compare branch names */
+    *is_current = (strcmp(current_name, branch_name) == 0);
+
+    git_reference_free(head);
+    return NULL;
+}
+
 /**
  * Tree operations
  */
@@ -1064,79 +1111,6 @@ error_t *gitops_delete_remote_branch(
     return NULL;
 }
 
-error_t *gitops_merge_ff_only(git_repository *repo, const char *branch_name) {
-    CHECK_NULL(repo);
-    CHECK_NULL(branch_name);
-
-    /* Get their commit */
-    char refname[256];
-    error_t *err_build = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
-    if (err_build) {
-        return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
-    }
-
-    git_annotated_commit *their_head = NULL;
-    git_reference *ref = NULL;
-    int err;
-
-    err = git_reference_lookup(&ref, repo, refname);
-    if (err < 0) {
-        return error_from_git(err);
-    }
-
-    err = git_annotated_commit_from_ref(&their_head, repo, ref);
-    git_reference_free(ref);
-    if (err < 0) {
-        return error_from_git(err);
-    }
-
-    /* Perform fast-forward merge */
-    git_merge_analysis_t analysis;
-    git_merge_preference_t preference;
-    const git_annotated_commit *merge_heads[] = { their_head };
-
-    err = git_merge_analysis(&analysis, &preference, repo, merge_heads, 1);
-    if (err < 0) {
-        git_annotated_commit_free(their_head);
-        return error_from_git(err);
-    }
-
-    if ((analysis & GIT_MERGE_ANALYSIS_FASTFORWARD) == 0) {
-        git_annotated_commit_free(their_head);
-        return ERROR(ERR_GIT, "Fast-forward merge not possible for '%s'", branch_name);
-    }
-
-    /* Perform FF merge */
-    git_reference *target_ref = NULL;
-    err = git_repository_head(&target_ref, repo);
-    if (err < 0) {
-        git_annotated_commit_free(their_head);
-        return error_from_git(err);
-    }
-
-    /* Get commit ID for fast-forward */
-    const git_oid *their_oid = git_annotated_commit_id(their_head);
-    if (!their_oid) {
-        git_reference_free(target_ref);
-        git_annotated_commit_free(their_head);
-        return ERROR(ERR_GIT, "Failed to get commit ID from annotated commit");
-    }
-
-    git_reference *new_target_ref = NULL;
-    err = git_reference_set_target(&new_target_ref, target_ref,
-                                   their_oid,
-                                   "merge: Fast-forward");
-    git_reference_free(target_ref);
-    git_annotated_commit_free(their_head);
-
-    if (err < 0) {
-        return error_from_git(err);
-    }
-
-    git_reference_free(new_target_ref);
-    return NULL;
-}
-
 /**
  * Reference operations
  */
@@ -1826,6 +1800,45 @@ error_t *gitops_update_branch_reference(
     }
 
     git_reference_free(new_ref);
+    return NULL;
+}
+
+/**
+ * Worktree operations
+ */
+
+error_t *gitops_sync_worktree(
+    git_repository *repo,
+    git_checkout_strategy_t strategy
+) {
+    CHECK_NULL(repo);
+
+    /* Bare repositories have no working directory to sync */
+    if (git_repository_is_bare(repo)) {
+        return NULL;
+    }
+
+    git_checkout_options opts = GIT_CHECKOUT_OPTIONS_INIT;
+    opts.checkout_strategy = strategy;
+
+    int err = git_checkout_head(repo, &opts);
+    if (err < 0) {
+        const git_error *e = git_error_last();
+        if (e && strategy == GIT_CHECKOUT_SAFE) {
+            /*
+             * SAFE checkout failed - likely due to local modifications.
+             * Provide a clear, actionable error message.
+             */
+            return ERROR(ERR_CONFLICT,
+                "Working directory has local modifications that conflict with HEAD.\n"
+                "Your changes have been preserved. To resolve:\n"
+                "  git checkout .   Discard all local changes\n"
+                "  git stash        Save changes temporarily\n"
+                "  git diff         View what differs");
+        }
+        return error_from_git(err);
+    }
+
     return NULL;
 }
 

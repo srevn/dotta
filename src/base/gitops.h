@@ -130,6 +130,23 @@ error_t *gitops_delete_branch(git_repository *repo, const char *name);
 error_t *gitops_current_branch(git_repository *repo, char **out);
 
 /**
+ * Check if a branch is the currently checked-out branch (HEAD)
+ *
+ * Compares branch_name against the branch that HEAD references.
+ * Returns false for detached HEAD state or bare repositories.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param branch_name Branch to check (must not be NULL)
+ * @param is_current Output: true if branch is current HEAD (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *gitops_is_current_branch(
+    git_repository *repo,
+    const char *branch_name,
+    bool *is_current
+);
+
+/**
  * Tree operations
  */
 
@@ -391,15 +408,6 @@ error_t *gitops_delete_remote_branch(
 );
 
 /**
- * Fast-forward merge (no conflicts possible)
- *
- * @param repo Repository (must not be NULL)
- * @param branch_name Branch to merge from (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *gitops_merge_ff_only(git_repository *repo, const char *branch_name);
-
-/**
  * Reference operations
  */
 
@@ -645,6 +653,29 @@ error_t *gitops_update_branch_reference(
     const char *branch_name,
     const git_oid *new_oid,
     const char *reflog_msg
+);
+
+/**
+ * Synchronize working directory with current HEAD
+ *
+ * Updates the working directory and index to match HEAD. Use after modifying
+ * the currently checked-out branch to ensure consistency.
+ *
+ * Strategy options:
+ * - GIT_CHECKOUT_SAFE: Abort if local modifications conflict (recommended)
+ * - GIT_CHECKOUT_FORCE: Overwrite all local modifications (use with caution)
+ *
+ * IMPORTANT: GIT_CHECKOUT_FORCE will destroy uncommitted changes without
+ * warning. Only use when certain no user data can exist (e.g., immediately
+ * after creating a new branch, or during dotta init).
+ *
+ * @param repo Repository (must not be NULL, must not be bare)
+ * @param strategy Checkout strategy (GIT_CHECKOUT_SAFE recommended)
+ * @return Error or NULL on success
+ */
+error_t *gitops_sync_worktree(
+    git_repository *repo,
+    git_checkout_strategy_t strategy
 );
 
 #endif /* DOTTA_GITOPS_H */

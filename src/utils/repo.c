@@ -89,6 +89,133 @@ error_t *resolve_repo_path(char **out) {
 }
 
 /**
+ * Ensure repository HEAD points to dotta-worktree
+ *
+ * Dotta requires the main worktree to always be on the dotta-worktree branch.
+ * If HEAD is on a different branch (e.g., user manually ran git checkout),
+ * this function automatically switches back using the correct checkout sequence.
+ *
+ * Behavior:
+ * - Already on dotta-worktree: no-op (fast path)
+ * - Clean working directory: switch succeeds, info message emitted
+ * - Dirty working directory: fails with clear error and fix instructions
+ * - Bare repository: no-op (no working directory)
+ *
+ * @param repo Repository handle (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *repo_ensure_dotta_worktree(git_repository *repo) {
+    CHECK_NULL(repo);
+
+    /* Bare repositories have no working directory */
+    if (git_repository_is_bare(repo)) {
+        return NULL;
+    }
+
+    error_t *err = NULL;
+
+    /* Verify dotta-worktree branch exists */
+    bool worktree_exists = false;
+    err = gitops_branch_exists(repo, "dotta-worktree", &worktree_exists);
+    if (err) {
+        return error_wrap(err, "Failed to check for dotta-worktree branch");
+    }
+
+    if (!worktree_exists) {
+        return ERROR(ERR_NOT_FOUND,
+            "Repository is not initialized (dotta-worktree branch missing)\n"
+            "Run 'dotta init' to initialize the repository");
+    }
+
+    /* Fast path: check if already on dotta-worktree */
+    bool is_current = false;
+    err = gitops_is_current_branch(repo, "dotta-worktree", &is_current);
+    if (err) {
+        /*
+         * Non-fatal: could be detached HEAD state.
+         * Continue with recovery attempt.
+         */
+        error_free(err);
+        err = NULL;
+    }
+
+    if (is_current) {
+        /* Already on dotta-worktree - nothing to do */
+        return NULL;
+    }
+
+    /* Get current branch name for user messaging */
+    char *old_branch = NULL;
+    error_t *branch_err = gitops_current_branch(repo, &old_branch);
+    if (branch_err) {
+        /*
+         * Non-fatal: detached HEAD or other unusual state.
+         * Continue with recovery, use placeholder in message.
+         */
+        error_free(branch_err);
+        old_branch = NULL;
+    }
+
+    /*
+     * Checkout dotta-worktree using correct order of operations
+     *
+     * Order (checkout_tree -> set_head):
+     * 1. checkout_tree compares target tree vs current state
+     * 2. With SAFE mode, fails if local modifications exist
+     * 3. Updates both Index and Working Directory atomically
+     * 4. set_head just moves the pointer after state is updated
+     */
+    git_object *target_commit = NULL;
+    int git_err = git_revparse_single(&target_commit, repo,
+                                      "refs/heads/dotta-worktree");
+    if (git_err < 0) {
+        free(old_branch);
+        return error_from_git(git_err);
+    }
+
+    git_checkout_options checkout_opts = GIT_CHECKOUT_OPTIONS_INIT;
+    checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE;
+
+    git_err = git_checkout_tree(repo, target_commit, &checkout_opts);
+    git_object_free(target_commit);
+
+    if (git_err < 0) {
+        const char *branch_desc = old_branch ? old_branch : "detached HEAD";
+
+        if (git_err == GIT_ECONFLICT) {
+            err = ERROR(ERR_CONFLICT,
+                "Cannot auto-recover to 'dotta-worktree' (currently on '%s')\n\n"
+                "Your working directory has modifications that prevent switching.\n"
+                "To resolve manually:\n"
+                "  dotta git stash          # Save your changes\n"
+                "  dotta git checkout dotta-worktree\n"
+                "  dotta git stash pop      # Restore changes (if needed)", branch_desc);
+        } else {
+            err = error_wrap(error_from_git(git_err),
+                "Failed to checkout dotta-worktree (was on '%s')", branch_desc);
+        }
+
+        free(old_branch);
+        return err;
+    }
+
+    /* Move HEAD to dotta-worktree (state already updated) */
+    git_err = git_repository_set_head(repo, "refs/heads/dotta-worktree");
+    if (git_err < 0) {
+        free(old_branch);
+        return error_from_git(git_err);
+    }
+
+    /* Success - inform user about the automated recovery */
+    const char *branch_desc = old_branch ? old_branch : "detached HEAD";
+    fprintf(stderr, "info: Recovered to 'dotta-worktree' (was on '%s')\n",
+            branch_desc);
+    free(old_branch);
+
+    return NULL;
+}
+
+/**
  * Open dotta repository
  */
 error_t *repo_open(git_repository **repo_out, char **path_out) {
@@ -110,16 +237,12 @@ error_t *repo_open(git_repository **repo_out, char **path_out) {
         const char *env_repo = getenv("DOTTA_REPO_DIR");
 
         if (env_repo) {
-            err = ERROR(ERR_NOT_FOUND,
-                "No dotta repository found at: %s\n\n"
+            err = ERROR(ERR_NOT_FOUND, "No dotta repository found at: %s\n\n"
                 "Run 'dotta init' to create a new repository\n"
-                "Note: DOTTA_REPO_DIR is set to: %s",
-                repo_path, env_repo);
+                "Note: DOTTA_REPO_DIR is set to: %s", repo_path, env_repo);
         } else {
-            err = ERROR(ERR_NOT_FOUND,
-                "No dotta repository found at: %s\n\n"
-                "Run 'dotta init' to create a new repository",
-                repo_path);
+            err = ERROR(ERR_NOT_FOUND, "No dotta repository found at: %s\n\n"
+                "Run 'dotta init' to create a new repository", repo_path);
         }
 
         free(repo_path);
@@ -133,6 +256,20 @@ error_t *repo_open(git_repository **repo_out, char **path_out) {
                         repo_path);
         free(repo_path);
         return wrapped;
+    }
+
+    /*
+     * Ensure HEAD points to dotta-worktree
+     *
+     * Dotta's invariant: HEAD must always be on dotta-worktree.
+     * If user manually checked out another branch (e.g., git checkout global),
+     * recover automatically before proceeding.
+     */
+    err = repo_ensure_dotta_worktree(repo);
+    if (err) {
+        git_repository_free(repo);
+        free(repo_path);
+        return err;
     }
 
     /* Success - set outputs */
@@ -197,7 +334,8 @@ error_t *repo_fix_ownership_if_needed(const char *repo_path) {
 
     /* Only warn if there were failures */
     if (failed_count > 0) {
-        fprintf(stderr, "Warning: Failed to restore ownership for %zu files\n", failed_count);
+        fprintf(stderr, "Warning: Failed to restore ownership for %zu files\n",
+                failed_count);
     }
 
     return NULL;

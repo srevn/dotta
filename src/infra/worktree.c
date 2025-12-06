@@ -56,7 +56,10 @@ static char *generate_worktree_name(void) {
 /**
  * Generate temporary directory path from name
  */
-static error_t *generate_temp_path_from_name(const char *name, char **out) {
+static error_t *generate_temp_path_from_name(
+    const char *name,
+    char **out
+) {
     CHECK_NULL(name);
     CHECK_NULL(out);
 
@@ -270,32 +273,49 @@ error_t *worktree_checkout_branch(
 
     /* Build reference name */
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err_build = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
-    if (err_build) {
-        return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
+    error_t *err = gitops_build_refname(refname, sizeof(refname),
+                                        "refs/heads/%s", branch_name);
+    if (err) {
+        return error_wrap(err, "Invalid branch name '%s'", branch_name);
     }
 
-    /* Find the commit for the branch */
+    /* Resolve branch to commit object */
     git_object *commit = NULL;
-    int err = git_revparse_single(&commit, wt->repo, refname);
-    if (err < 0) {
-        return error_from_git(err);
+    int git_err = git_revparse_single(&commit, wt->repo, refname);
+    if (git_err < 0) {
+        return error_from_git(git_err);
     }
 
-    /* Checkout */
+    /* Checkout tree with SAFE strategy
+     *
+     * With GIT_CHECKOUT_SAFE:
+     * - Clean working directory: transition allowed, files updated
+     * - Modified files: checkout blocked with GIT_ECONFLICT
+     */
     git_checkout_options checkout_opts = GIT_CHECKOUT_OPTIONS_INIT;
     checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE;
 
-    err = git_checkout_tree(wt->repo, commit, &checkout_opts);
+    git_err = git_checkout_tree(wt->repo, commit, &checkout_opts);
     git_object_free(commit);
-    if (err < 0) {
-        return error_from_git(err);
+
+    if (git_err < 0) {
+        if (git_err == GIT_ECONFLICT) {
+            return ERROR(ERR_CONFLICT,
+                "Cannot checkout '%s': local modifications would be overwritten",
+                branch_name);
+        }
+        return error_from_git(git_err);
     }
 
-    /* Update HEAD */
-    err = git_repository_set_head(wt->repo, refname);
-    if (err < 0) {
-        return error_from_git(err);
+    /*
+     * Move HEAD to target branch
+     *
+     * At this point, Index and Working Directory already match the target.
+     * This is just updating the HEAD pointer to complete the transition.
+     */
+    git_err = git_repository_set_head(wt->repo, refname);
+    if (git_err < 0) {
+        return error_from_git(git_err);
     }
 
     return NULL;
@@ -314,7 +334,8 @@ error_t *worktree_create_orphan(
 
     /* Build reference name */
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err_build = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
+    error_t *err_build = gitops_build_refname(refname, sizeof(refname),
+                                              "refs/heads/%s", branch_name);
     if (err_build) {
         return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
     }
@@ -359,7 +380,8 @@ void worktree_cleanup(worktree_handle_t *wt) {
     /* Step 3: Delete the temporary worktree branch from main repo */
     if (wt->name && wt->main_repo) {
         char refname[DOTTA_REFNAME_MAX];
-        error_t *err_build = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", wt->name);
+        error_t *err_build = gitops_build_refname(refname, sizeof(refname),
+                                                  "refs/heads/%s", wt->name);
         if (!err_build) {
             git_reference *ref = NULL;
             if (git_reference_lookup(&ref, wt->main_repo, refname) == 0) {

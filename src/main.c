@@ -907,21 +907,34 @@ static int cmd_diff_main(int argc, char **argv) {
         .all_changes = false
     };
 
-    /* Collect positional arguments */
+    /* Collect positional arguments and profiles */
     char **positional = malloc((size_t)argc * sizeof(char *));
-    if (!positional) {
+    char **profiles = malloc((size_t)argc * sizeof(char *));
+    if (!positional || !profiles) {
         fprintf(stderr, "Failed to allocate memory\n");
+        free(positional);
+        free(profiles);
         return 1;
     }
     size_t positional_count = 0;
+    size_t profile_count = 0;
     bool has_direction_flag = false;
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             free(positional);
+            free(profiles);
             print_diff_help(argv[0]);
             return 0;
+        } else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--profile") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: --profile requires an argument\n");
+                free(positional);
+                free(profiles);
+                return 1;
+            }
+            profiles[profile_count++] = argv[++i];
         } else if (strcmp(argv[i], "--name-only") == 0) {
             opts.name_only = true;
         } else if (strcmp(argv[i], "--upstream") == 0) {
@@ -935,13 +948,33 @@ static int cmd_diff_main(int argc, char **argv) {
             opts.direction = DIFF_BOTH;
             has_direction_flag = true;
         } else if (argv[i][0] != '-') {
-            /* Positional argument */
-            positional[positional_count++] = argv[i];
+            /* Positional argument - classify as file path or profile name */
+            bool is_file = argv[i][0] == '/' || argv[i][0] == '~' || argv[i][0] == '.' ||
+                           strncmp(argv[i], "home/", 5) == 0 ||
+                           strncmp(argv[i], "root/", 5) == 0 ||
+                           strncmp(argv[i], "custom/", 7) == 0;
+
+            if (is_file) {
+                positional[positional_count++] = argv[i];
+            } else if (str_looks_like_git_ref(argv[i])) {
+                /* Git reference (commit hash, HEAD, etc.) */
+                positional[positional_count++] = argv[i];
+            } else {
+                /* Profile name */
+                profiles[profile_count++] = argv[i];
+            }
         } else {
             fprintf(stderr, "Error: Unknown option '%s'\n", argv[i]);
             free(positional);
+            free(profiles);
             return 1;
         }
+    }
+
+    /* Set profile options */
+    if (profile_count > 0) {
+        opts.profiles = profiles;
+        opts.profile_count = profile_count;
     }
 
     /* Detect mode based on positional arguments */
@@ -991,12 +1024,14 @@ static int cmd_diff_main(int argc, char **argv) {
         error_print(err, stderr);
         error_free(err);
         free(positional);
+        free(profiles);
         return 1;
     }
 
     /* Execute command */
     err = cmd_diff(repo, &opts);
     free(positional);
+    free(profiles);
     git_repository_free(repo);
 
     if (err) {

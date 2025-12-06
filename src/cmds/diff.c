@@ -347,8 +347,10 @@ static error_t *show_file_diff_from_workspace(
  * @param diverged Array of diverged items from workspace (must not be NULL)
  * @param diverged_count Number of diverged items
  * @param manifest Manifest for tree entry lookup (must not be NULL)
+ * @param repo Repository (must not be NULL)
  * @param content_cache Content cache for blob access (must not be NULL)
  * @param direction Diff direction (UPSTREAM or DOWNSTREAM)
+ * @param filter_profiles Profile filter for CLI (can be NULL for no filter)
  * @param opts Command options (must not be NULL)
  * @param out Output context (must not be NULL)
  * @param diff_count Output: number of diffs shown (must not be NULL)
@@ -361,11 +363,11 @@ static error_t *present_diffs_for_direction(
     content_cache_t *content_cache,
     git_repository *repo,
     diff_direction_t direction,
+    const profile_list_t *filter_profiles,
     const cmd_diff_options_t *opts,
     output_ctx_t *out,
     size_t *diff_count
 ) {
-    CHECK_NULL(diverged);
     CHECK_NULL(manifest);
     CHECK_NULL(content_cache);
     CHECK_NULL(repo);
@@ -375,6 +377,11 @@ static error_t *present_diffs_for_direction(
 
     *diff_count = 0;
     error_t *err = NULL;
+
+    /* Early return if no diverged items */
+    if (diverged_count == 0 || !diverged) {
+        return NULL;
+    }
 
     for (size_t i = 0; i < diverged_count; i++) {
         const workspace_item_t *item = &diverged[i];
@@ -396,6 +403,11 @@ static error_t *present_diffs_for_direction(
 
         /* Filter 4: Check if item has diffable divergence */
         if (!has_diffable_divergence(item)) {
+            continue;
+        }
+
+        /* Filter 5: Profile filter (CLI filtering) */
+        if (!profile_filter_matches(item->profile, filter_profiles)) {
             continue;
         }
 
@@ -1182,6 +1194,7 @@ cleanup:
  *
  * @param repo Repository (must not be NULL)
  * @param profiles Profile list (must not be NULL)
+ * @param filter_profiles Profile filter for CLI (can be NULL for no filter)
  * @param config Configuration (can be NULL)
  * @param opts Command options (must not be NULL)
  * @param out Output context (must not be NULL)
@@ -1190,6 +1203,7 @@ cleanup:
 static error_t *diff_workspace(
     git_repository *repo,
     profile_list_t *profiles,
+    const profile_list_t *filter_profiles,
     const dotta_config_t *config,
     const cmd_diff_options_t *opts,
     output_ctx_t *out
@@ -1252,8 +1266,8 @@ static error_t *diff_workspace(
         err = present_diffs_for_direction(
             diverged, diverged_count,
             manifest, cache, repo,
-            DIFF_UPSTREAM, opts, out,
-            &upstream_count
+            DIFF_UPSTREAM, filter_profiles,
+            opts, out, &upstream_count
         );
         if (err) goto cleanup;
 
@@ -1269,8 +1283,8 @@ static error_t *diff_workspace(
         err = present_diffs_for_direction(
             diverged, diverged_count,
             manifest, cache, repo,
-            DIFF_DOWNSTREAM, opts, out,
-            &downstream_count
+            DIFF_DOWNSTREAM, filter_profiles,
+            opts, out, &downstream_count
         );
         if (err) goto cleanup;
 
@@ -1285,8 +1299,8 @@ static error_t *diff_workspace(
         err = present_diffs_for_direction(
             diverged, diverged_count,
             manifest, cache, repo,
-            opts->direction, opts, out,
-            &total_diff_count
+            opts->direction, filter_profiles,
+            opts, out, &total_diff_count
         );
         if (err) goto cleanup;
 
@@ -1386,7 +1400,7 @@ error_t *cmd_diff(git_repository *repo, const cmd_diff_options_t *opts) {
         case DIFF_WORKSPACE:
             /* Workspace diff uses workspace_profiles for accurate analysis,
              * diff_profiles for filtering output */
-            err = diff_workspace(repo, workspace_profiles, config, opts, out);
+            err = diff_workspace(repo, workspace_profiles, diff_profiles, config, opts, out);
             goto cleanup;
     }
 

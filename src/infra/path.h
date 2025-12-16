@@ -182,8 +182,14 @@ error_t *path_get_home(char **out);
  * Accepts multiple input formats:
  *   1. Absolute paths: /path/to/file
  *   2. Tilde paths: ~/path/to/file
- *   3. Relative paths: ./path, ../path, path/to/file (resolved via CWD)
+ *   3. Relative paths: ./path, ../path, .dotfile, path/to/file (resolved via CWD)
  *   4. Storage paths: home/..., root/..., custom/...
+ *
+ * Note on relative paths:
+ *   Paths starting with '.' are treated as relative, including dotfiles like
+ *   '.bashrc'. This allows convenient shorthand: typing '.bashrc' in $HOME
+ *   resolves to 'home/.bashrc'. For single-component paths without '.', use
+ *   explicit './' prefix to indicate relative path intent.
  *
  * Behavior modes:
  *   - require_exists=true: Paths MUST exist and will be canonicalized
@@ -194,11 +200,18 @@ error_t *path_get_home(char **out);
  *                           (file need not exist on disk)
  *                           Used for show/revert/remove/filters
  *
+ * Path normalization:
+ *   All paths are normalized to resolve '.' and '..' components before
+ *   conversion to storage format. This ensures consistent HOME detection
+ *   regardless of how the path is expressed.
+ *
  * Examples:
  *   ~/.bashrc (exists=true)     -> canonicalized to home/.bashrc
  *   ~/.bashrc (exists=false)    -> pattern-converted to home/.bashrc
  *   ./config (in $HOME)         -> home/config
  *   ./config (in /etc)          -> root/etc/config
+ *   .bashrc (in $HOME)          -> home/.bashrc (dotfile as relative path)
+ *   ../file (in $HOME/project)  -> home/file (.. resolved)
  *   home/.bashrc (either mode)  -> validated and returned as home/.bashrc
  *   /etc/hosts (exists=true)    -> canonicalized to root/etc/hosts
  *   config (no slash)           -> ERROR: ambiguous (use ./config)

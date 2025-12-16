@@ -787,6 +787,118 @@ error_t *fs_canonicalize_path(const char *path, char **out) {
     return NULL;
 }
 
+error_t *fs_normalize_path(const char *path, char **out) {
+    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(out);
+
+    size_t path_len = strlen(path);
+    if (path_len == 0) {
+        return ERROR(ERR_INVALID_ARG, "Cannot normalize empty path");
+    }
+
+    bool is_absolute = (path[0] == '/');
+
+    /* Allocate component stack (max components = path_len/2 + 1) */
+    size_t max_components = path_len / 2 + 2;
+    char **components = calloc(max_components, sizeof(char *));
+    if (!components) {
+        return ERROR(ERR_MEMORY, "Failed to allocate component stack");
+    }
+    size_t stack_size = 0;
+
+    /* Make a mutable copy for tokenization */
+    char *path_copy = strdup(path);
+    if (!path_copy) {
+        free(components);
+        return ERROR(ERR_MEMORY, "Failed to copy path");
+    }
+
+    /* Tokenize by '/' and process each component */
+    char *saveptr = NULL;
+    char *token = strtok_r(path_copy, "/", &saveptr);
+
+    while (token != NULL) {
+        if (token[0] == '\0' || strcmp(token, ".") == 0) {
+            /* Empty component or '.': skip */
+        } else if (strcmp(token, "..") == 0) {
+            /* '..': pop previous component (if any) */
+            if (stack_size > 0) {
+                stack_size--;
+                free(components[stack_size]);
+                components[stack_size] = NULL;
+            }
+            /* If stack is empty and absolute path, ignore (can't go above root) */
+        } else {
+            /* Regular component: push to stack */
+            components[stack_size] = strdup(token);
+            if (!components[stack_size]) {
+                /* Cleanup on error */
+                for (size_t i = 0; i < stack_size; i++) {
+                    free(components[i]);
+                }
+                free(components);
+                free(path_copy);
+                return ERROR(ERR_MEMORY, "Failed to duplicate component");
+            }
+            stack_size++;
+        }
+        token = strtok_r(NULL, "/", &saveptr);
+    }
+
+    free(path_copy);
+
+    /* Calculate result length */
+    size_t result_len = is_absolute ? 1 : 0;  /* Leading '/' for absolute */
+    for (size_t i = 0; i < stack_size; i++) {
+        if (i > 0) result_len++;  /* Separator '/' */
+        result_len += strlen(components[i]);
+    }
+
+    /* Handle empty result */
+    if (result_len == 0) {
+        /* Relative path that normalized to empty -> "." */
+        *out = strdup(".");
+        for (size_t i = 0; i < stack_size; i++) {
+            free(components[i]);
+        }
+        free(components);
+        if (!*out) {
+            return ERROR(ERR_MEMORY, "Failed to allocate result");
+        }
+        return NULL;
+    }
+
+    /* Build result string */
+    char *result = malloc(result_len + 1);
+    if (!result) {
+        for (size_t i = 0; i < stack_size; i++) {
+            free(components[i]);
+        }
+        free(components);
+        return ERROR(ERR_MEMORY, "Failed to allocate normalized path");
+    }
+
+    char *ptr = result;
+    if (is_absolute) {
+        *ptr++ = '/';
+    }
+
+    for (size_t i = 0; i < stack_size; i++) {
+        if (i > 0) {
+            *ptr++ = '/';
+        }
+        size_t comp_len = strlen(components[i]);
+        memcpy(ptr, components[i], comp_len);
+        ptr += comp_len;
+        free(components[i]);
+    }
+    *ptr = '\0';
+
+    free(components);
+    *out = result;
+    return NULL;
+}
+
 error_t *fs_get_parent_dir(const char *path, char **out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);

@@ -299,6 +299,43 @@ error_t *fs_make_absolute(const char *path, char **out);
 error_t *fs_canonicalize_path(const char *path, char **out);
 
 /**
+ * Normalize path by resolving . and .. components (no filesystem access)
+ *
+ * This function performs pure string manipulation to resolve `.` and `..`
+ * path components WITHOUT accessing the filesystem. Unlike fs_canonicalize_path()
+ * which requires the path to exist, this function works on any path string.
+ *
+ * Use cases:
+ * - Normalizing paths before prefix comparison (e.g., HOME detection)
+ * - Processing user input that may not exist yet
+ * - Resolving relative paths joined with CWD
+ *
+ * Behavior:
+ * - Removes all `.` components (current directory references)
+ * - Resolves `..` by removing the preceding component
+ * - Preserves leading `/` for absolute paths
+ * - Collapses multiple consecutive slashes to single slash
+ * - `..` at root level is ignored (cannot go above root)
+ *
+ * Examples:
+ *   /home/user/project/../file   -> /home/user/file
+ *   /home/user/./config          -> /home/user/config
+ *   /home/user/../../../etc      -> /etc
+ *   ./foo/../bar                 -> bar
+ *   foo/bar/../baz               -> foo/baz
+ *
+ * Limitations:
+ * - Does NOT resolve symlinks (use fs_canonicalize_path for that)
+ * - Does NOT validate path existence
+ * - Does NOT handle tilde expansion (expand ~ before calling)
+ *
+ * @param path Path to normalize (must not be NULL)
+ * @param out Normalized path (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+error_t *fs_normalize_path(const char *path, char **out);
+
+/**
  * Get parent directory path
  *
  * @param path Path (must not be NULL)

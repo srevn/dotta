@@ -462,18 +462,17 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
             goto cleanup;
         }
 
-        /* Try to convert filesystem path to storage path */
+        /* Try to convert filesystem path to storage path
+         * This handles absolute paths (/...), tilde paths (~...), relative paths (./, ../),
+         * and passes through storage paths (home/..., root/..., custom/...) as-is */
         const char *search_path = opts->file_path;
-        if (opts->file_path[0] == '/' || opts->file_path[0] == '~') {
-            /* Looks like a filesystem path - try to convert */
-            error_t *convert_err = path_resolve_input(opts->file_path, false, &storage_path_converted);
-            if (convert_err) {
-                error_free(convert_err);
-                /* Fall back to original path */
-                search_path = opts->file_path;
-            } else {
-                search_path = storage_path_converted;
-            }
+        error_t *convert_err = path_resolve_input(opts->file_path, false, &storage_path_converted);
+        if (convert_err) {
+            error_free(convert_err);
+            /* Fall back to original path (may be a partial match pattern) */
+            search_path = opts->file_path;
+        } else {
+            search_path = storage_path_converted;
         }
 
         err = show_file(repo, opts->profile, search_path, opts->commit, opts->raw);
@@ -507,18 +506,17 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
         goto cleanup;
     }
 
-    /* Try to convert filesystem path to storage path for better matching */
+    /* Try to convert filesystem path to storage path for better matching
+     * This handles absolute paths (/...), tilde paths (~...), relative paths (./, ../),
+     * and passes through storage paths (home/..., root/..., custom/...) as-is */
     const char *search_path = opts->file_path;
-    if (opts->file_path[0] == '/' || opts->file_path[0] == '~') {
-        /* Looks like a filesystem path - try to convert */
-        error_t *convert_err = path_resolve_input(opts->file_path, false, &storage_path_converted);
-        if (convert_err) {
-            error_free(convert_err);
-            /* Fall back to original path */
-            search_path = opts->file_path;
-        } else {
-            search_path = storage_path_converted;
-        }
+    error_t *convert_err = path_resolve_input(opts->file_path, false, &storage_path_converted);
+    if (convert_err) {
+        error_free(convert_err);
+        /* Fall back to original path (may be a partial match pattern) */
+        search_path = opts->file_path;
+    } else {
+        search_path = storage_path_converted;
     }
 
     /* Search all profiles for exact path match */

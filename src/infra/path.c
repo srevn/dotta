@@ -861,7 +861,7 @@ error_t *path_resolve_input(
                 }
             }
 
-            /* Make absolute without following symlinks and verify existence */
+            /* Make absolute without following symlinks */
             char *absolute = NULL;
             err = fs_make_absolute(expanded, &absolute);
             free(expanded);
@@ -871,10 +871,18 @@ error_t *path_resolve_input(
                     "Hint: File must exist for this operation", input);
             }
 
+            /* Normalize path to resolve any .. components before storage conversion */
+            char *normalized = NULL;
+            err = fs_normalize_path(absolute, &normalized);
+            free(absolute);
+            if (err) {
+                return error_wrap(err, "Failed to normalize path '%s'", input);
+            }
+
             /* Convert to storage format */
             path_prefix_t prefix;
-            err = path_to_storage(absolute, NULL, &storage_path, &prefix);
-            free(absolute);
+            err = path_to_storage(normalized, NULL, &storage_path, &prefix);
+            free(normalized);
             if (err) {
                 return error_wrap(err, "Failed to convert path '%s'", input);
             }
@@ -903,6 +911,15 @@ error_t *path_resolve_input(
                     "Path must be absolute after tilde expansion (got '%s')", input);
             }
 
+            /* Normalize path to resolve any .. components before HOME comparison */
+            char *normalized = NULL;
+            err = fs_normalize_path(working_path, &normalized);
+            free(working_path);
+            if (err) {
+                return error_wrap(err, "Failed to normalize path '%s'", input);
+            }
+            working_path = normalized;
+
             /* Get HOME directory for path classification */
             char *home = NULL;
             err = path_get_home(&home);
@@ -910,6 +927,15 @@ error_t *path_resolve_input(
                 free(working_path);
                 return err;
             }
+
+            /* Canonicalize HOME to handle symlinks (e.g., /tmp -> /private/tmp on macOS)
+             * This ensures consistent comparison with normalized paths. */
+            char *home_canonical = NULL;
+            if (fs_canonicalize_path(home, &home_canonical) == NULL) {
+                free(home);
+                home = home_canonical;
+            }
+            /* If canonicalization failed, keep original home */
 
             size_t home_len = strlen(home);
 
@@ -967,6 +993,15 @@ error_t *path_resolve_input(
                 return error_wrap(err, "Failed to resolve relative path '%s'", input);
             }
         }
+
+        /* Normalize path to resolve any .. components before HOME comparison */
+        char *normalized = NULL;
+        err = fs_normalize_path(absolute, &normalized);
+        free(absolute);
+        if (err) {
+            return error_wrap(err, "Failed to normalize relative path '%s'", input);
+        }
+        absolute = normalized;
 
         /* Convert absolute path to storage format (same as Mode B above) */
         char *home = NULL;

@@ -230,8 +230,10 @@ error_t *path_resolve_input(
  * NULL filter semantics: matches all paths (no filtering).
  */
 typedef struct {
-    char **storage_paths;    /* Storage paths or glob patterns (owned) */
-    size_t count;            /* Number of entries */
+    struct hashmap *exact_paths;  /* Exact paths for O(1) lookup (hashmap owns keys) */
+    char **glob_patterns;         /* Glob patterns for iteration (owned) */
+    size_t glob_count;            /* Number of glob patterns */
+    size_t count;                 /* Total entries (exact + globs) */
 } path_filter_t;
 
 /**

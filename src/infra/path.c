@@ -17,6 +17,7 @@
 #include "base/filesystem.h"
 #include "utils/array.h"
 #include "utils/buffer.h"
+#include "utils/hashmap.h"
 #include "utils/match.h"
 #include "utils/string.h"
 
@@ -1118,12 +1119,11 @@ error_t *path_resolve_input(
  * Create path filter from user input paths
  *
  * Handles three types of inputs:
- * 1. Glob patterns (*, ?, []) - stored as-is for pattern matching
- * 2. Storage paths (home/..., root/..., custom/...) - validated and stored
- * 3. Filesystem paths (/, ~, ./) - resolved to storage format
+ * 1. Glob patterns (*, ?, []) - stored in glob_patterns array for iteration
+ * 2. Storage paths (home/..., root/..., custom/...) - stored in exact_paths hashmap
+ * 3. Filesystem paths (/, ~, ./) - resolved to storage format, then stored in hashmap
  *
- * Glob patterns are assumed to be in storage path format or basename-only.
- * Examples: "*.vim", "*.conf", recursive globs with storage prefix
+ * Performance: Separates exact paths (O(1) lookup) from globs (O(G) iteration).
  */
 error_t *path_filter_create(
     const char **inputs,
@@ -1143,17 +1143,37 @@ error_t *path_filter_create(
         return ERROR(ERR_MEMORY, "Failed to allocate path filter");
     }
 
-    filter->storage_paths = calloc(count, sizeof(char *));
-    if (!filter->storage_paths) {
+    /* Create hashmap for exact paths */
+    filter->exact_paths = hashmap_create(0);
+    if (!filter->exact_paths) {
         free(filter);
-        return ERROR(ERR_MEMORY, "Failed to allocate filter patterns");
+        return ERROR(ERR_MEMORY, "Failed to allocate filter hashmap");
     }
 
+    /* First pass: count glob patterns for allocation */
+    size_t glob_count = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (inputs[i] && strpbrk(inputs[i], "*?[")) {
+            glob_count++;
+        }
+    }
+
+    /* Allocate glob patterns array if needed */
+    if (glob_count > 0) {
+        filter->glob_patterns = calloc(glob_count, sizeof(char *));
+        if (!filter->glob_patterns) {
+            hashmap_free(filter->exact_paths, NULL);
+            free(filter);
+            return ERROR(ERR_MEMORY, "Failed to allocate glob patterns");
+        }
+    }
+
+    /* Second pass: populate hashmap and glob array */
     error_t *err = NULL;
     for (size_t i = 0; i < count; i++) {
         const char *input = inputs[i];
 
-        /* Case 1: Glob pattern - store as-is (no path resolution) */
+        /* Case 1: Glob pattern - validate and store in glob array */
         if (input && strpbrk(input, "*?[")) {
             /*
              * Glob patterns are used directly for matching.
@@ -1176,19 +1196,28 @@ error_t *path_filter_create(
                 goto cleanup;
             }
 
-            filter->storage_paths[i] = strdup(input);
-            if (!filter->storage_paths[i]) {
+            filter->glob_patterns[filter->glob_count] = strdup(input);
+            if (!filter->glob_patterns[filter->glob_count]) {
                 err = ERROR(ERR_MEMORY, "Failed to duplicate pattern");
                 goto cleanup;
             }
+            filter->glob_count++;
             filter->count++;
             continue;
         }
 
-        /* Case 2: Regular path - resolve to storage format */
-        err = path_resolve_input(input, false, &filter->storage_paths[i]);
+        /* Case 2: Exact path - resolve and store in hashmap */
+        char *resolved = NULL;
+        err = path_resolve_input(input, false, &resolved);
         if (err) {
             err = error_wrap(err, "Invalid path '%s'", input);
+            goto cleanup;
+        }
+
+        /* Store in hashmap (hashmap duplicates key internally) */
+        err = hashmap_set(filter->exact_paths, resolved, (void *)1);
+        free(resolved);
+        if (err) {
             goto cleanup;
         }
         filter->count++;
@@ -1198,11 +1227,12 @@ error_t *path_filter_create(
     return NULL;
 
 cleanup:
-    /* Free already allocated paths */
-    for (size_t j = 0; j < filter->count; j++) {
-        free(filter->storage_paths[j]);
+    /* Free already allocated glob patterns */
+    for (size_t j = 0; j < filter->glob_count; j++) {
+        free(filter->glob_patterns[j]);
     }
-    free(filter->storage_paths);
+    free(filter->glob_patterns);
+    hashmap_free(filter->exact_paths, NULL);
     free(filter);
     return err;
 }
@@ -1210,7 +1240,7 @@ cleanup:
 /**
  * Check if storage path matches filter
  *
- * Matching semantics (via match module):
+ * Matching semantics:
  * - Exact match: "home/.bashrc" matches "home/.bashrc"
  * - Directory prefix: "home/.config" matches "home/.config/fish/config.fish"
  * - Glob patterns: recursive globs match nested file paths
@@ -1230,16 +1260,41 @@ bool path_filter_matches(
         return false;
     }
 
-    /* Check against each filter entry using match module
+    /* Fast path 1: O(1) exact match via hashmap
      *
-     * match_pattern() provides:
-     * - Exact matching for literal paths
-     * - Directory prefix matching (gitignore-style)
-     * - Glob pattern matching (*, **, ?, [abc])
-     * - Basename-only patterns match at any depth
+     * Checks if the full storage path exists as a filter entry.
      */
-    for (size_t i = 0; i < filter->count; i++) {
-        if (match_pattern(filter->storage_paths[i], storage_path, MATCH_DOUBLESTAR)) {
+    if (hashmap_has(filter->exact_paths, storage_path)) {
+        return true;
+    }
+
+    /* Fast path 2: O(D) ancestor prefix matching
+     *
+     * This preserves gitignore-style directory matching where filter
+     * "home/.config" matches all files under that directory.
+     */
+    size_t len = strlen(storage_path);
+    if (len < PATH_MAX) {
+        char path_buf[PATH_MAX];
+        memcpy(path_buf, storage_path, len + 1);
+
+        char *last_slash;
+        while ((last_slash = strrchr(path_buf, '/')) != NULL) {
+            *last_slash = '\0';
+            if (hashmap_has(filter->exact_paths, path_buf)) {
+                return true;
+            }
+        }
+    }
+
+    /* Slow path: O(G) glob pattern matching
+     *
+     * Iterate through glob patterns using full match_pattern() semantics.
+     * This handles wildcards (*, ?, []), recursive globs (**), and
+     * basename-only patterns that match at any depth.
+     */
+    for (size_t i = 0; i < filter->glob_count; i++) {
+        if (match_pattern(filter->glob_patterns[i], storage_path, MATCH_DOUBLESTAR)) {
             return true;
         }
     }
@@ -1255,10 +1310,15 @@ void path_filter_free(path_filter_t *filter) {
         return;
     }
 
-    for (size_t i = 0; i < filter->count; i++) {
-        free(filter->storage_paths[i]);
+    /* Free glob patterns (owned strings) */
+    for (size_t i = 0; i < filter->glob_count; i++) {
+        free(filter->glob_patterns[i]);
     }
-    free(filter->storage_paths);
+    free(filter->glob_patterns);
+
+    /* Free hashmap (keys owned by hashmap, values are just markers) */
+    hashmap_free(filter->exact_paths, NULL);
+
     free(filter);
 }
 

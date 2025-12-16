@@ -211,6 +211,73 @@ error_t *path_resolve_input(
 );
 
 /**
+ * Path filter for batch matching
+ *
+ * Stores pre-resolved storage paths for efficient O(N) matching.
+ * Created from user-provided paths (filesystem or storage format).
+ *
+ * NULL filter semantics: matches all paths (no filtering).
+ */
+typedef struct {
+    char **storage_paths;    /* Normalized storage paths (owned) */
+    size_t count;            /* Number of paths */
+} path_filter_t;
+
+/**
+ * Create path filter from user input paths
+ *
+ * Pre-resolves all inputs to storage format using path_resolve_input().
+ * Accepts filesystem paths (~/.bashrc, /etc/hosts) and storage paths
+ * (home/.bashrc, root/etc/hosts, custom/etc/nginx.conf).
+ *
+ * NULL semantics:
+ * - If inputs is NULL or count is 0, returns NULL filter (matches all)
+ * - A NULL filter passed to path_filter_matches() matches all paths
+ *
+ * Error handling:
+ * - If any path resolution fails, returns error and cleans up
+ * - Partial results are not returned
+ *
+ * @param inputs User-provided path strings (can be NULL if count is 0)
+ * @param count Number of input paths
+ * @param out Path filter (must not be NULL, receives NULL if no filter)
+ * @return Error or NULL on success
+ */
+error_t *path_filter_create(
+    const char **inputs,
+    size_t count,
+    path_filter_t **out
+);
+
+/**
+ * Check if storage path matches filter
+ *
+ * Returns true if:
+ * - Filter is NULL (no restrictions, matches all)
+ * - storage_path matches any filter entry (exact match)
+ *
+ * Thread safety: Safe for concurrent reads with same filter.
+ *
+ * @param filter Path filter (NULL = match all)
+ * @param storage_path Storage path to check (must not be NULL)
+ * @return true if matches, false otherwise
+ */
+bool path_filter_matches(
+    const path_filter_t *filter,
+    const char *storage_path
+);
+
+/**
+ * Free path filter
+ *
+ * Frees all allocated storage paths and the filter structure.
+ * Safe to call with NULL.
+ *
+ * @param filter Filter to free (can be NULL)
+ */
+void path_filter_free(path_filter_t *filter);
+
+/**
  * Validate custom prefix parameter
  *
  * Validates that a user-provided custom prefix is safe to use.

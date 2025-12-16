@@ -213,13 +213,17 @@ void print_remove_help(const char *prog_name) {
 }
 
 void print_apply_help(const char *prog_name) {
-    printf("Usage: %s apply [options] [profile]...\n\n", prog_name);
+    printf("Usage: %s apply [options] [profile|file]...\n\n", prog_name);
     printf("Synchronize filesystem with profiles\n\n");
     printf("Description:\n");
     printf("  Apply performs a complete synchronization:\n");
     printf("  • Deploys new and updated files from enabled profiles\n");
     printf("  • Removes orphaned files (from disabled profiles)\n");
     printf("  • Updates state to reflect current deployment\n\n");
+    printf("Arguments:\n");
+    printf("  <profile>       Filter deployment to specific profile(s)\n");
+    printf("  <file>          Filter deployment to specific file(s)\n");
+    printf("                  Accepts filesystem or storage path (home/..., root/...)\n");
     printf("Options:\n");
     printf("  -p, --profile <name>      Specify profile(s) to apply\n");
     printf("  -e, --exclude <pattern>   Skip files matching pattern (prevents deployment AND removal)\n");
@@ -230,12 +234,17 @@ void print_apply_help(const char *prog_name) {
     printf("  --no-skip-unchanged       Disable smart skipping (default: enabled)\n");
     printf("  -v, --verbose             Print verbose output\n");
     printf("  -h, --help                Show this help message\n");
-    printf("\n");
+    printf("\nFile Filtering:\n");
+    printf("  Deploy specific files instead of entire profiles:\n");
+    printf("    %s apply ~/.bashrc                   # Deploy only .bashrc\n", prog_name);
+    printf("    %s apply home/.bashrc                # Same using storage path\n", prog_name);
+    printf("    %s apply ~/.bashrc ~/.zshrc          # Deploy multiple files\n", prog_name);
+    printf("    %s apply darwin ~/.bashrc            # Profile filter + file filter\n", prog_name);
+    printf("\nExclusion Patterns:\n");
     printf("  Excluded files are protected from both deployment and removal:\n");
-    printf("    %s apply --exclude 'home/.bashrc'   # Skip .bashrc entirely\n", prog_name);
-    printf("    %s apply -p work -e 'home/.ssh/*'   # Combined with profile filter\n", prog_name);
-    printf("\n");
-    printf("Smart Skipping:\n");
+    printf("    %s apply --exclude 'home/.bashrc'    # Skip .bashrc entirely\n", prog_name);
+    printf("    %s apply -p work -e 'home/.ssh/*'    # Combined with profile filter\n", prog_name);
+    printf("\nSmart Skipping:\n");
     printf("  By default, files that match profile content are skipped for efficiency.\n");
     printf("  Use --no-skip-unchanged to force deployment of all files.\n");
     printf("\n");

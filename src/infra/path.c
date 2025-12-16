@@ -49,7 +49,7 @@ error_t *path_get_home(char **out) {
 }
 
 /**
- * Validate storage path (SECURITY CRITICAL)
+ * Validate storage path
  */
 error_t *path_validate_storage(const char *storage_path) {
     CHECK_NULL(storage_path);
@@ -203,8 +203,8 @@ error_t *path_expand_home(const char *path, char **out) {
  * and extracts the relative part after the prefix.
  *
  * Boundary verification ensures prefix matches a complete path component:
- *   /home/user matches /home/user/.bashrc ✓
- *   /home/user does NOT match /home/username/.bashrc ✗
+ *   /home/user matches /home/user/.bashrc
+ *   /home/user does NOT match /home/username/.bashrc
  *
  * Returns:
  *   >0 : Match succeeded, returns length of relative part, sets *out_relative
@@ -253,9 +253,9 @@ static int extract_relative_after_prefix(
  * Try prepending custom prefix to absolute path.
  *
  * Resolution strategy:
- *   1. If path already under prefix → return NULL (use as-is)
- *   2. Try prepending prefix → if exists on filesystem, return prepended
- *   3. Otherwise → return NULL (fallback to original)
+ *   1. If path already under prefix -> return NULL (use as-is)
+ *   2. Try prepending prefix -> if exists on filesystem, return prepended
+ *   3. Otherwise -> return NULL (fallback to original)
  *
  * This enables intuitive smart resolution where both explicit and implicit
  * forms work correctly:
@@ -313,7 +313,7 @@ static char *try_prepend_custom_prefix(
  * Normalize user input path to absolute filesystem path.
  *
  * Transformation order:
- *   1. Tilde expansion (~/ → $HOME)
+ *   1. Tilde expansion (~/ -> $HOME)
  *   2. Custom prefix joining (relative + prefix)
  *   3. Absolute path pass-through
  *   4. CWD joining (relative, no prefix)
@@ -321,11 +321,11 @@ static char *try_prepend_custom_prefix(
  * Security: Rejects path traversal (..) in relative paths with custom_prefix.
  *
  * Examples:
- *   ("~/file", NULL)        → "$HOME/file"
- *   ("rel/file", "/jail")   → "/jail/rel/file"
- *   ("/abs/file", "/jail")  → "/abs/file" (absolute unchanged)
- *   ("rel/file", NULL)      → "$CWD/rel/file"
- *   ("../escape", "/jail")  → ERROR
+ *   ("~/file", NULL)        -> "$HOME/file"
+ *   ("rel/file", "/jail")   -> "/jail/rel/file"
+ *   ("/abs/file", "/jail")  -> "/abs/file" (absolute unchanged)
+ *   ("rel/file", NULL)      -> "$CWD/rel/file"
+ *   ("../escape", "/jail")  -> ERROR
  *
  * @param user_path User-provided path (filesystem or tilde)
  * @param custom_prefix Optional custom prefix for relative path context (can be NULL)
@@ -841,8 +841,10 @@ error_t *path_resolve_input(
             free(home);
         }
 
-    /* Case 2: Storage path (home/... or root/...) */
-    } else if (str_starts_with(input, "home/") || str_starts_with(input, "root/")) {
+    /* Case 2: Storage path (home/..., root/..., or custom/...) */
+    } else if (str_starts_with(input, "home/") ||
+               str_starts_with(input, "root/") ||
+               str_starts_with(input, "custom/")) {
         /* Validate storage path format */
         err = path_validate_storage(input);
         if (err) {
@@ -860,13 +862,102 @@ error_t *path_resolve_input(
         return ERROR(ERR_INVALID_ARG,
             "Path '%s' is neither a valid filesystem path nor storage path\n"
             "Hint: Filesystem paths must be absolute (/) or tilde (~) prefixed\n"
-            "      Storage paths must start with 'home/' or 'root/'",
+            "      Storage paths must start with 'home/', 'root/', or 'custom/'",
             input);
     }
 
     /* Success - transfer ownership */
     *out_storage_path = storage_path;
     return NULL;
+}
+
+/**
+ * Create path filter from user input paths
+ */
+error_t *path_filter_create(
+    const char **inputs,
+    size_t count,
+    path_filter_t **out
+) {
+    CHECK_NULL(out);
+
+    /* No inputs = no filter (matches all) */
+    if (!inputs || count == 0) {
+        *out = NULL;
+        return NULL;
+    }
+
+    path_filter_t *filter = calloc(1, sizeof(*filter));
+    if (!filter) {
+        return ERROR(ERR_MEMORY, "Failed to allocate path filter");
+    }
+
+    filter->storage_paths = calloc(count, sizeof(char *));
+    if (!filter->storage_paths) {
+        free(filter);
+        return ERROR(ERR_MEMORY, "Failed to allocate filter paths");
+    }
+
+    error_t *err = NULL;
+    for (size_t i = 0; i < count; i++) {
+        /* Resolve to storage path (flexible mode - file need not exist) */
+        err = path_resolve_input(inputs[i], false, &filter->storage_paths[i]);
+        if (err) {
+            /* Cleanup on error - free already resolved paths */
+            for (size_t j = 0; j < i; j++) {
+                free(filter->storage_paths[j]);
+            }
+            free(filter->storage_paths);
+            free(filter);
+            return error_wrap(err, "Invalid file path '%s'", inputs[i]);
+        }
+        filter->count++;
+    }
+
+    *out = filter;
+    return NULL;
+}
+
+/**
+ * Check if storage path matches filter
+ */
+bool path_filter_matches(
+    const path_filter_t *filter,
+    const char *storage_path
+) {
+    /* No filter = match all */
+    if (!filter) {
+        return true;
+    }
+
+    /* NULL storage_path never matches */
+    if (!storage_path) {
+        return false;
+    }
+
+    /* Check against each filter entry */
+    for (size_t i = 0; i < filter->count; i++) {
+        if (strcmp(storage_path, filter->storage_paths[i]) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Free path filter
+ */
+void path_filter_free(path_filter_t *filter) {
+    if (!filter) {
+        return;
+    }
+
+    for (size_t i = 0; i < filter->count; i++) {
+        free(filter->storage_paths[i]);
+    }
+    free(filter->storage_paths);
+    free(filter);
 }
 
 /**

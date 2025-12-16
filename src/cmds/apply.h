@@ -16,6 +16,8 @@
 typedef struct {
     char **profiles;            /* Profile names (NULL = use state/config) */
     size_t profile_count;       /* Number of profiles */
+    char **files;               /* Specific files to apply (NULL = all files) */
+    size_t file_count;          /* Number of files */
     bool force;                 /* Overwrite modified files */
     bool dry_run;               /* Don't actually deploy */
     bool keep_orphans;          /* Don't remove orphaned files (opt-out from default cleanup) */

@@ -18,6 +18,7 @@
 #include "core/workspace.h"
 #include "crypto/keymanager.h"
 #include "infra/content.h"
+#include "infra/path.h"
 #include "utils/array.h"
 #include "utils/config.h"
 #include "utils/hooks.h"
@@ -882,6 +883,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     hook_context_t *hook_ctx = NULL;
     char *profiles_str = NULL;
     deploy_result_t *deploy_res = NULL;
+    path_filter_t *file_filter = NULL;
 
     /* Load configuration */
     err = config_load(NULL, &config);
@@ -981,6 +983,20 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
     }
 
+    /* Create file filter from CLI arguments */
+    if (opts->files && opts->file_count > 0) {
+        err = path_filter_create((const char **)opts->files, opts->file_count, &file_filter);
+        if (err) {
+            err = error_wrap(err, "Failed to create file filter");
+            goto cleanup;
+        }
+
+        if (opts->verbose && file_filter) {
+            output_print(out, OUTPUT_VERBOSE, "\nFile filter: %zu file%s specified\n",
+                        file_filter->count, file_filter->count == 1 ? "" : "s");
+        }
+    }
+
     /* Load workspace (includes manifest building and metadata loading)
      *
      * The workspace builds the manifest internally during initialization,
@@ -1051,6 +1067,11 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             continue;
         }
 
+        /* Filter by file filter (skip files not in CLI file list) */
+        if (!path_filter_matches(file_filter, entry->storage_path)) {
+            continue;
+        }
+
         /* Filter by exclusion pattern (skip excluded files) */
         if (matches_exclude_pattern(entry->filesystem_path, opts)) {
             excluded_deploy_count++;
@@ -1098,6 +1119,11 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
             /* Filter by operation profiles (skip files not in filter) */
             if (entry->source_profile &&
                 !profile_filter_matches(entry->source_profile->name, operation_profiles)) {
+                continue;
+            }
+
+            /* Filter by file filter (skip files not in CLI file list) */
+            if (!path_filter_matches(file_filter, entry->storage_path)) {
                 continue;
             }
 
@@ -1154,6 +1180,12 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                     "  %zu file%s already up-to-date (skipped)\n",
                     clean_count,
                     clean_count == 1 ? "" : "s");
+    }
+
+    /* Warn if file filter was specified but no files matched */
+    if (file_filter && deploy_manifest->count == 0 && clean_count == 0) {
+        output_warning(out, "No matching files found in enabled profiles");
+        output_hint(out, "Check if the file path is correct and profile is enabled");
     }
 
     /* Extract orphans from workspace (unless --keep-orphans)
@@ -2005,6 +2037,7 @@ cleanup:
     if (preflight) preflight_result_free(preflight);
     if (hook_ctx) hook_context_free(hook_ctx);
     if (profiles_str) free(profiles_str);
+    if (file_filter) path_filter_free(file_filter);
     if (dir_orphans) free(dir_orphans);
     if (file_orphans) free(file_orphans);
     if (ws) workspace_free(ws);

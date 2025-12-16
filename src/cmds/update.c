@@ -24,6 +24,7 @@
 #include "crypto/keymanager.h"
 #include "crypto/policy.h"
 #include "infra/content.h"
+#include "infra/path.h"
 #include "infra/worktree.h"
 #include "utils/array.h"
 #include "utils/commit.h"
@@ -216,30 +217,6 @@ static void item_array_free(void *ptr) {
 }
 
 /**
- * Check if file matches CLI filter (if any)
- *
- * Helper function for filter_items_for_update().
- */
-static bool matches_file_filter(
-    const char *filesystem_path,
-    const cmd_update_options_t *opts
-) {
-    /* If no file filter, include all */
-    if (!opts->files || opts->file_count == 0) {
-        return true;
-    }
-
-    /* Check if this file is in the filter list */
-    for (size_t i = 0; i < opts->file_count; i++) {
-        if (strcmp(filesystem_path, opts->files[i]) == 0) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-/**
  * Check if path should be excluded by CLI patterns
  *
  * Helper function for filter_items_for_update().
@@ -292,6 +269,7 @@ static bool matches_exclude_pattern(
  *
  * @param ws Workspace (must not be NULL)
  * @param opts Update options (must not be NULL)
+ * @param file_filter Pre-resolved file filter (NULL = all files, matches by storage_path)
  * @param operation_profiles Profile filter (NULL = all profiles, filters by item->profile)
  * @param config Configuration (can be NULL, used for auto_detect_new_files)
  * @param out Output context (for verbose logging, can be NULL)
@@ -302,6 +280,7 @@ static bool matches_exclude_pattern(
 static error_t *filter_items_for_update(
     const workspace_t *ws,
     const cmd_update_options_t *opts,
+    const path_filter_t *file_filter,
     const profile_list_t *operation_profiles,
     const dotta_config_t *config,
     output_ctx_t *out,
@@ -368,8 +347,8 @@ static error_t *filter_items_for_update(
             continue;
         }
 
-        /* Apply CLI file filter */
-        if (!matches_file_filter(item->filesystem_path, opts)) {
+        /* Apply CLI file filter (using storage_path for canonical matching) */
+        if (!path_filter_matches(file_filter, item->storage_path)) {
             continue;
         }
 
@@ -432,7 +411,8 @@ static error_t *filter_items_for_update(
             continue;
         }
 
-        if (!matches_file_filter(item->filesystem_path, opts)) {
+        /* Apply CLI file filter (using storage_path for canonical matching) */
+        if (!path_filter_matches(file_filter, item->storage_path)) {
             continue;
         }
 
@@ -1939,6 +1919,7 @@ error_t *cmd_update(
     hook_context_t *hook_ctx = NULL;
     char *repo_dir = NULL;
     char *profiles_str = NULL;
+    path_filter_t *file_filter = NULL;
     size_t total_updated = 0;
 
     /* Load configuration */
@@ -2084,6 +2065,15 @@ error_t *cmd_update(
         goto cleanup;
     }
 
+    /* Create file filter from CLI arguments (pre-resolve to storage paths) */
+    if (opts->files && opts->file_count > 0) {
+        err = path_filter_create((const char **)opts->files, opts->file_count, &file_filter);
+        if (err) {
+            err = error_wrap(err, "Failed to create file filter");
+            goto cleanup;
+        }
+    }
+
     /* Filter items for update (handles all flags and edge cases internally)
      *
      * Uses operation_profiles for CLI -p filtering. This ensures display
@@ -2091,7 +2081,7 @@ error_t *cmd_update(
      */
     const workspace_item_t **update_items = NULL;
     size_t update_count = 0;
-    err = filter_items_for_update(ws, opts, operation_profiles, config, out,
+    err = filter_items_for_update(ws, opts, file_filter, operation_profiles, config, out,
                                   &update_items, &update_count);
     if (err) {
         err = error_wrap(err, "Failed to filter items for update");
@@ -2305,6 +2295,7 @@ cleanup:
     if (hook_ctx) hook_context_free(hook_ctx);
     if (ws) workspace_free(ws);
     if (profiles_str) free(profiles_str);
+    if (file_filter) path_filter_free(file_filter);
     if (repo_dir) free(repo_dir);
     /* Free operation profiles only if not shared with workspace profiles */
     if (operation_profiles && operation_profiles != workspace_profiles) {

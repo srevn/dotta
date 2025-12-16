@@ -348,6 +348,8 @@ static int cmd_apply_main(int argc, char **argv) {
     cmd_apply_options_t opts = {
         .profiles = NULL,
         .profile_count = 0,
+        .files = NULL,
+        .file_count = 0,
         .exclude_patterns = NULL,
         .exclude_count = 0,
         .force = false,
@@ -360,22 +362,26 @@ static int cmd_apply_main(int argc, char **argv) {
         .argv = argv             /* For privilege re-exec */
     };
 
-    /* Collect profile arguments and exclude patterns */
+    /* Collect profile arguments, file paths, and exclude patterns */
     char **profiles = malloc((size_t)argc * sizeof(char *));
+    char **files = malloc((size_t)argc * sizeof(char *));
     char **excludes = malloc((size_t)argc * sizeof(char *));
-    if (!profiles || !excludes) {
+    if (!profiles || !files || !excludes) {
         fprintf(stderr, "Failed to allocate memory\n");
         free(profiles);
+        free(files);
         free(excludes);
         return 1;
     }
     size_t profile_count = 0;
+    size_t file_count = 0;
     size_t exclude_count = 0;
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             free(profiles);
+            free(files);
             free(excludes);
             print_apply_help(argv[0]);
             return 0;
@@ -395,6 +401,7 @@ static int cmd_apply_main(int argc, char **argv) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: --profile requires an argument\n");
                 free(profiles);
+                free(files);
                 free(excludes);
                 return 1;
             }
@@ -403,16 +410,27 @@ static int cmd_apply_main(int argc, char **argv) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: --exclude requires a pattern argument\n");
                 free(profiles);
+                free(files);
                 free(excludes);
                 return 1;
             }
             excludes[exclude_count++] = argv[++i];
         } else if (argv[i][0] != '-') {
-            /* Positional argument - treat as profile name */
-            profiles[profile_count++] = argv[i];
+            /* Positional argument - classify as file path or profile name */
+            bool is_file = argv[i][0] == '/' || argv[i][0] == '~' || argv[i][0] == '.' ||
+                           strncmp(argv[i], "home/", 5) == 0 ||
+                           strncmp(argv[i], "root/", 5) == 0 ||
+                           strncmp(argv[i], "custom/", 7) == 0;
+
+            if (is_file) {
+                files[file_count++] = argv[i];
+            } else {
+                profiles[profile_count++] = argv[i];
+            }
         } else {
             fprintf(stderr, "Error: Unknown argument '%s'\n", argv[i]);
             free(profiles);
+            free(files);
             free(excludes);
             print_apply_help(argv[0]);
             return 1;
@@ -422,6 +440,11 @@ static int cmd_apply_main(int argc, char **argv) {
     if (profile_count > 0) {
         opts.profiles = profiles;
         opts.profile_count = profile_count;
+    }
+
+    if (file_count > 0) {
+        opts.files = files;
+        opts.file_count = file_count;
     }
 
     if (exclude_count > 0) {
@@ -436,6 +459,7 @@ static int cmd_apply_main(int argc, char **argv) {
         error_print(err, stderr);
         error_free(err);
         free(profiles);
+        free(files);
         free(excludes);
         return 1;
     }
@@ -443,6 +467,7 @@ static int cmd_apply_main(int argc, char **argv) {
     /* Execute command */
     err = cmd_apply(repo, &opts);
     free(profiles);
+    free(files);
     free(excludes);
     git_repository_free(repo);
 

@@ -370,7 +370,7 @@ static error_t *workspace_add_diverged(
  * Fast OID-based content verification for non-encrypted files
  *
  * Computes SHA-1 hash of filesystem file and compares to expected blob OID.
- * This optimization avoids expensive Git blob loading from pack files
+ * This optimization avoids expensive Git blob loading from pack files.
  *
  * IMPORTANT: Only call for NON-ENCRYPTED files. For encrypted files, the
  * blob_oid is the hash of ciphertext, while the filesystem contains plaintext.
@@ -379,15 +379,17 @@ static error_t *workspace_add_diverged(
  * - CMP_EQUAL:     Hash matches (file content unchanged)
  * - CMP_DIFFERENT: Hash differs (content was modified)
  * - CMP_TYPE_DIFF: Type mismatch (expected file but found symlink, or vice versa)
- * - CMP_MISSING:   File doesn't exist (TOCTOU safety - deleted after initial check)
+ * - CMP_MISSING:   File doesn't exist (deleted after initial check)
  *
- * STAT PROPAGATION: Always captures stat when file exists, enabling caller's
- * permission checking without redundant syscall. This is critical for the
- * two-phase permission checking in analyze_file_divergence().
+ * Stat propagation:
+ * - If in_stat != NULL: Uses provided stat data (zero syscalls)
+ * - If in_stat == NULL: Performs lstat() internally
+ * - If out_stat != NULL: Returns stat data for caller reuse
  *
  * @param blob_oid Expected blob OID from manifest (must not be NULL)
  * @param filesystem_path Path to file on disk (must not be NULL)
  * @param expected_mode Expected git filemode (BLOB, BLOB_EXECUTABLE, or LINK)
+ * @param in_stat Optional pre-captured stat (can be NULL for internal lstat)
  * @param result Output: comparison result (must not be NULL)
  * @param out_stat Output: captured stat for permission checking (can be NULL)
  * @return Error or NULL on success
@@ -396,6 +398,7 @@ static error_t *verify_oid_matches_disk(
     const git_oid *blob_oid,
     const char *filesystem_path,
     git_filemode_t expected_mode,
+    const struct stat *in_stat,
     compare_result_t *result,
     struct stat *out_stat
 ) {
@@ -403,30 +406,41 @@ static error_t *verify_oid_matches_disk(
     CHECK_NULL(filesystem_path);
     CHECK_NULL(result);
 
-    /* Step 1: Stat file for type check and stat propagation
+    /* Step 1: Stat handling - use provided stat or capture new one
      *
-     * We must stat the file to:
-     * 1. Verify file type matches expected (file vs symlink)
-     * 2. Capture stat for caller's permission checking
-     *
-     * Using lstat() to not follow symlinks - we need to detect symlinks.
+     * Single-stat-per-file principle: When caller has already stat'd the file
+     * (e.g., for existence check), we reuse that stat to avoid redundant syscall.
+     * This is critical for performance in hot paths like workspace analysis.
      */
     struct stat st;
-    if (lstat(filesystem_path, &st) != 0) {
-        if (errno == ENOENT) {
-            /* File doesn't exist - TOCTOU race: deleted after initial check */
-            *result = CMP_MISSING;
-            if (out_stat) {
-                memset(out_stat, 0, sizeof(*out_stat));
-            }
-            return NULL;
-        }
-        return ERROR(ERR_FS, "Failed to stat '%s': %s", filesystem_path, strerror(errno));
-    }
+    const struct stat *stat_ptr;
 
-    /* Propagate stat to caller for permission checking */
-    if (out_stat) {
-        memcpy(out_stat, &st, sizeof(struct stat));
+    if (in_stat) {
+        /* Caller provided stat - use it (zero syscalls) */
+        stat_ptr = in_stat;
+        if (out_stat) {
+            memcpy(out_stat, in_stat, sizeof(struct stat));
+        }
+    } else {
+        /* No pre-captured stat - perform lstat internally
+         * Using lstat() to not follow symlinks.
+         */
+        if (lstat(filesystem_path, &st) != 0) {
+            if (errno == ENOENT) {
+                /* File doesn't exist */
+                *result = CMP_MISSING;
+                if (out_stat) {
+                    memset(out_stat, 0, sizeof(*out_stat));
+                }
+                return NULL;
+            }
+            return ERROR(ERR_FS, "Failed to stat '%s': %s",
+                         filesystem_path, strerror(errno));
+        }
+        stat_ptr = &st;
+        if (out_stat) {
+            memcpy(out_stat, &st, sizeof(struct stat));
+        }
     }
 
     /* Step 2: Type verification and hash computation */
@@ -434,7 +448,7 @@ static error_t *verify_oid_matches_disk(
 
     if (expected_mode == GIT_FILEMODE_LINK) {
         /* Expected symlink - verify type matches */
-        if (!S_ISLNK(st.st_mode)) {
+        if (!S_ISLNK(stat_ptr->st_mode)) {
             *result = CMP_TYPE_DIFF;
             return NULL;
         }
@@ -460,12 +474,12 @@ static error_t *verify_oid_matches_disk(
         }
     } else {
         /* Expected regular file (BLOB or BLOB_EXECUTABLE) */
-        if (S_ISLNK(st.st_mode)) {
+        if (S_ISLNK(stat_ptr->st_mode)) {
             *result = CMP_TYPE_DIFF;
             return NULL;
         }
 
-        if (!S_ISREG(st.st_mode)) {
+        if (!S_ISREG(stat_ptr->st_mode)) {
             /* Not a regular file (directory, device, FIFO, socket, etc.) */
             *result = CMP_TYPE_DIFF;
             return NULL;
@@ -523,7 +537,26 @@ static error_t *analyze_file_divergence(
      */
     bool in_state = (manifest_entry->blob_oid != NULL);
 
-    bool on_filesystem = fs_lexists(fs_path);
+    /* Single stat capture for the entire analysis
+     *
+     * This stat is reused for:
+     * 1. Existence check (on_filesystem flag)
+     * 2. Type verification in comparison functions
+     * 3. Metadata divergence checks (mode, ownership)
+     */
+    struct stat initial_stat;
+    bool on_filesystem;
+
+    if (lstat(fs_path, &initial_stat) != 0) {
+        if (errno == ENOENT) {
+            on_filesystem = false;
+            memset(&initial_stat, 0, sizeof(initial_stat));
+        } else {
+            return ERROR(ERR_FS, "Failed to stat '%s': %s", fs_path, strerror(errno));
+        }
+    } else {
+        on_filesystem = true;
+    }
 
     /* Divergence accumulator (bit flags, can combine) */
     divergence_type_t divergence = DIVERGENCE_NONE;
@@ -572,6 +605,8 @@ static error_t *analyze_file_divergence(
          *
          * Non-encrypted: Hash filesystem file and compare OID directly.
          * Encrypted: blob_oid is ciphertext hash; must load, decrypt, compare.
+         *
+         * Both paths receive initial_stat to avoid redundant lstat syscalls.
          */
         if (!manifest_entry->encrypted) {
             /* Fast path: OID hash verification */
@@ -579,6 +614,7 @@ static error_t *analyze_file_divergence(
                 &blob_oid,
                 fs_path,
                 expected_mode,
+                &initial_stat,
                 &cmp_result,
                 &file_stat
             );
@@ -605,9 +641,9 @@ static error_t *analyze_file_divergence(
                     expected_content,
                     fs_path,
                     expected_mode,
-                    NULL,           /* in_stat: let compare_buffer_to_disk stat */
+                    &initial_stat,
                     &cmp_result,
-                    &file_stat      /* out_stat: capture for permission checking */
+                    &file_stat
                 );
             }
             /* Note: Don't free expected_content - cache owns it! */
@@ -637,8 +673,9 @@ static error_t *analyze_file_divergence(
                                               WORKSPACE_ITEM_FILE, on_filesystem, true, false);
 
             case CMP_MISSING:
-                /* TOCTOU race condition: File deleted between fs_lexists() and compare.
-                 * Update flag and skip permission checks below. */
+                /* File was deleted during analysis (rare edge case).
+                 * With stat propagation this case is unlikely but kept for
+                 * robustness. Update flag and skip permission checks below. */
                 on_filesystem = false;
                 break;
 
@@ -656,8 +693,7 @@ static error_t *analyze_file_divergence(
         /* PERMISSION CHECKING: Two-phase approach
          *
          * Only check permissions if file still exists and no critical divergence.
-         * Guards against TOCTOU race (file deleted during compare) and avoids
-         * redundant checks on files with type mismatches.
+         * Guards against file deletion (CMP_MISSING) and type mismatches.
          *
          * PHASE A: Git filemode (executable bit)
          *   - Check using VWD cache type field (converted to expected_mode)
@@ -793,18 +829,19 @@ static error_t *analyze_file_divergence(
  * - Uses VWD cached metadata (blob_oid, encrypted, mode, owner, group)
  * - Leverages content cache with transparent encryption handling
  * - Two-phase permission checking (exec bit + full metadata)
- * - TOCTOU-aware (handles files deleted/modified during analysis)
+ * - Single-stat-per-file (caller provides pre-captured stat)
  *
  * Performance Safeguards:
  * - 100MB size limit (prevents loading huge files into memory)
- * - Early return on missing files (no wasted work)
  * - Content cache (reuses decrypted content across checks)
+ * - Stat propagation (zero redundant lstat syscalls)
  *
  * @param ws Workspace (provides content_cache, repo)
  * @param state_entry State database entry with expected state (VWD cache)
  * @param fs_path Filesystem path
  * @param storage_path Storage path (for AAD in encryption)
  * @param profile Profile name
+ * @param in_stat Pre-captured stat from caller (must not be NULL)
  * @return Divergence flags or DIVERGENCE_UNVERIFIED on error
  */
 static divergence_type_t compute_orphan_divergence(
@@ -812,25 +849,15 @@ static divergence_type_t compute_orphan_divergence(
     const state_file_entry_t *state_entry,
     const char *fs_path,
     const char *storage_path,
-    const char *profile
+    const char *profile,
+    const struct stat *in_stat
 ) {
     /* Defensive NULL checks */
-    if (!ws || !state_entry || !fs_path) {
+    if (!ws || !state_entry || !fs_path || !in_stat) {
         return DIVERGENCE_UNVERIFIED;
     }
 
-    /* Step 1: Initial stat for existence check
-     *
-     * Note: A fresh stat will be captured later by compare_buffer_to_disk()
-     * for TOCTOU safety. This initial stat is only for existence validation.
-     */
-    struct stat initial_stat;
-    if (lstat(fs_path, &initial_stat) != 0) {
-        /* File doesn't exist - not an error, just means orphan was already removed */
-        return DIVERGENCE_NONE;
-    }
-
-    /* Step 2: Validate blob_oid (defensive programming)
+    /* Step 1: Validate blob_oid (defensive programming)
      *
      * Every state entry SHOULD have blob_oid. If missing, it's data corruption.
      * Handle gracefully rather than crashing.
@@ -848,23 +875,25 @@ static divergence_type_t compute_orphan_divergence(
         return DIVERGENCE_UNVERIFIED;
     }
 
-    /* Step 3: Extract expected filemode from type field
+    /* Step 2: Extract expected filemode from type field
      *
      * Calculate once, use for both content comparison and mode checking.
      * Uses shared helper for consistent mapping across modules.
      */
     git_filemode_t expected_mode = state_type_to_git_filemode(state_entry->type);
 
-    /* Capture stat for permission checking */
+    /* Stat for permission checking (receives copy from in_stat via comparison functions) */
     struct stat fresh_stat;
     memset(&fresh_stat, 0, sizeof(fresh_stat));
     compare_result_t cmp_result;
     error_t *err = NULL;
 
-    /* Step 4: Content and type comparison with strategy selection
+    /* Step 3: Content and type comparison with strategy selection
      *
      * Non-encrypted: Hash filesystem file and compare OID directly.
      * Encrypted: blob_oid is ciphertext hash; must load, decrypt, compare.
+     *
+     * Both paths receive in_stat to avoid redundant lstat syscalls.
      */
     if (!state_entry->encrypted) {
         /* Fast path: OID hash verification */
@@ -872,6 +901,7 @@ static divergence_type_t compute_orphan_divergence(
             &blob_oid,
             fs_path,
             expected_mode,
+            in_stat,
             &cmp_result,
             &fresh_stat
         );
@@ -919,23 +949,14 @@ static divergence_type_t compute_orphan_divergence(
             return DIVERGENCE_UNVERIFIED;
         }
 
-        /* Step 5: Content and type comparison with stat capture
-         *
-         * compare_buffer_to_disk() performs:
-         * 1. Fresh lstat() (TOCTOU-safe, may detect file deleted/replaced)
-         * 2. Type checking (file vs symlink)
-         * 3. Content comparison (byte-by-byte)
-         *
-         * We pass NULL for in_stat to force fresh stat (catches TOCTOU races).
-         * We capture out_stat for metadata checking (reuse stat).
-         */
+        /* Content and type comparison using caller's stat */
         err = compare_buffer_to_disk(
             expected_content,
             fs_path,
             expected_mode,
-            NULL,         /* in_stat: Force fresh stat for TOCTOU safety */
+            in_stat,
             &cmp_result,
-            &fresh_stat   /* out_stat: Capture for metadata checking */
+            &fresh_stat
         );
         /* Note: Don't free expected_content - cache owns it! */
 
@@ -946,10 +967,9 @@ static divergence_type_t compute_orphan_divergence(
         }
     }
 
-    /* Step 6: Interpret comparison result
+    /* Step 4: Interpret comparison result
      *
      * Use switch statement (not if-else) for exhaustive handling.
-     * Pattern from analyze_file_divergence() lines 524-549.
      */
     divergence_type_t divergence = DIVERGENCE_NONE;
     bool file_exists = true;  /* Track for permission checking guard */
@@ -975,11 +995,14 @@ static divergence_type_t compute_orphan_divergence(
             break;
 
         case CMP_MISSING:
-            /* TOCTOU race: File deleted between initial lstat() and compare
+            /* File deleted between caller's stat and content read (rare race)
              *
-             * File no longer exists on filesystem. This is not an error - it just
-             * means the orphan was already manually removed. Safe to report as
-             * DIVERGENCE_NONE (apply will skip it, state will be pruned).
+             * With stat propagation, CMP_MISSING can only occur if the file was
+             * removed after the caller's single lstat but before the comparison
+             * function read its contents. This is rare but handled gracefully.
+             *
+             * Report as DIVERGENCE_NONE - the orphan was already removed manually.
+             * Apply will skip it (nothing to remove), state will be pruned.
              */
             file_exists = false;
             break;
@@ -995,21 +1018,21 @@ static divergence_type_t compute_orphan_divergence(
             break;
     }
 
-    /* Step 7: Permission checking (two-phase, if file still exists)
+    /* Step 5: Permission checking (two-phase, if file still exists)
      *
      * Only check permissions if:
-     * 1. File still exists (not deleted in TOCTOU race)
+     * 1. File still exists (not deleted during analysis)
      * 2. No type divergence (type mismatch makes mode checking nonsensical)
      * 3. Verification didn't fail (we have fresh_stat from compare)
      *
      * PHASE A: Git filemode (executable bit)
-     *   - Uses expected_mode from Step 5
+     *   - Uses expected_mode from Step 2
      *   - Skips symlinks (exec bit doesn't apply)
      *   - Catches: file is 0755 in git but 0644 on disk (or vice versa)
      *
      * PHASE B: Full metadata (all permission bits + ownership)
      *   - Uses check_item_metadata_divergence() helper
-     *   - Reuses fresh_stat from Step 6 (zero extra syscalls)
+     *   - Reuses fresh_stat from Step 3 (zero extra syscalls)
      *   - Skipped if state_entry->mode == 0 (no metadata tracked)
      *   - Separately tracks MODE and OWNERSHIP divergence
      */
@@ -1030,7 +1053,8 @@ static divergence_type_t compute_orphan_divergence(
          * Mode sentinel: state_entry->mode == 0 means "no metadata tracked",
          * check will be skipped by check_item_metadata_divergence().
          *
-         * Uses fresh_stat from compare (TOCTOU-safe, consistent view).
+         * Uses fresh_stat populated by comparison function (same data as in_stat,
+         * copied via out_stat parameter for consistent access pattern).
          */
         bool mode_differs = false;
         bool ownership_differs = false;
@@ -1119,28 +1143,69 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
         if (!manifest_entry) {
             /* Orphaned: in state, not in manifest (out of scope) */
             bool profile_enabled = (hashmap_get(ws->profile_index, profile) != NULL);
-            bool on_filesystem = fs_lexists(fs_path);
+
+            /* Single stat capture for orphan analysis
+             *
+             * This stat is reused for type verification, content comparison,
+             * and metadata checks - eliminating redundant lstat syscalls.
+             *
+             * stat_valid tracks whether we have usable stat data:
+             * - true: lstat succeeded, orphan_stat contains valid data
+             * - false: lstat failed, orphan_stat is zeroed (unusable)
+             */
+            struct stat orphan_stat;
+            bool on_filesystem;
+            bool stat_valid = false;
+
+            if (lstat(fs_path, &orphan_stat) != 0) {
+                if (errno == ENOENT) {
+                    /* File doesn't exist - orphan was already removed manually */
+                    on_filesystem = false;
+                } else {
+                    /* Cannot stat file (EACCES, EIO, ELOOP, etc.)
+                     *
+                     * Conservative handling: Assume file exists but is inaccessible.
+                     * We lack valid stat data, so divergence cannot be computed.
+                     * Mark as UNVERIFIED below so:
+                     * - Status shows [orphaned, unverified] (user visibility)
+                     * - Apply skips removal (safety - can't verify what we can't stat)
+                     */
+                    on_filesystem = true;
+                }
+                memset(&orphan_stat, 0, sizeof(orphan_stat));
+            } else {
+                on_filesystem = true;
+                stat_valid = true;
+            }
 
             /* Compute divergence for orphaned file
              *
-             * Only check divergence if file exists on filesystem. If file already
-             * deleted, divergence is meaningless (can't compare to non-existent file).
+             * Only compute if file exists AND we have valid stat data.
              *
-             * This analysis enables status to predict apply behavior:
+             * Cases:
+             * - File doesn't exist (ENOENT): divergence = NONE (nothing to compare)
+             * - File inaccessible (other error): divergence = UNVERIFIED (unsafe to act)
+             * - File accessible: divergence = computed from content/metadata analysis
+             *
+             * This enables status to predict apply behavior:
              * - DIVERGENCE_NONE → Clean orphan, will be removed
              * - DIVERGENCE_CONTENT/TYPE → Modified, apply will skip (safety check)
              * - DIVERGENCE_MODE/OWNERSHIP → Metadata changed, apply will skip
              * - DIVERGENCE_UNVERIFIED → Cannot verify, apply will skip
              */
             divergence_type_t divergence = DIVERGENCE_NONE;
-            if (on_filesystem) {
+            if (stat_valid) {
                 divergence = compute_orphan_divergence(
                     ws,
                     state_entry,
                     fs_path,
                     storage_path,
-                    profile
+                    profile,
+                    &orphan_stat
                 );
+            } else if (on_filesystem) {
+                /* File exists but stat failed - cannot verify divergence safely */
+                divergence = DIVERGENCE_UNVERIFIED;
             }
 
             err = workspace_add_diverged(

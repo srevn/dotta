@@ -416,11 +416,18 @@ static int cmd_apply_main(int argc, char **argv) {
             }
             excludes[exclude_count++] = argv[++i];
         } else if (argv[i][0] != '-') {
-            /* Positional argument - classify as file path or profile name */
+            /* Positional argument - classify as file path or profile name
+             *
+             * File patterns are detected by:
+             * - Path prefix: /, ~, .
+             * - Storage prefix: home/, root/, custom/
+             * - Glob characters: *, ?, [
+             */
             bool is_file = argv[i][0] == '/' || argv[i][0] == '~' || argv[i][0] == '.' ||
                            strncmp(argv[i], "home/", 5) == 0 ||
                            strncmp(argv[i], "root/", 5) == 0 ||
-                           strncmp(argv[i], "custom/", 7) == 0;
+                           strncmp(argv[i], "custom/", 7) == 0 ||
+                           strpbrk(argv[i], "*?[") != NULL;
 
             if (is_file) {
                 files[file_count++] = argv[i];
@@ -973,11 +980,18 @@ static int cmd_diff_main(int argc, char **argv) {
             opts.direction = DIFF_BOTH;
             has_direction_flag = true;
         } else if (argv[i][0] != '-') {
-            /* Positional argument - classify as file path or profile name */
+            /* Positional argument - classify as file path or profile name
+             *
+             * File patterns are detected by:
+             * - Path prefix: /, ~, .
+             * - Storage prefix: home/, root/, custom/
+             * - Glob characters: *, ?, [
+             */
             bool is_file = argv[i][0] == '/' || argv[i][0] == '~' || argv[i][0] == '.' ||
                            strncmp(argv[i], "home/", 5) == 0 ||
                            strncmp(argv[i], "root/", 5) == 0 ||
-                           strncmp(argv[i], "custom/", 7) == 0;
+                           strncmp(argv[i], "custom/", 7) == 0 ||
+                           strpbrk(argv[i], "*?[") != NULL;
 
             if (is_file) {
                 positional[positional_count++] = argv[i];
@@ -1244,11 +1258,18 @@ static int cmd_update_main(int argc, char **argv) {
         } else if (argv[i][0] != '-') {
             /* Positional argument */
             if (profile_count == 0 && file_count == 0) {
-                /* Classify first positional as file path or profile name */
+                /* Classify first positional as file path or profile name
+                 *
+                 * File patterns are detected by:
+                 * - Path prefix: /, ~, .
+                 * - Storage prefix: home/, root/, custom/
+                 * - Glob characters: *, ?, [
+                 */
                 bool is_file = argv[i][0] == '/' || argv[i][0] == '~' || argv[i][0] == '.' ||
                                strncmp(argv[i], "home/", 5) == 0 ||
                                strncmp(argv[i], "root/", 5) == 0 ||
-                               strncmp(argv[i], "custom/", 7) == 0;
+                               strncmp(argv[i], "custom/", 7) == 0 ||
+                               strpbrk(argv[i], "*?[") != NULL;
 
                 if (is_file) {
                     files[file_count++] = argv[i];

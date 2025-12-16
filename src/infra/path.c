@@ -387,7 +387,7 @@ error_t *path_normalize_input(
             free(expanded);
             return ERROR(ERR_INVALID_ARG,
                 "Path traversal (..) not allowed in relative paths with --prefix.\n"
-                "  Use absolute paths if you need to reference files outside the prefix.");
+                "Use absolute paths if you need to reference files outside the prefix.");
         }
 
         err = fs_path_join(custom_prefix, user_path, &joined);
@@ -771,7 +771,7 @@ static error_t *path_resolve_relative(const char *relative_path, char **out) {
     char cwd[PATH_MAX];
     if (!getcwd(cwd, sizeof(cwd))) {
         return ERROR(ERR_FS, "Failed to get current working directory: %s",
-                    strerror(errno));
+                     strerror(errno));
     }
 
     /* Strip leading ./ from relative path */
@@ -918,8 +918,8 @@ error_t *path_resolve_input(
         /* Make absolute (validates existence if require_exists) */
         err = fs_make_absolute(expanded, &absolute);
         if (err) {
-            err = error_wrap(err, "Failed to resolve path '%s'%s",
-                input, require_exists ? "\nHint: File must exist for this operation" : "");
+            err = error_wrap(err, "Failed to resolve path '%s'%s", input,
+                  require_exists ? "\nHint: File must exist for this operation" : "");
             goto cleanup;
         }
     }

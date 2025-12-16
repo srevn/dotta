@@ -192,6 +192,18 @@ error_t *path_get_home(char **out);
  *                           (file need not exist on disk)
  *                           Used for show/revert/remove/filters
  *
+ * Custom prefix detection:
+ *   When custom_prefixes is provided (non-NULL with prefix_count > 0),
+ *   filesystem paths are checked against each prefix AFTER $HOME detection.
+ *   First matching prefix wins. This enables proper resolution of paths
+ *   like /mnt/jail/etc/nginx.conf to custom/etc/nginx.conf when /mnt/jail
+ *   is in the custom_prefixes array.
+ *
+ *   Detection order (canonical representation):
+ *   1. $HOME - Always first (canonical for user files)
+ *   2. Custom prefixes - Iterate array, first match wins
+ *   3. Root - Fallback for system files
+ *
  * Path normalization:
  *   All paths are normalized to resolve '.' and '..' components before
  *   conversion to storage format. This ensures consistent HOME detection
@@ -206,16 +218,21 @@ error_t *path_get_home(char **out);
  *   ../file (in $HOME/project)  -> home/file (.. resolved)
  *   home/.bashrc (either mode)  -> validated and returned as home/.bashrc
  *   /etc/hosts (exists=true)    -> canonicalized to root/etc/hosts
+ *   /mnt/jail/etc/nginx.conf    -> custom/etc/nginx.conf (if /mnt/jail in prefixes)
  *   config (no slash)           -> ERROR: ambiguous (use ./config)
  *
  * @param input User-provided path string (must not be NULL)
  * @param require_exists Whether to canonicalize and verify existence
+ * @param custom_prefixes Array of custom prefixes to try (can be NULL)
+ * @param prefix_count Number of custom prefixes (0 if none)
  * @param out_storage_path Output in storage format (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
 error_t *path_resolve_input(
     const char *input,
     bool require_exists,
+    const char **custom_prefixes,
+    size_t prefix_count,
     char **out_storage_path
 );
 
@@ -254,9 +271,16 @@ typedef struct {
  * - Patterns with "/" must use storage format (e.g., home/ followed by glob)
  * - Recursive patterns (doublestar followed by /foo) match at any depth
  *
+ * Custom prefix detection:
+ *   When custom_prefixes is provided (non-NULL with prefix_count > 0),
+ *   filesystem path inputs are checked against each prefix during resolution.
+ *   This enables users to specify /mnt/jail/etc/nginx.conf as a filter and
+ *   have it correctly match custom/etc/nginx.conf in the manifest.
+ *
  * NULL semantics:
  * - If inputs is NULL or count is 0, returns NULL filter (matches all)
  * - A NULL filter passed to path_filter_matches() matches all paths
+ * - custom_prefixes can be NULL (equivalent to prefix_count=0)
  *
  * Error handling:
  * - If any path resolution fails, returns error and cleans up
@@ -264,12 +288,16 @@ typedef struct {
  *
  * @param inputs User-provided path or pattern strings (can be NULL if count is 0)
  * @param count Number of inputs
+ * @param custom_prefixes Array of custom prefixes for resolution (can be NULL)
+ * @param prefix_count Number of custom prefixes (0 if none)
  * @param out Path filter (must not be NULL, receives NULL if no filter)
  * @return Error or NULL on success
  */
 error_t *path_filter_create(
     const char **inputs,
     size_t count,
+    const char **custom_prefixes,
+    size_t prefix_count,
     path_filter_t **out
 );
 

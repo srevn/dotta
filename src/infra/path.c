@@ -853,6 +853,8 @@ static bool path_is_relative(const char *input) {
 error_t *path_resolve_input(
     const char *input,
     bool require_exists,
+    const char **custom_prefixes,
+    size_t prefix_count,
     char **out_storage_path
 ) {
     CHECK_NULL(input);
@@ -902,9 +904,44 @@ error_t *path_resolve_input(
                 return error_wrap(err, "Failed to normalize path '%s'", input);
             }
 
-            /* Convert to storage format */
+            /* Convert to storage format
+             *
+             * Mode A uses path_to_storage() which already supports custom prefix
+             * via its second parameter. However, path_to_storage() only accepts
+             * a single prefix and is designed for add/update operations where
+             * --prefix is explicit. For filter resolution, we try each prefix.
+             *
+             * Detection order (canonical representation):
+             * 1. $HOME - Always first (canonical for user files)
+             * 2. Custom prefixes - Iterate array, first match wins
+             * 3. Root - Fallback for system files
+             */
             path_prefix_t prefix;
+
+            /* First try with NULL (detects home/ and root/) */
             err = path_to_storage(normalized, NULL, &storage_path, &prefix);
+
+            /* If resolved to root/ but we have custom prefixes, check if any match */
+            if (!err && prefix == PREFIX_ROOT && custom_prefixes && prefix_count > 0) {
+                /* Try each custom prefix to see if we should use custom/ instead */
+                for (size_t i = 0; i < prefix_count; i++) {
+                    if (!custom_prefixes[i]) continue;
+
+                    const char *relative = NULL;
+                    int match = extract_relative_after_prefix(normalized, custom_prefixes[i], &relative);
+                    if (match > 0) {
+                        /* Found a matching custom prefix - rebuild as custom/ */
+                        free(storage_path);
+                        storage_path = str_format("custom/%s", relative);
+                        if (!storage_path) {
+                            free(normalized);
+                            return ERROR(ERR_MEMORY, "Failed to format custom storage path");
+                        }
+                        break;
+                    }
+                }
+            }
+
             free(normalized);
             if (err) {
                 return error_wrap(err, "Failed to convert path '%s'", input);
@@ -984,13 +1021,42 @@ error_t *path_resolve_input(
                     return ERROR(ERR_MEMORY, "Failed to format storage path");
                 }
             } else {
-                /* Outside home - use root/ prefix */
-                storage_path = str_format("root%s", working_path);
+                /* Outside home - try custom prefixes before falling back to root/
+                 *
+                 * Detection order (canonical representation):
+                 * 1. $HOME - Already checked above (canonical for user files)
+                 * 2. Custom prefixes - Iterate array, first match wins
+                 * 3. Root - Fallback for system files
+                 */
+                if (custom_prefixes && prefix_count > 0) {
+                    for (size_t i = 0; i < prefix_count; i++) {
+                        if (!custom_prefixes[i]) continue;
+
+                        const char *rel = NULL;
+                        int cmatch = extract_relative_after_prefix(working_path, custom_prefixes[i], &rel);
+                        if (cmatch > 0) {
+                            /* Found a matching custom prefix */
+                            storage_path = str_format("custom/%s", rel);
+                            if (!storage_path) {
+                                free(working_path);
+                                free(home);
+                                free(home_canonical);
+                                return ERROR(ERR_MEMORY, "Failed to format custom storage path");
+                            }
+                            break;
+                        }
+                    }
+                }
+
                 if (!storage_path) {
-                    free(working_path);
-                    free(home);
-                    free(home_canonical);
-                    return ERROR(ERR_MEMORY, "Failed to format storage path");
+                    /* No custom prefix matched - use root/ prefix */
+                    storage_path = str_format("root%s", working_path);
+                    if (!storage_path) {
+                        free(working_path);
+                        free(home);
+                        free(home_canonical);
+                        return ERROR(ERR_MEMORY, "Failed to format storage path");
+                    }
                 }
             }
 
@@ -1070,13 +1136,42 @@ error_t *path_resolve_input(
                 return ERROR(ERR_MEMORY, "Failed to format storage path");
             }
         } else {
-            /* Outside home - use root/ prefix */
-            storage_path = str_format("root%s", absolute);
+            /* Outside home - try custom prefixes before falling back to root/
+             *
+             * Detection order (canonical representation):
+             * 1. $HOME - Already checked above (canonical for user files)
+             * 2. Custom prefixes - Iterate array, first match wins
+             * 3. Root - Fallback for system files
+             */
+            if (custom_prefixes && prefix_count > 0) {
+                for (size_t i = 0; i < prefix_count; i++) {
+                    if (!custom_prefixes[i]) continue;
+
+                    const char *rel = NULL;
+                    int cmatch = extract_relative_after_prefix(absolute, custom_prefixes[i], &rel);
+                    if (cmatch > 0) {
+                        /* Found a matching custom prefix */
+                        storage_path = str_format("custom/%s", rel);
+                        if (!storage_path) {
+                            free(absolute);
+                            free(home);
+                            free(home_canonical);
+                            return ERROR(ERR_MEMORY, "Failed to format custom storage path");
+                        }
+                        break;
+                    }
+                }
+            }
+
             if (!storage_path) {
-                free(absolute);
-                free(home);
-                free(home_canonical);
-                return ERROR(ERR_MEMORY, "Failed to format storage path");
+                /* No custom prefix matched - use root/ prefix */
+                storage_path = str_format("root%s", absolute);
+                if (!storage_path) {
+                    free(absolute);
+                    free(home);
+                    free(home_canonical);
+                    return ERROR(ERR_MEMORY, "Failed to format storage path");
+                }
             }
         }
 
@@ -1128,6 +1223,8 @@ error_t *path_resolve_input(
 error_t *path_filter_create(
     const char **inputs,
     size_t count,
+    const char **custom_prefixes,
+    size_t prefix_count,
     path_filter_t **out
 ) {
     CHECK_NULL(out);
@@ -1208,7 +1305,7 @@ error_t *path_filter_create(
 
         /* Case 2: Exact path - resolve and store in hashmap */
         char *resolved = NULL;
-        err = path_resolve_input(input, false, &resolved);
+        err = path_resolve_input(input, false, custom_prefixes, prefix_count, &resolved);
         if (err) {
             err = error_wrap(err, "Invalid path '%s'", input);
             goto cleanup;

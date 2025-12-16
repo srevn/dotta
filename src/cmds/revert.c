@@ -132,8 +132,11 @@ static error_t *discover_file(
     /* Initialize output flag */
     *found_in_history = false;
 
-    /* Resolve input path to storage format (flexible mode - file need not exist) */
-    err = path_resolve_input(file_path, false, &storage_path);
+    /* Resolve input path to storage format (flexible mode - file need not exist)
+     *
+     * Note: No custom prefix context available for revert command - users must use
+     * storage format (custom/etc/nginx.conf) for custom/ paths */
+    err = path_resolve_input(file_path, false, NULL, 0, &storage_path);
     if (err) {
         return err;
     }

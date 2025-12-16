@@ -983,9 +983,32 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Create file filter from CLI arguments */
+    /* Create file filter from CLI arguments
+     *
+     * Extract custom prefixes from operation profiles to enable proper resolution
+     * of filesystem paths like /mnt/jail/etc/nginx.conf to custom/etc/nginx.conf.
+     * Without this, such paths would incorrectly resolve to root/mnt/jail/etc/nginx.conf.
+     */
     if (opts->files && opts->file_count > 0) {
-        err = path_filter_create((const char **)opts->files, opts->file_count, &file_filter);
+        /* Extract custom prefixes from operation profiles */
+        const char **custom_prefixes = NULL;
+        size_t prefix_count = 0;
+
+        if (operation_profiles && operation_profiles->count > 0) {
+            custom_prefixes = calloc(operation_profiles->count, sizeof(char *));
+            if (custom_prefixes) {
+                for (size_t i = 0; i < operation_profiles->count; i++) {
+                    if (operation_profiles->profiles[i].custom_prefix) {
+                        custom_prefixes[prefix_count++] = operation_profiles->profiles[i].custom_prefix;
+                    }
+                }
+            }
+        }
+
+        err = path_filter_create((const char **)opts->files, opts->file_count,
+                                 custom_prefixes, prefix_count, &file_filter);
+        free(custom_prefixes);  /* Array only, strings are borrowed from profiles */
+
         if (err) {
             err = error_wrap(err, "Failed to create file filter");
             goto cleanup;

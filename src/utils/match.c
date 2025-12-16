@@ -41,20 +41,48 @@ const char *match_basename(const char *path) {
 }
 
 /**
- * Check if pattern contains double-star (**)
+ * Find valid recursive glob in pattern
+ *
+ * A valid recursive glob is a sequence of 2+ asterisks at a component boundary:
+ *   - Preceded by '/' or at start of pattern
+ *   - Followed by '/' or at end of pattern
+ *
+ * Valid:   "**", "***", "** /foo", "*** /foo", "foo/ **"  (no spaces in real patterns)
+ * Invalid: "a**b", "test_**", "**suffix" (not at component boundary)
  */
-bool match_has_doublestar(const char *pattern) {
+const char *match_has_doublestar(const char *pattern) {
     if (!pattern) {
-        return false;
+        return NULL;
     }
 
-    /* Look for ** (two consecutive asterisks) */
-    for (const char *p = pattern; *p; p++) {
-        if (p[0] == '*' && p[1] == '*') {
-            return true;
+    const char *p = pattern;
+    while (*p) {
+        if (*p != '*') {
+            p++;
+            continue;
+        }
+
+        /* Found asterisk - consume entire sequence */
+        const char *seq_start = p;
+        while (*p == '*') {
+            p++;
+        }
+
+        /* Need 2+ asterisks for recursive glob */
+        if (p - seq_start < 2) {
+            continue;
+        }
+
+        /* Must be at component boundary */
+        bool at_start = (seq_start == pattern) || (seq_start[-1] == '/');
+        bool at_end = (*p == '\0') || (*p == '/');
+
+        if (at_start && at_end) {
+            return seq_start;
         }
     }
-    return false;
+
+    return NULL;
 }
 
 /**
@@ -207,10 +235,10 @@ static bool match_doublestar_pattern(
         return false;
     }
 
-    /* Find first ** in pattern */
-    const char *doublestar = strstr(pattern, "**");
+    /* Find valid recursive glob ** in pattern */
+    const char *doublestar = match_has_doublestar(pattern);
     if (!doublestar) {
-        /* No ** found - shouldn't happen, but fall back to fnmatch */
+        /* No valid ** - fall back to fnmatch (handles ** as regular wildcard) */
         return match_fnmatch(pattern, path, flags, false);
     }
 

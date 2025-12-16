@@ -20,10 +20,16 @@
  *     [a-z]    Matches one character from range
  *     [!abc]   Matches one character NOT in set
  *
- *   Double-star (recursive glob):
- *     Double-star followed by /foo   Matches foo at any depth
- *     foo followed by double-star    Matches everything under foo/
- *     Path components separated      Matches at any nesting level
+ *   Double-star (recursive glob) - must be at component boundary:
+ *     "**"           Matches everything (any path, any depth)
+ *     "** /foo"      Matches foo at any depth (no space in actual pattern)
+ *     "foo/ **"      Matches everything under foo/ (no space in actual pattern)
+ *     "foo/ ** /bar" Matches bar at any depth under foo/ (no spaces)
+ *
+ *   Double-star NOT at boundary (treated as regular wildcard by fnmatch):
+ *     "a**b"         Matches aXXXb (** acts like single *)
+ *     "test_**"      Matches test_XXX
+ *     "**suffix"     Matches XXXsuffix
  *
  *   Path semantics:
  *     foo      Pattern without / matches basename at any depth
@@ -48,9 +54,9 @@
  * Edge Cases Handled:
  *   - Empty patterns never match
  *   - Empty paths never match
- *   - Patterns like "**" match everything
- *   - Patterns with double-star handle zero-length matches
- *   - Multiple consecutive ** are treated as single **
+ *   - Patterns like "**" or "***" match everything (2+ asterisks collapse)
+ *   - Patterns with ** at boundaries handle zero-length matches
+ *   - ** not at component boundary: handled by fnmatch as regular wildcard
  *   - Proper escaping in character classes
  *   - Case-sensitive matching by default (configurable)
  *
@@ -136,15 +142,20 @@ bool match_any(
 );
 
 /**
- * Check if pattern contains double-star (**)
+ * Find valid recursive glob in pattern
  *
- * Utility function to detect if a pattern uses ** recursive glob.
- * Useful for optimization - patterns without ** can use faster code paths.
+ * Returns pointer to asterisk sequence (2+) at a path component boundary:
+ *   - "**" or "***" at start, followed by / or end
+ *   - "/ **" or "/ ***" suffix (everything under directory)
+ *   - "/ ** /" or "/ *** /" middle (recursive subdirectory match)
+ *
+ * Returns NULL for asterisks embedded in a component (a**b, test_**, **suffix).
+ * These patterns are handled by fnmatch which treats ** as a regular wildcard.
  *
  * @param pattern Pattern to check (must not be NULL)
- * @return true if pattern contains **, false otherwise
+ * @return Pointer to valid asterisk sequence, or NULL if none found
  */
-bool match_has_doublestar(const char *pattern);
+const char *match_has_doublestar(const char *pattern);
 
 /**
  * Check if pattern is basename-only (no /)

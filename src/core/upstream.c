@@ -47,7 +47,7 @@ error_t *upstream_analyze_profile(
     error_t *err;
 
     err = gitops_build_refname(local_refname, sizeof(local_refname),
-                    "refs/heads/%s", profile_name);
+                               "refs/heads/%s", profile_name);
     if (err) {
         upstream_info_free(info);
         return error_wrap(err, "Invalid profile name '%s'", profile_name);
@@ -58,7 +58,7 @@ error_t *upstream_analyze_profile(
     if (err) {
         upstream_info_free(info);
         return error_wrap(err, "Invalid remote/profile name '%s/%s'",
-                    remote_name, profile_name);
+                          remote_name, profile_name);
     }
 
     /* Check local branch exists */
@@ -209,8 +209,7 @@ error_t *upstream_detect_remote(git_repository *repo, char **out_remote) {
 
     if (remotes.count == 0) {
         git_strarray_dispose(&remotes);
-        return ERROR(ERR_NOT_FOUND,
-                    "No remotes configured\n"
+        return ERROR(ERR_NOT_FOUND, "No remotes configured\n"
                     "Hint: Add a remote with 'dotta remote add <name> <url>'");
     }
 
@@ -238,8 +237,7 @@ error_t *upstream_detect_remote(git_repository *repo, char **out_remote) {
 
     /* Multiple remotes, no origin - need explicit remote name */
     git_strarray_dispose(&remotes);
-    return ERROR(ERR_INVALID_ARG,
-                "Multiple remotes configured, but no 'origin' found\n"
+    return ERROR(ERR_INVALID_ARG, "Multiple remotes configured, but no 'origin' found\n"
                 "Hint: Specify remote explicitly or rename preferred remote to 'origin'");
 }
 
@@ -319,7 +317,7 @@ error_t *upstream_discover_branches(
     /* Build glob pattern for remote refs */
     char glob_pattern[256];
     err = gitops_build_refname(glob_pattern, sizeof(glob_pattern),
-                    "refs/remotes/%s/*", remote_name);
+                               "refs/remotes/%s/*", remote_name);
     if (err) {
         string_array_free(branches);
         return error_wrap(err, "Invalid remote name '%s'", remote_name);
@@ -328,7 +326,7 @@ error_t *upstream_discover_branches(
     /* Build prefix for extracting branch names */
     char remote_prefix[256];
     err = gitops_build_refname(remote_prefix, sizeof(remote_prefix),
-                    "refs/remotes/%s/", remote_name);
+                               "refs/remotes/%s/", remote_name);
     if (err) {
         string_array_free(branches);
         return error_wrap(err, "Invalid remote name '%s'", remote_name);
@@ -481,9 +479,8 @@ error_t *upstream_create_tracking_branch(
 
     /* Get remote ref */
     char remote_refname[256];
-    error_t *err = gitops_build_refname(remote_refname,
-                    sizeof(remote_refname), "refs/remotes/%s/%s",
-                    remote_name, branch_name);
+    error_t *err = gitops_build_refname(remote_refname, sizeof(remote_refname),
+                                        "refs/remotes/%s/%s", remote_name, branch_name);
     if (err) {
         return error_wrap(err, "Invalid remote/branch name '%s/%s'",
                     remote_name, branch_name);

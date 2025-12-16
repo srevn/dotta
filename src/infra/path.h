@@ -130,14 +130,6 @@ error_t *path_validate_storage(const char *storage_path);
 error_t *path_validate_filesystem(const char *filesystem_path);
 
 /**
- * Check if path is under $HOME
- *
- * @param path Absolute filesystem path (must not be NULL)
- * @return true if path is under $HOME directory
- */
-bool path_is_under_home(const char *path);
-
-/**
  * Expand ~ to $HOME
  *
  * Examples:

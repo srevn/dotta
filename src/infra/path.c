@@ -142,24 +142,6 @@ error_t *path_validate_filesystem(const char *filesystem_path) {
 }
 
 /**
- * Check if path is under $HOME
- */
-bool path_is_under_home(const char *path) {
-    if (!path || path[0] == '\0') {
-        return false;
-    }
-
-    char *home = NULL;
-    if (path_get_home(&home) != NULL) {
-        return false;
-    }
-
-    bool result = str_starts_with(path, home);
-    free(home);
-    return result;
-}
-
-/**
  * Expand ~ to $HOME
  */
 error_t *path_expand_home(const char *path, char **out) {
@@ -252,6 +234,47 @@ static int extract_relative_after_prefix(
 }
 
 /**
+ * Detect if path is under HOME directory, considering both original
+ * and canonicalized HOME (to handle symlinks).
+ *
+ * Returns:
+ *   >0 : Match succeeded, returns length of relative part, sets *out_relative
+ *    0 : Prefix matched but relative part is empty (directory itself)
+ *   -1 : No match (prefix doesn't match or boundary violation)
+ *
+ * @param absolute Absolute filesystem path
+ * @param home Original HOME directory
+ * @param home_canonical Canonicalized HOME (may be NULL or same as home)
+ * @param out_relative Output relative part (points into absolute, caller doesn't own)
+ * @return Match status (see above)
+ */
+static int detect_home_prefix(
+    const char *absolute,
+    const char *home,
+    const char *home_canonical,
+    const char **out_relative
+) {
+    const char *relative;
+    int match;
+
+    match = extract_relative_after_prefix(absolute, home, &relative);
+    if (match >= 0) {
+        *out_relative = relative;
+        return match;
+    }
+
+    if (home_canonical && home_canonical != home) {
+        match = extract_relative_after_prefix(absolute, home_canonical, &relative);
+        if (match >= 0) {
+            *out_relative = relative;
+            return match;
+        }
+    }
+
+    return -1;
+}
+
+/**
  * Try prepending custom prefix to absolute path.
  *
  * Resolution strategy:
@@ -323,11 +346,11 @@ static char *try_prepend_custom_prefix(
  * Security: Rejects path traversal (..) in relative paths with custom_prefix.
  *
  * Examples:
- *   ("~/file", NULL)        -> "$HOME/file"
- *   ("rel/file", "/jail")   -> "/jail/rel/file"
- *   ("/abs/file", "/jail")  -> "/abs/file" (absolute unchanged)
- *   ("rel/file", NULL)      -> "$CWD/rel/file"
- *   ("../escape", "/jail")  -> ERROR
+ *   ("~/file", NULL)             -> "$HOME/file"
+ *   ("relative/file", "/jail")   -> "/jail/relative/file"
+ *   ("/abs/file", "/jail")       -> "/abs/file" (absolute unchanged)
+ *   ("relative/file", NULL)      -> "$CWD/relative/file"
+ *   ("../escape", "/jail")       -> ERROR
  *
  * @param user_path User-provided path (filesystem or tilde)
  * @param custom_prefix Optional custom prefix for relative path context (can be NULL)
@@ -560,8 +583,8 @@ error_t *path_from_storage(
             return err;
         }
 
-        const char *rel = storage_path + strlen("home/");
-        err = fs_path_join(home, rel, filesystem_path);
+        const char *relative_path = storage_path + strlen("home/");
+        err = fs_path_join(home, relative_path, filesystem_path);
         free(home);
         return err;
 
@@ -588,10 +611,10 @@ error_t *path_from_storage(
         /* Strip "custom" prefix and prepend custom_prefix
          * storage_path = "custom/etc/nginx.conf"
          * After strlen("custom"): "/etc/nginx.conf" (with leading slash)
-         * Build: <prefix> + <rel> = "/mnt/jail" + "/etc/nginx.conf" */
-        const char *rel = storage_path + strlen("custom");
+         * Build: <prefix> + <relative> = "/mnt/jail" + "/etc/nginx.conf" */
+        const char *relative_path = storage_path + strlen("custom");
 
-        *filesystem_path = str_format("%s%s", custom_prefix, rel);
+        *filesystem_path = str_format("%s%s", custom_prefix, relative_path);
         if (!*filesystem_path) {
             return ERROR(ERR_MEMORY, "Failed to format custom filesystem path");
         }
@@ -866,8 +889,7 @@ error_t *path_resolve_input(
             err = fs_make_absolute(expanded, &absolute);
             free(expanded);
             if (err) {
-                return error_wrap(err,
-                    "Failed to resolve path '%s'\n"
+                return error_wrap(err, "Failed to resolve path '%s'\n"
                     "Hint: File must exist for this operation", input);
             }
 
@@ -932,32 +954,32 @@ error_t *path_resolve_input(
              * This ensures consistent comparison with normalized paths. */
             char *home_canonical = NULL;
             if (fs_canonicalize_path(home, &home_canonical) == NULL) {
-                free(home);
-                home = home_canonical;
+                /* Success: home_canonical now contains canonical path */
+                /* Keep original home as well for detection */
             }
-            /* If canonicalization failed, keep original home */
+            /* If canonicalization failed, home_canonical remains NULL */
 
-            size_t home_len = strlen(home);
+            /* Check if path is under $HOME (original or canonical) */
+            const char *relative_path = NULL;
+            int match = detect_home_prefix(working_path, home, home_canonical, &relative_path);
 
-            /* Check if path is under $HOME */
-            if (str_starts_with(working_path, home) &&
-                (working_path[home_len] == '/' || working_path[home_len] == '\0')) {
-                /* Under home directory */
-                const char *rel = working_path + home_len;
-                if (rel[0] == '/') rel++;  /* Skip leading slash */
-
-                if (rel[0] == '\0') {
+            if (match >= 0) {
+                /* Under home directory (or is home directory itself) */
+                if (match == 0) {
+                    /* HOME directory itself - not allowed */
                     free(working_path);
                     free(home);
+                    free(home_canonical);
                     return ERROR(ERR_INVALID_ARG,
                         "Cannot specify HOME directory itself");
                 }
 
                 /* Build storage path: home/... */
-                storage_path = str_format("home/%s", rel);
+                storage_path = str_format("home/%s", relative_path);
                 if (!storage_path) {
                     free(working_path);
                     free(home);
+                    free(home_canonical);
                     return ERROR(ERR_MEMORY, "Failed to format storage path");
                 }
             } else {
@@ -966,9 +988,12 @@ error_t *path_resolve_input(
                 if (!storage_path) {
                     free(working_path);
                     free(home);
+                    free(home_canonical);
                     return ERROR(ERR_MEMORY, "Failed to format storage path");
                 }
             }
+
+            free(home_canonical);
 
             free(working_path);
             free(home);
@@ -982,8 +1007,7 @@ error_t *path_resolve_input(
             /* Strict mode: Use fs_make_absolute which validates existence */
             err = fs_make_absolute(input, &absolute);
             if (err) {
-                return error_wrap(err,
-                    "Failed to resolve relative path '%s'\n"
+                return error_wrap(err, "Failed to resolve relative path '%s'\n"
                     "Hint: File must exist for this operation", input);
             }
         } else {
@@ -1017,32 +1041,31 @@ error_t *path_resolve_input(
          * fall back to the original HOME path. */
         char *home_canonical = NULL;
         if (fs_canonicalize_path(home, &home_canonical) == NULL) {
-            free(home);
-            home = home_canonical;
+            /* Success: home_canonical now contains canonical path */
+            /* Keep original home as well for detection */
         }
-        /* If canonicalization failed, home_canonical is NULL and we keep original home */
+        /* If canonicalization failed, home_canonical remains NULL */
 
-        size_t home_len = strlen(home);
+        /* Check if path is under $HOME (original or canonical) */
+        const char *relative_path = NULL;
+        int match = detect_home_prefix(absolute, home, home_canonical, &relative_path);
 
-        /* Check if path is under $HOME */
-        if (str_starts_with(absolute, home) &&
-            (absolute[home_len] == '/' || absolute[home_len] == '\0')) {
-            /* Under home directory */
-            const char *rel = absolute + home_len;
-            if (rel[0] == '/') rel++;  /* Skip leading slash */
-
-            if (rel[0] == '\0') {
+        if (match >= 0) {
+            /* Under home directory (or is home directory itself) */
+            if (match == 0) {
+                /* HOME directory itself - not allowed */
                 free(absolute);
                 free(home);
-                return ERROR(ERR_INVALID_ARG,
-                    "Cannot specify HOME directory itself");
+                free(home_canonical);
+                return ERROR(ERR_INVALID_ARG, "Cannot specify HOME directory itself");
             }
 
             /* Build storage path: home/... */
-            storage_path = str_format("home/%s", rel);
+            storage_path = str_format("home/%s", relative_path);
             if (!storage_path) {
                 free(absolute);
                 free(home);
+                free(home_canonical);
                 return ERROR(ERR_MEMORY, "Failed to format storage path");
             }
         } else {
@@ -1051,9 +1074,12 @@ error_t *path_resolve_input(
             if (!storage_path) {
                 free(absolute);
                 free(home);
+                free(home_canonical);
                 return ERROR(ERR_MEMORY, "Failed to format storage path");
             }
         }
+
+        free(home_canonical);
 
         free(absolute);
         free(home);
@@ -1086,28 +1112,6 @@ error_t *path_resolve_input(
     /* Success - transfer ownership */
     *out_storage_path = storage_path;
     return NULL;
-}
-
-/**
- * Check if string contains glob metacharacters
- *
- * Detects *, ?, and [ which indicate a glob pattern rather than a literal path.
- * Used to determine whether to resolve path or store as pattern.
- *
- * @param s String to check (can be NULL)
- * @return true if contains glob chars, false otherwise
- */
-static bool path_is_glob_pattern(const char *s) {
-    if (!s) {
-        return false;
-    }
-
-    for (const char *p = s; *p; p++) {
-        if (*p == '*' || *p == '?' || *p == '[') {
-            return true;
-        }
-    }
-    return false;
 }
 
 /**
@@ -1150,7 +1154,7 @@ error_t *path_filter_create(
         const char *input = inputs[i];
 
         /* Case 1: Glob pattern - store as-is (no path resolution) */
-        if (path_is_glob_pattern(input)) {
+        if (input && strpbrk(input, "*?[")) {
             /*
              * Glob patterns are used directly for matching.
              * They should be in one of these formats:
@@ -1168,8 +1172,7 @@ error_t *path_filter_create(
                 !str_starts_with(input, "*/")) {
                 err = ERROR(ERR_INVALID_ARG,
                     "Glob pattern '%s' must use storage format or be basename-only\n"
-                    "Examples: 'home/ * * / *.vim', '*.vim' (spaces for doc only)",
-                    input);
+                    "Examples: 'home/ * * / *.vim', '*.vim' (spaces for doc only)", input);
                 goto cleanup;
             }
 

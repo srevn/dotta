@@ -179,25 +179,29 @@ error_t *path_get_home(char **out);
 /**
  * Resolve flexible path input to canonical storage format
  *
- * Accepts two input formats:
- *   1. Filesystem paths: /path/to/file, ~/path/to/file
- *   2. Storage paths: home/path/to/file, root/path/to/file
+ * Accepts multiple input formats:
+ *   1. Absolute paths: /path/to/file
+ *   2. Tilde paths: ~/path/to/file
+ *   3. Relative paths: ./path, ../path, path/to/file (resolved via CWD)
+ *   4. Storage paths: home/..., root/..., custom/...
  *
  * Behavior modes:
- *   - require_exists=true: Filesystem paths MUST exist and will be canonicalized
- *                          (resolves symlinks, verifies existence)
+ *   - require_exists=true: Paths MUST exist and will be canonicalized
+ *                          (validates existence via lstat)
  *                          Critical for add/update to track correct files
  *
- *   - require_exists=false: Filesystem paths converted by pattern only
+ *   - require_exists=false: Paths converted by pattern only
  *                           (file need not exist on disk)
- *                           Used for show/revert/remove (operations on Git data)
+ *                           Used for show/revert/remove/filters
  *
  * Examples:
  *   ~/.bashrc (exists=true)     -> canonicalized to home/.bashrc
  *   ~/.bashrc (exists=false)    -> pattern-converted to home/.bashrc
+ *   ./config (in $HOME)         -> home/config
+ *   ./config (in /etc)          -> root/etc/config
  *   home/.bashrc (either mode)  -> validated and returned as home/.bashrc
  *   /etc/hosts (exists=true)    -> canonicalized to root/etc/hosts
- *   .bashrc (either mode)       -> ERROR: ambiguous/invalid path
+ *   config (no slash)           -> ERROR: ambiguous (use ./config)
  *
  * @param input User-provided path string (must not be NULL)
  * @param require_exists Whether to canonicalize and verify existence
@@ -211,24 +215,37 @@ error_t *path_resolve_input(
 );
 
 /**
- * Path filter for batch matching
+ * Path filter for selective file operations
  *
- * Stores pre-resolved storage paths for efficient O(N) matching.
- * Created from user-provided paths (filesystem or storage format).
+ * Supports three types of filter entries:
+ *   1. Exact paths: "home/.bashrc" - matches single file
+ *   2. Directory prefixes: "home/.config/fish" - matches all files under directory
+ *   3. Glob patterns: "*.vim", "home/ ** / *.conf" - pattern-based matching
  *
  * NULL filter semantics: matches all paths (no filtering).
  */
 typedef struct {
-    char **storage_paths;    /* Normalized storage paths (owned) */
-    size_t count;            /* Number of paths */
+    char **storage_paths;    /* Storage paths or glob patterns (owned) */
+    size_t count;            /* Number of entries */
 } path_filter_t;
 
 /**
  * Create path filter from user input paths
  *
- * Pre-resolves all inputs to storage format using path_resolve_input().
- * Accepts filesystem paths (~/.bashrc, /etc/hosts) and storage paths
- * (home/.bashrc, root/etc/hosts, custom/etc/nginx.conf).
+ * Accepts three types of inputs:
+ *   1. Glob patterns (*, ?, []) - stored as-is for pattern matching
+ *      Examples: "*.vim", "home/ ** / *.conf" (recursive)
+ *
+ *   2. Filesystem paths - resolved to storage format
+ *      Examples: ~/.bashrc, /etc/hosts, ./config, ../path
+ *
+ *   3. Storage paths - validated and stored directly
+ *      Examples: home/.bashrc, root/etc/hosts, custom/etc/nginx.conf
+ *
+ * Glob pattern rules:
+ * - Basename-only patterns ("*.vim") match at any depth
+ * - Patterns with "/" must use storage format (e.g., home/ followed by glob)
+ * - Recursive patterns (doublestar followed by /foo) match at any depth
  *
  * NULL semantics:
  * - If inputs is NULL or count is 0, returns NULL filter (matches all)
@@ -238,8 +255,8 @@ typedef struct {
  * - If any path resolution fails, returns error and cleans up
  * - Partial results are not returned
  *
- * @param inputs User-provided path strings (can be NULL if count is 0)
- * @param count Number of input paths
+ * @param inputs User-provided path or pattern strings (can be NULL if count is 0)
+ * @param count Number of inputs
  * @param out Path filter (must not be NULL, receives NULL if no filter)
  * @return Error or NULL on success
  */
@@ -252,9 +269,15 @@ error_t *path_filter_create(
 /**
  * Check if storage path matches filter
  *
+ * Matching semantics (gitignore-style via match module):
+ * - Exact match: "home/.bashrc" matches "home/.bashrc"
+ * - Directory prefix: "home/.config" matches "home/.config/fish/config.fish"
+ * - Glob patterns: recursive globs match nested paths
+ * - Basename patterns: "*.vim" matches "home/.vim/vimrc.vim"
+ *
  * Returns true if:
  * - Filter is NULL (no restrictions, matches all)
- * - storage_path matches any filter entry (exact match)
+ * - storage_path matches any filter entry
  *
  * Thread safety: Safe for concurrent reads with same filter.
  *

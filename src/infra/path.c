@@ -7,6 +7,7 @@
 #include "path.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <pwd.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -16,6 +17,7 @@
 #include "base/filesystem.h"
 #include "utils/array.h"
 #include "utils/buffer.h"
+#include "utils/match.h"
 #include "utils/string.h"
 
 /**
@@ -714,6 +716,111 @@ cleanup:
 }
 
 /**
+ * Resolve relative path to absolute using CWD
+ *
+ * Pure string operation - does NOT check file existence.
+ * Used for flexible mode path resolution where file need not exist.
+ *
+ * Handles:
+ * - ./foo -> $CWD/foo (strips ./)
+ * - ../bar -> $CWD/../bar (keeps ..)
+ * - relative/path -> $CWD/relative/path
+ *
+ * @param relative_path Relative path (must not be NULL)
+ * @param out Absolute path (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+static error_t *path_resolve_relative(const char *relative_path, char **out) {
+    CHECK_NULL(relative_path);
+    CHECK_NULL(out);
+
+    /* Already absolute - just duplicate */
+    if (relative_path[0] == '/') {
+        *out = strdup(relative_path);
+        if (!*out) {
+            return ERROR(ERR_MEMORY, "Failed to duplicate path");
+        }
+        return NULL;
+    }
+
+    /* Get current working directory */
+    char cwd[PATH_MAX];
+    if (!getcwd(cwd, sizeof(cwd))) {
+        return ERROR(ERR_FS, "Failed to get current working directory: %s",
+                    strerror(errno));
+    }
+
+    /* Strip leading ./ from relative path */
+    const char *clean_path = relative_path;
+    while (clean_path[0] == '.' && clean_path[1] == '/') {
+        clean_path += 2;
+        /* Skip any additional slashes */
+        while (*clean_path == '/') {
+            clean_path++;
+        }
+    }
+
+    /* Handle edge case: path was just "./" or "." */
+    if (*clean_path == '\0' || (clean_path[0] == '.' && clean_path[1] == '\0')) {
+        /* Just return CWD */
+        *out = strdup(cwd);
+        if (!*out) {
+            return ERROR(ERR_MEMORY, "Failed to duplicate CWD");
+        }
+        return NULL;
+    }
+
+    /* Join CWD with cleaned relative path */
+    return fs_path_join(cwd, clean_path, out);
+}
+
+/**
+ * Check if input looks like a relative path
+ *
+ * Relative paths are:
+ * - Paths starting with . (./foo, ../bar, .hidden)
+ * - Paths containing / but not starting with a known prefix
+ *
+ * NOT relative:
+ * - Absolute paths (/...)
+ * - Tilde paths (~...)
+ * - Storage paths (home/..., root/..., custom/...)
+ */
+static bool path_is_relative(const char *input) {
+    if (!input || input[0] == '\0') {
+        return false;
+    }
+
+    /* Starts with . - definitely relative */
+    if (input[0] == '.') {
+        return true;
+    }
+
+    /* Absolute or tilde - not relative */
+    if (input[0] == '/' || input[0] == '~') {
+        return false;
+    }
+
+    /* Storage paths - not relative */
+    if (str_starts_with(input, "home/") ||
+        str_starts_with(input, "root/") ||
+        str_starts_with(input, "custom/")) {
+        return false;
+    }
+
+    /* Contains slash but not a storage path - treat as relative
+     * e.g., "config/file.txt" from CWD */
+    if (strchr(input, '/') != NULL) {
+        return true;
+    }
+
+    /* Single component without slash - ambiguous, not treated as relative
+     * Could be a profile name or a file in CWD, but we can't tell.
+     * User should use ./ prefix for clarity. */
+    return false;
+}
+
+/**
  * Resolve flexible path input to canonical storage format
  *
  * This is the unified path resolution function used by all commands.
@@ -841,7 +948,82 @@ error_t *path_resolve_input(
             free(home);
         }
 
-    /* Case 2: Storage path (home/..., root/..., or custom/...) */
+    /* Case 2: Relative path (./foo, ../bar, or path/with/slash) */
+    } else if (path_is_relative(input)) {
+        char *absolute = NULL;
+
+        if (require_exists) {
+            /* Strict mode: Use fs_make_absolute which validates existence */
+            err = fs_make_absolute(input, &absolute);
+            if (err) {
+                return error_wrap(err,
+                    "Failed to resolve relative path '%s'\n"
+                    "Hint: File must exist for this operation", input);
+            }
+        } else {
+            /* Flexible mode: Resolve via CWD without existence check */
+            err = path_resolve_relative(input, &absolute);
+            if (err) {
+                return error_wrap(err, "Failed to resolve relative path '%s'", input);
+            }
+        }
+
+        /* Convert absolute path to storage format (same as Mode B above) */
+        char *home = NULL;
+        err = path_get_home(&home);
+        if (err) {
+            free(absolute);
+            return err;
+        }
+
+        /* Canonicalize HOME to handle symlinks (e.g., /tmp -> /private/tmp on macOS)
+         * This is necessary because getcwd() returns canonical paths, but $HOME
+         * may contain symlinks. If canonicalization fails (e.g., $HOME doesn't exist),
+         * fall back to the original HOME path. */
+        char *home_canonical = NULL;
+        if (fs_canonicalize_path(home, &home_canonical) == NULL) {
+            free(home);
+            home = home_canonical;
+        }
+        /* If canonicalization failed, home_canonical is NULL and we keep original home */
+
+        size_t home_len = strlen(home);
+
+        /* Check if path is under $HOME */
+        if (str_starts_with(absolute, home) &&
+            (absolute[home_len] == '/' || absolute[home_len] == '\0')) {
+            /* Under home directory */
+            const char *rel = absolute + home_len;
+            if (rel[0] == '/') rel++;  /* Skip leading slash */
+
+            if (rel[0] == '\0') {
+                free(absolute);
+                free(home);
+                return ERROR(ERR_INVALID_ARG,
+                    "Cannot specify HOME directory itself");
+            }
+
+            /* Build storage path: home/... */
+            storage_path = str_format("home/%s", rel);
+            if (!storage_path) {
+                free(absolute);
+                free(home);
+                return ERROR(ERR_MEMORY, "Failed to format storage path");
+            }
+        } else {
+            /* Outside home - use root/ prefix */
+            storage_path = str_format("root%s", absolute);
+            if (!storage_path) {
+                free(absolute);
+                free(home);
+                return ERROR(ERR_MEMORY, "Failed to format storage path");
+            }
+        }
+
+        free(absolute);
+        free(home);
+
+    /* Case 3: Storage path (home/..., root/..., or custom/...) */
     } else if (str_starts_with(input, "home/") ||
                str_starts_with(input, "root/") ||
                str_starts_with(input, "custom/")) {
@@ -857,12 +1039,12 @@ error_t *path_resolve_input(
             return ERROR(ERR_MEMORY, "Failed to allocate storage path");
         }
 
-    /* Case 3: Invalid/ambiguous path */
+    /* Case 4: Invalid/ambiguous path */
     } else {
         return ERROR(ERR_INVALID_ARG,
             "Path '%s' is neither a valid filesystem path nor storage path\n"
-            "Hint: Filesystem paths must be absolute (/) or tilde (~) prefixed\n"
-            "      Storage paths must start with 'home/', 'root/', or 'custom/'",
+            "Hint: Use absolute (/path), tilde (~/.file), relative (./path), or\n"
+            "      storage format (home/..., root/..., custom/...)",
             input);
     }
 
@@ -872,7 +1054,37 @@ error_t *path_resolve_input(
 }
 
 /**
+ * Check if string contains glob metacharacters
+ *
+ * Detects *, ?, and [ which indicate a glob pattern rather than a literal path.
+ * Used to determine whether to resolve path or store as pattern.
+ *
+ * @param s String to check (can be NULL)
+ * @return true if contains glob chars, false otherwise
+ */
+static bool path_is_glob_pattern(const char *s) {
+    if (!s) {
+        return false;
+    }
+
+    for (const char *p = s; *p; p++) {
+        if (*p == '*' || *p == '?' || *p == '[') {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
  * Create path filter from user input paths
+ *
+ * Handles three types of inputs:
+ * 1. Glob patterns (*, ?, []) - stored as-is for pattern matching
+ * 2. Storage paths (home/..., root/..., custom/...) - validated and stored
+ * 3. Filesystem paths (/, ~, ./) - resolved to storage format
+ *
+ * Glob patterns are assumed to be in storage path format or basename-only.
+ * Examples: "*.vim", "*.conf", recursive globs with storage prefix
  */
 error_t *path_filter_create(
     const char **inputs,
@@ -895,31 +1107,76 @@ error_t *path_filter_create(
     filter->storage_paths = calloc(count, sizeof(char *));
     if (!filter->storage_paths) {
         free(filter);
-        return ERROR(ERR_MEMORY, "Failed to allocate filter paths");
+        return ERROR(ERR_MEMORY, "Failed to allocate filter patterns");
     }
 
     error_t *err = NULL;
     for (size_t i = 0; i < count; i++) {
-        /* Resolve to storage path (flexible mode - file need not exist) */
-        err = path_resolve_input(inputs[i], false, &filter->storage_paths[i]);
-        if (err) {
-            /* Cleanup on error - free already resolved paths */
-            for (size_t j = 0; j < i; j++) {
-                free(filter->storage_paths[j]);
+        const char *input = inputs[i];
+
+        /* Case 1: Glob pattern - store as-is (no path resolution) */
+        if (path_is_glob_pattern(input)) {
+            /*
+             * Glob patterns are used directly for matching.
+             * They should be in one of these formats:
+             * - Basename-only: "*.vim", "config.*"
+             * - Recursive: doublestar followed by path component
+             * - Storage path with glob: "home/..." with wildcards
+             *
+             * Validate that patterns with / use proper prefix (unless doublestar)
+             */
+            if (strchr(input, '/') != NULL &&
+                !str_starts_with(input, "home/") &&
+                !str_starts_with(input, "root/") &&
+                !str_starts_with(input, "custom/") &&
+                !str_starts_with(input, "**/") &&
+                !str_starts_with(input, "*/")) {
+                err = ERROR(ERR_INVALID_ARG,
+                    "Glob pattern '%s' must use storage format or be basename-only\n"
+                    "Examples: 'home/ * * / *.vim', '*.vim' (spaces for doc only)",
+                    input);
+                goto cleanup;
             }
-            free(filter->storage_paths);
-            free(filter);
-            return error_wrap(err, "Invalid file path '%s'", inputs[i]);
+
+            filter->storage_paths[i] = strdup(input);
+            if (!filter->storage_paths[i]) {
+                err = ERROR(ERR_MEMORY, "Failed to duplicate pattern");
+                goto cleanup;
+            }
+            filter->count++;
+            continue;
+        }
+
+        /* Case 2: Regular path - resolve to storage format */
+        err = path_resolve_input(input, false, &filter->storage_paths[i]);
+        if (err) {
+            err = error_wrap(err, "Invalid path '%s'", input);
+            goto cleanup;
         }
         filter->count++;
     }
 
     *out = filter;
     return NULL;
+
+cleanup:
+    /* Free already allocated paths */
+    for (size_t j = 0; j < filter->count; j++) {
+        free(filter->storage_paths[j]);
+    }
+    free(filter->storage_paths);
+    free(filter);
+    return err;
 }
 
 /**
  * Check if storage path matches filter
+ *
+ * Matching semantics (via match module):
+ * - Exact match: "home/.bashrc" matches "home/.bashrc"
+ * - Directory prefix: "home/.config" matches "home/.config/fish/config.fish"
+ * - Glob patterns: recursive globs match nested file paths
+ * - Basename patterns: "*.vim" matches "home/.vim/foo.vim"
  */
 bool path_filter_matches(
     const path_filter_t *filter,
@@ -935,9 +1192,16 @@ bool path_filter_matches(
         return false;
     }
 
-    /* Check against each filter entry */
+    /* Check against each filter entry using match module
+     *
+     * match_pattern() provides:
+     * - Exact matching for literal paths
+     * - Directory prefix matching (gitignore-style)
+     * - Glob pattern matching (*, **, ?, [abc])
+     * - Basename-only patterns match at any depth
+     */
     for (size_t i = 0; i < filter->count; i++) {
-        if (strcmp(storage_path, filter->storage_paths[i]) == 0) {
+        if (match_pattern(filter->storage_paths[i], storage_path, MATCH_DOUBLESTAR)) {
             return true;
         }
     }

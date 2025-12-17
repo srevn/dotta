@@ -17,6 +17,7 @@
 #include "cmds/apply.h"
 #include "cmds/bootstrap.h"
 #include "cmds/clone.h"
+#include "cmds/completion.h"
 #include "cmds/diff.h"
 #include "cmds/git.h"
 #include "cmds/ignore.h"
@@ -2213,6 +2214,101 @@ static int cmd_key_main(int argc, char **argv) {
 }
 
 /**
+ * Completion command main (hidden from help)
+ *
+ * Provides completion data for shell scripts. Uses silent failure model:
+ * errors result in no output, not error messages.
+ *
+ * Usage:
+ *   dotta __complete check              # Exit 0 if in repo, 1 otherwise
+ *   dotta __complete profiles           # Enabled profiles
+ *   dotta __complete profiles --all     # All available profiles (branches)
+ *   dotta __complete files              # All managed files
+ *   dotta __complete files -p <profile> # Files in specific profile
+ *   dotta __complete files --storage    # Storage paths instead of filesystem
+ *   dotta __complete commits            # Recent commits from first enabled profile
+ *   dotta __complete commits -p <prof>  # Recent commits from specific profile
+ *   dotta __complete commits --limit N  # Limit number of commits
+ */
+static int cmd_completion_main(int argc, char **argv) {
+    cmd_completion_options_t opts = {
+        .mode = COMPLETE_CHECK,
+        .profile = NULL,
+        .all = false,
+        .storage_paths = false,
+        .limit = 20
+    };
+
+    /* Need at least: dotta __complete <mode> */
+    if (argc < 3) {
+        return 1;  /* Silent failure */
+    }
+
+    /* Parse mode */
+    const char *mode = argv[2];
+    if (strcmp(mode, "check") == 0) {
+        opts.mode = COMPLETE_CHECK;
+    } else if (strcmp(mode, "profiles") == 0) {
+        opts.mode = COMPLETE_PROFILES;
+    } else if (strcmp(mode, "files") == 0) {
+        opts.mode = COMPLETE_FILES;
+    } else if (strcmp(mode, "commits") == 0) {
+        opts.mode = COMPLETE_COMMITS;
+    } else if (strcmp(mode, "remotes") == 0) {
+        opts.mode = COMPLETE_REMOTES;
+    } else {
+        return 1;  /* Unknown mode - silent failure */
+    }
+
+    /* Parse options */
+    for (int i = 3; i < argc; i++) {
+        if (strcmp(argv[i], "--all") == 0 || strcmp(argv[i], "-a") == 0) {
+            opts.all = true;
+        } else if (strcmp(argv[i], "--storage") == 0 || strcmp(argv[i], "-s") == 0) {
+            opts.storage_paths = true;
+        } else if ((strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--profile") == 0)
+                   && i + 1 < argc) {
+            opts.profile = argv[++i];
+        } else if ((strcmp(argv[i], "--limit") == 0 || strcmp(argv[i], "-l") == 0)
+                   && i + 1 < argc) {
+            opts.limit = atoi(argv[++i]);
+        }
+        /* Unknown options silently ignored - don't want to break completion */
+    }
+
+    /* Check mode: just try to open repo */
+    if (opts.mode == COMPLETE_CHECK) {
+        git_repository *repo = NULL;
+        error_t *err = repo_open(&repo, NULL);
+        if (err) {
+            error_free(err);
+            return 1;  /* Not in a dotta repo */
+        }
+        git_repository_free(repo);
+        return 0;  /* In a dotta repo */
+    }
+
+    /* Open repository for other modes */
+    git_repository *repo = NULL;
+    error_t *err = repo_open(&repo, NULL);
+    if (err) {
+        error_free(err);
+        return 0;  /* Silent failure - output nothing */
+    }
+
+    /* Execute completion */
+    err = cmd_completion(repo, &opts);
+    git_repository_free(repo);
+
+    /* Ignore errors - completion should always "succeed" */
+    if (err) {
+        error_free(err);
+    }
+
+    return 0;
+}
+
+/**
  * Signal handler for cleanup on SIGINT/SIGTERM
  *
  * Ensures that the global keymanager is properly cleaned up (master key
@@ -2313,6 +2409,8 @@ int main(int argc, char **argv) {
         ret = cmd_key_main(argc, argv);
     } else if (strcmp(command, "git") == 0) {
         ret = cmd_git_main(argc, argv);
+    } else if (strcmp(command, "__complete") == 0) {
+        ret = cmd_completion_main(argc, argv);
     } else {
         fprintf(stderr, "Error: Unknown command '%s'\n", command);
         print_usage(argv[0]);

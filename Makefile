@@ -78,6 +78,7 @@ ETC_DIR := etc
 PREFIX ?= /usr/local
 BINDIR := $(PREFIX)/bin
 DATADIR := $(PREFIX)/share/dotta
+FISHDIR ?= $(PREFIX)/share/fish/vendor_completions.d
 
 # Source files by layer
 BASE_SRC := $(wildcard $(SRC_DIR)/base/*.c)
@@ -192,17 +193,6 @@ install: $(TARGET)
 	@echo "  Installed: $(DATADIR)/hooks/*.sample"
 	@echo "  Installed: $(DATADIR)/hooks/README.md"
 	@echo ""
-	@echo "Quick start:"
-	@echo "  1. Copy sample config:"
-	@echo "     mkdir -p ~/.config/dotta"
-	@echo "     cp $(DATADIR)/config.toml.sample ~/.config/dotta/config.toml"
-	@echo ""
-	@echo "  2. Initialize repository:"
-	@echo "     dotta init"
-	@echo ""
-	@echo "  3. Add your first file:"
-	@echo "     dotta add --profile global ~/.bashrc"
-	@echo ""
 
 # Uninstall
 .PHONY: uninstall
@@ -212,9 +202,35 @@ uninstall:
 	@echo "  Removed: $(BINDIR)/dotta"
 	@rm -rf $(DATADIR)
 	@echo "  Removed: $(DATADIR)"
+	@rm -f $(FISHDIR)/dotta.fish
+	@echo "  Removed: $(FISHDIR)/dotta.fish"
 	@echo ""
 	@echo "Note: User configurations in ~/.config/dotta were not removed"
 	@echo "To remove user configs: rm -rf ~/.config/dotta"
+
+# Install shell completions
+.PHONY: install-completions
+install-completions:
+	@echo "Installing shell completions..."
+	@if [ -d "$(FISHDIR)" ] || [ ! -e "$(FISHDIR)" ]; then \
+		install -d "$(FISHDIR)" && \
+		install -m 644 $(ETC_DIR)/completions/dotta.fish "$(FISHDIR)/dotta.fish" && \
+		echo "  Installed: $(FISHDIR)/dotta.fish"; \
+	else \
+		echo "  Skipped fish completions ($(FISHDIR) exists but is not a directory)"; \
+	fi
+
+# Uninstall shell completions
+.PHONY: uninstall-completions
+uninstall-completions:
+	@echo "Removing shell completions..."
+	@rm -f "$(FISHDIR)/dotta.fish"
+	@echo "  Removed: $(FISHDIR)/dotta.fish"
+
+# Install all (binary + completions)
+.PHONY: install-all
+install-all: install
+	@$(MAKE) --no-print-directory install-completions
 
 # Format code (requires clang-format)
 .PHONY: format
@@ -233,20 +249,24 @@ check-deps:
 .PHONY: help
 help:
 	@echo "Dotta Makefile targets:"
-	@echo "  all          - Build main executable (default)"
-	@echo "  debug        - Build with debug symbols"
-	@echo "  static       - Build with libgit2 statically linked (portable)"
-	@echo "  clean        - Remove build artifacts"
-	@echo "  install      - Install binary, configs, and hooks to $(PREFIX)"
-	@echo "  uninstall    - Remove installed files from $(PREFIX)"
-	@echo "  format       - Format code with clang-format"
-	@echo "  check-deps   - Check for required dependencies"
-	@echo "  help         - Show this help message"
+	@echo "  all                   - Build main executable (default)"
+	@echo "  debug                 - Build with debug symbols"
+	@echo "  static                - Build with libgit2 statically linked (portable)"
+	@echo "  clean                 - Remove build artifacts"
+	@echo "  install               - Install binary, configs, and hooks to $(PREFIX)"
+	@echo "  install-completions   - Install fish shell completions"
+	@echo "  install-all           - Install binary, configs, hooks, and completions"
+	@echo "  uninstall             - Remove installed files from $(PREFIX)"
+	@echo "  uninstall-completions - Remove shell completions only"
+	@echo "  format                - Format code with clang-format"
+	@echo "  check-deps            - Check for required dependencies"
+	@echo "  help                  - Show this help message"
 	@echo ""
 	@echo "Installation paths:"
-	@echo "  Binary:      $(BINDIR)/dotta"
-	@echo "  Configs:     $(DATADIR)/"
-	@echo "  Hooks:       $(DATADIR)/hooks/"
+	@echo "  Binary:       $(BINDIR)/dotta"
+	@echo "  Configs:      $(DATADIR)/"
+	@echo "  Hooks:        $(DATADIR)/hooks/"
+	@echo "  Completions:  $(FISHDIR)/dotta.fish"
 	@echo ""
 	@echo "Override PREFIX with: make install PREFIX=/custom/path"
 

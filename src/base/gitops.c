@@ -1939,6 +1939,7 @@ error_t *gitops_diff_trees(
     git_repository *repo,
     git_tree *old_tree,
     git_tree *new_tree,
+    const git_diff_options *opts,
     git_diff **out_diff
 ) {
     CHECK_NULL(repo);
@@ -1946,7 +1947,7 @@ error_t *gitops_diff_trees(
 
     /* Note: old_tree and new_tree can be NULL for added/deleted semantics */
 
-    int ret = git_diff_tree_to_tree(out_diff, repo, old_tree, new_tree, NULL);
+    int ret = git_diff_tree_to_tree(out_diff, repo, old_tree, new_tree, opts);
     if (ret < 0) {
         return error_from_git(ret);
     }

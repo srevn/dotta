@@ -18,49 +18,11 @@
 #include "crypto/keymanager.h"
 #include "infra/compare.h"
 #include "infra/content.h"
+#include "infra/path.h"
 #include "utils/config.h"
+#include "utils/hashmap.h"
 #include "utils/output.h"
 #include "utils/timeutil.h"
-
-/**
- * Get basename from path
- */
-static const char *get_basename(const char *path) {
-    const char *last_slash = strrchr(path, '/');
-    return last_slash ? last_slash + 1 : path;
-}
-
-/**
- * Check if file should be diffed based on file filter
- */
-static bool matches_file_filter(const char *path, const cmd_diff_options_t *opts) {
-    /* If no files specified, match all files */
-    if (!opts->files || opts->file_count == 0) {
-        return true;
-    }
-
-    const char *basename = get_basename(path);
-
-    for (size_t i = 0; i < opts->file_count; i++) {
-        /* Try exact path match first */
-        if (strcmp(path, opts->files[i]) == 0) {
-            return true;
-        }
-
-        /* Try basename match */
-        const char *search_basename = get_basename(opts->files[i]);
-        if (strcmp(basename, search_basename) == 0) {
-            return true;
-        }
-
-        /* Try substring match in full path */
-        if (strstr(path, opts->files[i]) != NULL) {
-            return true;
-        }
-    }
-
-    return false;
-}
 
 /**
  * Determine if workspace item should be shown for the given direction
@@ -351,6 +313,7 @@ static error_t *show_file_diff_from_workspace(
  * @param content_cache Content cache for blob access (must not be NULL)
  * @param direction Diff direction (UPSTREAM or DOWNSTREAM)
  * @param filter_profiles Profile filter for CLI (can be NULL for no filter)
+ * @param file_filter File filter for CLI (can be NULL for no filter)
  * @param opts Command options (must not be NULL)
  * @param out Output context (must not be NULL)
  * @param diff_count Output: number of diffs shown (must not be NULL)
@@ -364,6 +327,7 @@ static error_t *present_diffs_for_direction(
     git_repository *repo,
     diff_direction_t direction,
     const profile_list_t *filter_profiles,
+    const path_filter_t *file_filter,
     const cmd_diff_options_t *opts,
     output_ctx_t *out,
     size_t *diff_count
@@ -392,7 +356,7 @@ static error_t *present_diffs_for_direction(
         }
 
         /* Filter 2: Check file filter (user-specified files) */
-        if (!matches_file_filter(item->filesystem_path, opts)) {
+        if (!path_filter_matches(file_filter, item->storage_path)) {
             continue;
         }
 
@@ -741,6 +705,7 @@ static int print_diff_line_cb(
  * @param manifest Historical manifest to compare (must not be NULL)
  * @param metadata Metadata from historical commit (must not be NULL)
  * @param profile_name Profile name (must not be NULL)
+ * @param file_filter File filter for CLI (can be NULL for no filter)
  * @param opts Command options (must not be NULL)
  * @param out Output context (must not be NULL)
  * @param diff_count Output: number of diffs shown (must not be NULL)
@@ -751,6 +716,7 @@ static error_t *compare_manifest_to_filesystem(
     const manifest_t *manifest,
     const metadata_t *metadata,
     const char *profile_name,
+    const path_filter_t *file_filter,
     const cmd_diff_options_t *opts,
     output_ctx_t *out,
     size_t *diff_count
@@ -780,7 +746,7 @@ static error_t *compare_manifest_to_filesystem(
         const char *storage_path = entry->storage_path;
 
         /* Check file filter */
-        if (!matches_file_filter(fs_path, opts)) {
+        if (!path_filter_matches(file_filter, storage_path)) {
             continue;
         }
 
@@ -969,6 +935,7 @@ static error_t *compare_manifest_to_filesystem(
  * @param repo Repository (must not be NULL)
  * @param commit_ref Commit reference to compare (must not be NULL)
  * @param profiles Profile list (must not be NULL)
+ * @param file_filter File filter (can be NULL)
  * @param opts Command options (must not be NULL)
  * @param out Output context (must not be NULL)
  * @return Error or NULL on success
@@ -977,6 +944,7 @@ static error_t *diff_commit_to_workspace(
     git_repository *repo,
     const char *commit_ref,
     profile_list_t *profiles,
+    const path_filter_t *file_filter,
     const cmd_diff_options_t *opts,
     output_ctx_t *out
 ) {
@@ -1055,7 +1023,8 @@ static error_t *diff_commit_to_workspace(
     /* Step 6: Compare historical manifest against current filesystem */
     size_t diff_count = 0;
     err = compare_manifest_to_filesystem(
-        repo, manifest, metadata, profile_name,
+        repo, manifest, metadata,
+        profile_name, file_filter,
         opts, out, &diff_count
     );
     if (err) {
@@ -1077,6 +1046,85 @@ cleanup:
 }
 
 /**
+ * Build git_strarray pathspec from path filter
+ *
+ * Converts a path_filter_t (containing exact paths in a hashmap and glob
+ * patterns in an array) into a git_strarray pathspec for libgit2's diff
+ * operations.
+ *
+ * Memory ownership:
+ *   - The returned strings array is allocated and must be freed by caller
+ *   - Individual string pointers are borrowed from the filter (not duplicated)
+ *   - Filter must outlive the diff operation (caller's responsibility)
+ *
+ * The caller should free only the array after use:
+ *   if (diff_opts.pathspec.strings) free(diff_opts.pathspec.strings);
+ *
+ * Fail-safe behavior:
+ *   - NULL filter: no-op (matches all files)
+ *   - Empty filter: no-op (matches all files)
+ *   - Allocation failure: no-op (matches all files, best-effort)
+ *
+ * @param filter Path filter (can be NULL for no filtering)
+ * @param opts Diff options to populate (must not be NULL)
+ */
+static error_t *build_diff_pathspec(
+    const path_filter_t *filter,
+    git_diff_options *opts
+) {
+    if (!opts) {
+        return NULL;
+    }
+
+    /* NULL or empty filter = match all files (leave pathspec at defaults) */
+    if (!filter || filter->count == 0) {
+        return NULL;
+    }
+
+    /* Allocate pointer array for all paths (exact + globs) */
+    char **strings = calloc(filter->count, sizeof(char *));
+    if (!strings) {
+        return ERROR(ERR_MEMORY, "Failed to allocate memory for diff pathspec");
+    }
+
+    size_t index = 0;
+
+    /*
+     * Phase 1: Collect exact paths from hashmap
+     *
+     * Hashmap keys are owned by the hashmap (duplicated on insert).
+     * We borrow pointers here - safe because filter outlives diff operation.
+     */
+    hashmap_iter_t iter;
+    hashmap_iter_init(&iter, filter->exact_paths);
+    const char *key;
+
+    while (hashmap_iter_next(&iter, &key, NULL)) {
+        if (index < filter->count) {
+            strings[index++] = (char *)key;  /* Borrow pointer from hashmap */
+        }
+    }
+
+    /*
+     * Phase 2: Collect glob patterns from array
+     *
+     * Glob patterns are owned by filter->glob_patterns[].
+     * We borrow pointers here - safe because filter outlives diff operation.
+     */
+    for (size_t i = 0; i < filter->glob_count; i++) {
+        if (index < filter->count) {
+            strings[index++] = filter->glob_patterns[i];  /* Borrow pointer */
+        }
+    }
+
+    /* Populate pathspec in diff options */
+    opts->pathspec.strings = strings;
+    opts->pathspec.count = index;
+    
+    return NULL;
+}
+
+/**
  * Diff two commits
  */
 static error_t *diff_commits(
@@ -1084,6 +1132,7 @@ static error_t *diff_commits(
     const char *commit1_ref,
     const char *commit2_ref,
     profile_list_t *profiles,
+    const path_filter_t *file_filter,
     const cmd_diff_options_t *opts,
     output_ctx_t *out
 ) {
@@ -1148,8 +1197,20 @@ static error_t *diff_commits(
         goto cleanup;
     }
 
-    /* Generate diff */
-    err = gitops_diff_trees(repo, tree1, tree2, &diff);
+    /* Generate diff with file filtering options */
+    git_diff_options diff_opts = GIT_DIFF_OPTIONS_INIT;
+    err = build_diff_pathspec(file_filter, &diff_opts);
+    if (err) {
+        goto cleanup;
+    }
+
+    err = gitops_diff_trees(repo, tree1, tree2, &diff_opts, &diff);
+    
+    /* Free pathspec strings if they were allocated */
+    if (diff_opts.pathspec.strings) {
+        free(diff_opts.pathspec.strings);
+    }
+
     if (err) {
         err = error_wrap(err, "Failed to generate diff");
         goto cleanup;
@@ -1195,6 +1256,7 @@ cleanup:
  * @param repo Repository (must not be NULL)
  * @param profiles Profile list (must not be NULL)
  * @param filter_profiles Profile filter for CLI (can be NULL for no filter)
+ * @param file_filter File filter (can be NULL)
  * @param config Configuration (can be NULL)
  * @param opts Command options (must not be NULL)
  * @param out Output context (must not be NULL)
@@ -1204,6 +1266,7 @@ static error_t *diff_workspace(
     git_repository *repo,
     profile_list_t *profiles,
     const profile_list_t *filter_profiles,
+    const path_filter_t *file_filter,
     const dotta_config_t *config,
     const cmd_diff_options_t *opts,
     output_ctx_t *out
@@ -1264,9 +1327,9 @@ static error_t *diff_workspace(
         output_info(out, "Shows what 'dotta apply' would change\n");
 
         err = present_diffs_for_direction(
-            diverged, diverged_count,
-            manifest, cache, repo,
-            DIFF_UPSTREAM, filter_profiles,
+            diverged, diverged_count, manifest,
+            cache, repo, DIFF_UPSTREAM,
+            filter_profiles, file_filter,
             opts, out, &upstream_count
         );
         if (err) goto cleanup;
@@ -1281,9 +1344,9 @@ static error_t *diff_workspace(
         output_info(out, "Shows what 'dotta update' would commit\n");
 
         err = present_diffs_for_direction(
-            diverged, diverged_count,
-            manifest, cache, repo,
-            DIFF_DOWNSTREAM, filter_profiles,
+            diverged, diverged_count, manifest,
+            cache, repo, DIFF_DOWNSTREAM,
+            filter_profiles, file_filter,
             opts, out, &downstream_count
         );
         if (err) goto cleanup;
@@ -1297,9 +1360,9 @@ static error_t *diff_workspace(
     } else {
         /* Single direction */
         err = present_diffs_for_direction(
-            diverged, diverged_count,
-            manifest, cache, repo,
-            opts->direction, filter_profiles,
+            diverged, diverged_count, manifest,
+            cache, repo, opts->direction,
+            filter_profiles, file_filter,
             opts, out, &total_diff_count
         );
         if (err) goto cleanup;
@@ -1321,7 +1384,10 @@ cleanup:
 /**
  * Diff command implementation
  */
-error_t *cmd_diff(git_repository *repo, const cmd_diff_options_t *opts) {
+error_t *cmd_diff(
+    git_repository *repo,
+    const cmd_diff_options_t *opts
+) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
@@ -1330,6 +1396,7 @@ error_t *cmd_diff(git_repository *repo, const cmd_diff_options_t *opts) {
     output_ctx_t *out = NULL;
     profile_list_t *workspace_profiles = NULL;
     profile_list_t *diff_profiles = NULL;
+    path_filter_t *file_filter = NULL;
 
     /* Load configuration */
     err = config_load(NULL, &config);
@@ -1385,26 +1452,54 @@ error_t *cmd_diff(git_repository *repo, const cmd_diff_options_t *opts) {
         diff_profiles = workspace_profiles;
     }
 
+    /* Create file filter from CLI arguments */
+    if (opts->files && opts->file_count > 0) {
+        /* Collect custom prefixes from profiles for path resolution */
+        const char **custom_prefixes = NULL;
+        size_t prefix_count = 0;
+
+        if (diff_profiles && diff_profiles->count > 0) {
+            custom_prefixes = calloc(diff_profiles->count, sizeof(char *));
+            if (custom_prefixes) {
+                for (size_t i = 0; i < diff_profiles->count; i++) {
+                    if (diff_profiles->profiles[i].custom_prefix) {
+                        custom_prefixes[prefix_count++] = diff_profiles->profiles[i].custom_prefix;
+                    }
+                }
+            }
+        }
+
+        err = path_filter_create((const char **)opts->files, opts->file_count,
+                                 custom_prefixes, prefix_count, &file_filter);
+        free(custom_prefixes);  /* Array only, strings borrowed from profiles */
+
+        if (err) {
+            err = error_wrap(err, "Failed to create file filter");
+            goto cleanup;
+        }
+    }
+
     /* Route to diff implementation based on mode */
     switch (opts->mode) {
         case DIFF_COMMIT_TO_COMMIT:
             /* Diff two commits */
-            err = diff_commits(repo, opts->commit1, opts->commit2, diff_profiles, opts, out);
+            err = diff_commits(repo, opts->commit1, opts->commit2, diff_profiles, file_filter, opts, out);
             goto cleanup;
 
         case DIFF_COMMIT_TO_WORKSPACE:
             /* Use commit-to-workspace diff */
-            err = diff_commit_to_workspace(repo, opts->commit1, diff_profiles, opts, out);
+            err = diff_commit_to_workspace(repo, opts->commit1, diff_profiles, file_filter, opts, out);
             goto cleanup;
 
         case DIFF_WORKSPACE:
             /* Workspace diff uses workspace_profiles for accurate analysis,
              * diff_profiles for filtering output */
-            err = diff_workspace(repo, workspace_profiles, diff_profiles, config, opts, out);
+            err = diff_workspace(repo, workspace_profiles, diff_profiles, file_filter, config, opts, out);
             goto cleanup;
     }
 
 cleanup:
+    if (file_filter) path_filter_free(file_filter);
     if (diff_profiles && diff_profiles != workspace_profiles) {
         profile_list_free(diff_profiles);
     }

@@ -282,7 +282,7 @@ static error_t *show_commit(
     }
 
     /* Generate diff between parent and commit */
-    err = gitops_diff_trees(repo, parent_tree, commit_tree, &diff);
+    err = gitops_diff_trees(repo, parent_tree, commit_tree, NULL, &diff);
     if (err) {
         goto cleanup;
     }

@@ -200,6 +200,26 @@ error_t *profile_list_load(
 );
 
 /**
+ * Enrich profiles with custom prefixes from state
+ *
+ * Populates profile->custom_prefix for each profile by querying the state
+ * database. This bridges profile loading (Git-based) with deployment
+ * configuration (state-based).
+ *
+ * Error semantics:
+ * - State load failure: Non-fatal (profiles remain without custom_prefix)
+ * - Memory allocation failure: Fatal (returns error, caller must handle)
+ *
+ * @param profiles Profile list to enrich (must not be NULL)
+ * @param repo Repository for state access (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *profiles_enrich_with_prefixes(
+    profile_list_t *profiles,
+    git_repository *repo
+);
+
+/**
  * Resolve profiles based on priority hierarchy (unified profile resolution)
  *
  * This is the primary function for loading profiles throughout the application.

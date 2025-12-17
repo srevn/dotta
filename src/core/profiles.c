@@ -530,6 +530,79 @@ cleanup:
 }
 
 /**
+ * Enrich profiles with custom prefixes from state
+ *
+ * Bridges profile loading (Git-based) with deployment configuration (state-based)
+ * by populating the custom_prefix field for each profile from the state database.
+ */
+error_t *profiles_enrich_with_prefixes(
+    profile_list_t *profiles,
+    git_repository *repo
+) {
+    CHECK_NULL(profiles);
+    CHECK_NULL(repo);
+
+    /* Early return for empty profile list */
+    if (profiles->count == 0) {
+        return NULL;
+    }
+
+    /* Load state (read-only) to get prefix map */
+    state_t *state = NULL;
+    error_t *err = state_load(repo, &state);
+    if (err) {
+        /* State load failure is non-fatal - profiles just won't have custom_prefix
+         * This preserves current behavior for environments without state */
+        error_free(err);
+        return NULL;
+    }
+
+    if (!state) {
+        return NULL;  /* No state database = no prefixes */
+    }
+
+    /* Get prefix map from state */
+    hashmap_t *prefix_map = NULL;
+    err = state_get_prefix_map(state, &prefix_map);
+    if (err) {
+        state_free(state);
+        return error_wrap(err, "Failed to get custom prefix map");
+    }
+
+    /* Enrich each profile with its custom prefix (if any) */
+    for (size_t i = 0; i < profiles->count; i++) {
+        profile_t *profile = &profiles->profiles[i];
+        const char *custom_prefix = NULL;
+        
+        /* Query from state */
+        custom_prefix = (const char *)hashmap_get(prefix_map, profile->name);
+        
+        /* Attach to profile (owned by profile, freed in profile_list_free) */
+        if (custom_prefix) {
+            /* Free any existing custom_prefix (defensive) and set new prefix */
+            free(profile->custom_prefix);
+            profile->custom_prefix = strdup(custom_prefix);
+            if (!profile->custom_prefix) {
+                hashmap_free(prefix_map, free);
+                state_free(state);
+                return ERROR(ERR_MEMORY,
+                            "Failed to allocate custom_prefix for profile '%s'",
+                            profile->name);
+            }
+        } else {
+            /* No custom prefix - ensure field is NULL */
+            free(profile->custom_prefix);
+            profile->custom_prefix = NULL;
+        }
+    }
+    
+    /* Cleanup temporary resources */
+    hashmap_free(prefix_map, free);
+    state_free(state);
+    return NULL;
+}
+
+/**
  * Validate state profiles and filter out non-existent ones
  *
  * Checks that all profiles listed in state exist as local branches.
@@ -633,7 +706,18 @@ error_t *profile_resolve(
         if (source_out) {
             *source_out = PROFILE_SOURCE_EXPLICIT;
         }
-        return profile_list_load(repo, explicit_profiles, explicit_count, true, out);
+        err = profile_list_load(repo, explicit_profiles, explicit_count, true, out);
+        if (err) {
+            return err;
+        }
+        /* Enrich with custom prefixes from state */
+        err = profiles_enrich_with_prefixes(*out, repo);
+        if (err) {
+            profile_list_free(*out);
+            *out = NULL;
+            return err;
+        }
+        return NULL;
     }
 
     /* Priority 2: State profiles (persistent management) */
@@ -703,6 +787,14 @@ error_t *profile_resolve(
 
     err = profile_list_load(repo, names, count, strict_mode, out);
     if (err) {
+        goto cleanup;
+    }
+
+    /* Enrich with custom prefixes from state */
+    err = profiles_enrich_with_prefixes(*out, repo);
+    if (err) {
+        profile_list_free(*out);
+        *out = NULL;
         goto cleanup;
     }
 
@@ -783,7 +875,20 @@ error_t *profile_resolve_for_operations(
     }
 
     /* Load explicitly specified profiles */
-    return profile_list_load(repo, cli_profiles, cli_count, strict_mode, out);
+    error_t *err = profile_list_load(repo, cli_profiles, cli_count, strict_mode, out);
+    if (err) {
+        return err;
+    }
+
+    /* Enrich with custom prefixes from state */
+    err = profiles_enrich_with_prefixes(*out, repo);
+    if (err) {
+        profile_list_free(*out);
+        *out = NULL;
+        return err;
+    }
+
+    return NULL;
 }
 
 /**

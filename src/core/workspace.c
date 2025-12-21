@@ -33,6 +33,7 @@
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "core/ignore.h"
+#include "core/profiles.h"
 #include "crypto/encryption.h"
 #include "crypto/keymanager.h"
 #include "crypto/policy.h"
@@ -2584,9 +2585,13 @@ const workspace_item_t *workspace_get_all_diverged(
  *
  * Two-pass extraction: count by kind, then populate both arrays.
  * Caller owns returned arrays; items are borrowed from workspace.
+ *
+ * Profile filtering: When profile_filter is non-NULL, only orphans from
+ * matching profiles are extracted (Coherent Scope principle).
  */
 error_t *workspace_extract_orphans(
     const workspace_t *ws,
+    const profile_list_t *profile_filter,
     const workspace_item_t ***out_file_orphans,
     size_t *out_file_count,
     const workspace_item_t ***out_dir_orphans,
@@ -2607,10 +2612,20 @@ error_t *workspace_extract_orphans(
         return NULL;
     }
 
-    /* Pass 1: Count orphans by kind */
+    /* Pass 1: Count orphans by kind (with optional profile filter)
+     *
+     * When profile_filter is set, only count orphans from matching profiles.
+     * This enables coherent scope for profile-filtered operations.
+     */
     size_t file_count = 0, dir_count = 0;
     for (size_t i = 0; i < ws->diverged_count; i++) {
         if (ws->diverged[i].state == WORKSPACE_STATE_ORPHANED) {
+            /* Apply profile filter if specified */
+            if (profile_filter &&
+                !profile_filter_matches(ws->diverged[i].profile, profile_filter)) {
+                continue;  /* Skip orphans from other profiles */
+            }
+
             if (ws->diverged[i].item_kind == WORKSPACE_ITEM_FILE) {
                 file_count++;
             } else {
@@ -2643,10 +2658,16 @@ error_t *workspace_extract_orphans(
         }
     }
 
-    /* Pass 2: Populate both arrays in single iteration */
+    /* Pass 2: Populate both arrays in single iteration (with same filter) */
     size_t f_idx = 0, d_idx = 0;
     for (size_t i = 0; i < ws->diverged_count; i++) {
         if (ws->diverged[i].state == WORKSPACE_STATE_ORPHANED) {
+            /* Apply same profile filter as Pass 1 */
+            if (profile_filter &&
+                !profile_filter_matches(ws->diverged[i].profile, profile_filter)) {
+                continue;
+            }
+
             if (ws->diverged[i].item_kind == WORKSPACE_ITEM_FILE) {
                 if (file_arr) {
                     file_arr[f_idx++] = &ws->diverged[i];

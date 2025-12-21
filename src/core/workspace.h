@@ -189,7 +189,7 @@ const workspace_item_t *workspace_get_all_diverged(
  * Encapsulates orphan filtering logic within the workspace module.
  *
  * Algorithm:
- * - Pass 1: Count orphans by kind (file vs directory)
+ * - Pass 1: Count orphans by kind (file vs directory), applying profile filter
  * - Pass 2: Populate both arrays in single iteration
  *
  * Performance: O(N) where N = diverged count (2 passes total).
@@ -199,12 +199,20 @@ const workspace_item_t *workspace_get_all_diverged(
  * Selective extraction: Pass NULL for out_file_orphans or out_dir_orphans
  * to skip that extraction. The corresponding count will be set to 0.
  *
+ * Profile filtering: When profile_filter is non-NULL, only orphans from
+ * matching profiles are extracted. This enables `apply -p <profile>`
+ * to only remove orphans from the specified profile.
+ *
  * Edge cases:
  * - No orphans: Returns success with count=0, arrays=NULL
  * - analyze_orphans=false during load: Returns success with count=0
  * - Memory failure: Returns error, no partial allocation
+ * - profile_filter with no matches: Returns success with count=0
  *
  * @param ws Workspace (must not be NULL)
+ * @param profile_filter Optional profile filter (NULL = all orphans)
+ *                       When non-NULL, only extracts orphans from profiles
+ *                       matching the filter (uses profile_filter_matches)
  * @param out_file_orphans Output file array (caller frees, NULL to skip)
  * @param out_file_count Output file count (set to 0 if out_file_orphans is NULL)
  * @param out_dir_orphans Output directory array (caller frees, NULL to skip)
@@ -213,6 +221,7 @@ const workspace_item_t *workspace_get_all_diverged(
  */
 error_t *workspace_extract_orphans(
     const workspace_t *ws,
+    const profile_list_t *profile_filter,
     const workspace_item_t ***out_file_orphans,
     size_t *out_file_count,
     const workspace_item_t ***out_dir_orphans,

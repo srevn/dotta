@@ -983,6 +983,13 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         }
     }
 
+    /* Explicit profile filter detection (Coherent Scope)
+     *
+     * Directly checks CLI arguments to determine if profile filtering is requested.
+     * Used to scope orphan cleanup and directory processing.
+     */
+    bool has_profile_filter = (opts->profiles != NULL && opts->profile_count > 0);
+
     /* Create file filter from CLI arguments
      *
      * Extract custom prefixes from operation profiles to enable proper resolution
@@ -1216,26 +1223,26 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
      * Architecture: workspace_load() already detected ALL orphans (enabled + disabled
      * profiles) during analyze_orphaned_state(). We extract them here for cleanup.
      *
-     * Two semantic modes determine orphan cleanup behavior:
+     * Three semantic modes determine orphan cleanup behavior (Coherent Scope):
      *
-     * 1. FULL SYNC MODE (no file filter):
-     *    Orphan removal is UNCONDITIONAL - does not respect profile filter.
-     *    - Profile filter applies to deployment (which files to deploy)
-     *    - Orphan removal is housekeeping (removing files outside VWD scope)
-     *    - The manifest layer already decided orphan status based on enabled profiles
-     *    - Apply must respect that authority regardless of CLI profile filter
+     * 1. FULL SYNC MODE (no file filter, no profile filter):
+     *    Process ALL orphans - complete workspace convergence.
+     *    - Disabled profile orphans: User disabled profile -> files removed
+     *    - Enabled profile orphans: File deleted from Git -> filesystem converges
+     *    - VWD invariant: manifest is authoritative source for scope
      *
-     *    Why unconditional in full sync?
-     *    - Disabled profile orphans: User disabled profile -> files must be removed
-     *    - Enabled profile orphans: File deleted from Git -> filesystem must converge
-     *    - VWD invariant: manifest is authoritative source for scope decisions
+     * 2. PROFILE SCOPED MODE (profile filter active, no file filter):
+     *    Process only orphans from filtered profiles.
+     *    - `dotta apply -p work` removes only work's orphans
+     *    - Orphans from other profiles are preserved
+     *    - User can run `dotta apply` (no filter) for full sync when ready
+     *    - Implements Coherent Scope: all side effects respect CLI filter
      *
-     * 2. TARGETED MODE (file filter active):
+     * 3. TARGETED MODE (file filter active):
      *    Orphan cleanup is SKIPPED entirely.
      *    - When user specifies files to apply, they expect a TARGETED operation
-     *    - Orphan cleanup is a side effect that would violate principle of least surprise
+     *    - Orphan cleanup is a side effect that would violate least surprise
      *    - An orphan cannot "match" a specific file path by definition
-     *    - User can run `dotta apply` (no filter) to get full sync with orphan cleanup
      *
      * Extracted orphans are used for:
      * 1. Privilege checking (filter root/ paths)
@@ -1249,18 +1256,18 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
 
         /* Extract orphans via workspace API (2-pass internally: count, then populate)
          *
-         * In full sync mode, orphan removal is UNCONDITIONAL:
-         * - Profile filter applies to deployment (which managed files to deploy)
-         * - Orphan removal is housekeeping (removing files outside VWD scope)
-         * - Manifest (VWD) already determined orphan status via enabled profiles
-         * - Apply must respect that authority regardless of CLI profile filter
+         * Coherent Scope principle: When profile filter is active, only extract
+         * orphans from the specified profiles. Orphans from other profiles are
+         * preserved, implementing scoped cleanup behavior.
          */
         const workspace_item_t **all_file_orphans = NULL;
         const workspace_item_t **all_dir_orphans = NULL;
         size_t total_file_orphans = 0, total_dir_orphans = 0;
 
-        err = workspace_extract_orphans(ws, &all_file_orphans, &total_file_orphans,
-                                        &all_dir_orphans, &total_dir_orphans);
+        err = workspace_extract_orphans(
+            ws, has_profile_filter ? operation_profiles : NULL, &all_file_orphans,
+            &total_file_orphans, &all_dir_orphans, &total_dir_orphans
+        );
         if (err) {
             err = error_wrap(err, "Failed to extract orphans from workspace");
             goto cleanup;
@@ -1460,7 +1467,8 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         .skip_existing = opts->skip_existing,
         .skip_unchanged = opts->skip_unchanged,
         .strict_ownership = config->strict_mode,
-        .targeted_mode = (file_filter != NULL)
+        .targeted_mode = (file_filter != NULL),
+        .profile_scope = has_profile_filter ? operation_profiles : NULL
     };
 
     err = deploy_preflight_check_from_workspace(ws, deploy_manifest, &deploy_opts, &preflight);

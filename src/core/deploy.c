@@ -13,6 +13,7 @@
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "core/metadata.h"
+#include "core/profiles.h"
 #include "core/workspace.h"
 #include "infra/content.h"
 #include "utils/array.h"
@@ -693,16 +694,21 @@ static error_t *deploy_tracked_directories(
         return NULL;  /* No tracked directories */
     }
 
-    /* Verbose output: differentiate targeted vs full sync mode */
+    /* Verbose output: differentiate scoped vs full sync mode */
     if (opts->verbose) {
         if (opts->targeted_mode) {
+            /* File filter: strictly ancestors only */
             size_t required_count = required_dirs ? hashmap_size(required_dirs) : 0;
             if (required_count > 0) {
                 printf("Checking %zu tracked director%s (scoped to deployment)...\n",
                        required_count, required_count == 1 ? "y" : "ies");
             }
             /* If required_count == 0, no directories to process - skip message */
+        } else if (opts->profile_scope) {
+            /* Profile filter: ancestors + profile-owned directories */
+            printf("Processing tracked directories (scoped to profile)...\n");
         } else {
+            /* Full sync: all directories */
             printf("Creating %zu tracked director%s with metadata...\n",
                    dir_count, dir_count == 1 ? "y" : "ies");
         }
@@ -712,20 +718,46 @@ static error_t *deploy_tracked_directories(
     for (size_t i = 0; i < dir_count; i++) {
         const state_directory_entry_t *dir_entry = &directories[i];
 
-        /* Targeted mode: skip directories not in required set
+        /* Scope filtering: targeted_mode and/or profile_scope
          *
-         * When file filter is active, only process directories that are
-         * ancestors of files being deployed. This implements coherent scope.
+         * Composition rules (Inclusive Ancestry principle):
          *
-         * Uses opts->targeted_mode as authoritative control:
-         * - targeted_mode=true, required_dirs=NULL: empty manifest, skip all
-         * - targeted_mode=true, required_dirs non-NULL: filter by set
-         * - targeted_mode=false: process all (full sync)
+         * 1. targeted_mode (file filter): STRICT - only required ancestors
+         *    - required_dirs contains ancestors of specific files
+         *    - Skip ALL directories not in required_dirs
+         *
+         * 2. profile_scope (profile filter): INCLUSIVE
+         *    - Process if in required_dirs (ancestor of profile's files)
+         *    - OR process if matches profile_scope (owned by filtered profile)
+         *    - Skip if neither condition met
+         *
+         * 3. Both filters: targeted_mode takes precedence (more restrictive)
+         *    - Only ancestors of specific files, regardless of profile ownership
          */
-        if (opts->targeted_mode &&
-            (!required_dirs || !hashmap_has(required_dirs, dir_entry->filesystem_path))) {
-            continue;
+        bool in_required = required_dirs && hashmap_has(required_dirs, dir_entry->filesystem_path);
+
+        if (opts->targeted_mode) {
+            /* Strict ancestor-only mode (file filter active) */
+            if (!in_required) {
+                if (opts->verbose) {
+                    printf("  Skipped: %s (not ancestor of targeted files)\n", dir_entry->filesystem_path);
+                }
+                continue;
+            }
+        } else if (opts->profile_scope) {
+            /* Profile scope: ancestors OR profile-owned directories
+             *
+             * Inclusive Ancestry: ancestor directories are always processed
+             * to ensure file deployment succeeds, even if owned by different profile.
+             */
+            if (!in_required && !profile_filter_matches(dir_entry->profile, opts->profile_scope)) {
+                if (opts->verbose) {
+                    printf("  Skipped: %s (outside profile scope)\n", dir_entry->filesystem_path);
+                }
+                continue;
+            }
         }
+        /* else: no filter, process all (full sync mode) */
 
         /* Skip STATE_INACTIVE directories - they're orphaned and awaiting cleanup
          *
@@ -959,14 +991,20 @@ error_t *deploy_execute(
         return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
     }
 
-    /* Calculate required directories when targeted_mode is active
+    /* Calculate required directories when ANY scope filter is active
      *
-     * Coherent scope: when file filter is active, only process directories
-     * that are ancestors of files being deployed. This prevents unrelated
-     * directory operations when user specifies specific files to apply.
+     * Required directories are ancestors of files in the manifest. They must
+     * be processed regardless of profile ownership to ensure file deployment.
+     *
+     * Scope filters:
+     * - targeted_mode (file filter): Strictly process only ancestors
+     * - profile_scope (profile filter): Process ancestors AND profile-owned dirs
+     *
+     * When either filter is active, we need the required_dirs hashmap to
+     * determine which directories are ancestors of files being deployed.
      */
     hashmap_t *required_dirs = NULL;
-    if (opts->targeted_mode && manifest->count > 0 && state) {
+    if ((opts->targeted_mode || opts->profile_scope) && manifest->count > 0 && state) {
         err = calculate_required_directories(manifest, state, &required_dirs);
         if (err) {
             deploy_result_free(result);

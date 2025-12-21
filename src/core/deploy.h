@@ -59,6 +59,17 @@ typedef struct {
     bool skip_unchanged;   /* Skip files that match profile content (smart skip) */
     bool strict_ownership; /* Fail if ownership cannot be resolved (strict_mode) */
     bool targeted_mode;    /* Scope directory processing to manifest file ancestors */
+
+    /**
+     * Profile scope for directory processing
+     *
+     * When non-NULL, directory processing is scoped to:
+     * 1. Directories that are ancestors of files being deployed
+     * 2. Directories owned by profiles matching this filter
+     *
+     * NULL = process all directories (full sync mode)
+     */
+    const profile_list_t *profile_scope;
 } deploy_options_t;
 
 /**

@@ -99,11 +99,13 @@ static void display_enabled_profiles(
  * Organized into actionable sections (Git-like structure).
  *
  * @param ws Workspace (must not be NULL, borrowed from caller)
+ * @param profile_filter Optional profile filter (NULL = show all items)
  * @param out Output context (must not be NULL)
  * @param verbose Verbose output flag
  */
 static void display_workspace_status(
     workspace_t *ws,
+    const profile_list_t *profile_filter,
     output_ctx_t *out,
     bool verbose
 ) {
@@ -176,9 +178,20 @@ static void display_workspace_status(
             size_t undeployed_count = 0;
             size_t new_count = 0;
             size_t orphaned_count = 0;
+            size_t hidden_count = 0;  /* Items hidden by profile filter */
 
             for (size_t i = 0; i < all_count; i++) {
                 const workspace_item_t *item = &all_items[i];
+
+                /* Apply profile filter if specified (Coherent Scope)
+                 *
+                 * When profile filter is active, only show items from matching
+                 * profiles. This ensures status output matches what apply would do.
+                 */
+                if (profile_filter && !profile_filter_matches(item->profile, profile_filter)) {
+                    hidden_count++;
+                    continue;  /* Skip items from other profiles */
+                }
 
                 switch (item->state) {
                     case WORKSPACE_STATE_DEPLOYED:
@@ -336,6 +349,13 @@ static void display_workspace_status(
                         output_hint_line(out, "  • Force removal: 'dotta apply --force' (WARNING: DATA LOSS)");
                     }
                 }
+            }
+
+            /* Show hidden items note when profile filter is active */
+            if (profile_filter && hidden_count > 0) {
+                output_printf(out, OUTPUT_NORMAL,
+                    "\n  (%zu item%s from other profiles hidden)\n",
+                    hidden_count, hidden_count == 1 ? "" : "s");
             }
 
             /* Cleanup (single free for all category arrays) */
@@ -864,13 +884,19 @@ error_t *cmd_status(
     /* Display enabled profiles and last deployment info */
     display_enabled_profiles(out, display_profiles, manifest, state, opts->verbose);
 
-    /* Display workspace status
+    /* Display workspace status (with profile filtering for Coherent Scope)
      *
      * The workspace was loaded with persistent profiles (workspace_profiles)
-     * for accurate divergence analysis. Display functions filter output based
-     * on display_profiles when CLI filter is specified.
+     * for accurate divergence analysis. When CLI filter is specified,
+     * we pass the filter to display_workspace_status to show only items
+     * from those profiles. This ensures `dotta status -p work` matches
+     * `dotta apply -p work` behavior.
+     *
+     * Explicit detection (opts->profiles != NULL) is more robust than
+     * pointer comparison and matches the pattern used in apply.c.
      */
-    display_workspace_status(ws, out, opts->verbose);
+    bool has_display_filter = (opts->profiles != NULL && opts->profile_count > 0);
+    display_workspace_status(ws, has_display_filter ? display_profiles : NULL, out, opts->verbose);
 
     /* Show remote sync status (if requested) */
     if (opts->show_remote) {

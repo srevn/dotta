@@ -58,6 +58,7 @@ typedef struct {
     bool skip_existing;    /* Skip files that already exist (don't overwrite) */
     bool skip_unchanged;   /* Skip files that match profile content (smart skip) */
     bool strict_ownership; /* Fail if ownership cannot be resolved (strict_mode) */
+    bool targeted_mode;    /* Scope directory processing to manifest file ancestors */
 } deploy_options_t;
 
 /**

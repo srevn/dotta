@@ -773,9 +773,9 @@ static bool matches_exclude_pattern(
     /* Use match module for gitignore-style pattern matching
      *
      * MATCH_DOUBLESTAR enables doublestar recursive wildcards:
-     *   home/.config/doublestar         → matches all descendants
-     *   *.conf                          → matches any .conf file
-     *   home/.*                         → matches dotfiles in home/
+     *   home/.config/doublestar         -> matches all descendants
+     *   *.conf                          -> matches any .conf file
+     *   home/.*                         -> matches dotfiles in home/
      */
     return match_any(
         opts->exclude_patterns,
@@ -800,7 +800,7 @@ static bool matches_exclude_pattern(
  */
 static bool needs_deployment(const workspace_item_t *ws_item) {
     if (ws_item == NULL) {
-        /* Not in workspace divergence index → file is clean */
+        /* Not in workspace divergence index -> file is clean */
         return false;
     }
 
@@ -1180,7 +1180,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                  *   - DIVERGENCE_CONTENT: File content differs from Git
                  *   - DIVERGENCE_MODE: Permissions changed
                  *   - DIVERGENCE_OWNERSHIP: Owner/group changed (root/ files)
-                 *   - DIVERGENCE_TYPE: Type changed (file→symlink, etc.)
+                 *   - DIVERGENCE_TYPE: Type changed (file->symlink, etc.)
                  *   - DIVERGENCE_ENCRYPTION: Encryption policy violation
                  *
                  * Shallow copy: All pointers (tree entries, profile pointers) are
@@ -1211,21 +1211,31 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         output_hint(out, "Check if the file path is correct and profile is enabled");
     }
 
-    /* Extract orphans from workspace (unless --keep-orphans)
+    /* Extract orphans from workspace (unless --keep-orphans or file filter active)
      *
      * Architecture: workspace_load() already detected ALL orphans (enabled + disabled
      * profiles) during analyze_orphaned_state(). We extract them here for cleanup.
      *
-     * CRITICAL: Orphan removal is UNCONDITIONAL and does NOT respect operation filter.
-     * - Operation filter applies to deployment (which files to deploy)
-     * - Orphan removal is housekeeping (removing files outside VWD scope)
-     * - The manifest layer already decided orphan status based on enabled profiles
-     * - Apply must respect that authority regardless of CLI filter
+     * Two semantic modes determine orphan cleanup behavior:
      *
-     * Why unconditional?
-     * - Disabled profile orphans: User disabled profile → files must be removed
-     * - Enabled profile orphans: File deleted from Git → filesystem must converge
-     * - VWD invariant: manifest is authoritative source for scope decisions
+     * 1. FULL SYNC MODE (no file filter):
+     *    Orphan removal is UNCONDITIONAL - does not respect profile filter.
+     *    - Profile filter applies to deployment (which files to deploy)
+     *    - Orphan removal is housekeeping (removing files outside VWD scope)
+     *    - The manifest layer already decided orphan status based on enabled profiles
+     *    - Apply must respect that authority regardless of CLI profile filter
+     *
+     *    Why unconditional in full sync?
+     *    - Disabled profile orphans: User disabled profile -> files must be removed
+     *    - Enabled profile orphans: File deleted from Git -> filesystem must converge
+     *    - VWD invariant: manifest is authoritative source for scope decisions
+     *
+     * 2. TARGETED MODE (file filter active):
+     *    Orphan cleanup is SKIPPED entirely.
+     *    - When user specifies files to apply, they expect a TARGETED operation
+     *    - Orphan cleanup is a side effect that would violate principle of least surprise
+     *    - An orphan cannot "match" a specific file path by definition
+     *    - User can run `dotta apply` (no filter) to get full sync with orphan cleanup
      *
      * Extracted orphans are used for:
      * 1. Privilege checking (filter root/ paths)
@@ -1234,16 +1244,16 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
      *
      * This eliminates redundant orphan detection in cleanup module (performance gain).
      */
-    if (!opts->keep_orphans) {
+    if (!opts->keep_orphans && file_filter == NULL) {
         output_print(out, OUTPUT_VERBOSE, "\nExtracting orphans from workspace...\n");
 
         /* Extract orphans via workspace API (2-pass internally: count, then populate)
          *
-         * Orphan removal is UNCONDITIONAL (does not respect operation filter):
-         * - Operation filter applies to deployment (which managed files to deploy)
+         * In full sync mode, orphan removal is UNCONDITIONAL:
+         * - Profile filter applies to deployment (which managed files to deploy)
          * - Orphan removal is housekeeping (removing files outside VWD scope)
          * - Manifest (VWD) already determined orphan status via enabled profiles
-         * - Apply must respect that authority regardless of CLI filter
+         * - Apply must respect that authority regardless of CLI profile filter
          */
         const workspace_item_t **all_file_orphans = NULL;
         const workspace_item_t **all_dir_orphans = NULL;
@@ -1378,6 +1388,10 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
                 }
             }
         }
+    } else if (file_filter != NULL && !opts->keep_orphans) {
+        /* File filter active: skip orphan cleanup (targeted operation) */
+        output_print(out, OUTPUT_VERBOSE,
+                    "\nSkipping orphan cleanup (file filter active)\n");
     }
 
     /* Check if there's anything to do */
@@ -1445,7 +1459,8 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         .verbose = opts->verbose,
         .skip_existing = opts->skip_existing,
         .skip_unchanged = opts->skip_unchanged,
-        .strict_ownership = config->strict_mode
+        .strict_ownership = config->strict_mode,
+        .targeted_mode = (file_filter != NULL)
     };
 
     err = deploy_preflight_check_from_workspace(ws, deploy_manifest, &deploy_opts, &preflight);
@@ -1708,7 +1723,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
              *   2. User prompt: "Deploy N files and remove M orphans? [y/N]"
              *   3. User edits file X (saves important work to it)
              *   4. User confirms "y"
-             *   5. cleanup_execute trusts stale preflight → deletes file X → DATA LOSS
+             *   5. cleanup_execute trusts stale preflight -> deletes file X -> DATA LOSS
              *
              * Solution: Pass NULL to force fresh safety check when interactive delay
              * occurred. Non-interactive paths (--force, confirm_destructive=false)
@@ -1737,10 +1752,10 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
              * - Next 'dotta apply' will retry cleanup naturally (idempotent convergence)
              *
              * Error scenarios handled gracefully:
-             * - Permission denied on orphan removal → warn user, continue
-             * - Filesystem errors during cleanup → warn user, continue
-             * - Safety violations (uncommitted changes) → already warned in preflight
-             * - Partial cleanup (some succeed, some fail) → record successful removals
+             * - Permission denied on orphan removal -> warn user, continue
+             * - Filesystem errors during cleanup -> warn user, continue
+             * - Safety violations (uncommitted changes) -> already warned in preflight
+             * - Partial cleanup (some succeed, some fail) -> record successful removals
              *
              * State consistency guarantee:
              * - Deployment state ALWAYS saved (deployment succeeded)
@@ -1780,10 +1795,10 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
              * orphaned entries accumulate forever in virtual_manifest.
              *
              * The flow for orphaned files:
-             *   1. Profile disabled → entry stays in state (manifest_disable_profile)
-             *   2. Workspace detects orphan → entry in state, profile not enabled
-             *   3. cleanup_execute() → file removed from filesystem (just happened)
-             *   4. THIS CODE → entry removed from state (completing the cycle)
+             *   1. Profile disabled -> entry stays in state (manifest_disable_profile)
+             *   2. Workspace detects orphan -> entry in state, profile not enabled
+             *   3. cleanup_execute() -> file removed from filesystem (just happened)
+             *   4. THIS CODE -> entry removed from state (completing the cycle)
              *
              * DEFENSIVE: Only process if cleanup succeeded and returned results.
              * - If cleanup_err occurred above, cleanup_res may be NULL or incomplete
@@ -1870,10 +1885,10 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
              * we need to remove their entries from state to prevent accumulation.
              *
              * The flow for orphaned directories:
-             *   1. Profile disabled → entry stays in state (manifest_disable_profile)
-             *   2. Workspace detects orphan → entry in state, profile not enabled
-             *   3. cleanup_execute() → directory removed from filesystem (just happened)
-             *   4. THIS CODE → entry removed from state (completing the cycle)
+             *   1. Profile disabled -> entry stays in state (manifest_disable_profile)
+             *   2. Workspace detects orphan -> entry in state, profile not enabled
+             *   3. cleanup_execute() -> directory removed from filesystem (just happened)
+             *   4. THIS CODE -> entry removed from state (completing the cycle)
              *
              * This mirrors file orphan cleanup (lines 1664-1712) and prevents
              * orphaned entries from accumulating forever in tracked_directories.

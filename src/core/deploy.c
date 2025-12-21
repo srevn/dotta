@@ -17,6 +17,7 @@
 #include "infra/content.h"
 #include "utils/array.h"
 #include "utils/buffer.h"
+#include "utils/hashmap.h"
 #include "utils/privilege.h"
 #include "utils/string.h"
 
@@ -229,7 +230,7 @@ static error_t *resolve_deployment_ownership(
     bool is_home_prefix = str_starts_with(storage_path, "home/");
     bool requires_root_privileges = privilege_path_requires_root(storage_path);
 
-    /* Case 1: home/ prefix when running as root → use actual user (sudo handling) */
+    /* Case 1: home/ prefix when running as root -> use actual user (sudo handling) */
     if (is_home_prefix && privilege_is_elevated()) {
         error_t *err = privilege_get_actual_user(out_uid, out_gid);
         if (err) {
@@ -239,7 +240,7 @@ static error_t *resolve_deployment_ownership(
         return NULL;
     }
 
-    /* Case 2: root/ or custom/ prefix with ownership metadata → resolve to UID/GID */
+    /* Case 2: root/ or custom/ prefix with ownership metadata -> resolve to UID/GID */
     if (requires_root_privileges && (owner || group)) {
         error_t *err = metadata_resolve_ownership(owner, group, out_uid, out_gid);
         if (err) {
@@ -282,7 +283,7 @@ static error_t *resolve_deployment_ownership(
         return NULL;
     }
 
-    /* Case 3: All other cases → no ownership change */
+    /* Case 3: All other cases -> no ownership change */
     return NULL;
 }
 
@@ -453,7 +454,7 @@ error_t *deploy_file(
      *
      * Unified helper handles:
      * - home/ files when running as root: Use actual user's UID/GID (sudo handling)
-     * - root/ files with owner/group: Resolve username/groupname → UID/GID
+     * - root/ files with owner/group: Resolve username/groupname -> UID/GID
      * - All other cases: Return -1 (preserve current user/root ownership)
      */
     uid_t target_uid, target_gid;
@@ -479,8 +480,8 @@ error_t *deploy_file(
      * cleared explicitly before writing.
      *
      * Uses lstat() to avoid following symlinks:
-     * - Symlink to directory: lstat returns S_IFLNK → O_CREAT handles correctly
-     * - Actual directory: lstat returns S_IFDIR → must clear before writing
+     * - Symlink to directory: lstat returns S_IFLNK -> O_CREAT handles correctly
+     * - Actual directory: lstat returns S_IFDIR -> must clear before writing
      *
      * Safety: Only reached with --force (preflight blocks DIVERGENCE_TYPE)
      */
@@ -536,6 +537,109 @@ cleanup:
 }
 
 /**
+ * Calculate directories required for deploying manifest files
+ *
+ * When targeted_mode is active, only directories that are ancestors of files
+ * in the manifest should be processed. This function builds a hashmap of
+ * tracked directory paths that are ancestors of any file being deployed.
+ *
+ * Performance: O(F * D) where F = files in manifest, D = average path depth
+ * Memory: Caller owns returned hashmap and must free with hashmap_free(h, NULL)
+ *
+ * @param manifest Files being deployed (must not be NULL)
+ * @param state State database for tracked directory lookup (must not be NULL)
+ * @param out Hashmap of required directory filesystem_paths (caller frees)
+ * @return Error or NULL on success
+ */
+static error_t *calculate_required_directories(
+    const manifest_t *manifest,
+    const state_t *state,
+    hashmap_t **out
+) {
+    CHECK_NULL(manifest);
+    CHECK_NULL(state);
+    CHECK_NULL(out);
+
+    *out = NULL;
+    error_t *err = NULL;
+
+    /* Get all tracked directories for O(1) membership check */
+    state_directory_entry_t *directories = NULL;
+    size_t dir_count = 0;
+    err = state_get_all_directories(state, &directories, &dir_count);
+    if (err) {
+        return err;
+    }
+
+    if (dir_count == 0) {
+        state_free_all_directories(directories, dir_count);
+        return NULL;  /* No tracked directories - nothing to filter */
+    }
+
+    /* Build lookup hashmap of tracked directory paths */
+    hashmap_t *tracked = hashmap_create(dir_count);
+    if (!tracked) {
+        state_free_all_directories(directories, dir_count);
+        return ERROR(ERR_MEMORY, "Failed to create tracked directory hashmap");
+    }
+
+    for (size_t i = 0; i < dir_count; i++) {
+        err = hashmap_set(tracked, directories[i].filesystem_path, (void *)1);
+        if (err) {
+            hashmap_free(tracked, NULL);
+            state_free_all_directories(directories, dir_count);
+            return error_wrap(err, "Failed to populate tracked directory set");
+        }
+    }
+    state_free_all_directories(directories, dir_count);
+
+    /* Build set of required directories from manifest file ancestors */
+    hashmap_t *required = hashmap_create(0);
+    if (!required) {
+        hashmap_free(tracked, NULL);
+        return ERROR(ERR_MEMORY, "Failed to create required directory hashmap");
+    }
+
+    for (size_t i = 0; i < manifest->count; i++) {
+        const char *filepath = manifest->entries[i].filesystem_path;
+
+        /* Walk up directory tree, adding tracked ancestors */
+        size_t len = strlen(filepath);
+        char *parent = malloc(len + 1);
+        if (!parent) {
+            hashmap_free(required, NULL);
+            hashmap_free(tracked, NULL);
+            return ERROR(ERR_MEMORY, "Failed to allocate path buffer");
+        }
+        memcpy(parent, filepath, len + 1);
+
+        while (true) {
+            char *slash = strrchr(parent, '/');
+            if (!slash || slash == parent) {
+                break;  /* Reached root */
+            }
+            *slash = '\0';  /* Truncate to parent */
+
+            /* If this parent is tracked, add to required set */
+            if (hashmap_has(tracked, parent)) {
+                err = hashmap_set(required, parent, (void *)1);
+                if (err) {
+                    free(parent);
+                    hashmap_free(required, NULL);
+                    hashmap_free(tracked, NULL);
+                    return error_wrap(err, "Failed to add required directory");
+                }
+            }
+        }
+        free(parent);
+    }
+
+    hashmap_free(tracked, NULL);
+    *out = required;
+    return NULL;
+}
+
+/**
  * Deploy tracked directories from state
  *
  * Creates or updates tracked directories with proper permissions and ownership
@@ -552,15 +656,21 @@ cleanup:
  * - Create missing directories
  * - Fix divergent directories (mode/ownership changes)
  *
+ * Targeted mode (when required_dirs is non-NULL):
+ * - Only processes directories that are ancestors of files being deployed
+ * - Implements coherent scope: file filter scopes all side effects
+ *
  * @param ws Workspace with divergence analysis (must not be NULL)
  * @param state State database (can be NULL - returns immediately if NULL)
  * @param opts Deployment options (must not be NULL)
+ * @param required_dirs Directories to process (NULL = all, non-NULL = filter)
  * @return Error or NULL on success
  */
 static error_t *deploy_tracked_directories(
     const workspace_t *ws,
     const state_t *state,
-    const deploy_options_t *opts
+    const deploy_options_t *opts,
+    const hashmap_t *required_dirs
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(opts);
@@ -583,14 +693,39 @@ static error_t *deploy_tracked_directories(
         return NULL;  /* No tracked directories */
     }
 
+    /* Verbose output: differentiate targeted vs full sync mode */
     if (opts->verbose) {
-        printf("Creating %zu tracked director%s with metadata...\n",
-               dir_count, dir_count == 1 ? "y" : "ies");
+        if (opts->targeted_mode) {
+            size_t required_count = required_dirs ? hashmap_size(required_dirs) : 0;
+            if (required_count > 0) {
+                printf("Checking %zu tracked director%s (scoped to deployment)...\n",
+                       required_count, required_count == 1 ? "y" : "ies");
+            }
+            /* If required_count == 0, no directories to process - skip message */
+        } else {
+            printf("Creating %zu tracked director%s with metadata...\n",
+                   dir_count, dir_count == 1 ? "y" : "ies");
+        }
     }
 
     /* Deploy each tracked directory */
     for (size_t i = 0; i < dir_count; i++) {
         const state_directory_entry_t *dir_entry = &directories[i];
+
+        /* Targeted mode: skip directories not in required set
+         *
+         * When file filter is active, only process directories that are
+         * ancestors of files being deployed. This implements coherent scope.
+         *
+         * Uses opts->targeted_mode as authoritative control:
+         * - targeted_mode=true, required_dirs=NULL: empty manifest, skip all
+         * - targeted_mode=true, required_dirs non-NULL: filter by set
+         * - targeted_mode=false: process all (full sync)
+         */
+        if (opts->targeted_mode &&
+            (!required_dirs || !hashmap_has(required_dirs, dir_entry->filesystem_path))) {
+            continue;
+        }
 
         /* Skip STATE_INACTIVE directories - they're orphaned and awaiting cleanup
          *
@@ -638,9 +773,9 @@ static error_t *deploy_tracked_directories(
         /* Query workspace for divergence (O(1) hashmap lookup)
          *
          * Convergence model (matches file deployment pattern):
-         * - ws_item == NULL && exists → SKIP (directory CLEAN)
-         * - ws_item != NULL → FIX (has divergence: mode/ownership/type)
-         * - !exists → CREATE (missing or deleted)
+         * - ws_item == NULL && exists -> SKIP (directory CLEAN)
+         * - ws_item != NULL -> FIX (has divergence: mode/ownership/type)
+         * - !exists -> CREATE (missing or deleted)
          */
         const workspace_item_t *ws_item = workspace_get_item(ws, filesystem_path);
 
@@ -824,8 +959,26 @@ error_t *deploy_execute(
         return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
     }
 
+    /* Calculate required directories when targeted_mode is active
+     *
+     * Coherent scope: when file filter is active, only process directories
+     * that are ancestors of files being deployed. This prevents unrelated
+     * directory operations when user specifies specific files to apply.
+     */
+    hashmap_t *required_dirs = NULL;
+    if (opts->targeted_mode && manifest->count > 0 && state) {
+        err = calculate_required_directories(manifest, state, &required_dirs);
+        if (err) {
+            deploy_result_free(result);
+            return error_wrap(err, "Failed to calculate required directories");
+        }
+    }
+
     /* Deploy tracked directories from state database first */
-    err = deploy_tracked_directories(ws, state, opts);
+    err = deploy_tracked_directories(ws, state, opts, required_dirs);
+    if (required_dirs) {
+        hashmap_free(required_dirs, NULL);
+    }
     if (err) {
         deploy_result_free(result);
         return error_wrap(err, "Failed to deploy tracked directories");

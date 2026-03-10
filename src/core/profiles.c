@@ -1047,15 +1047,13 @@ static int manifest_build_callback(
     error_t *err = NULL;
 
     if (str_starts_with(storage_path, "custom/") && !ctx->custom_prefix) {
-        /* Graceful degradation: custom/ file without known prefix.
-         * Use storage_path as filesystem_path. This causes stat() to fail
-         * (not absolute path), showing the file as "missing on disk" -
-         * semantically correct when deployment location is unknown. */
-        filesystem_path = strdup(storage_path);
-        if (!filesystem_path) {
-            ctx->error = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
-            return -1;
-        }
+        /* Skip custom/ files when deployment prefix is unknown.
+         *
+         * Custom prefix is machine-specific configuration (e.g., /jails/proxy/root)
+         * stored in the per-machine state database. During clone or when a profile is
+         * enabled without --prefix, we can't resolve where these files belong on disk.
+         */
+        return 0;  /* Skip, continue walk */
     } else {
         err = path_from_storage(storage_path, ctx->custom_prefix, &filesystem_path);
         if (err) {

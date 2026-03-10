@@ -3158,6 +3158,11 @@ error_t *manifest_sync_directories(
          * This preserves deployed_at timestamps and enables clean orphan detection.
          */
         for (size_t j = 0; j < dir_count; j++) {
+            /* Skip custom/ directories when prefix is unknown */
+            if (str_starts_with(directories[j]->key, "custom/") && !custom_prefix) {
+                continue;
+            }
+
             state_directory_entry_t *state_dir = NULL;
 
             err = state_directory_entry_create_from_metadata(

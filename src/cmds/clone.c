@@ -232,8 +232,11 @@ static error_t *initialize_state(
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile_names);
     CHECK_NULL(out);
+
+    if (count > 0 && !profile_names) {
+        return ERROR(ERR_INVALID_ARG, "profile_names must not be NULL when count > 0");
+    }
 
     /* Create state database (with or without profiles) */
     state_t *state = NULL;
@@ -496,16 +499,46 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         string_array_free(remote_branches);
     }
 
-    /* Initialize state with fetched profiles */
+    /* Initialize state with fetched profiles.
+     *
+     * Profiles with custom/ files require a machine-specific --prefix to resolve
+     * deployment paths. Without it, enabling them creates half-configured state
+     * that breaks other operations. Filter them out and hint the user instead.
+     * The branch data is already fetched and available locally. */
     if (string_array_size(fetched_profiles) > 0) {
-        char **profile_names = fetched_profiles->items;
-        size_t profile_count = string_array_size(fetched_profiles);
+        string_array_t *profile_names = string_array_create();
+        if (!profile_names) {
+            final_err = ERROR(ERR_MEMORY, "Failed to allocate profile array");
+            goto cleanup;
+        }
 
-        err = initialize_state(repo, profile_names, profile_count, out);
+        for (size_t i = 0; i < string_array_size(fetched_profiles); i++) {
+            const char *name = string_array_get(fetched_profiles, i);
+            bool has_custom = false;
+
+            error_t *check_err = profile_has_custom_files(repo, name, &has_custom);
+            if (check_err) {
+                error_free(check_err);
+                /* Can't determine — include it to avoid silently dropping profiles */
+                string_array_push(profile_names, name);
+                continue;
+            }
+
+            if (has_custom) {
+                output_warning(out, "Profile '%s' requires --prefix (not enabled)", name);
+                output_hint(out, "Run: dotta profile enable --prefix <path> %s", name);
+            } else {
+                string_array_push(profile_names, name);
+            }
+        }
+
+        err = initialize_state(repo, profile_names->items, string_array_size(profile_names), out);
         if (err) {
             output_error(out, "Failed to initialize state: %s", error_message(err));
             error_free(err);
         }
+
+        string_array_free(profile_names);
     } else {
         /* No profiles fetched - initialize empty state */
         output_warning(out, "No profiles were fetched");

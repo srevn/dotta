@@ -144,8 +144,7 @@ static error_t *build_profile_oid_map(
         err = get_branch_head_oid(repo, profile->name, &oid);
         if (err) {
             hashmap_free(map, free);
-            return error_wrap(err, "Failed to get HEAD for profile '%s'",
-                            profile->name);
+            return error_wrap(err, "Failed to get HEAD for profile '%s'", profile->name);
         }
 
         /* Convert to hex string */
@@ -262,7 +261,7 @@ static error_t *extract_file_metadata_from_tree_entry(
 }
 
 /**
- * Enrich profiles with deployment configuration from state
+ * Enrich profiles with custom prefixes from state
  *
  * Modifies profiles in-place by attaching custom_prefix strings.
  * Caller owns profiles and must free with profile_list_free().
@@ -278,7 +277,7 @@ static error_t *extract_file_metadata_from_tree_entry(
  * @param transient_prefix Optional prefix for transient profile (can be NULL)
  * @return Error or NULL on success
  */
-static error_t *enrich_profiles_with_deployment_config(
+static error_t *enrich_profiles_with_prefixes(
     const state_t *state,
     profile_list_t *profiles,
     const char *transient_profile,
@@ -313,7 +312,7 @@ static error_t *enrich_profiles_with_deployment_config(
         return error_wrap(err, "Failed to load custom prefix configuration");
     }
 
-    /* Enrich each profile with deployment configuration */
+    /* Enrich each profile with custom prefix */
     for (size_t i = 0; i < profiles->count; i++) {
         profile_t *profile = &profiles->profiles[i];
         const char *custom_prefix = NULL;
@@ -348,7 +347,7 @@ static error_t *enrich_profiles_with_deployment_config(
 /**
  * Build manifest from profiles
  *
- * Orchestrates profile loading (Git), deployment config enrichment (State),
+ * Orchestrates profile loading (Git), prefix enrichment (State),
  * and manifest building (Profiles). This is the "precedence oracle" pattern -
  * profile_build_manifest() determines file ownership, then we use that answer.
  *
@@ -357,7 +356,7 @@ static error_t *enrich_profiles_with_deployment_config(
  * accessing entry->source_profile->name results in use-after-free.
  *
  * @param repo Git repository (must not be NULL)
- * @param state State handle for deployment config (must not be NULL)
+ * @param state State handle for prefix resolution (must not be NULL)
  * @param profile_names Profile names to build from (must not be NULL)
  * @param transient_profile Optional profile for transient override (can be NULL)
  * @param transient_prefix Optional prefix for transient profile (can be NULL)
@@ -391,12 +390,12 @@ static error_t *build_manifest(
         return error_wrap(err, "Failed to load profiles for manifest build");
     }
 
-    /* Enrich profiles with deployment config (orchestration) */
-    err = enrich_profiles_with_deployment_config(state, profiles,
-                                                  transient_profile, transient_prefix);
+    /* Enrich profiles with prefixes */
+    err = enrich_profiles_with_prefixes(state, profiles,
+                                        transient_profile, transient_prefix);
     if (err) {
         profile_list_free(profiles);
-        return error_wrap(err, "Failed to enrich profiles with deployment config");
+        return error_wrap(err, "Failed to enrich profiles with prefixes");
     }
 
     /* Build manifest from enriched profiles (applies precedence rules) */
@@ -541,7 +540,7 @@ static error_t *sync_entry_to_state(
     err = state_add_file(state, &state_entry);
     if (err) {
         err = error_wrap(err, "Failed to sync manifest entry for %s",
-                       manifest_entry->storage_path);
+                        manifest_entry->storage_path);
     }
 
 cleanup:
@@ -2089,16 +2088,16 @@ error_t *manifest_update_files(
 
     /* 1. Load enabled profiles from Git */
     err = profile_list_load(repo, enabled_profiles->items,
-                           enabled_profiles->count, false, &profiles);
+                            enabled_profiles->count, false, &profiles);
     if (err) {
         return error_wrap(err, "Failed to load profiles for bulk sync");
     }
 
-    /* 2. Enrich profiles with deployment config */
-    err = enrich_profiles_with_deployment_config(state, profiles, NULL, NULL);
+    /* 2. Enrich profiles with prefixes */
+    err = enrich_profiles_with_prefixes(state, profiles, NULL, NULL);
     if (err) {
         profile_list_free(profiles);
-        return error_wrap(err, "Failed to enrich profiles with deployment config");
+        return error_wrap(err, "Failed to enrich profiles with prefixes");
     }
 
     /* 3. Build FRESH manifest from Git (post-commit state) */
@@ -2453,16 +2452,16 @@ error_t *manifest_add_files(
 
     /* 1. Load enabled profiles from Git */
     err = profile_list_load(repo, enabled_profiles->items,
-                           enabled_profiles->count, false, &profiles);
+                            enabled_profiles->count, false, &profiles);
     if (err) {
         return error_wrap(err, "Failed to load profiles for bulk sync");
     }
 
-    /* 2. Enrich profiles with deployment config */
-    err = enrich_profiles_with_deployment_config(state, profiles, NULL, NULL);
+    /* 2. Enrich profiles with prefixes */
+    err = enrich_profiles_with_prefixes(state, profiles, NULL, NULL);
     if (err) {
         profile_list_free(profiles);
-        return error_wrap(err, "Failed to enrich profiles with deployment config");
+        return error_wrap(err, "Failed to enrich profiles with prefixes");
     }
 
     /* 3. Build FRESH manifest from Git (post-commit state) */
@@ -2691,10 +2690,10 @@ error_t *manifest_sync_diff(
         goto cleanup;
     }
 
-    /* 1.1. Enrich profiles with deployment config */
-    err = enrich_profiles_with_deployment_config(state, profiles, NULL, NULL);
+    /* 1.1. Enrich profiles with prefixes */
+    err = enrich_profiles_with_prefixes(state, profiles, NULL, NULL);
     if (err) {
-        err = error_wrap(err, "Failed to enrich profiles with deployment config");
+        err = error_wrap(err, "Failed to enrich profiles with prefixes");
         goto cleanup;
     }
 

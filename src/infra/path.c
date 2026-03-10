@@ -15,8 +15,6 @@
 
 #include "base/error.h"
 #include "base/filesystem.h"
-#include "utils/array.h"
-#include "utils/buffer.h"
 #include "utils/hashmap.h"
 #include "utils/match.h"
 #include "utils/string.h"
@@ -118,25 +116,6 @@ error_t *path_validate_storage(const char *storage_path) {
     }
 
     free(path_copy);
-    return NULL;
-}
-
-/**
- * Validate filesystem path
- */
-error_t *path_validate_filesystem(const char *filesystem_path) {
-    CHECK_NULL(filesystem_path);
-
-    if (filesystem_path[0] == '\0') {
-        return ERROR(ERR_INVALID_ARG, "Filesystem path cannot be empty");
-    }
-
-    /* For now, just require absolute paths */
-    if (filesystem_path[0] != '/' && filesystem_path[0] != '~') {
-        return ERROR(ERR_INVALID_ARG,
-                    "Filesystem path must be absolute (got '%s')", filesystem_path);
-    }
-
     return NULL;
 }
 
@@ -580,116 +559,6 @@ error_t *path_from_storage(
         /* Should never happen due to validation */
         return ERROR(ERR_INTERNAL, "Invalid storage path prefix: '%s'", storage_path);
     }
-}
-
-/**
- * Splits a path into its components.
- */
-static error_t *path_split(const char *path, string_array_t **out) {
-    char *path_copy = strdup(path);
-    if (!path_copy) {
-        return ERROR(ERR_MEMORY, "Failed to copy path");
-    }
-
-    string_array_t *arr = string_array_create();
-    if (!arr) {
-        free(path_copy);
-        return ERROR(ERR_MEMORY, "Failed to create string array");
-    }
-
-    char *saveptr = NULL;
-    char *component = strtok_r(path_copy, "/", &saveptr);
-    while (component) {
-        string_array_push(arr, component);
-        component = strtok_r(NULL, "/", &saveptr);
-    }
-
-    free(path_copy);
-    *out = arr;
-    return NULL;
-}
-
-/**
- * Make path relative to base
- */
-error_t *path_make_relative(
-    const char *base,
-    const char *full,
-    char **out
-) {
-    CHECK_NULL(base);
-    CHECK_NULL(full);
-    CHECK_NULL(out);
-
-    error_t *err = NULL;
-    string_array_t *base_parts = NULL;
-    string_array_t *full_parts = NULL;
-    buffer_t *result_buf = NULL;
-
-    err = path_split(base, &base_parts);
-    if (err) goto cleanup;
-
-    err = path_split(full, &full_parts);
-    if (err) goto cleanup;
-
-    size_t base_len = string_array_size(base_parts);
-    size_t full_len = string_array_size(full_parts);
-    size_t common_prefix_len = 0;
-
-    while (common_prefix_len < base_len && common_prefix_len < full_len &&
-           strcmp(string_array_get(base_parts, common_prefix_len),
-                  string_array_get(full_parts, common_prefix_len)) == 0) {
-        common_prefix_len++;
-    }
-
-    result_buf = buffer_create();
-    if (!result_buf) {
-        err = ERROR(ERR_MEMORY, "Failed to create result buffer");
-        goto cleanup;
-    }
-
-    /* Add ".." for each remaining part in base */
-    for (size_t i = common_prefix_len; i < base_len; i++) {
-        buffer_append_string(result_buf, "../");
-    }
-
-    /* Add remaining parts from full */
-    for (size_t i = common_prefix_len; i < full_len; i++) {
-        buffer_append_string(result_buf, string_array_get(full_parts, i));
-        if (i < full_len - 1) {
-            buffer_append_string(result_buf, "/");
-        }
-    }
-
-    /* Handle case where paths are identical */
-    if (buffer_size(result_buf) == 0) {
-        *out = strdup(".");
-        if (!*out) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate relative path");
-        }
-    } else {
-        /* Transfer ownership from buffer to avoid copy */
-        err = buffer_release_data(result_buf, out);
-        if (err) {
-            goto cleanup;
-        }
-
-        /* Remove trailing slash if present */
-        size_t len = strlen(*out);
-        if (len > 0 && (*out)[len - 1] == '/') {
-            (*out)[len - 1] = '\0';
-        }
-
-        /* Set result_buf to NULL since ownership was transferred */
-        result_buf = NULL;
-    }
-
-cleanup:
-    if (base_parts) string_array_free(base_parts);
-    if (full_parts) string_array_free(full_parts);
-    if (result_buf) buffer_free(result_buf);
-
-    return err;
 }
 
 /**

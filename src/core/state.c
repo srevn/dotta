@@ -197,8 +197,7 @@ static error_t *initialize_schema(sqlite3 *db) {
     /* Execute schema SQL */
     rc = sqlite3_exec(db, schema_sql, NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(ERR_STATE_INVALID,
-            "Failed to initialize schema: %s",
+        error_t *err = ERROR(ERR_STATE_INVALID, "Failed to initialize schema: %s",
             errmsg ? errmsg : sqlite3_errstr(rc));
         sqlite3_free(errmsg);
         return err;
@@ -263,7 +262,7 @@ static error_t *verify_schema_version(sqlite3 *db) {
  * - synchronous=NORMAL: Fast but safe
  * - cache_size: 10MB for large deployments
  * - temp_store=MEMORY: Temp operations in RAM
- * - busy_timeout: Wait up to 5s for lock
+ * - busy_timeout: Wait up to 300ms for lock
  *
  * @param db Database connection (must not be NULL)
  * @return Error or NULL on success
@@ -277,8 +276,7 @@ static error_t *configure_db(sqlite3 *db) {
     /* 1. Enable WAL mode (critical for performance) */
     rc = sqlite3_exec(db, "PRAGMA journal_mode=WAL;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(ERR_STATE_INVALID,
-            "Failed to enable WAL mode: %s",
+        error_t *err = ERROR(ERR_STATE_INVALID, "Failed to enable WAL mode: %s",
             errmsg ? errmsg : sqlite3_errstr(rc));
         sqlite3_free(errmsg);
         return err;
@@ -287,8 +285,7 @@ static error_t *configure_db(sqlite3 *db) {
     /* 2. Fast synchronization (safe on crash, fast on commit) */
     rc = sqlite3_exec(db, "PRAGMA synchronous=NORMAL;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(ERR_STATE_INVALID,
-            "Failed to set synchronous mode: %s",
+        error_t *err = ERROR(ERR_STATE_INVALID, "Failed to set synchronous mode: %s",
             errmsg ? errmsg : sqlite3_errstr(rc));
         sqlite3_free(errmsg);
         return err;
@@ -297,8 +294,7 @@ static error_t *configure_db(sqlite3 *db) {
     /* 3. Larger cache (10MB instead of default 2MB) */
     rc = sqlite3_exec(db, "PRAGMA cache_size=10000;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(ERR_STATE_INVALID,
-            "Failed to set cache size: %s",
+        error_t *err = ERROR(ERR_STATE_INVALID, "Failed to set cache size: %s",
             errmsg ? errmsg : sqlite3_errstr(rc));
         sqlite3_free(errmsg);
         return err;
@@ -307,8 +303,7 @@ static error_t *configure_db(sqlite3 *db) {
     /* 4. Store temp tables in memory (faster) */
     rc = sqlite3_exec(db, "PRAGMA temp_store=MEMORY;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(ERR_STATE_INVALID,
-            "Failed to set temp store: %s",
+        error_t *err = ERROR(ERR_STATE_INVALID, "Failed to set temp store: %s",
             errmsg ? errmsg : sqlite3_errstr(rc));
         sqlite3_free(errmsg);
         return err;
@@ -353,9 +348,9 @@ static error_t *open_db(const char *db_path, bool create_if_missing, sqlite3 **o
             return NULL;
         }
 
-        err = ERROR(ERR_FS,
-            "Failed to open database: %s",
-            db ? sqlite3_errmsg(db) : sqlite3_errstr(rc));
+        err = ERROR(ERR_FS, "Failed to open database: %s",
+                    db ? sqlite3_errmsg(db) : sqlite3_errstr(rc));
+
         if (db) sqlite3_close(db);
         return err;
     }
@@ -422,8 +417,7 @@ static error_t *prepare_statements(state_t *state) {
         " type, mode, owner, \"group\", encrypted, state, deployed_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
 
-    rc = sqlite3_prepare_v2(state->db, sql_insert, -1,
-                           &state->stmt_insert_file, NULL);
+    rc = sqlite3_prepare_v2(state->db, sql_insert, -1, &state->stmt_insert_file, NULL);
     if (rc != SQLITE_OK) {
         return sqlite_error(state->db, "Failed to prepare insert statement");
     }
@@ -434,7 +428,7 @@ static error_t *prepare_statements(state_t *state) {
         "WHERE filesystem_path = ?;";
 
     rc = sqlite3_prepare_v2(state->db, sql_update_deployed_at, -1,
-                           &state->stmt_update_deployed_at, NULL);
+                            &state->stmt_update_deployed_at, NULL);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
         return sqlite_error(state->db, "Failed to prepare update deployed_at statement");
@@ -449,7 +443,7 @@ static error_t *prepare_statements(state_t *state) {
         "WHERE filesystem_path = ?;";
 
     rc = sqlite3_prepare_v2(state->db, sql_update_entry, -1,
-                           &state->stmt_update_entry, NULL);
+                            &state->stmt_update_entry, NULL);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
         sqlite3_finalize(state->stmt_update_deployed_at);
@@ -460,8 +454,7 @@ static error_t *prepare_statements(state_t *state) {
     const char *sql_exists =
         "SELECT 1 FROM virtual_manifest WHERE filesystem_path = ? LIMIT 1;";
 
-    rc = sqlite3_prepare_v2(state->db, sql_exists, -1,
-                           &state->stmt_file_exists, NULL);
+    rc = sqlite3_prepare_v2(state->db, sql_exists, -1, &state->stmt_file_exists, NULL);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
         sqlite3_finalize(state->stmt_update_deployed_at);
@@ -475,8 +468,7 @@ static error_t *prepare_statements(state_t *state) {
         "type, mode, owner, \"group\", encrypted, state, deployed_at "
         "FROM virtual_manifest WHERE filesystem_path = ?;";
 
-    rc = sqlite3_prepare_v2(state->db, sql_get, -1,
-                           &state->stmt_get_file, NULL);
+    rc = sqlite3_prepare_v2(state->db, sql_get, -1, &state->stmt_get_file, NULL);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
         sqlite3_finalize(state->stmt_update_deployed_at);
@@ -491,8 +483,7 @@ static error_t *prepare_statements(state_t *state) {
         "type, mode, owner, \"group\", encrypted, state, deployed_at "
         "FROM virtual_manifest WHERE profile = ?;";
 
-    rc = sqlite3_prepare_v2(state->db, sql_by_profile, -1,
-                           &state->stmt_get_by_profile, NULL);
+    rc = sqlite3_prepare_v2(state->db, sql_by_profile, -1, &state->stmt_get_by_profile, NULL);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
         sqlite3_finalize(state->stmt_update_deployed_at);
@@ -506,8 +497,7 @@ static error_t *prepare_statements(state_t *state) {
     const char *sql_remove =
         "DELETE FROM virtual_manifest WHERE filesystem_path = ?;";
 
-    rc = sqlite3_prepare_v2(state->db, sql_remove, -1,
-                           &state->stmt_remove_file, NULL);
+    rc = sqlite3_prepare_v2(state->db, sql_remove, -1, &state->stmt_remove_file, NULL);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
         sqlite3_finalize(state->stmt_update_deployed_at);
@@ -523,8 +513,7 @@ static error_t *prepare_statements(state_t *state) {
         "INSERT INTO enabled_profiles (position, name, enabled_at, custom_prefix) "
         "VALUES (?, ?, ?, ?);";
 
-    rc = sqlite3_prepare_v2(state->db, sql_profile, -1,
-                           &state->stmt_insert_profile, NULL);
+    rc = sqlite3_prepare_v2(state->db, sql_profile, -1, &state->stmt_insert_profile, NULL);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
         sqlite3_finalize(state->stmt_update_deployed_at);
@@ -1099,36 +1088,35 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
     /* Bind parameters */
     /* 1. filesystem_path */
     sqlite3_bind_text(state->stmt_insert_file, 1,
-                     entry->filesystem_path, -1, SQLITE_TRANSIENT);
+                      entry->filesystem_path, -1, SQLITE_TRANSIENT);
 
     /* 2. storage_path */
     sqlite3_bind_text(state->stmt_insert_file, 2,
-                     entry->storage_path, -1, SQLITE_TRANSIENT);
+                      entry->storage_path, -1, SQLITE_TRANSIENT);
 
     /* 3. profile */
     sqlite3_bind_text(state->stmt_insert_file, 3,
-                     entry->profile, -1, SQLITE_TRANSIENT);
+                      entry->profile, -1, SQLITE_TRANSIENT);
 
     /* 4. old_profile */
     if (entry->old_profile) {
         sqlite3_bind_text(state->stmt_insert_file, 4,
-                         entry->old_profile, -1, SQLITE_TRANSIENT);
+                          entry->old_profile, -1, SQLITE_TRANSIENT);
     } else {
         sqlite3_bind_null(state->stmt_insert_file, 4);
     }
 
     /* 5. git_oid */
     sqlite3_bind_text(state->stmt_insert_file, 5,
-                     entry->git_oid, -1, SQLITE_TRANSIENT);
+                      entry->git_oid, -1, SQLITE_TRANSIENT);
 
     /* 6. blob_oid */
     sqlite3_bind_text(state->stmt_insert_file, 6,
-                     entry->blob_oid, -1, SQLITE_TRANSIENT);
+                      entry->blob_oid, -1, SQLITE_TRANSIENT);
 
     /* 7. type */
     const char *type_str = entry->type == STATE_FILE_REGULAR ? "file" :
-                          entry->type == STATE_FILE_SYMLINK ? "symlink" :
-                          "executable";
+                           entry->type == STATE_FILE_SYMLINK ? "symlink" : "executable";
     sqlite3_bind_text(state->stmt_insert_file, 7, type_str, -1, SQLITE_STATIC);
 
     /* 8. mode */
@@ -1141,7 +1129,7 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
     /* 9. owner */
     if (entry->owner) {
         sqlite3_bind_text(state->stmt_insert_file, 9,
-                         entry->owner, -1, SQLITE_TRANSIENT);
+                          entry->owner, -1, SQLITE_TRANSIENT);
     } else {
         sqlite3_bind_null(state->stmt_insert_file, 9);
     }
@@ -1149,7 +1137,7 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
     /* 10. group */
     if (entry->group) {
         sqlite3_bind_text(state->stmt_insert_file, 10,
-                         entry->group, -1, SQLITE_TRANSIENT);
+                          entry->group, -1, SQLITE_TRANSIENT);
     } else {
         sqlite3_bind_null(state->stmt_insert_file, 10);
     }
@@ -1526,7 +1514,7 @@ error_t *state_clear_files(state_t *state) {
     int rc = sqlite3_exec(state->db, "DELETE FROM virtual_manifest;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
         error_t *err = ERROR(ERR_STATE_INVALID, "Failed to clear virtual manifest: %s",
-                            errmsg ? errmsg : sqlite3_errstr(rc));
+                             errmsg ? errmsg : sqlite3_errstr(rc));
         sqlite3_free(errmsg);
         return err;
     }
@@ -1572,7 +1560,7 @@ error_t *state_directory_entry_create_from_metadata(
     if (err) {
         free(entry);
         return error_wrap(err, "Failed to derive filesystem path from storage path: %s",
-                         meta_item->key);
+                          meta_item->key);
     }
 
     /* Copy storage path */
@@ -1734,7 +1722,7 @@ error_t *state_get_all_directories(
             "ORDER BY filesystem_path;";
 
         int rc = sqlite3_prepare_v2(mutable_state->db, sql, -1,
-                                     &mutable_state->stmt_get_all_directories, NULL);
+                                    &mutable_state->stmt_get_all_directories, NULL);
         if (rc != SQLITE_OK) {
             return sqlite_error(mutable_state->db,
                 "Failed to prepare get all directories statement");
@@ -1888,7 +1876,7 @@ error_t *state_get_directories_by_profile(
             "ORDER BY filesystem_path;";
 
         int rc = sqlite3_prepare_v2(mutable_state->db, sql, -1,
-                                     &mutable_state->stmt_get_directories_by_profile, NULL);
+                                    &mutable_state->stmt_get_directories_by_profile, NULL);
         if (rc != SQLITE_OK) {
             return sqlite_error(mutable_state->db,
                 "Failed to prepare get directories by profile statement");
@@ -2095,7 +2083,7 @@ error_t *state_update_directory(
     int changes = sqlite3_changes(state->db);
     if (changes == 0) {
         return ERROR(ERR_NOT_FOUND, "Directory not found in state: %s",
-                    entry->filesystem_path);
+                     entry->filesystem_path);
     }
 
     return NULL;
@@ -2932,7 +2920,7 @@ error_t *state_set_file_state(
     /* Validate state value */
     if (strcmp(new_state, STATE_ACTIVE) != 0 && strcmp(new_state, STATE_INACTIVE) != 0) {
         return ERROR(ERR_INVALID_ARG, "Invalid state '%s' (must be 'active' or 'inactive')",
-                    new_state);
+                     new_state);
     }
 
     const char *sql = "UPDATE virtual_manifest SET state = ? WHERE filesystem_path = ?";
@@ -2982,8 +2970,7 @@ error_t *state_update_entry(
 
     /* Convert type enum to string */
     const char *type_str = entry->type == STATE_FILE_REGULAR ? "file" :
-                          entry->type == STATE_FILE_SYMLINK ? "symlink" :
-                          "executable";
+                           entry->type == STATE_FILE_SYMLINK ? "symlink" : "executable";
 
     /* Reset and bind all 13 fields + filesystem_path for WHERE clause */
     sqlite3_reset(state->stmt_update_entry);

@@ -123,19 +123,6 @@ error_t *path_from_storage(
 error_t *path_validate_storage(const char *storage_path);
 
 /**
- * Validate filesystem path
- *
- * Checks:
- * - Not empty
- * - Absolute path (starts with /)
- * - No suspicious patterns
- *
- * @param filesystem_path Path to validate (must not be NULL)
- * @return Error or NULL if valid
- */
-error_t *path_validate_filesystem(const char *filesystem_path);
-
-/**
  * Expand ~ to $HOME
  *
  * Examples:
@@ -147,24 +134,6 @@ error_t *path_validate_filesystem(const char *filesystem_path);
  * @return Error or NULL on success
  */
 error_t *path_expand_home(const char *path, char **out);
-
-/**
- * Make path relative to base
- *
- * Examples:
- *   base=/home/user, full=/home/user/.bashrc -> .bashrc
- *   base=/home/user, full=/etc/hosts         -> ../../etc/hosts
- *
- * @param base Base directory (must not be NULL)
- * @param full Full path (must not be NULL)
- * @param out Relative path (must not be NULL, caller must free)
- * @return Error or NULL on success
- */
-error_t *path_make_relative(
-    const char *base,
-    const char *full,
-    char **out
-);
 
 /**
  * Get $HOME directory

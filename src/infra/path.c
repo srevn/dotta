@@ -97,16 +97,14 @@ error_t *path_validate_storage(const char *storage_path) {
         /* Check if component is exactly ".." (path traversal) */
         if (strcmp(component, "..") == 0) {
             free(path_copy);
-            return ERROR(ERR_INVALID_ARG,
-                        "Path traversal not allowed (component '..' in '%s')",
-                        storage_path);
+            return ERROR(ERR_INVALID_ARG, "Path traversal not allowed (component '..' in '%s')",
+                         storage_path);
         }
 
         /* Check if component is "." (redundant, but potentially suspicious) */
         if (strcmp(component, ".") == 0) {
             free(path_copy);
-            return ERROR(ERR_INVALID_ARG,
-                        "Invalid path component '.' in '%s'", storage_path);
+            return ERROR(ERR_INVALID_ARG, "Invalid path component '.' in '%s'", storage_path);
         }
 
         /* Check for empty component (would indicate //) */
@@ -276,85 +274,32 @@ static int detect_home_prefix(
 }
 
 /**
- * Try prepending custom prefix to absolute path.
- *
- * Resolution strategy:
- *   1. If path already under prefix -> return NULL (use as-is)
- *   2. Try prepending prefix -> if exists on filesystem, return prepended
- *   3. Otherwise -> return NULL (fallback to original)
- *
- * This enables intuitive smart resolution where both explicit and implicit
- * forms work correctly:
- *   --prefix /jail /jail/etc/nginx.conf  (explicit, already under prefix)
- *   --prefix /jail /etc/nginx.conf       (implicit, prepends if file exists)
- *
- * When both files exist (/etc/nginx.conf and /jail/etc/nginx.conf), the
- * prefixed version is preferred to honor the user's explicit --prefix intent.
- *
- * Example:
- *   Input: absolute="/etc/nginx.conf", custom_prefix="/jail"
- *   Check: Is /etc/nginx.conf already under /jail? NO
- *   Try: Does /jail/etc/nginx.conf exist? YES
- *   Return: "/jail/etc/nginx.conf" (caller must free)
- *
- * @param absolute Absolute filesystem path (must not be NULL)
- * @param custom_prefix Custom prefix to try (must not be NULL)
- * @return Prepended path if resolution succeeded (caller frees), or NULL
- */
-static char *try_prepend_custom_prefix(
-    const char *absolute,
-    const char *custom_prefix
-) {
-    const char *relative;
-
-    /* Check if path is already under prefix */
-    int match = extract_relative_after_prefix(absolute, custom_prefix, &relative);
-    if (match >= 0) {
-        /*
-         * Already under prefix (match > 0) or IS the prefix directory (match == 0).
-         * Use original path as-is - no prepending needed.
-         */
-        return NULL;
-    }
-
-    /* Try prepending custom prefix to the path */
-    char *prefixed = str_format("%s%s", custom_prefix, absolute);
-    if (!prefixed) {
-        /* Allocation failed - gracefully fallback to original path */
-        return NULL;
-    }
-
-    /* Check if prefixed version exists on filesystem */
-    if (fs_exists(prefixed)) {
-        /* File exists under prefix - use this version */
-        return prefixed;  /* Caller takes ownership */
-    }
-
-    /* Prefixed path doesn't exist - fallback to original */
-    free(prefixed);
-    return NULL;
-}
-
-/**
  * Normalize user input path to absolute filesystem path.
+ *
+ * The custom_prefix defines a virtual filesystem root. All paths (relative
+ * and absolute) are resolved within that context. An absolute path like
+ * /etc/hosts with prefix /jail becomes /jail/etc/hosts.
  *
  * Transformation order:
  *   1. Tilde expansion (~/ -> $HOME)
- *   2. Custom prefix joining (relative + prefix)
- *   3. Absolute path pass-through
- *   4. CWD joining (relative, no prefix)
+ *   2. Custom prefix resolution:
+ *      - Relative paths: join with prefix
+ *      - Absolute paths already under prefix: pass through
+ *      - Absolute paths not under prefix: prepend prefix
+ *   3. CWD joining (relative, no prefix)
  *
  * Security: Rejects path traversal (..) in relative paths with custom_prefix.
  *
  * Examples:
- *   ("~/file", NULL)             -> "$HOME/file"
- *   ("relative/file", "/jail")   -> "/jail/relative/file"
- *   ("/abs/file", "/jail")       -> "/abs/file" (absolute unchanged)
- *   ("relative/file", NULL)      -> "$CWD/relative/file"
- *   ("../escape", "/jail")       -> ERROR
+ *   ("~/file", NULL)                  -> "$HOME/file"
+ *   ("relative/file", "/jail")        -> "/jail/relative/file"
+ *   ("/etc/hosts", "/jail")           -> "/jail/etc/hosts"
+ *   ("/jail/etc/hosts", "/jail")      -> "/jail/etc/hosts" (already under prefix)
+ *   ("relative/file", NULL)           -> "$CWD/relative/file"
+ *   ("../escape", "/jail")            -> ERROR
  *
  * @param user_path User-provided path (filesystem or tilde)
- * @param custom_prefix Optional custom prefix for relative path context (can be NULL)
+ * @param custom_prefix Optional prefix defining virtual filesystem root (can be NULL)
  * @param out Normalized absolute path (caller frees)
  * @return Error or NULL on success
  */
@@ -371,7 +316,7 @@ error_t *path_normalize_input(
     char *joined = NULL;
     const char *path_to_make_absolute = user_path;
 
-    /* Step 1: Expand tilde (highest priority - canonical) */
+    /* Step 1: Expand tilde (highest priority - canonical, bypasses prefix) */
     if (user_path[0] == '~') {
         err = path_expand_home(user_path, &expanded);
         if (err) {
@@ -380,22 +325,42 @@ error_t *path_normalize_input(
         path_to_make_absolute = expanded;
     }
 
-    /* Step 2: Join relative paths with custom prefix */
-    else if (custom_prefix && custom_prefix[0] != '\0' && user_path[0] != '/') {
-        /* Security: Block path traversal in relative paths with custom prefix */
-        if (strstr(user_path, "..") != NULL) {
-            free(expanded);
-            return ERROR(ERR_INVALID_ARG,
-                "Path traversal (..) not allowed in relative paths with --prefix.\n"
-                "Use absolute paths if you need to reference files outside the prefix.");
-        }
+    /* Step 2: Resolve paths within custom prefix context
+     * Tilde paths skip this - ~/file always means $HOME/file regardless of prefix */
+    else if (custom_prefix && custom_prefix[0] != '\0') {
+        const char *path = path_to_make_absolute;
 
-        err = fs_path_join(custom_prefix, user_path, &joined);
-        if (err) {
-            free(expanded);
-            return error_wrap(err, "Failed to join custom prefix with relative path");
+        if (path[0] != '/') {
+            /* Relative path: join with prefix */
+            if (strstr(path, "..") != NULL) {
+                free(expanded);
+                return ERROR(ERR_INVALID_ARG,
+                    "Path traversal (..) not allowed in relative paths with --prefix.\n"
+                    "Use absolute paths if you need to reference files outside the prefix.");
+            }
+
+            err = fs_path_join(custom_prefix, path, &joined);
+            if (err) {
+                free(expanded);
+                return error_wrap(err, "Failed to join custom prefix with relative path");
+            }
+            path_to_make_absolute = joined;
+        } else {
+            /* Absolute path: prepend prefix unless already under it */
+            const char *relative;
+            int match = extract_relative_after_prefix(path, custom_prefix, &relative);
+
+            if (match < 0) {
+                /* Not under prefix - prepend it (path is absolute within the virtual root) */
+                joined = str_format("%s%s", custom_prefix, path);
+                if (!joined) {
+                    free(expanded);
+                    return ERROR(ERR_MEMORY, "Failed to prepend custom prefix to path");
+                }
+                path_to_make_absolute = joined;
+            }
+            /* match >= 0: already under prefix, pass through unchanged */
         }
-        path_to_make_absolute = joined;
     }
 
     /* Step 3: Make absolute (handles absolute pass-through and CWD joining) */
@@ -472,26 +437,23 @@ error_t *path_to_storage(
         goto cleanup;
     }
 
-    /* Try custom prefix second (if provided) */
+    /* Try custom prefix second (if provided)
+     *
+     * path_normalize_input already resolved the path within the prefix context
+     * (prepending prefix to absolute paths, joining with relative paths), so
+     * absolute is guaranteed to be under the prefix if the path is valid.
+     */
     if (custom_prefix && custom_prefix[0] != '\0') {
-        /* Smart resolution: try prepending prefix if path not already under it */
-        char *resolved = try_prepend_custom_prefix(absolute, custom_prefix);
-        const char *path_to_check = resolved ? resolved : absolute;
-
-        match = extract_relative_after_prefix(path_to_check, custom_prefix, &relative);
+        match = extract_relative_after_prefix(absolute, custom_prefix, &relative);
 
         if (match > 0) {
-            /* Custom prefix matched with non-empty relative part */
-            /* Validate file exists (either via smart resolution or already under prefix) */
-            if (!resolved && !fs_lexists(path_to_check)) {
-                /* Path was already under prefix but doesn't exist */
-                free(resolved);
-                err = ERROR(ERR_NOT_FOUND, "File not found: %s", path_to_check);
+            /* Custom prefix matched - validate file exists */
+            if (!fs_lexists(absolute)) {
+                err = ERROR(ERR_NOT_FOUND, "File not found: %s", absolute);
                 goto cleanup;
             }
 
             result = str_format("custom/%s", relative);
-            free(resolved);  /* Free prepended path if allocated */
             if (!result) {
                 err = ERROR(ERR_MEMORY, "Failed to format custom storage path");
                 goto cleanup;
@@ -501,20 +463,12 @@ error_t *path_to_storage(
 
         } else if (match == 0) {
             /* Custom prefix directory itself - not supported */
-            free(resolved);  /* Free prepended path if allocated */
-            err = ERROR(ERR_INVALID_ARG,
-                "Cannot store custom prefix directory itself");
+            err = ERROR(ERR_INVALID_ARG, "Cannot store custom prefix directory itself");
             goto cleanup;
         }
 
-        /* No match - custom prefix provided but cannot be satisfied */
-        free(resolved);  /* Free prepended path if allocated */
-        err = ERROR(ERR_INVALID_ARG,
-            "File '%s' not found under custom prefix '%s'.\n"
-            "  Checked: %s%s\n"
-            "  Either create the file at that location first, or omit --prefix to use system file.",
-            absolute, custom_prefix, custom_prefix, absolute);
-        goto cleanup;
+        /* No match - path not under prefix (e.g., tilde-expanded $HOME path) */
+        /* Fall through to root prefix detection below */
     }
 
     /* Fallback to ROOT prefix for absolute paths */
@@ -624,8 +578,7 @@ error_t *path_from_storage(
 
     } else {
         /* Should never happen due to validation */
-        return ERROR(ERR_INTERNAL,
-                    "Invalid storage path prefix: '%s'", storage_path);
+        return ERROR(ERR_INTERNAL, "Invalid storage path prefix: '%s'", storage_path);
     }
 }
 
@@ -947,8 +900,7 @@ error_t *path_resolve_input(
         err = ERROR(ERR_INVALID_ARG,
             "Path '%s' is neither a valid filesystem path nor storage path\n"
             "Hint: Use absolute (/path), tilde (~/.file), relative (./path), or\n"
-            "      storage format (home/..., root/..., custom/...)",
-            input);
+            "      storage format (home/..., root/..., custom/...)", input);
         goto cleanup;
     }
 

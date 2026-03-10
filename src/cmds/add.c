@@ -1317,8 +1317,8 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
 
         /* Check path exists (use lexists to allow broken symlinks) */
         if (!fs_lexists(absolute)) {
+            err = ERROR(ERR_NOT_FOUND, "Path not found: %s", absolute);
             free(absolute);
-            err = ERROR(ERR_NOT_FOUND, "Path not found: %s", file);
             goto cleanup;
         }
 

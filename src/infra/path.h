@@ -26,21 +26,27 @@
  *
  * Transformation order:
  * 1. Tilde expansion (~/ → $HOME)
- * 2. Custom prefix joining (relative + prefix)
- * 3. Absolute path pass-through
- * 4. CWD joining (relative, no prefix)
+ * 2. Custom prefix: join with relative paths, prepend to absolute paths
+ *    (absolute paths already under prefix pass through unchanged)
+ * 3. CWD joining (relative, no prefix)
+ *
+ * The custom_prefix defines a virtual filesystem root. All paths (relative
+ * and absolute) are resolved within that context. An absolute path like
+ * /etc/hosts with prefix /jail becomes /jail/etc/hosts because the path
+ * is "absolute within the jail".
  *
  * Security: Rejects path traversal (..) in relative paths with custom_prefix.
  *
  * Examples:
- *   ("~/file", NULL)        → "$HOME/file"
- *   ("rel/file", "/jail")   → "/jail/rel/file"
- *   ("/abs/file", "/jail")  → "/abs/file"
- *   ("rel/file", NULL)      → "$CWD/rel/file"
- *   ("../escape", "/jail")  → ERROR
+ *   ("~/file", NULL)              → "$HOME/file"
+ *   ("rel/file", "/jail")         → "/jail/rel/file"
+ *   ("/etc/hosts", "/jail")       → "/jail/etc/hosts"
+ *   ("/jail/etc/hosts", "/jail")  → "/jail/etc/hosts" (already under prefix)
+ *   ("rel/file", NULL)            → "$CWD/rel/file"
+ *   ("../escape", "/jail")        → ERROR
  *
  * @param user_path User-provided path (filesystem or tilde)
- * @param custom_prefix Optional custom prefix for relative paths (can be NULL)
+ * @param custom_prefix Optional prefix defining virtual filesystem root (can be NULL)
  * @param out Normalized absolute path (caller must free)
  * @return Error or NULL on success
  */

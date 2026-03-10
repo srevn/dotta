@@ -131,40 +131,29 @@ typedef struct {
 } profile_list_t;
 
 /**
- * Auto-detect profiles
+ * Detect matching profile names from a list of available branches
  *
- * Detects profiles in precedence order:
- * 1. global - Universal settings
- * 2. <os> - OS base profile (darwin, linux, freebsd)
- * 3. <os>/<variant> - OS sub-profiles (darwin/name, one level deep, sorted alphabetically)
- * 4. hosts/<hostname> - Host base profile
- * 5. hosts/<hostname>/<variant> - Host sub-profiles (one level deep, sorted alphabetically)
+ * Pure name-based detection using system information (OS, hostname).
+ * Returns names in precedence order. Always includes "global" first
+ * if present in the available branches.
  *
- * Only includes profiles that exist as branches.
+ * Detection order:
+ * 1. "global" — always included if available
+ * 2. <os> — OS base profile (darwin, linux, freebsd)
+ * 3. <os>/<variant> — OS sub-profiles (sorted alphabetically, one level deep)
+ * 4. hosts/<hostname> — host base profile
+ * 5. hosts/<hostname>/<variant> — host sub-profiles (sorted alphabetically)
  *
- * Examples:
- * - OS "darwin" with profiles "darwin", "darwin/name", "darwin/work":
- *   → global → darwin → darwin/name → darwin/work
+ * No Git operations — takes a branch name list, returns matching names.
+ * All detection steps are non-fatal (skip on system call failure).
  *
- * - Hostname "visavis" with profile "hosts/visavis":
- *   → global → darwin → hosts/visavis
- *
- * - Hostname "visavis" with profiles "hosts/visavis/github" and "hosts/visavis/work":
- *   → global → darwin → hosts/visavis/github → hosts/visavis/work
- *
- * - Combined hierarchical profiles:
- *   → global → darwin → darwin/name → hosts/visavis → hosts/visavis/work
- *
- * Note: Git refs don't allow both hosts/<hostname> and hosts/<hostname>/<variant>
- * to coexist. Use either a base profile OR sub-profiles, not both.
- *
- * @param repo Repository (must not be NULL)
- * @param out Profile list (must not be NULL, caller must free)
+ * @param available_branches List of branch names to match against (must not be NULL)
+ * @param out_names Matched profile names in precedence order (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *profile_detect_auto(
-    git_repository *repo,
-    profile_list_t **out
+error_t *profile_detect_names(
+    const string_array_t *available_branches,
+    string_array_t **out_names
 );
 
 /**

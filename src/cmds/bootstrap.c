@@ -452,18 +452,14 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
             goto cleanup;
         }
     } else {
-        /* Auto-detect profiles */
-        err = profile_detect_auto(repo, &profiles);
+        /* Use enabled profiles from state */
+        err = profile_resolve(repo, NULL, 0, false, &profiles, NULL);
         if (err) {
-            err = error_wrap(err, "Failed to auto-detect profiles");
-            goto cleanup;
-        }
-
-        if (profiles->count == 0) {
-            output_info(out, "No profiles detected for this machine.");
+            output_info(out, "No enabled profiles found.");
             output_newline(out);
-            output_hint(out, "Create a profile with:");
-            output_hint_line(out, "  dotta add --profile <profile-name> <file>");
+            output_hint(out, "Enable profiles first:");
+            output_hint_line(out, "  dotta profile enable <name>");
+            error_free(err);
             goto cleanup;
         }
     }

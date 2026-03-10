@@ -137,9 +137,8 @@ error_t *file_entry_ensure_tree_entry(
     }
 
     /* Lookup tree entry from Git (creates owned reference) */
-    int git_err = git_tree_entry_bypath(&entry->entry,
-                                         entry->source_profile->tree,
-                                         entry->storage_path);
+    int git_err = git_tree_entry_bypath(&entry->entry, entry->source_profile->tree,
+                                        entry->storage_path);
     if (git_err != 0) {
         if (git_err == GIT_ENOTFOUND) {
             return ERROR(ERR_NOT_FOUND, "File '%s' not found in profile '%s' Git tree",
@@ -154,112 +153,50 @@ error_t *file_entry_ensure_tree_entry(
 }
 
 /**
- * Helper: Add profiles from array to list as auto-detected
+ * Match hierarchical profile names from available names
+ *
+ * Finds base match (exact prefix) and sub-matches (prefix/variant, one level
+ * deep only). Sub-matches are sorted alphabetically for deterministic ordering.
+ *
+ * @param available Available names to match against
+ * @param prefix Prefix to match (e.g., "darwin", "hosts/myhost")
+ * @param out Output array to append matches to (base first, then sorted subs)
+ * @return Error or NULL on success
  */
-static error_t *add_profiles_to_list(
-    git_repository *repo,
-    const string_array_t *profile_names,
-    profile_list_t *list
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(profile_names);
-    CHECK_NULL(list);
-    CHECK_NULL(list->profiles);
-
-    for (size_t i = 0; i < string_array_size(profile_names); i++) {
-        const char *profile_name = string_array_get(profile_names, i);
-        profile_t *profile = NULL;
-        error_t *err = profile_load(repo, profile_name, &profile);
-        if (err) {
-            return err;
-        }
-
-        profile->auto_detected = true;
-        list->profiles[list->count++] = *profile;
-        free(profile);  /* Shallow copy of internals to list, only free struct */
-    }
-
-    return NULL;
-}
-
-/**
- * Detect hierarchical profiles (base + sub-profiles)
- *
- * Generic helper for detecting profiles with hierarchical structure.
- * Finds both base profile (exact match) and sub-profiles (prefix/variant).
- * Sub-profiles are limited to one level deep and sorted alphabetically.
- *
- * This is a pure filtering function - it takes a pre-fetched branch list
- * and filters it by prefix. This allows the caller to fetch branches once
- * and reuse the list for multiple hierarchical detections (OS, host, etc.),
- * avoiding redundant Git operations.
- *
- * Examples:
- * - Prefix "darwin":
- *   Finds: darwin, darwin/personal, darwin/work
- *   Rejects: darwin/ (empty variant), darwin/work/nested (too deep)
- *
- * - Prefix "hosts/visavis":
- *   Finds: hosts/visavis, hosts/visavis/github, hosts/visavis/work
- *
- * @param repo Repository (must not be NULL)
- * @param branches Pre-fetched branch list to filter (must not be NULL)
- * @param prefix Profile prefix to match (must not be NULL)
- * @param list Profile list to append to (must not be NULL)
- * @param capacity Current capacity of list->profiles array (must not be NULL, updated on realloc)
- * @return Error or NULL on success (no matches is not an error)
- */
-static error_t *detect_hierarchical_profiles(
-    git_repository *repo,
-    const string_array_t *branches,
+static error_t *match_hierarchical_names(
+    const string_array_t *available,
     const char *prefix,
-    profile_list_t *list,
-    size_t *capacity
+    string_array_t *out
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(branches);
-    CHECK_NULL(prefix);
-    CHECK_NULL(list);
-    CHECK_NULL(capacity);
-
     error_t *err = NULL;
-    string_array_t *base_profile = NULL;
-    string_array_t *sub_profiles = NULL;
-
     size_t prefix_len = strlen(prefix);
 
-    /* Collect matching profiles: base + sub-profiles */
-    base_profile = string_array_create();
-    sub_profiles = string_array_create();
-
-    if (!base_profile || !sub_profiles) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate profile arrays");
-        goto cleanup;
+    string_array_t *sub_profiles = string_array_create();
+    if (!sub_profiles) {
+        return ERROR(ERR_MEMORY, "Failed to allocate sub-profiles array");
     }
 
-    for (size_t i = 0; i < string_array_size(branches); i++) {
-        const char *branch = string_array_get(branches, i);
+    for (size_t i = 0; i < string_array_size(available); i++) {
+        const char *name = string_array_get(available, i);
 
         /* Check if branch starts with prefix */
-        if (!str_starts_with(branch, prefix)) {
+        if (!str_starts_with(name, prefix)) {
             continue;
         }
 
-        const char *suffix = branch + prefix_len;
+        const char *suffix = name + prefix_len;
 
-        /* Exact match: prefix exactly matches branch name */
         if (suffix[0] == '\0') {
-            err = string_array_push(base_profile, branch);
+            /* Exact match: base profile — add directly to output */
+            err = string_array_push(out, name);
             if (err) {
                 goto cleanup;
             }
-        }
-        /* Sub-profile: prefix/variant (one level deep only) */
-        else if (suffix[0] == '/') {
+        } else if (suffix[0] == '/') {
             const char *variant = suffix + 1;
-            /* Validate: variant must be non-empty and contain no '/' (one level deep) */
+            /* One level deep only: non-empty variant with no further '/' */
             if (variant[0] != '\0' && strchr(variant, '/') == NULL) {
-                err = string_array_push(sub_profiles, branch);
+                err = string_array_push(sub_profiles, name);
                 if (err) {
                     goto cleanup;
                 }
@@ -267,149 +204,53 @@ static error_t *detect_hierarchical_profiles(
         }
     }
 
-    /* Calculate total profiles to add */
-    size_t base_count = string_array_size(base_profile);
-    size_t sub_count = string_array_size(sub_profiles);
-    size_t total_to_add = base_count + sub_count;
-
-    if (total_to_add == 0) {
-        /* No matching profiles found - success with no changes */
-        goto cleanup;
-    }
-
-    /* Ensure capacity with overflow check */
-    size_t needed_capacity = list->count + total_to_add;
-    if (needed_capacity > *capacity || !list->profiles) {
-        /* Check for overflow in doubling loop */
-        if (*capacity > SIZE_MAX / 2) {
-            err = ERROR(ERR_INTERNAL, "Profile capacity overflow");
-            goto cleanup;
-        }
-
-        /* Start with needed capacity or reasonable minimum */
-        size_t new_capacity;
-        if (*capacity == 0) {
-            new_capacity = (needed_capacity > 8) ? needed_capacity : 8;
-        } else {
-            new_capacity = *capacity * 2;
-            while (new_capacity < needed_capacity) {
-                if (new_capacity > SIZE_MAX / 2) {
-                    err = ERROR(ERR_INTERNAL, "Profile capacity overflow");
-                    goto cleanup;
-                }
-                new_capacity *= 2;
-            }
-        }
-
-        profile_t *new_profiles = realloc(list->profiles, new_capacity * sizeof(profile_t));
-        if (!new_profiles) {
-            err = ERROR(ERR_MEMORY, "Failed to grow profiles array");
-            goto cleanup;
-        }
-
-        list->profiles = new_profiles;
-        *capacity = new_capacity;
-    }
-
     /* Sort sub-profiles alphabetically for deterministic ordering */
-    if (sub_count > 1) {
+    if (string_array_size(sub_profiles) > 1) {
         string_array_sort(sub_profiles);
     }
 
-    /* Add base profile first (if exists) */
-    err = add_profiles_to_list(repo, base_profile, list);
-    if (err) {
-        goto cleanup;
-    }
-
-    /* Add sub-profiles (sorted alphabetically) */
-    err = add_profiles_to_list(repo, sub_profiles, list);
-    if (err) {
-        goto cleanup;
+    /* Append sorted sub-profiles after base */
+    for (size_t i = 0; i < string_array_size(sub_profiles); i++) {
+        err = string_array_push(out, string_array_get(sub_profiles, i));
+        if (err) {
+            goto cleanup;
+        }
     }
 
 cleanup:
-    string_array_free(base_profile);
     string_array_free(sub_profiles);
     return err;
 }
 
 /**
- * Auto-detect profiles based on system information
- *
- * Detection order (precedence: later overrides earlier):
- * 1. global             - Universal settings
- * 2. <os>               - OS base profile (darwin, linux, freebsd)
- * 3. <os>/<variant>     - OS sub-profiles (alphabetically sorted)
- * 4. hosts/<hostname>   - Host base profile
- * 5. hosts/<hostname>/<variant> - Host sub-profiles (alphabetically sorted)
- *
- * All detection steps are non-fatal. Missing profiles or system information
- * failures are silently skipped to maximize compatibility.
- *
- * @param repo Repository (must not be NULL)
- * @param out Profile list (must not be NULL, caller must free)
- * @return Error or NULL on success
+ * Detect matching profile names from a list of available branches
  */
-error_t *profile_detect_auto(
-    git_repository *repo,
-    profile_list_t **out
+error_t *profile_detect_names(
+    const string_array_t *available_branches,
+    string_array_t **out_names
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(out);
+    CHECK_NULL(available_branches);
+    CHECK_NULL(out_names);
 
     error_t *err = NULL;
-    profile_list_t *list = NULL;
-    string_array_t *branches = NULL;
     char *os_name = NULL;
-    char host_prefix[256];
 
-    /* Allocate profile list */
-    list = calloc(1, sizeof(profile_list_t));
-    if (!list) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate profile list");
-        goto cleanup;
+    string_array_t *names = string_array_create();
+    if (!names) {
+        return ERROR(ERR_MEMORY, "Failed to allocate profile names array");
     }
 
-    /* Initial capacity for typical case (will grow if needed) */
-    size_t capacity = 8;
-    list->profiles = calloc(capacity, sizeof(profile_t));
-    if (!list->profiles) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate profiles array");
-        goto cleanup;
-    }
-    list->count = 0;
-
-    /* 1. Try "global" profile */
-    profile_t *profile = NULL;
-    err = profile_load(repo, "global", &profile);
-    if (!err) {
-        profile->auto_detected = true;
-        list->profiles[list->count++] = *profile;
-        free(profile);  /* Shallow copy of internals to list, only free struct */
-    } else {
-        /* Non-fatal: skip global profile if it doesn't exist or fails to load */
-        error_free(err);
-        err = NULL;
+    /* 1. "global" — always first if present */
+    if (string_array_contains(available_branches, "global")) {
+        err = string_array_push(names, "global");
+        if (err) {
+            goto cleanup;
+        }
     }
 
-    /* Fetch all branches once for efficient hierarchical profile detection.
-     * This list is reused for both OS-specific and host-specific detection,
-     * avoiding redundant Git operations. Non-fatal if fetching fails. */
-    err = gitops_list_branches(repo, &branches);
-    if (err) {
-        /* Non-fatal: skip hierarchical profile detection if branch listing fails.
-         * The function can still succeed with just the global profile (if present)
-         * or return an empty profile list. */
-        error_free(err);
-        err = NULL;
-        /* branches remains NULL, hierarchical detection will be skipped */
-    }
-
-    /* 2. Detect OS-specific profiles (e.g., darwin, darwin/work) */
+    /* 2. OS-specific profiles (darwin, linux, freebsd, ...) */
     struct utsname uts;
-    if (branches && uname(&uts) == 0) {
-        /* Convert OS name to lowercase (Darwin -> darwin, Linux -> linux) */
+    if (uname(&uts) == 0) {
         os_name = strdup(uts.sysname);
         if (!os_name) {
             err = ERROR(ERR_MEMORY, "Failed to allocate OS name");
@@ -421,51 +262,41 @@ error_t *profile_detect_auto(
             *p = (char)tolower((unsigned char)*p);
         }
 
-        err = detect_hierarchical_profiles(repo, branches, os_name, list, &capacity);
+        err = match_hierarchical_names(available_branches, os_name, names);
         if (err) {
             /* Non-fatal: skip OS profiles if detection fails */
             error_free(err);
             err = NULL;
         }
-
-        free(os_name);
-        os_name = NULL;
     }
     /* Non-fatal: skip OS profiles if uname() fails */
 
-    /* 3. Detect host-specific profiles (e.g., hosts/myhost, hosts/myhost/work) */
+    /* 3. Host-specific profiles (hosts/<hostname>, hosts/<hostname>/variant) */
     char hostname[256];
-    if (branches && gethostname(hostname, sizeof(hostname)) == 0) {
-        /* Null-terminate to be safe */
+    if (gethostname(hostname, sizeof(hostname)) == 0) {
         hostname[sizeof(hostname) - 1] = '\0';
 
-        /* Build host prefix */
+        char host_prefix[DOTTA_REFNAME_MAX];
         int ret = snprintf(host_prefix, sizeof(host_prefix), "hosts/%s", hostname);
-        if (ret < 0 || (size_t)ret >= sizeof(host_prefix)) {
-            err = ERROR(ERR_INTERNAL, "Host prefix too long");
-            goto cleanup;
-        }
-
-        err = detect_hierarchical_profiles(repo, branches, host_prefix, list, &capacity);
-        if (err) {
-            /* Non-fatal: skip host profiles if detection fails */
-            error_free(err);
-            err = NULL;
+        if (ret >= 0 && (size_t)ret < sizeof(host_prefix)) {
+            err = match_hierarchical_names(available_branches, host_prefix, names);
+            if (err) {
+                /* Non-fatal: skip host profiles if detection fails */
+                error_free(err);
+                err = NULL;
+            }
         }
     }
     /* Non-fatal: continue if gethostname() fails */
 
     /* Success */
-    *out = list;
-    string_array_free(branches);
+    free(os_name);
+    *out_names = names;
     return NULL;
 
 cleanup:
-    string_array_free(branches);
     free(os_name);
-    if (err) {
-        profile_list_free(list);
-    }
+    string_array_free(names);
     return err;
 }
 
@@ -921,8 +752,7 @@ error_t *profile_validate_filter(
         }
 
         if (!found) {
-            return ERROR(ERR_INVALID_ARG,
-                        "Profile '%s' is not enabled\n"
+            return ERROR(ERR_INVALID_ARG, "Profile '%s' is not enabled\n"
                         "Hint: Run 'dotta profile enable %s' first",
                         filter_name, filter_name);
         }

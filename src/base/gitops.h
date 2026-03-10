@@ -112,6 +112,23 @@ error_t *gitops_create_orphan_branch(git_repository *repo, const char *name);
 error_t *gitops_list_branches(git_repository *repo, string_array_t **out);
 
 /**
+ * List all remote tracking branches
+ *
+ * Returns branch names (without <remote>/ prefix) for all remote tracking
+ * references. Filters out special refs (HEAD, dotta-worktree).
+ *
+ * @param repo Repository (must not be NULL)
+ * @param remote_name Remote name (e.g., "origin") (must not be NULL)
+ * @param out String array of branch names (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+error_t *gitops_list_remote_branches(
+    git_repository *repo,
+    const char *remote_name,
+    string_array_t **out
+);
+
+/**
  * Delete branch
  *
  * @param repo Repository (must not be NULL)

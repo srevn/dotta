@@ -11,7 +11,6 @@
 #include "clone.h"
 
 #include <git2.h>
-#include <libgen.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,13 +27,9 @@
 #include "utils/array.h"
 #include "utils/config.h"
 #include "utils/output.h"
-#include "utils/string.h"
 
 /* Default repository name when URL parsing fails */
 #define DEFAULT_REPO_NAME "dotta-repo"
-
-/* Maximum length for remote reference prefix (refs/remotes/<name>/) */
-#define REMOTE_REF_PREFIX_MAX 256
 
 /**
  * Extract repository name from URL
@@ -130,7 +125,7 @@ static error_t *fetch_profiles(
         err = gitops_fetch_branch(repo, remote_name, profile_name, xfer);
         if (err) {
             output_warning(out, "Failed to fetch '%s': %s",
-                          profile_name, error_message(err));
+                           profile_name, error_message(err));
             error_free(err);
             continue;
         }
@@ -145,7 +140,7 @@ static error_t *fetch_profiles(
             err = upstream_create_tracking_branch(repo, remote_name, profile_name);
             if (err) {
                 output_warning(out, "Failed to create local branch '%s': %s",
-                              profile_name, error_message(err));
+                               profile_name, error_message(err));
                 error_free(err);
                 continue;
             }
@@ -188,48 +183,12 @@ static error_t *fetch_all_profiles(
 
     output_section(out, "Fetching all remote profiles");
 
-    /* Discover all remote branches */
-    string_array_t *all_branches = string_array_create();
-    if (!all_branches) {
-        return ERROR(ERR_MEMORY, "Failed to create array");
+    /* List all remote tracking branches */
+    string_array_t *all_branches = NULL;
+    error_t *err = gitops_list_remote_branches(repo, remote_name, &all_branches);
+    if (err) {
+        return error_wrap(err, "Failed to list remote branches");
     }
-
-    /* Build remote reference prefix */
-    char prefix[REMOTE_REF_PREFIX_MAX];
-    int ret = snprintf(prefix, sizeof(prefix), "refs/remotes/%s/", remote_name);
-    if (ret < 0 || (size_t)ret >= sizeof(prefix)) {
-        string_array_free(all_branches);
-        return ERROR(ERR_INVALID_ARG, "Remote name too long");
-    }
-    size_t prefix_len = strlen(prefix);
-
-    /* Iterate remote refs to find all branches */
-    git_reference_iterator *iter = NULL;
-    int git_err = git_reference_iterator_new(&iter, repo);
-    if (git_err < 0) {
-        string_array_free(all_branches);
-        return error_from_git(git_err);
-    }
-
-    git_reference *ref = NULL;
-    while (git_reference_next(&ref, iter) == 0) {
-        const char *refname = git_reference_name(ref);
-
-        /* Only process remote tracking branches for our remote */
-        if (str_starts_with(refname, prefix)) {
-            const char *branch_name = refname + prefix_len;
-
-            /* Skip dotta-worktree and HEAD */
-            if (strcmp(branch_name, "dotta-worktree") != 0 &&
-                strcmp(branch_name, "HEAD") != 0) {
-                string_array_push(all_branches, branch_name);
-            }
-        }
-
-        git_reference_free(ref);
-    }
-
-    git_reference_iterator_free(iter);
 
     /* Create array for successfully fetched profiles */
     string_array_t *successful = string_array_create();
@@ -240,10 +199,8 @@ static error_t *fetch_all_profiles(
 
     /* Fetch and create local branches */
     size_t fetched_count = 0;
-    error_t *err = fetch_profiles(repo, remote_name,
-                                  all_branches->items,
-                                  all_branches->count,
-                                  out, xfer, &fetched_count, successful);
+    err = fetch_profiles(repo, remote_name, all_branches->items,
+                         all_branches->count, out, xfer, &fetched_count, successful);
 
     string_array_free(all_branches);
 
@@ -253,86 +210,9 @@ static error_t *fetch_all_profiles(
     }
 
     output_success(out, "Fetched %zu profile%s",
-                  fetched_count, fetched_count == 1 ? "" : "s");
+                   fetched_count, fetched_count == 1 ? "" : "s");
 
     *fetched_profiles = successful;
-    return NULL;
-}
-
-/**
- * Handle no-profiles-detected case
- *
- * Provides user guidance when auto-detection finds no profiles.
- * Offers to fetch 'global' as a sensible fallback.
- *
- * @param repo Repository
- * @param remote_name Remote name
- * @param out Output context
- * @param xfer Transfer context
- * @param fallback_profiles Output: fallback profiles to use
- * @return Error or NULL on success
- */
-static error_t *handle_no_profiles_detected(
-    git_repository *repo,
-    const char *remote_name,
-    output_ctx_t *out,
-    transfer_context_t *xfer,
-    string_array_t **fallback_profiles
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(out);
-    CHECK_NULL(fallback_profiles);
-
-    output_warning(out, "No profiles auto-detected for this system");
-
-    /* List available remote profiles */
-    string_array_t *remote_branches = NULL;
-    error_t *err = upstream_discover_branches(repo, remote_name, &remote_branches);
-
-    if (!err && remote_branches && string_array_size(remote_branches) > 0) {
-        output_section(out, "Available remote profiles");
-        for (size_t i = 0; i < string_array_size(remote_branches); i++) {
-            output_printf(out, OUTPUT_NORMAL, "  • %s\n", string_array_get(remote_branches, i));
-        }
-        output_newline(out);
-
-        /* Check if 'global' exists */
-        bool has_global = false;
-        for (size_t i = 0; i < string_array_size(remote_branches); i++) {
-            if (strcmp(string_array_get(remote_branches, i), "global") == 0) {
-                has_global = true;
-                break;
-            }
-        }
-
-        if (has_global) {
-            output_info(out, "Fetching 'global' profile as fallback...");
-
-            /* Fetch global */
-            char *global_name = "global";
-            *fallback_profiles = string_array_create();
-            if (!*fallback_profiles) {
-                string_array_free(remote_branches);
-                return ERROR(ERR_MEMORY, "Failed to create fallback array");
-            }
-
-            err = fetch_profiles(repo, remote_name, &global_name, 1,
-                                out, xfer, NULL, *fallback_profiles);
-
-            if (!err && string_array_size(*fallback_profiles) > 0) {
-                output_success(out, "Using 'global' profile");
-            } else {
-                /* Failed to fetch - clean up */
-                string_array_free(*fallback_profiles);
-                *fallback_profiles = NULL;
-            }
-        } else {
-            output_info(out, "No 'global' profile found.");
-            output_info(out, "Run 'dotta profile enable <name>' after setup");
-        }
-    }
-
-    string_array_free(remote_branches);
     return NULL;
 }
 
@@ -416,7 +296,7 @@ static error_t *initialize_state(
         size_t offset = 0;
         for (size_t i = 0; i < count && offset < sizeof(profiles_str) - 1; i++) {
             int written = snprintf(profiles_str + offset, sizeof(profiles_str) - offset,
-                                  "%s%s", profile_names[i], (i < count - 1) ? ", " : "");
+                                   "%s%s", profile_names[i], (i < count - 1) ? ", " : "");
             if (written > 0) {
                 offset += written;
             }
@@ -443,7 +323,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     output_ctx_t *out = NULL;
     transfer_context_t *xfer = NULL;
     string_array_t *fetched_profiles = NULL;
-    profile_list_t *detected_profiles = NULL;
+    string_array_t *detected_names = NULL;
 
     /* Create output context */
     out = output_create();
@@ -528,7 +408,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
 
         size_t fetched_count = 0;
         err = fetch_profiles(repo, "origin", opts->profiles, opts->profile_count,
-                            out, xfer, &fetched_count, fetched_profiles);
+                             out, xfer, &fetched_count, fetched_profiles);
 
         if (err) {
             output_error(out, "Failed to fetch profiles: %s", error_message(err));
@@ -537,8 +417,8 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         }
 
         output_success(out, "Fetched %zu of %zu specified profile%s",
-                      fetched_count, opts->profile_count,
-                      opts->profile_count == 1 ? "" : "s");
+                       fetched_count, opts->profile_count,
+                       opts->profile_count == 1 ? "" : "s");
 
     } else if (opts->fetch_all) {
         /* Hub mode - fetch all profiles */
@@ -558,38 +438,36 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         /* Default: auto-detect profiles for this machine */
         output_section(out, "Auto-detecting profiles for this system");
 
-        err = profile_detect_auto(repo, &detected_profiles);
+        /* List all remote tracking branches (available after clone) */
+        string_array_t *remote_branches = NULL;
+        err = gitops_list_remote_branches(repo, "origin", &remote_branches);
         if (err) {
-            output_warning(out, "Failed to auto-detect profiles: %s", error_message(err));
+            output_warning(out, "Failed to list remote branches: %s", error_message(err));
             error_free(err);
-            detected_profiles = NULL;
+            remote_branches = NULL;
         }
 
-        if (detected_profiles && detected_profiles->count > 0) {
+        /* Name-based detection against remote branches */
+        if (remote_branches) {
+            err = profile_detect_names(remote_branches, &detected_names);
+            if (err) {
+                output_warning(out, "Failed to detect profiles: %s", error_message(err));
+                error_free(err);
+            }
+        }
+
+        if (detected_names && string_array_size(detected_names) > 0) {
             /* Show detected profiles */
-            for (size_t i = 0; i < detected_profiles->count; i++) {
-                output_info(out, "  • %s", detected_profiles->profiles[i].name);
+            for (size_t i = 0; i < string_array_size(detected_names); i++) {
+                output_info(out, "  • %s", string_array_get(detected_names, i));
             }
             output_newline(out);
 
-            /* Build profile names array */
-            char **profile_names = malloc(detected_profiles->count * sizeof(char *));
-            if (!profile_names) {
-                final_err = ERROR(ERR_MEMORY, "Failed to allocate profile names");
-                goto cleanup;
-            }
-
-            for (size_t i = 0; i < detected_profiles->count; i++) {
-                profile_names[i] = detected_profiles->profiles[i].name;
-            }
-
             /* Fetch detected profiles */
             size_t fetched_count = 0;
-            err = fetch_profiles(repo, "origin", profile_names, detected_profiles->count,
-                                out, xfer, &fetched_count, fetched_profiles);
-
-            free(profile_names);
-
+            err = fetch_profiles(repo, "origin", detected_names->items,
+                                 string_array_size(detected_names),
+                                 out, xfer, &fetched_count, fetched_profiles);
             if (err) {
                 output_warning(out, "Some profiles failed to fetch: %s", error_message(err));
                 error_free(err);
@@ -597,21 +475,25 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
 
             if (fetched_count > 0) {
                 output_success(out, "Fetched %zu profile%s",
-                              fetched_count, fetched_count == 1 ? "" : "s");
+                               fetched_count, fetched_count == 1 ? "" : "s");
             }
 
         } else {
-            /* No profiles detected - handle gracefully */
-            string_array_t *fallback = NULL;
-            err = handle_no_profiles_detected(repo, "origin", out, xfer, &fallback);
-            if (!err && fallback) {
-                /* Use fallback profiles */
-                string_array_free(fetched_profiles);
-                fetched_profiles = fallback;
-            } else if (err) {
-                error_free(err);
+            /* No profiles detected — show available remote branches as guidance */
+            output_warning(out, "No profiles auto-detected for this system");
+
+            if (remote_branches && string_array_size(remote_branches) > 0) {
+                output_section(out, "Available remote profiles");
+                for (size_t i = 0; i < string_array_size(remote_branches); i++) {
+                    output_info(out, "  • %s", string_array_get(remote_branches, i));
+                }
+                output_newline(out);
             }
+
+            output_info(out, "Run 'dotta profile enable <name>' after setup");
         }
+
+        string_array_free(remote_branches);
     }
 
     /* Initialize state with fetched profiles */
@@ -713,11 +595,10 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     if (run_bootstrap && string_array_size(fetched_profiles) > 0) {
         /* Load profiles for bootstrap execution */
         profile_list_t *bootstrap_profiles = NULL;
-        err = profile_list_load(repo,
-                               fetched_profiles->items,
-                               string_array_size(fetched_profiles),
-                               false, /* non-strict: skip non-existent */
-                               &bootstrap_profiles);
+        err = profile_list_load(repo, fetched_profiles->items,
+                                string_array_size(fetched_profiles),
+                                false, /* non-strict: skip non-existent */
+                                &bootstrap_profiles);
 
         if (!err && bootstrap_profiles) {
             output_newline(out);
@@ -757,9 +638,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
 
 cleanup:
     /* Cleanup resources */
-    if (detected_profiles) {
-        profile_list_free(detected_profiles);
-    }
+    string_array_free(detected_names);
     if (xfer) {
         transfer_context_free(xfer);
     }

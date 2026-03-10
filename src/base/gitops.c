@@ -80,7 +80,11 @@ error_t *gitops_discover_and_open(git_repository **out, const char *start_path) 
  * Branch/Reference operations
  */
 
-error_t *gitops_branch_exists(git_repository *repo, const char *name, bool *exists) {
+error_t *gitops_branch_exists(
+    git_repository *repo,
+    const char *name,
+    bool *exists
+) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
     CHECK_NULL(exists);
@@ -88,7 +92,8 @@ error_t *gitops_branch_exists(git_repository *repo, const char *name, bool *exis
 
     git_reference *ref = NULL;
     char refname[256];
-    error_t *err_build = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", name);
+    error_t *err_build = gitops_build_refname(refname, sizeof(refname),
+                                              "refs/heads/%s", name);
     if (err_build) {
         return error_wrap(err_build, "Invalid branch name '%s'", name);
     }
@@ -108,7 +113,10 @@ error_t *gitops_branch_exists(git_repository *repo, const char *name, bool *exis
     return NULL;
 }
 
-error_t *gitops_create_orphan_branch(git_repository *repo, const char *name) {
+error_t *gitops_create_orphan_branch(
+    git_repository *repo,
+    const char *name
+) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
     CHECK_ARG(name[0] != '\0', "Branch name cannot be empty");
@@ -151,7 +159,8 @@ error_t *gitops_create_orphan_branch(git_repository *repo, const char *name) {
     /* Create orphan commit (no parents) */
     git_oid commit_oid;
     char refname[256];
-    error_t *err_build = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", name);
+    error_t *err_build = gitops_build_refname(refname, sizeof(refname),
+                                              "refs/heads/%s", name);
     if (err_build) {
         git_signature_free(sig);
         git_tree_free(tree);
@@ -182,7 +191,10 @@ error_t *gitops_create_orphan_branch(git_repository *repo, const char *name) {
     return NULL;
 }
 
-error_t *gitops_list_branches(git_repository *repo, string_array_t **out) {
+error_t *gitops_list_branches(
+    git_repository *repo,
+    string_array_t **out
+) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
 
@@ -225,7 +237,80 @@ error_t *gitops_list_branches(git_repository *repo, string_array_t **out) {
     return NULL;
 }
 
-error_t *gitops_delete_branch(git_repository *repo, const char *name) {
+error_t *gitops_list_remote_branches(
+    git_repository *repo,
+    const char *remote_name,
+    string_array_t **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(remote_name);
+    CHECK_NULL(out);
+
+    /* Build prefix to strip: "<remote_name>/" */
+    char prefix[DOTTA_REFNAME_MAX];
+    int ret = snprintf(prefix, sizeof(prefix), "%s/", remote_name);
+    if (ret < 0 || (size_t)ret >= sizeof(prefix)) {
+        return ERROR(ERR_INVALID_ARG, "Remote name too long");
+    }
+    size_t prefix_len = (size_t)ret;
+
+    git_branch_iterator *iter = NULL;
+    int err = git_branch_iterator_new(&iter, repo, GIT_BRANCH_REMOTE);
+    if (err < 0) {
+        return error_wrap(error_from_git(err),
+                "Failed to create remote branch iterator");
+    }
+
+    string_array_t *branches = string_array_create();
+    if (!branches) {
+        git_branch_iterator_free(iter);
+        return ERROR(ERR_MEMORY, "Failed to allocate branch list");
+    }
+
+    git_reference *ref = NULL;
+    git_branch_t branch_type;
+
+    while (git_branch_next(&ref, &branch_type, iter) == 0) {
+        const char *name = NULL;
+        err = git_branch_name(&name, ref);
+        if (err < 0) {
+            git_reference_free(ref);
+            continue;  /* Non-fatal: skip unreadable refs */
+        }
+
+        /* git_branch_name returns "origin/branch" for remote branches */
+        if (!str_starts_with(name, prefix)) {
+            git_reference_free(ref);
+            continue;  /* Different remote */
+        }
+
+        const char *branch_name = name + prefix_len;
+
+        /* Skip special refs */
+        if (strcmp(branch_name, "dotta-worktree") == 0 ||
+            strcmp(branch_name, "HEAD") == 0) {
+            git_reference_free(ref);
+            continue;
+        }
+
+        error_t *derr = string_array_push(branches, branch_name);
+        git_reference_free(ref);
+        if (derr) {
+            git_branch_iterator_free(iter);
+            string_array_free(branches);
+            return derr;
+        }
+    }
+
+    git_branch_iterator_free(iter);
+    *out = branches;
+    return NULL;
+}
+
+error_t *gitops_delete_branch(
+    git_repository *repo,
+    const char *name
+) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
     CHECK_ARG(name[0] != '\0', "Branch name cannot be empty");
@@ -251,7 +336,10 @@ error_t *gitops_delete_branch(git_repository *repo, const char *name) {
     return NULL;
 }
 
-error_t *gitops_current_branch(git_repository *repo, char **out) {
+error_t *gitops_current_branch(
+    git_repository *repo,
+    char **out
+) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
 
@@ -329,7 +417,11 @@ error_t *gitops_is_current_branch(
  * Tree operations
  */
 
-error_t *gitops_load_tree(git_repository *repo, const char *ref_name, git_tree **out) {
+error_t *gitops_load_tree(
+    git_repository *repo,
+    const char *ref_name,
+    git_tree **out
+) {
     CHECK_NULL(repo);
     CHECK_NULL(ref_name);
     CHECK_NULL(out);
@@ -380,7 +472,11 @@ error_t *gitops_load_tree(git_repository *repo, const char *ref_name, git_tree *
     return NULL;
 }
 
-error_t *gitops_tree_walk(git_tree *tree, git_treewalk_cb callback, void *payload) {
+error_t *gitops_tree_walk(
+    git_tree *tree,
+    git_treewalk_cb callback,
+    void *payload
+) {
     CHECK_NULL(tree);
     CHECK_NULL(callback);
 
@@ -420,7 +516,8 @@ error_t *gitops_create_commit(
     git_oid *parent_oid = NULL;
     git_commit *parent = NULL;
     char refname[256];
-    error_t *err_build = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
+    error_t *err_build = gitops_build_refname(refname, sizeof(refname),
+                                              "refs/heads/%s", branch_name);
     if (err_build) {
         git_signature_free(sig);
         /* NOTE: Do not free 'tree' - it is owned by the caller */
@@ -695,7 +792,7 @@ static error_t *build_tree_for_path(
     /* Recurse to build child tree */
     git_oid child_tree_oid;
     err = build_tree_for_path(repo, child_tree, segments, depth + 1,
-                               blob_oid, file_mode, &child_tree_oid);
+                              blob_oid, file_mode, &child_tree_oid);
 
     /* Free child_tree if we loaded it */
     if (child_tree) {
@@ -951,11 +1048,15 @@ error_t *gitops_fetch_branch(
     }
 
     char refspec[256];
-    error_t *err_build = gitops_build_refname(refspec, sizeof(refspec), "refs/heads/%s:refs/remotes/%s/%s",
-                                       branch_name, remote_name, branch_name);
+    error_t *err_build = gitops_build_refname(
+        refspec, sizeof(refspec),
+        "refs/heads/%s:refs/remotes/%s/%s",
+        branch_name, remote_name, branch_name
+    );
     if (err_build) {
         git_remote_free(remote);
-        return error_wrap(err_build, "Invalid branch/remote name '%s/%s'", remote_name, branch_name);
+        return error_wrap(err_build, "Invalid branch/remote name '%s/%s'",
+                          remote_name, branch_name);
     }
 
     const char *refspecs[] = { refspec };
@@ -1033,9 +1134,8 @@ error_t *gitops_fetch_branches(
             branch_names[i], remote_name, branch_names[i]
         );
         if (err_build) {
-            err_result = error_wrap(err_build,
-                "Invalid branch/remote name '%s/%s'",
-                remote_name, branch_names[i]);
+            err_result = error_wrap(err_build, "Invalid branch/remote name '%s/%s'",
+                                    remote_name, branch_names[i]);
             goto cleanup;
         }
     }
@@ -1114,8 +1214,8 @@ error_t *gitops_push_branch(
     }
 
     char refspec[256];
-    error_t *err_build = gitops_build_refname(refspec, sizeof(refspec), "refs/heads/%s:refs/heads/%s",
-                                       branch_name, branch_name);
+    error_t *err_build = gitops_build_refname(refspec, sizeof(refspec),
+                            "refs/heads/%s:refs/heads/%s", branch_name, branch_name);
     if (err_build) {
         git_remote_free(remote);
         return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
@@ -1172,7 +1272,8 @@ error_t *gitops_delete_remote_branch(
 
     /* Delete remote branch using empty refspec: :refs/heads/branch */
     char refspec[256];
-    error_t *err_build = gitops_build_refname(refspec, sizeof(refspec), ":refs/heads/%s", branch_name);
+    error_t *err_build = gitops_build_refname(refspec, sizeof(refspec),
+                                              ":refs/heads/%s", branch_name);
     if (err_build) {
         git_remote_free(remote);
         return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
@@ -1455,7 +1556,8 @@ error_t *gitops_resolve_commit_in_branch(
 
     /* Build reference name for branch */
     char ref_name[256];
-    error_t *err_build = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", branch_name);
+    error_t *err_build = gitops_build_refname(ref_name, sizeof(ref_name),
+                                              "refs/heads/%s", branch_name);
     if (err_build) {
         return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
     }
@@ -1511,7 +1613,7 @@ error_t *gitops_resolve_commit_in_branch(
 
     if (ret < 0) {
         return ERROR(ERR_NOT_FOUND, "Commit '%s' not found in branch '%s'",
-                    commit_ref, branch_name);
+                     commit_ref, branch_name);
     }
 
     /* Get the commit OID */
@@ -1644,7 +1746,9 @@ error_t *gitops_merge_trees_safe(
 
     /* Perform three-way merge on trees */
     git_merge_options merge_opts = GIT_MERGE_OPTIONS_INIT;
-    git_err = git_merge_trees(&index, repo, ancestor_tree, our_tree, their_tree, &merge_opts);
+    git_err = git_merge_trees(
+        &index, repo, ancestor_tree, our_tree, their_tree, &merge_opts
+    );
 
     /* Clean up trees */
     git_tree_free(their_tree);

@@ -584,12 +584,12 @@ static error_t *sync_push_phase(
                          * Note: Pass NULL for metadata_cache (not the cached value).
                          * The cache was built before fetch and contains stale metadata.
                          * manifest_sync_diff will load fresh metadata from the new commit. */
-                        size_t synced = 0, removed = 0, fallbacks = 0;
+                        size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
                         error_t *manifest_err = manifest_sync_diff(
                             repo, state, result->profile_name,
                             &old_oid, &new_oid, enabled_profiles,
                             NULL /* metadata_cache */,
-                            &synced, &removed, &fallbacks
+                            &synced, &removed, &fallbacks, &skipped
                         );
 
                         if (manifest_err) {
@@ -609,6 +609,12 @@ static error_t *sync_push_phase(
                                    colored ? colored : result->profile_name,
                                    result->behind, result->behind == 1 ? "" : "s",
                                    synced, removed, fallbacks, fallbacks == 1 ? "" : "s");
+                        }
+
+                        if (skipped > 0) {
+                            output_warning(out, "   %zu custom file%s skipped (no prefix configured for '%s')",
+                                          skipped, skipped == 1 ? "" : "s", result->profile_name);
+                            output_hint(out, "   Run: dotta profile enable --prefix <path> %s", result->profile_name);
                         }
                         free(colored);
                     } else {
@@ -737,12 +743,12 @@ static error_t *sync_push_phase(
                                      * Note: Pass NULL for metadata_cache (not the cached value).
                                      * The cache was built before fetch and contains stale metadata.
                                      * manifest_sync_diff will load fresh metadata from the new commit. */
-                                    size_t synced = 0, removed = 0, fallbacks = 0;
+                                    size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
                                     error_t *manifest_err = manifest_sync_diff(
                                         repo, state, result->profile_name,
                                         &ctx.saved_oid, &new_oid, enabled_profiles,
                                         NULL /* metadata_cache */,
-                                        &synced, &removed, &fallbacks
+                                        &synced, &removed, &fallbacks, &skipped
                                     );
 
                                     if (manifest_err) {
@@ -752,6 +758,12 @@ static error_t *sync_push_phase(
                                     } else if (synced > 0 || removed > 0 || fallbacks > 0) {
                                         output_info(out, "   Manifest: %zu staged, %zu removed, %zu fallback%s",
                                                    synced, removed, fallbacks, fallbacks == 1 ? "" : "s");
+                                    }
+
+                                    if (skipped > 0) {
+                                        output_warning(out, "   %zu custom file%s skipped (no prefix configured for '%s')",
+                                                      skipped, skipped == 1 ? "" : "s", result->profile_name);
+                                        output_hint(out, "   Run: dotta profile enable --prefix <path> %s", result->profile_name);
                                     }
                                 }
                             }
@@ -843,12 +855,12 @@ static error_t *sync_push_phase(
                                      * Note: Pass NULL for metadata_cache (not the cached value).
                                      * The cache was built before fetch and contains stale metadata.
                                      * manifest_sync_diff will load fresh metadata from the new commit. */
-                                    size_t synced = 0, removed = 0, fallbacks = 0;
+                                    size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
                                     error_t *manifest_err = manifest_sync_diff(
                                         repo, state, result->profile_name,
                                         &ctx.saved_oid, &new_oid, enabled_profiles,
                                         NULL /* metadata_cache */,
-                                        &synced, &removed, &fallbacks
+                                        &synced, &removed, &fallbacks, &skipped
                                     );
 
                                     if (manifest_err) {
@@ -858,6 +870,12 @@ static error_t *sync_push_phase(
                                     } else if (synced > 0 || removed > 0 || fallbacks > 0) {
                                         output_info(out, "   Manifest: %zu staged, %zu removed, %zu fallback%s",
                                                    synced, removed, fallbacks, fallbacks == 1 ? "" : "s");
+                                    }
+
+                                    if (skipped > 0) {
+                                        output_warning(out, "   %zu custom file%s skipped (no prefix configured for '%s')",
+                                                      skipped, skipped == 1 ? "" : "s", result->profile_name);
+                                        output_hint(out, "   Run: dotta profile enable --prefix <path> %s", result->profile_name);
                                     }
                                 }
                             }
@@ -980,12 +998,12 @@ static error_t *sync_push_phase(
                                  * Note: Pass NULL for metadata_cache (not the cached value).
                                  * The cache was built before fetch and contains stale metadata.
                                  * manifest_sync_diff will load fresh metadata from the new commit. */
-                                size_t synced = 0, removed = 0, fallbacks = 0;
+                                size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
                                 error_t *manifest_err = manifest_sync_diff(
                                     repo, state, result->profile_name,
                                     &ctx.saved_oid, &new_oid, enabled_profiles,
                                     NULL /* metadata_cache */,
-                                    &synced, &removed, &fallbacks
+                                    &synced, &removed, &fallbacks, &skipped
                                 );
 
                                 if (manifest_err) {
@@ -995,6 +1013,12 @@ static error_t *sync_push_phase(
                                 } else if (synced > 0 || removed > 0 || fallbacks > 0) {
                                     output_info(out, "   Manifest: %zu staged, %zu removed, %zu fallback%s",
                                                synced, removed, fallbacks, fallbacks == 1 ? "" : "s");
+                                }
+
+                                if (skipped > 0) {
+                                    output_warning(out, "   %zu custom file%s skipped (no prefix configured for '%s')",
+                                                  skipped, skipped == 1 ? "" : "s", result->profile_name);
+                                    output_hint(out, "   Run: dotta profile enable --prefix <path> %s", result->profile_name);
                                 }
                             }
                         }

@@ -520,6 +520,7 @@ error_t *manifest_reorder_profiles(
  * @param out_synced Output: number of files synced (can be NULL)
  * @param out_removed Output: number of files removed (can be NULL)
  * @param out_fallbacks Output: number of fallback resolutions (can be NULL)
+ * @param out_skipped Output: number of custom/ files skipped due to missing prefix (can be NULL)
  * @return Error or NULL on success
  */
 error_t *manifest_sync_diff(
@@ -532,7 +533,8 @@ error_t *manifest_sync_diff(
     const hashmap_t *metadata_cache,
     size_t *out_synced,
     size_t *out_removed,
-    size_t *out_fallbacks
+    size_t *out_fallbacks,
+    size_t *out_skipped
 );
 
 /**

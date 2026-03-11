@@ -215,15 +215,13 @@ static void print_deploy_results(const output_ctx_t *out, const deploy_result_t 
         /* Adopted count */
         if (result->adopted_count > 0) {
             if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL,
-                    "Adopted %s%zu%s file%s (now tracked)\n",
+                output_printf(out, OUTPUT_NORMAL, "Adopted %s%zu%s file%s (now tracked)\n",
                     output_color_code(out, OUTPUT_COLOR_YELLOW),
                     result->adopted_count,
                     output_color_code(out, OUTPUT_COLOR_RESET),
                     result->adopted_count == 1 ? "" : "s");
             } else {
-                output_printf(out, OUTPUT_NORMAL,
-                    "Adopted %zu file%s (now tracked)\n",
+                output_printf(out, OUTPUT_NORMAL, "Adopted %zu file%s (now tracked)\n",
                     result->adopted_count,
                     result->adopted_count == 1 ? "" : "s");
             }

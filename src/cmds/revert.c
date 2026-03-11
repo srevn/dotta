@@ -1344,7 +1344,8 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
         NULL,               /* metadata_cache - will load if needed */
         &synced,
         &removed,
-        &fallbacks
+        &fallbacks,
+        NULL                /* out_skipped - not applicable for revert */
     );
 
     if (manifest_err) {

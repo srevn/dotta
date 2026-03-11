@@ -2652,7 +2652,8 @@ error_t *manifest_sync_diff(
     const hashmap_t *metadata_cache,
     size_t *out_synced,
     size_t *out_removed,
-    size_t *out_fallbacks
+    size_t *out_fallbacks,
+    size_t *out_skipped
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -2674,7 +2675,7 @@ error_t *manifest_sync_diff(
     git_tree *new_tree = NULL;
     git_diff *diff = NULL;
 
-    size_t synced = 0, removed = 0, fallbacks = 0;
+    size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
 
     /* PHASE 1: BUILD CONTEXT (O(M)) */
     /* 1.0. Load all enabled profiles from Git (current state) */
@@ -2819,6 +2820,12 @@ error_t *manifest_sync_diff(
 
         /* Use custom prefix from profile (attached by orchestrator) */
         const char *custom_prefix = synced_profile_custom_prefix;
+
+        /* Skip custom/ files when deployment prefix is unknown */
+        if (str_starts_with(storage_path, "custom/") && !custom_prefix) {
+            skipped++;
+            continue;
+        }
 
         /* Resolve filesystem path with appropriate prefix */
         char *filesystem_path = NULL;
@@ -3020,6 +3027,7 @@ error_t *manifest_sync_diff(
     if (out_synced) *out_synced = synced;
     if (out_removed) *out_removed = removed;
     if (out_fallbacks) *out_fallbacks = fallbacks;
+    if (out_skipped) *out_skipped = skipped;
 
     /* Synchronize git_oid for ALL files from this profile.
      * After sync, the branch HEAD has moved to new_oid. ALL files from this

@@ -830,11 +830,13 @@ static error_t *cleanup_metadata(
 static error_t *remove_files_from_profile(
     git_repository *repo,
     const cmd_remove_options_t *opts,
-    size_t *removed_count_out
+    size_t *removed_count_out,
+    bool *performed
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
     CHECK_NULL(removed_count_out);
+    CHECK_NULL(performed);
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
@@ -849,6 +851,7 @@ static error_t *remove_files_from_profile(
     worktree_handle_t *wt = NULL;
     state_t *state = NULL;
 
+    *performed = false;
     *removed_count_out = 0;
 
     /* Load configuration */
@@ -1161,6 +1164,7 @@ static error_t *remove_files_from_profile(
     }
 
     /* Success - save removed count */
+    *performed = true;
     *removed_count_out = removed_count;
 
 cleanup:
@@ -1183,10 +1187,12 @@ cleanup:
  */
 static error_t *delete_profile_branch(
     git_repository *repo,
-    const cmd_remove_options_t *opts
+    const cmd_remove_options_t *opts,
+    bool *performed
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
+    CHECK_NULL(performed);
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
@@ -1201,6 +1207,8 @@ static error_t *delete_profile_branch(
     profile_t *profile = NULL;
     string_array_t *files = NULL;
 
+    *performed = false;
+    
     /* Load config first */
     err = config_load(NULL, &config);
     if (err) {
@@ -1520,6 +1528,8 @@ static error_t *delete_profile_branch(
         goto cleanup;
     }
 
+    *performed = true;
+
     /* Push deletion to remote if remote exists
      * This is critical for sync to work - other repos need to know the branch was deleted
      */
@@ -1619,13 +1629,14 @@ error_t *cmd_remove(git_repository *repo, const cmd_remove_options_t *opts) {
 
     /* Branch: Delete profile */
     if (opts->delete_profile) {
-        err = delete_profile_branch(repo, opts);
+        bool performed = false;
+        err = delete_profile_branch(repo, opts, &performed);
         if (err) {
             output_free(out);
             return err;
         }
 
-        if (!opts->quiet && !opts->dry_run) {
+        if (performed && !opts->quiet) {
             output_success(out, "Profile '%s' deleted", opts->profile);
             output_info(out, "Run 'dotta apply' to remove deployed files from filesystem");
             output_newline(out);
@@ -1637,16 +1648,17 @@ error_t *cmd_remove(git_repository *repo, const cmd_remove_options_t *opts) {
 
     /* Branch: Remove files from profile */
     size_t removed_count = 0;
-    err = remove_files_from_profile(repo, opts, &removed_count);
+    bool performed = false;
+    err = remove_files_from_profile(repo, opts, &removed_count, &performed);
     if (err) {
         output_free(out);
         return err;
     }
 
     /* Display summary */
-    if (!opts->quiet && !opts->dry_run) {
+    if (performed && !opts->quiet) {
         output_success(out, "Removed %zu file%s from profile '%s'",
-                      removed_count, removed_count == 1 ? "" : "s", opts->profile);
+                       removed_count, removed_count == 1 ? "" : "s", opts->profile);
         output_info(out, "Run 'dotta apply' to remove files from filesystem");
         output_newline(out);
     }

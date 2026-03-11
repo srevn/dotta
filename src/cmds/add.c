@@ -874,8 +874,16 @@ cleanup:
  *      a. Build metadata cache for all enabled profiles
  *      b. Create keymanager for encryption handling
  *      c. Open transaction (state_load_for_update)
- *      d. Call manifest_add_files() (builds fresh manifest internally)
- *      e. Commit transaction (state_save)
+ *      d. If custom_prefix provided: update prefix in state (UPSERT)
+ *      e. Call manifest_add_files() (builds fresh manifest internally)
+ *      f. Commit transaction (state_save)
+ *
+ * Custom Prefix Update:
+ *   When adding custom/ files to an already-enabled profile, the custom_prefix
+ *   must be stored in state BEFORE manifest_add_files(). This is the same
+ *   ordering constraint as auto_enable_and_sync_profile() (STEP 6 → STEP 7).
+ *   Only called when custom_prefix is non-NULL to avoid clearing an existing
+ *   prefix when adding home/ or root/ files.
  *
  * Lifecycle Tracking:
  *   Files get deployed_at = time(NULL) because ADD captures files FROM the
@@ -895,6 +903,7 @@ cleanup:
  *
  * @param repo Git repository
  * @param profile_name Profile that files were added to
+ * @param custom_prefix Custom prefix for custom/ files (can be NULL)
  * @param added_files Filesystem paths that were added
  * @param out Output context for verbose logging (can be NULL)
  * @param out_updated Output flag: true if manifest was updated (must not be NULL)
@@ -903,6 +912,7 @@ cleanup:
 static error_t *update_manifest_after_add(
     git_repository *repo,
     const char *profile_name,
+    const char *custom_prefix,
     const string_array_t *added_files,
     output_ctx_t *out,
     bool *out_updated
@@ -977,7 +987,25 @@ static error_t *update_manifest_after_add(
         goto cleanup;
     }
 
-    /* STEP 4: Bulk sync operation (O(M+N)) */
+    /* STEP 4: Update custom prefix in state if adding custom/ files
+     *
+     * CRITICAL ORDER: Must store prefix BEFORE manifest_add_files() so
+     * state_get_prefix_map() can resolve custom/ storage paths during
+     * manifest building. Same ordering constraint as
+     * auto_enable_and_sync_profile() (STEP 6 → STEP 7).
+     *
+     * Only called when custom_prefix is non-NULL to avoid clearing an
+     * existing prefix when adding home/ or root/ files.
+     * state_enable_profile() uses UPSERT - safe on already-enabled profiles. */
+    if (custom_prefix) {
+        err = state_enable_profile(state, profile_name, custom_prefix);
+        if (err) {
+            err = error_wrap(err, "Failed to update custom prefix for profile");
+            goto cleanup;
+        }
+    }
+
+    /* STEP 5: Bulk sync operation (O(M+N)) */
     size_t synced_count = 0;
     err = manifest_add_files(
         repo,
@@ -994,7 +1022,7 @@ static error_t *update_manifest_after_add(
         goto cleanup;
     }
 
-    /* STEP 5: Commit transaction */
+    /* STEP 6: Commit transaction */
     err = state_save(repo, state);
     if (err) {
         err = error_wrap(err, "Failed to save manifest updates");
@@ -1651,7 +1679,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
          * If not enabled, skips manifest update (user must explicitly enable).
          */
         error_t *manifest_err = update_manifest_after_add(
-            repo, opts->profile, all_files, out, &manifest_updated
+            repo, opts->profile, opts->custom_prefix, all_files, out, &manifest_updated
         );
 
         if (manifest_err) {

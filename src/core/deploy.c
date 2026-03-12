@@ -759,14 +759,15 @@ static error_t *deploy_tracked_directories(
         }
         /* else: no filter, process all (full sync mode) */
 
-        /* Skip STATE_INACTIVE directories - they're orphaned and awaiting cleanup
+        /* Skip removal-pending directories (STATE_INACTIVE or STATE_DELETED)
          *
-         * ARCHITECTURE: STATE_INACTIVE directories are staged for removal by profile disable.
-         * They should NOT be deployed. Only STATE_ACTIVE directories participate in deployment.
+         * ARCHITECTURE: These directories are staged for removal (by profile disable
+         * or confirmed deletion). They should NOT be deployed.
          */
-        if (dir_entry->state && strcmp(dir_entry->state, STATE_INACTIVE) == 0) {
+        if (dir_entry->state && (strcmp(dir_entry->state, STATE_INACTIVE) == 0 ||
+                                 strcmp(dir_entry->state, STATE_DELETED) == 0)) {
             if (opts->verbose) {
-                printf("  Skipped: %s (inactive - staged for removal)\n", dir_entry->filesystem_path);
+                printf("  Skipped: %s (staged for removal)\n", dir_entry->filesystem_path);
             }
             continue;
         }

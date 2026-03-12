@@ -1612,9 +1612,9 @@ static error_t *analyze_untracked_files(
         for (size_t i = 0; i < dir_count; i++) {
             const state_directory_entry_t *dir_entry = &directories[i];
 
-            /* Skip STATE_INACTIVE directories - they're orphaned and shouldn't be scanned
+            /* Skip removal-pending directories (STATE_INACTIVE or STATE_DELETED)
              *
-             * ARCHITECTURE: STATE_INACTIVE directories are staged for removal.
+             * ARCHITECTURE: These directories are staged for removal.
              * We should NOT scan them for untracked files because:
              * 1. The directory is being removed (profile disabled)
              * 2. Scanning would report spurious untracked files
@@ -1622,7 +1622,8 @@ static error_t *analyze_untracked_files(
              *
              * This ensures untracked file detection only applies to active directories.
              */
-            if (dir_entry->state && strcmp(dir_entry->state, STATE_INACTIVE) == 0) {
+            if (dir_entry->state && (strcmp(dir_entry->state, STATE_INACTIVE) == 0 ||
+                                     strcmp(dir_entry->state, STATE_DELETED) == 0)) {
                 continue;  /* Skip silently - these will be handled by orphan detection */
             }
 
@@ -1703,15 +1704,16 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
     for (size_t i = 0; i < dir_count; i++) {
         const state_directory_entry_t *dir_entry = &directories[i];
 
-        /* Skip STATE_INACTIVE directories - they're staged for removal
+        /* Skip removal-pending directories (STATE_INACTIVE or STATE_DELETED)
          *
-         * ARCHITECTURE: STATE_INACTIVE directories are orphaned and shouldn't
+         * ARCHITECTURE: These directories are staged for removal and shouldn't
          * participate in divergence analysis. They'll be detected as orphans
          * by analyze_orphaned_directories() and cleaned by apply.
          *
          * This mirrors file handling pattern (workspace.c:1669-1674).
          */
-        if (dir_entry->state && strcmp(dir_entry->state, STATE_INACTIVE) == 0) {
+        if (dir_entry->state && (strcmp(dir_entry->state, STATE_INACTIVE) == 0 ||
+                                 strcmp(dir_entry->state, STATE_DELETED) == 0)) {
             continue;  /* Skip silently - orphan detection will handle this */
         }
 
@@ -2177,8 +2179,9 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
          *
          * This check eliminates false-positive warnings for expected removals.
          */
-        if (state_entry->state && strcmp(state_entry->state, STATE_INACTIVE) == 0) {
-            /* Inactive entry - skip silently, don't add to manifest */
+        if (state_entry->state && (strcmp(state_entry->state, STATE_INACTIVE) == 0 ||
+                                   strcmp(state_entry->state, STATE_DELETED) == 0)) {
+            /* Pending removal - skip silently, don't add to manifest */
             free(entry->storage_path);
             free(entry->filesystem_path);
             continue;  /* Don't increment manifest_idx */

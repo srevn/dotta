@@ -230,6 +230,7 @@ static int cmd_remove_main(int argc, char **argv) {
         .dry_run = false,
         .force = false,
         .interactive = false,
+        .keep_files = false,
         .verbose = false,
         .quiet = false,
         .message = NULL
@@ -265,6 +266,8 @@ static int cmd_remove_main(int argc, char **argv) {
             opts.message = argv[++i];
         } else if (strcmp(argv[i], "--delete-profile") == 0) {
             opts.delete_profile = true;
+        } else if (strcmp(argv[i], "--keep-files") == 0) {
+            opts.keep_files = true;
         } else if (strcmp(argv[i], "-n") == 0 || strcmp(argv[i], "--dry-run") == 0) {
             opts.dry_run = true;
         } else if (strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--force") == 0) {

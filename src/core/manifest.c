@@ -1592,25 +1592,28 @@ error_t *manifest_remove_files(
 
             fallback_count++;
         } else {
-            /* No fallback - mark as inactive (staged for removal)
+            /* No fallback - mark as deleted (controlled deletion)
              *
-             * Entry marked STATE_INACTIVE and remains in state for orphan detection.
-             * See manifest_disable_profile() for detailed architectural rationale.
+             * Entry marked STATE_DELETED (controlled deletion via remove command)
+             * and remains in state for orphan detection.
+             *
+             * STATE_DELETED bypasses branch existence checks in safety module,
+             * since user intent is unambiguous (explicit remove command).
              *
              * The orphan cleanup flow:
-             *   1. Entry marked inactive (this function)
-             *   2. Workspace skips inactive entries (no Git validation)
-             *   3. Workspace orphan detection loads inactive entries → marks as ORPHANED
+             *   1. Entry marked deleted (this function)
+             *   2. Workspace skips removal-pending entries (no Git validation)
+             *   3. Workspace orphan detection loads entries → marks as ORPHANED
              *   4. Apply removes (filesystem + state cleanup)
              *
              * Cleanup deferred to apply - DO NOT call state_remove_file() here.
              */
 
-            /* Mark entry as inactive for silent workspace handling */
-            err = state_set_file_state(state, filesystem_path, STATE_INACTIVE);
+            /* Mark entry as deleted for controlled deletion */
+            err = state_set_file_state(state, filesystem_path, STATE_DELETED);
             if (err) {
                 /* Non-fatal: log warning but continue */
-                fprintf(stderr, "warning: failed to mark '%s' as inactive: %s\n",
+                fprintf(stderr, "warning: failed to mark '%s' as deleted: %s\n",
                         filesystem_path, error_message(err));
                 error_free(err);
                 err = NULL;  /* Clear error, continue operation */

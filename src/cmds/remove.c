@@ -257,8 +257,7 @@ static error_t *resolve_paths_to_remove(
 
                 free(storage_path);
                 free(canonical);
-                err = ERROR(ERR_NOT_FOUND,
-                            "File '%s' not found in profile '%s'\n"
+                err = ERROR(ERR_NOT_FOUND, "File '%s' not found in profile '%s'\n"
                             "Hint: Use 'dotta list --profile %s' to see tracked files",
                             error_storage_path, profile_name, profile_name);
                 goto cleanup;
@@ -275,8 +274,7 @@ static error_t *resolve_paths_to_remove(
 
     /* Check if we found any files */
     if (string_array_size(storage_paths) == 0) {
-        err = ERROR(ERR_NOT_FOUND,
-                    "No files found to remove from profile '%s'", profile_name);
+        err = ERROR(ERR_NOT_FOUND, "No files found to remove from profile '%s'", profile_name);
         goto cleanup;
     }
 
@@ -604,10 +602,15 @@ static bool confirm_removal(
 
     /* Prompt user */
     char prompt[512];
-    snprintf(prompt, sizeof(prompt),
-            "Remove %zu file%s from profile '%s'?\n"
-            "(Filesystem files will remain until 'dotta apply')",
-            count, count == 1 ? "" : "s", opts->profile);
+    if (opts->keep_files) {
+        snprintf(prompt, sizeof(prompt), "Remove %zu file%s from profile '%s'?\n"
+                "(Filesystem files will remain, released from management)",
+                count, count == 1 ? "" : "s", opts->profile);
+    } else {
+        snprintf(prompt, sizeof(prompt), "Remove %zu file%s from profile '%s'?\n"
+                "(Filesystem files will remain until 'dotta apply')",
+                count, count == 1 ? "" : "s", opts->profile);
+    }
 
     output_ctx_t *out = output_create_from_config(config);
     bool confirmed = output_confirm(out, prompt, false);
@@ -643,8 +646,12 @@ static bool confirm_profile_deletion(
     output_newline(out);
     output_warning(out, "This will delete profile '%s' (%zu file%s)",
                   profile_name, file_count, file_count == 1 ? "" : "s");
-    output_info(out, "         Deployed files will remain on filesystem.");
-    output_info(out, "         Run 'dotta apply' to remove them.");
+    if (opts->keep_files) {
+        output_info(out, "         Deployed files will be released from management.");
+    } else {
+        output_info(out, "         Deployed files will remain on filesystem.");
+        output_info(out, "         Run 'dotta apply' to remove them.");
+    }
     output_newline(out);
 
     bool confirmed = output_confirm_destructive(out, config, "Continue?", opts->force);
@@ -1119,6 +1126,29 @@ static error_t *remove_files_from_profile(
                     }
                     error_free(manifest_err);
                 } else {
+                    /* With --keep-files: release STATE_DELETED entries immediately
+                     * (remove from state so files become unmanaged, no apply needed) */
+                    if (opts->keep_files && manifest_removed_count > 0) {
+                        state_file_entry_t *delete_entries = NULL;
+                        size_t delete_count = 0;
+                        error_t *delete_err = state_get_entries_by_profile(
+                            state, opts->profile, &delete_entries, &delete_count);
+                        if (!delete_err) {
+                            for (size_t di = 0; di < delete_count; di++) {
+                                if (delete_entries[di].state &&
+                                    strcmp(delete_entries[di].state, STATE_DELETED) == 0) {
+                                    error_t *rm_err = state_remove_file(state, delete_entries[di].filesystem_path);
+                                    if (rm_err) {
+                                        error_free(rm_err);
+                                    }
+                                }
+                            }
+                            state_free_all_files(delete_entries, delete_count);
+                        } else {
+                            error_free(delete_err);
+                        }
+                    }
+
                     /* Commit transaction */
                     err = state_save(repo, state);
                     if (err) {
@@ -1131,9 +1161,15 @@ static error_t *remove_files_from_profile(
                     } else {
                         /* Display manifest sync results */
                         if ((manifest_removed_count > 0 || manifest_fallback_count > 0) && out && opts->verbose) {
-                            output_info(out, "Manifest: %zu staged for removal, %zu fallback%s",
-                                       manifest_removed_count, manifest_fallback_count,
-                                       manifest_fallback_count == 1 ? "" : "s");
+                            if (opts->keep_files) {
+                                output_info(out, "Manifest: %zu released, %zu fallback%s",
+                                           manifest_removed_count, manifest_fallback_count,
+                                           manifest_fallback_count == 1 ? "" : "s");
+                            } else {
+                                output_info(out, "Manifest: %zu staged for removal, %zu fallback%s",
+                                           manifest_removed_count, manifest_fallback_count,
+                                           manifest_fallback_count == 1 ? "" : "s");
+                            }
                         }
                     }
                 }
@@ -1233,10 +1269,8 @@ static error_t *delete_profile_branch(
     /* Check if profile exists */
     if (!profile_exists(repo, opts->profile)) {
         if (!opts->force) {
-            err = ERROR(ERR_NOT_FOUND,
-                       "Profile '%s' does not exist\n"
-                       "Hint: Use 'dotta list' to see available profiles",
-                       opts->profile);
+            err = ERROR(ERR_NOT_FOUND, "Profile '%s' does not exist\n"
+                       "Hint: Use 'dotta list' to see available profiles", opts->profile);
             goto cleanup;
         }
         /* With --force, just warn and exit */
@@ -1254,10 +1288,8 @@ static error_t *delete_profile_branch(
     }
 
     if (all_profiles->count <= 1) {
-        err = ERROR(ERR_INVALID_ARG,
-                    "Cannot delete last remaining profile '%s'\n"
-                    "Hint: A repository must have at least one profile",
-                    opts->profile);
+        err = ERROR(ERR_INVALID_ARG, "Cannot delete last remaining profile '%s'\n"
+                    "Hint: A repository must have at least one profile", opts->profile);
         goto cleanup;
     }
     profile_list_free(all_profiles);
@@ -1373,8 +1405,12 @@ static error_t *delete_profile_branch(
     if (deployed_count > 0 && opts->verbose) {
         output_newline(out);
         output_info(out, "Note: Profile '%s' has %zu deployed file%s",
-                   opts->profile, deployed_count, deployed_count == 1 ? "" : "s");
-        output_info(out, "      These will be removed when you run 'dotta apply'.");
+                    opts->profile, deployed_count, deployed_count == 1 ? "" : "s");
+        if (opts->keep_files) {
+            output_info(out, "      These files will be released from management.");
+        } else {
+            output_info(out, "      These will be removed when you run 'dotta apply'.");
+        }
         output_newline(out);
     }
 
@@ -1530,6 +1566,99 @@ static error_t *delete_profile_branch(
 
     *performed = true;
 
+    /* Post-deletion: upgrade STATE_INACTIVE entries to STATE_DELETED
+     * (or release immediately with --keep-files)
+     *
+     * After branch deletion, STATE_INACTIVE entries from manifest_disable_profile()
+     * (or from a prior profile disable) must be upgraded to STATE_DELETED.
+     * Without this, the safety module would RELEASE these files (branch gone +
+     * STATE_INACTIVE = irrecoverable), when the user's intent is to delete them.
+     *
+     * With --keep-files: remove state entries entirely (release from management).
+     *
+     * This is a SEPARATE transaction from the earlier manifest_disable_profile
+     * transaction — the branch must be deleted first.
+     */
+    state_t *delete_state = NULL;
+    error_t *delete_err = state_load_for_update(repo, &delete_state);
+    if (!delete_err && delete_state) {
+        size_t released_count = 0;
+
+        /* Handle file entries */
+        state_file_entry_t *file_entries = NULL;
+        size_t file_count = 0;
+        delete_err = state_get_entries_by_profile(delete_state, opts->profile,
+                                                 &file_entries, &file_count);
+        if (!delete_err) {
+            for (size_t i = 0; i < file_count; i++) {
+                if (!file_entries[i].state || (strcmp(file_entries[i].state, STATE_INACTIVE) != 0 &&
+                                               strcmp(file_entries[i].state, STATE_DELETED) != 0)) {
+                    continue;
+                }
+                error_t *file_err = NULL;
+                if (opts->keep_files) {
+                    file_err = state_remove_file(delete_state, file_entries[i].filesystem_path);
+                } else {
+                    file_err = state_set_file_state(
+                        delete_state, file_entries[i].filesystem_path,STATE_DELETED);
+                }
+                if (file_err) {
+                    error_free(file_err);
+                } else {
+                    released_count++;
+                }
+            }
+            state_free_all_files(file_entries, file_count);
+        } else {
+            error_free(delete_err);
+            delete_err = NULL;
+        }
+
+        /* Handle directory entries */
+        state_directory_entry_t *dir_entries = NULL;
+        size_t dir_count = 0;
+        delete_err = state_get_directories_by_profile(delete_state, opts->profile,
+                                                     &dir_entries, &dir_count);
+        if (!delete_err) {
+            for (size_t i = 0; i < dir_count; i++) {
+                if (!dir_entries[i].state || (strcmp(dir_entries[i].state, STATE_INACTIVE) != 0 &&
+                                              strcmp(dir_entries[i].state, STATE_DELETED) != 0)) {
+                    continue;
+                }
+                error_t *dir_err = NULL;
+                if (opts->keep_files) {
+                    dir_err = state_remove_directory(delete_state, dir_entries[i].filesystem_path);
+                } else {
+                    dir_err = state_set_directory_state(
+                        delete_state, dir_entries[i].filesystem_path, STATE_DELETED);
+                }
+                if (dir_err) {
+                    error_free(dir_err);
+                }
+            }
+            state_free_all_directories(dir_entries, dir_count);
+        } else {
+            error_free(delete_err);
+            delete_err = NULL;
+        }
+
+        /* Commit transaction */
+        delete_err = state_save(repo, delete_state);
+        if (delete_err) {
+            output_warning(out, "Failed to update state after branch deletion: %s", error_message(delete_err));
+            error_free(delete_err);
+        } else if (opts->keep_files && released_count > 0 && opts->verbose) {
+            output_info(out, "%zu file%s released from management",
+                        released_count, released_count == 1 ? "" : "s");
+        }
+
+        state_free(delete_state);
+    } else if (delete_err) {
+        /* Non-fatal: safety module will handle this conservatively */
+        output_warning(out, "Failed to open state for post-deletion update: %s", error_message(delete_err));
+        error_free(delete_err);
+    }
+
     /* Push deletion to remote if remote exists
      * This is critical for sync to work - other repos need to know the branch was deleted
      */
@@ -1559,13 +1688,9 @@ static error_t *delete_profile_branch(
     }
 
     /*
-     * Architectural note: We do not modify state here.
-     * State cleanup happens automatically on next `apply`:
-     * - Profile resolution won't include deleted profile
-     * - Orphaned files will be pruned during deployment
-     * - State will be rebuilt to reflect new reality
-     *
-     * This ensures `apply` has full global context for cleanup decisions.
+     * Architectural note: State entries were upgraded to STATE_DELETED (or
+     * released with --keep-files) in the post-deletion block above.
+     * Final filesystem cleanup for STATE_DELETED entries happens on `apply`.
      */
 
     /* Execute post-remove hook */
@@ -1638,7 +1763,11 @@ error_t *cmd_remove(git_repository *repo, const cmd_remove_options_t *opts) {
 
         if (performed && !opts->quiet) {
             output_success(out, "Profile '%s' deleted", opts->profile);
-            output_info(out, "Run 'dotta apply' to remove deployed files from filesystem");
+            if (opts->keep_files) {
+                output_info(out, "Files released from management (no apply needed)");
+            } else {
+                output_info(out, "Run 'dotta apply' to remove deployed files from filesystem");
+            }
             output_newline(out);
         }
 
@@ -1659,7 +1788,11 @@ error_t *cmd_remove(git_repository *repo, const cmd_remove_options_t *opts) {
     if (performed && !opts->quiet) {
         output_success(out, "Removed %zu file%s from profile '%s'",
                        removed_count, removed_count == 1 ? "" : "s", opts->profile);
-        output_info(out, "Run 'dotta apply' to remove files from filesystem");
+        if (opts->keep_files) {
+            output_info(out, "Files released from management (no apply needed)");
+        } else {
+            output_info(out, "Run 'dotta apply' to remove files from filesystem");
+        }
         output_newline(out);
     }
 

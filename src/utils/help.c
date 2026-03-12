@@ -185,6 +185,7 @@ void print_remove_help(const char *prog_name) {
     printf("\nOptions:\n");
     printf("  -p, --profile <name>   Profile name\n");
     printf("  --delete-profile       Delete entire profile branch\n");
+    printf("  --keep-files           Release files from management\n");
     printf("  -m, --message <msg>    Custom commit message\n");
     printf("  -n, --dry-run          Show what would be removed without doing it\n");
     printf("  -f, --force            Skip confirmations, ignore missing files\n");

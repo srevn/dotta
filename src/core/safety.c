@@ -7,8 +7,8 @@
  *
  * Architecture:
  * - Trusts workspace divergence completely (no re-verification)
- * - Branch existence check: Detects external profile deletion
- * - Lifecycle state query: Distinguishes controlled vs external deletion
+ * - Lifecycle state: STATE_DELETED bypasses branch check (controlled deletion)
+ * - Branch existence check: Detects external profile deletion for STATE_INACTIVE/ACTIVE
  * - UNVERIFIED treated conservatively: Don't delete what we can't verify
  *
  * Workspace provides accurate divergence for orphans:
@@ -277,18 +277,20 @@ static check_result_t map_divergence_to_violation(
 /**
  * Check lifecycle state and branch existence
  *
- * Two-phase check implementing precedence hierarchy:
+ * Three-phase check implementing safety hierarchy:
  *
- * PHASE 1: Lifecycle State (highest precedence)
- * - STATE_INACTIVE: Controlled deletion (proceed to content verification)
- * - STATE_ACTIVE: Continue to phase 2
+ * PHASE 1: Controlled Deletion (STATE_DELETED)
+ * - Skip branch check entirely (user confirmed intent via remove command)
+ * - Proceed to divergence routing
  *
- * PHASE 2: Branch Existence (only for STATE_ACTIVE orphans)
+ * PHASE 2: Branch Existence (STATE_INACTIVE and STATE_ACTIVE)
  * - Branch exists: Proceed to divergence routing
- * - Branch deleted: RELEASED violation (external deletion)
+ * - Branch gone: RELEASED violation (irrecoverable, protect user data)
  *
- * Key Invariant: User intent (STATE_INACTIVE) overrides branch existence check.
- * This ensures consistent behavior regardless of branch existence (Git GC timing).
+ * Key Invariant: Only STATE_DELETED (explicit confirmed intent) bypasses the
+ * branch check. Both STATE_INACTIVE and STATE_ACTIVE require branch existence
+ * for safe removal. This prevents silent data loss when a branch is deleted
+ * externally after a profile disable.
  *
  * @param repo Git repository
  * @param state State database (for targeted lookup)
@@ -296,8 +298,8 @@ static check_result_t map_divergence_to_violation(
  * @param cache Profile existence cache
  * @param result Safety result to populate
  * @param out_err Error output for fatal failures (only set on ERROR)
- * @return SAFETY_CHECK_CONTINUE if branch exists (proceed to divergence routing)
- *         SAFETY_CHECK_DONE if handled (controlled deletion or violation added)
+ * @return SAFETY_CHECK_CONTINUE if safe to proceed (divergence routing)
+ *         SAFETY_CHECK_DONE if handled (violation added or released)
  *         SAFETY_CHECK_ERROR if fatal error occurred (check out_err)
  */
 static check_result_t check_branch_existence(
@@ -310,12 +312,7 @@ static check_result_t check_branch_existence(
 ) {
     *out_err = NULL;
 
-    /* PHASE 1: Check lifecycle state (highest precedence)
-     *
-     * User intent (STATE_INACTIVE) takes precedence over all other checks.
-     * If user explicitly disabled profile via manifest_disable_profile(),
-     * trust that intent unconditionally regardless of branch existence.
-     */
+    /* Look up lifecycle state from state database */
     state_file_entry_t *state_entry = NULL;
     error_t *err = state_get_file(state, orphan->filesystem_path, &state_entry);
 
@@ -337,16 +334,17 @@ static check_result_t check_branch_existence(
         return SAFETY_CHECK_CONTINUE;  /* Proceed to divergence routing (defensive) */
     }
 
+    /* Extract lifecycle state before freeing entry */
     bool is_controlled_deletion = state_entry->state &&
-                                  strcmp(state_entry->state, STATE_INACTIVE) == 0;
+                                  strcmp(state_entry->state, STATE_DELETED) == 0;
 
     state_free_entry(state_entry);
 
     if (is_controlled_deletion) {
-        /* CONTROLLED DELETION WITH VERIFICATION
+        /* PHASE 1: CONTROLLED DELETION (STATE_DELETED)
          *
-         * Entry marked STATE_INACTIVE by manifest_disable_profile() while
-         * the branch still existed. User intent is to remove these files.
+         * Entry marked STATE_DELETED by deliberate user action (remove command).
+         * User intent is unambiguous - skip branch existence check entirely.
          *
          * Behavior:
          * - Clean files (DIVERGENCE_NONE): Safe to remove (no violation)
@@ -359,10 +357,11 @@ static check_result_t check_branch_existence(
         return SAFETY_CHECK_CONTINUE;  /* Proceed to divergence routing */
     }
 
-    /* PHASE 2: Check branch existence (only for STATE_ACTIVE orphans)
+    /* PHASE 2: BRANCH EXISTENCE CHECK (STATE_INACTIVE and STATE_ACTIVE)
      *
-     * At this point, lifecycle state is STATE_ACTIVE. Check if branch was
-     * deleted externally (outside dotta).
+     * For both staged removals (profile disable) and active entries,
+     * verify the profile branch still exists. If the branch is gone,
+     * Git content is irrecoverable — release files to prevent data loss.
      */
     bool profile_exists = false;
     err = check_profile_exists(repo, cache, orphan->profile, &profile_exists);
@@ -371,20 +370,13 @@ static check_result_t check_branch_existence(
         return SAFETY_CHECK_ERROR;
     }
 
-    /* Branch exists - proceed with divergence routing */
     if (profile_exists) {
-        return SAFETY_CHECK_CONTINUE;
+        return SAFETY_CHECK_CONTINUE;  /* Branch exists, proceed to divergence routing */
     }
 
-    /* EXTERNAL DELETION
+    /* RELEASED: Branch deleted (externally or after profile disable).
+     * Cannot recover content from Git. Release file from management.
      *
-     * Profile branch deleted outside dotta (e.g., git branch -D).
-     * State entry is still ACTIVE (never went through controlled flow).
-     *
-     * Cannot verify: No branch = no reference to compare against.
-     * Cannot trust intent: User didn't request deletion via dotta.
-     *
-     * Safe choice: "Release" the file from management
      * - Leave file on filesystem (protect user data)
      * - Track for state cleanup (can't manage without profile)
      * - Non-blocking (inform user, don't prevent operation)
@@ -460,11 +452,12 @@ error_t *safety_check_orphans(
             continue;
         }
 
-        /* PHASE 1: Branch Existence Precondition Check
+        /* Lifecycle State and Branch Existence Check
          *
-         * Must check branch existence before any verification. This determines:
-         * 1. Whether verification is meaningful (branch exists -> can verify)
-         * 2. What to do when branch is deleted (controlled vs external deletion)
+         * Determines safety based on lifecycle state and branch existence:
+         * - STATE_DELETED: Skip branch check (controlled deletion)
+         * - STATE_INACTIVE/ACTIVE + branch exists: Proceed to divergence routing
+         * - STATE_INACTIVE/ACTIVE + branch gone: RELEASED violation
          */
         check_result_t check_result = check_branch_existence(repo, state, orphan,
                                                              cache, result, &err);
@@ -477,7 +470,7 @@ error_t *safety_check_orphans(
             continue;
         }
 
-        /* PHASE 2: Divergence Routing
+        /* Divergence Routing
          *
          * Workspace already performed comprehensive verification:
          * - Non-encrypted: Streaming OID verification

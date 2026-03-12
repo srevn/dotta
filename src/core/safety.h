@@ -91,10 +91,10 @@ typedef struct {
  *
  * Algorithm:
  * 1. Skip if file not on filesystem (already deleted)
- * 2. Check branch existence (workspace cannot do this)
- *    - Branch exists: proceed with divergence routing
- *    - Branch deleted + STATE_INACTIVE: safe (controlled deletion)
- *    - Branch deleted + STATE_ACTIVE: RELEASED violation (external deletion)
+ * 2. Check lifecycle state and branch existence:
+ *    - STATE_DELETED: skip branch check (confirmed deletion via remove command)
+ *    - STATE_INACTIVE/STATE_ACTIVE + branch exists: proceed to divergence routing
+ *    - STATE_INACTIVE/STATE_ACTIVE + branch gone: RELEASED violation
  * 3. Route by divergence type (TRUST WORKSPACE):
  *    - DIVERGENCE_NONE: safe to remove (no violation)
  *    - DIVERGENCE_CONTENT: MODIFIED violation
@@ -109,7 +109,8 @@ typedef struct {
  *
  * Edge Cases:
  * - External branch deletion: RELEASED violation (protects user data)
- * - Controlled deletion (profile disable): Safe to remove
+ * - Staged removal with branch gone (profile disable then branch deleted): RELEASED
+ * - Controlled deletion (remove command): Safe to remove (STATE_DELETED bypasses branch check)
  * - Large non-encrypted files: Verified (streaming OID, any size)
  * - Large encrypted files (>100MB): CANNOT_VERIFY (OOM protection)
  * - File deleted during check: Safe (no violation)

@@ -45,7 +45,8 @@ typedef enum {
  * The state field implements an explicit state machine for file management.
  */
 #define STATE_ACTIVE "active"       /* Normal entry, file is in scope and should be managed */
-#define STATE_INACTIVE "inactive"   /* Marked for removal, awaiting cleanup by apply */
+#define STATE_INACTIVE "inactive"   /* Staged for removal, reversible (profile disable) */
+#define STATE_DELETED "deleted"     /* Confirmed deletion, awaiting filesystem cleanup by apply */
 
 /**
  * Convert state file type to git filemode
@@ -114,7 +115,7 @@ typedef struct {
     bool encrypted;             /* Encryption flag */
 
     /* Lifecycle tracking */
-    char *state;                /* Lifecycle state (STATE_ACTIVE or STATE_INACTIVE) */
+    char *state;                /* Lifecycle state (STATE_ACTIVE/STATE_INACTIVE/STATE_DELETED) */
     time_t deployed_at;         /* Lifecycle timestamp (0 = never deployed, >0 = known) */
 } state_file_entry_t;
 
@@ -130,7 +131,7 @@ typedef struct {
     char *group;              /* Group (optional, root/ prefix only) */
 
     /* Lifecycle tracking */
-    char *state;              /* Lifecycle state (STATE_ACTIVE or STATE_INACTIVE) */
+    char *state;              /* Lifecycle state (STATE_ACTIVE/STATE_INACTIVE/STATE_DELETED) */
     time_t deployed_at;       /* Lifecycle timestamp (0 = never deployed, >0 = known) */
 } state_directory_entry_t;
 
@@ -476,7 +477,7 @@ error_t *state_clear_files(state_t *state);
  * @param owner Owner username (can be NULL)
  * @param group Group name (can be NULL)
  * @param encrypted Encryption flag
- * @param state Lifecycle state (STATE_ACTIVE or STATE_INACTIVE, can be NULL for default)
+ * @param state Lifecycle state (can be NULL for default)
  * @param deployed_at Lifecycle timestamp (0 = never deployed, >0 = known)
  * @param out Entry (must not be NULL, caller must free with state_free_entry)
  * @return Error or NULL on success
@@ -539,19 +540,20 @@ error_t *state_clear_old_profile(
 );
 
 /**
- * Set file entry state (active/inactive)
+ * Set file entry state (active/inactive/deleted)
  *
  * Updates the state column for a manifest entry. Used by manifest layer
  * to mark files as inactive when they become orphaned (removed with no fallback).
  *
  * Valid states:
  *   - STATE_ACTIVE   - Normal entry, file is in scope
- *   - STATE_INACTIVE - Marked for removal, awaiting cleanup by apply
+ *   - STATE_INACTIVE - Staged for removal, reversible (profile disable)
+ *   - STATE_DELETED  - Confirmed deletion via remove command
  *
  * Preconditions:
  *   - state MUST have active transaction (via state_load_for_update)
  *   - filesystem_path MUST exist in virtual_manifest
- *   - new_state MUST be STATE_ACTIVE or STATE_INACTIVE
+ *   - new_state MUST be STATE_ACTIVE, STATE_INACTIVE, or STATE_DELETED
  *
  * @param state State handle (must not be NULL, must have active transaction)
  * @param filesystem_path File to update (must not be NULL)
@@ -756,11 +758,11 @@ error_t *state_get_directory(
  * Set directory lifecycle state
  *
  * Updates the state column for a directory entry.
- * Used by manifest operations to mark directories as active/inactive.
+ * Used by manifest operations to mark directories as active/inactive/deleted.
  *
  * @param state State handle (must not be NULL, must have active transaction)
  * @param filesystem_path Directory path (must not be NULL)
- * @param new_state Lifecycle state (STATE_ACTIVE or STATE_INACTIVE)
+ * @param new_state Lifecycle state (STATE_ACTIVE/STATE_INACTIVE/STATE_DELETED)
  * @return Error or NULL on success
  */
 error_t *state_set_directory_state(

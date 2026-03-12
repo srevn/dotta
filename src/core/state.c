@@ -168,7 +168,7 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    \"group\" TEXT,"
         "    encrypted INTEGER NOT NULL DEFAULT 0,"
         "    "
-        "    state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active', 'inactive')),"
+        "    state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active', 'inactive', 'deleted')),"
         "    deployed_at INTEGER NOT NULL DEFAULT 0"
         ");"
 
@@ -187,7 +187,7 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    mode INTEGER,"
         "    owner TEXT,"
         "    \"group\" TEXT,"
-        "    state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active', 'inactive')),"
+        "    state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active', 'inactive', 'deleted')),"
         "    deployed_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))"
         ") STRICT;"
 
@@ -2268,7 +2268,7 @@ error_t *state_get_directory(
  *
  * @param state State handle (must not be NULL, must have active transaction)
  * @param filesystem_path Directory path (must not be NULL)
- * @param new_state Lifecycle state (STATE_ACTIVE or STATE_INACTIVE)
+ * @param new_state Lifecycle state (STATE_ACTIVE, STATE_INACTIVE, or STATE_DELETED)
  * @return Error or NULL on success
  */
 error_t *state_set_directory_state(
@@ -2282,9 +2282,10 @@ error_t *state_set_directory_state(
     CHECK_NULL(new_state);
 
     /* Validate state value */
-    if (strcmp(new_state, STATE_ACTIVE) != 0 && strcmp(new_state, STATE_INACTIVE) != 0) {
-        return ERROR(ERR_INVALID_ARG, "Invalid state '%s' (must be 'active' or 'inactive')",
-                     new_state);
+    if (strcmp(new_state, STATE_ACTIVE) != 0 && strcmp(new_state, STATE_INACTIVE) != 0 &&
+        strcmp(new_state, STATE_DELETED) != 0) {
+        return ERROR(ERR_INVALID_ARG,
+            "Invalid state '%s' (must be 'active', 'inactive', or 'deleted')", new_state);
     }
 
     /* Prepare statement if needed */
@@ -2888,19 +2889,20 @@ error_t *state_clear_old_profile(
 }
 
 /**
- * Set file entry state (active/inactive)
+ * Set file entry state (active/inactive/deleted)
  *
  * Updates the state column for a manifest entry. Used by manifest layer
- * to mark files as inactive when they become orphaned (removed with no fallback).
+ * to mark files for removal (inactive for staging, deleted for confirmed removal).
  *
  * Valid states:
  *   - STATE_ACTIVE   - Normal entry, file is in scope
- *   - STATE_INACTIVE - Marked for removal, awaiting cleanup by apply
+ *   - STATE_INACTIVE - Staged for removal, reversible (profile disable)
+ *   - STATE_DELETED  - Confirmed deletion via remove command
  *
  * Preconditions:
  *   - state MUST have active transaction (via state_load_for_update)
  *   - filesystem_path MUST exist in virtual_manifest
- *   - new_state MUST be STATE_ACTIVE or STATE_INACTIVE
+ *   - new_state MUST be STATE_ACTIVE, STATE_INACTIVE, or STATE_DELETED
  *
  * @param state State handle (must not be NULL, must have active transaction)
  * @param filesystem_path File to update (must not be NULL)
@@ -2918,9 +2920,10 @@ error_t *state_set_file_state(
     CHECK_NULL(new_state);
 
     /* Validate state value */
-    if (strcmp(new_state, STATE_ACTIVE) != 0 && strcmp(new_state, STATE_INACTIVE) != 0) {
-        return ERROR(ERR_INVALID_ARG, "Invalid state '%s' (must be 'active' or 'inactive')",
-                     new_state);
+    if (strcmp(new_state, STATE_ACTIVE) != 0 && strcmp(new_state, STATE_INACTIVE) != 0 &&
+        strcmp(new_state, STATE_DELETED) != 0) {
+        return ERROR(ERR_INVALID_ARG,
+            "Invalid state '%s' (must be 'active', 'inactive', or 'deleted')", new_state);
     }
 
     const char *sql = "UPDATE virtual_manifest SET state = ? WHERE filesystem_path = ?";

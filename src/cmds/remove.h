@@ -32,6 +32,7 @@ typedef struct {
     bool dry_run;               /* Show what would be removed without doing it */
     bool force;                 /* Skip confirmations */
     bool interactive;           /* Prompt for each file */
+    bool keep_files;            /* Release files from management (untrack) */
 
     /* Output flags */
     bool verbose;               /* Print verbose output */

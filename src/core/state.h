@@ -47,6 +47,7 @@ typedef enum {
 #define STATE_ACTIVE "active"       /* Normal entry, file is in scope and should be managed */
 #define STATE_INACTIVE "inactive"   /* Staged for removal, reversible (profile disable) */
 #define STATE_DELETED "deleted"     /* Confirmed deletion, awaiting filesystem cleanup by apply */
+#define STATE_RELEASED "released"   /* File removed from Git externally, loss of authority */
 
 /**
  * Convert state file type to git filemode
@@ -115,7 +116,7 @@ typedef struct {
     bool encrypted;             /* Encryption flag */
 
     /* Lifecycle tracking */
-    char *state;                /* Lifecycle state (STATE_ACTIVE/STATE_INACTIVE/STATE_DELETED) */
+    char *state;                /* Lifecycle state (STATE_ACTIVE/STATE_INACTIVE etc.) */
     time_t deployed_at;         /* Lifecycle timestamp (0 = never deployed, >0 = known) */
 } state_file_entry_t;
 
@@ -131,7 +132,7 @@ typedef struct {
     char *group;              /* Group (optional, root/ prefix only) */
 
     /* Lifecycle tracking */
-    char *state;              /* Lifecycle state (STATE_ACTIVE/STATE_INACTIVE/STATE_DELETED) */
+    char *state;              /* Lifecycle state (STATE_ACTIVE/STATE_INACTIVE etc.) */
     time_t deployed_at;       /* Lifecycle timestamp (0 = never deployed, >0 = known) */
 } state_directory_entry_t;
 
@@ -549,11 +550,12 @@ error_t *state_clear_old_profile(
  *   - STATE_ACTIVE   - Normal entry, file is in scope
  *   - STATE_INACTIVE - Staged for removal, reversible (profile disable)
  *   - STATE_DELETED  - Confirmed deletion via remove command
+ *   - STATE_RELEASED    - File removed from Git externally, loss of authority
  *
  * Preconditions:
  *   - state MUST have active transaction (via state_load_for_update)
  *   - filesystem_path MUST exist in virtual_manifest
- *   - new_state MUST be STATE_ACTIVE, STATE_INACTIVE, or STATE_DELETED
+ *   - new_state MUST be STATE_ACTIVE, STATE_INACTIVE, STATE_DELETED, or STATE_RELEASED
  *
  * @param state State handle (must not be NULL, must have active transaction)
  * @param filesystem_path File to update (must not be NULL)

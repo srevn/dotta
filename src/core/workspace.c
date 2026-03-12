@@ -32,6 +32,7 @@
 
 #include "base/error.h"
 #include "base/filesystem.h"
+#include "base/gitops.h"
 #include "core/ignore.h"
 #include "core/profiles.h"
 #include "crypto/encryption.h"
@@ -87,6 +88,24 @@ struct workspace {
     size_t diverged_count;
     size_t diverged_capacity;
     hashmap_t *diverged_index;       /* Maps filesystem_path -> array index+1 (as void*) */
+
+    /* Staleness tracking (populated by workspace_build_manifest_from_state)
+     *
+     * When external Git operations modify branches, the VWD cache in state
+     * becomes stale. These fields track the detection and in-memory patching:
+     *
+     * - stale_paths: filesystem_path → (void*)1 for entries patched in-memory
+     *   Used by analyze_file_divergence to add DIVERGENCE_STALE flag.
+     *
+     * - released_paths: filesystem_path → (void*)1 for entries removed from Git
+     *   Used by analyze_orphaned_files to emit WORKSPACE_STATE_RELEASED.
+     *
+     * Both are NULL when no staleness detected (common fast path).
+     */
+    hashmap_t *stale_paths;          /* Patched entries (NULL if no staleness) */
+    hashmap_t *released_paths;       /* Entries removed from Git (NULL if no staleness) */
+    const hashmap_t *repaired_paths; /* From manifest_repair_stale: path → old_blob_oid (borrowed) */
+    bool manifest_stale;             /* True if any profile had stale git_oid */
 
     /* Status cache */
     workspace_status_t status;
@@ -789,7 +808,76 @@ static error_t *analyze_file_divergence(
         /* Keep accumulated divergence flags from Phase 1 */
     }
 
-    /* PHASE 3: Profile ownership change detection
+    /* PHASE 3: Staleness flag
+     *
+     * Two complementary detection paths:
+     *
+     * Path A (in-memory patching): For read-only commands (status, diff).
+     * workspace_build_manifest_from_state detected stale git_oid, patched VWD
+     * cache from fresh Git manifest. Unconditional DIVERGENCE_STALE — safe
+     * because read-only commands don't modify files.
+     *
+     * Path B (persistent repair): For apply command.
+     * manifest_repair_stale() already updated state, workspace sees repaired
+     * entries. repaired_paths maps path → old_blob_oid. We verify the file
+     * on disk matches old_blob_oid (what dotta deployed) before setting
+     * DIVERGENCE_STALE. This prevents overwriting user modifications:
+     *   - File matches old blob: DIVERGENCE_STALE (safe to deploy new content)
+     *   - File matches neither: DIVERGENCE_CONTENT only (user modified, block)
+     *
+     * DIVERGENCE_STALE can combine with other flags:
+     *   [stale]              — expected state changed, content matches new state
+     *   [stale, modified]    — expected state changed, file has old deployed content
+     */
+    if (ws->stale_paths && hashmap_get(ws->stale_paths, fs_path)) {
+        /* Path A: In-memory patching (read-only commands) */
+        divergence |= DIVERGENCE_STALE;
+    } else if (ws->repaired_paths && on_filesystem && (divergence & DIVERGENCE_CONTENT)) {
+        /* Path B: Persistent repair — verify file matches old deployed blob.
+         *
+         * Only check when content diverges (file ≠ new expected blob). If content
+         * matches new blob, there's no divergence and no need for STALE flag.
+         */
+        const char *old_blob_hex = hashmap_get((hashmap_t *)ws->repaired_paths, fs_path);
+        if (old_blob_hex) {
+            git_oid old_blob_oid;
+            if (git_oid_fromstr(&old_blob_oid, old_blob_hex) == 0) {
+                /* Compare file on disk against OLD blob (what dotta deployed).
+                 * Reuse the same verification strategy as Phase 1. */
+                git_filemode_t expected_mode = state_type_to_git_filemode(manifest_entry->type);
+                struct stat verify_stat;
+                compare_result_t verify_result;
+
+                if (!manifest_entry->encrypted) {
+                    error_t *verify_err = verify_oid_matches_disk(
+                        &old_blob_oid, fs_path, expected_mode, &initial_stat, &verify_result, &verify_stat
+                    );
+                    if (!verify_err && verify_result == CMP_EQUAL) {
+                        /* File matches old deployed content — stale repair is safe */
+                        divergence |= DIVERGENCE_STALE;
+                    }
+                    if (verify_err) error_free(verify_err);
+                } else {
+                    /* Encrypted: compare decrypted content */
+                    const buffer_t *old_content = NULL;
+                    error_t *verify_err = content_cache_get_from_blob_oid(
+                        ws->content_cache, &old_blob_oid, storage_path, profile, manifest_entry->encrypted, &old_content
+                    );
+                    if (!verify_err && old_content) {
+                        verify_err = compare_buffer_to_disk(
+                            old_content, fs_path, expected_mode, &initial_stat, &verify_result, &verify_stat
+                        );
+                        if (!verify_err && verify_result == CMP_EQUAL) {
+                            divergence |= DIVERGENCE_STALE;
+                        }
+                    }
+                    if (verify_err) error_free(verify_err);
+                }
+            }
+        }
+    }
+
+    /* PHASE 4: Profile ownership change detection
      *
      * Check VWD cache for old_profile to detect ownership changes.
      * old_profile is set by manifest layer when file ownership changes
@@ -1142,90 +1230,134 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
         }
 
         if (!manifest_entry) {
-            /* Orphaned: in state, not in manifest (out of scope) */
+            /* In state but not in manifest — either orphaned or released.
+             *
+             * Released detection has two complementary paths:
+             *
+             * 1. In-memory patching (status/diff): workspace_build_manifest_from_state()
+             *    detected stale entries, built fresh Git manifest, found file missing.
+             *    Tracked in ws->released_paths.
+             *
+             * 2. Persistent repair (apply): manifest_repair_stale() already ran and
+             *    set STATE_RELEASED in database. The in-memory patching path doesn't
+             *    trigger (git_oids match post-repair), so released_paths is empty.
+             *    Check state lifecycle directly.
+             *
+             * Orphaned: File out of scope for other reasons (profile disabled,
+             * branch deleted, etc.). Standard orphan handling applies.
+             */
+            bool is_released = (ws->released_paths && hashmap_get(ws->released_paths, fs_path) != NULL) ||
+                               (state_entry->state && strcmp(state_entry->state, STATE_RELEASED) == 0);
+
             bool profile_enabled = (hashmap_get(ws->profile_index, profile) != NULL);
 
-            /* Single stat capture for orphan analysis
-             *
-             * This stat is reused for type verification, content comparison,
-             * and metadata checks - eliminating redundant lstat syscalls.
-             *
-             * stat_valid tracks whether we have usable stat data:
-             * - true: lstat succeeded, orphan_stat contains valid data
-             * - false: lstat failed, orphan_stat is zeroed (unusable)
-             */
-            struct stat orphan_stat;
-            bool on_filesystem;
-            bool stat_valid = false;
+            if (is_released) {
+                /* RELEASED: File removed from Git externally (loss of authority)
+                 *
+                 * No divergence computation needed — we're not deleting this file.
+                 * It will be left on filesystem and state entry cleaned up.
+                 * Check filesystem presence only for display purposes.
+                 */
+                bool on_filesystem = (lstat(fs_path, &(struct stat){0}) == 0);
 
-            if (lstat(fs_path, &orphan_stat) != 0) {
-                if (errno == ENOENT) {
-                    /* File doesn't exist - orphan was already removed manually */
-                    on_filesystem = false;
-                } else {
-                    /* Cannot stat file (EACCES, EIO, ELOOP, etc.)
-                     *
-                     * Conservative handling: Assume file exists but is inaccessible.
-                     * We lack valid stat data, so divergence cannot be computed.
-                     * Mark as UNVERIFIED below so:
-                     * - Status shows [orphaned, unverified] (user visibility)
-                     * - Apply skips removal (safety - can't verify what we can't stat)
-                     */
-                    on_filesystem = true;
-                }
-                memset(&orphan_stat, 0, sizeof(orphan_stat));
-            } else {
-                on_filesystem = true;
-                stat_valid = true;
-            }
-
-            /* Compute divergence for orphaned file
-             *
-             * Only compute if file exists AND we have valid stat data.
-             *
-             * Cases:
-             * - File doesn't exist (ENOENT): divergence = NONE (nothing to compare)
-             * - File inaccessible (other error): divergence = UNVERIFIED (unsafe to act)
-             * - File accessible: divergence = computed from content/metadata analysis
-             *
-             * This enables status to predict apply behavior:
-             * - DIVERGENCE_NONE → Clean orphan, will be removed
-             * - DIVERGENCE_CONTENT/TYPE → Modified, apply will skip (safety check)
-             * - DIVERGENCE_MODE/OWNERSHIP → Metadata changed, apply will skip
-             * - DIVERGENCE_UNVERIFIED → Cannot verify, apply will skip
-             */
-            divergence_type_t divergence = DIVERGENCE_NONE;
-            if (stat_valid) {
-                divergence = compute_orphan_divergence(
+                err = workspace_add_diverged(
                     ws,
-                    state_entry,
                     fs_path,
                     storage_path,
                     profile,
-                    &orphan_stat
+                    NULL,
+                    WORKSPACE_STATE_RELEASED,
+                    DIVERGENCE_STALE,
+                    WORKSPACE_ITEM_FILE,
+                    on_filesystem,
+                    profile_enabled,
+                    false
                 );
-            } else if (on_filesystem) {
-                /* File exists but stat failed - cannot verify divergence safely */
-                divergence = DIVERGENCE_UNVERIFIED;
-            }
+            } else {
+                /* Standard orphan analysis */
 
-            err = workspace_add_diverged(
-                ws,
-                fs_path,
-                storage_path,
-                profile,
-                NULL,             /* No old_profile for orphans */
-                WORKSPACE_STATE_ORPHANED,  /* State: in deployment state, not in profile */
-                divergence,       /* Divergence: computed from filesystem comparison */
-                WORKSPACE_ITEM_FILE,
-                on_filesystem,
-                profile_enabled,
-                false             /* No profile change for orphans */
-            );
+                /* Single stat capture for orphan analysis
+                 *
+                 * This stat is reused for type verification, content comparison,
+                 * and metadata checks - eliminating redundant lstat syscalls.
+                 *
+                 * stat_valid tracks whether we have usable stat data:
+                 * - true: lstat succeeded, orphan_stat contains valid data
+                 * - false: lstat failed, orphan_stat is zeroed (unusable)
+                 */
+                struct stat orphan_stat;
+                bool on_filesystem;
+                bool stat_valid = false;
+
+                if (lstat(fs_path, &orphan_stat) != 0) {
+                    if (errno == ENOENT) {
+                        /* File doesn't exist - orphan was already removed manually */
+                        on_filesystem = false;
+                    } else {
+                        /* Cannot stat file (EACCES, EIO, ELOOP, etc.)
+                         *
+                         * Conservative handling: Assume file exists but is inaccessible.
+                         * We lack valid stat data, so divergence cannot be computed.
+                         * Mark as UNVERIFIED below so:
+                         * - Status shows [orphaned, unverified] (user visibility)
+                         * - Apply skips removal (safety - can't verify what we can't stat)
+                         */
+                        on_filesystem = true;
+                    }
+                    memset(&orphan_stat, 0, sizeof(orphan_stat));
+                } else {
+                    on_filesystem = true;
+                    stat_valid = true;
+                }
+
+                /* Compute divergence for orphaned file
+                 *
+                 * Only compute if file exists AND we have valid stat data.
+                 *
+                 * Cases:
+                 * - File doesn't exist (ENOENT): divergence = NONE (nothing to compare)
+                 * - File inaccessible (other error): divergence = UNVERIFIED (unsafe to act)
+                 * - File accessible: divergence = computed from content/metadata analysis
+                 *
+                 * This enables status to predict apply behavior:
+                 * - DIVERGENCE_NONE → Clean orphan, will be removed
+                 * - DIVERGENCE_CONTENT/TYPE → Modified, apply will skip (safety check)
+                 * - DIVERGENCE_MODE/OWNERSHIP → Metadata changed, apply will skip
+                 * - DIVERGENCE_UNVERIFIED → Cannot verify, apply will skip
+                 */
+                divergence_type_t divergence = DIVERGENCE_NONE;
+                if (stat_valid) {
+                    divergence = compute_orphan_divergence(
+                        ws,
+                        state_entry,
+                        fs_path,
+                        storage_path,
+                        profile,
+                        &orphan_stat
+                    );
+                } else if (on_filesystem) {
+                    /* File exists but stat failed - cannot verify divergence safely */
+                    divergence = DIVERGENCE_UNVERIFIED;
+                }
+
+                err = workspace_add_diverged(
+                    ws,
+                    fs_path,
+                    storage_path,
+                    profile,
+                    NULL,                       /* No old_profile for orphans */
+                    WORKSPACE_STATE_ORPHANED,   /* State: in deployment state, not in profile */
+                    divergence,                 /* Divergence: computed from filesystem comparison */
+                    WORKSPACE_ITEM_FILE,
+                    on_filesystem,
+                    profile_enabled,
+                    false                       /* No profile change for orphans */
+                );
+            }
 
             if (err) {
                 state_free_all_files(state_files, state_count);
-                return error_wrap(err, "Failed to add orphaned file");
+                return error_wrap(err, "Failed to add orphaned/released file");
             }
         }
     }
@@ -1392,6 +1524,7 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
 
         switch (item->state) {
             case WORKSPACE_STATE_ORPHANED:
+            case WORKSPACE_STATE_RELEASED:
                 has_orphaned = true;
                 break;
 
@@ -2052,20 +2185,276 @@ static error_t *analyze_encryption_policy_mismatch(
 }
 
 /**
+ * Detect stale profiles by comparing state git_oid against current branch HEAD
+ *
+ * Scans state entries to find profiles whose stored git_oid doesn't match
+ * the profile branch's current HEAD. Returns a hashmap of stale profile names
+ * mapped to their current HEAD oid hex string.
+ *
+ * Algorithm:
+ *   For each enabled profile in workspace scope:
+ *     1. Find any ACTIVE state entry from this profile
+ *     2. Compare entry's git_oid with profile's current HEAD
+ *     3. If mismatch: add to stale map (profile_name → HEAD_oid_hex)
+ *
+ * Performance: O(P) ref lookups where P = enabled profile count.
+ * State entries are already loaded; we just sample one per profile.
+ *
+ * @param ws Workspace (state entries loaded, profiles indexed)
+ * @param state_entries All state entries (from state_get_all_files)
+ * @param state_count Number of state entries
+ * @param out_stale Output: hashmap of stale profiles (NULL if none stale)
+ *                  Caller must free with hashmap_free(map, free).
+ * @return Error or NULL on success
+ */
+static error_t *detect_stale_profiles(
+    const workspace_t *ws,
+    const state_file_entry_t *state_entries,
+    size_t state_count,
+    hashmap_t **out_stale
+) {
+    *out_stale = NULL;
+
+    if (state_count == 0 || !ws->profiles) {
+        return NULL;
+    }
+
+    error_t *err = NULL;
+    hashmap_t *stale_map = NULL;
+
+    /* Build set of profile names we've already checked (avoid redundant ref lookups) */
+    hashmap_t *checked = hashmap_create(ws->profiles->count);
+    if (!checked) {
+        return ERROR(ERR_MEMORY, "Failed to create profile check set");
+    }
+
+    for (size_t i = 0; i < state_count; i++) {
+        const state_file_entry_t *entry = &state_entries[i];
+
+        /* Only check ACTIVE entries from profiles in workspace scope */
+        if (!entry->state || strcmp(entry->state, STATE_ACTIVE) != 0) {
+            continue;
+        }
+        if (!entry->profile || !entry->git_oid) {
+            continue;
+        }
+        if (!hashmap_get(ws->profile_index, entry->profile)) {
+            continue;  /* Profile not in workspace scope */
+        }
+
+        /* Skip if already checked this profile */
+        if (hashmap_get(checked, entry->profile)) {
+            continue;
+        }
+
+        /* Mark as checked (store non-NULL sentinel) */
+        err = hashmap_set(checked, entry->profile, (void *)(uintptr_t)1);
+        if (err) {
+            goto cleanup;
+        }
+
+        /* Get profile's current HEAD */
+        git_reference *ref = NULL;
+        char refname[DOTTA_REFNAME_MAX];
+        err = gitops_build_refname(refname, sizeof(refname),
+                                   "refs/heads/%s", entry->profile);
+        if (err) {
+            /* Can't resolve refname — skip (safety will catch later) */
+            error_free(err);
+            err = NULL;
+            continue;
+        }
+
+        err = gitops_lookup_reference(ws->repo, refname, &ref);
+        if (err) {
+            /* Branch may have been deleted — skip (orphan detection handles this) */
+            error_free(err);
+            err = NULL;
+            continue;
+        }
+
+        const git_oid *head_oid = git_reference_target(ref);
+        if (!head_oid) {
+            git_reference_free(ref);
+            continue;
+        }
+
+        /* Compare stored git_oid with current HEAD */
+        char head_hex[GIT_OID_HEXSZ + 1];
+        git_oid_tostr(head_hex, sizeof(head_hex), head_oid);
+        git_reference_free(ref);
+
+        if (strcmp(entry->git_oid, head_hex) != 0) {
+            /* Stale! Profile's HEAD moved since last dotta operation */
+            if (!stale_map) {
+                stale_map = hashmap_create(ws->profiles->count);
+                if (!stale_map) {
+                    err = ERROR(ERR_MEMORY, "Failed to create stale profile map");
+                    goto cleanup;
+                }
+            }
+
+            char *oid_copy = strdup(head_hex);
+            if (!oid_copy) {
+                err = ERROR(ERR_MEMORY, "Failed to allocate HEAD oid string");
+                goto cleanup;
+            }
+
+            err = hashmap_set(stale_map, entry->profile, oid_copy);
+            if (err) {
+                free(oid_copy);
+                goto cleanup;
+            }
+        }
+    }
+
+    hashmap_free(checked, NULL);
+    *out_stale = stale_map;
+    return NULL;
+
+cleanup:
+    hashmap_free(checked, NULL);
+    hashmap_free(stale_map, free);
+    return err;
+}
+
+/**
+ * Patch a manifest entry's VWD cache from a fresh Git manifest entry
+ *
+ * Replaces stale cached state (blob_oid, type, mode, metadata) with
+ * current values from the fresh manifest built from Git.
+ *
+ * The fresh_entry has a git_tree_entry from which we extract blob_oid and type.
+ * Metadata comes from the workspace's pre-loaded metadata cache.
+ *
+ * @param vwd_entry Manifest entry to patch (VWD cache fields will be replaced)
+ * @param fresh_entry Fresh entry from profile_build_manifest (has tree entry)
+ * @param head_oid_hex Current HEAD oid hex string for the profile
+ * @param metadata Pre-loaded metadata for the profile (can be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *patch_entry_from_fresh(
+    file_entry_t *vwd_entry,
+    const file_entry_t *fresh_entry,
+    const char *head_oid_hex,
+    const metadata_t *metadata
+) {
+    /* Extract blob OID from fresh tree entry */
+    const git_oid *blob_oid = git_tree_entry_id(fresh_entry->entry);
+    if (!blob_oid) {
+        return ERROR(ERR_INTERNAL, "Fresh tree entry has no OID for '%s'",
+                     fresh_entry->storage_path);
+    }
+
+    char blob_hex[GIT_OID_HEXSZ + 1];
+    git_oid_tostr(blob_hex, sizeof(blob_hex), blob_oid);
+
+    /* Derive type and default mode from git filemode */
+    git_filemode_t filemode = git_tree_entry_filemode(fresh_entry->entry);
+    state_file_type_t new_type;
+    mode_t new_mode;
+    switch (filemode) {
+        case GIT_FILEMODE_LINK:
+            new_type = STATE_FILE_SYMLINK;
+            new_mode = 0;
+            break;
+        case GIT_FILEMODE_BLOB_EXECUTABLE:
+            new_type = STATE_FILE_EXECUTABLE;
+            new_mode = 0755;
+            break;
+        default:
+            new_type = STATE_FILE_REGULAR;
+            new_mode = 0644;
+            break;
+    }
+
+    /* Look up metadata for this file (may override mode, provide owner/group/encrypted) */
+    const char *new_owner = NULL;
+    const char *new_group = NULL;
+    bool new_encrypted = false;
+
+    if (metadata) {
+        const metadata_item_t *meta_item = NULL;
+        error_t *meta_err = metadata_get_item(metadata, fresh_entry->storage_path, &meta_item);
+        if (meta_err) {
+            /* NOT_FOUND is fine (old profiles without metadata) */
+            if (meta_err->code != ERR_NOT_FOUND) {
+                return meta_err;
+            }
+            error_free(meta_err);
+        } else if (meta_item) {
+            if (meta_item->mode != 0) {
+                new_mode = meta_item->mode;
+            }
+            new_owner = meta_item->owner;
+            new_group = meta_item->group;
+            new_encrypted = meta_item->file.encrypted;
+        }
+    }
+
+    /* Replace VWD cache fields — free old strings, allocate new */
+    free(vwd_entry->git_oid);
+    vwd_entry->git_oid = strdup(head_oid_hex);
+    if (!vwd_entry->git_oid) {
+        return ERROR(ERR_MEMORY, "Failed to allocate patched git_oid");
+    }
+
+    free(vwd_entry->blob_oid);
+    vwd_entry->blob_oid = strdup(blob_hex);
+    if (!vwd_entry->blob_oid) {
+        return ERROR(ERR_MEMORY, "Failed to allocate patched blob_oid");
+    }
+
+    vwd_entry->type = new_type;
+    vwd_entry->mode = new_mode;
+
+    free(vwd_entry->owner);
+    vwd_entry->owner = new_owner ? strdup(new_owner) : NULL;
+    if (new_owner && !vwd_entry->owner) {
+        return ERROR(ERR_MEMORY, "Failed to allocate patched owner");
+    }
+
+    free(vwd_entry->group);
+    vwd_entry->group = new_group ? strdup(new_group) : NULL;
+    if (new_group && !vwd_entry->group) {
+        return ERROR(ERR_MEMORY, "Failed to allocate patched group");
+    }
+
+    vwd_entry->encrypted = new_encrypted;
+
+    /* Update source_profile if owner changed (precedence shift) */
+    if (fresh_entry->source_profile &&
+        vwd_entry->source_profile != fresh_entry->source_profile) {
+        vwd_entry->source_profile = fresh_entry->source_profile;
+    }
+
+    return NULL;
+}
+
+/**
  * Build in-memory manifest from state manifest table
  *
  * Reads manifest entries from state DB and constructs manifest_t structure.
  * Does NOT load git_tree_entry* pointers (set to NULL). Tree entries are
  * lazy-loaded only when needed for content display (diffs, conflict resolution).
  *
- * This is the core of the Virtual Working Directory architecture - we read
- * the expected state cache (manifest table) instead of walking Git trees. This makes
- * status operations O(M × DB) where M = entries in manifest.
+ * Staleness Detection and In-Memory Patching:
+ * After loading state entries, compares each profile's stored git_oid against
+ * the branch's current HEAD. If any profile is stale (external Git changes):
+ *   - Builds a fresh manifest from Git via profile_build_manifest()
+ *   - Patches VWD cache fields for stale entries found in fresh manifest
+ *   - Marks entries removed from Git in ws->released_paths (for orphan analysis)
+ *   - Tracks patched entries in ws->stale_paths (for DIVERGENCE_STALE flag)
  *
- * Files from profiles not in the workspace scope are filtered out with a warning.
+ * This in-memory patching provides visibility in read-only commands (status)
+ * without modifying the state database.
+ *
+ * Files from profiles not in the workspace scope are filtered out silently.
  * This can happen if a profile is disabled but manifest still has orphaned entries.
  *
- * Performance: O(M × DB) where M = entries in manifest table
+ * Performance:
+ *   Common case (no staleness): O(M × DB) + O(P) ref lookups
+ *   Stale case: O(M × DB) + O(F) fresh manifest build, F = total files in Git
  *
  * @param ws Workspace (must not be NULL, state must be loaded)
  * @return Error or NULL on success
@@ -2078,6 +2467,8 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
     error_t *err = NULL;
     state_file_entry_t *state_entries = NULL;
     size_t state_count = 0;
+    hashmap_t *stale_profiles = NULL;
+    manifest_t *fresh_manifest = NULL;
 
     /* Read all entries from manifest table */
     err = state_get_all_files(ws->state, &state_entries, &state_count);
@@ -2085,9 +2476,56 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         return error_wrap(err, "Failed to read manifest from state");
     }
 
+    /* Staleness Detection (Phase 1 of stale manifest healing)
+     *
+     * Compare each profile's stored git_oid against its branch's current HEAD.
+     * If any mismatch: external Git operations occurred, VWD cache is stale.
+     *
+     * Cost: O(P) ref lookups where P = enabled profile count (typically < 10).
+     * Fast path: If no staleness detected, stale_profiles is NULL and the rest
+     * of this function proceeds identically to the non-stale case.
+     */
+    err = detect_stale_profiles(ws, state_entries, state_count, &stale_profiles);
+    if (err) {
+        state_free_all_files(state_entries, state_count);
+        return error_wrap(err, "Failed to detect stale profiles");
+    }
+
+    /* If staleness detected, build fresh manifest from Git for patching.
+     *
+     * The fresh manifest represents the current truth in Git after external
+     * operations. We'll use it to:
+     * - Patch VWD cache for files that still exist (updated blob_oid/metadata)
+     * - Identify files removed from Git (mark for release)
+     *
+     * Cost: O(F) where F = total files across all enabled profiles (rare path).
+     */
+    if (stale_profiles) {
+        ws->manifest_stale = true;
+
+        err = profile_build_manifest(ws->repo, ws->profiles, &fresh_manifest);
+        if (err) {
+            hashmap_free(stale_profiles, free);
+            state_free_all_files(state_entries, state_count);
+            return error_wrap(err, "Failed to build fresh manifest for stale repair");
+        }
+
+        /* Allocate tracking hashmaps */
+        ws->stale_paths = hashmap_create(64);
+        ws->released_paths = hashmap_create(16);
+        if (!ws->stale_paths || !ws->released_paths) {
+            manifest_free(fresh_manifest);
+            hashmap_free(stale_profiles, free);
+            state_free_all_files(state_entries, state_count);
+            return ERROR(ERR_MEMORY, "Failed to allocate staleness tracking");
+        }
+    }
+
     /* Allocate manifest structure */
     ws->manifest = calloc(1, sizeof(manifest_t));
     if (!ws->manifest) {
+        manifest_free(fresh_manifest);
+        hashmap_free(stale_profiles, free);
         state_free_all_files(state_entries, state_count);
         return ERROR(ERR_MEMORY, "Failed to allocate manifest");
     }
@@ -2097,6 +2535,8 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
     if (!ws->manifest->entries) {
         free(ws->manifest);
         ws->manifest = NULL;
+        manifest_free(fresh_manifest);
+        hashmap_free(stale_profiles, free);
         state_free_all_files(state_entries, state_count);
         return ERROR(ERR_MEMORY, "Failed to allocate manifest entries");
     }
@@ -2111,6 +2551,8 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         free(ws->manifest->entries);
         free(ws->manifest);
         ws->manifest = NULL;
+        manifest_free(fresh_manifest);
+        hashmap_free(stale_profiles, free);
         state_free_all_files(state_entries, state_count);
         return ERROR(ERR_MEMORY, "Failed to create manifest index");
     }
@@ -2145,110 +2587,154 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             /* Cleanup on allocation failure */
             free(entry->storage_path);
             free(entry->filesystem_path);
-
-            /* Free previously allocated entries */
-            for (size_t j = 0; j < manifest_idx; j++) {
-                free(ws->manifest->entries[j].storage_path);
-                free(ws->manifest->entries[j].filesystem_path);
-                free(ws->manifest->entries[j].old_profile);
-                free(ws->manifest->entries[j].git_oid);
-                free(ws->manifest->entries[j].blob_oid);
-                free(ws->manifest->entries[j].owner);
-                free(ws->manifest->entries[j].group);
-                if (ws->manifest->entries[j].entry) {
-                    git_tree_entry_free(ws->manifest->entries[j].entry);
-                }
-            }
-            hashmap_free(path_map, NULL);
-            free(ws->manifest->entries);
-            free(ws->manifest);
-            ws->manifest = NULL;
-            state_free_all_files(state_entries, state_count);
-            return ERROR(ERR_MEMORY, "Failed to allocate manifest entry paths");
+            err = ERROR(ERR_MEMORY, "Failed to allocate manifest entry paths");
+            goto cleanup;
         }
 
-        /* Check if this entry is inactive (marked for removal)
+        /* Skip non-active entries (marked for removal or stale)
          *
-         * Inactive entries are explicitly marked by the manifest layer when a file
-         * is removed or a profile is disabled with no fallback. These entries are
-         * intentionally out of scope and should not be validated against Git.
-         *
-         * They remain in the manifest table for orphan detection. The orphan
-         * detection phase (analyze_orphaned_files) will load these entries and
-         * mark them as ORPHANED for cleanup by apply.
-         *
-         * This check eliminates false-positive warnings for expected removals.
+         * These entries remain in the manifest table for orphan detection.
+         * The orphan detection phase (analyze_orphaned_files) will load them
+         * and mark them as ORPHANED or RELEASED for cleanup by apply.
          */
         if (state_entry->state && (strcmp(state_entry->state, STATE_INACTIVE) == 0 ||
-                                   strcmp(state_entry->state, STATE_DELETED) == 0)) {
-            /* Pending removal - skip silently, don't add to manifest */
+                                   strcmp(state_entry->state, STATE_DELETED) == 0 ||
+                                   strcmp(state_entry->state, STATE_RELEASED) == 0)) {
             free(entry->storage_path);
             free(entry->filesystem_path);
             continue;  /* Don't increment manifest_idx */
         }
 
-        /* Populate VWD expected state cache from database
-         *
-         * These fields enable O(1) divergence checking without N database queries.
-         * They represent the cached expected state that workspace divergence
-         * analysis will compare against filesystem reality.
-         *
-         * NULL fields: Some optional fields (mode, owner, group, git_oid, blob_oid)
-         * may be NULL in state database. Use conditional strdup to handle gracefully.
-         */
-        entry->old_profile = state_entry->old_profile ? strdup(state_entry->old_profile) : NULL;
-        entry->git_oid = state_entry->git_oid ? strdup(state_entry->git_oid) : NULL;
-        entry->blob_oid = state_entry->blob_oid ? strdup(state_entry->blob_oid) : NULL;
-        entry->type = state_entry->type;
-        entry->mode = state_entry->mode;
-        entry->owner = state_entry->owner ? strdup(state_entry->owner) : NULL;
-        entry->group = state_entry->group ? strdup(state_entry->group) : NULL;
-        entry->encrypted = state_entry->encrypted;
-        entry->deployed_at = state_entry->deployed_at;
+        /* Check if this entry is from a stale profile and needs patching */
+        bool entry_is_stale = false;
+        const char *head_oid_hex = NULL;
 
-        /* Check for allocation failures in VWD fields */
-        if ((state_entry->old_profile && !entry->old_profile) ||
-            (state_entry->git_oid && !entry->git_oid) ||
-            (state_entry->blob_oid && !entry->blob_oid) ||
-            (state_entry->owner && !entry->owner) ||
-            (state_entry->group && !entry->group)) {
-
-            /* Cleanup current entry's allocated fields */
-            free(entry->storage_path);
-            free(entry->filesystem_path);
-            free(entry->old_profile);
-            free(entry->git_oid);
-            free(entry->blob_oid);
-            free(entry->owner);
-            free(entry->group);
-
-            /* Free previously allocated entries */
-            for (size_t j = 0; j < manifest_idx; j++) {
-                free(ws->manifest->entries[j].storage_path);
-                free(ws->manifest->entries[j].filesystem_path);
-                free(ws->manifest->entries[j].old_profile);
-                free(ws->manifest->entries[j].git_oid);
-                free(ws->manifest->entries[j].blob_oid);
-                free(ws->manifest->entries[j].owner);
-                free(ws->manifest->entries[j].group);
-                if (ws->manifest->entries[j].entry) {
-                    git_tree_entry_free(ws->manifest->entries[j].entry);
-                }
+        if (stale_profiles && state_entry->profile) {
+            head_oid_hex = hashmap_get(stale_profiles, state_entry->profile);
+            if (head_oid_hex) {
+                entry_is_stale = true;
             }
-            hashmap_free(path_map, NULL);
-            free(ws->manifest->entries);
-            free(ws->manifest);
-            ws->manifest = NULL;
-            state_free_all_files(state_entries, state_count);
-            return ERROR(ERR_MEMORY, "Failed to allocate VWD cache fields");
         }
 
-        /* Set tree entry to NULL - lazy-loaded on demand.
-         *
-         * VWD Architecture: Manifest built from state DB, not Git trees.
-         * Tree entries loaded when needed via file_entry_ensure_tree_entry().
-         * This achieves true O(M × DB) performance for workspace loading. */
-        entry->entry = NULL;
+        if (entry_is_stale && fresh_manifest && fresh_manifest->index) {
+            /* Stale entry — look up in fresh manifest for patching
+             *
+             * The fresh manifest represents current Git truth. Three cases:
+             *
+             * CASE A: File found in fresh manifest (same or different profile)
+             *   → Patch VWD cache with current values. File stays in manifest.
+             *
+             * CASE B: File NOT in fresh manifest (removed from all profiles)
+             *   → File removed from Git externally. Add to released_paths,
+             *     skip from manifest. Orphan analysis will classify as RELEASED.
+             */
+            void *fresh_idx_ptr = hashmap_get(fresh_manifest->index, state_entry->filesystem_path);
+
+            if (fresh_idx_ptr) {
+                /* CASE A: File still in Git — populate from state, then patch */
+                size_t fresh_idx = (size_t)(uintptr_t)fresh_idx_ptr - 1;
+                const file_entry_t *fresh_entry = &fresh_manifest->entries[fresh_idx];
+
+                /* First populate VWD fields from state (baseline).
+                 *
+                 * Most string fields (git_oid, blob_oid, owner, group) will be
+                 * overwritten by patch_entry_from_fresh, so transient NULL from
+                 * strdup failure is harmless (free(NULL) is safe). Only old_profile
+                 * survives without being patched — check it explicitly. */
+                entry->old_profile = state_entry->old_profile ? strdup(state_entry->old_profile) : NULL;
+                if (state_entry->old_profile && !entry->old_profile) {
+                    free(entry->storage_path);
+                    free(entry->filesystem_path);
+                    err = ERROR(ERR_MEMORY, "Failed to allocate old_profile for stale entry");
+                    goto cleanup;
+                }
+                entry->git_oid = state_entry->git_oid ? strdup(state_entry->git_oid) : NULL;
+                entry->blob_oid = state_entry->blob_oid ? strdup(state_entry->blob_oid) : NULL;
+                entry->type = state_entry->type;
+                entry->mode = state_entry->mode;
+                entry->owner = state_entry->owner ? strdup(state_entry->owner) : NULL;
+                entry->group = state_entry->group ? strdup(state_entry->group) : NULL;
+                entry->encrypted = state_entry->encrypted;
+                entry->deployed_at = state_entry->deployed_at;
+                entry->entry = NULL;
+
+                /* Now overwrite stale fields from fresh manifest */
+                const metadata_t *meta = ws_get_metadata(ws, fresh_entry->source_profile->name);
+                err = patch_entry_from_fresh(entry, fresh_entry, head_oid_hex, meta);
+                if (err) {
+                    free(entry->storage_path);
+                    free(entry->filesystem_path);
+                    free(entry->old_profile);
+                    free(entry->git_oid);
+                    free(entry->blob_oid);
+                    free(entry->owner);
+                    free(entry->group);
+                    err = error_wrap(err, "Failed to patch stale entry '%s'", state_entry->storage_path);
+                    goto cleanup;
+                }
+
+                /* Track as patched for DIVERGENCE_STALE flag */
+                error_t *track_err = hashmap_set(ws->stale_paths, entry->filesystem_path, (void *)(uintptr_t)1);
+                if (track_err) {
+                    err = track_err;
+                    goto cleanup;
+                }
+            } else {
+                /* CASE B: File removed from Git externally
+                 *
+                 * No enabled profile contains this file. Add to released_paths
+                 * so analyze_orphaned_files emits WORKSPACE_STATE_RELEASED.
+                 * Skip from manifest (file is no longer in scope). */
+                err = hashmap_set(ws->released_paths, state_entry->filesystem_path, (void *)(uintptr_t)1);
+                if (err) {
+                    free(entry->storage_path);
+                    free(entry->filesystem_path);
+                    goto cleanup;
+                }
+
+                free(entry->storage_path);
+                free(entry->filesystem_path);
+                continue;  /* Don't add to manifest */
+            }
+        } else {
+            /* Non-stale entry — populate VWD cache from state database
+             *
+             * These fields enable O(1) divergence checking without N database queries.
+             * They represent the cached expected state that workspace divergence
+             * analysis will compare against filesystem reality.
+             *
+             * NULL fields: Some optional fields (mode, owner, group, git_oid, blob_oid)
+             * may be NULL in state database. Use conditional strdup to handle gracefully.
+             */
+            entry->old_profile = state_entry->old_profile ? strdup(state_entry->old_profile) : NULL;
+            entry->git_oid = state_entry->git_oid ? strdup(state_entry->git_oid) : NULL;
+            entry->blob_oid = state_entry->blob_oid ? strdup(state_entry->blob_oid) : NULL;
+            entry->type = state_entry->type;
+            entry->mode = state_entry->mode;
+            entry->owner = state_entry->owner ? strdup(state_entry->owner) : NULL;
+            entry->group = state_entry->group ? strdup(state_entry->group) : NULL;
+            entry->encrypted = state_entry->encrypted;
+            entry->deployed_at = state_entry->deployed_at;
+            entry->entry = NULL;
+
+            /* Check for allocation failures in VWD fields */
+            if ((state_entry->old_profile && !entry->old_profile) || (state_entry->git_oid && !entry->git_oid) ||
+                (state_entry->blob_oid && !entry->blob_oid) || (state_entry->owner && !entry->owner) ||
+                (state_entry->group && !entry->group)) {
+
+                /* Cleanup current entry's allocated fields */
+                free(entry->storage_path);
+                free(entry->filesystem_path);
+                free(entry->old_profile);
+                free(entry->git_oid);
+                free(entry->blob_oid);
+                free(entry->owner);
+                free(entry->group);
+
+                err = ERROR(ERR_MEMORY, "Failed to allocate VWD cache fields");
+                goto cleanup;
+            }
+        }
 
         /* Store index in hashmap (offset by 1 to distinguish from NULL).
          * We cast the index through uintptr_t to store it as a void pointer.
@@ -2260,25 +2746,8 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         err = hashmap_set(path_map, entry->filesystem_path,
                          (void *)(uintptr_t)(manifest_idx + 1));
         if (err) {
-            /* Cleanup: free hashmap and all allocated entries */
-            hashmap_free(path_map, NULL);
-            for (size_t j = 0; j <= manifest_idx; j++) {
-                free(ws->manifest->entries[j].storage_path);
-                free(ws->manifest->entries[j].filesystem_path);
-                free(ws->manifest->entries[j].old_profile);
-                free(ws->manifest->entries[j].git_oid);
-                free(ws->manifest->entries[j].blob_oid);
-                free(ws->manifest->entries[j].owner);
-                free(ws->manifest->entries[j].group);
-                if (ws->manifest->entries[j].entry) {
-                    git_tree_entry_free(ws->manifest->entries[j].entry);
-                }
-            }
-            free(ws->manifest->entries);
-            free(ws->manifest);
-            ws->manifest = NULL;
-            state_free_all_files(state_entries, state_count);
-            return error_wrap(err, "Failed to populate manifest index");
+            err = error_wrap(err, "Failed to populate manifest index");
+            goto cleanup;
         }
 
         manifest_idx++;
@@ -2286,12 +2755,38 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
 
     /* Transfer index ownership to manifest */
     ws->manifest->index = path_map;
+    path_map = NULL;  /* Prevent double-free on cleanup */
 
     /* Set final count (may be less than state_count due to filtering) */
     ws->manifest->count = manifest_idx;
 
+    manifest_free(fresh_manifest);
+    hashmap_free(stale_profiles, free);
     state_free_all_files(state_entries, state_count);
     return NULL;
+
+cleanup:
+    /* Centralized error cleanup */
+    for (size_t j = 0; j < manifest_idx; j++) {
+        free(ws->manifest->entries[j].storage_path);
+        free(ws->manifest->entries[j].filesystem_path);
+        free(ws->manifest->entries[j].old_profile);
+        free(ws->manifest->entries[j].git_oid);
+        free(ws->manifest->entries[j].blob_oid);
+        free(ws->manifest->entries[j].owner);
+        free(ws->manifest->entries[j].group);
+        if (ws->manifest->entries[j].entry) {
+            git_tree_entry_free(ws->manifest->entries[j].entry);
+        }
+    }
+    hashmap_free(path_map, NULL);
+    free(ws->manifest->entries);
+    free(ws->manifest);
+    ws->manifest = NULL;
+    manifest_free(fresh_manifest);
+    hashmap_free(stale_profiles, free);
+    state_free_all_files(state_entries, state_count);
+    return err;
 }
 
 /**
@@ -2329,6 +2824,9 @@ error_t *workspace_load(
     if (err) {
         return err;
     }
+
+    /* Store repaired_paths from caller (borrowed reference, not freed by workspace) */
+    ws->repaired_paths = resolved_opts.repaired_paths;
 
     /* Initialize encryption infrastructure */
     /* Note: keymanager can be NULL if encryption is not configured - this is valid */
@@ -2622,7 +3120,8 @@ error_t *workspace_extract_orphans(
      */
     size_t file_count = 0, dir_count = 0;
     for (size_t i = 0; i < ws->diverged_count; i++) {
-        if (ws->diverged[i].state == WORKSPACE_STATE_ORPHANED) {
+        if (ws->diverged[i].state == WORKSPACE_STATE_ORPHANED ||
+            ws->diverged[i].state == WORKSPACE_STATE_RELEASED) {
             /* Apply profile filter if specified */
             if (profile_filter &&
                 !profile_filter_matches(ws->diverged[i].profile, profile_filter)) {
@@ -2664,7 +3163,8 @@ error_t *workspace_extract_orphans(
     /* Pass 2: Populate both arrays in single iteration (with same filter) */
     size_t f_idx = 0, d_idx = 0;
     for (size_t i = 0; i < ws->diverged_count; i++) {
-        if (ws->diverged[i].state == WORKSPACE_STATE_ORPHANED) {
+        if (ws->diverged[i].state == WORKSPACE_STATE_ORPHANED ||
+            ws->diverged[i].state == WORKSPACE_STATE_RELEASED) {
             /* Apply same profile filter as Pass 1 */
             if (profile_filter &&
                 !profile_filter_matches(ws->diverged[i].profile, profile_filter)) {
@@ -2918,6 +3418,19 @@ bool workspace_item_extract_display_info(
                 }
             }
 
+            if (item->divergence & DIVERGENCE_STALE) {
+                /* VWD cache was stale due to external Git changes.
+                 * Entry has been patched in-memory with current Git state.
+                 * This is informational — the patched values are authoritative. */
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    tags_out[tag_count++] = "stale";
+                }
+                /* Upgrade color to MAGENTA to highlight external changes */
+                if (*color_out == OUTPUT_COLOR_YELLOW) {
+                    *color_out = OUTPUT_COLOR_MAGENTA;
+                }
+            }
+
             /* Format metadata based on divergence type
              *
              * For mode/ownership divergence, show metadata profile if different
@@ -2986,6 +3499,16 @@ bool workspace_item_extract_display_info(
             snprintf(metadata_buf, metadata_size, "in %s", item->profile);
             break;
 
+        case WORKSPACE_STATE_RELEASED:
+            /* File removed from Git externally — released from management.
+             * File left on filesystem, state entry will be cleaned up. */
+            if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                tags_out[tag_count++] = "released";
+            }
+            *color_out = OUTPUT_COLOR_MAGENTA;
+            snprintf(metadata_buf, metadata_size, "from %s", item->profile);
+            break;
+
         default:
             /* Unknown state - defensive fallback
              * Should never happen in normal operation, but handle gracefully */
@@ -2999,6 +3522,13 @@ bool workspace_item_extract_display_info(
 
     *tag_count_out = tag_count;
     return true;
+}
+
+/**
+ * Check if workspace detected stale manifest entries
+ */
+bool workspace_is_stale(const workspace_t *ws) {
+    return ws ? ws->manifest_stale : false;
 }
 
 /**
@@ -3035,6 +3565,10 @@ void workspace_free(workspace_t *ws) {
     }
     content_cache_free(ws->content_cache);
     /* Don't free keymanager - it's global */
+
+    /* Free staleness tracking (NULL-safe) */
+    hashmap_free(ws->stale_paths, NULL);
+    hashmap_free(ws->released_paths, NULL);
 
     /* Free owned state */
     manifest_free(ws->manifest);

@@ -1198,6 +1198,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
                 break;
             case WORKSPACE_STATE_UNDEPLOYED:
             case WORKSPACE_STATE_ORPHANED:
+            case WORKSPACE_STATE_RELEASED:
                 /* Not sync's concern - handled by apply command */
                 break;
         }
@@ -1371,6 +1372,34 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     if (err) {
         err = error_wrap(err, "Failed to get enabled profiles");
         goto cleanup;
+    }
+
+    /* Repair stale manifest before sync operations.
+     *
+     * If external Git changes moved a branch HEAD since the last dotta operation,
+     * state entries have stale git_oid/blob_oid values. manifest_sync_diff() computes
+     * a diff between old_oid (local HEAD before fetch) and new_oid (after merge). It
+     * then calls sync_profile_git_oids() which updates ALL entries' git_oid to match
+     * the new HEAD. This masks pre-existing staleness: files changed between the stale
+     * state and the pre-fetch HEAD would have their git_oid updated (now matching HEAD)
+     * but blob_oid unchanged (still from the stale commit). These entries become
+     * permanently invisible to staleness detection — ghost entries with wrong blob_oid.
+     *
+     * Running repair first brings state in sync with the current local HEAD. Then
+     * sync_diff operates on accurate state and only handles the remote changes. */
+    if (enabled_profiles && enabled_profiles->count > 0) {
+        manifest_repair_stats_t repair_stats = {0};
+        err = manifest_repair_stale(repo, state, enabled_profiles, &repair_stats, NULL);
+        if (err) {
+            err = error_wrap(err, "Failed to repair stale manifest before sync");
+            goto cleanup;
+        }
+
+        if (repair_stats.updated > 0 || repair_stats.released > 0) {
+            output_info(out, "Synchronized %zu file%s, released %zu from management",
+                        repair_stats.updated, repair_stats.updated == 1 ? "" : "s",
+                        repair_stats.released);
+        }
     }
 
     /* Phase 3: Sync with remote (push/pull/divergence handling) */

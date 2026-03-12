@@ -90,7 +90,8 @@ typedef enum {
     WORKSPACE_STATE_UNDEPLOYED,    /* In profile, not deployed yet */
     WORKSPACE_STATE_DELETED,       /* Was deployed, removed from filesystem */
     WORKSPACE_STATE_ORPHANED,      /* In deployment state, not in profile */
-    WORKSPACE_STATE_UNTRACKED      /* On filesystem in tracked directory, not in manifest */
+    WORKSPACE_STATE_UNTRACKED,     /* On filesystem in tracked directory, not in manifest */
+    WORKSPACE_STATE_RELEASED       /* File removed from Git externally, released from management */
 } workspace_state_t;
 
 /**
@@ -109,7 +110,8 @@ typedef enum {
     DIVERGENCE_OWNERSHIP  = 1 << 2,  /* Owner/group changed (requires root) */
     DIVERGENCE_ENCRYPTION = 1 << 3,  /* File violates encryption policy */
     DIVERGENCE_TYPE       = 1 << 4,  /* Type changed (file/symlink/dir) */
-    DIVERGENCE_UNVERIFIED = 1 << 5   /* Cannot verify (missing key, error, large file) */
+    DIVERGENCE_UNVERIFIED = 1 << 5,  /* Cannot verify (missing key, error, large file) */
+    DIVERGENCE_STALE      = 1 << 6   /* VWD cache stale (external Git changes detected) */
 } divergence_type_t;
 
 /**

@@ -57,12 +57,14 @@ typedef enum {
 /**
  * Profile cache entry
  *
- * Caches branch existence to avoid repeated Git lookups in batch checks.
- * Uses lightweight boolean instead of loading full git_tree objects.
+ * Caches branch existence and tree to avoid repeated Git lookups in batch checks.
+ * Tree is loaded lazily on first file-in-tree check for each profile.
  */
 typedef struct {
     char *profile_name;  /* Owned copy of profile name (hashmap key) */
     bool exists;         /* true if profile branch exists */
+    git_tree *tree;      /* Cached tree for file-in-tree checks (NULL until loaded, NULL if !exists) */
+    bool tree_loaded;    /* true if tree load was attempted (avoids retrying on failure) */
 } profile_cache_t;
 
 /**
@@ -73,6 +75,9 @@ static void free_profile_cache(void *entry) {
         return;
     }
     profile_cache_t *cache = (profile_cache_t *)entry;
+    if (cache->tree) {
+        git_tree_free(cache->tree);
+    }
     free(cache->profile_name);
     free(cache);
 }
@@ -137,6 +142,119 @@ static error_t *check_profile_exists(
     }
 
     *out_exists = exists;
+    return NULL;
+}
+
+/**
+ * Check if a file exists in a profile's current Git tree (cached)
+ *
+ * Loads the profile's tree lazily (once per profile) and checks if the
+ * given storage_path exists in it. This detects files removed from Git
+ * externally while the branch still exists.
+ *
+ * Error handling follows a two-tier conservative model:
+ * - Tree loading failures (ref/commit/tree resolution): treated as
+ *   "not in tree" (returns NULL + out_in_tree=false). These failures
+ *   indicate the profile is unusable, so RELEASED is appropriate.
+ * - Tree entry lookup failures (corrupt tree, OOM on valid tree):
+ *   returns an error so the caller can use CANNOT_VERIFY (more
+ *   conservative than RELEASED — preserves the state entry).
+ *
+ * @param repo Git repository
+ * @param cache Profile cache (tree loaded lazily and cached)
+ * @param profile_name Profile to check
+ * @param storage_path Storage path to look up (e.g., "home/.bashrc")
+ * @param out_in_tree Output: true if file exists in tree
+ * @return Error on fatal failure (memory), NULL on success
+ */
+static error_t *check_file_in_tree(
+    git_repository *repo,
+    hashmap_t *cache,
+    const char *profile_name,
+    const char *storage_path,
+    bool *out_in_tree
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(cache);
+    CHECK_NULL(profile_name);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(out_in_tree);
+
+    *out_in_tree = false;
+
+    /* Get cached profile entry */
+    profile_cache_t *cached = hashmap_get(cache, profile_name);
+    if (!cached || !cached->exists) {
+        /* Profile doesn't exist or not cached — file can't be in tree */
+        return NULL;
+    }
+
+    /* Lazy-load tree on first file-in-tree check for this profile */
+    if (!cached->tree_loaded) {
+        cached->tree_loaded = true;
+
+        /* Resolve branch HEAD to tree */
+        git_reference *ref = NULL;
+        char refname[DOTTA_REFNAME_MAX];
+        error_t *err = gitops_build_refname(refname, sizeof(refname),
+                                            "refs/heads/%s", profile_name);
+        if (err) {
+            error_free(err);
+            return NULL;  /* Can't build refname — treat as not in tree */
+        }
+
+        err = gitops_lookup_reference(repo, refname, &ref);
+        if (err) {
+            error_free(err);
+            return NULL;  /* Can't resolve ref — treat as not in tree */
+        }
+
+        git_commit *commit = NULL;
+        int git_err = git_commit_lookup(&commit, repo, git_reference_target(ref));
+        git_reference_free(ref);
+
+        if (git_err != 0) {
+            return NULL;  /* Can't load commit — treat as not in tree */
+        }
+
+        git_tree *tree = NULL;
+        git_err = git_commit_tree(&tree, commit);
+        git_commit_free(commit);
+
+        if (git_err != 0) {
+            return NULL;  /* Can't load tree — treat as not in tree */
+        }
+
+        cached->tree = tree;  /* Transfer ownership to cache */
+    }
+
+    if (!cached->tree) {
+        /* Tree load previously failed */
+        return NULL;
+    }
+
+    /* Check if file exists in tree via path traversal
+     *
+     * Distinguish between "file not in tree" (GIT_ENOTFOUND) and actual
+     * errors (GIT_ERROR, OOM). ENOTFOUND is the normal "removed from Git"
+     * case. Actual errors should propagate so the caller can treat them
+     * as CANNOT_VERIFY rather than RELEASED — preserving the state entry
+     * is more conservative than removing it.
+     */
+    git_tree_entry *entry = NULL;
+    int ret = git_tree_entry_bypath(&entry, cached->tree, storage_path);
+
+    if (ret == 0) {
+        *out_in_tree = true;
+        git_tree_entry_free(entry);
+    } else if (ret != GIT_ENOTFOUND) {
+        /* Unexpected error (corrupt tree, OOM). Propagate so caller
+         * can use CANNOT_VERIFY instead of RELEASED. */
+        return ERROR(ERR_GIT, "Failed to check tree entry for '%s': %s",
+                     storage_path, git_error_last() ? git_error_last()->message : "unknown");
+    }
+    /* GIT_ENOTFOUND: file not in tree — out_in_tree stays false */
+
     return NULL;
 }
 
@@ -275,27 +393,34 @@ static check_result_t map_divergence_to_violation(
 }
 
 /**
- * Check lifecycle state and branch existence
+ * Check lifecycle state, branch existence, and file-in-tree
  *
- * Three-phase check implementing safety hierarchy:
+ * Four-phase check implementing safety hierarchy:
  *
  * PHASE 1: Controlled Deletion (STATE_DELETED)
  * - Skip branch check entirely (user confirmed intent via remove command)
  * - Proceed to divergence routing
  *
- * PHASE 2: Branch Existence (STATE_INACTIVE and STATE_ACTIVE)
- * - Branch exists: Proceed to divergence routing
- * - Branch gone: RELEASED violation (irrecoverable, protect user data)
+ * PHASE 2: Stale Entry (STATE_RELEASED)
+ * - File already identified as removed from Git externally
+ * - Auto-release: RELEASED violation, skip all further checks
  *
- * Key Invariant: Only STATE_DELETED (explicit confirmed intent) bypasses the
- * branch check. Both STATE_INACTIVE and STATE_ACTIVE require branch existence
- * for safe removal. This prevents silent data loss when a branch is deleted
- * externally after a profile disable.
+ * PHASE 3: Branch Existence (STATE_INACTIVE and STATE_ACTIVE)
+ * - Branch gone: RELEASED violation (irrecoverable, protect user data)
+ * - Branch exists: continue to Phase 4
+ *
+ * PHASE 4: File-in-Tree (defense in depth)
+ * - Branch exists but file not in tree: RELEASED violation
+ * - File in tree: proceed to divergence routing
+ *
+ * Key Invariant: Only STATE_DELETED (explicit confirmed intent) bypasses
+ * safety checks. STATE_RELEASED auto-releases. All other states require both
+ * branch existence AND file-in-tree verification for safe removal.
  *
  * @param repo Git repository
  * @param state State database (for targeted lookup)
  * @param orphan Workspace item
- * @param cache Profile existence cache
+ * @param cache Profile cache (branch existence + tree, lazy-loaded)
  * @param result Safety result to populate
  * @param out_err Error output for fatal failures (only set on ERROR)
  * @return SAFETY_CHECK_CONTINUE if safe to proceed (divergence routing)
@@ -334,9 +459,12 @@ static check_result_t check_branch_existence(
         return SAFETY_CHECK_CONTINUE;  /* Proceed to divergence routing (defensive) */
     }
 
-    /* Extract lifecycle state before freeing entry */
+    /* Extract lifecycle state and storage_path before freeing entry */
     bool is_controlled_deletion = state_entry->state &&
                                   strcmp(state_entry->state, STATE_DELETED) == 0;
+
+    bool is_stale = state_entry->state && strcmp(state_entry->state, STATE_RELEASED) == 0;
+    char *storage_path = state_entry->storage_path ? strdup(state_entry->storage_path) : NULL;
 
     state_free_entry(state_entry);
 
@@ -350,14 +478,29 @@ static check_result_t check_branch_existence(
          * - Clean files (DIVERGENCE_NONE): Safe to remove (no violation)
          * - Modified files (DIVERGENCE_CONTENT): Violation added (user warned)
          * - Force flag: Bypasses all checks (unchanged behavior)
-         *
-         * This provides defense-in-depth: user intent is respected for clean
-         * files, but post-disable modifications are protected.
          */
+        free(storage_path);
         return SAFETY_CHECK_CONTINUE;  /* Proceed to divergence routing */
     }
 
-    /* PHASE 2: BRANCH EXISTENCE CHECK (STATE_INACTIVE and STATE_ACTIVE)
+    if (is_stale) {
+        /* PHASE 2: STALE ENTRY (STATE_RELEASED)
+         *
+         * File removed from Git externally. Manifest repair (or workspace
+         * in-memory patching) already identified this as loss of authority.
+         * Auto-release without further checks — the decision was already made.
+         */
+        free(storage_path);
+        err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
+                            orphan->profile, SAFETY_REASON_RELEASED, false);
+        if (err) {
+            *out_err = err;
+            return SAFETY_CHECK_ERROR;
+        }
+        return SAFETY_CHECK_DONE;
+    }
+
+    /* PHASE 3: BRANCH EXISTENCE CHECK (STATE_INACTIVE and STATE_ACTIVE)
      *
      * For both staged removals (profile disable) and active entries,
      * verify the profile branch still exists. If the branch is gone,
@@ -366,38 +509,75 @@ static check_result_t check_branch_existence(
     bool profile_exists = false;
     err = check_profile_exists(repo, cache, orphan->profile, &profile_exists);
     if (err) {
+        free(storage_path);
         *out_err = error_wrap(err, "Failed to check profile existence for '%s'", orphan->profile);
         return SAFETY_CHECK_ERROR;
     }
 
-    if (profile_exists) {
-        return SAFETY_CHECK_CONTINUE;  /* Branch exists, proceed to divergence routing */
+    if (!profile_exists) {
+        /* Branch deleted externally. Release file from management. */
+        free(storage_path);
+        err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
+                            orphan->profile, SAFETY_REASON_RELEASED, false);
+        if (err) {
+            *out_err = err;
+            return SAFETY_CHECK_ERROR;
+        }
+        return SAFETY_CHECK_DONE;
     }
 
-    /* RELEASED: Branch deleted (externally or after profile disable).
-     * Cannot recover content from Git. Release file from management.
+    /* PHASE 4: FILE-IN-TREE CHECK (defense in depth)
      *
-     * - Leave file on filesystem (protect user data)
-     * - Track for state cleanup (can't manage without profile)
-     * - Non-blocking (inform user, don't prevent operation)
+     * Branch exists, but file may have been removed from it externally.
+     * Verify the specific file still exists in the profile's current tree.
+     * This catches: git rm <file> && git commit (branch alive, file gone).
      */
-    err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
-                        orphan->profile, SAFETY_REASON_RELEASED, false);
-    if (err) {
-        *out_err = err;
-        return SAFETY_CHECK_ERROR;
+    const char *lookup_path = storage_path ? storage_path : orphan->storage_path;
+
+    if (lookup_path) {
+        bool file_in_tree = false;
+        err = check_file_in_tree(repo, cache, orphan->profile, lookup_path, &file_in_tree);
+        if (err) {
+            /* Tree entry lookup failed (corrupt tree, OOM).
+             * Degrade to CANNOT_VERIFY — don't release (destructive to state),
+             * don't allow removal (can't confirm Git backing). */
+            error_free(err);
+            free(storage_path);
+            err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
+                                orphan->profile, SAFETY_REASON_CANNOT_VERIFY, false);
+            if (err) {
+                *out_err = err;
+                return SAFETY_CHECK_ERROR;
+            }
+            return SAFETY_CHECK_DONE;
+        }
+
+        if (!file_in_tree) {
+            /* Branch exists but file doesn't — loss of authority.
+             * Git cannot back this file. Release from management. */
+            free(storage_path);
+            err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
+                                orphan->profile, SAFETY_REASON_RELEASED, false);
+            if (err) {
+                *out_err = err;
+                return SAFETY_CHECK_ERROR;
+            }
+            return SAFETY_CHECK_DONE;
+        }
     }
 
-    return SAFETY_CHECK_DONE;
+    free(storage_path);
+    return SAFETY_CHECK_CONTINUE;  /* File backed by Git, proceed to divergence routing */
 }
 
 /**
  * Check removal safety for orphaned workspace items
  *
  * Validates that orphaned files can be safely removed by checking:
- * 1. Branch existence (external deletion detection)
- * 2. Lifecycle state (controlled vs external deletion)
- * 3. Workspace divergence (trusted completely - no re-verification)
+ * 1. Lifecycle state (STATE_DELETED bypasses, STATE_RELEASED auto-releases)
+ * 2. Branch existence (external deletion detection)
+ * 3. File-in-tree (defense in depth — branch exists but file removed)
+ * 4. Workspace divergence (trusted completely - no re-verification)
  *
  * Trusts workspace divergence analysis completely, eliminating redundant
  * verification while preserving all data loss protections. DIVERGENCE_UNVERIFIED

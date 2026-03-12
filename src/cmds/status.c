@@ -153,6 +153,12 @@ static void display_workspace_status(
             }
         }
 
+        /* Staleness warning — external Git changes detected */
+        if (workspace_is_stale(ws)) {
+            output_warning(out, "External Git changes detected — manifest is stale\n"
+                           "  Hint: Run 'dotta apply' to synchronize state");
+        }
+
         /* Show sectioned output for dirty/invalid workspace */
         if (ws_status != WORKSPACE_CLEAN) {
             /* Get all diverged items once */
@@ -215,6 +221,7 @@ static void display_workspace_status(
                         break;
 
                     case WORKSPACE_STATE_ORPHANED:
+                    case WORKSPACE_STATE_RELEASED:
                         orphaned[orphaned_count++] = item;
                         break;
                 }

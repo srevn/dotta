@@ -281,10 +281,11 @@ static error_t *prune_orphaned_files(
 
         if (violation) {
             if (strcmp(violation->reason, SAFETY_REASON_RELEASED) == 0) {
-                /* RELEASED: External profile deletion
+                /* RELEASED: File removed from Git externally (loss of authority)
                  *
-                 * - DO NOT remove file (cannot verify safety)
-                 * - DO track for state cleanup (can't manage without profile)
+                 * Triggers: branch deleted, file removed from branch, STATE_RELEASED.
+                 * - DO NOT remove file (Git cannot back it, protect user data)
+                 * - DO track for state cleanup (can't manage without Git backing)
                  *
                  * The file is "released" from dotta's management.
                  */

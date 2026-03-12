@@ -53,6 +53,14 @@ typedef struct {
 } manifest_disable_stats_t;
 
 /**
+ * Statistics from stale manifest repair
+ */
+typedef struct {
+    size_t updated;     /* Files with updated blob_oid/metadata (still in Git) */
+    size_t released;    /* Files set to STATE_RELEASED (removed from Git externally) */
+} manifest_repair_stats_t;
+
+/**
  * Enable profile in manifest with optional custom prefix
  *
  * Called when a profile is enabled. Populates manifest from Git branch
@@ -396,6 +404,59 @@ error_t *manifest_rebuild(
     git_repository *repo,
     state_t *state,
     const string_array_t *enabled_profiles
+);
+
+/**
+ * Repair stale manifest entries from external Git changes
+ *
+ * Detects and repairs state entries whose git_oid no longer matches the
+ * profile branch's current HEAD. This happens when Git operations occur
+ * outside dotta (git commit, git rebase, git rm, etc.).
+ *
+ * This is the persistent counterpart to workspace's in-memory patching.
+ * After repair, subsequent workspace_load() calls see accurate state
+ * with zero overhead (no stale detection needed).
+ *
+ * Algorithm:
+ *   1. Quick staleness check: O(P) — one state query per enabled profile,
+ *      compare git_oid against branch HEAD. If all current: return (zero cost).
+ *   2. For stale profiles: build fresh manifest from Git (precedence oracle).
+ *   3. For each ACTIVE state entry from stale profiles:
+ *      - Found in fresh manifest: update entry (new blob_oid, metadata, git_oid)
+ *      - Not in fresh manifest: mark STATE_RELEASED (loss of authority)
+ *   4. Sync git_oid for all entries in repaired profiles.
+ *   5. Sync tracked directories for consistency.
+ *
+ * Preconditions:
+ *   - state MUST have active transaction (via state_load_for_update)
+ *   - enabled_profiles MUST be current enabled set
+ *
+ * Postconditions:
+ *   - Updated entries have current git_oid, blob_oid, and metadata
+ *   - Released entries marked STATE_RELEASED (orphan pipeline handles cleanup)
+ *   - Tracked directories synced to reflect current Git state
+ *   - Transaction remains open (caller commits)
+ *
+ * Performance:
+ *   Common case (no staleness): O(P) state queries + O(P) ref lookups
+ *   Stale case: O(M) fresh manifest build, M = total files in Git
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param state State handle with active transaction (must not be NULL)
+ * @param enabled_profiles Current enabled profiles (must not be NULL)
+ * @param out_stats Output repair statistics (must not be NULL)
+ * @param out_repaired_paths Optional output: hashmap of filesystem_path → old_blob_oid (hex string).
+ *                           Caller must free with hashmap_free(map, free). NULL to skip.
+ *                           Used by workspace to verify old content before allowing deployment
+ *                           (prevents overwriting user modifications during stale repair).
+ * @return Error or NULL on success
+ */
+error_t *manifest_repair_stale(
+    git_repository *repo,
+    state_t *state,
+    const string_array_t *enabled_profiles,
+    manifest_repair_stats_t *out_stats,
+    hashmap_t **out_repaired_paths
 );
 
 /**

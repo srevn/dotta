@@ -12,6 +12,7 @@
 #include "base/error.h"
 #include "core/cleanup.h"
 #include "core/deploy.h"
+#include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/safety.h"
 #include "core/state.h"
@@ -270,113 +271,175 @@ static void print_safety_violations(
         return;
     }
 
-    output_section(out, "Modified orphaned files detected");
-    output_newline(out);
-
-    output_warning(out, "The following files cannot be safely removed:");
+    /* Separate blocking violations from informational released entries.
+     *
+     * RELEASED violations are non-blocking (files left on filesystem, state cleaned).
+     * All other violations are blocking (files skipped to prevent data loss).
+     * Display them in separate sections with appropriate messaging. */
+    size_t blocking_count = 0;
+    size_t released_count = 0;
 
     for (size_t i = 0; i < safety_result->count; i++) {
-        const safety_violation_t *v = &safety_result->violations[i];
-
-        /* Format reason for display */
-        const char *reason_display = NULL;
-        const char *icon = "•";
-
-        if (strcmp(v->reason, SAFETY_REASON_MODIFIED) == 0) {
-            reason_display = "modified";
-            icon = "✗";
-        } else if (strcmp(v->reason, SAFETY_REASON_MODE_CHANGED) == 0) {
-            reason_display = "permissions changed";
-            icon = "⚠";
-        } else if (strcmp(v->reason, SAFETY_REASON_TYPE_CHANGED) == 0) {
-            reason_display = "type changed";
-            icon = "⚠";
-        } else if (strcmp(v->reason, SAFETY_REASON_RELEASED) == 0) {
-            reason_display = "released (profile deleted externally)";
-            icon = "→";
-        } else if (strcmp(v->reason, SAFETY_REASON_FILE_REMOVED) == 0) {
-            reason_display = "removed from profile";
-            icon = "!";
-        } else if (strcmp(v->reason, SAFETY_REASON_CANNOT_VERIFY) == 0) {
-            reason_display = "cannot verify";
-            icon = "?";
+        if (strcmp(safety_result->violations[i].reason, SAFETY_REASON_RELEASED) == 0) {
+            released_count++;
         } else {
-            reason_display = v->reason;
+            blocking_count++;
         }
+    }
 
-        if (output_colors_enabled(out)) {
-            const char *reason_color = v->content_modified ?
-                output_color_code(out, OUTPUT_COLOR_RED) :
-                output_color_code(out, OUTPUT_COLOR_YELLOW);
+    /* Display blocking violations (modified, type changed, etc.) */
+    if (blocking_count > 0) {
+        output_section(out, "Modified orphaned files detected");
+        output_newline(out);
 
-            output_printf(out, OUTPUT_NORMAL, "  %s%s%s %s %s(%s",
-                   reason_color,
-                   icon,
-                   output_color_code(out, OUTPUT_COLOR_RESET),
-                   v->filesystem_path,
-                   reason_color,
-                   reason_display);
+        output_warning(out, "The following files cannot be safely removed:");
 
-            if (v->source_profile) {
-                output_printf(out, OUTPUT_NORMAL, " from %s%s%s",
-                       output_color_code(out, OUTPUT_COLOR_CYAN),
-                       v->source_profile,
-                       reason_color);
+        /* Get first blocking violation's profile for example commands */
+        const char *example_profile = NULL;
+
+        for (size_t i = 0; i < safety_result->count; i++) {
+            const safety_violation_t *v = &safety_result->violations[i];
+
+            if (strcmp(v->reason, SAFETY_REASON_RELEASED) == 0) {
+                continue;  /* Show released files separately */
             }
 
-            output_printf(out, OUTPUT_NORMAL, ")%s\n",
-                   output_color_code(out, OUTPUT_COLOR_RESET));
+            if (!example_profile && v->source_profile) {
+                example_profile = v->source_profile;
+            }
 
-            if (v->storage_path) {
-                output_printf(out, OUTPUT_NORMAL, "      %sstorage: %s%s\n",
-                       output_color_code(out, OUTPUT_COLOR_DIM),
-                       v->storage_path,
+            /* Format reason for display */
+            const char *reason_display = NULL;
+            const char *icon = "•";
+
+            if (strcmp(v->reason, SAFETY_REASON_MODIFIED) == 0) {
+                reason_display = "modified";
+                icon = "✗";
+            } else if (strcmp(v->reason, SAFETY_REASON_MODE_CHANGED) == 0) {
+                reason_display = "permissions changed";
+                icon = "⚠";
+            } else if (strcmp(v->reason, SAFETY_REASON_TYPE_CHANGED) == 0) {
+                reason_display = "type changed";
+                icon = "⚠";
+            } else if (strcmp(v->reason, SAFETY_REASON_FILE_REMOVED) == 0) {
+                reason_display = "removed from profile";
+                icon = "!";
+            } else if (strcmp(v->reason, SAFETY_REASON_CANNOT_VERIFY) == 0) {
+                reason_display = "cannot verify";
+                icon = "?";
+            } else {
+                reason_display = v->reason;
+            }
+
+            if (output_colors_enabled(out)) {
+                const char *reason_color = v->content_modified ?
+                    output_color_code(out, OUTPUT_COLOR_RED) :
+                    output_color_code(out, OUTPUT_COLOR_YELLOW);
+
+                output_printf(out, OUTPUT_NORMAL, "  %s%s%s %s %s(%s",
+                       reason_color,
+                       icon,
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       v->filesystem_path,
+                       reason_color,
+                       reason_display);
+
+                if (v->source_profile) {
+                    output_printf(out, OUTPUT_NORMAL, " from %s%s%s",
+                           output_color_code(out, OUTPUT_COLOR_CYAN),
+                           v->source_profile,
+                           reason_color);
+                }
+
+                output_printf(out, OUTPUT_NORMAL, ")%s\n",
                        output_color_code(out, OUTPUT_COLOR_RESET));
-            }
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "  %s %s (%s",
-                   icon, v->filesystem_path, reason_display);
 
-            if (v->source_profile) {
-                output_printf(out, OUTPUT_NORMAL, " from %s", v->source_profile);
-            }
+                if (v->storage_path) {
+                    output_printf(out, OUTPUT_NORMAL, "      %sstorage: %s%s\n",
+                           output_color_code(out, OUTPUT_COLOR_DIM),
+                           v->storage_path,
+                           output_color_code(out, OUTPUT_COLOR_RESET));
+                }
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "  %s %s (%s",
+                       icon, v->filesystem_path, reason_display);
 
-            output_printf(out, OUTPUT_NORMAL, ")\n");
+                if (v->source_profile) {
+                    output_printf(out, OUTPUT_NORMAL, " from %s", v->source_profile);
+                }
 
-            if (v->storage_path) {
-                output_printf(out, OUTPUT_NORMAL, "      storage: %s\n", v->storage_path);
+                output_printf(out, OUTPUT_NORMAL, ")\n");
+
+                if (v->storage_path) {
+                    output_printf(out, OUTPUT_NORMAL, "      storage: %s\n", v->storage_path);
+                }
             }
         }
+        output_newline(out);
+
+        output_info(out, "These files have uncommitted changes that would be lost.");
+        output_info(out, "To prevent data loss, commit changes before removing:");
+        output_newline(out);
+
+        output_hint(out, "Options:");
+        output_hint_line(out, "  1. Commit changes to the profile:");
+
+        if (example_profile) {
+            output_hint_line(out, "     dotta update -p %s <files>", example_profile);
+            output_hint_line(out, "     dotta apply");
+        } else {
+            output_hint_line(out, "     dotta update <files>");
+            output_hint_line(out, "     dotta apply");
+        }
+
+        output_hint_line(out, "  2. Force removal (discards changes):");
+        output_hint_line(out, "     dotta apply --force");
+        output_hint_line(out, "  3. Keep the profile enabled:");
+
+        if (example_profile) {
+            output_hint_line(out, "     dotta profile enable %s", example_profile);
+        }
     }
-    output_newline(out);
 
-    output_info(out, "These files are from disabled profiles but have uncommitted changes.");
-    output_info(out, "To prevent data loss, commit changes before removing:");
-    output_newline(out);
+    /* Display released files (informational, non-blocking) */
+    if (released_count > 0) {
+        output_section(out, "Released files");
 
-    /* Get first violation's profile for example commands */
-    const char *example_profile = NULL;
-    if (safety_result->count > 0 && safety_result->violations[0].source_profile) {
-        example_profile = safety_result->violations[0].source_profile;
-    }
+        output_info(out, "The following files were removed from Git externally:");
 
-    output_hint(out, "Options:");
-    output_hint_line(out, "  1. Commit changes to the profile:");
+        for (size_t i = 0; i < safety_result->count; i++) {
+            const safety_violation_t *v = &safety_result->violations[i];
 
-    if (example_profile) {
-        output_hint_line(out, "     dotta update -p %s <files>", example_profile);
-        output_hint_line(out, "     dotta apply");
-    } else {
-        output_hint_line(out, "     dotta update <files>");
-        output_hint_line(out, "     dotta apply");
-    }
+            if (strcmp(v->reason, SAFETY_REASON_RELEASED) != 0) {
+                continue;
+            }
 
-    output_hint_line(out, "  2. Force removal (discards changes):");
-    output_hint_line(out, "     dotta apply --force");
-    output_hint_line(out, "  3. Keep the profile enabled:");
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "  %s→%s %s",
+                       output_color_code(out, OUTPUT_COLOR_CYAN),
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       v->filesystem_path);
 
-    if (example_profile) {
-        output_hint_line(out, "     dotta profile enable %s", example_profile);
+                if (v->source_profile) {
+                    output_printf(out, OUTPUT_NORMAL, " %s(from %s)%s",
+                           output_color_code(out, OUTPUT_COLOR_DIM),
+                           v->source_profile,
+                           output_color_code(out, OUTPUT_COLOR_RESET));
+                }
+
+                output_printf(out, OUTPUT_NORMAL, "\n");
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "  → %s", v->filesystem_path);
+
+                if (v->source_profile) {
+                    output_printf(out, OUTPUT_NORMAL, " (from %s)", v->source_profile);
+                }
+
+                output_printf(out, OUTPUT_NORMAL, "\n");
+            }
+        }
+
+        output_info(out, "These files will be left on the filesystem and released from management.");
     }
 }
 
@@ -424,6 +487,21 @@ static void print_cleanup_results(
             } else {
                 output_printf(out, OUTPUT_NORMAL, "  [skipped] %s (safety violation)\n",
                        string_array_get(result->skipped_files, i));
+            }
+        }
+    }
+
+    if (verbose && result->released_files && string_array_size(result->released_files) > 0) {
+        output_section(out, "Released files (removed from Git externally)");
+        for (size_t i = 0; i < string_array_size(result->released_files); i++) {
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "  %s[released]%s %s\n",
+                       output_color_code(out, OUTPUT_COLOR_CYAN),
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       string_array_get(result->released_files, i));
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "  [released] %s\n",
+                       string_array_get(result->released_files, i));
             }
         }
     }
@@ -580,20 +658,53 @@ static void print_cleanup_preflight_results(
         return;
     }
 
-    /* Case 2: Orphaned files found - always show summary */
+    /* Case 2: Orphaned files found - always show summary
+     *
+     * Count released files from safety violations to provide accurate breakdown.
+     * Released files are left on filesystem (not removed), so the "will be removed"
+     * count must exclude them to avoid misleading the user.
+     */
     if (result->will_prune_orphans) {
         output_section(out, "Orphaned files");
 
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "  %s%zu%s file%s will be removed (no longer in any profile)\n",
-                   output_color_code(out, OUTPUT_COLOR_YELLOW),
-                   result->orphaned_files_count,
-                   output_color_code(out, OUTPUT_COLOR_RESET),
-                   result->orphaned_files_count == 1 ? "" : "s");
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "  %zu file%s will be removed (no longer in any profile)\n",
-                   result->orphaned_files_count,
-                   result->orphaned_files_count == 1 ? "" : "s");
+        /* Count released files from safety violations */
+        size_t released_count = 0;
+        if (result->safety_violations) {
+            for (size_t i = 0; i < result->safety_violations->count; i++) {
+                if (strcmp(result->safety_violations->violations[i].reason, SAFETY_REASON_RELEASED) == 0) {
+                    released_count++;
+                }
+            }
+        }
+
+        size_t removal_count = result->orphaned_files_count - released_count;
+
+        if (removal_count > 0) {
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "  %s%zu%s file%s will be removed (no longer in any profile)\n",
+                       output_color_code(out, OUTPUT_COLOR_YELLOW),
+                       removal_count,
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       removal_count == 1 ? "" : "s");
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "  %zu file%s will be removed (no longer in any profile)\n",
+                       removal_count,
+                       removal_count == 1 ? "" : "s");
+            }
+        }
+
+        if (released_count > 0) {
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "  %s%zu%s file%s will be released from management\n",
+                       output_color_code(out, OUTPUT_COLOR_CYAN),
+                       released_count,
+                       output_color_code(out, OUTPUT_COLOR_RESET),
+                       released_count == 1 ? "" : "s");
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "  %zu file%s will be released from management\n",
+                       released_count,
+                       released_count == 1 ? "" : "s");
+            }
         }
 
         /* Show individual paths in verbose mode */
@@ -824,8 +935,13 @@ static bool needs_deployment(const workspace_item_t *ws_item) {
              * Needs deployment only if properties diverged (content, mode, ownership, etc.).
              *
              * If divergence == NONE: file is clean, matches Git perfectly.
-             * If divergence != NONE: file has property mismatches, needs redeployment. */
-            return (ws_item->divergence != DIVERGENCE_NONE);
+             * If divergence != NONE: file has property mismatches, needs redeployment.
+             *
+             * DIVERGENCE_STALE is informational (VWD cache was patched in-memory from
+             * fresh Git state). It does NOT indicate a filesystem mismatch — the patched
+             * values are the new expected state. Mask it out to avoid spurious deployment
+             * when the file content already matches the new Git state. */
+            return (ws_item->divergence & ~DIVERGENCE_STALE) != DIVERGENCE_NONE;
 
         case WORKSPACE_STATE_ORPHANED:
             /* File exists in deployment state but not in any enabled profile.
@@ -846,6 +962,11 @@ static bool needs_deployment(const workspace_item_t *ws_item) {
              *
              * Defensive: Return false (don't deploy untracked files, user must 'add' them). */
             return false;
+
+        case WORKSPACE_STATE_RELEASED:
+            /* File removed from Git externally, released from management.
+             * Never needs deployment — cleanup handles state entry removal. */
+            return false;
     }
 
     /* Unreachable if all enum values handled.
@@ -856,7 +977,10 @@ static bool needs_deployment(const workspace_item_t *ws_item) {
 /**
  * Apply command implementation
  */
-error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
+error_t *cmd_apply(
+    git_repository *repo,
+    const cmd_apply_options_t *opts
+) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
@@ -878,6 +1002,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
     content_cache_t *cache = NULL;
     preflight_result_t *preflight = NULL;
     cleanup_preflight_result_t *cleanup_preflight = NULL;
+    hashmap_t *repaired_paths = NULL;
     hook_context_t *hook_ctx = NULL;
     char *profiles_str = NULL;
     deploy_result_t *deploy_res = NULL;
@@ -921,6 +1046,45 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         err = error_wrap(err, "Failed to load state");
         goto cleanup;
     }
+
+    /* Persistent stale manifest repair
+     *
+     * Detect and fix state entries whose git_oid no longer matches the
+     * profile branch HEAD (caused by external Git operations). This runs
+     * BEFORE workspace_load() so the workspace sees accurate state.
+     *
+     * Algorithm:
+     * - Quick check: O(P) per-profile git_oid comparison (zero cost if clean)
+     * - If stale: build fresh Git manifest, update or release state entries
+     *
+     * After repair, workspace_load's in-memory patching path won't trigger
+     * (git_oid matches HEAD), eliminating redundant fresh manifest builds.
+     */
+    string_array_t *enabled_names = NULL;
+    err = state_get_profiles(state, &enabled_names);
+    if (err) {
+        err = error_wrap(err, "Failed to get enabled profiles for stale repair");
+        goto cleanup;
+    }
+
+    if (enabled_names && enabled_names->count > 0) {
+        manifest_repair_stats_t repair_stats = {0};
+        err = manifest_repair_stale(repo, state, enabled_names, &repair_stats, &repaired_paths);
+
+        if (err) {
+            string_array_free(enabled_names);
+            err = error_wrap(err, "Failed to repair stale manifest");
+            goto cleanup;
+        }
+
+        if (repair_stats.updated > 0 || repair_stats.released > 0) {
+            output_info(out, "Synchronized %zu file%s, released %zu from management",
+                        repair_stats.updated, repair_stats.updated == 1 ? "" : "s",
+                        repair_stats.released);
+        }
+    }
+
+    string_array_free(enabled_names);
 
     /* Load profiles
      *
@@ -1046,7 +1210,8 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         .analyze_orphans = true,
         .analyze_untracked = false,    /* Skip expensive directory scan */
         .analyze_directories = true,   /* Directory metadata convergence */
-        .analyze_encryption = false    /* Not needed for deployment */
+        .analyze_encryption = false,   /* Not needed for deployment */
+        .repaired_paths = repaired_paths  /* From stale repair: path → old_blob_oid */
     };
     err = workspace_load(repo, state, workspace_profiles, config, &ws_opts, &ws);
     if (err) {
@@ -1063,7 +1228,7 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
 
     if (opts->verbose) {
         output_print(out, OUTPUT_VERBOSE, "Workspace loaded: %zu file%s in manifest\n",
-                    manifest->count, manifest->count == 1 ? "" : "s");
+                     manifest->count, manifest->count == 1 ? "" : "s");
     }
 
     /* CONVERGENCE MODEL: Analyze files for divergence and build deployment list
@@ -1527,10 +1692,18 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
         if (cleanup_preflight->has_blocking_violations && !opts->force) {
             output_print(out, OUTPUT_NORMAL, "\n");
 
+            /* Count only blocking violations (exclude RELEASED which are informational) */
+            size_t blocking_violation_count = 0;
+            for (size_t i = 0; i < cleanup_preflight->safety_violations->count; i++) {
+                if (strcmp(cleanup_preflight->safety_violations->violations[i].reason, SAFETY_REASON_RELEASED) != 0) {
+                    blocking_violation_count++;
+                }
+            }
+
             output_warning(out, "%zu orphaned file%s %s uncommitted changes.",
-                          cleanup_preflight->safety_violations->count,
-                          cleanup_preflight->safety_violations->count == 1 ? "" : "s",
-                          cleanup_preflight->safety_violations->count == 1 ? "has" : "have");
+                          blocking_violation_count,
+                          blocking_violation_count == 1 ? "" : "s",
+                          blocking_violation_count == 1 ? "has" : "have");
 
             output_print(out, OUTPUT_NORMAL,
                         "These files will be skipped during cleanup to prevent data loss.\n");
@@ -1847,12 +2020,12 @@ error_t *cmd_apply(git_repository *repo, const cmd_apply_options_t *opts) {
 
             /* Remove released file entries from state
              *
-             * Released files: profile deleted externally (git branch -D).
-             * - File left on filesystem (cannot verify safety, protect user data)
-             * - State entry removed (can't manage without profile)
+             * Released files: removed from Git externally (git rm, rebase, branch -D).
+             * - File left on filesystem (Git cannot back it, protect user data)
+             * - State entry removed (can't manage without Git backing)
              *
-             * The user is informed via RELEASED violation display, but operation
-             * is non-blocking. These files are effectively "let go" - dotta stops
+             * The user is informed via RELEASED display, but operation is
+             * non-blocking. These files are effectively "let go" — dotta stops
              * tracking them and they become normal unmanaged files.
              */
             if (cleanup_res && cleanup_res->released_files &&
@@ -2084,6 +2257,7 @@ cleanup:
     if (file_filter) path_filter_free(file_filter);
     if (dir_orphans) free(dir_orphans);
     if (file_orphans) free(file_orphans);
+    if (repaired_paths) hashmap_free(repaired_paths, free);
     if (ws) workspace_free(ws);
     if (operation_profiles && operation_profiles != workspace_profiles) {
         profile_list_free(operation_profiles);

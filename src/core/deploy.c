@@ -85,8 +85,14 @@ error_t *deploy_preflight_check_from_workspace(
              * File has divergence - check if it's a blocking conflict.
              * Only block on content conflicts (CONTENT, TYPE).
              * Metadata divergence (mode, ownership) and encryption policy are informational.
+             *
+             * DIVERGENCE_STALE exception: When content diverges because the expected
+             * state changed (stale repair), and the file on disk matches what dotta
+             * deployed (old blob), it's safe to overwrite. DIVERGENCE_STALE is only
+             * set after this verification, so we can trust it here.
              */
-            if (ws_item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE)) {
+            if ((ws_item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE)) &&
+                !(ws_item->divergence & DIVERGENCE_STALE)) {
                 /* Content or type conflict - block deployment */
                 error_t *err = string_array_push(result->conflicts, path);
                 if (err) {

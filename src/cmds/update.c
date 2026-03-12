@@ -313,12 +313,14 @@ static error_t *filter_items_for_update(
         /* Determine if item should be included based on state + divergence */
         switch (item->state) {
             case WORKSPACE_STATE_DEPLOYED:
-                /* Deployed files/dirs with divergence - check what kind */
-                if (item->divergence != DIVERGENCE_NONE) {
-                    /* Has some divergence (content/mode/ownership/encryption/type) */
+                /* Deployed files/dirs with divergence - check what kind.
+                 *
+                 * Mask DIVERGENCE_STALE: stale-only files have no local changes
+                 * (content matches current Git state after in-memory patching). */
+                if ((item->divergence & ~DIVERGENCE_STALE) != DIVERGENCE_NONE) {
                     should_include = !opts->only_new;
                 }
-                /* DEPLOYED + NONE = clean, exclude */
+                /* DEPLOYED + NONE/STALE-only = clean, exclude */
                 break;
 
             case WORKSPACE_STATE_DELETED:
@@ -336,9 +338,11 @@ static error_t *filter_items_for_update(
 
             case WORKSPACE_STATE_UNDEPLOYED:
             case WORKSPACE_STATE_ORPHANED:
+            case WORKSPACE_STATE_RELEASED:
                 /* Not relevant for update command:
                  * - UNDEPLOYED: handled by apply command
-                 * - ORPHANED: handled by remove command */
+                 * - ORPHANED: handled by remove command
+                 * - RELEASED: handled by apply command */
                 should_include = false;
                 break;
         }
@@ -387,7 +391,7 @@ static error_t *filter_items_for_update(
         /* Same filtering logic as first pass */
         switch (item->state) {
             case WORKSPACE_STATE_DEPLOYED:
-                if (item->divergence != DIVERGENCE_NONE) {
+                if ((item->divergence & ~DIVERGENCE_STALE) != DIVERGENCE_NONE) {
                     should_include = !opts->only_new;
                 }
                 break;
@@ -403,6 +407,7 @@ static error_t *filter_items_for_update(
 
             case WORKSPACE_STATE_UNDEPLOYED:
             case WORKSPACE_STATE_ORPHANED:
+            case WORKSPACE_STATE_RELEASED:
                 should_include = false;
                 break;
         }
@@ -1596,6 +1601,7 @@ static error_t *update_display_summary(
 
                 case WORKSPACE_STATE_UNDEPLOYED:
                 case WORKSPACE_STATE_ORPHANED:
+                case WORKSPACE_STATE_RELEASED:
                     /* Should not appear in filtered results, but be defensive */
                     break;
             }
@@ -1618,9 +1624,9 @@ static error_t *update_display_summary(
                     continue;
                 }
 
-                /* Check if file is deployed and has any divergence */
+                /* Check if file is deployed and has actual (non-stale) divergence */
                 bool is_modified = (item->state == WORKSPACE_STATE_DEPLOYED &&
-                                   item->divergence != DIVERGENCE_NONE);
+                                   (item->divergence & ~DIVERGENCE_STALE) != DIVERGENCE_NONE);
 
                 if (!is_modified) {
                     continue;

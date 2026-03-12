@@ -91,10 +91,13 @@ typedef struct {
  *
  * Algorithm:
  * 1. Skip if file not on filesystem (already deleted)
- * 2. Check lifecycle state and branch existence:
+ * 2. Check lifecycle state, branch existence, and file-in-tree:
  *    - STATE_DELETED: skip branch check (confirmed deletion via remove command)
- *    - STATE_INACTIVE/STATE_ACTIVE + branch exists: proceed to divergence routing
+ *    - STATE_RELEASED: auto-release (file removed from Git externally)
  *    - STATE_INACTIVE/STATE_ACTIVE + branch gone: RELEASED violation
+ *    - STATE_INACTIVE/STATE_ACTIVE + branch exists, file not in tree: RELEASED violation
+ *    - STATE_INACTIVE/STATE_ACTIVE + branch exists, tree lookup error: CANNOT_VERIFY violation
+ *    - STATE_INACTIVE/STATE_ACTIVE + branch exists, file in tree: proceed to divergence
  * 3. Route by divergence type (TRUST WORKSPACE):
  *    - DIVERGENCE_NONE: safe to remove (no violation)
  *    - DIVERGENCE_CONTENT: MODIFIED violation
@@ -109,6 +112,9 @@ typedef struct {
  *
  * Edge Cases:
  * - External branch deletion: RELEASED violation (protects user data)
+ * - External file removal (branch exists, file gone): RELEASED violation (file-in-tree check)
+ * - Tree lookup error (corrupt tree, OOM): CANNOT_VERIFY violation (degrade gracefully)
+ * - Stale entry (STATE_RELEASED): Auto-release (decision already made by repair/patching)
  * - Staged removal with branch gone (profile disable then branch deleted): RELEASED
  * - Controlled deletion (remove command): Safe to remove (STATE_DELETED bypasses branch check)
  * - Large non-encrypted files: Verified (streaming OID, any size)

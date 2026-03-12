@@ -68,16 +68,20 @@ static bool should_show_item_for_direction(
  * @return true if item can be diffed
  */
 static bool has_diffable_divergence(const workspace_item_t *item) {
-    /* Can't diff untracked or orphaned items (no Git side to compare) */
+    /* Can't diff untracked, orphaned, or released items (no Git side to compare) */
     if (item->state == WORKSPACE_STATE_UNTRACKED ||
-        item->state == WORKSPACE_STATE_ORPHANED) {
+        item->state == WORKSPACE_STATE_ORPHANED ||
+        item->state == WORKSPACE_STATE_RELEASED) {
         return false;
     }
 
-    /* Must have actual divergence or be in transition state */
-    return item->divergence != DIVERGENCE_NONE ||
-           item->state == WORKSPACE_STATE_UNDEPLOYED ||
-           item->state == WORKSPACE_STATE_DELETED;
+    /* Must have actual (non-stale) divergence or be in transition state.
+     *
+     * DIVERGENCE_STALE is informational (VWD cache patched from fresh Git).
+     * A stale-only file has matching content — no meaningful diff to show. */
+    return (item->divergence & ~DIVERGENCE_STALE) != DIVERGENCE_NONE ||
+            item->state == WORKSPACE_STATE_UNDEPLOYED ||
+            item->state == WORKSPACE_STATE_DELETED;
 }
 
 /**

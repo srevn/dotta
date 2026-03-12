@@ -168,7 +168,8 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    \"group\" TEXT,"
         "    encrypted INTEGER NOT NULL DEFAULT 0,"
         "    "
-        "    state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active', 'inactive', 'deleted')),"
+        "    state TEXT NOT NULL DEFAULT 'active'"
+        "      CHECK(state IN ('active', 'inactive', 'deleted', 'released')),"
         "    deployed_at INTEGER NOT NULL DEFAULT 0"
         ");"
 
@@ -187,7 +188,8 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    mode INTEGER,"
         "    owner TEXT,"
         "    \"group\" TEXT,"
-        "    state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active', 'inactive', 'deleted')),"
+        "    state TEXT NOT NULL DEFAULT 'active'"
+        "      CHECK(state IN ('active', 'inactive', 'deleted', 'released')),"
         "    deployed_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))"
         ") STRICT;"
 
@@ -2889,7 +2891,7 @@ error_t *state_clear_old_profile(
 }
 
 /**
- * Set file entry state (active/inactive/deleted)
+ * Set file entry state (active/inactive/deleted/released)
  *
  * Updates the state column for a manifest entry. Used by manifest layer
  * to mark files for removal (inactive for staging, deleted for confirmed removal).
@@ -2902,7 +2904,7 @@ error_t *state_clear_old_profile(
  * Preconditions:
  *   - state MUST have active transaction (via state_load_for_update)
  *   - filesystem_path MUST exist in virtual_manifest
- *   - new_state MUST be STATE_ACTIVE, STATE_INACTIVE, or STATE_DELETED
+ *   - new_state MUST be STATE_ACTIVE, STATE_INACTIVE, STATE_DELETED, etc
  *
  * @param state State handle (must not be NULL, must have active transaction)
  * @param filesystem_path File to update (must not be NULL)
@@ -2921,9 +2923,9 @@ error_t *state_set_file_state(
 
     /* Validate state value */
     if (strcmp(new_state, STATE_ACTIVE) != 0 && strcmp(new_state, STATE_INACTIVE) != 0 &&
-        strcmp(new_state, STATE_DELETED) != 0) {
+        strcmp(new_state, STATE_DELETED) != 0 && strcmp(new_state, STATE_RELEASED) != 0) {
         return ERROR(ERR_INVALID_ARG,
-            "Invalid state '%s' (must be 'active', 'inactive', or 'deleted')", new_state);
+            "Invalid state '%s' (must be 'active', 'inactive', 'deleted', or 'released')", new_state);
     }
 
     const char *sql = "UPDATE virtual_manifest SET state = ? WHERE filesystem_path = ?";
@@ -3084,7 +3086,7 @@ error_t *state_update_git_oid_for_profile(
     int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         return ERROR(ERR_STATE_INVALID, "Failed to prepare git_oid update: %s",
-                    sqlite3_errmsg(state->db));
+                     sqlite3_errmsg(state->db));
     }
 
     /* Bind parameters */
@@ -3097,7 +3099,7 @@ error_t *state_update_git_oid_for_profile(
 
     if (rc != SQLITE_DONE) {
         return ERROR(ERR_STATE_INVALID, "Failed to update git_oid for profile '%s': %s",
-                    profile_name, sqlite3_errmsg(state->db));
+                     profile_name, sqlite3_errmsg(state->db));
     }
 
     return NULL;
@@ -3192,8 +3194,7 @@ error_t *state_get_entries_by_profile(
         const char *state_str = (const char *)sqlite3_column_text(stmt, 11);
         sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 12);
 
-        if (!fs_path || !storage_path || !profile ||
-            !git_oid || !blob_oid || !type_str) {
+        if (!fs_path || !storage_path || !profile || !git_oid || !blob_oid || !type_str) {
             state_free_all_files(entries, i);
             return ERROR(ERR_STATE_INVALID, "NULL value in required column at row %zu", i);
         }

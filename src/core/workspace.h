@@ -106,6 +106,17 @@ typedef struct {
     bool analyze_untracked;    /* Directory scanning for new files (EXPENSIVE!) */
     bool analyze_directories;  /* Directory metadata checks */
     bool analyze_encryption;   /* Encryption policy validation */
+
+    /* Stale repair context (from manifest_repair_stale)
+     *
+     * When non-NULL, maps filesystem_path → old_blob_oid (hex string) for entries
+     * that were persistently repaired before workspace_load(). Used to set
+     * DIVERGENCE_STALE on items whose file content matches the old (deployed) blob,
+     * enabling preflight to distinguish "expected state changed" from "user modified."
+     *
+     * Borrowed reference — workspace does NOT free this. Caller owns it.
+     */
+    const hashmap_t *repaired_paths;
 } workspace_load_t;
 
 /**
@@ -413,6 +424,19 @@ bool workspace_item_extract_display_info(
     char *metadata_buf,
     size_t metadata_size
 );
+
+/**
+ * Check if workspace detected stale manifest entries
+ *
+ * Returns true if any profile's VWD cache was stale due to external Git
+ * operations. Stale entries are patched in-memory during workspace load,
+ * but the state database is NOT modified. Use this to inform the user
+ * and suggest running 'dotta apply' for persistent repair.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @return true if staleness was detected and patched
+ */
+bool workspace_is_stale(const workspace_t *ws);
 
 /**
  * Free workspace

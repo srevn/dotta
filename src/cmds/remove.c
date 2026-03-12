@@ -797,6 +797,83 @@ static error_t *cleanup_metadata(
         }
     }
 
+    /* Remove orphaned directory entries
+     *
+     * When all files under a tracked directory are removed, the directory
+     * metadata entry must also be removed. Otherwise manifest_sync_directories()
+     * will re-activate the directory as STATE_ACTIVE on every subsequent operation.
+     *
+     * Directory metadata is always derivative of file metadata (created as a
+     * side-effect of `dotta add` capturing parent directory permissions). If no
+     * files remain under a directory, the entry is genuinely orphaned.
+     */
+    size_t dir_count = 0;
+    const metadata_item_t **directories =
+        metadata_get_items_by_kind(metadata, METADATA_ITEM_DIRECTORY, &dir_count);
+
+    if (directories && dir_count > 0) {
+        /* Get remaining files for prefix checking */
+        size_t file_count = 0;
+        const metadata_item_t **files =
+            metadata_get_items_by_kind(metadata, METADATA_ITEM_FILE, &file_count);
+
+        /* Collect orphaned keys first (can't modify metadata during iteration) */
+        string_array_t *orphaned_dirs = string_array_create();
+        if (!orphaned_dirs) {
+            free(files);
+            free(directories);
+            metadata_free(metadata);
+            return ERROR(ERR_MEMORY, "Failed to allocate orphaned dirs array");
+        }
+
+        for (size_t d = 0; d < dir_count; d++) {
+            const char *dir_key = directories[d]->key;
+            size_t dir_key_len = strlen(dir_key);
+            bool has_files = false;
+
+            for (size_t f = 0; f < file_count; f++) {
+                if (str_starts_with(files[f]->key, dir_key) && files[f]->key[dir_key_len] == '/') {
+                    has_files = true;
+                    break;
+                }
+            }
+
+            if (!has_files) {
+                err = string_array_push(orphaned_dirs, dir_key);
+                if (err) {
+                    string_array_free(orphaned_dirs);
+                    free(files);
+                    free(directories);
+                    metadata_free(metadata);
+                    return error_wrap(err, "Failed to track orphaned directory");
+                }
+            }
+        }
+
+        /* Remove orphaned directories */
+        for (size_t i = 0; i < string_array_size(orphaned_dirs); i++) {
+            err = metadata_remove_item(metadata, string_array_get(orphaned_dirs, i));
+            if (err) {
+                string_array_free(orphaned_dirs);
+                free(files);
+                free(directories);
+                metadata_free(metadata);
+                return error_wrap(err, "Failed to remove orphaned directory metadata");
+            }
+
+            removed_count++;
+
+            if (opts->verbose && out) {
+                output_info(out, "Removed orphaned directory metadata: %s",
+                            string_array_get(orphaned_dirs, i));
+            }
+        }
+
+        string_array_free(orphaned_dirs);
+        free(files);
+        free(directories);
+    }
+
     /* Save updated metadata to worktree */
     err = metadata_save_to_worktree(worktree_path, metadata);
     metadata_free(metadata);
@@ -892,7 +969,7 @@ static error_t *remove_files_from_profile(
 
     /* Resolve paths */
     err = resolve_paths_to_remove(repo, opts->profile, opts->paths, opts->path_count,
-                                   &storage_paths, &filesystem_paths, opts, out, state);
+                                  &storage_paths, &filesystem_paths, opts, out, state);
     if (err) {
         goto cleanup;
     }

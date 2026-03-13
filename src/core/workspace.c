@@ -1632,15 +1632,19 @@ static error_t *scan_directory_for_untracked(
                 return err;
             }
         } else {
-            /* Check if this file is already in manifest (O(1) lookup using index) */
-            void *idx_ptr = hashmap_get(ws->manifest->index, full_path);
-            file_entry_t *manifest_entry = NULL;
-            if (idx_ptr) {
-                size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
-                manifest_entry = &ws->manifest->entries[idx];
-            }
+            /* Check if this file is already tracked.
+             *
+             * Two checks needed:
+             * 1. Manifest index: file is in an active enabled profile
+             * 2. Diverged index: file already classified (e.g., as released
+             *    or orphaned by prior analysis phases). Released files are
+             *    excluded from manifest but already have diverged entries —
+             *    adding them as untracked would create duplicates.
+             */
+            bool already_tracked = (hashmap_get(ws->manifest->index, full_path) != NULL) ||
+                                   (hashmap_get(ws->diverged_index, full_path) != NULL);
 
-            if (!manifest_entry) {
+            if (!already_tracked) {
                 /* This is an untracked file! */
                 char *storage_path = str_format("%s/%s", storage_prefix, entry->d_name);
                 if (!storage_path) {
@@ -1745,19 +1749,34 @@ static error_t *analyze_untracked_files(
         for (size_t i = 0; i < dir_count; i++) {
             const state_directory_entry_t *dir_entry = &directories[i];
 
-            /* Skip removal-pending directories (STATE_INACTIVE or STATE_DELETED)
+            /* Skip removal-pending directories (STATE_INACTIVE, STATE_DELETED,
+             * or STATE_RELEASED)
              *
              * ARCHITECTURE: These directories are staged for removal.
              * We should NOT scan them for untracked files because:
-             * 1. The directory is being removed (profile disabled)
+             * 1. The directory is being removed (profile disabled or released)
              * 2. Scanning would report spurious untracked files
              * 3. The profile may be re-enabled later (directories reactivated)
              *
              * This ensures untracked file detection only applies to active directories.
              */
             if (dir_entry->state && (strcmp(dir_entry->state, STATE_INACTIVE) == 0 ||
-                                     strcmp(dir_entry->state, STATE_DELETED) == 0)) {
+                                     strcmp(dir_entry->state, STATE_DELETED) == 0 ||
+                                     strcmp(dir_entry->state, STATE_RELEASED) == 0)) {
                 continue;  /* Skip silently - these will be handled by orphan detection */
+            }
+
+            /* Skip directories already classified as orphaned by prior analysis.
+             *
+             * In the in-memory stale detection path (read-only commands), the
+             * directory state in the database is still ACTIVE (state not modified),
+             * but analyze_orphaned_directories() has already identified it as
+             * orphaned (not in merged_metadata rebuilt from current Git). Scanning
+             * such directories would report files as [new] that are actually
+             * [released] — creating confusing duplicate entries.
+             */
+            if (hashmap_get(ws->diverged_index, dir_entry->filesystem_path) != NULL) {
+                continue;
             }
 
             /* State directory entries contain:
@@ -2635,7 +2654,13 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 size_t fresh_idx = (size_t)(uintptr_t)fresh_idx_ptr - 1;
                 const file_entry_t *fresh_entry = &fresh_manifest->entries[fresh_idx];
 
-                /* First populate VWD fields from state (baseline).
+                /* Save old blob_oid before patching — needed to determine if
+                 * the file's content actually changed (not just git_oid/metadata).
+                 * When blob_oid is unchanged, the file is not stale from the
+                 * user's perspective — only the profile HEAD moved. */
+                const char *old_blob_oid = state_entry->blob_oid;
+
+                /* Populate VWD fields from state (baseline).
                  *
                  * Most string fields (git_oid, blob_oid, owner, group) will be
                  * overwritten by patch_entry_from_fresh, so transient NULL from
@@ -2673,11 +2698,27 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                     goto cleanup;
                 }
 
-                /* Track as patched for DIVERGENCE_STALE flag */
-                error_t *track_err = hashmap_set(ws->stale_paths, entry->filesystem_path, (void *)(uintptr_t)1);
-                if (track_err) {
-                    err = track_err;
-                    goto cleanup;
+                /* Track as stale ONLY if blob_oid actually changed.
+                 *
+                 * When blob_oid is unchanged (profile HEAD moved but this file's
+                 * content was not modified in Git), the file is not stale from the
+                 * user's perspective — it just needs a git_oid update in state.
+                 * Flagging these as DIVERGENCE_STALE would show them as "uncommitted
+                 * changes" even though their content is correct.
+                 *
+                 * Only files whose content actually changed in Git (new blob_oid)
+                 * need the DIVERGENCE_STALE flag for deployment/display purposes.
+                 */
+                bool blob_changed = !old_blob_oid || !entry->blob_oid ||
+                                    strcmp(old_blob_oid, entry->blob_oid) != 0;
+
+                if (blob_changed) {
+                    error_t *track_err = hashmap_set(ws->stale_paths,
+                                                     entry->filesystem_path, (void *)(uintptr_t)1);
+                    if (track_err) {
+                        err = track_err;
+                        goto cleanup;
+                    }
                 }
             } else {
                 /* CASE B: File removed from Git externally

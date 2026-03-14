@@ -1856,16 +1856,18 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
     for (size_t i = 0; i < dir_count; i++) {
         const state_directory_entry_t *dir_entry = &directories[i];
 
-        /* Skip removal-pending directories (STATE_INACTIVE or STATE_DELETED)
+        /* Skip removal-pending directories (STATE_INACTIVE, STATE_DELETED,
+         * or STATE_RELEASED)
          *
          * ARCHITECTURE: These directories are staged for removal and shouldn't
          * participate in divergence analysis. They'll be detected as orphans
          * by analyze_orphaned_directories() and cleaned by apply.
          *
-         * This mirrors file handling pattern (workspace.c:1669-1674).
+         * This mirrors file handling pattern and the untracked directory scan skip.
          */
         if (dir_entry->state && (strcmp(dir_entry->state, STATE_INACTIVE) == 0 ||
-                                 strcmp(dir_entry->state, STATE_DELETED) == 0)) {
+                                 strcmp(dir_entry->state, STATE_DELETED) == 0 ||
+                                 strcmp(dir_entry->state, STATE_RELEASED) == 0)) {
             continue;  /* Skip silently - orphan detection will handle this */
         }
 

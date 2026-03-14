@@ -337,18 +337,14 @@ static void print_safety_violations(
                     output_color_code(out, OUTPUT_COLOR_YELLOW);
 
                 output_printf(out, OUTPUT_NORMAL, "  %s%s%s %s %s(%s",
-                       reason_color,
-                       icon,
+                       reason_color, icon,
                        output_color_code(out, OUTPUT_COLOR_RESET),
-                       v->filesystem_path,
-                       reason_color,
-                       reason_display);
+                       v->filesystem_path, reason_color, reason_display);
 
                 if (v->source_profile) {
                     output_printf(out, OUTPUT_NORMAL, " from %s%s%s",
                            output_color_code(out, OUTPUT_COLOR_CYAN),
-                           v->source_profile,
-                           reason_color);
+                           v->source_profile, reason_color);
                 }
 
                 output_printf(out, OUTPUT_NORMAL, ")%s\n",
@@ -613,24 +609,23 @@ static void print_cleanup_results(
 
         if (result->orphaned_files_skipped > 0) {
             output_warning(out, "Skipped %zu orphaned file%s (uncommitted changes)",
-                          result->orphaned_files_skipped,
-                          result->orphaned_files_skipped == 1 ? "" : "s");
+                           result->orphaned_files_skipped,
+                           result->orphaned_files_skipped == 1 ? "" : "s");
             output_print(out, OUTPUT_NORMAL, "Use --verbose to see which files were skipped.\n");
             output_print(out, OUTPUT_NORMAL, "To remove: commit/stash changes, or use --force.\n");
         }
 
         if (result->orphaned_directories_skipped > 0) {
             output_info(out, "Skipped %zu orphaned director%s (not empty)",
-                       result->orphaned_directories_skipped,
-                       result->orphaned_directories_skipped == 1 ? "y" : "ies");
+                        result->orphaned_directories_skipped,
+                        result->orphaned_directories_skipped == 1 ? "y" : "ies");
             output_print(out, OUTPUT_NORMAL, "Use --verbose to see which directories were skipped.\n");
         }
 
         if (result->orphaned_files_failed > 0 || result->orphaned_directories_failed > 0) {
             size_t total_failed = result->orphaned_files_failed + result->orphaned_directories_failed;
             output_warning(out, "Failed to prune %zu item%s",
-                   total_failed,
-                   total_failed == 1 ? "" : "s");
+                           total_failed, total_failed == 1 ? "" : "s");
         }
     }
 }
@@ -688,8 +683,7 @@ static void print_cleanup_preflight_results(
                        removal_count == 1 ? "" : "s");
             } else {
                 output_printf(out, OUTPUT_NORMAL, "  %zu file%s will be removed (no longer in any profile)\n",
-                       removal_count,
-                       removal_count == 1 ? "" : "s");
+                       removal_count, removal_count == 1 ? "" : "s");
             }
         }
 
@@ -702,8 +696,7 @@ static void print_cleanup_preflight_results(
                        released_count == 1 ? "" : "s");
             } else {
                 output_printf(out, OUTPUT_NORMAL, "  %zu file%s will be released from management\n",
-                       released_count,
-                       released_count == 1 ? "" : "s");
+                       released_count, released_count == 1 ? "" : "s");
             }
         }
 
@@ -1185,7 +1178,7 @@ error_t *cmd_apply(
 
         if (opts->verbose && file_filter) {
             output_print(out, OUTPUT_VERBOSE, "\nFile filter: %zu file%s specified\n",
-                        file_filter->count, file_filter->count == 1 ? "" : "s");
+                         file_filter->count, file_filter->count == 1 ? "" : "s");
         }
     }
 
@@ -1324,9 +1317,8 @@ error_t *cmd_apply(
             if (matches_exclude_pattern(entry->filesystem_path, opts)) {
                 /* Already counted in Pass 1, just skip */
                 if (opts->verbose) {
-                    output_print(out, OUTPUT_VERBOSE,
-                                "  Skipping (excluded): %s\n",
-                                entry->filesystem_path);
+                    output_print(out, OUTPUT_VERBOSE, "  Skipping (excluded): %s\n",
+                                 entry->filesystem_path);
                 }
                 continue;
             }
@@ -1365,14 +1357,10 @@ error_t *cmd_apply(
     }
 
     if (opts->verbose) {
-        output_print(out, OUTPUT_VERBOSE,
-                    "  %zu file%s need deployment (missing or divergent)\n",
-                    deploy_manifest->count,
-                    deploy_manifest->count == 1 ? "" : "s");
-        output_print(out, OUTPUT_VERBOSE,
-                    "  %zu file%s already up-to-date (skipped)\n",
-                    clean_count,
-                    clean_count == 1 ? "" : "s");
+        output_print(out, OUTPUT_VERBOSE, "  %zu file%s need deployment (missing or divergent)\n",
+                     deploy_manifest->count, deploy_manifest->count == 1 ? "" : "s");
+        output_print(out, OUTPUT_VERBOSE, "  %zu file%s already up-to-date (skipped)\n",
+                     clean_count, clean_count == 1 ? "" : "s");
     }
 
     /* Warn if file filter was specified but no files matched */
@@ -1517,11 +1505,11 @@ error_t *cmd_apply(
         if (opts->verbose) {
             if (file_orphan_count > 0) {
                 output_print(out, OUTPUT_VERBOSE, "Found %zu orphaned file%s\n",
-                            file_orphan_count, file_orphan_count == 1 ? "" : "s");
+                             file_orphan_count, file_orphan_count == 1 ? "" : "s");
             }
             if (dir_orphan_count > 0) {
                 output_print(out, OUTPUT_VERBOSE, "Found %zu orphaned director%s\n",
-                            dir_orphan_count, dir_orphan_count == 1 ? "y" : "ies");
+                             dir_orphan_count, dir_orphan_count == 1 ? "y" : "ies");
             }
 
             /* Show breakdown by profile status */
@@ -1546,22 +1534,18 @@ error_t *cmd_apply(
                 }
 
                 if (disabled_count > 0) {
-                    output_print(out, OUTPUT_VERBOSE,
-                                "  %zu from disabled profile%s\n",
-                                disabled_count,
-                                disabled_count == 1 ? "" : "s");
+                    output_print(out, OUTPUT_VERBOSE, "  %zu from disabled profile%s\n",
+                                 disabled_count, disabled_count == 1 ? "" : "s");
                 }
                 if (enabled_count > 0) {
-                    output_print(out, OUTPUT_VERBOSE,
-                                "  %zu from enabled profiles (deleted from Git)\n",
-                                enabled_count);
+                    output_print(out, OUTPUT_VERBOSE, "  %zu from enabled profiles (deleted from Git)\n",
+                                 enabled_count);
                 }
             }
         }
     } else if (file_filter != NULL && !opts->keep_orphans) {
         /* File filter active: skip orphan cleanup (targeted operation) */
-        output_print(out, OUTPUT_VERBOSE,
-                    "\nSkipping orphan cleanup (file filter active)\n");
+        output_print(out, OUTPUT_VERBOSE, "\nSkipping orphan cleanup (file filter active)\n");
     }
 
     /* Check if there's anything to do */
@@ -1695,7 +1679,8 @@ error_t *cmd_apply(
             /* Count only blocking violations (exclude RELEASED which are informational) */
             size_t blocking_violation_count = 0;
             for (size_t i = 0; i < cleanup_preflight->safety_violations->count; i++) {
-                if (strcmp(cleanup_preflight->safety_violations->violations[i].reason, SAFETY_REASON_RELEASED) != 0) {
+                if (strcmp(cleanup_preflight->safety_violations->violations[i].reason,
+                           SAFETY_REASON_RELEASED) != 0) {
                     blocking_violation_count++;
                 }
             }
@@ -1767,18 +1752,39 @@ error_t *cmd_apply(
     if (config->confirm_destructive && !opts->force && !opts->dry_run) {
         char prompt[512];  /* Larger buffer for enhanced prompt */
 
-        /* Build comprehensive prompt that includes cleanup information */
+        /* Build comprehensive prompt that includes cleanup information
+         *
+         * Exclude released files from the "remove" count since they are left
+         * on filesystem (not destructive). Only count files that will actually
+         * be deleted to avoid misleading the user about the operation scope.
+         */
         if (cleanup_preflight && cleanup_preflight->will_prune_orphans) {
-            /* Enhanced prompt: mentions both deployment and orphan removal */
-            snprintf(prompt, sizeof(prompt),
-                    "Deploy %zu file%s and remove %zu orphaned file%s?",
-                    deploy_manifest->count, deploy_manifest->count == 1 ? "" : "s",
-                    cleanup_preflight->orphaned_files_count,
-                    cleanup_preflight->orphaned_files_count == 1 ? "" : "s");
+            /* Count released files to exclude from removal count */
+            size_t preflight_released = 0;
+            if (cleanup_preflight->safety_violations) {
+                for (size_t i = 0; i < cleanup_preflight->safety_violations->count; i++) {
+                    if (strcmp(cleanup_preflight->safety_violations->violations[i].reason,
+                               SAFETY_REASON_RELEASED) == 0) {
+                        preflight_released++;
+                    }
+                }
+            }
+            size_t removal_count = cleanup_preflight->orphaned_files_count - preflight_released;
+
+            if (removal_count > 0) {
+                /* Enhanced prompt: mentions both deployment and orphan removal */
+                snprintf(prompt, sizeof(prompt), "Deploy %zu file%s and remove %zu orphaned file%s?",
+                         deploy_manifest->count, deploy_manifest->count == 1 ? "" : "s",
+                         removal_count, removal_count == 1 ? "" : "s");
+            } else {
+                /* All orphans are released (none will be removed from filesystem) */
+                snprintf(prompt, sizeof(prompt), "Deploy %zu file%s to filesystem?",
+                         deploy_manifest->count, deploy_manifest->count == 1 ? "" : "s");
+            }
         } else {
             /* Standard prompt: only deployment */
             snprintf(prompt, sizeof(prompt), "Deploy %zu file%s to filesystem?",
-                    deploy_manifest->count, deploy_manifest->count == 1 ? "" : "s");
+                     deploy_manifest->count, deploy_manifest->count == 1 ? "" : "s");
         }
 
         if (!output_confirm(out, prompt, false)) {
@@ -1794,8 +1800,7 @@ error_t *cmd_apply(
             output_print(out, OUTPUT_VERBOSE, "\nDry-run mode - no files will be modified\n");
         } else {
             output_print(out, OUTPUT_VERBOSE, "\nDeploying %zu divergent file%s...\n",
-                        deploy_manifest->count,
-                        deploy_manifest->count == 1 ? "" : "s");
+                         deploy_manifest->count, deploy_manifest->count == 1 ? "" : "s");
         }
 
         err = deploy_execute(repo, ws, deploy_manifest, state, &deploy_opts, cache, &deploy_res);
@@ -1818,34 +1823,29 @@ error_t *cmd_apply(
         if (total_excluded > 0) {
             if (opts->verbose) {
                 /* Detailed breakdown */
-                output_printf(out, OUTPUT_NORMAL,
-                             "Skipped %zu file%s (--exclude patterns):\n",
+                output_printf(out, OUTPUT_NORMAL, "Skipped %zu file%s (--exclude patterns):\n",
                              total_excluded,
                              total_excluded == 1 ? "" : "s");
                 if (excluded_deploy_count > 0) {
-                    output_printf(out, OUTPUT_NORMAL,
-                                 "  • %zu divergent file%s not deployed\n",
+                    output_printf(out, OUTPUT_NORMAL, "  • %zu divergent file%s not deployed\n",
                                  excluded_deploy_count,
                                  excluded_deploy_count == 1 ? "" : "s");
                 }
                 if (excluded_orphan_count > 0) {
-                    output_printf(out, OUTPUT_NORMAL,
-                                 "  • %zu orphaned file%s not removed\n",
+                    output_printf(out, OUTPUT_NORMAL, "  • %zu orphaned file%s not removed\n",
                                  excluded_orphan_count,
                                  excluded_orphan_count == 1 ? "" : "s");
                 }
             } else {
                 /* Simple summary */
                 if (output_colors_enabled(out)) {
-                    output_printf(out, OUTPUT_NORMAL,
-                                 "Skipped %s%zu%s file%s (--exclude patterns)\n",
+                    output_printf(out, OUTPUT_NORMAL, "Skipped %s%zu%s file%s (--exclude patterns)\n",
                                  output_color_code(out, OUTPUT_COLOR_CYAN),
                                  total_excluded,
                                  output_color_code(out, OUTPUT_COLOR_RESET),
                                  total_excluded == 1 ? "" : "s");
                 } else {
-                    output_printf(out, OUTPUT_NORMAL,
-                                 "Skipped %zu file%s (--exclude patterns)\n",
+                    output_printf(out, OUTPUT_NORMAL, "Skipped %zu file%s (--exclude patterns)\n",
                                  total_excluded,
                                  total_excluded == 1 ? "" : "s");
                 }
@@ -1915,7 +1915,7 @@ error_t *cmd_apply(
                 .orphaned_directories = dir_orphans,      /* Workspace item array */
                 .orphaned_directories_count = dir_orphan_count,
                 .preflight_violations = interactive_delay
-                    ? NULL  /* Stale - force fresh safety check */
+                    ? NULL                                /* Stale - force fresh safety check */
                     : (cleanup_preflight ? cleanup_preflight->safety_violations : NULL),
                 .dry_run = false,                         /* Dry-run handled at deployment level */
                 .force = opts->force,
@@ -2006,16 +2006,15 @@ error_t *cmd_apply(
                          * State cleanup failure is a warning, not a fatal error.
                          */
                         output_warning(out, "Failed to remove state entry for %s: %s",
-                                      path, error_message(err));
+                                       path, error_message(err));
                         error_free(err);
                         err = NULL;  /* Don't propagate - continue operation */
                     }
                 }
 
-                output_print(out, OUTPUT_VERBOSE,
-                            "  Removed %zu orphaned entr%s from state\n",
-                            string_array_size(cleanup_res->removed_files),
-                            string_array_size(cleanup_res->removed_files) == 1 ? "y" : "ies");
+                output_print(out, OUTPUT_VERBOSE, "  Removed %zu orphaned entr%s from state\n",
+                             string_array_size(cleanup_res->removed_files),
+                             string_array_size(cleanup_res->removed_files) == 1 ? "y" : "ies");
             }
 
             /* Remove released file entries from state
@@ -2046,16 +2045,15 @@ error_t *cmd_apply(
                     if (err) {
                         /* Non-fatal - file is safe on filesystem */
                         output_warning(out, "Failed to release state entry for %s: %s",
-                                      path, error_message(err));
+                                       path, error_message(err));
                         error_free(err);
                         err = NULL;
                     }
                 }
 
-                output_print(out, OUTPUT_VERBOSE,
-                            "  Released %zu file%s from management\n",
-                            string_array_size(cleanup_res->released_files),
-                            string_array_size(cleanup_res->released_files) == 1 ? "" : "s");
+                output_print(out, OUTPUT_VERBOSE, "  Released %zu file%s from management\n",
+                             string_array_size(cleanup_res->released_files),
+                             string_array_size(cleanup_res->released_files) == 1 ? "" : "s");
             }
 
             /* Remove orphaned directory entries from state
@@ -2099,16 +2097,15 @@ error_t *cmd_apply(
                          * State cleanup failure is a warning, not a fatal error.
                          */
                         output_warning(out, "Failed to remove directory state entry for %s: %s",
-                                      path, error_message(err));
+                                       path, error_message(err));
                         error_free(err);
                         err = NULL;  /* Don't propagate - continue operation */
                     }
                 }
 
-                output_print(out, OUTPUT_VERBOSE,
-                            "  Removed %zu orphaned directory entr%s from state\n",
-                            string_array_size(cleanup_res->removed_dirs),
-                            string_array_size(cleanup_res->removed_dirs) == 1 ? "y" : "ies");
+                output_print(out, OUTPUT_VERBOSE, "  Removed %zu orphaned directory entr%s from state\n",
+                             string_array_size(cleanup_res->removed_dirs),
+                             string_array_size(cleanup_res->removed_dirs) == 1 ? "y" : "ies");
             }
 
             cleanup_result_free(cleanup_res);
@@ -2147,8 +2144,8 @@ error_t *cmd_apply(
                      * The timestamp is metadata for display and lifecycle tracking.
                      * Failure here should not abort the entire operation.
                      */
-                    output_warning(out, "Failed to update timestamp for %s: %s",
-                                  path, error_message(err));
+                    output_warning(out, "Failed to update timestamp for %s: %s", path,
+                                   error_message(err));
                     error_free(err);
                     err = NULL;  /* Don't propagate - continue operation */
                 }
@@ -2160,15 +2157,15 @@ error_t *cmd_apply(
                     if (clear_err) {
                         /* Non-fatal warning - deployment succeeded, just clearing flag failed */
                         output_warning(out, "Failed to clear ownership change flag for %s: %s",
-                                      path, error_message(clear_err));
+                                       path, error_message(clear_err));
                         error_free(clear_err);
                     }
                 }
             }
 
             output_print(out, OUTPUT_VERBOSE, "  Updated %zu timestamp%s\n",
-                        string_array_size(deploy_res->deployed),
-                        string_array_size(deploy_res->deployed) == 1 ? "" : "s");
+                         string_array_size(deploy_res->deployed),
+                         string_array_size(deploy_res->deployed) == 1 ? "" : "s");
         }
 
         /* Update deployed_at for adopted files
@@ -2192,16 +2189,16 @@ error_t *cmd_apply(
                      * Log warning and continue - the important fact (file exists
                      * with correct content) is true regardless of database state.
                      */
-                    output_warning(out, "Failed to record adoption for %s: %s",
-                                  path, error_message(err));
+                    output_warning(out, "Failed to record adoption for %s: %s", path,
+                                   error_message(err));
                     error_free(err);
                     err = NULL;
                 }
             }
 
             output_print(out, OUTPUT_VERBOSE, "  Recorded %zu adopted file%s\n",
-                        string_array_size(deploy_res->adopted),
-                        string_array_size(deploy_res->adopted) == 1 ? "" : "s");
+                         string_array_size(deploy_res->adopted),
+                         string_array_size(deploy_res->adopted) == 1 ? "" : "s");
         }
 
         /* Commit state transaction (saves both deployment and cleanup state)

@@ -2285,9 +2285,9 @@ error_t *state_set_directory_state(
 
     /* Validate state value */
     if (strcmp(new_state, STATE_ACTIVE) != 0 && strcmp(new_state, STATE_INACTIVE) != 0 &&
-        strcmp(new_state, STATE_DELETED) != 0) {
+        strcmp(new_state, STATE_DELETED) != 0 && strcmp(new_state, STATE_RELEASED) != 0) {
         return ERROR(ERR_INVALID_ARG,
-            "Invalid state '%s' (must be 'active', 'inactive', or 'deleted')", new_state);
+            "Invalid state '%s' (must be 'active', 'inactive', 'deleted', or 'released')", new_state);
     }
 
     /* Prepare statement if needed */

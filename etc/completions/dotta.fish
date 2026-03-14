@@ -45,14 +45,17 @@ function __dotta_files
         # Try to find positional profile for certain commands
         set -l cmd ""
         set -l cmd_idx 0
-        for i in (seq 2 (count $tokens))
-            switch $tokens[$i]
-                case '-*'
-                    continue
-                case '*'
-                    set cmd $tokens[$i]
-                    set cmd_idx $i
-                    break
+        set -l tc (count $tokens)
+        if test $tc -ge 2
+            for i in (seq 2 $tc)
+                switch $tokens[$i]
+                    case '-*'
+                        continue
+                    case '*'
+                        set cmd $tokens[$i]
+                        set cmd_idx $i
+                        break
+                end
             end
         end
 
@@ -191,17 +194,19 @@ end
 function __dotta_is_nth_arg
     set -l n $argv[1]
     set -l tokens (commandline -opc)
-    set -l current (commandline -ct)
+    set -l tc (count $tokens)
 
     set -l cmd_idx 0
-    # tokens[1] is 'dotta'
-    for i in (seq 2 (count $tokens))
-        switch $tokens[$i]
-            case '-*'
-                continue
-            case '*'
-                set cmd_idx $i
-                break
+    # tokens[1] is 'dotta'; find the subcommand
+    if test $tc -ge 2
+        for i in (seq 2 $tc)
+            switch $tokens[$i]
+                case '-*'
+                    continue
+                case '*'
+                    set cmd_idx $i
+                    break
+            end
         end
     end
 
@@ -209,19 +214,21 @@ function __dotta_is_nth_arg
         return 1
     end
 
+    # Count positional args after the subcommand
     set -l arg_count 0
-    for i in (seq (math $cmd_idx + 1) (count $tokens))
-        switch $tokens[$i]
-            case '-*'
-                continue
-            case '*'
-                set arg_count (math $arg_count + 1)
+    set -l arg_start (math $cmd_idx + 1)
+    if test $arg_start -le $tc
+        for i in (seq $arg_start $tc)
+            switch $tokens[$i]
+                case '-*'
+                    continue
+                case '*'
+                    set arg_count (math $arg_count + 1)
+            end
         end
     end
 
-    if test -z "$current"
-        set arg_count (math $arg_count + 1)
-    end
+    set arg_count (math $arg_count + 1)
 
     if test $arg_count -eq $n
         return 0
@@ -324,7 +331,7 @@ complete -c dotta -n "__dotta_using_command add; or __dotta_using_command apply;
 
 # add: First positional is profile (required), remaining are filesystem paths
 complete -c dotta -n "__dotta_using_command add; and __dotta_is_nth_arg 1" -xa "(__dotta_profiles_all)"
-complete -c dotta -n "__dotta_using_command add; and not __dotta_is_nth_arg 1" -xa "(__fish_complete_path)"
+complete -c dotta -n "__dotta_using_command add; and not __dotta_is_nth_arg 1" -F
 
 # remove: First positional is profile (required), remaining are managed files
 complete -c dotta -n "__dotta_using_command remove; and not __dotta_seen_option --delete-profile; and __dotta_is_nth_arg 1" -xa "(__dotta_profiles)"
@@ -454,7 +461,7 @@ complete -c dotta -n "__dotta_using_command show" -l raw -d "Raw content"
 # --- ignore ---
 complete -c dotta -n "__dotta_using_command ignore" -l add -d "Add pattern"
 complete -c dotta -n "__dotta_using_command ignore" -l remove -d "Remove pattern"
-complete -c dotta -n "__dotta_using_command ignore" -l test -xa "(__fish_complete_path)" -d "Test if path is ignored"
+complete -c dotta -n "__dotta_using_command ignore" -l test -rF -d "Test if path is ignored"
 complete -c dotta -n "__dotta_using_command ignore" -s v -l verbose -d "Verbose output"
 
 # --- bootstrap ---

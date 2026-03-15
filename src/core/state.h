@@ -166,7 +166,7 @@ error_t *state_load(git_repository *repo, state_t **out);
  * Use this function for operations that will modify state (add, apply, remove, etc.).
  * For read-only operations, use state_load().
  *
- * If another process holds the write lock, waits up to 5 seconds (SQLITE_BUSY).
+ * If another process holds the write lock, waits up to 3 seconds (SQLITE_BUSY).
  *
  * @param repo Repository (must not be NULL)
  * @param out State structure (must not be NULL, caller must free with state_free)

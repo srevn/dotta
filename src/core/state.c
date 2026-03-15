@@ -264,7 +264,7 @@ static error_t *verify_schema_version(sqlite3 *db) {
  * - synchronous=NORMAL: Fast but safe
  * - cache_size: 10MB for large deployments
  * - temp_store=MEMORY: Temp operations in RAM
- * - busy_timeout: Wait up to 300ms for lock
+ * - busy_timeout: Wait up to 3s for lock
  *
  * @param db Database connection (must not be NULL)
  * @return Error or NULL on success
@@ -312,7 +312,11 @@ static error_t *configure_db(sqlite3 *db) {
     }
 
     /* 5. Short busy timeout to handle transient locks gracefully */
-    sqlite3_busy_timeout(db, 300);
+    sqlite3_busy_timeout(db, 3000);
+
+    /* 6. Disable persistent WAL */
+    int persist_wal = 0;
+    sqlite3_file_control(db, NULL, SQLITE_FCNTL_PERSIST_WAL, &persist_wal);
 
     return NULL;
 }
@@ -2711,11 +2715,14 @@ void state_free(state_t *state) {
     /* Finalize prepared statements */
     finalize_statements(state);
 
-    /* Checkpoint WAL before close (non-blocking, best effort) */
+    /* Clean close: optimize, checkpoint, and close */
     if (state->db) {
-        /* Use PASSIVE mode */
+        /* Let SQLite update statistics if needed (lightweight, no-op most of the time) */
+        sqlite3_exec(state->db, "PRAGMA optimize;", NULL, NULL, NULL);
+
+        /* TRUNCATE checkpoint: merge WAL into main db and truncate WAL to zero */
         sqlite3_wal_checkpoint_v2(state->db, NULL,
-                                  SQLITE_CHECKPOINT_PASSIVE, NULL, NULL);
+                                  SQLITE_CHECKPOINT_TRUNCATE, NULL, NULL);
         sqlite3_close(state->db);
         state->db = NULL;
     }

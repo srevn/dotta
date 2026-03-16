@@ -276,12 +276,10 @@ static bool match_doublestar_pattern(
             return true;
         }
 
-        /* Check if path starts with prefix */
-        if (strncmp(path, prefix, prefix_len) == 0) {
-            /* Exact match or prefix/ match */
-            if (path[prefix_len] == '\0' || path[prefix_len] == '/') {
-                return true;
-            }
+        /* Check if path starts with prefix followed by "/" */
+        if (strncmp(path, prefix, prefix_len) == 0 &&
+            path[prefix_len] == '/') {
+            return true;
         }
         return false;
     }

@@ -107,7 +107,8 @@ error_t *profile_load_tree(git_repository *repo, profile_t *profile) {
     }
 
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", profile->name);
+    error_t *err = gitops_build_refname(refname, sizeof(refname),
+                                        "refs/heads/%s", profile->name);
     if (err) {
         return error_wrap(err, "Invalid profile name '%s'", profile->name);
     }
@@ -942,9 +943,8 @@ static int tree_walk_callback(const char *root,
 
     /* Check for truncation */
     if (ret < 0 || (size_t)ret >= sizeof(full_path)) {
-        data->error = ERROR(ERR_INTERNAL,
-                           "Path exceeds maximum length: %s%s",
-                           root ? root : "", name);
+        data->error = ERROR(ERR_INTERNAL, "Path exceeds maximum length: %s%s",
+                            root ? root : "", name);
         return -1;
     }
 

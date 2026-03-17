@@ -54,7 +54,10 @@ static bool validate_remote_url(const char *url) {
 /**
  * List remotes
  */
-static error_t *remote_list(git_repository *repo, bool verbose) {
+static error_t *remote_list(
+    git_repository *repo,
+    bool verbose
+) {
     CHECK_NULL(repo);
 
     dotta_config_t *config = NULL;
@@ -161,10 +164,8 @@ static error_t *remote_add(
     if (!validate_remote_name(name)) {
         config_free(config);
         output_free(out);
-        return ERROR(ERR_INVALID_ARG,
-                    "Invalid remote name '%s'\n"
-                    "Remote names must contain only letters, numbers, hyphens, and underscores",
-                    name);
+        return ERROR(ERR_INVALID_ARG, "Invalid remote name '%s'\n"
+            "Only letters, numbers, hyphens, and underscores allowed", name);
     }
 
     /* Validate URL */
@@ -182,10 +183,8 @@ static error_t *remote_add(
         git_remote_free(existing);
         config_free(config);
         output_free(out);
-        return ERROR(ERR_EXISTS,
-                    "Remote '%s' already exists\n"
-                    "Hint: Use 'dotta remote set-url %s <url>' to change the URL",
-                    name, name);
+        return ERROR(ERR_EXISTS, "Remote '%s' already exists\n"
+            "Hint: Use 'dotta remote set-url %s <url>' to change the URL", name, name);
     } else if (git_err != GIT_ENOTFOUND) {
         /* Unexpected error */
         config_free(config);
@@ -221,7 +220,10 @@ static error_t *remote_add(
 /**
  * Remove remote
  */
-static error_t *remote_remove(git_repository *repo, const char *name) {
+static error_t *remote_remove(
+    git_repository *repo,
+    const char *name
+) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
 
@@ -359,10 +361,8 @@ static error_t *remote_rename(
     if (!validate_remote_name(new_name)) {
         config_free(config);
         output_free(out);
-        return ERROR(ERR_INVALID_ARG,
-                    "Invalid remote name '%s'\n"
-                    "Remote names must contain only letters, numbers, hyphens, and underscores",
-                    new_name);
+        return ERROR(ERR_INVALID_ARG, "Invalid remote name '%s'\n"
+            "Only letters, numbers, hyphens, and underscores allowed", new_name);
     }
 
     /* Check if old remote exists */
@@ -431,7 +431,10 @@ static error_t *remote_rename(
 /**
  * Show remote details
  */
-static error_t *remote_show(git_repository *repo, const char *name) {
+static error_t *remote_show(
+    git_repository *repo,
+    const char *name
+) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
 
@@ -498,7 +501,10 @@ static error_t *remote_show(git_repository *repo, const char *name) {
 /**
  * Remote command implementation
  */
-error_t *cmd_remote(git_repository *repo, const cmd_remote_options_t *opts) {
+error_t *cmd_remote(
+    git_repository *repo,
+    const cmd_remote_options_t *opts
+) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 

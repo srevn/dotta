@@ -795,9 +795,9 @@ error_t *cleanup_execute(
     }
 
     /* Step 2: Prune orphaned directories (with inline safety check) */
-    err = prune_orphaned_directories(opts->orphaned_directories,
-                                     opts->orphaned_directories_count,
-                                     result, opts);
+    err = prune_orphaned_directories(
+        opts->orphaned_directories, opts->orphaned_directories_count, result, opts
+    );
     if (err) {
         cleanup_result_free(result);
         return error_wrap(err, "Failed to prune orphaned directories");

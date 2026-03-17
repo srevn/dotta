@@ -62,8 +62,7 @@ static void display_enabled_profiles(
                 format_relative_time(profile_deploy_time, relative_buf, sizeof(relative_buf));
 
                 /* Display dimmed timestamp */
-                char *dimmed_time = output_colorize(out, OUTPUT_COLOR_DIM,
-                    time_buf);
+                char *dimmed_time = output_colorize(out, OUTPUT_COLOR_DIM, time_buf);
                 if (dimmed_time) {
                     output_printf(out, OUTPUT_NORMAL, "  %s(deployed %s)%s",
                                  output_color_code(out, OUTPUT_COLOR_DIM),
@@ -85,7 +84,7 @@ static void display_enabled_profiles(
                 }
             }
             output_printf(out, OUTPUT_NORMAL, "\n    %zu file%s",
-                         profile_file_count, profile_file_count == 1 ? "" : "s");
+                          profile_file_count, profile_file_count == 1 ? "" : "s");
         }
 
         output_newline(out);
@@ -145,8 +144,7 @@ static void display_workspace_status(
         if (status_msg) {
             if (output_colors_enabled(out)) {
                 output_printf(out, OUTPUT_NORMAL, "  %s%s%s\n",
-                             output_color_code(out, status_color),
-                             status_msg,
+                             output_color_code(out, status_color), status_msg,
                              output_color_code(out, OUTPUT_COLOR_RESET));
             } else {
                 output_printf(out, OUTPUT_NORMAL, "  %s\n", status_msg);
@@ -246,9 +244,9 @@ static void display_workspace_status(
                         char metadata[256];
 
                         if (workspace_item_extract_display_info(uncommitted[i],
-                                tags, &tag_count, &color, metadata, sizeof(metadata))) {
+                            tags, &tag_count, &color, metadata, sizeof(metadata))) {
                             output_list_add_multi(list, tags, tag_count, color,
-                                                 uncommitted[i]->filesystem_path, metadata);
+                                                  uncommitted[i]->filesystem_path, metadata);
                         }
                     }
 
@@ -271,9 +269,9 @@ static void display_workspace_status(
                         char metadata[256];
 
                         if (workspace_item_extract_display_info(undeployed[i],
-                                tags, &tag_count, &color, metadata, sizeof(metadata))) {
+                            tags, &tag_count, &color, metadata, sizeof(metadata))) {
                             output_list_add_multi(list, tags, tag_count, color,
-                                                 undeployed[i]->filesystem_path, metadata);
+                                                  undeployed[i]->filesystem_path, metadata);
                         }
                     }
 
@@ -296,9 +294,9 @@ static void display_workspace_status(
                         char metadata[256];
 
                         if (workspace_item_extract_display_info(new_files[i],
-                                tags, &tag_count, &color, metadata, sizeof(metadata))) {
+                            tags, &tag_count, &color, metadata, sizeof(metadata))) {
                             output_list_add_multi(list, tags, tag_count, color,
-                                                 new_files[i]->filesystem_path, metadata);
+                                                  new_files[i]->filesystem_path, metadata);
                         }
                     }
 
@@ -328,9 +326,9 @@ static void display_workspace_status(
                         char metadata[256];
 
                         if (workspace_item_extract_display_info(orphaned[i],
-                                tags, &tag_count, &color, metadata, sizeof(metadata))) {
+                            tags, &tag_count, &color, metadata, sizeof(metadata))) {
                             output_list_add_multi(list, tags, tag_count, color,
-                                                 orphaned[i]->filesystem_path, metadata);
+                                                  orphaned[i]->filesystem_path, metadata);
                         }
 
                         /* Track if this orphan has divergence (not clean) */
@@ -360,9 +358,8 @@ static void display_workspace_status(
 
             /* Show hidden items note when profile filter is active */
             if (profile_filter && hidden_count > 0) {
-                output_printf(out, OUTPUT_NORMAL,
-                    "\n  (%zu item%s from other profiles hidden)\n",
-                    hidden_count, hidden_count == 1 ? "" : "s");
+                output_printf(out, OUTPUT_NORMAL, "\n  (%zu item%s from other profiles hidden)\n",
+                              hidden_count, hidden_count == 1 ? "" : "s");
             }
 
             /* Cleanup (single free for all category arrays) */
@@ -451,7 +448,7 @@ static error_t *display_remote_status(
                 /* Non-fatal: just warn and continue with status display */
                 if (verbose) {
                     output_warning(out, "Failed to fetch branches: %s",
-                                  error_message(fetch_err));
+                                   error_message(fetch_err));
                 }
                 error_free(fetch_err);
             }
@@ -558,14 +555,13 @@ static error_t *display_remote_status(
                 output_printf(out, OUTPUT_NORMAL, "  Status:         ");
                 if (output_colors_enabled(out)) {
                     output_printf(out, OUTPUT_NORMAL, "%s%s%s\n",
-                                 output_color_code(out, color),
-                                 status_str,
-                                 output_color_code(out, OUTPUT_COLOR_RESET));
+                                  output_color_code(out, color), status_str,
+                                  output_color_code(out, OUTPUT_COLOR_RESET));
                 } else {
                     output_printf(out, OUTPUT_NORMAL, "%s\n", status_str);
                 }
                 output_printf(out, OUTPUT_NORMAL, "  Local commit:   %s %s (%s)\n",
-                             local_oid_str, local_summary, time_str);
+                              local_oid_str, local_summary, time_str);
 
                 git_commit_free(local_commit);
             }
@@ -593,7 +589,7 @@ static error_t *display_remote_status(
                     format_relative_time(remote_time, time_str, sizeof(time_str));
 
                     output_printf(out, OUTPUT_NORMAL, "  Remote commit:  %s %s (%s)\n",
-                                 remote_oid_str, remote_summary, time_str);
+                                  remote_oid_str, remote_summary, time_str);
 
                     git_commit_free(remote_commit);
                 }
@@ -612,9 +608,8 @@ static error_t *display_remote_status(
             /* Display status in dimmed parentheses */
             if (output_colors_enabled(out)) {
                 output_printf(out, OUTPUT_NORMAL, "  %s(%s)%s\n",
-                             output_color_code(out, OUTPUT_COLOR_DIM),
-                             status_str,
-                             output_color_code(out, OUTPUT_COLOR_RESET));
+                              output_color_code(out, OUTPUT_COLOR_DIM), status_str,
+                              output_color_code(out, OUTPUT_COLOR_RESET));
             } else {
                 output_printf(out, OUTPUT_NORMAL, "  (%s)\n", status_str);
             }
@@ -801,7 +796,7 @@ error_t *cmd_status(
     /* Load display profiles (CLI filter or shared pointer) */
     if (opts->profiles && opts->profile_count > 0) {
         err = profile_resolve_for_operations(repo, opts->profiles, opts->profile_count,
-                                            config->strict_mode, &display_profiles);
+                                             config->strict_mode, &display_profiles);
         if (err) {
             err = error_wrap(err, "Failed to resolve display profiles");
             goto cleanup;

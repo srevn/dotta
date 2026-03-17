@@ -704,7 +704,7 @@ static void print_cleanup_preflight_results(
         if (verbose && result->orphaned_files && result->orphaned_files_count > 0) {
             size_t display_limit = 20;  /* Don't flood the terminal */
             size_t display_count = result->orphaned_files_count < display_limit ?
-                                  result->orphaned_files_count : display_limit;
+                                   result->orphaned_files_count : display_limit;
 
             for (size_t i = 0; i < display_count; i++) {
                 if (output_colors_enabled(out)) {
@@ -1686,9 +1686,9 @@ error_t *cmd_apply(
             }
 
             output_warning(out, "%zu orphaned file%s %s uncommitted changes.",
-                          blocking_violation_count,
-                          blocking_violation_count == 1 ? "" : "s",
-                          blocking_violation_count == 1 ? "has" : "have");
+                           blocking_violation_count,
+                           blocking_violation_count == 1 ? "" : "s",
+                           blocking_violation_count == 1 ? "has" : "have");
 
             output_print(out, OUTPUT_NORMAL,
                         "These files will be skipped during cleanup to prevent data loss.\n");

@@ -89,23 +89,11 @@ struct workspace {
     size_t diverged_capacity;
     hashmap_t *diverged_index;       /* Maps filesystem_path -> array index+1 (as void*) */
 
-    /* Staleness tracking (populated by workspace_build_manifest_from_state)
-     *
-     * When external Git operations modify branches, the VWD cache in state
-     * becomes stale. These fields track the detection and in-memory patching:
-     *
-     * - stale_paths: filesystem_path → (void*)1 for entries patched in-memory
-     *   Used by analyze_file_divergence to add DIVERGENCE_STALE flag.
-     *
-     * - released_paths: filesystem_path → (void*)1 for entries removed from Git
-     *   Used by analyze_orphaned_files to emit WORKSPACE_STATE_RELEASED.
-     *
-     * Both are NULL when no staleness detected (common fast path).
-     */
+    /* Staleness tracking */
+    bool manifest_stale;             /* True if any profile had stale git_oid */
     hashmap_t *stale_paths;          /* Patched entries (NULL if no staleness) */
     hashmap_t *released_paths;       /* Entries removed from Git (NULL if no staleness) */
-    const hashmap_t *repaired_paths; /* From manifest_repair_stale: path → old_blob_oid (borrowed) */
-    bool manifest_stale;             /* True if any profile had stale git_oid */
+    const hashmap_t *repaired_paths; /* From manifest_repair_stale: path -> old_blob_oid (borrowed) */
 
     /* Status cache */
     workspace_status_t status;

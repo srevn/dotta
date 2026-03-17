@@ -200,8 +200,7 @@ static error_t *list_profiles(
         if (!opts->verbose && !show_remote) {
             if (output_colors_enabled(out)) {
                 output_printf(out, OUTPUT_NORMAL, "  %s%s%s\n",
-                        output_color_code(out, OUTPUT_COLOR_CYAN),
-                        name,
+                        output_color_code(out, OUTPUT_COLOR_CYAN), name,
                         output_color_code(out, OUTPUT_COLOR_RESET));
             } else {
                 output_printf(out, OUTPUT_NORMAL, "  %s\n", name);
@@ -242,9 +241,11 @@ static error_t *list_profiles(
 
             /* Get last commit info */
             char refname[DOTTA_REFNAME_MAX];
-            error_t *refname_err = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", name);
+            error_t *refname_err = gitops_build_refname(refname, sizeof(refname),
+                                                        "refs/heads/%s", name);
             git_commit *last_commit = NULL;
-            error_t *commit_err = refname_err ? refname_err : gitops_get_commit(repo, refname, &last_commit);
+            error_t *commit_err = refname_err ? refname_err :
+                                        gitops_get_commit(repo, refname, &last_commit);
 
             if (!commit_err && last_commit) {
                 const git_oid *oid = git_commit_id(last_commit);

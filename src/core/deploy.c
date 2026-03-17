@@ -346,12 +346,14 @@ error_t *deploy_file(
         /* Parse cached blob_oid */
         git_oid oid;
         if (!entry->blob_oid) {
-            err = ERROR(ERR_INTERNAL, "Missing blob_oid for symlink '%s'", entry->storage_path);
+            err = ERROR(ERR_INTERNAL,
+                        "Missing blob_oid for symlink '%s'", entry->storage_path);
             goto cleanup;
         }
 
         if (git_oid_fromstr(&oid, entry->blob_oid) != 0) {
-            err = ERROR(ERR_INTERNAL, "Invalid blob_oid for symlink '%s'", entry->storage_path);
+            err = ERROR(ERR_INTERNAL,
+                        "Invalid blob_oid for symlink '%s'", entry->storage_path);
             goto cleanup;
         }
 
@@ -740,13 +742,15 @@ static error_t *deploy_tracked_directories(
          * 3. Both filters: targeted_mode takes precedence (more restrictive)
          *    - Only ancestors of specific files, regardless of profile ownership
          */
-        bool in_required = required_dirs && hashmap_has(required_dirs, dir_entry->filesystem_path);
+        bool in_required = required_dirs &&
+                           hashmap_has(required_dirs, dir_entry->filesystem_path);
 
         if (opts->targeted_mode) {
             /* Strict ancestor-only mode (file filter active) */
             if (!in_required) {
                 if (opts->verbose) {
-                    printf("  Skipped: %s (not ancestor of targeted files)\n", dir_entry->filesystem_path);
+                    printf("  Skipped: %s (not ancestor of targeted files)\n",
+                          dir_entry->filesystem_path);
                 }
                 continue;
             }
@@ -756,9 +760,11 @@ static error_t *deploy_tracked_directories(
              * Inclusive Ancestry: ancestor directories are always processed
              * to ensure file deployment succeeds, even if owned by different profile.
              */
-            if (!in_required && !profile_filter_matches(dir_entry->profile, opts->profile_scope)) {
+            if (!in_required &&
+                !profile_filter_matches(dir_entry->profile, opts->profile_scope)) {
                 if (opts->verbose) {
-                    printf("  Skipped: %s (outside profile scope)\n", dir_entry->filesystem_path);
+                    printf("  Skipped: %s (outside profile scope)\n",
+                           dir_entry->filesystem_path);
                 }
                 continue;
             }
@@ -847,13 +853,15 @@ static error_t *deploy_tracked_directories(
              * proceeds below.
              */
             if (opts->verbose) {
-                printf("  Clearing type conflict at %s (recreating as directory)\n", filesystem_path);
+                printf("  Clearing type conflict at %s (recreating as directory)\n",
+                       filesystem_path);
             }
 
             error_t *clear_err = fs_clear_path(filesystem_path);
             if (clear_err) {
                 state_free_all_directories(directories, dir_count);
-                return error_wrap(clear_err, "Failed to clear type conflict at '%s'", filesystem_path);
+                return error_wrap(clear_err, "Failed to clear type conflict at '%s'",
+                            filesystem_path);
             }
 
             /* Path cleared - update tracking flag for verbose output */

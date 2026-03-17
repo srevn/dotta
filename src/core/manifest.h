@@ -445,10 +445,10 @@ error_t *manifest_rebuild(
  * @param state State handle with active transaction (must not be NULL)
  * @param enabled_profiles Current enabled profiles (must not be NULL)
  * @param out_stats Output repair statistics (must not be NULL)
- * @param out_repaired_paths Optional output: hashmap of filesystem_path → old_blob_oid (hex string).
- *                           Caller must free with hashmap_free(map, free). NULL to skip.
- *                           Used by workspace to verify old content before allowing deployment
- *                           (prevents overwriting user modifications during stale repair).
+ * @param out_repaired_paths Optional output: hashmap of filesystem_path → old_blob_oid.
+ *            Caller must free with hashmap_free(map, free). NULL to skip.
+ *            Used by workspace to verify old content before allowing deployment
+ *            (prevents overwriting user modifications during stale repair).
  * @return Error or NULL on success
  */
 error_t *manifest_repair_stale(

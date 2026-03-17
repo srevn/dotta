@@ -2715,14 +2715,11 @@ void state_free(state_t *state) {
     /* Finalize prepared statements */
     finalize_statements(state);
 
-    /* Clean close: optimize, checkpoint, and close */
+    /* Checkpoint WAL before close (non-blocking, best effort) */
     if (state->db) {
-        /* Let SQLite update statistics if needed (lightweight, no-op most of the time) */
-        sqlite3_exec(state->db, "PRAGMA optimize;", NULL, NULL, NULL);
-
-        /* TRUNCATE checkpoint: merge WAL into main db and truncate WAL to zero */
+        /* PASSIVE checkpoint: merge WAL into main db */
         sqlite3_wal_checkpoint_v2(state->db, NULL,
-                                  SQLITE_CHECKPOINT_TRUNCATE, NULL, NULL);
+                                  SQLITE_CHECKPOINT_PASSIVE, NULL, NULL);
         sqlite3_close(state->db);
         state->db = NULL;
     }

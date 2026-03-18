@@ -97,14 +97,21 @@ static void display_enabled_profiles(
  * Shows the consistency between profile state, deployment state, and filesystem.
  * Organized into actionable sections (Git-like structure).
  *
+ * When a profile filter is active, the status line is scoped to the filtered
+ * profile(s), showing file counts and per-profile divergence instead of global
+ * workspace status. This prevents misleading "Dirty" messages when the filtered
+ * profile is clean but other enabled profiles have divergence.
+ *
  * @param ws Workspace (must not be NULL, borrowed from caller)
  * @param profile_filter Optional profile filter (NULL = show all items)
+ * @param manifest Manifest for file counting (can be NULL, used with profile filter)
  * @param out Output context (must not be NULL)
  * @param verbose Verbose output flag
  */
 static void display_workspace_status(
     workspace_t *ws,
     const profile_list_t *profile_filter,
+    const manifest_t *manifest,
     output_ctx_t *out,
     bool verbose
 ) {
@@ -115,18 +122,92 @@ static void display_workspace_status(
     /* Get workspace status from provided workspace */
     workspace_status_t ws_status = workspace_get_status(ws);
 
-    /* Only display section if there's something to report */
-    if (ws_status != WORKSPACE_CLEAN || verbose) {
-        output_newline(out);
-        output_section(out, "Workspace status");
+    /* Get all diverged items (shared between pre-scan and categorization) */
+    size_t all_count = 0;
+    const workspace_item_t *all_items = workspace_get_all_diverged(ws, &all_count);
 
-        /* Display overall status with color */
-        const char *status_msg = NULL;
+    /* Pre-scan: count files and diverged items scoped to profile filter.
+     * Needed before the status line to determine filtered workspace state. */
+    size_t profile_file_count = 0;
+    size_t filtered_diverged = 0;
+    size_t hidden_count = 0;
+
+    if (profile_filter) {
+        /* Count total managed files from manifest for filtered profile(s) */
+        if (manifest) {
+            for (size_t i = 0; i < manifest->count; i++) {
+                if (manifest->entries[i].source_profile &&
+                    profile_filter_matches(manifest->entries[i].source_profile->name, profile_filter)) {
+                    profile_file_count++;
+                }
+            }
+        }
+
+        /* Partition diverged items into filtered vs hidden */
+        for (size_t i = 0; i < all_count; i++) {
+            if (profile_filter_matches(all_items[i].profile, profile_filter)) {
+                filtered_diverged++;
+            } else {
+                hidden_count++;
+            }
+        }
+    }
+
+    /* Section visibility:
+     * - Divergence present (filtered or global): always show
+     * - Clean with hidden divergence from other profiles: always show
+     * - Clean with no divergence anywhere: show only with verbose
+     */
+    bool has_divergence = profile_filter ? (filtered_diverged > 0) : (ws_status != WORKSPACE_CLEAN);
+    if (!has_divergence && hidden_count == 0 && !verbose) {
+        return;
+    }
+
+    output_newline(out);
+    output_section(out, "Workspace status");
+
+    /* Display status line */
+    if (profile_filter) {
+        /* Profile-scoped status: reflects the filtered profile */
+        output_color_t status_color;
+        char status_buf[128];
+
+        if (filtered_diverged == 0) {
+            status_color = OUTPUT_COLOR_GREEN;
+            if (profile_file_count > 0) {
+                snprintf(status_buf, sizeof(status_buf), "Clean - %zu file%s, all aligned",
+                         profile_file_count, profile_file_count == 1 ? "" : "s");
+            } else {
+                snprintf(status_buf, sizeof(status_buf), "Clean - no files in profile");
+            }
+        } else {
+            status_color = OUTPUT_COLOR_YELLOW;
+            snprintf(status_buf, sizeof(status_buf), "Dirty - %zu item%s diverged",
+                     filtered_diverged, filtered_diverged == 1 ? "" : "s");
+        }
+
+        if (output_colors_enabled(out)) {
+            output_printf(out, OUTPUT_NORMAL, "  %s%s%s\n",
+                         output_color_code(out, status_color), status_buf,
+                         output_color_code(out, OUTPUT_COLOR_RESET));
+        } else {
+            output_printf(out, OUTPUT_NORMAL, "  %s\n", status_buf);
+        }
+    } else {
+        /* Global status */
         output_color_t status_color = OUTPUT_COLOR_GREEN;
+        char status_buf[128];
+        const char *status_msg = NULL;
 
         switch (ws_status) {
             case WORKSPACE_CLEAN:
-                status_msg = "Clean - all states aligned";
+                if (manifest && manifest->count > 0) {
+                    snprintf(status_buf, sizeof(status_buf), "Clean - %zu file%s, all aligned",
+                             manifest->count, manifest->count == 1 ? "" : "s");
+                    status_msg = status_buf;
+                } else {
+                    status_msg = "Clean - all states aligned";
+                }
                 status_color = OUTPUT_COLOR_GREEN;
                 break;
 
@@ -150,18 +231,18 @@ static void display_workspace_status(
                 output_printf(out, OUTPUT_NORMAL, "  %s\n", status_msg);
             }
         }
+    }
 
-        /* Staleness warning — external Git changes detected */
-        if (workspace_is_stale(ws)) {
-            output_warning(out, "External Git changes detected — manifest is stale\n"
-                           "  Hint: Run 'dotta apply' to synchronize state");
-        }
+    /* Staleness warning — external Git changes detected */
+    if (workspace_is_stale(ws)) {
+        output_warning(out, "External Git changes detected — manifest is stale\n"
+                       "  Hint: Run 'dotta apply' to synchronize state");
+    }
 
-        /* Show sectioned output for dirty/invalid workspace */
-        if (ws_status != WORKSPACE_CLEAN) {
-            /* Get all diverged items once */
-            size_t all_count = 0;
-            const workspace_item_t *all_items = workspace_get_all_diverged(ws, &all_count);
+    /* Show sectioned output for dirty/invalid workspace */
+    if (ws_status != WORKSPACE_CLEAN) {
+        /* When filter active and filtered profile is clean, skip detailed sections */
+        if (!profile_filter || filtered_diverged > 0) {
 
             /* Single allocation for all category pointers (4 categories × all_count slots)
              * Memory layout: [uncommitted...][undeployed...][new_files...][orphaned...]
@@ -182,8 +263,6 @@ static void display_workspace_status(
             size_t undeployed_count = 0;
             size_t new_count = 0;
             size_t orphaned_count = 0;
-            size_t hidden_count = 0;  /* Items hidden by profile filter */
-
             for (size_t i = 0; i < all_count; i++) {
                 const workspace_item_t *item = &all_items[i];
 
@@ -193,7 +272,6 @@ static void display_workspace_status(
                  * profiles. This ensures status output matches what apply would do.
                  */
                 if (profile_filter && !profile_filter_matches(item->profile, profile_filter)) {
-                    hidden_count++;
                     continue;  /* Skip items from other profiles */
                 }
 
@@ -356,14 +434,14 @@ static void display_workspace_status(
                 }
             }
 
-            /* Show hidden items note when profile filter is active */
-            if (profile_filter && hidden_count > 0) {
-                output_printf(out, OUTPUT_NORMAL, "\n  (%zu item%s from other profiles hidden)\n",
-                              hidden_count, hidden_count == 1 ? "" : "s");
-            }
-
             /* Cleanup (single free for all category arrays) */
             free(categorized);
+        }
+
+        /* Show hidden items note when profile filter is active */
+        if (profile_filter && hidden_count > 0) {
+            output_printf(out, OUTPUT_NORMAL, "\n  (%zu item%s from other profiles hidden)\n",
+                          hidden_count, hidden_count == 1 ? "" : "s");
         }
     }
 }
@@ -898,7 +976,8 @@ error_t *cmd_status(
      * pointer comparison and matches the pattern used in apply.c.
      */
     bool has_display_filter = (opts->profiles != NULL && opts->profile_count > 0);
-    display_workspace_status(ws, has_display_filter ? display_profiles : NULL, out, opts->verbose);
+    display_workspace_status(ws, has_display_filter ?
+                                 display_profiles : NULL, manifest, out, opts->verbose);
 
     /* Show remote sync status (if requested) */
     if (opts->show_remote) {

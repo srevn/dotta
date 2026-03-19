@@ -10,6 +10,7 @@
 
 #include "base/error.h"
 #include "base/gitops.h"
+#include "base/transfer.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "core/upstream.h"
@@ -79,7 +80,8 @@ static void display_enabled_profiles(
         if (verbose && manifest) {
             size_t profile_file_count = 0;
             for (size_t j = 0; j < manifest->count; j++) {
-                if (manifest->entries[j].source_profile == profile) {
+                if (manifest->entries[j].source_profile &&
+                    strcmp(manifest->entries[j].source_profile->name, profile->name) == 0) {
                     profile_file_count++;
                 }
             }
@@ -500,8 +502,27 @@ static error_t *display_remote_status(
 
     /* Fetch if requested */
     if (!no_fetch) {
+        transfer_context_t *xfer = NULL;
+
         if (verbose) {
-            output_info(out, "Fetching from '%s'...", remote_name);
+            /* Ephemeral fetch message (no newline — resolved after fetch completes).
+             * If objects are transferred, transfer_progress_callback overwrites this
+             * line via \r. If up-to-date, we append " done.\n" inline. */
+            output_printf(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
+            fflush(out->stream);
+
+            /* Create transfer context for progress reporting */
+            char *remote_url = NULL;
+            git_remote *remote_obj = NULL;
+            if (git_remote_lookup(&remote_obj, repo, remote_name) == 0) {
+                const char *url = git_remote_url(remote_obj);
+                if (url) {
+                    remote_url = strdup(url);
+                }
+                git_remote_free(remote_obj);
+            }
+            xfer = transfer_context_create(out, remote_url);
+            free(remote_url);
         }
 
         /* Build array of branch names for batched fetch */
@@ -509,6 +530,7 @@ static error_t *display_remote_status(
         if (!branch_names) {
             /* Memory allocation failed - non-fatal, just warn */
             if (verbose) {
+                fprintf(out->stream, "\n");
                 output_warning(out, "Failed to allocate memory for fetch operation");
             }
         } else {
@@ -519,21 +541,33 @@ static error_t *display_remote_status(
 
             /* Perform batched fetch - single network operation for all branches */
             error_t *fetch_err = gitops_fetch_branches(
-                repo, remote_name, branch_names, profiles_to_check->count, NULL
+                repo, remote_name, branch_names, profiles_to_check->count, xfer
             );
 
             if (fetch_err) {
                 /* Non-fatal: just warn and continue with status display */
                 if (verbose) {
+                    /* Finish the current line before warning */
+                    if (xfer && xfer->progress_active) {
+                        xfer->progress_active = false;
+                    }
+                    fprintf(out->stream, "\n");
                     output_warning(out, "Failed to fetch branches: %s",
                                    error_message(fetch_err));
                 }
                 error_free(fetch_err);
+            } else if (verbose && (!xfer || xfer->total_objects == 0)) {
+                /* No objects transferred — resolve "Fetching..." inline */
+                fprintf(out->stream, " done.\n");
             }
+            /* If objects were transferred, transfer_progress_callback already
+             * displayed progress and finalized with ", done.\n" */
 
             /* Free the array (strings are borrowed, don't free them) */
             free(branch_names);
         }
+
+        transfer_context_free(xfer);
 
         /* Add spacing after fetch output in verbose mode */
         if (verbose) {

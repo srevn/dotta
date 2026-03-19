@@ -94,7 +94,7 @@ hydro_hash_hash(
 )
 ```
 
-## SIV Construction (Version 2)
+## SIV Construction
 
 Dotta implements a custom **SIV (Synthetic IV)** construction for deterministic authenticated encryption. This is a well-established pattern that provides both confidentiality and authenticity without requiring nonces.
 
@@ -170,11 +170,6 @@ Ciphertext (N bytes):
 ```
 
 **Total overhead:** 40 bytes per file
-
-### Version History
-
-- **Version 1:** (deprecated) - Nonce-based encryption
-- **Version 2:** (current) - SIV-based deterministic encryption
 
 ## Encryption Workflow
 
@@ -650,15 +645,3 @@ We use direct derivation mode (no password storage), so zero master is correct.
 - [Gimli permutation](https://gimli.cr.yp.to/) - Cryptographic primitive
 - Dotta source code: `src/crypto/`, `src/infra/content.c`
 
-## Change Log
-
-**Version 2 (Current):**
-- SIV-based deterministic encryption
-- Path-bound via AAD
-- Profile key caching for performance
-- Session-based key management
-- File-based session cache for cross-invocation persistence
-
-**Version 1 (Deprecated):**
-- Nonce-based encryption (non-deterministic)
-- Not suitable for Git versioning

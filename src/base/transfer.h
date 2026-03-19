@@ -33,6 +33,7 @@ typedef struct transfer_context_s {
 
     /* Progress tracking state */
     bool progress_active;          /* Whether progress is currently being displayed */
+    bool ephemeral;                /* Clear progress on completion instead of showing "done" */
     const char *operation;         /* Current operation ("Receiving", "Sending", etc.) */
 
     /* Transfer statistics */

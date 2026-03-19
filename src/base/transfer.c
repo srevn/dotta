@@ -32,6 +32,28 @@ static void format_bytes(size_t bytes, char *buffer, size_t buffer_size) {
 }
 
 /**
+ * Finalize the current progress line
+ *
+ * In ephemeral mode on a TTY, clears the entire line (progress vanishes).
+ * In persistent mode, appends the given completion text (e.g., ", done.\n").
+ * Non-TTY ephemeral falls back to newline (ANSI clear requires terminal).
+ */
+static void finalize_progress(transfer_context_t *ctx, const char *completion) {
+    if (ctx->ephemeral && ctx->output->color_enabled) {
+        /* TTY: clear the line — progress vanishes */
+        fprintf(ctx->output->stream, "\r\033[2K");
+    } else if (ctx->ephemeral) {
+        /* Non-TTY: can't use ANSI clear, just finish the line */
+        fprintf(ctx->output->stream, "\n");
+    } else {
+        /* Persistent: show completion text */
+        fprintf(ctx->output->stream, "%s", completion);
+    }
+    fflush(ctx->output->stream);
+    ctx->progress_active = false;
+}
+
+/**
  * Create transfer context
  */
 transfer_context_t *transfer_context_create(output_ctx_t *output, const char *url) {
@@ -73,10 +95,9 @@ void transfer_context_free(transfer_context_t *ctx) {
     /* Free owned credential context */
     credential_context_free(ctx->cred);
 
-    /* Clear progress if active */
+    /* Clear progress if still active (safety net for interrupted transfers) */
     if (ctx->progress_active && ctx->output) {
-        /* Print newline to finish progress line */
-        output_newline(ctx->output);
+        finalize_progress(ctx, "\n");
     }
 
     /* Free the context itself */
@@ -147,11 +168,9 @@ int transfer_progress_callback(
         fflush(ctx->output->stream);
         ctx->progress_active = true;
 
-        /* Check if indexing is complete */
-        if (indexed == total && received == total) {
-            fprintf(ctx->output->stream, ", done.\n");
-            fflush(ctx->output->stream);
-            ctx->progress_active = false;
+        /* Check if indexing is complete (guard prevents double finalization) */
+        if (indexed == total && received == total && ctx->progress_active) {
+            finalize_progress(ctx, ", done.\n");
         }
     } else if (received > 0) {
         /* Don't know total yet, just show count */
@@ -202,11 +221,9 @@ int transfer_push_progress_callback(
         fflush(ctx->output->stream);
         ctx->progress_active = true;
 
-        /* Check if complete */
-        if (current == total) {
-            fprintf(ctx->output->stream, ", done.\n");
-            fflush(ctx->output->stream);
-            ctx->progress_active = false;
+        /* Check if complete (guard prevents double finalization) */
+        if (current == total && ctx->progress_active) {
+            finalize_progress(ctx, ", done.\n");
         }
     } else {
         /* No total known - just show current */

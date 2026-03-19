@@ -503,11 +503,12 @@ static error_t *display_remote_status(
     /* Fetch if requested */
     if (!no_fetch) {
         transfer_context_t *xfer = NULL;
+        bool ephemeral = false;
 
         if (verbose) {
-            /* Ephemeral fetch message (no newline — resolved after fetch completes).
-             * If objects are transferred, transfer_progress_callback overwrites this
-             * line via \r. If up-to-date, we append " done.\n" inline. */
+            /* Ephemeral fetch message (no newline — resolved after fetch).
+             * On TTY: progress overwrites via \r, then line is cleared entirely.
+             * On pipe: falls back to inline text resolution. */
             output_printf(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
             fflush(out->stream);
 
@@ -523,6 +524,11 @@ static error_t *display_remote_status(
             }
             xfer = transfer_context_create(out, remote_url);
             free(remote_url);
+
+            if (xfer) {
+                xfer->ephemeral = true;
+            }
+            ephemeral = out->color_enabled;  /* ANSI clear only works on TTY */
         }
 
         /* Build array of branch names for batched fetch */
@@ -530,7 +536,12 @@ static error_t *display_remote_status(
         if (!branch_names) {
             /* Memory allocation failed - non-fatal, just warn */
             if (verbose) {
-                fprintf(out->stream, "\n");
+                if (ephemeral) {
+                    fprintf(out->stream, "\r\033[2K");
+                    fflush(out->stream);
+                } else {
+                    fprintf(out->stream, "\n");
+                }
                 output_warning(out, "Failed to allocate memory for fetch operation");
             }
         } else {
@@ -544,24 +555,36 @@ static error_t *display_remote_status(
                 repo, remote_name, branch_names, profiles_to_check->count, xfer
             );
 
-            if (fetch_err) {
-                /* Non-fatal: just warn and continue with status display */
-                if (verbose) {
-                    /* Finish the current line before warning */
+            /* Resolve the ephemeral fetch/progress line */
+            if (verbose) {
+                if (ephemeral) {
+                    /* Clear any remaining text on the line. Handles all cases:
+                     *   - Callback completed: already cleared, harmless no-op
+                     *   - Mid-progress error: clears partial progress
+                     *   - Up-to-date: clears "Fetching..." text */
                     if (xfer && xfer->progress_active) {
                         xfer->progress_active = false;
                     }
+                    fprintf(out->stream, "\r\033[2K");
+                    fflush(out->stream);
+                } else if (fetch_err) {
+                    /* Non-TTY: finish the line before warning */
                     fprintf(out->stream, "\n");
+                } else if (!xfer || xfer->total_objects == 0) {
+                    /* Non-TTY, up-to-date: resolve inline */
+                    fprintf(out->stream, " done.\n");
+                }
+                /* Non-TTY with objects: callback wrote ", done.\n" */
+            }
+
+            if (fetch_err) {
+                /* Non-fatal: just warn and continue with status display */
+                if (verbose) {
                     output_warning(out, "Failed to fetch branches: %s",
                                    error_message(fetch_err));
                 }
                 error_free(fetch_err);
-            } else if (verbose && (!xfer || xfer->total_objects == 0)) {
-                /* No objects transferred — resolve "Fetching..." inline */
-                fprintf(out->stream, " done.\n");
             }
-            /* If objects were transferred, transfer_progress_callback already
-             * displayed progress and finalized with ", done.\n" */
 
             /* Free the array (strings are borrowed, don't free them) */
             free(branch_names);
@@ -569,7 +592,8 @@ static error_t *display_remote_status(
 
         transfer_context_free(xfer);
 
-        /* Add spacing after fetch output in verbose mode */
+        /* Section spacing — the cleared line serves as the blank separator
+         * in ephemeral mode, matching the newline's role in persistent mode */
         if (verbose) {
             output_newline(out);
         }

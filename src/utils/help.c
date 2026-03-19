@@ -13,24 +13,28 @@
 void print_usage(const char *prog_name) {
     printf("Usage: %s <command> [options]\n\n", prog_name);
     printf("Commands:\n");
-    printf("  init         Initialize a new dotta repository\n");
-    printf("  clone        Clone a dotta repository\n");
-    printf("  add          Add new files or directories to a profile\n");
-    printf("  remove       Remove files from a profile or delete profile\n");
-    printf("  apply        Deploy enabled profiles to the filesystem\n");
-    printf("  status       Show the status of tracked files in the workspace\n");
-    printf("  diff         Show differences between profile and workspace files\n");
-    printf("  list         List profiles, files, and commit history\n");
-    printf("  profile      Profile management and layering\n");
-    printf("  show         Show file content from profile\n");
-    printf("  revert       Revert file to previous commit state\n");
-    printf("  remote       Manage remote repositories\n");
-    printf("  update       Update profiles with modified files\n");
-    printf("  sync         Synchronize profiles with a remote repository\n");
-    printf("  ignore       Manage ignore patterns\n");
-    printf("  bootstrap    Execute profile bootstrap scripts\n");
-    printf("  key          Manage encryption keys and passphrases\n");
-    printf("  git          Execute git commands within repository\n");
+    printf("  init           Initialize a new dotta repository\n");
+    printf("  clone          Clone a dotta repository\n");
+    printf("  add            Add files or directories to a profile\n");
+    printf("  remove         Remove files from a profile or delete profile\n");
+    printf("  update         Commit filesystem changes back to profiles\n");
+    printf("  apply          Deploy enabled profiles to the filesystem\n");
+    printf("  revert         Revert a file to a previous version\n");
+    printf("  status         Show workspace status and remote sync state\n");
+    printf("  diff           Show differences between profiles and filesystem\n");
+    printf("  list           List profiles, files, and commit history\n");
+    printf("  show           Show file content or commit details\n");
+    printf("  sync           Synchronize profiles with remote repository\n");
+    printf("  profile        Profile management and layering\n");
+    printf("  remote         Manage remote repositories\n");
+    printf("  ignore         Manage ignore patterns\n");
+    printf("  bootstrap      Execute profile bootstrap scripts\n");
+    printf("  key            Manage encryption keys and passphrases\n");
+    printf("  git            Execute git commands within repository\n");
+    printf("\nOptions:\n");
+    printf("  -h, --help     Show help (use <command> --help for details)\n");
+    printf("  -v, --version  Show version information\n");
+    printf("  --interactive  TUI for profile management\n");
     printf("\nRun '%s <command> --help' for more information on a command.\n", prog_name);
 }
 
@@ -213,6 +217,38 @@ void print_remove_help(const char *prog_name) {
     printf("\n");
 }
 
+void print_update_help(const char *prog_name) {
+    printf("Usage: %s update [options] [file]...\n\n", prog_name);
+    printf("Update profiles with modified files\n\n");
+    printf("Syncs filesystem changes back into profile branches.\n");
+    printf("This is the reverse of 'apply' (filesystem -> repo).\n\n");
+    printf("Options:\n");
+    printf("  -m, --message <msg>       Custom commit message\n");
+    printf("  -p, --profile <name>      Only update files from this profile\n");
+    printf("  -e, --exclude <pattern>   Exclude pattern (glob, can be repeated)\n");
+    printf("  -n, --dry-run             Show what would be updated\n");
+    printf("  -i, --interactive         Prompt for confirmation\n");
+    printf("  -v, --verbose             Verbose output\n");
+    printf("  --include-new             Include new files from tracked directories\n");
+    printf("  --only-new                Only process new files (ignore modified)\n");
+    printf("  -h, --help                Show this help message\n");
+    printf("\nFile Detection:\n");
+    printf("  By default, new files are auto-detected based on config settings:\n");
+    printf("    - core.auto_detect_new_files controls automatic detection\n");
+    printf("    - security.confirm_new_files controls confirmation prompts\n");
+    printf("  Use --include-new or --only-new to explicitly override config.\n");
+    printf("\nExamples:\n");
+    printf("  %s update                        # Update all modified files\n", prog_name);
+    printf("  %s update ~/.bashrc              # Update specific file\n", prog_name);
+    printf("  %s update --include-new          # Update modified AND add new files\n", prog_name);
+    printf("  %s update --only-new             # Only add new files\n", prog_name);
+    printf("  %s update --profile global       # Update only global profile\n", prog_name);
+    printf("  %s update --dry-run              # Preview changes\n", prog_name);
+    printf("  %s update -m \"Update shell config\"  # Custom message\n", prog_name);
+    printf("  %s update --exclude '*.log'      # Exclude log files from update\n", prog_name);
+    printf("\n");
+}
+
 void print_apply_help(const char *prog_name) {
     printf("Usage: %s apply [options] [profile|file]...\n\n", prog_name);
     printf("Synchronize filesystem with profiles\n\n");
@@ -248,6 +284,48 @@ void print_apply_help(const char *prog_name) {
     printf("\nSmart Skipping:\n");
     printf("  By default, files that match profile content are skipped for efficiency.\n");
     printf("  Use --no-skip-unchanged to force deployment of all files.\n");
+    printf("\n");
+}
+
+void print_revert_help(const char *prog_name) {
+    printf("Usage: %s revert [options] <file@commit>\n", prog_name);
+    printf("   or: %s revert [options] <file> <commit>\n", prog_name);
+    printf("   or: %s revert [options] <profile> <file@commit>\n", prog_name);
+    printf("   or: %s revert [options] <profile> <file> <commit>\n\n", prog_name);
+    printf("Revert a file in a profile to its state at a specific commit\n\n");
+    printf("Syntax:\n");
+    printf("  <file> <commit>               Revert file to commit (discover profile)\n");
+    printf("  <profile> <file> <commit>     Revert file in profile to commit\n");
+    printf("  <file>@<commit>               Compact: file at commit\n");
+    printf("  <profile>:<file>@<commit>     Compact: profile, file, and commit\n");
+    printf("\n");
+    printf("Arguments:\n");
+    printf("  profile                       Profile name (e.g., global, darwin/work)\n");
+    printf("  file                          Filesystem or storage path (home/..., root/...)\n");
+    printf("  commit                        Required commit ref (e.g., HEAD~3, abc123)\n");
+    printf("\nOptions:\n");
+    printf("  -p, --profile <name>  Override profile (required if file is ambiguous)\n");
+    printf("  -m, --message <msg>   Custom commit message\n");
+    printf("  -f, --force           Skip confirmation and override conflicts\n");
+    printf("  -n, --dry-run         Preview changes without modifying anything\n");
+    printf("  -v, --verbose         Print verbose output\n");
+    printf("  -h, --help            Show this help message\n");
+    printf("\nBehavior:\n");
+    printf("  This command modifies the Git repository only. Run 'dotta apply' afterward\n");
+    printf("  to deploy the reverted file to your filesystem.\n");
+    printf("\n");
+    printf("  1. Discovers file in profiles (exact path or basename search)\n");
+    printf("  2. Resolves target commit in profile history\n");
+    printf("  3. Shows diff preview between current and target state\n");
+    printf("  4. Prompts for confirmation (unless --force)\n");
+    printf("  5. Reverts file and metadata to target commit state\n");
+    printf("  6. Creates commit with restored changes\n");
+    printf("\nExamples:\n");
+    printf("  %s revert home/.bashrc HEAD~3\n", prog_name);
+    printf("  %s revert darwin home/.bashrc a4f2c8e\n", prog_name);
+    printf("  %s revert darwin:home/.bashrc@a4f2c8e\n", prog_name);
+    printf("  %s revert -m \"Fix config\" home/.bashrc HEAD~1\n", prog_name);
+    printf("  %s revert --dry-run darwin home/.config/nvim/init.lua HEAD~2\n", prog_name);
     printf("\n");
 }
 
@@ -364,6 +442,96 @@ void print_list_help(const char *prog_name) {
     printf("\n");
 }
 
+void print_show_help(const char *prog_name) {
+    printf("Usage: %s show [options] <target>\n", prog_name);
+    printf("   or: %s show [options] <profile> <file> [<commit>]\n\n", prog_name);
+    printf("Show file content or commit details with diff\n\n");
+
+    printf("Syntax:\n");
+    printf("  <commit>                      Show commit with diff\n");
+    printf("  <file>                        Show file from enabled profiles (HEAD)\n");
+    printf("  <file> <commit>               Show file at specific commit\n");
+    printf("  <profile> <file>              Show file from profile (HEAD)\n");
+    printf("  <profile> <file> <commit>     Show file from profile at commit\n");
+    printf("  <file>@<commit>               Compact: file at commit\n");
+    printf("  <profile>:<file>@<commit>     Compact: profile, file, and commit\n");
+    printf("\nOptions:\n");
+    printf("  -p, --profile <name>  Override profile for file lookup or commit search\n");
+    printf("  --raw                 Show raw content without formatting\n");
+    printf("  -h, --help            Show this help message\n");
+    printf("\nCommit Mode:\n");
+    printf("  When argument looks like a git ref (SHA, HEAD, HEAD~1), shows commit:\n");
+    printf("    - Commit metadata (SHA, date, author, message)\n");
+    printf("    - File change statistics\n");
+    printf("    - Full unified diff (like 'git show')\n");
+    printf("  Searches enabled profiles (use -p to specify profile)\n");
+    printf("\nFile Mode:\n");
+    printf("  Shows file content from profile branches\n");
+    printf("  Without profile: searches enabled profiles for exact path match\n");
+    printf("  Accepts paths in either format (filesystem or storage):\n");
+    printf("    • Filesystem: /etc/hosts, ~/.bashrc\n");
+    printf("    • Storage: root/etc/hosts, home/.bashrc\n");
+    printf("\nExamples:\n");
+    printf("  # Show commit with diff\n");
+    printf("  %s show a4f2c8e                        # From enabled profiles\n", prog_name);
+    printf("  %s show -p global a4f2c8e              # From specific profile\n", prog_name);
+    printf("\n");
+    printf("  # Show file (current version)\n");
+    printf("  %s show home/.bashrc                   # From enabled profiles\n", prog_name);
+    printf("  %s show -p global home/.bashrc         # From specific profile\n", prog_name);
+    printf("  %s show global:home/.bashrc            # Refspec syntax\n", prog_name);
+    printf("\n");
+    printf("  # Show file at specific commit\n");
+    printf("  %s show darwin home/.bashrc a4f2c8e\n", prog_name);
+    printf("  %s show home/.bashrc@a4f2c8e           # Refspec syntax (needs -p)\n", prog_name);
+    printf("  %s show global:home/.bashrc@a4f2c8e    # Full refspec\n", prog_name);
+    printf("\n");
+}
+
+void print_sync_help(const char *prog_name) {
+    printf("Usage: %s sync [profile]... [options]\n\n", prog_name);
+    printf("Synchronize local profiles with a remote repository\n\n");
+    printf("Fetches from the remote, analyzes branch states, and pushes or pulls changes\n");
+    printf("By default, this command operates on all enabled profiles and requires a clean workspace\n");
+    printf("Use 'dotta update' to commit local changes before syncing\n\n");
+    printf("Arguments:\n");
+    printf("  [profile]...           Optional list of profiles to sync (default: all enabled)\n");
+    printf("\nOptions:\n");
+    printf("  -p, --profile <name>   Specify a profile to sync (can be used multiple times)\n");
+    printf("  -n, --dry-run          Show what would happen without making changes\n");
+    printf("  --no-push              Fetch and analyze only; do not push local changes\n");
+    printf("  --no-pull              Push local changes only; do not pull remote changes\n");
+    printf("  -f, --force            Force sync even with uncommitted local changes\n");
+    printf("  --diverged <strategy>  Specify how to handle diverged branches:\n");
+    printf("                         warn (default), rebase, merge, ours, theirs\n");
+    printf("  -v, --verbose          Show detailed, step-by-step output\n");
+    printf("  -h, --help             Show this help message\n");
+    printf("\nWhat it does:\n");
+    printf("  1. Validates that the workspace is clean (no uncommitted changes)\n");
+    printf("  2. Fetches the latest changes from the remote for the specified profiles\n");
+    printf("  3. Analyzes each profile to determine its state (ahead, behind, or diverged)\n");
+    printf("  4. Pulls changes if the remote is ahead (fast-forward only)\n");
+    printf("  5. Pushes changes if the local is ahead\n");
+    printf("  6. Resolves diverged branches using the configured strategy\n");
+    printf("\nTypical Workflow:\n");
+    printf("  %s update                  # Commit local changes to one or more profiles\n", prog_name);
+    printf("  %s sync                    # Synchronize all enabled profiles with the remote\n", prog_name);
+    printf("\nConfiguration:\n");
+    printf("  Set defaults in ~/.config/dotta/config.toml:\n");
+    printf("    [sync]\n");
+    printf("    auto_pull = true\n");
+    printf("    diverged_strategy = \"warn\"\n");
+    printf("\nExamples:\n");
+    printf("  %s sync                    # Sync all enabled profiles with the remote\n", prog_name);
+    printf("  %s sync global             # Sync only the 'global' profile\n", prog_name);
+    printf("  %s sync global darwin      # Sync multiple specific profiles\n", prog_name);
+    printf("  %s sync --dry-run          # Preview the actions sync would take\n", prog_name);
+    printf("  %s sync --force            # Sync even with uncommitted changes\n", prog_name);
+    printf("  %s sync --no-pull          # Push local changes only, skipping remote pulls\n", prog_name);
+    printf("  %s sync --diverged rebase  # Use the 'rebase' strategy for diverged branches\n", prog_name);
+    printf("\n");
+}
+
 void print_profile_help(const char *prog_name) {
     printf("Usage: %s profile <subcommand> [options]\n\n", prog_name);
     printf("Manage which profiles are used in your current workspace\n\n");
@@ -413,94 +581,6 @@ void print_profile_help(const char *prog_name) {
     printf("\n");
 }
 
-void print_show_help(const char *prog_name) {
-    printf("Usage: %s show [options] <target>\n", prog_name);
-    printf("   or: %s show [options] <profile> <file> [<commit>]\n\n", prog_name);
-    printf("Show file content or commit details with diff\n\n");
-
-    printf("Syntax:\n");
-    printf("  <commit>                      Show commit with diff\n");
-    printf("  <file>                        Show file from enabled profiles (HEAD)\n");
-    printf("  <file> <commit>               Show file at specific commit\n");
-    printf("  <profile> <file>              Show file from profile (HEAD)\n");
-    printf("  <profile> <file> <commit>     Show file from profile at commit\n");
-    printf("  <file>@<commit>               Compact: file at commit\n");
-    printf("  <profile>:<file>@<commit>     Compact: profile, file, and commit\n");
-    printf("\nOptions:\n");
-    printf("  -p, --profile <name>  Override profile for file lookup or commit search\n");
-    printf("  --raw                 Show raw content without formatting\n");
-    printf("  -h, --help            Show this help message\n");
-    printf("\nCommit Mode:\n");
-    printf("  When argument looks like a git ref (SHA, HEAD, HEAD~1), shows commit:\n");
-    printf("    - Commit metadata (SHA, date, author, message)\n");
-    printf("    - File change statistics\n");
-    printf("    - Full unified diff (like 'git show')\n");
-    printf("  Searches enabled profiles (use -p to specify profile)\n");
-    printf("\nFile Mode:\n");
-    printf("  Shows file content from profile branches\n");
-    printf("  Without profile: searches enabled profiles for exact path match\n");
-    printf("  Accepts paths in either format (filesystem or storage):\n");
-    printf("    • Filesystem: /etc/hosts, ~/.bashrc\n");
-    printf("    • Storage: root/etc/hosts, home/.bashrc\n");
-    printf("\nExamples:\n");
-    printf("  # Show commit with diff\n");
-    printf("  %s show a4f2c8e                        # From enabled profiles\n", prog_name);
-    printf("  %s show -p global a4f2c8e              # From specific profile\n", prog_name);
-    printf("\n");
-    printf("  # Show file (current version)\n");
-    printf("  %s show home/.bashrc                   # From enabled profiles\n", prog_name);
-    printf("  %s show -p global home/.bashrc         # From specific profile\n", prog_name);
-    printf("  %s show global:home/.bashrc            # Refspec syntax\n", prog_name);
-    printf("\n");
-    printf("  # Show file at specific commit\n");
-    printf("  %s show darwin home/.bashrc a4f2c8e\n", prog_name);
-    printf("  %s show home/.bashrc@a4f2c8e           # Refspec syntax (needs -p)\n", prog_name);
-    printf("  %s show global:home/.bashrc@a4f2c8e    # Full refspec\n", prog_name);
-    printf("\n");
-}
-
-void print_revert_help(const char *prog_name) {
-    printf("Usage: %s revert [options] <file@commit>\n", prog_name);
-    printf("   or: %s revert [options] <file> <commit>\n", prog_name);
-    printf("   or: %s revert [options] <profile> <file@commit>\n", prog_name);
-    printf("   or: %s revert [options] <profile> <file> <commit>\n\n", prog_name);
-    printf("Revert a file in a profile to its state at a specific commit\n\n");
-    printf("Syntax:\n");
-    printf("  <file> <commit>               Revert file to commit (discover profile)\n");
-    printf("  <profile> <file> <commit>     Revert file in profile to commit\n");
-    printf("  <file>@<commit>               Compact: file at commit\n");
-    printf("  <profile>:<file>@<commit>     Compact: profile, file, and commit\n");
-    printf("\n");
-    printf("Arguments:\n");
-    printf("  profile                       Profile name (e.g., global, darwin/work)\n");
-    printf("  file                          Filesystem or storage path (home/..., root/...)\n");
-    printf("  commit                        Required commit ref (e.g., HEAD~3, abc123)\n");
-    printf("\nOptions:\n");
-    printf("  -p, --profile <name>  Override profile (required if file is ambiguous)\n");
-    printf("  -m, --message <msg>   Custom commit message\n");
-    printf("  -f, --force           Skip confirmation and override conflicts\n");
-    printf("  -n, --dry-run         Preview changes without modifying anything\n");
-    printf("  -v, --verbose         Print verbose output\n");
-    printf("  -h, --help            Show this help message\n");
-    printf("\nBehavior:\n");
-    printf("  This command modifies the Git repository only. Run 'dotta apply' afterward\n");
-    printf("  to deploy the reverted file to your filesystem.\n");
-    printf("\n");
-    printf("  1. Discovers file in profiles (exact path or basename search)\n");
-    printf("  2. Resolves target commit in profile history\n");
-    printf("  3. Shows diff preview between current and target state\n");
-    printf("  4. Prompts for confirmation (unless --force)\n");
-    printf("  5. Reverts file and metadata to target commit state\n");
-    printf("  6. Creates commit with restored changes\n");
-    printf("\nExamples:\n");
-    printf("  %s revert home/.bashrc HEAD~3\n", prog_name);
-    printf("  %s revert darwin home/.bashrc a4f2c8e\n", prog_name);
-    printf("  %s revert darwin:home/.bashrc@a4f2c8e\n", prog_name);
-    printf("  %s revert -m \"Fix config\" home/.bashrc HEAD~1\n", prog_name);
-    printf("  %s revert --dry-run darwin home/.config/nvim/init.lua HEAD~2\n", prog_name);
-    printf("\n");
-}
-
 void print_remote_help(const char *prog_name) {
     printf("Usage: %s remote [options] [subcommand]\n\n", prog_name);
     printf("Manage remote repositories\n\n");
@@ -519,82 +599,6 @@ void print_remote_help(const char *prog_name) {
     printf("  %s remote -v\n", prog_name);
     printf("  %s remote add origin git@github.com:user/dotfiles.git\n", prog_name);
     printf("  %s remote set-url origin https://github.com/user/dotfiles.git\n", prog_name);
-    printf("\n");
-}
-
-void print_update_help(const char *prog_name) {
-    printf("Usage: %s update [options] [file]...\n\n", prog_name);
-    printf("Update profiles with modified files\n\n");
-    printf("Syncs filesystem changes back into profile branches.\n");
-    printf("This is the reverse of 'apply' (filesystem -> repo).\n\n");
-    printf("Options:\n");
-    printf("  -m, --message <msg>       Custom commit message\n");
-    printf("  -p, --profile <name>      Only update files from this profile\n");
-    printf("  -e, --exclude <pattern>   Exclude pattern (glob, can be repeated)\n");
-    printf("  -n, --dry-run             Show what would be updated\n");
-    printf("  -i, --interactive         Prompt for confirmation\n");
-    printf("  -v, --verbose             Verbose output\n");
-    printf("  --include-new             Include new files from tracked directories\n");
-    printf("  --only-new                Only process new files (ignore modified)\n");
-    printf("  -h, --help                Show this help message\n");
-    printf("\nFile Detection:\n");
-    printf("  By default, new files are auto-detected based on config settings:\n");
-    printf("    - core.auto_detect_new_files controls automatic detection\n");
-    printf("    - security.confirm_new_files controls confirmation prompts\n");
-    printf("  Use --include-new or --only-new to explicitly override config.\n");
-    printf("\nExamples:\n");
-    printf("  %s update                        # Update all modified files\n", prog_name);
-    printf("  %s update ~/.bashrc              # Update specific file\n", prog_name);
-    printf("  %s update --include-new          # Update modified AND add new files\n", prog_name);
-    printf("  %s update --only-new             # Only add new files\n", prog_name);
-    printf("  %s update --profile global       # Update only global profile\n", prog_name);
-    printf("  %s update --dry-run              # Preview changes\n", prog_name);
-    printf("  %s update -m \"Update shell config\"  # Custom message\n", prog_name);
-    printf("  %s update --exclude '*.log'      # Exclude log files from update\n", prog_name);
-    printf("\n");
-}
-
-void print_sync_help(const char *prog_name) {
-    printf("Usage: %s sync [profile]... [options]\n\n", prog_name);
-    printf("Synchronize local profiles with a remote repository\n\n");
-    printf("Fetches from the remote, analyzes branch states, and pushes or pulls changes\n");
-    printf("By default, this command operates on all enabled profiles and requires a clean workspace\n");
-    printf("Use 'dotta update' to commit local changes before syncing\n\n");
-    printf("Arguments:\n");
-    printf("  [profile]...           Optional list of profiles to sync (default: all enabled)\n");
-    printf("\nOptions:\n");
-    printf("  -p, --profile <name>   Specify a profile to sync (can be used multiple times)\n");
-    printf("  -n, --dry-run          Show what would happen without making changes\n");
-    printf("  --no-push              Fetch and analyze only; do not push local changes\n");
-    printf("  --no-pull              Push local changes only; do not pull remote changes\n");
-    printf("  -f, --force            Force sync even with uncommitted local changes\n");
-    printf("  --diverged <strategy>  Specify how to handle diverged branches:\n");
-    printf("                         warn (default), rebase, merge, ours, theirs\n");
-    printf("  -v, --verbose          Show detailed, step-by-step output\n");
-    printf("  -h, --help             Show this help message\n");
-    printf("\nWhat it does:\n");
-    printf("  1. Validates that the workspace is clean (no uncommitted changes)\n");
-    printf("  2. Fetches the latest changes from the remote for the specified profiles\n");
-    printf("  3. Analyzes each profile to determine its state (ahead, behind, or diverged)\n");
-    printf("  4. Pulls changes if the remote is ahead (fast-forward only)\n");
-    printf("  5. Pushes changes if the local is ahead\n");
-    printf("  6. Resolves diverged branches using the configured strategy\n");
-    printf("\nTypical Workflow:\n");
-    printf("  %s update                  # Commit local changes to one or more profiles\n", prog_name);
-    printf("  %s sync                    # Synchronize all enabled profiles with the remote\n", prog_name);
-    printf("\nConfiguration:\n");
-    printf("  Set defaults in ~/.config/dotta/config.toml:\n");
-    printf("    [sync]\n");
-    printf("    auto_pull = true\n");
-    printf("    diverged_strategy = \"warn\"\n");
-    printf("\nExamples:\n");
-    printf("  %s sync                    # Sync all enabled profiles with the remote\n", prog_name);
-    printf("  %s sync global             # Sync only the 'global' profile\n", prog_name);
-    printf("  %s sync global darwin      # Sync multiple specific profiles\n", prog_name);
-    printf("  %s sync --dry-run          # Preview the actions sync would take\n", prog_name);
-    printf("  %s sync --force            # Sync even with uncommitted changes\n", prog_name);
-    printf("  %s sync --no-pull          # Push local changes only, skipping remote pulls\n", prog_name);
-    printf("  %s sync --diverged rebase  # Use the 'rebase' strategy for diverged branches\n", prog_name);
     printf("\n");
 }
 
@@ -716,21 +720,6 @@ void print_bootstrap_help(const char *prog_name) {
     printf("\n");
 }
 
-void print_interactive_help(const char *prog_name) {
-    printf("Usage: %s --interactive\n\n", prog_name);
-    printf("Interactive profile management and ordering.\n\n");
-    printf("Keybindings:\n");
-    printf("  ↑↓, j/k, g/G    Navigate profiles\n");
-    printf("  space           Enable/disable profiles\n");
-    printf("  J/K             Move profile up/down\n");
-    printf("  w               Save profile order and choice\n");
-    printf("  q, ESC          Quit\n\n");
-    printf("Notes:\n");
-    printf("  - Enabled profiles are saved to state in the displayed order\n");
-    printf("  - Profile order determines layering (later overrides earlier)\n");
-    printf("  - Use regular commands (apply, update, sync) after enabling profiles\n");
-}
-
 void print_key_help(const char *prog_name) {
     printf("Usage: %s key <set|clear|status> [options]\n\n", prog_name);
     printf("Manage encryption keys and passphrases\n\n");
@@ -789,4 +778,19 @@ void print_key_help(const char *prog_name) {
     printf("  %s add --encrypt       # Encrypt files when adding\n", prog_name);
     printf("  %s apply               # Decrypt files when deploying\n", prog_name);
     printf("\n");
+}
+
+void print_interactive_help(const char *prog_name) {
+    printf("Usage: %s --interactive\n\n", prog_name);
+    printf("Interactive profile management and ordering.\n\n");
+    printf("Keybindings:\n");
+    printf("  ↑↓, j/k, g/G    Navigate profiles\n");
+    printf("  space           Enable/disable profiles\n");
+    printf("  J/K             Move profile up/down\n");
+    printf("  w               Save profile order and choice\n");
+    printf("  q, ESC          Quit\n\n");
+    printf("Notes:\n");
+    printf("  - Enabled profiles are saved to state in the displayed order\n");
+    printf("  - Profile order determines layering (later overrides earlier)\n");
+    printf("  - Use regular commands (apply, update, sync) after enabling profiles\n");
 }

@@ -14,7 +14,7 @@ void print_usage(const char *prog_name) {
     printf("Usage: %s <command> [options]\n\n", prog_name);
     printf("Commands:\n");
     printf("  init           Initialize a new dotta repository\n");
-    printf("  clone          Clone a dotta repository\n");
+    printf("  clone          Clone an existing dotta repository\n");
     printf("  add            Add files or directories to a profile\n");
     printf("  remove         Remove files from a profile or delete profile\n");
     printf("  update         Commit filesystem changes back to profiles\n");

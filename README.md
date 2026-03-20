@@ -15,7 +15,7 @@ Usage: dotta <command> [options]
 
 Commands:
   init           Initialize a new dotta repository
-  clone          Clone a dotta repository
+  clone          Clone an existing dotta repository
   add            Add files or directories to a profile
   remove         Remove files from a profile or delete profile
   update         Commit filesystem changes back to profiles

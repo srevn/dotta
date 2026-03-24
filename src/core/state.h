@@ -225,6 +225,36 @@ error_t *state_load_for_update(git_repository *repo, state_t **out);
 error_t *state_save(git_repository *repo, state_t *state);
 
 /**
+ * Begin an explicit transaction on a read-only state handle
+ *
+ * Acquires a write lock (BEGIN IMMEDIATE). Used by batch operations
+ * that need atomicity on a state opened via state_load() (no inherent
+ * transaction). Must be paired with state_commit_transaction() or
+ * state_rollback_transaction().
+ *
+ * @param state State (must not be NULL, must have open database, must not be in transaction)
+ * @return Error or NULL on success
+ */
+error_t *state_begin_transaction(state_t *state);
+
+/**
+ * Commit a transaction started by state_begin_transaction()
+ *
+ * @param state State (must not be NULL, must be in transaction)
+ * @return Error or NULL on success
+ */
+error_t *state_commit_transaction(state_t *state);
+
+/**
+ * Roll back a transaction started by state_begin_transaction()
+ *
+ * Safe to call on error paths. Silently succeeds if no transaction active.
+ *
+ * @param state State (must not be NULL)
+ */
+void state_rollback_transaction(state_t *state);
+
+/**
  * Create empty state
  *
  * @param out State structure (must not be NULL, caller must free with state_free)

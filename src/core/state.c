@@ -2715,6 +2715,66 @@ error_t *state_save(git_repository *repo, state_t *state) {
 }
 
 /**
+ * Begin an explicit transaction on a read-only state handle
+ */
+error_t *state_begin_transaction(state_t *state) {
+    CHECK_NULL(state);
+    CHECK_NULL(state->db);
+
+    if (state->in_transaction) {
+        return ERROR(ERR_STATE_INVALID, "Transaction already active");
+    }
+
+    char *errmsg = NULL;
+    int rc = sqlite3_exec(state->db, "BEGIN IMMEDIATE;", NULL, NULL, &errmsg);
+    if (rc != SQLITE_OK) {
+        error_t *err = ERROR(ERR_CONFLICT, "Failed to acquire write lock: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc));
+        sqlite3_free(errmsg);
+        return err;
+    }
+
+    state->in_transaction = true;
+    return NULL;
+}
+
+/**
+ * Commit a transaction started by state_begin_transaction()
+ */
+error_t *state_commit_transaction(state_t *state) {
+    CHECK_NULL(state);
+    CHECK_NULL(state->db);
+
+    if (!state->in_transaction) {
+        return ERROR(ERR_STATE_INVALID, "No active transaction to commit");
+    }
+
+    char *errmsg = NULL;
+    int rc = sqlite3_exec(state->db, "COMMIT;", NULL, NULL, &errmsg);
+    if (rc != SQLITE_OK) {
+        error_t *err = ERROR(ERR_STATE_INVALID, "Failed to commit transaction: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc));
+        sqlite3_free(errmsg);
+        return err;
+    }
+
+    state->in_transaction = false;
+    return NULL;
+}
+
+/**
+ * Roll back a transaction started by state_begin_transaction()
+ */
+void state_rollback_transaction(state_t *state) {
+    if (!state || !state->db || !state->in_transaction) {
+        return;
+    }
+
+    sqlite3_exec(state->db, "ROLLBACK;", NULL, NULL, NULL);
+    state->in_transaction = false;
+}
+
+/**
  * Create empty state
  *
  * Returns in-memory state with no database connection.

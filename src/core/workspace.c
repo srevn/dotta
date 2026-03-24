@@ -3645,6 +3645,13 @@ bool workspace_is_stale(const workspace_t *ws) {
 
 /**
  * Flush accumulated stat cache updates to the state database
+ *
+ * When the workspace owns its state (read-only mode, e.g. status/diff),
+ * no transaction is active — wraps the batch in BEGIN/COMMIT to avoid
+ * N individual autocommits (each triggering a WAL write + fsync).
+ *
+ * When state is borrowed (e.g. apply), the caller's transaction is already
+ * active — flushes directly into it.
  */
 error_t *workspace_flush_stat_caches(workspace_t *ws) {
     CHECK_NULL(ws);
@@ -3659,6 +3666,18 @@ error_t *workspace_flush_stat_caches(workspace_t *ws) {
         return NULL;
     }
 
+    /* Batch writes in a transaction when no external transaction is active.
+     * owns_state == true means state_load() (read-only, no transaction).
+     * owns_state == false means borrowed from state_load_for_update() (has transaction). */
+    bool needs_transaction = ws->owns_state;
+
+    if (needs_transaction) {
+        error_t *err = state_begin_transaction(ws->state);
+        if (err) {
+            return error_wrap(err, "Failed to begin stat cache transaction");
+        }
+    }
+
     for (size_t i = 0; i < ws->stat_update_count; i++) {
         error_t *err = state_update_stat_cache(
             ws->state,
@@ -3666,8 +3685,18 @@ error_t *workspace_flush_stat_caches(workspace_t *ws) {
             &ws->stat_updates[i].stat
         );
         if (err) {
+            if (needs_transaction) {
+                state_rollback_transaction(ws->state);
+            }
             return error_wrap(err, "Failed to flush stat cache for '%s'",
                               ws->stat_updates[i].filesystem_path);
+        }
+    }
+
+    if (needs_transaction) {
+        error_t *err = state_commit_transaction(ws->state);
+        if (err) {
+            return error_wrap(err, "Failed to commit stat cache transaction");
         }
     }
 

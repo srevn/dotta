@@ -28,7 +28,7 @@
 #include "utils/hashmap.h"
 
 /* Schema version - must match database */
-#define STATE_SCHEMA_VERSION "5"
+#define STATE_SCHEMA_VERSION "6"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -135,7 +135,7 @@ static error_t *initialize_schema(sqlite3 *db) {
         "CREATE TABLE IF NOT EXISTS schema_meta ("
         "    key TEXT PRIMARY KEY,"
         "    value TEXT NOT NULL"
-        ");"
+        ") STRICT;"
 
         /* Insert version (fails silently if already exists) */
         "INSERT OR IGNORE INTO schema_meta (key, value) "
@@ -147,7 +147,7 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    name TEXT NOT NULL UNIQUE,"
         "    enabled_at INTEGER NOT NULL,"
         "    custom_prefix TEXT"
-        ");"
+        ") STRICT;"
 
         /* Index for existence checks */
         "CREATE INDEX IF NOT EXISTS idx_enabled_name "
@@ -176,7 +176,7 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    stat_mtime INTEGER NOT NULL DEFAULT 0,"
         "    stat_size  INTEGER NOT NULL DEFAULT 0,"
         "    stat_ino   INTEGER NOT NULL DEFAULT 0"
-        ");"
+        ") STRICT;"
 
         /* Indexes for common queries (hot paths) */
         "CREATE INDEX IF NOT EXISTS idx_manifest_profile "

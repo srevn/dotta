@@ -1212,6 +1212,14 @@ error_t *cmd_apply(
         goto cleanup;
     }
 
+    /* Flush stat caches for files verified clean during workspace analysis.
+     * Within apply's transaction — committed atomically with deployment changes. */
+    err = workspace_flush_stat_caches(ws);
+    if (err) {
+        err = error_wrap(err, "Failed to flush stat caches");
+        goto cleanup;
+    }
+
     /* Extract manifest from workspace (borrowed reference, owned by workspace) */
     manifest = workspace_get_manifest(ws);
     if (!manifest) {
@@ -1553,6 +1561,14 @@ error_t *cmd_apply(
         (opts->keep_orphans || (file_orphan_count == 0 && dir_orphan_count == 0))) {
         /* No divergent files and (keeping orphans OR no orphans to clean) */
         output_info(out, "Nothing to deploy (workspace is clean)");
+
+        /* Commit transaction to persist stat cache updates from workspace flush */
+        err = state_save(repo, state);
+        if (err) {
+            err = error_wrap(err, "Failed to commit stat cache updates");
+            goto cleanup;
+        }
+
         err = NULL;
         goto cleanup;
     }
@@ -2135,8 +2151,17 @@ error_t *cmd_apply(
             for (size_t i = 0; i < string_array_size(deploy_res->deployed); i++) {
                 const char *path = string_array_get(deploy_res->deployed, i);
 
-                /* Update deployed_at to mark file as deployed */
-                err = state_update_deployed_at(state, path, now);
+                /* Capture stat from just-deployed file for fast-path cache.
+                 *
+                 * The file was just written and fsynced by deploy_file() — lstat()
+                 * is a cheap inode lookup from kernel cache. If lstat fails (rare:
+                 * file removed between deploy and here), pass NULL to clear cache. */
+                struct stat post_stat;
+                const stat_cache_t sc = (lstat(path, &post_stat) == 0)
+                    ? stat_cache_from_stat(&post_stat) : STAT_CACHE_UNSET;
+
+                /* Update deployed_at and stat cache */
+                err = state_update_post_deploy(state, path, now, &sc);
                 if (err) {
                     /* Non-fatal warning - deployment succeeded, just timestamp update failed
                      *
@@ -2183,7 +2208,15 @@ error_t *cmd_apply(
             for (size_t i = 0; i < string_array_size(deploy_res->adopted); i++) {
                 const char *path = string_array_get(deploy_res->adopted, i);
 
-                err = state_update_deployed_at(state, path, now);
+                /* Capture stat from adopted file for fast-path cache.
+                 *
+                 * Adopted files already existed with correct content — lstat()
+                 * is guaranteed to succeed (deploy_execute verified existence). */
+                struct stat adopted_stat;
+                const stat_cache_t sc = (lstat(path, &adopted_stat) == 0)
+                    ? stat_cache_from_stat(&adopted_stat) : STAT_CACHE_UNSET;
+
+                err = state_update_post_deploy(state, path, now, &sc);
                 if (err) {
                     /* Non-fatal: file is already correct on filesystem.
                      * Log warning and continue - the important fact (file exists

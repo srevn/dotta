@@ -964,6 +964,14 @@ error_t *cmd_status(
         goto cleanup;
     }
 
+    /* Flush verified stat caches to database (self-healing optimization).
+     * Seeds the fast path for subsequent status calls. Non-fatal on failure
+     * — status still renders correctly, just won't benefit from fast path. */
+    error_t *flush_err = workspace_flush_stat_caches(ws);
+    if (flush_err) {
+        error_free(flush_err);
+    }
+
     /* Extract manifest from workspace (borrowed reference, owned by workspace) */
     manifest = workspace_get_manifest(ws);
     if (!manifest) {

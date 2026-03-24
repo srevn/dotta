@@ -815,7 +815,23 @@ static error_t *auto_enable_and_sync_profile(
         goto cleanup;
     }
 
-    /* STEP 8: Commit transaction atomically */
+    /* STEP 8: Record stat cache for added files
+     *
+     * Files were just captured from filesystem — content matches blob_oid.
+     * lstat() is cheap (kernel cache hot from recent content_store_file_to_worktree).
+     * state_update_stat_cache returns success on not-found (file may have been
+     * filtered by precedence, so not all added_files end up in manifest). */
+    for (size_t i = 0; i < string_array_size(added_files); i++) {
+        const char *path = string_array_get(added_files, i);
+        struct stat st;
+        if (lstat(path, &st) == 0) {
+            stat_cache_t sc = stat_cache_from_stat(&st);
+            state_update_stat_cache(state, path, &sc);
+            /* Non-fatal: ignore errors (optimization only) */
+        }
+    }
+
+    /* STEP 9: Commit transaction atomically */
     err = state_save(repo, state);
     if (err) {
         err = error_wrap(err, "Failed to commit transaction");
@@ -1022,7 +1038,17 @@ static error_t *update_manifest_after_add(
         goto cleanup;
     }
 
-    /* STEP 6: Commit transaction */
+    /* STEP 6: Record stat cache for added files */
+    for (size_t i = 0; i < string_array_size(added_files); i++) {
+        const char *path = string_array_get(added_files, i);
+        struct stat st;
+        if (lstat(path, &st) == 0) {
+            stat_cache_t sc = stat_cache_from_stat(&st);
+            state_update_stat_cache(state, path, &sc);
+        }
+    }
+
+    /* STEP 7: Commit transaction */
     err = state_save(repo, state);
     if (err) {
         err = error_wrap(err, "Failed to save manifest updates");

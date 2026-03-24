@@ -1321,6 +1321,23 @@ static error_t *update_manifest_after_update(
         goto cleanup;
     }
 
+    /* Record stat cache for updated files (fast-path optimization)
+     *
+     * Files were just captured from filesystem — content matches blob_oid.
+     * Skip deleted items (file doesn't exist) and directories (no stat cache). */
+    for (size_t i = 0; i < item_count; i++) {
+        const workspace_item_t *item = all_items[i];
+        if (item->item_kind != WORKSPACE_ITEM_FILE ||
+            item->state == WORKSPACE_STATE_DELETED) {
+            continue;
+        }
+        struct stat st;
+        if (lstat(item->filesystem_path, &st) == 0) {
+            stat_cache_t sc = stat_cache_from_stat(&st);
+            state_update_stat_cache(state, item->filesystem_path, &sc);
+        }
+    }
+
     /* Commit transaction */
     err = state_save(repo, state);
     if (err) {

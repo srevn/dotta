@@ -28,7 +28,7 @@
 #include "utils/hashmap.h"
 
 /* Schema version - must match database */
-#define STATE_SCHEMA_VERSION "4"
+#define STATE_SCHEMA_VERSION "5"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -55,7 +55,8 @@ struct state {
 
     /* Prepared statements (initialized once, reused) */
     sqlite3_stmt *stmt_insert_file;         /* INSERT OR REPLACE virtual_manifest */
-    sqlite3_stmt *stmt_update_deployed_at;  /* UPDATE virtual_manifest SET deployed_at */
+    sqlite3_stmt *stmt_update_post_deploy;  /* UPDATE virtual_manifest SET deployed_at + stat cache */
+    sqlite3_stmt *stmt_update_stat_cache;   /* UPDATE virtual_manifest SET stat cache only */
     sqlite3_stmt *stmt_update_entry;        /* UPDATE virtual_manifest (full) */
     sqlite3_stmt *stmt_remove_file;         /* DELETE FROM virtual_manifest */
     sqlite3_stmt *stmt_file_exists;         /* SELECT 1 FROM virtual_manifest */
@@ -170,7 +171,11 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    "
         "    state TEXT NOT NULL DEFAULT 'active'"
         "      CHECK(state IN ('active', 'inactive', 'deleted', 'released')),"
-        "    deployed_at INTEGER NOT NULL DEFAULT 0"
+        "    deployed_at INTEGER NOT NULL DEFAULT 0,"
+        "    "
+        "    stat_mtime INTEGER NOT NULL DEFAULT 0,"
+        "    stat_size  INTEGER NOT NULL DEFAULT 0,"
+        "    stat_ino   INTEGER NOT NULL DEFAULT 0"
         ");"
 
         /* Indexes for common queries (hot paths) */
@@ -420,24 +425,40 @@ static error_t *prepare_statements(state_t *state) {
     const char *sql_insert =
         "INSERT OR REPLACE INTO virtual_manifest "
         "(filesystem_path, storage_path, profile, old_profile, git_oid, blob_oid, "
-        " type, mode, owner, \"group\", encrypted, state, deployed_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
+        " type, mode, owner, \"group\", encrypted, state, deployed_at, "
+        " stat_mtime, stat_size, stat_ino) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
 
     rc = sqlite3_prepare_v2(state->db, sql_insert, -1, &state->stmt_insert_file, NULL);
     if (rc != SQLITE_OK) {
         return sqlite_error(state->db, "Failed to prepare insert statement");
     }
 
-    /* Update deployed_at only (used by apply - hot path) */
-    const char *sql_update_deployed_at =
-        "UPDATE virtual_manifest SET deployed_at = ? "
+    /* Update deployed_at + stat cache (used by apply - hot path) */
+    const char *sql_update_post_deploy =
+        "UPDATE virtual_manifest "
+        "SET deployed_at = ?, stat_mtime = ?, stat_size = ?, stat_ino = ? "
         "WHERE filesystem_path = ?;";
 
-    rc = sqlite3_prepare_v2(state->db, sql_update_deployed_at, -1,
-                            &state->stmt_update_deployed_at, NULL);
+    rc = sqlite3_prepare_v2(state->db, sql_update_post_deploy, -1,
+                            &state->stmt_update_post_deploy, NULL);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
-        return sqlite_error(state->db, "Failed to prepare update deployed_at statement");
+        return sqlite_error(state->db, "Failed to prepare update post-deploy statement");
+    }
+
+    /* Update stat cache only (used by add/update/enable after sync_entry_to_state) */
+    const char *sql_update_stat_cache =
+        "UPDATE virtual_manifest "
+        "SET stat_mtime = ?, stat_size = ?, stat_ino = ? "
+        "WHERE filesystem_path = ?;";
+
+    rc = sqlite3_prepare_v2(state->db, sql_update_stat_cache, -1,
+                            &state->stmt_update_stat_cache, NULL);
+    if (rc != SQLITE_OK) {
+        sqlite3_finalize(state->stmt_insert_file);
+        sqlite3_finalize(state->stmt_update_post_deploy);
+        return sqlite_error(state->db, "Failed to prepare update stat cache statement");
     }
 
     /* Update full entry (used by manifest sync operations) */
@@ -445,14 +466,16 @@ static error_t *prepare_statements(state_t *state) {
         "UPDATE virtual_manifest SET "
         "storage_path = ?, profile = ?, old_profile = ?, git_oid = ?, blob_oid = ?, "
         "type = ?, mode = ?, owner = ?, \"group\" = ?, encrypted = ?, "
-        "state = ?, deployed_at = ? "
+        "state = ?, deployed_at = ?, "
+        "stat_mtime = ?, stat_size = ?, stat_ino = ? "
         "WHERE filesystem_path = ?;";
 
     rc = sqlite3_prepare_v2(state->db, sql_update_entry, -1,
                             &state->stmt_update_entry, NULL);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_deployed_at);
+        sqlite3_finalize(state->stmt_update_post_deploy);
+        sqlite3_finalize(state->stmt_update_stat_cache);
         return sqlite_error(state->db, "Failed to prepare update entry statement");
     }
 
@@ -463,7 +486,8 @@ static error_t *prepare_statements(state_t *state) {
     rc = sqlite3_prepare_v2(state->db, sql_exists, -1, &state->stmt_file_exists, NULL);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_deployed_at);
+        sqlite3_finalize(state->stmt_update_post_deploy);
+        sqlite3_finalize(state->stmt_update_stat_cache);
         sqlite3_finalize(state->stmt_update_entry);
         return sqlite_error(state->db, "Failed to prepare exists statement");
     }
@@ -471,13 +495,15 @@ static error_t *prepare_statements(state_t *state) {
     /* Get file (used in workspace analysis) */
     const char *sql_get =
         "SELECT storage_path, profile, old_profile, git_oid, blob_oid, "
-        "type, mode, owner, \"group\", encrypted, state, deployed_at "
+        "type, mode, owner, \"group\", encrypted, state, deployed_at, "
+        "stat_mtime, stat_size, stat_ino "
         "FROM virtual_manifest WHERE filesystem_path = ?;";
 
     rc = sqlite3_prepare_v2(state->db, sql_get, -1, &state->stmt_get_file, NULL);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_deployed_at);
+        sqlite3_finalize(state->stmt_update_post_deploy);
+        sqlite3_finalize(state->stmt_update_stat_cache);
         sqlite3_finalize(state->stmt_update_entry);
         sqlite3_finalize(state->stmt_file_exists);
         return sqlite_error(state->db, "Failed to prepare get statement");
@@ -486,13 +512,15 @@ static error_t *prepare_statements(state_t *state) {
     /* Get entries by profile (used by profile disable) */
     const char *sql_by_profile =
         "SELECT filesystem_path, storage_path, profile, old_profile, git_oid, blob_oid, "
-        "type, mode, owner, \"group\", encrypted, state, deployed_at "
+        "type, mode, owner, \"group\", encrypted, state, deployed_at, "
+        "stat_mtime, stat_size, stat_ino "
         "FROM virtual_manifest WHERE profile = ?;";
 
     rc = sqlite3_prepare_v2(state->db, sql_by_profile, -1, &state->stmt_get_by_profile, NULL);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_deployed_at);
+        sqlite3_finalize(state->stmt_update_post_deploy);
+        sqlite3_finalize(state->stmt_update_stat_cache);
         sqlite3_finalize(state->stmt_update_entry);
         sqlite3_finalize(state->stmt_file_exists);
         sqlite3_finalize(state->stmt_get_file);
@@ -506,7 +534,8 @@ static error_t *prepare_statements(state_t *state) {
     rc = sqlite3_prepare_v2(state->db, sql_remove, -1, &state->stmt_remove_file, NULL);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_deployed_at);
+        sqlite3_finalize(state->stmt_update_post_deploy);
+        sqlite3_finalize(state->stmt_update_stat_cache);
         sqlite3_finalize(state->stmt_update_entry);
         sqlite3_finalize(state->stmt_file_exists);
         sqlite3_finalize(state->stmt_get_file);
@@ -522,7 +551,8 @@ static error_t *prepare_statements(state_t *state) {
     rc = sqlite3_prepare_v2(state->db, sql_profile, -1, &state->stmt_insert_profile, NULL);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_deployed_at);
+        sqlite3_finalize(state->stmt_update_post_deploy);
+        sqlite3_finalize(state->stmt_update_stat_cache);
         sqlite3_finalize(state->stmt_update_entry);
         sqlite3_finalize(state->stmt_file_exists);
         sqlite3_finalize(state->stmt_get_file);
@@ -550,9 +580,14 @@ static void finalize_statements(state_t *state) {
         state->stmt_insert_file = NULL;
     }
 
-    if (state->stmt_update_deployed_at) {
-        sqlite3_finalize(state->stmt_update_deployed_at);
-        state->stmt_update_deployed_at = NULL;
+    if (state->stmt_update_post_deploy) {
+        sqlite3_finalize(state->stmt_update_post_deploy);
+        state->stmt_update_post_deploy = NULL;
+    }
+
+    if (state->stmt_update_stat_cache) {
+        sqlite3_finalize(state->stmt_update_stat_cache);
+        state->stmt_update_stat_cache = NULL;
     }
 
     if (state->stmt_update_entry) {
@@ -1161,6 +1196,11 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
     /* 13. deployed_at */
     sqlite3_bind_int64(state->stmt_insert_file, 13, (sqlite3_int64)entry->deployed_at);
 
+    /* 14-16. stat cache (fast-path divergence detection) */
+    sqlite3_bind_int64(state->stmt_insert_file, 14, entry->stat_cache.mtime);
+    sqlite3_bind_int64(state->stmt_insert_file, 15, entry->stat_cache.size);
+    sqlite3_bind_int64(state->stmt_insert_file, 16, (sqlite3_int64)entry->stat_cache.ino);
+
     /* Execute (don't finalize - statement is reused) */
     int rc = sqlite3_step(state->stmt_insert_file);
 
@@ -1274,7 +1314,8 @@ error_t *state_get_file(
         return sqlite_error(state->db, "Failed to query file");
     }
 
-    /* Extract all 13 columns from scope-based schema */
+    /* Extract columns from scope-based schema
+     * Columns 0-11: core fields, 12-14: stat cache */
     const char *storage_path = (const char *)sqlite3_column_text(stmt, 0);
     const char *profile = (const char *)sqlite3_column_text(stmt, 1);
     const char *old_profile = (const char *)sqlite3_column_text(stmt, 2);
@@ -1293,6 +1334,13 @@ error_t *state_get_file(
     int encrypted = sqlite3_column_int(stmt, 9);
     const char *state_str = (const char *)sqlite3_column_text(stmt, 10);
     sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 11);
+
+    /* Stat cache (fast-path divergence detection) */
+    stat_cache_t stat_cache = {
+        .mtime = sqlite3_column_int64(stmt, 12),
+        .size  = sqlite3_column_int64(stmt, 13),
+        .ino   = (uint64_t)sqlite3_column_int64(stmt, 14),
+    };
 
     /* Validate required columns */
     if (!storage_path || !profile || !git_oid || !blob_oid || !type_str) {
@@ -1328,6 +1376,8 @@ error_t *state_get_file(
     );
 
     if (err) return err;
+
+    entry->stat_cache = stat_cache;
 
     *out = entry;
     return NULL;
@@ -1388,10 +1438,11 @@ error_t *state_get_all_files(
         return ERROR(ERR_MEMORY, "Failed to allocate file array");
     }
 
-    /* Query all files with scope-based schema (13 columns) */
+    /* Query all files (16 columns: 13 core + 3 stat cache) */
     const char *sql_files =
         "SELECT filesystem_path, storage_path, profile, old_profile, git_oid, blob_oid, "
-        "type, mode, owner, \"group\", encrypted, state, deployed_at "
+        "type, mode, owner, \"group\", encrypted, state, deployed_at, "
+        "stat_mtime, stat_size, stat_ino "
         "FROM virtual_manifest ORDER BY filesystem_path;";
 
     sqlite3_stmt *stmt = NULL;
@@ -1403,7 +1454,8 @@ error_t *state_get_all_files(
 
     size_t i = 0;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < file_count) {
-        /* Get all 13 columns with NULL checking (scope-based schema) */
+        /* Get columns with NULL checking (scope-based schema)
+         * Columns 0-12: core fields, 13-15: stat cache */
         const char *fs_path = (const char *)sqlite3_column_text(stmt, 0);
         const char *storage_path = (const char *)sqlite3_column_text(stmt, 1);
         const char *profile = (const char *)sqlite3_column_text(stmt, 2);
@@ -1423,6 +1475,13 @@ error_t *state_get_all_files(
         int encrypted = sqlite3_column_int(stmt, 10);
         const char *state_str = (const char *)sqlite3_column_text(stmt, 11);
         sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 12);
+
+        /* Stat cache (fast-path divergence detection) */
+        stat_cache_t stat_cache = {
+            .mtime = sqlite3_column_int64(stmt, 13),
+            .size  = sqlite3_column_int64(stmt, 14),
+            .ino   = (uint64_t)sqlite3_column_int64(stmt, 15),
+        };
 
         /* Validate non-nullable columns */
         if (!fs_path || !storage_path || !profile ||
@@ -1456,6 +1515,7 @@ error_t *state_get_all_files(
         entries[i].encrypted = (encrypted != 0);
         entries[i].state = state_str ? strdup(state_str) : strdup(STATE_ACTIVE);
         entries[i].deployed_at = (time_t)deployed_at;
+        entries[i].stat_cache = stat_cache;
 
         /* Check allocation success */
         if (!entries[i].filesystem_path || !entries[i].storage_path || !entries[i].profile ||
@@ -2807,38 +2867,53 @@ error_t *state_create_entry(
 }
 
 /**
- * Update deployed_at timestamp (optimized hot path for apply)
+ * Update post-deploy state (optimized hot path for apply)
  *
- * Updates only the deployed_at field to record lifecycle state.
- * Hot path - called during apply for all deployed files.
+ * Updates deployed_at and stat cache fields after successful deployment.
+ * Hot path - called during apply for all deployed and adopted files.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param filesystem_path File path to update (must not be NULL)
  * @param deployed_at New deployed_at timestamp (use time(NULL) for current time)
+ * @param stat_cache Stat cache to record (NULL writes zeros, clearing the cache)
  * @return Error or NULL on success (not found is an error)
  */
-error_t *state_update_deployed_at(
+error_t *state_update_post_deploy(
     state_t *state,
     const char *filesystem_path,
-    time_t deployed_at
+    time_t deployed_at,
+    const stat_cache_t *stat_cache
 ) {
     CHECK_NULL(state);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(state->db);
-    CHECK_NULL(state->stmt_update_deployed_at);
+    CHECK_NULL(state->stmt_update_post_deploy);
 
     /* Reset and bind */
-    sqlite3_reset(state->stmt_update_deployed_at);
-    sqlite3_clear_bindings(state->stmt_update_deployed_at);
+    sqlite3_reset(state->stmt_update_post_deploy);
+    sqlite3_clear_bindings(state->stmt_update_post_deploy);
 
-    sqlite3_bind_int64(state->stmt_update_deployed_at, 1, (sqlite3_int64)deployed_at);
-    sqlite3_bind_text(state->stmt_update_deployed_at, 2, filesystem_path, -1, SQLITE_TRANSIENT);
+    /* SQL: SET deployed_at = ?, stat_mtime = ?, stat_size = ?, stat_ino = ?
+     *      WHERE filesystem_path = ? */
+    sqlite3_bind_int64(state->stmt_update_post_deploy, 1, (sqlite3_int64)deployed_at);
+
+    if (stat_cache) {
+        sqlite3_bind_int64(state->stmt_update_post_deploy, 2, stat_cache->mtime);
+        sqlite3_bind_int64(state->stmt_update_post_deploy, 3, stat_cache->size);
+        sqlite3_bind_int64(state->stmt_update_post_deploy, 4, (sqlite3_int64)stat_cache->ino);
+    } else {
+        sqlite3_bind_int64(state->stmt_update_post_deploy, 2, 0);
+        sqlite3_bind_int64(state->stmt_update_post_deploy, 3, 0);
+        sqlite3_bind_int64(state->stmt_update_post_deploy, 4, 0);
+    }
+
+    sqlite3_bind_text(state->stmt_update_post_deploy, 5, filesystem_path, -1, SQLITE_TRANSIENT);
 
     /* Execute */
-    int rc = sqlite3_step(state->stmt_update_deployed_at);
+    int rc = sqlite3_step(state->stmt_update_post_deploy);
 
     if (rc != SQLITE_DONE) {
-        return sqlite_error(state->db, "Failed to update deployed_at");
+        return sqlite_error(state->db, "Failed to update post-deploy state");
     }
 
     /* Check if row was actually updated */
@@ -2846,6 +2921,57 @@ error_t *state_update_deployed_at(
     if (changes == 0) {
         return ERROR(ERR_NOT_FOUND, "File '%s' not found in manifest", filesystem_path);
     }
+
+    return NULL;
+}
+
+/**
+ * Update stat cache only (fast-path divergence optimization)
+ *
+ * Records filesystem stat for a manifest entry without changing deployed_at.
+ * Used by add/update/enable paths where the file is known to match blob_oid
+ * but the entry was just synced via sync_entry_to_state() (which always
+ * writes STAT_CACHE_UNSET).
+ *
+ * Not-found is not an error: the entry may not exist if the profile
+ * is disabled or the file was filtered by precedence. Callers should
+ * not need to check existence before calling.
+ *
+ * @param state State (must not be NULL, must have active transaction)
+ * @param filesystem_path File path to update (must not be NULL)
+ * @param stat_cache Stat cache to record (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_update_stat_cache(
+    state_t *state,
+    const char *filesystem_path,
+    const stat_cache_t *stat_cache
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(stat_cache);
+    CHECK_NULL(state->db);
+    CHECK_NULL(state->stmt_update_stat_cache);
+
+    /* Reset and bind */
+    sqlite3_reset(state->stmt_update_stat_cache);
+    sqlite3_clear_bindings(state->stmt_update_stat_cache);
+
+    /* SQL: SET stat_mtime = ?, stat_size = ?, stat_ino = ?
+     *      WHERE filesystem_path = ? */
+    sqlite3_bind_int64(state->stmt_update_stat_cache, 1, stat_cache->mtime);
+    sqlite3_bind_int64(state->stmt_update_stat_cache, 2, stat_cache->size);
+    sqlite3_bind_int64(state->stmt_update_stat_cache, 3, (sqlite3_int64)stat_cache->ino);
+    sqlite3_bind_text(state->stmt_update_stat_cache, 4, filesystem_path, -1, SQLITE_TRANSIENT);
+
+    /* Execute */
+    int rc = sqlite3_step(state->stmt_update_stat_cache);
+
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to update stat cache");
+    }
+
+    /* Not-found is OK — entry may not exist (disabled profile, filtered by precedence) */
 
     return NULL;
 }
@@ -2981,7 +3107,7 @@ error_t *state_update_entry(
     const char *type_str = entry->type == STATE_FILE_REGULAR ? "file" :
                            entry->type == STATE_FILE_SYMLINK ? "symlink" : "executable";
 
-    /* Reset and bind all 13 fields + filesystem_path for WHERE clause */
+    /* Reset and bind all 15 fields + filesystem_path for WHERE clause */
     sqlite3_reset(state->stmt_update_entry);
     sqlite3_clear_bindings(state->stmt_update_entry);
 
@@ -3028,8 +3154,13 @@ error_t *state_update_entry(
     /* 12. deployed_at */
     sqlite3_bind_int64(state->stmt_update_entry, 12, (sqlite3_int64)entry->deployed_at);
 
-    /* 13. filesystem_path for WHERE clause */
-    sqlite3_bind_text(state->stmt_update_entry, 13, entry->filesystem_path, -1, SQLITE_TRANSIENT);
+    /* 13-15. stat cache (fast-path divergence detection) */
+    sqlite3_bind_int64(state->stmt_update_entry, 13, entry->stat_cache.mtime);
+    sqlite3_bind_int64(state->stmt_update_entry, 14, entry->stat_cache.size);
+    sqlite3_bind_int64(state->stmt_update_entry, 15, (sqlite3_int64)entry->stat_cache.ino);
+
+    /* 16. filesystem_path for WHERE clause */
+    sqlite3_bind_text(state->stmt_update_entry, 16, entry->filesystem_path, -1, SQLITE_TRANSIENT);
 
     /* Execute */
     int rc = sqlite3_step(state->stmt_update_entry);
@@ -3198,6 +3329,13 @@ error_t *state_get_entries_by_profile(
         const char *state_str = (const char *)sqlite3_column_text(stmt, 11);
         sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 12);
 
+        /* Stat cache (fast-path divergence detection) */
+        stat_cache_t stat_cache = {
+            .mtime = sqlite3_column_int64(stmt, 13),
+            .size  = sqlite3_column_int64(stmt, 14),
+            .ino   = (uint64_t)sqlite3_column_int64(stmt, 15),
+        };
+
         if (!fs_path || !storage_path || !profile || !git_oid || !blob_oid || !type_str) {
             state_free_all_files(entries, i);
             return ERROR(ERR_STATE_INVALID, "NULL value in required column at row %zu", i);
@@ -3224,6 +3362,7 @@ error_t *state_get_entries_by_profile(
         entries[i].encrypted = (encrypted != 0);
         entries[i].state = state_str ? strdup(state_str) : strdup(STATE_ACTIVE);
         entries[i].deployed_at = (time_t)deployed_at;
+        entries[i].stat_cache = stat_cache;
 
         if (!entries[i].filesystem_path || !entries[i].storage_path || !entries[i].profile ||
             !entries[i].git_oid || !entries[i].blob_oid || !entries[i].state) {

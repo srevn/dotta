@@ -439,6 +439,25 @@ bool workspace_item_extract_display_info(
 bool workspace_is_stale(const workspace_t *ws);
 
 /**
+ * Flush accumulated stat cache updates to the state database
+ *
+ * During workspace_load(), files verified clean via the slow path (content
+ * comparison) accumulate stat cache updates. This function persists those
+ * updates so subsequent runs benefit from the fast path.
+ *
+ * This makes the stat cache self-healing: the first status/apply after
+ * profile enable verifies all files via the slow path and seeds the cache.
+ * The second call hits the fast path for unchanged files.
+ *
+ * Safe to call on any workspace — returns immediately if no updates pending.
+ * Uses the workspace's internal state handle for database writes.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *workspace_flush_stat_caches(workspace_t *ws);
+
+/**
  * Free workspace
  *
  * Frees all internal state and divergence analysis results.

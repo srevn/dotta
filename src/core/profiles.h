@@ -100,6 +100,7 @@ typedef struct {
     char *group;                     /* Group name (root/ files only, can be NULL) */
     bool encrypted;                  /* Encryption flag */
     time_t deployed_at;              /* Lifecycle timestamp (0 = never deployed, >0 = known) */
+    stat_cache_t stat_cache;         /* Filesystem stat at last known-good state (all-zero = unset) */
 } file_entry_t;
 
 /**

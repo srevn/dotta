@@ -57,6 +57,20 @@ typedef struct {
 } merged_metadata_entry_t;
 
 /**
+ * Pending stat cache update (internal type)
+ *
+ * Accumulated during analyze_file_divergence() when the slow path confirms
+ * CMP_EQUAL. The verified filesystem stat should be persisted so subsequent
+ * runs benefit from the fast path.
+ *
+ * Path is borrowed from the manifest entry (valid for workspace lifetime).
+ */
+typedef struct {
+    const char *filesystem_path;     /* Target path (borrowed from manifest entry) */
+    stat_cache_t stat;               /* Captured stat triple for cache seeding */
+} stat_cache_update_t;
+
+/**
  * Workspace structure
  *
  * Contains indexed views of all three states plus divergence analysis.
@@ -80,13 +94,13 @@ struct workspace {
     /* Unified metadata view with profile precedence applied */
     hashmap_t *merged_metadata;      /* Owned map: key -> merged_metadata_entry_t* */
     merged_metadata_entry_t *merged_entries;  /* Owned array of entries */
-    size_t merged_count;
-    size_t merged_capacity;
+    size_t merged_count;             /* Number of merged entries */
+    size_t merged_capacity;          /* Allocated capacity of merged array */
 
     /* Divergence tracking */
     workspace_item_t *diverged;      /* Array of diverged items (files and directories) */
-    size_t diverged_count;
-    size_t diverged_capacity;
+    size_t diverged_count;           /* Number of diverged items */
+    size_t diverged_capacity;        /* Allocated capacity of diverged array */
     hashmap_t *diverged_index;       /* Maps filesystem_path -> array index+1 (as void*) */
 
     /* Staleness tracking */
@@ -95,9 +109,14 @@ struct workspace {
     hashmap_t *released_paths;       /* Entries removed from Git (NULL if no staleness) */
     const hashmap_t *repaired_paths; /* From manifest_repair_stale: path -> old_blob_oid (borrowed) */
 
+    /* Stat cache updates (accumulated during divergence analysis) */
+    stat_cache_update_t *stat_updates;  /* Pending slow-path updates (owned) */
+    size_t stat_update_count;        /* Number of pending updates */
+    size_t stat_update_capacity;     /* Allocated capacity of updates array */
+
     /* Status cache */
-    workspace_status_t status;
-    bool status_computed;
+    workspace_status_t status;       /* Cached cleanliness assessment */
+    bool status_computed;            /* True if status has been evaluated */
 };
 
 /**
@@ -375,6 +394,38 @@ static error_t *workspace_add_diverged(
 }
 
 /**
+ * Record a stat cache update for later flushing
+ *
+ * Called from analyze_file_divergence() when the slow path confirms CMP_EQUAL.
+ * Accumulates the verified stat so workspace_flush_stat_caches() can persist it.
+ *
+ * Best-effort: silently skips on OOM rather than failing the analysis.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @param filesystem_path Path (borrowed from manifest, valid for workspace lifetime)
+ * @param st Verified filesystem stat
+ */
+static void workspace_record_stat_update(
+    workspace_t *ws,
+    const char *filesystem_path,
+    const struct stat *st
+) {
+    if (ws->stat_update_count >= ws->stat_update_capacity) {
+        size_t new_cap = ws->stat_update_capacity ? ws->stat_update_capacity * 2 : 16;
+        stat_cache_update_t *new_arr = realloc(ws->stat_updates,
+                                               new_cap * sizeof(stat_cache_update_t));
+        if (!new_arr) return;
+        ws->stat_updates = new_arr;
+        ws->stat_update_capacity = new_cap;
+    }
+
+    ws->stat_updates[ws->stat_update_count++] = (stat_cache_update_t){
+        .filesystem_path = filesystem_path,
+        .stat = stat_cache_from_stat(st),
+    };
+}
+
+/**
  * Fast OID-based content verification for non-encrypted files
  *
  * Computes SHA-1 hash of filesystem file and compares to expected blob OID.
@@ -609,56 +660,79 @@ static error_t *analyze_file_divergence(
         compare_result_t cmp_result;
         error_t *err = NULL;
 
-        /* Comparison strategy selection based on encryption status
+        /* STAT CACHE FAST PATH
          *
-         * Non-encrypted: Hash filesystem file and compare OID directly.
-         * Encrypted: blob_oid is ciphertext hash; must load, decrypt, compare.
+         * If the filesystem stat matches the cached stat from when content was
+         * last verified/deployed, skip content comparison entirely. This is the
+         * same approach Git uses with its index.
          *
-         * Both paths receive initial_stat to avoid redundant lstat syscalls.
+         * The stat cache is valid if the filesystem file was last verified or
+         * deployed to match the current blob_oid. On match, we know content is
+         * unchanged — set CMP_EQUAL and use initial_stat for permission checks.
+         *
+         * On miss (stat differs or cache unset), fall through to the existing
+         * content comparison. False misses are harmless (just slower). False
+         * positives cannot occur through normal filesystem operations because
+         * the mtime+size+ino triple catches all content-changing operations.
          */
-        if (!manifest_entry->encrypted) {
-            /* Fast path: OID hash verification */
-            err = verify_oid_matches_disk(
-                &blob_oid,
-                fs_path,
-                expected_mode,
-                &initial_stat,
-                &cmp_result,
-                &file_stat
-            );
+        const stat_cache_t *cached = &manifest_entry->stat_cache;
+        if (cached->mtime != 0
+            && cached->mtime == (int64_t)initial_stat.st_mtime
+            && cached->size  == (int64_t)initial_stat.st_size
+            && cached->ino   == (uint64_t)initial_stat.st_ino) {
+            cmp_result = CMP_EQUAL;
+            file_stat = initial_stat;
         } else {
-            /* SLOW PATH: Content comparison for encrypted files
+            /* SLOW PATH: Full content comparison
              *
-             * Content cache provides:
-             * - Automatic decryption (uses encrypted flag from VWD cache)
-             * - Caching (repeated checks for same blob don't re-decrypt)
-             * - Error handling (missing key, corrupt data, etc.)
+             * Strategy selection based on encryption status:
+             * - Non-encrypted: Hash filesystem file and compare OID directly
+             * - Encrypted: blob_oid is ciphertext hash; must load, decrypt, compare
+             *
+             * Both paths receive initial_stat to avoid redundant lstat syscalls.
              */
-            const buffer_t *expected_content = NULL;
-            err = content_cache_get_from_blob_oid(
-                ws->content_cache,
-                &blob_oid,
-                storage_path,
-                profile,
-                manifest_entry->encrypted,
-                &expected_content
-            );
-
-            if (!err) {
-                err = compare_buffer_to_disk(
-                    expected_content,
+            if (!manifest_entry->encrypted) {
+                err = verify_oid_matches_disk(
+                    &blob_oid,
                     fs_path,
                     expected_mode,
                     &initial_stat,
                     &cmp_result,
                     &file_stat
                 );
-            }
-            /* Note: Don't free expected_content - cache owns it! */
-        }
+            } else {
+                const buffer_t *expected_content = NULL;
+                err = content_cache_get_from_blob_oid(
+                    ws->content_cache,
+                    &blob_oid,
+                    storage_path,
+                    profile,
+                    manifest_entry->encrypted,
+                    &expected_content
+                );
 
-        if (err) {
-            return error_wrap(err, "Failed to verify '%s'", fs_path);
+                if (!err) {
+                    err = compare_buffer_to_disk(
+                        expected_content,
+                        fs_path,
+                        expected_mode,
+                        &initial_stat,
+                        &cmp_result,
+                        &file_stat
+                    );
+                }
+                /* Note: Don't free expected_content - cache owns it! */
+            }
+
+            if (err) {
+                return error_wrap(err, "Failed to verify '%s'", fs_path);
+            }
+
+            /* Slow path verified content — seed stat cache for fast path.
+             * On next run, the stat cache check above will hit and skip comparison. */
+            if (cmp_result == CMP_EQUAL) {
+                workspace_record_stat_update(ws, fs_path, &file_stat);
+            }
         }
 
         /* Set divergence flags based on comparison result */
@@ -1646,13 +1720,13 @@ static error_t *scan_directory_for_untracked(
                     full_path,
                     storage_path,
                     profile,
-                    NULL,  /* No old_profile for untracked */
+                    NULL,                       /* No old_profile for untracked */
                     WORKSPACE_STATE_UNTRACKED,  /* State: on filesystem in tracked dir */
                     DIVERGENCE_NONE,            /* Divergence: none */
                     WORKSPACE_ITEM_FILE,
-                    true,   /* on filesystem */
-                    true,   /* profile_enabled */
-                    false   /* No profile change */
+                    true,                       /* on filesystem */
+                    true,                       /* profile_enabled */
+                    false                       /* No profile change */
                 );
 
                 free(storage_path);
@@ -1886,13 +1960,13 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                     filesystem_path,
                     storage_path,
                     profile_name,
-                    NULL,  /* No old_profile for directories */
+                    NULL,                     /* No old_profile for directories */
                     WORKSPACE_STATE_DELETED,  /* State: was in profile, removed from filesystem */
                     DIVERGENCE_NONE,          /* Divergence: none (file is gone) */
                     WORKSPACE_ITEM_DIRECTORY,
-                    false,  /* on_filesystem (deleted) */
-                    true,   /* profile_enabled */
-                    false   /* No profile change */
+                    false,                    /* on_filesystem (deleted) */
+                    true,                     /* profile_enabled */
+                    false                     /* No profile change */
                 );
 
                 if (err) {
@@ -1926,13 +2000,13 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 filesystem_path,
                 storage_path,
                 profile_name,
-                NULL,  /* No old_profile for directories */
+                NULL,                      /* No old_profile for directories */
                 WORKSPACE_STATE_DEPLOYED,  /* Path exists, just wrong type */
                 DIVERGENCE_TYPE,           /* Type changed (dir → file/symlink) */
                 WORKSPACE_ITEM_DIRECTORY,
-                true,   /* on_filesystem (path exists, wrong type) */
-                true,   /* profile_enabled */
-                false   /* No profile change */
+                true,                      /* on_filesystem (path exists, wrong type) */
+                true,                      /* profile_enabled */
+                false                      /* No profile change */
             );
 
             if (err) {
@@ -1974,13 +2048,13 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 filesystem_path,
                 storage_path,
                 profile_name,
-                NULL,  /* No old_profile for directories */
+                NULL,                      /* No old_profile for directories */
                 WORKSPACE_STATE_DEPLOYED,  /* State: directory exists as expected */
                 divergence,                /* Divergence: mode/ownership flags */
                 WORKSPACE_ITEM_DIRECTORY,
-                true,   /* on_filesystem */
-                true,   /* profile_enabled */
-                false   /* No profile change */
+                true,                      /* on_filesystem */
+                true,                      /* profile_enabled */
+                false                      /* No profile change */
             );
 
             if (err) {
@@ -2179,8 +2253,8 @@ static error_t *analyze_encryption_policy_mismatch(
                     DIVERGENCE_ENCRYPTION, /* Divergence: encryption policy violated */
                     WORKSPACE_ITEM_FILE,
                     false, /* on_filesystem (unknown, encryption check is in-repo only) */
-                    true,  /* profile_enabled */
-                    false  /* No profile change */
+                    true,                  /* profile_enabled */
+                    false                  /* No profile change */
                 );
 
                 if (err) {
@@ -2430,6 +2504,12 @@ static error_t *patch_entry_from_fresh(
     }
 
     vwd_entry->encrypted = new_encrypted;
+
+    /* Invalidate stat cache — blob_oid may have changed, so the cached stat
+     * (recorded against the OLD blob_oid) is no longer valid. Clearing forces
+     * the slow path in analyze_file_divergence(), which correctly compares
+     * filesystem content against the NEW expected blob_oid. */
+    vwd_entry->stat_cache = STAT_CACHE_UNSET;
 
     /* Update source_profile if owner changed (precedence shift) */
     if (fresh_entry->source_profile &&
@@ -2746,6 +2826,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             entry->group = state_entry->group ? strdup(state_entry->group) : NULL;
             entry->encrypted = state_entry->encrypted;
             entry->deployed_at = state_entry->deployed_at;
+            entry->stat_cache = state_entry->stat_cache;
             entry->entry = NULL;
 
             /* Check for allocation failures in VWD fields */
@@ -3563,6 +3644,39 @@ bool workspace_is_stale(const workspace_t *ws) {
 }
 
 /**
+ * Flush accumulated stat cache updates to the state database
+ */
+error_t *workspace_flush_stat_caches(workspace_t *ws) {
+    CHECK_NULL(ws);
+
+    if (ws->stat_update_count == 0) {
+        return NULL;
+    }
+
+    /* state may be NULL for empty databases (no manifest, no files).
+     * stat_update_count should be 0 in this case, but guard defensively. */
+    if (!ws->state) {
+        return NULL;
+    }
+
+    for (size_t i = 0; i < ws->stat_update_count; i++) {
+        error_t *err = state_update_stat_cache(
+            ws->state,
+            ws->stat_updates[i].filesystem_path,
+            &ws->stat_updates[i].stat
+        );
+        if (err) {
+            return error_wrap(err, "Failed to flush stat cache for '%s'",
+                              ws->stat_updates[i].filesystem_path);
+        }
+    }
+
+    ws->stat_update_count = 0;
+
+    return NULL;
+}
+
+/**
  * Free workspace
  */
 void workspace_free(workspace_t *ws) {
@@ -3579,6 +3693,9 @@ void workspace_free(workspace_t *ws) {
         free(ws->diverged[i].old_profile);  /* Free profile change tracking */
     }
     free(ws->diverged);
+
+    /* Free stat cache updates (paths are borrowed, stat is plain data) */
+    free(ws->stat_updates);
 
     /* Free indices (values are borrowed, so pass NULL for value free function) */
     hashmap_free(ws->profile_index, NULL);

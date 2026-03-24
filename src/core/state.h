@@ -24,6 +24,7 @@
 #define DOTTA_STATE_H
 
 #include <git2.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <types.h>
 
@@ -76,6 +77,40 @@ static inline git_filemode_t state_type_to_git_filemode(state_file_type_t type) 
 }
 
 /**
+ * Stat cache for fast-path divergence detection
+ *
+ * Captures filesystem stat fields at a point when the file is known to match
+ * the manifest's blob_oid. If the current stat matches, content comparison
+ * can be skipped entirely — the same approach Git uses with its index.
+ *
+ * Sentinel: All-zero state means unset — forces the slow path (safe default).
+ * mtime == 0 acts as validity gate: a file with genuine mtime=0 (epoch)
+ * simply never benefits from the fast path — correct, just not optimized.
+ */
+typedef struct {
+    int64_t  mtime;   /* st_mtime seconds at last known-good state (0 = unset) */
+    int64_t  size;    /* st_size at last known-good state */
+    uint64_t ino;     /* st_ino at last known-good state */
+} stat_cache_t;
+
+#define STAT_CACHE_UNSET ((stat_cache_t){0})
+
+/**
+ * Populate stat cache from a struct stat
+ *
+ * Captures the three fields used for fast-path validation.
+ * Call this after a filesystem write or verification confirms
+ * the file matches the current blob_oid.
+ */
+static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
+    return (stat_cache_t){
+        .mtime = (int64_t)st->st_mtime,
+        .size  = (int64_t)st->st_size,
+        .ino   = (uint64_t)st->st_ino,
+    };
+}
+
+/**
  * State file entry (virtual manifest entry)
  *
  * Represents the manifest (scope definition) - which files should exist
@@ -118,6 +153,9 @@ typedef struct {
     /* Lifecycle tracking */
     char *state;                /* Lifecycle state (STATE_ACTIVE/STATE_INACTIVE etc.) */
     time_t deployed_at;         /* Lifecycle timestamp (0 = never deployed, >0 = known) */
+
+    /* Stat cache */
+    stat_cache_t stat_cache;    /* Filesystem stat at last known-good state (all-zero = unset) */
 } state_file_entry_t;
 
 /**
@@ -508,20 +546,44 @@ error_t *state_create_entry(
 void state_free_entry(state_file_entry_t *entry);
 
 /**
- * Update deployed_at timestamp (optimized hot path for apply)
+ * Update post-deploy state (optimized hot path for apply)
  *
- * Updates only the deployed_at field of a manifest entry.
- * Used during apply after successful deployment to record lifecycle state.
+ * Updates deployed_at timestamp and stat cache for a manifest entry.
+ * Used during apply after successful deployment to record lifecycle state
+ * and cache filesystem stat for fast-path divergence detection.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param filesystem_path File path to update (must not be NULL)
  * @param deployed_at New deployed_at timestamp (use time(NULL) for current time)
+ * @param stat_cache Stat cache to record (NULL writes zeros, clearing the cache)
  * @return Error or NULL on success (not found is an error)
  */
-error_t *state_update_deployed_at(
+error_t *state_update_post_deploy(
     state_t *state,
     const char *filesystem_path,
-    time_t deployed_at
+    time_t deployed_at,
+    const stat_cache_t *stat_cache
+);
+
+/**
+ * Update stat cache only (fast-path divergence optimization)
+ *
+ * Records filesystem stat for a manifest entry without changing deployed_at.
+ * Used by:
+ * - workspace_flush_stat_caches(): persists verified stats from analysis
+ * - add/update/enable paths: records stat after sync_entry_to_state()
+ *
+ * Works in both transactional (apply) and auto-commit (status) modes.
+ *
+ * @param state State (must not be NULL, must have open database)
+ * @param filesystem_path File path to update (must not be NULL)
+ * @param stat_cache Stat cache to record (must not be NULL)
+ * @return Error or NULL on success (not found is not an error — returns NULL)
+ */
+error_t *state_update_stat_cache(
+    state_t *state,
+    const char *filesystem_path,
+    const stat_cache_t *stat_cache
 );
 
 /**

@@ -5,8 +5,10 @@
 #include "key.h"
 
 #include <git2.h>
+#include <hydrogen.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
 
 #include "base/error.h"
 #include "core/metadata.h"
@@ -74,9 +76,12 @@ static error_t *cmd_key_set(
     /* Set passphrase in keymanager (derives and caches master key) */
     err = keymanager_set_passphrase(key_mgr, passphrase, passphrase_len);
 
-    /* Securely clear passphrase from memory */
+    /* Securely clear passphrase from memory.
+     * keymanager_prompt_passphrase returns a buffer of exactly passphrase_len+1
+     * bytes with mlock. Use hydro_memzero (not memset) to resist optimization. */
     if (passphrase) {
-        memset(passphrase, 0, passphrase_len);
+        munlock(passphrase, passphrase_len + 1);
+        hydro_memzero(passphrase, passphrase_len + 1);
         free(passphrase);
     }
 

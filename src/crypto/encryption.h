@@ -11,7 +11,7 @@
  *     → Profile Key (via hydro_hash_hash with profile name)
  *     → Per-file MAC Key + CTR Key (via hydro_kdf_derive_from_key)
  *
- * SIV Construction (Version 2):
+ * SIV Construction (Version 3):
  *   This implements deterministic AEAD using the SIV (Synthetic IV) pattern:
  *
  *   1. Derive subkeys:
@@ -26,7 +26,8 @@
  *      ciphertext = plaintext XOR keystream
  *
  *   4. Compute SIV (MAC over associated data + ciphertext):
- *      siv = HMAC(mac_key, storage_path || ciphertext, context="dottamac")
+ *      siv = HMAC(mac_key, len(storage_path) || storage_path || ciphertext, context="dottamac")
+ *      (length prefix provides domain separation between path and ciphertext)
  *
  *   File format: [Magic 8B][SIV 32B][Ciphertext N B]
  *
@@ -49,7 +50,7 @@
 /* Magic header for encrypted files */
 #define ENCRYPTION_MAGIC "DOTTA"
 #define ENCRYPTION_MAGIC_BYTES 5        /* "DOTTA" magic string length */
-#define ENCRYPTION_VERSION 2            /* Version 2: SIV-based deterministic encryption */
+#define ENCRYPTION_VERSION 3            /* Version 3: SIV with length-prefixed domain separation */
 #define ENCRYPTION_MAGIC_HEADER_SIZE 8  /* Magic (5 bytes) + version (1 byte) + padding (2 bytes) */
 #define ENCRYPTION_HEADER_SIZE 8        /* Magic header (8 bytes) */
 #define ENCRYPTION_SIV_SIZE 32          /* SIV/MAC tag (32 bytes) */

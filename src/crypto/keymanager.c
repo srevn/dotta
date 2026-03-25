@@ -489,11 +489,16 @@ static void session_cache_clear(void) {
         return;  /* Already cleared */
     }
 
-    /* Secure deletion: zero file before unlinking (best-effort) */
+    /* Secure deletion: zero file before unlinking (best-effort).
+     * Flush and sync to ensure zeros are committed to disk before the
+     * file is unlinked, preventing kernel reordering from leaving
+     * the original key data on disk. */
     FILE *fp = fopen(cache_path, "r+b");
     if (fp) {
         struct session_cache_file zero = {0};
         fwrite(&zero, sizeof(zero), 1, fp);
+        fflush(fp);
+        fsync(fileno(fp));
         fclose(fp);
     }
 
@@ -881,7 +886,32 @@ error_t *keymanager_prompt_passphrase(
         return ERROR(ERR_INVALID_ARG, "Passphrase cannot be empty");
     }
 
-    *out_passphrase = passphrase;
+    /* Create a right-sized copy so callers can munlock/memzero with len+1.
+     *
+     * The read buffer is MAX_PASSPHRASE_LENGTH+1 bytes but the actual passphrase
+     * is typically much shorter. Returning the oversized buffer means callers
+     * can't know the true allocation size for proper munlock/memzero cleanup.
+     * By returning a tight copy, len+1 is always the correct size. */
+    char *tight = malloc(len + 1);
+    if (!tight) {
+        munlock(passphrase, MAX_PASSPHRASE_LENGTH + 1);
+        hydro_memzero(passphrase, MAX_PASSPHRASE_LENGTH + 1);
+        free(passphrase);
+        return ERROR(ERR_MEMORY, "Failed to allocate passphrase buffer");
+    }
+
+    if (mlock(tight, len + 1) != 0) {
+        /* Best-effort: non-fatal */
+    }
+
+    memcpy(tight, passphrase, len + 1);
+
+    /* Zero and free the oversized read buffer */
+    munlock(passphrase, MAX_PASSPHRASE_LENGTH + 1);
+    hydro_memzero(passphrase, MAX_PASSPHRASE_LENGTH + 1);
+    free(passphrase);
+
+    *out_passphrase = tight;
     *out_len = len;
     return NULL;
 }
@@ -997,9 +1027,11 @@ error_t *keymanager_get_key(
     /* Derive master key */
     err = keymanager_set_passphrase(mgr, passphrase, passphrase_len);
 
-    /* Securely zero and free passphrase */
-    munlock(passphrase, passphrase_len);
-    hydro_memzero(passphrase, passphrase_len);
+    /* Securely zero and free passphrase.
+     * Both keymanager_prompt_passphrase and get_passphrase_from_env
+     * return a buffer of exactly passphrase_len+1 bytes with mlock. */
+    munlock(passphrase, passphrase_len + 1);
+    hydro_memzero(passphrase, passphrase_len + 1);
     free(passphrase);
 
     if (err) {
@@ -1024,13 +1056,22 @@ error_t *keymanager_get_profile_key(
     CHECK_NULL(profile_name);
     CHECK_NULL(out_profile_key);
 
-    /* Check cache first */
+    /* Check cache first, but only if master key is still valid.
+     *
+     * If the master key has expired (session timeout), cached profile keys
+     * must not be served — doing so would bypass re-authentication.
+     * Clear the cache and fall through to trigger a passphrase prompt. */
     if (mgr->profile_keys) {
-        uint8_t *cached_key = hashmap_get(mgr->profile_keys, profile_name);
-        if (cached_key) {
-            /* Cache hit - copy and return */
-            memcpy(out_profile_key, cached_key, ENCRYPTION_PROFILE_KEY_SIZE);
-            return NULL;
+        if (!is_key_valid(mgr)) {
+            /* Master key expired — invalidate all derived profile keys */
+            hashmap_clear(mgr->profile_keys, secure_free_profile_key);
+        } else {
+            uint8_t *cached_key = hashmap_get(mgr->profile_keys, profile_name);
+            if (cached_key) {
+                /* Cache hit - copy and return */
+                memcpy(out_profile_key, cached_key, ENCRYPTION_PROFILE_KEY_SIZE);
+                return NULL;
+            }
         }
     }
 

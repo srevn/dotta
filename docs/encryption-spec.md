@@ -115,8 +115,9 @@ Dotta implements a custom **SIV (Synthetic IV)** construction for deterministic 
 4. **Encrypt plaintext** via XOR:
    - `ciphertext = plaintext ⊕ keystream`
 
-5. **Compute SIV** (MAC over AAD + ciphertext):
-   - `siv = HMAC(mac_key, storage_path || ciphertext, context="dottamac")`
+5. **Compute SIV** (MAC over length-prefixed AAD + ciphertext):
+   - `siv = HMAC(mac_key, len(storage_path) || storage_path || ciphertext, context="dottamac")`
+   - Path length is encoded as 8-byte little-endian for domain separation
 
 6. **Assemble output**:
    - `[Magic Header 8B][SIV 32B][Ciphertext N B]`
@@ -125,7 +126,7 @@ Dotta implements a custom **SIV (Synthetic IV)** construction for deterministic 
 
 1. Parse header and extract SIV
 2. Derive `mac_key` and `ctr_key` (same as encryption)
-3. Re-compute SIV over `storage_path || ciphertext`
+3. Re-compute SIV over `len(storage_path) || storage_path || ciphertext`
 4. Verify SIV matches (constant-time comparison)
 5. If valid: derive `stream_seed`, generate keystream, decrypt
 
@@ -159,11 +160,11 @@ SIV constructions trade randomness for determinism while maintaining strong secu
 
 Magic Header (8 bytes):
   [0-4]   "DOTTA" (magic string)
-  [5]     0x02 (version byte)
+  [5]     0x03 (version byte)
   [6-7]   0x00 0x00 (reserved/padding)
 
 SIV (32 bytes):
-  MAC tag authenticating storage_path || ciphertext
+  MAC tag authenticating len(storage_path) || storage_path || ciphertext
 
 Ciphertext (N bytes):
   plaintext ⊕ keystream
@@ -467,16 +468,21 @@ error_t *keymanager_get_profile_key(
     const char *profile_name,
     uint8_t out_profile_key[32]
 ) {
-    // 1. Check cache (O(1) hashmap lookup)
+    // 1. Check cache, but only if master key is still valid
     if (mgr->profile_keys) {
-        uint8_t *cached_key = hashmap_get(mgr->profile_keys, profile_name);
-        if (cached_key) {
-            memcpy(out_profile_key, cached_key, 32);
-            return NULL;  // Cache hit
+        if (!is_key_valid(mgr)) {
+            // Master key expired — invalidate all derived profile keys
+            hashmap_clear(mgr->profile_keys, secure_free_profile_key);
+        } else {
+            uint8_t *cached_key = hashmap_get(mgr->profile_keys, profile_name);
+            if (cached_key) {
+                memcpy(out_profile_key, cached_key, 32);
+                return NULL;  // Cache hit
+            }
         }
     }
 
-    // 2. Cache miss: derive and cache
+    // 2. Cache miss or expired: get master key (may prompt), derive and cache
     // ...derive profile_key from master_key...
     hashmap_set(mgr->profile_keys, profile_name, profile_key);
 
@@ -487,7 +493,7 @@ error_t *keymanager_get_profile_key(
 **Benefits:**
 - **First access:** Full derivation (master key + profile key)
 - **Subsequent:** O(1) cache lookup (30,000x faster)
-- **Lifetime:** Tied to master key cache
+- **Lifetime:** Tied to master key cache (invalidated on session timeout)
 - **Memory:** ~32 bytes per profile (negligible)
 
 ### Content Caching

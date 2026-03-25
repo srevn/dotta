@@ -19,6 +19,20 @@ static const unsigned char MAGIC_HEADER[8] = {
 };
 
 /**
+ * Store a uint64_t in little-endian byte order (portable)
+ */
+static void store_le64(uint8_t out[8], uint64_t val) {
+    out[0] = (uint8_t)(val);
+    out[1] = (uint8_t)(val >> 8);
+    out[2] = (uint8_t)(val >> 16);
+    out[3] = (uint8_t)(val >> 24);
+    out[4] = (uint8_t)(val >> 32);
+    out[5] = (uint8_t)(val >> 40);
+    out[6] = (uint8_t)(val >> 48);
+    out[7] = (uint8_t)(val >> 56);
+}
+
+/**
  * Derive subkeys for SIV construction (internal helper)
  *
  * Derives two independent subkeys from the profile key using KDF:
@@ -86,10 +100,11 @@ static error_t *derive_stream_seed(
  * Compute SIV/MAC over associated data and ciphertext (internal helper)
  *
  * Computes the SIV (Synthetic IV) as a MAC over:
- *   siv = HMAC(mac_key, storage_path || ciphertext, context="dottamac")
+ *   siv = HMAC(mac_key, len(storage_path) || storage_path || ciphertext, context="dottamac")
  *
- * The storage_path is authenticated as associated data, binding the ciphertext
- * to its intended location.
+ * The path length prefix (8-byte LE) provides domain separation, preventing
+ * an adversary from shifting the boundary between path and ciphertext to forge
+ * a valid MAC for a different (path, ciphertext) pair.
  *
  * @param mac_key MAC subkey (32 bytes)
  * @param storage_path File path in profile (authenticated associated data)
@@ -112,8 +127,14 @@ static error_t *compute_siv(
         return ERROR(ERR_CRYPTO, "Failed to initialize MAC computation");
     }
 
+    /* Length-prefix the path for domain separation */
+    size_t path_len = strlen(storage_path);
+    uint8_t path_len_le[8];
+    store_le64(path_len_le, (uint64_t)path_len);
+    hydro_hash_update(&mac_state, path_len_le, sizeof(path_len_le));
+
     /* Authenticate storage_path (associated data) */
-    hydro_hash_update(&mac_state, (const uint8_t *)storage_path, strlen(storage_path));
+    hydro_hash_update(&mac_state, (const uint8_t *)storage_path, path_len);
 
     /* Authenticate ciphertext */
     hydro_hash_update(&mac_state, ciphertext, ciphertext_len);

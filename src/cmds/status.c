@@ -323,10 +323,11 @@ static void display_workspace_status(
                         output_color_t color;
                         char metadata[256];
 
-                        if (workspace_item_extract_display_info(uncommitted[i],
-                            tags, &tag_count, &color, metadata, sizeof(metadata))) {
-                            output_list_add_multi(list, tags, tag_count, color,
-                                                  uncommitted[i]->filesystem_path, metadata);
+                        if (workspace_item_extract_display_info(uncommitted[i], tags, &tag_count,
+                                                                &color, metadata, sizeof(metadata))) {
+                            output_list_add_multi(
+                                list, tags, tag_count, color, uncommitted[i]->filesystem_path, metadata
+                            );
                         }
                     }
 
@@ -348,10 +349,11 @@ static void display_workspace_status(
                         output_color_t color;
                         char metadata[256];
 
-                        if (workspace_item_extract_display_info(undeployed[i],
-                            tags, &tag_count, &color, metadata, sizeof(metadata))) {
-                            output_list_add_multi(list, tags, tag_count, color,
-                                                  undeployed[i]->filesystem_path, metadata);
+                        if (workspace_item_extract_display_info(undeployed[i], tags, &tag_count,
+                                                                &color, metadata, sizeof(metadata))) {
+                            output_list_add_multi(
+                                list, tags, tag_count, color, undeployed[i]->filesystem_path, metadata
+                            );
                         }
                     }
 
@@ -373,10 +375,11 @@ static void display_workspace_status(
                         output_color_t color;
                         char metadata[256];
 
-                        if (workspace_item_extract_display_info(new_files[i],
-                            tags, &tag_count, &color, metadata, sizeof(metadata))) {
-                            output_list_add_multi(list, tags, tag_count, color,
-                                                  new_files[i]->filesystem_path, metadata);
+                        if (workspace_item_extract_display_info(new_files[i], tags, &tag_count,
+                                                                &color, metadata, sizeof(metadata))) {
+                            output_list_add_multi(
+                                list, tags, tag_count, color, new_files[i]->filesystem_path, metadata
+                            );
                         }
                     }
 
@@ -405,10 +408,11 @@ static void display_workspace_status(
                         output_color_t color;
                         char metadata[256];
 
-                        if (workspace_item_extract_display_info(orphaned[i],
-                            tags, &tag_count, &color, metadata, sizeof(metadata))) {
-                            output_list_add_multi(list, tags, tag_count, color,
-                                                  orphaned[i]->filesystem_path, metadata);
+                        if (workspace_item_extract_display_info(orphaned[i], tags, &tag_count,
+                                                                &color, metadata, sizeof(metadata))) {
+                            output_list_add_multi(
+                                list, tags, tag_count, color, orphaned[i]->filesystem_path, metadata
+                            );
                         }
 
                         /* Track if this orphan has divergence (not clean) */
@@ -648,7 +652,7 @@ static error_t *display_remote_status(
             case UPSTREAM_DIVERGED:
                 color = OUTPUT_COLOR_RED;
                 snprintf(status_str, sizeof(status_str), "%s diverged (%zu ahead, %zu behind)",
-                        symbol, info->ahead, info->behind);
+                         symbol, info->ahead, info->behind);
                 diverged++;
                 break;
             case UPSTREAM_NO_REMOTE:
@@ -674,8 +678,8 @@ static error_t *display_remote_status(
             error_t *local_ref_err = gitops_build_refname(local_ref, sizeof(local_ref),
                                                           "refs/heads/%s", profile_name);
             git_commit *local_commit = NULL;
-            error_t *commit_err = local_ref_err ? local_ref_err :
-                                   gitops_get_commit(repo, local_ref, &local_commit);
+            error_t *commit_err = local_ref_err ?
+                                  local_ref_err : gitops_get_commit(repo, local_ref, &local_commit);
 
             if (!commit_err && local_commit) {
                 const git_oid *local_oid = git_commit_id(local_commit);
@@ -710,8 +714,8 @@ static error_t *display_remote_status(
                                                                "refs/remotes/%s/%s",
                                                                remote_name, profile_name);
                 git_commit *remote_commit = NULL;
-                commit_err = remote_ref_err ? remote_ref_err :
-                            gitops_get_commit(repo, remote_ref, &remote_commit);
+                commit_err = remote_ref_err ?
+                             remote_ref_err : gitops_get_commit(repo, remote_ref, &remote_commit);
 
                 if (!commit_err && remote_commit) {
                     const git_oid *remote_oid = git_commit_id(remote_commit);
@@ -931,8 +935,9 @@ error_t *cmd_status(
 
     /* Load display profiles (CLI filter or shared pointer) */
     if (opts->profiles && opts->profile_count > 0) {
-        err = profile_resolve_for_operations(repo, opts->profiles, opts->profile_count,
-                                             config->strict_mode, &display_profiles);
+        err = profile_resolve_for_operations(
+            repo, opts->profiles, opts->profile_count, config->strict_mode, &display_profiles
+        );
         if (err) {
             err = error_wrap(err, "Failed to resolve display profiles");
             goto cleanup;
@@ -1042,13 +1047,15 @@ error_t *cmd_status(
      * pointer comparison and matches the pattern used in apply.c.
      */
     bool has_display_filter = (opts->profiles != NULL && opts->profile_count > 0);
-    display_workspace_status(ws, has_display_filter ?
-                                 display_profiles : NULL, manifest, out, opts->verbose);
+    display_workspace_status(
+        ws, has_display_filter ? display_profiles : NULL, manifest, out, opts->verbose
+    );
 
     /* Show remote sync status (if requested) */
     if (opts->show_remote) {
-        err = display_remote_status(repo, display_profiles, out, opts->all_profiles,
-                                    opts->verbose, opts->no_fetch);
+        err = display_remote_status(
+            repo, display_profiles, out, opts->all_profiles, opts->verbose, opts->no_fetch
+        );
         if (err) {
             /* Non-fatal: might not have remote configured */
             error_free(err);

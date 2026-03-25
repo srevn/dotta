@@ -496,8 +496,7 @@ static error_t *profile_fetch(
 
             error_t *fetch_err = gitops_fetch_branch(repo, remote_name, branch_name, xfer);
             if (fetch_err) {
-                output_error(out, "Failed to fetch '%s': %s",
-                            branch_name, error_message(fetch_err));
+                output_error(out, "Failed to fetch '%s': %s", branch_name, error_message(fetch_err));
                 error_free(fetch_err);
                 failed_count++;
                 continue;
@@ -529,8 +528,7 @@ static error_t *profile_fetch(
     } else {
         /* Fetch specific profiles */
         if (opts->profile_count == 0) {
-            err = ERROR(ERR_INVALID_ARG,
-                        "No profiles specified\n"
+            err = ERROR(ERR_INVALID_ARG, "No profiles specified\n"
                         "Hint: Use 'dotta profile fetch <name>' or '--all'");
             goto cleanup;
         }
@@ -587,13 +585,13 @@ static error_t *profile_fetch(
             bool already_exists = profile_exists(repo, profile_name);
             if (already_exists && opts->verbose) {
                 output_info(out, "  %s already exists locally (updating...)",
-                           profile_name);
+                            profile_name);
             }
 
             error_t *fetch_err = gitops_fetch_branch(repo, remote_name, profile_name, xfer);
             if (fetch_err) {
                 output_error(out, "Failed to fetch '%s': %s",
-                            profile_name, error_message(fetch_err));
+                             profile_name, error_message(fetch_err));
                 error_free(fetch_err);
                 failed_count++;
                 continue;
@@ -610,7 +608,7 @@ static error_t *profile_fetch(
                 fetch_err = upstream_create_tracking_branch(repo, remote_name, profile_name);
                 if (fetch_err) {
                     output_warning(out, "Failed to create local branch '%s': %s",
-                                  profile_name, error_message(fetch_err));
+                                   profile_name, error_message(fetch_err));
                     error_free(fetch_err);
                 } else {
                     fetched_count++;
@@ -1309,7 +1307,7 @@ static error_t *profile_reorder(
     if (!opts->quiet) {
         output_newline(out);
         output_success(out, "Reordered %zu profile%s", opts->profile_count,
-                      opts->profile_count == 1 ? "" : "s");
+                       opts->profile_count == 1 ? "" : "s");
         output_info(out, "Manifest updated to reflect new precedence");
         output_info(out, "Run 'dotta status' to review changes");
         output_info(out, "Run 'dotta apply' to deploy");
@@ -1443,7 +1441,7 @@ static error_t *profile_validate(
 
     if (orphaned_files > 0) {
         output_warning(out, "Found %zu orphaned file entr%s in state",
-                      orphaned_files, orphaned_files == 1 ? "y" : "ies");
+                       orphaned_files, orphaned_files == 1 ? "y" : "ies");
         output_info(out, "  These reference non-existent profiles");
         output_hint(out, "  Run 'dotta apply' to clean up");
     }

@@ -47,13 +47,7 @@ static error_t *print_blob_content(
 
     buffer_t *content = NULL;
     error_t *err = content_get_from_blob_oid(
-        repo,
-        blob_oid,
-        storage_path,
-        profile_name,
-        encrypted,
-        km,    /* Prompt for password only if file is encrypted */
-        &content
+        repo, blob_oid, storage_path, profile_name, encrypted, km, &content
     );
     if (err) {
         return error_wrap(err, "Failed to get file content");
@@ -126,7 +120,9 @@ static error_t *show_file(
     /* Load tree from profile */
     if (commit_ref) {
         /* Resolve commit and load its tree */
-        err = gitops_resolve_commit_in_branch(repo, profile_name, commit_ref, &commit_oid, &commit);
+        err = gitops_resolve_commit_in_branch(
+            repo, profile_name, commit_ref, &commit_oid, &commit
+        );
         if (err) {
             goto cleanup;
         }
@@ -164,7 +160,8 @@ static error_t *show_file(
     } else {
         /* Load from branch HEAD */
         char ref_name_buf[DOTTA_REFNAME_MAX];
-        err = gitops_build_refname(ref_name_buf, sizeof(ref_name_buf), "refs/heads/%s", profile_name);
+        err = gitops_build_refname(ref_name_buf, sizeof(ref_name_buf),
+                                   "refs/heads/%s", profile_name);
         if (err) {
             err = error_wrap(err, "Invalid profile name '%s'", profile_name);
             goto cleanup;
@@ -260,9 +257,12 @@ static error_t *show_commit(
     git_diff_stats *stats = NULL;
 
     /* Resolve commit in profile */
-    err = gitops_resolve_commit_in_branch(repo, profile_name, commit_ref, &commit_oid, &commit);
+    err = gitops_resolve_commit_in_branch(
+        repo, profile_name, commit_ref, &commit_oid, &commit
+    );
     if (err) {
-        err = error_wrap(err, "Commit '%s' not found in profile '%s'", commit_ref, profile_name);
+        err = error_wrap(err, "Commit '%s' not found in profile '%s'",
+                         commit_ref, profile_name);
         goto cleanup;
     }
 
@@ -535,7 +535,7 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
 
         char ref_name[DOTTA_REFNAME_MAX];
         error_t *refname_err = gitops_build_refname(ref_name, sizeof(ref_name),
-                                                     "refs/heads/%s", profile_name);
+                                                    "refs/heads/%s", profile_name);
         if (refname_err) {
             error_free(refname_err);
             continue;

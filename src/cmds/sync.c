@@ -49,7 +49,7 @@ typedef struct {
     size_t up_to_date_count;
     size_t no_remote_count;
     size_t failed_count;
-    size_t fetch_failed_count;      /* Track fetch failures separately */
+    size_t fetch_failed_count;       /* Track fetch failures separately */
     size_t auth_failed_count;        /* Track authentication failures */
 } sync_results_t;
 
@@ -152,8 +152,7 @@ static error_t *force_push_branch(
     /* Force push refspec ('+' prefix forces the push) */
     char refspec[DOTTA_REFSPEC_MAX];
     error_t *err_build = gitops_build_refname(refspec, sizeof(refspec),
-                                               "+refs/heads/%s:refs/heads/%s",
-                                               branch_name, branch_name);
+                            "+refs/heads/%s:refs/heads/%s", branch_name, branch_name);
     if (err_build) {
         git_remote_free(remote);
         return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
@@ -203,14 +202,17 @@ static error_t *pull_branch_ff(
     char remote_refname[DOTTA_REFNAME_MAX];
     error_t *err;
 
-    err = gitops_build_refname(local_refname, sizeof(local_refname), "refs/heads/%s", branch_name);
+    err = gitops_build_refname(local_refname, sizeof(local_refname),
+                               "refs/heads/%s", branch_name);
     if (err) {
         return error_wrap(err, "Invalid branch name '%s'", branch_name);
     }
 
-    err = gitops_build_refname(remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s", remote_name, branch_name);
+    err = gitops_build_refname(remote_refname, sizeof(remote_refname),
+                               "refs/remotes/%s/%s", remote_name, branch_name);
     if (err) {
-        return error_wrap(err, "Invalid remote/branch name '%s/%s'", remote_name, branch_name);
+        return error_wrap(err, "Invalid remote/branch name '%s/%s'",
+                          remote_name, branch_name);
     }
 
     git_reference *local_ref = NULL;
@@ -274,7 +276,7 @@ static error_t *pull_branch_ff(
     /* Perform fast-forward */
     git_reference *updated_ref = NULL;
     git_err = git_reference_set_target(&updated_ref, local_ref, remote_oid,
-                                      "sync: Fast-forward pull");
+                                       "sync: Fast-forward pull");
     git_reference_free(local_ref);
     git_reference_free(remote_ref);
 
@@ -309,8 +311,7 @@ static error_t *sync_fetch_enabled_profiles(
     git_remote *remote = NULL;
     int git_err = git_remote_lookup(&remote, repo, remote_name);
     if (git_err == GIT_ENOTFOUND) {
-        return ERROR(ERR_NOT_FOUND,
-                    "No remote '%s' configured\n"
+        return ERROR(ERR_NOT_FOUND, "No remote '%s' configured\n"
                     "Hint: Run 'dotta remote add %s <url>' to add a remote",
                     remote_name, remote_name);
     } else if (git_err < 0) {
@@ -319,7 +320,8 @@ static error_t *sync_fetch_enabled_profiles(
     git_remote_free(remote);
 
     char section_title[DOTTA_MESSAGE_MAX];
-    snprintf(section_title, sizeof(section_title), "Fetching enabled profiles from '%s'", remote_name);
+    snprintf(section_title, sizeof(section_title), "Fetching enabled profiles from '%s'",
+             remote_name);
     output_section(out, section_title);
 
     /* Build array of branch names for batched fetch */
@@ -357,15 +359,13 @@ static error_t *sync_fetch_enabled_profiles(
         }
         error_free(err);
 
-        return ERROR(ERR_GIT,
-                    "Failed to fetch profiles from remote\n"
-                    "Hint: Check network connectivity and remote accessibility");
+        return ERROR(ERR_GIT, "Failed to fetch profiles from remote\n"
+                     "Hint: Check network connectivity and remote accessibility");
     }
 
     if (verbose) {
         output_success(out, "Fetched %zu enabled profile%s",
-                      profiles->count,
-                      profiles->count == 1 ? "" : "s");
+                       profiles->count, profiles->count == 1 ? "" : "s");
     }
 
     output_newline(out);
@@ -399,7 +399,9 @@ static error_t *sync_analyze_phase(
 
         /* Analyze state */
         upstream_info_t *info = NULL;
-        error_t *err = upstream_analyze_profile(repo, remote_name, profile->name, &info);
+        error_t *err = upstream_analyze_profile(
+            repo, remote_name, profile->name, &info
+        );
 
         if (err) {
             result->failed = true;
@@ -441,9 +443,491 @@ static error_t *sync_analyze_phase(
 }
 
 /**
+ * Record profile operation failure
+ *
+ * Takes ownership of err (frees it). Caller must print any
+ * output_error messages BEFORE calling this function.
+ */
+static void mark_result_failed(
+    profile_sync_result_t *result,
+    sync_results_t *results,
+    error_t *err
+) {
+    result->failed = true;
+    result->error_message = strdup(error_message(err));
+    results->failed_count++;
+    error_free(err);
+}
+
+/**
+ * Sync manifest after branch update (non-fatal on failure)
+ *
+ * Calls manifest_sync_diff with NULL metadata_cache (cache is stale after
+ * fetch/pull — fresh metadata is loaded from updated Git state).
+ *
+ * On failure: prints warning + recovery hint, returns false.
+ * On success: writes stats to output parameters, returns true.
+ * Output parameters are optional (can be NULL).
+ */
+static bool sync_manifest(
+    git_repository *repo,
+    state_t *state,
+    const char *profile_name,
+    const git_oid *old_oid,
+    const git_oid *new_oid,
+    const string_array_t *enabled_profiles,
+    output_ctx_t *out,
+    size_t *out_synced,
+    size_t *out_removed,
+    size_t *out_fallbacks,
+    size_t *out_skipped
+) {
+    size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
+    error_t *err = manifest_sync_diff(
+        repo, state, profile_name, old_oid, new_oid, enabled_profiles,
+        NULL /* metadata_cache — stale after fetch */,
+        &synced, &removed, &fallbacks, &skipped
+    );
+
+    if (err) {
+        output_warning(out, "   Manifest sync failed: %s", error_message(err));
+        output_hint(out, "   Run 'dotta status' or 'dotta apply' to resync manifest");
+        error_free(err);
+        return false;
+    }
+
+    if (out_synced) *out_synced = synced;
+    if (out_removed) *out_removed = removed;
+    if (out_fallbacks) *out_fallbacks = fallbacks;
+    if (out_skipped) *out_skipped = skipped;
+    return true;
+}
+
+/**
+ * Sync manifest and print standard result summary
+ *
+ * High-level wrapper for non-pull callers (rebase, merge, theirs).
+ * Prints manifest stats line and skipped files warning.
+ */
+static void sync_manifest_and_report(
+    git_repository *repo,
+    state_t *state,
+    const char *profile_name,
+    const git_oid *old_oid,
+    const git_oid *new_oid,
+    const string_array_t *enabled_profiles,
+    output_ctx_t *out
+) {
+    size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
+    bool ok = sync_manifest(
+        repo, state, profile_name, old_oid, new_oid, enabled_profiles,
+        out,&synced, &removed, &fallbacks, &skipped
+    );
+
+    if (ok && (synced > 0 || removed > 0 || fallbacks > 0)) {
+        output_info(out, "   Manifest: %zu staged, %zu removed, %zu fallback%s",
+                   synced, removed, fallbacks, fallbacks == 1 ? "" : "s");
+    }
+
+    if (skipped > 0) {
+        output_warning(out, "   %zu custom file%s skipped (no prefix configured for '%s')",
+                      skipped, skipped == 1 ? "" : "s", profile_name);
+        output_hint(out, "   Run: dotta profile enable --prefix <path> %s", profile_name);
+    }
+}
+
+/**
+ * Attempt divergence rollback after resolution failure
+ *
+ * Returns critical error if rollback itself fails (caller must propagate).
+ * Returns NULL and prints informational message on successful rollback.
+ */
+static error_t *attempt_rollback(
+    divergence_context_t *ctx,
+    const char *profile_name,
+    const char *failure_reason,
+    output_ctx_t *out
+) {
+    error_t *err = divergence_rollback(ctx);
+    if (err) {
+        output_error(out, "   ✗ CRITICAL: Rollback failed: %s", error_message(err));
+        output_newline(out);
+        return error_wrap(err,
+            "Failed to rollback branch '%s' after %s.\n"
+            "Repository may be in an inconsistent state.\n"
+            "Manual intervention required: git reset --hard origin/%s",
+            profile_name, failure_reason, profile_name);
+    }
+
+    output_info(out, "   ↺ Rolled back to original state");
+    return NULL;
+}
+
+/**
+ * Handle UPSTREAM_REMOTE_AHEAD: auto-pull (fast-forward) or warn
+ */
+static void handle_remote_ahead(
+    git_repository *repo,
+    const char *remote_name,
+    profile_sync_result_t *result,
+    sync_results_t *results,
+    output_ctx_t *out,
+    bool verbose,
+    bool auto_pull,
+    state_t *state,
+    const string_array_t *enabled_profiles
+) {
+    if (!auto_pull) {
+        /* Just warn - don't auto-pull */
+        char *colored = output_colorize(out, OUTPUT_COLOR_YELLOW, result->profile_name);
+        output_info(out, "↓ %s: remote has %zu new commit%s",
+               colored ? colored : result->profile_name,
+               result->behind, result->behind == 1 ? "" : "s");
+        output_hint(out, "   Run 'dotta pull' or enable auto_pull in config to automatically pull");
+        free(colored);
+        return;
+    }
+
+    /* Auto-pull when safe (fast-forward only) */
+    if (verbose) {
+        output_info(out, "Pulling %s (%zu commit%s behind)...",
+               result->profile_name, result->behind, result->behind == 1 ? "" : "s");
+    }
+
+    bool pulled = false;
+    git_oid old_oid, new_oid;
+    error_t *err = pull_branch_ff(
+        repo, remote_name, result->profile_name, &pulled, &old_oid, &new_oid
+    );
+    if (err) {
+        output_error(out, "✗ %s: pull failed - %s", result->profile_name, error_message(err));
+        mark_result_failed(result, results, err);
+        return;
+    }
+
+    if (!pulled) {
+        /* Already up-to-date - report in verbose mode */
+        if (verbose) {
+            char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
+            output_info(out, "= %s: already up-to-date", colored ? colored : result->profile_name);
+            free(colored);
+        }
+        /* Decrement need_pull_count since it was already up-to-date */
+        if (results->need_pull_count > 0) {
+            results->need_pull_count--;
+        }
+        return;
+    }
+
+    /* Pull succeeded */
+    if (results->need_pull_count > 0) {
+        results->need_pull_count--;
+    }
+
+    /* Sync manifest — stats needed for success message */
+    size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
+    bool manifest_ok = sync_manifest(
+        repo, state, result->profile_name, &old_oid, &new_oid,
+        enabled_profiles, out, &synced, &removed, &fallbacks, &skipped
+    );
+
+    char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
+    if (!manifest_ok) {
+        output_success(out, "%s: pulled %zu commit%s (manifest sync failed)",
+               colored ? colored : result->profile_name,
+               result->behind, result->behind == 1 ? "" : "s");
+    } else {
+        output_success(out, "%s: pulled %zu commit%s (%zu staged, %zu removed, %zu fallback%s)",
+               colored ? colored : result->profile_name,
+               result->behind, result->behind == 1 ? "" : "s",
+               synced, removed, fallbacks, fallbacks == 1 ? "" : "s");
+    }
+    if (skipped > 0) {
+        output_warning(out, "   %zu custom file%s skipped (no prefix configured for '%s')",
+                      skipped, skipped == 1 ? "" : "s", result->profile_name);
+        output_hint(out, "   Run: dotta profile enable --prefix <path> %s", result->profile_name);
+    }
+    free(colored);
+}
+
+/**
+ * Resolve divergence via rebase or merge, then push
+ *
+ * Unified handler for DIVERGE_REBASE and DIVERGE_MERGE strategies
+ * (structurally identical — only the strategy enum and log strings differ).
+ *
+ * Returns critical error only on rollback failure (caller must propagate).
+ * All other failures are recorded in result/results and return NULL.
+ */
+static error_t *resolve_and_push_divergence(
+    git_repository *repo,
+    const char *remote_name,
+    profile_sync_result_t *result,
+    sync_results_t *results,
+    output_ctx_t *out,
+    divergence_strategy_t strategy,
+    const char *strategy_name,
+    transfer_context_t *xfer,
+    state_t *state,
+    const string_array_t *enabled_profiles
+) {
+    const char *cap_name = (strategy == DIVERGENCE_STRATEGY_REBASE)
+        ? "Rebase" : "Merge";
+    const char *past_desc = (strategy == DIVERGENCE_STRATEGY_REBASE)
+        ? "rebased onto remote" : "merged with remote";
+    const char *push_desc = (strategy == DIVERGENCE_STRATEGY_REBASE)
+        ? "rebased commits" : "merge commit";
+
+    output_info(out, "   Resolving with %s strategy...", strategy_name);
+
+    /* Initialize divergence context (saves current state for rollback) */
+    divergence_context_t ctx;
+    error_t *err = divergence_context_init(&ctx, repo, remote_name, result->profile_name, strategy);
+    if (err) {
+        output_error(out, "   ✗ Failed to initialize divergence context: %s", error_message(err));
+        mark_result_failed(result, results, err);
+        return NULL;
+    }
+
+    /* Perform in-memory resolution (never modifies HEAD) */
+    git_oid new_oid;
+    err = divergence_resolve(&ctx, &new_oid);
+    if (err) {
+        output_error(out, "   ✗ %s failed: %s", cap_name, error_message(err));
+        mark_result_failed(result, results, err);
+        return NULL;
+    }
+
+    /* Verify resolution */
+    size_t ahead = 0;
+    err = divergence_verify(&ctx, &ahead, NULL);
+    if (err) {
+        output_error(out, "   ✗ %s verification failed: %s", cap_name, error_message(err));
+        mark_result_failed(result, results, err);
+
+        char reason[64];
+        snprintf(reason, sizeof(reason), "%s verification failure", strategy_name);
+        return attempt_rollback(&ctx, result->profile_name, reason, out);
+    }
+
+    output_success(out, "   Successfully %s (%zu commit%s to push)",
+                   past_desc, ahead, ahead == 1 ? "" : "s");
+
+    /* Push resolved commits */
+    err = gitops_push_branch(repo, remote_name, result->profile_name, xfer);
+    if (err) {
+        output_error(out, "   ✗ Push after %s failed: %s", strategy_name, error_message(err));
+        mark_result_failed(result, results, err);
+
+        output_info(out, "   ↺ Rolling back %s (push failed)...", strategy_name);
+        return attempt_rollback(&ctx, result->profile_name, "push failure", out);
+    }
+
+    output_success(out, "   Pushed %s", push_desc);
+    result->pushed = true;
+    results->pushed_count++;
+    if (results->diverged_count > 0) {
+        results->diverged_count--;
+    }
+
+    /* Sync manifest with changes from resolution */
+    sync_manifest_and_report(
+        repo, state, result->profile_name, &ctx.saved_oid, &new_oid, enabled_profiles, out
+    );
+
+    return NULL;
+}
+
+/**
+ * Handle DIVERGE_OURS: force push local branch to remote
+ */
+static error_t *handle_diverged_ours(
+    git_repository *repo,
+    const char *remote_name,
+    profile_sync_result_t *result,
+    sync_results_t *results,
+    output_ctx_t *out,
+    bool confirm_destructive,
+    transfer_context_t *xfer
+) {
+    output_info(out, "   Resolving with 'ours' strategy (force push)...");
+
+    /* Get user confirmation for destructive operation */
+    if (confirm_destructive) {
+        char prompt[DOTTA_MESSAGE_MAX];
+        snprintf(prompt, sizeof(prompt),
+                "WARNING: This will force push and OVERWRITE remote '%s'.\n"
+                "Remote commits will be LOST. Continue?", result->profile_name);
+        if (!output_confirm_or_default(out, prompt, false, false)) {
+            output_info(out, "   Operation cancelled by user");
+            return NULL;
+        }
+    }
+
+    /* Initialize divergence context (saves current state for rollback) */
+    divergence_context_t ctx;
+    error_t *err = divergence_context_init(
+        &ctx, repo, remote_name, result->profile_name, DIVERGENCE_STRATEGY_OURS
+    );
+    if (err) {
+        output_error(out, "   ✗ Failed to initialize divergence context: %s",
+                    error_message(err));
+        mark_result_failed(result, results, err);
+        return NULL;
+    }
+
+    /* For OURS, resolve is a no-op (local stays unchanged) */
+    err = divergence_resolve(&ctx, NULL);
+    if (err) {
+        output_error(out, "   ✗ Resolution failed: %s", error_message(err));
+        mark_result_failed(result, results, err);
+        return NULL;
+    }
+
+    /* Force push to remote */
+    err = force_push_branch(repo, remote_name, result->profile_name, xfer);
+    if (err) {
+        output_error(out, "   ✗ Force push failed: %s", error_message(err));
+        mark_result_failed(result, results, err);
+        return NULL;
+    }
+
+    output_success(out, "   Force pushed to remote (remote commits discarded)");
+    result->pushed = true;
+    results->pushed_count++;
+    if (results->diverged_count > 0) {
+        results->diverged_count--;
+    }
+
+    return NULL;
+}
+
+/**
+ * Handle DIVERGE_THEIRS: reset local branch to remote
+ */
+static error_t *handle_diverged_theirs(
+    git_repository *repo,
+    const char *remote_name,
+    profile_sync_result_t *result,
+    sync_results_t *results,
+    output_ctx_t *out,
+    bool confirm_destructive,
+    state_t *state,
+    const string_array_t *enabled_profiles
+) {
+    output_info(out, "   Resolving with 'theirs' strategy (reset to remote)...");
+
+    /* Get user confirmation for destructive operation */
+    if (confirm_destructive) {
+        char prompt[DOTTA_MESSAGE_MAX];
+        snprintf(prompt, sizeof(prompt),
+                "WARNING: This will reset '%s' to remote and DISCARD local commits.\n"
+                "Local changes will be LOST. Continue?", result->profile_name);
+        if (!output_confirm_or_default(out, prompt, false, false)) {
+            output_info(out, "   Operation cancelled by user");
+            return NULL;
+        }
+    }
+
+    /* Initialize divergence context (saves current state for rollback) */
+    divergence_context_t ctx;
+    error_t *err = divergence_context_init(
+        &ctx, repo, remote_name, result->profile_name, DIVERGENCE_STRATEGY_THEIRS
+    );
+    if (err) {
+        output_error(out, "   ✗ Failed to initialize divergence context: %s",
+                     error_message(err));
+        mark_result_failed(result, results, err);
+        return NULL;
+    }
+
+    /* Resolve divergence (resets local branch to remote) */
+    git_oid new_oid;
+    err = divergence_resolve(&ctx, &new_oid);
+    if (err) {
+        output_error(out, "   ✗ Reset failed: %s", error_message(err));
+        mark_result_failed(result, results, err);
+        return NULL;
+    }
+
+    /* Verify reset succeeded */
+    err = divergence_verify(&ctx, NULL, NULL);
+    if (err) {
+        output_error(out, "   ✗ Reset verification failed: %s", error_message(err));
+        output_warning(out, "   Local branch was reset but verification failed");
+        mark_result_failed(result, results, err);
+        return NULL;
+    }
+
+    output_success(out, "   Reset to remote (local commits discarded)");
+    if (results->diverged_count > 0) {
+        results->diverged_count--;
+    }
+
+    /* Sync manifest with changes from reset */
+    sync_manifest_and_report(
+        repo, state, result->profile_name, &ctx.saved_oid, &new_oid, enabled_profiles, out
+    );
+
+    return NULL;
+}
+
+/**
+ * Handle UPSTREAM_DIVERGED: dispatch based on configured strategy
+ *
+ * Returns critical error only on rollback failure (from rebase/merge).
+ */
+static error_t *handle_diverged(
+    git_repository *repo,
+    const char *remote_name,
+    profile_sync_result_t *result,
+    sync_results_t *results,
+    output_ctx_t *out,
+    sync_divergence_strategy_t strategy,
+    transfer_context_t *xfer,
+    bool confirm_destructive,
+    state_t *state,
+    const string_array_t *enabled_profiles
+) {
+    char *colored = output_colorize(out, OUTPUT_COLOR_RED, result->profile_name);
+    output_warning(out, "⚠ %s: diverged (%zu local, %zu remote commits)",
+           colored ? colored : result->profile_name, result->ahead, result->behind);
+    free(colored);
+
+    switch (strategy) {
+        case DIVERGE_WARN:
+            output_hint(out, "   Use --diverged=<strategy> or set sync.diverged_strategy in config");
+            output_hint_line(out, "   Strategies: rebase, merge, ours (keep local), theirs (keep remote)");
+            break;
+
+        case DIVERGE_REBASE:
+            return resolve_and_push_divergence(
+                repo, remote_name, result, results, out,
+                DIVERGENCE_STRATEGY_REBASE, "rebase", xfer, state, enabled_profiles);
+
+        case DIVERGE_MERGE:
+            return resolve_and_push_divergence(
+                repo, remote_name, result, results, out,
+                DIVERGENCE_STRATEGY_MERGE, "merge", xfer, state, enabled_profiles);
+
+        case DIVERGE_OURS:
+            return handle_diverged_ours(
+                repo, remote_name, result, results, out,
+                confirm_destructive, xfer);
+
+        case DIVERGE_THEIRS:
+            return handle_diverged_theirs(
+                repo, remote_name, result, results, out,
+                confirm_destructive, state, enabled_profiles);
+    }
+
+    return NULL;
+}
+
+/**
  * Phase 3: Sync branches with remote (push/pull/divergence handling)
  *
- * Now includes manifest synchronization when branches are updated via
+ * Includes manifest synchronization when branches are updated via
  * pull/rebase/merge/reset operations. This maintains the VWD architecture
  * by keeping the manifest table in sync with Git branches.
  */
@@ -469,14 +953,9 @@ static error_t *sync_push_phase(
     CHECK_NULL(enabled_profiles);
     CHECK_NULL(ws);
 
-    /* Extract cached resources from workspace for manifest operations
-     *
-     * IMPORTANT: metadata_cache is NOT used during sync operations (see below).
-     * The cache was built from Git state BEFORE fetch/pull operations, making it
-     * stale after branch updates. We pass NULL to manifest_sync_diff() to force
-     * fresh metadata loading from the updated Git state. */
-    const hashmap_t *metadata_cache = workspace_get_metadata_cache(ws);
-    (void)metadata_cache;  /* Explicitly unused - see comment above */
+    /* metadata_cache intentionally unused during sync — stale after fetch/pull.
+     * Manifest operations load fresh metadata from updated Git state. */
+    (void)workspace_get_metadata_cache(ws);
 
     output_section(out, "Syncing with remote");
 
@@ -503,22 +982,17 @@ static error_t *sync_push_phase(
                 /* Safe to push - local has new commits */
                 if (verbose) {
                     output_info(out, "Pushing %s (%zu commit%s)...",
-                           result->profile_name,
-                           result->ahead, result->ahead == 1 ? "" : "s");
+                           result->profile_name, result->ahead, result->ahead == 1 ? "" : "s");
                 }
 
                 error_t *err = gitops_push_branch(repo, remote_name, result->profile_name, xfer);
                 if (err) {
-                    result->failed = true;
-                    result->error_message = strdup(error_message(err));
-                    results->failed_count++;
                     output_error(out, "✗ %s: push failed - %s",
                                 result->profile_name, error_message(err));
-                    error_free(err);
+                    mark_result_failed(result, results, err);
                 } else {
                     result->pushed = true;
                     results->pushed_count++;
-
                     char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
                     output_success(out, "%s: pushed %zu commit%s",
                            colored ? colored : result->profile_name,
@@ -536,16 +1010,12 @@ static error_t *sync_push_phase(
 
                 error_t *err = gitops_push_branch(repo, remote_name, result->profile_name, xfer);
                 if (err) {
-                    result->failed = true;
-                    result->error_message = strdup(error_message(err));
-                    results->failed_count++;
                     output_error(out, "✗ %s: failed to create remote branch - %s",
-                                result->profile_name, error_message(err));
-                    error_free(err);
+                                 result->profile_name, error_message(err));
+                    mark_result_failed(result, results, err);
                 } else {
                     result->pushed = true;
                     results->pushed_count++;
-
                     char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
                     output_success(out, "%s: created remote branch",
                            colored ? colored : result->profile_name);
@@ -554,482 +1024,25 @@ static error_t *sync_push_phase(
                 break;
             }
 
-            case UPSTREAM_REMOTE_AHEAD: {
-                if (auto_pull) {
-                    /* Auto-pull when safe (fast-forward only) */
-                    if (verbose) {
-                        output_info(out, "Pulling %s (%zu commit%s behind)...",
-                               result->profile_name,
-                               result->behind, result->behind == 1 ? "" : "s");
-                    }
-
-                    bool pulled = false;
-                    git_oid old_oid, new_oid;
-                    error_t *err = pull_branch_ff(repo, remote_name, result->profile_name, &pulled, &old_oid, &new_oid);
-                    if (err) {
-                        result->failed = true;
-                        result->error_message = strdup(error_message(err));
-                        results->failed_count++;
-                        output_error(out, "✗ %s: pull failed - %s",
-                                    result->profile_name, error_message(err));
-                        error_free(err);
-                    } else if (pulled) {
-                        /* Pull succeeded - decrement need_pull_count since we resolved it */
-                        if (results->need_pull_count > 0) {
-                            results->need_pull_count--;
-                        }
-
-                        /* Update manifest with changes from pull
-                         *
-                         * Note: Pass NULL for metadata_cache (not the cached value).
-                         * The cache was built before fetch and contains stale metadata.
-                         * manifest_sync_diff will load fresh metadata from the new commit. */
-                        size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
-                        error_t *manifest_err = manifest_sync_diff(
-                            repo, state, result->profile_name,
-                            &old_oid, &new_oid, enabled_profiles,
-                            NULL /* metadata_cache */,
-                            &synced, &removed, &fallbacks, &skipped
-                        );
-
-                        if (manifest_err) {
-                            /* Log warning but don't fail - Git succeeded, manifest can be recovered */
-                            output_warning(out, "   Manifest sync failed: %s", error_message(manifest_err));
-                            output_hint(out, "   Run 'dotta status' or 'dotta apply' to resync manifest");
-                            error_free(manifest_err);
-                        }
-
-                        char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
-                        if (manifest_err) {
-                            output_success(out, "%s: pulled %zu commit%s (manifest sync failed)",
-                                   colored ? colored : result->profile_name,
-                                   result->behind, result->behind == 1 ? "" : "s");
-                        } else {
-                            output_success(out, "%s: pulled %zu commit%s (%zu staged, %zu removed, %zu fallback%s)",
-                                   colored ? colored : result->profile_name,
-                                   result->behind, result->behind == 1 ? "" : "s",
-                                   synced, removed, fallbacks, fallbacks == 1 ? "" : "s");
-                        }
-
-                        if (skipped > 0) {
-                            output_warning(out, "   %zu custom file%s skipped (no prefix configured for '%s')",
-                                          skipped, skipped == 1 ? "" : "s", result->profile_name);
-                            output_hint(out, "   Run: dotta profile enable --prefix <path> %s", result->profile_name);
-                        }
-                        free(colored);
-                    } else {
-                        /* Already up-to-date - report in verbose mode */
-                        if (verbose) {
-                            char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
-                            output_info(out, "= %s: already up-to-date",
-                                   colored ? colored : result->profile_name);
-                            free(colored);
-                        }
-                        /* Decrement need_pull_count since it was already up-to-date */
-                        if (results->need_pull_count > 0) {
-                            results->need_pull_count--;
-                        }
-                    }
-                } else {
-                    /* Just warn - don't auto-pull */
-                    char *colored = output_colorize(out, OUTPUT_COLOR_YELLOW, result->profile_name);
-                    output_info(out, "↓ %s: remote has %zu new commit%s",
-                           colored ? colored : result->profile_name,
-                           result->behind, result->behind == 1 ? "" : "s");
-                    output_hint(out, "   Run 'dotta pull' or enable auto_pull in config to automatically pull");
-                    free(colored);
-                }
+            case UPSTREAM_REMOTE_AHEAD:
+                handle_remote_ahead(
+                    repo, remote_name, result, results, out, verbose,
+                    auto_pull, state, enabled_profiles
+                );
                 break;
-            }
 
             case UPSTREAM_DIVERGED: {
-                /* Handle divergence based on strategy */
-                char *colored = output_colorize(out, OUTPUT_COLOR_RED, result->profile_name);
-                output_warning(out, "⚠ %s: diverged (%zu local, %zu remote commits)",
-                       colored ? colored : result->profile_name,
-                       result->ahead, result->behind);
-                free(colored);
-
-                error_t *err = NULL;
-                switch (diverged_strategy) {
-                    case DIVERGE_WARN:
-                        output_hint(out, "   Use --diverged=<strategy> or set sync.diverged_strategy in config");
-                        output_hint_line(out, "   Strategies: rebase, merge, ours (keep local), theirs (keep remote)");
-                        results->diverged_count++;
-                        break;
-
-                    case DIVERGE_REBASE:
-                    {
-                        output_info(out, "   Resolving with rebase strategy...");
-
-                        /* Initialize divergence context */
-                        divergence_context_t ctx;
-                        err = divergence_context_init(&ctx, repo, remote_name, result->profile_name,
-                                                      DIVERGENCE_STRATEGY_REBASE);
-                        if (err) {
-                            output_error(out, "   ✗ Failed to initialize divergence context: %s",
-                                        error_message(err));
-                            error_free(err);
-                            break;
-                        }
-
-                        /* Perform in-memory rebase (never modifies HEAD) */
-                        git_oid new_oid;
-                        err = divergence_resolve(&ctx, &new_oid);
-                        if (err) {
-                            result->failed = true;
-                            result->error_message = strdup(error_message(err));
-                            results->failed_count++;
-                            output_error(out, "   ✗ Rebase failed: %s", error_message(err));
-                            error_free(err);
-                        } else {
-                            /* Verify rebase succeeded */
-                            size_t ahead = 0;
-                            err = divergence_verify(&ctx, &ahead, NULL);
-                            if (err) {
-                                result->failed = true;
-                                result->error_message = strdup(error_message(err));
-                                results->failed_count++;
-                                output_error(out, "   ✗ Rebase verification failed: %s", error_message(err));
-                                error_free(err);
-                                /* Rollback */
-                                err = divergence_rollback(&ctx);
-                                if (err) {
-                                    output_error(out, "   ✗ CRITICAL: Rollback failed: %s", error_message(err));
-                                    output_newline(out);
-                                    error_t *rollback_err = error_wrap(err,
-                                        "Failed to rollback branch '%s' after rebase verification failure.\n"
-                                        "Repository may be in an inconsistent state.\n"
-                                        "Manual intervention required: git reset --hard origin/%s",
-                                        result->profile_name, result->profile_name);
-                                    return rollback_err;
-                                } else {
-                                    output_info(out, "   ↺ Rolled back to original state");
-                                }
-                            } else {
-                                output_success(out, "   Successfully rebased onto remote (%zu commit%s to push)",
-                                       ahead, ahead == 1 ? "" : "s");
-
-                                /* Now push the rebased commits */
-                                err = gitops_push_branch(repo, remote_name, result->profile_name, xfer);
-                                if (err) {
-                                    result->failed = true;
-                                    result->error_message = strdup(error_message(err));
-                                    results->failed_count++;
-                                    output_error(out, "   ✗ Push after rebase failed: %s", error_message(err));
-                                    error_free(err);
-                                    /* Rollback since push failed */
-                                    output_info(out, "   ↺ Rolling back rebase (push failed)...");
-                                    err = divergence_rollback(&ctx);
-                                    if (err) {
-                                        output_error(out, "   ✗ CRITICAL: Rollback failed: %s", error_message(err));
-                                        output_newline(out);
-                                        error_t *rollback_err = error_wrap(err,
-                                            "Failed to rollback branch '%s' after push failure.\n"
-                                            "Repository may be in an inconsistent state.\n"
-                                            "Manual intervention required: git reset --hard origin/%s",
-                                            result->profile_name, result->profile_name);
-                                        return rollback_err;
-                                    } else {
-                                        output_success(out, "   Rolled back to original state");
-                                    }
-                                } else {
-                                    output_success(out, "   Pushed rebased commits");
-                                    result->pushed = true;
-                                    results->pushed_count++;
-
-                                    /* Update manifest with changes from rebase
-                                     *
-                                     * Note: Pass NULL for metadata_cache (not the cached value).
-                                     * The cache was built before fetch and contains stale metadata.
-                                     * manifest_sync_diff will load fresh metadata from the new commit. */
-                                    size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
-                                    error_t *manifest_err = manifest_sync_diff(
-                                        repo, state, result->profile_name,
-                                        &ctx.saved_oid, &new_oid, enabled_profiles,
-                                        NULL /* metadata_cache */,
-                                        &synced, &removed, &fallbacks, &skipped
-                                    );
-
-                                    if (manifest_err) {
-                                        output_warning(out, "   Manifest sync failed: %s", error_message(manifest_err));
-                                        output_hint(out, "   Run 'dotta status' or 'dotta apply' to resync manifest");
-                                        error_free(manifest_err);
-                                    } else if (synced > 0 || removed > 0 || fallbacks > 0) {
-                                        output_info(out, "   Manifest: %zu staged, %zu removed, %zu fallback%s",
-                                                   synced, removed, fallbacks, fallbacks == 1 ? "" : "s");
-                                    }
-
-                                    if (skipped > 0) {
-                                        output_warning(out, "   %zu custom file%s skipped (no prefix configured for '%s')",
-                                                      skipped, skipped == 1 ? "" : "s", result->profile_name);
-                                        output_hint(out, "   Run: dotta profile enable --prefix <path> %s", result->profile_name);
-                                    }
-                                }
-                            }
-                        }
-                        break;
-                    }
-
-                    case DIVERGE_MERGE: {
-                        output_info(out, "   Resolving with merge strategy...");
-
-                        /* Initialize divergence context */
-                        divergence_context_t ctx;
-                        err = divergence_context_init(&ctx, repo, remote_name, result->profile_name,
-                                                      DIVERGENCE_STRATEGY_MERGE);
-                        if (err) {
-                            output_error(out, "   ✗ Failed to initialize divergence context: %s",
-                                        error_message(err));
-                            error_free(err);
-                            break;
-                        }
-
-                        /* Perform tree-based merge (never modifies HEAD) */
-                        git_oid new_oid;
-                        err = divergence_resolve(&ctx, &new_oid);
-                        if (err) {
-                            result->failed = true;
-                            result->error_message = strdup(error_message(err));
-                            results->failed_count++;
-                            output_error(out, "   ✗ Merge failed: %s", error_message(err));
-                            error_free(err);
-                        } else {
-                            /* Verify merge succeeded */
-                            size_t ahead = 0;
-                            err = divergence_verify(&ctx, &ahead, NULL);
-                            if (err) {
-                                result->failed = true;
-                                result->error_message = strdup(error_message(err));
-                                results->failed_count++;
-                                output_error(out, "   ✗ Merge verification failed: %s", error_message(err));
-                                error_free(err);
-                                /* Rollback */
-                                err = divergence_rollback(&ctx);
-                                if (err) {
-                                    output_error(out, "   ✗ CRITICAL: Rollback failed: %s", error_message(err));
-                                    output_newline(out);
-                                    error_t *rollback_err = error_wrap(err,
-                                        "Failed to rollback branch '%s' after merge verification failure.\n"
-                                        "Repository may be in an inconsistent state.\n"
-                                        "Manual intervention required: git reset --hard origin/%s",
-                                        result->profile_name, result->profile_name);
-                                    return rollback_err;
-                                } else {
-                                    output_info(out, "   ↺ Rolled back to original state");
-                                }
-                            } else {
-                                output_success(out, "   Successfully merged with remote (%zu commit%s to push)",
-                                       ahead, ahead == 1 ? "" : "s");
-
-                                /* Now push the merge commit */
-                                err = gitops_push_branch(repo, remote_name, result->profile_name, xfer);
-                                if (err) {
-                                    result->failed = true;
-                                    result->error_message = strdup(error_message(err));
-                                    results->failed_count++;
-                                    output_error(out, "   ✗ Push after merge failed: %s", error_message(err));
-                                    error_free(err);
-                                    /* Rollback since push failed */
-                                    output_info(out, "   ↺ Rolling back merge (push failed)...");
-                                    err = divergence_rollback(&ctx);
-                                    if (err) {
-                                        output_error(out, "   ✗ CRITICAL: Rollback failed: %s", error_message(err));
-                                        output_newline(out);
-                                        error_t *rollback_err = error_wrap(err,
-                                            "Failed to rollback branch '%s' after push failure.\n"
-                                            "Repository may be in an inconsistent state.\n"
-                                            "Manual intervention required: git reset --hard origin/%s",
-                                            result->profile_name, result->profile_name);
-                                        return rollback_err;
-                                    } else {
-                                        output_success(out, "   Rolled back to original state");
-                                    }
-                                } else {
-                                    output_success(out, "   Pushed merge commit");
-                                    result->pushed = true;
-                                    results->pushed_count++;
-
-                                    /* Update manifest with changes from merge
-                                     *
-                                     * Note: Pass NULL for metadata_cache (not the cached value).
-                                     * The cache was built before fetch and contains stale metadata.
-                                     * manifest_sync_diff will load fresh metadata from the new commit. */
-                                    size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
-                                    error_t *manifest_err = manifest_sync_diff(
-                                        repo, state, result->profile_name,
-                                        &ctx.saved_oid, &new_oid, enabled_profiles,
-                                        NULL /* metadata_cache */,
-                                        &synced, &removed, &fallbacks, &skipped
-                                    );
-
-                                    if (manifest_err) {
-                                        output_warning(out, "   Manifest sync failed: %s", error_message(manifest_err));
-                                        output_hint(out, "   Run 'dotta status' or 'dotta apply' to resync manifest");
-                                        error_free(manifest_err);
-                                    } else if (synced > 0 || removed > 0 || fallbacks > 0) {
-                                        output_info(out, "   Manifest: %zu staged, %zu removed, %zu fallback%s",
-                                                   synced, removed, fallbacks, fallbacks == 1 ? "" : "s");
-                                    }
-
-                                    if (skipped > 0) {
-                                        output_warning(out, "   %zu custom file%s skipped (no prefix configured for '%s')",
-                                                      skipped, skipped == 1 ? "" : "s", result->profile_name);
-                                        output_hint(out, "   Run: dotta profile enable --prefix <path> %s", result->profile_name);
-                                    }
-                                }
-                            }
-                        }
-                        break;
-                    }
-
-                    case DIVERGE_OURS: {
-                        output_info(out, "   Resolving with 'ours' strategy (force push)...");
-
-                        /* Get user confirmation for destructive operation */
-                        if (confirm_destructive) {
-                            char prompt[DOTTA_MESSAGE_MAX];
-                            snprintf(prompt, sizeof(prompt),
-                                    "WARNING: This will force push and OVERWRITE remote '%s'.\n"
-                                    "Remote commits will be LOST. Continue?", result->profile_name);
-                            bool confirmed = output_confirm_or_default(out, prompt, false, false);
-                            if (!confirmed) {
-                                output_info(out, "   Operation cancelled by user");
-                                break;
-                            }
-                        }
-
-                        /* Initialize divergence context (saves current state for rollback) */
-                        divergence_context_t ctx;
-                        err = divergence_context_init(&ctx, repo, remote_name, result->profile_name,
-                                                      DIVERGENCE_STRATEGY_OURS);
-                        if (err) {
-                            result->failed = true;
-                            result->error_message = strdup(error_message(err));
-                            results->failed_count++;
-                            output_error(out, "   ✗ Failed to initialize divergence context: %s",
-                                        error_message(err));
-                            error_free(err);
-                            break;
-                        }
-
-                        /* Resolve divergence (for OURS, this is a no-op - local stays unchanged) */
-                        err = divergence_resolve(&ctx, NULL);
-                        if (err) {
-                            result->failed = true;
-                            result->error_message = strdup(error_message(err));
-                            results->failed_count++;
-                            output_error(out, "   ✗ Resolution failed: %s", error_message(err));
-                            error_free(err);
-                            break;
-                        }
-
-                        /* Force push to remote */
-                        err = force_push_branch(repo, remote_name, result->profile_name, xfer);
-                        if (err) {
-                            result->failed = true;
-                            result->error_message = strdup(error_message(err));
-                            results->failed_count++;
-                            output_error(out, "   ✗ Force push failed: %s", error_message(err));
-                            error_free(err);
-                        } else {
-                            output_success(out, "   Force pushed to remote (remote commits discarded)");
-                            result->pushed = true;
-                            results->pushed_count++;
-                        }
-                        break;
-                    }
-
-                    case DIVERGE_THEIRS: {
-                        output_info(out, "   Resolving with 'theirs' strategy (reset to remote)...");
-
-                        /* Get user confirmation for destructive operation */
-                        if (confirm_destructive) {
-                            char prompt[DOTTA_MESSAGE_MAX];
-                            snprintf(prompt, sizeof(prompt),
-                                    "WARNING: This will reset '%s' to remote and DISCARD local commits.\n"
-                                    "Local changes will be LOST. Continue?", result->profile_name);
-                            bool confirmed = output_confirm_or_default(out, prompt, false, false);
-                            if (!confirmed) {
-                                output_info(out, "   Operation cancelled by user");
-                                break;
-                            }
-                        }
-
-                        /* Initialize divergence context (saves current state for rollback) */
-                        divergence_context_t ctx;
-                        err = divergence_context_init(&ctx, repo, remote_name, result->profile_name,
-                                                      DIVERGENCE_STRATEGY_THEIRS);
-                        if (err) {
-                            result->failed = true;
-                            result->error_message = strdup(error_message(err));
-                            results->failed_count++;
-                            output_error(out, "   ✗ Failed to initialize divergence context: %s",
-                                        error_message(err));
-                            error_free(err);
-                            break;
-                        }
-
-                        /* Resolve divergence (resets local branch to remote) */
-                        git_oid new_oid;
-                        err = divergence_resolve(&ctx, &new_oid);
-                        if (err) {
-                            result->failed = true;
-                            result->error_message = strdup(error_message(err));
-                            results->failed_count++;
-                            output_error(out, "   ✗ Reset failed: %s", error_message(err));
-                            error_free(err);
-                        } else {
-                            /* Verify reset succeeded */
-                            err = divergence_verify(&ctx, NULL, NULL);
-                            if (err) {
-                                result->failed = true;
-                                result->error_message = strdup(error_message(err));
-                                results->failed_count++;
-                                output_error(out, "   ✗ Reset verification failed: %s", error_message(err));
-                                output_warning(out, "   Local branch was reset but verification failed");
-                                error_free(err);
-                            } else {
-                                output_success(out, "   Reset to remote (local commits discarded)");
-                                /* No push needed - local is now at remote */
-
-                                /* Update manifest with changes from reset
-                                 *
-                                 * Note: Pass NULL for metadata_cache (not the cached value).
-                                 * The cache was built before fetch and contains stale metadata.
-                                 * manifest_sync_diff will load fresh metadata from the new commit. */
-                                size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
-                                error_t *manifest_err = manifest_sync_diff(
-                                    repo, state, result->profile_name,
-                                    &ctx.saved_oid, &new_oid, enabled_profiles,
-                                    NULL /* metadata_cache */,
-                                    &synced, &removed, &fallbacks, &skipped
-                                );
-
-                                if (manifest_err) {
-                                    output_warning(out, "   Manifest sync failed: %s", error_message(manifest_err));
-                                    output_hint(out, "   Run 'dotta status' or 'dotta apply' to resync manifest");
-                                    error_free(manifest_err);
-                                } else if (synced > 0 || removed > 0 || fallbacks > 0) {
-                                    output_info(out, "   Manifest: %zu staged, %zu removed, %zu fallback%s",
-                                               synced, removed, fallbacks, fallbacks == 1 ? "" : "s");
-                                }
-
-                                if (skipped > 0) {
-                                    output_warning(out, "   %zu custom file%s skipped (no prefix configured for '%s')",
-                                                  skipped, skipped == 1 ? "" : "s", result->profile_name);
-                                    output_hint(out, "   Run: dotta profile enable --prefix <path> %s", result->profile_name);
-                                }
-                            }
-                        }
-                        break;
-                    }
+                error_t *err = handle_diverged(
+                    repo, remote_name, result, results, out, diverged_strategy,
+                    xfer, confirm_destructive, state, enabled_profiles
+                );
+                if (err) {
+                    return err;  /* Critical rollback failure */
                 }
                 break;
             }
 
             case UPSTREAM_UNKNOWN:
-                /* Skip profiles with unknown state */
                 output_warning(out, "  ? %s: state unknown", result->profile_name);
                 break;
         }
@@ -1128,7 +1141,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     if (opts->profiles && opts->profile_count > 0) {
         /* User specified CLI filter */
         err = profile_resolve_for_operations(repo, opts->profiles, opts->profile_count,
-                                            config->strict_mode, &sync_profiles);
+                                             config->strict_mode, &sync_profiles);
         if (err) {
             err = error_wrap(err, "Failed to resolve sync profiles");
             goto cleanup;

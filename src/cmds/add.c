@@ -1156,94 +1156,82 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
      *
      * If re-exec succeeds, this function DOES NOT RETURN.
      */
-    {
-        /* Build array of storage paths by pre-resolving all file paths */
-        const char **storage_paths = calloc(opts->file_count, sizeof(char *));
-        char **allocated_paths = calloc(opts->file_count, sizeof(char *));
 
-        if (!storage_paths || !allocated_paths) {
-            free(storage_paths);
-            free(allocated_paths);
-            err = ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
-            goto cleanup;
-        }
+    /* Build array of storage paths by pre-resolving all file paths */
+    const char **storage_paths = calloc(opts->file_count, sizeof(char *));
+    char **allocated_paths = calloc(opts->file_count, sizeof(char *));
 
-        /* Resolve all filesystem paths to storage paths */
-        for (size_t i = 0; i < opts->file_count; i++) {
-            const char *file_path = opts->files[i];
-            char *storage_path = NULL;
-            path_prefix_t prefix;
-
-            err = path_to_storage(file_path, opts->custom_prefix, &storage_path, &prefix);
-            if (err) {
-                /* Cleanup allocated paths on error */
-                for (size_t j = 0; j < i; j++) {
-                    free(allocated_paths[j]);
-                }
-                free(storage_paths);
-                free(allocated_paths);
-                err = error_wrap(err, "Failed to resolve path '%s'", file_path);
-                goto cleanup;
-            }
-
-            /* Warn if file under $HOME but custom prefix provided */
-            if (prefix == PREFIX_HOME && opts->custom_prefix) {
-                output_warning(out, "File '%s' is under $HOME, using portable 'home/' prefix", file_path);
-                output_hint(out, "The --prefix flag is ignored for files under $HOME");
-            }
-
-            allocated_paths[i] = storage_path;
-            storage_paths[i] = storage_path;
-        }
-
-        /* Check privilege requirements
-         *
-         * If root/ files detected without root privileges:
-         * - Interactive: Prompts user, re-execs with sudo if approved
-         * - Non-interactive: Returns error with clear message
-         *
-         * If re-exec succeeds, this function DOES NOT RETURN.
-         * If re-exec fails or user declines, returns error.
-         */
-        err = privilege_ensure_for_operation(
-            storage_paths,
-            opts->file_count,
-            "add",
-            true,  /* interactive = true (default for add) */
-            opts->argc,
-            opts->argv,
-            out
-        );
-
-        /* Cleanup storage paths array */
-        for (size_t i = 0; i < opts->file_count; i++) {
-            free(allocated_paths[i]);
-        }
+    if (!storage_paths || !allocated_paths) {
         free(storage_paths);
         free(allocated_paths);
+        err = ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
+        goto cleanup;
+    }
 
+    /* Resolve all filesystem paths to storage paths */
+    for (size_t i = 0; i < opts->file_count; i++) {
+        const char *file_path = opts->files[i];
+        char *storage_path = NULL;
+        path_prefix_t prefix;
+
+        err = path_to_storage(file_path, opts->custom_prefix, &storage_path, &prefix);
         if (err) {
-            /* User declined elevation or non-interactive mode blocked it */
+            /* Cleanup allocated paths on error */
+            for (size_t j = 0; j < i; j++) {
+                free(allocated_paths[j]);
+            }
+            free(storage_paths);
+            free(allocated_paths);
+            err = error_wrap(err, "Failed to resolve path '%s'", file_path);
             goto cleanup;
         }
 
-        /* If we reach here, privileges are OK - proceed with operation */
+        /* Warn if file under $HOME but custom prefix provided */
+        if (prefix == PREFIX_HOME && opts->custom_prefix) {
+            output_warning(out, "File '%s' is under $HOME, using portable 'home/' prefix", file_path);
+            output_hint(out, "The --prefix flag is ignored for files under $HOME");
+        }
+
+        allocated_paths[i] = storage_path;
+        storage_paths[i] = storage_path;
     }
+
+    /* Check privilege requirements
+     *
+     * If root/ files detected without root privileges:
+     * - Interactive: Prompts user, re-execs with sudo if approved
+     * - Non-interactive: Returns error with clear message
+     *
+     * If re-exec succeeds, this function DOES NOT RETURN.
+     * If re-exec fails or user declines, returns error.
+     */
+    err = privilege_ensure_for_operation(
+        storage_paths, opts->file_count, "add", true,  /* interactive = true (default for add) */
+        opts->argc, opts->argv, out
+    );
+
+    /* Cleanup storage paths array */
+    for (size_t i = 0; i < opts->file_count; i++) {
+        free(allocated_paths[i]);
+    }
+    free(storage_paths);
+    free(allocated_paths);
+
+    if (err) {
+        /* User declined elevation or non-interactive mode blocked it */
+        goto cleanup;
+    }
+
+    /* If we reach here, privileges are OK - proceed with operation */
 
     /* Create ignore context */
     err = ignore_context_create(
-        repo,
-        config,
-        opts->profile,
-        opts->exclude_patterns,
-        opts->exclude_count,
-        &ignore_ctx
+        repo, config, opts->profile, opts->exclude_patterns, opts->exclude_count, &ignore_ctx
     );
     if (err) {
         /* Non-fatal: continue without ignore context */
         if (opts->verbose && out) {
-            output_warning(out, "Failed to create ignore context: %s",
-                          error_message(err));
+            output_warning(out, "Failed to create ignore context: %s", error_message(err));
         }
         error_free(err);
         err = NULL;
@@ -1336,10 +1324,8 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
 
                 if (!prefix_for_conversion || prefix_for_conversion[0] == '\0') {
                     free(absolute);
-                    err = ERROR(ERR_INVALID_ARG,
-                        "Storage path '%s' requires --prefix flag\n"
-                        "Usage: dotta add -p %s --prefix /path/to/target %s",
-                        file, opts->profile, file);
+                    err = ERROR(ERR_INVALID_ARG, "Storage path '%s' requires --prefix flag\n"
+                        "Usage: dotta add -p %s --prefix /path/to/target %s", file, opts->profile, file);
                     goto cleanup;
                 }
             }
@@ -1402,7 +1388,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                 /* Non-fatal: just log warning */
                 if (opts->verbose && out) {
                     output_warning(out, "Failed to compute storage prefix for directory '%s': %s",
-                                  absolute, error_message(err));
+                                   absolute, error_message(err));
                 }
                 error_free(err);
                 err = NULL;
@@ -1493,10 +1479,8 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
      *   1. Explicit encryption requested (--encrypt flag)
      *   2. Auto-encrypt patterns configured (files may match patterns)
      */
-    bool needs_encryption = opts->encrypt ||
-                           (config && config->encryption_enabled &&
-                            config->auto_encrypt_patterns &&
-                            config->auto_encrypt_pattern_count > 0);
+    bool needs_encryption = opts->encrypt || (config && config->encryption_enabled &&
+                            config->auto_encrypt_patterns && config->auto_encrypt_pattern_count > 0);
 
     if (needs_encryption && config && config->encryption_enabled) {
         key_mgr = keymanager_get_global(config);
@@ -1551,24 +1535,20 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             /* Non-fatal: log warning and continue */
             if (opts->verbose && out) {
                 output_warning(out, "Failed to stat directory '%s': %s",
-                              dir->filesystem_path, strerror(errno));
+                               dir->filesystem_path, strerror(errno));
             }
             continue;
         }
 
         /* Capture directory metadata using stat data */
         metadata_item_t *dir_item = NULL;
-        err = metadata_capture_from_directory(
-            dir->storage_path,
-            &dir_stat,
-            &dir_item
-        );
+        err = metadata_capture_from_directory(dir->storage_path, &dir_stat, &dir_item);
 
         if (err) {
             /* Non-fatal: log warning and continue */
             if (opts->verbose && out) {
                 output_warning(out, "Failed to capture metadata for directory '%s': %s",
-                              dir->filesystem_path, error_message(err));
+                               dir->filesystem_path, error_message(err));
             }
             error_free(err);
             err = NULL;
@@ -1584,7 +1564,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                            dir_item->group ? dir_item->group : "?");
             } else {
                 output_info(out, "Captured directory metadata: %s (mode: %04o)",
-                           dir->filesystem_path, dir_item->mode);
+                            dir->filesystem_path, dir_item->mode);
             }
         }
 
@@ -1597,7 +1577,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             /* Non-fatal: log warning and continue */
             if (opts->verbose && out) {
                 output_warning(out, "Failed to track directory '%s': %s",
-                              dir->filesystem_path, error_message(err));
+                               dir->filesystem_path, error_message(err));
             }
             error_free(err);
             err = NULL;
@@ -1605,7 +1585,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             dir_tracked_count++;
             if (opts->verbose && out) {
                 output_info(out, "Tracked directory: %s -> %s",
-                           dir->filesystem_path, dir->storage_path);
+                            dir->filesystem_path, dir->storage_path);
             }
         }
     }
@@ -1646,7 +1626,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         }
         if (dir_tracked_count > 0) {
             output_info(out, "Tracked %zu director%s for change detection",
-                       dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies");
+                        dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies");
         }
     }
 
@@ -1682,17 +1662,15 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
          * - Matches VWD architecture specification
          */
         error_t *enable_err = auto_enable_and_sync_profile(
-            repo, opts->profile, opts->custom_prefix, all_files, out,
-            &manifest_updated, &manifest_synced_count
+            repo, opts->profile, opts->custom_prefix, all_files,
+            out, &manifest_updated, &manifest_synced_count
         );
 
         if (enable_err) {
             /* Non-fatal: Git commit succeeded, user can manually enable later */
             if (out) {
-                output_warning(out, "Failed to auto-enable profile: %s",
-                              error_message(enable_err));
-                output_hint(out, "Run 'dotta profile enable %s' to enable manually",
-                           opts->profile);
+                output_warning(out, "Failed to auto-enable profile: %s", error_message(enable_err));
+                output_hint(out, "Run 'dotta profile enable %s' to enable manually", opts->profile);
             }
             error_free(enable_err);
             manifest_updated = false;
@@ -1711,11 +1689,9 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         if (manifest_err) {
             /* Non-fatal: Git commit succeeded */
             if (out) {
-                output_warning(out, "Failed to update manifest: %s",
-                              error_message(manifest_err));
+                output_warning(out, "Failed to update manifest: %s", error_message(manifest_err));
                 output_info(out, "Files committed to Git successfully");
-                output_hint(out, "Run 'dotta profile enable %s' to sync manifest",
-                           opts->profile);
+                output_hint(out, "Run 'dotta profile enable %s' to sync manifest", opts->profile);
             }
             error_free(manifest_err);
             manifest_updated = false;
@@ -1752,11 +1728,11 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         /* Primary success message */
         if (added_count > 0) {
             output_success(out, "Added %zu file%s to profile '%s'",
-                          added_count, added_count == 1 ? "" : "s", opts->profile);
+                           added_count, added_count == 1 ? "" : "s", opts->profile);
         } else {
             /* Directory-only add */
             output_success(out, "Tracking %zu director%s in profile '%s'", dir_tracked_count,
-                          dir_tracked_count == 1 ? "y" : "ies", opts->profile);
+                           dir_tracked_count == 1 ? "y" : "ies", opts->profile);
         }
     
         if (profile_was_new) {
@@ -1766,7 +1742,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         /* Show directory tracking info only when files were also added */
         if (added_count > 0 && tracked_dir_count > 0) {
             output_info(out, "Tracking %zu director%s for change detection",
-                       tracked_dir_count, tracked_dir_count == 1 ? "y" : "ies");
+                        tracked_dir_count, tracked_dir_count == 1 ? "y" : "ies");
         }
     
         output_newline(out);
@@ -1779,27 +1755,27 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                     /* New profile - show sync results with precedence awareness */
                     if (manifest_synced_count == added_count) {
                         output_info(out, "Manifest updated (%zu file%s marked as deployed)",
-                                   manifest_synced_count, manifest_synced_count == 1 ? "" : "s");
+                                    manifest_synced_count, manifest_synced_count == 1 ? "" : "s");
                     } else {
                         output_info(out, "Manifest updated (%zu/%zu file%s marked as deployed)",
-                                   manifest_synced_count, added_count, added_count == 1 ? "" : "s");
+                                    manifest_synced_count, added_count, added_count == 1 ? "" : "s");
     
                         if (manifest_synced_count < added_count) {
                             size_t skipped = added_count - manifest_synced_count;
                             output_info(out, "Note: %zu file%s overridden by higher-precedence profiles",
-                                       skipped, skipped == 1 ? "" : "s");
+                                        skipped, skipped == 1 ? "" : "s");
                         }
                     }
                 } else {
                     /* Existing enabled profile */
                     output_info(out, "Manifest updated (%zu file%s marked as deployed)",
-                               added_count, added_count == 1 ? "" : "s");
+                                added_count, added_count == 1 ? "" : "s");
                     output_hint(out, "Files captured from filesystem (already deployed)");
                 }
             } else {
                 /* Directory-only add */
                 output_info(out, "Manifest updated (%zu director%s synced)",
-                           dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies");
+                            dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies");
             }
             output_hint(out, "Run 'dotta status' to verify");
         } else {

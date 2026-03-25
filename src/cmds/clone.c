@@ -199,8 +199,10 @@ static error_t *fetch_all_profiles(
 
     /* Fetch and create local branches */
     size_t fetched_count = 0;
-    err = fetch_profiles(repo, remote_name, all_branches->items,
-                         all_branches->count, out, xfer, &fetched_count, successful);
+    err = fetch_profiles(
+        repo, remote_name, all_branches->items, all_branches->count,
+        out, xfer, &fetched_count, successful
+    );
 
     string_array_free(all_branches);
 
@@ -298,8 +300,10 @@ static error_t *initialize_state(
         char profiles_str[1024] = {0};
         size_t offset = 0;
         for (size_t i = 0; i < count && offset < sizeof(profiles_str) - 1; i++) {
-            int written = snprintf(profiles_str + offset, sizeof(profiles_str) - offset,
-                                   "%s%s", profile_names[i], (i < count - 1) ? ", " : "");
+            int written = snprintf(
+                profiles_str + offset, sizeof(profiles_str) - offset,
+                "%s%s", profile_names[i], (i < count - 1) ? ", " : ""
+            );
             if (written > 0) {
                 offset += written;
             }
@@ -410,8 +414,10 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         output_section(out, "Fetching specified profiles");
 
         size_t fetched_count = 0;
-        err = fetch_profiles(repo, "origin", opts->profiles, opts->profile_count,
-                             out, xfer, &fetched_count, fetched_profiles);
+        err = fetch_profiles(
+            repo, "origin", opts->profiles, opts->profile_count,
+            out, xfer, &fetched_count, fetched_profiles
+        );
 
         if (err) {
             output_error(out, "Failed to fetch profiles: %s", error_message(err));
@@ -468,9 +474,10 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
 
             /* Fetch detected profiles */
             size_t fetched_count = 0;
-            err = fetch_profiles(repo, "origin", detected_names->items,
-                                 string_array_size(detected_names),
-                                 out, xfer, &fetched_count, fetched_profiles);
+            err = fetch_profiles(
+                repo, "origin", detected_names->items, string_array_size(detected_names),
+                out, xfer, &fetched_count, fetched_profiles
+            );
             if (err) {
                 output_warning(out, "Some profiles failed to fetch: %s", error_message(err));
                 error_free(err);
@@ -628,16 +635,16 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     if (run_bootstrap && string_array_size(fetched_profiles) > 0) {
         /* Load profiles for bootstrap execution */
         profile_list_t *bootstrap_profiles = NULL;
-        err = profile_list_load(repo, fetched_profiles->items,
-                                string_array_size(fetched_profiles),
-                                false, /* non-strict: skip non-existent */
-                                &bootstrap_profiles);
+        err = profile_list_load(
+            repo, fetched_profiles->items, string_array_size(fetched_profiles),
+            false, /* non-strict: skip non-existent */ &bootstrap_profiles
+        );
 
         if (!err && bootstrap_profiles) {
             output_newline(out);
-            err = bootstrap_run_for_profiles(repo, local_path,
-                                             (struct profile_list *)bootstrap_profiles,
-                                             false, true);
+            err = bootstrap_run_for_profiles(
+                repo, local_path, (struct profile_list *)bootstrap_profiles, false, true
+            );
             if (err) {
                 output_error(out, "Bootstrap failed: %s", error_message(err));
                 error_free(err);

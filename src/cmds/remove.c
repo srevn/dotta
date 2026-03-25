@@ -1037,9 +1037,7 @@ static error_t *remove_files_from_profile(
         hook_ctx->dry_run = opts->dry_run;
 
         /* Add paths to hook context */
-        hook_context_add_files(hook_ctx,
-                              filesystem_paths->items,
-                              filesystem_paths->count);
+        hook_context_add_files(hook_ctx, filesystem_paths->items, filesystem_paths->count);
 
         hook_result_t *hook_result = NULL;
         err = hook_execute(config, HOOK_PRE_REMOVE, hook_ctx, &hook_result);

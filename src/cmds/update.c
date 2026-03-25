@@ -1046,8 +1046,9 @@ static error_t *update_profile(
     }
 
     /* Update metadata for both files and directories */
-    err = update_metadata_for_profile(wt, items, item_count,
-                                         encryption_status, file_stats, opts, out);
+    err = update_metadata_for_profile(
+        wt, items, item_count, encryption_status, file_stats, opts, out
+    );
     if (err) {
         err = error_wrap(err, "Failed to update metadata");
         goto cleanup;
@@ -1487,9 +1488,7 @@ static error_t *update_execute_for_all_profiles(
 
         /* Update this profile using shared worktree */
         err = update_profile(
-            wt, profile,
-            array->items, array->count,
-            opts, out, config, ws
+            wt, profile, array->items, array->count, opts, out, config, ws
         );
 
         if (err) {
@@ -1655,13 +1654,14 @@ static error_t *update_display_summary(
                 output_color_t color;
                 char base_metadata[256];
 
-                if (!workspace_item_extract_display_info(item,
-                        tags, &tag_count, &color, base_metadata, sizeof(base_metadata))) {
+                if (!workspace_item_extract_display_info(item, tags, &tag_count, &color,
+                                                         base_metadata, sizeof(base_metadata))) {
                     continue;
                 }
 
-                output_list_add_multi(list, tags, tag_count, color,
-                                     item->filesystem_path, base_metadata);
+                output_list_add_multi(
+                    list, tags, tag_count, color, item->filesystem_path, base_metadata
+                );
             }
 
             output_list_render(list);
@@ -1685,10 +1685,11 @@ static error_t *update_display_summary(
                     output_color_t color;
                     char metadata[256];
 
-                    if (workspace_item_extract_display_info(item,
-                            tags, &tag_count, &color, metadata, sizeof(metadata))) {
-                        output_list_add_multi(list, tags, tag_count, color,
-                                             item->filesystem_path, metadata);
+                    if (workspace_item_extract_display_info(item, tags, &tag_count, &color,
+                                                            metadata, sizeof(metadata))) {
+                        output_list_add_multi(
+                            list, tags, tag_count, color, item->filesystem_path, metadata
+                        );
                     }
                 }
             }
@@ -1714,10 +1715,11 @@ static error_t *update_display_summary(
                     output_color_t color;
                     char metadata[256];
 
-                    if (workspace_item_extract_display_info(item,
-                            tags, &tag_count, &color, metadata, sizeof(metadata))) {
-                        output_list_add_multi(list, tags, tag_count, color,
-                                             item->filesystem_path, metadata);
+                    if (workspace_item_extract_display_info(item, tags, &tag_count, &color,
+                                                            metadata, sizeof(metadata))) {
+                        output_list_add_multi(
+                            list, tags, tag_count, color, item->filesystem_path, metadata
+                        );
                     }
                 }
             }
@@ -1747,8 +1749,8 @@ static error_t *update_display_summary(
                 output_color_t color;
                 char base_metadata[256];
 
-                if (workspace_item_extract_display_info(item,
-                        tags, &tag_count, &color, base_metadata, sizeof(base_metadata))) {
+                if (workspace_item_extract_display_info(item, tags, &tag_count, &color,
+                                                        base_metadata, sizeof(base_metadata))) {
                     /* Build custom content with trailing slash for directories */
                     char path_with_slash[PATH_MAX + 2];
                     snprintf(path_with_slash, sizeof(path_with_slash), "%s/",
@@ -1764,8 +1766,9 @@ static error_t *update_display_summary(
                         snprintf(metadata, sizeof(metadata), "directory %s", base_metadata);
                     }
 
-                    output_list_add_multi(list, tags, tag_count, color,
-                                         path_with_slash, metadata);
+                    output_list_add_multi(
+                        list, tags, tag_count, color, path_with_slash, metadata
+                    );
                 }
             }
 
@@ -1780,9 +1783,7 @@ static error_t *update_display_summary(
             "The following files match auto-encrypt patterns but are stored as plaintext:");
         output_newline(out);
 
-        output_list_t *list = output_list_create(out,
-            "Encryption policy violations",
-            NULL);
+        output_list_t *list = output_list_create(out, "Encryption policy violations", NULL);
 
         if (list) {
             for (size_t i = 0; i < item_count; i++) {
@@ -1796,14 +1797,14 @@ static error_t *update_display_summary(
                 /* Build metadata with profile and resolution status */
                 char metadata[512];
                 const char *status = item->on_filesystem ?
-                    "will be encrypted" : "file missing - cannot fix";
-                snprintf(metadata, sizeof(metadata), "from %s, %s",
-                        item->profile, status);
+                                     "will be encrypted" : "file missing - cannot fix";
+                snprintf(metadata, sizeof(metadata), "from %s, %s", item->profile, status);
 
                 /* Single tag for policy violation */
                 const char *tags[] = {"plaintext"};
-                output_list_add_multi(list, tags, 1, OUTPUT_COLOR_RED,
-                                     item->filesystem_path, metadata);
+                output_list_add_multi(
+                    list, tags, 1, OUTPUT_COLOR_RED, item->filesystem_path, metadata
+                );
             }
 
             output_list_render(list);
@@ -1997,8 +1998,9 @@ error_t *cmd_update(
     /* Phase 2: Load operation profiles (CLI filter or shared pointer) */
     if (opts->profiles && opts->profile_count > 0) {
         /* CLI filter specified - load operation filter profiles */
-        err = profile_resolve_for_operations(repo, opts->profiles, opts->profile_count,
-                                            config->strict_mode, &operation_profiles);
+        err = profile_resolve_for_operations(
+            repo, opts->profiles, opts->profile_count, config->strict_mode, &operation_profiles
+        );
         if (err) {
             err = error_wrap(err, "Failed to resolve operation profiles");
             goto cleanup;
@@ -2110,8 +2112,9 @@ error_t *cmd_update(
             }
         }
 
-        err = path_filter_create((const char **)opts->files, opts->file_count,
-                                 custom_prefixes, prefix_count, &file_filter);
+        err = path_filter_create(
+            (const char **)opts->files, opts->file_count, custom_prefixes, prefix_count, &file_filter
+        );
         free(custom_prefixes);  /* Array only, strings are borrowed from profiles */
 
         if (err) {
@@ -2127,8 +2130,9 @@ error_t *cmd_update(
      */
     const workspace_item_t **update_items = NULL;
     size_t update_count = 0;
-    err = filter_items_for_update(ws, opts, file_filter, operation_profiles, config, out,
-                                  &update_items, &update_count);
+    err = filter_items_for_update(
+        ws, opts, file_filter, operation_profiles, config, out, &update_items, &update_count
+    );
     if (err) {
         err = error_wrap(err, "Failed to filter items for update");
         goto cleanup;
@@ -2256,8 +2260,10 @@ error_t *cmd_update(
      * CLI filtering while maintaining accurate workspace analysis with persistent profiles.
      */
     hashmap_t *by_profile = NULL;
-    err = update_execute_for_all_profiles(repo, operation_profiles, update_items, update_count,
-                                             opts, out, config, ws, &total_updated, &by_profile);
+    err = update_execute_for_all_profiles(
+        repo, operation_profiles, update_items, update_count,
+        opts, out, config, ws, &total_updated, &by_profile
+    );
 
     /* Free update_items array (items themselves are owned by workspace) */
     if (update_items) {
@@ -2293,8 +2299,7 @@ error_t *cmd_update(
 
     if (manifest_err) {
         /* Non-fatal: commits succeeded but manifest update failed */
-        output_warning(out, "Failed to update manifest: %s",
-                      error_message(manifest_err));
+        output_warning(out, "Failed to update manifest: %s", error_message(manifest_err));
         output_info(out, "Files committed to Git successfully");
         output_hint(out, "Run 'dotta status' to check manifest state");
         output_hint(out, "Or run 'dotta profile enable <profile>' to repair");

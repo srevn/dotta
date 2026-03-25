@@ -94,14 +94,14 @@ static error_t *bootstrap_create_template(
 
     /* Check if script already exists in Git */
     if (bootstrap_exists(repo, profile_name, script_name)) {
-        return ERROR(ERR_EXISTS, "Bootstrap script already exists for profile '%s'", profile_name);
+        return ERROR(ERR_EXISTS,
+            "Bootstrap script already exists for profile '%s'", profile_name);
     }
 
     /* Generate template content */
-    char *content = str_format(BOOTSTRAP_TEMPLATE,
-                              profile_name,
-                              profile_name,
-                              profile_name);
+    char *content = str_format(
+        BOOTSTRAP_TEMPLATE, profile_name, profile_name, profile_name
+    );
     if (!content) {
         return ERROR(ERR_MEMORY, "Failed to generate bootstrap template");
     }
@@ -137,7 +137,9 @@ static error_t *bootstrap_create_template(
     }
 
     /* Insert bootstrap script directly into root tree */
-    git_err = git_treebuilder_insert(NULL, root_builder, script_name, &blob_oid, GIT_FILEMODE_BLOB_EXECUTABLE);
+    git_err = git_treebuilder_insert(
+        NULL, root_builder, script_name, &blob_oid, GIT_FILEMODE_BLOB_EXECUTABLE
+    );
     if (git_err < 0) {
         git_treebuilder_free(root_builder);
         return error_from_git(git_err);
@@ -166,11 +168,7 @@ static error_t *bootstrap_create_template(
     }
 
     err = gitops_create_commit(
-        repo,
-        profile_name,
-        new_tree,
-        commit_message,
-        NULL
+        repo, profile_name, new_tree, commit_message, NULL
     );
 
     free(commit_message);
@@ -243,14 +241,8 @@ static error_t *bootstrap_edit(
 
     bool was_modified = false;
     err = gitops_update_file(
-        repo,
-        profile_name,
-        script_name,
-        (const char *)buffer_data(content_buf),
-        buffer_size(content_buf),
-        commit_msg,
-        GIT_FILEMODE_BLOB_EXECUTABLE,
-        &was_modified
+        repo, profile_name, script_name, (const char *)buffer_data(content_buf),
+        buffer_size(content_buf), commit_msg, GIT_FILEMODE_BLOB_EXECUTABLE, &was_modified
     );
 
     if (err) {
@@ -261,7 +253,8 @@ static error_t *bootstrap_edit(
     /* Inform user */
     if (out) {
         if (was_modified) {
-            output_success(out, "Updated and committed bootstrap script for profile '%s'", profile_name);
+            output_success(out, "Updated and committed bootstrap script for profile '%s'",
+                           profile_name);
         } else {
             output_info(out, "No changes made to bootstrap script");
         }
@@ -314,8 +307,7 @@ static error_t *bootstrap_show(
     /* Display content */
     if (out && buffer_size(content) > 0) {
         /* Write content as a single block (includes newlines) */
-        output_printf(out, OUTPUT_NORMAL, "%.*s",
-                     (int)buffer_size(content),
+        output_printf(out, OUTPUT_NORMAL, "%.*s", (int)buffer_size(content),
                      (const char *)buffer_data(content));
     }
 
@@ -533,9 +525,9 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
 
     /* Execute bootstrap scripts */
     bool stop_on_error = !opts->continue_on_error;
-    err = bootstrap_run_for_profiles(repo, repo_path,
-                                     (struct profile_list *)profiles,
-                                     opts->dry_run, stop_on_error);
+    err = bootstrap_run_for_profiles(
+        repo, repo_path, (struct profile_list *)profiles, opts->dry_run, stop_on_error
+    );
     if (err) {
         err = error_wrap(err, "Bootstrap failed");
         goto cleanup;

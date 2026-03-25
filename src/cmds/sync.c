@@ -982,15 +982,33 @@ static error_t *sync_push_phase(
 
         /* Handle based on state */
         switch (result->state) {
-            case UPSTREAM_UP_TO_DATE:
+            case UPSTREAM_UP_TO_DATE: {
                 if (verbose) {
                     char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
                     output_info(out, "= %s: up-to-date", colored ? colored : result->profile_name);
                     free(colored);
                 }
                 break;
+            }
 
             case UPSTREAM_LOCAL_AHEAD: {
+                /* theirs: discard local commits, reset to remote */
+                if (diverged_strategy == DIVERGE_THEIRS) {
+                    char *colored = output_colorize(out, OUTPUT_COLOR_YELLOW, result->profile_name);
+                    output_info(out, "↑ %s: %zu commit%s ahead of remote",
+                                colored ? colored : result->profile_name,
+                                result->ahead, result->ahead == 1 ? "" : "s");
+                    free(colored);
+                    error_t *err = handle_diverged_theirs(
+                        repo, remote_name, result, results, out,
+                        confirm_destructive, state, enabled_profiles
+                    );
+                    if (err) {
+                        return err;
+                    }
+                    break;
+                }
+
                 /* Safe to push - local has new commits */
                 if (verbose) {
                     output_info(out, "Pushing %s (%zu commit%s)...",
@@ -1036,12 +1054,33 @@ static error_t *sync_push_phase(
                 break;
             }
 
-            case UPSTREAM_REMOTE_AHEAD:
+            case UPSTREAM_REMOTE_AHEAD: {
+                /* ours: force push local, discard remote commits */
+                if (diverged_strategy == DIVERGE_OURS) {
+                    char *colored = output_colorize(out, OUTPUT_COLOR_YELLOW, result->profile_name);
+                    output_info(out, "↓ %s: %zu remote commit%s ahead",
+                                colored ? colored : result->profile_name,
+                                result->behind, result->behind == 1 ? "" : "s");
+                    free(colored);
+                    error_t *err = handle_diverged_ours(
+                        repo, remote_name, result, results, out,
+                        confirm_destructive, xfer
+                    );
+                    if (err) {
+                        return err;
+                    }
+                    /* Adjust: analyze phase counted this as needing pull */
+                    if (results->need_pull_count > 0) {
+                        results->need_pull_count--;
+                    }
+                    break;
+                }
                 handle_remote_ahead(
                     repo, remote_name, result, results, out, verbose,
                     auto_pull, state, enabled_profiles
                 );
                 break;
+            }
 
             case UPSTREAM_DIVERGED: {
                 error_t *err = handle_diverged(
@@ -1054,9 +1093,10 @@ static error_t *sync_push_phase(
                 break;
             }
 
-            case UPSTREAM_UNKNOWN:
+            case UPSTREAM_UNKNOWN: {
                 output_warning(out, "  ? %s: state unknown", result->profile_name);
                 break;
+            }
         }
     }
 

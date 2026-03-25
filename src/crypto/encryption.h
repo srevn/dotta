@@ -7,9 +7,11 @@
  *
  * Key hierarchy:
  *   User Passphrase
- *     → Master Key (via hydro_pwhash_deterministic)
- *     → Profile Key (via hydro_hash_hash with profile name)
- *     → Per-file MAC Key + CTR Key (via hydro_kdf_derive_from_key)
+ *     → hydro_pwhash_deterministic (CPU-hard, Gimli iterations)
+ *     → balloon_harden (memory-hard, when memlimit > 0)
+ *     → Master Key (32 bytes)
+ *       → Profile Key (via hydro_hash_hash with profile name)
+ *         → Per-file MAC Key + CTR Key (via hydro_kdf_derive_from_key)
  *
  * SIV Construction (Version 3):
  *   This implements deterministic AEAD using the SIV (Synthetic IV) pattern:
@@ -64,12 +66,24 @@
 #define ENCRYPTION_CTX_SIV_CTR   "dottactr"  /* For deriving stream seed */
 
 /* Key sizes (from libhydrogen) */
-#define ENCRYPTION_MASTER_KEY_SIZE 32       /* hydro_pwhash output */
-#define ENCRYPTION_PROFILE_KEY_SIZE 32      /* hydro_kdf output */
+#define ENCRYPTION_MASTER_KEY_SIZE 32   /* hydro_pwhash output */
+#define ENCRYPTION_PROFILE_KEY_SIZE 32  /* hydro_kdf output */
 
-/* Password hashing parameters */
-#define ENCRYPTION_PWHASH_MEMLIMIT 0
-#define ENCRYPTION_PWHASH_THREADS 1
+/* Password hashing parameters (passed to hydro_pwhash_deterministic) */
+#define ENCRYPTION_PWHASH_MEMLIMIT 0    /* Unused by libhydrogen (memory hardness via balloon instead) */
+#define ENCRYPTION_PWHASH_THREADS 1     /* Single-threaded (fixed) */
+
+/* Balloon hashing parameters (memory-hard key derivation layer) */
+#define ENCRYPTION_BALLOON_BLOCK_SIZE       1024                  /* Bytes per block */
+#define ENCRYPTION_BALLOON_ROUNDS           3                     /* Mixing rounds */
+#define ENCRYPTION_BALLOON_MEMLIMIT_DEFAULT (64 * 1024 * 1024)    /* 64 MB */
+#define ENCRYPTION_BALLOON_MEMLIMIT_MIN     (1 * 1024 * 1024)     /* 1 MB minimum */
+
+/* Balloon hashing context strings (must be exactly 8 bytes each) */
+#define ENCRYPTION_CTX_BALLOON_EXPAND  "dottamem"  /* Expansion: per-block seed derivation */
+#define ENCRYPTION_CTX_BALLOON_INDEX   "dottaidx"  /* Mixing: pseudo-random index derivation */
+#define ENCRYPTION_CTX_BALLOON_MIX     "dottamix"  /* Mixing: block combination */
+#define ENCRYPTION_CTX_BALLOON_FINAL   "dottafin"  /* Finalization: master key extraction */
 
 /**
  * Initialize libhydrogen
@@ -84,17 +98,20 @@ error_t *encryption_init(void);
 /**
  * Derive master key from passphrase
  *
- * Uses hydro_pwhash_deterministic to derive a 32-byte master key from
- * a user passphrase. The same passphrase always produces the same key
- * (deterministic derivation).
+ * Two-phase deterministic key derivation:
+ *   1. CPU-hard: hydro_pwhash_deterministic (Gimli permutation iterations)
+ *   2. Memory-hard: balloon hashing (large buffer with data-dependent access)
  *
- * This is a computationally expensive operation (controlled by opslimit).
- * Higher opslimit provides better protection against brute force attacks
- * but takes longer to compute.
+ * The same (passphrase, opslimit, memlimit) always produces the same key
+ * (deterministic derivation). Both phases are computationally expensive.
+ *
+ * When memlimit is 0, balloon hashing is skipped (CPU-hard only).
+ * When memlimit is non-zero, it must be >= ENCRYPTION_BALLOON_MEMLIMIT_MIN.
  *
  * @param passphrase User passphrase (must not be NULL)
  * @param passphrase_len Length of passphrase in bytes
  * @param opslimit CPU cost parameter (recommended: 10000+, higher = more secure but slower)
+ * @param memlimit Memory cost in bytes for balloon hashing (0 = disabled, default: 64 MB)
  * @param out_master_key Output buffer for 32-byte master key (must be pre-allocated)
  * @return Error or NULL on success
  */
@@ -102,6 +119,7 @@ error_t *encryption_derive_master_key(
     const char *passphrase,
     size_t passphrase_len,
     uint64_t opslimit,
+    size_t memlimit,
     uint8_t out_master_key[ENCRYPTION_MASTER_KEY_SIZE]
 );
 
@@ -207,6 +225,9 @@ error_t *encryption_decrypt(
  * @param data_len Content length
  * @return true if data has valid dotta encryption magic header
  */
-bool encryption_is_encrypted(const unsigned char *data, size_t data_len);
+bool encryption_is_encrypted(
+    const unsigned char *data,
+    size_t data_len
+);
 
 #endif /* DOTTA_ENCRYPTION_H */

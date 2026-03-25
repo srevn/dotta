@@ -60,6 +60,7 @@ typedef struct dotta_config {
     char **auto_encrypt_patterns; /* Auto-encrypt patterns (gitignore-style) */
     size_t auto_encrypt_pattern_count;
     uint64_t encryption_opslimit; /* CPU cost for password hashing (default: 10000) */
+    size_t encryption_memlimit;   /* Memory cost for balloon hashing in MB (default: 64, 0 = disabled) */
     int32_t session_timeout;      /* Key cache timeout in seconds (default: 3600, 0 = always prompt, -1 = never expire) */
 } dotta_config_t;
 

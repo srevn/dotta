@@ -60,7 +60,8 @@ struct session_cache_file {
  */
 struct keymanager {
     /* Configuration */
-    uint64_t opslimit;        /* CPU cost for password hashing (only tunable parameter) */
+    uint64_t opslimit;        /* CPU cost for password hashing */
+    size_t memlimit;          /* Memory cost for balloon hashing (0 = disabled) */
     int32_t session_timeout;  /* Timeout in seconds (0 = always prompt, -1 = never expire) */
 
     /* Cached master key */
@@ -542,8 +543,9 @@ error_t *keymanager_create(
         return ERROR(ERR_MEMORY, "Failed to allocate key manager");
     }
 
-    /* Copy configuration */
+    /* Copy configuration (memlimit: convert MB from config to bytes for crypto) */
     mgr->opslimit = config->encryption_opslimit;
+    mgr->memlimit = config->encryption_memlimit * 1024 * 1024;
     mgr->session_timeout = config->session_timeout;
 
     /* Initialize key state */
@@ -751,6 +753,7 @@ error_t *keymanager_set_passphrase(
         passphrase,
         passphrase_len,
         mgr->opslimit,
+        mgr->memlimit,
         mgr->master_key
     );
 

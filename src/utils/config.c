@@ -118,11 +118,12 @@ dotta_config_t *config_create_default(void) {
     config->diverged_strategy = strdup("warn");  /* Default: warn on divergence */
 
     /* [encryption] defaults */
-    config->encryption_enabled = false;           /* Default: disabled (opt-in) */
+    config->encryption_enabled = false;        /* Default: disabled (opt-in) */
     config->auto_encrypt_patterns = NULL;
     config->auto_encrypt_pattern_count = 0;
-    config->encryption_opslimit = 10000;          /* Moderate security */
-    config->session_timeout = 3600;               /* 1 hour */
+    config->encryption_opslimit = 10000;       /* Moderate security */
+    config->encryption_memlimit = 64;          /* 64 MB balloon hashing */
+    config->session_timeout = 3600;            /* 1 hour */
 
     return config;
 }
@@ -419,14 +420,18 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
                 free(config->auto_encrypt_patterns);
             }
 
-            extract_string_array(auto_encrypt,
-                                &config->auto_encrypt_patterns,
-                                &config->auto_encrypt_pattern_count);
+            extract_string_array(auto_encrypt, &config->auto_encrypt_patterns,
+                                 &config->auto_encrypt_pattern_count);
         }
 
         toml_datum_t opslimit = toml_get(encryption, "opslimit");
         if (opslimit.type == TOML_INT64) {
             config->encryption_opslimit = (uint64_t)opslimit.u.int64;
+        }
+
+        toml_datum_t memlimit = toml_get(encryption, "memlimit");
+        if (memlimit.type == TOML_INT64) {
+            config->encryption_memlimit = (size_t)memlimit.u.int64;
         }
 
         toml_datum_t session_timeout = toml_get(encryption, "session_timeout");
@@ -532,6 +537,15 @@ error_t *config_validate(const dotta_config_t *config) {
     if (config->hooks_dir && config->hooks_dir[0] == '\0') {
         return ERROR(ERR_INVALID_ARG,
                     "Invalid hooks_dir: empty string (must be a valid path or omitted for default)");
+    }
+
+    /* Validate encryption_memlimit (in MB, converted to bytes downstream).
+     * Any non-zero size_t value >= 1 meets the 1 MB minimum, so we only
+     * need to guard against overflow when converting to bytes. */
+    if (config->encryption_memlimit > SIZE_MAX / (1024 * 1024)) {
+        return ERROR(ERR_INVALID_ARG,
+                    "Invalid encryption memlimit: %zu MB (value too large)",
+                    config->encryption_memlimit);
     }
 
     return NULL;

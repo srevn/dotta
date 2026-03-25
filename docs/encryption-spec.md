@@ -32,6 +32,7 @@ The implementation uses [libhydrogen](https://github.com/jedisct1/libhydrogen), 
 | Operation | libhydrogen Function | Algorithm |
 |-----------|---------------------|-----------|
 | Password hashing | `hydro_pwhash_deterministic` | Gimli-based KDF with configurable work factor |
+| Balloon hashing | `hydro_hash_hash` + `hydro_random_buf_deterministic` | Memory-hard KDF (Boneh et al., 2016) |
 | Key derivation | `hydro_kdf_derive_from_key` | KMAC-like construction over Gimli |
 | Keyed hashing | `hydro_hash_hash` | KMAC variant (similar to NIST SP 800-185) |
 | Deterministic RNG | `hydro_random_buf_deterministic` | Gimli-based PRNG |
@@ -43,6 +44,8 @@ The implementation uses [libhydrogen](https://github.com/jedisct1/libhydrogen), 
 ```
 User Passphrase
     ↓ [hydro_pwhash_deterministic with high work factor]
+CPU Key (32 bytes, intermediate)
+    ↓ [balloon_harden with memory-hard buffer, when memlimit > 0]
 Master Key (32 bytes)
     ↓ [hydro_hash_hash with profile name as input]
 Profile Key (32 bytes, one per profile)
@@ -55,18 +58,31 @@ Profile Key (32 bytes, one per profile)
 
 ### Key Derivation Details
 
-**Master Key Derivation:**
+**Master Key Derivation (two phases):**
+
+Phase 1 — CPU-hard (Gimli permutation iterations):
 ```c
 hydro_pwhash_deterministic(
-    master_key,           // Output: 32 bytes
+    cpu_key,              // Output: 32 bytes (intermediate)
     passphrase,           // Input: user passphrase
     "dotta/v1",           // Context: version tag
     zero_master,          // Master: zeros (direct derivation mode)
     opslimit=10000,       // CPU cost (configurable)
-    memlimit=0,           // Memory (fixed)
+    memlimit=0,           // Memory (unused by libhydrogen)
     threads=1             // Single-threaded (fixed)
 )
 ```
+
+Phase 2 — Memory-hard (balloon hashing, when memlimit > 0):
+```c
+balloon_harden(
+    cpu_key,              // Input: 32-byte CPU-hard key
+    memlimit=67108864,    // Memory: 64 MB (configurable)
+    master_key            // Output: 32 bytes
+)
+```
+
+When `memlimit = 0`, balloon hashing is skipped and `cpu_key` becomes the master key directly (CPU-hard only).
 
 **Profile Key Derivation:**
 ```c
@@ -93,6 +109,74 @@ hydro_hash_hash(
     ctr_key               // Key: CTR subkey
 )
 ```
+
+## Balloon Hashing (Memory-Hard Layer)
+
+### Motivation
+
+libhydrogen's `hydro_pwhash_deterministic` provides CPU hardness via Gimli permutation iterations, but has **zero memory hardness** — the `memlimit` parameter is silently ignored (`(void) memlimit;` in the implementation). This makes the KDF trivially parallelizable on GPUs/ASICs, where thousands of cores can each run the derivation using negligible memory.
+
+Balloon hashing (Boneh, Corrigan-Gibbs, Schechter, 2016) adds a memory-hard layer on top of the CPU-hard derivation, forcing each derivation attempt to allocate and randomly access a large buffer (default: 64 MB). This makes parallel attacks proportionally expensive in both compute and memory.
+
+### Algorithm
+
+The balloon hashing layer wraps the CPU-hard key (`cpu_key`) and produces the final master key through three phases:
+
+**Phase 1 — Expansion:** Fill a buffer of `n_blocks = memlimit / 1024` blocks, each 1024 bytes. Each block gets a unique seed derived from `cpu_key` and the block index, then expanded via `hydro_random_buf_deterministic`:
+```
+for i in 0..n_blocks:
+    seed = hash(i, context="dottamem", key=cpu_key)
+    block[i] = PRNG(seed, 1024 bytes)
+```
+
+**Phase 2 — Mixing (3 rounds):** Data-dependent random access that provides memory hardness. For each block, derive a pseudo-random index from the block's content, then mix the current block with the previous and randomly-indexed blocks:
+```
+for round in 0..3:
+    for i in 0..n_blocks:
+        prev = block[(i-1) % n_blocks]
+        idx = hash(round||i, context="dottaidx", key=block[i]) % n_blocks
+        mix = streaming_hash(block[idx] || block[i], context="dottamix", key=prev)
+        block[i] = PRNG(mix, 1024 bytes)
+```
+
+**Phase 3 — Finalization:** Hash the last block to produce the master key:
+```
+master_key = hash(block[n_blocks-1], context="dottafin", key=cpu_key)
+```
+
+### Parameters
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Block size | 1024 bytes | Balance between hash calls and memory bandwidth |
+| Mixing rounds | 3 | Standard recommendation from the paper |
+| Default memlimit | 64 MB (67,108,864 bytes) | 65,536 blocks |
+| Minimum memlimit | 1 MB (1,048,576 bytes) | 1,024 blocks |
+| memlimit = 0 | Disabled | CPU-hard only (pre-balloon behavior) |
+
+### Security Properties
+
+- **Provable memory hardness:** Computing the output requires O(memlimit) memory (proven lower bound)
+- **Time-memory trade-off resistance:** 3 mixing rounds provide strong resistance
+- **Sequential within rounds:** Block `i` depends on block `i-1`, preventing intra-round parallelism
+- **Data-dependent access:** Random index depends on block content, preventing precomputation
+- **Deterministic:** Same inputs always produce the same output
+
+### Secure Memory Handling
+
+- Buffer is `mlock()`'d to prevent swapping to disk (best-effort, non-fatal if fails)
+- Buffer is `hydro_memzero()`'d before freeing
+- Buffer is `munlock()`'d after zeroing
+- All intermediate seeds and hashes are zeroed after use
+- CPU key (intermediate between pwhash and balloon) is zeroed after balloon completes
+
+### Performance
+
+For 64 MB (default):
+- Expansion: 65,536 hash + PRNG calls
+- Mixing: 3 × 65,536 = 196,608 hash + PRNG calls
+- Total: ~262K cryptographic operations
+- Expected time: ~200-400ms on modern hardware (happens once per session)
 
 ## SIV Construction
 
@@ -323,12 +407,12 @@ struct keymanager {
 **File Format (108 bytes total):**
 
 ```
-┌────────────┬─────────┬──────────┬──────────────┬──────────────┬──────────────┬──────────────┬─────────┐
-│ Magic      │ Version │ Reserved │ Created At   │ Expires At   │ Machine Salt │ Encrypted Key│ MAC     │
-├────────────┼─────────┼──────────┼──────────────┼──────────────┼──────────────┼──────────────┼─────────┤
-│ "DOTTASES" │ 0x01    │ 0x00×3   │ uint64_t     │ uint64_t     │ 16 bytes     │ 32 bytes     │ 32 bytes│
-│ 8 bytes    │ 1 byte  │ 3 bytes  │ 8 bytes      │ 8 bytes      │              │              │         │
-└────────────┴─────────┴──────────┴──────────────┴──────────────┴──────────────┴──────────────┴─────────┘
+┌────────────┬─────────┬──────────┬──────────────┬──────────────┬──────────────┬───────────────┬──────────┐
+│ Magic      │ Version │ Reserved │ Created At   │ Expires At   │ Machine Salt │ Encrypted Key │ MAC      │
+├────────────┼─────────┼──────────┼──────────────┼──────────────┼──────────────┼───────────────┼──────────┤
+│ "DOTTASES" │ 0x01    │ 0x00×3   │ uint64_t     │ uint64_t     │ 16 bytes     │ 32 bytes      │ 32 bytes │
+│ 8 bytes    │ 1 byte  │ 3 bytes  │ 8 bytes      │ 8 bytes      │              │               │          │
+└────────────┴─────────┴──────────┴──────────────┴──────────────┴──────────────┴───────────────┴──────────┘
 
 Magic Header (8 bytes):
   "DOTTASES" - Cache file identifier
@@ -532,6 +616,10 @@ enabled = true
 # Recommended: 10000+ for interactive use
 opslimit = 10000
 
+# Memory hardness for key derivation via balloon hashing (in MB)
+# 0 = disabled, minimum 1 MB when enabled
+memlimit = 64  # 64 MB (default)
+
 # Session timeout in seconds (-1 = never, 0 = always prompt, N = expire after N seconds)
 session_timeout = 3600  # 1 hour
 
@@ -545,19 +633,26 @@ auto_encrypt = [
 
 ### Work Factor Tuning
 
-**Opslimit Recommendations:**
+**Opslimit Recommendations (CPU hardness):**
 - **Development:** 1000 (faster iteration)
 - **Production:** 10000+ (recommended)
 - **High security:** 100000+ (very slow, paranoid)
 
-**Benchmark (approximate):**
+**Memlimit Recommendations (memory hardness):**
+- **Disabled:** 0 (CPU hardness only, not recommended for production)
+- **Low memory:** 1 MB (1,048,576) — minimal protection
+- **Moderate:** 16 MB (16,777,216) — constrained environments
+- **Recommended:** 64 MB (67,108,864) — good balance (default)
+- **High security:** 256 MB (268,435,456) — for systems with ample RAM
+
+**Benchmark (approximate, combined opslimit + memlimit):**
 ```
-opslimit=1000   → ~10ms  (weak)
-opslimit=10000  → ~100ms (recommended)
-opslimit=100000 → ~1s    (strong)
+opslimit=10000, memlimit=0       → ~100ms  (CPU only, GPU-vulnerable)
+opslimit=10000, memlimit=64MB    → ~300ms  (recommended)
+opslimit=10000, memlimit=256MB   → ~800ms  (high security)
 ```
 
-Trade-off: Higher values protect against brute-force but slow down legitimate use.
+Trade-off: Higher values protect against brute-force but slow down legitimate use and increase memory requirements.
 
 ## Security Analysis
 
@@ -582,7 +677,8 @@ Trade-off: Higher values protect against brute-force but slow down legitimate us
 **Relies on:**
 - Gimli permutation security (peer-reviewed, NIST lightweight crypto finalist)
 - KMAC construction soundness (NIST SP 800-185 standard)
-- `hydro_pwhash` work factor adequacy
+- `hydro_pwhash` work factor adequacy (CPU hardness)
+- Balloon hashing memory-hardness proofs (Boneh et al., 2016)
 - Proper implementation (code audit recommended)
 
 **Does Not Rely On:**
@@ -614,7 +710,11 @@ libhydrogen requires 8-byte context strings for domain separation:
 
 | Context | Value | Purpose |
 |---------|-------|---------|
-| `ENCRYPTION_CTX_PWHASH` | `"dotta/v1"` | Master key derivation |
+| `ENCRYPTION_CTX_PWHASH` | `"dotta/v1"` | CPU-hard key derivation (pwhash) |
+| `ENCRYPTION_CTX_BALLOON_EXPAND` | `"dottamem"` | Balloon expansion: per-block seed derivation |
+| `ENCRYPTION_CTX_BALLOON_INDEX` | `"dottaidx"` | Balloon mixing: pseudo-random index derivation |
+| `ENCRYPTION_CTX_BALLOON_MIX` | `"dottamix"` | Balloon mixing: block combination |
+| `ENCRYPTION_CTX_BALLOON_FINAL` | `"dottafin"` | Balloon finalization: master key extraction |
 | `ENCRYPTION_CTX_KDF` | `"profile "` | Profile key derivation |
 | `ENCRYPTION_CTX_SIV_KDF` | `"dottasiv"` | MAC/CTR subkey derivation |
 | `ENCRYPTION_CTX_SIV_MAC` | `"dottamac"` | SIV computation |
@@ -632,9 +732,10 @@ libhydrogen requires 8-byte context strings for domain separation:
 static const uint8_t zero_master[hydro_pwhash_MASTERKEYBYTES] = {0};
 
 hydro_pwhash_deterministic(
-    out_master_key, 32, passphrase, passphrase_len,
+    cpu_key, 32, passphrase, passphrase_len,
     "dotta/v1", zero_master, opslimit, 0, 1
 );
+// cpu_key is then passed through balloon_harden() when memlimit > 0
 ```
 
 **Why zero master?** libhydrogen's `hydro_pwhash_deterministic` supports two modes:
@@ -646,6 +747,7 @@ We use direct derivation mode (no password storage), so zero master is correct.
 ## References
 
 - [libhydrogen documentation](https://github.com/jedisct1/libhydrogen/wiki)
+- [Balloon Hashing](https://eprint.iacr.org/2016/027) - Boneh, Corrigan-Gibbs, Schechter (2016)
 - [SIV (RFC 5297)](https://tools.ietf.org/html/rfc5297) - Synthetic Initialization Vector
 - [NIST SP 800-185](https://csrc.nist.gov/publications/detail/sp/800-185/final) - KMAC construction
 - [Gimli permutation](https://gimli.cr.yp.to/) - Cryptographic primitive

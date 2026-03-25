@@ -444,6 +444,26 @@ auto_encrypt = [
 # Default: 10000
 opslimit = 10000
 
+# Memory Hardness Cost (memlimit) — in megabytes
+# Controls the memory required for key derivation via balloon hashing.
+# This adds memory hardness on top of the CPU hardness provided by opslimit,
+# making brute-force attacks expensive on GPUs/ASICs.
+#
+# Each key derivation will temporarily allocate this much memory.
+#
+# Recommended values (in MB):
+#   -   0 = Disabled (CPU hardness only, NOT recommended for production)
+#   -   1 = 1 MB   (minimal, for constrained environments)
+#   -  16 = 16 MB  (moderate, good for low-memory systems)
+#   -  64 = 64 MB  (recommended default, good balance)
+#   - 256 = 256 MB (high security, for systems with ample RAM)
+#
+# Note: This value must be identical across all machines (affects key derivation).
+# Minimum: 1 MB when enabled. Set to 0 to disable entirely.
+#
+# Default: 64
+memlimit = 64
+
 # Session Timeout
 # How long (in seconds) to cache the encryption key
 # After this time, you'll be prompted for your passphrase again

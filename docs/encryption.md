@@ -98,19 +98,30 @@ dotta show home/.ssh/id_rsa  # Decrypted on display too
 
 ## Work Factor
 
-The `opslimit` parameter controls the CPU cost of passphrase-to-key derivation:
+Two parameters control the cost of passphrase-to-key derivation:
 
 ```toml
 [encryption]
-opslimit = 10000   # ~100ms (recommended)
-# opslimit = 1000  # ~10ms (faster, weaker)
-# opslimit = 100000 # ~1s (stronger, slower)
+opslimit = 10000   # CPU cost: ~100ms (recommended)
+memlimit = 64      # Memory cost in MB: 64 MB (recommended)
 ```
 
-**Important:** `opslimit` must be identical across all machines. Different values produce different keys from the same passphrase, causing decryption failures.
+**`opslimit`** -- CPU hardness via Gimli permutation iterations:
+- `1000` -- ~10ms (faster, weaker)
+- `10000` -- ~100ms (recommended)
+- `100000` -- ~1s (stronger, slower)
+
+**`memlimit`** -- Memory hardness via balloon hashing (in MB):
+- `0` -- Disabled (CPU hardness only, not recommended)
+- `1` -- 1 MB (minimal, for constrained environments)
+- `64` -- 64 MB (recommended default)
+- `256` -- 256 MB (high security)
+
+**Important:** Both `opslimit` and `memlimit` must be identical across all machines. Different values produce different keys from the same passphrase, causing decryption failures.
 
 ## Security Properties
 
+- **Memory-hard key derivation** -- balloon hashing resists GPU/ASIC brute-force attacks
 - **Deterministic AEAD** -- same file + key produces identical ciphertext (Git-friendly)
 - **Path-bound** -- files are cryptographically tied to their storage path
 - **Per-profile key isolation** -- each profile derives its own encryption key

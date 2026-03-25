@@ -5,7 +5,9 @@
 #include "crypto/encryption.h"
 
 #include <hydrogen.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 
 #include "base/error.h"
 #include "utils/buffer.h"
@@ -33,6 +35,20 @@ static void store_le64(uint8_t out[8], uint64_t val) {
 }
 
 /**
+ * Load a uint64_t from little-endian byte order (portable)
+ */
+static uint64_t load_le64(const uint8_t in[8]) {
+    return (uint64_t)in[0]
+         | ((uint64_t)in[1] << 8)
+         | ((uint64_t)in[2] << 16)
+         | ((uint64_t)in[3] << 24)
+         | ((uint64_t)in[4] << 32)
+         | ((uint64_t)in[5] << 40)
+         | ((uint64_t)in[6] << 48)
+         | ((uint64_t)in[7] << 56);
+}
+
+/**
  * Derive subkeys for SIV construction (internal helper)
  *
  * Derives two independent subkeys from the profile key using KDF:
@@ -54,13 +70,13 @@ static error_t *derive_siv_subkeys(
 ) {
     /* Derive MAC key (subkey_id=1) */
     if (hydro_kdf_derive_from_key(out_mac_key, 32, 1,
-                                   ENCRYPTION_CTX_SIV_KDF, profile_key) != 0) {
+                                  ENCRYPTION_CTX_SIV_KDF, profile_key) != 0) {
         return ERROR(ERR_CRYPTO, "Failed to derive MAC key");
     }
 
     /* Derive CTR key (subkey_id=2) */
     if (hydro_kdf_derive_from_key(out_ctr_key, 32, 2,
-                                   ENCRYPTION_CTX_SIV_KDF, profile_key) != 0) {
+                                  ENCRYPTION_CTX_SIV_KDF, profile_key) != 0) {
         hydro_memzero(out_mac_key, 32);
         return ERROR(ERR_CRYPTO, "Failed to derive CTR key");
     }
@@ -87,8 +103,7 @@ static error_t *derive_stream_seed(
     const char *storage_path,
     uint8_t out_seed[32]
 ) {
-    if (hydro_hash_hash(out_seed, 32,
-                        (const uint8_t *)storage_path, strlen(storage_path),
+    if (hydro_hash_hash(out_seed, 32, (const uint8_t *)storage_path, strlen(storage_path),
                         ENCRYPTION_CTX_SIV_CTR, ctr_key) != 0) {
         return ERROR(ERR_CRYPTO, "Failed to derive stream seed");
     }
@@ -155,10 +170,169 @@ error_t *encryption_init(void) {
     return NULL;
 }
 
+/**
+ * Balloon hashing: memory-hard key derivation (internal helper)
+ *
+ * Implements the balloon hashing algorithm (Boneh, Corrigan-Gibbs, Schechter, 2016)
+ * to add memory hardness to the key derivation pipeline. The algorithm has three
+ * phases:
+ *
+ *   1. EXPANSION: Fill a large buffer with pseudorandom data derived from the
+ *      CPU-hard key. Each block gets a unique seed (keyed hash of block index),
+ *      then expanded to BLOCK_SIZE via deterministic PRNG.
+ *
+ *   2. MIXING: Perform data-dependent random access over the buffer. For each
+ *      block, derive a pseudo-random index from the block's content, then mix
+ *      the current block with the previous and randomly-indexed blocks. This is
+ *      what provides memory hardness: computing any block requires having the
+ *      full buffer in memory.
+ *
+ *   3. FINALIZATION: Hash the last block (which depends on the entire computation
+ *      chain) to produce the 32-byte master key.
+ *
+ * The buffer is mlock'd (best-effort) to prevent swapping, securely zeroed
+ * before freeing, and munlock'd after zeroing.
+ *
+ * @param cpu_key 32-byte output from hydro_pwhash_deterministic
+ * @param memlimit Total memory in bytes (must be >= ENCRYPTION_BALLOON_MEMLIMIT_MIN)
+ * @param out_master_key Output buffer for 32-byte master key
+ * @return Error or NULL on success
+ */
+static error_t *balloon_harden(
+    const uint8_t cpu_key[ENCRYPTION_MASTER_KEY_SIZE],
+    size_t memlimit,
+    uint8_t out_master_key[ENCRYPTION_MASTER_KEY_SIZE]
+) {
+    error_t *err = NULL;
+    uint8_t *buf = NULL;
+    bool buf_mlocked = false;
+
+    const size_t n_blocks = memlimit / ENCRYPTION_BALLOON_BLOCK_SIZE;
+    const size_t buf_size = n_blocks * ENCRYPTION_BALLOON_BLOCK_SIZE;
+
+    /* Allocate balloon buffer */
+    buf = malloc(buf_size);
+    if (!buf) {
+        return ERROR(ERR_MEMORY, "Failed to allocate %zu bytes for balloon hashing",
+                     buf_size);
+    }
+
+    /* Best-effort mlock to prevent swapping sensitive key material to disk */
+    buf_mlocked = (mlock(buf, buf_size) == 0);
+
+    /* PHASE 1: EXPANSION
+     *
+     * Fill buffer deterministically. Each block gets a unique seed derived
+     * from cpu_key and block index, then expanded via deterministic PRNG. */
+    for (size_t i = 0; i < n_blocks; i++) {
+        uint8_t seed[32];
+        uint8_t i_le[8];
+        store_le64(i_le, (uint64_t)i);
+
+        if (hydro_hash_hash(seed, sizeof(seed), i_le, sizeof(i_le),
+                            ENCRYPTION_CTX_BALLOON_EXPAND, cpu_key) != 0) {
+            err = ERROR(ERR_CRYPTO, "Balloon expansion: hash failed at block %zu", i);
+            goto cleanup;
+        }
+
+        hydro_random_buf_deterministic(
+            buf + i * ENCRYPTION_BALLOON_BLOCK_SIZE,
+            ENCRYPTION_BALLOON_BLOCK_SIZE,
+            seed
+        );
+
+        hydro_memzero(seed, sizeof(seed));
+    }
+
+    /* PHASE 2: MIXING
+     *
+     * Data-dependent random access over 3 rounds. For each block, derive a
+     * pseudo-random index from the block's content, then re-expand the block
+     * from a mix of (previous block, random block, current block). This forces
+     * the full buffer to remain in memory. */
+    for (int round = 0; round < ENCRYPTION_BALLOON_ROUNDS; round++) {
+        for (size_t i = 0; i < n_blocks; i++) {
+            size_t prev_idx = (i == 0) ? n_blocks - 1 : i - 1;
+
+            /* Derive pseudo-random block index from current block content + position.
+             * Key: first 32 bytes of current block (pseudorandom from expansion/prior mix).
+             * Message: round || i as 16-byte little-endian encoding. */
+            uint8_t idx_msg[16];
+            store_le64(idx_msg, (uint64_t)round);
+            store_le64(idx_msg + 8, (uint64_t)i);
+
+            uint8_t idx_hash[32];
+            if (hydro_hash_hash(idx_hash, sizeof(idx_hash), idx_msg, sizeof(idx_msg),
+                                ENCRYPTION_CTX_BALLOON_INDEX,
+                                buf + i * ENCRYPTION_BALLOON_BLOCK_SIZE) != 0) {
+                err = ERROR(ERR_CRYPTO, "Balloon mixing: index hash failed");
+                goto cleanup;
+            }
+
+            size_t idx = (size_t)(load_le64(idx_hash) % (uint64_t)n_blocks);
+
+            /* Mix previous, random, and current blocks via streaming keyed hash.
+             * Key: first 32 bytes of previous block.
+             * Data: first 32 bytes of random block || first 32 bytes of current block. */
+            hydro_hash_state mix_state;
+            uint8_t mix_hash[32];
+
+            if (hydro_hash_init(&mix_state, ENCRYPTION_CTX_BALLOON_MIX,
+                                buf + prev_idx * ENCRYPTION_BALLOON_BLOCK_SIZE) != 0) {
+                err = ERROR(ERR_CRYPTO, "Balloon mixing: hash init failed");
+                goto cleanup;
+            }
+
+            hydro_hash_update(&mix_state, buf + idx * ENCRYPTION_BALLOON_BLOCK_SIZE, 32);
+            hydro_hash_update(&mix_state, buf + i * ENCRYPTION_BALLOON_BLOCK_SIZE, 32);
+            hydro_hash_final(&mix_state, mix_hash, sizeof(mix_hash));
+
+            /* Re-expand current block from new seed */
+            hydro_random_buf_deterministic(
+                buf + i * ENCRYPTION_BALLOON_BLOCK_SIZE,
+                ENCRYPTION_BALLOON_BLOCK_SIZE,
+                mix_hash
+            );
+
+            hydro_memzero(&mix_state, sizeof(mix_state));
+            hydro_memzero(mix_hash, sizeof(mix_hash));
+            hydro_memzero(idx_hash, sizeof(idx_hash));
+        }
+    }
+
+    /* PHASE 3: FINALIZATION
+     *
+     * Hash the last block (which depends on the entire computation chain)
+     * to produce the 32-byte master key. The cpu_key is used as the hash
+     * key, binding the output to the original passphrase derivation. */
+    if (hydro_hash_hash(out_master_key, ENCRYPTION_MASTER_KEY_SIZE,
+                        buf + (n_blocks - 1) * ENCRYPTION_BALLOON_BLOCK_SIZE,
+                        ENCRYPTION_BALLOON_BLOCK_SIZE,
+                        ENCRYPTION_CTX_BALLOON_FINAL, cpu_key) != 0) {
+        err = ERROR(ERR_CRYPTO, "Balloon finalization: hash failed");
+        goto cleanup;
+    }
+
+cleanup:
+    if (buf) {
+        hydro_memzero(buf, buf_size);
+        if (buf_mlocked) {
+            munlock(buf, buf_size);
+        }
+        free(buf);
+    }
+    if (err) {
+        hydro_memzero(out_master_key, ENCRYPTION_MASTER_KEY_SIZE);
+    }
+
+    return err;
+}
+
 error_t *encryption_derive_master_key(
     const char *passphrase,
     size_t passphrase_len,
     uint64_t opslimit,
+    size_t memlimit,
     uint8_t out_master_key[ENCRYPTION_MASTER_KEY_SIZE]
 ) {
     CHECK_NULL(passphrase);
@@ -166,6 +340,13 @@ error_t *encryption_derive_master_key(
 
     if (passphrase_len == 0) {
         return ERROR(ERR_INVALID_ARG, "Passphrase cannot be empty");
+    }
+
+    /* Validate memlimit: 0 disables balloon hashing, otherwise must meet minimum */
+    if (memlimit > 0 && memlimit < ENCRYPTION_BALLOON_MEMLIMIT_MIN) {
+        return ERROR(ERR_INVALID_ARG,
+                     "Balloon memlimit must be 0 (disabled) or >= %d bytes (1 MB)",
+                     ENCRYPTION_BALLOON_MEMLIMIT_MIN);
     }
 
     /* Use zero master key for hydro_pwhash (we derive everything from passphrase)
@@ -176,8 +357,16 @@ error_t *encryption_derive_master_key(
      * See libhydrogen Password-hashing.md for details. */
     static const uint8_t zero_master[hydro_pwhash_MASTERKEYBYTES] = {0};
 
+    /* Phase 1: CPU-hard derivation (Gimli permutation iterations)
+     *
+     * When balloon hashing is enabled (memlimit > 0), write to intermediate
+     * buffer. When disabled, write directly to output (preserving pre-balloon
+     * behavior exactly). */
+    uint8_t cpu_key[ENCRYPTION_MASTER_KEY_SIZE] = {0};
+    uint8_t *pwhash_target = (memlimit > 0) ? cpu_key : out_master_key;
+
     int result = hydro_pwhash_deterministic(
-        out_master_key,
+        pwhash_target,
         ENCRYPTION_MASTER_KEY_SIZE,
         passphrase,
         passphrase_len,
@@ -189,10 +378,18 @@ error_t *encryption_derive_master_key(
     );
 
     if (result != 0) {
+        hydro_memzero(cpu_key, sizeof(cpu_key));
         return ERROR(ERR_CRYPTO, "Failed to derive master key from passphrase");
     }
 
-    return NULL;
+    if (memlimit == 0) {
+        return NULL;
+    }
+
+    /* Phase 2: Memory-hard derivation (balloon hashing) */
+    error_t *err = balloon_harden(cpu_key, memlimit, out_master_key);
+    hydro_memzero(cpu_key, sizeof(cpu_key));
+    return err;
 }
 
 error_t *encryption_derive_profile_key(
@@ -262,9 +459,8 @@ error_t *encryption_encrypt(
 
     /* Calculate output size with overflow detection */
     if (plaintext_len > SIZE_MAX - ENCRYPTION_OVERHEAD) {
-        return ERROR(ERR_INVALID_ARG,
-                    "Plaintext too large (size_t overflow): %zu bytes",
-                    plaintext_len);
+        return ERROR(ERR_INVALID_ARG, "Plaintext too large (size_t overflow): %zu bytes",
+                     plaintext_len);
     }
     size_t total_len = ENCRYPTION_HEADER_SIZE + ENCRYPTION_SIV_SIZE + plaintext_len;
 
@@ -388,9 +584,8 @@ error_t *encryption_decrypt(
 
     /* Step 1: Validate minimum size */
     if (ciphertext_len < ENCRYPTION_OVERHEAD) {
-        return ERROR(ERR_CRYPTO,
-                    "Invalid ciphertext: too small (expected >= %d, got %zu)",
-                    ENCRYPTION_OVERHEAD, ciphertext_len);
+        return ERROR(ERR_CRYPTO, "Invalid ciphertext: too small (expected >= %d, got %zu)",
+                     ENCRYPTION_OVERHEAD, ciphertext_len);
     }
 
     /* Step 2: Verify magic header */
@@ -400,9 +595,8 @@ error_t *encryption_decrypt(
 
     /* Check version */
     if (ciphertext[5] != ENCRYPTION_VERSION) {
-        return ERROR(ERR_CRYPTO,
-                    "Unsupported encryption version: %d (expected %d)",
-                    ciphertext[5], ENCRYPTION_VERSION);
+        return ERROR(ERR_CRYPTO, "Unsupported encryption version: %d (expected %d)",
+                     ciphertext[5], ENCRYPTION_VERSION);
     }
 
     /* Step 3: Extract SIV and ciphertext body */

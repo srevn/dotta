@@ -88,7 +88,8 @@ static error_t *show_file(
     const char *profile_name,
     const char *file_path,
     const char *commit_ref,
-    bool raw
+    bool raw,
+    const dotta_config_t *config
 ) {
     error_t *err = NULL;
     git_tree *tree = NULL;
@@ -105,7 +106,7 @@ static error_t *show_file(
      * if file is encrypted and key is not cached, when content layer calls
      * keymanager_get_key().
      */
-    keymanager_t *km = keymanager_get_global(NULL);
+    keymanager_t *km = keymanager_get_global(config);
 
     /* Load metadata for encryption state validation */
     err = metadata_load_from_branch(repo, profile_name, &metadata);
@@ -450,6 +451,14 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
     /* Handle SHOW_FILE mode */
     CHECK_NULL(opts->file_path);
 
+    /* Load config for encryption parameters (needed by keymanager).
+     * Must be loaded before show_file() to ensure correct key derivation. */
+    err = config_load(NULL, &config);
+    if (err) {
+        err = error_wrap(err, "Failed to load config");
+        goto cleanup;
+    }
+
     if (opts->profile) {
         /* Profile specified - show from that profile */
         bool exists = false;
@@ -477,7 +486,7 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
             search_path = storage_converted;
         }
 
-        err = show_file(repo, opts->profile, search_path, opts->commit, opts->raw);
+        err = show_file(repo, opts->profile, search_path, opts->commit, opts->raw, config);
         goto cleanup;
     }
 
@@ -488,12 +497,6 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
         err = ERROR(ERR_INVALID_ARG,
                     "When using --commit with a file, you must also specify --profile\n"
                     "Hint: Use 'dotta list' to see which profiles contain files");
-        goto cleanup;
-    }
-
-    err = config_load(NULL, &config);
-    if (err) {
-        err = error_wrap(err, "Failed to load config");
         goto cleanup;
     }
 
@@ -566,7 +569,7 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
         printf("# Path: %s\n", search_path);
         printf("\n");
     }
-    err = show_file(repo, found_profile, search_path, NULL, opts->raw);
+    err = show_file(repo, found_profile, search_path, NULL, opts->raw, config);
 
 cleanup:
     if (config) {

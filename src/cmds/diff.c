@@ -185,7 +185,8 @@ static error_t *show_file_diff_from_workspace(
                 output_color_code(out, OUTPUT_COLOR_RESET));
         free(cyan_path);
     } else {
-        output_printf(out, OUTPUT_NORMAL, "diff --dotta a/%s b/%s\n", entry->storage_path, entry->storage_path);
+        output_printf(out, OUTPUT_NORMAL, "diff --dotta a/%s b/%s\n",
+                entry->storage_path, entry->storage_path);
         output_printf(out, OUTPUT_NORMAL, "profile: %s\n", entry->source_profile->name);
     }
 
@@ -211,8 +212,7 @@ static error_t *show_file_diff_from_workspace(
     }
 
     /* For missing files or type changes, no content diff to show */
-    if (item->state == WORKSPACE_STATE_DELETED ||
-        item->state == WORKSPACE_STATE_UNDEPLOYED ||
+    if (item->state == WORKSPACE_STATE_DELETED || item->state == WORKSPACE_STATE_UNDEPLOYED ||
         (item->divergence & DIVERGENCE_TYPE)) {
         return NULL;
     }
@@ -228,16 +228,14 @@ static error_t *show_file_diff_from_workspace(
      * to avoid unnecessary Git operations when tree entry not needed. */
     error_t *err = file_entry_ensure_tree_entry((file_entry_t *)entry, repo);
     if (err) {
-        return error_wrap(err, "Failed to load tree entry for '%s'",
-                          item->filesystem_path);
+        return error_wrap(err, "Failed to load tree entry for '%s'", item->filesystem_path);
     }
 
     /* Get content from cache (borrowed reference - don't free) */
     const buffer_t *content = NULL;
     err = content_cache_get_from_tree_entry(
         cache, entry->entry, entry->storage_path,
-        entry->source_profile->name, entry->encrypted,
-        &content
+        entry->source_profile->name, entry->encrypted, &content
     );
     if (err) {
         return error_wrap(err, "Failed to get content for '%s'", item->filesystem_path);
@@ -246,12 +244,11 @@ static error_t *show_file_diff_from_workspace(
     /* Generate diff */
     git_filemode_t mode = git_tree_entry_filemode(entry->entry);
     compare_direction_t cmp_dir = (direction == DIFF_UPSTREAM) ?
-                                   CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM;
+                                                CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM;
 
     file_diff_t *diff = NULL;
     err = compare_generate_diff(
-        content, item->filesystem_path, entry->storage_path,
-        mode, NULL, cmp_dir, &diff
+        content, item->filesystem_path, entry->storage_path, mode, NULL, cmp_dir, &diff
     );
 
     if (err) {
@@ -448,11 +445,7 @@ static error_t *resolve_commit_in_profiles(
         const char *profile_name = profiles->profiles[i].name;
 
         error_t *err = gitops_resolve_commit_in_branch(
-            repo,
-            profile_name,
-            commit_ref,
-            out_oid,
-            out_commit
+            repo, profile_name, commit_ref, out_oid, out_commit
         );
 
         if (!err) {
@@ -663,8 +656,7 @@ static int print_diff_line_cb(
     }
 
     /* Print line origin if it's a change line */
-    if (line->origin == GIT_DIFF_LINE_ADDITION ||
-        line->origin == GIT_DIFF_LINE_DELETION ||
+    if (line->origin == GIT_DIFF_LINE_ADDITION || line->origin == GIT_DIFF_LINE_DELETION ||
         line->origin == GIT_DIFF_LINE_CONTEXT) {
         if (color) {
             output_printf(out, OUTPUT_NORMAL, "%s%c%.*s%s",
@@ -722,6 +714,7 @@ static error_t *compare_manifest_to_filesystem(
     const char *profile_name,
     const path_filter_t *file_filter,
     const cmd_diff_options_t *opts,
+    const dotta_config_t *config,
     output_ctx_t *out,
     size_t *diff_count
 ) {
@@ -736,8 +729,10 @@ static error_t *compare_manifest_to_filesystem(
     *diff_count = 0;
     error_t *err = NULL;
 
-    /* Create content cache for efficient blob access */
-    keymanager_t *km = keymanager_get_global(NULL);
+    /* Create content cache for efficient blob access.
+     * Pass config to ensure keymanager uses user's derivation parameters
+     * (opslimit, memlimit) if this is the first call to create the singleton. */
+    keymanager_t *km = keymanager_get_global(config);
     content_cache_t *cache = content_cache_create(repo, km);
     if (!cache) {
         return ERROR(ERR_MEMORY, "Failed to create content cache");
@@ -770,8 +765,7 @@ static error_t *compare_manifest_to_filesystem(
             bool encrypted = metadata_get_file_encrypted(metadata, storage_path);
             const buffer_t *hist_content = NULL;
             err = content_cache_get_from_tree_entry(
-                cache, entry->entry, storage_path,
-                profile_name, encrypted, &hist_content
+                cache, entry->entry, storage_path, profile_name, encrypted, &hist_content
             );
             if (err) {
                 content_cache_free(cache);
@@ -799,8 +793,7 @@ static error_t *compare_manifest_to_filesystem(
         bool encrypted = metadata_get_file_encrypted(metadata, storage_path);
         const buffer_t *hist_content = NULL;
         err = content_cache_get_from_tree_entry(
-            cache, entry->entry, storage_path,
-            profile_name, encrypted, &hist_content
+            cache, entry->entry, storage_path, profile_name, encrypted, &hist_content
         );
         if (err) {
             content_cache_free(cache);
@@ -950,6 +943,7 @@ static error_t *diff_commit_to_workspace(
     profile_list_t *profiles,
     const path_filter_t *file_filter,
     const cmd_diff_options_t *opts,
+    const dotta_config_t *config,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
@@ -967,8 +961,9 @@ static error_t *diff_commit_to_workspace(
     metadata_t *metadata = NULL;
 
     /* Step 1: Resolve commit to find which profile contains it */
-    err = resolve_commit_in_profiles(repo, profiles, commit_ref,
-                                     &commit_oid, &commit, &profile_name);
+    err = resolve_commit_in_profiles(
+        repo, profiles, commit_ref, &commit_oid, &commit, &profile_name
+    );
     if (err) {
         goto cleanup;
     }
@@ -1027,9 +1022,7 @@ static error_t *diff_commit_to_workspace(
     /* Step 6: Compare historical manifest against current filesystem */
     size_t diff_count = 0;
     err = compare_manifest_to_filesystem(
-        repo, manifest, metadata,
-        profile_name, file_filter,
-        opts, out, &diff_count
+        repo, manifest, metadata, profile_name, file_filter, opts, config, out, &diff_count
     );
     if (err) {
         goto cleanup;
@@ -1158,15 +1151,17 @@ static error_t *diff_commits(
     git_diff *diff = NULL;
 
     /* Resolve first commit */
-    err = resolve_commit_in_profiles(repo, profiles, commit1_ref,
-                                     &commit1_oid, &commit1, &profile1_name);
+    err = resolve_commit_in_profiles(
+        repo, profiles, commit1_ref, &commit1_oid, &commit1, &profile1_name
+    );
     if (err) {
         goto cleanup;
     }
 
     /* Resolve second commit */
-    err = resolve_commit_in_profiles(repo, profiles, commit2_ref,
-                                     &commit2_oid, &commit2, &profile2_name);
+    err = resolve_commit_in_profiles(
+        repo, profiles, commit2_ref, &commit2_oid, &commit2, &profile2_name
+    );
     if (err) {
         goto cleanup;
     }
@@ -1331,10 +1326,8 @@ static error_t *diff_workspace(
         output_info(out, "Shows what 'dotta apply' would change\n");
 
         err = present_diffs_for_direction(
-            diverged, diverged_count, manifest,
-            cache, repo, DIFF_UPSTREAM,
-            filter_profiles, file_filter,
-            opts, out, &upstream_count
+            diverged, diverged_count, manifest, cache, repo, DIFF_UPSTREAM,
+            filter_profiles, file_filter, opts, out, &upstream_count
         );
         if (err) goto cleanup;
 
@@ -1348,10 +1341,8 @@ static error_t *diff_workspace(
         output_info(out, "Shows what 'dotta update' would commit\n");
 
         err = present_diffs_for_direction(
-            diverged, diverged_count, manifest,
-            cache, repo, DIFF_DOWNSTREAM,
-            filter_profiles, file_filter,
-            opts, out, &downstream_count
+            diverged, diverged_count, manifest, cache, repo, DIFF_DOWNSTREAM,
+            filter_profiles, file_filter, opts, out, &downstream_count
         );
         if (err) goto cleanup;
 
@@ -1364,10 +1355,8 @@ static error_t *diff_workspace(
     } else {
         /* Single direction */
         err = present_diffs_for_direction(
-            diverged, diverged_count, manifest,
-            cache, repo, opts->direction,
-            filter_profiles, file_filter,
-            opts, out, &total_diff_count
+            diverged, diverged_count, manifest, cache, repo, opts->direction,
+            filter_profiles, file_filter, opts, out, &total_diff_count
         );
         if (err) goto cleanup;
 
@@ -1441,8 +1430,9 @@ error_t *cmd_diff(
 
     /* Load diff profiles (CLI filter or shared pointer) */
     if (opts->profiles && opts->profile_count > 0) {
-        err = profile_resolve_for_operations(repo, opts->profiles, opts->profile_count,
-                                            config->strict_mode, &diff_profiles);
+        err = profile_resolve_for_operations(
+            repo, opts->profiles, opts->profile_count, config->strict_mode, &diff_profiles
+        );
         if (err) {
             err = error_wrap(err, "Failed to resolve diff profiles");
             goto cleanup;
@@ -1473,8 +1463,9 @@ error_t *cmd_diff(
             }
         }
 
-        err = path_filter_create((const char **)opts->files, opts->file_count,
-                                 custom_prefixes, prefix_count, &file_filter);
+        err = path_filter_create(
+            (const char **)opts->files, opts->file_count, custom_prefixes, prefix_count, &file_filter
+        );
         free(custom_prefixes);  /* Array only, strings borrowed from profiles */
 
         if (err) {
@@ -1487,18 +1478,24 @@ error_t *cmd_diff(
     switch (opts->mode) {
         case DIFF_COMMIT_TO_COMMIT:
             /* Diff two commits */
-            err = diff_commits(repo, opts->commit1, opts->commit2, diff_profiles, file_filter, opts, out);
+            err = diff_commits(
+                repo, opts->commit1, opts->commit2, diff_profiles, file_filter, opts, out
+            );
             goto cleanup;
 
         case DIFF_COMMIT_TO_WORKSPACE:
             /* Use commit-to-workspace diff */
-            err = diff_commit_to_workspace(repo, opts->commit1, diff_profiles, file_filter, opts, out);
+            err = diff_commit_to_workspace(
+                repo, opts->commit1, diff_profiles, file_filter, opts, config, out
+            );
             goto cleanup;
 
         case DIFF_WORKSPACE:
             /* Workspace diff uses workspace_profiles for accurate analysis,
              * diff_profiles for filtering output */
-            err = diff_workspace(repo, workspace_profiles, diff_profiles, file_filter, config, opts, out);
+            err = diff_workspace(
+                repo, workspace_profiles, diff_profiles, file_filter, config, opts, out
+            );
             goto cleanup;
     }
 

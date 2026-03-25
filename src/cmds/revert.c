@@ -1189,7 +1189,7 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
             err = load_metadata_graceful(repo, profile_name, &metadata);
             if (err) goto cleanup;
 
-            km = keymanager_get_global(NULL);
+            km = keymanager_get_global(config);
 
             err = show_diff_preview(repo, resolved_path, profile_name, metadata, km,
                                    current_blob_oid, target_blob_oid, out);

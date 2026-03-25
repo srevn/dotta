@@ -66,9 +66,9 @@ struct keymanager {
 
     /* Cached master key */
     uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE];
-    bool has_key;          /* Is master key cached? */
-    time_t cached_at;      /* When was key cached (monotonic time, 0 if not cached) */
-    bool mlocked;          /* Is memory locked with mlock()? */
+    bool has_key;             /* Is master key cached? */
+    time_t cached_at;         /* When was key cached (monotonic time, 0 if not cached) */
+    bool mlocked;             /* Is memory locked with mlock()? */
 
     /* Profile key cache (profile_name → uint8_t[32]) */
     hashmap_t *profile_keys;  /* Owned - each value is malloc'd ENCRYPTION_PROFILE_KEY_SIZE */

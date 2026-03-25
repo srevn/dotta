@@ -91,30 +91,42 @@ static void sync_results_free(sync_results_t *results) {
 
 /**
  * Parse divergence strategy from string
+ *
+ * @param str Strategy string (NULL defaults to DIVERGE_WARN)
+ * @param out_strategy Parsed strategy (set only on success)
+ * @return true if valid (or NULL), false if unrecognized
  */
-static sync_divergence_strategy_t parse_divergence_strategy(const char *str, output_ctx_t *out) {
+static bool parse_divergence_strategy(
+    const char *str,
+    sync_divergence_strategy_t *out_strategy
+) {
     if (!str) {
-        return DIVERGE_WARN;
+        *out_strategy = DIVERGE_WARN;
+        return true;
     }
 
+    if (strcmp(str, "warn") == 0) {
+        *out_strategy = DIVERGE_WARN;
+        return true;
+    }
     if (strcmp(str, "rebase") == 0) {
-        return DIVERGE_REBASE;
-    } else if (strcmp(str, "merge") == 0) {
-        return DIVERGE_MERGE;
-    } else if (strcmp(str, "ours") == 0) {
-        return DIVERGE_OURS;
-    } else if (strcmp(str, "theirs") == 0) {
-        return DIVERGE_THEIRS;
-    } else if (strcmp(str, "warn") == 0) {
-        return DIVERGE_WARN;
+        *out_strategy = DIVERGE_REBASE;
+        return true;
+    }
+    if (strcmp(str, "merge") == 0) {
+        *out_strategy = DIVERGE_MERGE;
+        return true;
+    }
+    if (strcmp(str, "ours") == 0) {
+        *out_strategy = DIVERGE_OURS;
+        return true;
+    }
+    if (strcmp(str, "theirs") == 0) {
+        *out_strategy = DIVERGE_THEIRS;
+        return true;
     }
 
-    /* Invalid strategy - warn user and fall back to safe default */
-    if (out) {
-        output_warning(out, "Invalid divergence strategy '%s' (valid: warn, rebase, merge, ours, theirs)", str);
-        output_info(out, "Falling back to 'warn' (safe default)");
-    }
-    return DIVERGE_WARN;  /* Default */
+    return false;
 }
 
 
@@ -1355,10 +1367,13 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     bool auto_pull = opts->no_pull ? false : config->auto_pull;
 
     /* Determine divergence strategy: CLI overrides config */
-    sync_divergence_strategy_t diverged_strategy = parse_divergence_strategy(
-        opts->diverged ? opts->diverged : config->diverged_strategy,
-        out
-    );
+    const char *strategy_str = opts->diverged ? opts->diverged : config->diverged_strategy;
+    sync_divergence_strategy_t diverged_strategy;
+    if (!parse_divergence_strategy(strategy_str, &diverged_strategy)) {
+        err = ERROR(ERR_INVALID_ARG, "Invalid divergence strategy '%s' "
+                    "(valid: warn, rebase, merge, ours, theirs)", strategy_str);
+        goto cleanup;
+    }
 
     /* Phase 1: Fetch enabled profiles from remote (use sync_profiles for operations) */
     err = sync_fetch_enabled_profiles(repo, remote_name, sync_profiles,

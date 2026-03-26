@@ -1503,13 +1503,13 @@ static error_t *analyze_orphaned_directories(workspace_t *ws) {
                 dir_path,
                 storage_path,
                 profile,
-                NULL,             /* No old_profile for orphans */
+                NULL,                      /* No old_profile for orphans */
                 WORKSPACE_STATE_ORPHANED,  /* State: in state, not in profile */
                 DIVERGENCE_NONE,           /* Divergence: none */
                 WORKSPACE_ITEM_DIRECTORY,
                 on_filesystem,
                 profile_enabled,
-                false             /* No profile change for orphans */
+                false                      /* No profile change for orphans */
             );
 
             if (err) {
@@ -2256,7 +2256,7 @@ static error_t *analyze_encryption_policy_mismatch(
                 }
 
                 workspace_state_t item_state = in_state ?
-                    WORKSPACE_STATE_DEPLOYED : WORKSPACE_STATE_UNDEPLOYED;
+                               WORKSPACE_STATE_DEPLOYED : WORKSPACE_STATE_UNDEPLOYED;
 
                 err = workspace_add_diverged(
                     ws,

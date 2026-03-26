@@ -110,6 +110,15 @@ static error_t *copy_file_to_worktree(
             goto cleanup;
         }
 
+        /* Capture symlink stat so metadata_capture_from_file detects S_ISLNK */
+        if (out_stat) {
+            if (lstat(filesystem_path, out_stat) != 0) {
+                err = ERROR(ERR_INTERNAL, "Failed to stat symlink '%s': %s",
+                            filesystem_path, strerror(errno));
+                goto cleanup;
+            }
+        }
+
         /* Symlinks are never encrypted */
         if (out_was_encrypted) {
             *out_was_encrypted = false;
@@ -217,6 +226,21 @@ static void item_array_free(void *ptr) {
 }
 
 /**
+ * Per-item result from file copy operations
+ *
+ * Tracks results from copy_file_to_worktree() for each workspace item.
+ * Indexed by item position (not file-only position) to prevent index
+ * misalignment between update_profile() and update_metadata_for_profile().
+ *
+ * Memory: calloc-initialized, so unprocessed items have copied=false.
+ */
+typedef struct {
+    bool copied;          /* File was successfully copied to worktree */
+    bool encrypted;       /* File was encrypted during copy */
+    struct stat stat;     /* Captured stat data (valid only if copied=true) */
+} file_copy_result_t;
+
+/**
  * Check if path should be excluded by CLI patterns
  *
  * Helper function for filter_items_for_update().
@@ -236,6 +260,53 @@ static bool matches_exclude_pattern(
         path,
         MATCH_DOUBLESTAR  /* Enable ** support */
     );
+}
+
+/**
+ * Check if a workspace item's state/divergence qualifies for update
+ *
+ * Pure predicate — no side effects, no filtering by path/profile/exclusion.
+ * Extracted to single source of truth for state eligibility logic.
+ */
+static bool is_update_candidate(
+    const workspace_item_t *item,
+    const cmd_update_options_t *opts,
+    const dotta_config_t *config
+) {
+    /* Determine if item should be included based on state + divergence */
+    switch (item->state) {
+        case WORKSPACE_STATE_DEPLOYED:
+            /* Deployed files/dirs with divergence - check what kind.
+             *
+             * Mask DIVERGENCE_STALE: stale-only files have no local changes
+             * (content matches current Git state after in-memory patching). */
+            if ((item->divergence & ~DIVERGENCE_STALE) != DIVERGENCE_NONE) {
+                return !opts->only_new;
+            }
+            /* DEPLOYED + NONE/STALE-only = clean, exclude */
+            return false;
+
+        case WORKSPACE_STATE_DELETED:
+            /* File removed from filesystem - include unless --only-new */
+            return !opts->only_new;
+
+        case WORKSPACE_STATE_UNTRACKED:
+            /* New files - include if:
+             * - Explicit flags set (--include-new or --only-new), OR
+             * - Config auto_detect_new_files is enabled (for confirmation prompt) */
+            return (opts->include_new || opts->only_new ||
+                   (config && config->auto_detect_new_files));
+
+        case WORKSPACE_STATE_UNDEPLOYED:
+        case WORKSPACE_STATE_ORPHANED:
+        case WORKSPACE_STATE_RELEASED:
+            /* Not relevant for update command:
+             * - UNDEPLOYED: handled by apply command
+             * - ORPHANED: handled by remove command
+             * - RELEASED: handled by apply command */
+            return false;
+    }
+    return false;
 }
 
 /**
@@ -308,46 +379,8 @@ static error_t *filter_items_for_update(
 
     for (size_t i = 0; i < all_count; i++) {
         const workspace_item_t *item = &all[i];
-        bool should_include = false;
 
-        /* Determine if item should be included based on state + divergence */
-        switch (item->state) {
-            case WORKSPACE_STATE_DEPLOYED:
-                /* Deployed files/dirs with divergence - check what kind.
-                 *
-                 * Mask DIVERGENCE_STALE: stale-only files have no local changes
-                 * (content matches current Git state after in-memory patching). */
-                if ((item->divergence & ~DIVERGENCE_STALE) != DIVERGENCE_NONE) {
-                    should_include = !opts->only_new;
-                }
-                /* DEPLOYED + NONE/STALE-only = clean, exclude */
-                break;
-
-            case WORKSPACE_STATE_DELETED:
-                /* File removed from filesystem - include unless --only-new */
-                should_include = !opts->only_new;
-                break;
-
-            case WORKSPACE_STATE_UNTRACKED:
-                /* New files - include if:
-                 * - Explicit flags set (--include-new or --only-new), OR
-                 * - Config auto_detect_new_files is enabled (for confirmation prompt) */
-                should_include = (opts->include_new || opts->only_new ||
-                                 (config && config->auto_detect_new_files));
-                break;
-
-            case WORKSPACE_STATE_UNDEPLOYED:
-            case WORKSPACE_STATE_ORPHANED:
-            case WORKSPACE_STATE_RELEASED:
-                /* Not relevant for update command:
-                 * - UNDEPLOYED: handled by apply command
-                 * - ORPHANED: handled by remove command
-                 * - RELEASED: handled by apply command */
-                should_include = false;
-                break;
-        }
-
-        if (!should_include) {
+        if (!is_update_candidate(item, opts, config)) {
             continue;
         }
 
@@ -386,33 +419,8 @@ static error_t *filter_items_for_update(
 
     for (size_t i = 0; i < all_count; i++) {
         const workspace_item_t *item = &all[i];
-        bool should_include = false;
 
-        /* Same filtering logic as first pass */
-        switch (item->state) {
-            case WORKSPACE_STATE_DEPLOYED:
-                if ((item->divergence & ~DIVERGENCE_STALE) != DIVERGENCE_NONE) {
-                    should_include = !opts->only_new;
-                }
-                break;
-
-            case WORKSPACE_STATE_DELETED:
-                should_include = !opts->only_new;
-                break;
-
-            case WORKSPACE_STATE_UNTRACKED:
-                should_include = (opts->include_new || opts->only_new ||
-                                 (config && config->auto_detect_new_files));
-                break;
-
-            case WORKSPACE_STATE_UNDEPLOYED:
-            case WORKSPACE_STATE_ORPHANED:
-            case WORKSPACE_STATE_RELEASED:
-                should_include = false;
-                break;
-        }
-
-        if (!should_include) {
+        if (!is_update_candidate(item, opts, config)) {
             continue;
         }
 
@@ -528,14 +536,13 @@ static error_t *group_items_by_profile(
 /**
  * Update metadata for items (unified for files and directories)
  *
- * CRITICAL: encryption_status and file_stats are indexed by FILE position only
- * (not by all items). We track a separate file_idx that advances only for files.
+ * copy_results is indexed by item position (same index as items array).
+ * Only items with copy_results[i].copied == true have valid stat/encryption data.
  *
  * @param wt Worktree handle (must not be NULL)
  * @param items Array of workspace items to update (must not be NULL)
  * @param item_count Number of items
- * @param encryption_status Encryption status for FILES only (indexed by file position, can be NULL)
- * @param file_stats Stat data for FILES only (indexed by file position, can be NULL)
+ * @param copy_results Per-item copy results indexed by item position (can be NULL)
  * @param opts Update options (must not be NULL)
  * @param out Output context (can be NULL)
  * @return Error or NULL on success
@@ -544,8 +551,7 @@ static error_t *update_metadata_for_profile(
     worktree_handle_t *wt,
     const workspace_item_t **items,
     size_t item_count,
-    const bool *encryption_status,
-    const struct stat *file_stats,
+    const file_copy_result_t *copy_results,
     const cmd_update_options_t *opts,
     output_ctx_t *out
 ) {
@@ -589,7 +595,6 @@ static error_t *update_metadata_for_profile(
 
     size_t captured_file_count = 0;
     size_t updated_dir_count = 0;
-    size_t file_idx = 0;  /* Track position in file_stats/encryption_status arrays */
 
     /* Process all items (files and directories) in a unified loop */
     for (size_t i = 0; i < item_count; i++) {
@@ -613,23 +618,20 @@ static error_t *update_metadata_for_profile(
                             error_free(err);
                             err = NULL;
                         }
-                        if (opts->verbose) {
-                            printf("Removed metadata: %s\n", item->filesystem_path);
+                        if (opts->verbose && out) {
+                            output_info(out, "  Removed metadata: %s", item->filesystem_path);
                         }
                     }
-                    /* Deleted files don't advance file_idx (no stat captured) */
                     continue;
                 }
 
-                /* Use pre-captured stat from copy_file_to_worktree()
-                 * CRITICAL: file_stats is indexed by FILE position, not all items */
-                if (!file_stats || file_idx >= item_count) {
-                    /* Safety check - should never happen */
-                    metadata_free(metadata);
-                    return ERROR(ERR_INTERNAL, "File stat index out of bounds");
+                /* Skip files not copied to worktree (e.g., encryption-divergence
+                 * on files missing from filesystem). Indexed by item position. */
+                if (!copy_results || !copy_results[i].copied) {
+                    continue;
                 }
 
-                const struct stat *file_stat = &file_stats[file_idx];
+                const struct stat *file_stat = &copy_results[i].stat;
 
                 /* Capture metadata from pre-captured stat data */
                 metadata_item_t *meta_item = NULL;
@@ -643,18 +645,12 @@ static error_t *update_metadata_for_profile(
                 if (err) {
                     metadata_free(metadata);
                     return error_wrap(err, "Failed to capture metadata for: %s",
-                                     item->filesystem_path);
+                                      item->filesystem_path);
                 }
 
-                /* meta_item will be NULL for symlinks - skip them */
+                /* meta_item will be NULL for symlinks (detected via S_ISLNK in stat) */
                 if (meta_item) {
-                    /* Use tracked encryption status from copy_file_to_worktree() */
-                    if (encryption_status) {
-                        meta_item->file.encrypted = encryption_status[file_idx];
-                    } else {
-                        /* Fallback: assume plaintext if no tracked status */
-                        meta_item->file.encrypted = false;
-                    }
+                    meta_item->file.encrypted = copy_results[i].encrypted;
 
                     /* Save metadata before adding (for verbose output) */
                     mode_t mode = meta_item->mode;
@@ -675,25 +671,20 @@ static error_t *update_metadata_for_profile(
 
                     captured_file_count++;
 
-                    if (opts->verbose) {
+                    if (opts->verbose && out) {
                         if (owner || group) {
-                            printf("Captured metadata: %s (mode: %04o, owner: %s:%s%s)\n",
-                                  item->filesystem_path, mode,
-                                  owner ? owner : "?",
-                                  group ? group : "?",
-                                  is_encrypted ? ", encrypted" : "");
+                            output_info(out, "  Captured metadata: %s (mode: %04o, owner: %s:%s%s)",
+                                   item->filesystem_path, mode, owner ? owner : "?",
+                                   group ? group : "?", is_encrypted ? ", encrypted" : "");
                         } else {
-                            printf("Captured metadata: %s (mode: %04o%s)\n",
-                                  item->filesystem_path, mode,
-                                  is_encrypted ? ", encrypted" : "");
+                            output_info(out, "  Captured metadata: %s (mode: %04o%s)",
+                                   item->filesystem_path, mode, is_encrypted ? ", encrypted" : "");
                         }
                     }
                     free(owner);
                     free(group);
                 }
 
-                /* Advance file index for next file */
-                file_idx++;
                 break;
             }
 
@@ -742,7 +733,7 @@ static error_t *update_metadata_for_profile(
                     free(group);
                     metadata_free(metadata);
                     return error_wrap(err, "Failed to update directory metadata for '%s'",
-                                     item->filesystem_path);
+                                      item->filesystem_path);
                 }
 
                 updated_dir_count++;
@@ -751,8 +742,7 @@ static error_t *update_metadata_for_profile(
                     if (owner || group) {
                         output_info(out, "  Updated directory metadata: %s (mode: %04o, owner: %s:%s)",
                                     item->filesystem_path, mode,
-                                    owner ? owner : "?",
-                                    group ? group : "?");
+                                    owner ? owner : "?", group ? group : "?");
                     } else {
                         output_info(out, "  Updated directory metadata: %s (mode: %04o)",
                                     item->filesystem_path, mode);
@@ -799,10 +789,9 @@ static error_t *update_metadata_for_profile(
         return error_from_git(git_err);
     }
 
-    if (opts->verbose && (captured_file_count > 0 || updated_dir_count > 0)) {
-        printf("Updated metadata for %zu file(s) and %zu director%s\n",
-               captured_file_count,
-               updated_dir_count,
+    if (opts->verbose && out && (captured_file_count > 0 || updated_dir_count > 0)) {
+        output_info(out, "Updated metadata for %zu file(s) and %zu director%s",
+               captured_file_count, updated_dir_count,
                updated_dir_count == 1 ? "y" : "ies");
     }
 
@@ -823,6 +812,7 @@ static error_t *update_metadata_for_profile(
  * @param out Output context (must not be NULL)
  * @param config Configuration (can be NULL)
  * @param ws Workspace for metadata cache access (can be NULL)
+ * @param out_processed Output: number of items committed (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *update_profile(
@@ -833,13 +823,17 @@ static error_t *update_profile(
     const cmd_update_options_t *opts,
     output_ctx_t *out,
     const dotta_config_t *config,
-    workspace_t *ws
+    workspace_t *ws,
+    size_t *out_processed
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(profile);
     CHECK_NULL(items);
     CHECK_NULL(opts);
     CHECK_NULL(out);
+    CHECK_NULL(out_processed);
+
+    *out_processed = 0;
 
     if (item_count == 0) {
         return NULL;
@@ -860,8 +854,7 @@ static error_t *update_profile(
     metadata_t *existing_metadata = NULL;
     bool owns_metadata = false;
     keymanager_t *key_mgr = NULL;
-    bool *encryption_status = NULL;
-    struct stat *file_stats = NULL;
+    file_copy_result_t *copy_results = NULL;
 
     /* Try to get metadata from workspace cache first */
     if (ws) {
@@ -914,28 +907,13 @@ static error_t *update_profile(
         }
     }
 
-    /* Count files that need stat tracking (non-deleted files only) */
-    size_t file_count = 0;
-    for (size_t i = 0; i < item_count; i++) {
-        const workspace_item_t *item = items[i];
-        if (item->item_kind == WORKSPACE_ITEM_FILE && item->state != WORKSPACE_STATE_DELETED) {
-            file_count++;
-        }
-    }
-
-    /* Allocate tracking arrays for files that need stats */
-    if (file_count > 0) {
-        encryption_status = calloc(file_count, sizeof(bool));
-        if (!encryption_status) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate encryption status array");
-            goto cleanup;
-        }
-
-        file_stats = calloc(file_count, sizeof(struct stat));
-        if (!file_stats) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate file stats array");
-            goto cleanup;
-        }
+    /* Allocate per-item result tracking (indexed by item position, not file-only position).
+     * This prevents index misalignment between update_profile and update_metadata_for_profile
+     * when files are skipped (e.g., encryption-divergence on missing files). */
+    copy_results = calloc(item_count, sizeof(file_copy_result_t));
+    if (!copy_results) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate copy results array");
+        goto cleanup;
     }
 
     /* Get worktree index for staging */
@@ -946,8 +924,6 @@ static error_t *update_profile(
     }
 
     /* Process all items in a single unified loop */
-    size_t file_idx = 0;  /* Track position in encryption_status/file_stats arrays */
-
     for (size_t i = 0; i < item_count; i++) {
         const workspace_item_t *item = items[i];
 
@@ -968,7 +944,6 @@ static error_t *update_profile(
                         err = error_from_git(git_err);
                         goto cleanup;
                     }
-                    /* Deleted files don't advance file_idx (no stat captured) */
                     continue;
                 }
 
@@ -999,7 +974,6 @@ static error_t *update_profile(
                         output_info(out,
                             "  To resolve: re-create file and run update, or remove from profile.");
                     }
-                    /* Skip this file - don't advance file_idx (no stat captured) */
                     continue;
                 }
 
@@ -1012,13 +986,15 @@ static error_t *update_profile(
                     key_mgr,
                     config,
                     existing_metadata,
-                    &encryption_status[file_idx],
-                    &file_stats[file_idx]
+                    &copy_results[i].encrypted,
+                    &copy_results[i].stat
                 );
                 if (err) {
                     err = error_wrap(err, "Failed to copy '%s'", item->filesystem_path);
                     goto cleanup;
                 }
+
+                copy_results[i].copied = true;
 
                 /* Stage file */
                 int git_err = git_index_add_bypath(index, item->storage_path);
@@ -1027,8 +1003,6 @@ static error_t *update_profile(
                     goto cleanup;
                 }
 
-                /* Advance file index for next file */
-                file_idx++;
                 break;
             }
 
@@ -1038,16 +1012,11 @@ static error_t *update_profile(
                 break;
             }
         }
-
-        /* Check for error after each item */
-        if (err) {
-            goto cleanup;
-        }
     }
 
     /* Update metadata for both files and directories */
     err = update_metadata_for_profile(
-        wt, items, item_count, encryption_status, file_stats, opts, out
+        wt, items, item_count, copy_results, opts, out
     );
     if (err) {
         err = error_wrap(err, "Failed to update metadata");
@@ -1070,7 +1039,7 @@ static error_t *update_profile(
         goto cleanup;
     }
 
-    /* Build array of storage paths for commit message (files only) */
+    /* Build array of storage paths for commit message */
     storage_paths = malloc(item_count * sizeof(char *));
     if (!storage_paths) {
         err = ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
@@ -1080,8 +1049,24 @@ static error_t *update_profile(
     size_t path_count = 0;
     for (size_t i = 0; i < item_count; i++) {
         const workspace_item_t *item = items[i];
-        /* Include all items (files and directories) in commit message */
-        storage_paths[path_count++] = item->storage_path;
+
+        if (item->item_kind == WORKSPACE_ITEM_FILE) {
+            /* Include deleted files (staged for removal) */
+            if (item->state == WORKSPACE_STATE_DELETED) {
+                storage_paths[path_count++] = item->storage_path;
+            } else if (copy_results && copy_results[i].copied) {
+                /* Include files that were copied to worktree */
+                storage_paths[path_count++] = item->storage_path;
+            }
+            /* Skip files not processed (e.g., encryption-divergence on missing) */
+        } else if (item->item_kind == WORKSPACE_ITEM_DIRECTORY) {
+            storage_paths[path_count++] = item->storage_path;
+        }
+    }
+
+    /* Skip commit if nothing was processed */
+    if (path_count == 0) {
+        goto cleanup;
     }
 
     /* Build commit message context */
@@ -1108,6 +1093,8 @@ static error_t *update_profile(
         goto cleanup;
     }
 
+    *out_processed = path_count;
+
 cleanup:
     /* Free resources in reverse order */
     if (message) free(message);
@@ -1115,8 +1102,7 @@ cleanup:
     if (tree) git_tree_free(tree);
     if (index) git_index_free(index);
     if (owns_metadata && existing_metadata) metadata_free(existing_metadata);
-    if (file_stats) free(file_stats);
-    if (encryption_status) free(encryption_status);
+    if (copy_results) free(copy_results);
 
     return err;
 }
@@ -1351,7 +1337,7 @@ static error_t *update_manifest_after_update(
     /* Verbose summary */
     if (opts->verbose && (synced > 0 || removed > 0 || fallbacks > 0)) {
         output_info(out, "Manifest synced: %zu updated, %zu removed, %zu fallbacks",
-                   synced, removed, fallbacks);
+                    synced, removed, fallbacks);
     }
 
 cleanup:
@@ -1487,8 +1473,9 @@ static error_t *update_execute_for_all_profiles(
         }
 
         /* Update this profile using shared worktree */
+        size_t processed = 0;
         err = update_profile(
-            wt, profile, array->items, array->count, opts, out, config, ws
+            wt, profile, array->items, array->count, opts, out, config, ws, &processed
         );
 
         if (err) {
@@ -1496,11 +1483,11 @@ static error_t *update_execute_for_all_profiles(
             break;
         }
 
-        *total_updated += array->count;
+        *total_updated += processed;
 
-        if (!opts->verbose) {
+        if (!opts->verbose && processed > 0) {
             output_success(out, "  Updated %zu item%s",
-                          array->count, array->count == 1 ? "" : "s");
+                          processed, processed == 1 ? "" : "s");
         }
     }
 
@@ -1640,7 +1627,7 @@ static error_t *update_display_summary(
                     continue;
                 }
 
-                /* Check if file is deployed and has actual (non-stale) divergence */
+                /* Check if file is deployed and has (non-stale) divergence */
                 bool is_modified = (item->state == WORKSPACE_STATE_DEPLOYED &&
                                    (item->divergence & ~DIVERGENCE_STALE) != DIVERGENCE_NONE);
 
@@ -1758,13 +1745,7 @@ static error_t *update_display_summary(
 
                     /* Build custom metadata with explicit "directory" indicator */
                     char metadata[256];
-                    if (strstr(base_metadata, "metadata from")) {
-                        /* For split metadata: "directory metadata from profile" */
-                        snprintf(metadata, sizeof(metadata), "directory %s", base_metadata);
-                    } else {
-                        /* For normal case: "directory from profile" */
-                        snprintf(metadata, sizeof(metadata), "directory %s", base_metadata);
-                    }
+                    snprintf(metadata, sizeof(metadata), "directory %s", base_metadata);
 
                     output_list_add_multi(
                         list, tags, tag_count, color, path_with_slash, metadata
@@ -1849,6 +1830,7 @@ static error_t *update_confirm_operation(
 
     /* Count items by category */
     size_t modified_count = 0;
+    size_t deleted_count = 0;
     size_t new_count = 0;
     size_t dir_count = 0;
 
@@ -1858,6 +1840,8 @@ static error_t *update_confirm_operation(
         if (item->item_kind == WORKSPACE_ITEM_FILE) {
             if (item->state == WORKSPACE_STATE_UNTRACKED) {
                 new_count++;
+            } else if (item->state == WORKSPACE_STATE_DELETED) {
+                deleted_count++;
             } else {
                 modified_count++;
             }
@@ -1866,18 +1850,21 @@ static error_t *update_confirm_operation(
         }
     }
 
-    /* Dry run - just show and exit */
+    /* Dry run - show breakdown and exit */
     if (opts->dry_run) {
-        if (dir_count > 0) {
-            output_info(out, "Dry run: would update %zu file%s, %zu director%s, and add %zu new file%s",
-                       modified_count, modified_count == 1 ? "" : "s",
-                       dir_count, dir_count == 1 ? "y" : "ies",
-                       new_count, new_count == 1 ? "" : "s");
-        } else {
-            output_info(out, "Dry run: would update %zu modified file%s and add %zu new file%s",
-                       modified_count, modified_count == 1 ? "" : "s",
-                       new_count, new_count == 1 ? "" : "s");
-        }
+        output_info(out, "Dry run: no changes will be committed");
+        if (modified_count > 0)
+            output_info(out, "  %zu modified file%s to update",
+                        modified_count, modified_count == 1 ? "" : "s");
+        if (deleted_count > 0)
+            output_info(out, "  %zu deleted file%s to remove",
+                        deleted_count, deleted_count == 1 ? "" : "s");
+        if (new_count > 0)
+            output_info(out, "  %zu new file%s to add",
+                        new_count, new_count == 1 ? "" : "s");
+        if (dir_count > 0)
+            output_info(out, "  %zu director%s to update metadata",
+                        dir_count, dir_count == 1 ? "y" : "ies");
         *result = CONFIRM_DRY_RUN;
         return NULL;
     }
@@ -1897,19 +1884,15 @@ static error_t *update_confirm_operation(
     }
 
     /* Confirmation for new files (if auto-detected, not explicit flag) */
-    if (new_count > 0 &&
-        config && config->confirm_new_files &&
-        !opts->include_new && !opts->only_new &&
-        config->auto_detect_new_files) {
+    if (new_count > 0 && config && config->confirm_new_files &&
+        !opts->include_new && !opts->only_new && config->auto_detect_new_files) {
 
         printf("Found %zu new file%s. Add %s to profiles? [y/N] ",
-               new_count, new_count == 1 ? "" : "s",
-               new_count == 1 ? "it" : "them");
+               new_count, new_count == 1 ? "" : "s", new_count == 1 ? "it" : "them");
         fflush(stdout);
 
         char response[10];
-        if (!fgets(response, sizeof(response), stdin) ||
-            (response[0] != 'y' && response[0] != 'Y')) {
+        if (!fgets(response, sizeof(response), stdin) || (response[0] != 'y' && response[0] != 'Y')) {
             /* User declined - would need to filter out new files */
             /* For now, just proceed without them - filtering would require
              * rebuilding the array which is complex. Better to handle this
@@ -1944,6 +1927,8 @@ error_t *cmd_update(
     char *repo_dir = NULL;
     char *profiles_str = NULL;
     path_filter_t *file_filter = NULL;
+    const workspace_item_t **update_items = NULL;
+    size_t update_count = 0;
     size_t total_updated = 0;
 
     /* Load configuration */
@@ -1989,9 +1974,8 @@ error_t *cmd_update(
     }
 
     if (workspace_profiles->count == 0) {
-        err = ERROR(ERR_NOT_FOUND,
-                   "No enabled profiles found\n"
-                   "Hint: Run 'dotta profile enable <name>' to enable profiles");
+        err = ERROR(ERR_NOT_FOUND, "No enabled profiles found\n"
+                    "Hint: Run 'dotta profile enable <name>' to enable profiles");
         goto cleanup;
     }
 
@@ -2128,8 +2112,6 @@ error_t *cmd_update(
      * Uses operation_profiles for CLI -p filtering. This ensures display
      * matches execution - only items from specified profiles are shown.
      */
-    const workspace_item_t **update_items = NULL;
-    size_t update_count = 0;
     err = filter_items_for_update(
         ws, opts, file_filter, operation_profiles, config, out, &update_items, &update_count
     );
@@ -2176,7 +2158,6 @@ error_t *cmd_update(
             const char **storage_paths = calloc(file_count, sizeof(char *));
             if (!storage_paths) {
                 err = ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
-                if (update_items) free(update_items);
                 goto cleanup;
             }
 
@@ -2211,7 +2192,6 @@ error_t *cmd_update(
 
             if (err) {
                 /* User declined elevation or non-interactive mode blocked it */
-                if (update_items) free(update_items);
                 goto cleanup;
             }
 
@@ -2222,7 +2202,6 @@ error_t *cmd_update(
     /* Display summary of items to update */
     err = update_display_summary(out, update_items, update_count, opts);
     if (err) {
-        if (update_items) free(update_items);
         goto cleanup;
     }
 
@@ -2230,7 +2209,6 @@ error_t *cmd_update(
     confirm_result_t confirm_result;
     err = update_confirm_operation(out, opts, update_items, update_count, config, &confirm_result);
     if (err) {
-        if (update_items) free(update_items);
         goto cleanup;
     }
 
@@ -2239,15 +2217,24 @@ error_t *cmd_update(
         case CONFIRM_CANCELLED:
         case CONFIRM_DRY_RUN:
             /* User cancelled or dry run - clean exit (not an error) */
-            if (update_items) free(update_items);
             goto cleanup;
 
-        case CONFIRM_SKIP_NEW_FILES:
-            /* User declined new files - would need to filter array
-             * For now, treat as cancellation (complex to re-filter) */
-            output_info(out, "Skipping new files not yet implemented in v2");
-            if (update_items) free(update_items);
-            goto cleanup;
+        case CONFIRM_SKIP_NEW_FILES: {
+            /* User declined new files - filter them out, keep modified/deleted */
+            size_t filtered = 0;
+            for (size_t i = 0; i < update_count; i++) {
+                if (update_items[i]->state != WORKSPACE_STATE_UNTRACKED) {
+                    update_items[filtered++] = update_items[i];
+                }
+            }
+            update_count = filtered;
+
+            if (update_count == 0) {
+                output_info(out, "No modified files remaining after skipping new files");
+                goto cleanup;
+            }
+            break;
+        }
 
         case CONFIRM_PROCEED:
             /* Continue with operation */
@@ -2265,11 +2252,9 @@ error_t *cmd_update(
         opts, out, config, ws, &total_updated, &by_profile
     );
 
-    /* Free update_items array (items themselves are owned by workspace) */
-    if (update_items) {
-        free(update_items);
-        update_items = NULL;
-    }
+    /* Capture count before by_profile is freed */
+    size_t updated_profile_count = by_profile ? hashmap_size(by_profile) : 0;
+
     if (err) {
         if (by_profile) {
             hashmap_free(by_profile, item_array_free);
@@ -2323,11 +2308,11 @@ error_t *cmd_update(
         hook_result_free(hook_result);
     }
 
-    /* Summary (report operation profile count) */
+    /* Summary (report updated profile count) */
     output_newline(out);
     output_success(out, "Updated %zu item%s across %zu profile%s",
                    total_updated, total_updated == 1 ? "" : "s",
-                   operation_profiles->count, operation_profiles->count == 1 ? "" : "s");
+                   updated_profile_count, updated_profile_count == 1 ? "" : "s");
 
     /* Manifest status feedback */
     output_newline(out);
@@ -2343,6 +2328,7 @@ error_t *cmd_update(
 
 cleanup:
     /* Free all resources in reverse order */
+    if (update_items) free(update_items);
     if (hook_ctx) hook_context_free(hook_ctx);
     if (ws) workspace_free(ws);
     if (profiles_str) free(profiles_str);

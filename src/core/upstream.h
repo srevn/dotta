@@ -5,8 +5,8 @@
  * Designed for minimal network overhead - fetches only refs, not full objects.
  */
 
-#ifndef DOTTA_UTILS_UPSTREAM_H
-#define DOTTA_UTILS_UPSTREAM_H
+#ifndef DOTTA_UPSTREAM_H
+#define DOTTA_UPSTREAM_H
 
 #include <git2.h>
 #include <stdbool.h>
@@ -182,4 +182,4 @@ error_t *upstream_create_tracking_branch(
  */
 error_t *upstream_detect_remote(git_repository *repo, char **out_remote);
 
-#endif /* DOTTA_UTILS_UPSTREAM_H */
+#endif /* DOTTA_UPSTREAM_H */

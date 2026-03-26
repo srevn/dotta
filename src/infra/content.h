@@ -36,8 +36,8 @@
  * - Used by: core (workspace), commands (show, diff)
  */
 
-#ifndef DOTTA_INFRA_CONTENT_H
-#define DOTTA_INFRA_CONTENT_H
+#ifndef DOTTA_CONTENT_H
+#define DOTTA_CONTENT_H
 
 #include <git2.h>
 #include <sys/stat.h>
@@ -302,4 +302,4 @@ error_t *content_store_file_to_worktree(
     struct stat *out_stat
 );
 
-#endif /* DOTTA_INFRA_CONTENT_H */
+#endif /* DOTTA_CONTENT_H */

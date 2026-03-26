@@ -18,8 +18,8 @@
  * - Proper cleanup on exit
  */
 
-#ifndef DOTTA_INTERACTIVE_H
-#define DOTTA_INTERACTIVE_H
+#ifndef DOTTA_CMD_INTERACTIVE_H
+#define DOTTA_CMD_INTERACTIVE_H
 
 #include <git2.h>
 #include <stdbool.h>
@@ -181,4 +181,4 @@ interactive_result_t interactive_handle_key(
  */
 void profile_item_free(profile_item_t *item);
 
-#endif /* DOTTA_INTERACTIVE_H */
+#endif /* DOTTA_CMD_INTERACTIVE_H */

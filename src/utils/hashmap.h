@@ -15,8 +15,8 @@
  * - Automatic resizing when load factor exceeds 0.75
  */
 
-#ifndef DOTTA_UTILS_HASHMAP_H
-#define DOTTA_UTILS_HASHMAP_H
+#ifndef DOTTA_HASHMAP_H
+#define DOTTA_HASHMAP_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -194,4 +194,4 @@ bool hashmap_iter_is_stale(const hashmap_iter_t *iter);
  */
 void hashmap_free(hashmap_t *map, hashmap_value_free_fn free_value);
 
-#endif /* DOTTA_UTILS_HASHMAP_H */
+#endif /* DOTTA_HASHMAP_H */

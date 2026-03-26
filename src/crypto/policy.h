@@ -16,21 +16,10 @@
  * 3. File previously encrypted (metadata) → ENCRYPT (maintain state)
  * 4. Auto-encrypt patterns → ENCRYPT (pattern match)
  * 5. Default → PLAINTEXT (safe default)
- *
- * Usage:
- *   bool should_encrypt;
- *   error_t *err = encryption_policy_should_encrypt(
- *       config, storage_path,
- *       opts->encrypt, opts->no_encrypt,
- *       metadata, &should_encrypt
- *   );
- *   if (err) { handle error }
- *
- *   // Now use should_encrypt to decide encryption...
  */
 
-#ifndef DOTTA_CRYPTO_POLICY_H
-#define DOTTA_CRYPTO_POLICY_H
+#ifndef DOTTA_POLICY_H
+#define DOTTA_POLICY_H
 
 #include <stdbool.h>
 #include <types.h>
@@ -143,4 +132,4 @@ error_t *encryption_policy_matches_auto_patterns(
     bool *out_matches
 );
 
-#endif /* DOTTA_CRYPTO_POLICY_H */
+#endif /* DOTTA_POLICY_H */

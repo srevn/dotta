@@ -19,13 +19,40 @@
 #include "infra/path.h"
 #include "utils/buffer.h"
 #include "utils/config.h"
+#include "utils/output.h"
 #include "utils/timeutil.h"
 
 /**
- * Print blob content
+ * Check if content appears to be binary
+ *
+ * Scans for NUL bytes in the first 8000 bytes, matching Git's heuristic.
+ * Must be called on plaintext content (after decryption).
+ */
+static bool content_is_binary(const unsigned char *data, size_t size) {
+    size_t check_len = size < 8000 ? size : 8000;
+    return memchr(data, '\0', check_len) != NULL;
+}
+
+/**
+ * Get human-readable file type from git filemode
+ */
+static const char *filemode_type_str(git_filemode_t mode) {
+    switch (mode) {
+        case GIT_FILEMODE_BLOB_EXECUTABLE: return "executable";
+        case GIT_FILEMODE_LINK:            return "symlink";
+        case GIT_FILEMODE_BLOB:            return "regular file";
+        default:                           return "file";
+    }
+}
+
+/**
+ * Print blob content with metadata header
  *
  * Uses content layer for transparent decryption. Password prompt only
  * happens if file is encrypted and key is not cached.
+ *
+ * Handles symlinks (shows target), binary files (shows size without
+ * dumping content), and encrypted files (indicates decryption occurred).
  */
 static error_t *print_blob_content(
     git_repository *repo,
@@ -34,13 +61,16 @@ static error_t *print_blob_content(
     const char *profile_name,
     const metadata_t *metadata,
     keymanager_t *km,
-    bool raw
+    git_filemode_t filemode,
+    bool raw,
+    output_ctx_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(blob_oid);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile_name);
     CHECK_NULL(metadata);
+    CHECK_NULL(out);
 
     /* Get plaintext content (handles encryption transparently) */
     bool encrypted = metadata_get_file_encrypted(metadata, storage_path);
@@ -53,20 +83,86 @@ static error_t *print_blob_content(
         return error_wrap(err, "Failed to get file content");
     }
 
+    const char *dim = output_color_code(out, OUTPUT_COLOR_DIM);
+    const char *reset = output_color_code(out, OUTPUT_COLOR_RESET);
+
+    /* Symlinks: content is the target path */
+    if (filemode == GIT_FILEMODE_LINK) {
+        if (!raw) {
+            output_printf(out, OUTPUT_NORMAL, "%s# Type:%s    symlink\n", dim, reset);
+            output_printf(out, OUTPUT_NORMAL, "%s# Target:%s  %.*s\n", dim, reset,
+                    (int)buffer_size(content), (const char *)buffer_data(content));
+        } else {
+            fwrite(buffer_data(content), 1, buffer_size(content), stdout);
+            const char *data = (const char *)buffer_data(content);
+            if (buffer_size(content) > 0 && data[buffer_size(content) - 1] != '\n') {
+                fputc('\n', stdout);
+            }
+        }
+        buffer_free(content);
+        return NULL;
+    }
+
+    /* Binary detection (on plaintext, after decryption) */
+    if (buffer_size(content) > 0 &&
+        content_is_binary(buffer_data(content), buffer_size(content))) {
+        if (!raw) {
+            char size_buf[32];
+            output_format_size(buffer_size(content), size_buf, sizeof(size_buf));
+
+            output_printf(out, OUTPUT_NORMAL, "%s# Type:%s    binary file", dim, reset);
+            if (encrypted) {
+                output_printf(out, OUTPUT_NORMAL, " (encrypted)");
+            }
+            output_newline(out);
+            output_printf(out, OUTPUT_NORMAL, "%s# Size:%s    %s\n", dim, reset, size_buf);
+        }
+        /* Don't dump binary content to terminal */
+        buffer_free(content);
+        return NULL;
+    }
+
     if (!raw) {
-        /* Add header showing size */
-        printf("Content-Length: %zu bytes\n", buffer_size(content));
-        printf("---\n");
+        /* File type */
+        output_printf(out, OUTPUT_NORMAL, "%s# Type:%s    %s", dim, reset,
+                filemode_type_str(filemode));
+        if (encrypted) {
+            output_printf(out, OUTPUT_NORMAL, " (encrypted)");
+        }
+        output_newline(out);
+
+        /* Mode and ownership from metadata */
+        const metadata_item_t *item = NULL;
+        error_t *meta_err = metadata_get_item(metadata, storage_path, &item);
+        if (meta_err) {
+            error_free(meta_err);
+            item = NULL;
+        }
+        if (item) {
+            output_printf(out, OUTPUT_NORMAL, "%s# Mode:%s    %04o\n",
+                    dim, reset, (unsigned)item->mode);
+            if (item->owner) {
+                output_printf(out, OUTPUT_NORMAL, "%s# Owner:%s   %s:%s\n",
+                        dim, reset, item->owner, item->group ? item->group : "");
+            }
+        }
+
+        /* Size */
+        char size_buf[32];
+        output_format_size(buffer_size(content), size_buf, sizeof(size_buf));
+        output_printf(out, OUTPUT_NORMAL, "%s# Size:%s    %s\n", dim, reset, size_buf);
+
+        output_printf(out, OUTPUT_NORMAL, "%s---%s\n", dim, reset);
     }
 
     /* Write content to stdout */
     if (buffer_size(content) > 0) {
         fwrite(buffer_data(content), 1, buffer_size(content), stdout);
 
-        /* Ensure newline at end if not present */
+        /* Ensure trailing newline */
         const char *data = (const char *)buffer_data(content);
         if (data[buffer_size(content) - 1] != '\n') {
-            printf("\n");
+            fputc('\n', stdout);
         }
     }
 
@@ -83,13 +179,13 @@ static error_t *show_file(
     const char *file_path,
     const char *commit_ref,
     bool raw,
-    const dotta_config_t *config
+    const dotta_config_t *config,
+    output_ctx_t *out
 ) {
     error_t *err = NULL;
     git_tree *tree = NULL;
     git_tree_entry *entry = NULL;
     git_commit *commit = NULL;
-    char *ref_name = NULL;
     git_oid commit_oid;
     metadata_t *metadata = NULL;
 
@@ -133,28 +229,38 @@ static error_t *show_file(
             goto cleanup;
         }
 
-        /* Print commit metadata if not raw */
+        /* Print commit context if not raw */
         if (!raw && commit) {
+            const char *dim = output_color_code(out, OUTPUT_COLOR_DIM);
+            const char *yellow = output_color_code(out, OUTPUT_COLOR_YELLOW);
+            const char *reset = output_color_code(out, OUTPUT_COLOR_RESET);
+
             char oid_str[8];
             git_oid_tostr(oid_str, sizeof(oid_str), &commit_oid);
 
             const git_signature *author = git_commit_author(commit);
             time_t commit_time = (time_t)author->when.time;
-            struct tm *tm_info = localtime(&commit_time);
-            char time_buf[64];
-            strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
+            char time_str[64];
+            format_relative_time(commit_time, time_str, sizeof(time_str));
 
-            printf("# Commit: %s\n", oid_str);
-            printf("# Date: %s\n", time_buf);
-            printf("# Author: %s <%s>\n", author->name, author->email);
+            output_printf(out, OUTPUT_NORMAL, "%s# Commit:%s  %s%s%s\n",
+                    dim, reset, yellow, oid_str, reset);
+            output_printf(out, OUTPUT_NORMAL, "%s# Date:%s    %s\n",
+                    dim, reset, time_str);
+            output_printf(out, OUTPUT_NORMAL, "%s# Author:%s  %s <%s>\n",
+                    dim, reset, author->name, author->email);
 
             /* Show first line of commit message */
             const char *msg = git_commit_message(commit);
-            const char *newline = strchr(msg, '\n');
-            if (newline) {
-                printf("# Message: %.*s\n", (int)(newline - msg), msg);
-            } else {
-                printf("# Message: %s\n", msg);
+            if (msg) {
+                const char *newline = strchr(msg, '\n');
+                if (newline) {
+                    output_printf(out, OUTPUT_NORMAL, "%s# Message:%s %.*s\n",
+                            dim, reset, (int)(newline - msg), msg);
+                } else {
+                    output_printf(out, OUTPUT_NORMAL, "%s# Message:%s %s\n",
+                            dim, reset, msg);
+                }
             }
         }
     } else {
@@ -180,9 +286,10 @@ static error_t *show_file(
         goto cleanup;
     }
 
-    /* Get entry type and OID */
+    /* Get entry type, OID, and filemode */
     git_object_t entry_type = git_tree_entry_type(entry);
     const git_oid *entry_oid = git_tree_entry_id(entry);
+    git_filemode_t filemode = git_tree_entry_filemode(entry);
 
     if (entry_type == GIT_OBJECT_BLOB) {
         /*
@@ -193,7 +300,9 @@ static error_t *show_file(
          * metadata is used for encryption state validation
          * km will prompt for password only if file is encrypted
          */
-        err = print_blob_content(repo, entry_oid, file_path, profile_name, metadata, km, raw);
+        err = print_blob_content(
+            repo, entry_oid, file_path, profile_name, metadata, km, filemode, raw, out
+        );
     } else if (entry_type == GIT_OBJECT_TREE) {
         err = ERROR(ERR_INVALID_ARG, "'%s' is a directory", file_path);
     } else {
@@ -201,37 +310,75 @@ static error_t *show_file(
     }
 
 cleanup:
-    if (metadata) {
-        metadata_free(metadata);
-    }
-    if (entry) {
-        git_tree_entry_free(entry);
-    }
-    if (tree) {
-        git_tree_free(tree);
-    }
-    if (commit) {
-        git_commit_free(commit);
-    }
-    free(ref_name);
+    if (metadata) metadata_free(metadata);
+    if (entry) git_tree_entry_free(entry);
+    if (tree) git_tree_free(tree);
+    if (commit) git_commit_free(commit);
     return err;
 }
 
 /**
- * Callback for printing diff lines to stdout
+ * Callback for printing diff lines with color
+ *
+ * Colorizes additions (green), deletions (red), and headers (cyan).
+ * Matches the diff command's output style.
  */
-static int print_diff_line(
+static int print_diff_line_cb(
     const git_diff_delta *delta,
     const git_diff_hunk *hunk,
     const git_diff_line *line,
     void *payload
 ) {
+    output_ctx_t *out = (output_ctx_t *)payload;
     (void)delta;
     (void)hunk;
-    (void)payload;
 
-    /* Write the line content to stdout */
-    fwrite(line->content, 1, line->content_len, stdout);
+    const char *color = NULL;
+
+    if (output_colors_enabled(out)) {
+        switch (line->origin) {
+            case GIT_DIFF_LINE_ADDITION:
+                color = output_color_code(out, OUTPUT_COLOR_GREEN);
+                break;
+            case GIT_DIFF_LINE_DELETION:
+                color = output_color_code(out, OUTPUT_COLOR_RED);
+                break;
+            case GIT_DIFF_LINE_FILE_HDR:
+            case GIT_DIFF_LINE_HUNK_HDR:
+                color = output_color_code(out, OUTPUT_COLOR_CYAN);
+                break;
+            default:
+                break;
+        }
+    }
+
+    /* Print line origin character for change lines */
+    if (line->origin == GIT_DIFF_LINE_ADDITION ||
+        line->origin == GIT_DIFF_LINE_DELETION ||
+        line->origin == GIT_DIFF_LINE_CONTEXT) {
+        if (color) {
+            output_printf(out, OUTPUT_NORMAL, "%s%c%.*s%s",
+                    color, line->origin,
+                    (int)line->content_len, line->content,
+                    output_color_code(out, OUTPUT_COLOR_RESET));
+        } else {
+            output_printf(out, OUTPUT_NORMAL, "%c%.*s",
+                    line->origin,
+                    (int)line->content_len, line->content);
+        }
+    } else {
+        /* File/hunk headers - print as-is */
+        if (color) {
+            output_printf(out, OUTPUT_NORMAL, "%s%.*s%s",
+                    color,
+                    (int)line->content_len, line->content,
+                    output_color_code(out, OUTPUT_COLOR_RESET));
+        } else {
+            output_printf(out, OUTPUT_NORMAL, "%.*s",
+                    (int)line->content_len, line->content);
+        }
+    }
+
     return 0;
 }
 
@@ -242,11 +389,13 @@ static error_t *show_commit(
     git_repository *repo,
     const char *commit_ref,
     const char *profile_name,
-    bool raw
+    bool raw,
+    output_ctx_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(commit_ref);
     CHECK_NULL(profile_name);
+    CHECK_NULL(out);
 
     error_t *err = NULL;
     git_oid commit_oid;
@@ -288,86 +437,124 @@ static error_t *show_commit(
         goto cleanup;
     }
 
-    /* Get diff stats */
-    err = gitops_diff_get_stats(diff, &stats);
-    if (err) {
-        goto cleanup;
-    }
-
     if (!raw) {
-        /* Print commit header */
+        /* Commit header with color (matching diff command style) */
         char oid_str[8];
         git_oid_tostr(oid_str, sizeof(oid_str), &commit_oid);
-
-        printf("commit %s (%s)\n", oid_str, profile_name);
 
         const git_signature *author = git_commit_author(commit);
         time_t commit_time = (time_t)author->when.time;
 
-        char time_str[64];
-        format_relative_time(commit_time, time_str, sizeof(time_str));
+        struct tm tm_info;
+        localtime_r(&commit_time, &tm_info);
+        char time_buf[64];
+        strftime(time_buf, sizeof(time_buf), "%a %b %d %H:%M:%S %Y", &tm_info);
 
-        printf("Date:   %s\n", time_str);
-        printf("\n");
+        char relative_buf[64];
+        format_relative_time(commit_time, relative_buf, sizeof(relative_buf));
 
-        /* Print commit message (indented) */
+        if (output_colors_enabled(out)) {
+            output_printf(out, OUTPUT_NORMAL, "%scommit %s%s %s(%s)%s\n",
+                    output_color_code(out, OUTPUT_COLOR_YELLOW),
+                    oid_str,
+                    output_color_code(out, OUTPUT_COLOR_RESET),
+                    output_color_code(out, OUTPUT_COLOR_CYAN),
+                    profile_name,
+                    output_color_code(out, OUTPUT_COLOR_RESET));
+
+            output_printf(out, OUTPUT_NORMAL, "%sAuthor:%s %s <%s>\n",
+                    output_color_code(out, OUTPUT_COLOR_BOLD),
+                    output_color_code(out, OUTPUT_COLOR_RESET),
+                    author->name, author->email);
+
+            output_printf(out, OUTPUT_NORMAL, "%sDate:%s   %s (%s)\n",
+                    output_color_code(out, OUTPUT_COLOR_BOLD),
+                    output_color_code(out, OUTPUT_COLOR_RESET),
+                    time_buf, relative_buf);
+        } else {
+            output_printf(out, OUTPUT_NORMAL, "commit %s (%s)\n",
+                    oid_str, profile_name);
+            output_printf(out, OUTPUT_NORMAL, "Author: %s <%s>\n",
+                    author->name, author->email);
+            output_printf(out, OUTPUT_NORMAL, "Date:   %s (%s)\n",
+                    time_buf, relative_buf);
+        }
+
+        output_newline(out);
+
+        /* Commit message (indented) */
         const char *msg = git_commit_message(commit);
-        const char *line = msg;
-        while (line && *line) {
-            const char *next = strchr(line, '\n');
-            if (next) {
-                printf("    %.*s\n", (int)(next - line), line);
-                line = next + 1;
-            } else {
-                printf("    %s\n", line);
-                break;
+        if (msg) {
+            const char *line = msg;
+            while (line && *line) {
+                const char *next = strchr(line, '\n');
+                if (next) {
+                    output_printf(out, OUTPUT_NORMAL, "    %.*s\n",
+                            (int)(next - line), line);
+                    line = next + 1;
+                } else {
+                    output_printf(out, OUTPUT_NORMAL, "    %s\n", line);
+                    break;
+                }
             }
         }
-        printf("\n");
 
-        /* Print stats summary */
+        output_newline(out);
+
+        /* Diff stats with color */
+        err = gitops_diff_get_stats(diff, &stats);
+        if (err) {
+            goto cleanup;
+        }
+
         size_t files_changed = git_diff_stats_files_changed(stats);
         size_t insertions = git_diff_stats_insertions(stats);
         size_t deletions = git_diff_stats_deletions(stats);
 
-        printf(" %zu file%s changed", files_changed, files_changed == 1 ? "" : "s");
-        if (insertions > 0) {
-            printf(", %zu insertion%s(+)", insertions, insertions == 1 ? "" : "s");
+        if (output_colors_enabled(out)) {
+            output_printf(out, OUTPUT_NORMAL, " %zu file%s changed",
+                    files_changed, files_changed == 1 ? "" : "s");
+            if (insertions > 0) {
+                output_printf(out, OUTPUT_NORMAL, ", %s%zu insertion%s(+)%s",
+                        output_color_code(out, OUTPUT_COLOR_GREEN),
+                        insertions, insertions == 1 ? "" : "s",
+                        output_color_code(out, OUTPUT_COLOR_RESET));
+            }
+            if (deletions > 0) {
+                output_printf(out, OUTPUT_NORMAL, ", %s%zu deletion%s(-)%s",
+                        output_color_code(out, OUTPUT_COLOR_RED),
+                        deletions, deletions == 1 ? "" : "s",
+                        output_color_code(out, OUTPUT_COLOR_RESET));
+            }
+        } else {
+            output_printf(out, OUTPUT_NORMAL, " %zu file%s changed",
+                    files_changed, files_changed == 1 ? "" : "s");
+            if (insertions > 0) {
+                output_printf(out, OUTPUT_NORMAL, ", %zu insertion%s(+)",
+                        insertions, insertions == 1 ? "" : "s");
+            }
+            if (deletions > 0) {
+                output_printf(out, OUTPUT_NORMAL, ", %zu deletion%s(-)",
+                        deletions, deletions == 1 ? "" : "s");
+            }
         }
-        if (deletions > 0) {
-            printf(", %zu deletion%s(-)", deletions, deletions == 1 ? "" : "s");
-        }
-        printf("\n\n");
+
+        output_printf(out, OUTPUT_NORMAL, "\n\n");
     }
 
-    if (stats) {
-        git_diff_stats_free(stats);
-        stats = NULL;
-    }
-
-    /* Print the diff itself */
-    int ret = git_diff_print(diff, GIT_DIFF_FORMAT_PATCH, print_diff_line, NULL);
+    /* Print the diff with color */
+    int ret = git_diff_print(diff, GIT_DIFF_FORMAT_PATCH, print_diff_line_cb, out);
     if (ret < 0) {
         err = error_from_git(ret);
         goto cleanup;
     }
 
 cleanup:
-    if (stats) {
-        git_diff_stats_free(stats);
-    }
-    if (diff) {
-        git_diff_free(diff);
-    }
-    if (parent_tree) {
-        git_tree_free(parent_tree);
-    }
-    if (commit_tree) {
-        git_tree_free(commit_tree);
-    }
-    if (commit) {
-        git_commit_free(commit);
-    }
+    if (stats) git_diff_stats_free(stats);
+    if (diff) git_diff_free(diff);
+    if (parent_tree) git_tree_free(parent_tree);
+    if (commit_tree) git_tree_free(commit_tree);
+    if (commit) git_commit_free(commit);
     return err;
 }
 
@@ -380,9 +567,25 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
 
     error_t *err = NULL;
     dotta_config_t *config = NULL;
+    output_ctx_t *out = NULL;
     profile_list_t *profiles = NULL;
     char *storage_converted = NULL;
     const char *found_profile = NULL;
+
+    /* Load configuration (non-fatal, fall back to defaults) */
+    err = config_load(NULL, &config);
+    if (err) {
+        error_free(err);
+        err = NULL;
+        config = config_create_default();
+    }
+
+    /* Create output context */
+    out = output_create_from_config(config);
+    if (!out) {
+        err = ERROR(ERR_MEMORY, "Failed to create output context");
+        goto cleanup;
+    }
 
     /* Handle SHOW_COMMIT mode */
     if (opts->mode == SHOW_COMMIT) {
@@ -393,12 +596,6 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
 
         if (!profile_name) {
             /* No profile specified - use enabled profiles */
-            err = config_load(NULL, &config);
-            if (err) {
-                err = error_wrap(err, "Failed to load config");
-                goto cleanup;
-            }
-
             err = profile_resolve(repo, NULL, 0, config->strict_mode, &profiles, NULL);
             if (err) {
                 err = error_wrap(err, "Failed to load profiles");
@@ -413,7 +610,9 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
             /* Try to find commit in enabled profiles (in order) */
             for (size_t i = 0; i < profiles->count; i++) {
                 profile_name = profiles->profiles[i].name;
-                error_t *try_err = show_commit(repo, opts->commit, profile_name, opts->raw);
+                error_t *try_err = show_commit(
+                    repo, opts->commit, profile_name, opts->raw, out
+                );
 
                 /* If found, we're done */
                 if (!try_err) {
@@ -429,7 +628,8 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
                 error_free(try_err);
             }
 
-            err = ERROR(ERR_NOT_FOUND, "Commit '%s' not found in enabled profiles", opts->commit);
+            err = ERROR(ERR_NOT_FOUND,
+                    "Commit '%s' not found in enabled profiles", opts->commit);
             goto cleanup;
         }
 
@@ -444,20 +644,12 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
             goto cleanup;
         }
 
-        err = show_commit(repo, opts->commit, profile_name, opts->raw);
+        err = show_commit(repo, opts->commit, profile_name, opts->raw, out);
         goto cleanup;
     }
 
     /* Handle SHOW_FILE mode */
     CHECK_NULL(opts->file_path);
-
-    /* Load config for encryption parameters (needed by keymanager).
-     * Must be loaded before show_file() to ensure correct key derivation. */
-    err = config_load(NULL, &config);
-    if (err) {
-        err = error_wrap(err, "Failed to load config");
-        goto cleanup;
-    }
 
     if (opts->profile) {
         /* Profile specified - show from that profile */
@@ -486,17 +678,17 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
             search_path = storage_converted;
         }
 
-        err = show_file(repo, opts->profile, search_path, opts->commit, opts->raw, config);
+        err = show_file(repo, opts->profile, search_path, opts->commit, opts->raw, config, out);
         goto cleanup;
     }
 
     /* No profile specified - search across enabled profiles (exact path only) */
 
-    /* If commit is specified without profile, require profile to be specified */
+    /* File at specific commit requires explicit profile for unambiguous resolution */
     if (opts->commit) {
         err = ERROR(ERR_INVALID_ARG,
-                    "When using --commit with a file, you must also specify --profile\n"
-                    "Hint: Use 'dotta list' to see which profiles contain files");
+                    "Showing a file at a specific commit requires a profile\n"
+                    "Hint: Use 'dotta show -p <profile> <file> <commit>'");
         goto cleanup;
     }
 
@@ -565,19 +757,18 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
 
     /* Show the file */
     if (!opts->raw) {
-        printf("# From profile: %s\n", found_profile);
-        printf("# Path: %s\n", search_path);
-        printf("\n");
+        const char *dim = output_color_code(out, OUTPUT_COLOR_DIM);
+        const char *reset = output_color_code(out, OUTPUT_COLOR_RESET);
+        output_printf(out, OUTPUT_NORMAL, "%s# Profile:%s %s\n", dim, reset, found_profile);
+        output_printf(out, OUTPUT_NORMAL, "%s# Path:%s    %s\n", dim, reset, search_path);
+        output_newline(out);
     }
-    err = show_file(repo, found_profile, search_path, NULL, opts->raw, config);
+    err = show_file(repo, found_profile, search_path, NULL, opts->raw, config, out);
 
 cleanup:
-    if (config) {
-        config_free(config);
-    }
-    if (profiles) {
-        profile_list_free(profiles);
-    }
+    output_free(out);
+    if (config) config_free(config);
+    if (profiles) profile_list_free(profiles);
     free(storage_converted);
     return err;
 }

@@ -9,8 +9,8 @@
  * and the branch is updated, or it fails and the branch remains unchanged.
  */
 
-#ifndef DOTTA_CORE_DIVERGENCE_H
-#define DOTTA_CORE_DIVERGENCE_H
+#ifndef DOTTA_DIVERGENCE_H
+#define DOTTA_DIVERGENCE_H
 
 #include <git2.h>
 #include <types.h>
@@ -105,4 +105,4 @@ error_t *divergence_verify(
     size_t *out_behind
 );
 
-#endif /* DOTTA_CORE_DIVERGENCE_H */
+#endif /* DOTTA_DIVERGENCE_H */

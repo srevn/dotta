@@ -5,8 +5,8 @@
  * Used by commands that need to reference files with optional profile/commit context.
  */
 
-#ifndef DOTTA_UTILS_REFSPEC_H
-#define DOTTA_UTILS_REFSPEC_H
+#ifndef DOTTA_REFSPEC_H
+#define DOTTA_REFSPEC_H
 
 #include <types.h>
 
@@ -42,4 +42,4 @@ error_t *parse_refspec(
     char **out_commit
 );
 
-#endif /* DOTTA_UTILS_REFSPEC_H */
+#endif /* DOTTA_REFSPEC_H */

@@ -912,7 +912,12 @@ static error_t *analyze_file_divergence(
 
                 if (!manifest_entry->encrypted) {
                     error_t *verify_err = verify_oid_matches_disk(
-                        &old_blob_oid, fs_path, expected_mode, &initial_stat, &verify_result, &verify_stat
+                        &old_blob_oid,
+                        fs_path,
+                        expected_mode,
+                        &initial_stat,
+                        &verify_result,
+                        &verify_stat
                     );
                     if (!verify_err && verify_result == CMP_EQUAL) {
                         /* File matches old deployed content — stale repair is safe */
@@ -923,11 +928,21 @@ static error_t *analyze_file_divergence(
                     /* Encrypted: compare decrypted content */
                     const buffer_t *old_content = NULL;
                     error_t *verify_err = content_cache_get_from_blob_oid(
-                        ws->content_cache, &old_blob_oid, storage_path, profile, manifest_entry->encrypted, &old_content
+                        ws->content_cache,
+                        &old_blob_oid,
+                        storage_path,
+                        profile,
+                        manifest_entry->encrypted,
+                        &old_content
                     );
                     if (!verify_err && old_content) {
                         verify_err = compare_buffer_to_disk(
-                            old_content, fs_path, expected_mode, &initial_stat, &verify_result, &verify_stat
+                            old_content,
+                            fs_path,
+                            expected_mode,
+                            &initial_stat,
+                            &verify_result,
+                            &verify_stat
                         );
                         if (!verify_err && verify_result == CMP_EQUAL) {
                             divergence |= DIVERGENCE_STALE;
@@ -2751,6 +2766,8 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 entry->group = state_entry->group ? strdup(state_entry->group) : NULL;
                 entry->encrypted = state_entry->encrypted;
                 entry->deployed_at = state_entry->deployed_at;
+                /* stat_cache intentionally not copied — patch_entry_from_fresh()
+                 * invalidates it (blob_oid may change, making cached stat stale) */
                 entry->entry = NULL;
 
                 /* Now overwrite stale fields from fresh manifest */

@@ -56,7 +56,8 @@ typedef struct {
  * Statistics from stale manifest repair
  */
 typedef struct {
-    size_t updated;     /* Files with updated blob_oid/metadata (still in Git) */
+    size_t updated;     /* Files with changed blob_oid (content changed in Git) */
+    size_t refreshed;   /* Files with only git_oid refresh (content unchanged) */
     size_t released;    /* Files set to STATE_RELEASED (removed from Git externally) */
 } manifest_repair_stats_t;
 
@@ -445,7 +446,10 @@ error_t *manifest_rebuild(
  * @param state State handle with active transaction (must not be NULL)
  * @param enabled_profiles Current enabled profiles (must not be NULL)
  * @param out_stats Output repair statistics (must not be NULL)
- * @param out_repaired_paths Optional output: hashmap of filesystem_path → old_blob_oid.
+ * @param out_repaired_paths Optional output: hashmap of filesystem_path → old_blob_oid
+ *            for entries whose blob actually changed. Entries with only git_oid
+ *            refresh (same blob) are excluded — they won't trigger content
+ *            divergence in workspace, so Path B's guard would skip them anyway.
  *            Caller must free with hashmap_free(map, free). NULL to skip.
  *            Used by workspace to verify old content before allowing deployment
  *            (prevents overwriting user modifications during stale repair).

@@ -2060,13 +2060,36 @@ error_t *manifest_repair_stale(
                     goto cleanup;
                 }
 
-                /* Save old blob_oid BEFORE updating (for safe deployment verification).
+                /* Determine if file content actually changed (blob_oid differs).
                  *
-                 * The caller uses this to verify that files on disk still match what
-                 * dotta deployed (old blob), preventing user modifications from being
-                 * silently overwritten when expected state changes.
+                 * A profile HEAD can move without changing this file's blob
+                 * (other files in the commit changed). Distinguishing content
+                 * changes from git_oid-only refreshes enables:
+                 *   - Accurate repaired_paths (Path B only verifies content-changed files)
+                 *   - Accurate stats (user sees real content changes, not bookkeeping)
+                 *
+                 * Mirrors the blob_changed check in workspace_build_manifest_from_state()
+                 * (Path A) for symmetric treatment across both staleness paths.
                  */
-                if (repaired_paths && entry->blob_oid) {
+                bool blob_changed = true;  /* Default: assume changed (safe) */
+                const struct git_oid *new_blob_oid = git_tree_entry_id(fresh_entry->entry);
+                if (new_blob_oid && entry->blob_oid) {
+                    char new_blob_hex[GIT_OID_HEXSZ + 1];
+                    git_oid_tostr(new_blob_hex, sizeof(new_blob_hex), new_blob_oid);
+                    blob_changed = (strcmp(entry->blob_oid, new_blob_hex) != 0);
+                }
+
+                /* Save old blob_oid for content-changed entries BEFORE updating.
+                 *
+                 * The caller (apply's Path B) uses this to verify that files on disk
+                 * still match what dotta deployed (old blob), preventing user
+                 * modifications from being silently overwritten.
+                 *
+                 * Only tracked when blob actually changed — unchanged-blob entries
+                 * won't trigger DIVERGENCE_CONTENT in workspace, so Path B's
+                 * content-divergence guard would skip them anyway.
+                 */
+                if (repaired_paths && entry->blob_oid && blob_changed) {
                     char *old_blob = strdup(entry->blob_oid);
                     if (!old_blob) {
                         state_free_all_files(entries, count);
@@ -2081,15 +2104,20 @@ error_t *manifest_repair_stale(
                     }
                 }
 
-                err = sync_entry_to_state(repo, state, fresh_entry, git_oid,
-                                          metadata, entry->deployed_at);
+                err = sync_entry_to_state(
+                    repo, state, fresh_entry, git_oid, metadata, entry->deployed_at
+                );
                 if (err) {
                     err = error_wrap(err, "Failed to repair stale entry '%s'", entry->storage_path);
                     state_free_all_files(entries, count);
                     goto cleanup;
                 }
 
-                out_stats->updated++;
+                if (blob_changed) {
+                    out_stats->updated++;
+                } else {
+                    out_stats->refreshed++;
+                }
             } else {
                 /* File removed from all enabled profiles — loss of authority.
                  *

@@ -1594,7 +1594,7 @@ static int cmd_remote_main(int argc, char **argv) {
         }
         opts.name = argv[3];
         opts.url = argv[4];
-    } else if (strcmp(argv[2], "remove") == 0) {
+    } else if (strcmp(argv[2], "remove") == 0 || strcmp(argv[2], "rm") == 0) {
         opts.subcommand = REMOTE_REMOVE;
         if (argc < 4) {
             fprintf(stderr, "Error: 'remote remove' requires name\n");
@@ -1628,10 +1628,15 @@ static int cmd_remote_main(int argc, char **argv) {
             return 1;
         }
         opts.name = argv[3];
+    } else if (argc == 3) {
+        /* Bare name is shorthand for 'show <name>' */
+        opts.subcommand = REMOTE_SHOW;
+        opts.name = argv[2];
     } else {
-        /* Assume it's a remote name to list (treat as verbose list) */
-        opts.subcommand = REMOTE_LIST;
-        opts.verbose = true;
+        /* Too many arguments or unknown subcommand */
+        fprintf(stderr, "Error: Unknown remote command or invalid arguments\n");
+        print_remote_help(argv[0]);
+        return 1;
     }
 
     /* Open resolved repository */

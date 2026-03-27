@@ -34,21 +34,59 @@ static bool validate_remote_name(const char *name) {
 }
 
 /**
- * Validate remote URL (basic validation)
+ * Validate remote URL structure
  *
  * Accepts:
- * - SSH: git@github.com:user/repo.git
- * - HTTPS: https://github.com/user/repo.git
- * - File paths: /path/to/repo
+ * - URL-style: https://, http://, ssh://, git://, file:// schemes
+ * - SSH SCP-style: user@host:path (e.g., git@github.com:user/repo.git)
+ * - Local paths: absolute (/path) or relative (./path, ../path)
  */
 static bool validate_remote_url(const char *url) {
-    if (!url || url[0] == '\0') {
+    if (!url || !*url) {
         return false;
     }
 
-    /* Basic validation - just check it's not empty */
-    /* libgit2 will do the real validation */
-    return strlen(url) > 0;
+    /* Reject whitespace */
+    for (const char *p = url; *p; p++) {
+        if (isspace((unsigned char)*p)) {
+            return false;
+        }
+    }
+
+    /* URL-style: scheme://... */
+    const char *scheme_end = strstr(url, "://");
+    if (scheme_end) {
+        size_t scheme_len = (size_t)(scheme_end - url);
+        if ((scheme_len == 5 && strncmp(url, "https", 5) == 0) ||
+            (scheme_len == 4 && strncmp(url, "http", 4) == 0) ||
+            (scheme_len == 3 && strncmp(url, "ssh", 3) == 0) ||
+            (scheme_len == 3 && strncmp(url, "git", 3) == 0) ||
+            (scheme_len == 4 && strncmp(url, "file", 4) == 0)) {
+            /* Must have something after scheme:// */
+            return *(scheme_end + 3) != '\0';
+        }
+        return false;
+    }
+
+    /* SSH SCP-style: user@host:path */
+    const char *at = strchr(url, '@');
+    if (at && at > url) {
+        const char *colon = strchr(at + 1, ':');
+        if (colon && colon > at + 1 && *(colon + 1) != '\0') {
+            return true;
+        }
+    }
+
+    /* Local path: absolute or explicitly relative */
+    if (url[0] == '/') {
+        return true;
+    }
+    if (url[0] == '.' && (url[1] == '/' ||
+        (url[1] == '.' && url[2] == '/'))) {
+        return true;
+    }
+
+    return false;
 }
 
 /**
@@ -62,7 +100,10 @@ static error_t *remote_list(
 
     dotta_config_t *config = NULL;
     error_t *cfg_err = config_load(NULL, &config);
-    if (cfg_err) config = config_create_default();
+    if (cfg_err) {
+        error_free(cfg_err);
+        config = config_create_default();
+    }
     output_ctx_t *out = output_create_from_config(config);
     if (!out) {
         config_free(config);
@@ -85,6 +126,9 @@ static error_t *remote_list(
         return NULL;
     }
 
+    const char *c = output_color_code(out, OUTPUT_COLOR_CYAN);
+    const char *r = output_color_code(out, OUTPUT_COLOR_RESET);
+
     /* List each remote */
     for (size_t i = 0; i < remotes.count; i++) {
         const char *remote_name = remotes.strings[i];
@@ -96,7 +140,7 @@ static error_t *remote_list(
             if (git_err < 0) {
                 git_strarray_dispose(&remotes);
                 config_free(config);
-        output_free(out);
+                output_free(out);
                 return error_from_git(git_err);
             }
 
@@ -108,26 +152,15 @@ static error_t *remote_list(
                 push_url = fetch_url;
             }
 
-            char *colored_name = output_colorize(out, OUTPUT_COLOR_CYAN, remote_name);
-            if (colored_name) {
-                printf("%-15s %s (fetch)\n", colored_name, fetch_url);
-                printf("%-15s %s (push)\n", colored_name, push_url);
-                free(colored_name);
-            } else {
-                printf("%-15s %s (fetch)\n", remote_name, fetch_url);
-                printf("%-15s %s (push)\n", remote_name, push_url);
-            }
+            output_printf(out, OUTPUT_NORMAL,
+                "%s%-15s%s %s (fetch)\n", c, remote_name, r, fetch_url);
+            output_printf(out, OUTPUT_NORMAL,
+                "%s%-15s%s %s (push)\n", c, remote_name, r, push_url);
 
             git_remote_free(remote);
         } else {
             /* Just show names */
-            char *colored_name = output_colorize(out, OUTPUT_COLOR_CYAN, remote_name);
-            if (colored_name) {
-                printf("%s\n", colored_name);
-                free(colored_name);
-            } else {
-                printf("%s\n", remote_name);
-            }
+            output_printf(out, OUTPUT_NORMAL, "%s%s%s\n", c, remote_name, r);
         }
     }
 
@@ -135,7 +168,7 @@ static error_t *remote_list(
 
     git_strarray_dispose(&remotes);
     config_free(config);
-        output_free(out);
+    output_free(out);
     return NULL;
 }
 
@@ -153,7 +186,10 @@ static error_t *remote_add(
 
     dotta_config_t *config = NULL;
     error_t *cfg_err = config_load(NULL, &config);
-    if (cfg_err) config = config_create_default();
+    if (cfg_err) {
+        error_free(cfg_err);
+        config = config_create_default();
+    }
     output_ctx_t *out = output_create_from_config(config);
     if (!out) {
         config_free(config);
@@ -172,7 +208,9 @@ static error_t *remote_add(
     if (!validate_remote_url(url)) {
         config_free(config);
         output_free(out);
-        return ERROR(ERR_INVALID_ARG, "Invalid remote URL");
+        return ERROR(ERR_INVALID_ARG, "Invalid remote URL '%s'\n"
+            "Expected: https://..., git@host:path, ssh://..., or /local/path",
+            url);
     }
 
     /* Check if remote already exists */
@@ -205,15 +243,12 @@ static error_t *remote_add(
 
     /* Success message */
     char *colored_name = output_colorize(out, OUTPUT_COLOR_CYAN, name);
-    if (colored_name) {
-        output_success(out, "Remote '%s' added successfully", colored_name);
-        free(colored_name);
-    } else {
-        output_success(out, "Remote '%s' added successfully", name);
-    }
+    output_success(out, "Remote '%s' added successfully",
+        colored_name ? colored_name : name);
+    free(colored_name);
 
     config_free(config);
-        output_free(out);
+    output_free(out);
     return NULL;
 }
 
@@ -229,7 +264,10 @@ static error_t *remote_remove(
 
     dotta_config_t *config = NULL;
     error_t *cfg_err = config_load(NULL, &config);
-    if (cfg_err) config = config_create_default();
+    if (cfg_err) {
+        error_free(cfg_err);
+        config = config_create_default();
+    }
     output_ctx_t *out = output_create_from_config(config);
     if (!out) {
         config_free(config);
@@ -260,15 +298,12 @@ static error_t *remote_remove(
 
     /* Success message */
     char *colored_name = output_colorize(out, OUTPUT_COLOR_CYAN, name);
-    if (colored_name) {
-        output_success(out, "Removed remote '%s'", colored_name);
-        free(colored_name);
-    } else {
-        output_success(out, "Removed remote '%s'", name);
-    }
+    output_success(out, "Removed remote '%s'",
+        colored_name ? colored_name : name);
+    free(colored_name);
 
     config_free(config);
-        output_free(out);
+    output_free(out);
     return NULL;
 }
 
@@ -286,7 +321,10 @@ static error_t *remote_set_url(
 
     dotta_config_t *config = NULL;
     error_t *cfg_err = config_load(NULL, &config);
-    if (cfg_err) config = config_create_default();
+    if (cfg_err) {
+        error_free(cfg_err);
+        config = config_create_default();
+    }
     output_ctx_t *out = output_create_from_config(config);
     if (!out) {
         config_free(config);
@@ -297,7 +335,9 @@ static error_t *remote_set_url(
     if (!validate_remote_url(new_url)) {
         config_free(config);
         output_free(out);
-        return ERROR(ERR_INVALID_ARG, "Invalid remote URL");
+        return ERROR(ERR_INVALID_ARG, "Invalid remote URL '%s'\n"
+            "Expected: https://..., git@host:path, ssh://..., or /local/path",
+            new_url);
     }
 
     /* Check if remote exists */
@@ -324,15 +364,12 @@ static error_t *remote_set_url(
 
     /* Success message */
     char *colored_name = output_colorize(out, OUTPUT_COLOR_CYAN, name);
-    if (colored_name) {
-        output_success(out, "Remote '%s' URL updated", colored_name);
-        free(colored_name);
-    } else {
-        output_success(out, "Remote '%s' URL updated", name);
-    }
+    output_success(out, "Remote '%s' URL updated",
+        colored_name ? colored_name : name);
+    free(colored_name);
 
     config_free(config);
-        output_free(out);
+    output_free(out);
     return NULL;
 }
 
@@ -350,7 +387,10 @@ static error_t *remote_rename(
 
     dotta_config_t *config = NULL;
     error_t *cfg_err = config_load(NULL, &config);
-    if (cfg_err) config = config_create_default();
+    if (cfg_err) {
+        error_free(cfg_err);
+        config = config_create_default();
+    }
     output_ctx_t *out = output_create_from_config(config);
     if (!out) {
         config_free(config);
@@ -400,7 +440,7 @@ static error_t *remote_rename(
         /* Show warnings about problematic refspecs */
         output_warning(out, "The following refspecs could not be updated:");
         for (size_t i = 0; i < problems.count; i++) {
-            fprintf(stderr, "  %s\n", problems.strings[i]);
+            output_printf(out, OUTPUT_NORMAL, "  %s\n", problems.strings[i]);
         }
     }
 
@@ -415,16 +455,14 @@ static error_t *remote_rename(
     /* Success message */
     char *old_colored = output_colorize(out, OUTPUT_COLOR_CYAN, old_name);
     char *new_colored = output_colorize(out, OUTPUT_COLOR_CYAN, new_name);
-    if (old_colored && new_colored) {
-        output_success(out, "Renamed remote '%s' to '%s'", old_colored, new_colored);
-        free(old_colored);
-        free(new_colored);
-    } else {
-        output_success(out, "Renamed remote '%s' to '%s'", old_name, new_name);
-    }
+    output_success(out, "Renamed remote '%s' to '%s'",
+        old_colored ? old_colored : old_name,
+        new_colored ? new_colored : new_name);
+    free(old_colored);
+    free(new_colored);
 
     config_free(config);
-        output_free(out);
+    output_free(out);
     return NULL;
 }
 
@@ -440,7 +478,10 @@ static error_t *remote_show(
 
     dotta_config_t *config = NULL;
     error_t *cfg_err = config_load(NULL, &config);
-    if (cfg_err) config = config_create_default();
+    if (cfg_err) {
+        error_free(cfg_err);
+        config = config_create_default();
+    }
     output_ctx_t *out = output_create_from_config(config);
     if (!out) {
         config_free(config);
@@ -461,15 +502,9 @@ static error_t *remote_show(
     }
 
     /* Show remote information */
-    char *colored_name = output_colorize(out, OUTPUT_COLOR_CYAN, name);
-    if (colored_name) {
-        output_section(out, NULL);
-        printf("Remote: %s\n", colored_name);
-        free(colored_name);
-    } else {
-        output_section(out, NULL);
-        printf("Remote: %s\n", name);
-    }
+    const char *c = output_color_code(out, OUTPUT_COLOR_CYAN);
+    const char *r = output_color_code(out, OUTPUT_COLOR_RESET);
+    output_printf(out, OUTPUT_NORMAL, "Remote: %s%s%s\n", c, name, r);
 
     const char *fetch_url = git_remote_url(remote);
     const char *push_url = git_remote_pushurl(remote);
@@ -478,23 +513,38 @@ static error_t *remote_show(
         push_url = fetch_url;
     }
 
-    printf("  Fetch URL: %s\n", fetch_url);
-    printf("  Push URL:  %s\n", push_url);
+    output_printf(out, OUTPUT_NORMAL, "  Fetch URL: %s\n", fetch_url);
+    output_printf(out, OUTPUT_NORMAL, "  Push URL:  %s\n", push_url);
 
-    /* Show tracked branches */
-    git_strarray refspecs;
+    /* Show fetch refspecs */
+    git_strarray refspecs = {0};
     git_err = git_remote_get_fetch_refspecs(&refspecs, remote);
     if (git_err == 0 && refspecs.count > 0) {
-        printf("  Fetch refspecs:\n");
+        output_printf(out, OUTPUT_NORMAL, "  Fetch refspecs:\n");
         for (size_t i = 0; i < refspecs.count; i++) {
-            printf("    %s\n", refspecs.strings[i]);
+            output_printf(out, OUTPUT_NORMAL, "    %s\n", refspecs.strings[i]);
         }
+    }
+    if (git_err == 0) {
+        git_strarray_dispose(&refspecs);
+    }
+
+    /* Show push refspecs */
+    memset(&refspecs, 0, sizeof(refspecs));
+    git_err = git_remote_get_push_refspecs(&refspecs, remote);
+    if (git_err == 0 && refspecs.count > 0) {
+        output_printf(out, OUTPUT_NORMAL, "  Push refspecs:\n");
+        for (size_t i = 0; i < refspecs.count; i++) {
+            output_printf(out, OUTPUT_NORMAL, "    %s\n", refspecs.strings[i]);
+        }
+    }
+    if (git_err == 0) {
         git_strarray_dispose(&refspecs);
     }
 
     git_remote_free(remote);
     config_free(config);
-        output_free(out);
+    output_free(out);
     return NULL;
 }
 

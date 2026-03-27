@@ -1168,7 +1168,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Resolve all filesystem paths to storage paths (pre-flight for privilege check) */
+    /* Resolve all paths to storage format (pre-flight for privilege check) */
     size_t storage_count = 0;
     for (size_t i = 0; i < opts->file_count; i++) {
         const char *file_path = opts->files[i];
@@ -1176,7 +1176,29 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         char *storage_path = NULL;
         path_prefix_t prefix;
 
-        /* Normalize raw user input to absolute path first */
+        /* Storage-path inputs (home/..., root/..., custom/...) are used directly.
+         * The pre-flight only needs the storage prefix for privilege detection;
+         * full validation happens in the main processing loop. */
+        if (str_starts_with(file_path, "home/") ||
+            str_starts_with(file_path, "root/") ||
+            str_starts_with(file_path, "custom/")) {
+            storage_path = strdup(file_path);
+            if (!storage_path) {
+                for (size_t j = 0; j < storage_count; j++) {
+                    free(allocated_paths[j]);
+                }
+                free(storage_paths);
+                free(allocated_paths);
+                err = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
+                goto cleanup;
+            }
+            allocated_paths[storage_count] = storage_path;
+            storage_paths[storage_count] = storage_path;
+            storage_count++;
+            continue;
+        }
+
+        /* Filesystem path — normalize raw user input to absolute path first */
         err = path_normalize_input(file_path, opts->custom_prefix, &absolute);
         if (err) {
             for (size_t j = 0; j < storage_count; j++) {

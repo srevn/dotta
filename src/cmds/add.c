@@ -1168,14 +1168,28 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Resolve all filesystem paths to storage paths */
+    /* Resolve all filesystem paths to storage paths (pre-flight for privilege check) */
     size_t storage_count = 0;
     for (size_t i = 0; i < opts->file_count; i++) {
         const char *file_path = opts->files[i];
+        char *absolute = NULL;
         char *storage_path = NULL;
         path_prefix_t prefix;
 
-        err = path_to_storage(file_path, opts->custom_prefix, &storage_path, &prefix);
+        /* Normalize raw user input to absolute path first */
+        err = path_normalize_input(file_path, opts->custom_prefix, &absolute);
+        if (err) {
+            for (size_t j = 0; j < storage_count; j++) {
+                free(allocated_paths[j]);
+            }
+            free(storage_paths);
+            free(allocated_paths);
+            err = error_wrap(err, "Failed to resolve path '%s'", file_path);
+            goto cleanup;
+        }
+
+        err = path_to_storage(absolute, opts->custom_prefix, &storage_path, &prefix);
+        free(absolute);
         if (err) {
             /* Directory inputs that equal the custom prefix can't be converted
              * to a storage path (the prefix root has no storage representation).

@@ -353,7 +353,10 @@ error_t *path_normalize_input(
 }
 
 /**
- * Convert filesystem path to storage path
+ * Classify absolute filesystem path into storage path
+ *
+ * Pure classifier — requires pre-normalized absolute path.
+ * Callers must call path_normalize_input() first for raw user input.
  *
  * Detection order:
  *  1. Custom prefix (if explicitly provided and matches) - FIRST
@@ -373,18 +376,17 @@ error_t *path_to_storage(
     CHECK_NULL(filesystem_path);
     CHECK_NULL(storage_path);
 
+    /* Require absolute path — callers must normalize before calling */
+    if (filesystem_path[0] != '/') {
+        return ERROR(ERR_INVALID_ARG, "path_to_storage requires an absolute path, got: %s\n"
+            "Use path_normalize_input() first for raw user input", filesystem_path);
+    }
+
     /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
-    char *absolute = NULL;
     char *home = NULL;
     char *result = NULL;
     path_prefix_t detected_prefix;
-
-    /* Normalize user input path (handles tilde, relative+prefix, etc.) */
-    err = path_normalize_input(filesystem_path, custom_prefix, &absolute);
-    if (err) {
-        return err;
-    }
 
     const char *relative;
     int match;
@@ -400,12 +402,12 @@ error_t *path_to_storage(
      * stored locally under $HOME).
      */
     if (custom_prefix && custom_prefix[0] != '\0') {
-        match = extract_relative_after_prefix(absolute, custom_prefix, &relative);
+        match = extract_relative_after_prefix(filesystem_path, custom_prefix, &relative);
 
         if (match > 0) {
             /* Custom prefix matched - validate file exists */
-            if (!fs_lexists(absolute)) {
-                err = ERROR(ERR_NOT_FOUND, "File not found: %s", absolute);
+            if (!fs_lexists(filesystem_path)) {
+                err = ERROR(ERR_NOT_FOUND, "File not found: %s", filesystem_path);
                 goto cleanup;
             }
 
@@ -433,13 +435,13 @@ error_t *path_to_storage(
         goto cleanup;
     }
 
-    match = extract_relative_after_prefix(absolute, home, &relative);
+    match = extract_relative_after_prefix(filesystem_path, home, &relative);
 
     if (match > 0) {
         /* HOME prefix matched with non-empty relative part */
         /* Validate file exists */
-        if (!fs_lexists(absolute)) {
-            err = ERROR(ERR_NOT_FOUND, "File not found: %s", absolute);
+        if (!fs_lexists(filesystem_path)) {
+            err = ERROR(ERR_NOT_FOUND, "File not found: %s", filesystem_path);
             goto cleanup;
         }
 
@@ -459,13 +461,13 @@ error_t *path_to_storage(
 
     /* Fallback to ROOT prefix for absolute paths */
     /* Validate file exists before storing */
-    if (!fs_lexists(absolute)) {
-        err = ERROR(ERR_NOT_FOUND, "File not found: %s", absolute);
+    if (!fs_lexists(filesystem_path)) {
+        err = ERROR(ERR_NOT_FOUND, "File not found: %s", filesystem_path);
         goto cleanup;
     }
 
     /* Note: For root, we include the leading slash in the relative part */
-    relative = absolute;
+    relative = filesystem_path;
     if (relative[0] == '/') {
         relative++;  /* Skip leading slash for consistency */
     }
@@ -494,7 +496,6 @@ validate:
     err = NULL;
 
 cleanup:
-    free(absolute);
     free(home);
     return err;
 }

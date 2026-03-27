@@ -57,7 +57,11 @@ error_t *path_normalize_input(
 );
 
 /**
- * Convert filesystem path to storage path
+ * Classify absolute filesystem path into storage path
+ *
+ * Pure classifier — does NOT normalize the input. Callers must provide
+ * an already-resolved absolute filesystem path (use path_normalize_input()
+ * first if working with raw user input).
  *
  * Detection order:
  * 1. Custom prefix (if explicitly provided and matches) - FIRST
@@ -69,12 +73,12 @@ error_t *path_normalize_input(
  * (no behavior change for the common case).
  *
  * Examples:
- *   ~/.bashrc (NULL)              -> home/.bashrc (PREFIX_HOME)
- *   ~/repo/cfg/file (/repo/cfg)   -> custom/file (PREFIX_CUSTOM, prefix wins)
- *   /jail/etc/nginx.conf (/jail) -> custom/etc/nginx.conf (PREFIX_CUSTOM)
- *   /etc/hosts (NULL)             -> root/etc/hosts (PREFIX_ROOT)
+ *   ("/home/user/.bashrc", NULL)           -> home/.bashrc (PREFIX_HOME)
+ *   ("/jail/etc/nginx.conf", "/jail")      -> custom/etc/nginx.conf (PREFIX_CUSTOM)
+ *   ("/home/user/.bashrc", "/home/user/r") -> home/.bashrc (not under prefix)
+ *   ("/etc/hosts", NULL)                   -> root/etc/hosts (PREFIX_ROOT)
  *
- * @param filesystem_path Filesystem path (e.g., "/mnt/jail/etc/nginx.conf")
+ * @param filesystem_path Absolute filesystem path (must start with '/')
  * @param custom_prefix Custom prefix to detect (NULL if not using custom/)
  * @param storage_path Output storage path (caller must free)
  * @param prefix_out Output prefix type (can be NULL)

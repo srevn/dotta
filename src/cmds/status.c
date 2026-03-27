@@ -829,17 +829,19 @@ static error_t *display_remote_status(
 }
 
 /**
- * Extract storage paths from manifest for privilege checking
+ * Extract paths needing elevation from manifest for privilege checking
  *
- * Allocates array of storage path pointers. Caller must free the array
- * (but not the strings, which are borrowed from manifest).
+ * Uses privilege_needs_elevation() to filter paths, considering whether
+ * each entry's custom prefix is under $HOME. Allocates array of storage
+ * path pointers. Caller must free the array (but not the strings, which
+ * are borrowed from manifest).
  *
  * @param manifest Manifest (must not be NULL)
- * @param paths_out Output array of paths (must not be NULL)
+ * @param paths_out Output array of paths needing elevation (must not be NULL)
  * @param count_out Output count (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *extract_storage_paths_from_manifest(
+static error_t *extract_elevation_paths_from_manifest(
     const manifest_t *manifest,
     const char ***paths_out,
     size_t *count_out
@@ -859,12 +861,18 @@ static error_t *extract_storage_paths_from_manifest(
         return ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
     }
 
+    size_t count = 0;
     for (size_t i = 0; i < manifest->count; i++) {
-        paths[i] = manifest->entries[i].storage_path;
+        const char *prefix = manifest->entries[i].source_profile
+                           ? manifest->entries[i].source_profile->custom_prefix : NULL;
+
+        if (privilege_needs_elevation(manifest->entries[i].storage_path, prefix)) {
+            paths[count++] = manifest->entries[i].storage_path;
+        }
     }
 
     *paths_out = paths;
-    *count_out = manifest->count;
+    *count_out = count;
     return NULL;
 }
 
@@ -993,12 +1001,13 @@ error_t *cmd_status(
 
     /* Check privileges for complete status (may re-exec with sudo) */
     if (!opts->no_sudo && manifest && manifest->count > 0) {
-        /* Extract storage paths from manifest */
+        /* Extract paths that need elevation from manifest */
         const char **storage_paths = NULL;
         size_t path_count = 0;
 
-        error_t *extract_err = extract_storage_paths_from_manifest(
-            manifest, &storage_paths, &path_count);
+        error_t *extract_err = extract_elevation_paths_from_manifest(
+            manifest, &storage_paths, &path_count
+        );
 
         if (!extract_err && path_count > 0) {
             /* Check if privileges needed (may re-exec) */

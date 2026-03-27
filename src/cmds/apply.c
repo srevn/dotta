@@ -797,9 +797,14 @@ static error_t *ensure_complete_apply_privileges(
         return ERROR(ERR_MEMORY, "Failed to allocate root paths list");
     }
 
-    /* 1. Collect root/ paths from manifest (files being deployed) */
+    /* 1. Collect paths needing elevation from manifest (files being deployed).
+     * Uses privilege_needs_elevation() which considers whether the custom prefix
+     * is under $HOME — custom/ paths under $HOME don't need sudo. */
     for (size_t i = 0; i < manifest->count; i++) {
-        if (privilege_path_requires_root(manifest->entries[i].storage_path)) {
+        const char *prefix = manifest->entries[i].source_profile
+                           ? manifest->entries[i].source_profile->custom_prefix : NULL;
+
+        if (privilege_needs_elevation(manifest->entries[i].storage_path, prefix)) {
             error_t *err = string_array_push(root_paths, manifest->entries[i].storage_path);
             if (err) {
                 string_array_free(root_paths);
@@ -808,11 +813,13 @@ static error_t *ensure_complete_apply_privileges(
         }
     }
 
-    /* 2. Collect root/ paths from file orphans (files being removed) */
+    /* 2. Collect paths needing elevation from file orphans (files being removed) */
     if (file_orphans && file_orphan_count > 0) {
         for (size_t i = 0; i < file_orphan_count; i++) {
-            /* workspace_item_t has storage_path field */
-            if (privilege_path_requires_root(file_orphans[i]->storage_path)) {
+            const char *prefix = file_orphans[i]->source_profile
+                               ? file_orphans[i]->source_profile->custom_prefix : NULL;
+
+            if (privilege_needs_elevation(file_orphans[i]->storage_path, prefix)) {
                 error_t *err = string_array_push(root_paths, file_orphans[i]->storage_path);
                 if (err) {
                     string_array_free(root_paths);
@@ -822,11 +829,13 @@ static error_t *ensure_complete_apply_privileges(
         }
     }
 
-    /* 3. Collect root/ paths from directory orphans (directories being removed) */
+    /* 3. Collect paths needing elevation from directory orphans (directories being removed) */
     if (dir_orphans && dir_orphan_count > 0) {
         for (size_t i = 0; i < dir_orphan_count; i++) {
-            /* workspace_item_t has storage_path field */
-            if (privilege_path_requires_root(dir_orphans[i]->storage_path)) {
+            const char *prefix = dir_orphans[i]->source_profile
+                               ? dir_orphans[i]->source_profile->custom_prefix : NULL;
+
+            if (privilege_needs_elevation(dir_orphans[i]->storage_path, prefix)) {
                 error_t *err = string_array_push(root_paths, dir_orphans[i]->storage_path);
                 if (err) {
                     string_array_free(root_paths);

@@ -25,6 +25,8 @@
 #include <unistd.h>
 
 #include "base/error.h"
+#include "base/filesystem.h"
+#include "infra/path.h"
 #include "utils/string.h"
 #include "utils/terminal.h"
 
@@ -82,6 +84,104 @@ bool privilege_paths_require_root(const char **storage_paths, size_t count) {
     }
 
     return false;  /* No paths require root */
+}
+
+/**
+ * Check if a path is under a parent directory
+ *
+ * Verifies proper path boundary: /home/user matches /home/user/foo
+ * but NOT /home/username/foo. The path can equal the parent (boundary
+ * char is '\0').
+ *
+ * @param path Path to check (must not be NULL)
+ * @param parent Candidate parent directory (must not be NULL)
+ * @return true if path is under (or equal to) parent
+ */
+static bool is_path_under(const char *path, const char *parent) {
+    size_t parent_len = strlen(parent);
+
+    if (strncmp(path, parent, parent_len) != 0) {
+        return false;
+    }
+
+    /* Verify boundary: next char after prefix must be '/' or end of string */
+    char boundary = path[parent_len];
+    return boundary == '/' || boundary == '\0';
+}
+
+/**
+ * Check if a custom prefix requires elevated privileges
+ *
+ * Compares the custom prefix against $HOME using canonical paths to handle
+ * symlinks (e.g., macOS /tmp → /private/tmp). Checks all combinations of
+ * raw and canonical forms to catch symlinks on either side.
+ */
+bool privilege_custom_prefix_needs_elevation(const char *custom_prefix) {
+    if (!custom_prefix || custom_prefix[0] == '\0') {
+        return true;  /* No prefix → conservative default */
+    }
+
+    char *home = NULL;
+    error_t *err = path_get_home(&home);
+    if (err) {
+        error_free(err);
+        return true;  /* Can't determine HOME → conservative default */
+    }
+
+    /* Canonicalize both paths to resolve symlinks.
+     * Either may fail (e.g., prefix doesn't exist on this system). */
+    char *home_canonical = NULL;
+    char *prefix_canonical = NULL;
+
+    error_t *h_err = fs_canonicalize_path(home, &home_canonical);
+    if (h_err) {
+        error_free(h_err);
+    }
+
+    error_t *p_err = fs_canonicalize_path(custom_prefix, &prefix_canonical);
+    if (p_err) {
+        error_free(p_err);
+    }
+
+    /* Check all valid combinations of raw/canonical forms.
+     * A single match is sufficient — symlinks may be on either side. */
+    const char *homes[] = { home, home_canonical };
+    const char *prefixes[] = { custom_prefix, prefix_canonical };
+
+    bool under_home = false;
+    for (int h = 0; h < 2 && !under_home; h++) {
+        if (!homes[h]) continue;
+        for (int p = 0; p < 2 && !under_home; p++) {
+            if (!prefixes[p]) continue;
+            under_home = is_path_under(prefixes[p], homes[h]);
+        }
+    }
+
+    free(home);
+    free(home_canonical);
+    free(prefix_canonical);
+
+    return !under_home;
+}
+
+/**
+ * Check if a storage path requires elevation for pre-flight purposes
+ */
+bool privilege_needs_elevation(const char *storage_path, const char *custom_prefix) {
+    if (!storage_path || storage_path[0] == '\0') {
+        return false;
+    }
+
+    if (str_starts_with(storage_path, "root/")) {
+        return true;
+    }
+
+    if (str_starts_with(storage_path, "custom/")) {
+        return privilege_custom_prefix_needs_elevation(custom_prefix);
+    }
+
+    /* home/ and other prefixes don't need elevation */
+    return false;
 }
 
 /**

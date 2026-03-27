@@ -2154,24 +2154,31 @@ error_t *cmd_update(
         }
 
         if (file_count > 0) {
-            /* Extract storage paths from file items */
+            /* Extract paths needing elevation from file items.
+             * Uses privilege_needs_elevation() which considers whether each
+             * entry's custom prefix is under $HOME. */
             const char **storage_paths = calloc(file_count, sizeof(char *));
             if (!storage_paths) {
                 err = ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
                 goto cleanup;
             }
 
-            size_t path_idx = 0;
+            size_t elevation_count = 0;
             for (size_t i = 0; i < update_count; i++) {
                 const workspace_item_t *item = update_items[i];
                 if (item->item_kind == WORKSPACE_ITEM_FILE) {
-                    storage_paths[path_idx++] = item->storage_path;
+                    const char *prefix = item->source_profile
+                                       ? item->source_profile->custom_prefix : NULL;
+
+                    if (privilege_needs_elevation(item->storage_path, prefix)) {
+                        storage_paths[elevation_count++] = item->storage_path;
+                    }
                 }
             }
 
             /* Check privilege requirements
              *
-             * If root/ files detected without root privileges:
+             * If paths needing root detected without root privileges:
              * - Interactive: Prompts user, re-execs with sudo if approved
              * - Non-interactive: Returns error with clear message
              *
@@ -2180,7 +2187,7 @@ error_t *cmd_update(
              */
             err = privilege_ensure_for_operation(
                 storage_paths,
-                file_count,
+                elevation_count,
                 "update",
                 opts->interactive,  /* Use existing interactive flag */
                 opts->argc,

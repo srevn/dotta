@@ -1168,7 +1168,15 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Resolve all paths to storage format (pre-flight for privilege check) */
+    /* Pre-compute whether custom prefix needs elevation.
+     * All paths in this add invocation share the same prefix. */
+    bool custom_needs_elevation = opts->custom_prefix
+        ? privilege_custom_prefix_needs_elevation(opts->custom_prefix)
+        : false;  /* No prefix → no custom/ paths → irrelevant */
+
+    /* Resolve all paths to storage format (pre-flight for privilege check).
+     * Only paths that actually need elevation are included — home/ never does,
+     * and custom/ only does when the prefix is outside $HOME. */
     size_t storage_count = 0;
     for (size_t i = 0; i < opts->file_count; i++) {
         const char *file_path = opts->files[i];
@@ -1176,12 +1184,16 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         char *storage_path = NULL;
         path_prefix_t prefix;
 
-        /* Storage-path inputs (home/..., root/..., custom/...) are used directly.
-         * The pre-flight only needs the storage prefix for privilege detection;
-         * full validation happens in the main processing loop. */
+        /* Storage-path inputs (home/..., root/..., custom/...) — only include
+         * paths that actually need elevation in the privilege check. */
         if (str_starts_with(file_path, "home/") ||
             str_starts_with(file_path, "root/") ||
             str_starts_with(file_path, "custom/")) {
+            bool needs_elevation = str_starts_with(file_path, "root/") ||
+                                  (str_starts_with(file_path, "custom/") && custom_needs_elevation);
+            if (!needs_elevation) {
+                continue;
+            }
             storage_path = strdup(file_path);
             if (!storage_path) {
                 for (size_t j = 0; j < storage_count; j++) {
@@ -1215,11 +1227,29 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         if (err) {
             /* Directory inputs that equal the custom prefix can't be converted
              * to a storage path (the prefix root has no storage representation).
-             * Skip them here — files inside will be checked individually after
-             * directory expansion in the main processing loop. */
+             * The main processing loop will expand the directory into files.
+             *
+             * If the custom prefix needs elevation, add a representative entry
+             * so the privilege check fires for expanded custom/ files. Without
+             * this, directory inputs bypass the pre-flight entirely. */
             if (!fs_is_symlink(file_path) && fs_is_directory(file_path)) {
                 error_free(err);
                 err = NULL;
+                if (custom_needs_elevation) {
+                    storage_path = strdup("custom/");
+                    if (!storage_path) {
+                        for (size_t j = 0; j < storage_count; j++) {
+                            free(allocated_paths[j]);
+                        }
+                        free(storage_paths);
+                        free(allocated_paths);
+                        err = ERROR(ERR_MEMORY, "Failed to allocate representative path");
+                        goto cleanup;
+                    }
+                    allocated_paths[storage_count] = storage_path;
+                    storage_paths[storage_count] = storage_path;
+                    storage_count++;
+                }
                 continue;
             }
             /* Actual error for regular files */
@@ -1232,9 +1262,14 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             goto cleanup;
         }
 
-        allocated_paths[storage_count] = storage_path;
-        storage_paths[storage_count] = storage_path;
-        storage_count++;
+        /* Only include paths that need elevation in the privilege check */
+        if (prefix == PREFIX_ROOT || (prefix == PREFIX_CUSTOM && custom_needs_elevation)) {
+            allocated_paths[storage_count] = storage_path;
+            storage_paths[storage_count] = storage_path;
+            storage_count++;
+        } else {
+            free(storage_path);
+        }
     }
 
     /* Check privilege requirements

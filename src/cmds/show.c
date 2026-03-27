@@ -761,7 +761,6 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
         const char *reset = output_color_code(out, OUTPUT_COLOR_RESET);
         output_printf(out, OUTPUT_NORMAL, "%s# Profile:%s %s\n", dim, reset, found_profile);
         output_printf(out, OUTPUT_NORMAL, "%s# Path:%s    %s\n", dim, reset, search_path);
-        output_newline(out);
     }
     err = show_file(repo, found_profile, search_path, NULL, opts->raw, config, out);
 

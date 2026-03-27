@@ -48,7 +48,15 @@ bool privilege_is_sudo(void);
  * Paths with root/ or custom/ prefix require root privileges for complete
  * metadata capture (ownership information). Paths with home/ prefix do not.
  *
- * @param storage_path Storage path (e.g., "home/.bashrc", "root/etc/hosts", "custom/etc/nginx.conf")
+ * NOTE: This answers "could this path type carry ownership metadata?" —
+ * the correct predicate for metadata capture and deployment layers, which
+ * self-correct via privilege_is_elevated() and (owner || group) guards.
+ *
+ * For pre-flight privilege checks ("should we prompt for sudo?"), use
+ * privilege_needs_elevation() instead, which considers whether the
+ * custom prefix is under $HOME.
+ *
+ * @param storage_path Storage path (e.g., "home/.bashrc", "custom/etc/nginx.conf")
  * @return true if path requires root privileges, false otherwise
  */
 bool privilege_path_requires_root(const char *storage_path);
@@ -61,6 +69,46 @@ bool privilege_path_requires_root(const char *storage_path);
  * @return true if any path requires root, false otherwise
  */
 bool privilege_paths_require_root(const char **storage_paths, size_t count);
+
+/**
+ * Check if a custom prefix requires elevated privileges
+ *
+ * Determines whether a custom deployment prefix points to a location
+ * that requires root access. Prefixes under $HOME are accessible to
+ * the current user without elevation.
+ *
+ * Uses canonical path comparison (resolves symlinks) with proper
+ * path boundary checks to avoid false matches (e.g., /home/user
+ * vs /home/username).
+ *
+ * Safe defaults: returns true (needs elevation) when prefix is NULL
+ * or when path resolution fails (can't determine HOME, prefix
+ * doesn't exist on this system, etc.).
+ *
+ * @param custom_prefix Custom prefix path (NULL returns true)
+ * @return true if elevation needed, false if prefix is under $HOME
+ */
+bool privilege_custom_prefix_needs_elevation(const char *custom_prefix);
+
+/**
+ * Check if a storage path requires elevation for pre-flight purposes
+ *
+ * Pre-flight decision function: "should we prompt for sudo?"
+ *
+ * Unlike privilege_path_requires_root() which answers "could this path
+ * type carry ownership metadata?" (used by metadata/deploy layers),
+ * this function answers the narrower pre-flight question by considering
+ * whether the custom prefix is actually under $HOME.
+ *
+ * - home/ paths: never need elevation
+ * - root/ paths: always need elevation
+ * - custom/ paths: need elevation only if custom_prefix is NOT under $HOME
+ *
+ * @param storage_path Storage path (e.g., "custom/etc/nginx.conf")
+ * @param custom_prefix Custom prefix for this path's profile (NULL if unknown)
+ * @return true if elevation needed, false otherwise
+ */
+bool privilege_needs_elevation(const char *storage_path, const char *custom_prefix);
 
 /**
  * Get actual user UID/GID (handling sudo context)

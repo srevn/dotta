@@ -385,6 +385,7 @@ error_t *path_to_storage(
     /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
     char *home = NULL;
+    char *home_canonical = NULL;
     char *result = NULL;
     path_prefix_t detected_prefix;
 
@@ -435,7 +436,14 @@ error_t *path_to_storage(
         goto cleanup;
     }
 
-    match = extract_relative_after_prefix(filesystem_path, home, &relative);
+    /* Canonicalize HOME to handle symlinks (e.g., /tmp -> /private/tmp on macOS).
+     * getcwd() returns canonical paths, but $HOME may contain symlinks. */
+    error_t *canon_err = fs_canonicalize_path(home, &home_canonical);
+    if (canon_err) {
+        error_free(canon_err);
+    }
+
+    match = detect_home_prefix(filesystem_path, home, home_canonical, &relative);
 
     if (match > 0) {
         /* HOME prefix matched with non-empty relative part */
@@ -497,6 +505,7 @@ validate:
 
 cleanup:
     free(home);
+    free(home_canonical);
     return err;
 }
 

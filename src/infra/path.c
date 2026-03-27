@@ -343,7 +343,13 @@ error_t *path_normalize_input(
     }
 
     /* Step 3: Make absolute (handles absolute pass-through and CWD joining) */
-    err = fs_make_absolute(path_to_make_absolute, out);
+    char *absolute = NULL;
+    err = fs_make_absolute(path_to_make_absolute, &absolute);
+    if (!err) {
+        /* Step 4: Normalize (resolve ., .., consecutive slashes) */
+        err = fs_normalize_path(absolute, out);
+        free(absolute);
+    }
 
     /* Cleanup */
     free(expanded);

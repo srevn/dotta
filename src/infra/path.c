@@ -355,13 +355,14 @@ error_t *path_normalize_input(
 /**
  * Convert filesystem path to storage path
  *
- * Detection order (CANONICAL REPRESENTATION):
- *  1. $HOME (canonical for user files) - FIRST
- *  2. Custom prefix (if provided and matches) - SECOND
+ * Detection order:
+ *  1. Custom prefix (if explicitly provided and matches) - FIRST
+ *  2. $HOME (canonical for user files) - SECOND
  *  3. Root (fallback for system files)
  *
- * This ensures files under $HOME ALWAYS use home/ prefix,
- * even if --prefix matches $HOME (canonical representation).
+ * Explicit user intent (--prefix) takes priority over implicit $HOME
+ * detection. When no custom prefix is provided, $HOME is checked first
+ * as before (no behavior change for the common case).
  */
 error_t *path_to_storage(
     const char *filesystem_path,
@@ -385,42 +386,18 @@ error_t *path_to_storage(
         return err;
     }
 
-    /* Try $HOME prefix first (most canonical) */
-    err = path_get_home(&home);
-    if (err) {
-        goto cleanup;
-    }
-
     const char *relative;
-    int match = extract_relative_after_prefix(absolute, home, &relative);
+    int match;
 
-    if (match > 0) {
-        /* HOME prefix matched with non-empty relative part */
-        /* Validate file exists */
-        if (!fs_lexists(absolute)) {
-            err = ERROR(ERR_NOT_FOUND, "File not found: %s", absolute);
-            goto cleanup;
-        }
-
-        result = str_format("home/%s", relative);
-        if (!result) {
-            err = ERROR(ERR_MEMORY, "Failed to format home storage path");
-            goto cleanup;
-        }
-        detected_prefix = PREFIX_HOME;
-        goto validate;
-
-    } else if (match == 0) {
-        /* HOME directory itself - not supported */
-        err = ERROR(ERR_INVALID_ARG, "Cannot store HOME directory itself");
-        goto cleanup;
-    }
-
-    /* Try custom prefix second (if provided)
+    /* Try custom prefix first when explicitly provided (user intent wins)
      *
      * path_normalize_input already resolved the path within the prefix context
      * (prepending prefix to absolute paths, joining with relative paths), so
      * absolute is guaranteed to be under the prefix if the path is valid.
+     *
+     * This allows files under $HOME to use custom/ prefix when the user
+     * explicitly provides --prefix (e.g., managing remote system configs
+     * stored locally under $HOME).
      */
     if (custom_prefix && custom_prefix[0] != '\0') {
         match = extract_relative_after_prefix(absolute, custom_prefix, &relative);
@@ -447,7 +424,37 @@ error_t *path_to_storage(
         }
 
         /* No match - path not under prefix (e.g., tilde-expanded $HOME path) */
-        /* Fall through to root prefix detection below */
+        /* Fall through to HOME/root detection below */
+    }
+
+    /* Try $HOME prefix (canonical for user files without explicit prefix) */
+    err = path_get_home(&home);
+    if (err) {
+        goto cleanup;
+    }
+
+    match = extract_relative_after_prefix(absolute, home, &relative);
+
+    if (match > 0) {
+        /* HOME prefix matched with non-empty relative part */
+        /* Validate file exists */
+        if (!fs_lexists(absolute)) {
+            err = ERROR(ERR_NOT_FOUND, "File not found: %s", absolute);
+            goto cleanup;
+        }
+
+        result = str_format("home/%s", relative);
+        if (!result) {
+            err = ERROR(ERR_MEMORY, "Failed to format home storage path");
+            goto cleanup;
+        }
+        detected_prefix = PREFIX_HOME;
+        goto validate;
+
+    } else if (match == 0) {
+        /* HOME directory itself - not supported */
+        err = ERROR(ERR_INVALID_ARG, "Cannot store HOME directory itself");
+        goto cleanup;
     }
 
     /* Fallback to ROOT prefix for absolute paths */
@@ -789,9 +796,9 @@ error_t *path_resolve_input(
          * prefix and is designed for add/update operations where --prefix is
          * explicit. For filter resolution, we try each prefix.
          *
-         * Detection order (canonical representation):
-         * 1. $HOME - Always first (canonical for user files)
-         * 2. Custom prefixes - Iterate array, first match wins
+         * Detection order:
+         * 1. Custom prefixes - Explicit user intent, first match wins
+         * 2. $HOME - Canonical for user files
          * 3. Root - Fallback for system files
          */
         path_prefix_t prefix;
@@ -803,8 +810,10 @@ error_t *path_resolve_input(
             goto cleanup;
         }
 
-        /* If resolved to root/ but we have custom prefixes, check if any match */
-        if (prefix == PREFIX_ROOT && custom_prefixes && prefix_count > 0) {
+        /* If resolved to home/ or root/ but we have custom prefixes,
+         * check if any match (explicit prefix wins over implicit detection) */
+        if ((prefix == PREFIX_ROOT || prefix == PREFIX_HOME) &&
+            custom_prefixes && prefix_count > 0) {
             /* Try each custom prefix to see if we should use custom/ instead */
             for (size_t i = 0; i < prefix_count; i++) {
                 if (!custom_prefixes[i]) continue;
@@ -849,57 +858,59 @@ error_t *path_resolve_input(
         /* If canonicalization succeeded, home_canonical now contains canonical path */
         /* Keep original home as well for detection */
 
-        /* Check if path is under $HOME (original or canonical) */
-        const char *relative_path = NULL;
-        int match = detect_home_prefix(normalized, home, home_canonical, &relative_path);
+        /* Detection order:
+         * 1. Custom prefixes - Explicit user intent, first match wins
+         * 2. $HOME - Canonical for user files
+         * 3. Root - Fallback for system files
+         */
 
-        if (match >= 0) {
-            /* Under home directory (or is home directory itself) */
-            if (match == 0) {
-                /* HOME directory itself - not allowed */
-                err = ERROR(ERR_INVALID_ARG, "Cannot specify HOME directory itself");
-                goto cleanup;
-            }
+        /* Try custom prefixes first (explicit user intent wins) */
+        if (custom_prefixes && prefix_count > 0) {
+            for (size_t i = 0; i < prefix_count; i++) {
+                if (!custom_prefixes[i]) continue;
 
-            /* Build storage path: home/... */
-            storage_path = str_format("home/%s", relative_path);
-            if (!storage_path) {
-                err = ERROR(ERR_MEMORY, "Failed to format storage path");
-                goto cleanup;
-            }
-        } else {
-            /* Outside home - try custom prefixes before falling back to root/
-             *
-             * Detection order (canonical representation):
-             * 1. $HOME - Already checked above (canonical for user files)
-             * 2. Custom prefixes - Iterate array, first match wins
-             * 3. Root - Fallback for system files
-             */
-            if (custom_prefixes && prefix_count > 0) {
-                for (size_t i = 0; i < prefix_count; i++) {
-                    if (!custom_prefixes[i]) continue;
-
-                    const char *rel = NULL;
-                    int cmatch = extract_relative_after_prefix(normalized, custom_prefixes[i], &rel);
-                    if (cmatch > 0) {
-                        /* Found a matching custom prefix */
-                        storage_path = str_format("custom/%s", rel);
-                        if (!storage_path) {
-                            err = ERROR(ERR_MEMORY, "Failed to format custom storage path");
-                            goto cleanup;
-                        }
-                        break;
+                const char *rel = NULL;
+                int cmatch = extract_relative_after_prefix(normalized, custom_prefixes[i], &rel);
+                if (cmatch > 0) {
+                    /* Found a matching custom prefix */
+                    storage_path = str_format("custom/%s", rel);
+                    if (!storage_path) {
+                        err = ERROR(ERR_MEMORY, "Failed to format custom storage path");
+                        goto cleanup;
                     }
+                    break;
                 }
             }
+        }
 
-            if (!storage_path) {
-                /* No custom prefix matched - use root/ prefix */
-                storage_path = str_format("root%s", normalized);
+        /* Try $HOME if no custom prefix matched */
+        if (!storage_path) {
+            const char *relative_path = NULL;
+            int match = detect_home_prefix(normalized, home, home_canonical, &relative_path);
+
+            if (match >= 0) {
+                /* Under home directory (or is home directory itself) */
+                if (match == 0) {
+                    /* HOME directory itself - not allowed */
+                    err = ERROR(ERR_INVALID_ARG, "Cannot specify HOME directory itself");
+                    goto cleanup;
+                }
+
+                /* Build storage path: home/... */
+                storage_path = str_format("home/%s", relative_path);
                 if (!storage_path) {
                     err = ERROR(ERR_MEMORY, "Failed to format storage path");
                     goto cleanup;
                 }
+            }
+        }
+
+        /* Fallback to root/ if neither custom nor HOME matched */
+        if (!storage_path) {
+            storage_path = str_format("root%s", normalized);
+            if (!storage_path) {
+                err = ERROR(ERR_MEMORY, "Failed to format storage path");
+                goto cleanup;
             }
         }
     }

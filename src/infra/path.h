@@ -59,17 +59,18 @@ error_t *path_normalize_input(
 /**
  * Convert filesystem path to storage path
  *
- * Detection order (CANONICAL REPRESENTATION):
- * 1. $HOME (canonical for user files) - FIRST
- * 2. Custom prefix (if provided and matches) - SECOND
+ * Detection order:
+ * 1. Custom prefix (if explicitly provided and matches) - FIRST
+ * 2. $HOME (canonical for user files) - SECOND
  * 3. Root (fallback for system files)
  *
- * This ensures files under $HOME ALWAYS use home/ prefix,
- * even if --prefix matches $HOME (canonical representation).
+ * Explicit user intent (--prefix) takes priority over implicit $HOME
+ * detection. When no custom prefix is provided, $HOME is checked first
+ * (no behavior change for the common case).
  *
  * Examples:
  *   ~/.bashrc (NULL)              -> home/.bashrc (PREFIX_HOME)
- *   ~/.bashrc ($HOME)             -> home/.bashrc (PREFIX_HOME, prefix ignored)
+ *   ~/repo/cfg/file (/repo/cfg)   -> custom/file (PREFIX_CUSTOM, prefix wins)
  *   /jail/etc/nginx.conf (/jail) -> custom/etc/nginx.conf (PREFIX_CUSTOM)
  *   /etc/hosts (NULL)             -> root/etc/hosts (PREFIX_ROOT)
  *
@@ -169,14 +170,14 @@ error_t *path_get_home(char **out);
  *
  * Custom prefix detection:
  *   When custom_prefixes is provided (non-NULL with prefix_count > 0),
- *   filesystem paths are checked against each prefix AFTER $HOME detection.
+ *   filesystem paths are checked against each prefix BEFORE $HOME detection.
  *   First matching prefix wins. This enables proper resolution of paths
  *   like /mnt/jail/etc/nginx.conf to custom/etc/nginx.conf when /mnt/jail
- *   is in the custom_prefixes array.
+ *   is in the custom_prefixes array, even when the path is under $HOME.
  *
- *   Detection order (canonical representation):
- *   1. $HOME - Always first (canonical for user files)
- *   2. Custom prefixes - Iterate array, first match wins
+ *   Detection order:
+ *   1. Custom prefixes - Explicit user intent, first match wins
+ *   2. $HOME - Canonical for user files
  *   3. Root - Fallback for system files
  *
  * Path normalization:

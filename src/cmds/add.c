@@ -1169,6 +1169,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     }
 
     /* Resolve all filesystem paths to storage paths */
+    size_t storage_count = 0;
     for (size_t i = 0; i < opts->file_count; i++) {
         const char *file_path = opts->files[i];
         char *storage_path = NULL;
@@ -1176,8 +1177,17 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
 
         err = path_to_storage(file_path, opts->custom_prefix, &storage_path, &prefix);
         if (err) {
-            /* Cleanup allocated paths on error */
-            for (size_t j = 0; j < i; j++) {
+            /* Directory inputs that equal the custom prefix can't be converted
+             * to a storage path (the prefix root has no storage representation).
+             * Skip them here — files inside will be checked individually after
+             * directory expansion in the main processing loop. */
+            if (!fs_is_symlink(file_path) && fs_is_directory(file_path)) {
+                error_free(err);
+                err = NULL;
+                continue;
+            }
+            /* Actual error for regular files */
+            for (size_t j = 0; j < storage_count; j++) {
                 free(allocated_paths[j]);
             }
             free(storage_paths);
@@ -1186,14 +1196,9 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             goto cleanup;
         }
 
-        /* Warn if file under $HOME but custom prefix provided */
-        if (prefix == PREFIX_HOME && opts->custom_prefix) {
-            output_warning(out, "File '%s' is under $HOME, using portable 'home/' prefix", file_path);
-            output_hint(out, "The --prefix flag is ignored for files under $HOME");
-        }
-
-        allocated_paths[i] = storage_path;
-        storage_paths[i] = storage_path;
+        allocated_paths[storage_count] = storage_path;
+        storage_paths[storage_count] = storage_path;
+        storage_count++;
     }
 
     /* Check privilege requirements
@@ -1206,12 +1211,12 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
      * If re-exec fails or user declines, returns error.
      */
     err = privilege_ensure_for_operation(
-        storage_paths, opts->file_count, "add", true,  /* interactive = true (default for add) */
+        storage_paths, storage_count, "add", true,  /* interactive = true (default for add) */
         opts->argc, opts->argv, out
     );
 
     /* Cleanup storage paths array */
-    for (size_t i = 0; i < opts->file_count; i++) {
+    for (size_t i = 0; i < storage_count; i++) {
         free(allocated_paths[i]);
     }
     free(storage_paths);
@@ -1380,16 +1385,17 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             }
             string_array_free(dir_files);
 
-            /* Track this directory for new file detection */
+            if (opts->verbose && out) {
+                output_info(out, "Added directory: %s", absolute);
+            }
+
+            /* Track this directory for metadata capture */
             char *storage_prefix = NULL;
             path_prefix_t prefix;
             err = path_to_storage(absolute, opts->custom_prefix, &storage_prefix, &prefix);
             if (err) {
-                /* Non-fatal: just log warning */
-                if (opts->verbose && out) {
-                    output_warning(out, "Failed to compute storage prefix for directory '%s': %s",
-                                   absolute, error_message(err));
-                }
+                /* Non-fatal: directory that equals the custom prefix root has no
+                 * storage path representation. Individual files are still added. */
                 error_free(err);
                 err = NULL;
                 free(absolute);
@@ -1413,10 +1419,6 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             tracked_dirs[tracked_dir_count].filesystem_path = strdup(absolute);
             tracked_dirs[tracked_dir_count].storage_path = storage_prefix;
             tracked_dir_count++;
-
-            if (opts->verbose && out) {
-                output_info(out, "Added directory: %s", absolute);
-            }
         } else {
             /* Single file or symlink - check if excluded */
             if (is_excluded(absolute, false, ignore_ctx, opts, out)) {

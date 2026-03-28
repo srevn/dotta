@@ -106,6 +106,36 @@ error_t *profile_load_tree(git_repository *repo, profile_t *profile) {
         return NULL;  /* Already loaded */
     }
 
+    /* Use cached reference if available (avoids redundant ref lookup) */
+    if (profile->ref) {
+        git_object *obj = NULL;
+        int git_err = git_reference_peel(&obj, profile->ref, GIT_OBJECT_ANY);
+        if (git_err < 0) {
+            error_t *err = error_from_git(git_err);
+            return error_wrap(err, "Failed to peel reference for profile '%s'",
+                              profile->name);
+        }
+
+        git_object_t obj_type = git_object_type(obj);
+        if (obj_type == GIT_OBJECT_COMMIT) {
+            git_commit *commit = (git_commit *)obj;
+            git_err = git_commit_tree(&profile->tree, commit);
+            git_object_free(obj);
+            if (git_err < 0) {
+                return error_from_git(git_err);
+            }
+        } else if (obj_type == GIT_OBJECT_TREE) {
+            profile->tree = (git_tree *)obj;
+        } else {
+            git_object_free(obj);
+            return ERROR(ERR_GIT, "Profile '%s': unexpected object type %d",
+                         profile->name, (int)obj_type);
+        }
+
+        return NULL;
+    }
+
+    /* Fallback: resolve by name (for profiles without cached reference) */
     char refname[DOTTA_REFNAME_MAX];
     error_t *err = gitops_build_refname(refname, sizeof(refname),
                                         "refs/heads/%s", profile->name);
@@ -362,6 +392,58 @@ cleanup:
 }
 
 /**
+ * Enrich profiles with custom prefixes from an already-loaded state
+ *
+ * Core enrichment logic: queries the prefix map and populates each profile's
+ * custom_prefix field. Caller must provide a valid, loaded state.
+ *
+ * @param profiles Profile list to enrich (must not be NULL, count > 0)
+ * @param state Loaded state database (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *enrich_profiles_from_state(
+    profile_list_t *profiles,
+    state_t *state
+) {
+    /* Get prefix map from state */
+    hashmap_t *prefix_map = NULL;
+    error_t *err = state_get_prefix_map(state, &prefix_map);
+    if (err) {
+        return error_wrap(err, "Failed to get custom prefix map");
+    }
+
+    /* Enrich each profile with its custom prefix (if any) */
+    for (size_t i = 0; i < profiles->count; i++) {
+        profile_t *profile = &profiles->profiles[i];
+        const char *custom_prefix = NULL;
+
+        /* Query from state */
+        custom_prefix = (const char *)hashmap_get(prefix_map, profile->name);
+
+        /* Attach to profile (owned by profile, freed in profile_list_free) */
+        if (custom_prefix) {
+            /* Free any existing custom_prefix (defensive) and set new prefix */
+            free(profile->custom_prefix);
+            profile->custom_prefix = strdup(custom_prefix);
+            if (!profile->custom_prefix) {
+                hashmap_free(prefix_map, free);
+                return ERROR(ERR_MEMORY,
+                    "Failed to allocate custom_prefix for profile '%s'",
+                    profile->name);
+            }
+        } else {
+            /* No custom prefix - ensure field is NULL */
+            free(profile->custom_prefix);
+            profile->custom_prefix = NULL;
+        }
+    }
+
+    /* Cleanup temporary resources */
+    hashmap_free(prefix_map, free);
+    return NULL;
+}
+
+/**
  * Enrich profiles with custom prefixes from state
  *
  * Bridges profile loading (Git-based) with deployment configuration (state-based)
@@ -393,45 +475,9 @@ error_t *profiles_enrich_with_prefixes(
         return NULL;  /* No state database = no prefixes */
     }
 
-    /* Get prefix map from state */
-    hashmap_t *prefix_map = NULL;
-    err = state_get_prefix_map(state, &prefix_map);
-    if (err) {
-        state_free(state);
-        return error_wrap(err, "Failed to get custom prefix map");
-    }
-
-    /* Enrich each profile with its custom prefix (if any) */
-    for (size_t i = 0; i < profiles->count; i++) {
-        profile_t *profile = &profiles->profiles[i];
-        const char *custom_prefix = NULL;
-        
-        /* Query from state */
-        custom_prefix = (const char *)hashmap_get(prefix_map, profile->name);
-        
-        /* Attach to profile (owned by profile, freed in profile_list_free) */
-        if (custom_prefix) {
-            /* Free any existing custom_prefix (defensive) and set new prefix */
-            free(profile->custom_prefix);
-            profile->custom_prefix = strdup(custom_prefix);
-            if (!profile->custom_prefix) {
-                hashmap_free(prefix_map, free);
-                state_free(state);
-                return ERROR(ERR_MEMORY,
-                            "Failed to allocate custom_prefix for profile '%s'",
-                            profile->name);
-            }
-        } else {
-            /* No custom prefix - ensure field is NULL */
-            free(profile->custom_prefix);
-            profile->custom_prefix = NULL;
-        }
-    }
-    
-    /* Cleanup temporary resources */
-    hashmap_free(prefix_map, free);
+    err = enrich_profiles_from_state(profiles, state);
     state_free(state);
-    return NULL;
+    return err;
 }
 
 /**
@@ -538,7 +584,9 @@ error_t *profile_resolve(
         if (source_out) {
             *source_out = PROFILE_SOURCE_EXPLICIT;
         }
-        err = profile_list_load(repo, explicit_profiles, explicit_count, true, out);
+        err = profile_list_load(
+            repo, explicit_profiles, explicit_count, strict_mode, out
+        );
         if (err) {
             return err;
         }
@@ -577,7 +625,9 @@ error_t *profile_resolve(
     }
 
     /* State has enabled profiles - validate and use them */
-    err = validate_state_profiles(repo, state_profiles, &valid_profiles, &missing_profiles);
+    err = validate_state_profiles(
+        repo, state_profiles, &valid_profiles, &missing_profiles
+    );
     if (err) {
         err = error_wrap(err, "Failed to validate state profiles");
         goto cleanup;
@@ -622,8 +672,8 @@ error_t *profile_resolve(
         goto cleanup;
     }
 
-    /* Enrich with custom prefixes from state */
-    err = profiles_enrich_with_prefixes(*out, repo);
+    /* Enrich with custom prefixes (state already loaded) */
+    err = enrich_profiles_from_state(*out, state);
     if (err) {
         profile_list_free(*out);
         *out = NULL;
@@ -754,8 +804,7 @@ error_t *profile_validate_filter(
 
         if (!found) {
             return ERROR(ERR_INVALID_ARG, "Profile '%s' is not enabled\n"
-                        "Hint: Run 'dotta profile enable %s' first",
-                        filter_name, filter_name);
+                "Hint: Run 'dotta profile enable %s' first", filter_name, filter_name);
         }
     }
 
@@ -948,6 +997,17 @@ static int tree_walk_callback(const char *root,
         return -1;
     }
 
+    /* Skip repository metadata files */
+    if (strcmp(full_path, ".dottaignore") == 0 ||
+        strcmp(full_path, ".bootstrap") == 0 ||
+        strcmp(full_path, ".gitignore") == 0 ||
+        strcmp(full_path, "README.md") == 0 ||
+        strcmp(full_path, "README") == 0 ||
+        str_starts_with(full_path, ".git/") ||
+        str_starts_with(full_path, ".dotta/")) {
+        return 0;  /* Skip, continue walk */
+    }
+
     /* Add to array */
     error_t *err = string_array_push(data->paths, full_path);
     if (err) {
@@ -1106,10 +1166,21 @@ static int manifest_build_callback(
         ctx->manifest->entries[existing_idx].entry = dup_entry;
         ctx->manifest->entries[existing_idx].source_profile = ctx->profile;
 
-        /* VWD fields remain NULL/0 (not populated for Git-based manifests)
-         * The existing entry already has VWD fields initialized to NULL/0
-         * from initial creation, so no action needed here. This comment
-         * documents that we're intentionally preserving the NULL/0 state. */
+        /* Update type from overriding entry's filemode (may differ between profiles) */
+        switch (git_tree_entry_filemode(dup_entry)) {
+            case GIT_FILEMODE_BLOB_EXECUTABLE:
+                ctx->manifest->entries[existing_idx].type = STATE_FILE_EXECUTABLE;
+                break;
+            case GIT_FILEMODE_LINK:
+                ctx->manifest->entries[existing_idx].type = STATE_FILE_SYMLINK;
+                break;
+            default:
+                ctx->manifest->entries[existing_idx].type = STATE_FILE_REGULAR;
+                break;
+        }
+
+        /* Other VWD fields remain NULL/0 (not populated for Git-based manifests).
+         * The existing entry already has these initialized from initial creation. */
     } else {
         /* Add new entry - grow array if needed */
         if (ctx->manifest->count >= ctx->capacity) {
@@ -1160,13 +1231,8 @@ static int manifest_build_callback(
         new_entry->git_oid = NULL;
         new_entry->blob_oid = NULL;
 
-        /* Derive type from Git filemode (executable bit detection)
-         * Uses same logic as extract_file_metadata_from_tree_entry() in manifest.c */
-        git_filemode_t filemode = git_tree_entry_filemode(dup_entry);
-        switch (filemode) {
-            case GIT_FILEMODE_BLOB:
-                new_entry->type = STATE_FILE_REGULAR;
-                break;
+        /* Derive type from Git filemode (executable bit detection) */
+        switch (git_tree_entry_filemode(dup_entry)) {
             case GIT_FILEMODE_BLOB_EXECUTABLE:
                 new_entry->type = STATE_FILE_EXECUTABLE;
                 break;
@@ -1184,6 +1250,7 @@ static int manifest_build_callback(
         new_entry->group = NULL;
         new_entry->encrypted = false;
         new_entry->deployed_at = 0;
+        new_entry->stat_cache = STAT_CACHE_UNSET;
 
         /* Store index in hashmap (offset by 1 to distinguish from NULL) */
         err = hashmap_set(ctx->path_map, filesystem_path,
@@ -1572,7 +1639,18 @@ error_t *profile_build_manifest_from_tree(
     temp_profile->ref = NULL;
     temp_profile->tree = tree;  /* Borrowed - caller owns tree lifetime */
     temp_profile->auto_detected = false;
-    temp_profile->custom_prefix = NULL;
+    if (custom_prefix) {
+        temp_profile->custom_prefix = strdup(custom_prefix);
+        if (!temp_profile->custom_prefix) {
+            free(temp_profile->name);
+            free(temp_profile);
+            temp_profile = NULL;
+            err = ERROR(ERR_MEMORY, "Failed to duplicate custom_prefix");
+            goto cleanup;
+        }
+    } else {
+        temp_profile->custom_prefix = NULL;
+    }
 
     /* Store in manifest for cleanup */
     manifest->owned_profile = temp_profile;
@@ -1591,6 +1669,12 @@ error_t *profile_build_manifest_from_tree(
     };
 
     err = gitops_tree_walk(tree, manifest_build_callback, &ctx);
+
+    /* Release borrowed tree reference — walk complete, entries hold owned copies.
+     * This prevents double-free: caller owns tree lifetime, profile_free must not
+     * free it when manifest_free() cleans up owned_profile. */
+    temp_profile->tree = NULL;
+
     if (err || ctx.error) {
         err = ctx.error ? ctx.error : err;
         err = error_wrap(err, "Failed to build manifest from tree");

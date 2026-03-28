@@ -21,6 +21,7 @@
 #include "infra/path.h"
 #include "utils/config.h"
 #include "utils/hashmap.h"
+#include "utils/match.h"
 #include "utils/output.h"
 #include "utils/timeutil.h"
 
@@ -887,6 +888,74 @@ cleanup:
 }
 
 /**
+ * Validate file filter entries against manifest
+ *
+ * Checks each filter entry (exact paths and glob patterns) against all
+ * manifest storage paths. Outputs a warning for each unmatched entry,
+ * which likely indicates a typo.
+ *
+ * @param file_filter File filter to validate (NULL = no validation, returns 0)
+ * @param manifest Manifest to check against (must not be NULL if filter is non-NULL)
+ * @param out Output context for warnings
+ * @return Number of filter entries that matched no manifest entry (0 = all matched)
+ */
+static size_t validate_filter_paths(
+    const path_filter_t *file_filter,
+    const manifest_t *manifest,
+    output_ctx_t *out
+) {
+    if (!file_filter || !manifest) return 0;
+
+    size_t unmatched = 0;
+
+    /* Check exact paths from hashmap */
+    hashmap_iter_t iter;
+    hashmap_iter_init(&iter, file_filter->exact_paths);
+    const char *filter_path;
+    while (hashmap_iter_next(&iter, &filter_path, NULL)) {
+        bool found = false;
+        size_t filter_len = strlen(filter_path);
+
+        for (size_t i = 0; i < manifest->count; i++) {
+            const char *sp = manifest->entries[i].storage_path;
+            if (strcmp(sp, filter_path) == 0) {
+                found = true;
+                break;
+            }
+            /* Directory prefix: filter path is ancestor of storage path */
+            if (strncmp(sp, filter_path, filter_len) == 0 && sp[filter_len] == '/') {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            output_warning(out, "No managed file matches '%s'", filter_path);
+            unmatched++;
+        }
+    }
+
+    /* Check glob patterns */
+    for (size_t g = 0; g < file_filter->glob_count; g++) {
+        bool found = false;
+        for (size_t i = 0; i < manifest->count; i++) {
+            if (match_pattern(file_filter->glob_patterns[g],
+                              manifest->entries[i].storage_path, MATCH_DOUBLESTAR)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            output_warning(out, "No managed file matches pattern '%s'",
+                           file_filter->glob_patterns[g]);
+            unmatched++;
+        }
+    }
+
+    return unmatched;
+}
+
+/**
  * Diff commit to workspace - Compare historical commit with filesystem
  *
  * CURRENT LIMITATION: Single-profile comparison only.
@@ -1001,7 +1070,13 @@ static error_t *diff_commit_to_workspace(
     }
 
     if (diff_count == 0 && !opts->name_only) {
-        output_info(out, "No differences between commit and workspace\n");
+        size_t unmatched = validate_filter_paths(file_filter, manifest, out);
+        if (unmatched > 0) {
+            output_hint(out, "Use 'dotta list <profile>' to see managed files");
+        }
+        if (unmatched == 0 || (file_filter && unmatched < file_filter->count)) {
+            output_info(out, "No differences between commit and workspace\n");
+        }
     }
 
 cleanup:
@@ -1290,7 +1365,19 @@ static error_t *diff_workspace(
     /* Step 3: Get cached resources from workspace */
     const manifest_t *manifest = workspace_get_manifest(ws);
 
-    /* Step 4: Borrow content cache from workspace
+    /* Step 4: Validate file filter paths against manifest */
+    if (file_filter) {
+        size_t unmatched = validate_filter_paths(file_filter, manifest, out);
+        if (unmatched > 0) {
+            output_hint(out, "Use 'dotta list <profile>' to see managed files");
+            if (unmatched == file_filter->count) {
+                /* All filter paths are invalid — nothing to diff */
+                goto cleanup;
+            }
+        }
+    }
+
+    /* Step 5: Borrow content cache from workspace
      *
      * Reuses the workspace's cache which was populated during file analysis.
      * For encrypted files, this avoids redundant blob reads and decryption.
@@ -1303,7 +1390,7 @@ static error_t *diff_workspace(
         goto cleanup;
     }
 
-    /* Step 5: Filter and present diffs based on direction */
+    /* Step 6: Filter and present diffs based on direction */
     size_t total_diff_count = 0;
 
     if (opts->direction == DIFF_BOTH) {

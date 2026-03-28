@@ -321,9 +321,6 @@ static void print_safety_violations(
             } else if (strcmp(v->reason, SAFETY_REASON_TYPE_CHANGED) == 0) {
                 reason_display = "type changed";
                 icon = "⚠";
-            } else if (strcmp(v->reason, SAFETY_REASON_FILE_REMOVED) == 0) {
-                reason_display = "removed from profile";
-                icon = "!";
             } else if (strcmp(v->reason, SAFETY_REASON_CANNOT_VERIFY) == 0) {
                 reason_display = "cannot verify";
                 icon = "?";

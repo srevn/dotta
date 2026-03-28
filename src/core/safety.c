@@ -61,7 +61,6 @@ typedef enum {
  * Tree is loaded lazily on first file-in-tree check for each profile.
  */
 typedef struct {
-    char *profile_name;  /* Owned copy of profile name (hashmap key) */
     bool exists;         /* true if profile branch exists */
     git_tree *tree;      /* Cached tree for file-in-tree checks (NULL until loaded, NULL if !exists) */
     bool tree_loaded;    /* true if tree load was attempted (avoids retrying on failure) */
@@ -78,7 +77,6 @@ static void free_profile_cache(void *entry) {
     if (cache->tree) {
         git_tree_free(cache->tree);
     }
-    free(cache->profile_name);
     free(cache);
 }
 
@@ -92,7 +90,7 @@ static void free_profile_cache(void *entry) {
  * @param cache Profile existence cache
  * @param profile_name Profile to check
  * @param out_exists Output: true if branch exists, false otherwise
- * @return Error on fatal failure (memory), NULL on success
+ * @return Error on failure (memory or Git lookup), NULL on success
  */
 static error_t *check_profile_exists(
     git_repository *repo,
@@ -116,22 +114,17 @@ static error_t *check_profile_exists(
     bool exists = false;
     error_t *err = gitops_branch_exists(repo, profile_name, &exists);
     if (err) {
-        /* Treat lookup errors as "doesn't exist" (conservative) */
-        error_free(err);
-        exists = false;
+        /* Propagate Git errors — caller emits CANNOT_VERIFY.
+         * Don't cache failures (transient errors should be retryable). */
+        return err;
     }
 
-    /* Cache the result */
+    /* Cache successful lookups only */
     profile_cache_t *entry = calloc(1, sizeof(profile_cache_t));
     if (!entry) {
         return ERROR(ERR_MEMORY, "Failed to allocate cache entry");
     }
 
-    entry->profile_name = strdup(profile_name);
-    if (!entry->profile_name) {
-        free(entry);
-        return ERROR(ERR_MEMORY, "Failed to allocate profile name");
-    }
     entry->exists = exists;
 
     /* Insert into cache */
@@ -152,20 +145,17 @@ static error_t *check_profile_exists(
  * given storage_path exists in it. This detects files removed from Git
  * externally while the branch still exists.
  *
- * Error handling follows a two-tier conservative model:
- * - Tree loading failures (ref/commit/tree resolution): treated as
- *   "not in tree" (returns NULL + out_in_tree=false). These failures
- *   indicate the profile is unusable, so RELEASED is appropriate.
- * - Tree entry lookup failures (corrupt tree, OOM on valid tree):
- *   returns an error so the caller can use CANNOT_VERIFY (more
- *   conservative than RELEASED — preserves the state entry).
+ * Error handling propagates all failures as errors so the caller
+ * can emit CANNOT_VERIFY (blocks removal, preserves state entry).
+ * Tree loading is only cached on success — transient failures
+ * allow retries for subsequent files from the same profile.
  *
  * @param repo Git repository
  * @param cache Profile cache (tree loaded lazily and cached)
  * @param profile_name Profile to check
  * @param storage_path Storage path to look up (e.g., "home/.bashrc")
  * @param out_in_tree Output: true if file exists in tree
- * @return Error on fatal failure (memory), NULL on success
+ * @return Error on failure (Git or memory), NULL on success
  */
 static error_t *check_file_in_tree(
     git_repository *repo,
@@ -189,32 +179,36 @@ static error_t *check_file_in_tree(
         return NULL;
     }
 
-    /* Lazy-load tree on first file-in-tree check for this profile */
+    /* Lazy-load tree on first file-in-tree check for this profile.
+     * Only set tree_loaded on success — failures allow retries. */
     if (!cached->tree_loaded) {
-        cached->tree_loaded = true;
-
         /* Resolve branch HEAD to tree */
         git_reference *ref = NULL;
         char refname[DOTTA_REFNAME_MAX];
         error_t *err = gitops_build_refname(refname, sizeof(refname),
                                             "refs/heads/%s", profile_name);
         if (err) {
-            error_free(err);
-            return NULL;  /* Can't build refname — treat as not in tree */
+            return err;
         }
 
         err = gitops_lookup_reference(repo, refname, &ref);
         if (err) {
-            error_free(err);
-            return NULL;  /* Can't resolve ref — treat as not in tree */
+            return err;
+        }
+
+        const git_oid *target = git_reference_target(ref);
+        if (!target) {
+            git_reference_free(ref);
+            return ERROR(ERR_GIT, "Symbolic reference for profile '%s'", profile_name);
         }
 
         git_commit *commit = NULL;
-        int git_err = git_commit_lookup(&commit, repo, git_reference_target(ref));
+        int git_err = git_commit_lookup(&commit, repo, target);
         git_reference_free(ref);
 
         if (git_err != 0) {
-            return NULL;  /* Can't load commit — treat as not in tree */
+            return ERROR(ERR_GIT, "Failed to load commit for profile '%s': %s",
+                profile_name, git_error_last() ? git_error_last()->message : "unknown");
         }
 
         git_tree *tree = NULL;
@@ -222,15 +216,12 @@ static error_t *check_file_in_tree(
         git_commit_free(commit);
 
         if (git_err != 0) {
-            return NULL;  /* Can't load tree — treat as not in tree */
+            return ERROR(ERR_GIT, "Failed to load tree for profile '%s': %s",
+                profile_name, git_error_last() ? git_error_last()->message : "unknown");
         }
 
-        cached->tree = tree;  /* Transfer ownership to cache */
-    }
-
-    if (!cached->tree) {
-        /* Tree load previously failed */
-        return NULL;
+        cached->tree = tree;          /* Transfer ownership to cache */
+        cached->tree_loaded = true;   /* Cache success only */
     }
 
     /* Check if file exists in tree via path traversal
@@ -251,7 +242,7 @@ static error_t *check_file_in_tree(
         /* Unexpected error (corrupt tree, OOM). Propagate so caller
          * can use CANNOT_VERIFY instead of RELEASED. */
         return ERROR(ERR_GIT, "Failed to check tree entry for '%s': %s",
-                     storage_path, git_error_last() ? git_error_last()->message : "unknown");
+            storage_path, git_error_last() ? git_error_last()->message : "unknown");
     }
     /* GIT_ENOTFOUND: file not in tree — out_in_tree stays false */
 
@@ -332,7 +323,9 @@ static error_t *add_violation(
  * 2. DIVERGENCE_TYPE - file type changed (TYPE_CHANGED violation)
  * 3. DIVERGENCE_MODE/OWNERSHIP - permissions changed (MODE_CHANGED violation)
  * 4. DIVERGENCE_UNVERIFIED - verification failed (CANNOT_VERIFY violation)
- * 5. DIVERGENCE_NONE - safe to remove (no violation)
+ * 5. DIVERGENCE_ENCRYPTION/STALE - known-safe (no user modification)
+ * 6. DIVERGENCE_NONE - safe to remove (no violation)
+ * 7. Unknown flags - CANNOT_VERIFY (defensive default)
  *
  * Note: DIVERGENCE_UNVERIFIED now only occurs for:
  * - Encrypted files > 100MB (AEAD requires full ciphertext, OOM protection)
@@ -388,8 +381,22 @@ static check_result_t map_divergence_to_violation(
         return *out_err ? SAFETY_CHECK_ERROR : SAFETY_CHECK_DONE;
     }
 
-    /* Unrecognized divergence flags (future-proofing) - treat as safe */
-    return SAFETY_CHECK_DONE;
+    /* All priority flags handled above. Remaining flags:
+     * - ENCRYPTION: Policy mismatch (not user modification) — safe
+     * - STALE: VWD cache outdated (Git changed) — irrelevant for removal
+     * Unknown flags: block removal until explicitly handled above. */
+    static const divergence_type_t known_flags = DIVERGENCE_CONTENT | DIVERGENCE_TYPE |
+        DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP | DIVERGENCE_UNVERIFIED |
+        DIVERGENCE_ENCRYPTION | DIVERGENCE_STALE;
+
+    if (orphan->divergence & ~known_flags) {
+        /* Unknown divergence type — cannot assess safety, block removal */
+        *out_err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
+                                 orphan->profile, SAFETY_REASON_CANNOT_VERIFY, false);
+        return *out_err ? SAFETY_CHECK_ERROR : SAFETY_CHECK_DONE;
+    }
+
+    return SAFETY_CHECK_DONE;  /* Only known-safe flags — safe to remove */
 }
 
 /**
@@ -454,11 +461,6 @@ static check_result_t check_branch_existence(
         return SAFETY_CHECK_DONE;
     }
 
-    if (!state_entry) {
-        /* Not in state - shouldn't happen for orphans, but handle gracefully */
-        return SAFETY_CHECK_CONTINUE;  /* Proceed to divergence routing (defensive) */
-    }
-
     /* Extract lifecycle state and storage_path before freeing entry */
     bool is_controlled_deletion = state_entry->state &&
                                   strcmp(state_entry->state, STATE_DELETED) == 0;
@@ -509,9 +511,25 @@ static check_result_t check_branch_existence(
     bool profile_exists = false;
     err = check_profile_exists(repo, cache, orphan->profile, &profile_exists);
     if (err) {
+        if (error_code(err) == ERR_MEMORY) {
+            /* Memory allocation failure — fatal */
+            free(storage_path);
+            *out_err = error_wrap(err, "Failed to check profile existence for '%s'",
+                                  orphan->profile);
+            return SAFETY_CHECK_ERROR;
+        }
+        /* Git lookup failed (transient I/O, locked packfile, etc.)
+         * Cannot determine branch existence — block removal to preserve state.
+         * Don't emit RELEASED (would permanently delete state entry). */
+        error_free(err);
         free(storage_path);
-        *out_err = error_wrap(err, "Failed to check profile existence for '%s'", orphan->profile);
-        return SAFETY_CHECK_ERROR;
+        err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
+                            orphan->profile, SAFETY_REASON_CANNOT_VERIFY, false);
+        if (err) {
+            *out_err = err;
+            return SAFETY_CHECK_ERROR;
+        }
+        return SAFETY_CHECK_DONE;
     }
 
     if (!profile_exists) {
@@ -534,36 +552,46 @@ static check_result_t check_branch_existence(
      */
     const char *lookup_path = storage_path ? storage_path : orphan->storage_path;
 
-    if (lookup_path) {
-        bool file_in_tree = false;
-        err = check_file_in_tree(repo, cache, orphan->profile, lookup_path, &file_in_tree);
+    if (!lookup_path) {
+        /* No storage path available — cannot verify file in Git tree.
+         * Block removal rather than silently bypassing defense-in-depth check. */
+        err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
+                            orphan->profile, SAFETY_REASON_CANNOT_VERIFY, false);
         if (err) {
-            /* Tree entry lookup failed (corrupt tree, OOM).
-             * Degrade to CANNOT_VERIFY — don't release (destructive to state),
-             * don't allow removal (can't confirm Git backing). */
-            error_free(err);
-            free(storage_path);
-            err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
-                                orphan->profile, SAFETY_REASON_CANNOT_VERIFY, false);
-            if (err) {
-                *out_err = err;
-                return SAFETY_CHECK_ERROR;
-            }
-            return SAFETY_CHECK_DONE;
+            *out_err = err;
+            return SAFETY_CHECK_ERROR;
         }
+        return SAFETY_CHECK_DONE;
+    }
 
-        if (!file_in_tree) {
-            /* Branch exists but file doesn't — loss of authority.
-             * Git cannot back this file. Release from management. */
-            free(storage_path);
-            err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
-                                orphan->profile, SAFETY_REASON_RELEASED, false);
-            if (err) {
-                *out_err = err;
-                return SAFETY_CHECK_ERROR;
-            }
-            return SAFETY_CHECK_DONE;
+    bool file_in_tree = false;
+    err = check_file_in_tree(repo, cache, orphan->profile, lookup_path, &file_in_tree);
+    if (err) {
+        /* Tree entry lookup failed (corrupt tree, OOM).
+         * Degrade to CANNOT_VERIFY — don't release (destructive to state),
+         * don't allow removal (can't confirm Git backing). */
+        error_free(err);
+        free(storage_path);
+        err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
+                            orphan->profile, SAFETY_REASON_CANNOT_VERIFY, false);
+        if (err) {
+            *out_err = err;
+            return SAFETY_CHECK_ERROR;
         }
+        return SAFETY_CHECK_DONE;
+    }
+
+    if (!file_in_tree) {
+        /* Branch exists but file doesn't — loss of authority.
+         * Git cannot back this file. Release from management. */
+        free(storage_path);
+        err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
+                            orphan->profile, SAFETY_REASON_RELEASED, false);
+        if (err) {
+            *out_err = err;
+            return SAFETY_CHECK_ERROR;
+        }
+        return SAFETY_CHECK_DONE;
     }
 
     free(storage_path);
@@ -639,8 +667,9 @@ error_t *safety_check_orphans(
          * - STATE_INACTIVE/ACTIVE + branch exists: Proceed to divergence routing
          * - STATE_INACTIVE/ACTIVE + branch gone: RELEASED violation
          */
-        check_result_t check_result = check_branch_existence(repo, state, orphan,
-                                                             cache, result, &err);
+        check_result_t check_result = check_branch_existence(
+            repo, state, orphan, cache, result, &err
+        );
 
         if (check_result == SAFETY_CHECK_ERROR) {
             goto cleanup;

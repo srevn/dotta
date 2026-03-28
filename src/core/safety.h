@@ -61,7 +61,6 @@ typedef struct {
 #define SAFETY_REASON_MODIFIED         "modified"          /* Content changed */
 #define SAFETY_REASON_MODE_CHANGED     "mode_changed"      /* Permissions changed */
 #define SAFETY_REASON_TYPE_CHANGED     "type_changed"      /* File<->symlink conversion */
-#define SAFETY_REASON_FILE_REMOVED     "file_removed"      /* Removed from profile */
 #define SAFETY_REASON_CANNOT_VERIFY    "cannot_verify"     /* Unable to verify (I/O, permissions) */
 
 /**

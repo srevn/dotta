@@ -16,6 +16,7 @@ typedef struct {
     char *username;
     char *password;
     bool credentials_provided;
+    int attempts;              /* Retry counter to prevent infinite callback loop */
 } credential_context_t;
 
 /**

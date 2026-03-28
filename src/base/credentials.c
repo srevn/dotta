@@ -15,6 +15,18 @@
 /* Maximum length for username and password */
 #define CRED_MAX_LEN 256
 
+/**
+ * Secure zeroing that cannot be optimized away by the compiler.
+ * The volatile qualifier prevents dead-store elimination, ensuring
+ * sensitive data (passwords, credentials) is actually cleared from memory.
+ */
+static void secure_zero(void *ptr, size_t len) {
+    volatile unsigned char *p = ptr;
+    while (len--) {
+        *p++ = 0;
+    }
+}
+
 /* Forward declarations */
 static char *extract_hostname(const char *url);
 static char *extract_protocol(const char *url);
@@ -51,19 +63,28 @@ static bool is_valid_credential_field(const char *field) {
 }
 
 /**
- * Validate hostname to prevent command injection
- * Hostnames should only contain alphanumeric characters, dots, hyphens, and underscores
+ * Validate host string (hostname or hostname:port)
+ *
+ * Hostnames: alphanumeric, dots, hyphens, underscores
+ * Port (optional): colon followed by digits only
  */
 static bool is_valid_hostname(const char *hostname) {
     if (!hostname || !*hostname) {
         return false;
     }
 
+    bool in_port = false;
     for (const char *p = hostname; *p; p++) {
-        if (!((*p >= 'a' && *p <= 'z') ||
-              (*p >= 'A' && *p <= 'Z') ||
-              (*p >= '0' && *p <= '9') ||
-              *p == '.' || *p == '-' || *p == '_')) {
+        if (in_port) {
+            if (!(*p >= '0' && *p <= '9')) {
+                return false;
+            }
+        } else if (*p == ':') {
+            in_port = true;
+        } else if (!((*p >= 'a' && *p <= 'z') ||
+                     (*p >= 'A' && *p <= 'Z') ||
+                     (*p >= '0' && *p <= '9') ||
+                     *p == '.' || *p == '-' || *p == '_')) {
             return false;
         }
     }
@@ -130,10 +151,13 @@ credential_context_t *credential_context_create(const char *url) {
     if (!ctx) {
         return NULL;
     }
-    ctx->url = url ? strdup(url) : NULL;
-    ctx->username = NULL;
-    ctx->password = NULL;
-    ctx->credentials_provided = false;
+    if (url) {
+        ctx->url = strdup(url);
+        if (!ctx->url) {
+            free(ctx);
+            return NULL;
+        }
+    }
     return ctx;
 }
 
@@ -146,11 +170,11 @@ void credential_context_free(credential_context_t *ctx) {
     }
     free(ctx->url);
     if (ctx->username) {
-        memset(ctx->username, 0, strlen(ctx->username));
+        secure_zero(ctx->username, strlen(ctx->username));
         free(ctx->username);
     }
     if (ctx->password) {
-        memset(ctx->password, 0, strlen(ctx->password));
+        secure_zero(ctx->password, strlen(ctx->password));
         free(ctx->password);
     }
     free(ctx);
@@ -293,10 +317,13 @@ static int get_credentials_from_helper(
     char *password,
     size_t max_len
 ) {
-    /* SECURITY: Validate hostname to prevent command injection
-     * This is the ONLY user-derived input in the shell command.
+    /* SECURITY: Validate inputs before embedding in heredoc command.
+     * Hostname and protocol are the only user-derived inputs in the shell
+     * command. The single-quoted heredoc (<<'EOF') prevents shell expansion,
+     * but newlines in either field could break the heredoc structure.
      * All credential fields come from the helper's OUTPUT (we read them). */
-    if (!is_valid_hostname(hostname) || !protocol) {
+    if (!is_valid_hostname(hostname) || !protocol ||
+        !is_valid_credential_field(protocol)) {
         return -1;
     }
 
@@ -343,6 +370,9 @@ static int get_credentials_from_helper(
         }
     }
 
+    /* Zero the line buffer - may contain credential data */
+    secure_zero(line, sizeof(line));
+
     int status = pclose(fp);
 
     /* Check if we got credentials */
@@ -354,41 +384,56 @@ static int get_credentials_from_helper(
 }
 
 /**
- * Extract hostname from URL
+ * Extract host (hostname[:port]) from URL
+ *
+ * Handles standard URLs (https://host:port/path) and
+ * SCP-style URLs (user@host:path) where ':' is a path separator.
+ *
+ * Returns the host field suitable for the git credential protocol,
+ * including port when present in standard URLs.
  */
 static char *extract_hostname(const char *url) {
-    /* Skip protocol */
+    /* Determine URL style and skip protocol */
+    bool has_protocol = false;
     const char *start = strstr(url, "://");
     if (start) {
+        has_protocol = true;
         start += 3;
     } else {
         start = url;
     }
 
-    /* Find end of hostname (before '/' or ':') */
-    const char *end = start;
-    while (*end && *end != '/' && *end != ':' && *end != '@') {
-        end++;
-    }
-
-    /* Handle username@ prefix */
-    const char *at = strchr(start, '@');
-    if (at && at < end) {
-        start = at + 1;
-        end = start;
-        while (*end && *end != '/' && *end != ':') {
-            end++;
+    /* Find end of authority section */
+    const char *authority_end = start;
+    if (has_protocol) {
+        /* Standard URL: authority ends at '/' or end of string */
+        while (*authority_end && *authority_end != '/') {
+            authority_end++;
+        }
+    } else {
+        /* SCP-style (user@host:path): ':' is a path separator, not port */
+        while (*authority_end && *authority_end != '/' && *authority_end != ':') {
+            authority_end++;
         }
     }
 
-    size_t len = end - start;
-    char *hostname = malloc(len + 1);
-    if (hostname) {
-        memcpy(hostname, start, len);
-        hostname[len] = '\0';
+    /* Skip userinfo@ prefix if present within authority */
+    for (const char *p = start; p < authority_end; p++) {
+        if (*p == '@') {
+            start = p + 1;
+            break;
+        }
     }
 
-    return hostname;
+    /* Extract host (includes port for standard URLs) */
+    size_t len = authority_end - start;
+    char *host = malloc(len + 1);
+    if (host) {
+        memcpy(host, start, len);
+        host[len] = '\0';
+    }
+
+    return host;
 }
 
 /**
@@ -427,9 +472,8 @@ static char *find_ssh_key(void) {
     /* List of common SSH key filenames (in order of preference) */
     const char *key_names[] = {
         ".ssh/id_ed25519",
-        ".ssh/id_rsa",
         ".ssh/id_ecdsa",
-        ".ssh/id_dsa",
+        ".ssh/id_rsa",
         NULL
     };
 
@@ -465,6 +509,20 @@ int credentials_callback(
 ) {
     credential_context_t *ctx = (credential_context_t *)payload;
     int err = -1;
+
+    if (!url) {
+        return GIT_PASSTHROUGH;
+    }
+
+    /* Prevent infinite retry loop.
+     * libgit2 calls this callback repeatedly when the server rejects
+     * credentials. Without tracking, we'd return the same credentials
+     * each time, looping forever. */
+    if (ctx) {
+        if (ctx->attempts++ > 0) {
+            return GIT_EAUTH;
+        }
+    }
 
     /* Determine username */
     const char *username = username_from_url;
@@ -517,10 +575,11 @@ int credentials_callback(
         /* Extract hostname from URL */
         char *hostname = extract_hostname(url);
         char *protocol = extract_protocol(url);
-        
+
         if (hostname && protocol) {
             char cred_username[CRED_MAX_LEN];
             char cred_password[CRED_MAX_LEN];
+            bool got_credentials = false;
 
             /* Try to get credentials from git credential helper */
             if (get_credentials_from_helper(
@@ -540,20 +599,26 @@ int credentials_callback(
                     if (ctx) {
                         ctx->username = strdup(cred_username);
                         ctx->password = strdup(cred_password);
-                        ctx->credentials_provided = true;
+                        ctx->credentials_provided = (ctx->username && ctx->password);
                     }
-                    free(hostname);
-                    free(protocol);
-                    return 0;
+                    got_credentials = true;
                 }
             } else {
                 /* Try anonymous access for public repos */
                 err = git_credential_userpass_plaintext_new(out, "", "");
                 if (err == 0) {
-                    free(hostname);
-                    free(protocol);
-                    return 0;
+                    got_credentials = true;
                 }
+            }
+
+            /* Zero stack buffers that may contain credential data */
+            secure_zero(cred_username, sizeof(cred_username));
+            secure_zero(cred_password, sizeof(cred_password));
+
+            if (got_credentials) {
+                free(hostname);
+                free(protocol);
+                return 0;
             }
         }
         free(hostname);

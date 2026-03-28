@@ -230,7 +230,8 @@ error_t *worktree_create_temp(
     }
 
     /* Create worktree using libgit2 (it will create the directory) */
-    git_worktree_add_options opts = GIT_WORKTREE_ADD_OPTIONS_INIT;
+    git_worktree_add_options opts;
+    git_worktree_add_options_init(&opts, GIT_WORKTREE_ADD_OPTIONS_VERSION);
 
     int git_err = git_worktree_add(&wt->worktree, repo, wt->name, wt->path, &opts);
     if (git_err < 0) {
@@ -292,7 +293,8 @@ error_t *worktree_checkout_branch(
      * - Clean working directory: transition allowed, files updated
      * - Modified files: checkout blocked with GIT_ECONFLICT
      */
-    git_checkout_options checkout_opts = GIT_CHECKOUT_OPTIONS_INIT;
+    git_checkout_options checkout_opts;
+    git_checkout_options_init(&checkout_opts, GIT_CHECKOUT_OPTIONS_VERSION);
     checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE;
 
     git_err = git_checkout_tree(wt->repo, commit, &checkout_opts);

@@ -356,7 +356,8 @@ static error_t *generate_text_diff(
     }
 
     /* Configure diff options */
-    git_diff_options diff_opts = GIT_DIFF_OPTIONS_INIT;
+    git_diff_options diff_opts;
+    git_diff_options_init(&diff_opts, GIT_DIFF_OPTIONS_VERSION);
     diff_opts.context_lines = 3;
     diff_opts.interhunk_lines = 0;
     diff_opts.flags = GIT_DIFF_NORMAL;

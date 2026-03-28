@@ -1255,7 +1255,8 @@ static error_t *diff_commits(
     }
 
     /* Generate diff with file filtering options */
-    git_diff_options diff_opts = GIT_DIFF_OPTIONS_INIT;
+    git_diff_options diff_opts;
+    git_diff_options_init(&diff_opts, GIT_DIFF_OPTIONS_VERSION);
     err = build_diff_pathspec(file_filter, &diff_opts);
     if (err) {
         goto cleanup;

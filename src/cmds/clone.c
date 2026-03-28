@@ -584,7 +584,8 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     }
 
     /* Clean working directory */
-    git_checkout_options checkout_opts = GIT_CHECKOUT_OPTIONS_INIT;
+    git_checkout_options checkout_opts;
+    git_checkout_options_init(&checkout_opts, GIT_CHECKOUT_OPTIONS_VERSION);
     checkout_opts.checkout_strategy = GIT_CHECKOUT_FORCE;
     git_err = git_checkout_head(repo, &checkout_opts);
     if (git_err < 0) {

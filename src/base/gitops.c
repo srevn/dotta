@@ -1010,7 +1010,8 @@ error_t *gitops_clone(
     CHECK_NULL(url);
     CHECK_NULL(local_path);
 
-    git_clone_options opts = GIT_CLONE_OPTIONS_INIT;
+    git_clone_options opts;
+    git_clone_options_init(&opts, GIT_CLONE_OPTIONS_VERSION);
 
     /* Set up transfer callbacks if context provided */
     if (xfer) {
@@ -1059,7 +1060,8 @@ error_t *gitops_fetch_branch(
     }
 
     /* Set up transfer callbacks if context provided */
-    git_fetch_options fetch_opts = GIT_FETCH_OPTIONS_INIT;
+    git_fetch_options fetch_opts;
+    git_fetch_options_init(&fetch_opts, GIT_FETCH_OPTIONS_VERSION);
     if (xfer) {
         fetch_opts.callbacks.credentials = transfer_credentials_callback;
         fetch_opts.callbacks.transfer_progress = transfer_progress_callback;
@@ -1160,7 +1162,8 @@ error_t *gitops_fetch_branches(
     }
 
     /* Set up transfer callbacks if context provided */
-    git_fetch_options fetch_opts = GIT_FETCH_OPTIONS_INIT;
+    git_fetch_options fetch_opts;
+    git_fetch_options_init(&fetch_opts, GIT_FETCH_OPTIONS_VERSION);
     if (xfer) {
         fetch_opts.callbacks.credentials = transfer_credentials_callback;
         fetch_opts.callbacks.transfer_progress = transfer_progress_callback;
@@ -1222,7 +1225,8 @@ error_t *gitops_push_branch(
     }
 
     /* Set up transfer callbacks if context provided */
-    git_push_options push_opts = GIT_PUSH_OPTIONS_INIT;
+    git_push_options push_opts;
+    git_push_options_init(&push_opts, GIT_PUSH_OPTIONS_VERSION);
     if (xfer) {
         push_opts.callbacks.credentials = transfer_credentials_callback;
         push_opts.callbacks.push_transfer_progress = transfer_push_progress_callback;
@@ -1281,7 +1285,8 @@ error_t *gitops_delete_remote_branch(
     }
 
     /* Set up transfer callbacks if context provided */
-    git_push_options push_opts = GIT_PUSH_OPTIONS_INIT;
+    git_push_options push_opts;
+    git_push_options_init(&push_opts, GIT_PUSH_OPTIONS_VERSION);
     if (xfer) {
         push_opts.callbacks.credentials = transfer_credentials_callback;
         push_opts.callbacks.push_transfer_progress = transfer_push_progress_callback;
@@ -1662,7 +1667,8 @@ error_t *gitops_merge_trees_safe(
     }
 
     /* Perform three-way merge on trees */
-    git_merge_options merge_opts = GIT_MERGE_OPTIONS_INIT;
+    git_merge_options merge_opts;
+    git_merge_options_init(&merge_opts, GIT_MERGE_OPTIONS_VERSION);
     git_err = git_merge_trees(
         &index, repo, ancestor_tree, our_tree, their_tree, &merge_opts
     );
@@ -1792,7 +1798,8 @@ error_t *gitops_rebase_inmemory_safe(
     /* Initialize in-memory rebase
      * CRITICAL: opts.inmemory = 1 ensures HEAD is never modified
      */
-    git_rebase_options opts = GIT_REBASE_OPTIONS_INIT;
+    git_rebase_options opts;
+    git_rebase_options_init(&opts, GIT_REBASE_OPTIONS_VERSION);
     opts.inmemory = 1;  /* This is the key - never touch HEAD or working directory */
 
     git_err = git_rebase_init(&rebase, repo, branch_commit, NULL, onto_commit, &opts);
@@ -1928,7 +1935,8 @@ error_t *gitops_sync_worktree(
         return NULL;
     }
 
-    git_checkout_options opts = GIT_CHECKOUT_OPTIONS_INIT;
+    git_checkout_options opts;
+    git_checkout_options_init(&opts, GIT_CHECKOUT_OPTIONS_VERSION);
     opts.checkout_strategy = strategy;
 
     int err = git_checkout_head(repo, &opts);

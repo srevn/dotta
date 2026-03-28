@@ -315,7 +315,9 @@ error_t *upstream_query_remote_branches(
     }
 
     /* Setup callbacks for authentication */
-    git_remote_callbacks callbacks = GIT_REMOTE_CALLBACKS_INIT;
+    git_remote_callbacks callbacks;
+    memset(&callbacks, 0, sizeof(callbacks));
+    callbacks.version = GIT_REMOTE_CALLBACKS_VERSION;
     if (cred_ctx) {
         callbacks.credentials = credentials_callback;
         callbacks.payload = cred_ctx;

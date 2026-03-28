@@ -39,7 +39,8 @@ static error_t *init_repository(const char *path, git_repository **out) {
     }
 
     /* Create new repository */
-    git_repository_init_options opts = GIT_REPOSITORY_INIT_OPTIONS_INIT;
+    git_repository_init_options opts;
+    git_repository_init_options_init(&opts, GIT_REPOSITORY_INIT_OPTIONS_VERSION);
     opts.flags = GIT_REPOSITORY_INIT_MKPATH;
 
     err = git_repository_init_ext(&repo, path, &opts);

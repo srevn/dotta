@@ -173,7 +173,8 @@ static error_t *repo_ensure_dotta_worktree(git_repository *repo) {
         return error_from_git(git_err);
     }
 
-    git_checkout_options checkout_opts = GIT_CHECKOUT_OPTIONS_INIT;
+    git_checkout_options checkout_opts;
+    git_checkout_options_init(&checkout_opts, GIT_CHECKOUT_OPTIONS_VERSION);
     checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE;
 
     git_err = git_checkout_tree(repo, target_commit, &checkout_opts);

@@ -151,7 +151,8 @@ static error_t *force_push_branch(
     }
 
     /* Set up transfer callbacks if context provided */
-    git_push_options push_opts = GIT_PUSH_OPTIONS_INIT;
+    git_push_options push_opts;
+    git_push_options_init(&push_opts, GIT_PUSH_OPTIONS_VERSION);
     if (xfer) {
         push_opts.callbacks.credentials = transfer_credentials_callback;
         push_opts.callbacks.push_transfer_progress = transfer_push_progress_callback;

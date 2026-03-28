@@ -60,7 +60,7 @@ function __dotta_files
         end
 
         switch $cmd
-            case add remove list show revert ignore
+            case apply update add remove list show revert ignore diff
                 # First positional after command might be profile
                 set -l pos_idx (math $cmd_idx + 1)
                 if test $pos_idx -le (count $tokens)
@@ -340,10 +340,12 @@ complete -c dotta -n "__dotta_using_command remove; and not __dotta_seen_option 
 # apply: Can take profile names OR file paths (heuristic determines type)
 complete -c dotta -n "__dotta_using_command apply" -xa "(__dotta_profiles)"
 complete -c dotta -n "__dotta_using_command apply" -xa "(__dotta_files)"
+complete -c dotta -n "__dotta_using_command apply" -F
 
 # update: Can take profile name OR file paths (heuristic determines type)
 complete -c dotta -n "__dotta_using_command update" -xa "(__dotta_profiles)"
 complete -c dotta -n "__dotta_using_command update" -xa "(__dotta_files)"
+complete -c dotta -n "__dotta_using_command update" -F
 
 # status: Positional arguments are profiles
 complete -c dotta -n "__dotta_using_command status" -xa "(__dotta_profiles)"
@@ -352,9 +354,10 @@ complete -c dotta -n "__dotta_using_command status" -xa "(__dotta_profiles)"
 complete -c dotta -n "__dotta_using_command list; and __dotta_is_nth_arg 1" -xa "(__dotta_profiles)"
 complete -c dotta -n "__dotta_using_command list; and __dotta_is_nth_arg 2" -xa "(__dotta_files)"
 
-# diff: Takes managed files or profiles
-complete -c dotta -n "__dotta_using_command diff" -xa "(__dotta_profiles)"
+# diff: 1st arg is profile or file, rest are files (storage or filesystem paths)
+complete -c dotta -n "__dotta_using_command diff; and __dotta_is_nth_arg 1" -xa "(__dotta_profiles)"
 complete -c dotta -n "__dotta_using_command diff" -xa "(__dotta_files)"
+complete -c dotta -n "__dotta_using_command diff" -F
 
 # sync: Positional arguments are profiles
 complete -c dotta -n "__dotta_using_command sync" -xa "(__dotta_profiles)"

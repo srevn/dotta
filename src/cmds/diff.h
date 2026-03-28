@@ -3,13 +3,12 @@
  *
  * Displays actual content differences for modified files.
  *
- * Direction semantics:
- * - Upstream (repository): Source of truth for configuration
- * - Downstream (filesystem): Deployed state
- *
- * DIFF_UPSTREAM: Shows repo → filesystem (what 'apply' would change)
- * DIFF_DOWNSTREAM: Shows filesystem → repo (what 'update' would commit)
- * DIFF_BOTH: Shows both directions
+ * Direction semantics (unified diff representation):
+ * - DIFF_UPSTREAM:   old=filesystem, new=repo  — '-' lines are current on disk,
+ *                    '+' lines are what apply would write. Use to preview apply.
+ * - DIFF_DOWNSTREAM: old=repo, new=filesystem  — '-' lines are in repo,
+ *                    '+' lines are local changes. Use to preview update.
+ * - DIFF_BOTH:       Shows both directions with labelled sections.
  */
 
 #ifndef DOTTA_CMD_DIFF_H
@@ -31,9 +30,9 @@ typedef enum {
  * Diff direction (for workspace mode only)
  */
 typedef enum {
-    DIFF_UPSTREAM,      /* Show changes from repo to filesystem (default) */
-    DIFF_DOWNSTREAM,    /* Show changes from filesystem to repo */
-    DIFF_BOTH           /* Show both directions */
+    DIFF_UPSTREAM,      /* old=filesystem, new=repo (what apply would write) */
+    DIFF_DOWNSTREAM,    /* old=repo, new=filesystem (what update would commit) */
+    DIFF_BOTH           /* Show both directions (split into two labelled sections) */
 } diff_direction_t;
 
 /**
@@ -55,7 +54,6 @@ typedef struct {
     char **profiles;            /* Profile names (NULL = use state/config) */
     size_t profile_count;       /* Number of profiles */
     bool name_only;             /* Only show file names, not diffs */
-    bool all_changes;           /* Show all changed files (deprecated, use direction) */
 } cmd_diff_options_t;
 
 /**

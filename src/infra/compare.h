@@ -86,11 +86,17 @@ error_t *compare_buffer_to_disk(
 );
 
 /**
- * Diff direction (forward declaration from diff.h)
+ * Diff direction for compare_generate_diff()
+ *
+ * Controls which side is treated as "old" and "new" in the unified diff:
+ *   CMP_DIR_UPSTREAM:   old=filesystem, new=repo — '-' is current disk content,
+ *                       '+' is repo content apply would write.
+ *   CMP_DIR_DOWNSTREAM: old=repo, new=filesystem — '-' is repo content,
+ *                       '+' is local changes update would commit.
  */
 typedef enum {
-    CMP_DIR_UPSTREAM,      /* Show filesystem → repo (what apply would do) */
-    CMP_DIR_DOWNSTREAM     /* Show repo → filesystem (what update would commit) */
+    CMP_DIR_UPSTREAM,    /* old=filesystem, new=repo (what apply would write) */
+    CMP_DIR_DOWNSTREAM   /* old=repo, new=filesystem (what update would commit) */
 } compare_direction_t;
 
 /**

@@ -48,40 +48,19 @@ static bool should_show_item_for_direction(
                (item->state == WORKSPACE_STATE_DELETED) ||
                (item->state == WORKSPACE_STATE_DEPLOYED &&
                 (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)));
-    } else {
+    }
+
+    if (direction == DIFF_DOWNSTREAM) {
         /* Downstream: What would update do? */
         /* Show: deleted, content/mode differs (filesystem → Git) */
         return (item->state == WORKSPACE_STATE_DELETED) ||
                (item->state == WORKSPACE_STATE_DEPLOYED &&
                 (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)));
     }
-}
 
-/**
- * Check if workspace item has divergence that can be diffed
- *
- * Some divergence types don't produce content diffs:
- * - Untracked files (not in Git yet)
- * - Orphaned state entries (removed from Git)
- *
- * @param item Workspace item (must not be NULL)
- * @return true if item can be diffed
- */
-static bool has_diffable_divergence(const workspace_item_t *item) {
-    /* Can't diff untracked, orphaned, or released items (no Git side to compare) */
-    if (item->state == WORKSPACE_STATE_UNTRACKED ||
-        item->state == WORKSPACE_STATE_ORPHANED ||
-        item->state == WORKSPACE_STATE_RELEASED) {
-        return false;
-    }
-
-    /* Must have actual (non-stale) divergence or be in transition state.
-     *
-     * DIVERGENCE_STALE is informational (VWD cache patched from fresh Git).
-     * A stale-only file has matching content — no meaningful diff to show. */
-    return (item->divergence & ~DIVERGENCE_STALE) != DIVERGENCE_NONE ||
-            item->state == WORKSPACE_STATE_UNDEPLOYED ||
-            item->state == WORKSPACE_STATE_DELETED;
+    /* DIFF_BOTH is always decomposed into two explicit calls by the caller
+     * before reaching this function — it should never arrive here. */
+    return false;
 }
 
 /**
@@ -135,6 +114,57 @@ static const char *get_status_message_from_item(
 }
 
 /**
+ * Print diff text with line-by-line colorization
+ *
+ * Applies color to unified diff output:
+ *   Green  (+): additions
+ *   Red    (-): deletions
+ *   Cyan  (@@): hunk headers
+ *
+ * Falls back to plain output when colors are disabled.
+ *
+ * @param out      Output context (must not be NULL)
+ * @param diff_text Diff text to display (can be NULL, no-op)
+ */
+static void print_colorized_diff_text(output_ctx_t *out, const char *diff_text) {
+    if (!diff_text) {
+        return;
+    }
+
+    if (!output_colors_enabled(out)) {
+        output_printf(out, OUTPUT_NORMAL, "%s\n", diff_text);
+        return;
+    }
+
+    const char *line = diff_text;
+    const char *next_line;
+
+    while (line && *line) {
+        next_line = strchr(line, '\n');
+        size_t line_len = next_line ? (size_t)(next_line - line) : strlen(line);
+
+        const char *color = NULL;
+        if (line_len > 0 && line[0] == '+' && (line_len == 1 || line[1] != '+')) {
+            color = output_color_code(out, OUTPUT_COLOR_GREEN);
+        } else if (line_len > 0 && line[0] == '-' && (line_len == 1 || line[1] != '-')) {
+            color = output_color_code(out, OUTPUT_COLOR_RED);
+        } else if (line_len > 1 && line[0] == '@' && line[1] == '@') {
+            color = output_color_code(out, OUTPUT_COLOR_CYAN);
+        }
+
+        if (color) {
+            output_printf(out, OUTPUT_NORMAL, "%s%.*s%s\n",
+                    color, (int)line_len, line,
+                    output_color_code(out, OUTPUT_COLOR_RESET));
+        } else {
+            output_printf(out, OUTPUT_NORMAL, "%.*s\n", (int)line_len, line);
+        }
+
+        line = next_line ? next_line + 1 : NULL;
+    }
+}
+
+/**
  * Show diff for a single file using workspace data
  *
  * Simplified version of show_file_diff() that uses pre-computed divergence
@@ -172,7 +202,6 @@ static error_t *show_file_diff_from_workspace(
 
     /* Show file header with colors */
     if (output_colors_enabled(out)) {
-        char *cyan_path = output_colorize(out, OUTPUT_COLOR_CYAN, entry->storage_path);
         output_printf(out, OUTPUT_NORMAL, "%sdiff --dotta a/%s b/%s%s\n",
                 output_color_code(out, OUTPUT_COLOR_BOLD),
                 entry->storage_path, entry->storage_path,
@@ -183,7 +212,6 @@ static error_t *show_file_diff_from_workspace(
                 output_color_code(out, OUTPUT_COLOR_CYAN),
                 entry->source_profile->name,
                 output_color_code(out, OUTPUT_COLOR_RESET));
-        free(cyan_path);
     } else {
         output_printf(out, OUTPUT_NORMAL, "diff --dotta a/%s b/%s\n",
                 entry->storage_path, entry->storage_path);
@@ -255,40 +283,8 @@ static error_t *show_file_diff_from_workspace(
         return error_wrap(err, "Failed to generate diff for '%s'", item->filesystem_path);
     }
 
-    /* Print diff with colors if enabled */
-    if (diff && diff->diff_text) {
-        if (output_colors_enabled(out)) {
-            /* Colorize diff output line by line */
-            char *line = diff->diff_text;
-            char *next_line;
-
-            while (line && *line) {
-                next_line = strchr(line, '\n');
-                size_t line_len = next_line ? (size_t)(next_line - line) : strlen(line);
-
-                /* Determine color based on first character */
-                const char *color = NULL;
-                if (line_len > 0 && line[0] == '+' && (line_len == 1 || line[1] != '+')) {
-                    color = output_color_code(out, OUTPUT_COLOR_GREEN);
-                } else if (line_len > 0 && line[0] == '-' && (line_len == 1 || line[1] != '-')) {
-                    color = output_color_code(out, OUTPUT_COLOR_RED);
-                } else if (line_len > 1 && line[0] == '@' && line[1] == '@') {
-                    color = output_color_code(out, OUTPUT_COLOR_CYAN);
-                }
-
-                if (color) {
-                    output_printf(out, OUTPUT_NORMAL, "%s%.*s%s\n",
-                            color, (int)line_len, line,
-                            output_color_code(out, OUTPUT_COLOR_RESET));
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, "%.*s\n", (int)line_len, line);
-                }
-
-                line = next_line ? next_line + 1 : NULL;
-            }
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "%s\n", diff->diff_text);
-        }
+    if (diff) {
+        print_colorized_diff_text(out, diff->diff_text);
     }
 
     compare_free_diff(diff);
@@ -366,12 +362,7 @@ static error_t *present_diffs_for_direction(
             continue;
         }
 
-        /* Filter 4: Check if item has diffable divergence */
-        if (!has_diffable_divergence(item)) {
-            continue;
-        }
-
-        /* Filter 5: Profile filter (CLI filtering) */
+        /* Filter 4: Profile filter (CLI filtering) */
         if (!profile_filter_matches(item->profile, filter_profiles)) {
             continue;
         }
@@ -548,11 +539,14 @@ static void print_commit_header(
     /* Print commit message with indentation */
     const char *message = git_commit_message(commit);
     char *msg_copy = strdup(message);
-    if (msg_copy) {
-        char *line = strtok(msg_copy, "\n");
+    if (!msg_copy) {
+        output_printf(out, OUTPUT_NORMAL, "    (message unavailable)\n");
+    } else {
+        char *saveptr = NULL;
+        char *line = strtok_r(msg_copy, "\n", &saveptr);
         while (line) {
             output_printf(out, OUTPUT_NORMAL, "    %s\n", line);
-            line = strtok(NULL, "\n");
+            line = strtok_r(NULL, "\n", &saveptr);
         }
         free(msg_copy);
     }
@@ -728,12 +722,14 @@ static error_t *compare_manifest_to_filesystem(
 
     *diff_count = 0;
     error_t *err = NULL;
+    content_cache_t *cache = NULL;
+    file_diff_t *diff = NULL;
 
     /* Create content cache for efficient blob access.
      * Pass config to ensure keymanager uses user's derivation parameters
      * (opslimit, memlimit) if this is the first call to create the singleton. */
     keymanager_t *km = keymanager_get_global(config);
-    content_cache_t *cache = content_cache_create(repo, km);
+    cache = content_cache_create(repo, km);
     if (!cache) {
         return ERROR(ERR_MEMORY, "Failed to create content cache");
     }
@@ -749,11 +745,15 @@ static error_t *compare_manifest_to_filesystem(
             continue;
         }
 
+        bool encrypted = metadata_get_file_encrypted(metadata, storage_path);
+        git_filemode_t mode = git_tree_entry_filemode(entry->entry);
+
         /* Name-only output */
         if (opts->name_only) {
-            /* Check if file exists and differs */
+            /* Use lstat to detect the path itself (broken symlinks are present,
+             * not missing — only the target is absent). */
             struct stat st;
-            bool exists = (stat(fs_path, &st) == 0);
+            bool exists = (lstat(fs_path, &st) == 0);
 
             if (!exists) {
                 output_printf(out, OUTPUT_NORMAL, "%s\n", fs_path);
@@ -762,23 +762,21 @@ static error_t *compare_manifest_to_filesystem(
             }
 
             /* Get content from historical commit (cached) */
-            bool encrypted = metadata_get_file_encrypted(metadata, storage_path);
             const buffer_t *hist_content = NULL;
             err = content_cache_get_from_tree_entry(
                 cache, entry->entry, storage_path, profile_name, encrypted, &hist_content
             );
             if (err) {
-                content_cache_free(cache);
-                return error_wrap(err, "Failed to get historical content for '%s'", fs_path);
+                err = error_wrap(err, "Failed to get historical content for '%s'", fs_path);
+                goto cleanup;
             }
 
             /* Compare with filesystem */
             compare_result_t result;
-            git_filemode_t mode = git_tree_entry_filemode(entry->entry);
             err = compare_buffer_to_disk(hist_content, fs_path, mode, NULL, &result, NULL);
             if (err) {
-                content_cache_free(cache);
-                return error_wrap(err, "Failed to compare '%s'", fs_path);
+                err = error_wrap(err, "Failed to compare '%s'", fs_path);
+                goto cleanup;
             }
 
             if (result != CMP_EQUAL) {
@@ -789,24 +787,21 @@ static error_t *compare_manifest_to_filesystem(
         }
 
         /* Full diff output */
-        /* Get content from historical commit (cached) */
-        bool encrypted = metadata_get_file_encrypted(metadata, storage_path);
         const buffer_t *hist_content = NULL;
         err = content_cache_get_from_tree_entry(
             cache, entry->entry, storage_path, profile_name, encrypted, &hist_content
         );
         if (err) {
-            content_cache_free(cache);
-            return error_wrap(err, "Failed to get historical content for '%s'", fs_path);
+            err = error_wrap(err, "Failed to get historical content for '%s'", fs_path);
+            goto cleanup;
         }
 
         /* Compare with filesystem */
         compare_result_t result;
-        git_filemode_t mode = git_tree_entry_filemode(entry->entry);
         err = compare_buffer_to_disk(hist_content, fs_path, mode, NULL, &result, NULL);
         if (err) {
-            content_cache_free(cache);
-            return error_wrap(err, "Failed to compare '%s'", fs_path);
+            err = error_wrap(err, "Failed to compare '%s'", fs_path);
+            goto cleanup;
         }
 
         /* Skip if identical */
@@ -867,59 +862,28 @@ static error_t *compare_manifest_to_filesystem(
             continue;
         }
 
-        /* Generate and show content diff (mode already declared above) */
-        file_diff_t *diff = NULL;
-
         err = compare_generate_diff(
             hist_content, fs_path, storage_path,
             mode, NULL, CMP_DIR_DOWNSTREAM, &diff
         );
         if (err) {
-            content_cache_free(cache);
-            return error_wrap(err, "Failed to generate diff for '%s'", fs_path);
+            err = error_wrap(err, "Failed to generate diff for '%s'", fs_path);
+            goto cleanup;
         }
 
-        /* Print diff with colors */
-        if (diff && diff->diff_text) {
-            if (output_colors_enabled(out)) {
-                /* Colorize diff output line by line */
-                char *line = diff->diff_text;
-                char *next_line;
-
-                while (line && *line) {
-                    next_line = strchr(line, '\n');
-                    size_t line_len = next_line ? (size_t)(next_line - line) : strlen(line);
-
-                    const char *color = NULL;
-                    if (line_len > 0 && line[0] == '+' && (line_len == 1 || line[1] != '+')) {
-                        color = output_color_code(out, OUTPUT_COLOR_GREEN);
-                    } else if (line_len > 0 && line[0] == '-' && (line_len == 1 || line[1] != '-')) {
-                        color = output_color_code(out, OUTPUT_COLOR_RED);
-                    } else if (line_len > 1 && line[0] == '@' && line[1] == '@') {
-                        color = output_color_code(out, OUTPUT_COLOR_CYAN);
-                    }
-
-                    if (color) {
-                        output_printf(out, OUTPUT_NORMAL, "%s%.*s%s\n",
-                                color, (int)line_len, line,
-                                output_color_code(out, OUTPUT_COLOR_RESET));
-                    } else {
-                        output_printf(out, OUTPUT_NORMAL, "%.*s\n", (int)line_len, line);
-                    }
-
-                    line = next_line ? next_line + 1 : NULL;
-                }
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "%s\n", diff->diff_text);
-            }
+        if (diff) {
+            print_colorized_diff_text(out, diff->diff_text);
         }
 
         compare_free_diff(diff);
+        diff = NULL;
         (*diff_count)++;
     }
 
+cleanup:
+    compare_free_diff(diff);
     content_cache_free(cache);
-    return NULL;
+    return err;
 }
 
 /**
@@ -971,6 +935,14 @@ static error_t *diff_commit_to_workspace(
     /* Step 2: Print commit header */
     char oid_str[8];
     git_oid_tostr(oid_str, sizeof(oid_str), &commit_oid);
+
+    /* Warn when multiple profiles are enabled: only the profile containing
+     * the commit is compared against the filesystem. */
+    if (profiles->count > 1) {
+        output_info(out, "Note: comparing commit against profile '%s' only "
+        "(commit-to-workspace compares one profile at a time)\n", profile_name);
+        output_newline(out);
+    }
 
     if (output_colors_enabled(out)) {
         output_printf(out, OUTPUT_NORMAL, "%sdiff --dotta %s..workspace%s\n\n",
@@ -1166,6 +1138,17 @@ static error_t *diff_commits(
         goto cleanup;
     }
 
+    /* Validate both commits are from the same profile.
+     * Dotta profiles are orphan branches — comparing commits across profiles
+     * would diff two completely unrelated trees, producing meaningless output. */
+    if (strcmp(profile1_name, profile2_name) != 0) {
+        err = ERROR(ERR_VALIDATION,
+            "Commits belong to different profiles ('%s' and '%s'); "
+            "cross-profile commit comparison is not supported",
+            profile1_name, profile2_name);
+        goto cleanup;
+    }
+
     /* Print diff range header */
     char oid1_str[8], oid2_str[8];
     git_oid_tostr(oid1_str, sizeof(oid1_str), &commit1_oid);
@@ -1215,16 +1198,22 @@ static error_t *diff_commits(
         goto cleanup;
     }
 
-    /* Print statistics */
-    err = print_diff_stats(out, diff);
-    if (err) {
-        goto cleanup;
-    }
+    if (opts->name_only) {
+        /* Name-only: list changed file paths without diff content or stats */
+        int ret = git_diff_print(diff, GIT_DIFF_FORMAT_NAME_ONLY, print_diff_line_cb, out);
+        if (ret < 0) {
+            err = error_from_git(ret);
+            goto cleanup;
+        }
+    } else {
+        /* Full diff: statistics followed by patch */
+        err = print_diff_stats(out, diff);
+        if (err) {
+            goto cleanup;
+        }
 
-    output_newline(out);
+        output_newline(out);
 
-    /* Print diff content if not name-only */
-    if (!opts->name_only) {
         int ret = git_diff_print(diff, GIT_DIFF_FORMAT_PATCH, print_diff_line_cb, out);
         if (ret < 0) {
             err = error_from_git(ret);

@@ -939,8 +939,7 @@ static int cmd_diff_main(int argc, char **argv) {
         .commit2 = NULL,
         .profiles = NULL,
         .profile_count = 0,
-        .name_only = false,
-        .all_changes = false
+        .name_only = false
     };
 
     /* Collect positional arguments and profiles */
@@ -980,7 +979,6 @@ static int cmd_diff_main(int argc, char **argv) {
             opts.direction = DIFF_DOWNSTREAM;
             has_direction_flag = true;
         } else if (strcmp(argv[i], "--all") == 0 || strcmp(argv[i], "-a") == 0) {
-            opts.all_changes = true;
             opts.direction = DIFF_BOTH;
             has_direction_flag = true;
         } else if (argv[i][0] != '-') {

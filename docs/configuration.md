@@ -103,6 +103,8 @@ pre_apply = true
 post_apply = true
 pre_add = false
 post_add = false
+pre_remove = false
+post_remove = false
 pre_update = false
 post_update = false
 ```
@@ -111,7 +113,7 @@ post_update = false
 
 Hook scripts run before/after operations. Place executable scripts in the hooks directory.
 
-**Available hooks:** `pre-apply`, `post-apply`, `pre-add`, `post-add`, `pre-update`, `post-update`
+**Available hooks:** `pre-apply`, `post-apply`, `pre-add`, `post-add`, `pre-remove`, `post-remove`, `pre-update`, `post-update`
 
 **Behavior:**
 - Pre-hooks can abort operations by exiting with a non-zero status
@@ -119,10 +121,10 @@ Hook scripts run before/after operations. Place executable scripts in the hooks 
 
 **Environment variables passed to hooks:**
 - `DOTTA_REPO_DIR` -- repository path
-- `DOTTA_COMMAND` -- operation name (`apply`, `add`, `update`)
+- `DOTTA_COMMAND` -- operation name (`apply`, `add`, `remove`, `update`)
 - `DOTTA_PROFILE` -- comma-separated profile list
 - `DOTTA_DRY_RUN` -- `"1"` if dry-run, `"0"` otherwise
-- `DOTTA_FILE_COUNT` -- number of files (add/update hooks)
+- `DOTTA_FILE_COUNT` -- number of files (add/remove/update hooks)
 - `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... -- individual file paths
 
 See [`etc/hooks/README.md`](../etc/hooks/README.md) for hook samples and detailed documentation.

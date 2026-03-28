@@ -117,6 +117,95 @@ Hooks allow you to run custom scripts before and after dotta operations.
 **Exit Behavior:**
 - Exit 0 or non-zero: Add already completed, exit code logged only
 
+### `pre-remove`
+
+**When:** Before removing files from a profile or deleting a profile
+**Use For:** Backing up files, validating removal, preventing accidental deletion
+
+**Example Use Cases:**
+- Create backup of files about to be removed
+- Prevent removal of critical config files
+- Notify team about profile deletions
+
+**Environment Variables:**
+- `DOTTA_REPO_DIR` - Path to dotta repository
+- `DOTTA_COMMAND` - Always "remove"
+- `DOTTA_PROFILE` - Profile name being modified or deleted
+- `DOTTA_FILE_COUNT` - Number of files (0 for profile deletion)
+- `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... - Individual file paths (0-indexed)
+- `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
+
+**Exit Behavior:**
+- Exit 0: Continue with remove
+- Exit non-zero: Abort remove operation
+
+### `post-remove`
+
+**When:** After removing files from a profile or deleting a profile
+**Use For:** Cleanup, notifications, auditing
+
+**Example Use Cases:**
+- Log removal for auditing
+- Notify team about profile deletions
+- Trigger CI/CD pipelines
+- Clean up related resources
+
+**Environment Variables:**
+- `DOTTA_REPO_DIR` - Path to dotta repository
+- `DOTTA_COMMAND` - Always "remove"
+- `DOTTA_PROFILE` - Profile name that was modified or deleted
+- `DOTTA_FILE_COUNT` - Number of files
+- `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... - Individual file paths (0-indexed)
+- `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
+
+**Exit Behavior:**
+- Exit 0 or non-zero: Remove already completed, exit code logged only
+
+### `pre-update`
+
+**When:** Before updating profiles with modified files
+**Use For:** Validating changes, checking for conflicts, creating checkpoints
+
+**Example Use Cases:**
+- Validate that modified files are syntactically correct
+- Check for sensitive data in changes
+- Create a snapshot before updating
+- Verify no conflicting changes exist
+
+**Environment Variables:**
+- `DOTTA_REPO_DIR` - Path to dotta repository
+- `DOTTA_COMMAND` - Always "update"
+- `DOTTA_PROFILE` - Comma-separated list of profiles being updated
+- `DOTTA_FILE_COUNT` - Number of files (if specific files given)
+- `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... - Individual file paths (0-indexed)
+- `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
+
+**Exit Behavior:**
+- Exit 0: Continue with update
+- Exit non-zero: Abort update operation
+
+### `post-update`
+
+**When:** After updating profiles with modified files
+**Use For:** Syncing changes, notifications, triggering deployments
+
+**Example Use Cases:**
+- Auto-sync to remote after update
+- Send Slack/Discord notifications about changes
+- Trigger CI/CD pipelines
+- Update documentation or changelogs
+
+**Environment Variables:**
+- `DOTTA_REPO_DIR` - Path to dotta repository
+- `DOTTA_COMMAND` - Always "update"
+- `DOTTA_PROFILE` - Comma-separated list of profiles that were updated
+- `DOTTA_FILE_COUNT` - Number of files
+- `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... - Individual file paths (0-indexed)
+- `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
+
+**Exit Behavior:**
+- Exit 0 or non-zero: Update already completed, exit code logged only
+
 ## Hook Configuration
 
 Control hooks via `~/.config/dotta/config.toml`:
@@ -128,6 +217,10 @@ pre_apply = true                      # Enable pre-apply
 post_apply = true                     # Enable post-apply
 pre_add = false                       # Disable pre-add (default)
 post_add = false                      # Disable post-add (default)
+pre_remove = false                    # Disable pre-remove (default)
+post_remove = false                   # Disable post-remove (default)
+pre_update = false                    # Disable pre-update (default)
+post_update = false                   # Disable post-update (default)
 ```
 
 ## Writing Hooks

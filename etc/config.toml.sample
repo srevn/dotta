@@ -51,6 +51,8 @@ auto_detect_new_files = true
 #   - post-apply   - Runs after applying profiles
 #   - pre-add      - Runs before adding files to a profile
 #   - post-add     - Runs after adding files to a profile
+#   - pre-remove   - Runs before removing files or deleting a profile
+#   - post-remove  - Runs after removing files or deleting a profile
 #   - pre-update   - Runs before updating profiles with modified files
 #   - post-update  - Runs after updating profiles with modified files
 #
@@ -74,12 +76,14 @@ timeout = 30
 
 # Enable/Disable Specific Hooks
 # You can selectively enable or disable hooks
-# Default: pre_apply=true, post_apply=true, pre_add=false, post_add=false, pre_update=false, post_update=false
+# Default: pre_apply=true, post_apply=true, all others=false
 
 pre_apply = true     # Run before applying profiles (e.g., backup current configs)
 post_apply = true    # Run after applying profiles (e.g., reload shell, restart services)
 pre_add = false      # Run before adding files (e.g., validate file contents)
 post_add = false     # Run after adding files (e.g., commit to git, notify team)
+pre_remove = false   # Run before removing files or deleting a profile (e.g., backup)
+post_remove = false  # Run after removing files or deleting a profile (e.g., notify)
 pre_update = false   # Run before updating profiles with modified files (e.g., validate changes)
 post_update = false  # Run after updating profiles with modified files (e.g., sync to remote, notify)
 

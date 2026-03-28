@@ -29,12 +29,14 @@ typedef enum {
 
 /**
  * Hook context - information passed to hooks
+ *
+ * All strings are owned by the context and freed by hook_context_free().
  */
 typedef struct {
-    const char *repo_dir;        /* Repository directory */
-    const char *command;         /* Command being executed */
-    const char *profile;         /* Profile name (if applicable) */
-    char **files;                /* Array of file paths (if applicable) */
+    char *repo_dir;              /* Repository directory (owned) */
+    char *command;               /* Command being executed (owned) */
+    char *profile;               /* Profile name (owned, if applicable) */
+    char **files;                /* Array of file paths (owned, if applicable) */
     size_t file_count;           /* Number of files */
     bool dry_run;                /* Is this a dry-run? */
 } hook_context_t;

@@ -1116,12 +1116,7 @@ bool fs_is_executable(const char *path) {
         return false;
     }
 
-    struct stat st;
-    if (stat(path, &st) < 0) {
-        return false;
-    }
-
-    return (st.st_mode & S_IXUSR) != 0;
+    return access(path, X_OK) == 0;
 }
 
 bool fs_exists(const char *path) {

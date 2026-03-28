@@ -2023,7 +2023,8 @@ error_t *cmd_update(
             hook_ctx = hook_context_create(repo_dir, "update", profiles_str);
             if (hook_ctx) {
                 hook_ctx->dry_run = opts->dry_run;
-                hook_context_add_files(hook_ctx, opts->files, opts->file_count);
+                err = hook_context_add_files(hook_ctx, opts->files, opts->file_count);
+                if (err) goto cleanup;
 
                 hook_result_t *hook_result = NULL;
                 err = hook_execute(config, HOOK_PRE_UPDATE, hook_ctx, &hook_result);

@@ -1037,7 +1037,8 @@ static error_t *remove_files_from_profile(
         hook_ctx->dry_run = opts->dry_run;
 
         /* Add paths to hook context */
-        hook_context_add_files(hook_ctx, filesystem_paths->items, filesystem_paths->count);
+        err = hook_context_add_files(hook_ctx, filesystem_paths->items, filesystem_paths->count);
+        if (err) goto cleanup;
 
         hook_result_t *hook_result = NULL;
         err = hook_execute(config, HOOK_PRE_REMOVE, hook_ctx, &hook_result);
@@ -1386,8 +1387,7 @@ static error_t *delete_profile_branch(
     size_t file_count = string_array_size(files);
     bool is_auto_detected = profile->auto_detected;
 
-    string_array_free(files);
-    files = NULL;
+    /* Keep files alive for hook context; freed in cleanup */
     profile_free(profile);
     profile = NULL;
 
@@ -1511,6 +1511,12 @@ static error_t *delete_profile_branch(
     hook_ctx = hook_context_create(repo_dir, "remove", opts->profile);
     if (hook_ctx) {
         hook_ctx->dry_run = opts->dry_run;
+
+        /* Pass profile file list (storage paths) to hook */
+        if (files) {
+            err = hook_context_add_files(hook_ctx, files->items, files->count);
+            if (err) goto cleanup;
+        }
 
         hook_result_t *hook_result = NULL;
         err = hook_execute(config, HOOK_PRE_REMOVE, hook_ctx, &hook_result);

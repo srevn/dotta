@@ -80,7 +80,7 @@ error_t *hook_get_path(
     CHECK_NULL(out);
 
     const char *hook_name = hook_type_name(type);
-    if (!hook_name || strcmp(hook_name, "unknown") == 0) {
+    if (strcmp(hook_name, "unknown") == 0) {
         return ERROR(ERR_INVALID_ARG, "Invalid hook type: %d", type);
     }
 
@@ -141,12 +141,6 @@ static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
     /* Initialize output */
     *env_count = 0;
 
-    /* Sanity check: prevent excessive file counts from creating huge environments */
-    if (context->file_count > 10000) {
-        /* This is almost certainly a mistake - hooks don't need 10k+ files */
-        return NULL;
-    }
-
     /* Count environment variables we'll include */
     extern char **environ;
     size_t system_env_count = 0;
@@ -191,7 +185,7 @@ static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
     if (context->repo_dir) {
         env[count] = str_format("DOTTA_REPO_DIR=%s", context->repo_dir);
         if (!env[count]) {
-            goto cleanup_failure;
+            goto cleanup;
         }
         count++;
     }
@@ -199,7 +193,7 @@ static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
     if (context->command) {
         env[count] = str_format("DOTTA_COMMAND=%s", context->command);
         if (!env[count]) {
-            goto cleanup_failure;
+            goto cleanup;
         }
         count++;
     }
@@ -207,20 +201,20 @@ static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
     if (context->profile) {
         env[count] = str_format("DOTTA_PROFILE=%s", context->profile);
         if (!env[count]) {
-            goto cleanup_failure;
+            goto cleanup;
         }
         count++;
     }
 
     env[count] = str_format("DOTTA_DRY_RUN=%s", context->dry_run ? "1" : "0");
     if (!env[count]) {
-        goto cleanup_failure;
+        goto cleanup;
     }
     count++;
 
     env[count] = str_format("DOTTA_FILE_COUNT=%zu", context->file_count);
     if (!env[count]) {
-        goto cleanup_failure;
+        goto cleanup;
     }
     count++;
 
@@ -229,7 +223,7 @@ static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
         for (size_t i = 0; i < context->file_count; i++) {
             env[count] = str_format("DOTTA_FILE_%zu=%s", i, context->files[i]);
             if (!env[count]) {
-                goto cleanup_failure;
+                goto cleanup;
             }
             count++;
         }
@@ -241,7 +235,7 @@ static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
         if (!str_starts_with(*e, "DOTTA_")) {
             env[count] = strdup(*e);
             if (!env[count]) {
-                goto cleanup_failure;
+                goto cleanup;
             }
             count++;
         }
@@ -253,7 +247,7 @@ static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
 
     return env;
 
-cleanup_failure:
+cleanup:
     /* Free all allocated strings on failure */
     for (size_t i = 0; i < count; i++) {
         free(env[i]);
@@ -337,6 +331,7 @@ error_t *hook_execute(
     error_t *err = NULL;
     struct sigaction sa_old, sa_new;
     bool sigaction_installed = false;
+    unsigned int prev_alarm = 0;
 
     /* Get hook script path */
     err = hook_get_path(config, type, &hook_path);
@@ -354,6 +349,14 @@ error_t *hook_execute(
     if (!fs_is_executable(hook_path)) {
         err = ERROR(ERR_PERMISSION,
                    "Hook '%s' is not executable", hook_type_name(type));
+        goto cleanup;
+    }
+
+    /* Sanity check: prevent excessive file counts from creating huge environments */
+    if (context->file_count > 10000) {
+        err = ERROR(ERR_INVALID_ARG,
+                   "Hook '%s': too many files in context (%zu, limit: 10000)",
+                   hook_type_name(type), context->file_count);
         goto cleanup;
     }
 
@@ -397,6 +400,9 @@ error_t *hook_execute(
         /* Cancel any inherited alarms */
         alarm(0);
 
+        /* Create new process group so timeout can kill all sub-processes */
+        setpgid(0, 0);
+
         /* Redirect stdin to /dev/null to prevent hook from reading terminal */
         int devnull = open("/dev/null", O_RDONLY);
         if (devnull >= 0) {
@@ -426,6 +432,13 @@ error_t *hook_execute(
         }
         close(pipefd[1]);
 
+        /* Close all inherited file descriptors to prevent leaks to hook */
+        long maxfd = sysconf(_SC_OPEN_MAX);
+        if (maxfd < 0 || maxfd > 65536) maxfd = 1024;
+        for (int fd = STDERR_FILENO + 1; fd < (int)maxfd; fd++) {
+            close(fd);
+        }
+
         /* Execute hook with environment */
         char *args[] = { hook_path, NULL };
         execve(hook_path, args, env);
@@ -438,6 +451,9 @@ error_t *hook_execute(
     /*
      * Parent process continues
      */
+
+    /* Ensure child's process group exists (races with child's setpgid) */
+    (void)setpgid(pid, pid);
 
     /* Close write end of pipe (child owns it now) */
     close(pipefd[1]);
@@ -459,7 +475,7 @@ error_t *hook_execute(
         }
 
         /* Start timeout countdown NOW (before reading) */
-        alarm((unsigned int)config->hook_timeout);
+        prev_alarm = alarm((unsigned int)config->hook_timeout);
     }
 
     /* Allocate buffer for reading hook output */
@@ -524,24 +540,23 @@ error_t *hook_execute(
     if (timed_out) {
         /*
          * Hook timed out during read phase
-         * Kill child and reap it
+         * Kill child's process group and reap it
          */
-        kill(pid, SIGTERM);
+        kill(-pid, SIGTERM);
 
         /* Give it 5 seconds to exit gracefully */
         alarm(5);
         if (waitpid(pid, &status, 0) == -1) {
-            /* Still won't die - use SIGKILL */
-            kill(pid, SIGKILL);
+            /* Still won't die - use SIGKILL on entire group */
+            kill(-pid, SIGKILL);
             alarm(0);
             waitpid(pid, &status, 0);  /* Must reap zombie */
         }
         alarm(0);
 
         pid = -1;  /* Process reaped */
-        err = ERROR(ERR_INTERNAL,
-                   "Hook '%s' exceeded timeout of %d seconds",
-                   hook_type_name(type), config->hook_timeout);
+        err = ERROR(ERR_INTERNAL, "Hook '%s' exceeded timeout of %d seconds",
+                    hook_type_name(type), config->hook_timeout);
         goto cleanup;
     }
 
@@ -554,11 +569,11 @@ error_t *hook_execute(
         if (waitpid(pid, &status, 0) == -1) {
             if (errno == EINTR) {
                 /* Timeout occurred during wait phase */
-                kill(pid, SIGTERM);
+                kill(-pid, SIGTERM);
 
                 alarm(5);
                 if (waitpid(pid, &status, 0) == -1) {
-                    kill(pid, SIGKILL);
+                    kill(-pid, SIGKILL);
                     alarm(0);
                     waitpid(pid, &status, 0);
                 }
@@ -572,7 +587,7 @@ error_t *hook_execute(
             } else {
                 /* Other error */
                 err = ERROR(ERR_FS, "Failed to wait for hook process: %s",
-                           strerror(errno));
+                            strerror(errno));
                 goto cleanup;
             }
         }
@@ -582,7 +597,7 @@ error_t *hook_execute(
         /* No timeout configured - simple wait */
         if (waitpid(pid, &status, 0) == -1) {
             err = ERROR(ERR_FS, "Failed to wait for hook process: %s",
-                       strerror(errno));
+                        strerror(errno));
             goto cleanup;
         }
     }
@@ -634,16 +649,15 @@ error_t *hook_execute(
     }
 
 cleanup:
-    /*
-     * Cleanup all resources in reverse order of acquisition
-     * Safe to call even if resource was never allocated (initialized to safe values)
-     */
-
-    /* Cancel alarm and restore signal handler (if timeout was configured) */
+    /* Cancel alarm and restore signal handler */
     if (config->hook_timeout > 0) {
         alarm(0);
         if (sigaction_installed) {
             sigaction(SIGALRM, &sa_old, NULL);
+        }
+        /* Best-effort restore of any previous alarm */
+        if (prev_alarm > 0) {
+            alarm(prev_alarm);
         }
     }
 
@@ -651,9 +665,9 @@ cleanup:
     if (pipefd[0] >= 0) close(pipefd[0]);
     if (pipefd[1] >= 0) close(pipefd[1]);
 
-    /* Reap child if still running (shouldn't happen, but be defensive) */
+    /* Reap child if still running */
     if (pid > 0) {
-        kill(pid, SIGKILL);
+        kill(-pid, SIGKILL);
         waitpid(pid, NULL, 0);
     }
 
@@ -666,14 +680,6 @@ cleanup:
     /* Free output only if not transferred to result */
     if (output && !res) {
         free(output);
-    }
-
-    /* Set result even on error (caller can see output) */
-    if (result && res) {
-        *result = res;
-    } else if (res) {
-        /* Result created but caller doesn't want it */
-        hook_result_free(res);
     }
 
     return err;
@@ -693,6 +699,8 @@ void hook_result_free(hook_result_t *result) {
 
 /**
  * Helper: Create hook context
+ *
+ * All strings are copied - the context owns its data.
  */
 hook_context_t *hook_context_create(
     const char *repo_dir,
@@ -704,18 +712,30 @@ hook_context_t *hook_context_create(
         return NULL;
     }
 
-    ctx->repo_dir = repo_dir;
-    ctx->command = command;
-    ctx->profile = profile;
-    ctx->files = NULL;
-    ctx->file_count = 0;
-    ctx->dry_run = false;
+    if (repo_dir) {
+        ctx->repo_dir = strdup(repo_dir);
+        if (!ctx->repo_dir) goto cleanup;
+    }
+    if (command) {
+        ctx->command = strdup(command);
+        if (!ctx->command) goto cleanup;
+    }
+    if (profile) {
+        ctx->profile = strdup(profile);
+        if (!ctx->profile) goto cleanup;
+    }
 
     return ctx;
+
+cleanup:
+    hook_context_free(ctx);
+    return NULL;
 }
 
 /**
  * Helper: Add files to hook context
+ *
+ * Deep-copies the file array - the context owns its data.
  */
 error_t *hook_context_add_files(
     hook_context_t *ctx,
@@ -728,9 +748,23 @@ error_t *hook_context_add_files(
         return NULL;
     }
 
-    ctx->files = files;
-    ctx->file_count = count;
+    ctx->files = calloc(count, sizeof(char *));
+    if (!ctx->files) {
+        return ERROR(ERR_MEMORY, "Failed to allocate hook file array");
+    }
 
+    for (size_t i = 0; i < count; i++) {
+        ctx->files[i] = strdup(files[i]);
+        if (!ctx->files[i]) {
+            for (size_t j = 0; j < i; j++) free(ctx->files[j]);
+            free(ctx->files);
+            ctx->files = NULL;
+            ctx->file_count = 0;
+            return ERROR(ERR_MEMORY, "Failed to copy hook file path");
+        }
+    }
+
+    ctx->file_count = count;
     return NULL;
 }
 
@@ -742,6 +776,16 @@ void hook_context_free(hook_context_t *ctx) {
         return;
     }
 
-    /* Note: We don't free the strings themselves as they're not owned by the context */
+    free(ctx->repo_dir);
+    free(ctx->command);
+    free(ctx->profile);
+
+    if (ctx->files) {
+        for (size_t i = 0; i < ctx->file_count; i++) {
+            free(ctx->files[i]);
+        }
+        free(ctx->files);
+    }
+
     free(ctx);
 }

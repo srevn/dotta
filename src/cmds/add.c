@@ -1322,7 +1322,8 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     /* Execute pre-add hook */
     hook_ctx = hook_context_create(repo_dir, "add", opts->profile);
     if (hook_ctx) {
-        hook_context_add_files(hook_ctx, opts->files, opts->file_count);
+        err = hook_context_add_files(hook_ctx, opts->files, opts->file_count);
+        if (err) goto cleanup;
 
         hook_result_t *hook_result = NULL;
         err = hook_execute(config, HOOK_PRE_ADD, hook_ctx, &hook_result);

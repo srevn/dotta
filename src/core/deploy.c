@@ -197,15 +197,21 @@ error_t *deploy_preflight_check_from_workspace(
  * Handles home/ vs root/custom/ prefix logic and sudo detection.
  *
  * Resolution rules:
- * - home/ prefix when running as root (sudo): Use actual user's UID/GID
+ * - Files deploying to user's home under sudo: Use actual user's UID/GID
  * - root/ or custom/ prefix with owner/group metadata: Resolve names to UID/GID
  * - All other cases: Return -1 (no ownership change)
+ *
+ * Home detection for sudo de-escalation:
+ * - Primary: storage_path starts with "home/" (always deploys to $HOME)
+ * - Fallback: filesystem_path is under actual user's home (catches custom/
+ *   prefix files reclassified by --prefix that still land under $HOME)
  *
  * Strict ownership mode (strict_ownership=true):
  * - ERR_NOT_FOUND (user/group missing): Fatal error, abort deployment
  * - ERR_PERMISSION (not root): Warning only (can't chown anyway)
  *
  * @param storage_path Path in profile (e.g., "home/.bashrc", "root/etc/hosts", "custom/etc/nginx.conf")
+ * @param filesystem_path Resolved deployment path (e.g., "/home/user/.bashrc") for home detection
  * @param owner Owner username from metadata (can be NULL)
  * @param group Group name from metadata (can be NULL)
  * @param out_uid Resolved UID or -1 for no change (must not be NULL)
@@ -217,6 +223,7 @@ error_t *deploy_preflight_check_from_workspace(
  */
 static error_t *resolve_deployment_ownership(
     const char *storage_path,
+    const char *filesystem_path,
     const char *owner,
     const char *group,
     uid_t *out_uid,
@@ -237,14 +244,26 @@ static error_t *resolve_deployment_ownership(
     bool is_home_prefix = str_starts_with(storage_path, "home/");
     bool requires_root_privileges = privilege_path_requires_root(storage_path);
 
-    /* Case 1: home/ prefix when running as root -> use actual user (sudo handling) */
-    if (is_home_prefix && privilege_is_elevated()) {
-        error_t *err = privilege_get_actual_user(out_uid, out_gid);
-        if (err) {
-            return error_wrap(err,
-                "Failed to determine actual user for home/ path: %s", storage_path);
+    /* Case 1: File deploys to user's home when running as root (sudo handling)
+     *
+     * Primary: storage_path starts with "home/" (always deploys to $HOME)
+     * Fallback: filesystem_path is under actual user's home (catches custom/
+     * prefix files reclassified by --prefix that still land under $HOME) */
+    if (privilege_is_elevated()) {
+        bool deploys_to_home = is_home_prefix;
+
+        if (!deploys_to_home && filesystem_path) {
+            deploys_to_home = privilege_path_is_under_home(filesystem_path);
         }
-        return NULL;
+
+        if (deploys_to_home) {
+            error_t *err = privilege_get_actual_user(out_uid, out_gid);
+            if (err) {
+                return error_wrap(err,
+                    "Failed to determine actual user for home path: %s", storage_path);
+            }
+            return NULL;
+        }
     }
 
     /* Case 2: root/ or custom/ prefix with ownership metadata -> resolve to UID/GID */
@@ -411,6 +430,7 @@ error_t *deploy_file(
         gid_t link_gid;
         err = resolve_deployment_ownership(
             entry->storage_path,
+            entry->filesystem_path,
             entry->owner,
             entry->group,
             &link_uid,
@@ -501,6 +521,7 @@ error_t *deploy_file(
     uid_t target_uid, target_gid;
     err = resolve_deployment_ownership(
         entry->storage_path,
+        entry->filesystem_path,
         entry->owner,  /* From manifest cache */
         entry->group,  /* From manifest cache */
         &target_uid,
@@ -937,6 +958,7 @@ static error_t *deploy_tracked_directories(
         uid_t target_uid, target_gid;
         err = resolve_deployment_ownership(
             dir_entry->storage_path,  /* Determines home/ vs root/ vs custom/ */
+            dir_entry->filesystem_path,
             dir_entry->owner,
             dir_entry->group,
             &target_uid,

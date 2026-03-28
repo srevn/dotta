@@ -165,6 +165,33 @@ bool privilege_custom_prefix_needs_elevation(const char *custom_prefix) {
 }
 
 /**
+ * Check if filesystem path is under actual user's home (sudo-aware)
+ */
+bool privilege_path_is_under_home(const char *filesystem_path) {
+    if (!filesystem_path || !privilege_is_sudo()) {
+        return false;
+    }
+
+    const char *sudo_uid_str = getenv("SUDO_UID");
+    if (!sudo_uid_str) {
+        return false;
+    }
+
+    char *endptr;
+    long parsed_uid = strtol(sudo_uid_str, &endptr, 10);
+    if (*endptr != '\0' || parsed_uid < 0) {
+        return false;
+    }
+
+    struct passwd *pw = getpwuid((uid_t)parsed_uid);
+    if (!pw || !pw->pw_dir) {
+        return false;
+    }
+
+    return is_path_under(filesystem_path, pw->pw_dir);
+}
+
+/**
  * Check if a storage path requires elevation for pre-flight purposes
  */
 bool privilege_needs_elevation(const char *storage_path, const char *custom_prefix) {

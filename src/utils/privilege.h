@@ -91,6 +91,22 @@ bool privilege_paths_require_root(const char **storage_paths, size_t count);
 bool privilege_custom_prefix_needs_elevation(const char *custom_prefix);
 
 /**
+ * Check if a filesystem path is under the actual user's home directory
+ *
+ * Under sudo: resolves actual user's home from SUDO_UID via passwd database,
+ * which is reliable regardless of how sudo configures $HOME.
+ * Not under sudo: returns false (no de-escalation context).
+ *
+ * Used by deployment ownership resolution: custom/ prefix files that deploy
+ * under $HOME should get actual user ownership when running under sudo,
+ * matching the behavior of home/ prefix files.
+ *
+ * @param filesystem_path Absolute filesystem path to check (must not be NULL)
+ * @return true if under sudo and path is under actual user's home
+ */
+bool privilege_path_is_under_home(const char *filesystem_path);
+
+/**
  * Check if a storage path requires elevation for pre-flight purposes
  *
  * Pre-flight decision function: "should we prompt for sudo?"

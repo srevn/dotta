@@ -1779,22 +1779,19 @@ error_t *cmd_apply(
 
         /* Build comprehensive prompt that includes cleanup information
          *
-         * Exclude released files from the "remove" count since they are left
-         * on filesystem (not destructive). Only count files that will actually
-         * be deleted to avoid misleading the user about the operation scope.
+         * Exclude ALL violation files from the "remove" count:
+         * - Released files: left on filesystem (not destructive)
+         * - Blocking violations (modified, mode_changed, etc.): skipped by safety
+         * Only count files that will actually be deleted.
          */
         if (cleanup_preflight && cleanup_preflight->will_prune_orphans) {
-            /* Count released files to exclude from removal count */
-            size_t preflight_released = 0;
+            size_t preflight_excluded = 0;
             if (cleanup_preflight->safety_violations) {
-                for (size_t i = 0; i < cleanup_preflight->safety_violations->count; i++) {
-                    if (strcmp(cleanup_preflight->safety_violations->violations[i].reason,
-                               SAFETY_REASON_RELEASED) == 0) {
-                        preflight_released++;
-                    }
-                }
+                preflight_excluded = cleanup_preflight->safety_violations->count;
             }
-            size_t removal_count = cleanup_preflight->orphaned_files_count - preflight_released;
+            size_t removal_count = (cleanup_preflight->orphaned_files_count > preflight_excluded)
+                ? cleanup_preflight->orphaned_files_count - preflight_excluded
+                : 0;
 
             if (removal_count > 0) {
                 /* Enhanced prompt: mentions both deployment and orphan removal */

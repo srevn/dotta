@@ -151,18 +151,32 @@ typedef struct {
     size_t orphaned_directories_skipped; /* Skipped (non-empty - safety) */
     size_t orphaned_directories_failed;  /* Failed to remove (I/O errors) */
 
-    /* Safety violation details */
-    safety_result_t *safety_violations;  /* NULL if no violations or force=true */
+    /* Safety violation details (owned)
+     *
+     * Only populated when cleanup_execute runs its own safety check
+     * (opts->preflight_violations was NULL). When preflight violations
+     * are reused, this stays NULL — the caller already has the data.
+     *
+     * For reliable skip tracking regardless of code path, use:
+     * - skipped_files array (always populated)
+     * - orphaned_files_skipped counter (always accurate)
+     */
+    safety_result_t *safety_violations;
 
-    /* Detailed file lists */
+    /* Detailed file lists (execution-only: not populated in dry-run)
+     *
+     * removed_files guarantees physical removal occurred (or file was already
+     * absent). Callers use this to drive state database cleanup. For dry-run
+     * preview of what would be removed, use cleanup_preflight_check instead.
+     */
     string_array_t *removed_files;       /* Successfully removed file paths */
     string_array_t *skipped_files;       /* Skipped file paths (safety violations) */
     string_array_t *failed_files;        /* Failed file paths (with errors) */
     string_array_t *released_files;      /* Released files (left on disk, state cleaned) */
 
-    /* Detailed directory lists */
+    /* Detailed directory lists (execution-only: not populated in dry-run) */
     string_array_t *removed_dirs;        /* Successfully removed directory paths */
-    string_array_t *skipped_dirs;        /* Skipped directory paths (non-empty orphans) */
+    string_array_t *skipped_dirs;        /* Skipped directory paths (non-empty/symlink) */
     string_array_t *failed_dirs;         /* Failed directory paths (with errors) */
 } cleanup_result_t;
 

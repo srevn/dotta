@@ -331,7 +331,7 @@ static error_t *prune_orphaned_files(
             continue;
         }
 
-        /* Dry run: don't remove */
+        /* Dry run: skip removal. Use cleanup_preflight_check for preview. */
         if (dry_run) {
             /* In dry-run mode, we don't remove but still track what would be removed
              * Caller can check dry_run flag to display appropriately */
@@ -480,10 +480,13 @@ static error_t *prune_orphaned_directories(
     /* All states initialized to DIR_STATE_UNKNOWN by calloc */
 
     bool made_progress = true;
+    size_t iteration = 0;
 
-    /* Iteratively remove empty orphaned directories until stable */
-    while (made_progress) {
+    /* Iteratively remove empty orphaned directories until stable.
+     * Guard: at most dir_count iterations (each must remove at least one). */
+    while (made_progress && iteration < dir_count) {
         made_progress = false;
+        iteration++;
 
         for (size_t i = 0; i < dir_count; i++) {
             const char *dir_path = orphans[i]->filesystem_path;
@@ -529,6 +532,26 @@ static error_t *prune_orphaned_directories(
                 continue;
             }
 
+            /* Skip symlinks — rmdir cannot remove them (ENOTDIR).
+             *
+             * A tracked directory replaced with a symlink is user modification.
+             * fs_exists follows symlinks (returns true if target exists), but
+             * rmdir operates on the path itself and fails on symlinks.
+             * Treat as non-removable to avoid confusing error messages.
+             */
+            if (fs_is_symlink(dir_path)) {
+                if (states[i] != DIR_STATE_NOT_EMPTY) {
+                    result->orphaned_directories_skipped++;
+                    error_t *push_err = string_array_push(result->skipped_dirs, dir_path);
+                    if (push_err) {
+                        free(states);
+                        return error_wrap(push_err, "Failed to track skipped symlink directory");
+                    }
+                    states[i] = DIR_STATE_NOT_EMPTY;
+                }
+                continue;
+            }
+
             /* INLINE SAFETY CHECK: Is directory empty? */
             if (!fs_is_directory_empty(dir_path)) {
                 /* Safety violation: contains untracked files */
@@ -549,7 +572,7 @@ static error_t *prune_orphaned_directories(
                 continue;  /* Won't re-check until child removed */
             }
 
-            /* Dry run: don't remove */
+            /* Dry run: skip removal. Use cleanup_preflight_check for preview. */
             if (dry_run) {
                 /* In dry-run mode, we don't remove but caller can infer what would happen
                  * from orphaned_directories_found and orphaned_directories_removed counters */
@@ -686,7 +709,7 @@ error_t *cleanup_preflight_check(
                 state,
                 file_orphans,
                 file_orphan_count,
-                opts->force,
+                false,  /* Always false here (guarded by !opts->force above) */
                 &result->safety_violations
             );
 
@@ -720,31 +743,35 @@ error_t *cleanup_preflight_check(
         /* Allocate directory array for preview */
         orphaned_dirs_display = string_array_create();
         if (!orphaned_dirs_display) {
-            /* Non-fatal: continue without directory preview */
-        } else {
-            /* Check which orphaned directories are non-empty (read-only preview) */
-            for (size_t i = 0; i < dir_orphan_count; i++) {
-                const char *dir_path = dir_orphans[i]->filesystem_path;
+            err = ERROR(ERR_MEMORY, "Failed to allocate orphan directory list for display");
+            goto cleanup;
+        }
 
-                /* Add to display list */
-                err = string_array_push(orphaned_dirs_display, dir_path);
-                if (err) {
-                    /* Non-fatal: best-effort directory preview */
-                    error_free(err);
-                    err = NULL;
-                    break;
-                }
+        /* Check which orphaned directories are non-empty (read-only preview) */
+        for (size_t i = 0; i < dir_orphan_count; i++) {
+            const char *dir_path = dir_orphans[i]->filesystem_path;
 
-                /* Check if directory exists and is non-empty (safety violation) */
-                if (fs_exists(dir_path) && !fs_is_directory_empty(dir_path)) {
-                    result->orphaned_directories_nonempty++;
-                }
+            /* Add to display list */
+            err = string_array_push(orphaned_dirs_display, dir_path);
+            if (err) {
+                err = error_wrap(err, "Failed to add orphaned directory to display list");
+                goto cleanup;
             }
 
-            /* Transfer ownership to result */
-            result->orphaned_directories = orphaned_dirs_display;
-            orphaned_dirs_display = NULL;  /* Prevent double-free */
+            /* Check if directory exists and is non-empty (safety concern)
+             *
+             * Note: fs_is_directory_empty returns false for unreadable directories
+             * (permission denied), which is the safe default — we count those as
+             * non-empty to avoid deleting what we can't verify.
+             */
+            if (fs_exists(dir_path) && !fs_is_directory_empty(dir_path)) {
+                result->orphaned_directories_nonempty++;
+            }
         }
+
+        /* Transfer ownership to result */
+        result->orphaned_directories = orphaned_dirs_display;
+        orphaned_dirs_display = NULL;  /* Prevent double-free */
     }
 
     /* Success - set output and prevent cleanup from freeing result */

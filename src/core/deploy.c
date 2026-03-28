@@ -300,7 +300,7 @@ static error_t *resolve_deployment_ownership(
 error_t *deploy_file(
     git_repository *repo,
     content_cache_t *cache,
-    const file_entry_t *entry,
+    file_entry_t *entry,
     const deploy_options_t *opts
 ) {
     CHECK_NULL(repo);
@@ -322,7 +322,7 @@ error_t *deploy_file(
     }
 
     /* Lazy-load tree entry for blob content and file mode */
-    err = file_entry_ensure_tree_entry((file_entry_t *)entry, repo);
+    err = file_entry_ensure_tree_entry(entry, repo);
     if (err) {
         return error_wrap(err, "Failed to load tree entry for '%s'",
                           entry->filesystem_path);
@@ -399,6 +399,38 @@ error_t *deploy_file(
         if (err) {
             err = error_wrap(err, "Failed to deploy symlink '%s'", entry->filesystem_path);
             goto cleanup;
+        }
+
+        /* Apply ownership to symlink if needed (root/ prefix paths)
+         *
+         * Symlink permissions are ignored by most filesystems, but symlink
+         * OWNERSHIP matters for security auditing and consistency.
+         * lchown() changes the link itself, not its target.
+         */
+        uid_t link_uid;
+        gid_t link_gid;
+        err = resolve_deployment_ownership(
+            entry->storage_path,
+            entry->owner,
+            entry->group,
+            &link_uid,
+            &link_gid,
+            opts->strict_ownership,
+            opts->dry_run,
+            opts->verbose
+        );
+        if (err) {
+            err = error_wrap(err, "Failed to resolve ownership for symlink '%s'",
+                             entry->filesystem_path);
+            goto cleanup;
+        }
+
+        if (link_uid != (uid_t)-1 || link_gid != (gid_t)-1) {
+            if (lchown(entry->filesystem_path, link_uid, link_gid) != 0) {
+                err = ERROR(ERR_FS, "Failed to set ownership on symlink '%s': %s",
+                            entry->filesystem_path, strerror(errno));
+                goto cleanup;
+            }
         }
 
         if (opts->verbose) {
@@ -1039,11 +1071,16 @@ error_t *deploy_execute(
 
     /* Deploy each file */
     for (size_t i = 0; i < manifest->count; i++) {
-        const file_entry_t *entry = &manifest->entries[i];
+        /* Non-const: deploy_file may lazy-load git tree entry */
+        file_entry_t *entry = (file_entry_t *)&manifest->entries[i];
 
         /* Check --skip-existing first (user explicitly chose not to overwrite) */
         if (opts->skip_existing && fs_exists(entry->filesystem_path) && !opts->force) {
-            string_array_push(result->skipped_existing, entry->filesystem_path);
+            err = string_array_push(result->skipped_existing, entry->filesystem_path);
+            if (err) {
+                deploy_result_free(result);
+                return error_wrap(err, "Failed to record skipped file");
+            }
             result->skipped_existing_count++;
             continue;
         }
@@ -1073,13 +1110,21 @@ error_t *deploy_execute(
                      * - Content happens to match Git
                      * - File needs dotta's acknowledgment (deployed_at update)
                      */
-                    string_array_push(result->adopted, entry->filesystem_path);
+                    err = string_array_push(result->adopted, entry->filesystem_path);
+                    if (err) {
+                        deploy_result_free(result);
+                        return error_wrap(err, "Failed to record adopted file");
+                    }
                     result->adopted_count++;
                 } else {
                     /* UNCHANGED: File previously deployed, still correct.
                      * No state update needed - deployed_at already set.
                      */
-                    string_array_push(result->unchanged, entry->filesystem_path);
+                    err = string_array_push(result->unchanged, entry->filesystem_path);
+                    if (err) {
+                        deploy_result_free(result);
+                        return error_wrap(err, "Failed to record unchanged file");
+                    }
                     result->unchanged_count++;
                 }
                 continue;
@@ -1089,15 +1134,20 @@ error_t *deploy_execute(
         /* Deploy the file */
         err = deploy_file(repo, cache, entry, opts);
         if (err) {
-            /* Record failure and return partial results */
+            /* Record failure and return partial results.
+             * string_array_push failure is non-fatal here (already error-pathing). */
             string_array_push(result->failed, entry->filesystem_path);
             result->error_message = strdup(error_message(err));
             *out = result;
-            return ERROR(ERR_INTERNAL, "Deployment failed at '%s'", entry->filesystem_path);
+            return error_wrap(err, "Deployment failed at '%s'", entry->filesystem_path);
         }
 
         /* Record success */
-        string_array_push(result->deployed, entry->filesystem_path);
+        err = string_array_push(result->deployed, entry->filesystem_path);
+        if (err) {
+            deploy_result_free(result);
+            return error_wrap(err, "Failed to record deployed file");
+        }
         result->deployed_count++;
     }
 

@@ -169,14 +169,15 @@ error_t *deploy_execute(
  *
  * @param repo Repository (must not be NULL)
  * @param cache Content cache for batch operations (must not be NULL)
- * @param entry File entry to deploy (must not be NULL, contains all deployment metadata)
+ * @param entry File entry to deploy (must not be NULL, contains all deployment metadata).
+ *              Non-const: may lazy-load git tree entry on first access.
  * @param opts Deployment options (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *deploy_file(
     git_repository *repo,
     content_cache_t *cache,
-    const file_entry_t *entry,
+    file_entry_t *entry,
     const deploy_options_t *opts
 );
 

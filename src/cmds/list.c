@@ -28,7 +28,7 @@
 #include "utils/timeutil.h"
 
 /* Display configuration constants */
-#define LIST_SHORT_OID_SIZE 8
+#define LIST_SHORT_OID_BUF_SIZE 8
 #define LIST_TIMESTAMP_BUFFER_SIZE 64
 #define LIST_REFNAME_BUFFER_SIZE 256
 #define LIST_MESSAGE_BUFFER_SIZE 256
@@ -118,7 +118,7 @@ static void format_upstream_state(
             break;
         case UPSTREAM_DIVERGED:
             color = OUTPUT_COLOR_RED;
-            snprintf(buffer, buffer_size, "[%s]", symbol);
+            snprintf(buffer, buffer_size, "[%s%zu+%zu]", symbol, info->ahead, info->behind);
             break;
         case UPSTREAM_NO_REMOTE:
             color = OUTPUT_COLOR_CYAN;
@@ -208,12 +208,14 @@ static error_t *list_profiles(
             continue;
         }
 
-        /* Verbose or remote mode: Get additional info */
+        /* Verbose mode: Load profile for stats (remote-only path needs no profile) */
         profile_t *profile = NULL;
-        err = profile_load(repo, name, &profile);
-        if (err) {
-            error_free(err);
-            continue;
+        if (opts->verbose) {
+            err = profile_load(repo, name, &profile);
+            if (err) {
+                error_free(err);
+                continue;
+            }
         }
 
         /* Start line with name */
@@ -229,8 +231,8 @@ static error_t *list_profiles(
         /* Verbose: Add stats */
         if (opts->verbose) {
             profile_stats_t stats = {0};
-            err = stats_get_profile_stats(repo, profile->tree, &stats);
-            if (!err) {
+            error_t *stats_err = stats_get_profile_stats(repo, profile->tree, &stats);
+            if (!stats_err) {
                 char size_str[32];
                 output_format_size(stats.total_size, size_str, sizeof(size_str));
                 output_printf(out, OUTPUT_NORMAL, " %2zu file%s, %8s",
@@ -238,6 +240,7 @@ static error_t *list_profiles(
                        stats.file_count == 1 ? " " : "s",
                        size_str);
             }
+            error_free(stats_err);
 
             /* Get last commit info */
             char refname[DOTTA_REFNAME_MAX];
@@ -249,7 +252,7 @@ static error_t *list_profiles(
 
             if (!commit_err && last_commit) {
                 const git_oid *oid = git_commit_id(last_commit);
-                char oid_str[LIST_SHORT_OID_SIZE];
+                char oid_str[LIST_SHORT_OID_BUF_SIZE];
                 git_oid_tostr(oid_str, sizeof(oid_str), oid);
 
                 const char *message = git_commit_message(last_commit);
@@ -314,7 +317,7 @@ static error_t *list_profiles(
             output_printf(out, OUTPUT_NORMAL, "%s[↓n]%s behind\n",
                     output_color_code(out, OUTPUT_COLOR_YELLOW),
                     output_color_code(out, OUTPUT_COLOR_RESET));
-            output_printf(out, OUTPUT_NORMAL, "  %s[↕]%s  diverged      ",
+            output_printf(out, OUTPUT_NORMAL, "  %s[↕n+m]%s diverged    ",
                     output_color_code(out, OUTPUT_COLOR_RED),
                     output_color_code(out, OUTPUT_COLOR_RESET));
             output_printf(out, OUTPUT_NORMAL, "%s[•]%s  no remote\n",
@@ -322,7 +325,7 @@ static error_t *list_profiles(
                     output_color_code(out, OUTPUT_COLOR_RESET));
         } else {
             output_printf(out, OUTPUT_NORMAL, "  [=] up-to-date    [↑n] ahead     [↓n] behind\n");
-            output_printf(out, OUTPUT_NORMAL, "  [↕] diverged      [•]  no remote\n");
+            output_printf(out, OUTPUT_NORMAL, "  [↕n+m] diverged   [•]  no remote\n");
         }
     }
 
@@ -486,24 +489,29 @@ static error_t *list_files(
                 if (commit_map) {
                     const commit_info_t *commit_info = stats_file_commit_map_get(commit_map, file_path);
                     if (commit_info) {
-                        char oid_str[LIST_SHORT_OID_SIZE];
+                        char oid_str[LIST_SHORT_OID_BUF_SIZE];
                         git_oid_tostr(oid_str, sizeof(oid_str), &commit_info->oid);
 
                         char time_str[64];
                         format_relative_time(commit_info->time, time_str, sizeof(time_str));
 
+                        size_t summary_len = strlen(commit_info->summary);
+                        if (summary_len > 40) {
+                            summary_len = 40;
+                        }
+
                         if (output_colors_enabled(out)) {
-                            output_printf(out, OUTPUT_NORMAL, "  %s%s%s %s %s(%s)%s",
+                            output_printf(out, OUTPUT_NORMAL, "  %s%s%s %.*s %s(%s)%s",
                                     output_color_code(out, OUTPUT_COLOR_YELLOW),
                                     oid_str,
                                     output_color_code(out, OUTPUT_COLOR_RESET),
-                                    commit_info->summary,
+                                    (int)summary_len, commit_info->summary,
                                     output_color_code(out, OUTPUT_COLOR_DIM),
                                     time_str,
                                     output_color_code(out, OUTPUT_COLOR_RESET));
                         } else {
-                            output_printf(out, OUTPUT_NORMAL, "  %s %s (%s)",
-                                    oid_str, commit_info->summary, time_str);
+                            output_printf(out, OUTPUT_NORMAL, "  %s %.*s (%s)",
+                                    oid_str, (int)summary_len, commit_info->summary, time_str);
                         }
                     }
                 }
@@ -545,23 +553,20 @@ static error_t *list_files(
 
 /**
  * Format timestamp as human-readable date (for verbose commit display)
+ *
+ * @param timestamp Git timestamp to format
+ * @param buf Caller-provided buffer (stack allocated)
+ * @param buf_size Buffer size in bytes
+ * @return true on success, false if timestamp is invalid
  */
-static char *format_time(git_time_t timestamp) {
+static bool format_time(git_time_t timestamp, char *buf, size_t buf_size) {
     time_t t = (time_t)timestamp;
-    struct tm *tm_info = localtime(&t);
-
-    /* localtime can return NULL for invalid timestamps */
-    if (!tm_info) {
-        return NULL;
+    struct tm tm_info;
+    if (!localtime_r(&t, &tm_info)) {
+        return false;
     }
-
-    char *buf = malloc(LIST_TIMESTAMP_BUFFER_SIZE);
-    if (!buf) {
-        return NULL;
-    }
-
-    strftime(buf, LIST_TIMESTAMP_BUFFER_SIZE, "%a %b %d %H:%M:%S %Y", tm_info);
-    return buf;
+    strftime(buf, buf_size, "%a %b %d %H:%M:%S %Y", &tm_info);
+    return true;
 }
 
 /**
@@ -594,6 +599,7 @@ static error_t *list_file_history(
     snprintf(header, sizeof(header), "History of '%s' in profile '%s'",
              opts->file_path, opts->profile);
     output_section(out, header);
+    output_newline(out);
 
     /* Calculate max message length for alignment (oneline mode only) */
     size_t max_msg_len = 0;
@@ -626,21 +632,20 @@ static error_t *list_file_history(
             }
 
             /* Display timestamp if valid */
-            char *date_str = format_time(commit->time);
-            if (date_str) {
+            char date_buf[LIST_TIMESTAMP_BUFFER_SIZE];
+            if (format_time(commit->time, date_buf, sizeof(date_buf))) {
                 char relative_str[64];
                 format_relative_time(commit->time, relative_str, sizeof(relative_str));
 
                 if (output_colors_enabled(out)) {
                     output_printf(out, OUTPUT_NORMAL, "Date:   %s %s(%s)%s\n",
-                            date_str,
+                            date_buf,
                             output_color_code(out, OUTPUT_COLOR_DIM),
                             relative_str,
                             output_color_code(out, OUTPUT_COLOR_RESET));
                 } else {
-                    output_printf(out, OUTPUT_NORMAL, "Date:   %s (%s)\n", date_str, relative_str);
+                    output_printf(out, OUTPUT_NORMAL, "Date:   %s (%s)\n", date_buf, relative_str);
                 }
-                free(date_str);
             }
 
             output_printf(out, OUTPUT_NORMAL, "\n    %s\n", commit->summary);
@@ -650,7 +655,7 @@ static error_t *list_file_history(
             }
         } else {
             /* Default: Oneline format */
-            char oid_str[LIST_SHORT_OID_SIZE];
+            char oid_str[LIST_SHORT_OID_BUF_SIZE];
             git_oid_tostr(oid_str, sizeof(oid_str), &commit->oid);
 
             char time_str[64];
@@ -706,6 +711,11 @@ error_t *cmd_list(git_repository *repo, const cmd_list_options_t *opts) {
     /* CLI flags override config */
     if (opts->verbose) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
+    }
+
+    /* Warn about flags that don't apply to the current mode */
+    if (opts->remote && opts->mode != LIST_PROFILES) {
+        output_warning(out, "--remote only applies when listing profiles");
     }
 
     /* Dispatch to appropriate list function based on mode */

@@ -232,11 +232,12 @@ diverged_strategy = "warn"
 # Available Template Variables:
 # -----------------------------
 #   {host}          - System hostname (from gethostname())
-#   {user}          - Current username (from getlogin() or $USER)
+#   {user}          - Current username (from $USER or getlogin())
 #   {profile}       - Profile name
-#   {action}        - Action (Add, Update, Sync, Revert)
-#   {action_past}   - Past tense (Added, Updated, Synced, Reverted)
+#   {action}        - Action (Add, Update, Remove, Sync, Revert)
+#   {action_past}   - Past tense (Added, Updated, Removed, Synced, Reverted)
 #   {count}         - Number of files
+#   {date}          - Local date (YYYY-MM-DD)
 #   {datetime}      - Local timestamp with timezone (ISO 8601 format)
 #   {files}         - Formatted file list (bullet points, max 5 shown)
 #   {target_commit} - Target commit SHA (for revert operations, empty otherwise)

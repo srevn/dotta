@@ -47,6 +47,7 @@ typedef struct {
  *   {action}        - Action (Add, Update, Remove, Sync, Revert)
  *   {action_past}   - Past tense (Added, Updated, Removed, Synced, Reverted)
  *   {count}         - Number of files
+ *   {date}          - Local date (YYYY-MM-DD)
  *   {datetime}      - Local timestamp with timezone (ISO 8601)
  *   {files}         - Formatted file list (bullet points)
  *   {target_commit} - Target commit SHA (for revert operations, empty otherwise)

@@ -43,6 +43,7 @@ diverged_strategy = "warn"    # warn, rebase, merge, ours, theirs
 [encryption]
 enabled = false               # Enable encryption (opt-in)
 opslimit = 10000              # KDF CPU cost (must match across machines)
+memlimit = 64                 # Memory hardness cost (must match across machines)
 session_timeout = 3600        # Key cache timeout in seconds (0=always prompt, -1=never expire)
 auto_encrypt = [              # Patterns for automatic encryption
     ".ssh/id_*",
@@ -90,7 +91,7 @@ Files: {count}
 """
 ```
 
-**Available variables:** `{host}`, `{user}`, `{profile}`, `{action}`, `{action_past}`, `{count}`, `{files}`, `{datetime}`, `{target_commit}`
+**Available variables:** `{host}`, `{user}`, `{profile}`, `{action}`, `{action_past}`, `{count}`, `{files}`, `{date}`, {datetime}`, `{target_commit}`
 
 ### [hooks]
 

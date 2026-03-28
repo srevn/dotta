@@ -24,7 +24,7 @@
  * conservative limits for safety and to catch truncation early.
  */
 #define DOTTA_REFNAME_MAX 256    /* For git reference names (refs/heads/...) */
-#define DOTTA_REFSPEC_MAX 256    /* For git refspecs (refs/heads/foo:refs/remotes/...) */
+#define DOTTA_REFSPEC_MAX 512    /* For git refspecs (refs/heads/foo:refs/remotes/origin/foo) */
 #define DOTTA_MESSAGE_MAX 512    /* For commit messages and prompts */
 
 /**
@@ -194,39 +194,17 @@ error_t *gitops_tree_walk(
 /**
  * Find file by exact path in tree
  *
- * Normalizes path (removes leading slash) before lookup.
+ * Normalizes path (strips all leading slashes) before lookup.
  *
- * @param repo Repository (must not be NULL)
  * @param tree Tree to search (must not be NULL)
  * @param path File path (must not be NULL)
  * @param out Tree entry (must not be NULL, caller must free with git_tree_entry_free)
  * @return Error or NULL on success
  */
 error_t *gitops_find_file_in_tree(
-    git_repository *repo,
     git_tree *tree,
     const char *path,
     git_tree_entry **out
-);
-
-/**
- * Find files by basename in tree
- *
- * Searches recursively for all files with matching basename.
- *
- * @param repo Repository (must not be NULL)
- * @param tree Tree to search (must not be NULL)
- * @param basename File basename to search for (must not be NULL)
- * @param out_paths Array of matching paths (must not be NULL, caller must free array and strings)
- * @param out_count Number of matching paths (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *gitops_find_files_by_basename_in_tree(
-    git_repository *repo,
-    git_tree *tree,
-    const char *basename,
-    char ***out_paths,
-    size_t *out_count
 );
 
 /**

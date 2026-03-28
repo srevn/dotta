@@ -281,7 +281,7 @@ static error_t *show_file(
     }
 
     /* Find file in tree */
-    err = gitops_find_file_in_tree(repo, tree, file_path, &entry);
+    err = gitops_find_file_in_tree(tree, file_path, &entry);
     if (err) {
         goto cleanup;
     }
@@ -735,7 +735,7 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
 
         error_t *load_err = gitops_load_tree(repo, ref_name, &tree);
         if (load_err == NULL) {
-            error_t *find_err = gitops_find_file_in_tree(repo, tree, search_path, &entry);
+            error_t *find_err = gitops_find_file_in_tree(tree, search_path, &entry);
             if (find_err == NULL) {
                 /* Found it! */
                 found_profile = profile_name;

@@ -10,7 +10,6 @@
 
 #include <git2.h>
 #include <stdbool.h>
-#include <time.h>
 #include <types.h>
 
 /**
@@ -38,15 +37,6 @@ typedef struct {
 } upstream_info_t;
 
 /**
- * List of upstream info for multiple profiles
- */
-typedef struct {
-    upstream_info_t *entries;
-    size_t count;
-    time_t fetched_at;           /* When remote refs were last fetched */
-} upstream_info_list_t;
-
-/**
  * Analyze upstream state for a single profile
  *
  * Compares local branch with remote tracking branch to determine sync state.
@@ -68,18 +58,6 @@ error_t *upstream_analyze_profile(
  * Free upstream info
  */
 void upstream_info_free(upstream_info_t *info);
-
-/**
- * Free upstream info list
- */
-void upstream_info_list_free(upstream_info_list_t *list);
-
-/**
- * Get string representation of upstream state
- *
- * Returns a human-readable string like "up-to-date", "ahead", "behind", etc.
- */
-const char *upstream_state_string(upstream_state_t state);
 
 /**
  * Get compact symbol for upstream state

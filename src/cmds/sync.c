@@ -863,7 +863,11 @@ static error_t *handle_diverged_theirs(
         return NULL;
     }
 
-    /* Verify reset succeeded */
+    /* Verify reset succeeded
+     *
+     * No rollback on failure — theirs strategy already reset the branch to
+     * the desired state. Rolling back would undo what the user requested.
+     */
     err = divergence_verify(&ctx, NULL, NULL);
     if (err) {
         output_error(out, "   ✗ Reset verification failed: %s", error_message(err));

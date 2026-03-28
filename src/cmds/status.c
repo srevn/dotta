@@ -7,6 +7,7 @@
 #include <git2.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "base/error.h"
 #include "base/gitops.h"

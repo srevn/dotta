@@ -42,8 +42,8 @@ error_t *upstream_analyze_profile(
     }
 
     /* Build reference names */
-    char local_refname[256];
-    char remote_refname[256];
+    char local_refname[DOTTA_REFNAME_MAX];
+    char remote_refname[DOTTA_REFNAME_MAX];
     error_t *err;
 
     err = gitops_build_refname(local_refname, sizeof(local_refname),
@@ -96,6 +96,13 @@ error_t *upstream_analyze_profile(
     const git_oid *local_oid = git_reference_target(local_ref);
     const git_oid *remote_oid = git_reference_target(remote_ref);
 
+    if (!local_oid || !remote_oid) {
+        git_reference_free(local_ref);
+        git_reference_free(remote_ref);
+        upstream_info_free(info);
+        return ERROR(ERR_GIT, "Branch reference has no target OID");
+    }
+
     /* Check if identical */
     if (git_oid_equal(local_oid, remote_oid)) {
         git_reference_free(local_ref);
@@ -145,35 +152,6 @@ void upstream_info_free(upstream_info_t *info) {
     }
     free(info->profile_name);
     free(info);
-}
-
-/**
- * Free upstream info list
- */
-void upstream_info_list_free(upstream_info_list_t *list) {
-    if (!list) {
-        return;
-    }
-    for (size_t i = 0; i < list->count; i++) {
-        free(list->entries[i].profile_name);
-    }
-    free(list->entries);
-    free(list);
-}
-
-/**
- * Get string representation of upstream state
- */
-const char *upstream_state_string(upstream_state_t state) {
-    switch (state) {
-        case UPSTREAM_UP_TO_DATE:   return "up-to-date";
-        case UPSTREAM_LOCAL_AHEAD:  return "ahead";
-        case UPSTREAM_REMOTE_AHEAD: return "behind";
-        case UPSTREAM_DIVERGED:     return "diverged";
-        case UPSTREAM_NO_REMOTE:    return "no remote";
-        case UPSTREAM_UNKNOWN:      return "unknown";
-        default:                    return "unknown";
-    }
 }
 
 /**
@@ -316,8 +294,7 @@ error_t *upstream_query_remote_branches(
 
     /* Setup callbacks for authentication */
     git_remote_callbacks callbacks;
-    memset(&callbacks, 0, sizeof(callbacks));
-    callbacks.version = GIT_REMOTE_CALLBACKS_VERSION;
+    git_remote_init_callbacks(&callbacks, GIT_REMOTE_CALLBACKS_VERSION);
     if (cred_ctx) {
         callbacks.credentials = credentials_callback;
         callbacks.payload = cred_ctx;
@@ -335,6 +312,11 @@ error_t *upstream_query_remote_branches(
         return error_from_git(git_err);
     }
 
+    /* Approve credentials on successful connection */
+    if (cred_ctx) {
+        credential_context_approve(cred_ctx);
+    }
+
     /* Get list of refs from remote */
     const git_remote_head **refs = NULL;
     size_t refs_len = 0;
@@ -344,11 +326,6 @@ error_t *upstream_query_remote_branches(
         git_remote_free(remote);
         string_array_free(branches);
         return error_from_git(git_err);
-    }
-
-    /* Approve credentials on successful connection */
-    if (cred_ctx) {
-        credential_context_approve(cred_ctx);
     }
 
     /* Extract branch names from refs/heads/ prefix */
@@ -403,7 +380,7 @@ error_t *upstream_create_tracking_branch(
     CHECK_NULL(branch_name);
 
     /* Get remote ref */
-    char remote_refname[256];
+    char remote_refname[DOTTA_REFNAME_MAX];
     error_t *err = gitops_build_refname(remote_refname, sizeof(remote_refname),
                                         "refs/remotes/%s/%s", remote_name, branch_name);
     if (err) {
@@ -425,7 +402,7 @@ error_t *upstream_create_tracking_branch(
     }
 
     /* Create local branch */
-    char local_refname[256];
+    char local_refname[DOTTA_REFNAME_MAX];
     err = gitops_build_refname(local_refname, sizeof(local_refname),
                                "refs/heads/%s", branch_name);
     if (err) {

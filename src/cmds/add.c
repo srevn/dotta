@@ -73,7 +73,7 @@ static bool is_excluded(
             /* On error, log and continue without ignoring */
             if (opts->verbose && out) {
                 output_warning(out, "Ignore check failed for %s: %s",
-                              path, error_message(err));
+                               path, error_message(err));
             }
             error_free(err);
             return false;
@@ -156,13 +156,24 @@ static error_t *collect_files_from_dir(
 
             /* Merge subdirectory files */
             for (size_t i = 0; i < string_array_size(subdir_files); i++) {
-                string_array_push(files, string_array_get(subdir_files, i));
+                err = string_array_push(files, string_array_get(subdir_files, i));
+                if (err) {
+                    string_array_free(subdir_files);
+                    string_array_free(files);
+                    closedir(dir);
+                    return err;
+                }
             }
             string_array_free(subdir_files);
         } else {
             /* Add file to list */
-            string_array_push(files, full_path);
+            error_t *push_err = string_array_push(files, full_path);
             free(full_path);
+            if (push_err) {
+                string_array_free(files);
+                closedir(dir);
+                return push_err;
+            }
         }
     }
 
@@ -218,14 +229,16 @@ static error_t *add_file_to_worktree(
     if (fs_lexists(dest_path)) {
         if (!opts->force) {
             error_t *exists_err = ERROR(ERR_EXISTS,
-                        "File '%s' (as '%s') already exists in profile '%s'. Use --force to overwrite.",
-                        filesystem_path, storage_path, opts->profile);
+                "File '%s' (as '%s') already exists in profile '%s'. "
+                "Use --force to overwrite.",
+                filesystem_path, storage_path, opts->profile);
             free(dest_path);
             return exists_err;
         }
         err = fs_remove_file(dest_path);
         if (err) {
-            error_t *wrapped_err = error_wrap(err, "Failed to remove existing file '%s' in worktree", dest_path);
+            error_t *wrapped_err = error_wrap(err,
+                "Failed to remove existing file '%s' in worktree", dest_path);
             free(dest_path);
             return wrapped_err;
         }
@@ -262,6 +275,10 @@ static error_t *add_file_to_worktree(
             free(dest_path);
             return error_wrap(err, "Failed to create symlink in worktree");
         }
+
+        if (opts->verbose && out) {
+            output_info(out, "Added symlink: %s -> %s", filesystem_path, storage_path);
+        }
     } else {
         /* Regular file - determine encryption policy using centralized logic */
         bool should_encrypt = false;
@@ -270,7 +287,7 @@ static error_t *add_file_to_worktree(
             storage_path,
             opts->encrypt,
             opts->no_encrypt,
-            NULL,  /* No metadata for add command (new files) */
+            metadata,  /* Existing metadata (preserves encryption state on --force re-add) */
             &should_encrypt
         );
         if (err) {
@@ -349,12 +366,12 @@ static error_t *add_file_to_worktree(
         if (opts->verbose && out) {
             if (item->owner || item->group) {
                 output_info(out, "Captured metadata: %s (mode: %04o, owner: %s:%s)",
-                           filesystem_path, item->mode,
-                           item->owner ? item->owner : "?",
-                           item->group ? item->group : "?");
+                            filesystem_path, item->mode,
+                            item->owner ? item->owner : "?",
+                            item->group ? item->group : "?");
             } else {
                 output_info(out, "Captured metadata: %s (mode: %04o)",
-                           filesystem_path, item->mode);
+                            filesystem_path, item->mode);
             }
         }
 
@@ -528,8 +545,12 @@ static error_t *create_commit(
             continue;
         }
 
-        string_array_push(storage_paths, storage_path);
+        derr = string_array_push(storage_paths, storage_path);
         free(storage_path);
+        if (derr) {
+            error_free(derr);
+            break;
+        }
     }
 
     /* Build commit message context */
@@ -576,86 +597,6 @@ static error_t *create_commit(
 }
 
 /**
- * Prepare manifest sync context
- *
- * Creates the keymanager and content cache needed for manifest sync operations.
- * Metadata is now loaded internally by manifest functions (manifest_add_files,
- * manifest_update_files) to ensure fresh, post-commit metadata is used.
- *
- * This helper eliminates code duplication between update_manifest_after_add()
- * and auto_enable_and_sync_profile(), providing a single source of truth for
- * context preparation.
- *
- * Algorithm:
- *   1. Load config and create keymanager
- *   2. Create content cache for batch operations
- *
- * Resource Management:
- *   All resources are owned by the caller and must be freed after use.
- *   On error, all allocated resources are cleaned up before returning.
- *
- * @param repo Git repository (must not be NULL)
- * @param out_km Output: keymanager (must not be NULL, caller must free)
- * @param out_content_cache Output: content cache (must not be NULL, caller must free)
- * @param out_config Output: config (must not be NULL, caller must free)
- * @return Error or NULL on success
- */
-static error_t *prepare_manifest_sync_context(
-    git_repository *repo,
-    keymanager_t **out_km,
-    content_cache_t **out_content_cache,
-    dotta_config_t **out_config
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(out_km);
-    CHECK_NULL(out_content_cache);
-    CHECK_NULL(out_config);
-
-    error_t *err = NULL;
-    keymanager_t *km = NULL;
-    content_cache_t *content_cache = NULL;
-    dotta_config_t *config = NULL;
-
-    /* STEP 1: Create keymanager */
-    err = config_load(NULL, &config);
-    if (err) {
-        goto cleanup;
-    }
-
-    err = keymanager_create(config, &km);
-    if (err) {
-        goto cleanup;
-    }
-
-    /* STEP 2: Create content cache for batch operations */
-    content_cache = content_cache_create(repo, km);
-    if (!content_cache) {
-        err = ERROR(ERR_MEMORY, "Failed to create content cache");
-        goto cleanup;
-    }
-
-    /* Success - transfer ownership to caller */
-    *out_km = km;
-    *out_content_cache = content_cache;
-    *out_config = config;
-    return NULL;
-
-cleanup:
-    /* Free resources in reverse order of allocation */
-    if (content_cache) {
-        content_cache_free(content_cache);
-    }
-    if (km) {
-        keymanager_free(km);
-    }
-    if (config) {
-        config_free(config);
-    }
-
-    return err;
-}
-
-/**
  * Auto-enable newly created profile and sync files to manifest
  *
  * Called when `dotta add -p <profile>` creates a NEW profile branch for the first
@@ -670,14 +611,14 @@ cleanup:
  *   1. Load current enabled profiles (or create empty list if no state)
  *   2. Check if already enabled (defensive, shouldn't happen)
  *   3. Add new profile to enabled list (in-memory only)
- *   4. Prepare sync context (metadata cache, keymanager, content cache)
- *   5. Open transaction
- *   6. Enable profile in state with custom prefix (makes prefix available)
- *   7. Sync files to manifest with DEPLOYED status (uses custom_prefix)
+ *   4. Open transaction
+ *   5. Enable profile in state with custom prefix (makes prefix available)
+ *   6. Sync files to manifest with DEPLOYED status (uses custom_prefix)
+ *   7. Record stat cache for added files
  *   8. Commit transaction atomically
  *
- * CRITICAL ORDER: Step 6 must precede step 7. The custom_prefix stored in step 6
- * is required by state_get_prefix_map() during manifest_add_files() in step 7 to
+ * CRITICAL ORDER: Step 5 must precede step 6. The custom_prefix stored in step 5
+ * is required by state_get_prefix_map() during manifest_add_files() in step 6 to
  * resolve custom/ storage paths. Transaction atomicity ensures: enable + sync
  * succeed together or fail together (automatic rollback on error).
  *
@@ -685,7 +626,6 @@ cleanup:
  * @param profile_name Profile to auto-enable (must not be NULL, must exist in Git)
  * @param custom_prefix Custom prefix for custom/ files (can be NULL)
  * @param added_files Filesystem paths that were added (must not be NULL)
- * @param out Output context for user feedback (can be NULL)
  * @param out_updated Output flag: true if successful (must not be NULL)
  * @param out_synced Output: count of files synced (can be NULL)
  * @return Error or NULL on success (non-fatal - caller treats as warning)
@@ -695,7 +635,6 @@ static error_t *auto_enable_and_sync_profile(
     const char *profile_name,
     const char *custom_prefix,
     const string_array_t *added_files,
-    output_ctx_t *out,
     bool *out_updated,
     size_t *out_synced
 ) {
@@ -707,9 +646,6 @@ static error_t *auto_enable_and_sync_profile(
     error_t *err = NULL;
     state_t *state = NULL;
     string_array_t *enabled_profiles = NULL;
-    keymanager_t *km = NULL;
-    dotta_config_t *config = NULL;
-    content_cache_t *content_cache = NULL;
     size_t synced_count = 0;
 
     *out_updated = false;
@@ -759,44 +695,32 @@ static error_t *auto_enable_and_sync_profile(
         return error_wrap(err, "Failed to add profile to enabled list");
     }
 
-    /* STEP 4: Prepare sync context (keymanager + content cache) */
-    err = prepare_manifest_sync_context(
-        repo,
-        &km,
-        &content_cache,
-        &config
-    );
-    if (err) {
-        err = error_wrap(err, "Failed to prepare sync context");
-        goto cleanup;
-    }
-
-    /* STEP 5: Open write transaction */
+    /* STEP 4: Open write transaction */
     err = state_load_for_update(repo, &state);
     if (err) {
         err = error_wrap(err, "Failed to open transaction");
         goto cleanup;
     }
 
-    /* STEP 6: Enable profile in state with custom prefix (if provided)
+    /* STEP 5: Enable profile in state with custom prefix (if provided)
      *
      * CRITICAL ORDER: Must enable BEFORE manifest sync so custom_prefix
      * is available in state for path resolution during manifest_add_files().
      * The custom prefix is stored in the enabled_profiles table and used
      * by state_get_prefix_map() to resolve custom/ storage paths.
      *
-     * Transaction Safety: If manifest sync (STEP 7) fails, state_free()
-     * automatically rolls back this change (see cleanup handler at line 838). */
+     * Transaction Safety: If manifest sync (STEP 6) fails, state_free()
+     * automatically rolls back this change (see cleanup handler). */
     err = state_enable_profile(state, profile_name, custom_prefix);
     if (err) {
         err = error_wrap(err, "Failed to enable profile in state");
         goto cleanup;
     }
 
-    /* STEP 7: Sync files to manifest with DEPLOYED status
+    /* STEP 6: Sync files to manifest with DEPLOYED status
      *
      * manifest_add_files() calls state_get_prefix_map() internally to build
-     * the manifest. The custom_prefix stored in STEP 6 is now available for
+     * the manifest. The custom_prefix stored in STEP 5 is now available for
      * resolving custom/ storage paths via path_from_storage().
      *
      * Precedence: If this profile has lower precedence than existing enabled
@@ -815,7 +739,7 @@ static error_t *auto_enable_and_sync_profile(
         goto cleanup;
     }
 
-    /* STEP 8: Record stat cache for added files
+    /* STEP 7: Record stat cache for added files
      *
      * Files were just captured from filesystem — content matches blob_oid.
      * lstat() is cheap (kernel cache hot from recent content_store_file_to_worktree).
@@ -831,7 +755,7 @@ static error_t *auto_enable_and_sync_profile(
         }
     }
 
-    /* STEP 9: Commit transaction atomically */
+    /* STEP 8: Commit transaction atomically */
     err = state_save(repo, state);
     if (err) {
         err = error_wrap(err, "Failed to commit transaction");
@@ -844,24 +768,7 @@ static error_t *auto_enable_and_sync_profile(
         *out_synced = synced_count;
     }
 
-    if (out && synced_count > 0) {
-        if (synced_count < string_array_size(added_files)) {
-            output_info(out, "Auto-enabled '%s' (%zu/%zu files synced, precedence applied)",
-                       profile_name, synced_count, string_array_size(added_files));
-        }
-    }
-
 cleanup:
-    /* Free resources in reverse order */
-    if (content_cache) {
-        content_cache_free(content_cache);
-    }
-    if (km) {
-        keymanager_free(km);
-    }
-    if (config) {
-        config_free(config);
-    }
     if (enabled_profiles) {
         string_array_free(enabled_profiles);
     }
@@ -887,17 +794,16 @@ cleanup:
  *   1. Check if profile is enabled (read-only check)
  *   2. If not enabled: return NULL (skip manifest update)
  *   3. If enabled:
- *      a. Build metadata cache for all enabled profiles
- *      b. Create keymanager for encryption handling
- *      c. Open transaction (state_load_for_update)
- *      d. If custom_prefix provided: update prefix in state (UPSERT)
- *      e. Call manifest_add_files() (builds fresh manifest internally)
- *      f. Commit transaction (state_save)
+ *      a. Open transaction (state_load_for_update)
+ *      b. If custom_prefix provided: update prefix in state (UPSERT)
+ *      c. Call manifest_add_files() (builds fresh manifest internally)
+ *      d. Record stat cache for added files
+ *      e. Commit transaction (state_save)
  *
  * Custom Prefix Update:
  *   When adding custom/ files to an already-enabled profile, the custom_prefix
  *   must be stored in state BEFORE manifest_add_files(). This is the same
- *   ordering constraint as auto_enable_and_sync_profile() (STEP 6 → STEP 7).
+ *   ordering constraint as auto_enable_and_sync_profile() (STEP 5 → STEP 6).
  *   Only called when custom_prefix is non-NULL to avoid clearing an existing
  *   prefix when adding home/ or root/ files.
  *
@@ -921,8 +827,8 @@ cleanup:
  * @param profile_name Profile that files were added to
  * @param custom_prefix Custom prefix for custom/ files (can be NULL)
  * @param added_files Filesystem paths that were added
- * @param out Output context for verbose logging (can be NULL)
  * @param out_updated Output flag: true if manifest was updated (must not be NULL)
+ * @param out_synced Output: count of files synced (can be NULL)
  * @return Error or NULL on success
  */
 static error_t *update_manifest_after_add(
@@ -930,8 +836,8 @@ static error_t *update_manifest_after_add(
     const char *profile_name,
     const char *custom_prefix,
     const string_array_t *added_files,
-    output_ctx_t *out,
-    bool *out_updated
+    bool *out_updated,
+    size_t *out_synced
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile_name);
@@ -941,9 +847,6 @@ static error_t *update_manifest_after_add(
     error_t *err = NULL;
     state_t *state = NULL;
     string_array_t *enabled_profiles = NULL;
-    keymanager_t *km = NULL;
-    dotta_config_t *config = NULL;
-    content_cache_t *content_cache = NULL;
 
     /* Initialize output */
     *out_updated = false;
@@ -984,31 +887,19 @@ static error_t *update_manifest_after_add(
         return NULL;
     }
 
-    /* STEP 2: Prepare sync context (keymanager, content cache) */
-    err = prepare_manifest_sync_context(
-        repo,
-        &km,
-        &content_cache,
-        &config
-    );
-    if (err) {
-        err = error_wrap(err, "Failed to prepare manifest sync context");
-        goto cleanup;
-    }
-
-    /* STEP 3: Open transaction */
+    /* STEP 2: Open transaction */
     err = state_load_for_update(repo, &state);
     if (err) {
         err = error_wrap(err, "Failed to open state transaction for manifest update");
         goto cleanup;
     }
 
-    /* STEP 4: Update custom prefix in state if adding custom/ files
+    /* STEP 3: Update custom prefix in state if adding custom/ files
      *
      * CRITICAL ORDER: Must store prefix BEFORE manifest_add_files() so
      * state_get_prefix_map() can resolve custom/ storage paths during
      * manifest building. Same ordering constraint as
-     * auto_enable_and_sync_profile() (STEP 6 → STEP 7).
+     * auto_enable_and_sync_profile() (STEP 5 → STEP 6).
      *
      * Only called when custom_prefix is non-NULL to avoid clearing an
      * existing prefix when adding home/ or root/ files.
@@ -1021,7 +912,7 @@ static error_t *update_manifest_after_add(
         }
     }
 
-    /* STEP 5: Bulk sync operation (O(M+N)) */
+    /* STEP 4: Bulk sync operation (O(M+N)) */
     size_t synced_count = 0;
     err = manifest_add_files(
         repo,
@@ -1038,7 +929,7 @@ static error_t *update_manifest_after_add(
         goto cleanup;
     }
 
-    /* STEP 6: Record stat cache for added files */
+    /* STEP 5: Record stat cache for added files */
     for (size_t i = 0; i < string_array_size(added_files); i++) {
         const char *path = string_array_get(added_files, i);
         struct stat st;
@@ -1048,7 +939,7 @@ static error_t *update_manifest_after_add(
         }
     }
 
-    /* STEP 7: Commit transaction */
+    /* STEP 6: Commit transaction */
     err = state_save(repo, state);
     if (err) {
         err = error_wrap(err, "Failed to save manifest updates");
@@ -1057,25 +948,11 @@ static error_t *update_manifest_after_add(
 
     /* Success */
     *out_updated = true;
-
-    /* Verbose output */
-    if (out && synced_count > 0) {
-        if (synced_count < string_array_size(added_files)) {
-            output_info(out, "Manifest updated: %zu/%zu files (precedence rules applied)",
-                       synced_count, string_array_size(added_files));
-        }
+    if (out_synced) {
+        *out_synced = synced_count;
     }
 
 cleanup:
-    if (content_cache) {
-        content_cache_free(content_cache);
-    }
-    if (km) {
-        keymanager_free(km);
-    }
-    if (config) {
-        config_free(config);
-    }
     if (enabled_profiles) {
         string_array_free(enabled_profiles);
     }
@@ -1109,18 +986,26 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     size_t tracked_dir_count = 0;
     size_t tracked_dir_capacity = 0;
     size_t added_count = 0;
-    size_t metadata_count = 0;
     bool profile_was_new = false;
     metadata_t *metadata = NULL;
     keymanager_t *key_mgr = NULL;
 
+    /* Pre-flight privilege check arrays (cleaned up in main cleanup block) */
+    const char **preflight_storage_paths = NULL;
+    char **preflight_allocated_paths = NULL;
+    size_t preflight_storage_count = 0;
+
     /* Load configuration for hooks and ignore patterns */
     err = config_load(NULL, &config);
     if (err) {
-        /* Non-fatal: continue without config */
+        /* Non-fatal: continue with default config */
         error_free(err);
         err = NULL;
         config = config_create_default();
+        if (!config) {
+            err = ERROR(ERR_MEMORY, "Failed to create default config");
+            goto cleanup;
+        }
     }
 
     /* Create output context from config */
@@ -1158,12 +1043,10 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
      */
 
     /* Build array of storage paths by pre-resolving all file paths */
-    const char **storage_paths = calloc(opts->file_count, sizeof(char *));
-    char **allocated_paths = calloc(opts->file_count, sizeof(char *));
+    preflight_storage_paths = calloc(opts->file_count, sizeof(char *));
+    preflight_allocated_paths = calloc(opts->file_count, sizeof(char *));
 
-    if (!storage_paths || !allocated_paths) {
-        free(storage_paths);
-        free(allocated_paths);
+    if (!preflight_storage_paths || !preflight_allocated_paths) {
         err = ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
         goto cleanup;
     }
@@ -1177,7 +1060,6 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     /* Resolve all paths to storage format (pre-flight for privilege check).
      * Only paths that actually need elevation are included — home/ never does,
      * and custom/ only does when the prefix is outside $HOME. */
-    size_t storage_count = 0;
     for (size_t i = 0; i < opts->file_count; i++) {
         const char *file_path = opts->files[i];
         char *absolute = NULL;
@@ -1196,28 +1078,18 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             }
             storage_path = strdup(file_path);
             if (!storage_path) {
-                for (size_t j = 0; j < storage_count; j++) {
-                    free(allocated_paths[j]);
-                }
-                free(storage_paths);
-                free(allocated_paths);
                 err = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
                 goto cleanup;
             }
-            allocated_paths[storage_count] = storage_path;
-            storage_paths[storage_count] = storage_path;
-            storage_count++;
+            preflight_allocated_paths[preflight_storage_count] = storage_path;
+            preflight_storage_paths[preflight_storage_count] = storage_path;
+            preflight_storage_count++;
             continue;
         }
 
         /* Filesystem path — normalize raw user input to absolute path first */
         err = path_normalize_input(file_path, opts->custom_prefix, &absolute);
         if (err) {
-            for (size_t j = 0; j < storage_count; j++) {
-                free(allocated_paths[j]);
-            }
-            free(storage_paths);
-            free(allocated_paths);
             err = error_wrap(err, "Failed to resolve path '%s'", file_path);
             goto cleanup;
         }
@@ -1238,35 +1110,25 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                 if (custom_needs_elevation) {
                     storage_path = strdup("custom/");
                     if (!storage_path) {
-                        for (size_t j = 0; j < storage_count; j++) {
-                            free(allocated_paths[j]);
-                        }
-                        free(storage_paths);
-                        free(allocated_paths);
                         err = ERROR(ERR_MEMORY, "Failed to allocate representative path");
                         goto cleanup;
                     }
-                    allocated_paths[storage_count] = storage_path;
-                    storage_paths[storage_count] = storage_path;
-                    storage_count++;
+                    preflight_allocated_paths[preflight_storage_count] = storage_path;
+                    preflight_storage_paths[preflight_storage_count] = storage_path;
+                    preflight_storage_count++;
                 }
                 continue;
             }
             /* Actual error for regular files */
-            for (size_t j = 0; j < storage_count; j++) {
-                free(allocated_paths[j]);
-            }
-            free(storage_paths);
-            free(allocated_paths);
             err = error_wrap(err, "Failed to resolve path '%s'", file_path);
             goto cleanup;
         }
 
         /* Only include paths that need elevation in the privilege check */
         if (prefix == PREFIX_ROOT || (prefix == PREFIX_CUSTOM && custom_needs_elevation)) {
-            allocated_paths[storage_count] = storage_path;
-            storage_paths[storage_count] = storage_path;
-            storage_count++;
+            preflight_allocated_paths[preflight_storage_count] = storage_path;
+            preflight_storage_paths[preflight_storage_count] = storage_path;
+            preflight_storage_count++;
         } else {
             free(storage_path);
         }
@@ -1282,16 +1144,8 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
      * If re-exec fails or user declines, returns error.
      */
     err = privilege_ensure_for_operation(
-        storage_paths, storage_count, "add", true,  /* interactive = true (default for add) */
-        opts->argc, opts->argv, out
+        preflight_storage_paths, preflight_storage_count, "add", true, opts->argc, opts->argv, out
     );
-
-    /* Cleanup storage paths array */
-    for (size_t i = 0; i < storage_count; i++) {
-        free(allocated_paths[i]);
-    }
-    free(storage_paths);
-    free(allocated_paths);
 
     if (err) {
         /* User declined elevation or non-interactive mode blocked it */
@@ -1400,7 +1254,6 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                 prefix_for_conversion = opts->custom_prefix;
 
                 if (!prefix_for_conversion || prefix_for_conversion[0] == '\0') {
-                    free(absolute);
                     err = ERROR(ERR_INVALID_ARG, "Storage path '%s' requires --prefix flag\n"
                         "Usage: dotta add -p %s --prefix /path/to/target %s", file, opts->profile, file);
                     goto cleanup;
@@ -1451,9 +1304,28 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                 goto cleanup;
             }
 
-            /* Merge directory files into all_files */
+            /* If all files were excluded, skip this directory entirely */
+            if (string_array_size(dir_files) == 0) {
+                string_array_free(dir_files);
+                if (opts->verbose && out) {
+                    output_info(out, "Skipped directory (all files excluded): %s", absolute);
+                }
+                free(absolute);
+                continue;
+            }
+
+            /* Merge directory files into all_files (dedup against explicit file args) */
             for (size_t j = 0; j < string_array_size(dir_files); j++) {
-                string_array_push(all_files, string_array_get(dir_files, j));
+                const char *dir_file = string_array_get(dir_files, j);
+                if (string_array_contains(all_files, dir_file)) {
+                    continue;
+                }
+                err = string_array_push(all_files, dir_file);
+                if (err) {
+                    string_array_free(dir_files);
+                    free(absolute);
+                    goto cleanup;
+                }
             }
             string_array_free(dir_files);
 
@@ -1489,6 +1361,12 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             }
 
             tracked_dirs[tracked_dir_count].filesystem_path = strdup(absolute);
+            if (!tracked_dirs[tracked_dir_count].filesystem_path) {
+                free(storage_prefix);
+                free(absolute);
+                err = ERROR(ERR_MEMORY, "Failed to duplicate directory path");
+                goto cleanup;
+            }
             tracked_dirs[tracked_dir_count].storage_path = storage_prefix;
             tracked_dir_count++;
         } else {
@@ -1501,8 +1379,14 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                 continue;
             }
 
-            /* Add to list */
-            string_array_push(all_files, absolute);
+            /* Add to list (dedup: skip if already collected via directory expansion) */
+            if (!string_array_contains(all_files, absolute)) {
+                err = string_array_push(all_files, absolute);
+                if (err) {
+                    free(absolute);
+                    goto cleanup;
+                }
+            }
         }
 
         free(absolute);
@@ -1556,7 +1440,13 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     bool needs_encryption = opts->encrypt || (config && config->encryption_enabled &&
                             config->auto_encrypt_patterns && config->auto_encrypt_pattern_count > 0);
 
-    if (needs_encryption && config && config->encryption_enabled) {
+    if (needs_encryption) {
+        if (!config || !config->encryption_enabled) {
+            err = ERROR(ERR_INVALID_ARG,
+                "Encryption requested (--encrypt) but encryption is not enabled in config.\n"
+                "Add to config.toml:\n\n  [encryption]\n  enabled = true");
+            goto cleanup;
+        }
         key_mgr = keymanager_get_global(config);
         if (!key_mgr) {
             err = ERROR(ERR_INTERNAL, "Failed to get encryption key manager");
@@ -1633,9 +1523,9 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         if (opts->verbose && out) {
             if (dir_item->owner || dir_item->group) {
                 output_info(out, "Captured directory metadata: %s (mode: %04o, owner: %s:%s)",
-                           dir->filesystem_path, dir_item->mode,
-                           dir_item->owner ? dir_item->owner : "?",
-                           dir_item->group ? dir_item->group : "?");
+                            dir->filesystem_path, dir_item->mode,
+                            dir_item->owner ? dir_item->owner : "?",
+                            dir_item->group ? dir_item->group : "?");
             } else {
                 output_info(out, "Captured directory metadata: %s (mode: %04o)",
                             dir->filesystem_path, dir_item->mode);
@@ -1694,14 +1584,9 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     }
 
     /* Verbose summary */
-    if (opts->verbose && out) {
-        if (metadata_count > 0) {
-            output_info(out, "Updated metadata for %zu file(s)", metadata_count);
-        }
-        if (dir_tracked_count > 0) {
-            output_info(out, "Tracked %zu director%s for change detection",
-                        dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies");
-        }
+    if (opts->verbose && out && dir_tracked_count > 0) {
+        output_info(out, "Tracked %zu director%s for change detection",
+                    dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies");
     }
 
     /* Create commit */
@@ -1737,7 +1622,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
          */
         error_t *enable_err = auto_enable_and_sync_profile(
             repo, opts->profile, opts->custom_prefix, all_files,
-            out, &manifest_updated, &manifest_synced_count
+            &manifest_updated, &manifest_synced_count
         );
 
         if (enable_err) {
@@ -1757,7 +1642,8 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
          * If not enabled, skips manifest update (user must explicitly enable).
          */
         error_t *manifest_err = update_manifest_after_add(
-            repo, opts->profile, opts->custom_prefix, all_files, out, &manifest_updated
+            repo, opts->profile, opts->custom_prefix, all_files,
+            &manifest_updated, &manifest_synced_count
         );
 
         if (manifest_err) {
@@ -1769,9 +1655,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             }
             error_free(manifest_err);
             manifest_updated = false;
-        } else if (manifest_updated) {
-            /* For existing enabled profiles, all files are synced (all or nothing) */
-            manifest_synced_count = added_count;
+            manifest_synced_count = 0;
         }
     }
 
@@ -1814,9 +1698,9 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         }
     
         /* Show directory tracking info only when files were also added */
-        if (added_count > 0 && tracked_dir_count > 0) {
+        if (added_count > 0 && dir_tracked_count > 0) {
             output_info(out, "Tracking %zu director%s for change detection",
-                        tracked_dir_count, tracked_dir_count == 1 ? "y" : "ies");
+                        dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies");
         }
     
         output_newline(out);
@@ -1842,8 +1726,18 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                     }
                 } else {
                     /* Existing enabled profile */
-                    output_info(out, "Manifest updated (%zu file%s marked as deployed)",
-                                added_count, added_count == 1 ? "" : "s");
+                    if (manifest_synced_count == added_count) {
+                        output_info(out, "Manifest updated (%zu file%s marked as deployed)",
+                                    manifest_synced_count, manifest_synced_count == 1 ? "" : "s");
+                    } else {
+                        output_info(out, "Manifest updated (%zu/%zu file%s marked as deployed)",
+                                    manifest_synced_count, added_count, added_count == 1 ? "" : "s");
+                        if (manifest_synced_count < added_count) {
+                            size_t skipped = added_count - manifest_synced_count;
+                            output_info(out, "Note: %zu file%s overridden by higher-precedence profiles",
+                                        skipped, skipped == 1 ? "" : "s");
+                        }
+                    }
                     output_hint(out, "Files captured from filesystem (already deployed)");
                 }
             } else {
@@ -1877,6 +1771,13 @@ cleanup:
     if (hook_ctx) hook_context_free(hook_ctx);
     if (repo_dir) free(repo_dir);
     if (ignore_ctx) ignore_context_free(ignore_ctx);
+    if (preflight_allocated_paths) {
+        for (size_t i = 0; i < preflight_storage_count; i++) {
+            free(preflight_allocated_paths[i]);
+        }
+        free(preflight_allocated_paths);
+    }
+    free(preflight_storage_paths);
     if (out) output_free(out);
     if (config) config_free(config);
 

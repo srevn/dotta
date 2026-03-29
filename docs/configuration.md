@@ -91,7 +91,7 @@ Files: {count}
 """
 ```
 
-**Available variables:** `{host}`, `{user}`, `{profile}`, `{action}`, `{action_past}`, `{count}`, `{files}`, `{date}`, {datetime}`, `{target_commit}`
+**Available variables:** `{host}`, `{user}`, `{profile}`, `{action}`, `{action_past}`, `{count}`, `{files}`, `{date}`, `{datetime}`, `{target_commit}`
 
 ### [hooks]
 

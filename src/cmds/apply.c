@@ -861,12 +861,13 @@ static error_t *ensure_complete_apply_privileges(
 }
 
 /**
- * Check if filesystem path should be excluded by CLI patterns
+ * Check if storage path should be excluded by CLI patterns
  *
  * Helper function for manifest filtering during convergence analysis
- * and orphan removal. Uses gitignore-style pattern matching.
+ * and orphan removal. Uses gitignore-style pattern matching against
+ * storage paths (VWD namespace), ensuring patterns are portable across machines.
  *
- * @param path Filesystem path (VWD format: "home/.bashrc", "root/etc/hosts")
+ * @param path Storage path (VWD format, e.g., "home/.bashrc", "root/etc/hosts")
  * @param opts Command options containing exclusion patterns
  * @return true if path matches any exclusion pattern, false otherwise
  */
@@ -1273,7 +1274,7 @@ error_t *cmd_apply(
         }
 
         /* Filter by exclusion pattern (skip excluded files) */
-        if (matches_exclude_pattern(entry->filesystem_path, opts)) {
+        if (matches_exclude_pattern(entry->storage_path, opts)) {
             excluded_deploy_count++;
             continue;
         }
@@ -1328,7 +1329,7 @@ error_t *cmd_apply(
             }
 
             /* Filter by exclusion pattern (skip excluded files) */
-            if (matches_exclude_pattern(entry->filesystem_path, opts)) {
+            if (matches_exclude_pattern(entry->storage_path, opts)) {
                 /* Already counted in Pass 1, just skip */
                 if (opts->verbose) {
                     output_print(out, OUTPUT_VERBOSE, "  Skipping (excluded): %s\n",
@@ -1445,7 +1446,7 @@ error_t *cmd_apply(
             size_t filtered_file_count = 0, filtered_dir_count = 0;
 
             for (size_t i = 0; i < total_file_orphans; i++) {
-                if (matches_exclude_pattern(all_file_orphans[i]->filesystem_path, opts)) {
+                if (matches_exclude_pattern(all_file_orphans[i]->storage_path, opts)) {
                     excluded_orphan_count++;
                     if (opts->verbose) {
                         output_print(out, OUTPUT_VERBOSE, "  Preserving orphan (excluded): %s\n",
@@ -1457,7 +1458,7 @@ error_t *cmd_apply(
             }
 
             for (size_t i = 0; i < total_dir_orphans; i++) {
-                if (matches_exclude_pattern(all_dir_orphans[i]->filesystem_path, opts)) {
+                if (matches_exclude_pattern(all_dir_orphans[i]->storage_path, opts)) {
                     excluded_orphan_count++;
                     if (opts->verbose) {
                         output_print(out, OUTPUT_VERBOSE, "  Preserving orphan (excluded): %s\n",
@@ -1479,7 +1480,7 @@ error_t *cmd_apply(
                 }
                 size_t f_idx = 0;
                 for (size_t i = 0; i < total_file_orphans; i++) {
-                    if (!matches_exclude_pattern(all_file_orphans[i]->filesystem_path, opts)) {
+                    if (!matches_exclude_pattern(all_file_orphans[i]->storage_path, opts)) {
                         file_orphans[f_idx++] = all_file_orphans[i];
                     }
                 }
@@ -1498,7 +1499,7 @@ error_t *cmd_apply(
                 }
                 size_t d_idx = 0;
                 for (size_t i = 0; i < total_dir_orphans; i++) {
-                    if (!matches_exclude_pattern(all_dir_orphans[i]->filesystem_path, opts)) {
+                    if (!matches_exclude_pattern(all_dir_orphans[i]->storage_path, opts)) {
                         dir_orphans[d_idx++] = all_dir_orphans[i];
                     }
                 }
@@ -1566,7 +1567,13 @@ error_t *cmd_apply(
     if (deploy_manifest->count == 0 &&
         (opts->keep_orphans || (file_orphan_count == 0 && dir_orphan_count == 0))) {
         /* No divergent files and (keeping orphans OR no orphans to clean) */
-        output_info(out, "Nothing to deploy (workspace is clean)");
+        size_t total_excluded = excluded_deploy_count + excluded_orphan_count;
+        if (total_excluded > 0) {
+            output_info(out, "Nothing to deploy (%zu file%s excluded by --exclude)",
+                        total_excluded, total_excluded == 1 ? "" : "s");
+        } else {
+            output_info(out, "Nothing to deploy (workspace is clean)");
+        }
 
         /* Commit transaction to persist stat cache updates from workspace flush */
         err = state_save(repo, state);
@@ -1621,6 +1628,10 @@ error_t *cmd_apply(
      * - Deploy file content: cache hit (already decrypted)
      */
     cache = workspace_get_content_cache(ws);
+    if (!cache) {
+        err = ERROR(ERR_INTERNAL, "Workspace content cache unavailable");
+        goto cleanup;
+    }
 
     /* Run pre-flight checks (using workspace divergence analysis)
      *
@@ -1774,36 +1785,36 @@ error_t *cmd_apply(
     if (config->confirm_destructive && !opts->force && !opts->dry_run) {
         char prompt[512];  /* Larger buffer for enhanced prompt */
 
-        /* Build comprehensive prompt that includes cleanup information
+        /* Calculate orphan removal count (exclude safety violations)
          *
-         * Exclude ALL violation files from the "remove" count:
-         * - Released files: left on filesystem (not destructive)
-         * - Blocking violations (modified, mode_changed, etc.): skipped by safety
-         * Only count files that will actually be deleted.
+         * Violation files are either left on filesystem (released) or
+         * skipped by safety (modified, mode_changed, etc.), so they
+         * won't actually be deleted. Exclude them from the count.
          */
+        size_t removal_count = 0;
         if (cleanup_preflight && cleanup_preflight->will_prune_orphans) {
             size_t preflight_excluded = 0;
             if (cleanup_preflight->safety_violations) {
                 preflight_excluded = cleanup_preflight->safety_violations->count;
             }
-            size_t removal_count = (cleanup_preflight->orphaned_files_count > preflight_excluded)
+            removal_count = (cleanup_preflight->orphaned_files_count > preflight_excluded)
                 ? cleanup_preflight->orphaned_files_count - preflight_excluded
                 : 0;
+        }
 
-            if (removal_count > 0) {
-                /* Enhanced prompt: mentions both deployment and orphan removal */
-                snprintf(prompt, sizeof(prompt), "Deploy %zu file%s and remove %zu orphaned file%s?",
-                         deploy_manifest->count, deploy_manifest->count == 1 ? "" : "s",
-                         removal_count, removal_count == 1 ? "" : "s");
-            } else {
-                /* All orphans are released (none will be removed from filesystem) */
-                snprintf(prompt, sizeof(prompt), "Deploy %zu file%s to filesystem?",
-                         deploy_manifest->count, deploy_manifest->count == 1 ? "" : "s");
-            }
-        } else {
-            /* Standard prompt: only deployment */
+        /* Build prompt based on pending actions */
+        if (deploy_manifest->count > 0 && removal_count > 0) {
+            snprintf(prompt, sizeof(prompt), "Deploy %zu file%s and remove %zu orphaned file%s?",
+                     deploy_manifest->count, deploy_manifest->count == 1 ? "" : "s",
+                     removal_count, removal_count == 1 ? "" : "s");
+        } else if (deploy_manifest->count > 0) {
             snprintf(prompt, sizeof(prompt), "Deploy %zu file%s to filesystem?",
                      deploy_manifest->count, deploy_manifest->count == 1 ? "" : "s");
+        } else if (removal_count > 0) {
+            snprintf(prompt, sizeof(prompt), "Remove %zu orphaned file%s?",
+                     removal_count, removal_count == 1 ? "" : "s");
+        } else {
+            snprintf(prompt, sizeof(prompt), "Proceed with cleanup?");
         }
 
         if (!output_confirm(out, prompt, false)) {
@@ -1837,40 +1848,6 @@ error_t *cmd_apply(
 
         print_deploy_results(out, deploy_res, opts->verbose);
 
-        /* Report exclusion statistics */
-        size_t total_excluded = excluded_deploy_count + excluded_orphan_count;
-        if (total_excluded > 0) {
-            if (opts->verbose) {
-                /* Detailed breakdown */
-                output_printf(out, OUTPUT_NORMAL, "Skipped %zu file%s (--exclude patterns):\n",
-                             total_excluded,
-                             total_excluded == 1 ? "" : "s");
-                if (excluded_deploy_count > 0) {
-                    output_printf(out, OUTPUT_NORMAL, "  • %zu divergent file%s not deployed\n",
-                                 excluded_deploy_count,
-                                 excluded_deploy_count == 1 ? "" : "s");
-                }
-                if (excluded_orphan_count > 0) {
-                    output_printf(out, OUTPUT_NORMAL, "  • %zu orphaned file%s not removed\n",
-                                 excluded_orphan_count,
-                                 excluded_orphan_count == 1 ? "" : "s");
-                }
-            } else {
-                /* Simple summary */
-                if (output_colors_enabled(out)) {
-                    output_printf(out, OUTPUT_NORMAL, "Skipped %s%zu%s file%s (--exclude patterns)\n",
-                                 output_color_code(out, OUTPUT_COLOR_CYAN),
-                                 total_excluded,
-                                 output_color_code(out, OUTPUT_COLOR_RESET),
-                                 total_excluded == 1 ? "" : "s");
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, "Skipped %zu file%s (--exclude patterns)\n",
-                                 total_excluded,
-                                 total_excluded == 1 ? "" : "s");
-                }
-            }
-        }
-
         /* Free deploy_manifest after successful deployment */
         free(deploy_manifest->entries);
         free(deploy_manifest);
@@ -1885,6 +1862,40 @@ error_t *cmd_apply(
         if (!deploy_res) {
             err = ERROR(ERR_MEMORY, "Failed to allocate deploy result");
             goto cleanup;
+        }
+    }
+
+    /* Report exclusion statistics (shown regardless of deployment activity) */
+    size_t total_excluded = excluded_deploy_count + excluded_orphan_count;
+    if (total_excluded > 0) {
+        if (opts->verbose) {
+            /* Detailed breakdown */
+            output_printf(out, OUTPUT_NORMAL, "Skipped %zu file%s (--exclude patterns):\n",
+                         total_excluded,
+                         total_excluded == 1 ? "" : "s");
+            if (excluded_deploy_count > 0) {
+                output_printf(out, OUTPUT_NORMAL, "  • %zu divergent file%s not deployed\n",
+                             excluded_deploy_count,
+                             excluded_deploy_count == 1 ? "" : "s");
+            }
+            if (excluded_orphan_count > 0) {
+                output_printf(out, OUTPUT_NORMAL, "  • %zu orphaned file%s not removed\n",
+                             excluded_orphan_count,
+                             excluded_orphan_count == 1 ? "" : "s");
+            }
+        } else {
+            /* Simple summary */
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "Skipped %s%zu%s file%s (--exclude patterns)\n",
+                             output_color_code(out, OUTPUT_COLOR_CYAN),
+                             total_excluded,
+                             output_color_code(out, OUTPUT_COLOR_RESET),
+                             total_excluded == 1 ? "" : "s");
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "Skipped %zu file%s (--exclude patterns)\n",
+                             total_excluded,
+                             total_excluded == 1 ? "" : "s");
+            }
         }
     }
 

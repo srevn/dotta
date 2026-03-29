@@ -241,9 +241,10 @@ typedef struct {
 } file_copy_result_t;
 
 /**
- * Check if path should be excluded by CLI patterns
+ * Check if storage path should be excluded by CLI patterns
  *
- * Helper function for filter_items_for_update().
+ * Helper function for filter_items_for_update(). Matches against storage
+ * paths (VWD namespace) for portable, machine-independent patterns.
  */
 static bool matches_exclude_pattern(
     const char *path,
@@ -390,7 +391,7 @@ static error_t *filter_items_for_update(
         }
 
         /* Apply exclusion patterns */
-        if (matches_exclude_pattern(item->filesystem_path, opts)) {
+        if (matches_exclude_pattern(item->storage_path, opts)) {
             if (opts->verbose && out) {
                 output_info(out, "Excluded: %s", item->filesystem_path);
             }
@@ -429,7 +430,7 @@ static error_t *filter_items_for_update(
             continue;
         }
 
-        if (matches_exclude_pattern(item->filesystem_path, opts)) {
+        if (matches_exclude_pattern(item->storage_path, opts)) {
             continue;
         }
 

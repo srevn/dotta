@@ -1439,12 +1439,12 @@ error_t *cmd_apply(
             goto cleanup;
         }
 
-        /* Apply exclusion filter if patterns specified */
-        if (opts->exclude_count > 0 &&
-            (total_file_orphans > 0 || total_dir_orphans > 0)) {
-            /* Count non-excluded orphans */
-            size_t filtered_file_count = 0, filtered_dir_count = 0;
-
+        /* Apply exclusion filter: single-pass in-place compaction */
+        if (opts->exclude_count > 0 && (total_file_orphans > 0 || total_dir_orphans > 0)) {
+            /* Single-pass in-place compaction: shift non-excluded items forward.
+             * The all_* arrays are malloc'd pointer arrays — safe to compact.
+             * Excluded items are counted and logged, then overwritten. */
+            size_t f_idx = 0;
             for (size_t i = 0; i < total_file_orphans; i++) {
                 if (matches_exclude_pattern(all_file_orphans[i]->storage_path, opts)) {
                     excluded_orphan_count++;
@@ -1453,10 +1453,12 @@ error_t *cmd_apply(
                                      all_file_orphans[i]->filesystem_path);
                     }
                 } else {
-                    filtered_file_count++;
+                    all_file_orphans[f_idx++] = all_file_orphans[i];
                 }
             }
+            total_file_orphans = f_idx;
 
+            size_t d_idx = 0;
             for (size_t i = 0; i < total_dir_orphans; i++) {
                 if (matches_exclude_pattern(all_dir_orphans[i]->storage_path, opts)) {
                     excluded_orphan_count++;
@@ -1465,57 +1467,17 @@ error_t *cmd_apply(
                                      all_dir_orphans[i]->filesystem_path);
                     }
                 } else {
-                    filtered_dir_count++;
+                    all_dir_orphans[d_idx++] = all_dir_orphans[i];
                 }
             }
-
-            /* Allocate filtered arrays */
-            if (filtered_file_count > 0) {
-                file_orphans = malloc(filtered_file_count * sizeof(workspace_item_t *));
-                if (!file_orphans) {
-                    free(all_file_orphans);
-                    free(all_dir_orphans);
-                    err = ERROR(ERR_MEMORY, "Failed to allocate filtered file orphan array");
-                    goto cleanup;
-                }
-                size_t f_idx = 0;
-                for (size_t i = 0; i < total_file_orphans; i++) {
-                    if (!matches_exclude_pattern(all_file_orphans[i]->storage_path, opts)) {
-                        file_orphans[f_idx++] = all_file_orphans[i];
-                    }
-                }
-                file_orphan_count = filtered_file_count;
-            }
-
-            if (filtered_dir_count > 0) {
-                dir_orphans = malloc(filtered_dir_count * sizeof(workspace_item_t *));
-                if (!dir_orphans) {
-                    free(all_file_orphans);
-                    free(all_dir_orphans);
-                    free(file_orphans);
-                    file_orphans = NULL;
-                    err = ERROR(ERR_MEMORY, "Failed to allocate filtered directory orphan array");
-                    goto cleanup;
-                }
-                size_t d_idx = 0;
-                for (size_t i = 0; i < total_dir_orphans; i++) {
-                    if (!matches_exclude_pattern(all_dir_orphans[i]->storage_path, opts)) {
-                        dir_orphans[d_idx++] = all_dir_orphans[i];
-                    }
-                }
-                dir_orphan_count = filtered_dir_count;
-            }
-
-            /* Free unfiltered arrays (filtered arrays now own the pointers) */
-            free(all_file_orphans);
-            free(all_dir_orphans);
-        } else {
-            /* No exclusion patterns - use extracted arrays directly */
-            file_orphans = all_file_orphans;
-            file_orphan_count = total_file_orphans;
-            dir_orphans = all_dir_orphans;
-            dir_orphan_count = total_dir_orphans;
+            total_dir_orphans = d_idx;
         }
+
+        /* Transfer ownership: both paths unify here */
+        file_orphans = all_file_orphans;
+        file_orphan_count = total_file_orphans;
+        dir_orphans = all_dir_orphans;
+        dir_orphan_count = total_dir_orphans;
 
         if (opts->verbose) {
             if (file_orphan_count > 0) {

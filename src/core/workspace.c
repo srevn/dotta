@@ -2191,13 +2191,16 @@ static error_t *analyze_encryption_policy_mismatch(
 
             if (lookup_err == NULL && meta_entry) {
                 /* Validate kind: encryption metadata only applies to files.
-                 * This should always be FILE (manifest contains only files), but
-                 * check defensively since this is corruption detection code. */
+                 * Symlinks and directories are never encrypted, so skip
+                 * encryption validation for non-FILE kinds. */
                 if (meta_entry->kind != METADATA_ITEM_FILE) {
-                    fprintf(stderr,
-                        "warning: metadata corruption for '%s' in profile '%s': "
-                        "expected FILE, got DIRECTORY. Skipping encryption validation.\n",
-                        storage_path, profile_name);
+                    if (meta_entry->kind == METADATA_ITEM_DIRECTORY) {
+                        fprintf(stderr,
+                            "warning: metadata corruption for '%s' in profile '%s': "
+                            "expected FILE, got DIRECTORY. Skipping encryption validation.\n",
+                            storage_path, profile_name);
+                    }
+                    /* SYMLINK: encryption not applicable, silently skip */
                 } else {
                     /* Detect mismatch between magic header and metadata */
                     if (is_encrypted != meta_entry->file.encrypted) {
@@ -2486,7 +2489,9 @@ static error_t *patch_entry_from_fresh(
             }
             new_owner = meta_item->owner;
             new_group = meta_item->group;
-            new_encrypted = meta_item->file.encrypted;
+            if (meta_item->kind == METADATA_ITEM_FILE) {
+                new_encrypted = meta_item->file.encrypted;
+            }
         }
     }
 

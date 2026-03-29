@@ -96,7 +96,7 @@ void metadata_free(void *ptr) {
         return;
     }
 
-    /* Free all items (both files and directories) */
+    /* Free all items (files, directories, and symlinks) */
     for (size_t i = 0; i < metadata->count; i++) {
         metadata_item_t *item = &metadata->items[i];
 
@@ -198,6 +198,44 @@ error_t *metadata_item_create_directory(
 }
 
 /**
+ * Create symlink metadata item
+ *
+ * Mode is always 0: symlink permissions are not settable via symlink() syscall,
+ * and chmod() on symlinks changes the target or fails (OS-dependent).
+ * Only ownership is meaningful (applied via lchown during deployment).
+ */
+error_t *metadata_item_create_symlink(
+    const char *storage_path,
+    metadata_item_t **out
+) {
+    CHECK_NULL(storage_path);
+    CHECK_NULL(out);
+
+    metadata_item_t *item = calloc(1, sizeof(metadata_item_t));
+    if (!item) {
+        return ERROR(ERR_MEMORY, "Failed to allocate metadata item");
+    }
+
+    item->kind = METADATA_ITEM_SYMLINK;
+
+    item->key = strdup(storage_path);
+    if (!item->key) {
+        free(item);
+        return ERROR(ERR_MEMORY, "Failed to duplicate storage path");
+    }
+
+    item->mode = 0;      /* Symlink permissions are not trackable */
+    item->owner = NULL;   /* Optional, set by caller if needed */
+    item->group = NULL;   /* Optional, set by caller if needed */
+
+    /* Initialize symlink union */
+    item->symlink._reserved = 0;
+
+    *out = item;
+    return NULL;
+}
+
+/**
  * Clone metadata item (deep copy)
  *
  * Creates a deep copy of a metadata item, duplicating all strings and
@@ -253,12 +291,16 @@ error_t *metadata_item_clone(const metadata_item_t *source, metadata_item_t **ou
     }
 
     /* Deep copy kind-specific union fields */
-    if (source->kind == METADATA_ITEM_FILE) {
-        /* File: copy encrypted flag */
-        item->file.encrypted = source->file.encrypted;
-    } else {
-        /* Directory: initialize reserved field */
-        item->directory._reserved = 0;
+    switch (source->kind) {
+        case METADATA_ITEM_FILE:
+            item->file.encrypted = source->file.encrypted;
+            break;
+        case METADATA_ITEM_DIRECTORY:
+            item->directory._reserved = 0;
+            break;
+        case METADATA_ITEM_SYMLINK:
+            item->symlink._reserved = 0;
+            break;
     }
 
     *out = item;
@@ -414,15 +456,20 @@ error_t *metadata_add_item(
         existing->group = new_group;
         existing->mode = source->mode;
 
-        /* Update kind (can change from file to directory or vice versa) */
+        /* Update kind (can change between file/directory/symlink) */
         existing->kind = source->kind;
 
         /* Update kind-specific union fields */
-        if (source->kind == METADATA_ITEM_FILE) {
-            existing->file.encrypted = source->file.encrypted;
-        } else {
-            /* Directory: initialize reserved field */
-            existing->directory._reserved = 0;
+        switch (source->kind) {
+            case METADATA_ITEM_FILE:
+                existing->file.encrypted = source->file.encrypted;
+                break;
+            case METADATA_ITEM_DIRECTORY:
+                existing->directory._reserved = 0;
+                break;
+            case METADATA_ITEM_SYMLINK:
+                existing->symlink._reserved = 0;
+                break;
         }
 
         return NULL;
@@ -468,11 +515,16 @@ error_t *metadata_add_item(
     item->mode = source->mode;
 
     /* Copy kind-specific union fields */
-    if (source->kind == METADATA_ITEM_FILE) {
-        item->file.encrypted = source->file.encrypted;
-    } else {
-        /* Directory: _reserved already zeroed by memset */
-        item->directory._reserved = 0;
+    switch (source->kind) {
+        case METADATA_ITEM_FILE:
+            item->file.encrypted = source->file.encrypted;
+            break;
+        case METADATA_ITEM_DIRECTORY:
+            item->directory._reserved = 0;
+            break;
+        case METADATA_ITEM_SYMLINK:
+            item->symlink._reserved = 0;
+            break;
     }
 
     /* Add to hashmap (if available) */
@@ -783,7 +835,7 @@ const metadata_item_t **metadata_get_items_by_kind(
  * Capture metadata from filesystem file
  *
  * Creates a file metadata item from stat data.
- * Symlinks are skipped (returns NULL with no error - caller should check *out).
+ * For symlinks, delegates to metadata_capture_from_symlink().
  *
  * Ownership capture (user/group):
  * - ONLY captured for root/ and custom/ prefix files when running as root (UID 0)
@@ -804,10 +856,10 @@ error_t *metadata_capture_from_file(
     CHECK_NULL(st);
     CHECK_NULL(out);
 
-    /* Check if file is a symlink - skip metadata for symlinks */
+    /* Symlinks need ownership tracking, not file metadata.
+     * Delegate to symlink-specific capture (handles root/ prefix check). */
     if (S_ISLNK(st->st_mode)) {
-        *out = NULL; /* Not an error, just skip */
-        return NULL;
+        return metadata_capture_from_symlink(storage_path, st, out);
     }
 
     /* Extract mode (permissions only, not file type bits) */
@@ -860,6 +912,68 @@ error_t *metadata_capture_from_file(
         }
     }
     /* For home/ prefix or when not running as root: owner/group remain NULL */
+
+    *out = item;
+    return NULL;
+}
+
+/**
+ * Capture metadata from filesystem symlink
+ *
+ * Creates a symlink metadata item with ownership data only.
+ * Mode is always 0 (symlink permissions are not settable).
+ *
+ * Symlinks only need metadata for ownership tracking on root/ prefix paths.
+ * For home/ prefix or non-root users, returns *out = NULL (no metadata needed).
+ *
+ * Ownership capture uses lstat data (st parameter), which returns the
+ * symlink's own uid/gid, not the target's.
+ */
+error_t *metadata_capture_from_symlink(
+    const char *storage_path,
+    const struct stat *st,
+    metadata_item_t **out
+) {
+    CHECK_NULL(storage_path);
+    CHECK_NULL(st);
+    CHECK_NULL(out);
+
+    /* Only capture metadata for root/custom prefix when running as root.
+     * home/ prefix symlinks are always owned by the current user — no metadata needed.
+     * Non-root users can't lchown anyway — no metadata needed. */
+    bool requires_root_privileges = privilege_path_requires_root(storage_path);
+    bool running_as_root = privilege_is_elevated();
+
+    if (!requires_root_privileges || !running_as_root) {
+        *out = NULL;
+        return NULL;
+    }
+
+    /* Create symlink item */
+    metadata_item_t *item = NULL;
+    error_t *err = metadata_item_create_symlink(storage_path, &item);
+    if (err) {
+        return err;
+    }
+
+    /* Capture ownership from lstat data */
+    struct passwd *pwd = getpwuid(st->st_uid);
+    if (pwd && pwd->pw_name) {
+        item->owner = strdup(pwd->pw_name);
+        if (!item->owner) {
+            metadata_item_free(item);
+            return ERROR(ERR_MEMORY, "Failed to allocate owner string");
+        }
+    }
+
+    struct group *grp = getgrgid(st->st_gid);
+    if (grp && grp->gr_name) {
+        item->group = strdup(grp->gr_name);
+        if (!item->group) {
+            metadata_item_free(item);
+            return ERROR(ERR_MEMORY, "Failed to allocate group string");
+        }
+    }
 
     *out = item;
     return NULL;
@@ -995,7 +1109,12 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t **out) {
         }
 
         /* Add kind discriminator */
-        const char *kind_str = (item->kind == METADATA_ITEM_FILE) ? "file" : "directory";
+        const char *kind_str;
+        switch (item->kind) {
+            case METADATA_ITEM_FILE:      kind_str = "file"; break;
+            case METADATA_ITEM_DIRECTORY: kind_str = "directory"; break;
+            case METADATA_ITEM_SYMLINK:   kind_str = "symlink"; break;
+        }
         if (!cJSON_AddStringToObject(item_obj, "kind", kind_str)) {
             cJSON_Delete(item_obj);
             err = ERROR(ERR_MEMORY, "Failed to add kind to item object");
@@ -1054,7 +1173,7 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t **out) {
                 }
             }
         }
-        /* DIRECTORY: No additional fields */
+        /* DIRECTORY, SYMLINK: No additional fields */
 
         /* Add item object to items array (ownership transferred to array) */
         cJSON_AddItemToArray(items_array, item_obj);
@@ -1165,11 +1284,14 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
             kind = METADATA_ITEM_FILE;
         } else if (strcmp(kind_obj->valuestring, "directory") == 0) {
             kind = METADATA_ITEM_DIRECTORY;
+        } else if (strcmp(kind_obj->valuestring, "symlink") == 0) {
+            kind = METADATA_ITEM_SYMLINK;
         } else {
             metadata_free(metadata);
             cJSON_Delete(root);
-            return ERROR(ERR_INVALID_ARG, "Invalid kind value: %s (expected 'file' or 'directory')",
-                        kind_obj->valuestring);
+            return ERROR(ERR_INVALID_ARG,
+                "Invalid kind value: %s (expected 'file', 'directory', or 'symlink')",
+                kind_obj->valuestring);
         }
 
         /* Get key (required) */
@@ -1253,7 +1375,7 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
             cJSON *encrypted_obj = cJSON_GetObjectItem(item_obj, "encrypted");
             item->file.encrypted = (encrypted_obj && cJSON_IsTrue(encrypted_obj));
         }
-        /* DIRECTORY: No fields to parse */
+        /* DIRECTORY, SYMLINK: No additional fields to parse */
 
         /* Add item to metadata collection (copies item internally) */
         err = metadata_add_item(metadata, item);

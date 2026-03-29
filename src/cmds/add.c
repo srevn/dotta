@@ -276,6 +276,19 @@ static error_t *add_file_to_worktree(
             return error_wrap(err, "Failed to create symlink in worktree");
         }
 
+        /* Capture symlink ownership metadata (root/ prefix + root user only).
+         * Uses lstat to get the symlink's own uid/gid, not the target's.
+         * Returns NULL item for home/ prefix or non-root (no metadata needed). */
+        struct stat link_stat;
+        if (lstat(filesystem_path, &link_stat) == 0) {
+            err = metadata_capture_from_symlink(storage_path, &link_stat, &item);
+            if (err) {
+                free(dest_path);
+                return error_wrap(err, "Failed to capture symlink metadata for '%s'",
+                                  filesystem_path);
+            }
+        }
+
         if (opts->verbose && out) {
             output_info(out, "Added symlink: %s -> %s", filesystem_path, storage_path);
         }
@@ -360,7 +373,7 @@ static error_t *add_file_to_worktree(
 
     free(dest_path);
 
-    /* Add metadata item to collection (item will be NULL for symlinks - that's ok) */
+    /* Add metadata item to collection (NULL for home/ prefix symlinks — no metadata needed) */
     if (item) {
         /* Verbose output for metadata capture */
         if (opts->verbose && out) {

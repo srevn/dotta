@@ -1612,8 +1612,11 @@ error_t *state_directory_entry_create_from_metadata(
 
     /* Validate that this is a directory item */
     if (meta_item->kind != METADATA_ITEM_DIRECTORY) {
-        return ERROR(ERR_INVALID_ARG, "Expected DIRECTORY metadata item, got %s",
-                     meta_item->kind == METADATA_ITEM_FILE ? "FILE" : "UNKNOWN");
+        const char *kind_str = "UNKNOWN";
+        if (meta_item->kind == METADATA_ITEM_FILE) kind_str = "FILE";
+        else if (meta_item->kind == METADATA_ITEM_SYMLINK) kind_str = "SYMLINK";
+
+        return ERROR(ERR_INVALID_ARG, "Expected DIRECTORY metadata item, got %s", kind_str);
     }
 
     state_directory_entry_t *entry = calloc(1, sizeof(state_directory_entry_t));

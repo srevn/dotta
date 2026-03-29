@@ -1,17 +1,23 @@
 /**
  * metadata.h - Unified metadata system
  *
- * UNIFIED DESIGN: Single discriminated union for files and directories.
+ * UNIFIED DESIGN: Single discriminated union for files, directories, and symlinks.
  *
  * Design principles:
- * - Common fields (mode, owner, group) apply to both files and directories
+ * - Common fields (mode, owner, group) apply to all kinds
  * - Kind-specific fields stored in discriminated union
- * - Single hashmap for O(1) lookup of both kinds
+ * - Single hashmap for O(1) lookup of all kinds
  * - Ownership tracking: ONLY for root/ prefix when running as root
  * - home/ prefix: always owned by current user
  * - Per-profile storage for natural layering
  * - Automatic capture during add/update operations
  * - Automatic restoration during apply/revert operations
+ *
+ * Symlink metadata:
+ * - mode is always 0 (symlink permissions are OS-dependent and not settable)
+ * - Only ownership is tracked (lchown changes the link itself, not its target)
+ * - Only created for root/ prefix symlinks when running as root
+ * - home/ prefix symlinks: no metadata entry needed (always current user)
  *
  * JSON Schema (Version 4):
  * {
@@ -46,6 +52,13 @@
  *       "mode": "0755",
  *       "owner": "root",
  *       "group": "wheel"
+ *     },
+ *     {
+ *       "kind": "symlink",
+ *       "key": "root/etc/alternatives/python",
+ *       "mode": "0000",
+ *       "owner": "root",
+ *       "group": "wheel"
  *     }
  *   ]
  * }
@@ -67,15 +80,16 @@
  */
 typedef enum {
     METADATA_ITEM_FILE = 0,
-    METADATA_ITEM_DIRECTORY = 1
+    METADATA_ITEM_DIRECTORY = 1,
+    METADATA_ITEM_SYMLINK = 2
 } metadata_item_kind_t;
 
 /**
- * Unified metadata item (files and directories)
+ * Unified metadata item (files, directories, and symlinks)
  *
- * This structure uses a discriminated union to store both file and directory
- * metadata efficiently. Common fields (mode, owner, group) are shared, while
- * kind-specific fields are stored in the union.
+ * This structure uses a discriminated union to store file, directory, and
+ * symlink metadata efficiently. Common fields (mode, owner, group) are shared,
+ * while kind-specific fields are stored in the union.
  *
  * Key interpretation (unified for all kinds):
  * - ALL ITEMS: key = storage_path (e.g., "home/.bashrc", "home/.config/nvim")
@@ -83,15 +97,20 @@ typedef enum {
  * This ensures metadata portability across machines.
  * Filesystem paths are derived on-demand using path_from_storage() when needed
  * for deployment or stat operations.
+ *
+ * Symlink semantics:
+ * - mode is always 0 (symlink permissions are not settable via symlink())
+ * - owner/group are tracked for root/ prefix symlinks (applied via lchown)
+ * - No encrypted flag (symlinks are never encrypted)
  */
 typedef struct {
-    metadata_item_kind_t kind;       /* Discriminator: FILE or DIRECTORY */
+    metadata_item_kind_t kind;       /* Discriminator: FILE, DIRECTORY, or SYMLINK */
 
     /* Lookup key */
-    char *key;                       /* storage_path for both files and directories */
+    char *key;                       /* storage_path for all kinds */
 
     /* Common metadata fields */
-    mode_t mode;                     /* Permission mode (e.g., 0600, 0644, 0755) */
+    mode_t mode;                     /* Permission mode (0 for symlinks) */
     char *owner;                     /* Owner username (optional, only for root/ prefix) */
     char *group;                     /* Group name (optional, only for root/ prefix) */
 
@@ -104,6 +123,10 @@ typedef struct {
         struct {
             char _reserved;          /* Reserved for C11 compliance */
         } directory;
+
+        struct {
+            char _reserved;          /* Reserved for C11 compliance */
+        } symlink;
     };
 } metadata_item_t;
 
@@ -172,6 +195,25 @@ error_t *metadata_item_create_file(
 error_t *metadata_item_create_directory(
     const char *storage_path,
     mode_t mode,
+    metadata_item_t **out
+);
+
+/**
+ * Create symlink metadata item
+ *
+ * Creates a metadata item for a symbolic link. Mode is always 0 because
+ * symlink permissions are not settable (symlink() has no mode parameter,
+ * and chmod() on a symlink changes the target or fails, OS-dependent).
+ *
+ * Only ownership (owner/group) is meaningful for symlinks, applied via
+ * lchown() during deployment.
+ *
+ * @param storage_path Path in profile (must not be NULL)
+ * @param out Item (must not be NULL, caller must free with metadata_item_free)
+ * @return Error or NULL on success
+ */
+error_t *metadata_item_create_symlink(
+    const char *storage_path,
     metadata_item_t **out
 );
 
@@ -336,7 +378,7 @@ const metadata_item_t **metadata_get_items_by_kind(
  * Capture metadata from filesystem file
  *
  * Creates a file metadata item from stat data.
- * Symlinks are skipped (returns NULL with no error - caller should check *out).
+ * For symlinks, delegates to metadata_capture_from_symlink().
  *
  * Ownership capture (user/group):
  * - ONLY captured for root/ prefix files when running as root (UID 0)
@@ -347,11 +389,37 @@ const metadata_item_t **metadata_get_items_by_kind(
  * @param storage_path Path in profile (must not be NULL)
  * @param st File stat data (must not be NULL)
  * @param out Item (must not be NULL, caller must free with metadata_item_free)
- *            Set to NULL if file is a symlink (not an error)
+ *            Set to NULL if symlink with no ownership to track (not an error)
  * @return Error or NULL on success
  */
 error_t *metadata_capture_from_file(
     const char *filesystem_path,
+    const char *storage_path,
+    const struct stat *st,
+    metadata_item_t **out
+);
+
+/**
+ * Capture metadata from filesystem symlink
+ *
+ * Creates a symlink metadata item with ownership data only.
+ * Mode is always 0 (symlink permissions are not settable).
+ *
+ * Symlinks only need metadata for ownership tracking on root/ prefix paths.
+ * For home/ prefix or non-root users, returns *out = NULL (no metadata needed).
+ *
+ * Ownership capture (user/group):
+ * - ONLY captured for root/ prefix symlinks when running as root (UID 0)
+ * - home/ prefix symlinks: always owned by current user, no metadata needed
+ * - Regular users: can't lchown anyway, no metadata needed
+ *
+ * @param storage_path Path in profile (must not be NULL)
+ * @param st Symlink stat data from lstat (must not be NULL, must be S_ISLNK)
+ * @param out Item (must not be NULL, caller must free with metadata_item_free)
+ *            Set to NULL if no ownership to track (not an error)
+ * @return Error or NULL on success
+ */
+error_t *metadata_capture_from_symlink(
     const char *storage_path,
     const struct stat *st,
     metadata_item_t **out

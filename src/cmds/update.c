@@ -648,15 +648,20 @@ static error_t *update_metadata_for_profile(
                                       item->filesystem_path);
                 }
 
-                /* meta_item will be NULL for symlinks (detected via S_ISLNK in stat) */
+                /* meta_item is NULL for home/ prefix symlinks (no metadata needed).
+                 * Non-NULL for files and root/ prefix symlinks (ownership tracked). */
                 if (meta_item) {
-                    meta_item->file.encrypted = copy_results[i].encrypted;
+                    /* Only set encrypted flag for FILE kind (symlinks are never encrypted) */
+                    if (meta_item->kind == METADATA_ITEM_FILE) {
+                        meta_item->file.encrypted = copy_results[i].encrypted;
+                    }
 
                     /* Save metadata before adding (for verbose output) */
                     mode_t mode = meta_item->mode;
                     char *owner = meta_item->owner ? strdup(meta_item->owner) : NULL;
                     char *group = meta_item->group ? strdup(meta_item->group) : NULL;
-                    bool is_encrypted = meta_item->file.encrypted;
+                    bool is_encrypted = (meta_item->kind == METADATA_ITEM_FILE)
+                                        ? meta_item->file.encrypted : false;
 
                     /* Add to metadata collection */
                     err = metadata_add_item(metadata, meta_item);

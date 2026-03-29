@@ -527,7 +527,8 @@ static error_t *sync_entry_to_state(
         .mode = mode,
         .owner = meta_item ? meta_item->owner : NULL,
         .group = meta_item ? meta_item->group : NULL,
-        .encrypted = meta_item ? meta_item->file.encrypted : false,
+        .encrypted = (meta_item && meta_item->kind == METADATA_ITEM_FILE)
+                     ? meta_item->file.encrypted : false,
         .deployed_at = deployed_at
     };
 

@@ -685,7 +685,7 @@ cleanup:
  * - Files that exist in both current and target (normal revert)
  * - Files deleted from HEAD (restore from history)
  * - Missing metadata gracefully (creates defaults with warning)
- * - Symlinks (skip metadata, they're tracked via tree mode only)
+ * - Symlinks (restore ownership metadata if present at target commit)
  */
 static error_t *revert_file_in_branch(
     git_repository *repo,
@@ -759,8 +759,25 @@ static error_t *revert_file_in_branch(
         goto cleanup;
     }
 
-    /* Extract or create metadata item for this file */
-    if (!is_symlink) {
+    /* Extract or create metadata item for this file/symlink */
+    if (is_symlink) {
+        /* Symlinks: only restore ownership metadata if present at target commit.
+         * No defaults needed — symlinks have no settable mode or encryption. */
+        const metadata_item_t *target_meta_item = NULL;
+        error_t *lookup_err = metadata_get_item(target_metadata, file_path, &target_meta_item);
+
+        if (!lookup_err && target_meta_item && target_meta_item->kind == METADATA_ITEM_SYMLINK) {
+            err = metadata_item_clone(target_meta_item, &meta_to_restore);
+            if (err) {
+                err = error_wrap(err, "Failed to clone symlink metadata item");
+                goto cleanup;
+            }
+        }
+        /* No metadata for symlink at target commit is fine — old profiles won't have it */
+        if (lookup_err) {
+            error_free(lookup_err);
+        }
+    } else {
         const metadata_item_t *target_meta_item = NULL;
         error_t *lookup_err = metadata_get_item(target_metadata, file_path, &target_meta_item);
 

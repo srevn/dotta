@@ -59,18 +59,17 @@ static void display_enabled_profiles(
                 char relative_buf[64];
 
                 /* Format both absolute and relative time */
-                struct tm *tm_info = localtime(&profile_deploy_time);
-                strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
+                struct tm tm_storage;
+                localtime_r(&profile_deploy_time, &tm_storage);
+                strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", &tm_storage);
                 format_relative_time(profile_deploy_time, relative_buf, sizeof(relative_buf));
 
                 /* Display dimmed timestamp */
-                char *dimmed_time = output_colorize(out, OUTPUT_COLOR_DIM, time_buf);
-                if (dimmed_time) {
+                if (output_colors_enabled(out)) {
                     output_printf(out, OUTPUT_NORMAL, "  %s(deployed %s)%s",
                                  output_color_code(out, OUTPUT_COLOR_DIM),
                                  relative_buf,
                                  output_color_code(out, OUTPUT_COLOR_RESET));
-                    free(dimmed_time);
                 } else {
                     output_printf(out, OUTPUT_NORMAL, "  (deployed %s)", relative_buf);
                 }
@@ -447,7 +446,7 @@ static void display_workspace_status(
 
         /* Show hidden items note when profile filter is active */
         if (profile_filter && hidden_count > 0) {
-            output_printf(out, OUTPUT_NORMAL, "\n  (%zu item%s from other profiles hidden)\n",
+            output_printf(out, OUTPUT_NORMAL, "  (%zu item%s from other profiles hidden)\n",
                           hidden_count, hidden_count == 1 ? "" : "s");
         }
     }
@@ -682,6 +681,16 @@ static error_t *display_remote_status(
             error_t *commit_err = local_ref_err ?
                                   local_ref_err : gitops_get_commit(repo, local_ref, &local_commit);
 
+            /* Status line — always shown regardless of commit loading */
+            output_printf(out, OUTPUT_NORMAL, "  Status:         ");
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "%s%s%s\n",
+                              output_color_code(out, color), status_str,
+                              output_color_code(out, OUTPUT_COLOR_RESET));
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "%s\n", status_str);
+            }
+
             if (!commit_err && local_commit) {
                 const git_oid *local_oid = git_commit_id(local_commit);
                 char local_oid_str[8];
@@ -693,14 +702,6 @@ static error_t *display_remote_status(
                 char time_str[64];
                 format_relative_time(local_time, time_str, sizeof(time_str));
 
-                output_printf(out, OUTPUT_NORMAL, "  Status:         ");
-                if (output_colors_enabled(out)) {
-                    output_printf(out, OUTPUT_NORMAL, "%s%s%s\n",
-                                  output_color_code(out, color), status_str,
-                                  output_color_code(out, OUTPUT_COLOR_RESET));
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, "%s\n", status_str);
-                }
                 output_printf(out, OUTPUT_NORMAL, "  Local commit:   %s %s (%s)\n",
                               local_oid_str, local_summary, time_str);
 
@@ -893,6 +894,7 @@ error_t *cmd_status(
     profile_list_t *workspace_profiles = NULL;
     profile_list_t *display_profiles = NULL;
     const manifest_t *manifest = NULL;
+    const state_t *state = NULL;
     workspace_t *ws = NULL;
     output_ctx_t *out = NULL;
 
@@ -960,85 +962,87 @@ error_t *cmd_status(
         display_profiles = workspace_profiles;
     }
 
-    /* Load workspace for divergence analysis
+    /* Load workspace for divergence analysis (only needed for local status)
      *
      * Uses persistent enabled profiles to ensure accurate orphan detection.
      * Manifest scope matches state scope, preventing false orphan reports.
      */
-    workspace_load_t ws_opts = {
-        .analyze_files = true,
-        .analyze_orphans = true,
-        .analyze_untracked = (config && config->auto_detect_new_files),
-        .analyze_directories = true,
-        .analyze_encryption = true
-    };
-    err = workspace_load(repo, NULL, workspace_profiles, config, &ws_opts, &ws);
-    if (err) {
-        err = error_wrap(err, "Failed to load workspace");
-        goto cleanup;
-    }
+    if (opts->show_local) {
+        workspace_load_t ws_opts = {
+            .analyze_files = true,
+            .analyze_orphans = true,
+            .analyze_untracked = (config && config->auto_detect_new_files),
+            .analyze_directories = true,
+            .analyze_encryption = true
+        };
+        err = workspace_load(repo, NULL, workspace_profiles, config, &ws_opts, &ws);
+        if (err) {
+            err = error_wrap(err, "Failed to load workspace");
+            goto cleanup;
+        }
 
-    /* Flush verified stat caches to database (self-healing optimization).
-     * Seeds the fast path for subsequent status calls. Non-fatal on failure
-     * — status still renders correctly, just won't benefit from fast path. */
-    error_t *flush_err = workspace_flush_stat_caches(ws);
-    if (flush_err) {
-        error_free(flush_err);
-    }
+        /* Flush verified stat caches to database (self-healing optimization).
+         * Seeds the fast path for subsequent status calls. Non-fatal on failure
+         * — status still renders correctly, just won't benefit from fast path. */
+        error_t *flush_err = workspace_flush_stat_caches(ws);
+        if (flush_err) {
+            error_free(flush_err);
+        }
 
-    /* Extract manifest from workspace (borrowed reference, owned by workspace) */
-    manifest = workspace_get_manifest(ws);
-    if (!manifest) {
-        err = ERROR(ERR_INTERNAL, "Workspace manifest is NULL");
-        goto cleanup;
-    }
+        /* Extract manifest from workspace (borrowed reference, owned by workspace) */
+        manifest = workspace_get_manifest(ws);
+        if (!manifest) {
+            err = ERROR(ERR_INTERNAL, "Workspace manifest is NULL");
+            goto cleanup;
+        }
 
-    /* Extract state from workspace (borrowed reference, owned by workspace) */
-    const state_t *state = workspace_get_state(ws);
-    if (!state) {
-        err = ERROR(ERR_INTERNAL, "Workspace state is NULL");
-        goto cleanup;
-    }
+        /* Extract state from workspace (borrowed reference, owned by workspace) */
+        state = workspace_get_state(ws);
+        if (!state) {
+            err = ERROR(ERR_INTERNAL, "Workspace state is NULL");
+            goto cleanup;
+        }
 
-    /* Check privileges for complete status (may re-exec with sudo) */
-    if (!opts->no_sudo && manifest && manifest->count > 0) {
-        /* Extract paths that need elevation from manifest */
-        const char **storage_paths = NULL;
-        size_t path_count = 0;
+        /* Check privileges for complete status (may re-exec with sudo) */
+        if (!opts->no_sudo && manifest->count > 0) {
+            /* Extract paths that need elevation from manifest */
+            const char **storage_paths = NULL;
+            size_t path_count = 0;
 
-        error_t *extract_err = extract_elevation_paths_from_manifest(
-            manifest, &storage_paths, &path_count
-        );
-
-        if (!extract_err && path_count > 0) {
-            /* Check if privileges needed (may re-exec) */
-            error_t *priv_err = privilege_ensure_for_operation(
-                storage_paths,
-                path_count,
-                "status",
-                true,  /* interactive mode (prompt allowed) */
-                opts->argc,
-                opts->argv,
-                out
+            error_t *extract_err = extract_elevation_paths_from_manifest(
+                manifest, &storage_paths, &path_count
             );
 
-            free((void *)storage_paths);
+            if (!extract_err && path_count > 0) {
+                /* Check if privileges needed (may re-exec) */
+                error_t *priv_err = privilege_ensure_for_operation(
+                    storage_paths,
+                    path_count,
+                    "status",
+                    true,  /* interactive mode (prompt allowed) */
+                    opts->argc,
+                    opts->argv,
+                    out
+                );
 
-            if (priv_err) {
-                /* User declined elevation or non-interactive mode */
-                output_newline(out);
-                output_warning(out, "Status check will be INCOMPLETE:\n");
-                output_printf(out, OUTPUT_NORMAL, "  ✓ Content changes will be detected\n");
-                output_printf(out, OUTPUT_NORMAL, "  ✓ Permission mode changes will be detected\n");
-                output_printf(out, OUTPUT_NORMAL, "  ✗ Ownership changes will NOT be detected\n");
-                output_newline(out);
+                if (priv_err) {
+                    /* User declined elevation or non-interactive mode */
+                    output_newline(out);
+                    output_warning(out, "Status check will be INCOMPLETE:\n");
+                    output_printf(out, OUTPUT_NORMAL, "  ✓ Content changes will be detected\n");
+                    output_printf(out, OUTPUT_NORMAL, "  ✓ Permission mode changes will be detected\n");
+                    output_printf(out, OUTPUT_NORMAL, "  ✗ Ownership changes will NOT be detected\n");
+                    output_newline(out);
 
-                error_free(priv_err);
-                /* Continue with partial status */
+                    error_free(priv_err);
+                    /* Continue with partial status */
+                }
+            } else {
+                /* Extraction failed - non-fatal, continue without privilege check */
+                error_free(extract_err);
             }
-        } else {
-            /* Extraction failed - non-fatal, continue without privilege check */
-            error_free(extract_err);
+
+            free((void *)storage_paths);
         }
     }
 
@@ -1056,10 +1060,12 @@ error_t *cmd_status(
      * Explicit detection (opts->profiles != NULL) is more robust than
      * pointer comparison and matches the pattern used in apply.c.
      */
-    bool has_display_filter = (opts->profiles != NULL && opts->profile_count > 0);
-    display_workspace_status(
-        ws, has_display_filter ? display_profiles : NULL, manifest, out, opts->verbose
-    );
+    if (opts->show_local) {
+        bool has_display_filter = (opts->profiles != NULL && opts->profile_count > 0);
+        display_workspace_status(
+            ws, has_display_filter ? display_profiles : NULL, manifest, out, opts->verbose
+        );
+    }
 
     /* Show remote sync status (if requested) */
     if (opts->show_remote) {

@@ -572,6 +572,11 @@ error_t *manifest_enable_profile(
     CHECK_NULL(profile_name);
     CHECK_NULL(enabled_profiles);
 
+    /* Initialize output stats (access_errors is incremented inline, must start at 0) */
+    if (out_stats) {
+        memset(out_stats, 0, sizeof(*out_stats));
+    }
+
     error_t *err = NULL;
     manifest_t *manifest = NULL;
     profile_list_t *profiles = NULL;
@@ -1041,13 +1046,14 @@ error_t *manifest_disable_profile(
                                                        fallback->source_profile->name);
             if (!fallback_oid_str) {
                 err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'",
-                           fallback->source_profile->name);
+                            fallback->source_profile->name);
                 goto cleanup;
             }
 
             /* Sync to state using proven, tested logic */
-            err = sync_entry_to_state(repo, state, fallback, fallback_oid_str,
-                                      fallback_metadata, entry->deployed_at);
+            err = sync_entry_to_state(
+                repo, state, fallback, fallback_oid_str, fallback_metadata, entry->deployed_at
+            );
             if (err) {
                 err = error_wrap(err, "Failed to sync entry to fallback for %s",
                                entry->storage_path);
@@ -1289,8 +1295,7 @@ error_t *manifest_disable_profile(
                 error_t *wrapped = error_wrap(err,
                     "Failed to mark directory '%s' as inactive", entry->filesystem_path);
                 fprintf(stderr, "Warning: %s\n", error_message(wrapped));
-                error_free(wrapped);
-                error_free(err);
+                error_free(wrapped);  /* Frees wrapped + chained cause (err) */
                 err = NULL;
             }
             dir_removed_count++;  /* Stats: directory marked for removal (user visibility) */
@@ -1317,10 +1322,6 @@ directory_cleanup:
     }
 
     state_free_all_directories(dir_entries, dir_count);
-
-    if (err) {
-        goto cleanup;  /* Jump to existing cleanup in manifest_disable_profile */
-    }
 
 cleanup:
     if (fallback_metadata) metadata_free(fallback_metadata);
@@ -1538,8 +1539,9 @@ error_t *manifest_remove_files(
              * 2. Gets metadata (mode, owner, group, encrypted) from merged metadata
              * 3. Uses INSERT OR REPLACE for atomic, complete entry update
              */
-            err = sync_entry_to_state(repo, state, fallback, fallback_oid_str,
-                                      metadata, preserved_deployed_at);
+            err = sync_entry_to_state(
+                repo, state, fallback, fallback_oid_str, metadata, preserved_deployed_at
+            );
             if (err) {
                 free(old_profile_name);
                 state_free_entry(current_entry);
@@ -2293,8 +2295,34 @@ error_t *manifest_reorder_profiles(
                 }
 
                 /* Sync with new owner, preserve existing deployed_at */
-                err = sync_entry_to_state(repo, state, new_entry, oid_str, metadata,
-                                          old_entry->deployed_at);
+                err = sync_entry_to_state(
+                    repo, state, new_entry, oid_str, metadata, old_entry->deployed_at
+                );
+                if (err) {
+                    goto cleanup;
+                }
+
+                /* Track profile ownership transition for user visibility
+                 *
+                 * Pattern: Same as manifest_disable_profile and manifest_remove_files.
+                 * Enables status to show "home/.bashrc (darwin → global)" after reorder.
+                 */
+                state_file_entry_t *updated_entry = NULL;
+                err = state_get_file(state, new_entry->filesystem_path, &updated_entry);
+                if (err) {
+                    err = error_wrap(err, "Failed to read entry for old_profile tracking: %s",
+                                     new_entry->filesystem_path);
+                    goto cleanup;
+                }
+
+                err = str_replace_owned(&updated_entry->old_profile, old_entry->profile);
+                if (err) {
+                    state_free_entry(updated_entry);
+                    goto cleanup;
+                }
+
+                err = state_update_entry(state, updated_entry);
+                state_free_entry(updated_entry);
                 if (err) {
                     goto cleanup;
                 }
@@ -2524,8 +2552,12 @@ error_t *manifest_update_files(
 
             if (fallback) {
                 /* Fallback exists - update to fallback profile */
-                const char *git_oid = hashmap_get(profile_oids,
-                                                 fallback->source_profile->name);
+                const char *git_oid = hashmap_get(profile_oids, fallback->source_profile->name);
+                if (!git_oid) {
+                    err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'",
+                                fallback->source_profile->name);
+                    goto cleanup;
+                }
 
                 /* Get metadata - from cache if available, otherwise use merged */
                 const metadata_t *metadata = NULL;
@@ -2639,6 +2671,10 @@ error_t *manifest_update_files(
              * Key insight: UPDATE captures files FROM filesystem, so they're
              * already deployed. We set deployed_at to mark them as known. */
             const char *git_oid = hashmap_get(profile_oids, item->profile);
+            if (!git_oid) {
+                err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'", item->profile);
+                goto cleanup;
+            }
 
             /* Get metadata - from cache if available, otherwise use merged */
             const metadata_t *metadata = NULL;
@@ -3231,6 +3267,11 @@ error_t *manifest_sync_diff(
              * User must run 'dotta apply' to actually deploy these changes.
              * We preserve deployed_at to maintain lifecycle tracking. */
             const char *git_oid_str = hashmap_get(profile_oids, profile_name);
+            if (!git_oid_str) {
+                err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'", profile_name);
+                free(filesystem_path);
+                goto cleanup;
+            }
 
             /* Get metadata - from cache if available, otherwise use merged */
             const metadata_t *profile_metadata = NULL;
@@ -3258,8 +3299,8 @@ error_t *manifest_sync_diff(
             }
 
             err = sync_entry_to_state(
-                repo, state, entry, git_oid_str, profile_metadata, deployed_at);
-
+                repo, state, entry, git_oid_str, profile_metadata, deployed_at
+            );
             if (err) {
                 err = error_wrap(err, "Failed to sync '%s' to manifest", filesystem_path);
                 free(filesystem_path);
@@ -3292,6 +3333,12 @@ error_t *manifest_sync_diff(
 
                 const char *fallback_git_oid = hashmap_get(profile_oids,
                                                            entry->source_profile->name);
+                if (!fallback_git_oid) {
+                    err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'",
+                                entry->source_profile->name);
+                    free(filesystem_path);
+                    goto cleanup;
+                }
 
                 /* Get metadata - from cache if available, otherwise use merged */
                 const metadata_t *fallback_metadata = NULL;
@@ -3301,12 +3348,17 @@ error_t *manifest_sync_diff(
                     fallback_metadata = metadata_merged;
                 }
 
-                /* Preserve existing deployed_at when falling back */
+                /* Preserve existing deployed_at and track old_profile when falling back */
                 time_t deployed_at = 0;
+                char *old_profile_name = NULL;
                 state_file_entry_t *existing_fb = NULL;
                 error_t *get_err_fb = state_get_file(state, filesystem_path, &existing_fb);
                 if (get_err_fb == NULL && existing_fb != NULL) {
                     deployed_at = existing_fb->deployed_at;
+                    /* Save old profile for ownership change tracking */
+                    if (existing_fb->profile) {
+                        old_profile_name = strdup(existing_fb->profile);
+                    }
                     state_free_entry(existing_fb);
                 } else if (get_err_fb) {
                     if (get_err_fb->code == ERR_NOT_FOUND) {
@@ -3319,12 +3371,40 @@ error_t *manifest_sync_diff(
                 }
 
                 err = sync_entry_to_state(
-                    repo, state, entry, fallback_git_oid, fallback_metadata, deployed_at);
-
+                    repo, state, entry, fallback_git_oid, fallback_metadata, deployed_at
+                );
                 if (err) {
+                    free(old_profile_name);
                     err = error_wrap(err, "Failed to sync fallback for '%s'", filesystem_path);
                     free(filesystem_path);
                     goto cleanup;
+                }
+
+                /* Track profile ownership transition for user visibility
+                 *
+                 * Pattern: Same as manifest_update_files and manifest_disable_profile.
+                 * Enables status to show "home/.bashrc (darwin → global)" after sync.
+                 */
+                if (old_profile_name) {
+                    state_file_entry_t *updated_entry = NULL;
+                    error_t *get_err2 = state_get_file(state, filesystem_path, &updated_entry);
+                    if (get_err2 == NULL && updated_entry != NULL) {
+                        err = str_replace_owned(&updated_entry->old_profile, old_profile_name);
+                        if (!err) {
+                            err = state_update_entry(state, updated_entry);
+                        }
+                        state_free_entry(updated_entry);
+                    } else if (get_err2) {
+                        error_free(get_err2);
+                    }
+                    free(old_profile_name);
+
+                    if (err) {
+                        err = error_wrap(err, "Failed to track ownership change for '%s'",
+                                       filesystem_path);
+                        free(filesystem_path);
+                        goto cleanup;
+                    }
                 }
 
                 fallbacks++;
@@ -3336,13 +3416,16 @@ error_t *manifest_sync_diff(
                 err = state_get_file(state, filesystem_path, &state_entry);
 
                 if (err) {
-                    /* File not in state (never deployed) - nothing to do */
                     if (err->code == ERR_NOT_FOUND) {
+                        /* File not in state (never deployed) - nothing to do */
                         error_free(err);
                         err = NULL;
+                        free(filesystem_path);
+                        continue;
                     }
+                    /* Fatal state error - propagate */
                     free(filesystem_path);
-                    continue;
+                    goto cleanup;
                 }
 
                 /* Check if profile_name owns this file */
@@ -3464,9 +3547,10 @@ error_t *manifest_sync_directories(
 
     error_t *err = NULL;
     hashmap_t *prefix_map = NULL;
+    metadata_t *metadata = NULL;
+    const metadata_item_t **directories = NULL;
 
     /* 1. Mark all directories as inactive (soft delete for orphan detection)
-     *
      *
      * This preserves directory entries for orphan detection instead of deleting them.
      * Directories not reactivated during rebuild become orphaned and are cleaned by apply.
@@ -3485,7 +3569,10 @@ error_t *manifest_sync_directories(
     /* 3. Rebuild from each enabled profile */
     for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
         const char *profile_name = string_array_get(enabled_profiles, i);
-        metadata_t *metadata = NULL;
+
+        /* Reset per-iteration state */
+        metadata = NULL;
+        directories = NULL;
 
         /* Load metadata (may not exist for old profiles - gracefully skip) */
         err = metadata_load_from_branch(repo, profile_name, &metadata);
@@ -3496,9 +3583,8 @@ error_t *manifest_sync_directories(
                 err = NULL;
                 continue;
             }
-            /* Other error - fatal */
-            hashmap_free(prefix_map, free);
-            return error_wrap(err, "Failed to load metadata for profile '%s'", profile_name);
+            err = error_wrap(err, "Failed to load metadata for profile '%s'", profile_name);
+            goto cleanup;
         }
 
         /* Lookup custom prefix for this profile */
@@ -3509,7 +3595,7 @@ error_t *manifest_sync_directories(
 
         /* Extract directories from metadata */
         size_t dir_count = 0;
-        const metadata_item_t **directories =
+        directories =
             metadata_get_items_by_kind(metadata, METADATA_ITEM_DIRECTORY, &dir_count);
 
         /* Reactivate or add each directory to state
@@ -3538,12 +3624,9 @@ error_t *manifest_sync_directories(
             );
 
             if (err) {
-                error_t *wrapped_err = error_wrap(err,
+                err = error_wrap(err,
                     "Failed to create state directory entry for '%s'", directories[j]->key);
-                free(directories);
-                metadata_free(metadata);
-                hashmap_free(prefix_map, free);
-                return wrapped_err;
+                break;
             }
 
             /* Check if directory already exists in state (may be inactive) */
@@ -3554,11 +3637,8 @@ error_t *manifest_sync_directories(
                 /* Fatal error - failed to query state */
                 state_free_directory_entry(state_dir);
                 if (existing) state_free_directory_entry(existing);
-                error_free(get_err);
-                free(directories);
-                metadata_free(metadata);
-                hashmap_free(prefix_map, free);
-                return error_wrap(get_err, "Failed to check directory state");
+                err = error_wrap(get_err, "Failed to check directory state");
+                break;
             }
 
             if (get_err && get_err->code == ERR_NOT_FOUND) {
@@ -3567,10 +3647,8 @@ error_t *manifest_sync_directories(
                 state_dir->state = strdup(STATE_ACTIVE);
                 if (!state_dir->state) {
                     state_free_directory_entry(state_dir);
-                    free(directories);
-                    metadata_free(metadata);
-                    hashmap_free(prefix_map, free);
-                    return ERROR(ERR_MEMORY, "Failed to allocate state string");
+                    err = ERROR(ERR_MEMORY, "Failed to allocate state string");
+                    break;
                 }
                 err = state_add_directory(state, state_dir);
             } else {
@@ -3598,21 +3676,30 @@ error_t *manifest_sync_directories(
             state_free_directory_entry(state_dir);
 
             if (err) {
-                error_t *wrapped_err = error_wrap(err,
+                err = error_wrap(err,
                     "Failed to add/update directory '%s' in state", directories[j]->key);
-                free(directories);
-                metadata_free(metadata);
-                hashmap_free(prefix_map, free);
-                return wrapped_err;
+                break;
             }
         }
 
-        /* Free the pointer array (items themselves are owned by metadata) */
+        /* Free per-iteration resources (always, whether error or success) */
         free(directories);
+        directories = NULL;
         metadata_free(metadata);
+        metadata = NULL;
+
+        if (err) {
+            goto cleanup;
+        }
     }
 
-    hashmap_free(prefix_map, free);
+cleanup:
+    /* Per-iteration resources are NULL on normal exit (freed in loop above).
+     * Non-NULL only if outer loop exited before per-iteration cleanup (e.g.,
+     * metadata_load_from_branch error before inner loop). */
+    free(directories);
+    if (metadata) metadata_free(metadata);
+    if (prefix_map) hashmap_free(prefix_map, free);
 
     /* After rebuild, any directories still in STATE_INACTIVE are orphaned
      * (belonged to disabled profiles with no fallback).
@@ -3621,5 +3708,5 @@ error_t *manifest_sync_directories(
      * This completes the mark-inactive-then-reactivate lifecycle.
      */
 
-    return NULL;
+    return err;
 }

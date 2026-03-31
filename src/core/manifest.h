@@ -312,7 +312,7 @@ error_t *manifest_add_files(
  *      d. If yes:
  *         - Check fresh manifest for fallback
  *         - Fallback exists: Update to fallback profile (deployed_at preserved)
- *         - No fallback: Mark as STATE_INACTIVE (staged for removal)
+ *         - No fallback: Mark as STATE_DELETED (controlled deletion)
  *      e. If no (different profile owns): Skip
  *
  * Preconditions:
@@ -323,7 +323,7 @@ error_t *manifest_add_files(
  *
  * Postconditions:
  *   - Files with fallback updated to fallback profile (deployed_at preserved)
- *   - Files without fallback marked STATE_INACTIVE (staged for removal)
+ *   - Files without fallback marked STATE_DELETED (controlled deletion)
  *   - Files not owned by removed_profile unchanged
  *   - Tracked directories synced from all enabled profiles
  *   - Transaction remains open (caller commits)

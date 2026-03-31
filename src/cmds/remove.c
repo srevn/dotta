@@ -43,7 +43,7 @@ static error_t *validate_options(const cmd_remove_options_t *opts) {
     if (opts->delete_profile) {
         if (opts->paths && opts->path_count > 0) {
             return ERROR(ERR_INVALID_ARG,
-                        "Cannot specify paths when using --delete-profile");
+                "Cannot specify paths when using --delete-profile");
         }
         return NULL;
     }
@@ -51,7 +51,7 @@ static error_t *validate_options(const cmd_remove_options_t *opts) {
     /* If not deleting profile, paths are required */
     if (!opts->paths || opts->path_count == 0) {
         return ERROR(ERR_INVALID_ARG,
-                    "At least one path is required (or use --delete-profile)");
+            "At least one path is required (or use --delete-profile)");
     }
 
     return NULL;
@@ -102,7 +102,8 @@ static error_t *resolve_paths_to_remove(
         if (!map_err && prefix_map) {
             custom_prefix = (const char *)hashmap_get(prefix_map, profile_name);
         } else if (map_err) {
-            /* Non-fatal: if prefix map loading fails, just degrade to showing storage paths */
+            /* Non-fatal: if prefix map loading fails,
+             * just degrade to showing storage paths */
             error_free(map_err);
         }
     }
@@ -162,8 +163,8 @@ static error_t *resolve_paths_to_remove(
             }
             /* With --force, skip this path */
             if (opts->verbose && out) {
-                output_warning(out, "Skipping invalid path '%s': %s",
-                               input_path, error_message(err));
+                output_warning(out,
+                    "Skipping invalid path '%s': %s", input_path, error_message(err));
             }
             error_free(err);
             err = NULL;
@@ -189,6 +190,9 @@ static error_t *resolve_paths_to_remove(
 
             err = string_array_push(storage_paths, storage_path);
             if (!err) {
+                /* If filesystem path unavailable (custom/ without prefix context),
+                 * fall back to storage path. Downstream consumers handle gracefully:
+                 * state lookups return "not found", display shows storage format. */
                 err = string_array_push(filesystem_paths, fs_path ? fs_path : storage_path);
             }
 
@@ -222,8 +226,9 @@ static error_t *resolve_paths_to_remove(
                     err = path_from_storage(profile_file, custom_prefix, &file_fs_path);
                     if (err) {
                         if ((opts->verbose || !opts->force) && out) {
-                            output_warning(out, "Failed to resolve filesystem path for '%s': %s",
-                                          profile_file, error_message(err));
+                            output_warning(out,
+                                "Failed to resolve filesystem path for '%s': %s",
+                                profile_file, error_message(err));
                         }
                         error_free(err);
                         err = NULL;
@@ -264,7 +269,8 @@ static error_t *resolve_paths_to_remove(
             }
             /* With --force, warn and skip */
             if (opts->verbose && out) {
-                output_warning(out, "File '%s' not found in profile, skipping", storage_path);
+                output_warning(out,
+                    "File '%s' not found in profile, skipping", storage_path);
             }
         }
 
@@ -320,7 +326,7 @@ static error_t *remove_file_from_worktree(
         free(file_path);
         if (!opts->force) {
             return ERROR(ERR_NOT_FOUND,
-                        "File '%s' not found in worktree", storage_path);
+                "File '%s' not found in worktree", storage_path);
         }
         /* With --force, skip silently */
         return NULL;
@@ -330,7 +336,8 @@ static error_t *remove_file_from_worktree(
     error_t *err = fs_remove_file(file_path);
     free(file_path);
     if (err) {
-        return error_wrap(err, "Failed to remove file '%s' from worktree", storage_path);
+        return error_wrap(err,
+            "Failed to remove file '%s' from worktree", storage_path);
     }
 
     /* Stage deletion */
@@ -364,38 +371,32 @@ static error_t *remove_file_from_worktree(
  *
  * Helper to determine if removing a file from one profile will affect the filesystem.
  */
-static bool is_deployed_from_other_profile(
-    git_repository *repo,
+static bool deployed_from_other_profile(
+    state_t *state,
     const char *filesystem_path,
     const char *current_profile
 ) {
-    if (!repo || !filesystem_path || !current_profile) {
+    if (!state || !filesystem_path || !current_profile) {
         return false;
     }
 
-    state_t *state = NULL;
-    error_t *err = state_load(repo, &state);
-    if (err) {
-        error_free(err);
-        return false;
-    }
-
-    if (!state || !state_file_exists(state, filesystem_path)) {
-        state_free(state);
+    if (!state_file_exists(state, filesystem_path)) {
         return false;
     }
 
     state_file_entry_t *state_entry = NULL;
-    err = state_get_file(state, filesystem_path, &state_entry);
+    error_t *err = state_get_file(state, filesystem_path, &state_entry);
 
     bool is_other = false;
-    if (!err && state_entry && strcmp(state_entry->profile, current_profile) != 0) {
+    if (!err && state_entry &&
+        state_entry->state &&
+        strcmp(state_entry->state, STATE_ACTIVE) == 0 &&
+        strcmp(state_entry->profile, current_profile) != 0) {
         is_other = true;
     }
 
     error_free(err);
     state_free_entry(state_entry);
-    state_free(state);
     return is_other;
 }
 
@@ -416,6 +417,7 @@ static error_t *analyze_multi_profile_conflicts(
     const string_array_t *storage_paths,
     const string_array_t *filesystem_paths,
     const char *current_profile,
+    state_t *state,
     string_array_t ***other_profiles_out,
     size_t *multi_profile_count_out,
     bool *has_deployed_from_other_out
@@ -466,8 +468,11 @@ static error_t *analyze_multi_profile_conflicts(
                 }
                 multi_profile_count++;
 
-                /* Check if deployed from another profile */
-                if (is_deployed_from_other_profile(repo, filesystem_path, current_profile)) {
+                /* Check if deployed from another profile.
+                 * Only valid with actual filesystem paths (absolute), not
+                 * storage path fallbacks (relative, e.g., "home/.bashrc"). */
+                if (filesystem_path[0] == '/' &&
+                    deployed_from_other_profile(state, filesystem_path, current_profile)) {
                     has_deployed_from_other = true;
                 }
             }
@@ -505,9 +510,9 @@ static void display_multi_profile_warnings(
     output_newline(out);
     output_section(out, "Multi-profile file warning");
     output_warning(out, "%zu file%s exist%s in multiple profiles:",
-                  multi_profile_count,
-                  multi_profile_count == 1 ? "" : "s",
-                  multi_profile_count == 1 ? "s" : "");
+                   multi_profile_count,
+                   multi_profile_count == 1 ? "" : "s",
+                   multi_profile_count == 1 ? "s" : "");
 
     /* Display each multi-profile file */
     for (size_t i = 0; i < file_count; i++) {
@@ -519,21 +524,20 @@ static void display_multi_profile_warnings(
 
         if (output_colors_enabled(out)) {
             output_printf(out, OUTPUT_NORMAL, "  %s%s%s also in:",
-                         output_color_code(out, OUTPUT_COLOR_YELLOW),
-                         fs_path,
-                         output_color_code(out, OUTPUT_COLOR_RESET));
+                    output_color_code(out, OUTPUT_COLOR_YELLOW), fs_path,
+                    output_color_code(out, OUTPUT_COLOR_RESET));
 
             for (size_t j = 0; j < string_array_size(other_profiles[i]); j++) {
                 output_printf(out, OUTPUT_NORMAL, " %s%s%s",
-                             output_color_code(out, OUTPUT_COLOR_CYAN),
-                             string_array_get(other_profiles[i], j),
-                             output_color_code(out, OUTPUT_COLOR_RESET));
+                        output_color_code(out, OUTPUT_COLOR_CYAN),
+                        string_array_get(other_profiles[i], j),
+                        output_color_code(out, OUTPUT_COLOR_RESET));
             }
         } else {
             output_printf(out, OUTPUT_NORMAL, "  %s also in:", fs_path);
             for (size_t j = 0; j < string_array_size(other_profiles[i]); j++) {
                 output_printf(out, OUTPUT_NORMAL, " %s",
-                             string_array_get(other_profiles[i], j));
+                        string_array_get(other_profiles[i], j));
             }
         }
         output_newline(out);
@@ -572,10 +576,12 @@ static void free_multi_profile_tracking(string_array_t **other_profiles, size_t 
 static bool confirm_removal(
     const string_array_t *storage_paths,
     const cmd_remove_options_t *opts,
-    const dotta_config_t *config
+    const dotta_config_t *config,
+    output_ctx_t *out
 ) {
-    CHECK_NULL(storage_paths);
-    CHECK_NULL(opts);
+    if (!storage_paths || !opts || !out) {
+        return false;
+    }
 
     /* Skip confirmation if --force */
     if (opts->force) {
@@ -602,21 +608,17 @@ static bool confirm_removal(
 
     /* Prompt user */
     char prompt[512];
-    if (!opts->delete_files) {
+    if (opts->delete_files) {
         snprintf(prompt, sizeof(prompt), "Remove %zu file%s from profile '%s'?\n"
-                "(Filesystem files will remain, released from management)",
-                count, count == 1 ? "" : "s", opts->profile);
+                 "(Deployed files will be removed on 'dotta apply')",
+                 count, count == 1 ? "" : "s", opts->profile);
     } else {
         snprintf(prompt, sizeof(prompt), "Remove %zu file%s from profile '%s'?\n"
-                "(Filesystem files will remain until 'dotta apply')",
-                count, count == 1 ? "" : "s", opts->profile);
+                 "(Deployed files will be released from management)",
+                 count, count == 1 ? "" : "s", opts->profile);
     }
 
-    output_ctx_t *out = output_create_from_config(config);
-    bool confirmed = output_confirm(out, prompt, false);
-    output_free(out);
-
-    return confirmed;
+    return output_confirm(out, prompt, false);
 }
 
 /**
@@ -630,8 +632,9 @@ static bool confirm_profile_deletion(
     const dotta_config_t *config,
     output_ctx_t *out
 ) {
-    CHECK_NULL(profile_name);
-    CHECK_NULL(out);
+    if (!profile_name || !out) {
+        return false;
+    }
 
     /* Skip confirmation if --force */
     if (opts->force) {
@@ -645,12 +648,11 @@ static bool confirm_profile_deletion(
 
     output_newline(out);
     output_warning(out, "This will delete profile '%s' (%zu file%s)",
-                  profile_name, file_count, file_count == 1 ? "" : "s");
-    if (!opts->delete_files) {
-        output_info(out, "         Deployed files will be released from management.");
+                   profile_name, file_count, file_count == 1 ? "" : "s");
+    if (opts->delete_files) {
+        output_info(out, "         Deployed files will be removed when you run 'dotta apply'.");
     } else {
-        output_info(out, "         Deployed files will remain on filesystem.");
-        output_info(out, "         Run 'dotta apply' to remove them.");
+        output_info(out, "         Deployed files will be released from management.");
     }
     output_newline(out);
 
@@ -743,12 +745,12 @@ static error_t *create_removal_commit(
  */
 static error_t *cleanup_metadata(
     worktree_handle_t *wt,
-    const string_array_t *removed_storage_paths,
+    const string_array_t *removed_paths,
     const cmd_remove_options_t *opts,
     output_ctx_t *out
 ) {
     CHECK_NULL(wt);
-    CHECK_NULL(removed_storage_paths);
+    CHECK_NULL(removed_paths);
 
     const char *worktree_path = worktree_get_path(wt);
     if (!worktree_path) {
@@ -778,8 +780,8 @@ static error_t *cleanup_metadata(
 
     /* Remove metadata entries for each removed file */
     size_t removed_count = 0;
-    for (size_t i = 0; i < string_array_size(removed_storage_paths); i++) {
-        const char *storage_path = string_array_get(removed_storage_paths, i);
+    for (size_t i = 0; i < string_array_size(removed_paths); i++) {
+        const char *storage_path = string_array_get(removed_paths, i);
 
         /* Check if metadata item exists */
         if (metadata_has_item(metadata, storage_path)) {
@@ -832,7 +834,8 @@ static error_t *cleanup_metadata(
             bool has_files = false;
 
             for (size_t f = 0; f < file_count; f++) {
-                if (str_starts_with(files[f]->key, dir_key) && files[f]->key[dir_key_len] == '/') {
+                if (str_starts_with(files[f]->key, dir_key) &&
+                                    files[f]->key[dir_key_len] == '/') {
                     has_files = true;
                     break;
                 }
@@ -874,6 +877,12 @@ static error_t *cleanup_metadata(
         free(directories);
     }
 
+    /* Skip rewrite if nothing was actually removed from metadata */
+    if (removed_count == 0) {
+        metadata_free(metadata);
+        return NULL;
+    }
+
     /* Save updated metadata to worktree */
     err = metadata_save_to_worktree(worktree_path, metadata);
     metadata_free(metadata);
@@ -913,14 +922,10 @@ static error_t *cleanup_metadata(
  */
 static error_t *remove_files_from_profile(
     git_repository *repo,
-    const cmd_remove_options_t *opts,
-    size_t *removed_count_out,
-    bool *performed
+    const cmd_remove_options_t *opts
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
-    CHECK_NULL(removed_count_out);
-    CHECK_NULL(performed);
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
@@ -933,10 +938,9 @@ static error_t *remove_files_from_profile(
     char *repo_dir = NULL;
     hook_context_t *hook_ctx = NULL;
     worktree_handle_t *wt = NULL;
+    string_array_t *removed_paths = NULL;
     state_t *state = NULL;
-
-    *performed = false;
-    *removed_count_out = 0;
+    bool profile_enabled = false;
 
     /* Load configuration */
     err = config_load(NULL, &config);
@@ -957,6 +961,8 @@ static error_t *remove_files_from_profile(
     /* CLI flags override config */
     if (opts->verbose) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
+    } else if (opts->quiet) {
+        output_set_verbosity(out, OUTPUT_QUIET);
     }
 
     /* Load state for custom prefix resolution (read-only, optional for UX) */
@@ -968,8 +974,10 @@ static error_t *remove_files_from_profile(
     }
 
     /* Resolve paths */
-    err = resolve_paths_to_remove(repo, opts->profile, opts->paths, opts->path_count,
-                                  &storage_paths, &filesystem_paths, opts, out, state);
+    err = resolve_paths_to_remove(
+        repo, opts->profile, opts->paths, opts->path_count, &storage_paths,
+        &filesystem_paths, opts, out, state
+    );
     if (err) {
         goto cleanup;
     }
@@ -981,6 +989,7 @@ static error_t *remove_files_from_profile(
         storage_paths,
         filesystem_paths,
         opts->profile,
+        state,
         &other_profiles,
         &multi_profile_count,
         &has_deployed_from_other
@@ -988,6 +997,14 @@ static error_t *remove_files_from_profile(
 
     if (err) {
         goto cleanup;
+    }
+
+    /* Capture profile-enabled status and release read-only state early.
+     * State was only needed for path resolution and conflict analysis above. */
+    if (state) {
+        profile_enabled = state_has_profile(state, opts->profile);
+        state_free(state);
+        state = NULL;
     }
 
     /* Display multi-profile warnings BEFORE any operation */
@@ -1011,16 +1028,16 @@ static error_t *remove_files_from_profile(
                      string_array_size(storage_paths),
                      string_array_size(storage_paths) == 1 ? "" : "s");
         if (opts->delete_files) {
-            output_printf(out, OUTPUT_NORMAL, "(Filesystem files would remain until 'dotta apply')\n");
+            output_printf(out, OUTPUT_NORMAL, "(Deployed files would be removed on 'dotta apply')\n");
         } else {
-            output_printf(out, OUTPUT_NORMAL, "(Filesystem files would be released from management)\n");
+            output_printf(out, OUTPUT_NORMAL, "(Deployed files would be released from management)\n");
         }
 
         goto cleanup;  /* err is NULL, will return success */
     }
 
     /* Confirm operation */
-    if (!confirm_removal(storage_paths, opts, config)) {
+    if (!confirm_removal(storage_paths, opts, config, out)) {
         output_printf(out, OUTPUT_NORMAL, "Cancelled\n");
         goto cleanup;  /* err is NULL, will return success */
     }
@@ -1038,10 +1055,10 @@ static error_t *remove_files_from_profile(
     /* Execute pre-remove hook */
     hook_ctx = hook_context_create(repo_dir, "remove", opts->profile);
     if (hook_ctx) {
-        hook_ctx->dry_run = opts->dry_run;
-
         /* Add paths to hook context */
-        err = hook_context_add_files(hook_ctx, filesystem_paths->items, filesystem_paths->count);
+        err = hook_context_add_files(
+            hook_ctx, filesystem_paths->items, filesystem_paths->count
+        );
         if (err) goto cleanup;
 
         hook_result_t *hook_result = NULL;
@@ -1073,8 +1090,21 @@ static error_t *remove_files_from_profile(
         goto cleanup;
     }
 
-    /* Remove each file from worktree */
+    /* Interactive mode requires a terminal for user prompts */
+    if (opts->interactive && !isatty(STDIN_FILENO)) {
+        err = ERROR(ERR_INVALID_ARG,
+            "Interactive mode requires a terminal (stdin is not a TTY)");
+        goto cleanup;
+    }
+
+    /* Remove each file from worktree, tracking which files are actually removed */
     size_t removed_count = 0;
+    removed_paths = string_array_create();
+    if (!removed_paths) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate removed paths array");
+        goto cleanup;
+    }
+
     for (size_t i = 0; i < string_array_size(storage_paths); i++) {
         const char *storage_path = string_array_get(storage_paths, i);
 
@@ -1113,18 +1143,32 @@ static error_t *remove_files_from_profile(
             /* Otherwise, abort */
             goto cleanup;
         }
+
+        err = string_array_push(removed_paths, storage_path);
+        if (err) {
+            err = error_wrap(err, "Failed to track removed path");
+            goto cleanup;
+        }
         removed_count++;
     }
 
-    /* Clean up metadata for removed files */
-    err = cleanup_metadata(wt, storage_paths, opts, out);
+    /* Nothing was removed (e.g., all declined in interactive mode) */
+    if (removed_count == 0) {
+        if (out) {
+            output_info(out, "No files removed");
+        }
+        goto cleanup;
+    }
+
+    /* Clean up metadata for actually-removed files only */
+    err = cleanup_metadata(wt, removed_paths, opts, out);
     if (err) {
         err = error_wrap(err, "Failed to clean up metadata");
         goto cleanup;
     }
 
     /* Create commit */
-    err = create_removal_commit(repo, wt, opts, storage_paths, config);
+    err = create_removal_commit(repo, wt, opts, removed_paths, config);
     if (err) {
         goto cleanup;
     }
@@ -1147,29 +1191,15 @@ static error_t *remove_files_from_profile(
     /* Update manifest if profile is enabled */
     size_t manifest_removed_count = 0, manifest_fallback_count = 0;
 
-    /* Check if profile is enabled */
-    state_t *read_state = NULL;
-    bool profile_enabled = false;
-
-    err = state_load(repo, &read_state);
-    if (!err && read_state) {
-        profile_enabled = state_has_profile(read_state, opts->profile);
-        state_free(read_state);
-        read_state = NULL;
-    } else if (err) {
-        /* State doesn't exist - treat as not enabled */
-        error_free(err);
-        err = NULL;
-    }
-
     if (profile_enabled) {
         /* Open transaction for manifest update */
-        state_t *state = NULL;
-        err = state_load_for_update(repo, &state);
+        state_t *update_state = NULL;
+        err = state_load_for_update(repo, &update_state);
         if (err) {
             /* Non-fatal */
             if (out) {
-                output_warning(out, "Failed to open transaction for manifest update: %s", error_message(err));
+                output_warning(out, "Failed to open transaction for manifest update: %s",
+                               error_message(err));
                 output_hint(out, "Run 'dotta status' or 'dotta apply' to resync manifest");
             }
             error_free(err);
@@ -1177,7 +1207,7 @@ static error_t *remove_files_from_profile(
         } else {
             /* Get enabled profiles for manifest sync */
             string_array_t *enabled_profiles = NULL;
-            err = state_get_profiles(state, &enabled_profiles);
+            err = state_get_profiles(update_state, &enabled_profiles);
             if (err) {
                 if (out) {
                     output_warning(out, "Failed to get enabled profiles: %s", error_message(err));
@@ -1185,14 +1215,14 @@ static error_t *remove_files_from_profile(
                 }
                 error_free(err);
                 err = NULL;
-                state_free(state);
+                state_free(update_state);
             } else {
                 /* Update manifest with fallback logic */
                 error_t *manifest_err = manifest_remove_files(
                     repo,
-                    state,
+                    update_state,
                     opts->profile,
-                    storage_paths,      /* Storage paths of removed files */
+                    removed_paths,
                     enabled_profiles,
                     &manifest_removed_count,
                     &manifest_fallback_count
@@ -1206,18 +1236,22 @@ static error_t *remove_files_from_profile(
                     }
                     error_free(manifest_err);
                 } else {
-                    /* Without --delete-files: release STATE_DELETED entries immediately
-                     * (remove from state so files become unmanaged, no apply needed) */
+                    /* manifest_remove_files() marks entries STATE_DELETED.
+                     * With --delete-files: leave them for apply to clean up.
+                     * Default: release immediately (no apply needed). */
                     if (!opts->delete_files && manifest_removed_count > 0) {
                         state_file_entry_t *delete_entries = NULL;
                         size_t delete_count = 0;
                         error_t *delete_err = state_get_entries_by_profile(
-                            state, opts->profile, &delete_entries, &delete_count);
+                            update_state, opts->profile, &delete_entries, &delete_count
+                        );
                         if (!delete_err) {
                             for (size_t di = 0; di < delete_count; di++) {
                                 if (delete_entries[di].state &&
                                     strcmp(delete_entries[di].state, STATE_DELETED) == 0) {
-                                    error_t *rm_err = state_remove_file(state, delete_entries[di].filesystem_path);
+                                    error_t *rm_err = state_remove_file(
+                                        update_state, delete_entries[di].filesystem_path
+                                    );
                                     if (rm_err) {
                                         error_free(rm_err);
                                     }
@@ -1230,7 +1264,7 @@ static error_t *remove_files_from_profile(
                     }
 
                     /* Commit transaction */
-                    err = state_save(repo, state);
+                    err = state_save(repo, update_state);
                     if (err) {
                         if (out) {
                             output_warning(out, "Failed to save manifest updates: %s", error_message(err));
@@ -1241,23 +1275,25 @@ static error_t *remove_files_from_profile(
                     } else {
                         /* Display manifest sync results */
                         if ((manifest_removed_count > 0 || manifest_fallback_count > 0) && out && opts->verbose) {
-                            if (!opts->delete_files) {
-                                output_info(out, "Manifest: %zu released, %zu fallback%s",
-                                           manifest_removed_count, manifest_fallback_count,
-                                           manifest_fallback_count == 1 ? "" : "s");
-                            } else {
+                            if (opts->delete_files) {
                                 output_info(out, "Manifest: %zu staged for removal, %zu fallback%s",
-                                           manifest_removed_count, manifest_fallback_count,
-                                           manifest_fallback_count == 1 ? "" : "s");
+                                            manifest_removed_count, manifest_fallback_count,
+                                            manifest_fallback_count == 1 ? "" : "s");
+                            } else {
+                                output_info(out, "Manifest: %zu released, %zu fallback%s",
+                                            manifest_removed_count, manifest_fallback_count,
+                                            manifest_fallback_count == 1 ? "" : "s");
                             }
                         }
                     }
                 }
 
-                state_free(state);
+                state_free(update_state);
                 string_array_free(enabled_profiles);
             }
         }
+    } else if (opts->verbose && out) {
+        output_info(out, "Profile not enabled, Git updated only");
     }
 
     /* Execute post-remove hook */
@@ -1279,16 +1315,25 @@ static error_t *remove_files_from_profile(
         hook_result_free(hook_result);
     }
 
-    /* Success - save removed count */
-    *performed = true;
-    *removed_count_out = removed_count;
+    /* Success */
+    if (!opts->quiet) {
+        output_success(out, "Removed %zu file%s from profile '%s'",
+                       removed_count, removed_count == 1 ? "" : "s", opts->profile);
+        if (opts->delete_files) {
+            output_info(out, "Run 'dotta apply' to remove files from filesystem");
+        } else {
+            output_info(out, "Files released from management (no apply needed)");
+        }
+        output_newline(out);
+    }
 
 cleanup:
     /* Free all resources in reverse order */
     if (hook_ctx) hook_context_free(hook_ctx);
     if (repo_dir) free(repo_dir);
     if (wt) worktree_cleanup(wt);
-    if (other_profiles) free_multi_profile_tracking(other_profiles, multi_profile_count);
+    if (other_profiles) free_multi_profile_tracking(other_profiles, string_array_size(storage_paths));
+    if (removed_paths) string_array_free(removed_paths);
     if (filesystem_paths) string_array_free(filesystem_paths);
     if (storage_paths) string_array_free(storage_paths);
     if (state) state_free(state);
@@ -1303,12 +1348,10 @@ cleanup:
  */
 static error_t *delete_profile_branch(
     git_repository *repo,
-    const cmd_remove_options_t *opts,
-    bool *performed
+    const cmd_remove_options_t *opts
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
-    CHECK_NULL(performed);
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
@@ -1322,8 +1365,9 @@ static error_t *delete_profile_branch(
     profile_list_t *all_profiles = NULL;
     profile_t *profile = NULL;
     string_array_t *files = NULL;
-
-    *performed = false;
+    string_array_t *hook_fs_paths = NULL;
+    char *hook_custom_prefix = NULL;
+    bool performed = false;
     
     /* Load config first */
     err = config_load(NULL, &config);
@@ -1344,13 +1388,15 @@ static error_t *delete_profile_branch(
     /* CLI flags override config */
     if (opts->verbose) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
+    } else if (opts->quiet) {
+        output_set_verbosity(out, OUTPUT_QUIET);
     }
 
     /* Check if profile exists */
     if (!profile_exists(repo, opts->profile)) {
         if (!opts->force) {
             err = ERROR(ERR_NOT_FOUND, "Profile '%s' does not exist\n"
-                       "Hint: Use 'dotta list' to see available profiles", opts->profile);
+                        "Hint: Use 'dotta list' to see available profiles", opts->profile);
             goto cleanup;
         }
         /* With --force, just warn and exit */
@@ -1398,7 +1444,7 @@ static error_t *delete_profile_branch(
     /* Dry run */
     if (opts->dry_run) {
         output_printf(out, OUTPUT_NORMAL, "Would delete profile '%s' (%zu file%s)\n",
-                     opts->profile, file_count, file_count == 1 ? "" : "s");
+                      opts->profile, file_count, file_count == 1 ? "" : "s");
         goto cleanup;  /* err is NULL, will return success */
     }
 
@@ -1443,7 +1489,8 @@ static error_t *delete_profile_branch(
         output_newline(out);
     } else if (is_local_only && opts->verbose) {
         /* Inform about local-only status in verbose mode (not a warning) */
-        output_info(out, "Note: Profile '%s' is local-only (not pushed to remote)", opts->profile);
+        output_info(out, "Note: Profile '%s' is local-only (not pushed to remote)",
+                    opts->profile);
     }
 
     /* Free upstream_info after we're done using is_local_only */
@@ -1452,7 +1499,10 @@ static error_t *delete_profile_branch(
         upstream_info = NULL;
     }
 
-    /* Load state to check for deployed files (read-only, informational only) */
+    /* Load state for informational queries and enabled check (single read-only load) */
+    bool profile_was_enabled = false;
+    size_t deployed_count = 0;
+
     err = state_load(repo, &state);
     if (err) {
         /* Non-fatal */
@@ -1461,9 +1511,11 @@ static error_t *delete_profile_branch(
         state = NULL;
     }
 
-    /* Check if profile has deployed files (informational message for user) */
-    size_t deployed_count = 0;
     if (state) {
+        /* Check if profile is enabled */
+        profile_was_enabled = state_has_profile(state, opts->profile);
+
+        /* Count deployed files for informational display */
         size_t state_file_count = 0;
         state_file_entry_t *state_files = NULL;
         error_t *state_err = state_get_all_files(state, &state_files, &state_file_count);
@@ -1478,6 +1530,20 @@ static error_t *delete_profile_branch(
         if (state_err) {
             error_free(state_err);
         }
+
+        /* Save custom prefix for hook filesystem path conversion */
+        hashmap_t *pfx_map = NULL;
+        error_t *pfx_err = state_get_prefix_map(state, &pfx_map);
+        if (!pfx_err && pfx_map) {
+            const char *pfx = hashmap_get(pfx_map, opts->profile);
+            if (pfx) hook_custom_prefix = strdup(pfx);
+            hashmap_free(pfx_map, free);
+        } else if (pfx_err) {
+            error_free(pfx_err);
+        }
+
+        state_free(state);
+        state = NULL;
     }
 
     /* Inform about deployed files (informational, not a warning) */
@@ -1485,18 +1551,12 @@ static error_t *delete_profile_branch(
         output_newline(out);
         output_info(out, "Note: Profile '%s' has %zu deployed file%s",
                     opts->profile, deployed_count, deployed_count == 1 ? "" : "s");
-        if (!opts->delete_files) {
-            output_info(out, "      These files will be released from management.");
-        } else {
+        if (opts->delete_files) {
             output_info(out, "      These will be removed when you run 'dotta apply'.");
+        } else {
+            output_info(out, "      These files will be released from management.");
         }
         output_newline(out);
-    }
-
-    /* Free state (no longer needed - we don't modify it) */
-    if (state) {
-        state_free(state);
-        state = NULL;
     }
 
     /* Confirm deletion */
@@ -1511,14 +1571,35 @@ static error_t *delete_profile_branch(
         goto cleanup;
     }
 
+    /* Convert storage paths to filesystem paths for hook consistency.
+     * The file removal path passes filesystem paths to hooks; do the same here. */
+    if (files) {
+        hook_fs_paths = string_array_create();
+        if (hook_fs_paths) {
+            for (size_t i = 0; i < string_array_size(files); i++) {
+                char *fs_path = NULL;
+                error_t *conv_err = path_from_storage(
+                    string_array_get(files, i), hook_custom_prefix, &fs_path
+                );
+                if (!conv_err && fs_path) {
+                    string_array_push(hook_fs_paths, fs_path);
+                    free(fs_path);
+                } else {
+                    /* Fall back to storage path (e.g., custom/ without prefix) */
+                    string_array_push(hook_fs_paths, string_array_get(files, i));
+                    if (conv_err) error_free(conv_err);
+                }
+            }
+        }
+    }
+
     /* Execute pre-remove hook */
     hook_ctx = hook_context_create(repo_dir, "remove", opts->profile);
     if (hook_ctx) {
-        hook_ctx->dry_run = opts->dry_run;
-
-        /* Pass profile file list (storage paths) to hook */
-        if (files) {
-            err = hook_context_add_files(hook_ctx, files->items, files->count);
+        /* Pass filesystem paths to hook (consistent with file removal hooks) */
+        string_array_t *hook_files = hook_fs_paths ? hook_fs_paths : files;
+        if (hook_files) {
+            err = hook_context_add_files(hook_ctx, hook_files->items, hook_files->count);
             if (err) goto cleanup;
         }
 
@@ -1544,26 +1625,13 @@ static error_t *delete_profile_branch(
      */
 
     /* Update manifest if profile is enabled (BEFORE deleting branch) */
-    bool profile_was_enabled = false;
-
-    /* Check if profile is enabled */
-    state_t *check_state = NULL;
-    err = state_load(repo, &check_state);
-    if (!err && check_state) {
-        profile_was_enabled = state_has_profile(check_state, opts->profile);
-        state_free(check_state);
-        check_state = NULL;
-    } else if (err) {
-        error_free(err);
-        err = NULL;
-    }
 
     if (profile_was_enabled) {
         output_print(out, OUTPUT_VERBOSE, "Disabling profile in manifest before deletion...\n");
 
         /* Open transaction */
-        state_t *state = NULL;
-        err = state_load_for_update(repo, &state);
+        state_t *manifest_state = NULL;
+        err = state_load_for_update(repo, &manifest_state);
         if (err) {
             err = error_wrap(err, "Failed to open transaction for profile disable");
             goto cleanup;
@@ -1571,9 +1639,9 @@ static error_t *delete_profile_branch(
 
         /* Get enabled profiles */
         string_array_t *enabled_profiles = NULL;
-        err = state_get_profiles(state, &enabled_profiles);
+        err = state_get_profiles(manifest_state, &enabled_profiles);
         if (err) {
-            state_free(state);
+            state_free(manifest_state);
             err = error_wrap(err, "Failed to get enabled profiles");
             goto cleanup;
         }
@@ -1582,18 +1650,21 @@ static error_t *delete_profile_branch(
         string_array_t *remaining = string_array_create();
         if (!remaining) {
             err = ERROR(ERR_MEMORY, "Failed to allocate remaining profiles array");
-            state_free(state);
+            state_free(manifest_state);
             string_array_free(enabled_profiles);
             goto cleanup;
         }
 
         for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
-            const char *profile = string_array_get(enabled_profiles, i);
-            if (strcmp(profile, opts->profile) != 0) {
-                error_t *push_err = string_array_push(remaining, profile);
-                if (push_err) {
-                    error_free(push_err);
-                    /* Non-fatal, continue */
+            const char *enabled = string_array_get(enabled_profiles, i);
+            if (strcmp(enabled, opts->profile) != 0) {
+                err = string_array_push(remaining, enabled);
+                if (err) {
+                    err = error_wrap(err, "Failed to build remaining profiles list");
+                    state_free(manifest_state);
+                    string_array_free(enabled_profiles);
+                    string_array_free(remaining);
+                    goto cleanup;
                 }
             }
         }
@@ -1604,7 +1675,7 @@ static error_t *delete_profile_branch(
          * detect fallbacks */
         err = manifest_disable_profile(
             repo,
-            state,
+            manifest_state,
             opts->profile,
             remaining,
             NULL  /* No stats needed for remove command */
@@ -1612,25 +1683,25 @@ static error_t *delete_profile_branch(
 
         if (err) {
             err = error_wrap(err, "Failed to disable profile in manifest");
-            state_free(state);
+            state_free(manifest_state);
             string_array_free(enabled_profiles);
             string_array_free(remaining);
             goto cleanup;
         }
 
         /* Remove from enabled_profiles in state */
-        err = state_disable_profile(state, opts->profile);
+        err = state_disable_profile(manifest_state, opts->profile);
         if (err) {
             err = error_wrap(err, "Failed to remove profile from state");
-            state_free(state);
+            state_free(manifest_state);
             string_array_free(enabled_profiles);
             string_array_free(remaining);
             goto cleanup;
         }
 
         /* Commit transaction */
-        err = state_save(repo, state);
-        state_free(state);
+        err = state_save(repo, manifest_state);
+        state_free(manifest_state);
         string_array_free(enabled_profiles);
         string_array_free(remaining);
 
@@ -1649,7 +1720,7 @@ static error_t *delete_profile_branch(
         goto cleanup;
     }
 
-    *performed = true;
+    performed = true;
 
     /* Post-deletion: upgrade STATE_INACTIVE entries to STATE_DELETED
      * (or release immediately without --delete-files)
@@ -1671,21 +1742,23 @@ static error_t *delete_profile_branch(
 
         /* Handle file entries */
         state_file_entry_t *file_entries = NULL;
-        size_t file_count = 0;
-        delete_err = state_get_entries_by_profile(delete_state, opts->profile,
-                                                 &file_entries, &file_count);
+        size_t entry_count = 0;
+        delete_err = state_get_entries_by_profile(
+            delete_state, opts->profile, &file_entries, &entry_count
+        );
         if (!delete_err) {
-            for (size_t i = 0; i < file_count; i++) {
+            for (size_t i = 0; i < entry_count; i++) {
                 if (!file_entries[i].state || (strcmp(file_entries[i].state, STATE_INACTIVE) != 0 &&
                                                strcmp(file_entries[i].state, STATE_DELETED) != 0)) {
                     continue;
                 }
                 error_t *file_err = NULL;
-                if (!opts->delete_files) {
-                    file_err = state_remove_file(delete_state, file_entries[i].filesystem_path);
-                } else {
+                if (opts->delete_files) {
                     file_err = state_set_file_state(
-                        delete_state, file_entries[i].filesystem_path, STATE_DELETED);
+                        delete_state, file_entries[i].filesystem_path, STATE_DELETED
+                    );
+                } else {
+                    file_err = state_remove_file(delete_state, file_entries[i].filesystem_path);
                 }
                 if (file_err) {
                     error_free(file_err);
@@ -1693,7 +1766,7 @@ static error_t *delete_profile_branch(
                     released_count++;
                 }
             }
-            state_free_all_files(file_entries, file_count);
+            state_free_all_files(file_entries, entry_count);
         } else {
             error_free(delete_err);
             delete_err = NULL;
@@ -1702,8 +1775,9 @@ static error_t *delete_profile_branch(
         /* Handle directory entries */
         state_directory_entry_t *dir_entries = NULL;
         size_t dir_count = 0;
-        delete_err = state_get_directories_by_profile(delete_state, opts->profile,
-                                                     &dir_entries, &dir_count);
+        delete_err = state_get_directories_by_profile(
+            delete_state, opts->profile, &dir_entries, &dir_count
+        );
         if (!delete_err) {
             for (size_t i = 0; i < dir_count; i++) {
                 if (!dir_entries[i].state || (strcmp(dir_entries[i].state, STATE_INACTIVE) != 0 &&
@@ -1711,11 +1785,11 @@ static error_t *delete_profile_branch(
                     continue;
                 }
                 error_t *dir_err = NULL;
-                if (!opts->delete_files) {
-                    dir_err = state_remove_directory(delete_state, dir_entries[i].filesystem_path);
-                } else {
+                if (opts->delete_files) {
                     dir_err = state_set_directory_state(
                         delete_state, dir_entries[i].filesystem_path, STATE_DELETED);
+                } else {
+                    dir_err = state_remove_directory(delete_state, dir_entries[i].filesystem_path);
                 }
                 if (dir_err) {
                     error_free(dir_err);
@@ -1730,27 +1804,32 @@ static error_t *delete_profile_branch(
         /* Commit transaction */
         delete_err = state_save(repo, delete_state);
         if (delete_err) {
-            output_warning(out, "Failed to update state after branch deletion: %s", error_message(delete_err));
+            output_warning(out, "Failed to update state after branch deletion: %s",
+                           error_message(delete_err));
             error_free(delete_err);
-        } else if (!opts->delete_files && released_count > 0 && opts->verbose) {
-            output_info(out, "%zu file%s released from management",
-                        released_count, released_count == 1 ? "" : "s");
+        } else if (released_count > 0 && opts->verbose) {
+            if (opts->delete_files) {
+                output_info(out, "%zu file%s staged for removal",
+                            released_count, released_count == 1 ? "" : "s");
+            } else {
+                output_info(out, "%zu file%s released from management",
+                            released_count, released_count == 1 ? "" : "s");
+            }
         }
 
         state_free(delete_state);
     } else if (delete_err) {
         /* Non-fatal: safety module will handle this conservatively */
-        output_warning(out, "Failed to open state for post-deletion update: %s", error_message(delete_err));
+        output_warning(out, "Failed to open state for post-deletion update: %s",
+                       error_message(delete_err));
         error_free(delete_err);
     }
 
     /* Push deletion to remote if remote exists
      * This is critical for sync to work - other repos need to know the branch was deleted
      */
-    if (remote_name) {
-        if (opts->verbose) {
-            output_info(out, "Pushing profile deletion to remote '%s'...", remote_name);
-        }
+    if (remote_name && !is_local_only) {
+        output_info(out, "Pushing profile deletion to remote '%s'...", remote_name);
 
         /* We don't have a credential context here, but gitops_delete_remote_branch will handle NULL */
         err = gitops_delete_remote_branch(repo, remote_name, opts->profile, NULL);
@@ -1761,10 +1840,10 @@ static error_t *delete_profile_branch(
             output_warning(out, "Failed to push deletion to remote: %s", error_message(err));
             output_info(out, "         The profile was deleted locally, but sync may not work correctly.");
             output_info(out, "         You can manually push the deletion with: git push %s :%s",
-                       remote_name, opts->profile);
+                        remote_name, opts->profile);
             error_free(err);
             err = NULL;
-        } else if (opts->verbose) {
+        } else {
             output_info(out, "Profile deletion pushed to remote");
         }
 
@@ -1795,8 +1874,21 @@ static error_t *delete_profile_branch(
         hook_result_free(hook_result);
     }
 
+    /* Success message (only on actual deletion, not dry-run/cancel/error) */
+    if (performed && !opts->quiet) {
+        output_success(out, "Profile '%s' deleted", opts->profile);
+        if (opts->delete_files) {
+            output_info(out, "Run 'dotta apply' to remove deployed files from filesystem");
+        } else {
+            output_info(out, "Files released from management (no apply needed)");
+        }
+        output_newline(out);
+    }
+
 cleanup:
     /* Free all resources in reverse order of allocation */
+    if (hook_fs_paths) string_array_free(hook_fs_paths);
+    free(hook_custom_prefix);
     if (hook_ctx) hook_context_free(hook_ctx);
     if (repo_dir) free(repo_dir);
     if (state) state_free(state);
@@ -1824,63 +1916,9 @@ error_t *cmd_remove(git_repository *repo, const cmd_remove_options_t *opts) {
         return err;
     }
 
-    /* Create output context for summary messages */
-    output_ctx_t *out = output_create();
-    if (!out) {
-        return ERROR(ERR_MEMORY, "Failed to create output context");
-    }
-
-    /* Apply CLI flags */
-    if (opts->verbose) {
-        output_set_verbosity(out, OUTPUT_VERBOSE);
-    } else if (opts->quiet) {
-        output_set_verbosity(out, OUTPUT_QUIET);
-    }
-
-    /* Branch: Delete profile */
+    /* Branch: Delete profile or remove files */
     if (opts->delete_profile) {
-        bool performed = false;
-        err = delete_profile_branch(repo, opts, &performed);
-        if (err) {
-            output_free(out);
-            return err;
-        }
-
-        if (performed && !opts->quiet) {
-            output_success(out, "Profile '%s' deleted", opts->profile);
-            if (!opts->delete_files) {
-                output_info(out, "Files released from management (no apply needed)");
-            } else {
-                output_info(out, "Run 'dotta apply' to remove deployed files from filesystem");
-            }
-            output_newline(out);
-        }
-
-        output_free(out);
-        return NULL;
+        return delete_profile_branch(repo, opts);
     }
-
-    /* Branch: Remove files from profile */
-    size_t removed_count = 0;
-    bool performed = false;
-    err = remove_files_from_profile(repo, opts, &removed_count, &performed);
-    if (err) {
-        output_free(out);
-        return err;
-    }
-
-    /* Display summary */
-    if (performed && !opts->quiet) {
-        output_success(out, "Removed %zu file%s from profile '%s'",
-                       removed_count, removed_count == 1 ? "" : "s", opts->profile);
-        if (!opts->delete_files) {
-            output_info(out, "Files released from management (no apply needed)");
-        } else {
-            output_info(out, "Run 'dotta apply' to remove files from filesystem");
-        }
-        output_newline(out);
-    }
-
-    output_free(out);
-    return NULL;
+    return remove_files_from_profile(repo, opts);
 }

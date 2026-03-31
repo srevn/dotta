@@ -23,7 +23,7 @@ else
 endif
 
 CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror -O2 -flto $(FEATURE_MACROS)
-DEBUG_FLAGS := -g -O0 -fsanitize=address,undefined -DDEBUG
+DEBUG_FLAGS := -g -O0 -fsanitize=address,undefined -fno-omit-frame-pointer -DDEBUG
 
 # Version information (captured at build time)
 GIT_COMMIT := $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo "unknown")
@@ -138,7 +138,7 @@ $(TARGET): $(LIB_OBJ) $(MAIN_OBJ) | $(BIN_DIR)
 
 # Debug build
 .PHONY: debug
-debug: CFLAGS := -std=c11 -Wall -Wextra -Wpedantic $(DEBUG_FLAGS) $(FEATURE_MACROS)
+debug: CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror $(DEBUG_FLAGS) $(FEATURE_MACROS)
 debug: clean $(TARGET)
 
 # Static build (with libgit2 statically linked for portability)

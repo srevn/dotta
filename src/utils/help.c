@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "help.h"
 #include "version.h"
 
 void print_usage(const char *prog_name) {

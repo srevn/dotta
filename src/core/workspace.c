@@ -12,7 +12,7 @@
  *
  * Key Design:
  * - merged_metadata: Single hashmap with precedence already applied
- * - Maps: key -> metadata_item_t* (borrowed pointers from metadata_cache)
+ * - Maps: key -> index+1 into merged_entries (realloc-safe, like diverged_index)
  * - Key interpretation: Both FILES and DIRECTORIES use storage_path (portable)
  * - Built once in workspace_load(), used by all analysis functions
  */
@@ -92,7 +92,7 @@ struct workspace {
     hashmap_t *metadata_cache;       /* Owned - maps profile_name -> metadata_t* */
 
     /* Unified metadata view with profile precedence applied */
-    hashmap_t *merged_metadata;      /* Owned map: key -> merged_metadata_entry_t* */
+    hashmap_t *merged_metadata;      /* Owned map: key -> index+1 into merged_entries (as void*) */
     merged_metadata_entry_t *merged_entries;  /* Owned array of entries */
     size_t merged_count;             /* Number of merged entries */
     size_t merged_capacity;          /* Allocated capacity of merged array */
@@ -137,6 +137,27 @@ static const metadata_t *ws_get_metadata(
         return NULL;
     }
     return hashmap_get(ws->metadata_cache, profile_name);
+}
+
+/**
+ * Look up merged metadata entry by key
+ *
+ * The merged_metadata hashmap stores array indices (as index+1 cast to void*)
+ * rather than direct pointers, making lookups safe across realloc of merged_entries.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @param key Lookup key (storage_path for both files and directories)
+ * @return Entry pointer or NULL if not found
+ */
+static const merged_metadata_entry_t *merged_metadata_lookup(
+    const workspace_t *ws,
+    const char *key
+) {
+    if (!ws->merged_metadata) return NULL;
+    void *idx_ptr = hashmap_get(ws->merged_metadata, key);
+    if (!idx_ptr) return NULL;
+    size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+    return &ws->merged_entries[idx];
 }
 
 /**
@@ -360,19 +381,15 @@ static error_t *workspace_add_diverged(
 
     /* Check if this item has metadata in merged_metadata and populate provenance
      * Both files and directories use storage_path as key (portable) */
-    if (ws->merged_metadata) {
-        const char *lookup_key = storage_path;
-
-        if (lookup_key) {
-            const merged_metadata_entry_t *meta_entry = hashmap_get(ws->merged_metadata, lookup_key);
-            if (meta_entry && meta_entry->profile_name) {
-                entry->metadata_profile = strdup(meta_entry->profile_name);
-                if (!entry->metadata_profile) {
-                    free(entry->filesystem_path);
-                    free(entry->storage_path);
-                    free(entry->profile);
-                    return ERROR(ERR_MEMORY, "Failed to allocate metadata_profile");
-                }
+    if (storage_path) {
+        const merged_metadata_entry_t *meta_entry = merged_metadata_lookup(ws, storage_path);
+        if (meta_entry && meta_entry->profile_name) {
+            entry->metadata_profile = strdup(meta_entry->profile_name);
+            if (!entry->metadata_profile) {
+                free(entry->filesystem_path);
+                free(entry->storage_path);
+                free(entry->profile);
+                return ERROR(ERR_MEMORY, "Failed to allocate metadata_profile");
             }
         }
     }
@@ -1486,12 +1503,10 @@ static error_t *analyze_orphaned_directories(workspace_t *ws) {
 
         /* Check if directory exists in merged_metadata (O(1) lookup)
          * For directories: key in merged_metadata = storage_path (portable) */
-        const merged_metadata_entry_t *meta_entry =
-            hashmap_get(ws->merged_metadata, storage_path);
+        const merged_metadata_entry_t *meta_entry = merged_metadata_lookup(ws, storage_path);
 
         /* Orphaned if: not in metadata OR wrong kind (defensive check) */
-        bool is_orphaned = (!meta_entry ||
-                            meta_entry->item->kind != METADATA_ITEM_DIRECTORY);
+        bool is_orphaned = (!meta_entry || meta_entry->item->kind != METADATA_ITEM_DIRECTORY);
 
         if (is_orphaned) {
             /* Orphaned: in state, not in metadata */
@@ -3056,13 +3071,15 @@ error_t *workspace_load(
              * 2. Filesystem enforces this constraint (path is either file or dir, not both)
              * 3. The winning entry represents current filesystem reality */
 
-            /* Check if entry exists (for updating profile_name on override) */
-            merged_metadata_entry_t *existing = hashmap_get(ws->merged_metadata, item->key);
+            /* Check if entry exists (for updating profile_name on override).
+             * Hashmap stores index+1 (not raw pointers) to stay valid across realloc. */
+            void *idx_ptr = hashmap_get(ws->merged_metadata, item->key);
 
-            if (existing) {
+            if (idx_ptr) {
                 /* Update existing entry - last profile wins (precedence) */
-                existing->item = item;
-                existing->profile_name = profile_name;
+                size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+                ws->merged_entries[idx].item = item;
+                ws->merged_entries[idx].profile_name = profile_name;
             } else {
                 /* Grow array if needed */
                 if (ws->merged_count >= ws->merged_capacity) {
@@ -3080,16 +3097,18 @@ error_t *workspace_load(
                 }
 
                 /* Add new entry */
-                merged_metadata_entry_t *entry = &ws->merged_entries[ws->merged_count++];
+                merged_metadata_entry_t *entry = &ws->merged_entries[ws->merged_count];
                 entry->item = item;
                 entry->profile_name = profile_name;
 
-                /* Add to hashmap */
-                error_t *map_err = hashmap_set(ws->merged_metadata, item->key, entry);
+                /* Store index+1 in hashmap (index 0 → value 1, avoiding NULL) */
+                error_t *map_err = hashmap_set(ws->merged_metadata, item->key,
+                                               (void *)(uintptr_t)(ws->merged_count + 1));
                 if (map_err) {
                     workspace_free(ws);
                     return error_wrap(map_err, "Failed to add entry to merged metadata");
                 }
+                ws->merged_count++;
             }
         }
     }

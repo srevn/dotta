@@ -1452,6 +1452,10 @@ static int cmd_git_main(int argc, char **argv) {
         return 1;
     }
 
+    /* Release repo handle before fork/exec - only the path is needed */
+    git_repository_free(repo);
+    repo = NULL;
+
     /* Build options from remaining arguments */
     cmd_git_options_t opts = {
         .args = &argv[2],           /* Skip "dotta" and "git" */
@@ -1461,10 +1465,7 @@ static int cmd_git_main(int argc, char **argv) {
     /* Execute git command (needs path, not repo handle) */
     int exit_code = cmd_git(repo_path, &opts);
 
-    /* Cleanup */
     free(repo_path);
-    git_repository_free(repo);
-
     return exit_code;
 }
 

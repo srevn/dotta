@@ -4,6 +4,7 @@
 
 #include "git.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/wait.h>
@@ -19,7 +20,12 @@
  * - Works with pipes and redirects
  */
 int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
-    if (!repo_path || !opts || !opts->args || opts->arg_count == 0) {
+    if (!repo_path || !opts) {
+        fprintf(stderr, "Error: Internal error (NULL arguments)\n");
+        return 1;
+    }
+
+    if (!opts->args || opts->arg_count == 0) {
         fprintf(stderr, "Error: No git command specified\n\n");
         fprintf(stderr, "Usage: dotta git <git-command> [args...]\n\n");
         fprintf(stderr, "Examples:\n");
@@ -64,28 +70,32 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
     }
 
     if (pid == 0) {
-        /* Child process: execute git */
+        /* Child process: execute git
+         * argv is intentionally not freed - execvp replaces the process image,
+         * and _exit() bypasses cleanup on failure */
         execvp("git", argv);
 
-        /* If we get here, exec failed */
+        /* If we get here, exec failed
+         * Use _exit() to avoid flushing parent's stdio buffers
+         * and running parent's atexit handlers */
         perror("execvp: git");
-        exit(127);  /* Standard exit code for command not found */
+        _exit(127);
     }
 
     /* Parent process: wait for git to complete */
     free(argv);
 
     int status;
-    pid_t wait_result = waitpid(pid, &status, 0);
-
-    if (wait_result < 0) {
-        perror("waitpid");
-        return 1;
+    pid_t wait_result;
+    while ((wait_result = waitpid(pid, &status, 0)) == -1) {
+        if (errno != EINTR) {
+            perror("waitpid");
+            return 1;
+        }
+        /* EINTR: signal interrupted wait, retry */
     }
 
     /* Return git's exit code */
-    printf("\n");
-
     if (WIFEXITED(status)) {
         return WEXITSTATUS(status);
     } else if (WIFSIGNALED(status)) {

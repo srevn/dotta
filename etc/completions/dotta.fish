@@ -423,6 +423,7 @@ complete -c dotta -n "__dotta_using_command add" -s v -l verbose -d "Verbose out
 # --- remove ---
 complete -c dotta -n "__dotta_using_command remove" -s m -l message -d "Commit message"
 complete -c dotta -n "__dotta_using_command remove" -l delete-profile -d "Delete entire profile"
+complete -c dotta -n "__dotta_using_command remove" -l delete-files -d "Delete deployed files on next apply"
 complete -c dotta -n "__dotta_using_command remove" -s n -l dry-run -d "Preview only"
 complete -c dotta -n "__dotta_using_command remove" -s f -l force -d "Skip confirmation"
 complete -c dotta -n "__dotta_using_command remove" -s i -l interactive -d "Interactive mode"

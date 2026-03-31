@@ -602,7 +602,7 @@ static bool confirm_removal(
 
     /* Prompt user */
     char prompt[512];
-    if (opts->keep_files) {
+    if (!opts->delete_files) {
         snprintf(prompt, sizeof(prompt), "Remove %zu file%s from profile '%s'?\n"
                 "(Filesystem files will remain, released from management)",
                 count, count == 1 ? "" : "s", opts->profile);
@@ -646,7 +646,7 @@ static bool confirm_profile_deletion(
     output_newline(out);
     output_warning(out, "This will delete profile '%s' (%zu file%s)",
                   profile_name, file_count, file_count == 1 ? "" : "s");
-    if (opts->keep_files) {
+    if (!opts->delete_files) {
         output_info(out, "         Deployed files will be released from management.");
     } else {
         output_info(out, "         Deployed files will remain on filesystem.");
@@ -1010,7 +1010,11 @@ static error_t *remove_files_from_profile(
         output_printf(out, OUTPUT_NORMAL, "\nTotal: %zu file%s would be removed from profile\n",
                      string_array_size(storage_paths),
                      string_array_size(storage_paths) == 1 ? "" : "s");
-        output_printf(out, OUTPUT_NORMAL, "(Filesystem files would remain until 'dotta apply')\n");
+        if (opts->delete_files) {
+            output_printf(out, OUTPUT_NORMAL, "(Filesystem files would remain until 'dotta apply')\n");
+        } else {
+            output_printf(out, OUTPUT_NORMAL, "(Filesystem files would be released from management)\n");
+        }
 
         goto cleanup;  /* err is NULL, will return success */
     }
@@ -1202,9 +1206,9 @@ static error_t *remove_files_from_profile(
                     }
                     error_free(manifest_err);
                 } else {
-                    /* With --keep-files: release STATE_DELETED entries immediately
+                    /* Without --delete-files: release STATE_DELETED entries immediately
                      * (remove from state so files become unmanaged, no apply needed) */
-                    if (opts->keep_files && manifest_removed_count > 0) {
+                    if (!opts->delete_files && manifest_removed_count > 0) {
                         state_file_entry_t *delete_entries = NULL;
                         size_t delete_count = 0;
                         error_t *delete_err = state_get_entries_by_profile(
@@ -1237,7 +1241,7 @@ static error_t *remove_files_from_profile(
                     } else {
                         /* Display manifest sync results */
                         if ((manifest_removed_count > 0 || manifest_fallback_count > 0) && out && opts->verbose) {
-                            if (opts->keep_files) {
+                            if (!opts->delete_files) {
                                 output_info(out, "Manifest: %zu released, %zu fallback%s",
                                            manifest_removed_count, manifest_fallback_count,
                                            manifest_fallback_count == 1 ? "" : "s");
@@ -1481,7 +1485,7 @@ static error_t *delete_profile_branch(
         output_newline(out);
         output_info(out, "Note: Profile '%s' has %zu deployed file%s",
                     opts->profile, deployed_count, deployed_count == 1 ? "" : "s");
-        if (opts->keep_files) {
+        if (!opts->delete_files) {
             output_info(out, "      These files will be released from management.");
         } else {
             output_info(out, "      These will be removed when you run 'dotta apply'.");
@@ -1648,14 +1652,14 @@ static error_t *delete_profile_branch(
     *performed = true;
 
     /* Post-deletion: upgrade STATE_INACTIVE entries to STATE_DELETED
-     * (or release immediately with --keep-files)
+     * (or release immediately without --delete-files)
      *
      * After branch deletion, STATE_INACTIVE entries from manifest_disable_profile()
      * (or from a prior profile disable) must be upgraded to STATE_DELETED.
      * Without this, the safety module would RELEASE these files (branch gone +
      * STATE_INACTIVE = irrecoverable), when the user's intent is to delete them.
      *
-     * With --keep-files: remove state entries entirely (release from management).
+     * Without --delete-files: remove state entries entirely (release from management).
      *
      * This is a SEPARATE transaction from the earlier manifest_disable_profile
      * transaction — the branch must be deleted first.
@@ -1677,11 +1681,11 @@ static error_t *delete_profile_branch(
                     continue;
                 }
                 error_t *file_err = NULL;
-                if (opts->keep_files) {
+                if (!opts->delete_files) {
                     file_err = state_remove_file(delete_state, file_entries[i].filesystem_path);
                 } else {
                     file_err = state_set_file_state(
-                        delete_state, file_entries[i].filesystem_path,STATE_DELETED);
+                        delete_state, file_entries[i].filesystem_path, STATE_DELETED);
                 }
                 if (file_err) {
                     error_free(file_err);
@@ -1707,7 +1711,7 @@ static error_t *delete_profile_branch(
                     continue;
                 }
                 error_t *dir_err = NULL;
-                if (opts->keep_files) {
+                if (!opts->delete_files) {
                     dir_err = state_remove_directory(delete_state, dir_entries[i].filesystem_path);
                 } else {
                     dir_err = state_set_directory_state(
@@ -1728,7 +1732,7 @@ static error_t *delete_profile_branch(
         if (delete_err) {
             output_warning(out, "Failed to update state after branch deletion: %s", error_message(delete_err));
             error_free(delete_err);
-        } else if (opts->keep_files && released_count > 0 && opts->verbose) {
+        } else if (!opts->delete_files && released_count > 0 && opts->verbose) {
             output_info(out, "%zu file%s released from management",
                         released_count, released_count == 1 ? "" : "s");
         }
@@ -1770,7 +1774,7 @@ static error_t *delete_profile_branch(
 
     /*
      * Architectural note: State entries were upgraded to STATE_DELETED (or
-     * released with --keep-files) in the post-deletion block above.
+     * released without --delete-files) in the post-deletion block above.
      * Final filesystem cleanup for STATE_DELETED entries happens on `apply`.
      */
 
@@ -1844,7 +1848,7 @@ error_t *cmd_remove(git_repository *repo, const cmd_remove_options_t *opts) {
 
         if (performed && !opts->quiet) {
             output_success(out, "Profile '%s' deleted", opts->profile);
-            if (opts->keep_files) {
+            if (!opts->delete_files) {
                 output_info(out, "Files released from management (no apply needed)");
             } else {
                 output_info(out, "Run 'dotta apply' to remove deployed files from filesystem");
@@ -1869,7 +1873,7 @@ error_t *cmd_remove(git_repository *repo, const cmd_remove_options_t *opts) {
     if (performed && !opts->quiet) {
         output_success(out, "Removed %zu file%s from profile '%s'",
                        removed_count, removed_count == 1 ? "" : "s", opts->profile);
-        if (opts->keep_files) {
+        if (!opts->delete_files) {
             output_info(out, "Files released from management (no apply needed)");
         } else {
             output_info(out, "Run 'dotta apply' to remove files from filesystem");

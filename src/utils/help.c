@@ -189,7 +189,7 @@ void print_remove_help(const char *prog_name) {
     printf("\nOptions:\n");
     printf("  -p, --profile <name>   Profile name\n");
     printf("  --delete-profile       Delete entire profile branch\n");
-    printf("  --keep-files           Release files from management\n");
+    printf("  --delete-files         Delete deployed files on next 'dotta apply'\n");
     printf("  -m, --message <msg>    Custom commit message\n");
     printf("  -n, --dry-run          Show what would be removed without doing it\n");
     printf("  -f, --force            Skip confirmations, ignore missing files\n");
@@ -208,11 +208,12 @@ void print_remove_help(const char *prog_name) {
     printf("      Preview what would be removed from profile\n");
     printf("\nWorkflow:\n");
     printf("  1. Remove files from profile (modifies Git repository only)\n");
-    printf("  2. Run 'dotta apply' to sync filesystem (prunes orphaned files by default)\n");
+    printf("  2. By default, files are released from management and remain on disk\n");
+    printf("  3. With --delete-files, run 'dotta apply' to remove them from filesystem\n");
     printf("\nNotes:\n");
     printf("  - This command modifies the Git repository only\n");
-    printf("  - Deployed files remain on filesystem until 'dotta apply' is run\n");
-    printf("  - This ensures proper global context when removing files from filesystem\n");
+    printf("  - By default, deployed files are released and remain on filesystem\n");
+    printf("  - Use --delete-files to stage deployed files for removal via 'dotta apply'\n");
     printf("  - Deleted profile branches can be recovered from remote if pushed\n");
     printf("\n");
 }

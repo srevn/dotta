@@ -27,12 +27,12 @@ typedef struct {
 
     /* Operation modes */
     bool delete_profile;        /* Delete entire profile branch */
+    bool delete_files;          /* Stage deployed files for deletion via apply */
 
     /* Safety flags */
     bool dry_run;               /* Show what would be removed without doing it */
     bool force;                 /* Skip confirmations */
     bool interactive;           /* Prompt for each file */
-    bool keep_files;            /* Release files from management (untrack) */
 
     /* Output flags */
     bool verbose;               /* Print verbose output */
@@ -49,8 +49,9 @@ typedef struct {
  * - If delete_profile=true: Deletes the entire profile branch
  * - If delete_profile=false: Removes specified files from profile
  *
- * This command modifies the Git repository only. Deployed files remain
- * on the filesystem until 'dotta apply' is run.
+ * This command modifies the Git repository only. By default, deployed files
+ * are released from management and remain on the filesystem. With delete_files=true,
+ * they are staged for removal and deleted when 'dotta apply' is run.
  *
  * Uses temporary worktree to safely modify profile branches.
  * Executes hooks but does not modify deployed files or state file entries.

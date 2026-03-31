@@ -116,7 +116,6 @@ struct workspace {
 
     /* Status cache */
     workspace_status_t status;       /* Cached cleanliness assessment */
-    bool status_computed;            /* True if status has been evaluated */
 };
 
 /**
@@ -210,7 +209,6 @@ static error_t *workspace_create_empty(
     ws->diverged_capacity = 0;
 
     ws->status = WORKSPACE_CLEAN;
-    ws->status_computed = false;
 
     *out = ws;
     return NULL;
@@ -1646,18 +1644,27 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
 
 /**
  * Recursively scan directory for untracked files
+ *
+ * Depth-limited to prevent stack overflow from pathological directory nesting.
  */
+#define SCAN_MAX_DEPTH 128
+
 static error_t *scan_directory_for_untracked(
     const char *dir_path,
     const char *storage_prefix,
     const char *profile,
     ignore_context_t *ignore_ctx,
-    workspace_t *ws
+    workspace_t *ws,
+    int depth
 ) {
     CHECK_NULL(dir_path);
     CHECK_NULL(storage_prefix);
     CHECK_NULL(profile);
     CHECK_NULL(ws);
+
+    if (depth >= SCAN_MAX_DEPTH) {
+        return NULL;
+    }
 
     DIR *dir = opendir(dir_path);
     if (!dir) {
@@ -1717,7 +1724,8 @@ static error_t *scan_directory_for_untracked(
                 sub_storage_prefix,
                 profile,
                 ignore_ctx,
-                ws
+                ws,
+                depth + 1
             );
 
             free(sub_storage_prefix);
@@ -1904,7 +1912,8 @@ static error_t *analyze_untracked_files(
                 dir_entry->storage_path,   /* Portable storage path */
                 profile_name,
                 ignore_ctx,
-                ws
+                ws,
+                0                          /* Initial depth */
             );
 
             if (err) {
@@ -1975,6 +1984,12 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                                  strcmp(dir_entry->state, STATE_DELETED) == 0 ||
                                  strcmp(dir_entry->state, STATE_RELEASED) == 0)) {
             continue;  /* Skip silently - orphan detection will handle this */
+        }
+
+        /* Skip directories from profiles not in the enabled set.
+         * Metadata divergence is only meaningful for active profiles. */
+        if (!hashmap_get(ws->profile_index, dir_entry->profile)) {
+            continue;
         }
 
         /* State directory entries contain:
@@ -3229,7 +3244,6 @@ error_t *workspace_load(
 
     /* Compute status */
     ws->status = compute_workspace_status(ws);
-    ws->status_computed = true;
 
     *out = ws;
     return NULL;
@@ -3364,11 +3378,12 @@ error_t *workspace_extract_orphans(
         }
     }
 
-    /* Set outputs */
+    /* Set outputs (use actual pass-2 indices, not pass-1 counts, to stay
+     * correct even if the two passes ever diverge due to future changes) */
     if (out_file_orphans) *out_file_orphans = file_arr;
-    if (out_file_count) *out_file_count = file_count;
+    if (out_file_count) *out_file_count = f_idx;
     if (out_dir_orphans) *out_dir_orphans = dir_arr;
-    if (out_dir_count) *out_dir_count = dir_count;
+    if (out_dir_count) *out_dir_count = d_idx;
 
     return NULL;
 }
@@ -3654,10 +3669,17 @@ bool workspace_item_extract_display_info(
 
             } else if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
                 /* Metadata divergence only - warning level
-                 * File content matches but permissions changed.
+                 * File content matches but permissions/ownership changed.
                  * Apply will skip (safety check considers this a modification). */
-                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
-                    tags_out[tag_count++] = "mode";
+                if (item->divergence & DIVERGENCE_MODE) {
+                    if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                        tags_out[tag_count++] = "mode";
+                    }
+                }
+                if (item->divergence & DIVERGENCE_OWNERSHIP) {
+                    if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                        tags_out[tag_count++] = "ownership";
+                    }
                 }
                 *color_out = OUTPUT_COLOR_YELLOW;
 

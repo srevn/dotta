@@ -114,9 +114,11 @@ static error_t *collect_files_from_dir(
     }
 
     struct dirent *entry;
+    errno = 0;
     while ((entry = readdir(dir)) != NULL) {
         /* Skip . and .. */
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            errno = 0;  /* Clear before next readdir() — see post-loop check */
             continue;
         }
 
@@ -138,6 +140,7 @@ static error_t *collect_files_from_dir(
                 output_info(out, "Excluded: %s", full_path);
             }
             free(full_path);
+            errno = 0;
             continue;
         }
 
@@ -175,6 +178,17 @@ static error_t *collect_files_from_dir(
                 return push_err;
             }
         }
+        errno = 0;
+    }
+
+    /* readdir() returns NULL on both end-of-directory and error.
+     * With errno cleared before each call, non-zero errno means I/O error. */
+    if (errno != 0) {
+        int saved_errno = errno;
+        closedir(dir);
+        string_array_free(files);
+        return ERROR(ERR_FS, "Error reading directory '%s': %s", dir_path,
+                     strerror(saved_errno));
     }
 
     closedir(dir);

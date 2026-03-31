@@ -1666,9 +1666,11 @@ static error_t *scan_directory_for_untracked(
     }
 
     struct dirent *entry;
+    errno = 0;
     while ((entry = readdir(dir)) != NULL) {
         /* Skip . and .. */
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            errno = 0;  /* Clear before next readdir() — see post-loop check */
             continue;
         }
 
@@ -1684,6 +1686,7 @@ static error_t *scan_directory_for_untracked(
         if (lstat(full_path, &st) != 0) {
             /* Path might have been deleted (race condition) */
             free(full_path);
+            errno = 0;
             continue;
         }
 
@@ -1694,6 +1697,7 @@ static error_t *scan_directory_for_untracked(
             error_t *err = ignore_should_ignore(ignore_ctx, full_path, is_dir, &ignored);
             if (!err && ignored) {
                 free(full_path);
+                errno = 0;
                 continue;
             }
             error_free(err);  /* Ignore errors in ignore checking */
@@ -1770,6 +1774,16 @@ static error_t *scan_directory_for_untracked(
                 free(full_path);
             }
         }
+        errno = 0;
+    }
+
+    /* readdir() returns NULL on both end-of-directory and error.
+     * With errno cleared before each call, non-zero errno means I/O error. */
+    if (errno != 0) {
+        int saved_errno = errno;
+        closedir(dir);
+        return ERROR(ERR_FS, "Error reading directory '%s': %s", dir_path,
+                     strerror(saved_errno));
     }
 
     closedir(dir);

@@ -156,6 +156,12 @@ static void complete_files(
     }
 
     for (size_t i = 0; i < count; i++) {
+        /* Skip entries staged for removal */
+        if (entries[i].state &&
+            (strcmp(entries[i].state, STATE_DELETED) == 0 ||
+             strcmp(entries[i].state, STATE_RELEASED) == 0)) {
+            continue;
+        }
         const char *path = storage_paths
             ? entries[i].storage_path
             : entries[i].filesystem_path;
@@ -263,6 +269,10 @@ static void complete_commits(
 
         /* Extract first line of commit message */
         const char *message = git_commit_message(commit);
+        if (!message) {
+            git_commit_free(commit);
+            continue;
+        }
         const char *newline = strchr(message, '\n');
         size_t msg_len = newline ? (size_t)(newline - message) : strlen(message);
         if (msg_len > COMPLETE_COMMIT_SUMMARY_MAX) {

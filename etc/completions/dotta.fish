@@ -9,6 +9,14 @@
 # These completions use `dotta __complete` for dynamic data.
 
 # =============================================================================
+# Constants
+# =============================================================================
+
+# Flags that consume the next token as their value (used by positional arg counting)
+set -g __dotta_value_flags -p --profile --profiles -m --message -e --exclude \
+                           --prefix --diverged --add --remove --test
+
+# =============================================================================
 # Helper Functions - Dynamic Completion via dotta __complete
 # =============================================================================
 
@@ -30,7 +38,7 @@ function __dotta_files
     set -l profile ""
 
     for i in (seq (count $tokens))
-        if test "$tokens[$i]" = "-p" -o "$tokens[$i]" = "--profile"
+        if contains -- "$tokens[$i]" -p --profile
             set -l next_idx (math $i + 1)
             if test $next_idx -le (count $tokens)
                 set profile $tokens[$next_idx]
@@ -61,12 +69,26 @@ function __dotta_files
 
         switch $cmd
             case apply update add remove list show revert ignore diff
-                # First positional after command might be profile
-                set -l pos_idx (math $cmd_idx + 1)
-                if test $pos_idx -le (count $tokens)
-                    # Check if tokens[pos_idx] is an option
-                    if not string match -q -- "-*" $tokens[$pos_idx]
-                        set profile $tokens[$pos_idx]
+                # Find first positional after command (skip flags and their values)
+                set -l value_flags $__dotta_value_flags
+                set -l skip_next 0
+                set -l scan_start (math $cmd_idx + 1)
+                if test $scan_start -le $tc
+                    for i in (seq $scan_start $tc)
+                        if test $skip_next -eq 1
+                            set skip_next 0
+                            continue
+                        end
+                        switch $tokens[$i]
+                            case '-*'
+                                if contains -- $tokens[$i] $value_flags
+                                    set skip_next 1
+                                end
+                                continue
+                            case '*'
+                                set profile $tokens[$i]
+                                break
+                        end
                     end
                 end
         end
@@ -95,7 +117,7 @@ function __dotta_commits
     set -l profile ""
 
     for i in (seq (count $tokens))
-        if test "$tokens[$i]" = "-p" -o "$tokens[$i]" = "--profile"
+        if contains -- "$tokens[$i]" -p --profile
             set -l next_idx (math $i + 1)
             if test $next_idx -le (count $tokens)
                 set profile $tokens[$next_idx]
@@ -150,10 +172,14 @@ end
 function __dotta_using_command
     set -l cmd $argv[1]
     set -l tokens (commandline -opc)
-
-    for tok in $tokens
-        if test "$tok" = "$cmd"
-            return 0
+    # Match only the first non-option token (the top-level command)
+    for tok in $tokens[2..-1]
+        switch $tok
+            case '-*'
+                continue
+            case '*'
+                test "$tok" = "$cmd"
+                return $status
         end
     end
     return 1
@@ -216,6 +242,8 @@ function __dotta_is_nth_arg
     set -l tokens (commandline -opc)
     set -l tc (count $tokens)
 
+    set -l value_flags $__dotta_value_flags
+
     set -l cmd_idx 0
     # tokens[1] is 'dotta'; find the subcommand
     if test $tc -ge 2
@@ -234,13 +262,21 @@ function __dotta_is_nth_arg
         return 1
     end
 
-    # Count positional args after the subcommand
+    # Count positional args after the subcommand, skipping flag values
     set -l arg_count 0
+    set -l skip_next 0
     set -l arg_start (math $cmd_idx + 1)
     if test $arg_start -le $tc
         for i in (seq $arg_start $tc)
+            if test $skip_next -eq 1
+                set skip_next 0
+                continue
+            end
             switch $tokens[$i]
                 case '-*'
+                    if contains -- $tokens[$i] $value_flags
+                        set skip_next 1
+                    end
                     continue
                 case '*'
                     set arg_count (math $arg_count + 1)

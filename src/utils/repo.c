@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "base/error.h"
 #include "base/filesystem.h"
@@ -205,6 +206,17 @@ static error_t *repo_ensure_dotta_worktree(git_repository *repo) {
     if (git_err < 0) {
         free(old_branch);
         return error_from_git(git_err);
+    }
+
+    /*
+     * Recovery may have deleted the process CWD (e.g., user was in a
+     * subdirectory that only existed on the old branch). Move to the
+     * repo workdir so subsequent operations (credential helpers, hooks)
+     * don't fail with invalid CWD.
+     */
+    const char *workdir = git_repository_workdir(repo);
+    if (workdir) {
+        chdir(workdir);
     }
 
     /* Success - inform user about the automated recovery */

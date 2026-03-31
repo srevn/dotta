@@ -115,6 +115,7 @@ static error_t *discover_file(
     git_repository *repo,
     const char *file_path,
     const char *profile_hint,
+    bool strict_mode,
     bool *found_in_history,
     char **out_profile,
     char **out_resolved_path
@@ -185,34 +186,24 @@ static error_t *discover_file(
 
         /* Found in HEAD (fast path) */
         *out_profile = strdup(profile_hint);
-        *out_resolved_path = storage_path;
-
         if (!*out_profile) {
             free(storage_path);
             return ERROR(ERR_MEMORY, "Failed to allocate profile name");
         }
 
+        *out_resolved_path = storage_path;
         return NULL;
     }
 
     /* Search across enabled profiles using optimized index */
-    dotta_config_t *config = NULL;
-    err = config_load(NULL, &config);
-    if (err) {
-        free(storage_path);
-        return error_wrap(err, "Failed to load config");
-    }
-
     profile_list_t *profiles = NULL;
-    err = profile_resolve(repo, NULL, 0, config->strict_mode, &profiles, NULL);
+    err = profile_resolve(repo, NULL, 0, strict_mode, &profiles, NULL);
     if (err) {
-        config_free(config);
         free(storage_path);
         return error_wrap(err, "Failed to resolve profiles");
     }
 
     if (profiles->count == 0) {
-        config_free(config);
         profile_list_free(profiles);
         free(storage_path);
         return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
@@ -223,7 +214,6 @@ static error_t *discover_file(
     err = profile_build_file_index(repo, NULL, &profile_index);
     if (err) {
         profile_list_free(profiles);
-        config_free(config);
         free(storage_path);
         return error_wrap(err, "Failed to build profile index");
     }
@@ -240,7 +230,6 @@ static error_t *discover_file(
 
         hashmap_free(profile_index, string_array_free);
         profile_list_free(profiles);
-        config_free(config);
         free(storage_path);
         return ERROR(ERR_NOT_FOUND, "File '%s' not found in any profile\n\n"
                     "If you are trying to revert a deleted file, specify the profile:\n"
@@ -253,17 +242,16 @@ static error_t *discover_file(
         /* Found in exactly one profile */
         const char *profile_name = string_array_get(matching_profiles, 0);
         *out_profile = strdup(profile_name);
-        *out_resolved_path = storage_path;
 
         hashmap_free(profile_index, string_array_free);
         profile_list_free(profiles);
-        config_free(config);
 
         if (!*out_profile) {
             free(storage_path);
             return ERROR(ERR_MEMORY, "Failed to allocate profile name");
         }
 
+        *out_resolved_path = storage_path;
         return NULL;
     }
 
@@ -277,7 +265,6 @@ static error_t *discover_file(
 
     hashmap_free(profile_index, string_array_free);
     profile_list_free(profiles);
-    config_free(config);
     free(storage_path);
 
     return ERROR(ERR_INVALID_ARG, "Ambiguous file reference");
@@ -408,7 +395,9 @@ static error_t *show_diff_preview(
     /* Print patch */
     git_buf buf = {0};
     ret = git_patch_to_buf(&buf, patch);
-    if (ret == 0 && buf.ptr) {
+    if (ret < 0) {
+        output_warning(out, "Could not format diff output");
+    } else if (buf.ptr) {
         /* Colorize diff output if colors enabled */
         if (output_colors_enabled(out)) {
             char *line = buf.ptr;
@@ -913,11 +902,10 @@ static error_t *revert_file_in_branch(
 
     /* PHASE 4: Create Atomic Commit */
 
-    /* Create tree from in-memory index.
+    /* Create tree from standalone in-memory index.
      *
-     * Do NOT call git_index_write() — we are using the repo's shared index
-     * object temporarily to build a tree. Writing it would persist profile
-     * branch content to .git/index, corrupting it (HEAD is dotta-worktree). */
+     * Do NOT call git_index_write() — this standalone index has no backing
+     * file. Writing the tree directly to the repo ODB is the correct approach. */
     git_oid new_tree_oid;
     ret = git_index_write_tree_to(&new_tree_oid, index, repo);
     if (ret < 0) {
@@ -1014,12 +1002,15 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     err = config_load(NULL, &config);
     if (err) {
         /* Non-fatal: continue with defaults */
+        error_free(err);
+        err = NULL;
         config = config_create_default();
     }
 
     /* Create output context from config */
     out = output_create_from_config(config);
     if (!out) {
+        config_free(config);
         return ERROR(ERR_MEMORY, "Failed to create output context");
     }
 
@@ -1033,8 +1024,8 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
 
     bool found_in_history = false;
     err = discover_file(
-        repo, opts->file_path, opts->profile, &found_in_history,
-        &profile_name, &resolved_path
+        repo, opts->file_path, opts->profile, config->strict_mode,
+        &found_in_history, &profile_name, &resolved_path
     );
     if (err) goto cleanup;
 
@@ -1128,80 +1119,83 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
         }
     }
 
-    /* Step 6: Show preview */
-    if (!opts->dry_run) {
-        /* Show commit metadata */
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "\n%sRevert preview:%s\n",
-                    output_color_code(out, OUTPUT_COLOR_BOLD),
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "\nRevert preview:\n");
-        }
+    /* Step 6: Show preview (always, including dry-run) */
+    if (output_colors_enabled(out)) {
+        output_printf(out, OUTPUT_NORMAL, "\n%sRevert preview:%s\n",
+                output_color_code(out, OUTPUT_COLOR_BOLD),
+                output_color_code(out, OUTPUT_COLOR_RESET));
+    } else {
+        output_printf(out, OUTPUT_NORMAL, "\nRevert preview:\n");
+    }
 
-        char oid_str[8];
-        git_oid_tostr(oid_str, sizeof(oid_str), &target_oid);
+    char oid_str[8];
+    git_oid_tostr(oid_str, sizeof(oid_str), &target_oid);
 
-        const git_signature *author = git_commit_author(target_commit);
-        time_t commit_time = (time_t)author->when.time;
-        struct tm *tm_info = localtime(&commit_time);
-        char time_buf[64];
+    const git_signature *author = git_commit_author(target_commit);
+    time_t commit_time = (time_t)author->when.time;
+    struct tm *tm_info = localtime(&commit_time);
+    char time_buf[64];
+    if (tm_info) {
         strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
+    } else {
+        snprintf(time_buf, sizeof(time_buf), "<invalid time>");
+    }
 
+    if (output_colors_enabled(out)) {
+        output_printf(out, OUTPUT_NORMAL, "  Profile: %s%s%s\n",
+                output_color_code(out, OUTPUT_COLOR_CYAN), profile_name,
+                output_color_code(out, OUTPUT_COLOR_RESET));
+        output_printf(out, OUTPUT_NORMAL, "  File: %s\n", resolved_path);
+        output_printf(out, OUTPUT_NORMAL, "  Target commit: %s (%s)\n", oid_str, time_buf);
+    } else {
+        output_printf(out, OUTPUT_NORMAL, "  Profile: %s\n", profile_name);
+        output_printf(out, OUTPUT_NORMAL, "  File: %s\n", resolved_path);
+        output_printf(out, OUTPUT_NORMAL, "  Target commit: %s (%s)\n", oid_str, time_buf);
+    }
+
+    if (found_in_history) {
+        /* File was deleted - show simple restoration message */
+        output_printf(out, OUTPUT_NORMAL, "\n");
         if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "  Profile: %s%s%s\n",
-                    output_color_code(out, OUTPUT_COLOR_CYAN),
-                    profile_name,
+            output_printf(out, OUTPUT_NORMAL, "%sRestoring deleted file from commit history%s\n",
+                    output_color_code(out, OUTPUT_COLOR_GREEN),
                     output_color_code(out, OUTPUT_COLOR_RESET));
-            output_printf(out, OUTPUT_NORMAL, "  File: %s\n", resolved_path);
-            output_printf(out, OUTPUT_NORMAL, "  Target commit: %s (%s)\n", oid_str, time_buf);
         } else {
-            output_printf(out, OUTPUT_NORMAL, "  Profile: %s\n", profile_name);
-            output_printf(out, OUTPUT_NORMAL, "  File: %s\n", resolved_path);
-            output_printf(out, OUTPUT_NORMAL, "  Target commit: %s (%s)\n", oid_str, time_buf);
+            output_printf(out, OUTPUT_NORMAL, "Restoring deleted file from commit history\n");
+        }
+    } else {
+        /* File exists - show detailed diff preview with decryption support.
+         * Load metadata from both current HEAD and target commit separately
+         * to handle encryption state changes between commits correctly. */
+        metadata_t *current_meta = NULL;
+        err = load_metadata_graceful(repo, profile_name, &current_meta);
+        if (err) goto cleanup;
+
+        metadata_t *target_meta = NULL;
+        err = load_metadata_from_commit(repo, target_commit, &target_meta);
+        if (err) {
+            metadata_free(current_meta);
+            goto cleanup;
         }
 
-        if (found_in_history) {
-            /* File was deleted - show simple restoration message */
-            output_printf(out, OUTPUT_NORMAL, "\n");
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "%sRestoring deleted file from commit history%s\n",
-                        output_color_code(out, OUTPUT_COLOR_GREEN),
-                        output_color_code(out, OUTPUT_COLOR_RESET));
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "Restoring deleted file from commit history\n");
-            }
-        } else {
-            /* File exists - show detailed diff preview with decryption support.
-             * Load metadata from both current HEAD and target commit separately
-             * to handle encryption state changes between commits correctly. */
-            metadata_t *current_meta = NULL;
-            err = load_metadata_graceful(repo, profile_name, &current_meta);
-            if (err) goto cleanup;
+        bool current_encrypted = metadata_get_file_encrypted(current_meta, resolved_path);
+        bool target_encrypted = metadata_get_file_encrypted(target_meta, resolved_path);
 
-            metadata_t *target_meta = NULL;
-            err = load_metadata_from_commit(repo, target_commit, &target_meta);
-            if (err) {
-                metadata_free(current_meta);
-                goto cleanup;
-            }
+        metadata_free(current_meta);
+        metadata_free(target_meta);
 
-            bool current_encrypted = metadata_get_file_encrypted(current_meta, resolved_path);
-            bool target_encrypted = metadata_get_file_encrypted(target_meta, resolved_path);
+        km = keymanager_get_global(config);
 
-            metadata_free(current_meta);
-            metadata_free(target_meta);
-
-            km = keymanager_get_global(config);
-
-            err = show_diff_preview(
-                repo, resolved_path, profile_name, current_encrypted, target_encrypted,
-                km, current_blob_oid, target_blob_oid, out
-            );
-            if (err) {
-                err = error_wrap(err, "Failed to show diff preview");
-                goto cleanup;
-            }
+        err = show_diff_preview(
+            repo, resolved_path, profile_name, current_encrypted, target_encrypted,
+            km, current_blob_oid, target_blob_oid, out
+        );
+        if (err) {
+            /* Non-fatal: the revert itself doesn't need decryption (copies blobs).
+             * Show warning and continue to confirmation — user decides. */
+            output_warning(out, "Could not show diff preview: %s", error_message(err));
+            error_free(err);
+            err = NULL;
         }
     }
 
@@ -1215,8 +1209,14 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     git_tree_free(current_tree);
     current_tree = NULL;
 
-    /* Step 7: Prompt for confirmation (unless --force or --dry-run) */
-    if (config->confirm_destructive && !opts->force && !opts->dry_run) {
+    /* Step 7: Early exit for dry-run (preview shown, no changes to make) */
+    if (opts->dry_run) {
+        output_info(out, "\nDry-run mode: No changes made");
+        goto cleanup;
+    }
+
+    /* Step 8: Prompt for confirmation (unless --force) */
+    if (config->confirm_destructive && !opts->force) {
         if (!output_confirm(out, "Revert file?", false)) {
             fprintf(stderr, "Aborted.\n");
             user_aborted = true;
@@ -1227,12 +1227,6 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     /* Free current_commit (no longer needed) */
     git_commit_free(current_commit);
     current_commit = NULL;
-
-    /* Step 8: Perform revert (unless dry-run) */
-    if (opts->dry_run) {
-        output_info(out, "\nDry-run mode: No changes made");
-        goto cleanup;
-    }
 
     /* Verify branch hasn't been modified concurrently since preview */
     if (!opts->force) {
@@ -1306,7 +1300,7 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
         output_hint(out, "Run 'dotta status' or 'dotta apply' to resync manifest");
         error_free(err);
         err = NULL;
-        goto success_output;
+        goto success;
     }
     if (new_head_commit) {
         git_commit_free(new_head_commit);
@@ -1323,7 +1317,7 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
         output_hint(out, "Run 'dotta status' or 'dotta apply' to resync manifest");
         error_free(err);
         err = NULL;
-        goto success_output;
+        goto success;
     }
 
     /* Get enabled profiles for manifest sync */
@@ -1334,7 +1328,7 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
         state_free(state);
         error_free(err);
         err = NULL;
-        goto success_output;
+        goto success;
     }
 
     /* Sync manifest via diff */
@@ -1359,7 +1353,7 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
         error_free(manifest_err);
         state_free(state);
         string_array_free(enabled_profiles);
-        goto success_output;
+        goto success;
     }
 
     /* Commit transaction */
@@ -1373,10 +1367,10 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
         output_hint(out, "Run 'dotta status' or 'dotta apply' to resync manifest");
         error_free(err);
         err = NULL;
-        goto success_output;
+        goto success;
     }
 
-success_output:
+success:
     /* Display success message */
     if (output_colors_enabled(out)) {
         output_printf(out, OUTPUT_NORMAL, "%s✓%s Reverted %s in profile '%s'\n",

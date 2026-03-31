@@ -40,7 +40,7 @@ function __dotta_files
     end
 
     if test -n "$profile"
-        dotta __complete files -p "$profile" 2>/dev/null
+        dotta __complete files --storage -p "$profile" 2>/dev/null
     else
         # Try to find positional profile for certain commands
         set -l cmd ""
@@ -72,15 +72,11 @@ function __dotta_files
         end
 
         if test -n "$profile"
-            dotta __complete files -p "$profile" 2>/dev/null
+            dotta __complete files --storage -p "$profile" 2>/dev/null
         else
-            dotta __complete files 2>/dev/null
+            dotta __complete files --storage 2>/dev/null
         end
     end
-end
-
-function __dotta_files_storage
-    dotta __complete files --storage 2>/dev/null
 end
 
 function __dotta_remotes

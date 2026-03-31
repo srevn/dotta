@@ -237,10 +237,10 @@ static error_t *add_file_to_worktree(
         }
         err = fs_remove_file(dest_path);
         if (err) {
-            error_t *wrapped_err = error_wrap(err,
+            error_t *wrapped = error_wrap(err,
                 "Failed to remove existing file '%s' in worktree", dest_path);
             free(dest_path);
-            return wrapped_err;
+            return wrapped;
         }
     }
 

@@ -22,6 +22,7 @@
 #include "core/stats.h"
 #include "core/upstream.h"
 #include "crypto/encryption.h"
+#include "infra/path.h"
 #include "utils/array.h"
 #include "utils/config.h"
 #include "utils/output.h"
@@ -586,18 +587,31 @@ static error_t *list_file_history(
     CHECK_NULL(opts->file_path);
     CHECK_NULL(out);
 
+    /* Resolve input path to storage format (handles absolute, tilde, relative,
+     * and storage paths). Flexible mode - file need not exist on disk.
+     *
+     * Note: No custom prefix context available for list command - users must use
+     * storage format (custom/etc/nginx.conf) for custom/ paths */
+    char *storage_path = NULL;
+    error_t *err = path_resolve_input(opts->file_path, false, NULL, 0, &storage_path);
+    if (err) {
+        return error_wrap(err, "Failed to resolve path '%s'", opts->file_path);
+    }
+
     /* Get file history */
     file_history_t *history = NULL;
-    error_t *err = stats_get_file_history(repo, opts->profile, opts->file_path, &history);
+    err = stats_get_file_history(repo, opts->profile, storage_path, &history);
     if (err) {
-        return error_wrap(err, "Failed to get history for '%s' in profile '%s'",
-                         opts->file_path, opts->profile);
+        error_t *wrapped = error_wrap(err, "Failed to get history for '%s' in profile '%s'",
+                                      storage_path, opts->profile);
+        free(storage_path);
+        return wrapped;
     }
 
     /* Print header */
     char header[LIST_HEADER_BUFFER_SIZE];
     snprintf(header, sizeof(header), "History of '%s' in profile '%s'",
-             opts->file_path, opts->profile);
+             storage_path, opts->profile);
     output_section(out, header);
     output_newline(out);
 
@@ -680,6 +694,7 @@ static error_t *list_file_history(
 
     /* Cleanup */
     stats_free_file_history(history);
+    free(storage_path);
 
     return NULL;
 }

@@ -84,7 +84,13 @@ function __dotta_remotes
 end
 
 function __dotta_commits
-    # Check for profile flag
+    # HEAD-based references (always valid for any profile branch)
+    printf "HEAD\tCurrent commit\n"
+    printf "HEAD~1\tPrevious commit\n"
+    printf "HEAD~2\t2 commits ago\n"
+    printf "HEAD~3\t3 commits ago\n"
+
+    # Hash-based references from profile commit history
     set -l tokens (commandline -opc)
     set -l profile ""
 
@@ -102,6 +108,24 @@ function __dotta_commits
         dotta __complete commits -p "$profile" --limit 20 2>/dev/null
     else
         dotta __complete commits --limit 20 2>/dev/null
+    end
+end
+
+function __dotta_refspec_commits
+    set -l token (commandline -ct)
+
+    # Only activate when current token contains @
+    if not string match -q '*@*' -- $token
+        return
+    end
+
+    # Extract file prefix (everything before the last @)
+    set -l prefix (string replace -r '@[^@]*$' '' -- $token)
+
+    # Prefix each commit reference with file@
+    for line in (__dotta_commits)
+        set -l parts (string split \t -- $line)
+        printf "%s@%s\t%s\n" $prefix $parts[1] $parts[2]
     end
 end
 
@@ -350,9 +374,10 @@ complete -c dotta -n "__dotta_using_command status" -xa "(__dotta_profiles)"
 complete -c dotta -n "__dotta_using_command list; and __dotta_is_nth_arg 1" -xa "(__dotta_profiles)"
 complete -c dotta -n "__dotta_using_command list; and __dotta_is_nth_arg 2" -xa "(__dotta_files)"
 
-# diff: 1st arg is profile or file, rest are files (storage or filesystem paths)
+# diff: Takes profiles, files, or commits
 complete -c dotta -n "__dotta_using_command diff; and __dotta_is_nth_arg 1" -xa "(__dotta_profiles)"
 complete -c dotta -n "__dotta_using_command diff" -xa "(__dotta_files)"
+complete -c dotta -n "__dotta_using_command diff" -xa "(__dotta_commits)"
 complete -c dotta -n "__dotta_using_command diff" -F
 
 # sync: Positional arguments are profiles
@@ -361,12 +386,15 @@ complete -c dotta -n "__dotta_using_command sync" -xa "(__dotta_profiles)"
 # ignore: Positional argument is profile
 complete -c dotta -n "__dotta_using_command ignore; and __dotta_is_nth_arg 1" -xa "(__dotta_profiles)"
 
-# show: Takes managed files or commits
+# show: Takes managed files, commits, or file@commit refspecs
 complete -c dotta -n "__dotta_using_command show" -xa "(__dotta_files)"
 complete -c dotta -n "__dotta_using_command show" -xa "(__dotta_commits)"
+complete -c dotta -n "__dotta_using_command show" -xa "(__dotta_refspec_commits)"
 
-# revert: Takes managed files
+# revert: Takes file@commit refspecs, managed files, or commits
 complete -c dotta -n "__dotta_using_command revert" -xa "(__dotta_files)"
+complete -c dotta -n "__dotta_using_command revert" -xa "(__dotta_commits)"
+complete -c dotta -n "__dotta_using_command revert" -xa "(__dotta_refspec_commits)"
 
 # =============================================================================
 # Command-Specific Options
@@ -424,7 +452,6 @@ complete -c dotta -n "__dotta_using_command diff" -l downstream -d "Filesystem t
 complete -c dotta -n "__dotta_using_command diff" -s a -l all -d "Both directions"
 complete -c dotta -n "__dotta_using_command diff" -l name-only -d "Names only"
 complete -c dotta -n "__dotta_using_command diff" -s v -l verbose -d "Verbose output"
-complete -c dotta -n "__dotta_using_command diff" -xa "(__dotta_commits)"
 
 # --- list ---
 complete -c dotta -n "__dotta_using_command list" -l remote -d "Show remote tracking"
@@ -452,7 +479,6 @@ complete -c dotta -n "__dotta_using_command revert" -s m -l message -d "Commit m
 complete -c dotta -n "__dotta_using_command revert" -s f -l force -d "Skip confirmation"
 complete -c dotta -n "__dotta_using_command revert" -s n -l dry-run -d "Preview only"
 complete -c dotta -n "__dotta_using_command revert" -s v -l verbose -d "Verbose output"
-complete -c dotta -n "__dotta_using_command revert" -xa "(__dotta_commits)"
 
 # --- show ---
 complete -c dotta -n "__dotta_using_command show" -l raw -d "Raw content"

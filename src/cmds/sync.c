@@ -47,7 +47,7 @@ typedef struct {
     size_t need_pull_count;
     size_t diverged_count;
     size_t up_to_date_count;
-    size_t no_remote_count;
+    size_t pulled_count;             /* Profiles updated from remote (pull/resolve/reset) */
     size_t failed_count;
     size_t fetch_failed_count;       /* Track fetch failures separately */
     size_t auth_failed_count;        /* Track authentication failures */
@@ -142,6 +142,7 @@ static error_t *force_push_branch(
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(branch_name);
+    CHECK_NULL(xfer);
 
     /* Force push local to remote */
     git_remote *remote = NULL;
@@ -150,17 +151,12 @@ static error_t *force_push_branch(
         return error_from_git(git_err);
     }
 
-    /* Set up transfer callbacks if context provided */
+    /* Set up transfer callbacks */
     git_push_options push_opts;
     git_push_options_init(&push_opts, GIT_PUSH_OPTIONS_VERSION);
-    if (xfer) {
-        push_opts.callbacks.credentials = transfer_credentials_callback;
-        push_opts.callbacks.push_transfer_progress = transfer_push_progress_callback;
-        push_opts.callbacks.payload = xfer;
-    } else {
-        /* No transfer context - use basic credential callback */
-        push_opts.callbacks.credentials = credentials_callback;
-    }
+    push_opts.callbacks.credentials = transfer_credentials_callback;
+    push_opts.callbacks.push_transfer_progress = transfer_push_progress_callback;
+    push_opts.callbacks.payload = xfer;
 
     /* Force push refspec ('+' prefix forces the push) */
     char refspec[DOTTA_REFSPEC_MAX];
@@ -178,13 +174,13 @@ static error_t *force_push_branch(
     git_remote_free(remote);
 
     if (git_err < 0) {
-        if (xfer && xfer->cred) {
+        if (xfer->cred) {
             credential_context_reject(xfer->cred);
         }
         return error_from_git(git_err);
     }
 
-    if (xfer && xfer->cred) {
+    if (xfer->cred) {
         credential_context_approve(xfer->cred);
     }
 
@@ -273,7 +269,7 @@ static error_t *pull_branch_ff(
         git_reference_free(local_ref);
         git_reference_free(remote_ref);
         return ERROR(ERR_CONFLICT,
-                    "Cannot fast-forward '%s' - branches have diverged", branch_name);
+            "Cannot fast-forward '%s' - branches have diverged", branch_name);
     }
 
     /* git_err == 1 means local IS an ancestor of remote - can fast-forward */
@@ -288,8 +284,9 @@ static error_t *pull_branch_ff(
 
     /* Perform fast-forward */
     git_reference *updated_ref = NULL;
-    git_err = git_reference_set_target(&updated_ref, local_ref, remote_oid,
-                                       "sync: Fast-forward pull");
+    git_err = git_reference_set_target(
+        &updated_ref, local_ref, remote_oid, "sync: Fast-forward pull"
+    );
     git_reference_free(local_ref);
     git_reference_free(remote_ref);
 
@@ -337,26 +334,58 @@ static error_t *sync_fetch_enabled_profiles(
              remote_name);
     output_section(out, section_title);
 
-    /* Build array of branch names for batched fetch */
+    /* Build array of fetchable branch names.
+     *
+     * Only include profiles that have a remote tracking ref — these are known
+     * to exist (or have existed) on the remote. Local-only profiles (never
+     * pushed) have no tracking ref and would cause the entire batched fetch
+     * to fail with a "ref not found" error from the remote. */
     char **branch_names = malloc(profiles->count * sizeof(char *));
     if (!branch_names) {
         return ERROR(ERR_MEMORY, "Failed to allocate branch names array");
     }
 
+    size_t fetch_count = 0;
     for (size_t i = 0; i < profiles->count; i++) {
-        branch_names[i] = profiles->profiles[i].name;
-        if (verbose) {
-            output_info(out, "  Queuing %s...", branch_names[i]);
+        char remote_refname[DOTTA_REFNAME_MAX];
+        error_t *err_build = gitops_build_refname(remote_refname, sizeof(remote_refname),
+                                "refs/remotes/%s/%s", remote_name, profiles->profiles[i].name);
+        if (err_build) {
+            error_free(err_build);
+            continue;
         }
+
+        git_reference *ref = NULL;
+        int rc = git_reference_lookup(&ref, repo, remote_refname);
+        if (rc == 0) {
+            git_reference_free(ref);
+            branch_names[fetch_count++] = profiles->profiles[i].name;
+            if (verbose) {
+                output_info(out, "  Queuing %s...", profiles->profiles[i].name);
+            }
+        } else if (verbose) {
+            output_info(out,
+                "  Skipping %s (local only, nothing to fetch)", profiles->profiles[i].name);
+        }
+    }
+
+    /* Skip fetch entirely if no profiles have remote tracking refs */
+    if (fetch_count == 0) {
+        free(branch_names);
+        if (verbose) {
+            output_info(out, "  No remote profiles to fetch");
+        }
+        output_newline(out);
+        return NULL;
     }
 
     /* Perform batched fetch - single network operation for all branches */
     if (verbose) {
-        output_info(out, "  Fetching %zu profile%s in batch...",
-                   profiles->count, profiles->count == 1 ? "" : "s");
+        output_info(out,
+            "  Fetching %zu profile%s in batch...", fetch_count, fetch_count == 1 ? "" : "s");
     }
 
-    error_t *err = gitops_fetch_branches(repo, remote_name, branch_names, profiles->count, xfer);
+    error_t *err = gitops_fetch_branches(repo, remote_name, branch_names, fetch_count, xfer);
     free(branch_names);
 
     if (err) {
@@ -377,8 +406,7 @@ static error_t *sync_fetch_enabled_profiles(
     }
 
     if (verbose) {
-        output_success(out, "Fetched %zu enabled profile%s",
-                       profiles->count, profiles->count == 1 ? "" : "s");
+        output_success(out, "Fetched %zu profile%s", fetch_count, fetch_count == 1 ? "" : "s");
     }
 
     output_newline(out);
@@ -444,7 +472,6 @@ static error_t *sync_analyze_phase(
                 results->diverged_count++;
                 break;
             case UPSTREAM_NO_REMOTE:
-                results->no_remote_count++;
                 break;
             case UPSTREAM_UNKNOWN:
                 /* Skip unknown states */
@@ -587,6 +614,7 @@ static void handle_remote_ahead(
     output_ctx_t *out,
     bool verbose,
     bool auto_pull,
+    bool no_pull,
     state_t *state,
     const string_array_t *enabled_profiles
 ) {
@@ -596,7 +624,11 @@ static void handle_remote_ahead(
         output_info(out, "↓ %s: remote has %zu new commit%s",
                colored ? colored : result->profile_name,
                result->behind, result->behind == 1 ? "" : "s");
-        output_hint(out, "   Run 'dotta pull' or enable auto_pull in config to automatically pull");
+        if (no_pull) {
+            output_hint(out, "   Pull skipped (--no-pull)");
+        } else {
+            output_hint(out, "   Enable 'auto_pull' in config to pull automatically during sync");
+        }
         free(colored);
         return;
     }
@@ -636,6 +668,7 @@ static void handle_remote_ahead(
     if (results->need_pull_count > 0) {
         results->need_pull_count--;
     }
+    results->pulled_count++;
 
     /* Sync manifest — stats needed for success message */
     size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
@@ -682,7 +715,8 @@ static error_t *resolve_and_push_divergence(
     const char *strategy_name,
     transfer_context_t *xfer,
     state_t *state,
-    const string_array_t *enabled_profiles
+    const string_array_t *enabled_profiles,
+    bool no_push
 ) {
     const char *cap_name = (strategy == DIVERGENCE_STRATEGY_REBASE)
         ? "Rebase" : "Merge";
@@ -726,22 +760,28 @@ static error_t *resolve_and_push_divergence(
     output_success(out, "   Successfully %s (%zu commit%s to push)",
                    past_desc, ahead, ahead == 1 ? "" : "s");
 
-    /* Push resolved commits */
-    err = gitops_push_branch(repo, remote_name, result->profile_name, xfer);
-    if (err) {
-        output_error(out, "   ✗ Push after %s failed: %s", strategy_name, error_message(err));
-        mark_result_failed(result, results, err);
+    if (no_push) {
+        output_info(out, "   Push skipped (--no-push)");
+    } else {
+        /* Push resolved commits */
+        err = gitops_push_branch(repo, remote_name, result->profile_name, xfer);
+        if (err) {
+            output_error(out, "   ✗ Push after %s failed: %s", strategy_name, error_message(err));
+            mark_result_failed(result, results, err);
 
-        output_info(out, "   ↺ Rolling back %s (push failed)...", strategy_name);
-        return attempt_rollback(&ctx, result->profile_name, "push failure", out);
+            output_info(out, "   ↺ Rolling back %s (push failed)...", strategy_name);
+            return attempt_rollback(&ctx, result->profile_name, "push failure", out);
+        }
+
+        output_success(out, "   Pushed %s", push_desc);
+        result->pushed = true;
+        results->pushed_count++;
     }
 
-    output_success(out, "   Pushed %s", push_desc);
-    result->pushed = true;
-    results->pushed_count++;
     if (results->diverged_count > 0) {
         results->diverged_count--;
     }
+    results->pulled_count++;
 
     /* Sync manifest with changes from resolution */
     sync_manifest_and_report(
@@ -761,44 +801,30 @@ static error_t *handle_diverged_ours(
     sync_results_t *results,
     output_ctx_t *out,
     bool confirm_destructive,
-    transfer_context_t *xfer
+    transfer_context_t *xfer,
+    bool no_push
 ) {
     output_info(out, "   Resolving with 'ours' strategy (force push)...");
+
+    if (no_push) {
+        output_info(out, "   Force push skipped (--no-push)");
+        return NULL;
+    }
 
     /* Get user confirmation for destructive operation */
     if (confirm_destructive) {
         char prompt[DOTTA_MESSAGE_MAX];
         snprintf(prompt, sizeof(prompt),
-                "WARNING: This will force push and OVERWRITE remote '%s'.\n"
-                "Remote commits will be LOST. Continue?", result->profile_name);
+                "WARNING: This will force push local '%s' and OVERWRITE remote.\n"
+                "Remote commits will be PERMANENTLY LOST. Continue?", result->profile_name);
         if (!output_confirm_or_default(out, prompt, false, false)) {
             output_info(out, "   Operation cancelled by user");
             return NULL;
         }
     }
 
-    /* Initialize divergence context (saves current state for rollback) */
-    divergence_context_t ctx;
-    error_t *err = divergence_context_init(
-        &ctx, repo, remote_name, result->profile_name, DIVERGENCE_STRATEGY_OURS
-    );
-    if (err) {
-        output_error(out, "   ✗ Failed to initialize divergence context: %s",
-                    error_message(err));
-        mark_result_failed(result, results, err);
-        return NULL;
-    }
-
-    /* For OURS, resolve is a no-op (local stays unchanged) */
-    err = divergence_resolve(&ctx, NULL);
-    if (err) {
-        output_error(out, "   ✗ Resolution failed: %s", error_message(err));
-        mark_result_failed(result, results, err);
-        return NULL;
-    }
-
-    /* Force push to remote */
-    err = force_push_branch(repo, remote_name, result->profile_name, xfer);
+    /* Force push local to remote (local branch stays unchanged) */
+    error_t *err = force_push_branch(repo, remote_name, result->profile_name, xfer);
     if (err) {
         output_error(out, "   ✗ Force push failed: %s", error_message(err));
         mark_result_failed(result, results, err);
@@ -808,9 +834,6 @@ static error_t *handle_diverged_ours(
     output_success(out, "   Force pushed to remote (remote commits discarded)");
     result->pushed = true;
     results->pushed_count++;
-    if (results->diverged_count > 0) {
-        results->diverged_count--;
-    }
 
     return NULL;
 }
@@ -877,9 +900,7 @@ static error_t *handle_diverged_theirs(
     }
 
     output_success(out, "   Reset to remote (local commits discarded)");
-    if (results->diverged_count > 0) {
-        results->diverged_count--;
-    }
+    results->pulled_count++;
 
     /* Sync manifest with changes from reset */
     sync_manifest_and_report(
@@ -904,7 +925,8 @@ static error_t *handle_diverged(
     transfer_context_t *xfer,
     bool confirm_destructive,
     state_t *state,
-    const string_array_t *enabled_profiles
+    const string_array_t *enabled_profiles,
+    bool no_push
 ) {
     char *colored = output_colorize(out, OUTPUT_COLOR_RED, result->profile_name);
     output_warning(out, "⚠ %s: diverged (%zu local, %zu remote commits)",
@@ -920,22 +942,35 @@ static error_t *handle_diverged(
         case DIVERGE_REBASE:
             return resolve_and_push_divergence(
                 repo, remote_name, result, results, out,
-                DIVERGENCE_STRATEGY_REBASE, "rebase", xfer, state, enabled_profiles);
+                DIVERGENCE_STRATEGY_REBASE, "rebase", xfer, state, enabled_profiles, no_push
+            );
 
         case DIVERGE_MERGE:
             return resolve_and_push_divergence(
                 repo, remote_name, result, results, out,
-                DIVERGENCE_STRATEGY_MERGE, "merge", xfer, state, enabled_profiles);
+                DIVERGENCE_STRATEGY_MERGE, "merge", xfer, state, enabled_profiles, no_push
+            );
 
-        case DIVERGE_OURS:
-            return handle_diverged_ours(
-                repo, remote_name, result, results, out,
-                confirm_destructive, xfer);
+        case DIVERGE_OURS: {
+            error_t *err = handle_diverged_ours(
+                repo, remote_name, result, results, out, confirm_destructive, xfer, no_push
+            );
+            if (!err && result->pushed) {
+                if (results->diverged_count > 0) results->diverged_count--;
+            }
+            return err;
+        }
 
-        case DIVERGE_THEIRS:
-            return handle_diverged_theirs(
-                repo, remote_name, result, results, out,
-                confirm_destructive, state, enabled_profiles);
+        case DIVERGE_THEIRS: {
+            size_t before = results->pulled_count;
+            error_t *err = handle_diverged_theirs(
+                repo, remote_name, result, results, out, confirm_destructive, state, enabled_profiles
+            );
+            if (!err && results->pulled_count > before) {
+                if (results->diverged_count > 0) results->diverged_count--;
+            }
+            return err;
+        }
     }
 
     return NULL;
@@ -955,12 +990,13 @@ static error_t *sync_push_phase(
     output_ctx_t *out,
     bool verbose,
     bool auto_pull,
+    bool no_pull,
+    bool no_push,
     sync_divergence_strategy_t diverged_strategy,
     transfer_context_t *xfer,
     bool confirm_destructive,
     state_t *state,                           /* For manifest updates */
-    const string_array_t *enabled_profiles,   /* For precedence resolution */
-    workspace_t *ws                           /* For cached resources */
+    const string_array_t *enabled_profiles    /* For precedence resolution */
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
@@ -968,11 +1004,6 @@ static error_t *sync_push_phase(
     CHECK_NULL(out);
     CHECK_NULL(state);
     CHECK_NULL(enabled_profiles);
-    CHECK_NULL(ws);
-
-    /* metadata_cache intentionally unused during sync — stale after fetch/pull.
-     * Manifest operations load fresh metadata from updated Git state. */
-    (void)workspace_get_metadata_cache(ws);
 
     output_section(out, "Syncing with remote");
 
@@ -997,8 +1028,9 @@ static error_t *sync_push_phase(
             }
 
             case UPSTREAM_LOCAL_AHEAD: {
-                /* theirs: discard local commits, reset to remote */
-                if (diverged_strategy == DIVERGE_THEIRS) {
+                /* theirs: discard local commits, reset to remote
+                 * Blocked by --no-pull since resetting to remote incorporates remote state */
+                if (diverged_strategy == DIVERGE_THEIRS && !no_pull) {
                     char *colored = output_colorize(out, OUTPUT_COLOR_YELLOW, result->profile_name);
                     output_info(out, "↑ %s: %zu commit%s ahead of remote",
                                 colored ? colored : result->profile_name,
@@ -1014,10 +1046,19 @@ static error_t *sync_push_phase(
                     break;
                 }
 
+                if (no_push) {
+                    char *colored = output_colorize(out, OUTPUT_COLOR_YELLOW, result->profile_name);
+                    output_info(out, "↑ %s: %zu commit%s ahead (push skipped: --no-push)",
+                           colored ? colored : result->profile_name,
+                           result->ahead, result->ahead == 1 ? "" : "s");
+                    free(colored);
+                    break;
+                }
+
                 /* Safe to push - local has new commits */
                 if (verbose) {
-                    output_info(out, "Pushing %s (%zu commit%s)...",
-                           result->profile_name, result->ahead, result->ahead == 1 ? "" : "s");
+                    output_info(out, "Pushing %s (%zu commit%s)...", result->profile_name,
+                        result->ahead, result->ahead == 1 ? "" : "s");
                 }
 
                 error_t *err = gitops_push_branch(repo, remote_name, result->profile_name, xfer);
@@ -1029,15 +1070,21 @@ static error_t *sync_push_phase(
                     result->pushed = true;
                     results->pushed_count++;
                     char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
-                    output_success(out, "%s: pushed %zu commit%s",
-                           colored ? colored : result->profile_name,
-                           result->ahead, result->ahead == 1 ? "" : "s");
+                    output_success(out,
+                        "%s: pushed %zu commit%s", colored ? colored : result->profile_name,
+                        result->ahead, result->ahead == 1 ? "" : "s");
                     free(colored);
                 }
                 break;
             }
 
             case UPSTREAM_NO_REMOTE: {
+                if (no_push) {
+                    output_info(out,
+                        "• %s: local only (push skipped: --no-push)", result->profile_name);
+                    break;
+                }
+
                 /* Remote branch doesn't exist - create it */
                 if (verbose) {
                     output_info(out, "Creating remote branch %s...", result->profile_name);
@@ -1063,34 +1110,50 @@ static error_t *sync_push_phase(
                 /* ours: force push local, discard remote commits */
                 if (diverged_strategy == DIVERGE_OURS) {
                     char *colored = output_colorize(out, OUTPUT_COLOR_YELLOW, result->profile_name);
-                    output_info(out, "↓ %s: %zu remote commit%s ahead",
-                                colored ? colored : result->profile_name,
-                                result->behind, result->behind == 1 ? "" : "s");
+                    output_info(out,
+                        "↓ %s: %zu remote commit%s ahead", colored ? colored : result->profile_name,
+                        result->behind, result->behind == 1 ? "" : "s");
                     free(colored);
+                    output_warning(out,
+                        "   Local is behind — force push will overwrite newer remote commits");
                     error_t *err = handle_diverged_ours(
-                        repo, remote_name, result, results, out,
-                        confirm_destructive, xfer
+                        repo, remote_name, result, results, out, confirm_destructive, xfer, no_push
                     );
                     if (err) {
                         return err;
                     }
-                    /* Adjust: analyze phase counted this as needing pull */
-                    if (results->need_pull_count > 0) {
+                    /* Adjust: analyze phase counted this as needing pull,
+                     * but only decrement if ours actually resolved (pushed).
+                     * If --no-push or user cancelled, profile still needs attention. */
+                    if (result->pushed && results->need_pull_count > 0) {
                         results->need_pull_count--;
                     }
                     break;
                 }
                 handle_remote_ahead(
-                    repo, remote_name, result, results, out, verbose,
-                    auto_pull, state, enabled_profiles
+                    repo, remote_name, result, results, out, verbose, auto_pull, no_pull,
+                    state, enabled_profiles
                 );
                 break;
             }
 
             case UPSTREAM_DIVERGED: {
+                /* --no-pull blocks strategies that incorporate remote changes */
+                if (no_pull && diverged_strategy != DIVERGE_WARN &&
+                               diverged_strategy != DIVERGE_OURS) {
+                    char *colored = output_colorize(out, OUTPUT_COLOR_RED, result->profile_name);
+                    output_warning(out, "⚠ %s: diverged (%zu local, %zu remote commits)",
+                           colored ? colored : result->profile_name, result->ahead, result->behind);
+                    free(colored);
+                    const char *name = diverged_strategy == DIVERGE_REBASE ? "rebase" :
+                                       diverged_strategy == DIVERGE_MERGE ? "merge" : "theirs";
+                    output_hint(out, "   '%s' resolution skipped (--no-pull prevents "
+                                    "incorporating remote changes)", name);
+                    break;
+                }
                 error_t *err = handle_diverged(
-                    repo, remote_name, result, results, out, diverged_strategy,
-                    xfer, confirm_destructive, state, enabled_profiles
+                    repo, remote_name, result, results, out, diverged_strategy, xfer,
+                    confirm_destructive, state, enabled_profiles, no_push
                 );
                 if (err) {
                     return err;  /* Critical rollback failure */
@@ -1142,8 +1205,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         /* Create error before freeing current_branch to avoid use-after-free */
         err = ERROR(ERR_STATE_INVALID,
                     "Main worktree must be on 'dotta-worktree' branch (currently on '%s')\n"
-                    "Hint: Run 'dotta git checkout dotta-worktree' to fix",
-                    current_branch);
+                    "Hint: Run 'dotta git checkout dotta-worktree' to fix", current_branch);
         goto cleanup;
     }
     free(current_branch);
@@ -1197,8 +1259,9 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     /* Phase 2: Load sync profiles (CLI filter or shared pointer) */
     if (opts->profiles && opts->profile_count > 0) {
         /* User specified CLI filter */
-        err = profile_resolve_for_operations(repo, opts->profiles, opts->profile_count,
-                                             config->strict_mode, &sync_profiles);
+        err = profile_resolve_for_operations(
+            repo, opts->profiles, opts->profile_count, config->strict_mode, &sync_profiles
+        );
         if (err) {
             err = error_wrap(err, "Failed to resolve sync profiles");
             goto cleanup;
@@ -1221,173 +1284,170 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         goto cleanup;
     }
 
+    /* Auto-detect remote early — fail fast before expensive workspace load */
+    err = upstream_detect_remote(repo, &remote_name);
+    if (err) {
+        goto cleanup;
+    }
+
     /* Validate workspace - sync requires clean workspace (no uncommitted changes)
+     *
+     * Skip entirely when --force is used: the clean check result is unused, and
+     * workspace_load can be expensive (filesystem analysis, directory scanning).
      *
      * CRITICAL: Use workspace_profiles (persistent) for VWD scope, NOT sync_profiles.
      * This ensures manifest scope matches state scope for accurate divergence detection.
      */
-    workspace_load_t ws_opts = {
-        .analyze_files = true,         /* Validate file state for uncommitted changes */
-        .analyze_orphans = false,      /* Orphans are apply's concern, not sync's */
-        .analyze_untracked = (config && config->auto_detect_new_files), /* Respect config */
-        .analyze_directories = false,  /* Directory metadata is apply's concern */
-        .analyze_encryption = false    /* Encryption is apply's concern */
-    };
-    /* Pass NULL for state - this is read-only validation, not a transactional operation.
-     * State transaction opened later for manifest updates after sync completes. */
-    err = workspace_load(repo, NULL, workspace_profiles, config, &ws_opts, &ws);
-    if (err) {
-        err = error_wrap(err, "Failed to load workspace");
-        goto cleanup;
-    }
-
-    /* Count all types of divergence */
-    size_t all_diverged_count = 0;
-    const workspace_item_t *all_diverged = workspace_get_all_diverged(ws, &all_diverged_count);
-
-    size_t modified_count = 0;    /* DEPLOYED with CONTENT divergence */
-    size_t deleted_count = 0;     /* DELETED state */
-    size_t mode_diff_count = 0;   /* DEPLOYED with MODE divergence */
-    size_t type_diff_count = 0;   /* DEPLOYED with TYPE divergence */
-    size_t untracked_count = 0;   /* UNTRACKED state */
-
-    for (size_t i = 0; i < all_diverged_count; i++) {
-        const workspace_item_t *item = &all_diverged[i];
-
-        switch (item->state) {
-            case WORKSPACE_STATE_DEPLOYED:
-                if (item->divergence & DIVERGENCE_CONTENT) modified_count++;
-                if (item->divergence & DIVERGENCE_MODE) mode_diff_count++;
-                if (item->divergence & DIVERGENCE_TYPE) type_diff_count++;
-                break;
-            case WORKSPACE_STATE_DELETED:
-                deleted_count++;
-                break;
-            case WORKSPACE_STATE_UNTRACKED:
-                untracked_count++;
-                break;
-            case WORKSPACE_STATE_UNDEPLOYED:
-            case WORKSPACE_STATE_ORPHANED:
-            case WORKSPACE_STATE_RELEASED:
-                /* Not sync's concern - handled by apply command */
-                break;
-        }
-    }
-
-    size_t uncommitted_count = modified_count + deleted_count + mode_diff_count +
-                               type_diff_count + untracked_count;
-
-    /* Check for uncommitted changes (fatal unless --force or user confirms) */
-    if (uncommitted_count > 0 && !opts->force) {
-        if (config->strict_mode) {
-            /* Strict mode: Block with full diagnostic output */
-            output_section(out, "Workspace has uncommitted changes");
-            output_newline(out);
-
-            /* Show what's uncommitted */
-            if (modified_count > 0) {
-                output_info(out, "  %zu modified file%s", modified_count,
-                           modified_count == 1 ? "" : "s");
-            }
-            if (deleted_count > 0) {
-                output_info(out, "  %zu deleted file%s", deleted_count,
-                           deleted_count == 1 ? "" : "s");
-            }
-            if (mode_diff_count > 0) {
-                output_info(out, "  %zu file%s with permission changes", mode_diff_count,
-                           mode_diff_count == 1 ? "" : "s");
-            }
-            if (type_diff_count > 0) {
-                output_info(out, "  %zu file%s with type changes", type_diff_count,
-                           type_diff_count == 1 ? "" : "s");
-            }
-            if (untracked_count > 0) {
-                output_info(out, "  %zu new untracked file%s", untracked_count,
-                           untracked_count == 1 ? "" : "s");
-            }
-
-            output_newline(out);
-            output_info(out, "Sync requires a clean workspace to prevent data loss.");
-            output_newline(out);
-            output_info(out, "Next steps:");
-            output_info(out, "  1. Run 'dotta update' to commit these changes to profile branches");
-            output_info(out, "  2. Then run 'dotta sync' to synchronize with remote");
-            output_newline(out);
-            output_info(out, "Or run 'dotta sync --force' to sync without committing local changes.");
-            output_newline(out);
-
-            err = ERROR(ERR_VALIDATION,
-                        "Cannot sync with uncommitted changes (found %zu uncommitted file%s)",
-                        uncommitted_count, uncommitted_count == 1 ? "" : "s");
+    if (!opts->force) {
+        workspace_load_t ws_opts = {
+            .analyze_files = true,         /* Validate file state for uncommitted changes */
+            .analyze_orphans = false,      /* Orphans are apply's concern, not sync's */
+            .analyze_untracked = (config && config->auto_detect_new_files), /* Respect config */
+            .analyze_directories = false,  /* Directory metadata is apply's concern */
+            .analyze_encryption = false    /* Encryption is apply's concern */
+        };
+        /* Pass NULL for state - this is read-only validation, not a transactional operation.
+         * State transaction opened later for manifest updates after sync completes. */
+        err = workspace_load(repo, NULL, workspace_profiles, config, &ws_opts, &ws);
+        if (err) {
+            err = error_wrap(err, "Failed to load workspace");
             goto cleanup;
         }
 
-        /* Non-strict mode: Warn and require user confirmation
-         *
-         * The risk: syncing before committing local changes can hide remote conflicts.
-         * If remote has changes to the same files, pulling those changes updates the
-         * manifest. Then 'update' commits local changes ON TOP of remote's version,
-         * silently overwriting remote changes without merge/conflict detection.
-         *
-         * Safe workflow: update → sync → resolve any divergence explicitly
-         */
-        output_warning(out, "Workspace has %zu uncommitted change%s",
-                      uncommitted_count, uncommitted_count == 1 ? "" : "s");
+        /* Count all types of divergence */
+        size_t all_diverged_count = 0;
+        const workspace_item_t *all_diverged = workspace_get_all_diverged(ws, &all_diverged_count);
 
-        /* Show breakdown in verbose mode */
-        if (opts->verbose) {
-            if (modified_count > 0) {
-                output_info(out, "  %zu modified", modified_count);
-            }
-            if (deleted_count > 0) {
-                output_info(out, "  %zu deleted", deleted_count);
-            }
-            if (mode_diff_count > 0) {
-                output_info(out, "  %zu permission changes", mode_diff_count);
-            }
-            if (type_diff_count > 0) {
-                output_info(out, "  %zu type changes", type_diff_count);
-            }
-            if (untracked_count > 0) {
-                output_info(out, "  %zu untracked", untracked_count);
+        size_t modified_count = 0;    /* DEPLOYED with CONTENT divergence */
+        size_t deleted_count = 0;     /* DELETED state */
+        size_t mode_diff_count = 0;   /* DEPLOYED with MODE divergence */
+        size_t type_diff_count = 0;   /* DEPLOYED with TYPE divergence */
+        size_t untracked_count = 0;   /* UNTRACKED state */
+
+        for (size_t i = 0; i < all_diverged_count; i++) {
+            const workspace_item_t *item = &all_diverged[i];
+
+            switch (item->state) {
+                case WORKSPACE_STATE_DEPLOYED:
+                    if (item->divergence & DIVERGENCE_CONTENT) modified_count++;
+                    if (item->divergence & DIVERGENCE_MODE) mode_diff_count++;
+                    if (item->divergence & DIVERGENCE_TYPE) type_diff_count++;
+                    break;
+                case WORKSPACE_STATE_DELETED:
+                    deleted_count++;
+                    break;
+                case WORKSPACE_STATE_UNTRACKED:
+                    untracked_count++;
+                    break;
+                case WORKSPACE_STATE_UNDEPLOYED:
+                case WORKSPACE_STATE_ORPHANED:
+                case WORKSPACE_STATE_RELEASED:
+                    /* Not sync's concern - handled by apply command */
+                    break;
             }
         }
 
-        output_newline(out);
-        output_info(out, "Syncing before 'update' may hide remote conflicts.");
-        output_hint(out, "Remote changes to the same files will be silently overwritten");
-        output_hint_line(out, "when you run 'update'. Commit first to preserve conflict detection.");
-        output_newline(out);
+        size_t uncommitted_count = modified_count + deleted_count + mode_diff_count +
+                                   type_diff_count + untracked_count;
 
-        /* Confirmation with safe defaults:
-         * - Interactive: defaults to NO (user must explicitly type 'y')
-         * - Non-interactive (CI/CD): refuses automatically
-         */
-        if (!output_confirm_or_default(out, "Continue anyway?", false, false)) {
-            output_info(out, "Sync cancelled");
-            output_hint(out, "Run 'dotta update' first to commit local changes");
-            err = NULL;  /* User cancelled - clean exit, not an error */
-            goto cleanup;
+        if (uncommitted_count > 0) {
+            if (config->strict_mode) {
+                /* Strict mode: Block with full diagnostic output */
+                output_section(out, "Workspace has uncommitted changes");
+                output_newline(out);
+
+                /* Show what's uncommitted */
+                if (modified_count > 0) {
+                    output_info(out, "  %zu modified file%s", modified_count,
+                               modified_count == 1 ? "" : "s");
+                }
+                if (deleted_count > 0) {
+                    output_info(out, "  %zu deleted file%s", deleted_count,
+                               deleted_count == 1 ? "" : "s");
+                }
+                if (mode_diff_count > 0) {
+                    output_info(out, "  %zu file%s with permission changes", mode_diff_count,
+                               mode_diff_count == 1 ? "" : "s");
+                }
+                if (type_diff_count > 0) {
+                    output_info(out, "  %zu file%s with type changes", type_diff_count,
+                               type_diff_count == 1 ? "" : "s");
+                }
+                if (untracked_count > 0) {
+                    output_info(out, "  %zu new untracked file%s", untracked_count,
+                               untracked_count == 1 ? "" : "s");
+                }
+
+                output_newline(out);
+                output_info(out, "Sync requires a clean workspace to prevent data loss.");
+                output_newline(out);
+                output_info(out, "Next steps:");
+                output_info(out, "  1. Run 'dotta update' to commit these changes to profile branches");
+                output_info(out, "  2. Then run 'dotta sync' to synchronize with remote");
+                output_newline(out);
+                output_info(out, "Or run 'dotta sync --force' to sync without committing local changes.");
+                output_newline(out);
+
+                err = ERROR(ERR_VALIDATION,
+                            "Cannot sync with uncommitted changes (found %zu uncommitted file%s)",
+                            uncommitted_count, uncommitted_count == 1 ? "" : "s");
+                goto cleanup;
+            }
+
+            /* Non-strict mode: Warn and require user confirmation
+             *
+             * The risk: syncing before committing local changes can hide remote conflicts.
+             * If remote has changes to the same files, pulling those changes updates the
+             * manifest. Then 'update' commits local changes ON TOP of remote's version,
+             * silently overwriting remote changes without merge/conflict detection.
+             *
+             * Safe workflow: update → sync → resolve any divergence explicitly
+             */
+            output_warning(out, "Workspace has %zu uncommitted change%s",
+                          uncommitted_count, uncommitted_count == 1 ? "" : "s");
+
+            /* Show breakdown in verbose mode */
+            if (opts->verbose) {
+                if (modified_count > 0) {
+                    output_info(out, "  %zu modified", modified_count);
+                }
+                if (deleted_count > 0) {
+                    output_info(out, "  %zu deleted", deleted_count);
+                }
+                if (mode_diff_count > 0) {
+                    output_info(out, "  %zu permission changes", mode_diff_count);
+                }
+                if (type_diff_count > 0) {
+                    output_info(out, "  %zu type changes", type_diff_count);
+                }
+                if (untracked_count > 0) {
+                    output_info(out, "  %zu untracked", untracked_count);
+                }
+            }
+
+            output_newline(out);
+            output_info(out, "Syncing before 'update' may hide remote conflicts.");
+            output_hint(out, "Remote changes to the same files will be silently overwritten");
+            output_hint_line(out, "when you run 'update'. Commit first to preserve conflict detection.");
+            output_newline(out);
+
+            /* Confirmation with safe defaults:
+             * - Interactive: defaults to NO (user must explicitly type 'y')
+             * - Non-interactive (CI/CD): refuses automatically
+             */
+            if (!output_confirm_or_default(out, "Continue anyway?", false, false)) {
+                output_info(out, "Sync cancelled");
+                output_hint(out, "Run 'dotta update' first to commit local changes");
+                err = NULL;  /* User cancelled - clean exit, not an error */
+                goto cleanup;
+            }
+
+            /* User confirmed - proceed with sync */
+            if (opts->verbose) {
+                output_info(out, "Proceeding with uncommitted changes (user confirmed)");
+            }
+            output_newline(out);
         }
-
-        /* User confirmed - proceed with sync */
-        if (opts->verbose) {
-            output_info(out, "Proceeding with uncommitted changes (user confirmed)");
-        }
-        output_newline(out);
-    }
-
-    /* Exit early if dry run */
-    if (opts->dry_run) {
-        output_info(out, "Dry run: no changes made");
-        err = NULL;
-        goto cleanup;
-    }
-
-    /* Auto-detect remote */
-    err = upstream_detect_remote(repo, &remote_name);
-    if (err) {
-        goto cleanup;
     }
 
     /* Create transfer context for progress reporting and credentials */
@@ -1421,8 +1481,9 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     }
 
     /* Phase 1: Fetch enabled profiles from remote (use sync_profiles for operations) */
-    err = sync_fetch_enabled_profiles(repo, remote_name, sync_profiles,
-                                      results, out, opts->verbose, xfer);
+    err = sync_fetch_enabled_profiles(
+        repo, remote_name, sync_profiles, results, out, opts->verbose, xfer
+    );
     if (err) {
         goto cleanup;
     }
@@ -1430,6 +1491,45 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     /* Phase 2: Analyze branch states (use sync_profiles for operations) */
     err = sync_analyze_phase(repo, remote_name, sync_profiles, results, out);
     if (err) {
+        goto cleanup;
+    }
+
+    /* Dry run: display analysis and exit without executing push/pull */
+    if (opts->dry_run) {
+        output_section(out, "Dry run analysis");
+        for (size_t i = 0; i < results->count; i++) {
+            profile_sync_result_t *r = &results->profiles[i];
+            if (r->failed) {
+                output_error(out, "  ✗ %s: %s", r->profile_name, r->error_message);
+                continue;
+            }
+            switch (r->state) {
+                case UPSTREAM_UP_TO_DATE:
+                    output_info(out, "  = %s: up-to-date", r->profile_name);
+                    break;
+                case UPSTREAM_LOCAL_AHEAD:
+                    output_info(out, "  ↑ %s: %zu commit%s to push",
+                               r->profile_name, r->ahead, r->ahead == 1 ? "" : "s");
+                    break;
+                case UPSTREAM_REMOTE_AHEAD:
+                    output_info(out, "  ↓ %s: %zu commit%s to pull",
+                               r->profile_name, r->behind, r->behind == 1 ? "" : "s");
+                    break;
+                case UPSTREAM_DIVERGED:
+                    output_warning(out, "  ↕ %s: diverged (%zu local, %zu remote)",
+                               r->profile_name, r->ahead, r->behind);
+                    break;
+                case UPSTREAM_NO_REMOTE:
+                    output_info(out, "  • %s: local only (no remote branch)", r->profile_name);
+                    break;
+                case UPSTREAM_UNKNOWN:
+                    output_warning(out, "  ? %s: unknown state", r->profile_name);
+                    break;
+            }
+        }
+        output_newline(out);
+        output_info(out, "Dry run: no changes made");
+        err = NULL;
         goto cleanup;
     }
 
@@ -1476,9 +1576,11 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     }
 
     /* Phase 3: Sync with remote (push/pull/divergence handling) */
-    err = sync_push_phase(repo, remote_name, results, out, opts->verbose,
-                          auto_pull, diverged_strategy, xfer,
-                          config->confirm_destructive, state, enabled_profiles, ws);
+    bool no_push = opts->no_push;
+    err = sync_push_phase(
+        repo, remote_name, results, out, opts->verbose, auto_pull, opts->no_pull, no_push,
+        diverged_strategy, xfer, config->confirm_destructive, state, enabled_profiles
+    );
     if (err) {
         goto cleanup;
     }
@@ -1495,55 +1597,55 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
 
     if (results->pushed_count > 0) {
         output_success(out, "%zu profile%s pushed",
-                      results->pushed_count,
-                      results->pushed_count == 1 ? "" : "s");
+                       results->pushed_count,
+                       results->pushed_count == 1 ? "" : "s");
+    }
+
+    if (results->pulled_count > 0) {
+        output_success(out, "%zu profile%s updated from remote",
+                       results->pulled_count,
+                       results->pulled_count == 1 ? "" : "s");
     }
 
     if (results->up_to_date_count > 0) {
         output_info(out, "%zu profile%s already up-to-date",
-                   results->up_to_date_count,
-                   results->up_to_date_count == 1 ? "" : "s");
+                    results->up_to_date_count,
+                    results->up_to_date_count == 1 ? "" : "s");
     }
 
     if (results->need_pull_count > 0) {
         output_warning(out, "%zu profile%s need pull",
-                      results->need_pull_count,
-                      results->need_pull_count == 1 ? "" : "s");
+                       results->need_pull_count,
+                       results->need_pull_count == 1 ? "" : "s");
     }
 
     if (results->diverged_count > 0) {
         output_warning(out, "%zu profile%s diverged (manual resolution needed)",
-                      results->diverged_count,
-                      results->diverged_count == 1 ? "" : "s");
+                       results->diverged_count,
+                       results->diverged_count == 1 ? "" : "s");
     }
 
     if (results->failed_count > 0) {
         output_error(out, "%zu profile%s failed",
-                    results->failed_count,
-                    results->failed_count == 1 ? "" : "s");
+                     results->failed_count,
+                     results->failed_count == 1 ? "" : "s");
     }
 
     if (results->fetch_failed_count > 0) {
         output_warning(out, "%zu fetch operation%s failed",
-                      results->fetch_failed_count,
-                      results->fetch_failed_count == 1 ? "" : "s");
+                       results->fetch_failed_count,
+                       results->fetch_failed_count == 1 ? "" : "s");
     }
 
     if (results->auth_failed_count > 0) {
         output_error(out, "%zu authentication failure%s",
-                    results->auth_failed_count,
-                    results->auth_failed_count == 1 ? "" : "s");
+                     results->auth_failed_count,
+                     results->auth_failed_count == 1 ? "" : "s");
     }
 
-    /* Provide guidance on next steps if profiles were updated */
-    size_t updated_count = results->pushed_count + (sync_profiles->count -
-                                                    results->need_pull_count -
-                                                    results->diverged_count -
-                                                    results->failed_count -
-                                                    results->up_to_date_count);
-    if (updated_count > 0 && results->failed_count == 0) {
+    /* Provide guidance on next steps if remote content was pulled/resolved */
+    if (results->pulled_count > 0) {
         output_newline(out);
-        output_info(out, "Manifest updated with changes from remote");
         output_hint(out, "Run 'dotta status' to review staged changes");
         output_hint(out, "Run 'dotta apply' to deploy changes to filesystem");
     }

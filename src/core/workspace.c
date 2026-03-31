@@ -231,7 +231,6 @@ static error_t *workspace_create_empty(
  * @param expected_mode Expected permission mode (0 = skip mode check, no metadata tracked)
  * @param expected_owner Expected owner username (NULL = skip owner check)
  * @param expected_group Expected group name (NULL = skip group check)
- * @param fs_path Filesystem path to check (must not be NULL, for error messages)
  * @param st File stat data (must not be NULL, pre-captured by caller)
  * @param out_mode_differs Output flag for mode divergence (must not be NULL)
  * @param out_ownership_differs Output flag for ownership divergence (must not be NULL)
@@ -1253,9 +1252,10 @@ static divergence_type_t compute_orphan_divergence(
 
         if (check_err) {
             /* Metadata check failed (rare: getpwuid/getgrgid failure)
-             * Treat as unverified rather than crashing */
+             * Preserve already-accumulated divergence (content/type) while
+             * signaling that metadata verification was incomplete. */
             error_free(check_err);
-            return DIVERGENCE_UNVERIFIED;
+            return divergence | DIVERGENCE_UNVERIFIED;
         }
 
         /* Accumulate metadata divergence flags
@@ -2198,6 +2198,11 @@ static error_t *analyze_encryption_policy_mismatch(
         size_t blob_size = (size_t)git_blob_rawsize(blob);
         is_encrypted = encryption_is_encrypted(blob_data, blob_size);
 
+        /* Free blob immediately — only needed for magic header check above.
+         * Prevents leak if future code adds early returns in metadata block. */
+        git_blob_free(blob);
+        blob = NULL;    /* Poison to catch use-after-free during development */
+
         /* Tier 2: Cross-validate with metadata (defense in depth) */
         const metadata_t *metadata = ws_get_metadata(ws, profile_name);
         if (metadata) {
@@ -2235,8 +2240,6 @@ static error_t *analyze_encryption_policy_mismatch(
 
             error_free(lookup_err);
         }
-
-        git_blob_free(blob);
 
         /* Policy mismatch: should be encrypted but isn't */
         if (should_auto_encrypt && !is_encrypted) {
@@ -2276,6 +2279,9 @@ static error_t *analyze_encryption_policy_mismatch(
                 workspace_state_t item_state = in_state ?
                                WORKSPACE_STATE_DEPLOYED : WORKSPACE_STATE_UNDEPLOYED;
 
+                struct stat enc_stat;
+                bool on_filesystem = (lstat(manifest_entry->filesystem_path, &enc_stat) == 0);
+
                 err = workspace_add_diverged(
                     ws,
                     manifest_entry->filesystem_path,
@@ -2285,7 +2291,7 @@ static error_t *analyze_encryption_policy_mismatch(
                     item_state,            /* State: deployed or undeployed */
                     DIVERGENCE_ENCRYPTION, /* Divergence: encryption policy violated */
                     WORKSPACE_ITEM_FILE,
-                    false, /* on_filesystem (unknown, encryption check is in-repo only) */
+                    on_filesystem,
                     true,                  /* profile_enabled */
                     false                  /* No profile change */
                 );
@@ -2456,6 +2462,10 @@ static error_t *patch_entry_from_fresh(
     const metadata_t *metadata
 ) {
     /* Extract blob OID from fresh tree entry */
+    if (!fresh_entry->entry) {
+        return ERROR(ERR_INTERNAL, "Fresh entry has no tree entry for '%s'",
+                     fresh_entry->storage_path);
+    }
     const git_oid *blob_oid = git_tree_entry_id(fresh_entry->entry);
     if (!blob_oid) {
         return ERROR(ERR_INTERNAL, "Fresh tree entry has no OID for '%s'",
@@ -2510,33 +2520,38 @@ static error_t *patch_entry_from_fresh(
         }
     }
 
-    /* Replace VWD cache fields — free old strings, allocate new */
-    free(vwd_entry->git_oid);
-    vwd_entry->git_oid = strdup(head_oid_hex);
-    if (!vwd_entry->git_oid) {
-        return ERROR(ERR_MEMORY, "Failed to allocate patched git_oid");
+    /* Allocate all new strings before modifying the entry. This
+     * ensures the entry stays consistent if any allocation fails. */
+    char *dup_git_oid = strdup(head_oid_hex);
+    char *dup_blob_oid = strdup(blob_hex);
+    char *dup_owner = new_owner ? strdup(new_owner) : NULL;
+    char *dup_group = new_group ? strdup(new_group) : NULL;
+
+    if (!dup_git_oid || !dup_blob_oid ||
+        (new_owner && !dup_owner) || (new_group && !dup_group)) {
+        free(dup_git_oid);
+        free(dup_blob_oid);
+        free(dup_owner);
+        free(dup_group);
+        return ERROR(ERR_MEMORY, "Failed to allocate patched fields for '%s'",
+                     fresh_entry->storage_path);
     }
 
+    /* Swap — free old strings, assign pre-allocated replacements */
+    free(vwd_entry->git_oid);
+    vwd_entry->git_oid = dup_git_oid;
+
     free(vwd_entry->blob_oid);
-    vwd_entry->blob_oid = strdup(blob_hex);
-    if (!vwd_entry->blob_oid) {
-        return ERROR(ERR_MEMORY, "Failed to allocate patched blob_oid");
-    }
+    vwd_entry->blob_oid = dup_blob_oid;
 
     vwd_entry->type = new_type;
     vwd_entry->mode = new_mode;
 
     free(vwd_entry->owner);
-    vwd_entry->owner = new_owner ? strdup(new_owner) : NULL;
-    if (new_owner && !vwd_entry->owner) {
-        return ERROR(ERR_MEMORY, "Failed to allocate patched owner");
-    }
+    vwd_entry->owner = dup_owner;
 
     free(vwd_entry->group);
-    vwd_entry->group = new_group ? strdup(new_group) : NULL;
-    if (new_group && !vwd_entry->group) {
-        return ERROR(ERR_MEMORY, "Failed to allocate patched group");
-    }
+    vwd_entry->group = dup_group;
 
     vwd_entry->encrypted = new_encrypted;
 
@@ -2823,6 +2838,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                     error_t *track_err = hashmap_set(ws->stale_paths,
                                                      entry->filesystem_path, (void *)(uintptr_t)1);
                     if (track_err) {
+                        manifest_idx++;  /* entry populated — track for cleanup */
                         err = track_err;
                         goto cleanup;
                     }
@@ -2885,21 +2901,19 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             }
         }
 
+        /* Track entry for cleanup — must precede any further fallible operations
+         * so the centralized cleanup loop (j < manifest_idx) covers this entry. */
+        manifest_idx++;
+
         /* Store index in hashmap (offset by 1 to distinguish from NULL).
-         * We cast the index through uintptr_t to store it as a void pointer.
-         * This is safe because:
-         * 1. Array indices are always much smaller than SIZE_MAX
-         * 2. uintptr_t can hold any pointer value (by definition)
-         * 3. We never dereference these "pointers" - they're just tagged integers
-         */
-        err = hashmap_set(path_map, entry->filesystem_path,
-                         (void *)(uintptr_t)(manifest_idx + 1));
+         * manifest_idx already holds the 1-based value after the increment above.
+         * The cast through uintptr_t is safe: indices are much smaller than
+         * SIZE_MAX, and we never dereference these "pointers". */
+        err = hashmap_set(path_map, entry->filesystem_path, (void *)(uintptr_t)(manifest_idx));
         if (err) {
             err = error_wrap(err, "Failed to populate manifest index");
             goto cleanup;
         }
-
-        manifest_idx++;
     }
 
     /* Transfer index ownership to manifest */

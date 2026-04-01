@@ -19,12 +19,6 @@ static bool match_pattern_internal(
     bool is_basename_match
 );
 
-static bool match_doublestar_pattern(
-    const char *pattern,
-    const char *path,
-    match_flags_t flags
-);
-
 /**
  * Extract basename from path
  */
@@ -43,12 +37,9 @@ const char *match_basename(const char *path) {
 /**
  * Find valid recursive glob in pattern
  *
- * A valid recursive glob is a sequence of 2+ asterisks at a component boundary:
+ * Valid recursive glob - sequence of 2+ asterisks at a component boundary:
  *   - Preceded by '/' or at start of pattern
  *   - Followed by '/' or at end of pattern
- *
- * Valid:   "**", "***", "** /foo", "*** /foo", "foo/ **"  (no spaces in real patterns)
- * Invalid: "a**b", "test_**", "**suffix" (not at component boundary)
  */
 const char *match_has_doublestar(const char *pattern) {
     if (!pattern) {
@@ -171,14 +162,12 @@ static const char *strip_trailing_slash(
  *
  * @param pattern Pattern to match
  * @param path Path to test
- * @param flags Match flags
  * @param is_basename True if path is a basename (no '/' characters)
  * @return true if pattern matches path
  */
 static bool match_fnmatch(
     const char *pattern,
     const char *path,
-    match_flags_t flags,
     bool is_basename
 ) {
     if (!pattern || !path) {
@@ -201,45 +190,88 @@ static bool match_fnmatch(
         fnm_flags |= FNM_PATHNAME;
     }
 
-    /* Case folding */
-    if (flags & MATCH_CASEFOLD) {
-#ifdef FNM_CASEFOLD
-        fnm_flags |= FNM_CASEFOLD;
-#endif
+    return fnmatch(pattern, path, fnm_flags) == 0;
+}
+
+/**
+ * Match a glob pattern against a path prefix at equivalent component depth
+ *
+ * Counts the depth (number of components) in the pattern, extracts the same
+ * number of leading components from the path, and compares them using fnmatch.
+ * This correctly handles glob metacharacters (*, ?, [...]) in the prefix.
+ *
+ * @param pattern Prefix pattern (must not be NULL or empty)
+ * @param path Path to match against (must not be NULL)
+ * @return Pointer to boundary position in path (/ or \0), or NULL on no match
+ */
+static const char *match_path_prefix(
+    const char *pattern,
+    const char *path
+) {
+    if (!pattern || !*pattern || !path) {
+        return NULL;
     }
 
-    return fnmatch(pattern, path, fnm_flags) == 0;
+    /* Count slashes in pattern to determine component depth */
+    size_t n_slashes = 0;
+    for (const char *p = pattern; *p; p++) {
+        if (*p == '/') n_slashes++;
+    }
+
+    /* Walk path to the boundary after the same number of components.
+     * Break at the (n_slashes + 1)-th slash, which separates the prefix
+     * portion from the rest of the path. */
+    const char *end = path;
+    size_t seen = 0;
+    while (*end) {
+        if (*end == '/') {
+            seen++;
+            if (seen > n_slashes) break;
+        }
+        end++;
+    }
+
+    /* Path must have at least as many components as the pattern */
+    if (seen < n_slashes) {
+        return NULL;
+    }
+
+    /* Extract path prefix up to boundary */
+    size_t len = (size_t)(end - path);
+    char buf[4096];
+    if (len >= sizeof(buf)) {
+        return NULL;
+    }
+    memcpy(buf, path, len);
+    buf[len] = '\0';
+
+    /* Compare using fnmatch (handles glob characters correctly) */
+    if (!match_fnmatch(pattern, buf, false)) {
+        return NULL;
+    }
+
+    return end;
 }
 
 /**
  * Match double-star pattern
  *
  * Handles patterns containing ** (recursive glob).
- * Examples:
- *   - Double-star/foo matches "foo", "a/foo", "a/b/foo"
- *   - foo/double-star matches "foo/bar", "foo/a/b/c"
- *   - Recursive patterns match at multiple levels
  *
  * Algorithm:
  *   1. Split pattern at ** boundaries
- *   2. Match prefix before **
+ *   2. Match prefix before ** using fnmatch (via match_path_prefix)
  *   3. Try matching suffix at all possible depths
  *   4. Handle multiple ** by recursion
  */
 static bool match_doublestar_pattern(
     const char *pattern,
     const char *path,
-    match_flags_t flags
+    match_flags_t flags,
+    const char *doublestar
 ) {
     if (!pattern || !path) {
         return false;
-    }
-
-    /* Find valid recursive glob ** in pattern */
-    const char *doublestar = match_has_doublestar(pattern);
-    if (!doublestar) {
-        /* No valid ** - fall back to fnmatch (handles ** as regular wildcard) */
-        return match_fnmatch(pattern, path, flags, false);
     }
 
     /* Split pattern into prefix, **, and suffix */
@@ -261,30 +293,30 @@ static bool match_doublestar_pattern(
         }
     }
 
-    /* Extract suffix (after **) */
-    const char *suffix = doublestar + 2; /* Skip ** */
+    /* Extract suffix (after **) - skip ALL consecutive asterisks (*** = **) */
+    const char *suffix = doublestar;
+    while (*suffix == '*') {
+        suffix++;
+    }
 
     /* Skip leading / after ** */
     while (*suffix == '/') {
         suffix++;
     }
 
-    /* Special case: ** at end (e.g., foo/double-star) - matches everything under prefix */
+    /* Special case: ** at end - matches everything under prefix */
     if (*suffix == '\0') {
         if (prefix_len == 0) {
             /* Pattern is just "**" - matches everything */
             return true;
         }
 
-        /* Check if path starts with prefix followed by "/" */
-        if (strncmp(path, prefix, prefix_len) == 0 &&
-            path[prefix_len] == '/') {
-            return true;
-        }
-        return false;
+        /* Prefix must match path prefix, with more path following */
+        const char *boundary = match_path_prefix(prefix, path);
+        return boundary && *boundary == '/';
     }
 
-    /* Special case: ** at start (e.g., double-star/foo) - matches at any depth */
+    /* Special case: ** at start - matches at any depth */
     if (prefix_len == 0) {
         /* Try matching suffix at current path */
         if (match_pattern_internal(suffix, path, flags, false)) {
@@ -302,23 +334,21 @@ static bool match_doublestar_pattern(
         return false;
     }
 
-    /* General case: prefix with double-star followed by suffix */
+    /* General case: prefix + ** + suffix */
 
-    /* Path must start with prefix */
-    if (strncmp(path, prefix, prefix_len) != 0) {
+    /* Match prefix against path using fnmatch */
+    const char *boundary = match_path_prefix(prefix, path);
+    if (!boundary) {
         return false;
     }
 
-    /* After prefix, must be end or / */
-    if (path[prefix_len] != '\0' && path[prefix_len] != '/') {
+    /* After prefix, must be / or end */
+    if (*boundary != '\0' && *boundary != '/') {
         return false;
     }
 
     /* Start search after prefix */
-    const char *search_start = path + prefix_len;
-    if (*search_start == '/') {
-        search_start++; /* Skip the / */
-    }
+    const char *search_start = (*boundary == '/') ? boundary + 1 : boundary;
 
     /* Try matching suffix at all depths under prefix */
 
@@ -371,27 +401,18 @@ static bool match_pattern_internal(
         return false;
     }
 
-    /* Optimization: Skip ** processing for basename matches
-     *
-     * Basenames never contain '/' characters by definition (they're the last
-     * path component). Patterns with ** are designed to match across directory
-     * levels, which is meaningless for basenames.
-     *
-     * Example:
-     *   Pattern: double-star followed by .log extension
-     *   Basename: "app.log"
-     *   Result: No match (double-star requires directory structure)
-     *
-     * This optimization avoids the expensive recursive match_doublestar_pattern()
-     * call when we know it cannot possibly match.
-     */
-    if (is_basename_match && match_has_doublestar(pattern)) {
+    /* Check once for valid ** in pattern */
+    const char *doublestar = match_has_doublestar(pattern);
+
+    /* Optimization: basenames never contain '/' so ** (which matches across
+     * directory levels) is meaningless. Skip the expensive recursive call. */
+    if (is_basename_match && doublestar) {
         return false;
     }
 
     /* Handle ** patterns (recursive glob) */
-    if ((flags & MATCH_DOUBLESTAR) && match_has_doublestar(pattern)) {
-        return match_doublestar_pattern(pattern, path, flags);
+    if ((flags & MATCH_DOUBLESTAR) && doublestar) {
+        return match_doublestar_pattern(pattern, path, flags, doublestar);
     }
 
     /* Use fnmatch for simple patterns
@@ -400,7 +421,7 @@ static bool match_pattern_internal(
      * - If true, path is a basename (no '/'), so FNM_PATHNAME is unnecessary
      * - If false, path may contain '/', so use FNM_PATHNAME
      */
-    return match_fnmatch(pattern, path, flags, is_basename_match);
+    return match_fnmatch(pattern, path, is_basename_match);
 }
 
 /**
@@ -415,6 +436,11 @@ bool match_pattern(const char *pattern, const char *path, match_flags_t flags) {
     if (*pattern == '\0') {
         return false;
     }
+
+    /* Track explicit anchoring before stripping.
+     * A leading / means the pattern is anchored to root and must NOT
+     * fall back to basename matching, even if the stripped pattern has no /. */
+    bool is_anchored = (*pattern == '/');
 
     /* Strip leading '/' from pattern (paths are relative) */
     pattern = strip_leading_slash(pattern);
@@ -452,20 +478,21 @@ bool match_pattern(const char *pattern, const char *path, match_flags_t flags) {
         return false;
     }
 
-    /* Extract basename for fallback matching */
-    const char *basename = match_basename(normalized_path);
-
-    /* Determine if this is a basename-only pattern */
-    bool is_basename_pattern = match_is_basename_pattern(pattern);
+    /* Determine if this is a basename-only pattern.
+     * A pattern is basename-only when it has no / AND was not explicitly anchored
+     * with a leading /. Basename-only patterns match at any depth. */
+    bool is_basename_pattern = !is_anchored && match_is_basename_pattern(pattern);
 
     /* Try matching full path (anchored) */
     if (match_pattern_internal(pattern, normalized_path, flags, false)) {
         return true;
     }
 
-    /* Try matching basename (if pattern has no /) */
+    /* Extract basename for fallback matching */
+    const char *basename = match_basename(normalized_path);
+
+    /* Try matching basename (if basename-only pattern and path has depth) */
     if (is_basename_pattern && basename != normalized_path) {
-        /* Pattern has no / - try matching basename */
         if (match_pattern_internal(pattern, basename, flags, true)) {
             return true;
         }
@@ -473,19 +500,47 @@ bool match_pattern(const char *pattern, const char *path, match_flags_t flags) {
 
     /* Directory prefix matching (gitignore-style)
      *
-     * Pattern "foo" matches "foo/bar/baz"
-     * Pattern ".config" matches ".config/fish/config.fish"
+     * If a pattern matches a directory component, everything under that
+     * directory also matches. This works differently for each pattern type:
      *
-     * This works for both basename-only patterns and anchored patterns:
-     * - Basename pattern ".vim" matches ".vim/vimrc"
-     * - Anchored pattern ".config/fish" matches ".config/fish/config.fish"
+     * Basename patterns: try against each intermediate component at any depth
+     *   ".vim" matches "home/.vim/vimrc" (matches .vim component)
+     *   "*.d" matches "home/conf.d/something" (glob against conf.d)
      *
-     * Check if normalized_path starts with pattern followed by /
+     * Anchored patterns: try against each path prefix at / boundaries
+     *   ".config/fish" matches ".config/fish/config.fish"
+     *   "*.d/conf" matches "test.d/conf/file" (glob in prefix)
      */
-    size_t pattern_len = strlen(pattern);
-    if (strncmp(pattern, normalized_path, pattern_len) == 0 &&
-        normalized_path[pattern_len] == '/') {
-        return true;
+    const char *comp_start = normalized_path;
+    while (*comp_start) {
+        const char *slash = strchr(comp_start, '/');
+        if (!slash) break; /* Last component is not a directory prefix */
+
+        if (is_basename_pattern) {
+            /* Try pattern against this individual component */
+            size_t comp_len = (size_t)(slash - comp_start);
+            char comp[4096];
+            if (comp_len < sizeof(comp)) {
+                memcpy(comp, comp_start, comp_len);
+                comp[comp_len] = '\0';
+                if (match_pattern_internal(pattern, comp, flags, true)) {
+                    return true;
+                }
+            }
+        } else {
+            /* Try pattern against path prefix up to this boundary */
+            size_t plen = (size_t)(slash - normalized_path);
+            char pbuf[4096];
+            if (plen < sizeof(pbuf)) {
+                memcpy(pbuf, normalized_path, plen);
+                pbuf[plen] = '\0';
+                if (match_pattern_internal(pattern, pbuf, flags, false)) {
+                    return true;
+                }
+            }
+        }
+
+        comp_start = slash + 1;
     }
 
     return false;

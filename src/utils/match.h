@@ -58,7 +58,7 @@
  *   - Patterns with ** at boundaries handle zero-length matches
  *   - ** not at component boundary: handled by fnmatch as regular wildcard
  *   - Proper escaping in character classes
- *   - Case-sensitive matching by default (configurable)
+ *   - Case-sensitive matching
  *
  * Performance Notes:
  *   - Simple patterns (no **) use fast fnmatch()
@@ -80,8 +80,7 @@ typedef enum {
     MATCH_DEFAULT     = 0,        /* Default behavior */
     MATCH_PATHNAME    = 1 << 0,   /* Wildcards don't match / (always on for *) */
     MATCH_DIRECTORY   = 1 << 1,   /* Path is a directory (enables trailing /) */
-    MATCH_CASEFOLD    = 1 << 2,   /* Case-insensitive matching */
-    MATCH_DOUBLESTAR  = 1 << 3,   /* Enable ** recursive glob support */
+    MATCH_DOUBLESTAR  = 1 << 2,   /* Enable ** recursive glob support */
 } match_flags_t;
 
 /**
@@ -109,7 +108,6 @@ typedef enum {
  * Flags:
  *   - MATCH_PATHNAME: Wildcards (star and question mark) do not match / (default for star)
  *   - MATCH_DIRECTORY: Path is a directory (enables trailing / matching)
- *   - MATCH_CASEFOLD: Case-insensitive matching
  *   - MATCH_DOUBLESTAR: Enable double-star recursive glob (recommended)
  *
  * @param pattern Glob pattern (must not be NULL)
@@ -160,16 +158,20 @@ const char *match_has_doublestar(const char *pattern);
 /**
  * Check if pattern is basename-only (no /)
  *
- * Utility function to detect if a pattern matches basename at any depth.
- * Basename-only patterns are those without any '/' character.
+ * Utility function to detect if a pattern has no path structure.
+ * Patterns without '/' (after stripping one leading '/') are basename-only.
+ *
+ * Note: This function does NOT account for explicit anchoring via leading '/'.
+ * The caller (match_pattern) tracks anchoring separately before stripping.
+ * This function should be called on already-normalized patterns.
  *
  * Examples:
- *   "*.log" -> true (basename-only)
- *   ".ssh/id_*" -> false (has /, anchored)
- *   "/foo" -> false (has /, anchored even after stripping leading /)
+ *   "*.log"     -> true  (no path structure)
+ *   ".ssh/id_*" -> false (has /, path structure)
+ *   "foo/bar"   -> false (has /, path structure)
  *
  * @param pattern Pattern to check (must not be NULL)
- * @return true if pattern is basename-only, false otherwise
+ * @return true if pattern has no '/' after optional leading '/' strip
  */
 bool match_is_basename_pattern(const char *pattern);
 

@@ -93,12 +93,20 @@ bool privilege_paths_require_root(const char **storage_paths, size_t count) {
  * but NOT /home/username/foo. The path can equal the parent (boundary
  * char is '\0').
  *
+ * Handles trailing slashes on parent (e.g., "/home/user/" treated
+ * identically to "/home/user").
+ *
  * @param path Path to check (must not be NULL)
  * @param parent Candidate parent directory (must not be NULL)
  * @return true if path is under (or equal to) parent
  */
 static bool is_path_under(const char *path, const char *parent) {
     size_t parent_len = strlen(parent);
+
+    /* Strip trailing slashes from parent for consistent boundary checking */
+    while (parent_len > 1 && parent[parent_len - 1] == '/') {
+        parent_len--;
+    }
 
     if (strncmp(path, parent, parent_len) != 0) {
         return false;
@@ -166,6 +174,11 @@ bool privilege_custom_prefix_needs_elevation(const char *custom_prefix) {
 
 /**
  * Check if filesystem path is under actual user's home (sudo-aware)
+ *
+ * Resolves symlinks on both sides to avoid false negatives on systems
+ * where home or path components go through symlinks (e.g., macOS
+ * /var → /private/var). Matches the canonicalization approach used
+ * by privilege_custom_prefix_needs_elevation().
  */
 bool privilege_path_is_under_home(const char *filesystem_path) {
     if (!filesystem_path || !privilege_is_sudo()) {
@@ -178,8 +191,9 @@ bool privilege_path_is_under_home(const char *filesystem_path) {
     }
 
     char *endptr;
+    errno = 0;
     long parsed_uid = strtol(sudo_uid_str, &endptr, 10);
-    if (*endptr != '\0' || parsed_uid < 0) {
+    if (errno != 0 || *endptr != '\0' || parsed_uid < 0) {
         return false;
     }
 
@@ -188,7 +202,38 @@ bool privilege_path_is_under_home(const char *filesystem_path) {
         return false;
     }
 
-    return is_path_under(filesystem_path, pw->pw_dir);
+    /* Canonicalize both paths to resolve symlinks, then check all
+     * valid combinations of raw/canonical forms (same approach as
+     * privilege_custom_prefix_needs_elevation). */
+    char *home_canonical = NULL;
+    char *path_canonical = NULL;
+
+    error_t *h_err = fs_canonicalize_path(pw->pw_dir, &home_canonical);
+    if (h_err) {
+        error_free(h_err);
+    }
+
+    error_t *p_err = fs_canonicalize_path(filesystem_path, &path_canonical);
+    if (p_err) {
+        error_free(p_err);
+    }
+
+    const char *homes[] = { pw->pw_dir, home_canonical };
+    const char *paths[] = { filesystem_path, path_canonical };
+
+    bool under_home = false;
+    for (int h = 0; h < 2 && !under_home; h++) {
+        if (!homes[h]) continue;
+        for (int p = 0; p < 2 && !under_home; p++) {
+            if (!paths[p]) continue;
+            under_home = is_path_under(paths[p], homes[h]);
+        }
+    }
+
+    free(home_canonical);
+    free(path_canonical);
+
+    return under_home;
 }
 
 /**
@@ -236,7 +281,7 @@ error_t *privilege_get_actual_user(uid_t *uid, gid_t *gid) {
         long parsed_uid = strtol(sudo_uid_str, &endptr, 10);
         if (errno != 0 || *endptr != '\0' || parsed_uid < 0) {
             return ERROR(ERR_INVALID_ARG,
-                        "Invalid SUDO_UID environment variable: %s", sudo_uid_str);
+                "Invalid SUDO_UID environment variable: %s", sudo_uid_str);
         }
 
         /* Parse GID */
@@ -244,14 +289,14 @@ error_t *privilege_get_actual_user(uid_t *uid, gid_t *gid) {
         long parsed_gid = strtol(sudo_gid_str, &endptr, 10);
         if (errno != 0 || *endptr != '\0' || parsed_gid < 0) {
             return ERROR(ERR_INVALID_ARG,
-                        "Invalid SUDO_GID environment variable: %s", sudo_gid_str);
+                "Invalid SUDO_GID environment variable: %s", sudo_gid_str);
         }
 
         /* Validate that the UID actually exists in the system */
         struct passwd *pw = getpwuid((uid_t)parsed_uid);
         if (!pw) {
             return ERROR(ERR_NOT_FOUND,
-                        "User with UID %ld (from SUDO_UID) not found in system", parsed_uid);
+                "User with UID %ld (from SUDO_UID) not found in system", parsed_uid);
         }
 
         *uid = (uid_t)parsed_uid;
@@ -266,58 +311,59 @@ error_t *privilege_get_actual_user(uid_t *uid, gid_t *gid) {
 }
 
 /**
- * Collect all paths that require root privileges
+ * Collect paths that require elevated privileges
  *
- * Allocates a new array containing pointers to root/ paths from the input.
- * Does NOT duplicate the path strings themselves - just stores pointers.
+ * Filters input to paths with root/ or custom/ prefix (both may carry
+ * ownership metadata requiring root). Allocates a new array of pointers;
+ * does NOT duplicate the path strings themselves.
  *
  * @param all_paths Input array of all paths
  * @param count Number of paths in input array
- * @param root_paths_out Output array of root/ paths (caller must free)
- * @param root_count_out Number of root/ paths found
+ * @param priv_paths_out Output array of privileged paths (caller must free)
+ * @param priv_count_out Number of privileged paths found
  * @return Error or NULL on success
  */
-static error_t *collect_root_paths(
+static error_t *collect_privileged_paths(
     const char **all_paths,
     size_t count,
-    const char ***root_paths_out,
-    size_t *root_count_out
+    const char ***priv_paths_out,
+    size_t *priv_count_out
 ) {
     CHECK_NULL(all_paths);
-    CHECK_NULL(root_paths_out);
-    CHECK_NULL(root_count_out);
+    CHECK_NULL(priv_paths_out);
+    CHECK_NULL(priv_count_out);
 
-    /* Count root/ paths first (two-pass for cleaner code) */
-    size_t root_count = 0;
+    /* Count privileged paths first (two-pass for cleaner code) */
+    size_t priv_count = 0;
     for (size_t i = 0; i < count; i++) {
         if (privilege_path_requires_root(all_paths[i])) {
-            root_count++;
+            priv_count++;
         }
     }
 
-    /* If no root paths, return empty result */
-    if (root_count == 0) {
-        *root_paths_out = NULL;
-        *root_count_out = 0;
+    /* If no privileged paths, return empty result */
+    if (priv_count == 0) {
+        *priv_paths_out = NULL;
+        *priv_count_out = 0;
         return NULL;
     }
 
-    /* Allocate array for root path pointers */
-    const char **root_paths = calloc(root_count, sizeof(char *));
-    if (!root_paths) {
-        return ERROR(ERR_MEMORY, "Failed to allocate root paths array");
+    /* Allocate array for privileged path pointers */
+    const char **priv_paths = calloc(priv_count, sizeof(char *));
+    if (!priv_paths) {
+        return ERROR(ERR_MEMORY, "Failed to allocate privileged paths array");
     }
 
-    /* Populate array with pointers to root/ paths */
+    /* Populate array */
     size_t idx = 0;
     for (size_t i = 0; i < count; i++) {
         if (privilege_path_requires_root(all_paths[i])) {
-            root_paths[idx++] = all_paths[i];
+            priv_paths[idx++] = all_paths[i];
         }
     }
 
-    *root_paths_out = root_paths;
-    *root_count_out = root_count;
+    *priv_paths_out = priv_paths;
+    *priv_count_out = priv_count;
     return NULL;
 }
 
@@ -328,14 +374,14 @@ static error_t *collect_root_paths(
  * first 10 files to avoid overwhelming the user.
  *
  * @param operation Operation name (e.g., "add", "update")
- * @param root_paths Array of paths requiring root
- * @param root_count Number of paths
+ * @param priv_paths Array of paths requiring root
+ * @param priv_count Number of paths
  * @param out Output context
  */
 static void display_privilege_requirement(
     const char *operation,
-    const char **root_paths,
-    size_t root_count,
+    const char **priv_paths,
+    size_t priv_count,
     output_ctx_t *out
 ) {
     /* Header */
@@ -347,18 +393,20 @@ static void display_privilege_requirement(
     /* List files requiring root (limit to 10 for readability) */
     output_print(out, OUTPUT_NORMAL, "\nFiles requiring root privileges:\n");
 
-    size_t display_count = root_count > 10 ? 10 : root_count;
+    size_t display_count = priv_count > 10 ? 10 : priv_count;
     for (size_t i = 0; i < display_count; i++) {
-        output_print(out, OUTPUT_NORMAL, "  %s\n", root_paths[i]);
+        output_print(out, OUTPUT_NORMAL, "  %s\n", priv_paths[i]);
     }
 
-    if (root_count > 10) {
-        output_print(out, OUTPUT_NORMAL, "  ... and %zu more\n", root_count - 10);
+    if (priv_count > 10) {
+        output_print(out, OUTPUT_NORMAL, "  ... and %zu more\n", priv_count - 10);
     }
 
     /* Explain why root is needed */
-    output_print(out, OUTPUT_NORMAL, "\nReason: Files with root/ prefix require ownership metadata capture,\n");
-    output_print(out, OUTPUT_NORMAL, "        which requires root privileges to access.\n");
+    output_print(out, OUTPUT_NORMAL,
+        "\nReason: These files require ownership metadata capture,\n");
+    output_print(out, OUTPUT_NORMAL,
+        "          which requires root privileges to access.\n");
 }
 
 /**
@@ -446,7 +494,7 @@ static error_t *reexec_with_sudo(int argc, char **argv) {
 
     /* Build sudo command */
     sudo_argv[0] = "sudo";
-    sudo_argv[1] = "-E";  /* Preserve environment variables (DOTTA_CONFIG_FILE, etc.) */
+    sudo_argv[1] = "-E";  /* Preserve environment variables */
 
     /* Copy all original arguments */
     for (int i = 0; i < argc; i++) {
@@ -465,10 +513,12 @@ static error_t *reexec_with_sudo(int argc, char **argv) {
 
     /* Provide helpful error message based on errno */
     if (saved_errno == ENOENT) {
-        return ERROR(ERR_PERMISSION, "Failed to execute sudo: command not found\n"
-                    "Ensure sudo is installed and in PATH");
+        return ERROR(ERR_PERMISSION,
+            "Failed to execute sudo: command not found\n"
+            "Ensure sudo is installed and in PATH");
     } else {
-        return ERROR(ERR_PERMISSION, "Failed to execute sudo: %s", strerror(saved_errno));
+        return ERROR(ERR_PERMISSION,
+            "Failed to execute sudo: %s", strerror(saved_errno));
     }
 }
 
@@ -476,10 +526,10 @@ static error_t *reexec_with_sudo(int argc, char **argv) {
  * Ensure proper privileges for an operation
  *
  * Main entry point for privilege management. Call this BEFORE starting
- * any operation that might modify root/ prefix files.
+ * any operation that might need elevated privileges (root/ or custom/ prefix files).
  *
  * WORKFLOW:
- * 1. Filter paths to find root/ prefixes
+ * 1. Filter paths to find privileged prefixes (root/, custom/)
  * 2. Check if already elevated - if yes, proceed
  * 3. Display requirement to user
  * 4. If interactive: prompt for confirmation
@@ -508,31 +558,33 @@ error_t *privilege_ensure_for_operation(
         return NULL;
     }
 
-    /* Collect paths requiring root privileges */
-    const char **root_paths = NULL;
-    size_t root_count = 0;
+    /* Collect paths requiring elevated privileges */
+    const char **priv_paths = NULL;
+    size_t priv_count = 0;
 
-    error_t *err = collect_root_paths(storage_paths, count, &root_paths, &root_count);
+    error_t *err = collect_privileged_paths(
+        storage_paths, count, &priv_paths, &priv_count
+    );
     if (err) {
         return err;
     }
 
-    /* Early exit: no root/ paths means no privilege check needed */
-    if (root_count == 0) {
-        free((void *)root_paths);  /* Free array even though it's NULL (defensive) */
+    /* Early exit: no privileged paths means no privilege check needed */
+    if (priv_count == 0) {
+        free((void *)priv_paths);
         return NULL;
     }
 
     /* Early exit: already elevated means we have required privileges */
     if (privilege_is_elevated()) {
-        free((void *)root_paths);
+        free((void *)priv_paths);
         return NULL;
     }
 
     /* We need elevation but don't have it - interact with user */
 
     /* Display requirement (always shown, even in non-interactive mode) */
-    display_privilege_requirement(operation_name, root_paths, root_count, out);
+    display_privilege_requirement(operation_name, priv_paths, priv_count, out);
 
     error_t *result = NULL;
 
@@ -547,7 +599,7 @@ error_t *privilege_ensure_for_operation(
             result = reexec_with_sudo(argc, argv);
 
             /* If we reach here, re-exec failed */
-            free((void *)root_paths);
+            free((void *)priv_paths);
             return result;
         } else {
             /* User declined elevation */
@@ -559,9 +611,9 @@ error_t *privilege_ensure_for_operation(
         output_print(out, OUTPUT_NORMAL, "  sudo %s %s ...\n\n", argv[0], operation_name);
 
         result = ERROR(ERR_PERMISSION,
-                      "Root privileges required but cannot prompt (non-interactive mode)");
+            "Root privileges required but cannot prompt (non-interactive mode)");
     }
 
-    free((void *)root_paths);
+    free((void *)priv_paths);
     return result;
 }

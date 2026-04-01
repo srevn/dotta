@@ -64,6 +64,18 @@ bool bootstrap_exists(
 );
 
 /**
+ * Validate bootstrap script content
+ *
+ * Checks for proper shebang line with absolute interpreter path.
+ * Use this to validate content before committing (e.g., after editing).
+ *
+ * @param content Script content (must not be NULL)
+ * @param size Content size
+ * @return Error or NULL if valid
+ */
+error_t *bootstrap_validate_content(const unsigned char *content, size_t size);
+
+/**
  * Extract bootstrap script from Git blob to temporary file
  *
  * Creates a secure temporary file with executable permissions and writes

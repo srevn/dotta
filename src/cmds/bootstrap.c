@@ -232,6 +232,18 @@ static error_t *bootstrap_edit(
         goto cleanup;
     }
 
+    /* Validate edited content before committing */
+    if (buffer_size(content_buf) == 0) {
+        err = ERROR(ERR_INVALID_ARG, "Bootstrap script cannot be empty");
+        goto cleanup;
+    }
+
+    err = bootstrap_validate_content(buffer_data(content_buf), buffer_size(content_buf));
+    if (err) {
+        err = error_wrap(err, "Edited bootstrap script has invalid content");
+        goto cleanup;
+    }
+
     /* Auto-commit the changes */
     commit_msg = str_format("Update bootstrap script for %s profile", profile_name);
     if (!commit_msg) {
@@ -447,11 +459,16 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
         /* Use enabled profiles from state */
         err = profile_resolve(repo, NULL, 0, false, &profiles, NULL);
         if (err) {
-            output_info(out, "No enabled profiles found.");
-            output_newline(out);
-            output_hint(out, "Enable profiles first:");
-            output_hint_line(out, "  dotta profile enable <name>");
-            error_free(err);
+            if (error_code(err) == ERR_NOT_FOUND) {
+                /* No profiles enabled — expected case, show guidance */
+                output_info(out, "No enabled profiles found.");
+                output_newline(out);
+                output_hint(out, "Enable profiles first:");
+                output_hint_line(out, "  dotta profile enable <name>");
+                error_free(err);
+                err = NULL;
+            }
+            /* Other errors (corrupted state, permission, etc.) propagate */
             goto cleanup;
         }
     }
@@ -525,17 +542,29 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
 
     /* Execute bootstrap scripts */
     bool stop_on_error = !opts->continue_on_error;
+    bool had_failures = false;
     err = bootstrap_run_for_profiles(
         repo, repo_path, (struct profile_list *)profiles, opts->dry_run, stop_on_error
     );
     if (err) {
-        err = error_wrap(err, "Bootstrap failed");
-        goto cleanup;
+        if (opts->continue_on_error) {
+            /* Partial failure — details already printed to stderr */
+            had_failures = true;
+            error_free(err);
+            err = NULL;
+        } else {
+            err = error_wrap(err, "Bootstrap failed");
+            goto cleanup;
+        }
     }
 
     if (!opts->dry_run) {
         output_newline(out);
-        output_success(out, "Bootstrap complete!");
+        if (had_failures) {
+            output_warning(out, "Bootstrap completed with errors.");
+        } else {
+            output_success(out, "Bootstrap complete!");
+        }
         output_newline(out);
         if (output_colors_enabled(out)) {
             output_printf(out, OUTPUT_NORMAL, "%sNext steps:%s\n",

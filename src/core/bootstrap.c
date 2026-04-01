@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "base/error.h"
@@ -75,7 +76,7 @@ static error_t *validate_profile_name(const char *profile_name) {
     const char *p = profile_name;
     while (*p) {
         /* Check for dangerous characters */
-        if (*p == '\n' || *p == '\r' || *p == '\0') {
+        if (*p == '\n' || *p == '\r') {
             return ERROR(ERR_INVALID_ARG,
                         "Profile name contains invalid characters");
         }
@@ -150,6 +151,16 @@ static error_t *validate_shebang(const unsigned char *content, size_t size) {
     }
 
     return NULL;
+}
+
+/**
+ * Validate bootstrap script content
+ */
+error_t *bootstrap_validate_content(const unsigned char *content, size_t size) {
+    if (!content) {
+        return ERROR(ERR_INVALID_ARG, "Script content cannot be NULL");
+    }
+    return validate_shebang(content, size);
 }
 
 /**
@@ -636,6 +647,14 @@ error_t *bootstrap_execute(
         }
         close(pipefd[1]);
 
+        /* Close all inherited file descriptors to prevent leaking
+         * parent's libgit2/SQLite handles to the bootstrap script */
+        int max_fd = (int)sysconf(_SC_OPEN_MAX);
+        if (max_fd < 0) max_fd = 1024;
+        for (int fd = 3; fd < max_fd; fd++) {
+            close(fd);
+        }
+
         /* Change to working directory: HOME (preferred) or repo root (fallback)
          *
          * Rationale: Bootstrap scripts typically install packages, configure
@@ -676,33 +695,33 @@ error_t *bootstrap_execute(
         fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
     }
 
-    /* Track elapsed time for timeout */
-    struct timeval start_time, current_time;
-    gettimeofday(&start_time, NULL);
+    /* Track elapsed time for timeout (monotonic clock immune to NTP/clock adjustments) */
+    struct timespec start_time, current_time;
+    clock_gettime(CLOCK_MONOTONIC, &start_time);
 
     ssize_t n;
     char buf[8192];
+    int status = 0;                 /* Shared status variable for all wait paths */
     bool timed_out = false;
     bool process_exited = false;
-    int final_status = 0;           /* Shared status variable for all wait paths */
     bool process_reaped = false;    /* Track if process already reaped via waitpid */
 
     while (!process_exited) {
         /* Check for timeout */
-        gettimeofday(&current_time, NULL);
+        clock_gettime(CLOCK_MONOTONIC, &current_time);
         long elapsed_seconds = current_time.tv_sec - start_time.tv_sec;
 
         if (elapsed_seconds >= BOOTSTRAP_TIMEOUT_SECONDS) {
             timed_out = true;
             fprintf(stderr, "\nWarning: Bootstrap script exceeded timeout (%d seconds)\n",
-                   BOOTSTRAP_TIMEOUT_SECONDS);
+                    BOOTSTRAP_TIMEOUT_SECONDS);
 
             /* Try graceful termination first */
             kill(pid, SIGTERM);
             sleep(2);
 
             /* Check if process terminated */
-            pid_t wait_result = waitpid(pid, &final_status, WNOHANG);
+            pid_t wait_result = waitpid(pid, &status, WNOHANG);
             if (wait_result > 0) {
                 /* Process reaped successfully */
                 process_reaped = true;
@@ -746,7 +765,7 @@ error_t *bootstrap_execute(
 
         if (select_result == 0) {
             /* Timeout - check if process is still running */
-            pid_t wait_result = waitpid(pid, &final_status, WNOHANG);
+            pid_t wait_result = waitpid(pid, &status, WNOHANG);
             if (wait_result == pid) {
                 /* Process exited */
                 process_reaped = true;
@@ -786,14 +805,13 @@ error_t *bootstrap_execute(
     close(pipefd[0]);
 
     /* Wait for child process to fully terminate */
-    int status = 0;
     int exit_code = 0;
     bool was_signaled = false;
     int signal_num = 0;
 
     if (!process_reaped) {
         /* Process not yet reaped - do blocking wait */
-        int wait_result = waitpid(pid, &final_status, 0);
+        int wait_result = waitpid(pid, &status, 0);
         if (wait_result == -1) {
             free_bootstrap_env(env, env_count);
             if (timed_out) {
@@ -803,9 +821,6 @@ error_t *bootstrap_execute(
             }
         }
     }
-
-    /* At this point, final_status contains the exit status */
-    status = final_status;
 
     if (timed_out) {
         /* Mark as timeout error */
@@ -938,7 +953,7 @@ error_t *bootstrap_run_for_profiles(
                     free(all_profiles_str);
                     free(failed_profiles);
                     return ERROR(ERR_INVALID_ARG,
-                                "Bootstrap script validation failed for %s", profile->name);
+                        "Bootstrap script validation failed for %s", profile->name);
                 }
                 failed_profiles[failed_count++] = profile->name;
             } else {
@@ -1021,14 +1036,17 @@ error_t *bootstrap_run_for_profiles(
 
     free(all_profiles_str);
 
-    /* Report failures if any occurred */
-    if (failed_count > 0 && !stop_on_error) {
+    /* Report and return error on partial failure */
+    if (failed_count > 0) {
         printf("\n");
         fprintf(stderr, "Warning: %zu bootstrap script%s failed:\n",
                failed_count, failed_count == 1 ? "" : "s");
         for (size_t i = 0; i < failed_count; i++) {
             fprintf(stderr, "  - %s\n", failed_profiles[i]);
         }
+        free(failed_profiles);
+        return ERROR(ERR_INTERNAL, "%zu of %zu bootstrap script%s failed",
+                     failed_count, script_count, failed_count == 1 ? "" : "s");
     }
 
     free(failed_profiles);

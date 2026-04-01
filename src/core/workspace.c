@@ -1625,8 +1625,7 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
                 break;
 
             case WORKSPACE_STATE_DEPLOYED:
-                /* Check metadata divergence */
-                if (item->divergence != DIVERGENCE_NONE) {
+                if (item->divergence != DIVERGENCE_NONE || item->profile_changed) {
                     has_warnings = true;
                 }
                 break;
@@ -3627,16 +3626,37 @@ bool workspace_item_extract_display_info(
                 }
             }
 
-            /* Format metadata based on divergence type
+            /* Profile reassignment tag (can coexist with divergence tags)
              *
-             * For mode/ownership divergence, show metadata profile if different
-             * from content profile. This indicates metadata comes from a different
-             * profile than the file content (split metadata scenario).
-             */
+             * Added after divergence tags as secondary information.
+             * Color only set for pure reassignment (sole tag) to avoid
+             * overriding severity-based colors from divergence. */
+            if (item->profile_changed) {
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    tags_out[tag_count++] = "reassigned";
+                }
+                if (tag_count == 1) {
+                    *color_out = OUTPUT_COLOR_CYAN;
+                }
+            }
+
+            /* Format metadata string
+             *
+             * Priority: profile transition > metadata source > default.
+             * When profile changed, always show old → new transition.
+             * When mode/ownership also diverges, append metadata source. */
             const char *meta_profile = item->metadata_profile ?
                 item->metadata_profile : item->profile;
 
-            if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
+            if (item->profile_changed && item->old_profile) {
+                if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
+                    snprintf(metadata_buf, metadata_size, "%s → %s, metadata from %s",
+                             item->old_profile, item->profile, meta_profile);
+                } else {
+                    snprintf(metadata_buf, metadata_size, "%s → %s",
+                             item->old_profile, item->profile);
+                }
+            } else if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
                 snprintf(metadata_buf, metadata_size, "metadata from %s", meta_profile);
             } else {
                 snprintf(metadata_buf, metadata_size, "from %s", item->profile);

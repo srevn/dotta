@@ -30,7 +30,8 @@
  *
  * Direction semantics:
  * - UPSTREAM: Show items where repository would change filesystem
- *   (undeployed files, files where Git differs from filesystem)
+ *   (undeployed files, files where Git differs from filesystem,
+ *    profile reassignments that apply would acknowledge)
  * - DOWNSTREAM: Show items where filesystem would change repository
  *   (modified files, deleted files that exist in Git)
  *
@@ -44,11 +45,13 @@ static bool should_show_item_for_direction(
 ) {
     if (direction == DIFF_UPSTREAM) {
         /* Upstream: What would apply do? */
-        /* Show: undeployed, deleted (apply would restore), content/mode differs (Git → filesystem) */
+        /* Show: undeployed, deleted (apply would restore), content/mode differs,
+         * or profile reassignment (apply acknowledges ownership change) */
         return (item->state == WORKSPACE_STATE_UNDEPLOYED) ||
                (item->state == WORKSPACE_STATE_DELETED) ||
                (item->state == WORKSPACE_STATE_DEPLOYED &&
-                (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)));
+                ((item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) ||
+                 item->profile_changed));
     }
 
     if (direction == DIFF_DOWNSTREAM) {
@@ -109,6 +112,12 @@ static const char *get_status_message_from_item(
         return direction == DIFF_UPSTREAM ?
             "mode would change on apply" :
             "mode changed locally";
+    }
+
+    /* Profile reassignment with no content/metadata divergence.
+     * Only reachable via UPSTREAM (DOWNSTREAM filtered by should_show_item). */
+    if (item->profile_changed) {
+        return "profile reassigned (acknowledged by apply)";
     }
 
     return "unknown";
@@ -228,6 +237,8 @@ static error_t *show_file_diff_from_workspace(
         status_color = OUTPUT_COLOR_RED;
     } else if (item->divergence & DIVERGENCE_TYPE) {
         status_color = OUTPUT_COLOR_RED;
+    } else if (item->profile_changed && item->divergence == DIVERGENCE_NONE) {
+        status_color = OUTPUT_COLOR_CYAN;
     }
 
     /* Show status */
@@ -252,8 +263,13 @@ static error_t *show_file_diff_from_workspace(
         return NULL;
     }
 
+    /* For profile reassignment only (content matches), no content diff */
+    if (item->profile_changed && item->divergence == DIVERGENCE_NONE) {
+        return NULL;
+    }
+
     /* Lazy-load tree entry for content and mode access.
-     * Note: Placed after early returns (name-only, missing files, mode-only)
+     * Note: Placed after early returns (name-only, missing files, mode-only, reassignment-only)
      * to avoid unnecessary Git operations when tree entry not needed. */
     error_t *err = file_entry_ensure_tree_entry((file_entry_t *)entry, repo);
     if (err) {

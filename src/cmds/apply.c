@@ -1525,10 +1525,51 @@ error_t *cmd_apply(
         output_print(out, OUTPUT_VERBOSE, "\nSkipping orphan cleanup (file filter active)\n");
     }
 
+    /* Count pending profile reassignments within operation scope
+     *
+     * Profile reassignment (old_profile set in state) is state bookkeeping,
+     * not deployment: no bytes need to move to disk since content may be
+     * identical. needs_deployment() correctly returns false for these, so
+     * they never enter deploy_manifest. But the old_profile flag must still
+     * be cleared to prevent the workspace from reporting stale divergence.
+     *
+     * Counted before the early-exit check to prevent the infinite dirty-status
+     * loop: status reports DIRTY (profile_changed), but needs_deployment()
+     * correctly returns false (no content divergence), so deploy_manifest is
+     * empty. Without this check, the acknowledgment code is never reached.
+     *
+     * Applies the same three filters as deploy_manifest construction:
+     *   1. Profile filter (-p): Coherent Scope — only acknowledge within scope
+     *   2. Path filter (file args): Only acknowledge targeted files
+     *   3. Exclusion filter (--exclude): Respect explicit exclusions
+     */
+    size_t acknowledged_count = 0;
+    size_t all_count = 0;
+    const workspace_item_t *all_items = workspace_get_all_diverged(ws, &all_count);
+
+    for (size_t i = 0; i < all_count; i++) {
+        if (!all_items[i].profile_changed) {
+            continue;
+        }
+
+        /* Coherent Scope: same filters as deployment pipeline */
+        if (!profile_filter_matches(all_items[i].profile, operation_profiles)) {
+            continue;
+        }
+        if (!path_filter_matches(file_filter, all_items[i].storage_path)) {
+            continue;
+        }
+        if (matches_exclude_pattern(all_items[i].storage_path, opts)) {
+            continue;
+        }
+        acknowledged_count++;
+    }
+
     /* Check if there's anything to do */
-    if (deploy_manifest->count == 0 &&
-        (opts->keep_orphans || (file_orphan_count == 0 && dir_orphan_count == 0))) {
-        /* No divergent files and (keeping orphans OR no orphans to clean) */
+    bool no_orphan_work = opts->keep_orphans || (file_orphan_count == 0 && dir_orphan_count == 0);
+
+    if (deploy_manifest->count == 0 && acknowledged_count == 0 && no_orphan_work) {
+        /* Nothing to deploy, acknowledge, or clean */
         size_t total_excluded = excluded_deploy_count + excluded_orphan_count;
         if (total_excluded > 0) {
             output_info(out, "Nothing to deploy (%zu file%s excluded by --exclude)",
@@ -1542,6 +1583,60 @@ error_t *cmd_apply(
         if (err) {
             err = error_wrap(err, "Failed to commit stat cache updates");
             goto cleanup;
+        }
+
+        err = NULL;
+        goto cleanup;
+    }
+
+    /* Acknowledgement-only fast path: profile reassignments with no filesystem changes
+     *
+     * When only profile bookkeeping is pending (no deployment, no orphans),
+     * skip privilege checks, preflight, hooks, and confirmation — none apply
+     * to pure state bookkeeping that doesn't touch the filesystem. */
+    if (deploy_manifest->count == 0 && no_orphan_work) {
+        if (!opts->dry_run) {
+            size_t cleared = 0;
+            size_t all_count = 0;
+            const workspace_item_t *all_items = workspace_get_all_diverged(ws, &all_count);
+
+            for (size_t i = 0; i < all_count; i++) {
+                if (!all_items[i].profile_changed) {
+                    continue;
+                }
+                if (!profile_filter_matches(all_items[i].profile, operation_profiles)) {
+                    continue;
+                }
+                if (!path_filter_matches(file_filter, all_items[i].storage_path)) {
+                    continue;
+                }
+                if (matches_exclude_pattern(all_items[i].storage_path, opts)) {
+                    continue;
+                }
+
+                error_t *clear_err = state_clear_old_profile(state, all_items[i].filesystem_path);
+                if (clear_err) {
+                    output_warning(out, "Failed to clear profile reassignment flag for %s: %s",
+                                   all_items[i].filesystem_path, error_message(clear_err));
+                    error_free(clear_err);
+                    continue;
+                }
+                cleared++;
+            }
+
+            if (cleared > 0) {
+                output_info(out, "Acknowledged %zu profile reassignment%s",
+                            cleared, cleared == 1 ? "" : "s");
+            }
+
+            err = state_save(repo, state);
+            if (err) {
+                err = error_wrap(err, "Failed to commit state changes");
+                goto cleanup;
+            }
+        } else {
+            output_info(out, "Would acknowledge %zu profile reassignment%s (dry-run)",
+                        acknowledged_count, acknowledged_count == 1 ? "" : "s");
         }
 
         err = NULL;
@@ -2150,18 +2245,6 @@ error_t *cmd_apply(
                     error_free(err);
                     err = NULL;  /* Don't propagate - continue operation */
                 }
-
-                /* Clear old_profile if ownership changed (acknowledge change after deployment) */
-                const workspace_item_t *ws_item = workspace_get_item(ws, path);
-                if (ws_item && ws_item->profile_changed) {
-                    error_t *clear_err = state_clear_old_profile(state, path);
-                    if (clear_err) {
-                        /* Non-fatal warning - deployment succeeded, just clearing flag failed */
-                        output_warning(out, "Failed to clear ownership change flag for %s: %s",
-                                       path, error_message(clear_err));
-                        error_free(clear_err);
-                    }
-                }
             }
 
             output_print(out, OUTPUT_VERBOSE, "  Updated %zu timestamp%s\n",
@@ -2208,6 +2291,53 @@ error_t *cmd_apply(
             output_print(out, OUTPUT_VERBOSE, "  Recorded %zu adopted file%s\n",
                          string_array_size(deploy_res->adopted),
                          string_array_size(deploy_res->adopted) == 1 ? "" : "s");
+        }
+
+        /* Acknowledge profile reassignments (clear old_profile in state)
+         *
+         * Profile reassignment may or may not coincide with content divergence.
+         * When content also diverged, the file was redeployed above. Either way,
+         * clear the old_profile flag for in-scope items so the transition doesn't
+         * persist as stale state across future runs. */
+        size_t cleared = 0;
+        size_t all_count = 0;
+        const workspace_item_t *all_items = workspace_get_all_diverged(ws, &all_count);
+
+        for (size_t i = 0; i < all_count; i++) {
+            if (!all_items[i].profile_changed) {
+                continue;
+            }
+            if (!profile_filter_matches(all_items[i].profile, operation_profiles)) {
+                continue;
+            }
+            if (!path_filter_matches(file_filter, all_items[i].storage_path)) {
+                continue;
+            }
+            if (matches_exclude_pattern(all_items[i].storage_path, opts)) {
+                continue;
+            }
+
+            error_t *clear_err = state_clear_old_profile(state, all_items[i].filesystem_path);
+            if (clear_err) {
+                output_warning(out, "Failed to clear profile reassignment flag for %s: %s",
+                               all_items[i].filesystem_path, error_message(clear_err));
+                error_free(clear_err);
+                continue;
+            }
+            cleared++;
+        }
+
+        if (cleared > 0) {
+            if (output_colors_enabled(out)) {
+                output_printf(out, OUTPUT_NORMAL, "Acknowledged %s%zu%s profile reassignment%s\n",
+                              output_color_code(out, OUTPUT_COLOR_CYAN),
+                              cleared,
+                              output_color_code(out, OUTPUT_COLOR_RESET),
+                              cleared == 1 ? "" : "s");
+            } else {
+                output_printf(out, OUTPUT_NORMAL, "Acknowledged %zu profile reassignment%s\n",
+                              cleared, cleared == 1 ? "" : "s");
+            }
         }
 
         /* Commit state transaction (saves both deployment and cleanup state)

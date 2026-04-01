@@ -246,10 +246,10 @@ static void display_workspace_status(
         /* When filter active and filtered profile is clean, skip detailed sections */
         if (!profile_filter || filtered_diverged > 0) {
 
-            /* Single allocation for all category pointers (4 categories × all_count slots)
-             * Memory layout: [uncommitted...][undeployed...][new_files...][orphaned...]
+            /* Single allocation for all category pointers (5 categories × all_count slots)
+             * Memory layout: [uncommitted][undeployed][new_files][orphaned][reassigned]
              * This provides cache-friendly contiguous memory with single malloc/free. */
-            const workspace_item_t **categorized = malloc(all_count * 4 * sizeof(workspace_item_t *));
+            const workspace_item_t **categorized = malloc(all_count * 5 * sizeof(workspace_item_t *));
             if (!categorized) {
                 output_error(out, "Failed to allocate memory for status display (%zu items)", all_count);
                 return;
@@ -257,14 +257,16 @@ static void display_workspace_status(
 
             /* Category arrays (pointer arithmetic into single allocation) */
             const workspace_item_t **uncommitted = categorized;
-            const workspace_item_t **undeployed = categorized + all_count;
-            const workspace_item_t **new_files = categorized + all_count * 2;
-            const workspace_item_t **orphaned = categorized + all_count * 3;
+            const workspace_item_t **undeployed  = categorized + all_count;
+            const workspace_item_t **new_files   = categorized + all_count * 2;
+            const workspace_item_t **orphaned    = categorized + all_count * 3;
+            const workspace_item_t **reassigned  = categorized + all_count * 4;
 
             size_t uncommitted_count = 0;
             size_t undeployed_count = 0;
             size_t new_count = 0;
             size_t orphaned_count = 0;
+            size_t reassigned_count = 0;
             for (size_t i = 0; i < all_count; i++) {
                 const workspace_item_t *item = &all_items[i];
 
@@ -279,9 +281,12 @@ static void display_workspace_status(
 
                 switch (item->state) {
                     case WORKSPACE_STATE_DEPLOYED:
-                        /* Deployed with divergence → uncommitted changes */
                         if (item->divergence != DIVERGENCE_NONE) {
+                            /* Real divergence → uncommitted changes */
                             uncommitted[uncommitted_count++] = item;
+                        } else if (item->profile_changed) {
+                            /* Pure profile reassignment (no filesystem divergence) */
+                            reassigned[reassigned_count++] = item;
                         }
                         break;
 
@@ -336,7 +341,33 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 2: Undeployed Files */
+            /* Section 2: Profile Reassignments */
+            if (reassigned_count > 0) {
+                output_list_t *list = output_list_create(out,
+                    "Profile reassignments",
+                    "run \"dotta apply\" to acknowledge");
+
+                if (list) {
+                    for (size_t i = 0; i < reassigned_count; i++) {
+                        const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                        size_t tag_count;
+                        output_color_t color;
+                        char metadata[256];
+
+                        if (workspace_item_extract_display_info(reassigned[i], tags, &tag_count,
+                                                                &color, metadata, sizeof(metadata))) {
+                            output_list_add_multi(
+                                list, tags, tag_count, color, reassigned[i]->filesystem_path, metadata
+                            );
+                        }
+                    }
+
+                    output_list_render(list);
+                    output_list_free(list);
+                }
+            }
+
+            /* Section 3: Undeployed Files */
             if (undeployed_count > 0) {
                 output_list_t *list = output_list_create(out,
                     "Undeployed files",
@@ -362,7 +393,7 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 3: New Files */
+            /* Section 4: New Files */
             if (new_count > 0) {
                 output_list_t *list = output_list_create(out,
                     "New files",
@@ -388,7 +419,7 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 4: Issues (orphaned) */
+            /* Section 5: Issues (orphaned) */
             if (orphaned_count > 0) {
                 output_list_t *list = output_list_create(out,
                     "Issues",

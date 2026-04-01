@@ -5,6 +5,7 @@
 #include "string.h"
 
 #include <ctype.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -61,7 +62,8 @@ char *str_trim(char *str) {
 
     /* Move trimmed string to beginning if necessary */
     if (start != str) {
-        memmove(str, start, strlen(start) + 1);
+        size_t trimmed_len = (size_t)(end - start) + 1;
+        memmove(str, start, trimmed_len + 1);  /* +1 for null terminator */
     }
 
     return str;
@@ -79,13 +81,20 @@ char *str_join(char **strings, size_t count, const char *delimiter) {
     size_t delim_len = strlen(delimiter);
     bool has_delimiter = (delim_len > 0);
 
-    /* Calculate total length */
+    /* Calculate total length (with overflow checks) */
     size_t total_len = 0;
     for (size_t i = 0; i < count; i++) {
         if (strings[i]) {
-            total_len += strlen(strings[i]);
+            size_t slen = strlen(strings[i]);
+            if (total_len + slen < total_len) {
+                return NULL;  /* Overflow */
+            }
+            total_len += slen;
         }
         if (i < count - 1 && has_delimiter) {
+            if (total_len + delim_len < total_len) {
+                return NULL;  /* Overflow */
+            }
             total_len += delim_len;
         }
     }

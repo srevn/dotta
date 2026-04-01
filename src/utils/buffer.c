@@ -86,11 +86,17 @@ error_t *buffer_append(buffer_t *buf, const unsigned char *data, size_t size) {
         return NULL;
     }
 
-    /* Ensure capacity */
+    /* Ensure capacity (with overflow check) */
     size_t required = buf->size + size;
+    if (required < buf->size) {
+        return ERROR(ERR_MEMORY, "Buffer size overflow");
+    }
     if (required > buf->capacity) {
         size_t new_capacity = buf->capacity == 0 ? INITIAL_CAPACITY : buf->capacity;
         while (new_capacity < required) {
+            if (new_capacity > SIZE_MAX / 2) {
+                return ERROR(ERR_MEMORY, "Buffer capacity overflow");
+            }
             new_capacity *= 2;
         }
 
@@ -132,11 +138,19 @@ error_t *buffer_append_format(buffer_t *buf, const char *fmt, ...) {
         return ERROR(ERR_INVALID_ARG, "Invalid format string");
     }
 
-    /* Ensure capacity */
-    size_t required = buf->size + (size_t)len;
+    /* Ensure capacity (account for vsnprintf null terminator, with overflow check) */
+    size_t required = buf->size + (size_t)len + 1;
+    if (required <= buf->size) {
+        va_end(args);
+        return ERROR(ERR_MEMORY, "Buffer size overflow");
+    }
     if (required > buf->capacity) {
         size_t new_capacity = buf->capacity == 0 ? INITIAL_CAPACITY : buf->capacity;
         while (new_capacity < required) {
+            if (new_capacity > SIZE_MAX / 2) {
+                va_end(args);
+                return ERROR(ERR_MEMORY, "Buffer capacity overflow");
+            }
             new_capacity *= 2;
         }
 

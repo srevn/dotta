@@ -20,28 +20,19 @@
  * Resolve repository path
  *
  * Determines the dotta repository location based on:
- * 1. DOTTA_REPO_DIR environment variable
+ * 1. DOTTA_REPO_DIR environment variable (always highest priority)
  * 2. Config file repo_dir setting
  * 3. Default: ~/.local/share/dotta/repo
  *
  * The path is always expanded (~ becomes absolute path).
- * If the config file exists but fails to parse/validate, falls back
- * to the default path to ensure the application remains usable.
+ * If the config file exists but fails to parse/validate, a warning
+ * is emitted to stderr and the resolution continues without config
+ * (env var and default are still respected).
  *
  * @param out Resolved repository path (caller must free)
  * @return Error or NULL on success
  */
 error_t *resolve_repo_path(char **out);
-
-/**
- * Get default repository path
- *
- * Returns: ~/.local/share/dotta/repo
- *
- * @param out Default repository path (caller must free)
- * @return Error or NULL on success
- */
-error_t *get_default_repo_path(char **out);
 
 /**
  * Open dotta repository
@@ -80,9 +71,10 @@ error_t *repo_open(git_repository **repo_out, char **path_out);
 /**
  * Fix repository ownership if running under sudo
  *
- * Automatically restores normal user ownership of the .git directory when
- * dotta commands are run via sudo. This prevents "Permission denied" errors
- * on subsequent non-sudo runs.
+ * Automatically restores normal user ownership of the repository directory
+ * and .git/ contents when dotta commands are run via sudo. This prevents
+ * "Permission denied" errors and libgit2 ownership validation failures
+ * (CVE-2022-24765) on subsequent non-sudo runs.
  *
  * WHEN TO CALL:
  * - Call this at process exit, after all Git operations complete
@@ -93,8 +85,9 @@ error_t *repo_open(git_repository **repo_out, char **path_out);
  * 1. Checks if running under sudo (via privilege_is_sudo())
  * 2. If not sudo: returns immediately (no-op)
  * 3. If sudo: gets original user's UID/GID from SUDO_UID/SUDO_GID
- * 4. Recursively fixes ownership of .git/ directory
- * 5. Logs statistics (files fixed/failed) to stderr
+ * 4. Fixes ownership of the repository directory itself
+ * 5. Recursively fixes ownership of .git/ directory
+ * 6. Logs statistics (files fixed/failed) to stderr
  *
  * ERROR HANDLING:
  * - Individual file failures: Logged, operation continues

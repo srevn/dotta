@@ -179,6 +179,9 @@ hashmap_t *hashmap_create(size_t initial_capacity) {
     /* Round up to next power of 2 for fast modulo */
     size_t capacity = 1;
     while (capacity < initial_capacity) {
+        if (capacity > SIZE_MAX / 2) {
+            return NULL;  /* Requested capacity too large */
+        }
         capacity *= 2;
     }
 
@@ -238,7 +241,13 @@ error_t *hashmap_set(hashmap_t *map, const char *key, void *value) {
 
     /* Check if resize needed */
     if (map->entry_count > map->resize_threshold) {
-        error_t *err = hashmap_resize(map, map->bucket_count * 2);
+        /* Guard against bucket_count overflow */
+        size_t new_bucket_count = (map->bucket_count <= SIZE_MAX / 2)
+            ? map->bucket_count * 2
+            : map->bucket_count;  /* Skip resize at maximum capacity */
+        error_t *err = (new_bucket_count > map->bucket_count)
+            ? hashmap_resize(map, new_bucket_count)
+            : NULL;
         if (err) {
             /* Resize failed, but insertion succeeded.
              * Continue with current size, but warn about performance degradation.

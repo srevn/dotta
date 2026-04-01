@@ -12,37 +12,8 @@
 #include "base/error.h"
 #include "base/filesystem.h"
 #include "base/gitops.h"
-#include "infra/path.h"
 #include "utils/config.h"
 #include "utils/privilege.h"
-
-/**
- * Get default repository path
- */
-error_t *get_default_repo_path(char **out) {
-    CHECK_NULL(out);
-
-    /* Get HOME directory */
-    char *home = NULL;
-    error_t *err = path_get_home(&home);
-    if (err) {
-        return error_wrap(err, "Failed to determine HOME directory");
-    }
-
-    /* Build path: ~/.local/share/dotta/repo */
-    size_t len = strlen(home) + strlen("/.local/share/dotta/repo") + 1;
-    char *path = malloc(len);
-    if (!path) {
-        free(home);
-        return ERROR(ERR_MEMORY, "Failed to allocate default repo path");
-    }
-
-    snprintf(path, len, "%s/.local/share/dotta/repo", home);
-    free(home);
-
-    *out = path;
-    return NULL;
-}
 
 /**
  * Resolve repository path
@@ -52,29 +23,24 @@ error_t *resolve_repo_path(char **out) {
 
     dotta_config_t *config = NULL;
     error_t *err = NULL;
-    char *repo_dir = NULL;
 
-    /* Load configuration
-     * Note: config_load returns default config if file doesn't exist,
-     * so this is safe and won't fail for missing config files.
-     * If config parsing fails, we fall back to default path.
-     */
+    /* Load configuration.
+     * config_load returns default config if file doesn't exist (not an error).
+     * If config parsing fails, warn and continue with NULL config —
+     * config_get_repo_dir handles NULL correctly (env var → default). */
     err = config_load(NULL, &config);
     if (err) {
-        /* Config file exists but failed to parse/validate.
-         * Log the issue but fall back to default path gracefully.
-         * This ensures the application remains usable even with
-         * a broken config file.
-         */
+        fprintf(stderr, "warning: %s (using default settings)\n",
+                error_message(err));
         error_free(err);
-        return get_default_repo_path(out);
+        config = NULL;
     }
 
-    /* Get repository directory using full priority chain:
+    /* Resolve repository directory using full priority chain:
      * 1. DOTTA_REPO_DIR environment variable
-     * 2. Config file repo_dir setting
-     * 3. Default: ~/.local/share/dotta/repo
-     */
+     * 2. Config file repo_dir setting (skipped when config is NULL)
+     * 3. Default: ~/.local/share/dotta/repo */
+    char *repo_dir = NULL;
     err = config_get_repo_dir(config, &repo_dir);
     config_free(config);
 
@@ -216,7 +182,7 @@ static error_t *repo_ensure_dotta_worktree(git_repository *repo) {
      */
     const char *workdir = git_repository_workdir(repo);
     if (workdir) {
-        chdir(workdir);
+        (void)chdir(workdir);
     }
 
     /* Success - inform user about the automated recovery */
@@ -334,7 +300,12 @@ error_t *repo_fix_ownership_if_needed(const char *repo_path) {
         return NULL;  /* .git doesn't exist - nothing to fix */
     }
 
-    /* Fix ownership recursively */
+    /* Fix ownership of the repository directory itself.
+     * Without this, libgit2 ownership validation (CVE-2022-24765 mitigations)
+     * may reject the repository on subsequent non-sudo runs. */
+    (void)chown(repo_path, actual_uid, actual_gid);
+
+    /* Fix .git/ ownership recursively */
     size_t fixed_count = 0;
     size_t failed_count = 0;
     err = fs_fix_ownership_recursive(git_dir, actual_uid, actual_gid,

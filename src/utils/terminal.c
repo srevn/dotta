@@ -45,8 +45,8 @@ error_t *terminal_init(terminal_t **out) {
     /* Save original terminal settings */
     if (tcgetattr(STDIN_FILENO, &term->orig_termios) < 0) {
         free(term);
-        return error_create(ERR_FS, "failed to get terminal attributes: %s",
-                          strerror(errno));
+        return error_create(ERR_FS,
+            "failed to get terminal attributes: %s", strerror(errno));
     }
 
     /* Configure raw mode */
@@ -89,8 +89,8 @@ error_t *terminal_init(terminal_t **out) {
     /* Apply raw mode settings */
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) < 0) {
         free(term);
-        return error_create(ERR_FS, "failed to enable raw mode: %s",
-                          strerror(errno));
+        return error_create(ERR_FS,
+            "failed to enable raw mode: %s", strerror(errno));
     }
 
     term->raw_mode_enabled = true;
@@ -124,14 +124,14 @@ error_t *terminal_get_size(terminal_size_t *out) {
 
     struct winsize ws;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) < 0) {
-        return error_create(ERR_FS, "failed to get terminal size: %s",
-                          strerror(errno));
+        return error_create(ERR_FS,
+            "failed to get terminal size: %s", strerror(errno));
     }
 
     /* Validate terminal size */
     if (ws.ws_row == 0 || ws.ws_col == 0) {
-        return error_create(ERR_FS, "invalid terminal size: %ux%u rows x cols",
-                          ws.ws_row, ws.ws_col);
+        return error_create(ERR_FS,
+            "invalid terminal size: %ux%u rows x cols", ws.ws_row, ws.ws_col);
     }
 
     out->rows = ws.ws_row;

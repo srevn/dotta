@@ -84,8 +84,8 @@ static error_t *string_array_grow(string_array_t *arr) {
     if (arr->capacity == 0) {
         new_capacity = INITIAL_CAPACITY;
     } else {
-        /* Check for overflow before doubling */
-        if (arr->capacity > SIZE_MAX / 2) {
+        /* Check for overflow before doubling (account for element size) */
+        if (arr->capacity > SIZE_MAX / (2 * sizeof(char *))) {
             return error_create(ERR_MEMORY, "String array too large to grow");
         }
         new_capacity = arr->capacity * 2;
@@ -111,7 +111,13 @@ error_t *string_array_push(string_array_t *arr, const char *str) {
         return error_create(ERR_MEMORY, "Failed to duplicate string");
     }
 
-    return string_array_push_take(arr, dup);
+    error_t *err = string_array_push_take(arr, dup);
+    if (err) {
+        free(dup);
+        return err;
+    }
+
+    return NULL;
 }
 
 error_t *string_array_push_take(string_array_t *arr, char *str) {
@@ -209,6 +215,11 @@ error_t *string_array_reserve(string_array_t *arr, size_t capacity) {
     /* Already have enough capacity */
     if (capacity <= arr->capacity) {
         return NULL;
+    }
+
+    /* Overflow check: capacity * sizeof(char *) must not wrap */
+    if (capacity > SIZE_MAX / sizeof(char *)) {
+        return error_create(ERR_MEMORY, "Array capacity overflow");
     }
 
     /* Allocate new capacity */

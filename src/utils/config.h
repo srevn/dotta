@@ -90,11 +90,6 @@ void config_free(dotta_config_t *config);
 error_t *config_get_path(char **out);
 
 /**
- * Get boolean value from config string
- */
-bool config_parse_bool(const char *value, bool default_value);
-
-/**
  * Validate configuration
  */
 error_t *config_validate(const dotta_config_t *config);

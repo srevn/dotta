@@ -150,10 +150,18 @@ error_t *fs_read_file(const char *path, buffer_t **out) {
     return NULL;
 }
 
-error_t *fs_write_file_raw(const char *path, const unsigned char *data, size_t size,
-                           mode_t mode, uid_t uid, gid_t gid) {
+error_t *fs_write_file_raw(
+    const char *path,
+    const unsigned char *data,
+    size_t size,
+    mode_t mode,
+    uid_t uid,
+    gid_t gid
+) {
     RETURN_IF_ERROR(validate_path(path));
-    /* Note: data can be NULL if size is 0 (empty file) */
+    if (size > 0 && !data) {
+        return ERROR(ERR_INVALID_ARG, "Data cannot be NULL when size > 0");
+    }
 
     /* Ensure parent directory exists */
     char *parent = NULL;
@@ -263,7 +271,14 @@ error_t *fs_write_file(const char *path, const buffer_t *content) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(content);
 
-    return fs_write_file_raw(path, buffer_data(content), buffer_size(content), 0644, -1, -1);
+    return fs_write_file_raw(
+        path,
+        buffer_data(content),
+        buffer_size(content),
+        0644,
+        -1,
+        -1
+    );
 }
 
 error_t *fs_copy_file(const char *src, const char *dst) {
@@ -365,8 +380,8 @@ error_t *fs_create_dir(const char *path, bool parents) {
         if (errno == EEXIST && fs_is_directory(path)) {
             return NULL;  /* Race condition - another process created it */
         }
-        return ERROR(ERR_FS, "Failed to create directory '%s': %s",
-                    path, strerror(errno));
+        return ERROR(ERR_FS,
+            "Failed to create directory '%s': %s", path, strerror(errno));
     }
 
     return NULL;
@@ -377,43 +392,42 @@ error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
 
     /* Validate mode */
     if (mode > 0777) {
-        return ERROR(ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)", mode);
+        return ERROR(ERR_INVALID_ARG,
+            "Invalid mode: %04o (must be <= 0777)", mode);
     }
 
-    /* If directory already exists, return success */
-    if (fs_is_directory(path)) {
-        return NULL;
-    }
+    bool existed = fs_is_directory(path);
 
-    /* Create parent directories if requested */
-    if (parents) {
-        char *parent = NULL;
-        error_t *err = fs_get_parent_dir(path, &parent);
-        if (err) {
-            return err;
-        }
-
-        if (parent && !fs_is_directory(parent)) {
-            /* Use default 0755 for parent directories */
-            err = fs_create_dir(parent, true);
-            free(parent);
+    if (!existed) {
+        /* Create parent directories if requested */
+        if (parents) {
+            char *parent = NULL;
+            error_t *err = fs_get_parent_dir(path, &parent);
             if (err) {
                 return err;
             }
-        } else {
-            free(parent);
-        }
-    }
 
-    /* Try to create directory with specified mode */
-    bool existed = false;
-    if (mkdir(path, mode) < 0) {
-        if (errno == EEXIST && fs_is_directory(path)) {
-            /* Directory already exists - will ensure correct mode below */
-            existed = true;
-        } else {
-            return ERROR(ERR_FS, "Failed to create directory '%s' with mode %04o: %s",
-                        path, mode, strerror(errno));
+            if (parent && !fs_is_directory(parent)) {
+                /* Use default 0755 for parent directories */
+                err = fs_create_dir(parent, true);
+                free(parent);
+                if (err) {
+                    return err;
+                }
+            } else {
+                free(parent);
+            }
+        }
+
+        /* Try to create directory with specified mode */
+        if (mkdir(path, mode) < 0) {
+            if (errno == EEXIST && fs_is_directory(path)) {
+                existed = true;
+            } else {
+                return ERROR(ERR_FS,
+                    "Failed to create directory '%s' with mode %04o: %s",
+                    path, mode, strerror(errno));
+            }
         }
     }
 
@@ -427,7 +441,6 @@ error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
      *
      * 2. Existing directory: May have wrong permissions
      *    Example: User runs `dotta apply --force` to fix ~/.ssh/ from 0755 to 0700
-     *    deploy.c only calls this function when --force is set for existing dirs
      *    chmod() updates mode to match metadata (security fix!)
      *
      * This makes the function idempotent: "ensure directory exists with exact mode"
@@ -435,7 +448,7 @@ error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
      */
     if (chmod(path, mode) < 0) {
         return ERROR(ERR_FS, "Failed to set permissions on directory '%s'%s: %s",
-                    path, existed ? " (already existed)" : "", strerror(errno));
+                     path, existed ? " (already existed)" : "", strerror(errno));
     }
 
     return NULL;
@@ -452,7 +465,8 @@ error_t *fs_create_dir_with_ownership(
 
     /* Validate mode */
     if (mode > 0777) {
-        return ERROR(ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)", mode);
+        return ERROR(ERR_INVALID_ARG,
+            "Invalid mode: %04o (must be <= 0777)", mode);
     }
 
     /* Try to open existing directory first (eliminates TOCTOU race)
@@ -470,8 +484,8 @@ error_t *fs_create_dir_with_ownership(
     /* Directory doesn't exist - verify it's actually missing */
     if (errno != ENOENT && errno != ENOTDIR) {
         /* Unexpected error (permission denied, etc.) */
-        return ERROR(ERR_FS, "Failed to open directory '%s': %s",
-                    path, strerror(errno));
+        return ERROR(ERR_FS,
+            "Failed to open directory '%s': %s", path, strerror(errno));
     }
 
     /* Create parent directories if requested */
@@ -502,8 +516,8 @@ error_t *fs_create_dir_with_ownership(
             /* Race condition: directory created concurrently, retry via open path */
             return fs_create_dir_with_ownership(path, mode, uid, gid, false);
         }
-        return ERROR(ERR_FS, "Failed to create directory '%s': %s",
-                    path, strerror(errno));
+        return ERROR(ERR_FS,
+            "Failed to create directory '%s': %s", path, strerror(errno));
     }
 
     /* Open newly created directory for atomic operations
@@ -512,8 +526,8 @@ error_t *fs_create_dir_with_ownership(
      * with ELOOP instead of applying ownership to the symlink target. */
     dirfd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
     if (dirfd < 0) {
-        return ERROR(ERR_FS, "Failed to open newly created directory '%s': %s",
-                    path, strerror(errno));
+        return ERROR(ERR_FS,
+            "Failed to open newly created directory '%s': %s", path, strerror(errno));
     }
 
 apply_metadata:
@@ -525,8 +539,8 @@ apply_metadata:
         if (fchown(dirfd, uid, gid) < 0) {
             int saved_errno = errno;
             close(dirfd);
-            return ERROR(ERR_FS, "Failed to set ownership on '%s': %s",
-                        path, strerror(saved_errno));
+            return ERROR(ERR_FS,
+                "Failed to set ownership on '%s': %s", path, strerror(saved_errno));
         }
     }
 
@@ -537,8 +551,8 @@ apply_metadata:
     if (fchmod(dirfd, mode) < 0) {
         int saved_errno = errno;
         close(dirfd);
-        return ERROR(ERR_FS, "Failed to set mode on '%s': %s",
-                    path, strerror(saved_errno));
+        return ERROR(ERR_FS,
+            "Failed to set mode on '%s': %s", path, strerror(saved_errno));
     }
 
     close(dirfd);
@@ -562,12 +576,6 @@ error_t *fs_remove_dir(const char *path, bool recursive) {
 
         for (size_t i = 0; i < string_array_size(entries); i++) {
             const char *entry = string_array_get(entries, i);
-
-            /* Skip . and .. */
-            if (strcmp(entry, ".") == 0 || strcmp(entry, "..") == 0) {
-                continue;
-            }
-
             char *full_path = NULL;
             err = fs_path_join(path, entry, &full_path);
             if (err) {
@@ -575,10 +583,22 @@ error_t *fs_remove_dir(const char *path, bool recursive) {
                 return err;
             }
 
-            /* Remove recursively */
-            if (fs_is_directory(full_path)) {
+            /* Use lstat to determine type WITHOUT following symlinks.
+             * This prevents symlink-traversal attacks where a symlink
+             * inside the tree points to a directory outside it - using
+             * stat() would follow the symlink and recursively delete the
+             * target directory's contents. */
+            struct stat st;
+            if (lstat(full_path, &st) < 0) {
+                /* If lstat fails, try unlink as fallback */
+                err = (errno != ENOENT)
+                    ? ERROR(ERR_FS,
+                        "Failed to stat '%s': %s", full_path, strerror(errno))
+                    : NULL;
+            } else if (S_ISDIR(st.st_mode)) {
                 err = fs_remove_dir(full_path, true);
             } else {
+                /* Regular file, symlink, or any other type: unlink */
                 err = fs_remove_file(full_path);
             }
 
@@ -707,17 +727,26 @@ error_t *fs_list_dir(const char *path, string_array_t **out) {
     string_array_t *entries = string_array_create();
     if (!entries) {
         closedir(dir);
-        return ERROR(ERR_MEMORY, "Failed to allocate directory listing for '%s'", path);
+        return ERROR(ERR_MEMORY,
+            "Failed to allocate directory listing for '%s'", path);
     }
 
     struct dirent *entry;
     errno = 0;
     while ((entry = readdir(dir)) != NULL) {
+        /* Skip . and .. - no caller ever wants these */
+        if (entry->d_name[0] == '.' && (entry->d_name[1] == '\0' ||
+            (entry->d_name[1] == '.' && entry->d_name[2] == '\0'))) {
+            errno = 0;
+            continue;
+        }
+
         error_t *err = string_array_push(entries, entry->d_name);
         if (err) {
             closedir(dir);
             string_array_free(entries);
-            return error_wrap(err, "Failed to build directory listing for '%s'", path);
+            return error_wrap(err,
+                "Failed to build directory listing for '%s'", path);
         }
         errno = 0;
     }
@@ -726,8 +755,8 @@ error_t *fs_list_dir(const char *path, string_array_t **out) {
         int saved_errno = errno;
         closedir(dir);
         string_array_free(entries);
-        return ERROR(ERR_FS, "Error reading directory '%s': %s",
-                    path, strerror(saved_errno));
+        return ERROR(ERR_FS,
+            "Error reading directory '%s': %s", path, strerror(saved_errno));
     }
 
     closedir(dir);
@@ -755,14 +784,25 @@ error_t *fs_make_absolute(const char *path, char **out) {
         /* Relative path - prepend current working directory */
         char cwd[PATH_MAX];
         if (getcwd(cwd, sizeof(cwd)) == NULL) {
-            return ERROR(ERR_FS, "Failed to get current directory: %s",
-                        strerror(errno));
+            return ERROR(ERR_FS,
+                "Failed to get current directory: %s", strerror(errno));
         }
 
         error_t *err = fs_path_join(cwd, path, &absolute);
         if (err) {
             return error_wrap(err, "Failed to join paths");
         }
+    }
+
+    /* Validate existence using lstat (doesn't follow final symlink component).
+     * This ensures the path refers to something real on the filesystem,
+     * preserving symlink locations for storage path determination. */
+    struct stat st;
+    if (lstat(absolute, &st) < 0) {
+        int saved_errno = errno;
+        free(absolute);
+        return ERROR(ERR_NOT_FOUND,
+            "Path does not exist: '%s': %s", path, strerror(saved_errno));
     }
 
     *out = absolute;
@@ -781,7 +821,8 @@ error_t *fs_canonicalize_path(const char *path, char **out) {
 
     *out = strdup(resolved);
     if (!*out) {
-        return ERROR(ERR_MEMORY, "Failed to allocate canonical path for '%s'", path);
+        return ERROR(ERR_MEMORY,
+            "Failed to allocate canonical path for '%s'", path);
     }
 
     return NULL;
@@ -947,7 +988,8 @@ error_t *fs_get_parent_dir(const char *path, char **out) {
     free(clean_path);
 
     if (!*out) {
-        return ERROR(ERR_MEMORY, "Failed to allocate parent path for '%s'", path);
+        return ERROR(ERR_MEMORY,
+            "Failed to allocate parent path for '%s'", path);
     }
 
     return NULL;
@@ -1012,14 +1054,18 @@ bool fs_is_writable(const char *path) {
 
     /* Check parent directory - walk up until we find an existing directory */
     char *check_path = NULL;
-    if (fs_get_parent_dir(path, &check_path) != NULL) {
+    error_t *err = fs_get_parent_dir(path, &check_path);
+    if (err) {
+        error_free(err);
         return false;
     }
 
     /* Walk up the directory tree until we find an existing directory */
     while (check_path && !fs_exists(check_path)) {
         char *parent = NULL;
-        if (fs_get_parent_dir(check_path, &parent) != NULL) {
+        err = fs_get_parent_dir(check_path, &parent);
+        if (err) {
+            error_free(err);
             free(check_path);
             return false;
         }

@@ -241,7 +241,7 @@ bool fs_is_directory(const char *path);
 bool fs_is_directory_empty(const char *path);
 
 /**
- * List directory contents
+ * List directory contents (excludes . and ..)
  *
  * @param path Directory path (must not be NULL)
  * @param out String array of filenames (must not be NULL)

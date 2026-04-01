@@ -37,19 +37,19 @@ struct worktree_handle {
  * Generate unique worktree name
  */
 static char *generate_worktree_name(void) {
-    /* Use process ID and microsecond timestamp for uniqueness */
+    /* Use process ID and timestamp for uniqueness.
+     * sec and usec are kept as separate fields to avoid overflow
+     * when multiplying tv_sec by 1000000 on 32-bit systems. */
     struct timeval tv;
     gettimeofday(&tv, NULL);
-
-    pid_t pid = getpid();
-    long usec = tv.tv_sec * 1000000L + tv.tv_usec;
 
     char *name = malloc(64);
     if (!name) {
         return NULL;
     }
 
-    snprintf(name, 64, "dotta-temp-%d-%ld", pid, usec);
+    snprintf(name, 64, "dotta-temp-%ld-%ld-%ld",
+             (long)getpid(), (long)tv.tv_sec, (long)tv.tv_usec);
     return name;
 }
 
@@ -187,45 +187,39 @@ error_t *worktree_create_temp(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
+    *out = NULL;
 
     /* Cleanup orphaned worktrees from dead processes (self-healing)
      * This is transparent, best-effort cleanup that ensures no stale
      * worktrees from interrupted operations block this creation. */
     cleanup_orphaned_worktrees(repo);
 
-    /* Allocate handle */
+    /* Allocate handle (calloc zero-initializes all fields) */
     worktree_handle_t *wt = calloc(1, sizeof(worktree_handle_t));
     if (!wt) {
         return ERROR(ERR_MEMORY, "Failed to allocate worktree handle");
     }
 
     wt->main_repo = repo;
-    wt->cleaned_up = false;
+    error_t *err = NULL;
 
     /* Generate unique name */
     wt->name = generate_worktree_name();
     if (!wt->name) {
-        free(wt);
-        return ERROR(ERR_MEMORY, "Failed to generate worktree name");
+        err = ERROR(ERR_MEMORY, "Failed to generate worktree name");
+        goto cleanup;
     }
 
     /* Generate temp path from the same name */
-    error_t *err = generate_temp_path_from_name(wt->name, &wt->path);
-    if (err) {
-        free(wt->name);
-        free(wt);
-        return err;
-    }
-
+    err = generate_temp_path_from_name(wt->name, &wt->path);
+    if (err) goto cleanup;
 
     /* Check if directory already exists from failed previous run */
     if (fs_is_directory(wt->path)) {
         err = fs_remove_dir(wt->path, true);
         if (err) {
-            free(wt->path);
-            free(wt->name);
-            free(wt);
-            return error_wrap(err, "Failed to remove existing temp directory");
+            err = error_wrap(err, "Failed to remove existing temp directory");
+            goto cleanup;
         }
     }
 
@@ -235,30 +229,26 @@ error_t *worktree_create_temp(
 
     int git_err = git_worktree_add(&wt->worktree, repo, wt->name, wt->path, &opts);
     if (git_err < 0) {
-        fs_remove_dir(wt->path, true);  /* Cleanup directory */
-        free(wt->path);
-        free(wt->name);
-        free(wt);
-        return error_from_git(git_err);
+        err = error_from_git(git_err);
+        goto cleanup;
     }
 
     /* Open repository from worktree */
     git_err = git_repository_open_from_worktree(&wt->repo, wt->worktree);
     if (git_err < 0) {
-        git_worktree_prune_options prune_opts = {0};
-        prune_opts.version = 1;
-        prune_opts.flags = GIT_WORKTREE_PRUNE_VALID;
-        git_worktree_prune(wt->worktree, &prune_opts);
-        git_worktree_free(wt->worktree);
-        fs_remove_dir(wt->path, true);
-        free(wt->path);
-        free(wt->name);
-        free(wt);
-        return error_from_git(git_err);
+        err = error_from_git(git_err);
+        goto cleanup;
     }
 
     *out = wt;
     return NULL;
+
+cleanup:
+    /* worktree_cleanup handles partially-initialized handles correctly:
+     * NULL fields are skipped, and it cleans up the temp branch that
+     * git_worktree_add creates (which the old error paths missed). */
+    worktree_cleanup(&wt);
+    return err;
 }
 
 error_t *worktree_checkout_branch(
@@ -343,21 +333,43 @@ error_t *worktree_create_orphan(
     }
 
     /* Set HEAD to new orphan branch (doesn't exist yet) */
-    int err = git_repository_set_head(wt->repo, refname);
-    if (err < 0) {
-        return error_from_git(err);
+    int rc = git_repository_set_head(wt->repo, refname);
+    if (rc < 0) {
+        return error_from_git(rc);
+    }
+
+    /* Clear the index to ensure a clean orphan state.
+     * git_worktree_add may have populated the index from the parent
+     * branch. An orphan branch should start with an empty index
+     * so only explicitly added files appear in the first commit. */
+    git_index *index = NULL;
+    rc = git_repository_index(&index, wt->repo);
+    if (rc < 0) {
+        return error_from_git(rc);
+    }
+
+    git_index_clear(index);
+    rc = git_index_write(index);
+    git_index_free(index);
+
+    if (rc < 0) {
+        return error_from_git(rc);
     }
 
     return NULL;
 }
 
-void worktree_cleanup(worktree_handle_t *wt) {
-    if (!wt) {
+void worktree_cleanup(worktree_handle_t **wt_ptr) {
+    if (!wt_ptr || !*wt_ptr) {
         return;
     }
 
+    worktree_handle_t *wt = *wt_ptr;
+    *wt_ptr = NULL;  /* Nullify caller's pointer immediately */
+
     if (wt->cleaned_up) {
-        return;  /* Already cleaned up */
+        free(wt);
+        return;  /* Already cleaned up, just free the shell */
     }
 
     wt->cleaned_up = true;

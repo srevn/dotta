@@ -1687,8 +1687,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     }
 
     /* Cleanup worktree before post-processing */
-    worktree_cleanup(wt);
-    wt = NULL;
+    worktree_cleanup(&wt);
 
     /* Execute post-add hook */
     if (hook_ctx) {
@@ -1794,7 +1793,7 @@ cleanup:
     /* Free resources in reverse order of allocation */
     if (metadata) metadata_free(metadata);
     if (all_files) string_array_free(all_files);
-    if (wt) worktree_cleanup(wt);
+    if (wt) worktree_cleanup(&wt);
     if (hook_ctx) hook_context_free(hook_ctx);
     if (repo_dir) free(repo_dir);
     if (ignore_ctx) ignore_context_free(ignore_ctx);

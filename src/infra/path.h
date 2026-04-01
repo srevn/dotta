@@ -117,10 +117,11 @@ error_t *path_from_storage(
  * Validate storage path
  *
  * Checks:
- * - No ".." components (path traversal)
- * - Starts with "home/" or "root/"
+ * - No ".." or "." components (path traversal)
+ * - Starts with "home/", "root/", or "custom/"
  * - Not absolute (no leading /)
  * - Not empty
+ * - No trailing slash (must reference a file, not a directory)
  *
  * @param storage_path Path to validate (must not be NULL)
  * @return Error or NULL if valid

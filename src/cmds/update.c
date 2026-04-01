@@ -1512,9 +1512,7 @@ cleanup:
             *out_by_profile = by_profile;
         }
     }
-    if (wt) {
-        worktree_cleanup(wt);
-    }
+    if (wt) worktree_cleanup(&wt);
 
     return err;
 }

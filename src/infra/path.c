@@ -74,6 +74,12 @@ error_t *path_validate_storage(const char *storage_path) {
                     storage_path);
     }
 
+    /* Must reference a file, not just a prefix directory */
+    if (storage_path[strlen(storage_path) - 1] == '/') {
+        return ERROR(ERR_INVALID_ARG,
+                    "Storage path must not end with '/': '%s'", storage_path);
+    }
+
     /* SECURITY: Additional checks */
     /* Check for consecutive slashes */
     if (strstr(storage_path, "//") != NULL) {
@@ -103,13 +109,6 @@ error_t *path_validate_storage(const char *storage_path) {
         if (strcmp(component, ".") == 0) {
             free(path_copy);
             return ERROR(ERR_INVALID_ARG, "Invalid path component '.' in '%s'", storage_path);
-        }
-
-        /* Check for empty component (would indicate //) */
-        if (component[0] == '\0') {
-            free(path_copy);
-            return ERROR(ERR_INVALID_ARG,
-                        "Empty path component in '%s'", storage_path);
         }
 
         component = strtok_r(NULL, "/", &saveptr);
@@ -241,7 +240,7 @@ static int detect_home_prefix(
         return match;
     }
 
-    if (home_canonical && home_canonical != home) {
+    if (home_canonical && strcmp(home_canonical, home) != 0) {
         match = extract_relative_after_prefix(absolute, home_canonical, &relative);
         if (match >= 0) {
             *out_relative = relative;
@@ -310,12 +309,16 @@ error_t *path_normalize_input(
         const char *path = path_to_make_absolute;
 
         if (path[0] != '/') {
-            /* Relative path: join with prefix */
-            if (strstr(path, "..") != NULL) {
-                free(expanded);
-                return ERROR(ERR_INVALID_ARG,
-                    "Path traversal (..) not allowed in relative paths with --prefix.\n"
-                    "Use absolute paths if you need to reference files outside the prefix.");
+            /* SECURITY: Reject '..' as a path component (not as substring).
+             * Prevents prefix escape: ../foo + /jail -> /jail/../foo -> /foo */
+            for (const char *p = path; *p; p++) {
+                if ((p == path || *(p - 1) == '/') && p[0] == '.' && p[1] == '.' &&
+                    (p[2] == '/' || p[2] == '\0')) {
+                    free(expanded);
+                    return ERROR(ERR_INVALID_ARG,
+                        "Path traversal (..) not allowed in relative paths with --prefix.\n"
+                        "Use absolute paths if you need to reference files outside the prefix.");
+                }
             }
 
             err = fs_path_join(custom_prefix, path, &joined);
@@ -484,6 +487,12 @@ error_t *path_to_storage(
     relative = filesystem_path;
     if (relative[0] == '/') {
         relative++;  /* Skip leading slash for consistency */
+    }
+
+    /* Reject root directory itself (parallel to HOME directory rejection above) */
+    if (relative[0] == '\0') {
+        err = ERROR(ERR_INVALID_ARG, "Cannot store root directory itself");
+        goto cleanup;
     }
 
     result = str_format("root/%s", relative);
@@ -843,6 +852,11 @@ error_t *path_resolve_input(
                         err = ERROR(ERR_MEMORY, "Failed to format custom storage path");
                         goto cleanup;
                     }
+                    err = path_validate_storage(new_path);
+                    if (err) {
+                        free(new_path);
+                        goto cleanup;
+                    }
                     free(storage_path);
                     storage_path = new_path;
                     break;
@@ -1170,14 +1184,33 @@ error_t *path_validate_custom_prefix(const char *prefix) {
             "Example: --prefix /mnt/jails/web", prefix);
     }
 
-    /* 2. No path traversal components */
-    if (strstr(prefix, "/./") || strstr(prefix, "/../") || strstr(prefix, "//")) {
+    /* 2. No path traversal or redundant components */
+    if (strstr(prefix, "//") != NULL) {
         return ERROR(ERR_INVALID_ARG,
-            "Custom prefix contains invalid path components: '%s'\n"
-            "Components like '..', '.', or '//' are not allowed", prefix);
+            "Custom prefix contains consecutive slashes: '%s'", prefix);
     }
 
-    /* 3. Must not end with slash (normalize) */
+    /* 3. Validate each component (catches . and .. at any position) */
+    char *prefix_copy = strdup(prefix + 1);  /* skip leading / */
+    if (!prefix_copy) {
+        return ERROR(ERR_MEMORY, "Failed to allocate path copy");
+    }
+    char *saveptr = NULL;
+    char *comp = strtok_r(prefix_copy, "/", &saveptr);
+    while (comp) {
+        if (strcmp(comp, ".") == 0 || strcmp(comp, "..") == 0) {
+            /* Save before free — comp points into prefix_copy */
+            const char *bad = strcmp(comp, ".") == 0 ? "." : "..";
+            free(prefix_copy);
+            return ERROR(ERR_INVALID_ARG,
+                "Custom prefix contains '%s' component: '%s'\n"
+                "Use canonical paths without '.', '..', or '//'", bad, prefix);
+        }
+        comp = strtok_r(NULL, "/", &saveptr);
+    }
+    free(prefix_copy);
+
+    /* 4. Must not end with slash (normalize) */
     size_t len = strlen(prefix);
     if (len > 1 && prefix[len - 1] == '/') {
         return ERROR(ERR_INVALID_ARG,
@@ -1185,7 +1218,7 @@ error_t *path_validate_custom_prefix(const char *prefix) {
             "Use: %.*s", prefix, (int)(len - 1), prefix);
     }
 
-    /* 4. Normalize and validate with realpath() */
+    /* 5. Normalize and validate with realpath() */
     char *resolved = realpath(prefix, NULL);
     if (!resolved) {
         if (errno == ENOENT) {
@@ -1198,7 +1231,7 @@ error_t *path_validate_custom_prefix(const char *prefix) {
         }
     }
 
-    /* 5. Verify it's a directory */
+    /* 6. Verify it's a directory */
     struct stat st;
     if (stat(resolved, &st) != 0) {
         free(resolved);

@@ -39,15 +39,6 @@ typedef struct worktree_handle worktree_handle_t;
  * @param repo Main repository (must not be NULL)
  * @param out Worktree handle (must not be NULL)
  * @return Error or NULL on success
- *
- * Example:
- *   worktree_handle_t *wt = NULL;
- *   err = worktree_create_temp(repo, &wt);
- *   if (err) return err;
- *
- *   // ... do work ...
- *
- *   worktree_cleanup(wt);  // ALWAYS call cleanup
  */
 error_t *worktree_create_temp(
     git_repository *repo,
@@ -83,20 +74,22 @@ error_t *worktree_create_orphan(
 /**
  * Cleanup worktree and free all resources
  *
- * Safe to call multiple times (idempotent).
- * Safe to call with NULL.
+ * Accepts pointer-to-pointer so the caller's pointer is nullified,
+ * making the function truly idempotent (safe to call multiple times).
+ * Safe to call with NULL pointer or pointer to NULL.
  *
  * Cleanup order (critical):
- * 1. Close worktree repository handle
- * 2. Prune libgit2 worktree object
- * 3. Delete temporary worktree branch
- * 4. Remove worktree directory
- * 5. Free name string
- * 6. Free handle memory
+ * 1. Nullify caller's pointer
+ * 2. Close worktree repository handle
+ * 3. Prune libgit2 worktree object
+ * 4. Delete temporary worktree branch
+ * 5. Remove worktree directory
+ * 6. Free name string
+ * 7. Free handle memory
  *
- * @param wt Worktree handle (can be NULL)
+ * @param wt Pointer to worktree handle (can be NULL, *wt can be NULL)
  */
-void worktree_cleanup(worktree_handle_t *wt);
+void worktree_cleanup(worktree_handle_t **wt);
 
 /**
  * Get worktree filesystem path
@@ -130,10 +123,7 @@ error_t *worktree_get_index(worktree_handle_t *wt, git_index **out);
  * is recommended for critical resources like worktrees.
  */
 static inline void cleanup_worktree_handle(worktree_handle_t **wt) {
-    if (wt && *wt) {
-        worktree_cleanup(*wt);
-        *wt = NULL;
-    }
+    worktree_cleanup(wt);
 }
 
 #define WORKTREE_CLEANUP __attribute__((cleanup(cleanup_worktree_handle)))

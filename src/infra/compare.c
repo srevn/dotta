@@ -68,7 +68,8 @@ error_t *compare_buffer_to_disk(
                 }
                 return NULL;
             }
-            return ERROR(ERR_FS, "Failed to stat '%s': %s", disk_path, strerror(errno));
+            return ERROR(ERR_FS,
+                "Failed to stat '%s': %s", disk_path, strerror(errno));
         }
         stat_ptr = &st;
         if (out_stat) {
@@ -140,11 +141,13 @@ error_t *compare_buffer_to_disk(
                     return error_wrap(err, "Failed to read '%s'", disk_path);
                 }
 
-                int cmp = memcmp(buffer_data(content), buffer_data(disk_content),
-                                buffer_size(content));
+                /* Re-check size: file may have changed between stat and read */
+                bool equal = (buffer_size(disk_content) == buffer_size(content)) &&
+                             (memcmp(buffer_data(content), buffer_data(disk_content),
+                                     buffer_size(content)) == 0);
                 buffer_free(disk_content);
 
-                if (cmp != 0) {
+                if (!equal) {
                     *result = CMP_DIFFERENT;
                     return NULL;
                 }
@@ -181,33 +184,34 @@ error_t *compare_buffer_to_disk(
 }
 
 /**
- * Diff line callback - accumulates diff output
+ * Diff line callback - accumulates diff output into a buffer_t payload
  */
-typedef struct {
-    buffer_t *output;
-    bool has_binary;
-} diff_callback_data_t;
-
 static int diff_line_callback(
     const git_diff_delta *delta,
     const git_diff_hunk *hunk,
     const git_diff_line *line,
     void *payload
 ) {
-    diff_callback_data_t *data = (diff_callback_data_t *)payload;
+    buffer_t *output = (buffer_t *)payload;
 
     /* Suppress unused parameter warnings */
     (void)delta;
     (void)hunk;
 
-    if (!data || !data->output) {
+    if (!output) {
         return -1;
     }
 
-    /* Check for binary content marker */
-    if (line->origin == GIT_DIFF_LINE_BINARY) {
-        data->has_binary = true;
-        buffer_append_string(data->output, "Binary files differ\n");
+    /* Skip EOFNL lines — the manual marker below handles "no newline at end
+     * of file" for all line types.  Letting EOFNL lines through would
+     * duplicate the marker because libgit2 emits them with the same text.
+     *
+     * Note: GIT_DIFF_LINE_BINARY never reaches this callback because
+     * git_diff_buffers only routes binary content to binary_cb (which we
+     * pass as NULL).  Binary detection is handled in compare_generate_diff. */
+    if (line->origin == GIT_DIFF_LINE_ADD_EOFNL ||
+        line->origin == GIT_DIFF_LINE_DEL_EOFNL ||
+        line->origin == GIT_DIFF_LINE_CONTEXT_EOFNL) {
         return 0;
     }
 
@@ -215,17 +219,15 @@ static int diff_line_callback(
     if (line->origin == GIT_DIFF_LINE_CONTEXT ||
         line->origin == GIT_DIFF_LINE_ADDITION ||
         line->origin == GIT_DIFF_LINE_DELETION) {
-        buffer_append(data->output, (const unsigned char *)&line->origin, 1);
+        buffer_append(output, (const unsigned char *)&line->origin, 1);
     }
 
     /* Add line content */
-    buffer_append(data->output, (const unsigned char *)line->content, line->content_len);
+    buffer_append(output, (const unsigned char *)line->content, line->content_len);
 
     /* Handle files without trailing newline like git diff does */
-    if (line->origin != GIT_DIFF_LINE_ADD_EOFNL &&
-        line->origin != GIT_DIFF_LINE_DEL_EOFNL &&
-        (line->content_len == 0 || line->content[line->content_len - 1] != '\n')) {
-        buffer_append_string(data->output, "\n\\ No newline at end of file\n");
+    if (line->content_len == 0 || line->content[line->content_len - 1] != '\n') {
+        buffer_append_string(output, "\n\\ No newline at end of file\n");
     }
 
     return 0;
@@ -250,9 +252,9 @@ static error_t *generate_symlink_diff(
     const char *blob_target = (const char *)buffer_data(content);
     size_t blob_target_len = buffer_size(content);
 
-    /* Read disk symlink target */
+    /* Read disk symlink target (lstat-based check handles broken symlinks) */
     char *disk_target = NULL;
-    if (fs_exists(disk_path) && fs_is_symlink(disk_path)) {
+    if (fs_is_symlink(disk_path)) {
         error_t *err = fs_read_symlink(disk_path, &disk_target);
         if (err) {
             return err;
@@ -322,36 +324,29 @@ static error_t *generate_text_diff(
 
     error_t *err = NULL;
     buffer_t *disk_content = NULL;
-    diff_callback_data_t callback_data = {0};
 
     /* Get repo buffer pointers (from input parameter - decrypted content) */
     const void *repo_data = buffer_data(content);
     size_t repo_size = buffer_size(content);
 
-    /* Read disk file content */
+    /* Read disk file content
+     * This function is only called when compare_buffer_to_disk returned
+     * CMP_DIFFERENT, so the file is known to exist. Read directly without
+     * a separate existence check to avoid TOCTOU races. */
     const void *disk_data = NULL;
     size_t disk_size = 0;
 
-    if (fs_exists(disk_path)) {
-        err = fs_read_file(disk_path, &disk_content);
-        if (err) {
-            return error_wrap(err, "Failed to read disk file");
-        }
-        disk_data = buffer_data(disk_content);
-        disk_size = buffer_size(disk_content);
-    } else {
-        /* File doesn't exist on disk - use empty buffer */
-        static const char empty[] = "";
-        disk_data = empty;
-        disk_size = 0;
+    err = fs_read_file(disk_path, &disk_content);
+    if (err) {
+        return error_wrap(err, "Failed to read disk file");
     }
+    disk_data = buffer_data(disk_content);
+    disk_size = buffer_size(disk_content);
 
-    /* Prepare callback data */
-    callback_data.output = buffer_create();
-    callback_data.has_binary = false;
-
-    if (!callback_data.output) {
-        if (disk_content) buffer_free(disk_content);
+    /* Output buffer passed directly as callback payload */
+    buffer_t *diff_output = buffer_create();
+    if (!diff_output) {
+        buffer_free(disk_content);
         return ERROR(ERR_MEMORY, "Failed to allocate diff buffer");
     }
 
@@ -377,7 +372,7 @@ static error_t *generate_text_diff(
             NULL,  /* binary callback */
             NULL,  /* hunk callback */
             diff_line_callback,
-            &callback_data
+            diff_output
         );
     } else {
         /* Downstream: repo → filesystem (what update would commit) */
@@ -392,7 +387,7 @@ static error_t *generate_text_diff(
             NULL,  /* binary callback */
             NULL,  /* hunk callback */
             diff_line_callback,
-            &callback_data
+            diff_output
         );
     }
 
@@ -400,19 +395,19 @@ static error_t *generate_text_diff(
     if (disk_content) buffer_free(disk_content);
 
     if (git_err < 0) {
-        buffer_free(callback_data.output);
+        buffer_free(diff_output);
         return error_from_git(git_err);
     }
 
     /* Extract result - transfer ownership and free buffer structure */
-    if (buffer_size(callback_data.output) > 0) {
-        err = buffer_release_data(callback_data.output, diff_text);
+    if (buffer_size(diff_output) > 0) {
+        err = buffer_release_data(diff_output, diff_text);
         if (err) {
             return error_wrap(err, "Failed to release diff text");
         }
     } else {
         *diff_text = NULL;
-        buffer_free(callback_data.output);
+        buffer_free(diff_output);
     }
 
     return NULL;
@@ -475,12 +470,9 @@ error_t *compare_generate_diff(
             actual = fs_stat_is_symlink(&file_stat) ? "symlink" : "regular file";
         }
 
-        /* Calculate exact buffer size needed for format string */
-        const char *format = "Type mismatch: expected %s, found %s";
-        size_t msg_len = strlen(format) - 4 + strlen(expected) + strlen(actual) + 1;
-        diff->diff_text = malloc(msg_len);
-        if (diff->diff_text) {
-            snprintf(diff->diff_text, msg_len, format, expected, actual);
+        if (asprintf(&diff->diff_text,
+                "Type mismatch: expected %s, found %s", expected, actual) < 0) {
+            diff->diff_text = NULL;
         }
     } else if (diff->status == CMP_DIFFERENT) {
         /* Generate actual unified diff */
@@ -502,6 +494,13 @@ error_t *compare_generate_diff(
             free(diff->path);
             free(diff);
             return err;
+        }
+
+        /* Binary files: libgit2 skips the line callback entirely when it
+         * detects binary content, so generate_text_diff returns NULL.
+         * Provide an explicit message rather than silent empty output. */
+        if (!diff->diff_text) {
+            diff->diff_text = strdup("Binary files differ");
         }
     }
 

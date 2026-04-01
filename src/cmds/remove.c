@@ -1174,8 +1174,7 @@ static error_t *remove_files_from_profile(
     }
 
     /* Cleanup worktree */
-    worktree_cleanup(wt);
-    wt = NULL;
+    worktree_cleanup(&wt);
 
     /*
      * Architectural note: We do NOT delete files from the filesystem here.
@@ -1328,12 +1327,12 @@ static error_t *remove_files_from_profile(
     }
 
 cleanup:
-    /* Free all resources in reverse order */
+    /* Free all resources in reverse order of allocation */
+    if (removed_paths) string_array_free(removed_paths);
+    if (wt) worktree_cleanup(&wt);
     if (hook_ctx) hook_context_free(hook_ctx);
     if (repo_dir) free(repo_dir);
-    if (wt) worktree_cleanup(wt);
     if (other_profiles) free_multi_profile_tracking(other_profiles, string_array_size(storage_paths));
-    if (removed_paths) string_array_free(removed_paths);
     if (filesystem_paths) string_array_free(filesystem_paths);
     if (storage_paths) string_array_free(storage_paths);
     if (state) state_free(state);

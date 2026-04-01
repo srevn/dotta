@@ -71,6 +71,9 @@ typedef struct {
  *     the repository remains valid for the entire lifetime of the ignore context.
  *   - Freeing the repository before freeing the ignore context will result in
  *     use-after-free errors.
+ *   - Only ONE ignore_context_t may be active per git_repository* at a time.
+ *     The context mutates the repository's internal ignore rules (via libgit2).
+ *     Creating a second context before freeing the first produces incorrect results.
  *   - The config and profile_name are copied internally and can be freed after
  *     this function returns.
  *   - CLI exclude patterns are copied internally and can be freed after this

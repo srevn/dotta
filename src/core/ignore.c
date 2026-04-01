@@ -26,12 +26,19 @@
  * Ignore context structure
  *
  * Layered ignore system:
- *   1. CLI patterns (highest priority)
- *   2. Combined .dottaignore (baseline from dotta-worktree + profile-specific)
- *      - Profile .dottaignore extends baseline, allowing negation to override
- *      - Example: baseline has "*.log", profile has "!important.log"
- *   3. Config patterns (machine-specific rules)
- *   4. Source .gitignore (lowest priority, when adding from git repos)
+ *   1. CLI patterns (highest priority) — uses match module
+ *   2. Combined .dottaignore (baseline + profile) — uses libgit2 for negation
+ *   3. Config patterns (machine-specific rules) — uses match module
+ *   4. Source .gitignore (lowest priority) — uses libgit2 on source repo
+ *
+ * Note: Layers 1/3 and layer 2 use different matching engines. The match
+ * module implements gitignore-style matching but without negation support.
+ * libgit2 provides full gitignore semantics including negation (!patterns).
+ * Subtle behavioral differences between engines are possible for edge cases.
+ *
+ * CONSTRAINT: Only one ignore_context_t may be active per git_repository*
+ * at a time. libgit2's internal ignore rules are global to the repository
+ * handle — concurrent contexts would corrupt each other's rules.
  */
 struct ignore_context {
     /* CLI patterns (highest priority) */
@@ -397,6 +404,15 @@ static error_t *ensure_rules_loaded(ignore_context_t *ctx) {
     if (!ctx->combined_dottaignore_content || !ctx->repo) {
         return NULL;
     }
+
+    /* Clear any stale rules from previous contexts.
+     *
+     * libgit2's internal ignore rules are global to the repository handle —
+     * git_ignore_add_rule() mutates the repo, git_ignore_clear_internal_rules()
+     * clears ALL internal rules. Only one ignore_context_t may be active per
+     * git_repository* at a time. This defensive clear ensures clean state
+     * even if a previous context was not freed properly. */
+    git_ignore_clear_internal_rules(ctx->repo);
 
     /* Add rules to repository (happens once per context) */
     int git_err = git_ignore_add_rule(
@@ -1066,9 +1082,15 @@ error_t *ignore_test_path(
                 result->ignored = true;
                 /* Determine which .dottaignore layer caused the match */
                 if (ctx->baseline_dottaignore_content && ctx->profile_dottaignore_content) {
-                    /* Both exist: check if baseline alone would match.
-                     * Uses match module (not libgit2) for a best-effort
-                     * attribution - accurate for non-negation patterns. */
+                    /* Both exist: best-effort source attribution.
+                     *
+                     * The combined rules use libgit2 (supports negation),
+                     * but libgit2 doesn't expose which rule caused the
+                     * match. We approximate by checking if baseline alone
+                     * would match using the match module (no negation).
+                     *
+                     * Accurate for simple cases. May misattribute when
+                     * negation patterns interact between layers. */
                     result->source = content_has_matching_pattern(
                             ctx->baseline_dottaignore_content, rel_path, is_directory
                         ) ? IGNORE_SOURCE_BASELINE_DOTTAIGNORE

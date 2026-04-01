@@ -224,7 +224,7 @@ error_t *metadata_item_create_symlink(
         return ERROR(ERR_MEMORY, "Failed to duplicate storage path");
     }
 
-    item->mode = 0;      /* Symlink permissions are not trackable */
+    item->mode = 0;       /* Symlink permissions are not trackable */
     item->owner = NULL;   /* Optional, set by caller if needed */
     item->group = NULL;   /* Optional, set by caller if needed */
 
@@ -832,6 +832,44 @@ const metadata_item_t **metadata_get_items_by_kind(
 }
 
 /**
+ * Capture ownership from stat data into metadata item
+ *
+ * Resolves UID to username and GID to groupname, storing as strings.
+ * Gracefully handles unresolvable UIDs/GIDs (leaves field NULL).
+ *
+ * On failure (memory allocation), item fields may be partially set.
+ * Caller is responsible for freeing the item on error.
+ *
+ * @param item Item to set ownership on (must not be NULL)
+ * @param st Stat data with uid/gid (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *capture_ownership(
+    metadata_item_t *item,
+    const struct stat *st
+) {
+    /* Resolve UID to username */
+    struct passwd *pwd = getpwuid(st->st_uid);
+    if (pwd && pwd->pw_name) {
+        item->owner = strdup(pwd->pw_name);
+        if (!item->owner) {
+            return ERROR(ERR_MEMORY, "Failed to allocate owner string");
+        }
+    }
+
+    /* Resolve GID to groupname */
+    struct group *grp = getgrgid(st->st_gid);
+    if (grp && grp->gr_name) {
+        item->group = strdup(grp->gr_name);
+        if (!item->group) {
+            return ERROR(ERR_MEMORY, "Failed to allocate group string");
+        }
+    }
+
+    return NULL;
+}
+
+/**
  * Capture metadata from filesystem file
  *
  * Creates a file metadata item from stat data.
@@ -862,53 +900,26 @@ error_t *metadata_capture_from_file(
         return metadata_capture_from_symlink(storage_path, st, out);
     }
 
-    /* Extract mode (permissions only, not file type bits) */
+    /* Reject non-regular files (devices, FIFOs, sockets) */
+    if (!S_ISREG(st->st_mode)) {
+        return ERROR(ERR_INVALID_ARG, "Not a regular file: %s", filesystem_path);
+    }
+
+    /* Create file item via factory
+     * (handles allocation, key duplication, mode validation) */
     mode_t mode = st->st_mode & 0777;
-
-    /* Create file item */
-    metadata_item_t *item = calloc(1, sizeof(metadata_item_t));
-    if (!item) {
-        return ERROR(ERR_MEMORY, "Failed to allocate metadata item");
+    metadata_item_t *item = NULL;
+    error_t *err = metadata_item_create_file(storage_path, mode, false, &item);
+    if (err) {
+        return err;
     }
-
-    item->kind = METADATA_ITEM_FILE;
-
-    item->key = strdup(storage_path);
-    if (!item->key) {
-        free(item);
-        return ERROR(ERR_MEMORY, "Failed to duplicate storage path");
-    }
-
-    item->mode = mode;
-    item->owner = NULL;  /* Set below if applicable */
-    item->group = NULL;  /* Set below if applicable */
-
-    /* Set file-specific union field (caller may update this) */
-    item->file.encrypted = false;
 
     /* Capture ownership for paths requiring root privileges (root/ and custom/) */
-    bool requires_root_privileges = privilege_path_requires_root(storage_path);
-    bool running_as_root = privilege_is_elevated();
-
-    if (requires_root_privileges && running_as_root) {
-        /* Resolve UID to username */
-        struct passwd *pwd = getpwuid(st->st_uid);
-        if (pwd && pwd->pw_name) {
-            item->owner = strdup(pwd->pw_name);
-            if (!item->owner) {
-                metadata_item_free(item);
-                return ERROR(ERR_MEMORY, "Failed to allocate owner string");
-            }
-        }
-
-        /* Resolve GID to groupname */
-        struct group *grp = getgrgid(st->st_gid);
-        if (grp && grp->gr_name) {
-            item->group = strdup(grp->gr_name);
-            if (!item->group) {
-                metadata_item_free(item);
-                return ERROR(ERR_MEMORY, "Failed to allocate group string");
-            }
+    if (privilege_path_requires_root(storage_path) && privilege_is_elevated()) {
+        err = capture_ownership(item, st);
+        if (err) {
+            metadata_item_free(item);
+            return err;
         }
     }
     /* For home/ prefix or when not running as root: owner/group remain NULL */
@@ -941,15 +952,12 @@ error_t *metadata_capture_from_symlink(
     /* Only capture metadata for root/custom prefix when running as root.
      * home/ prefix symlinks are always owned by the current user — no metadata needed.
      * Non-root users can't lchown anyway — no metadata needed. */
-    bool requires_root_privileges = privilege_path_requires_root(storage_path);
-    bool running_as_root = privilege_is_elevated();
-
-    if (!requires_root_privileges || !running_as_root) {
+    if (!privilege_path_requires_root(storage_path) || !privilege_is_elevated()) {
         *out = NULL;
         return NULL;
     }
 
-    /* Create symlink item */
+    /* Create symlink item via factory */
     metadata_item_t *item = NULL;
     error_t *err = metadata_item_create_symlink(storage_path, &item);
     if (err) {
@@ -957,22 +965,10 @@ error_t *metadata_capture_from_symlink(
     }
 
     /* Capture ownership from lstat data */
-    struct passwd *pwd = getpwuid(st->st_uid);
-    if (pwd && pwd->pw_name) {
-        item->owner = strdup(pwd->pw_name);
-        if (!item->owner) {
-            metadata_item_free(item);
-            return ERROR(ERR_MEMORY, "Failed to allocate owner string");
-        }
-    }
-
-    struct group *grp = getgrgid(st->st_gid);
-    if (grp && grp->gr_name) {
-        item->group = strdup(grp->gr_name);
-        if (!item->group) {
-            metadata_item_free(item);
-            return ERROR(ERR_MEMORY, "Failed to allocate group string");
-        }
+    err = capture_ownership(item, st);
+    if (err) {
+        metadata_item_free(item);
+        return err;
     }
 
     *out = item;
@@ -1006,53 +1002,21 @@ error_t *metadata_capture_from_directory(
         return ERROR(ERR_INVALID_ARG, "Path is not a directory: %s", storage_path);
     }
 
-    /* Extract mode (permissions only, not file type bits) */
+    /* Create directory item via factory 
+     * (handles allocation, key duplication, mode validation) */
     mode_t mode = st->st_mode & 0777;
-
-    /* Create directory item */
-    metadata_item_t *item = calloc(1, sizeof(metadata_item_t));
-    if (!item) {
-        return ERROR(ERR_MEMORY, "Failed to allocate metadata item");
+    metadata_item_t *item = NULL;
+    error_t *err = metadata_item_create_directory(storage_path, mode, &item);
+    if (err) {
+        return err;
     }
-
-    item->kind = METADATA_ITEM_DIRECTORY;
-
-    item->key = strdup(storage_path);
-    if (!item->key) {
-        free(item);
-        return ERROR(ERR_MEMORY, "Failed to duplicate storage path");
-    }
-
-    item->mode = mode;
-    item->owner = NULL;  /* Set below if applicable */
-    item->group = NULL;  /* Set below if applicable */
-
-    /* Initialize directory union */
-    item->directory._reserved = 0;
 
     /* Capture ownership for paths requiring root privileges (root/ and custom/) */
-    bool requires_root_privileges = privilege_path_requires_root(storage_path);
-    bool running_as_root = privilege_is_elevated();
-
-    if (requires_root_privileges && running_as_root) {
-        /* Resolve UID to username */
-        struct passwd *pwd = getpwuid(st->st_uid);
-        if (pwd && pwd->pw_name) {
-            item->owner = strdup(pwd->pw_name);
-            if (!item->owner) {
-                metadata_item_free(item);
-                return ERROR(ERR_MEMORY, "Failed to allocate owner string");
-            }
-        }
-
-        /* Resolve GID to groupname */
-        struct group *grp = getgrgid(st->st_gid);
-        if (grp && grp->gr_name) {
-            item->group = strdup(grp->gr_name);
-            if (!item->group) {
-                metadata_item_free(item);
-                return ERROR(ERR_MEMORY, "Failed to allocate group string");
-            }
+    if (privilege_path_requires_root(storage_path) && privilege_is_elevated()) {
+        err = capture_ownership(item, st);
+        if (err) {
+            metadata_item_free(item);
+            return err;
         }
     }
     /* For home/ prefix or when not running as root: owner/group remain NULL */
@@ -1114,6 +1078,10 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t **out) {
             case METADATA_ITEM_FILE:      kind_str = "file"; break;
             case METADATA_ITEM_DIRECTORY: kind_str = "directory"; break;
             case METADATA_ITEM_SYMLINK:   kind_str = "symlink"; break;
+            default:
+                cJSON_Delete(item_obj);
+                err = ERROR(ERR_INTERNAL, "Unknown metadata item kind: %d", item->kind);
+                goto cleanup;
         }
         if (!cJSON_AddStringToObject(item_obj, "kind", kind_str)) {
             cJSON_Delete(item_obj);
@@ -1307,7 +1275,8 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         if (err) {
             metadata_free(metadata);
             cJSON_Delete(root);
-            return error_wrap(err, "Invalid key in metadata: %s", key_obj->valuestring);
+            return error_wrap(err,
+                "Invalid key in metadata: %s", key_obj->valuestring);
         }
 
         /* Get mode (required) */
@@ -1315,7 +1284,8 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         if (!mode_obj || !cJSON_IsString(mode_obj) || !mode_obj->valuestring) {
             metadata_free(metadata);
             cJSON_Delete(root);
-            return ERROR(ERR_INVALID_ARG, "Item missing mode field (key: %s)", key_obj->valuestring);
+            return ERROR(ERR_INVALID_ARG,
+                "Item missing mode field (key: %s)", key_obj->valuestring);
         }
 
         /* Parse mode string */
@@ -1324,7 +1294,8 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         if (err) {
             metadata_free(metadata);
             cJSON_Delete(root);
-            return error_wrap(err, "Failed to parse mode for item: %s", key_obj->valuestring);
+            return error_wrap(err,
+                "Failed to parse mode for item: %s", key_obj->valuestring);
         }
 
         /* Create temporary item structure */
@@ -1344,6 +1315,11 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
             return ERROR(ERR_MEMORY, "Failed to duplicate key string");
         }
         item->mode = mode;
+
+        /* Symlink mode invariant: always 0 (permissions are not settable) */
+        if (kind == METADATA_ITEM_SYMLINK) {
+            item->mode = 0;
+        }
 
         /* Parse optional owner (only present for root/ prefix) */
         cJSON *owner_obj = cJSON_GetObjectItem(item_obj, "owner");
@@ -1384,7 +1360,8 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         if (err) {
             metadata_free(metadata);
             cJSON_Delete(root);
-            return error_wrap(err, "Failed to add item to metadata: %s", key_obj->valuestring);
+            return error_wrap(err,
+                "Failed to add item to metadata: %s", key_obj->valuestring);
         }
     }
 
@@ -1420,7 +1397,8 @@ error_t *metadata_load_from_branch(
 
     /* Look up branch reference */
     char ref_name[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", branch_name);
+    err = gitops_build_refname(ref_name, sizeof(ref_name),
+                               "refs/heads/%s", branch_name);
     if (err) {
         err = error_wrap(err, "Invalid branch name '%s'", branch_name);
         goto cleanup;
@@ -1454,7 +1432,8 @@ error_t *metadata_load_from_branch(
     git_err = git_tree_entry_bypath(&entry, tree, METADATA_FILE_PATH);
     if (git_err < 0) {
         if (git_err == GIT_ENOTFOUND) {
-            err = ERROR(ERR_NOT_FOUND, "Metadata file not found in branch: %s", branch_name);
+            err = ERROR(ERR_NOT_FOUND,
+                "Metadata file not found in branch: %s", branch_name);
         } else {
             err = error_from_git(git_err);
         }
@@ -1492,7 +1471,8 @@ error_t *metadata_load_from_branch(
     /* Parse JSON */
     err = metadata_from_json(json_str, &metadata);
     if (err) {
-        err = error_wrap(err, "Failed to parse metadata from branch: %s", branch_name);
+        err = error_wrap(err,
+            "Failed to parse metadata from branch: %s", branch_name);
         goto cleanup;
     }
 
@@ -1545,7 +1525,8 @@ error_t *metadata_load_from_tree(
     int git_err = git_tree_entry_bypath(&entry, tree, METADATA_FILE_PATH);
     if (git_err < 0) {
         if (git_err == GIT_ENOTFOUND) {
-            err = ERROR(ERR_NOT_FOUND, "Metadata file not found in profile: %s", profile_name);
+            err = ERROR(ERR_NOT_FOUND,
+                "Metadata file not found in profile: %s", profile_name);
         } else {
             err = error_from_git(git_err);
         }
@@ -1583,7 +1564,8 @@ error_t *metadata_load_from_tree(
     /* Parse JSON */
     err = metadata_from_json(json_str, &metadata);
     if (err) {
-        err = error_wrap(err, "Failed to parse metadata from profile: %s", profile_name);
+        err = error_wrap(err,
+            "Failed to parse metadata from profile: %s", profile_name);
         goto cleanup;
     }
 
@@ -1856,8 +1838,10 @@ error_t *metadata_parse_mode(const char *mode_str, mode_t *out) {
     char *endptr;
     unsigned long mode = strtoul(mode_str, &endptr, 8); /* Octal base */
 
-    if (*endptr != '\0') {
-        return ERROR(ERR_INVALID_ARG, "Invalid mode string: %s (not octal)", mode_str);
+    /* Reject empty/whitespace-only strings and trailing non-octal characters */
+    if (endptr == mode_str || *endptr != '\0') {
+        return ERROR(ERR_INVALID_ARG,
+                    "Invalid mode string: '%s' (not valid octal)", mode_str);
     }
 
     if (mode > 0777) {

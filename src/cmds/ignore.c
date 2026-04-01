@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include "base/error.h"
@@ -105,6 +106,13 @@ static error_t *add_patterns_to_content(
     size_t existing_len = existing_content ? strlen(existing_content) : 0;
     size_t required_size = existing_len;
 
+    /* Account for newline separator if existing content doesn't end with one */
+    bool needs_separator = (existing_len > 0 &&
+                            existing_content[existing_len - 1] != '\n');
+    if (needs_separator) {
+        required_size += 1;
+    }
+
     for (size_t i = 0; i < pattern_count; i++) {
         /* Validate pattern */
         if (!patterns[i] || patterns[i][0] == '\0') {
@@ -125,26 +133,25 @@ static error_t *add_patterns_to_content(
             continue;
         }
 
-        required_size += strlen(p) + 1;  /* +1 for newline */
+        required_size += strlen(p) + 1;  /* pattern + newline */
     }
 
     /* Allocate buffer */
-    char *result = malloc(required_size + 1);
+    char *result = malloc(required_size + 1);  /* +1 for null terminator */
     if (!result) {
         return ERROR(ERR_MEMORY, "Failed to allocate content buffer");
     }
 
-    /* Copy existing content */
-    if (existing_content && existing_len > 0) {
-        memcpy(result, existing_content, existing_len);
-        result[existing_len] = '\0';
+    /* Build content using tracked position (avoids O(n²) strcat) */
+    char *pos = result;
 
-        /* Ensure there's a trailing newline before adding patterns */
-        if (existing_len > 0 && existing_content[existing_len - 1] != '\n') {
-            strcat(result, "\n");
+    if (existing_content && existing_len > 0) {
+        memcpy(pos, existing_content, existing_len);
+        pos += existing_len;
+
+        if (needs_separator) {
+            *pos++ = '\n';
         }
-    } else {
-        result[0] = '\0';
     }
 
     /* Append new patterns */
@@ -167,12 +174,14 @@ static error_t *add_patterns_to_content(
             continue;
         }
 
-        /* Append pattern */
-        strcat(result, p);
-        strcat(result, "\n");
+        size_t plen = strlen(p);
+        memcpy(pos, p, plen);
+        pos += plen;
+        *pos++ = '\n';
         (*added_count)++;
     }
 
+    *pos = '\0';
     *new_content = result;
     return NULL;
 }
@@ -226,13 +235,13 @@ static error_t *remove_patterns_from_content(
         return ERROR(ERR_MEMORY, "Failed to allocate pattern tracking");
     }
 
-    /* Parse content line by line */
+    /* Parse content line by line using zero-allocation approach */
+    char *pos = result;
     const char *line_start = existing_content;
-    const char *line_end;
 
     while (*line_start) {
         /* Find end of line */
-        line_end = strchr(line_start, '\n');
+        const char *line_end = strchr(line_start, '\n');
         bool has_newline = (line_end != NULL);
         if (!line_end) {
             line_end = line_start + strlen(line_start);
@@ -240,56 +249,57 @@ static error_t *remove_patterns_from_content(
 
         /* Extract line */
         size_t line_len = (size_t)(line_end - line_start);
-        char *line = malloc(line_len + 1);
-        if (!line) {
-            free(result);
-            free(pattern_found);
-            return ERROR(ERR_MEMORY, "Failed to allocate line buffer");
-        }
-        memcpy(line, line_start, line_len);
-        line[line_len] = '\0';
 
-        /* Trim whitespace for comparison */
-        char *trimmed = line;
-        while (*trimmed && (*trimmed == ' ' || *trimmed == '\t')) {
-            trimmed++;
-        }
-        char *end = trimmed + strlen(trimmed) - 1;
-        while (end > trimmed && (*end == ' ' || *end == '\t' || *end == '\r')) {
-            *end = '\0';
-            end--;
+        /* Trim leading whitespace for comparison (no allocation) */
+        const char *trim_start = line_start;
+        size_t trim_len = line_len;
+
+        while (trim_len > 0 && (*trim_start == ' ' || *trim_start == '\t')) {
+            trim_start++;
+            trim_len--;
         }
 
-        /* Check if this line matches any pattern to remove */
-        bool should_remove = false;
-        for (size_t i = 0; i < pattern_count; i++) {
-            if (!patterns[i]) {
-                continue;
-            }
-
-            /* Trim pattern */
-            const char *p = patterns[i];
-            while (*p && (*p == ' ' || *p == '\t')) {
-                p++;
-            }
-
-            /* Skip comments and empty lines */
-            if (*trimmed != '#' && *trimmed != '\0' && strcmp(trimmed, p) == 0) {
-                should_remove = true;
-                pattern_found[i] = true;
+        /* Trim trailing whitespace */
+        while (trim_len > 0) {
+            char c = trim_start[trim_len - 1];
+            if (c == ' ' || c == '\t' || c == '\r') {
+                trim_len--;
+            } else {
                 break;
             }
         }
 
-        /* Keep line if not removing */
-        if (!should_remove) {
-            strcat(result, line);
-            if (has_newline) {
-                strcat(result, "\n");
+        /* Check if this line matches any pattern to remove */
+        bool should_remove = false;
+        if (trim_len > 0 && *trim_start != '#') {
+            for (size_t i = 0; i < pattern_count; i++) {
+                if (!patterns[i]) {
+                    continue;
+                }
+
+                /* Trim pattern for comparison */
+                const char *p = patterns[i];
+                while (*p && (*p == ' ' || *p == '\t')) {
+                    p++;
+                }
+
+                size_t plen = strlen(p);
+                if (plen == trim_len && memcmp(trim_start, p, plen) == 0) {
+                    should_remove = true;
+                    pattern_found[i] = true;
+                    break;
+                }
             }
         }
 
-        free(line);
+        /* Keep line if not removing (preserves original formatting) */
+        if (!should_remove) {
+            memcpy(pos, line_start, line_len);
+            pos += line_len;
+            if (has_newline) {
+                *pos++ = '\n';
+            }
+        }
 
         /* Move to next line */
         if (has_newline) {
@@ -298,6 +308,7 @@ static error_t *remove_patterns_from_content(
             break;
         }
     }
+    *pos = '\0';
 
     /* Count removed and not found */
     for (size_t i = 0; i < pattern_count; i++) {
@@ -372,7 +383,8 @@ static error_t *edit_baseline_dottaignore(
         if (git_err >= 0) {
             const void *content = git_blob_rawcontent(blob);
             size_t size = git_blob_rawsize(blob);
-            if (write(fd, content, size) < 0) {
+            ssize_t written = write(fd, content, size);
+            if (written < 0 || (size_t)written != size) {
                 git_blob_free(blob);
                 git_tree_free(tree);
                 close(fd);
@@ -385,7 +397,9 @@ static error_t *edit_baseline_dottaignore(
     } else {
         /* No existing .dottaignore, create with defaults */
         const char *default_content = ignore_default_dottaignore_content();
-        if (write(fd, default_content, strlen(default_content)) < 0) {
+        size_t len = strlen(default_content);
+        ssize_t written = write(fd, default_content, len);
+        if (written < 0 || (size_t)written != len) {
             git_tree_free(tree);
             close(fd);
             unlink(tmpfile);
@@ -416,6 +430,12 @@ static error_t *edit_baseline_dottaignore(
     /* Get file size */
     fseek(f, 0, SEEK_END);
     long fsize = ftell(f);
+    if (fsize < 0) {
+        fclose(f);
+        unlink(tmpfile);
+        free(tmpfile);
+        return ERROR(ERR_FS, "Failed to determine temporary file size");
+    }
     fseek(f, 0, SEEK_SET);
 
     char *new_content = malloc((size_t)fsize + 1);
@@ -433,6 +453,7 @@ static error_t *edit_baseline_dottaignore(
     free(tmpfile);
 
     /* Update .dottaignore in dotta-worktree branch */
+    bool was_modified = false;
     err = gitops_update_file(
         repo,
         "dotta-worktree",
@@ -441,13 +462,18 @@ static error_t *edit_baseline_dottaignore(
         read_size,
         "Update baseline .dottaignore",
         GIT_FILEMODE_BLOB,
-        NULL  /* Don't need modification flag */
+        &was_modified
     );
 
     free(new_content);
 
     if (err) {
         return error_wrap(err, "Failed to update .dottaignore");
+    }
+
+    if (!was_modified) {
+        output_info(out, "No changes to baseline .dottaignore");
+        return NULL;
     }
 
     /*
@@ -549,7 +575,8 @@ static error_t *edit_profile_dottaignore(
         if (git_err >= 0) {
             const void *content = git_blob_rawcontent(blob);
             size_t size = git_blob_rawsize(blob);
-            if (write(fd, content, size) < 0) {
+            ssize_t written = write(fd, content, size);
+            if (written < 0 || (size_t)written != size) {
                 git_blob_free(blob);
                 git_tree_free(tree);
                 close(fd);
@@ -575,7 +602,9 @@ static error_t *edit_profile_dottaignore(
                               "\n"
                               "# Add your profile-specific patterns below:\n"
                               "\n";
-        if (write(fd, template, strlen(template)) < 0) {
+        size_t len = strlen(template);
+        ssize_t written = write(fd, template, len);
+        if (written < 0 || (size_t)written != len) {
             git_tree_free(tree);
             close(fd);
             unlink(tmpfile);
@@ -606,6 +635,12 @@ static error_t *edit_profile_dottaignore(
     /* Get file size */
     fseek(f, 0, SEEK_END);
     long fsize = ftell(f);
+    if (fsize < 0) {
+        fclose(f);
+        unlink(tmpfile);
+        free(tmpfile);
+        return ERROR(ERR_FS, "Failed to determine temporary file size");
+    }
     fseek(f, 0, SEEK_SET);
 
     char *new_content = malloc((size_t)fsize + 1);
@@ -629,6 +664,7 @@ static error_t *edit_profile_dottaignore(
         return ERROR(ERR_MEMORY, "Failed to allocate commit message");
     }
 
+    bool was_modified = false;
     err = gitops_update_file(
         repo,
         profile_name,
@@ -637,7 +673,7 @@ static error_t *edit_profile_dottaignore(
         read_size,
         commit_msg,
         GIT_FILEMODE_BLOB,
-        NULL  /* Don't need modification flag */
+        &was_modified
     );
 
     free(commit_msg);
@@ -645,6 +681,11 @@ static error_t *edit_profile_dottaignore(
 
     if (err) {
         return error_wrap(err, "Failed to update profile .dottaignore");
+    }
+
+    if (!was_modified) {
+        output_info(out, "No changes to .dottaignore for profile '%s'", profile_name);
+        return NULL;
     }
 
     output_success(out, "Updated .dottaignore for profile '%s'", profile_name);
@@ -1095,7 +1136,16 @@ static error_t *test_path_ignore(
 
     /* Check if path exists and determine if it's a directory */
     bool path_exists = fs_exists(test_path);
-    bool is_directory = path_exists && fs_is_directory(test_path);
+    bool is_directory = false;
+
+    if (path_exists) {
+        is_directory = fs_is_directory(test_path);
+    } else {
+        /* For non-existent paths, treat trailing / as directory hint
+         * so directory-only patterns (e.g., "cache/") can be tested */
+        size_t len = strlen(test_path);
+        is_directory = (len > 0 && test_path[len - 1] == '/');
+    }
 
     if (!path_exists && verbose) {
         output_info(out, "Path does not exist: %s", test_path);

@@ -427,6 +427,9 @@ bool match_pattern(const char *pattern, const char *path, match_flags_t flags) {
     /* Check for trailing / (directory-only match) */
     bool pattern_is_directory = has_trailing_slash(pattern);
 
+    /* Buffer must outlive the if-block since pattern may point into it */
+    char pattern_buf[4096];
+
     if (pattern_is_directory) {
         /* Pattern matches directories only */
         if (!(flags & MATCH_DIRECTORY)) {
@@ -435,7 +438,6 @@ bool match_pattern(const char *pattern, const char *path, match_flags_t flags) {
         }
 
         /* Strip trailing / for matching */
-        char pattern_buf[4096];
         pattern = strip_trailing_slash(pattern, pattern_buf, sizeof(pattern_buf));
     }
 

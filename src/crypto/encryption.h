@@ -53,8 +53,7 @@
 #define ENCRYPTION_MAGIC "DOTTA"
 #define ENCRYPTION_MAGIC_BYTES 5        /* "DOTTA" magic string length */
 #define ENCRYPTION_VERSION 3            /* Version 3: SIV with length-prefixed domain separation */
-#define ENCRYPTION_MAGIC_HEADER_SIZE 8  /* Magic (5 bytes) + version (1 byte) + padding (2 bytes) */
-#define ENCRYPTION_HEADER_SIZE 8        /* Magic header (8 bytes) */
+#define ENCRYPTION_HEADER_SIZE 8        /* Magic (5) + version (1) + reserved (2) */
 #define ENCRYPTION_SIV_SIZE 32          /* SIV/MAC tag (32 bytes) */
 #define ENCRYPTION_OVERHEAD 40          /* Header (8) + SIV (32) */
 
@@ -157,7 +156,7 @@ error_t *encryption_derive_profile_key(
  *   4. Compute SIV/MAC over storage_path || ciphertext
  *
  * Output format:
- *   [Magic: "DOTTA\x02\x00\x00" (8 bytes)]
+ *   [Magic: "DOTTA\x03\x00\x00" (8 bytes)]
  *   [SIV: MAC tag (32 bytes)]
  *   [Ciphertext: encrypted data (plaintext_len bytes)]
  *

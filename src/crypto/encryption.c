@@ -151,8 +151,10 @@ static error_t *compute_siv(
     /* Authenticate storage_path (associated data) */
     hydro_hash_update(&mac_state, (const uint8_t *)storage_path, path_len);
 
-    /* Authenticate ciphertext */
-    hydro_hash_update(&mac_state, ciphertext, ciphertext_len);
+    /* Authenticate ciphertext (guard against NULL from malloc(0) on empty files) */
+    if (ciphertext_len > 0) {
+        hydro_hash_update(&mac_state, ciphertext, ciphertext_len);
+    }
 
     /* Finalize to get SIV */
     hydro_hash_final(&mac_state, out_siv, 32);
@@ -453,6 +455,7 @@ error_t *encryption_encrypt(
     uint8_t mac_key[32] = {0};
     uint8_t ctr_key[32] = {0};
     uint8_t stream_seed[32] = {0};
+    uint8_t siv[ENCRYPTION_SIV_SIZE] = {0};
     uint8_t *keystream = NULL;
     unsigned char *ciphertext = NULL;
     buffer_t *output = NULL;
@@ -499,7 +502,6 @@ error_t *encryption_encrypt(
     }
 
     /* Step 5: Compute SIV/MAC over storage_path || ciphertext */
-    uint8_t siv[ENCRYPTION_SIV_SIZE];
     err = compute_siv(mac_key, storage_path, ciphertext, plaintext_len, siv);
     if (err) {
         goto cleanup;
@@ -578,6 +580,7 @@ error_t *encryption_decrypt(
     uint8_t mac_key[32] = {0};
     uint8_t ctr_key[32] = {0};
     uint8_t stream_seed[32] = {0};
+    uint8_t siv_computed[ENCRYPTION_SIV_SIZE] = {0};
     uint8_t *keystream = NULL;
     unsigned char *plaintext_data = NULL;
     buffer_t *output = NULL;
@@ -588,8 +591,12 @@ error_t *encryption_decrypt(
                      ENCRYPTION_OVERHEAD, ciphertext_len);
     }
 
-    /* Step 2: Verify magic header */
-    if (memcmp(ciphertext, MAGIC_HEADER, sizeof(MAGIC_HEADER)) != 0) {
+    /* Step 2: Verify magic header and version
+     *
+     * Check magic bytes and version separately to give precise diagnostics.
+     * A version mismatch should report the actual version found, not just
+     * "invalid magic header". */
+    if (memcmp(ciphertext, MAGIC_HEADER, ENCRYPTION_MAGIC_BYTES) != 0) {
         return ERROR(ERR_CRYPTO, "Invalid magic header (not a dotta encrypted file)");
     }
 
@@ -611,7 +618,6 @@ error_t *encryption_decrypt(
     }
 
     /* Step 5: Re-compute SIV over storage_path || ciphertext */
-    uint8_t siv_computed[ENCRYPTION_SIV_SIZE];
     err = compute_siv(mac_key, storage_path, ciphertext_body, plaintext_len, siv_computed);
     if (err) {
         goto cleanup;

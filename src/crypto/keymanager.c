@@ -24,7 +24,7 @@
 /**
  * Session Cache File Format
  *
- * Binary layout (116 bytes total):
+ * Binary layout (108 bytes total):
  *   [magic: "DOTTASES" (8 bytes)]
  *   [version: 1 (1 byte)]
  *   [reserved: 0 (3 bytes)]
@@ -380,6 +380,7 @@ static error_t *session_cache_load(
 
     if (fread(&cache, sizeof(cache), 1, fp) != 1) {
         fclose(fp);
+        hydro_memzero(&cache, sizeof(cache));
         unlink(cache_path);
         free(cache_path);
         return ERROR(ERR_CRYPTO, "Cache file corrupted (incomplete read)");
@@ -390,6 +391,7 @@ static error_t *session_cache_load(
 
     /* Validate magic header */
     if (memcmp(cache.magic, SESSION_CACHE_MAGIC, 8) != 0) {
+        hydro_memzero(&cache, sizeof(cache));
         unlink(cache_path);
         free(cache_path);
         return ERROR(ERR_CRYPTO, "Cache file corrupted (bad magic)");
@@ -397,6 +399,7 @@ static error_t *session_cache_load(
 
     /* Check version */
     if (cache.version != SESSION_CACHE_VERSION) {
+        hydro_memzero(&cache, sizeof(cache));
         unlink(cache_path);
         free(cache_path);
         return ERROR(ERR_CRYPTO, "Unsupported cache version: %d", cache.version);
@@ -406,6 +409,7 @@ static error_t *session_cache_load(
     if (cache.expires_at != 0) {
         time_t now = time(NULL);
         if ((uint64_t)now >= cache.expires_at) {
+            hydro_memzero(&cache, sizeof(cache));
             unlink(cache_path);
             free(cache_path);
             return ERROR(ERR_NOT_FOUND, "Cache expired");
@@ -415,6 +419,7 @@ static error_t *session_cache_load(
     /* Get machine identity */
     err = get_machine_identity(&machine_id, &machine_id_len);
     if (err) {
+        hydro_memzero(&cache, sizeof(cache));
         free(cache_path);
         return err;
     }

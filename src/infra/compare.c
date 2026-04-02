@@ -93,7 +93,7 @@ error_t *compare_buffer_to_disk(
 
         size_t expected_len = buffer_size(content);
         bool targets_equal = (strlen(disk_target) == expected_len) &&
-                            (memcmp(buffer_data(content), disk_target, expected_len) == 0);
+                             (memcmp(buffer_data(content), disk_target, expected_len) == 0);
 
         free(disk_target);
         *result = targets_equal ? CMP_EQUAL : CMP_DIFFERENT;
@@ -181,6 +181,129 @@ error_t *compare_buffer_to_disk(
 
     /* Unsupported mode */
     return ERROR(ERR_INTERNAL, "Unsupported git filemode: %d", expected_mode);
+}
+
+/**
+ * Compare git blob OID to disk file with stat propagation
+ *
+ * OID-based counterpart to compare_buffer_to_disk. Hashes the filesystem
+ * file using git's blob hash algorithm (SHA-1("blob <size>\0" + content))
+ * and compares to the expected OID.
+ *
+ * For symlinks, reads the target string and hashes it identically to how
+ * Git stores symlinks (blob containing the target path as raw bytes).
+ *
+ * For regular files, uses git_odb_hashfile() which streams file content
+ * using constant memory regardless of file size.
+ */
+error_t *compare_oid_to_disk(
+    const git_oid *blob_oid,
+    const char *disk_path,
+    git_filemode_t expected_mode,
+    const struct stat *in_stat,
+    compare_result_t *result,
+    struct stat *out_stat
+) {
+    CHECK_NULL(blob_oid);
+    CHECK_NULL(disk_path);
+    CHECK_NULL(result);
+
+    /* Step 1: Stat handling - use provided stat or capture new one
+     *
+     * Single-stat-per-file principle: When caller has already stat'd the file
+     * (e.g., for existence check), we reuse that stat to avoid redundant syscall.
+     * This is critical for performance in hot paths like workspace analysis.
+     */
+    struct stat st;
+    const struct stat *stat_ptr;
+
+    if (in_stat) {
+        /* Caller provided stat - use it (zero syscalls) */
+        stat_ptr = in_stat;
+        if (out_stat) {
+            memcpy(out_stat, in_stat, sizeof(struct stat));
+        }
+    } else {
+        /* No pre-captured stat - perform lstat internally
+         * Using lstat() to not follow symlinks.
+         */
+        if (lstat(disk_path, &st) != 0) {
+            if (errno == ENOENT) {
+                /* File doesn't exist */
+                *result = CMP_MISSING;
+                if (out_stat) {
+                    memset(out_stat, 0, sizeof(*out_stat));
+                }
+                return NULL;
+            }
+            return ERROR(ERR_FS, "Failed to stat '%s': %s", disk_path,
+                         strerror(errno));
+        }
+        stat_ptr = &st;
+        if (out_stat) {
+            memcpy(out_stat, &st, sizeof(struct stat));
+        }
+    }
+
+    /* Step 2: Type verification and hash computation */
+    git_oid computed;
+
+    if (expected_mode == GIT_FILEMODE_LINK) {
+        /* Expected symlink - verify type matches */
+        if (!fs_stat_is_symlink(stat_ptr)) {
+            *result = CMP_TYPE_DIFF;
+            return NULL;
+        }
+
+        /* Hash symlink target string
+         *
+         * Git stores symlinks as blobs containing the target path as raw bytes.
+         * We read the target and hash it identically to how Git would.
+         */
+        char *target = NULL;
+        error_t *err = fs_read_symlink(disk_path, &target);
+        if (err) {
+            return error_wrap(err, "Failed to read symlink '%s'", disk_path);
+        }
+
+        int ret = git_odb_hash(&computed, target, strlen(target), GIT_OBJECT_BLOB);
+        free(target);
+
+        if (ret != 0) {
+            const git_error *git_err = git_error_last();
+            return ERROR(ERR_GIT, "Failed to hash symlink target: %s",
+                         git_err ? git_err->message : "unknown error");
+        }
+    } else {
+        /* Expected regular file (BLOB or BLOB_EXECUTABLE) */
+        if (fs_stat_is_symlink(stat_ptr)) {
+            *result = CMP_TYPE_DIFF;
+            return NULL;
+        }
+
+        if (!fs_stat_is_regular(stat_ptr)) {
+            /* Not a regular file (directory, device, FIFO, socket, etc.) */
+            *result = CMP_TYPE_DIFF;
+            return NULL;
+        }
+
+        /* Hash file directly from path
+         *
+         * git_odb_hashfile() streams the file content and computes the
+         * standard Git blob hash: SHA-1("blob <size>\0" + content).
+         * This uses constant memory regardless of file size.
+         */
+        int ret = git_odb_hashfile(&computed, disk_path, GIT_OBJECT_BLOB);
+        if (ret != 0) {
+            const git_error *git_err = git_error_last();
+            return ERROR(ERR_GIT, "Failed to hash file '%s': %s", disk_path,
+                         git_err ? git_err->message : "unknown error");
+        }
+    }
+
+    /* Step 3: Compare computed hash to expected blob OID */
+    *result = git_oid_equal(blob_oid, &computed) ? CMP_EQUAL : CMP_DIFFERENT;
+    return NULL;
 }
 
 /**

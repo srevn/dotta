@@ -1,19 +1,28 @@
 /**
  * compare.h - File comparison engine
  *
- * Compares buffer content with filesystem state.
+ * Compares expected content with filesystem state using two strategies:
  *
- * This module works exclusively with plaintext buffers provided by the
- * content layer (src/infra/content.h), which handles transparent decryption
- * of encrypted files. The compare module has no knowledge of encryption
- * or git internals - it simply compares buffers to disk files.
+ * 1. Buffer-based (compare_buffer_to_disk):
+ *    Compares plaintext buffers provided by the content layer
+ *    (src/infra/content.h). Used for encrypted files where the blob OID
+ *    is a ciphertext hash that cannot be compared to the plaintext on disk.
+ *
+ * 2. OID-based (compare_oid_to_disk):
+ *    Hashes the filesystem file and compares to an expected git blob OID.
+ *    Used for non-encrypted files where OID comparison avoids expensive
+ *    blob loading from pack files.
+ *
+ * Both strategies share the same stat propagation convention and return
+ * compare_result_t for uniform caller integration. Neither strategy
+ * accesses the git repository or object database — all operations are
+ * pure computation against the filesystem.
  *
  * Design principles:
- * - Pure buffer-based operations
  * - Handle all file types (regular, symlink)
  * - Compare permissions accurately (executable bit)
  * - Clear comparison results
- * - Integration with content layer for encrypted files
+ * - Stat propagation to minimize redundant syscalls
  */
 
 #ifndef DOTTA_COMPARE_H
@@ -78,6 +87,40 @@ typedef struct {
  */
 error_t *compare_buffer_to_disk(
     const buffer_t *content,
+    const char *disk_path,
+    git_filemode_t expected_mode,
+    const struct stat *in_stat,
+    compare_result_t *result,
+    struct stat *out_stat
+);
+
+/**
+ * Compare git blob OID to disk file (with stat propagation)
+ *
+ * OID-based comparison for non-encrypted files. Hashes the filesystem
+ * file using the standard git blob hash algorithm and compares to the
+ * expected blob OID. This avoids expensive blob loading from pack files.
+ *
+ * IMPORTANT: Only call for NON-ENCRYPTED files. For encrypted files, the
+ * blob_oid is the hash of ciphertext, while the filesystem contains plaintext.
+ * Use compare_buffer_to_disk with decrypted content instead.
+ *
+ * Stat propagation optimization:
+ * - If in_stat != NULL: Uses provided stat data (zero syscalls)
+ * - If in_stat == NULL: Performs lstat() internally
+ * - If out_stat != NULL: Returns stat data for caller reuse
+ * - Single stat used for all checks (type, size, mode)
+ *
+ * @param blob_oid Expected blob OID from manifest (must not be NULL)
+ * @param disk_path Path to file on disk (must not be NULL)
+ * @param expected_mode Expected git filemode (BLOB, BLOB_EXECUTABLE, or LINK)
+ * @param in_stat Optional pre-captured stat (can be NULL for internal lstat)
+ * @param result Comparison result (must not be NULL)
+ * @param out_stat Optional stat output (can be NULL, filled if provided)
+ * @return Error or NULL on success
+ */
+error_t *compare_oid_to_disk(
+    const git_oid *blob_oid,
     const char *disk_path,
     git_filemode_t expected_mode,
     const struct stat *in_stat,

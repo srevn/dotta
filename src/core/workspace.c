@@ -445,144 +445,6 @@ static void workspace_record_stat_update(
 }
 
 /**
- * Fast OID-based content verification for non-encrypted files
- *
- * Computes SHA-1 hash of filesystem file and compares to expected blob OID.
- * This optimization avoids expensive Git blob loading from pack files.
- *
- * IMPORTANT: Only call for NON-ENCRYPTED files. For encrypted files, the
- * blob_oid is the hash of ciphertext, while the filesystem contains plaintext.
- *
- * Returns standard compare_result_t for seamless integration:
- * - CMP_EQUAL:     Hash matches (file content unchanged)
- * - CMP_DIFFERENT: Hash differs (content was modified)
- * - CMP_TYPE_DIFF: Type mismatch (expected file but found symlink, or vice versa)
- * - CMP_MISSING:   File doesn't exist (deleted after initial check)
- *
- * Stat propagation:
- * - If in_stat != NULL: Uses provided stat data (zero syscalls)
- * - If in_stat == NULL: Performs lstat() internally
- * - If out_stat != NULL: Returns stat data for caller reuse
- *
- * @param blob_oid Expected blob OID from manifest (must not be NULL)
- * @param filesystem_path Path to file on disk (must not be NULL)
- * @param expected_mode Expected git filemode (BLOB, BLOB_EXECUTABLE, or LINK)
- * @param in_stat Optional pre-captured stat (can be NULL for internal lstat)
- * @param result Output: comparison result (must not be NULL)
- * @param out_stat Output: captured stat for permission checking (can be NULL)
- * @return Error or NULL on success
- */
-static error_t *verify_oid_matches_disk(
-    const git_oid *blob_oid,
-    const char *filesystem_path,
-    git_filemode_t expected_mode,
-    const struct stat *in_stat,
-    compare_result_t *result,
-    struct stat *out_stat
-) {
-    CHECK_NULL(blob_oid);
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(result);
-
-    /* Step 1: Stat handling - use provided stat or capture new one
-     *
-     * Single-stat-per-file principle: When caller has already stat'd the file
-     * (e.g., for existence check), we reuse that stat to avoid redundant syscall.
-     * This is critical for performance in hot paths like workspace analysis.
-     */
-    struct stat st;
-    const struct stat *stat_ptr;
-
-    if (in_stat) {
-        /* Caller provided stat - use it (zero syscalls) */
-        stat_ptr = in_stat;
-        if (out_stat) {
-            memcpy(out_stat, in_stat, sizeof(struct stat));
-        }
-    } else {
-        /* No pre-captured stat - perform lstat internally
-         * Using lstat() to not follow symlinks.
-         */
-        if (lstat(filesystem_path, &st) != 0) {
-            if (errno == ENOENT) {
-                /* File doesn't exist */
-                *result = CMP_MISSING;
-                if (out_stat) {
-                    memset(out_stat, 0, sizeof(*out_stat));
-                }
-                return NULL;
-            }
-            return ERROR(ERR_FS, "Failed to stat '%s': %s",
-                         filesystem_path, strerror(errno));
-        }
-        stat_ptr = &st;
-        if (out_stat) {
-            memcpy(out_stat, &st, sizeof(struct stat));
-        }
-    }
-
-    /* Step 2: Type verification and hash computation */
-    git_oid computed;
-
-    if (expected_mode == GIT_FILEMODE_LINK) {
-        /* Expected symlink - verify type matches */
-        if (!S_ISLNK(stat_ptr->st_mode)) {
-            *result = CMP_TYPE_DIFF;
-            return NULL;
-        }
-
-        /* Hash symlink target string
-         *
-         * Git stores symlinks as blobs containing the target path as raw bytes.
-         * We read the target and hash it identically to how Git would.
-         */
-        char *target = NULL;
-        error_t *err = fs_read_symlink(filesystem_path, &target);
-        if (err) {
-            return error_wrap(err, "Failed to read symlink '%s'", filesystem_path);
-        }
-
-        int ret = git_odb_hash(&computed, target, strlen(target), GIT_OBJECT_BLOB);
-        free(target);
-
-        if (ret != 0) {
-            const git_error *git_err = git_error_last();
-            return ERROR(ERR_GIT, "Failed to hash symlink target: %s",
-                         git_err ? git_err->message : "unknown error");
-        }
-    } else {
-        /* Expected regular file (BLOB or BLOB_EXECUTABLE) */
-        if (S_ISLNK(stat_ptr->st_mode)) {
-            *result = CMP_TYPE_DIFF;
-            return NULL;
-        }
-
-        if (!S_ISREG(stat_ptr->st_mode)) {
-            /* Not a regular file (directory, device, FIFO, socket, etc.) */
-            *result = CMP_TYPE_DIFF;
-            return NULL;
-        }
-
-        /* Hash file directly from path
-         *
-         * git_odb_hashfile() streams the file content and computes the
-         * standard Git blob hash: SHA-1("blob <size>\0" + content).
-         * This uses constant memory regardless of file size.
-         */
-        int ret = git_odb_hashfile(&computed, filesystem_path, GIT_OBJECT_BLOB);
-        if (ret != 0) {
-            const git_error *git_err = git_error_last();
-            return ERROR(ERR_GIT, "Failed to hash file '%s': %s", filesystem_path,
-                         git_err ? git_err->message : "unknown error");
-        }
-    }
-
-    /* Step 3: Compare computed hash to expected blob OID */
-    *result = git_oid_equal(blob_oid, &computed) ? CMP_EQUAL : CMP_DIFFERENT;
-    return NULL;
-}
-
-/**
  * Analyze divergence for a single file using VWD cache
  *
  * This function uses the VWD (Virtual Working Directory) cache stored in
@@ -711,7 +573,7 @@ static error_t *analyze_file_divergence(
              * Both paths receive initial_stat to avoid redundant lstat syscalls.
              */
             if (!manifest_entry->encrypted) {
-                err = verify_oid_matches_disk(
+                err = compare_oid_to_disk(
                     &blob_oid,
                     fs_path,
                     expected_mode,
@@ -930,7 +792,7 @@ static error_t *analyze_file_divergence(
                 compare_result_t verify_result;
 
                 if (!manifest_entry->encrypted) {
-                    error_t *verify_err = verify_oid_matches_disk(
+                    error_t *verify_err = compare_oid_to_disk(
                         &old_blob_oid,
                         fs_path,
                         expected_mode,
@@ -1087,7 +949,7 @@ static divergence_type_t compute_orphan_divergence(
      */
     if (!state_entry->encrypted) {
         /* Fast path: OID hash verification */
-        err = verify_oid_matches_disk(
+        err = compare_oid_to_disk(
             &blob_oid,
             fs_path,
             expected_mode,
@@ -3725,8 +3587,9 @@ void workspace_free(workspace_t *ws) {
     hashmap_free(ws->profile_index, NULL);
     hashmap_free(ws->diverged_index, NULL);
 
-    /* Free merged_metadata BEFORE metadata_cache (borrowed pointers) */
-    hashmap_free(ws->merged_metadata, NULL);  /* NULL = don't free values (they're in merged_entries) */
+    /* Free merged_metadata BEFORE metadata_cache (borrowed pointers) 
+     * NULL = don't free values (they're in merged_entries) */
+    hashmap_free(ws->merged_metadata, NULL);
 
     /* Free merged_entries array (strings are borrowed, just free array) */
     free(ws->merged_entries);

@@ -86,6 +86,11 @@ struct workspace {
     profile_list_t *profiles;        /* Selected profiles for this workspace (borrowed) */
     hashmap_t *profile_index;        /* Maps profile_name -> profile_t* (for O(1) lookup) */
 
+    /* Cached state query (shared between workspace_build_manifest_from_state
+     * and analyze_orphaned_files to avoid redundant full-table scan) */
+    state_file_entry_t *cached_state_files;  /* Owned, freed in workspace_free (NULL if empty) */
+    size_t cached_state_count;               /* Number of entries in cached_state_files */
+
     /* Encryption and caching infrastructure */
     keymanager_t *keymanager;        /* Borrowed from global */
     content_cache_t *content_cache;  /* Owned - caches decrypted content */
@@ -1295,18 +1300,15 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
     CHECK_NULL(ws->profile_index);
 
     error_t *err = NULL;
-    state_file_entry_t *state_files = NULL;
-    size_t state_count = 0;
 
-    /* Get all files in state */
-    err = state_get_all_files(ws->state, &state_files, &state_count);
-    if (err) {
-        return error_wrap(err, "Failed to get state files");
-    }
+    /* Reuse state entries cached by workspace_build_manifest_from_state.
+     * Both functions need the same full-table scan — caching avoids the
+     * redundant query. Entries are owned by ws, freed in workspace_free(). */
+    const state_file_entry_t *state_files = ws->cached_state_files;
+    size_t state_count = ws->cached_state_count;
 
     /* Early exit: no files in state means no orphans */
     if (state_count == 0) {
-        state_free_all_files(state_files, state_count);
         return NULL;
     }
 
@@ -1364,7 +1366,7 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
                     profile,
                     NULL,
                     WORKSPACE_STATE_RELEASED,
-                    DIVERGENCE_STALE,
+                    DIVERGENCE_NONE,
                     WORKSPACE_ITEM_FILE,
                     on_filesystem,
                     profile_enabled,
@@ -1453,13 +1455,11 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
             }
 
             if (err) {
-                state_free_all_files(state_files, state_count);
                 return error_wrap(err, "Failed to add orphaned/released file");
             }
         }
     }
 
-    state_free_all_files(state_files, state_count);
     return NULL;
 }
 
@@ -2508,11 +2508,16 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
     hashmap_t *stale_profiles = NULL;
     manifest_t *fresh_manifest = NULL;
 
-    /* Read all entries from manifest table */
+    /* Read all entries from manifest table.
+     *
+     * Cached on workspace for reuse by analyze_orphaned_files(),
+     * avoiding a redundant full-table scan. Freed in workspace_free(). */
     err = state_get_all_files(ws->state, &state_entries, &state_count);
     if (err) {
         return error_wrap(err, "Failed to read manifest from state");
     }
+    ws->cached_state_files = state_entries;
+    ws->cached_state_count = state_count;
 
     /* Staleness Detection (Phase 1 of stale manifest healing)
      *
@@ -2528,7 +2533,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         ws->repo, state_entries, state_count, ws->profile_index, &stale_profiles
     );
     if (err) {
-        state_free_all_files(state_entries, state_count);
         return error_wrap(err, "Failed to detect stale profiles");
     }
 
@@ -2547,7 +2551,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         err = profile_build_manifest(ws->repo, ws->profiles, &fresh_manifest);
         if (err) {
             hashmap_free(stale_profiles, free);
-            state_free_all_files(state_entries, state_count);
             return error_wrap(err, "Failed to build fresh manifest for stale repair");
         }
 
@@ -2557,7 +2560,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         if (!ws->stale_paths || !ws->released_paths) {
             manifest_free(fresh_manifest);
             hashmap_free(stale_profiles, free);
-            state_free_all_files(state_entries, state_count);
             return ERROR(ERR_MEMORY, "Failed to allocate staleness tracking");
         }
     }
@@ -2567,7 +2569,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
     if (!ws->manifest) {
         manifest_free(fresh_manifest);
         hashmap_free(stale_profiles, free);
-        state_free_all_files(state_entries, state_count);
         return ERROR(ERR_MEMORY, "Failed to allocate manifest");
     }
 
@@ -2578,7 +2579,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         ws->manifest = NULL;
         manifest_free(fresh_manifest);
         hashmap_free(stale_profiles, free);
-        state_free_all_files(state_entries, state_count);
         return ERROR(ERR_MEMORY, "Failed to allocate manifest entries");
     }
 
@@ -2594,7 +2594,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         ws->manifest = NULL;
         manifest_free(fresh_manifest);
         hashmap_free(stale_profiles, free);
-        state_free_all_files(state_entries, state_count);
         return ERROR(ERR_MEMORY, "Failed to create manifest index");
     }
 
@@ -2840,7 +2839,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
 
     manifest_free(fresh_manifest);
     hashmap_free(stale_profiles, free);
-    state_free_all_files(state_entries, state_count);
     return NULL;
 
 cleanup:
@@ -2863,7 +2861,6 @@ cleanup:
     ws->manifest = NULL;
     manifest_free(fresh_manifest);
     hashmap_free(stale_profiles, free);
-    state_free_all_files(state_entries, state_count);
     return err;
 }
 
@@ -3744,6 +3741,9 @@ void workspace_free(workspace_t *ws) {
     /* Free staleness tracking (NULL-safe) */
     hashmap_free(ws->stale_paths, NULL);
     hashmap_free(ws->released_paths, NULL);
+
+    /* Free cached state query (NULL-safe) */
+    state_free_all_files(ws->cached_state_files, ws->cached_state_count);
 
     /* Free owned state */
     manifest_free(ws->manifest);

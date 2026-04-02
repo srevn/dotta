@@ -1375,6 +1375,14 @@ static error_t *diff_workspace(
         return error_wrap(err, "Failed to load workspace");
     }
 
+    /* Flush verified stat caches to database (self-healing optimization).
+     * Seeds the fast path for subsequent status/apply calls. Non-fatal on failure
+     * — diff still renders correctly, just won't seed the fast path. */
+    error_t *flush_err = workspace_flush_stat_caches(ws);
+    if (flush_err) {
+        error_free(flush_err);
+    }
+
     /* Step 2: Get pre-analyzed divergence from workspace */
     size_t diverged_count = 0;
     const workspace_item_t *diverged = workspace_get_all_diverged(ws, &diverged_count);

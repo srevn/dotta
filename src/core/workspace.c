@@ -981,6 +981,11 @@ static error_t *analyze_file_divergence(
     bool profile_changed = (manifest_entry->old_profile != NULL);
     char *old_profile = profile_changed ? strdup(manifest_entry->old_profile) : NULL;
 
+    /* Maintain invariant: profile_changed implies old_profile is non-NULL.
+     * On strdup failure, degrade gracefully by dropping the transition flag
+     * rather than propagating inconsistent state to consumers. */
+    if (profile_changed && !old_profile) profile_changed = false;
+
     /* Add to workspace if there's any state change or divergence */
     if (state != WORKSPACE_STATE_DEPLOYED || divergence != DIVERGENCE_NONE || profile_changed) {
         error_t *err = workspace_add_diverged(ws, fs_path, storage_path, profile, old_profile,

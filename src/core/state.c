@@ -423,6 +423,15 @@ static error_t *prepare_statements(state_t *state) {
 
     /* Insert/update file (used by manifest sync operations - hot path)
      *
+     * old_profile preservation: When profile is unchanged (content sync,
+     * stale repair), preserves the existing old_profile rather than clearing
+     * it. This prevents content updates from silently discarding pending
+     * ownership transition metadata (set by manifest_disable_profile etc.)
+     * that has not yet been acknowledged by apply.
+     *
+     * When profile changes (enable, fallback, reorder), uses the incoming
+     * old_profile (typically NULL, then set by caller's read-modify-write).
+     *
      * Stat cache preservation: When blob_oid is unchanged (same content),
      * preserves the existing stat cache rather than zeroing it. This avoids
      * forcing the slow path (full content hash) for files whose content
@@ -442,7 +451,9 @@ static error_t *prepare_statements(state_t *state) {
         "ON CONFLICT(filesystem_path) DO UPDATE SET "
         "  storage_path = excluded.storage_path, "
         "  profile      = excluded.profile, "
-        "  old_profile  = excluded.old_profile, "
+        "  old_profile  = CASE WHEN excluded.profile = virtual_manifest.profile "
+        "                 THEN COALESCE(excluded.old_profile, virtual_manifest.old_profile) "
+        "                 ELSE excluded.old_profile END, "
         "  git_oid      = excluded.git_oid, "
         "  blob_oid     = excluded.blob_oid, "
         "  type         = excluded.type, "

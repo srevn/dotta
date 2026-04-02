@@ -1597,8 +1597,6 @@ error_t *cmd_apply(
     if (deploy_manifest->count == 0 && no_orphan_work) {
         if (!opts->dry_run) {
             size_t cleared = 0;
-            size_t all_count = 0;
-            const workspace_item_t *all_items = workspace_get_all_diverged(ws, &all_count);
 
             for (size_t i = 0; i < all_count; i++) {
                 if (!all_items[i].profile_changed) {

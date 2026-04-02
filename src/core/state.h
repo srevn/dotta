@@ -135,7 +135,7 @@ typedef struct {
     char *storage_path;         /* Path in profile (home/.bashrc) */
     char *filesystem_path;      /* Deployed path (/home/user/.bashrc) */
     char *profile;              /* Source profile name */
-    char *old_profile;          /* Previous owner if changed, NULL otherwise */
+    char *old_profile;          /* Previous profile if reassigned, NULL otherwise */
 
     /* Type */
     state_file_type_t type;     /* File type */
@@ -619,8 +619,8 @@ error_t *state_update_stat_cache(
 /**
  * Clear old_profile for a manifest entry
  *
- * Acknowledges profile ownership change after successful deployment.
- * Used by apply to clear the ownership change flag once the user has
+ * Acknowledges profile reassignment after successful deployment.
+ * Used by apply to clear the reassignment flag once the user has
  * been informed about the change via preflight.
  *
  * @param state State (must not be NULL, must have active transaction)

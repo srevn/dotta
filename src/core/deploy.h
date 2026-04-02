@@ -27,7 +27,7 @@ typedef struct keymanager keymanager_t;
 typedef struct workspace workspace_t;
 
 /**
- * Ownership change entry
+ * Profile reassignment entry
  *
  * Represents a file where the owning profile is changing.
  */
@@ -35,30 +35,30 @@ typedef struct {
     char *filesystem_path;      /* File path */
     char *old_profile;          /* Previous owning profile */
     char *new_profile;          /* New owning profile */
-} ownership_change_t;
+} reassignment_t;
 
 /**
  * Pre-flight check results
  */
 typedef struct {
-    bool has_errors;             /* Are there any blocking errors? */
-    string_array_t *conflicts;   /* Files modified locally */
-    string_array_t *permission_errors; /* Files with permission issues */
-    ownership_change_t *ownership_changes;  /* Files changing ownership */
-    size_t ownership_change_count;         /* Number of ownership changes */
+    bool has_errors;                     /* Are there any blocking errors? */
+    string_array_t *conflicts;           /* Files modified locally */
+    string_array_t *permission_errors;   /* Files with permission issues */
+    reassignment_t *reassignments;       /* Profile reassignments */
+    size_t reassignment_count;           /* Number of profile reassignments */
 } preflight_result_t;
 
 /**
  * Deployment options
  */
 typedef struct {
-    bool force;            /* Overwrite modified files */
-    bool dry_run;          /* Don't actually deploy */
-    bool verbose;          /* Print verbose output */
-    bool skip_existing;    /* Skip files that already exist (don't overwrite) */
-    bool skip_unchanged;   /* Skip files that match profile content (smart skip) */
-    bool strict_ownership; /* Fail if ownership cannot be resolved (strict_mode) */
-    bool targeted_mode;    /* Scope directory processing to manifest file ancestors */
+    bool force;               /* Overwrite modified files */
+    bool dry_run;             /* Don't actually deploy */
+    bool verbose;             /* Print verbose output */
+    bool skip_existing;       /* Skip files that already exist (don't overwrite) */
+    bool skip_unchanged;      /* Skip files that match profile content (smart skip) */
+    bool strict_ownership;    /* Fail if ownership cannot be resolved (strict_mode) */
+    bool targeted_mode;       /* Scope directory processing to manifest file ancestors */
 
     /**
      * Profile scope for directory processing
@@ -101,7 +101,7 @@ typedef struct {
  *
  * Checks performed:
  * - Conflict detection (modified files) - from workspace divergence
- * - Ownership changes (profile switches) - from workspace tracking
+ * - Profile reassignments (profile switches) - from workspace tracking
  * - Writability checks - filesystem-level (not in workspace)
  *
  * @param ws Workspace with pre-loaded divergence analysis (must not be NULL)

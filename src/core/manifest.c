@@ -1061,37 +1061,37 @@ error_t *manifest_disable_profile(
                 goto cleanup;
             }
 
-            /* Track profile ownership transition (old_profile metadata)
+            /* Track profile reassignment (old_profile metadata)
              *
-             * ARCHITECTURE: Separation of concerns between Git-sync and profile transitions.
+             * ARCHITECTURE: Separation of concerns between Git-sync and reassignment.
              *
              * sync_entry_to_state() is a low-level Git→State sync primitive used across
              * the codebase. It correctly writes the fallback entry but does NOT set
              * old_profile (Git-sync concern, not profile management semantics).
              *
-             * Profile ownership tracking is a higher-level semantic that provides user
-             * visibility into transitions (e.g., "file moved from darwin to global").
+             * Profile reassignment tracking is a higher-level semantic that provides
+             * user visibility into transitions (e.g., "file moved from darwin to global").
              * This layered approach maintains clean separation:
              *   Layer 1: Git→State sync (proven metadata extraction, blob_oid, etc.)
-             *   Layer 2: Profile transition tracking (ownership change attribution)
+             *   Layer 2: Reassignment tracking (profile change attribution)
              *
              * The old_profile field enables:
              *   - User visibility: status shows "home/.bashrc (darwin → global)"
              *   - Informed decisions: user sees why file is modified before apply
-             *   - Audit trail: track ownership history until deployment acknowledges it
+             *   - Audit trail: track reassignment history until deployment acknowledges it
              *
              * Post-deployment: apply clears old_profile after successful deployment,
-             * acknowledging the transition is complete.
+             * acknowledging the reassignment is complete.
              */
             state_file_entry_t *updated_entry = NULL;
             err = state_get_file(state, entry->filesystem_path, &updated_entry);
             if (err) {
-                err = error_wrap(err, "Failed to read entry for old_profile tracking: %s",
+                err = error_wrap(err, "Failed to read entry for reassignment tracking: %s",
                                  entry->filesystem_path);
                 goto cleanup;
             }
 
-            /* Set old_profile to the disabled profile name (ownership transition)
+            /* Set old_profile to the disabled profile name (reassignment)
              *
              * MEMORY SAFETY:
              * - entry->profile is owned by entries[] array (valid until cleanup)
@@ -1116,7 +1116,7 @@ error_t *manifest_disable_profile(
                 goto cleanup;
             }
 
-            /* Persist the ownership transition tracking */
+            /* Persist the reassignment tracking */
             err = state_update_entry(state, updated_entry);
             state_free_entry(updated_entry);  /* Always free, even on success */
             if (err) {
@@ -1519,11 +1519,11 @@ error_t *manifest_remove_files(
             /* Preserve deployed_at (lifecycle history) before sync overwrites entry */
             time_t preserved_deployed_at = current_entry->deployed_at;
 
-            /* Save old profile name for ownership transition tracking
+            /* Save old profile name for reassignment tracking
              *
              * MEMORY SAFETY: Must copy before sync_entry_to_state, which uses
              * state_add_file (INSERT OR REPLACE) and overwrites the entry.
-             * current_entry->profile is guaranteed non-NULL (ownership verified above).
+             * current_entry->profile is guaranteed non-NULL (verified above).
              */
             char *old_profile_name = strdup(current_entry->profile);
             if (!old_profile_name) {
@@ -1551,18 +1551,18 @@ error_t *manifest_remove_files(
                 goto cleanup;
             }
 
-            /* Track profile ownership transition (old_profile metadata)
+            /* Track profile reassignment (old_profile metadata)
              *
-             * ARCHITECTURE: Separation of concerns between Git-sync and profile transitions.
+             * ARCHITECTURE: Separation of concerns between Git-sync and reassignment.
              *
              * sync_entry_to_state() is a low-level Git→State sync primitive.
-             * Profile ownership tracking is higher-level semantic that provides user
+             * Reassignment tracking is a higher-level semantic that provides user
              * visibility into transitions (e.g., "file moved from darwin to global").
              *
              * The old_profile field enables:
              *   - User visibility: status shows "home/.bashrc (darwin → global)"
              *   - Informed decisions: user sees why file is modified before apply
-             *   - Audit trail: track ownership history until deployment acknowledges it
+             *   - Audit trail: track reassignment history until deployment acknowledges it
              */
             state_file_entry_t *updated_entry = NULL;
             err = state_get_file(state, filesystem_path, &updated_entry);
@@ -2132,6 +2132,42 @@ error_t *manifest_repair_stale(
                 goto cleanup;
             }
 
+            /* Track profile reassignment when owning profile shifts during repair.
+             *
+             * Same read-modify-write pattern as manifest_reorder_profiles,
+             * manifest_disable_profile, manifest_remove_files, manifest_sync_diff.
+             *
+             * entry->profile is still valid (pre-loaded all_entries array, not
+             * modified by sync_entry_to_state's DB write). Verified non-NULL
+             * by the filter at the top of this loop iteration.
+             *
+             * Triggers: external git rm (fallback to lower precedence),
+             *           external git add (higher precedence takes over). */
+            if (strcmp(fresh_entry->source_profile->name, entry->profile) != 0) {
+                state_file_entry_t *updated_entry = NULL;
+                err = state_get_file(state, entry->filesystem_path, &updated_entry);
+                if (err) {
+                    err = error_wrap(err, "Failed to read entry for reassignment tracking");
+                    goto cleanup;
+                }
+
+                err = str_replace_owned(&updated_entry->old_profile, entry->profile);
+                if (err) {
+                    state_free_entry(updated_entry);
+                    goto cleanup;
+                }
+
+                err = state_update_entry(state, updated_entry);
+                state_free_entry(updated_entry);
+                if (err) {
+                    err = error_wrap(err, "Failed to track reassignment for '%s'",
+                                     entry->storage_path);
+                    goto cleanup;
+                }
+
+                out_stats->reassigned++;
+            }
+
             if (blob_changed) {
                 out_stats->updated++;
             } else {
@@ -2190,7 +2226,7 @@ cleanup:
  *
  * Implementation strategy:
  *   1. Build new manifest with precedence oracle
- *   2. Compare with current state to detect ownership changes
+ *   2. Compare with current state to detect reassignments
  *   3. Update only changed files (preserves deployed_at for unchanged)
  *   4. Handle orphaned files (entries remain for orphan detection, apply removes)
  */
@@ -2316,7 +2352,7 @@ error_t *manifest_reorder_profiles(
                     goto cleanup;
                 }
 
-                /* Track profile ownership transition for user visibility
+                /* Track profile reassignment for user visibility
                  *
                  * Pattern: Same as manifest_disable_profile and manifest_remove_files.
                  * Enables status to show "home/.bashrc (darwin → global)" after reorder.
@@ -2588,7 +2624,7 @@ error_t *manifest_update_files(
                 error_t *get_err = state_get_file(state, item->filesystem_path, &existing_entry);
                 if (get_err == NULL && existing_entry != NULL) {
                     deployed_at = existing_entry->deployed_at;
-                    /* Save old profile for ownership change tracking */
+                    /* Save old profile for reassignment tracking */
                     if (existing_entry->profile) {
                         old_profile_name = strdup(existing_entry->profile);
                     }
@@ -2610,12 +2646,12 @@ error_t *manifest_update_files(
                     goto cleanup;
                 }
 
-                /* Update old_profile if ownership changed */
+                /* Update old_profile if profile was reassigned */
                 if (old_profile_name) {
                     state_file_entry_t *updated_entry = NULL;
                     error_t *get_err2 = state_get_file(state, item->filesystem_path, &updated_entry);
                     if (get_err2 == NULL && updated_entry != NULL) {
-                        /* Set old_profile to track ownership change */
+                        /* Set old_profile to track reassignment */
                         err = str_replace_owned(&updated_entry->old_profile, old_profile_name);
                         if (!err) {
                             err = state_update_entry(state, updated_entry);
@@ -2627,7 +2663,7 @@ error_t *manifest_update_files(
                     free(old_profile_name);
 
                     if (err) {
-                        err = error_wrap(err, "Failed to track ownership change for '%s'",
+                        err = error_wrap(err, "Failed to track reassignment for '%s'",
                                        item->filesystem_path);
                         goto cleanup;
                     }
@@ -3369,7 +3405,7 @@ error_t *manifest_sync_diff(
                 error_t *get_err_fb = state_get_file(state, filesystem_path, &existing_fb);
                 if (get_err_fb == NULL && existing_fb != NULL) {
                     deployed_at = existing_fb->deployed_at;
-                    /* Save old profile for ownership change tracking */
+                    /* Save old profile for reassignment tracking */
                     if (existing_fb->profile) {
                         old_profile_name = strdup(existing_fb->profile);
                     }
@@ -3394,7 +3430,7 @@ error_t *manifest_sync_diff(
                     goto cleanup;
                 }
 
-                /* Track profile ownership transition for user visibility
+                /* Track profile reassignment for user visibility
                  *
                  * Pattern: Same as manifest_update_files and manifest_disable_profile.
                  * Enables status to show "home/.bashrc (darwin → global)" after sync.
@@ -3414,7 +3450,7 @@ error_t *manifest_sync_diff(
                     free(old_profile_name);
 
                     if (err) {
-                        err = error_wrap(err, "Failed to track ownership change for '%s'",
+                        err = error_wrap(err, "Failed to track reassignment for '%s'",
                                        filesystem_path);
                         free(filesystem_path);
                         goto cleanup;

@@ -53,24 +53,24 @@ error_t *deploy_preflight_check_from_workspace(
     result->has_errors = false;
     result->conflicts = string_array_create();
     result->permission_errors = string_array_create();
-    result->ownership_changes = NULL;
-    result->ownership_change_count = 0;
+    result->reassignments = NULL;
+    result->reassignment_count = 0;
 
     if (!result->conflicts || !result->permission_errors) {
         preflight_result_free(result);
         return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
     }
 
-    /* Conflict Detection + Ownership Changes + Writability
+    /* Conflict Detection + Profile Reassignments + Writability
      * Query workspace for divergence (O(1) per file), map to preflight decisions.
      */
 
-    /* Pre-allocate ownership_changes array (resize as needed) */
-    size_t ownership_capacity = 16;
-    result->ownership_changes = calloc(ownership_capacity, sizeof(ownership_change_t));
-    if (!result->ownership_changes) {
+    /* Pre-allocate reassignments array (resize as needed) */
+    size_t reassignment_capacity = 16;
+    result->reassignments = calloc(reassignment_capacity, sizeof(reassignment_t));
+    if (!result->reassignments) {
         preflight_result_free(result);
-        return ERROR(ERR_MEMORY, "Failed to allocate ownership changes array");
+        return ERROR(ERR_MEMORY, "Failed to allocate reassignments array");
     }
 
     for (size_t i = 0; i < manifest->count; i++) {
@@ -104,24 +104,24 @@ error_t *deploy_preflight_check_from_workspace(
             /* Mode/ownership/encryption divergence is not blocking */
         }
 
-        /* Check for profile ownership changes */
+        /* Check for profile reassignment */
         if (ws_item && ws_item->profile_changed) {
-            /* Grow ownership_changes array if needed */
-            if (result->ownership_change_count >= ownership_capacity) {
-                ownership_capacity *= 2;
-                ownership_change_t *new_array = realloc(
-                    result->ownership_changes,
-                    ownership_capacity * sizeof(ownership_change_t)
+            /* Grow reassignments array if needed */
+            if (result->reassignment_count >= reassignment_capacity) {
+                reassignment_capacity *= 2;
+                reassignment_t *new_array = realloc(
+                    result->reassignments,
+                    reassignment_capacity * sizeof(reassignment_t)
                 );
                 if (!new_array) {
                     preflight_result_free(result);
-                    return ERROR(ERR_MEMORY, "Failed to grow ownership changes array");
+                    return ERROR(ERR_MEMORY, "Failed to grow reassignments array");
                 }
-                result->ownership_changes = new_array;
+                result->reassignments = new_array;
             }
 
-            /* Add ownership change */
-            ownership_change_t *change = &result->ownership_changes[result->ownership_change_count];
+            /* Add reassignment */
+            reassignment_t *change = &result->reassignments[result->reassignment_count];
             change->filesystem_path = strdup(path);
             change->old_profile = strdup(ws_item->old_profile);
             change->new_profile = strdup(ws_item->profile);
@@ -132,10 +132,10 @@ error_t *deploy_preflight_check_from_workspace(
                 free(change->old_profile);
                 free(change->new_profile);
                 preflight_result_free(result);
-                return ERROR(ERR_MEMORY, "Failed to allocate ownership change strings");
+                return ERROR(ERR_MEMORY, "Failed to allocate reassignment strings");
             }
 
-            result->ownership_change_count++;
+            result->reassignment_count++;
         }
 
         /* Writability check (filesystem-level, not in workspace) */
@@ -986,8 +986,7 @@ static error_t *deploy_tracked_directories(
 
         if (err) {
             state_free_all_directories(directories, dir_count);
-            return error_wrap(err, "Failed to create tracked directory: %s",
-                            filesystem_path);
+            return error_wrap(err, "Failed to create tracked directory: %s", filesystem_path);
         }
 
         /* Verbose output - distinguish creation from metadata fix */
@@ -1189,14 +1188,14 @@ void preflight_result_free(preflight_result_t *result) {
     string_array_free(result->conflicts);
     string_array_free(result->permission_errors);
 
-    /* Free ownership changes */
-    if (result->ownership_changes) {
-        for (size_t i = 0; i < result->ownership_change_count; i++) {
-            free(result->ownership_changes[i].filesystem_path);
-            free(result->ownership_changes[i].old_profile);
-            free(result->ownership_changes[i].new_profile);
+    /* Free reassignments */
+    if (result->reassignments) {
+        for (size_t i = 0; i < result->reassignment_count; i++) {
+            free(result->reassignments[i].filesystem_path);
+            free(result->reassignments[i].old_profile);
+            free(result->reassignments[i].new_profile);
         }
-        free(result->ownership_changes);
+        free(result->reassignments);
     }
 
     free(result);

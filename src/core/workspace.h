@@ -70,7 +70,7 @@ typedef struct {
     /* State flags */
     bool on_filesystem;         /* Exists on actual filesystem */
     bool profile_enabled;       /* Is source profile in workspace's enabled list? */
-    bool profile_changed;       /* Profile differs from state (ownership changed) */
+    bool profile_changed;       /* Profile differs from state (reassigned) */
 } workspace_item_t;
 
 /**

@@ -1589,6 +1589,11 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
                         repair_stats.updated, repair_stats.updated == 1 ? "" : "s",
                         repair_stats.released);
         }
+        if (repair_stats.reassigned > 0) {
+            output_info(out, "Detected %zu profile reassignment%s from external changes",
+                        repair_stats.reassigned,
+                        repair_stats.reassigned == 1 ? "" : "s");
+        }
     }
 
     /* Phase 3: Sync with remote (push/pull/divergence handling)

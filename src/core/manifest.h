@@ -59,6 +59,7 @@ typedef struct {
     size_t updated;     /* Files with changed blob_oid (content changed in Git) */
     size_t refreshed;   /* Files with only git_oid refresh (content unchanged) */
     size_t released;    /* Files set to STATE_RELEASED (removed from Git externally) */
+    size_t reassigned;  /* Files whose owning profile shifted during repair */
 } manifest_repair_stats_t;
 
 /**
@@ -125,7 +126,7 @@ error_t *manifest_enable_profile(
  *   1. Get all manifest entries owned by disabled profile
  *   2. Build manifest from remaining profiles (fallback check)
  *   3. For each entry:
- *      - If fallback found: update source_profile + git_oid (file ownership changes)
+ *      - If fallback found: update source_profile + git_oid (profile reassignment)
  *      - If no fallback: mark as STATE_INACTIVE (staged for removal by apply)
  *
  * Preconditions:
@@ -500,9 +501,9 @@ error_t *manifest_repair_stale(
 /**
  * Reorder profiles in manifest
  *
- * Called when profiles are reordered. Intelligently updates ownership
+ * Called when profiles are reordered. Intelligently updates reassignment
  * and status only for files that change owner, preserving DEPLOYED
- * status for files whose ownership remains unchanged.
+ * status for files whose profile assignment remains unchanged.
  *
  * Algorithm:
  *   1. Build manifest from new profile order (precedence oracle)
@@ -514,7 +515,7 @@ error_t *manifest_repair_stale(
  *   4. For files in old manifest but not new: remain for orphan detection (apply removes)
  *
  * Key Benefit: Unlike manifest_rebuild(), this preserves deployed_at timestamps
- * for files whose ownership doesn't change, providing better UX when
+ * for files whose profile assignment doesn't change, providing better UX when
  * reordering profiles.
  *
  * Preconditions:
@@ -522,8 +523,8 @@ error_t *manifest_repair_stale(
  *   - new_profile_order MUST be valid enabled profiles
  *
  * Postconditions:
- *   - Files with changed ownership updated (deployed_at preserved)
- *   - Files with unchanged ownership preserve existing entry
+ *   - Reassigned files updated (deployed_at preserved)
+ *   - Files with unchanged assignment preserve existing entry
  *   - Orphaned files remain for orphan detection (apply removes)
  *   - Transaction remains open (caller commits)
  *

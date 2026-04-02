@@ -423,14 +423,15 @@ static error_t *prepare_statements(state_t *state) {
 
     /* Insert/update file (used by manifest sync operations - hot path)
      *
-     * old_profile preservation: When profile is unchanged (content sync,
-     * stale repair), preserves the existing old_profile rather than clearing
-     * it. This prevents content updates from silently discarding pending
-     * ownership transition metadata (set by manifest_disable_profile etc.)
-     * that has not yet been acknowledged by apply.
+     * old_profile preservation: Always preserves existing old_profile when
+     * the incoming value is NULL. This prevents any UPSERT path from
+     * silently discarding pending reassignment metadata (set by
+     * manifest_disable_profile, manifest_reorder_profiles, etc.) that has
+     * not yet been acknowledged by apply.
      *
-     * When profile changes (enable, fallback, reorder), uses the incoming
-     * old_profile (typically NULL, then set by caller's read-modify-write).
+     * Setting old_profile is done exclusively via state_update_entry()
+     * (direct UPDATE). Clearing is done via state_clear_old_profile().
+     * This UPSERT only needs to preserve — never set or clear.
      *
      * Stat cache preservation: When blob_oid is unchanged (same content),
      * preserves the existing stat cache rather than zeroing it. This avoids
@@ -451,9 +452,7 @@ static error_t *prepare_statements(state_t *state) {
         "ON CONFLICT(filesystem_path) DO UPDATE SET "
         "  storage_path = excluded.storage_path, "
         "  profile      = excluded.profile, "
-        "  old_profile  = CASE WHEN excluded.profile = virtual_manifest.profile "
-        "                 THEN COALESCE(excluded.old_profile, virtual_manifest.old_profile) "
-        "                 ELSE excluded.old_profile END, "
+        "  old_profile  = COALESCE(excluded.old_profile, virtual_manifest.old_profile), "
         "  git_oid      = excluded.git_oid, "
         "  blob_oid     = excluded.blob_oid, "
         "  type         = excluded.type, "
@@ -3096,8 +3095,8 @@ error_t *state_update_stat_cache(
 /**
  * Clear old_profile for a manifest entry
  *
- * Acknowledges profile ownership change after successful deployment.
- * Sets old_profile to NULL to clear the ownership change flag.
+ * Acknowledges profile reassignment after successful deployment.
+ * Sets old_profile to NULL to clear the reassignment flag.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param filesystem_path File path (must not be NULL)

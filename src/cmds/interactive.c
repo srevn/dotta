@@ -348,8 +348,8 @@ static error_t *interactive_save_profile_order(
     /* Update manifest to reflect new precedence order
      *
      * This synchronizes the virtual_manifest table with the new profile order.
-     * Files whose ownership changes will be updated (deployed_at preserved), while
-     * files whose ownership remains unchanged preserve their existing entry. */
+     * Reassigned files will be updated (deployed_at preserved), while
+     * files whose assignment remains unchanged preserve their existing entry. */
     err = manifest_reorder_profiles(repo, deploy_state, new_order);
     string_array_free(new_order);
 

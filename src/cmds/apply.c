@@ -65,12 +65,12 @@ static void print_preflight_results(const output_ctx_t *out, const preflight_res
         }
     }
 
-    /* Print ownership changes */
-    if (result->ownership_changes && result->ownership_change_count > 0) {
-        output_section(out, "Ownership changes");
+    /* Print profile reassignments */
+    if (result->reassignments && result->reassignment_count > 0) {
+        output_section(out, "Profile reassignments");
         output_info(out, "  The following files will change ownership:");
-        for (size_t i = 0; i < result->ownership_change_count; i++) {
-            const ownership_change_t *change = &result->ownership_changes[i];
+        for (size_t i = 0; i < result->reassignment_count; i++) {
+            const reassignment_t *change = &result->reassignments[i];
             if (output_colors_enabled(out)) {
                 output_printf(out, OUTPUT_NORMAL, "  %s→%s %s: %s%s%s → %s%s%s\n",
                        output_color_code(out, OUTPUT_COLOR_YELLOW),
@@ -1081,6 +1081,11 @@ error_t *cmd_apply(
             output_info(out, "Synchronized %zu file%s, released %zu from management",
                         repair_stats.updated, repair_stats.updated == 1 ? "" : "s",
                         repair_stats.released);
+        }
+        if (repair_stats.reassigned > 0) {
+            output_info(out, "Detected %zu profile reassignment%s from external changes",
+                        repair_stats.reassigned,
+                        repair_stats.reassigned == 1 ? "" : "s");
         }
     }
 
@@ -2343,7 +2348,7 @@ error_t *cmd_apply(
          * This atomically commits all state changes made during apply:
          * - Deployment state: deployed_at timestamps for newly deployed files
          * - Cleanup state: removed orphan entries (if cleanup succeeded)
-         * - Ownership changes: cleared old_profile flags for transferred files
+         * - Reassignments: cleared old_profile flags for reassigned files
          *
          * If cleanup failed, only deployment state is saved (partial success model).
          * If cleanup succeeded, both deployment and cleanup state are saved (full success).

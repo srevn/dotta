@@ -973,10 +973,10 @@ static error_t *analyze_file_divergence(
         }
     }
 
-    /* PHASE 4: Profile ownership change detection
+    /* PHASE 4: Profile reassignment detection
      *
-     * Check VWD cache for old_profile to detect ownership changes.
-     * old_profile is set by manifest layer when file ownership changes
+     * Check VWD cache for old_profile to detect reassignments.
+     * old_profile is set by manifest layer when a file's owning profile changes
      * (e.g., removed from high-precedence profile, fell back to lower).
      *
      * The old_profile field is persisted in the database and populated

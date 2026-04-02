@@ -46,7 +46,7 @@ static bool should_show_item_for_direction(
     if (direction == DIFF_UPSTREAM) {
         /* Upstream: What would apply do? */
         /* Show: undeployed, deleted (apply would restore), content/mode differs,
-         * or profile reassignment (apply acknowledges ownership change) */
+         * or profile reassignment (apply acknowledges reassignment) */
         return (item->state == WORKSPACE_STATE_UNDEPLOYED) ||
                (item->state == WORKSPACE_STATE_DELETED) ||
                (item->state == WORKSPACE_STATE_DEPLOYED &&

@@ -529,6 +529,7 @@ static error_t *sync_entry_to_state(
         .group = meta_item ? meta_item->group : NULL,
         .encrypted = (meta_item && meta_item->kind == METADATA_ITEM_FILE)
                      ? meta_item->file.encrypted : false,
+        .state = STATE_ACTIVE,
         .deployed_at = deployed_at
     };
 
@@ -1821,110 +1822,112 @@ cleanup:
 /**
  * Detect which enabled profiles have stale manifest entries
  *
- * For each enabled profile, picks one ACTIVE state entry and compares
- * its git_oid against the branch's current HEAD. Mismatch means the
- * profile was modified outside dotta.
+ * Single-pass scan of state entries to find profiles whose stored git_oid
+ * doesn't match the profile branch's current HEAD. Mismatch means external
+ * Git operations occurred (commit, rebase, etc.) since the last dotta operation.
  *
- * Returns a hashmap of stale profile names → HEAD oid hex strings.
- * Returns NULL output (not error) when no staleness detected.
+ * Uses a dedup hashmap to ensure each profile is checked exactly once,
+ * regardless of how many entries it has.
  *
- * @param state State handle (must not be NULL)
  * @param repo Git repository (must not be NULL)
- * @param enabled_profiles Profile names to check (must not be NULL)
- * @param out_stale Output hashmap (caller must free with hashmap_free(..., free))
+ * @param entries State file entries to scan (must not be NULL if count > 0)
+ * @param entry_count Number of entries
+ * @param profile_scope Profile scope filter (must not be NULL).
+ *                      Only profiles present as keys are checked.
+ * @param out_stale Output: hashmap of profile_name -> head_hex for stale profiles.
+ *                  NULL if no profiles are stale. Caller frees with hashmap_free(map, free).
  * @return Error or NULL on success
  */
-static error_t *detect_stale_profiles_from_state(
-    const state_t *state,
+error_t *manifest_detect_stale_profiles(
     git_repository *repo,
-    const string_array_t *enabled_profiles,
+    const state_file_entry_t *entries,
+    size_t entry_count,
+    const hashmap_t *profile_scope,
     hashmap_t **out_stale
 ) {
     *out_stale = NULL;
 
+    if (entry_count == 0) return NULL;
+
     error_t *err = NULL;
     hashmap_t *stale_map = NULL;
 
-    for (size_t i = 0; i < enabled_profiles->count; i++) {
-        const char *profile_name = enabled_profiles->items[i];
+    /* Track which profiles we've already checked (avoid redundant ref lookups) */
+    hashmap_t *checked = hashmap_create(16);
+    if (!checked) {
+        return ERROR(ERR_MEMORY, "Failed to create profile check set");
+    }
 
-        /* Get entries for this profile to sample git_oid */
-        state_file_entry_t *entries = NULL;
-        size_t count = 0;
+    for (size_t i = 0; i < entry_count; i++) {
+        const state_file_entry_t *entry = &entries[i];
 
-        err = state_get_entries_by_profile(state, profile_name, &entries, &count);
-        if (err) {
-            /* Non-fatal: skip profile if query fails */
-            error_free(err);
-            err = NULL;
+        /* Only check ACTIVE entries with valid profile and git_oid */
+        if (!entry->state || strcmp(entry->state, STATE_ACTIVE) != 0) {
+            continue;
+        }
+        if (!entry->profile || !entry->git_oid) {
+            continue;
+        }
+        if (!hashmap_get(profile_scope, entry->profile)) {
+            continue;  /* Profile not in scope */
+        }
+
+        /* Skip if already checked this profile */
+        if (hashmap_get(checked, entry->profile)) {
             continue;
         }
 
-        if (count == 0) {
-            state_free_all_files(entries, count);
-            continue;  /* No entries for this profile */
+        /* Mark as checked (store non-NULL sentinel) */
+        err = hashmap_set(checked, entry->profile, (void *)(uintptr_t)1);
+        if (err) {
+            goto cleanup;
         }
 
-        /* Find first ACTIVE entry with git_oid as our sample */
-        const char *sample_oid = NULL;
-        for (size_t j = 0; j < count; j++) {
-            if (entries[j].state && strcmp(entries[j].state, STATE_ACTIVE) == 0 &&
-                entries[j].git_oid) {
-                sample_oid = entries[j].git_oid;
-                break;
-            }
-        }
-
-        if (!sample_oid) {
-            state_free_all_files(entries, count);
-            continue;  /* No active entries with git_oid */
-        }
-
-        /* Get branch's current HEAD */
+        /* Get profile's current HEAD */
         git_oid head_oid;
-        err = get_branch_head_oid(repo, profile_name, &head_oid);
+        err = get_branch_head_oid(repo, entry->profile, &head_oid);
         if (err) {
             /* Branch may have been deleted — skip (safety handles this) */
             error_free(err);
             err = NULL;
-            state_free_all_files(entries, count);
             continue;
         }
 
         char head_hex[GIT_OID_HEXSZ + 1];
         git_oid_tostr(head_hex, sizeof(head_hex), &head_oid);
 
-        if (strcmp(sample_oid, head_hex) != 0) {
+        if (strcmp(entry->git_oid, head_hex) != 0) {
             /* Profile is stale — HEAD moved since last dotta operation */
             if (!stale_map) {
-                stale_map = hashmap_create(enabled_profiles->count);
+                stale_map = hashmap_create(16);
                 if (!stale_map) {
-                    state_free_all_files(entries, count);
-                    return ERROR(ERR_MEMORY, "Failed to create stale profile map");
+                    err = ERROR(ERR_MEMORY, "Failed to create stale profile map");
+                    goto cleanup;
                 }
             }
 
             char *oid_copy = strdup(head_hex);
             if (!oid_copy) {
-                state_free_all_files(entries, count);
-                hashmap_free(stale_map, free);
-                return ERROR(ERR_MEMORY, "Failed to allocate HEAD oid string");
+                err = ERROR(ERR_MEMORY, "Failed to allocate HEAD oid string");
+                goto cleanup;
             }
 
-            err = hashmap_set(stale_map, profile_name, oid_copy);
+            err = hashmap_set(stale_map, entry->profile, oid_copy);
             if (err) {
                 free(oid_copy);
-                state_free_all_files(entries, count);
-                hashmap_free(stale_map, free);
-                return err;
+                goto cleanup;
             }
         }
-
-        state_free_all_files(entries, count);
     }
 
+    hashmap_free(checked, NULL);
     *out_stale = stale_map;
     return NULL;
+
+cleanup:
+    hashmap_free(checked, NULL);
+    hashmap_free(stale_map, free);
+    return err;
 }
 
 /**
@@ -1955,40 +1958,69 @@ error_t *manifest_repair_stale(
     }
 
     error_t *err = NULL;
+    size_t all_count = 0;
+    state_file_entry_t *all_entries = NULL;
+    hashmap_t *profile_scope = NULL;
     hashmap_t *stale_profiles = NULL;
     manifest_t *fresh_manifest = NULL;
     profile_list_t *fresh_profiles = NULL;
     hashmap_t *profile_oids = NULL;
-    metadata_t *metadata = NULL;
     hashmap_t *repaired_paths = NULL;
+    metadata_t *metadata = NULL;
 
-    /* Phase 1: Quick staleness check — O(P) state queries + O(P) ref lookups.
-     * If no profile is stale, return immediately (zero cost common case). */
-    err = detect_stale_profiles_from_state(state, repo, enabled_profiles, &stale_profiles);
+    /* Phase 1: Load all state entries and detect staleness (single DB query).
+     *
+     * Loads all entries once, then single-pass detects stale profiles via
+     * manifest_detect_stale_profiles(). Pre-loaded entries are reused in
+     * Phase 3, eliminating per-profile DB queries entirely.
+     *
+     * If no profile is stale, exits immediately (zero cost common case). */
+    err = state_get_all_files(state, &all_entries, &all_count);
     if (err) {
-        return error_wrap(err, "Failed to detect stale profiles");
+        return error_wrap(err, "Failed to load state entries for stale detection");
+    }
+
+    /* Build profile scope hashmap for O(1) lookups during detection */
+    profile_scope = hashmap_create(enabled_profiles->count);
+    if (!profile_scope) {
+        err = ERROR(ERR_MEMORY, "Failed to create profile scope map");
+        goto cleanup;
+    }
+    for (size_t i = 0; i < enabled_profiles->count; i++) {
+        err = hashmap_set(profile_scope, enabled_profiles->items[i],
+                          (void *)(uintptr_t)1);
+        if (err) goto cleanup;
+    }
+
+    err = manifest_detect_stale_profiles(
+        repo, all_entries, all_count, profile_scope, &stale_profiles
+    );
+    if (err) {
+        err = error_wrap(err, "Failed to detect stale profiles");
+        goto cleanup;
     }
 
     if (!stale_profiles) {
-        return NULL;  /* All profiles current — nothing to repair */
+        goto cleanup;  /* All profiles current — nothing to repair */
     }
 
     /* Create repaired_paths map if caller wants it */
     if (out_repaired_paths) {
         repaired_paths = hashmap_create(64);
         if (!repaired_paths) {
-            hashmap_free(stale_profiles, free);
-            return ERROR(ERR_MEMORY, "Failed to create repaired paths map");
+            err = ERROR(ERR_MEMORY, "Failed to create repaired paths map");
+            goto cleanup;
         }
     }
 
     /* Phase 2: Build fresh manifest from current Git state.
      * This gives us the ground truth for what files should exist. */
-    err = build_manifest(repo, state, enabled_profiles, NULL, NULL,
-                         &fresh_manifest, &fresh_profiles);
+    err = build_manifest(
+        repo, state, enabled_profiles, NULL, NULL, &fresh_manifest, &fresh_profiles
+    );
     if (err) {
-        hashmap_free(stale_profiles, free);
-        return error_wrap(err, "Failed to build fresh manifest for stale repair");
+        err = error_wrap(err, "Failed to build fresh manifest for stale repair");
+        goto cleanup;
     }
 
     /* Build profile→oid map for git_oid field updates */
@@ -2011,137 +2043,117 @@ error_t *manifest_repair_stale(
 
     /* Phase 3: Process ACTIVE state entries from stale profiles.
      *
-     * For each stale profile, get its entries and compare against the
-     * fresh manifest to determine: update (file still in Git) or release
-     * (file removed from Git externally).
+     * Single pass over pre-loaded entries, filtering by stale_profiles map.
+     * For each entry: compare against fresh manifest to determine update
+     * (file still in Git) or release (file removed from Git externally).
      */
-    hashmap_iter_t iter;
-    hashmap_iter_init(&iter, stale_profiles);
-    const char *profile_name;
-    void *value;
+    for (size_t i = 0; i < all_count; i++) {
+        state_file_entry_t *entry = &all_entries[i];
 
-    while (hashmap_iter_next(&iter, &profile_name, &value)) {
-        state_file_entry_t *entries = NULL;
-        size_t count = 0;
-
-        err = state_get_entries_by_profile(state, profile_name, &entries, &count);
-        if (err) {
-            err = error_wrap(err, "Failed to get entries for stale profile '%s'", profile_name);
-            goto cleanup;
+        /* Only repair ACTIVE entries from stale profiles */
+        if (!entry->state || strcmp(entry->state, STATE_ACTIVE) != 0) {
+            continue;
+        }
+        if (!entry->profile || !hashmap_get(stale_profiles, entry->profile)) {
+            continue;
         }
 
-        for (size_t i = 0; i < count; i++) {
-            state_file_entry_t *entry = &entries[i];
+        /* Look up in fresh manifest (O(1) index lookup) */
+        file_entry_t *fresh_entry = NULL;
+        if (fresh_manifest && fresh_manifest->index) {
+            void *idx_ptr = hashmap_get(fresh_manifest->index, entry->filesystem_path);
+            if (idx_ptr) {
+                size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+                fresh_entry = &fresh_manifest->entries[idx];
+            }
+        }
 
-            /* Only repair ACTIVE entries — inactive/deleted/stale are handled elsewhere */
-            if (!entry->state || strcmp(entry->state, STATE_ACTIVE) != 0) {
-                continue;
+        if (fresh_entry) {
+            /* File still in Git (same or different profile via fallback).
+             *
+             * Use sync_entry_to_state to update with current Git truth.
+             * Preserve deployed_at — the file's lifecycle history is unchanged,
+             * only the expected state cache needs updating.
+             */
+            const char *git_oid = hashmap_get(profile_oids, fresh_entry->source_profile->name);
+            if (!git_oid) {
+                err = ERROR(ERR_INTERNAL,
+                    "Missing OID for profile '%s'", fresh_entry->source_profile->name);
+                goto cleanup;
             }
 
-            /* Look up in fresh manifest (O(1) index lookup) */
-            file_entry_t *fresh_entry = NULL;
-            if (fresh_manifest && fresh_manifest->index) {
-                void *idx_ptr = hashmap_get(fresh_manifest->index, entry->filesystem_path);
-                if (idx_ptr) {
-                    size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
-                    fresh_entry = &fresh_manifest->entries[idx];
-                }
+            /* Determine if file content actually changed (blob_oid differs).
+             *
+             * A profile HEAD can move without changing this file's blob
+             * (other files in the commit changed). Distinguishing content
+             * changes from git_oid-only refreshes enables:
+             *   - Accurate repaired_paths (Path B only verifies content-changed files)
+             *   - Accurate stats (user sees real content changes, not bookkeeping)
+             *
+             * Mirrors the blob_changed check in workspace_build_manifest_from_state()
+             * (Path A) for symmetric treatment across both staleness paths.
+             */
+            bool blob_changed = true;  /* Default: assume changed (safe) */
+            const struct git_oid *new_blob_oid = git_tree_entry_id(fresh_entry->entry);
+            if (new_blob_oid && entry->blob_oid) {
+                char new_blob_hex[GIT_OID_HEXSZ + 1];
+                git_oid_tostr(new_blob_hex, sizeof(new_blob_hex), new_blob_oid);
+                blob_changed = (strcmp(entry->blob_oid, new_blob_hex) != 0);
             }
 
-            if (fresh_entry) {
-                /* File still in Git (same or different profile via fallback).
-                 *
-                 * Use sync_entry_to_state to update with current Git truth.
-                 * Preserve deployed_at — the file's lifecycle history is unchanged,
-                 * only the expected state cache needs updating.
-                 */
-                const char *git_oid = hashmap_get(profile_oids, fresh_entry->source_profile->name);
-                if (!git_oid) {
-                    state_free_all_files(entries, count);
-                    err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'",
-                                fresh_entry->source_profile->name);
+            /* Save old blob_oid for content-changed entries BEFORE updating.
+             *
+             * The caller (apply's Path B) uses this to verify that files on disk
+             * still match what dotta deployed (old blob), preventing user
+             * modifications from being silently overwritten.
+             *
+             * Only tracked when blob actually changed — unchanged-blob entries
+             * won't trigger DIVERGENCE_CONTENT in workspace, so Path B's
+             * content-divergence guard would skip them anyway.
+             */
+            if (repaired_paths && entry->blob_oid && blob_changed) {
+                char *old_blob = strdup(entry->blob_oid);
+                if (!old_blob) {
+                    err = ERROR(ERR_MEMORY, "Failed to save old blob_oid");
                     goto cleanup;
                 }
-
-                /* Determine if file content actually changed (blob_oid differs).
-                 *
-                 * A profile HEAD can move without changing this file's blob
-                 * (other files in the commit changed). Distinguishing content
-                 * changes from git_oid-only refreshes enables:
-                 *   - Accurate repaired_paths (Path B only verifies content-changed files)
-                 *   - Accurate stats (user sees real content changes, not bookkeeping)
-                 *
-                 * Mirrors the blob_changed check in workspace_build_manifest_from_state()
-                 * (Path A) for symmetric treatment across both staleness paths.
-                 */
-                bool blob_changed = true;  /* Default: assume changed (safe) */
-                const struct git_oid *new_blob_oid = git_tree_entry_id(fresh_entry->entry);
-                if (new_blob_oid && entry->blob_oid) {
-                    char new_blob_hex[GIT_OID_HEXSZ + 1];
-                    git_oid_tostr(new_blob_hex, sizeof(new_blob_hex), new_blob_oid);
-                    blob_changed = (strcmp(entry->blob_oid, new_blob_hex) != 0);
-                }
-
-                /* Save old blob_oid for content-changed entries BEFORE updating.
-                 *
-                 * The caller (apply's Path B) uses this to verify that files on disk
-                 * still match what dotta deployed (old blob), preventing user
-                 * modifications from being silently overwritten.
-                 *
-                 * Only tracked when blob actually changed — unchanged-blob entries
-                 * won't trigger DIVERGENCE_CONTENT in workspace, so Path B's
-                 * content-divergence guard would skip them anyway.
-                 */
-                if (repaired_paths && entry->blob_oid && blob_changed) {
-                    char *old_blob = strdup(entry->blob_oid);
-                    if (!old_blob) {
-                        state_free_all_files(entries, count);
-                        err = ERROR(ERR_MEMORY, "Failed to save old blob_oid");
-                        goto cleanup;
-                    }
-                    err = hashmap_set(repaired_paths, entry->filesystem_path, old_blob);
-                    if (err) {
-                        free(old_blob);
-                        state_free_all_files(entries, count);
-                        goto cleanup;
-                    }
-                }
-
-                err = sync_entry_to_state(
-                    repo, state, fresh_entry, git_oid, metadata, entry->deployed_at
-                );
+                err = hashmap_set(repaired_paths, entry->filesystem_path, old_blob);
                 if (err) {
-                    err = error_wrap(err, "Failed to repair stale entry '%s'", entry->storage_path);
-                    state_free_all_files(entries, count);
+                    free(old_blob);
                     goto cleanup;
                 }
+            }
 
-                if (blob_changed) {
-                    out_stats->updated++;
-                } else {
-                    out_stats->refreshed++;
-                }
+            err = sync_entry_to_state(
+                repo, state, fresh_entry, git_oid, metadata, entry->deployed_at
+            );
+            if (err) {
+                err = error_wrap(err, "Failed to repair stale entry '%s'", entry->storage_path);
+                goto cleanup;
+            }
+
+            if (blob_changed) {
+                out_stats->updated++;
             } else {
-                /* File removed from all enabled profiles — loss of authority.
-                 *
-                 * Mark STATE_RELEASED so the orphan→safety→cleanup pipeline releases
-                 * it (leaves file on filesystem, removes state entry).
-                 *
-                 * Do NOT remove the state entry here — the full pipeline ensures
-                 * user visibility and safety checks before any cleanup.
-                 */
-                err = state_set_file_state(state, entry->filesystem_path, STATE_RELEASED);
-                if (err) {
-                    err = error_wrap(err, "Failed to mark '%s' as stale", entry->storage_path);
-                    state_free_all_files(entries, count);
-                    goto cleanup;
-                }
-
-                out_stats->released++;
+                out_stats->refreshed++;
             }
-        }
+        } else {
+            /* File removed from all enabled profiles — loss of authority.
+             *
+             * Mark STATE_RELEASED so the orphan→safety→cleanup pipeline releases
+             * it (leaves file on filesystem, removes state entry).
+             *
+             * Do NOT remove the state entry here — the full pipeline ensures
+             * user visibility and safety checks before any cleanup.
+             */
+            err = state_set_file_state(state, entry->filesystem_path, STATE_RELEASED);
+            if (err) {
+                err = error_wrap(err, "Failed to mark '%s' as stale", entry->storage_path);
+                goto cleanup;
+            }
 
-        state_free_all_files(entries, count);
+            out_stats->released++;
+        }
     }
 
     /* Phase 4: Sync tracked directories to reflect current Git state.
@@ -2161,7 +2173,9 @@ error_t *manifest_repair_stale(
     }
 
 cleanup:
-    hashmap_free(stale_profiles, free);
+    if (stale_profiles) hashmap_free(stale_profiles, free);
+    if (profile_scope) hashmap_free(profile_scope, NULL);
+    state_free_all_files(all_entries, all_count);
     if (profile_oids) hashmap_free(profile_oids, free);
     if (fresh_profiles) profile_list_free(fresh_profiles);
     if (metadata) metadata_free(metadata);

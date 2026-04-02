@@ -32,8 +32,8 @@
 
 #include "base/error.h"
 #include "base/filesystem.h"
-#include "base/gitops.h"
 #include "core/ignore.h"
+#include "core/manifest.h"
 #include "core/profiles.h"
 #include "crypto/encryption.h"
 #include "crypto/keymanager.h"
@@ -2340,140 +2340,6 @@ static error_t *analyze_encryption_policy_mismatch(
 }
 
 /**
- * Detect stale profiles by comparing state git_oid against current branch HEAD
- *
- * Scans state entries to find profiles whose stored git_oid doesn't match
- * the profile branch's current HEAD. Returns a hashmap of stale profile names
- * mapped to their current HEAD oid hex string.
- *
- * Algorithm:
- *   For each enabled profile in workspace scope:
- *     1. Find any ACTIVE state entry from this profile
- *     2. Compare entry's git_oid with profile's current HEAD
- *     3. If mismatch: add to stale map (profile_name → HEAD_oid_hex)
- *
- * Performance: O(P) ref lookups where P = enabled profile count.
- * State entries are already loaded; we just sample one per profile.
- *
- * @param ws Workspace (state entries loaded, profiles indexed)
- * @param state_entries All state entries (from state_get_all_files)
- * @param state_count Number of state entries
- * @param out_stale Output: hashmap of stale profiles (NULL if none stale)
- *                  Caller must free with hashmap_free(map, free).
- * @return Error or NULL on success
- */
-static error_t *detect_stale_profiles(
-    const workspace_t *ws,
-    const state_file_entry_t *state_entries,
-    size_t state_count,
-    hashmap_t **out_stale
-) {
-    *out_stale = NULL;
-
-    if (state_count == 0 || !ws->profiles) {
-        return NULL;
-    }
-
-    error_t *err = NULL;
-    hashmap_t *stale_map = NULL;
-
-    /* Build set of profile names we've already checked (avoid redundant ref lookups) */
-    hashmap_t *checked = hashmap_create(ws->profiles->count);
-    if (!checked) {
-        return ERROR(ERR_MEMORY, "Failed to create profile check set");
-    }
-
-    for (size_t i = 0; i < state_count; i++) {
-        const state_file_entry_t *entry = &state_entries[i];
-
-        /* Only check ACTIVE entries from profiles in workspace scope */
-        if (!entry->state || strcmp(entry->state, STATE_ACTIVE) != 0) {
-            continue;
-        }
-        if (!entry->profile || !entry->git_oid) {
-            continue;
-        }
-        if (!hashmap_get(ws->profile_index, entry->profile)) {
-            continue;  /* Profile not in workspace scope */
-        }
-
-        /* Skip if already checked this profile */
-        if (hashmap_get(checked, entry->profile)) {
-            continue;
-        }
-
-        /* Mark as checked (store non-NULL sentinel) */
-        err = hashmap_set(checked, entry->profile, (void *)(uintptr_t)1);
-        if (err) {
-            goto cleanup;
-        }
-
-        /* Get profile's current HEAD */
-        git_reference *ref = NULL;
-        char refname[DOTTA_REFNAME_MAX];
-        err = gitops_build_refname(refname, sizeof(refname),
-                                   "refs/heads/%s", entry->profile);
-        if (err) {
-            /* Can't resolve refname — skip (safety will catch later) */
-            error_free(err);
-            err = NULL;
-            continue;
-        }
-
-        err = gitops_lookup_reference(ws->repo, refname, &ref);
-        if (err) {
-            /* Branch may have been deleted — skip (orphan detection handles this) */
-            error_free(err);
-            err = NULL;
-            continue;
-        }
-
-        const git_oid *head_oid = git_reference_target(ref);
-        if (!head_oid) {
-            git_reference_free(ref);
-            continue;
-        }
-
-        /* Compare stored git_oid with current HEAD */
-        char head_hex[GIT_OID_HEXSZ + 1];
-        git_oid_tostr(head_hex, sizeof(head_hex), head_oid);
-        git_reference_free(ref);
-
-        if (strcmp(entry->git_oid, head_hex) != 0) {
-            /* Stale! Profile's HEAD moved since last dotta operation */
-            if (!stale_map) {
-                stale_map = hashmap_create(ws->profiles->count);
-                if (!stale_map) {
-                    err = ERROR(ERR_MEMORY, "Failed to create stale profile map");
-                    goto cleanup;
-                }
-            }
-
-            char *oid_copy = strdup(head_hex);
-            if (!oid_copy) {
-                err = ERROR(ERR_MEMORY, "Failed to allocate HEAD oid string");
-                goto cleanup;
-            }
-
-            err = hashmap_set(stale_map, entry->profile, oid_copy);
-            if (err) {
-                free(oid_copy);
-                goto cleanup;
-            }
-        }
-    }
-
-    hashmap_free(checked, NULL);
-    *out_stale = stale_map;
-    return NULL;
-
-cleanup:
-    hashmap_free(checked, NULL);
-    hashmap_free(stale_map, free);
-    return err;
-}
-
-/**
  * Patch a manifest entry's VWD cache from a fresh Git manifest entry
  *
  * Replaces stale cached state (blob_oid, type, mode, metadata) with
@@ -2653,11 +2519,14 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
      * Compare each profile's stored git_oid against its branch's current HEAD.
      * If any mismatch: external Git operations occurred, VWD cache is stale.
      *
-     * Cost: O(P) ref lookups where P = enabled profile count (typically < 10).
+     * Cost: O(N) scan + O(P) ref lookups where N = entry count,
+     * P = enabled profile count (typically < 10).
      * Fast path: If no staleness detected, stale_profiles is NULL and the rest
      * of this function proceeds identically to the non-stale case.
      */
-    err = detect_stale_profiles(ws, state_entries, state_count, &stale_profiles);
+    err = manifest_detect_stale_profiles(
+        ws->repo, state_entries, state_count, ws->profile_index, &stale_profiles
+    );
     if (err) {
         state_free_all_files(state_entries, state_count);
         return error_wrap(err, "Failed to detect stale profiles");

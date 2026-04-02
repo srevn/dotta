@@ -408,6 +408,40 @@ error_t *manifest_rebuild(
 );
 
 /**
+ * Detect which enabled profiles have stale manifest entries
+ *
+ * Single-pass scan of state entries to find profiles whose stored git_oid
+ * doesn't match the profile branch's current HEAD. Mismatch means external
+ * Git operations occurred (commit, rebase, etc.) since the last dotta operation.
+ *
+ * Algorithm:
+ *   For each state entry:
+ *     1. Skip non-ACTIVE, missing profile/git_oid, out-of-scope
+ *     2. Skip if profile already checked (O(1) dedup hashmap)
+ *     3. Compare entry's git_oid with profile branch HEAD
+ *     4. If mismatch: add to stale map (profile_name -> HEAD_oid_hex)
+ *
+ * Performance: O(N) scan + O(P) ref lookups where N = entry count,
+ * P = unique enabled profiles (typically < 10).
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param entries State file entries to scan (must not be NULL if count > 0)
+ * @param entry_count Number of entries
+ * @param profile_scope Profile scope filter (must not be NULL).
+ *                      Only profiles present as keys are checked.
+ * @param out_stale Output: hashmap of profile_name -> head_hex for stale profiles.
+ *                  NULL if no profiles are stale. Caller frees with hashmap_free(map, free).
+ * @return Error or NULL on success
+ */
+error_t *manifest_detect_stale_profiles(
+    git_repository *repo,
+    const state_file_entry_t *entries,
+    size_t entry_count,
+    const hashmap_t *profile_scope,
+    hashmap_t **out_stale
+);
+
+/**
  * Repair stale manifest entries from external Git changes
  *
  * Detects and repairs state entries whose git_oid no longer matches the

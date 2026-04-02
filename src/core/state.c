@@ -421,13 +421,43 @@ static error_t *prepare_statements(state_t *state) {
 
     int rc;
 
-    /* Insert/update file (used by manifest sync operations - hot path) */
+    /* Insert/update file (used by manifest sync operations - hot path)
+     *
+     * Stat cache preservation: When blob_oid is unchanged (same content),
+     * preserves the existing stat cache rather than zeroing it. This avoids
+     * forcing the slow path (full content hash) for files whose content
+     * hasn't actually changed — common during sync, fallback, reorder,
+     * and repair operations.
+     *
+     * When blob_oid changes, stat cache is replaced with the incoming values
+     * (zeros from sync_entry_to_state), correctly invalidating the cache.
+     *
+     * Uses IS NOT for NULL-safe comparison (IS NOT treats NULL = NULL). */
     const char *sql_insert =
-        "INSERT OR REPLACE INTO virtual_manifest "
+        "INSERT INTO virtual_manifest "
         "(filesystem_path, storage_path, profile, old_profile, git_oid, blob_oid, "
         " type, mode, owner, \"group\", encrypted, state, deployed_at, "
         " stat_mtime, stat_size, stat_ino) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(filesystem_path) DO UPDATE SET "
+        "  storage_path = excluded.storage_path, "
+        "  profile      = excluded.profile, "
+        "  old_profile  = excluded.old_profile, "
+        "  git_oid      = excluded.git_oid, "
+        "  blob_oid     = excluded.blob_oid, "
+        "  type         = excluded.type, "
+        "  mode         = excluded.mode, "
+        "  owner        = excluded.owner, "
+        "  \"group\"    = excluded.\"group\", "
+        "  encrypted    = excluded.encrypted, "
+        "  state        = excluded.state, "
+        "  deployed_at  = excluded.deployed_at, "
+        "  stat_mtime   = CASE WHEN excluded.blob_oid IS NOT virtual_manifest.blob_oid "
+        "                 THEN excluded.stat_mtime ELSE virtual_manifest.stat_mtime END, "
+        "  stat_size    = CASE WHEN excluded.blob_oid IS NOT virtual_manifest.blob_oid "
+        "                 THEN excluded.stat_size ELSE virtual_manifest.stat_size END, "
+        "  stat_ino     = CASE WHEN excluded.blob_oid IS NOT virtual_manifest.blob_oid "
+        "                 THEN excluded.stat_ino ELSE virtual_manifest.stat_ino END;";
 
     rc = sqlite3_prepare_v2(state->db, sql_insert, -1, &state->stmt_insert_file, NULL);
     if (rc != SQLITE_OK) {
@@ -461,14 +491,27 @@ static error_t *prepare_statements(state_t *state) {
         return sqlite_error(state->db, "Failed to prepare update stat cache statement");
     }
 
-    /* Update full entry (used by manifest sync operations) */
+    /* Update full entry (used by manifest sync operations)
+     *
+     * Stat cache preservation: Same CASE WHEN pattern as INSERT statement.
+     * When blob_oid is unchanged (read-modify-write for old_profile tracking),
+     * preserves the existing stat cache. When blob_oid changes, incoming
+     * stat cache values are written (typically zeros = invalidation).
+     *
+     * Uses numbered parameters (?NNN) so the CASE WHEN can reference ?5
+     * (blob_oid) without additional bindings. */
     const char *sql_update_entry =
         "UPDATE virtual_manifest SET "
-        "storage_path = ?, profile = ?, old_profile = ?, git_oid = ?, blob_oid = ?, "
-        "type = ?, mode = ?, owner = ?, \"group\" = ?, encrypted = ?, "
-        "state = ?, deployed_at = ?, "
-        "stat_mtime = ?, stat_size = ?, stat_ino = ? "
-        "WHERE filesystem_path = ?;";
+        "storage_path = ?1, profile = ?2, old_profile = ?3, git_oid = ?4, "
+        "blob_oid = ?5, type = ?6, mode = ?7, owner = ?8, \"group\" = ?9, "
+        "encrypted = ?10, state = ?11, deployed_at = ?12, "
+        "stat_mtime = CASE WHEN ?5 IS NOT virtual_manifest.blob_oid "
+        "             THEN ?13 ELSE virtual_manifest.stat_mtime END, "
+        "stat_size  = CASE WHEN ?5 IS NOT virtual_manifest.blob_oid "
+        "             THEN ?14 ELSE virtual_manifest.stat_size END, "
+        "stat_ino   = CASE WHEN ?5 IS NOT virtual_manifest.blob_oid "
+        "             THEN ?15 ELSE virtual_manifest.stat_ino END "
+        "WHERE filesystem_path = ?16;";
 
     rc = sqlite3_prepare_v2(state->db, sql_update_entry, -1,
                             &state->stmt_update_entry, NULL);
@@ -3217,7 +3260,10 @@ error_t *state_update_entry(
     /* 12. deployed_at */
     sqlite3_bind_int64(state->stmt_update_entry, 12, (sqlite3_int64)entry->deployed_at);
 
-    /* 13-15. stat cache (fast-path divergence detection) */
+    /* 13-15. stat cache (fast-path divergence detection)
+     *
+     * These values are only written when blob_oid changes (CASE WHEN in SQL).
+     * When blob_oid is unchanged, the existing DB values are preserved. */
     sqlite3_bind_int64(state->stmt_update_entry, 13, entry->stat_cache.mtime);
     sqlite3_bind_int64(state->stmt_update_entry, 14, entry->stat_cache.size);
     sqlite3_bind_int64(state->stmt_update_entry, 15, (sqlite3_int64)entry->stat_cache.ino);

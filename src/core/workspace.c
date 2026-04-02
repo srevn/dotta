@@ -2829,8 +2829,8 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 entry->group = state_entry->group ? strdup(state_entry->group) : NULL;
                 entry->encrypted = state_entry->encrypted;
                 entry->deployed_at = state_entry->deployed_at;
-                /* stat_cache intentionally not copied — patch_entry_from_fresh()
-                 * invalidates it (blob_oid may change, making cached stat stale) */
+                /* stat_cache set after blob_changed check below — preserved when
+                 * blob_oid unchanged, left at STAT_CACHE_UNSET when changed */
                 entry->entry = NULL;
 
                 /* Now overwrite stale fields from fresh manifest */
@@ -2861,6 +2861,19 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                  */
                 bool blob_changed = !old_blob_oid || !entry->blob_oid ||
                                     strcmp(old_blob_oid, entry->blob_oid) != 0;
+
+                /* Preserve stat cache when blob_oid is unchanged.
+                 *
+                 * When profile HEAD moved but this file's blob is identical,
+                 * the cached stat triple is still valid (it was recorded against
+                 * the same blob_oid). Restoring it avoids the slow content-
+                 * comparison path for files that only had a git_oid refresh.
+                 *
+                 * When blob_oid changed, stat_cache stays STAT_CACHE_UNSET
+                 * (from patch_entry_from_fresh), correctly forcing the slow path. */
+                if (!blob_changed) {
+                    entry->stat_cache = state_entry->stat_cache;
+                }
 
                 if (blob_changed) {
                     error_t *track_err = hashmap_set(ws->stale_paths,

@@ -68,6 +68,9 @@ else
     HAS_STATIC_LIBGIT2 := 0
 endif
 
+# Uncrustify config
+UNCRUSTIFY_CFG := .uncrustify.cfg
+
 # Directories
 SRC_DIR := src
 BUILD_DIR := build
@@ -232,11 +235,26 @@ uninstall-completions:
 install-all: install
 	@$(MAKE) --no-print-directory install-completions
 
-# Format code (requires clang-format)
+# Format code (requires uncrustify)
+# Post-processing fixes uncrustify limitations:
+#   1. Orphaned ';' after multi-line closing paren: ")\n   ;" → ");"
+#   2. Address-of '&' split from operand: ", &\n   var" → ",\n   &var"
+#   3. Separated closing parens in if/while/for: ")\n   ) {" → ")) {"
 .PHONY: format
 format:
 	@echo "Formatting code..."
-	@find src include -name "*.c" -o -name "*.h" | xargs clang-format -i
+	@find src include -name "*.c" -o -name "*.h" | xargs -I{} uncrustify -c $(UNCRUSTIFY_CFG) -l C --no-backup {}
+	@echo "Post-processing uncrustify output..."
+	@find src include -name "*.c" -o -name "*.h" -exec perl -0777 -pi -e 's/\)\n\s+;/);/g' {} +
+	@find src include -name "*.c" -o -name "*.h" -exec perl -0777 -pi -e 's/,\s*&\n(\s+)(\w)/,\n$$1\&$$2/g' {} +
+	@find src include -name "*.c" -o -name "*.h" -exec perl -0777 -pi -e 's/\)\n(\s+)\) \{/\)\) \{/g' {} +
+
+# Check formatting without modifying files
+.PHONY: format-check
+format-check:
+	@find src include -name "*.c" -o -name "*.h" | xargs -I{} uncrustify -c $(UNCRUSTIFY_CFG) -l C --check {} 2>&1 | grep FAIL; \
+	if [ $$? -eq 0 ]; then echo "Formatting issues found. Run 'make format' to fix."; exit 1; \
+	else echo "All files formatted correctly."; fi
 
 # Check dependencies
 .PHONY: check-deps
@@ -258,7 +276,8 @@ help:
 	@echo "  install-all           - Install binary, configs, hooks, and completions"
 	@echo "  uninstall             - Remove installed files from $(PREFIX)"
 	@echo "  uninstall-completions - Remove shell completions only"
-	@echo "  format                - Format code with clang-format"
+	@echo "  format                - Format code with uncrustify"
+	@echo "  format-check          - Check formatting without modifying files"
 	@echo "  check-deps            - Check for required dependencies"
 	@echo "  help                  - Show this help message"
 	@echo ""

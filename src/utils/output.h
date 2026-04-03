@@ -247,18 +247,19 @@ void output_newline(const output_ctx_t *ctx);
 /**
  * Print section header
  *
- * Note: Does NOT add leading newline automatically. Use output_newline()
+ * Supports printf-style format strings for dynamic titles.
+ * Does NOT add leading newline automatically. Use output_newline()
  * before this function to add spacing between sections.
  *
  * Example:
- *   output_section(out, "First Section");      // No leading newline
- *   output_info(out, "content...");
+ *   output_section(out, "First Section");
+ *   output_section(out, "Files in '%s'", profile_name);
  *
  *   output_newline(out);                       // Add spacing
  *   output_section(out, "Second Section");
- *   output_info(out, "more content...");
  */
-void output_section(const output_ctx_t *ctx, const char *title);
+void output_section(const output_ctx_t *ctx, const char *fmt, ...)
+__attribute__((format(printf, 2, 3)));
 
 /**
  * Clear current line and flush (for inline progress)

@@ -32,8 +32,6 @@
 /* Display configuration constants */
 #define LIST_SHORT_OID_BUF_SIZE 8
 #define LIST_TIMESTAMP_BUFFER_SIZE 64
-#define LIST_MESSAGE_BUFFER_SIZE 256
-#define LIST_HEADER_BUFFER_SIZE 512
 #define LIST_MAX_MSG_ALIGN 60
 #define LIST_MAX_NAME_ALIGN 40
 #define LIST_MIN_NAME_ALIGN 12
@@ -92,58 +90,56 @@ static bool is_file_encrypted(
 }
 
 /**
- * Format upstream state for display
+ * Print upstream state indicator
  *
- * Formats into a separate plain buffer first, then writes the final result
- * (with or without ANSI colors) into the caller's buffer.
+ * Prints a colored upstream tracking indicator (e.g., [=], [↑3], [↕2+1])
+ * directly to the output stream via the output_colored API.
  */
-static void format_upstream_state(
+static void print_upstream_state(
     output_ctx_t *out,
-    const upstream_info_t *info,
-    char *buffer,
-    size_t buffer_size
+    const upstream_info_t *info
 ) {
-    if (!info || !buffer || buffer_size == 0) {
+    if (!info) {
         return;
     }
 
     const char *symbol = upstream_state_symbol(info->state);
     output_color_t color;
-    char plain[64];
+    char label[64];
 
     switch (info->state) {
         case UPSTREAM_UP_TO_DATE:
             color = OUTPUT_COLOR_GREEN;
             snprintf(
-                plain, sizeof(plain),
+                label, sizeof(label),
                 "[%s]", symbol
             );
             break;
         case UPSTREAM_LOCAL_AHEAD:
             color = OUTPUT_COLOR_YELLOW;
             snprintf(
-                plain, sizeof(plain),
+                label, sizeof(label),
                 "[%s%zu]", symbol, info->ahead
             );
             break;
         case UPSTREAM_REMOTE_AHEAD:
             color = OUTPUT_COLOR_YELLOW;
             snprintf(
-                plain, sizeof(plain),
+                label, sizeof(label),
                 "[%s%zu]", symbol, info->behind
             );
             break;
         case UPSTREAM_DIVERGED:
             color = OUTPUT_COLOR_RED;
             snprintf(
-                plain, sizeof(plain),
+                label, sizeof(label),
                 "[%s%zu+%zu]", symbol, info->ahead, info->behind
             );
             break;
         case UPSTREAM_NO_REMOTE:
             color = OUTPUT_COLOR_CYAN;
             snprintf(
-                plain, sizeof(plain),
+                label, sizeof(label),
                 "[%s]", symbol
             );
             break;
@@ -151,17 +147,13 @@ static void format_upstream_state(
         default:
             color = OUTPUT_COLOR_DIM;
             snprintf(
-                plain, sizeof(plain),
+                label, sizeof(label),
                 "[%s]", symbol
             );
             break;
     }
 
-    snprintf(
-        buffer, buffer_size, "%s%s%s",
-        output_color_code(out, color), plain,
-        output_color_code(out, OUTPUT_COLOR_RESET)
-    );
+    output_colored(out, OUTPUT_NORMAL, color, "  %s", label);
 }
 
 /**
@@ -344,9 +336,7 @@ static error_t *list_profiles(
             upstream_info_t *info = NULL;
             error_t *upstream_err = upstream_analyze_profile(repo, remote_name, name, &info);
             if (!upstream_err && info) {
-                char upstream_str[64];
-                format_upstream_state(out, info, upstream_str, sizeof(upstream_str));
-                output_print(out, OUTPUT_NORMAL, "  %s", upstream_str);
+                print_upstream_state(out, info);
                 upstream_info_free(info);
             } else {
                 error_free(upstream_err);
@@ -418,18 +408,14 @@ static error_t *list_files(
     }
 
     if (string_array_size(files) == 0) {
-        char msg[LIST_MESSAGE_BUFFER_SIZE];
-        snprintf(msg, sizeof(msg), "No files in profile '%s'", opts->profile);
-        output_info(out, "%s", msg);
+        output_info(out, "No files in profile '%s'", opts->profile);
         string_array_free(files);
         profile_free(profile);
         return NULL;
     }
 
     /* Print header */
-    char header[LIST_MESSAGE_BUFFER_SIZE];
-    snprintf(header, sizeof(header), "Files in profile '%s'", opts->profile);
-    output_section(out, header);
+    output_section(out, "Files in profile '%s'", opts->profile);
     output_newline(out);
 
     /* Sort for consistent output */
@@ -603,6 +589,7 @@ static error_t *list_files(
  */
 static bool format_time(git_time_t timestamp, char *buf, size_t buf_size) {
     time_t t = (time_t) timestamp;
+
     struct tm tm_info;
     if (!localtime_r(&t, &tm_info)) {
         return false;
@@ -677,12 +664,10 @@ static error_t *list_file_history(
     }
 
     /* Print header */
-    char header[LIST_HEADER_BUFFER_SIZE];
-    snprintf(
-        header, sizeof(header), "History of '%s' in profile '%s'",
+    output_section(
+        out, "History of '%s' in profile '%s'",
         storage_path, opts->profile
     );
-    output_section(out, header);
     output_newline(out);
 
     /* Calculate max message length for alignment (oneline mode only) */

@@ -689,12 +689,7 @@ static error_t *display_remote_status(
     }
 
     /* Display remote sync status section */
-    char section_title[256];
-    snprintf(
-        section_title, sizeof(section_title), "Remote sync status (%s)",
-        remote_name
-    );
-    output_section(out, section_title);
+    output_section(out, "Remote sync status (%s)", remote_name);
 
     /* Analyze and display each profile's sync state */
     size_t up_to_date = 0;

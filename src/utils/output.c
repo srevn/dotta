@@ -285,8 +285,7 @@ static bool expand_format(bool color_on, const char *fmt, style_buf_t *sb) {
         if (*p != '{') {
             /* Fast path: bulk-copy runs of literal characters */
             const char *run = p;
-            while (*p && *p != '{')
-                p++;
+            while (*p && *p != '{') p++;
             style_buf_puts(sb, run, (size_t) (p - run));
             continue;
         }
@@ -660,13 +659,20 @@ void output_newline(const output_ctx_t *ctx) {
     fputc('\n', ctx->stream);
 }
 
-void output_section(const output_ctx_t *ctx, const char *title) {
-    if (!ctx || !title) return;
+void output_section(const output_ctx_t *ctx, const char *fmt, ...) {
+    if (!ctx || !fmt) return;
     if (ctx->verbosity < OUTPUT_NORMAL) return;
 
     const char *bold = output_color_code(ctx, OUTPUT_COLOR_BOLD);
     const char *reset = output_color_code(ctx, OUTPUT_COLOR_RESET);
-    fprintf(ctx->stream, "%s%s%s\n", bold, title, reset);
+
+    fputs(bold, ctx->stream);
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(ctx->stream, fmt, args);
+    va_end(args);
+    fputs(reset, ctx->stream);
+    fputc('\n', ctx->stream);
 }
 
 void output_clear_line(const output_ctx_t *ctx) {

@@ -1334,9 +1334,6 @@ static error_t *sync_push_phase(
         }
     }
 
-    if (!ephemeral) {
-        output_newline(out);
-    }
     return NULL;
 }
 

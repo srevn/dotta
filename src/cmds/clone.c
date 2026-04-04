@@ -406,7 +406,6 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     output_section(out, "Cloning dotta repository");
     output_info(out, "  URL: %s", opts->url);
     output_info(out, "  Path: %s", local_path);
-    output_newline(out);
 
     /* Create transfer context for progress reporting and credentials */
     xfer = transfer_context_create(out, opts->url);
@@ -660,7 +659,6 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         }
 
         if (bootstrap_available) {
-            output_newline(out);
             output_section(out, "Bootstrap scripts available");
 
             for (size_t i = 0; i < string_array_size(fetched_profiles); i++) {
@@ -728,7 +726,6 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         output_success(out, "Bootstrap complete!");
     }
 
-    output_newline(out);
     output_section(out, "Next steps");
     if (!run_bootstrap && bootstrap_available) {
         output_info(out, "  dotta bootstrap        # Run bootstrap scripts");

@@ -194,7 +194,6 @@ static void print_manifest_disable_stats(
                 stats->files_removed == 1 ? "" : "s"
             );
         }
-        output_newline(out);
     } else {
         /* Compact summary */
         if (stats->files_removed > 0) {
@@ -318,7 +317,6 @@ static error_t *profile_list(
                 );
             }
         }
-        output_newline(out);
     } else {
         output_info(out, "No enabled profiles");
         output_hint(out, "Run 'dotta profile enable <name>'");
@@ -346,7 +344,6 @@ static error_t *profile_list(
                 );
             }
         }
-        output_newline(out);
     }
 
     /* Show remote profiles if requested */

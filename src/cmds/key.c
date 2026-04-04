@@ -322,8 +322,6 @@ static error_t *cmd_key_status(
         return NULL;
     }
 
-    output_newline(out);
-
     /* Display key cache status */
     output_section(out, "Key Cache Status");
 
@@ -382,8 +380,6 @@ static error_t *cmd_key_status(
             "  (You will be prompted for passphrase on next use)\n"
         );
     }
-
-    output_newline(out);
 
     /* Count and display encrypted files */
     output_section(out, "Encrypted Files");

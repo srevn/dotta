@@ -71,7 +71,6 @@ static void print_preflight_results(
             );
         }
         output_info(out, "  These files will now be managed by a different profile.");
-        output_newline(out);
     }
 }
 
@@ -580,7 +579,6 @@ static void print_cleanup_preflight_results(
 
     /* Case 3: Safety violations - ALWAYS show (blocking) */
     if (result->has_blocking_violations) {
-        output_newline(out);  /* Add spacing before safety violations */
         print_safety_violations(out, result->safety_violations);
     }
 

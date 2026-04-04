@@ -1387,7 +1387,6 @@ static error_t *diff_workspace(
         }
 
         /* Downstream section */
-        output_newline(out);
         output_section(out, "Downstream (filesystem → repository)");
         output_info(out, "Shows what 'dotta update' would commit\n");
 

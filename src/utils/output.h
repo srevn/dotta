@@ -56,6 +56,7 @@ typedef struct {
     output_color_mode_t color_mode;
     bool color_enabled;         /* Computed from color_mode for stream */
     bool stderr_color_enabled;  /* Computed from color_mode for stderr */
+    bool has_content;           /* Section/list rendered — drives automatic spacing */
 } output_ctx_t;
 
 /**
@@ -248,15 +249,12 @@ void output_newline(const output_ctx_t *ctx);
  * Print section header
  *
  * Supports printf-style format strings for dynamic titles.
- * Does NOT add leading newline automatically. Use output_newline()
- * before this function to add spacing between sections.
+ * Automatically adds a leading blank line between sections
+ * (tracked via has_content in output context).
  *
  * Example:
- *   output_section(out, "First Section");
- *   output_section(out, "Files in '%s'", profile_name);
- *
- *   output_newline(out);                       // Add spacing
- *   output_section(out, "Second Section");
+ *   output_section(out, "First Section");    // no leading blank (first section)
+ *   output_section(out, "Second Section");   // automatic blank line before
  */
 void output_section(const output_ctx_t *ctx, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
@@ -434,6 +432,9 @@ int output_list_add(
 
 /**
  * Render list with auto-calculated alignment
+ *
+ * Automatically adds a leading blank line between sections/lists
+ * (tracked via has_content in output context).
  *
  * Performs two-pass rendering:
  *   Pass 1: Calculate maximum tag width across all items

@@ -1845,7 +1845,6 @@ static error_t *update_display_summary(
             out, "The following files match auto-encrypt "
             "patterns but are stored as plaintext:"
         );
-        output_newline(out);
 
         output_list_t *list = output_list_create(
             out, "Encryption policy violations",

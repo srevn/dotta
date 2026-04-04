@@ -529,7 +529,6 @@ static void display_multi_profile_warnings(
         return;
     }
 
-    output_newline(out);
     output_section(out, "Multi-profile file warning");
     output_warning(
         out, "%zu file%s exist%s in multiple profiles:",

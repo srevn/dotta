@@ -162,7 +162,6 @@ static void display_workspace_status(
         return;
     }
 
-    output_newline(out);
     output_section(out, "Workspace status");
 
     /* Display status line */
@@ -301,11 +300,6 @@ static void display_workspace_status(
                         orphaned[orphaned_count++] = item;
                         break;
                 }
-            }
-
-            /* Add spacing between status message and section lists */
-            if (all_count > 0) {
-                output_newline(out);
             }
 
             /* Section 1: Uncommitted Changes */
@@ -844,8 +838,6 @@ static error_t *display_remote_status(
 
         upstream_info_free(info);
     }
-
-    output_newline(out);
 
     /* Display summary section */
     output_section(out, "Sync summary");

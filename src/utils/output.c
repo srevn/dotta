@@ -663,6 +663,12 @@ void output_section(const output_ctx_t *ctx, const char *fmt, ...) {
     if (!ctx || !fmt) return;
     if (ctx->verbosity < OUTPUT_NORMAL) return;
 
+    /* Automatic section separator */
+    if (ctx->has_content) {
+        fputc('\n', ctx->stream);
+    }
+    ((output_ctx_t *) ctx)->has_content = true;
+
     const char *bold = output_color_code(ctx, OUTPUT_COLOR_BOLD);
     const char *reset = output_color_code(ctx, OUTPUT_COLOR_RESET);
 
@@ -1034,6 +1040,12 @@ void output_list_render(output_list_t *list) {
     output_ctx_t *ctx = list->ctx;
     if (ctx->verbosity < OUTPUT_NORMAL) return;
 
+    /* Automatic section separator */
+    if (ctx->has_content) {
+        fputc('\n', ctx->stream);
+    }
+    ctx->has_content = true;
+
     /* Pass 1: Calculate maximum tag width */
     size_t max_tag_width = 0;
     for (size_t i = 0; i < list->count; i++) {
@@ -1087,8 +1099,6 @@ void output_list_render(output_list_t *list) {
 
         fputc('\n', ctx->stream);
     }
-
-    output_newline(ctx);
 }
 
 size_t output_list_count(const output_list_t *list) {

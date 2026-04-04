@@ -168,67 +168,57 @@ static void display_workspace_status(
     /* Display status line */
     if (profile_filter) {
         /* Profile-scoped status: reflects the filtered profile */
-        output_color_t status_color;
-        char status_buf[128];
-
         if (filtered_diverged == 0) {
-            status_color = OUTPUT_COLOR_GREEN;
             if (profile_file_count > 0) {
-                snprintf(
-                    status_buf, sizeof(status_buf), "Clean - %zu file%s aligned",
+                output_colored(
+                    out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN,
+                    "  Clean - %zu file%s aligned\n",
                     profile_file_count, profile_file_count == 1 ? "" : "s"
                 );
             } else {
-                snprintf(
-                    status_buf, sizeof(status_buf), "Clean - no files in profile"
+                output_colored(
+                    out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN,
+                    "  Clean - no files in profile\n"
                 );
             }
         } else {
-            status_color = OUTPUT_COLOR_YELLOW;
-            snprintf(
-                status_buf, sizeof(status_buf), "Dirty - %zu item%s diverged",
+            output_colored(
+                out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW,
+                "  Dirty - %zu item%s diverged\n",
                 filtered_diverged, filtered_diverged == 1 ? "" : "s"
             );
         }
-
-        output_colored(
-            out, OUTPUT_NORMAL, status_color, "  %s\n",
-            status_buf
-        );
     } else {
         /* Global status */
-        output_color_t status_color = OUTPUT_COLOR_GREEN;
-        char status_buf[128];
-        const char *status_msg = NULL;
-
         switch (ws_status) {
             case WORKSPACE_CLEAN:
                 if (manifest && manifest->count > 0) {
-                    snprintf(
-                        status_buf, sizeof(status_buf), "Clean - %zu file%s aligned",
+                    output_colored(
+                        out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN,
+                        "  Clean - %zu file%s aligned\n",
                         manifest->count, manifest->count == 1 ? "" : "s"
                     );
-                    status_msg = status_buf;
                 } else {
-                    status_msg = "Clean - all states aligned";
+                    output_colored(
+                        out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN,
+                        "  Clean - all states aligned\n"
+                    );
                 }
-
-                status_color = OUTPUT_COLOR_GREEN;
                 break;
 
             case WORKSPACE_DIRTY:
-                status_msg = "Dirty - workspace has divergence";
-                status_color = OUTPUT_COLOR_YELLOW;
+                output_colored(
+                    out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW,
+                    "  Dirty - workspace has divergence\n"
+                );
                 break;
 
             case WORKSPACE_INVALID:
-                status_msg = "Invalid - workspace has orphaned state entries";
-                status_color = OUTPUT_COLOR_RED;
+                output_colored(
+                    out, OUTPUT_NORMAL, OUTPUT_COLOR_RED,
+                    "  Invalid - workspace has orphaned state entries\n"
+                );
                 break;
-        }
-
-        if (status_msg) {
-            output_colored(out, OUTPUT_NORMAL, status_color, "  %s\n", status_msg);
         }
     }
 
@@ -524,8 +514,8 @@ static void display_workspace_status(
 
         /* Show hidden items note when profile filter is active */
         if (profile_filter && hidden_count > 0) {
-            output_print(
-                out, OUTPUT_NORMAL, "  (%zu item%s from other profiles hidden)\n",
+            output_styled(
+                out, OUTPUT_NORMAL, "  {dim}(%zu item%s from other profiles hidden){reset}\n",
                 hidden_count, hidden_count == 1 ? "" : "s"
             );
         }
@@ -680,12 +670,6 @@ static error_t *display_remote_status(
         }
 
         transfer_context_free(xfer);
-
-        /* Section spacing — the cleared line serves as the blank separator
-         * in ephemeral mode, matching the newline's role in persistent mode */
-        if (verbose) {
-            output_newline(out);
-        }
     }
 
     /* Display remote sync status section */

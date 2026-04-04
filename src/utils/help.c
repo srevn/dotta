@@ -397,6 +397,8 @@ void print_diff_help(const char *prog_name) {
     printf("  %s diff HEAD~1              # Previous commit vs workspace\n", prog_name);
     printf("  %s diff b3e1f9a a4f2c8e     # Compare two commits\n", prog_name);
     printf("  %s diff home/.bashrc        # Workspace diff for one file\n", prog_name);
+    printf("  %s diff home/.bashrc HEAD~2 # File at commit vs workspace\n", prog_name);
+    printf("  %s diff home/.bashrc a b    # File between two commits\n", prog_name);
     printf("\nIntegration:\n");
     printf("  %s list global home/.bashrc # See history\n", prog_name);
     printf("  %s diff b3e1f9a a4f2c8e     # Compare those commits\n", prog_name);

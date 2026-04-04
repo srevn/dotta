@@ -940,30 +940,37 @@ static int cmd_diff_main(int argc, char **argv) {
         .name_only     = false
     };
 
-    /* Collect positional arguments and profiles */
-    char **positional = malloc((size_t) argc * sizeof(char *));
+    /* Collect git references, file paths, and profiles separately.
+     * This separation enables combining file filters with commit references
+     * (e.g., dotta diff home/.bashrc HEAD~2). */
+    char **git_refs = malloc((size_t) argc * sizeof(char *));
+    char **files = malloc((size_t) argc * sizeof(char *));
     char **profiles = malloc((size_t) argc * sizeof(char *));
-    if (!positional || !profiles) {
+    if (!git_refs || !files || !profiles) {
         fprintf(stderr, "Failed to allocate memory\n");
-        free(positional);
+        free(git_refs);
+        free(files);
         free(profiles);
         return 1;
     }
-    size_t positional_count = 0;
+    size_t git_ref_count = 0;
+    size_t file_count = 0;
     size_t profile_count = 0;
     bool has_direction_flag = false;
 
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-            free(positional);
+            free(git_refs);
+            free(files);
             free(profiles);
             print_diff_help(argv[0]);
             return 0;
         } else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--profile") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: --profile requires an argument\n");
-                free(positional);
+                free(git_refs);
+                free(files);
                 free(profiles);
                 return 1;
             }
@@ -980,7 +987,7 @@ static int cmd_diff_main(int argc, char **argv) {
             opts.direction = DIFF_BOTH;
             has_direction_flag = true;
         } else if (argv[i][0] != '-') {
-            /* Positional argument - classify as file path or profile name
+            /* Positional argument - classify as file path, git ref, or profile
              *
              * File patterns are detected by:
              * - Path prefix: /, ~, .
@@ -992,17 +999,17 @@ static int cmd_diff_main(int argc, char **argv) {
                 strncmp(argv[i], "custom/", 7) == 0 || strpbrk(argv[i], "*?[") != NULL;
 
             if (is_file) {
-                positional[positional_count++] = argv[i];
+                files[file_count++] = argv[i];
             } else if (str_looks_like_git_ref(argv[i])) {
-                /* Git reference (commit hash, HEAD, etc.) */
-                positional[positional_count++] = argv[i];
+                git_refs[git_ref_count++] = argv[i];
             } else {
                 /* Profile name */
                 profiles[profile_count++] = argv[i];
             }
         } else {
             fprintf(stderr, "Error: Unknown option '%s'\n", argv[i]);
-            free(positional);
+            free(git_refs);
+            free(files);
             free(profiles);
             return 1;
         }
@@ -1014,44 +1021,39 @@ static int cmd_diff_main(int argc, char **argv) {
         opts.profile_count = profile_count;
     }
 
-    /* Detect mode based on positional arguments */
-    if (has_direction_flag || positional_count == 0) {
-        /* Workspace diff (explicit direction or no args) */
-        opts.mode = DIFF_WORKSPACE;
-        opts.files = positional;
-        opts.file_count = positional_count;
-    } else if (positional_count == 1) {
-        const char *arg = positional[0];
-        if (str_looks_like_git_ref(arg)) {
-            /* Commit to workspace */
-            opts.mode = DIFF_COMMIT_TO_WORKSPACE;
-            opts.commit1 = arg;
-        } else {
-            /* File filter for workspace diff */
-            opts.mode = DIFF_WORKSPACE;
-            opts.files = positional;
-            opts.file_count = 1;
-        }
-    } else if (positional_count == 2) {
-        const char *arg1 = positional[0];
-        const char *arg2 = positional[1];
+    /* File filters apply to all modes */
+    opts.files = files;
+    opts.file_count = file_count;
 
-        if (str_looks_like_git_ref(arg1) && str_looks_like_git_ref(arg2)) {
-            /* Commit to commit */
-            opts.mode = DIFF_COMMIT_TO_COMMIT;
-            opts.commit1 = arg1;
-            opts.commit2 = arg2;
-        } else {
-            /* File filters for workspace diff */
-            opts.mode = DIFF_WORKSPACE;
-            opts.files = positional;
-            opts.file_count = 2;
-        }
-    } else {
-        /* Multiple args - treat as file filters */
+    /* Detect mode from git references */
+    if (git_ref_count == 0) {
         opts.mode = DIFF_WORKSPACE;
-        opts.files = positional;
-        opts.file_count = positional_count;
+    } else if (git_ref_count == 1) {
+        opts.mode = DIFF_COMMIT_TO_WORKSPACE;
+        opts.commit1 = git_refs[0];
+    } else if (git_ref_count == 2) {
+        opts.mode = DIFF_COMMIT_TO_COMMIT;
+        opts.commit1 = git_refs[0];
+        opts.commit2 = git_refs[1];
+    } else {
+        fprintf(stderr, "Error: Too many commit references (max 2)\n");
+        free(git_refs);
+        free(files);
+        free(profiles);
+        return 1;
+    }
+
+    /* Direction flags only apply to workspace diffs */
+    if (has_direction_flag && opts.mode != DIFF_WORKSPACE) {
+        fprintf(
+            stderr,
+            "Error: Direction flags (--upstream, --downstream, --all) "
+            "only apply to workspace diffs\n"
+        );
+        free(git_refs);
+        free(files);
+        free(profiles);
+        return 1;
     }
 
     /* Open resolved repository */
@@ -1060,14 +1062,16 @@ static int cmd_diff_main(int argc, char **argv) {
     if (err) {
         error_print(err, stderr);
         error_free(err);
-        free(positional);
+        free(git_refs);
+        free(files);
         free(profiles);
         return 1;
     }
 
     /* Execute command */
     err = cmd_diff(repo, &opts);
-    free(positional);
+    free(git_refs);
+    free(files);
     free(profiles);
     git_repository_free(repo);
 

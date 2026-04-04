@@ -619,12 +619,16 @@ static int cmd_list_main(int argc, char **argv) {
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             opts.verbose = true;
         } else if (argv[i][0] != '-') {
-            /* Positional argument */
-            if (!opts.profile) {
-                /* First positional arg: profile name */
-                opts.profile = argv[i];
+            /* Positional argument - classify as file path or profile name */
+            if (!opts.profile && !opts.file_path) {
+                /* First positional: classify by pattern */
+                if (str_looks_like_file_path(argv[i])) {
+                    opts.file_path = argv[i];
+                } else {
+                    opts.profile = argv[i];
+                }
             } else if (!opts.file_path) {
-                /* Second positional arg: file path */
+                /* Have profile, second positional is file path */
                 opts.file_path = argv[i];
             } else {
                 fprintf(stderr, "Error: Unexpected argument '%s'\n", argv[i]);
@@ -640,11 +644,8 @@ static int cmd_list_main(int argc, char **argv) {
 
     /* Determine mode from arguments */
     if (opts.file_path) {
-        /* Profile + file path = file history */
-        if (!opts.profile) {
-            fprintf(stderr, "Error: File path requires a profile (-p or first argument)\n");
-            return 1;
-        }
+        /* File path present = file history
+         * (profile resolved implicitly if absent) */
         opts.mode = LIST_FILE_HISTORY;
     } else if (opts.profile) {
         /* Profile only = list files */

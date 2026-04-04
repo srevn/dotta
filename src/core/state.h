@@ -323,6 +323,29 @@ error_t *state_get_file(
 );
 
 /**
+ * Get file entry by storage path
+ *
+ * Like state_get_file() but keyed on storage_path instead of filesystem_path.
+ * Only returns active entries (state = 'active'). Uses idx_manifest_storage
+ * index for O(1) lookup.
+ *
+ * Since the manifest resolves precedence, each active storage_path maps to
+ * exactly one entry for home/ and root/ paths. For custom/ paths with
+ * different prefixes, multiple active entries may exist — returns the
+ * first match.
+ *
+ * @param state State (must not be NULL)
+ * @param storage_path Storage path to lookup (e.g., "home/.bashrc")
+ * @param out File entry (must not be NULL, caller must free with state_free_entry)
+ * @return Error or NULL on success (ERR_NOT_FOUND if not in manifest)
+ */
+error_t *state_get_file_by_storage(
+    const state_t *state,
+    const char *storage_path,
+    state_file_entry_t **out
+);
+
+/**
  * Get all file entries
  *
  * BREAKING CHANGE: Memory ownership changed from original API.

@@ -611,9 +611,10 @@ static error_t *list_file_history(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
-    CHECK_NULL(opts->profile);
     CHECK_NULL(opts->file_path);
     CHECK_NULL(out);
+
+    char *discovered_profile = NULL;
 
     /* Resolve input path to storage format (handles absolute, tilde, relative,
      * and storage paths). Flexible mode - file need not exist on disk.
@@ -626,13 +627,43 @@ static error_t *list_file_history(
         return error_wrap(err, "Failed to resolve path '%s'", opts->file_path);
     }
 
+    /* Resolve owning profile: explicit from user or implicit via manifest */
+    const char *profile_name = opts->profile;
+
+    if (!profile_name) {
+        string_array_t *matches = NULL;
+        err = profile_discover_file(repo, storage_path, true, &matches);
+        if (err) {
+            if (error_code(err) == ERR_NOT_FOUND) {
+                error_free(err);
+                err = ERROR(
+                    ERR_NOT_FOUND,
+                    "File '%s' not found in enabled profiles\n"
+                    "Hint: Use 'dotta list -p <profile> %s' to specify a profile",
+                    storage_path, opts->file_path
+                );
+            }
+            free(storage_path);
+            return err;
+        }
+
+        discovered_profile = strdup(string_array_get(matches, 0));
+        string_array_free(matches);
+        if (!discovered_profile) {
+            free(storage_path);
+            return ERROR(ERR_MEMORY, "Failed to allocate profile name");
+        }
+        profile_name = discovered_profile;
+    }
+
     /* Verify profile exists and check if file is in current tree (fast pre-check).
      * This validates the profile early and gives a clear hint for typos/deleted files
      * before the expensive O(total_commits) history walk. */
     profile_t *profile = NULL;
-    err = profile_load(repo, opts->profile, &profile);
+    err = profile_load(repo, profile_name, &profile);
     if (err) {
-        error_t *wrapped = error_wrap(err, "Profile '%s' not found", opts->profile);
+        error_t *wrapped = error_wrap(err, "Profile '%s' not found", profile_name);
+        free(discovered_profile);
         free(storage_path);
         return wrapped;
     }
@@ -653,12 +684,13 @@ static error_t *list_file_history(
 
     /* Get file history */
     file_history_t *history = NULL;
-    err = stats_get_file_history(repo, opts->profile, storage_path, &history);
+    err = stats_get_file_history(repo, profile_name, storage_path, &history);
     if (err) {
         error_t *wrapped = error_wrap(
             err, "Failed to get history for '%s' in profile '%s'",
-            storage_path, opts->profile
+            storage_path, profile_name
         );
+        free(discovered_profile);
         free(storage_path);
         return wrapped;
     }
@@ -666,7 +698,7 @@ static error_t *list_file_history(
     /* Print header */
     output_section(
         out, "History of '%s' in profile '%s'",
-        storage_path, opts->profile
+        storage_path, profile_name
     );
     output_newline(out);
 
@@ -734,6 +766,7 @@ static error_t *list_file_history(
 
     /* Cleanup */
     stats_free_file_history(history);
+    free(discovered_profile);
     free(storage_path);
 
     return NULL;

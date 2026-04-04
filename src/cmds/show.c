@@ -17,6 +17,7 @@
 #include "crypto/keymanager.h"
 #include "infra/content.h"
 #include "infra/path.h"
+#include "utils/array.h"
 #include "utils/buffer.h"
 #include "utils/config.h"
 #include "utils/output.h"
@@ -578,7 +579,8 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
     dotta_config_t *config = NULL;
     output_ctx_t *out = NULL;
     profile_list_t *profiles = NULL;
-    char *storage_converted = NULL;
+    string_array_t *matches = NULL;
+    char *converted = NULL;
     const char *found_profile = NULL;
 
     /* Load configuration (non-fatal, fall back to defaults) */
@@ -665,6 +667,20 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
     /* Handle SHOW_FILE mode */
     CHECK_NULL(opts->file_path);
 
+    /* Resolve file path to storage format (common to both explicit and implicit paths)
+     *
+     * Note: No custom prefix context available for show command - users must use
+     * storage format (custom/etc/nginx.conf) for custom/ paths */
+    const char *search_path = opts->file_path;
+    error_t *convert_err = path_resolve_input(opts->file_path, false, NULL, 0, &converted);
+    if (convert_err) {
+        error_free(convert_err);
+        /* Fall back to original path (may be a partial match pattern) */
+        search_path = opts->file_path;
+    } else {
+        search_path = converted;
+    }
+
     if (opts->profile) {
         /* Profile specified - show from that profile */
         bool exists = false;
@@ -673,28 +689,8 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
             goto cleanup;
         }
         if (!exists) {
-            err = ERROR(
-                ERR_NOT_FOUND, "Profile '%s' not found",
-                opts->profile
-            );
+            err = ERROR(ERR_NOT_FOUND, "Profile '%s' not found", opts->profile);
             goto cleanup;
-        }
-
-        /* Try to convert filesystem path to storage path
-         * This handles absolute paths (/...), tilde paths (~...), relative paths (./, ../),
-         * and passes through storage paths (home/..., root/..., custom/...) as-is */
-        const char *search_path = opts->file_path;
-        /* Note: No custom prefix context available for show command - users must use
-         * storage format (custom/etc/nginx.conf) for custom/ paths */
-        error_t *convert_err = path_resolve_input(
-            opts->file_path, false, NULL, 0, &storage_converted
-        );
-        if (convert_err) {
-            error_free(convert_err);
-            /* Fall back to original path (may be a partial match pattern) */
-            search_path = opts->file_path;
-        } else {
-            search_path = storage_converted;
         }
 
         err = show_file(
@@ -703,7 +699,7 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
         goto cleanup;
     }
 
-    /* No profile specified - search across enabled profiles (exact path only) */
+    /* No profile specified - resolve owning profile via manifest */
 
     /* File at specific commit requires explicit profile for unambiguous resolution */
     if (opts->commit) {
@@ -715,74 +711,20 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
         goto cleanup;
     }
 
-    err = profile_resolve(repo, NULL, 0, config->strict_mode, &profiles, NULL);
+    /* Discover owning profile via manifest (O(1) indexed lookup) */
+    err = profile_discover_file(repo, search_path, true, &matches);
     if (err) {
-        err = error_wrap(err, "Failed to load profiles");
-        goto cleanup;
-    }
-
-    if (profiles->count == 0) {
-        err = ERROR(ERR_NOT_FOUND, "No profiles found");
-        goto cleanup;
-    }
-
-    /* Try to convert filesystem path to storage path for better matching
-     * This handles absolute paths (/...), tilde paths (~...), relative paths (./, ../),
-     * and passes through storage paths (home/..., root/..., custom/...) as-is
-     *
-     * Note: No custom prefix context available for show command - users must use
-     * storage format (custom/etc/nginx.conf) for custom/ paths */
-    const char *search_path = opts->file_path;
-    error_t *convert_err = path_resolve_input(
-        opts->file_path, false, NULL, 0, &storage_converted
-    );
-    if (convert_err) {
-        error_free(convert_err);
-        /* Fall back to original path (may be a partial match pattern) */
-        search_path = opts->file_path;
-    } else {
-        search_path = storage_converted;
-    }
-
-    /* Search all profiles for exact path match */
-    for (size_t i = 0; i < profiles->count; i++) {
-        const char *profile_name = profiles->profiles[i].name;
-        git_tree *tree = NULL;
-        git_tree_entry *entry = NULL;
-
-        char ref_name[DOTTA_REFNAME_MAX];
-        error_t *refname_err = gitops_build_refname(
-            ref_name, sizeof(ref_name), "refs/heads/%s", profile_name
-        );
-        if (refname_err) {
-            error_free(refname_err);
-            continue;
+        if (error_code(err) == ERR_NOT_FOUND) {
+            error_free(err);
+            err = ERROR(
+                ERR_NOT_FOUND, "File '%s' not found in enabled profiles",
+                opts->file_path
+            );
         }
-
-        error_t *load_err = gitops_load_tree(repo, ref_name, &tree);
-        if (load_err == NULL) {
-            error_t *find_err = gitops_find_file_in_tree(tree, search_path, &entry);
-            if (find_err == NULL) {
-                /* Found it! */
-                found_profile = profile_name;
-                git_tree_entry_free(entry);
-                git_tree_free(tree);
-                break;
-            }
-            error_free(find_err);
-            git_tree_free(tree);
-        } else {
-            error_free(load_err);
-        }
-    }
-
-    if (!found_profile) {
-        err = ERROR(
-            ERR_NOT_FOUND, "File '%s' not found in enabled profiles",
-            opts->file_path
-        );
         goto cleanup;
     }
+
+    found_profile = string_array_get(matches, 0);
 
     /* Show the file */
     if (!opts->raw) {
@@ -795,12 +737,16 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
             search_path
         );
     }
-    err = show_file(repo, found_profile, search_path, NULL, opts->raw, config, out);
+    err = show_file(
+        repo, found_profile, search_path, NULL, opts->raw, config, out
+    );
 
 cleanup:
     output_free(out);
     if (config) config_free(config);
     if (profiles) profile_list_free(profiles);
-    free(storage_converted);
+    if (matches) string_array_free(matches);
+    if (converted) free(converted);
+
     return err;
 }

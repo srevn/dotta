@@ -61,6 +61,7 @@ struct state {
     sqlite3_stmt *stmt_remove_file;         /* DELETE FROM virtual_manifest */
     sqlite3_stmt *stmt_file_exists;         /* SELECT 1 FROM virtual_manifest */
     sqlite3_stmt *stmt_get_file;            /* SELECT * FROM virtual_manifest */
+    sqlite3_stmt *stmt_get_file_by_storage; /* SELECT * WHERE storage_path = ? */
     sqlite3_stmt *stmt_get_by_profile;      /* SELECT * WHERE profile = ? */
     sqlite3_stmt *stmt_insert_profile;      /* INSERT INTO enabled_profiles */
 
@@ -584,6 +585,26 @@ static error_t *prepare_statements(state_t *state) {
         return sqlite_error(state->db, "Failed to prepare get statement");
     }
 
+    /* Get file by storage path (used by profile discovery) */
+    const char *sql_get_by_storage =
+        "SELECT filesystem_path, profile, old_profile, git_oid, blob_oid, "
+        "type, mode, owner, \"group\", encrypted, state, deployed_at, "
+        "stat_mtime, stat_size, stat_ino "
+        "FROM virtual_manifest WHERE storage_path = ? AND state = 'active' LIMIT 1;";
+
+    rc = sqlite3_prepare_v2(
+        state->db, sql_get_by_storage, -1, &state->stmt_get_file_by_storage, NULL
+    );
+    if (rc != SQLITE_OK) {
+        sqlite3_finalize(state->stmt_insert_file);
+        sqlite3_finalize(state->stmt_update_post_deploy);
+        sqlite3_finalize(state->stmt_update_stat_cache);
+        sqlite3_finalize(state->stmt_update_entry);
+        sqlite3_finalize(state->stmt_file_exists);
+        sqlite3_finalize(state->stmt_get_file);
+        return sqlite_error(state->db, "Failed to prepare get by storage statement");
+    }
+
     /* Get entries by profile (used by profile disable) */
     const char *sql_by_profile =
         "SELECT filesystem_path, storage_path, profile, old_profile, git_oid, blob_oid, "
@@ -598,6 +619,7 @@ static error_t *prepare_statements(state_t *state) {
         sqlite3_finalize(state->stmt_update_entry);
         sqlite3_finalize(state->stmt_file_exists);
         sqlite3_finalize(state->stmt_get_file);
+        sqlite3_finalize(state->stmt_get_file_by_storage);
         return sqlite_error(state->db, "Failed to prepare get by profile statement");
     }
 
@@ -613,6 +635,7 @@ static error_t *prepare_statements(state_t *state) {
         sqlite3_finalize(state->stmt_update_entry);
         sqlite3_finalize(state->stmt_file_exists);
         sqlite3_finalize(state->stmt_get_file);
+        sqlite3_finalize(state->stmt_get_file_by_storage);
         sqlite3_finalize(state->stmt_get_by_profile);
         return sqlite_error(state->db, "Failed to prepare remove statement");
     }
@@ -630,6 +653,7 @@ static error_t *prepare_statements(state_t *state) {
         sqlite3_finalize(state->stmt_update_entry);
         sqlite3_finalize(state->stmt_file_exists);
         sqlite3_finalize(state->stmt_get_file);
+        sqlite3_finalize(state->stmt_get_file_by_storage);
         sqlite3_finalize(state->stmt_get_by_profile);
         sqlite3_finalize(state->stmt_remove_file);
         return sqlite_error(state->db, "Failed to prepare profile statement");
@@ -677,6 +701,11 @@ static void finalize_statements(state_t *state) {
     if (state->stmt_get_file) {
         sqlite3_finalize(state->stmt_get_file);
         state->stmt_get_file = NULL;
+    }
+
+    if (state->stmt_get_file_by_storage) {
+        sqlite3_finalize(state->stmt_get_file_by_storage);
+        state->stmt_get_file_by_storage = NULL;
     }
 
     if (state->stmt_get_by_profile) {
@@ -1372,7 +1401,10 @@ error_t *state_get_file(
 
     if (rc != SQLITE_ROW) {
         if (rc == SQLITE_DONE) {
-            return ERROR(ERR_NOT_FOUND, "File not found in state: %s", filesystem_path);
+            return ERROR(
+                ERR_NOT_FOUND,
+                "File not found in state: %s", filesystem_path
+            );
         }
         return sqlite_error(state->db, "Failed to query file");
     }
@@ -1424,20 +1456,95 @@ error_t *state_get_file(
     /* Create entry (caller owns) */
     state_file_entry_t *entry = NULL;
     error_t *err = state_create_entry(
-        storage_path,
-        filesystem_path,
-        profile,
-        old_profile,
-        type,
-        git_oid,
-        blob_oid,
-        mode,
-        owner,
-        group,
-        encrypted != 0,
-        state_str,
-        (time_t) deployed_at,
-        &entry
+        storage_path, filesystem_path, profile, old_profile, type,
+        git_oid, blob_oid, mode, owner, group, encrypted != 0,
+        state_str, (time_t) deployed_at, &entry
+    );
+
+    if (err) return err;
+
+    entry->stat_cache = stat_cache;
+
+    *out = entry;
+    return NULL;
+}
+
+error_t *state_get_file_by_storage(
+    const state_t *state,
+    const char *storage_path,
+    state_file_entry_t **out
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(out);
+    CHECK_NULL(state->db);
+    CHECK_NULL(state->stmt_get_file_by_storage);
+
+    /* Reset and bind (cast away const) */
+    sqlite3_stmt *stmt = ((state_t *) state)->stmt_get_file_by_storage;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+
+    sqlite3_bind_text(stmt, 1, storage_path, -1, SQLITE_TRANSIENT);
+
+    /* Execute */
+    int rc = sqlite3_step(stmt);
+
+    if (rc != SQLITE_ROW) {
+        if (rc == SQLITE_DONE) {
+            return ERROR(
+                ERR_NOT_FOUND, "File not found in manifest: %s", storage_path
+            );
+        }
+        return sqlite_error(state->db, "Failed to query file by storage path");
+    }
+
+    /* Extract columns:
+     * 0: filesystem_path (not the WHERE key here, must be read from result)
+     * 1-14: same layout as state_get_file columns 1-14 */
+    const char *filesystem_path = (const char *) sqlite3_column_text(stmt, 0);
+    const char *profile = (const char *) sqlite3_column_text(stmt, 1);
+    const char *old_profile = (const char *) sqlite3_column_text(stmt, 2);
+    const char *git_oid = (const char *) sqlite3_column_text(stmt, 3);
+    const char *blob_oid = (const char *) sqlite3_column_text(stmt, 4);
+    const char *type_str = (const char *) sqlite3_column_text(stmt, 5);
+
+    mode_t mode = 0;
+    if (sqlite3_column_type(stmt, 6) != SQLITE_NULL) {
+        mode = (mode_t) sqlite3_column_int(stmt, 6);
+    }
+
+    const char *owner = (const char *) sqlite3_column_text(stmt, 7);
+    const char *group = (const char *) sqlite3_column_text(stmt, 8);
+    int encrypted = sqlite3_column_int(stmt, 9);
+    const char *state_str = (const char *) sqlite3_column_text(stmt, 10);
+    sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 11);
+
+    stat_cache_t stat_cache = {
+        .mtime = sqlite3_column_int64(stmt,            12),
+        .size  = sqlite3_column_int64(stmt,            13),
+        .ino   = (uint64_t) sqlite3_column_int64(stmt, 14),
+    };
+
+    if (!filesystem_path || !profile || !git_oid || !blob_oid || !type_str) {
+        return ERROR(
+            ERR_STATE_INVALID,
+            "NULL value in required column for storage path: %s", storage_path
+        );
+    }
+
+    state_file_type_t type = STATE_FILE_REGULAR;
+    if (strcmp(type_str, "symlink") == 0) {
+        type = STATE_FILE_SYMLINK;
+    } else if (strcmp(type_str, "executable") == 0) {
+        type = STATE_FILE_EXECUTABLE;
+    }
+
+    state_file_entry_t *entry = NULL;
+    error_t *err = state_create_entry(
+        storage_path, filesystem_path, profile, old_profile, type,
+        git_oid, blob_oid, mode, owner, group, encrypted != 0,
+        state_str, (time_t) deployed_at, &entry
     );
 
     if (err) return err;
@@ -2915,6 +3022,7 @@ error_t *state_create_empty(state_t **out) {
     state->stmt_remove_file = NULL;
     state->stmt_file_exists = NULL;
     state->stmt_get_file = NULL;
+    state->stmt_get_file_by_storage = NULL;
     state->stmt_insert_profile = NULL;
 
     *out = state;

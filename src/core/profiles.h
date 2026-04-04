@@ -520,4 +520,30 @@ error_t *profile_build_file_index(
     hashmap_t **out_index
 );
 
+/**
+ * Discover which profile(s) own a file
+ *
+ * Two-tier resolution:
+ * 1. enabled_only=true: Manifest fast path, O(1) via state DB index.
+ *    Returns the single owning profile (precedence already resolved).
+ *
+ * 2. enabled_only=false: Branch scan, O(M×P) via profile_build_file_index().
+ *    Returns ALL profiles containing the file across all local branches.
+ *
+ * The storage_path must already be resolved (use path_resolve_input() first).
+ *
+ * @param repo Repository (must not be NULL)
+ * @param storage_path Storage path (e.g., "home/.bashrc")
+ * @param enabled_only If true, only search manifest (enabled profiles).
+ *                     If false, search all local branches.
+ * @param out_profiles Matching profile names (caller frees with string_array_free)
+ * @return Error (ERR_NOT_FOUND if no match) or NULL on success
+ */
+error_t *profile_discover_file(
+    git_repository *repo,
+    const char *storage_path,
+    bool enabled_only,
+    string_array_t **out_profiles
+);
+
 #endif /* DOTTA_PROFILES_H */

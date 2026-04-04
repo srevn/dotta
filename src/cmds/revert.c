@@ -5,7 +5,6 @@
 #include "revert.h"
 
 #include <git2.h>
-#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,7 +24,6 @@
 #include "utils/buffer.h"
 #include "utils/commit.h"
 #include "utils/config.h"
-#include "utils/hashmap.h"
 #include "utils/output.h"
 
 /**
@@ -117,18 +115,17 @@ static error_t *discover_file_in_history(
  *
  * Returns profile name and resolved storage path.
  * Accepts filesystem paths or storage paths.
- * Uses profile_build_file_index() for fast HEAD-based discovery.
  *
- * If the file is not found in the current HEAD and a profile hint is provided,
- * falls back to expensive history search using stats_get_file_history().
+ * With profile_hint: Checks specific profile's tree, falls back to
+ * history search if file deleted from HEAD.
  *
- * Uses path_resolve_input() for unified path handling.
+ * Without profile_hint: Uses profile_discover_file() for all-branch
+ * scan. Handles disambiguation when file exists in multiple profiles.
  */
 static error_t *discover_file(
     git_repository *repo,
     const char *file_path,
     const char *profile_hint,
-    bool strict_mode,
     const output_ctx_t *out,
     bool *found_in_history,
     char **out_profile,
@@ -210,58 +207,28 @@ static error_t *discover_file(
         return NULL;
     }
 
-    /* Search across enabled profiles using optimized index */
-    profile_list_t *profiles = NULL;
-    err = profile_resolve(repo, NULL, 0, strict_mode, &profiles, NULL);
+    /* Search across all local branches for the file */
+    string_array_t *matches = NULL;
+    err = profile_discover_file(repo, storage_path, false, &matches);
+
     if (err) {
+        if (error_code(err) == ERR_NOT_FOUND) {
+            error_free(err);
+            err = ERROR(
+                ERR_NOT_FOUND, "File '%s' not found in any profile\n\n"
+                "If you are trying to revert a deleted file, specify the profile:\n"
+                "  dotta revert --profile <name> %s <commit>\n\n"
+                "Use 'dotta list --all' to see all profiles.", storage_path, file_path
+            );
+        }
         free(storage_path);
-        return error_wrap(err, "Failed to resolve profiles");
+        return err;
     }
 
-    if (profiles->count == 0) {
-        profile_list_free(profiles);
-        free(storage_path);
-        return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
-    }
-
-    /* Build profile file index once - O(M×P) instead of O(M×GitOps) */
-    hashmap_t *profile_index = NULL;
-    err = profile_build_file_index(repo, NULL, &profile_index);
-    if (err) {
-        profile_list_free(profiles);
-        free(storage_path);
-        return error_wrap(err, "Failed to build profile index");
-    }
-
-    /* Lookup file in index - O(1) */
-    string_array_t *matching_profiles = hashmap_get(profile_index, storage_path);
-
-    if (!matching_profiles || string_array_size(matching_profiles) == 0) {
-        /* Not found in any profile's current HEAD */
-
-        /* Save storage_path for error message before freeing */
-        char error_storage_path[PATH_MAX];
-        snprintf(error_storage_path, sizeof(error_storage_path), "%s", storage_path);
-
-        hashmap_free(profile_index, string_array_free);
-        profile_list_free(profiles);
-        free(storage_path);
-        return ERROR(
-            ERR_NOT_FOUND, "File '%s' not found in any profile\n\n"
-            "If you are trying to revert a deleted file, specify the profile:\n"
-            "  dotta revert --profile <name> %s <commit>\n\n"
-            "Use 'dotta list --all' to see all profiles.",
-            error_storage_path, file_path
-        );
-    }
-
-    if (string_array_size(matching_profiles) == 1) {
+    if (string_array_size(matches) == 1) {
         /* Found in exactly one profile */
-        const char *profile_name = string_array_get(matching_profiles, 0);
-        *out_profile = strdup(profile_name);
-
-        hashmap_free(profile_index, string_array_free);
-        profile_list_free(profiles);
+        *out_profile = strdup(string_array_get(matches, 0));
+        string_array_free(matches);
 
         if (!*out_profile) {
             free(storage_path);
@@ -278,17 +245,16 @@ static error_t *discover_file(
         storage_path
     );
 
-    for (size_t i = 0; i < string_array_size(matching_profiles); i++) {
+    for (size_t i = 0; i < string_array_size(matches); i++) {
         output_print(
             out, OUTPUT_NORMAL, "  • %s\n",
-            string_array_get(matching_profiles, i)
+            string_array_get(matches, i)
         );
     }
     output_hint(out, "Specify --profile to disambiguate:");
     output_hint_line(out, "  dotta revert --profile <name> %s", storage_path);
 
-    hashmap_free(profile_index, string_array_free);
-    profile_list_free(profiles);
+    string_array_free(matches);
     free(storage_path);
 
     return ERROR(ERR_INVALID_ARG, "Ambiguous file reference");
@@ -1032,8 +998,8 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
 
     bool found_in_history = false;
     err = discover_file(
-        repo, opts->file_path, opts->profile, config->strict_mode,
-        out, &found_in_history, &profile_name, &resolved_path
+        repo, opts->file_path, opts->profile, out, &found_in_history,
+        &profile_name, &resolved_path
     );
     if (err) goto cleanup;
 

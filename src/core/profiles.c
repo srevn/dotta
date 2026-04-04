@@ -1640,6 +1640,95 @@ cleanup:
     return err;
 }
 
+error_t *profile_discover_file(
+    git_repository *repo,
+    const char *storage_path,
+    bool enabled_only,
+    string_array_t **out_profiles
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(out_profiles);
+
+    error_t *err = NULL;
+    *out_profiles = NULL;
+
+    if (enabled_only) {
+        /* Manifest fast path: O(1) via state DB index.
+         * Returns the single owning profile (precedence already resolved). */
+        state_t *state = NULL;
+        err = state_load(repo, &state);
+        if (err) {
+            return error_wrap(err, "Failed to load state for file discovery");
+        }
+
+        state_file_entry_t *entry = NULL;
+        err = state_get_file_by_storage(state, storage_path, &entry);
+
+        if (err) {
+            state_free(state);
+            if (error_code(err) == ERR_NOT_FOUND) {
+                error_free(err);
+                return ERROR(
+                    ERR_NOT_FOUND, "File '%s' not found in enabled profiles",
+                    storage_path
+                );
+            }
+            return err;
+        }
+
+        string_array_t *profiles = string_array_create();
+        if (!profiles) {
+            state_free_entry(entry);
+            state_free(state);
+            return ERROR(ERR_MEMORY, "Failed to allocate profile array");
+        }
+
+        err = string_array_push(profiles, entry->profile);
+        state_free_entry(entry);
+        state_free(state);
+
+        if (err) {
+            string_array_free(profiles);
+            return err;
+        }
+
+        *out_profiles = profiles;
+        return NULL;
+    }
+
+    /* Branch scan: O(M×P) via profile_build_file_index().
+     * Returns ALL profiles containing the file across all local branches. */
+    hashmap_t *index = NULL;
+    err = profile_build_file_index(repo, NULL, &index);
+    if (err) {
+        return error_wrap(
+            err, "Failed to build profile index for file discovery"
+        );
+    }
+
+    string_array_t *matches = hashmap_get(index, storage_path);
+
+    if (!matches || string_array_size(matches) == 0) {
+        hashmap_free(index, string_array_free);
+        return ERROR(
+            ERR_NOT_FOUND, "File '%s' not found in any profile",
+            storage_path
+        );
+    }
+
+    /* Clone the result — hashmap owns the original */
+    string_array_t *result = string_array_clone(matches);
+    hashmap_free(index, string_array_free);
+
+    if (!result) {
+        return ERROR(ERR_MEMORY, "Failed to clone profile matches");
+    }
+
+    *out_profiles = result;
+    return NULL;
+}
+
 /**
  * Build manifest from a single Git tree
  *

@@ -218,7 +218,9 @@ void credential_context_approve(credential_context_t *ctx) {
      * Credentials written to pipe, never exposed to shell */
     FILE *fp = popen("git credential approve 2>/dev/null", "w");
     if (fp) {
-        write_credential_request(fp, protocol, hostname, ctx->username, ctx->password);
+        write_credential_request(
+            fp, protocol, hostname, ctx->username, ctx->password
+        );
         pclose(fp);
     }
 

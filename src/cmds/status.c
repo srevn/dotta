@@ -42,14 +42,7 @@ static void display_enabled_profiles(
         const profile_t *profile = &profiles->profiles[i];
 
         /* Format profile name */
-        char *colored_name = output_colorize(out, OUTPUT_COLOR_CYAN, profile->name);
-
-        if (colored_name) {
-            output_printf(out, OUTPUT_NORMAL, "  %s", colored_name);
-            free(colored_name);
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "  %s", profile->name);
-        }
+        output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile->name);
 
         /* Show per-profile last deployed timestamp */
         if (state) {
@@ -65,14 +58,7 @@ static void display_enabled_profiles(
                 format_relative_time(profile_deploy_time, relative_buf, sizeof(relative_buf));
 
                 /* Display dimmed timestamp */
-                if (output_colors_enabled(out)) {
-                    output_printf(out, OUTPUT_NORMAL, "  %s(deployed %s)%s",
-                                 output_color_code(out, OUTPUT_COLOR_DIM),
-                                 relative_buf,
-                                 output_color_code(out, OUTPUT_COLOR_RESET));
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, "  (deployed %s)", relative_buf);
-                }
+                output_styled(out, OUTPUT_NORMAL, "  {dim}(deployed %s){reset}", relative_buf);
             }
         }
 
@@ -85,8 +71,8 @@ static void display_enabled_profiles(
                     profile_file_count++;
                 }
             }
-            output_printf(out, OUTPUT_NORMAL, "\n    %zu file%s",
-                          profile_file_count, profile_file_count == 1 ? "" : "s");
+            output_print(out, OUTPUT_NORMAL, "\n    %zu file%s",
+                         profile_file_count, profile_file_count == 1 ? "" : "s");
         }
 
         output_newline(out);
@@ -160,7 +146,8 @@ static void display_workspace_status(
      * - Clean with hidden divergence from other profiles: always show
      * - Clean with no divergence anywhere: show only with verbose
      */
-    bool has_divergence = profile_filter ? (filtered_diverged > 0) : (ws_status != WORKSPACE_CLEAN);
+    bool has_divergence = profile_filter ? (filtered_diverged > 0)
+                                         : (ws_status != WORKSPACE_CLEAN);
     if (!has_divergence && hidden_count == 0 && !verbose) {
         return;
     }
@@ -177,7 +164,7 @@ static void display_workspace_status(
         if (filtered_diverged == 0) {
             status_color = OUTPUT_COLOR_GREEN;
             if (profile_file_count > 0) {
-                snprintf(status_buf, sizeof(status_buf), "Clean - %zu file%s, all aligned",
+                snprintf(status_buf, sizeof(status_buf), "Clean - %zu file%s aligned",
                          profile_file_count, profile_file_count == 1 ? "" : "s");
             } else {
                 snprintf(status_buf, sizeof(status_buf), "Clean - no files in profile");
@@ -188,13 +175,7 @@ static void display_workspace_status(
                      filtered_diverged, filtered_diverged == 1 ? "" : "s");
         }
 
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "  %s%s%s\n",
-                         output_color_code(out, status_color), status_buf,
-                         output_color_code(out, OUTPUT_COLOR_RESET));
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "  %s\n", status_buf);
-        }
+        output_colored(out, OUTPUT_NORMAL, status_color, "  %s\n", status_buf);
     } else {
         /* Global status */
         output_color_t status_color = OUTPUT_COLOR_GREEN;
@@ -204,7 +185,7 @@ static void display_workspace_status(
         switch (ws_status) {
             case WORKSPACE_CLEAN:
                 if (manifest && manifest->count > 0) {
-                    snprintf(status_buf, sizeof(status_buf), "Clean - %zu file%s, all aligned",
+                    snprintf(status_buf, sizeof(status_buf), "Clean - %zu file%s aligned",
                              manifest->count, manifest->count == 1 ? "" : "s");
                     status_msg = status_buf;
                 } else {
@@ -225,13 +206,7 @@ static void display_workspace_status(
         }
 
         if (status_msg) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s%s%s\n",
-                             output_color_code(out, status_color), status_msg,
-                             output_color_code(out, OUTPUT_COLOR_RESET));
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  %s\n", status_msg);
-            }
+            output_colored(out, OUTPUT_NORMAL, status_color, "  %s\n", status_msg);
         }
     }
 
@@ -249,9 +224,11 @@ static void display_workspace_status(
             /* Single allocation for all category pointers (5 categories × all_count slots)
              * Memory layout: [uncommitted][undeployed][new_files][orphaned][reassigned]
              * This provides cache-friendly contiguous memory with single malloc/free. */
-            const workspace_item_t **categorized = malloc(all_count * 5 * sizeof(workspace_item_t *));
+            const workspace_item_t **categorized =
+                                malloc(all_count * 5 * sizeof(workspace_item_t *));
             if (!categorized) {
-                output_error(out, "Failed to allocate memory for status display (%zu items)", all_count);
+                output_error(out,
+                    "Failed to allocate memory for status display (%zu items)", all_count);
                 return;
             }
 
@@ -330,7 +307,7 @@ static void display_workspace_status(
 
                         if (workspace_item_extract_display_info(uncommitted[i], tags, &tag_count,
                                                                 &color, metadata, sizeof(metadata))) {
-                            output_list_add_multi(
+                            output_list_add(
                                 list, tags, tag_count, color, uncommitted[i]->filesystem_path, metadata
                             );
                         }
@@ -356,7 +333,7 @@ static void display_workspace_status(
 
                         if (workspace_item_extract_display_info(reassigned[i], tags, &tag_count,
                                                                 &color, metadata, sizeof(metadata))) {
-                            output_list_add_multi(
+                            output_list_add(
                                 list, tags, tag_count, color, reassigned[i]->filesystem_path, metadata
                             );
                         }
@@ -382,7 +359,7 @@ static void display_workspace_status(
 
                         if (workspace_item_extract_display_info(undeployed[i], tags, &tag_count,
                                                                 &color, metadata, sizeof(metadata))) {
-                            output_list_add_multi(
+                            output_list_add(
                                 list, tags, tag_count, color, undeployed[i]->filesystem_path, metadata
                             );
                         }
@@ -408,7 +385,7 @@ static void display_workspace_status(
 
                         if (workspace_item_extract_display_info(new_files[i], tags, &tag_count,
                                                                 &color, metadata, sizeof(metadata))) {
-                            output_list_add_multi(
+                            output_list_add(
                                 list, tags, tag_count, color, new_files[i]->filesystem_path, metadata
                             );
                         }
@@ -441,7 +418,7 @@ static void display_workspace_status(
 
                         if (workspace_item_extract_display_info(orphaned[i], tags, &tag_count,
                                                                 &color, metadata, sizeof(metadata))) {
-                            output_list_add_multi(
+                            output_list_add(
                                 list, tags, tag_count, color, orphaned[i]->filesystem_path, metadata
                             );
                         }
@@ -477,7 +454,7 @@ static void display_workspace_status(
 
         /* Show hidden items note when profile filter is active */
         if (profile_filter && hidden_count > 0) {
-            output_printf(out, OUTPUT_NORMAL, "  (%zu item%s from other profiles hidden)\n",
+            output_print(out, OUTPUT_NORMAL, "  (%zu item%s from other profiles hidden)\n",
                           hidden_count, hidden_count == 1 ? "" : "s");
         }
     }
@@ -544,7 +521,7 @@ static error_t *display_remote_status(
             /* Ephemeral fetch message (no newline — resolved after fetch).
              * On TTY: progress overwrites via \r, then line is cleared entirely.
              * On pipe: falls back to inline text resolution. */
-            output_printf(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
+            output_print(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
             fflush(out->stream);
 
             /* Create transfer context for progress reporting */
@@ -563,7 +540,7 @@ static error_t *display_remote_status(
             if (xfer) {
                 xfer->ephemeral = true;
             }
-            ephemeral = out->color_enabled;  /* ANSI clear only works on TTY */
+            ephemeral = output_is_tty(out);  /* ANSI clear only works on TTY */
         }
 
         /* Build array of branch names for batched fetch */
@@ -572,10 +549,9 @@ static error_t *display_remote_status(
             /* Memory allocation failed - non-fatal, just warn */
             if (verbose) {
                 if (ephemeral) {
-                    fprintf(out->stream, "\r\033[2K");
-                    fflush(out->stream);
+                    output_clear_line(out);
                 } else {
-                    fprintf(out->stream, "\n");
+                    output_newline(out);
                 }
                 output_warning(out, "Failed to allocate memory for fetch operation");
             }
@@ -600,14 +576,13 @@ static error_t *display_remote_status(
                     if (xfer && xfer->progress_active) {
                         xfer->progress_active = false;
                     }
-                    fprintf(out->stream, "\r\033[2K");
-                    fflush(out->stream);
+                    output_clear_line(out);
                 } else if (fetch_err) {
                     /* Non-TTY: finish the line before warning */
-                    fprintf(out->stream, "\n");
+                    output_newline(out);
                 } else if (!xfer || xfer->total_objects == 0) {
                     /* Non-TTY, up-to-date: resolve inline */
-                    fprintf(out->stream, " done.\n");
+                    output_print(out, OUTPUT_NORMAL, " done.\n");
                 }
                 /* Non-TTY with objects: callback wrote ", done.\n" */
             }
@@ -702,7 +677,7 @@ static error_t *display_remote_status(
         if (verbose && info->state != UPSTREAM_NO_REMOTE && info->state != UPSTREAM_UNKNOWN) {
             /* Verbose mode: show detailed commit info */
             output_newline(out);
-            output_printf(out, OUTPUT_NORMAL, "Profile: %s\n", profile_name);
+            output_print(out, OUTPUT_NORMAL, "Profile: %s\n", profile_name);
 
             /* Get local commit info */
             char local_ref[DOTTA_REFNAME_MAX];
@@ -713,14 +688,8 @@ static error_t *display_remote_status(
                                   local_ref_err : gitops_get_commit(repo, local_ref, &local_commit);
 
             /* Status line — always shown regardless of commit loading */
-            output_printf(out, OUTPUT_NORMAL, "  Status:         ");
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "%s%s%s\n",
-                              output_color_code(out, color), status_str,
-                              output_color_code(out, OUTPUT_COLOR_RESET));
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "%s\n", status_str);
-            }
+            output_print(out, OUTPUT_NORMAL, "  Status:         ");
+            output_colored(out, OUTPUT_NORMAL, color, "%s\n", status_str);
 
             if (!commit_err && local_commit) {
                 const git_oid *local_oid = git_commit_id(local_commit);
@@ -733,7 +702,7 @@ static error_t *display_remote_status(
                 char time_str[64];
                 format_relative_time(local_time, time_str, sizeof(time_str));
 
-                output_printf(out, OUTPUT_NORMAL, "  Local commit:   %s %s (%s)\n",
+                output_print(out, OUTPUT_NORMAL, "  Local commit:   %s %s (%s)\n",
                               local_oid_str, local_summary, time_str);
 
                 git_commit_free(local_commit);
@@ -761,7 +730,7 @@ static error_t *display_remote_status(
                     char time_str[64];
                     format_relative_time(remote_time, time_str, sizeof(time_str));
 
-                    output_printf(out, OUTPUT_NORMAL, "  Remote commit:  %s %s (%s)\n",
+                    output_print(out, OUTPUT_NORMAL, "  Remote commit:  %s %s (%s)\n",
                                   remote_oid_str, remote_summary, time_str);
 
                     git_commit_free(remote_commit);
@@ -770,22 +739,10 @@ static error_t *display_remote_status(
             }
         } else {
             /* Compact mode: single line matching enabled profiles format */
-            char *colored_name = output_colorize(out, OUTPUT_COLOR_CYAN, profile_name);
-            if (colored_name) {
-                output_printf(out, OUTPUT_NORMAL, "  %s", colored_name);
-                free(colored_name);
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  %s", profile_name);
-            }
+            output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile_name);
 
             /* Display status in dimmed parentheses */
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s(%s)%s\n",
-                              output_color_code(out, OUTPUT_COLOR_DIM), status_str,
-                              output_color_code(out, OUTPUT_COLOR_RESET));
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  (%s)\n", status_str);
-            }
+            output_styled(out, OUTPUT_NORMAL, "  {dim}(%s){reset}\n", status_str);
         }
 
         upstream_info_free(info);
@@ -797,59 +754,19 @@ static error_t *display_remote_status(
     output_section(out, "Sync summary");
 
     if (up_to_date > 0) {
-        char *colored_count = output_colorize(out, OUTPUT_COLOR_CYAN, "%zu");
-        if (colored_count) {
-            char formatted[64];
-            snprintf(formatted, sizeof(formatted), colored_count, up_to_date);
-            output_printf(out, OUTPUT_NORMAL, "  %s up-to-date\n", formatted);
-            free(colored_count);
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "  %zu up-to-date\n", up_to_date);
-        }
+        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} up-to-date\n", up_to_date);
     }
     if (ahead > 0) {
-        char *colored_count = output_colorize(out, OUTPUT_COLOR_CYAN, "%zu");
-        if (colored_count) {
-            char formatted[64];
-            snprintf(formatted, sizeof(formatted), colored_count, ahead);
-            output_printf(out, OUTPUT_NORMAL, "  %s ahead\n", formatted);
-            free(colored_count);
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "  %zu ahead\n", ahead);
-        }
+        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} ahead\n", ahead);
     }
     if (behind > 0) {
-        char *colored_count = output_colorize(out, OUTPUT_COLOR_CYAN, "%zu");
-        if (colored_count) {
-            char formatted[64];
-            snprintf(formatted, sizeof(formatted), colored_count, behind);
-            output_printf(out, OUTPUT_NORMAL, "  %s behind\n", formatted);
-            free(colored_count);
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "  %zu behind\n", behind);
-        }
+        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} behind\n", behind);
     }
     if (diverged > 0) {
-        char *colored_count = output_colorize(out, OUTPUT_COLOR_CYAN, "%zu");
-        if (colored_count) {
-            char formatted[64];
-            snprintf(formatted, sizeof(formatted), colored_count, diverged);
-            output_printf(out, OUTPUT_NORMAL, "  %s diverged\n", formatted);
-            free(colored_count);
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "  %zu diverged\n", diverged);
-        }
+        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} diverged\n", diverged);
     }
     if (no_remote > 0) {
-        char *colored_count = output_colorize(out, OUTPUT_COLOR_CYAN, "%zu");
-        if (colored_count) {
-            char formatted[64];
-            snprintf(formatted, sizeof(formatted), colored_count, no_remote);
-            output_printf(out, OUTPUT_NORMAL, "  %s no remote\n", formatted);
-            free(colored_count);
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "  %zu no remote\n", no_remote);
-        }
+        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no remote\n", no_remote);
     }
 
     /* Free profiles if we allocated them */
@@ -1060,9 +977,12 @@ error_t *cmd_status(
                     /* User declined elevation or non-interactive mode */
                     output_newline(out);
                     output_warning(out, "Status check will be INCOMPLETE:\n");
-                    output_printf(out, OUTPUT_NORMAL, "  ✓ Content changes will be detected\n");
-                    output_printf(out, OUTPUT_NORMAL, "  ✓ Permission mode changes will be detected\n");
-                    output_printf(out, OUTPUT_NORMAL, "  ✗ Ownership changes will NOT be detected\n");
+                    output_styled(out, OUTPUT_NORMAL,
+                           "  {green}✓{reset} Content changes will be detected\n");
+                    output_styled(out, OUTPUT_NORMAL,
+                           "  {green}✓{reset} Permission mode changes will be detected\n");
+                    output_styled(out, OUTPUT_NORMAL,
+                           "  {red}✗{reset} Ownership changes will NOT be detected\n");
                     output_newline(out);
 
                     error_free(priv_err);

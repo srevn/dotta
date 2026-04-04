@@ -177,7 +177,6 @@ respect_gitignore = true
 #   - "quiet"   - Only errors
 #   - "normal"  - Standard output (default)
 #   - "verbose" - Detailed operation info
-#   - "debug"   - Everything (for troubleshooting)
 # Default: normal
 verbosity = "normal"
 
@@ -189,15 +188,6 @@ verbosity = "normal"
 #   - "never"  - Never use colors (useful for logs)
 # Default: auto
 color = "auto"
-
-# Output Format
-# How to format command output
-# Options:
-#   - "compact"  - Brief, human-readable (default)
-#   - "detailed" - More information, still human-readable
-#   - "json"     - Machine-readable JSON (for scripts/tools)
-# Default: compact
-format = "compact"
 
 # ============================================================================
 # [sync] - Synchronization Settings

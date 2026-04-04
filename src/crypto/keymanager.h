@@ -142,12 +142,32 @@ error_t *keymanager_set_passphrase(
 void keymanager_clear(keymanager_t *mgr);
 
 /**
- * Check if key is cached and not expired
+ * Check if key is cached in memory and not expired
+ *
+ * Only checks in-memory state. Does not probe the disk cache.
+ * Use keymanager_probe_key() for a full availability check.
  *
  * @param mgr Key manager (must not be NULL)
- * @return true if key is available (cached and not expired)
+ * @return true if key is available in memory (cached and not expired)
  */
 bool keymanager_has_key(const keymanager_t *mgr);
+
+/**
+ * Probe for key availability without prompting
+ *
+ * Checks both in-memory cache and disk session cache. If a valid
+ * disk cache exists, loads it into memory. Does NOT prompt for
+ * passphrase or check environment variables.
+ *
+ * This is the non-interactive counterpart to keymanager_get_key():
+ *   - keymanager_has_key():   memory only (const, no side effects)
+ *   - keymanager_probe_key(): memory + disk (may load from disk)
+ *   - keymanager_get_key():   memory + disk + prompt (full resolution)
+ *
+ * @param mgr Key manager (must not be NULL)
+ * @return true if key is available (either from memory or disk cache)
+ */
+bool keymanager_probe_key(keymanager_t *mgr);
 
 /**
  * Get time until cache expiration

@@ -14,22 +14,12 @@
 #include "config.h"
 
 /**
- * Output format types
- */
-typedef enum {
-    OUTPUT_FORMAT_COMPACT,   /* Compact output (default) */
-    OUTPUT_FORMAT_DETAILED,  /* Detailed/verbose output */
-    OUTPUT_FORMAT_JSON       /* JSON output for scripting */
-} output_format_t;
-
-/**
  * Verbosity levels
  */
 typedef enum {
     OUTPUT_QUIET = 0,   /* Suppress all output except errors */
     OUTPUT_NORMAL = 1,  /* Normal output */
-    OUTPUT_VERBOSE = 2, /* Verbose output */
-    OUTPUT_DEBUG = 3    /* Debug output */
+    OUTPUT_VERBOSE = 2  /* Verbose output */
 } output_verbosity_t;
 
 /**
@@ -62,23 +52,17 @@ typedef enum {
  */
 typedef struct {
     FILE *stream;
-    output_format_t format;
     output_verbosity_t verbosity;
     output_color_mode_t color_mode;
-    bool color_enabled;  /* Computed from color_mode */
+    bool color_enabled;         /* Computed from color_mode for stream */
+    bool stderr_color_enabled;  /* Computed from color_mode for stderr */
 } output_ctx_t;
 
 /**
- * Create output context with defaults
+ * Create output context
  */
-output_ctx_t *output_create(void);
-
-/**
- * Create output context with specific settings
- */
-output_ctx_t *output_create_with(
+output_ctx_t *output_create(
     FILE *stream,
-    output_format_t format,
     output_verbosity_t verbosity,
     output_color_mode_t color_mode
 );
@@ -97,19 +81,9 @@ output_ctx_t *output_create_from_config(const dotta_config_t *config);
 void output_free(output_ctx_t *ctx);
 
 /**
- * Set output format
- */
-void output_set_format(output_ctx_t *ctx, output_format_t format);
-
-/**
  * Set verbosity level
  */
 void output_set_verbosity(output_ctx_t *ctx, output_verbosity_t verbosity);
-
-/**
- * Set color mode
- */
-void output_set_color_mode(output_ctx_t *ctx, output_color_mode_t mode);
 
 /**
  * Check if colors are enabled for the given context
@@ -117,18 +91,25 @@ void output_set_color_mode(output_ctx_t *ctx, output_color_mode_t mode);
 bool output_colors_enabled(const output_ctx_t *ctx);
 
 /**
+ * Check if the output stream is a TTY
+ *
+ * Returns true if ctx->stream is connected to a terminal.
+ * This is distinct from output_colors_enabled():
+ *   - colors_enabled can be true on non-TTY (--color=always)
+ *   - is_tty can be true with colors disabled (NO_COLOR, TERM=dumb)
+ *
+ * Use for decisions about ephemeral output (progress indicators,
+ * inline status), not for color decisions.
+ *
+ * @param ctx Output context (returns false if NULL)
+ * @return true if ctx->stream is a terminal
+ */
+bool output_is_tty(const output_ctx_t *ctx);
+
+/**
  * Get color code string
  */
 const char *output_color_code(const output_ctx_t *ctx, output_color_t color);
-
-/**
- * Apply color to text (returns formatted string, caller must free)
- */
-char *output_colorize(
-    const output_ctx_t *ctx,
-    output_color_t color,
-    const char *text
-);
 
 /**
  * Print with verbosity check
@@ -139,6 +120,57 @@ void output_print(
     const char *fmt,
     ...
 ) __attribute__((format(printf, 3, 4)));
+
+/**
+ * Print with inline style tags and verbosity check
+ *
+ * Like output_print() but supports {tag} markup for inline coloring.
+ * Tags are replaced with ANSI codes when colors are enabled, or removed
+ * when disabled. Unknown tags pass through literally.
+ *
+ * Supported tags:
+ *   {red}, {green}, {yellow}, {blue}, {magenta}, {cyan}, {white}
+ *   {bold}, {dim}
+ *   {reset}
+ *   {bold;red} (compound tags via semicolon)
+ *
+ * Auto-appends RESET if any color tag was used (prevents color bleed).
+ * Printf format specifiers (%s, %d, %zu) work normally alongside tags.
+ *
+ * @param ctx Output context
+ * @param min_level Minimum verbosity level
+ * @param fmt Format string with optional {tag} markup
+ *
+ * Example:
+ *   output_styled(out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n", path);
+ *   output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset} → {cyan}%s{reset}\n", old, new);
+ */
+void output_styled(
+    const output_ctx_t *ctx,
+    output_verbosity_t min_level,
+    const char *fmt,
+    ...
+) __attribute__((format(printf, 3, 4)));
+
+/**
+ * Print with a runtime-determined color wrapping the output
+ *
+ * Applies `color` to the entire formatted output and auto-resets.
+ * Use when the color is determined at runtime (variable output_color_t).
+ * For compile-time colors, prefer output_styled() with {tags} instead.
+ *
+ * When color is OUTPUT_COLOR_RESET, no color wrapping is applied
+ * (content prints plain). This allows using RESET as a "no color" sentinel.
+ *
+ * The format string also supports {tag} markup (routes through the style engine).
+ */
+void output_colored(
+    const output_ctx_t *ctx,
+    output_verbosity_t min_level,
+    output_color_t color,
+    const char *fmt,
+    ...
+) __attribute__((format(printf, 4, 5)));
 
 /**
  * Print error message
@@ -162,12 +194,6 @@ void output_success(const output_ctx_t *ctx, const char *fmt, ...)
  * Print info message
  */
 void output_info(const output_ctx_t *ctx, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));
-
-/**
- * Print debug message (only shown at DEBUG verbosity)
- */
-void output_debug(const output_ctx_t *ctx, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
 
 /**
@@ -219,22 +245,6 @@ void output_hint_line(const output_ctx_t *ctx, const char *fmt, ...)
 void output_newline(const output_ctx_t *ctx);
 
 /**
- * Print formatted text (respects output context)
- *
- * Use this instead of fprintf(out->stream, ...) or printf(...).
- * Respects verbosity settings and output context.
- *
- * Example:
- *   output_printf(out, "Files: %zu\n", count);
- */
-void output_printf(
-    const output_ctx_t *ctx,
-    output_verbosity_t min_level,
-    const char *fmt,
-    ...
-) __attribute__((format(printf, 3, 4)));
-
-/**
  * Print section header
  *
  * Note: Does NOT add leading newline automatically. Use output_newline()
@@ -251,33 +261,34 @@ void output_printf(
 void output_section(const output_ctx_t *ctx, const char *title);
 
 /**
- * Print item with status indicator
+ * Clear current line and flush (for inline progress)
+ *
+ * Designed for cleaning up ephemeral progress output (spinners,
+ * progress bars, status lines that should vanish when done).
+ *
+ * TTY: carriage return + ANSI clear line
+ * Non-TTY: newline (ANSI clear doesn't work on pipes)
+ * Always flushes the stream.
+ *
+ * @param ctx Output context
  */
-void output_item(
-    const output_ctx_t *ctx,
-    const char *status,
-    output_color_t status_color,
-    const char *text
-);
+void output_clear_line(const output_ctx_t *ctx);
 
 /**
- * Print key-value pair
+ * Print diff text with line-by-line colorization
+ *
+ * Parses a unified diff string and applies standard diff colors:
+ *   Green  (+): additions (excludes +++ headers)
+ *   Red    (-): deletions (excludes --- headers)
+ *   Cyan  (@@): hunk headers
+ *
+ * When colors are disabled, prints the diff text as-is in one call.
+ * No-op when ctx or diff_text is NULL.
+ *
+ * @param ctx Output context (must not be NULL)
+ * @param diff_text Unified diff text (NULL-safe, no-op)
  */
-void output_kv(
-    const output_ctx_t *ctx,
-    const char *key,
-    const char *value
-);
-
-/**
- * Print progress indicator
- */
-void output_progress(
-    const output_ctx_t *ctx,
-    size_t current,
-    size_t total,
-    const char *item
-);
+void output_print_diff(const output_ctx_t *ctx, const char *diff_text);
 
 /**
  * Format file size in human-readable form
@@ -290,56 +301,6 @@ void output_progress(
  * @param buffer_size Size of output buffer (minimum 32 bytes)
  */
 void output_format_size(size_t bytes, char *buffer, size_t buffer_size);
-
-/**
- * Begin JSON output
- */
-void output_json_begin(const output_ctx_t *ctx);
-
-/**
- * End JSON output
- */
-void output_json_end(const output_ctx_t *ctx);
-
-/**
- * Add JSON string field
- */
-void output_json_string(
-    const output_ctx_t *ctx,
-    const char *key,
-    const char *value,
-    bool last
-);
-
-/**
- * Add JSON number field
- */
-void output_json_number(
-    const output_ctx_t *ctx,
-    const char *key,
-    long value,
-    bool last
-);
-
-/**
- * Add JSON boolean field
- */
-void output_json_bool(
-    const output_ctx_t *ctx,
-    const char *key,
-    bool value,
-    bool last
-);
-
-/**
- * Begin JSON array
- */
-void output_json_array_begin(const output_ctx_t *ctx, const char *key);
-
-/**
- * End JSON array
- */
-void output_json_array_end(const output_ctx_t *ctx, bool last);
 
 /**
  * Prompt user for confirmation
@@ -446,30 +407,7 @@ output_list_t *output_list_create(
 );
 
 /**
- * Add item to list with single tag
- *
- * Adds an item with a single tag (e.g., "modified"). The tag will be
- * automatically wrapped in brackets: [modified]
- *
- * All strings are copied internally - caller retains ownership of inputs.
- *
- * @param list List builder (must not be NULL)
- * @param tag Tag string (will be wrapped in brackets, NULL treated as empty)
- * @param color Color for the tag
- * @param content Main content text (NULL treated as empty)
- * @param metadata Optional metadata shown dimmed in parentheses (NULL if none)
- * @return 0 on success, -1 on allocation failure
- */
-int output_list_add(
-    output_list_t *list,
-    const char *tag,
-    output_color_t color,
-    const char *content,
-    const char *metadata
-);
-
-/**
- * Add item to list with multiple tags
+ * Add item to list with tags
  *
  * Adds an item with multiple tags (e.g., ["modified", "mode"]).
  * Tags will be formatted as: [modified] [mode]
@@ -484,7 +422,7 @@ int output_list_add(
  * @param metadata Optional metadata shown dimmed in parentheses (NULL if none)
  * @return 0 on success, -1 on allocation failure
  */
-int output_list_add_multi(
+int output_list_add(
     output_list_t *list,
     const char **tags,
     size_t tag_count,

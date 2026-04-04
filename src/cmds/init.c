@@ -258,21 +258,9 @@ error_t *cmd_init(const cmd_init_options_t *opts) {
     output_success(out, "Initialized dotta repository in %s", path);
     output_newline(out);
 
-    if (output_colors_enabled(out)) {
-        output_printf(out, OUTPUT_NORMAL, "%sNext steps:%s\n",
-                     output_color_code(out, OUTPUT_COLOR_DIM),
-                     output_color_code(out, OUTPUT_COLOR_RESET));
-        output_printf(out, OUTPUT_NORMAL, "%s  1. Create a profile: dotta add --profile global ~/.bashrc%s\n",
-                     output_color_code(out, OUTPUT_COLOR_DIM),
-                     output_color_code(out, OUTPUT_COLOR_RESET));
-        output_printf(out, OUTPUT_NORMAL, "%s  2. Apply profiles: dotta apply%s\n",
-                     output_color_code(out, OUTPUT_COLOR_DIM),
-                     output_color_code(out, OUTPUT_COLOR_RESET));
-    } else {
-        output_info(out, "Next steps:");
-        output_info(out, "  1. Create a profile: dotta add --profile global ~/.bashrc");
-        output_info(out, "  2. Apply profiles: dotta apply");
-    }
+    output_hint(out, "Next steps:");
+    output_hint_line(out, "  1. Create a profile: dotta add --profile global ~/.bashrc");
+    output_hint_line(out, "  2. Apply profiles: dotta apply");
 
 cleanup:
     if (repo) git_repository_free(repo);

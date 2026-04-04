@@ -32,7 +32,11 @@
  * @param count Output file count (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *count_profile_files(git_repository *repo, const char *profile_name, size_t *count) {
+static error_t *count_profile_files(
+    git_repository *repo,
+    const char *profile_name,
+    size_t *count
+) {
     CHECK_NULL(repo);
     CHECK_NULL(profile_name);
     CHECK_NULL(count);
@@ -75,39 +79,25 @@ static void print_manifest_enable_stats(
     if (verbose) {
         /* Detailed breakdown */
         output_section(out, "Manifest Analysis");
-        output_printf(out, OUTPUT_NORMAL, "  Profile: %s\n", profile_name);
-        output_printf(out, OUTPUT_NORMAL, "  Total files: %zu\n", stats->total_files);
+        output_print(out, OUTPUT_NORMAL, "  Profile: %s\n", profile_name);
+        output_print(out, OUTPUT_NORMAL, "  Total files: %zu\n", stats->total_files);
 
         if (stats->already_deployed > 0) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "    - %s%zu%s already deployed and correct\n",
-                             output_color_code(out, OUTPUT_COLOR_GREEN),
-                             stats->already_deployed,
-                             output_color_code(out, OUTPUT_COLOR_RESET));
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "    - %zu already deployed and correct\n",
-                             stats->already_deployed);
-            }
+            output_styled(out, OUTPUT_NORMAL, "    - {green}%zu{reset} already deployed and correct\n",
+                          stats->already_deployed);
         }
 
         if (stats->needs_deployment > 0) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "    - %s%zu%s need deployment\n",
-                             output_color_code(out, OUTPUT_COLOR_YELLOW),
-                             stats->needs_deployment,
-                             output_color_code(out, OUTPUT_COLOR_RESET));
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "    - %zu need deployment\n",
-                             stats->needs_deployment);
-            }
+            output_styled(out, OUTPUT_NORMAL, "    - {yellow}%zu{reset} need deployment\n",
+                          stats->needs_deployment);
         }
 
         if (stats->access_errors > 0) {
             output_newline(out);
             output_warning(out, "Could not access %zu file%s during profile enable",
-                          stats->access_errors,
-                          stats->access_errors == 1 ? "" : "s");
-            output_hint(out, "These files are marked as needing deployment. Run 'dotta status' for details.");
+                           stats->access_errors, stats->access_errors == 1 ? "" : "s");
+            output_hint(out,
+                "These files are marked as needing deployment. Run 'dotta status' for details.");
         }
 
         output_newline(out);
@@ -115,26 +105,27 @@ static void print_manifest_enable_stats(
         /* Compact summary */
         if (stats->needs_deployment > 0) {
             if (stats->already_deployed > 0) {
-                output_printf(out, OUTPUT_NORMAL, "  Staged %zu file%s for deployment (%zu already up-to-date)\n",
-                             stats->needs_deployment,
-                             stats->needs_deployment == 1 ? "" : "s",
-                             stats->already_deployed);
+                output_print(out, OUTPUT_NORMAL,
+                    "  Staged %zu file%s for deployment (%zu already up-to-date)\n",
+                    stats->needs_deployment, stats->needs_deployment == 1 ? "" : "s",
+                    stats->already_deployed);
             } else {
-                output_printf(out, OUTPUT_NORMAL, "  Staged %zu file%s for deployment\n",
-                             stats->needs_deployment,
-                             stats->needs_deployment == 1 ? "" : "s");
+                output_print(out, OUTPUT_NORMAL,
+                    "  Staged %zu file%s for deployment\n",
+                    stats->needs_deployment, stats->needs_deployment == 1 ? "" : "s");
             }
         } else if (stats->already_deployed > 0) {
-            output_printf(out, OUTPUT_NORMAL, "  All %zu file%s already deployed\n",
-                         stats->already_deployed,
-                         stats->already_deployed == 1 ? "" : "s");
+            output_print(out, OUTPUT_NORMAL,
+                "  All %zu file%s already deployed\n",
+                stats->already_deployed, stats->already_deployed == 1 ? "" : "s");
         }
 
         if (stats->access_errors > 0) {
-            output_warning(out, "Could not access %zu file%s during profile enable",
-                          stats->access_errors,
-                          stats->access_errors == 1 ? "" : "s");
-            output_hint(out, "These files are marked as needing deployment. Run 'dotta status' for details.");
+            output_warning(out,
+                "Could not access %zu file%s during profile enable",
+                stats->access_errors, stats->access_errors == 1 ? "" : "s");
+            output_hint(out,
+                "These files are marked as needing deployment. Run 'dotta status' for details.");
         }
     }
 }
@@ -157,49 +148,37 @@ static void print_manifest_disable_stats(
     if (verbose) {
         /* Detailed breakdown */
         output_section(out, "Manifest Analysis");
-        output_printf(out, OUTPUT_NORMAL, "  Profile: %s\n", profile_name);
-        output_printf(out, OUTPUT_NORMAL, "  Total files affected: %zu\n", stats->total_files);
+        output_print(out, OUTPUT_NORMAL, "  Profile: %s\n", profile_name);
+        output_print(out, OUTPUT_NORMAL,
+            "  Total files affected: %zu\n", stats->total_files);
 
         if (stats->files_with_fallback > 0) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "    - %s%zu%s file%s with fallback (will revert)\n",
-                             output_color_code(out, OUTPUT_COLOR_GREEN),
-                             stats->files_with_fallback,
-                             output_color_code(out, OUTPUT_COLOR_RESET),
-                             stats->files_with_fallback == 1 ? "" : "s");
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "    - %zu file%s with fallback (will revert)\n",
-                             stats->files_with_fallback,
-                             stats->files_with_fallback == 1 ? "" : "s");
-            }
+            output_styled(out, OUTPUT_NORMAL,
+                "    - {green}%zu{reset} file%s with fallback (will revert)\n",
+                stats->files_with_fallback,
+                stats->files_with_fallback == 1 ? "" : "s");
         }
 
         if (stats->files_removed > 0) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "    - %s%zu%s file%s without fallback (will be removed)\n",
-                             output_color_code(out, OUTPUT_COLOR_RED),
-                             stats->files_removed,
-                             output_color_code(out, OUTPUT_COLOR_RESET),
-                             stats->files_removed == 1 ? "" : "s");
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "    - %zu file%s without fallback (will be removed)\n",
-                             stats->files_removed,
-                             stats->files_removed == 1 ? "" : "s");
-            }
+            output_styled(out, OUTPUT_NORMAL,
+                "    - {red}%zu{reset} file%s without fallback (will be removed)\n",
+                stats->files_removed,
+                stats->files_removed == 1 ? "" : "s");
         }
         output_newline(out);
     } else {
         /* Compact summary */
         if (stats->files_removed > 0) {
-            output_printf(out, OUTPUT_NORMAL, "  Staged %zu file%s for removal\n",
-                         stats->files_removed,
-                         stats->files_removed == 1 ? "" : "s");
+            output_print(out, OUTPUT_NORMAL, 
+                "  Staged %zu file%s for removal\n",
+                stats->files_removed, stats->files_removed == 1 ? "" : "s");
         }
 
         if (stats->files_with_fallback > 0) {
-            output_printf(out, OUTPUT_NORMAL, "  %zu file%s reverted to lower precedence\n",
-                         stats->files_with_fallback,
-                         stats->files_with_fallback == 1 ? "" : "s");
+            output_print(out, OUTPUT_NORMAL,
+                "  %zu file%s reverted to lower precedence\n",
+                stats->files_with_fallback,
+                stats->files_with_fallback == 1 ? "" : "s");
         }
     }
 }
@@ -294,28 +273,13 @@ static error_t *profile_list(
 
             /* Show file counts if available, otherwise indicate error */
             if (count_err) {
-                if (output_colors_enabled(out)) {
-                    output_printf(out, OUTPUT_NORMAL, "  %zu. %s%s%s (file count unavailable)\n",
-                           i + 1,
-                           output_color_code(out, OUTPUT_COLOR_CYAN),
-                           name,
-                           output_color_code(out, OUTPUT_COLOR_RESET));
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, "  %zu. %s (file count unavailable)\n", i + 1, name);
-                }
+                output_styled(out, OUTPUT_NORMAL,
+                       "  %zu. {cyan}%s{reset} (file count unavailable)\n",
+                       i + 1, name);
                 error_free(count_err);
             } else {
-                if (output_colors_enabled(out)) {
-                    output_printf(out, OUTPUT_NORMAL, "  %zu. %s%s%s (%zu file%s)\n",
-                           i + 1,
-                           output_color_code(out, OUTPUT_COLOR_CYAN),
-                           name,
-                           output_color_code(out, OUTPUT_COLOR_RESET),
-                           file_count, file_count == 1 ? "" : "s");
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, "  %zu. %s (%zu file%s)\n",
-                           i + 1, name, file_count, file_count == 1 ? "" : "s");
-                }
+                output_styled(out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (%zu file%s)\n",
+                       i + 1, name, file_count, file_count == 1 ? "" : "s");
             }
         }
         output_newline(out);
@@ -334,26 +298,12 @@ static error_t *profile_list(
 
             /* Show file counts if available, otherwise indicate error */
             if (count_err) {
-                if (output_colors_enabled(out)) {
-                    output_printf(out, OUTPUT_NORMAL, "  • %s%s%s (file count unavailable)\n",
-                           output_color_code(out, OUTPUT_COLOR_CYAN),
-                           name,
-                           output_color_code(out, OUTPUT_COLOR_RESET));
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, "  • %s (file count unavailable)\n", name);
-                }
+                output_styled(out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (file count unavailable)\n",
+                       name);
                 error_free(count_err);
             } else {
-                if (output_colors_enabled(out)) {
-                    output_printf(out, OUTPUT_NORMAL, "  • %s%s%s (%zu file%s)\n",
-                           output_color_code(out, OUTPUT_COLOR_CYAN),
-                           name,
-                           output_color_code(out, OUTPUT_COLOR_RESET),
-                           file_count, file_count == 1 ? "" : "s");
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, "  • %s (%zu file%s)\n",
-                           name, file_count, file_count == 1 ? "" : "s");
-                }
+                output_styled(out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (%zu file%s)\n",
+                       name, file_count, file_count == 1 ? "" : "s");
             }
         }
         output_newline(out);
@@ -386,7 +336,9 @@ static error_t *profile_list(
                  * This contacts the remote server to get the current list of profiles,
                  * ensuring we see newly added profiles that haven't been fetched yet.
                  */
-                remote_err = upstream_query_remote_branches(repo, remote_name, xfer->cred, &remote_branches);
+                remote_err = upstream_query_remote_branches(
+                    repo, remote_name, xfer->cred, &remote_branches
+                );
                 if (remote_err) {
                     output_warning(out, "Could not query remote: %s", error_message(remote_err));
                     error_free(remote_err);
@@ -395,16 +347,20 @@ static error_t *profile_list(
                      * Filter out branches that already exist locally
                      * Uses string_array_difference() for O(n+m) set difference
                      */
-                    error_t *diff_err = string_array_difference(remote_branches, all_branches, &remote_only);
+                    error_t *diff_err = string_array_difference(
+                        remote_branches, all_branches, &remote_only
+                    );
                     if (diff_err) {
-                        output_warning(out, "Failed to filter remote branches: %s", error_message(diff_err));
+                        output_warning(out,
+                            "Failed to filter remote branches: %s", error_message(diff_err));
                         error_free(diff_err);
                     }
 
                     if (remote_only && string_array_size(remote_only) > 0) {
                         output_section(out, "Remote (not fetched)");
                         for (size_t i = 0; i < string_array_size(remote_only); i++) {
-                            output_printf(out, OUTPUT_NORMAL, "  • %s\n", string_array_get(remote_only, i));
+                            output_print(out, OUTPUT_NORMAL,
+                                "  • %s\n", string_array_get(remote_only, i));
                         }
                         output_newline(out);
                     }
@@ -481,7 +437,9 @@ static error_t *profile_fetch(
 
     if (opts->fetch_all) {
         /* Query remote server for all available branches */
-        err = upstream_query_remote_branches(repo, remote_name, xfer ? xfer->cred : NULL, &remote_branches);
+        err = upstream_query_remote_branches(
+            repo, remote_name, xfer ? xfer->cred : NULL, &remote_branches
+        );
         if (err) {
             err = error_wrap(err, "Failed to query remote branches");
             goto cleanup;
@@ -496,7 +454,8 @@ static error_t *profile_fetch(
 
             error_t *fetch_err = gitops_fetch_branch(repo, remote_name, branch_name, xfer);
             if (fetch_err) {
-                output_error(out, "Failed to fetch '%s': %s", branch_name, error_message(fetch_err));
+                output_error(out,
+                    "Failed to fetch '%s': %s", branch_name, error_message(fetch_err));
                 error_free(fetch_err);
                 failed_count++;
                 continue;
@@ -508,19 +467,21 @@ static error_t *profile_fetch(
                 /* Branch already exists - fetch updated the remote ref */
                 fetched_count++;
                 if (opts->verbose) {
-                    output_success(out, "  ✓ Updated %s", branch_name);
+                    output_styled(out, OUTPUT_NORMAL, "  {green}✓{reset} Updated %s\n",
+                           branch_name);
                 }
             } else {
                 fetch_err = upstream_create_tracking_branch(repo, remote_name, branch_name);
                 if (fetch_err) {
                     output_error(out, "Failed to create local branch '%s': %s",
-                                branch_name, error_message(fetch_err));
+                                 branch_name, error_message(fetch_err));
                     error_free(fetch_err);
                     failed_count++;
                 } else {
                     fetched_count++;
                     if (opts->verbose) {
-                        output_success(out, "  ✓ Fetched %s", branch_name);
+                        output_styled(out, OUTPUT_NORMAL, "  {green}✓{reset} Fetched %s\n",
+                               branch_name);
                     }
                 }
             }
@@ -535,7 +496,9 @@ static error_t *profile_fetch(
 
         /* Pre-flight validation: query remote for available branches */
         string_array_t *available_remote = NULL;
-        err = upstream_query_remote_branches(repo, remote_name, xfer ? xfer->cred : NULL, &available_remote);
+        err = upstream_query_remote_branches(
+            repo, remote_name, xfer ? xfer->cred : NULL, &available_remote
+        );
         if (err) {
             err = error_wrap(err, "Failed to query remote branches");
             goto cleanup;
@@ -557,7 +520,7 @@ static error_t *profile_fetch(
 
             if (!found) {
                 output_error(out, "Profile '%s' does not exist on remote '%s'",
-                            profile_name, remote_name);
+                             profile_name, remote_name);
                 has_missing = true;
             }
         }
@@ -567,7 +530,8 @@ static error_t *profile_fetch(
             if (string_array_size(available_remote) > 0) {
                 output_section(out, "Available profiles on remote");
                 for (size_t i = 0; i < string_array_size(available_remote); i++) {
-                    output_printf(out, OUTPUT_NORMAL, "  • %s\n", string_array_get(available_remote, i));
+                    output_print(out, OUTPUT_NORMAL,
+                        "  • %s\n", string_array_get(available_remote, i));
                 }
                 output_newline(out);
             }
@@ -584,14 +548,13 @@ static error_t *profile_fetch(
             /* Check if already exists locally */
             bool already_exists = profile_exists(repo, profile_name);
             if (already_exists && opts->verbose) {
-                output_info(out, "  %s already exists locally (updating...)",
-                            profile_name);
+                output_info(out, "  %s already exists locally (updating...)", profile_name);
             }
 
             error_t *fetch_err = gitops_fetch_branch(repo, remote_name, profile_name, xfer);
             if (fetch_err) {
-                output_error(out, "Failed to fetch '%s': %s",
-                             profile_name, error_message(fetch_err));
+                output_error(out,
+                    "Failed to fetch '%s': %s", profile_name, error_message(fetch_err));
                 error_free(fetch_err);
                 failed_count++;
                 continue;
@@ -602,7 +565,8 @@ static error_t *profile_fetch(
                 /* Branch already exists - consider this a successful fetch/update */
                 fetched_count++;
                 if (opts->verbose) {
-                    output_success(out, "  ✓ Updated %s", profile_name);
+                    output_styled(out, OUTPUT_NORMAL, "  {green}✓{reset} Updated %s\n",
+                           profile_name);
                 }
             } else {
                 fetch_err = upstream_create_tracking_branch(repo, remote_name, profile_name);
@@ -613,7 +577,8 @@ static error_t *profile_fetch(
                 } else {
                     fetched_count++;
                     if (opts->verbose) {
-                        output_success(out, "  ✓ Fetched %s", profile_name);
+                        output_styled(out, OUTPUT_NORMAL, "  {green}✓{reset} Fetched %s\n",
+                               profile_name);
                     }
                 }
             }
@@ -636,11 +601,11 @@ cleanup:
     output_newline(out);
     if (fetched_count > 0) {
         output_success(out, "Fetched %zu profile%s",
-                      fetched_count, fetched_count == 1 ? "" : "s");
+                       fetched_count, fetched_count == 1 ? "" : "s");
     }
     if (failed_count > 0) {
         output_warning(out, "Failed to fetch %zu profile%s",
-                      failed_count, failed_count == 1 ? "" : "s");
+                       failed_count, failed_count == 1 ? "" : "s");
     }
 
     /* Only error if ALL operations failed or no profiles were available */
@@ -790,10 +755,10 @@ static error_t *profile_enable(
 
         /* Validate custom prefix requirement */
         if (has_custom && !opts->custom_prefix) {
-            output_error(out, "Profile '%s' contains custom/ files but --prefix not provided",
-                        profile_name);
-            output_hint(out, "dotta profile enable %s --prefix /path/to/target",
-                       profile_name);
+            output_error(out,
+                "Profile '%s' contains custom/ files but --prefix not provided", profile_name);
+            output_hint(out,
+                "dotta profile enable %s --prefix /path/to/target", profile_name);
             not_found++;
             continue;
         }
@@ -827,18 +792,23 @@ static error_t *profile_enable(
 
         /* Sync profile to manifest and capture stats */
         manifest_enable_stats_t stats = {0};
-        err = manifest_enable_profile(repo, state, profile_name, opts->custom_prefix, enabled, &stats);
+        err = manifest_enable_profile(
+            repo, state, profile_name, opts->custom_prefix, enabled, &stats
+        );
         if (err) {
-            err = error_wrap(err, "Failed to sync profile '%s' to manifest", profile_name);
+            err = error_wrap(err,
+                "Failed to sync profile '%s' to manifest", profile_name);
             goto cleanup;
         }
 
         /* Show manifest analysis if verbose, otherwise show compact summary */
         if (opts->verbose) {
             print_manifest_enable_stats(out, profile_name, &stats, true);
-            output_success(out, "  ✓ Enabled %s", profile_name);
+            output_styled(out, OUTPUT_NORMAL, "  {green}✓{reset} Enabled %s\n",
+                   profile_name);
         } else {
-            output_success(out, "  ✓ Enabled %s", profile_name);
+            output_styled(out, OUTPUT_NORMAL, "  {green}✓{reset} Enabled %s\n",
+                   profile_name);
             print_manifest_enable_stats(out, profile_name, &stats, false);
         }
     }
@@ -870,18 +840,21 @@ cleanup:
     }
 
     if (enabled_count > 0) {
-        output_success(out, "Enabled %zu profile%s", enabled_count,
-                      enabled_count == 1 ? "" : "s");
-        output_info(out, "Files staged for deployment in manifest");
-        output_info(out, "Run 'dotta status' to review or 'dotta apply' to deploy");
+        output_success(out,
+            "Enabled %zu profile%s", enabled_count, enabled_count == 1 ? "" : "s");
+        output_info(out,
+            "Files staged for deployment in manifest");
+        output_info(out,
+            "Run 'dotta status' to review or 'dotta apply' to deploy");
     }
     if (already_enabled > 0 && !opts->quiet) {
-        output_info(out, "%zu profile%s already enabled",
-                   already_enabled, already_enabled == 1 ? "" : "s");
+        output_info(out,
+            "%zu profile%s already enabled",
+            already_enabled, already_enabled == 1 ? "" : "s");
     }
     if (not_found > 0) {
-        output_warning(out, "%zu profile%s not found",
-                      not_found, not_found == 1 ? "" : "s");
+        output_warning(out,
+            "%zu profile%s not found", not_found, not_found == 1 ? "" : "s");
     }
 
     if (enabled_count == 0 && not_found > 0) {
@@ -950,7 +923,7 @@ static error_t *profile_disable(
         /* Disable specified profiles */
         if (opts->profile_count == 0) {
             err = ERROR(ERR_INVALID_ARG, "No profiles specified\n"
-                       "Hint: Use 'dotta profile disable <name>' or '--all'");
+                        "Hint: Use 'dotta profile disable <name>' or '--all'");
             goto cleanup;
         }
 
@@ -981,7 +954,8 @@ static error_t *profile_disable(
                 should_disable = true;
                 disabled_count++;
                 if (opts->verbose) {
-                    output_success(out, "  ✓ Disabling %s", profile_name);
+                    output_styled(out, OUTPUT_NORMAL, "  {green}✓{reset} Disabling %s\n",
+                           profile_name);
                 }
                 break;
             }
@@ -1034,7 +1008,7 @@ static error_t *profile_disable(
                     }
                 }
                 if (was_enabled) {
-                    output_printf(out, OUTPUT_NORMAL, "  - %s\n", profile_name);
+                    output_print(out, OUTPUT_NORMAL, "  - %s\n", profile_name);
                 }
             }
             output_newline(out);
@@ -1061,10 +1035,12 @@ static error_t *profile_disable(
             if (was_enabled) {
                 /* Unsync from manifest (updates to fallback or marks for removal) */
                 manifest_disable_stats_t stats = {0};
-                err = manifest_disable_profile(repo, state, profile_name, new_enabled, &stats);
+                err = manifest_disable_profile(
+                    repo, state, profile_name, new_enabled, &stats
+                );
                 if (err) {
-                    err = error_wrap(err, "Failed to unsync profile '%s' from manifest",
-                                   profile_name);
+                    err = error_wrap(err,
+                        "Failed to unsync profile '%s' from manifest", profile_name);
                     goto cleanup;
                 }
 
@@ -1079,7 +1055,8 @@ static error_t *profile_disable(
                 /* Remove from state */
                 err = state_disable_profile(state, profile_name);
                 if (err) {
-                    err = error_wrap(err, "Failed to remove profile '%s' from state", profile_name);
+                    err = error_wrap(err,
+                        "Failed to remove profile '%s' from state", profile_name);
                     goto cleanup;
                 }
             }
@@ -1111,12 +1088,16 @@ cleanup:
     }
 
     if (disabled_count > 0) {
-        output_success(out, "Disabled %zu profile%s", disabled_count, disabled_count == 1 ? "" : "s");
-        output_info(out, "Files updated in manifest (fallback or marked for removal)");
-        output_info(out, "Run 'dotta status' to review or 'dotta apply' to execute changes");
+        output_success(out,
+            "Disabled %zu profile%s", disabled_count, disabled_count == 1 ? "" : "s");
+        output_info(out,
+            "Files updated in manifest (fallback or marked for removal)");
+        output_info(out,
+            "Run 'dotta status' to review or 'dotta apply' to execute changes");
     }
     if (not_enabled > 0 && !opts->quiet) {
-        output_info(out, "%zu profile%s were not enabled", not_enabled, not_enabled == 1 ? "" : "s");
+        output_info(out,
+            "%zu profile%s were not enabled", not_enabled, not_enabled == 1 ? "" : "s");
     }
 
     /* Return success if profiles were already disabled (idempotent) */
@@ -1154,7 +1135,7 @@ static error_t *profile_reorder(
     /* Validation: at least one profile specified */
     if (opts->profile_count == 0) {
         err = ERROR(ERR_INVALID_ARG, "No profiles specified\n"
-                    "Hint: Provide profiles in desired order: dotta profile reorder <p1> <p2> ...");
+            "Hint: Provide profiles in desired order: dotta profile reorder <p1> <p2> ...");
         goto cleanup;
     }
 
@@ -1175,7 +1156,7 @@ static error_t *profile_reorder(
     /* Edge case: no enabled profiles */
     if (string_array_size(current_enabled) == 0) {
         err = ERROR(ERR_VALIDATION, "No enabled profiles to reorder\n"
-                   "Hint: Run 'dotta profile enable <name>' first");
+                    "Hint: Run 'dotta profile enable <name>' first");
         goto cleanup;
     }
 
@@ -1192,8 +1173,7 @@ static error_t *profile_reorder(
         for (size_t j = i + 1; j < opts->profile_count; j++) {
             if (strcmp(opts->profiles[i], opts->profiles[j]) == 0) {
                 err = ERROR(ERR_VALIDATION,
-                           "Profile '%s' appears multiple times in reorder list",
-                           opts->profiles[i]);
+                    "Profile '%s' appears multiple times in reorder list", opts->profiles[i]);
                 goto cleanup;
             }
         }
@@ -1210,9 +1190,8 @@ static error_t *profile_reorder(
         }
         if (!is_enabled) {
             err = ERROR(ERR_VALIDATION, "Profile '%s' is not enabled\n"
-                       "Hint: Only enabled profiles can be reordered."
-                       " Run 'dotta profile list' to see enabled profiles",
-                       opts->profiles[i]);
+                        "Hint: Only enabled profiles can be reordered."
+                        " Run 'dotta profile list' to see enabled profiles", opts->profiles[i]);
             goto cleanup;
         }
     }
@@ -1220,8 +1199,8 @@ static error_t *profile_reorder(
     /* Validation 3: Profile count must match */
     if (opts->profile_count != string_array_size(current_enabled)) {
         err = ERROR(ERR_VALIDATION, "Profile count mismatch: %zu enabled, %zu provided\n"
-                   "Hint: All enabled profiles must be included in reorder",
-                   string_array_size(current_enabled), opts->profile_count);
+                    "Hint: All enabled profiles must be included in reorder",
+                    string_array_size(current_enabled), opts->profile_count);
         goto cleanup;
     }
 
@@ -1237,7 +1216,7 @@ static error_t *profile_reorder(
         }
         if (!found) {
             err = ERROR(ERR_VALIDATION, "Missing enabled profile '%s' from reorder list\n"
-                       "Hint: All enabled profiles must be included", enabled_profile);
+                        "Hint: All enabled profiles must be included", enabled_profile);
             goto cleanup;
         }
     }
@@ -1261,15 +1240,15 @@ static error_t *profile_reorder(
     /* Show before/after in verbose mode */
     if (opts->verbose) {
         output_section(out, "Profile order change");
-        output_printf(out, OUTPUT_NORMAL, "  Before:");
+        output_print(out, OUTPUT_NORMAL, "  Before:");
         for (size_t i = 0; i < string_array_size(current_enabled); i++) {
-            output_printf(out, OUTPUT_NORMAL, " %s", string_array_get(current_enabled, i));
+            output_print(out, OUTPUT_NORMAL, " %s", string_array_get(current_enabled, i));
         }
         output_newline(out);
 
-        output_printf(out, OUTPUT_NORMAL, "  After: ");
+        output_print(out, OUTPUT_NORMAL, "  After: ");
         for (size_t i = 0; i < opts->profile_count; i++) {
-            output_printf(out, OUTPUT_NORMAL, " %s", opts->profiles[i]);
+            output_print(out, OUTPUT_NORMAL, " %s", opts->profiles[i]);
         }
         output_newline(out);
     }
@@ -1389,11 +1368,10 @@ static error_t *profile_validate(
 
     if (string_array_size(missing) > 0) {
         output_warning(out, "Found %zu missing profile%s in state:",
-                      string_array_size(missing),
-                      string_array_size(missing) == 1 ? "" : "s");
+            string_array_size(missing), string_array_size(missing) == 1 ? "" : "s");
 
         for (size_t i = 0; i < string_array_size(missing); i++) {
-            output_printf(out, OUTPUT_NORMAL, "  • %s\n", string_array_get(missing, i));
+            output_print(out, OUTPUT_NORMAL, "  • %s\n", string_array_get(missing, i));
         }
 
         if (opts->fix) {
@@ -1402,7 +1380,8 @@ static error_t *profile_validate(
                 const char *name = string_array_get(missing, i);
                 err = state_disable_profile(state, name);
                 if (err) {
-                    err = error_wrap(err, "Failed to remove missing profile '%s' from state", name);
+                    err = error_wrap(err,
+                        "Failed to remove missing profile '%s' from state", name);
                     goto cleanup;
                 }
             }
@@ -1413,7 +1392,7 @@ static error_t *profile_validate(
                 goto cleanup;
             }
 
-            output_success(out, "✓ Removed missing profiles from state\n");
+            output_success(out, "Removed missing profiles from state");
             fixed_enabled_profiles = true;
         } else {
             output_hint(out, "Run 'dotta profile validate --fix' to remove them");

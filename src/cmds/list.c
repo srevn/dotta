@@ -139,13 +139,9 @@ static void format_upstream_state(
             break;
     }
 
-    if (output_colors_enabled(out)) {
-        snprintf(buffer, buffer_size, "%s%s%s",
-                output_color_code(out, color), plain,
-                output_color_code(out, OUTPUT_COLOR_RESET));
-    } else {
-        snprintf(buffer, buffer_size, "%s", plain);
-    }
+    snprintf(buffer, buffer_size, "%s%s%s",
+            output_color_code(out, color), plain,
+            output_color_code(out, OUTPUT_COLOR_RESET));
 }
 
 /**
@@ -237,13 +233,7 @@ static error_t *list_profiles(
 
         /* Simple mode: Just name with enabled indicator */
         if (!opts->verbose && !show_remote) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s%s%s%s\n", indicator,
-                        output_color_code(out, OUTPUT_COLOR_CYAN), name,
-                        output_color_code(out, OUTPUT_COLOR_RESET));
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  %s%s\n", indicator, name);
-            }
+            output_styled(out, OUTPUT_NORMAL, "  %s{cyan}%s{reset}\n", indicator, name);
             continue;
         }
 
@@ -261,15 +251,8 @@ static error_t *list_profiles(
         }
 
         /* Start line with indicator and name */
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "  %s%s%-*s%s", indicator,
-                    output_color_code(out, OUTPUT_COLOR_CYAN),
-                    (int)max_name_len, name,
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "  %s%-*s", indicator,
-                    (int)max_name_len, name);
-        }
+        output_styled(out, OUTPUT_NORMAL, "  %s{cyan}%-*s{reset}", indicator,
+                (int)max_name_len, name);
 
         /* Verbose: Add stats (requires successfully loaded profile) */
         if (opts->verbose && profile) {
@@ -278,7 +261,7 @@ static error_t *list_profiles(
             if (!stats_err) {
                 char size_str[32];
                 output_format_size(stats.total_size, size_str, sizeof(size_str));
-                output_printf(out, OUTPUT_NORMAL, " %2zu file%s, %8s",
+                output_print(out, OUTPUT_NORMAL, " %2zu file%s, %8s",
                        stats.file_count, stats.file_count == 1 ? " " : "s", size_str);
             }
             error_free(stats_err);
@@ -309,19 +292,10 @@ static error_t *list_profiles(
                     char time_str[64];
                     format_relative_time(author->when.time, time_str, sizeof(time_str));
 
-                    if (output_colors_enabled(out)) {
-                        output_printf(out, OUTPUT_NORMAL, "  %s%s%s %.*s %s(%s)%s",
-                                output_color_code(out, OUTPUT_COLOR_YELLOW),
-                                oid_str,
-                                output_color_code(out, OUTPUT_COLOR_RESET),
-                                (int)msg_len, message,
-                                output_color_code(out, OUTPUT_COLOR_DIM),
-                                time_str,
-                                output_color_code(out, OUTPUT_COLOR_RESET));
-                    } else {
-                        output_printf(out, OUTPUT_NORMAL, "  %s %.*s (%s)",
-                                oid_str, (int)msg_len, message, time_str);
-                    }
+                    output_styled(out, OUTPUT_NORMAL, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
+                            oid_str,
+                            (int)msg_len, message,
+                            time_str);
 
                     git_commit_free(last_commit);
                 }
@@ -338,7 +312,7 @@ static error_t *list_profiles(
             if (!upstream_err && info) {
                 char upstream_str[64];
                 format_upstream_state(out, info, upstream_str, sizeof(upstream_str));
-                output_printf(out, OUTPUT_NORMAL, "  %s", upstream_str);
+                output_print(out, OUTPUT_NORMAL, "  %s", upstream_str);
                 upstream_info_free(info);
             } else {
                 error_free(upstream_err);
@@ -352,27 +326,12 @@ static error_t *list_profiles(
     /* Print remote legend if shown */
     if (show_remote) {
         output_newline(out);
-        output_printf(out, OUTPUT_NORMAL, "Remote tracking (from %s):\n", remote_name);
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "  %s[=]%s  up-to-date    ",
-                    output_color_code(out, OUTPUT_COLOR_GREEN),
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-            output_printf(out, OUTPUT_NORMAL, "%s[↑n]%s ahead    ",
-                    output_color_code(out, OUTPUT_COLOR_YELLOW),
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-            output_printf(out, OUTPUT_NORMAL, "%s[↓n]%s behind\n",
-                    output_color_code(out, OUTPUT_COLOR_YELLOW),
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-            output_printf(out, OUTPUT_NORMAL, "  %s[↕n+m]%s diverged    ",
-                    output_color_code(out, OUTPUT_COLOR_RED),
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-            output_printf(out, OUTPUT_NORMAL, "%s[•]%s  no remote\n",
-                    output_color_code(out, OUTPUT_COLOR_CYAN),
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "  [=] up-to-date    [↑n] ahead     [↓n] behind\n");
-            output_printf(out, OUTPUT_NORMAL, "  [↕n+m] diverged   [•]  no remote\n");
-        }
+        output_print(out, OUTPUT_NORMAL,
+            "Remote tracking (from %s):\n", remote_name);
+        output_styled(out, OUTPUT_NORMAL,
+            "  {green}[=]{reset} up-to-date    {yellow}[↑n]{reset} ahead     {yellow}[↓n]{reset} behind\n");
+        output_styled(out, OUTPUT_NORMAL,
+            "  {red}[↕n+m]{reset} diverged   {cyan}[•]{reset}  no remote\n");
     }
 
     /* Cleanup */
@@ -479,24 +438,11 @@ static error_t *list_files(
         /* Print file path (with alignment in verbose mode) */
         if (opts->verbose) {
             /* Verbose: Left-align with padding for column alignment */
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s%-*s%s",
-                        output_color_code(out, OUTPUT_COLOR_CYAN),
-                        (int)max_path_len, file_path,
-                        output_color_code(out, OUTPUT_COLOR_RESET));
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  %-*s", (int)max_path_len, file_path);
-            }
+            output_styled(out, OUTPUT_NORMAL, "  {cyan}%-*s{reset}",
+                    (int)max_path_len, file_path);
         } else {
             /* Simple: No alignment needed */
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s%s%s",
-                        output_color_code(out, OUTPUT_COLOR_CYAN),
-                        file_path,
-                        output_color_code(out, OUTPUT_COLOR_RESET));
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  %s", file_path);
-            }
+            output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", file_path);
         }
 
         /* Verbose: Add size and last commit */
@@ -508,16 +454,10 @@ static error_t *list_files(
                 /* Check encryption status and display indicator */
                 bool encrypted = is_file_encrypted(metadata, repo, entry, file_path);
                 if (encrypted) {
-                    if (output_colors_enabled(out)) {
-                        output_printf(out, OUTPUT_NORMAL, "  %s[E]%s ",
-                                output_color_code(out, OUTPUT_COLOR_YELLOW),
-                                output_color_code(out, OUTPUT_COLOR_RESET));
-                    } else {
-                        output_printf(out, OUTPUT_NORMAL, "  [E] ");
-                    }
+                    output_styled(out, OUTPUT_NORMAL, "  {yellow}[E]{reset} ");
                 } else {
                     /* Space padding to maintain alignment */
-                    output_printf(out, OUTPUT_NORMAL, "      ");
+                    output_print(out, OUTPUT_NORMAL, "      ");
                 }
 
                 /* Get blob size efficiently */
@@ -529,7 +469,7 @@ static error_t *list_files(
                                           size - ENCRYPTION_OVERHEAD : size;
                     char size_str[32];
                     output_format_size(display_size, size_str, sizeof(size_str));
-                    output_printf(out, OUTPUT_NORMAL, " %8s", size_str);
+                    output_print(out, OUTPUT_NORMAL, " %8s", size_str);
                     total_size += display_size;
                 }
                 error_free(stats_err);
@@ -549,32 +489,17 @@ static error_t *list_files(
                             summary_len = 40;
                         }
 
-                        if (output_colors_enabled(out)) {
-                            output_printf(out, OUTPUT_NORMAL, "  %s%s%s %.*s %s(%s)%s",
-                                    output_color_code(out, OUTPUT_COLOR_YELLOW),
-                                    oid_str,
-                                    output_color_code(out, OUTPUT_COLOR_RESET),
-                                    (int)summary_len, commit_info->summary,
-                                    output_color_code(out, OUTPUT_COLOR_DIM),
-                                    time_str,
-                                    output_color_code(out, OUTPUT_COLOR_RESET));
-                        } else {
-                            output_printf(out, OUTPUT_NORMAL, "  %s %.*s (%s)",
-                                    oid_str, (int)summary_len, commit_info->summary, time_str);
-                        }
+                        output_styled(out, OUTPUT_NORMAL, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
+                                oid_str,
+                                (int)summary_len, commit_info->summary,
+                                time_str);
                     }
                 }
 
                 git_tree_entry_free(entry);
             } else {
                 /* Tree entry lookup failed unexpectedly */
-                if (output_colors_enabled(out)) {
-                    output_printf(out, OUTPUT_NORMAL, "  %s[?]%s",
-                            output_color_code(out, OUTPUT_COLOR_DIM),
-                            output_color_code(out, OUTPUT_COLOR_RESET));
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, "  [?]");
-                }
+                output_styled(out, OUTPUT_NORMAL, "  {dim}[?]{reset}");
             }
         }
 
@@ -586,12 +511,12 @@ static error_t *list_files(
     if (opts->verbose) {
         char size_str[32];
         output_format_size(total_size, size_str, sizeof(size_str));
-        output_printf(out, OUTPUT_NORMAL, "Total: %zu file%s, %s\n",
+        output_print(out, OUTPUT_NORMAL, "Total: %zu file%s, %s\n",
                string_array_size(files),
                string_array_size(files) == 1 ? "" : "s",
                size_str);
     } else {
-        output_printf(out, OUTPUT_NORMAL, "Total: %zu file%s\n",
+        output_print(out, OUTPUT_NORMAL, "Total: %zu file%s\n",
                string_array_size(files),
                string_array_size(files) == 1 ? "" : "s");
     }
@@ -721,15 +646,7 @@ static error_t *list_file_history(
             char oid_str[GIT_OID_SHA1_HEXSIZE + 1];
             git_oid_tostr(oid_str, sizeof(oid_str), &commit->oid);
 
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "%scommit %s%s%s\n",
-                        output_color_code(out, OUTPUT_COLOR_BOLD),
-                        output_color_code(out, OUTPUT_COLOR_YELLOW),
-                        oid_str,
-                        output_color_code(out, OUTPUT_COLOR_RESET));
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "commit %s\n", oid_str);
-            }
+            output_styled(out, OUTPUT_NORMAL, "{bold}commit {yellow}%s{reset}\n", oid_str);
 
             /* Display timestamp if valid */
             char date_buf[LIST_TIMESTAMP_BUFFER_SIZE];
@@ -737,18 +654,11 @@ static error_t *list_file_history(
                 char relative_str[64];
                 format_relative_time(commit->time, relative_str, sizeof(relative_str));
 
-                if (output_colors_enabled(out)) {
-                    output_printf(out, OUTPUT_NORMAL, "Date:   %s %s(%s)%s\n",
-                            date_buf,
-                            output_color_code(out, OUTPUT_COLOR_DIM),
-                            relative_str,
-                            output_color_code(out, OUTPUT_COLOR_RESET));
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, "Date:   %s (%s)\n", date_buf, relative_str);
-                }
+                output_styled(out, OUTPUT_NORMAL, "Date:   %s {dim}(%s){reset}\n",
+                        date_buf, relative_str);
             }
 
-            output_printf(out, OUTPUT_NORMAL, "\n    %s\n", commit->summary);
+            output_print(out, OUTPUT_NORMAL, "\n    %s\n", commit->summary);
 
             if (i < history->count - 1) {
                 output_newline(out);
@@ -761,20 +671,11 @@ static error_t *list_file_history(
             char time_str[64];
             format_relative_time(commit->time, time_str, sizeof(time_str));
 
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s%s%s  %-*s %s(%s)%s\n",
-                        output_color_code(out, OUTPUT_COLOR_YELLOW),
-                        oid_str,
-                        output_color_code(out, OUTPUT_COLOR_RESET),
-                        (int)max_msg_len,
-                        commit->summary,
-                        output_color_code(out, OUTPUT_COLOR_DIM),
-                        time_str,
-                        output_color_code(out, OUTPUT_COLOR_RESET));
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  %s  %-*s (%s)\n",
-                        oid_str, (int)max_msg_len, commit->summary, time_str);
-            }
+            output_styled(out, OUTPUT_NORMAL, "  {yellow}%s{reset}  %-*s {dim}(%s){reset}\n",
+                    oid_str,
+                    (int)max_msg_len,
+                    commit->summary,
+                    time_str);
         }
     }
 

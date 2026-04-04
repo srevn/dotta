@@ -659,6 +659,33 @@ bool keymanager_has_key(const keymanager_t *mgr) {
     return is_key_valid(mgr);
 }
 
+bool keymanager_probe_key(keymanager_t *mgr) {
+    if (!mgr) {
+        return false;
+    }
+
+    /* Check in-memory cache first */
+    if (is_key_valid(mgr)) {
+        return true;
+    }
+
+    /* Try disk session cache (skip if always-prompt mode) */
+    if (mgr->session_timeout == 0) {
+        return false;
+    }
+
+    error_t *err = session_cache_load(mgr->master_key);
+    if (err) {
+        error_free(err);
+        return false;
+    }
+
+    /* Disk cache loaded successfully - promote to in-memory */
+    mgr->has_key = true;
+    mgr->cached_at = get_monotonic_time();
+    return true;
+}
+
 int64_t keymanager_time_until_expiry(
     const keymanager_t *mgr,
     time_t *out_expires_at

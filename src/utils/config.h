@@ -43,9 +43,8 @@ typedef struct dotta_config {
     bool respect_gitignore;       /* Check .gitignore in source directories */
 
     /* [output] */
-    char *verbosity;              /* "quiet", "normal", "verbose", "debug" */
+    char *verbosity;              /* "quiet", "normal", "verbose" */
     char *color;                  /* "auto", "always", "never" */
-    char *format;                 /* "compact", "detailed", "json" */
 
     /* [commit] */
     char *commit_title;           /* Title template for commits */

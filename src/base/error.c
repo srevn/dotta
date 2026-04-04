@@ -10,6 +10,21 @@
 #include <string.h>
 
 /**
+ * Static OOM sentinel - returned when error allocation itself fails.
+ *
+ * Without this, OOM during error creation returns NULL, which every caller
+ * interprets as "no error" — silently swallowing the real failure.
+ * The sentinel is pre-allocated in static storage, never freed.
+ */
+static error_t oom_sentinel = {
+    .code    = ERR_MEMORY,
+    .message = (char *)"Out of memory",
+    .file    = NULL,
+    .line    = 0,
+    .cause   = NULL
+};
+
+/**
  * Create error with variable arguments (internal helper)
  */
 static error_t *error_vcreate(
@@ -21,7 +36,7 @@ static error_t *error_vcreate(
 ) {
     error_t *err = calloc(1, sizeof(error_t));
     if (!err) {
-        return NULL;  /* Out of memory - can't allocate error */
+        return &oom_sentinel;
     }
 
     err->code = code;
@@ -37,13 +52,13 @@ static error_t *error_vcreate(
 
     if (len < 0) {
         free(err);
-        return NULL;
+        return &oom_sentinel;
     }
 
     err->message = malloc(len + 1);
     if (!err->message) {
         free(err);
-        return NULL;
+        return &oom_sentinel;
     }
 
     vsnprintf(err->message, len + 1, fmt, args);
@@ -80,21 +95,19 @@ error_t *error_wrap(error_t *cause, const char *fmt, ...) {
 
     va_list args;
     va_start(args, fmt);
-    error_t *err = error_vcreate(
-        cause->code,
-        cause->file,
-        cause->line,
-        fmt,
-        args
-    );
+    error_t *err = error_vcreate(cause->code, NULL, 0, fmt, args);
     va_end(args);
 
-    if (err) {
-        err->cause = cause;
+    if (err == &oom_sentinel) {
+        /* Can't allocate wrapper — return cause to preserve the error
+         * chain and avoid leaking the cause we took ownership of */
+        return cause;
     }
 
+    err->cause = cause;
     return err;
 }
+
 
 error_t *error_from_git(int git_error_code) {
     const git_error *e = git_error_last();
@@ -117,17 +130,12 @@ error_t *error_from_errno(int errno_val) {
 }
 
 void error_free(error_t *err) {
-    if (!err) {
-        return;
+    while (err && err != &oom_sentinel) {
+        error_t *cause = err->cause;
+        free(err->message);
+        free(err);
+        err = cause;
     }
-
-    /* Free cause chain */
-    if (err->cause) {
-        error_free(err->cause);
-    }
-
-    free(err->message);
-    free(err);
 }
 
 const char *error_message(const error_t *err) {

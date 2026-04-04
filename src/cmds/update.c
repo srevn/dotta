@@ -1463,13 +1463,7 @@ static error_t *update_execute_for_all_profiles(
         }
 
         /* Display profile header */
-        char *colored_name = output_colorize(out, OUTPUT_COLOR_CYAN, profile->name);
-        if (colored_name) {
-            output_info(out, "Updating profile '%s':", colored_name);
-            free(colored_name);
-        } else {
-            output_info(out, "Updating profile '%s':", profile->name);
-        }
+        output_info(out, "Updating profile '{cyan}%s{reset}':", profile->name);
 
         /* Checkout profile branch in shared worktree */
         err = worktree_checkout_branch(wt, profile->name);
@@ -1542,9 +1536,7 @@ static error_t *update_display_summary(
 
     /* Show dry-run banner if applicable */
     if (opts && opts->dry_run) {
-        output_printf(out, OUTPUT_NORMAL, "%sDRY RUN MODE%s - No changes will be committed\n\n",
-                     output_color_code(out, OUTPUT_COLOR_BOLD),
-                     output_color_code(out, OUTPUT_COLOR_RESET));
+        output_styled(out, OUTPUT_NORMAL, "{bold}DRY RUN MODE{reset} - No changes will be committed\n\n");
     }
 
     /* Show filter context if any filters are active */
@@ -1650,7 +1642,7 @@ static error_t *update_display_summary(
                     continue;
                 }
 
-                output_list_add_multi(
+                output_list_add(
                     list, tags, tag_count, color, item->filesystem_path, base_metadata
                 );
             }
@@ -1678,7 +1670,7 @@ static error_t *update_display_summary(
 
                     if (workspace_item_extract_display_info(item, tags, &tag_count, &color,
                                                             metadata, sizeof(metadata))) {
-                        output_list_add_multi(
+                        output_list_add(
                             list, tags, tag_count, color, item->filesystem_path, metadata
                         );
                     }
@@ -1708,7 +1700,7 @@ static error_t *update_display_summary(
 
                     if (workspace_item_extract_display_info(item, tags, &tag_count, &color,
                                                             metadata, sizeof(metadata))) {
-                        output_list_add_multi(
+                        output_list_add(
                             list, tags, tag_count, color, item->filesystem_path, metadata
                         );
                     }
@@ -1751,7 +1743,7 @@ static error_t *update_display_summary(
                     char metadata[256];
                     snprintf(metadata, sizeof(metadata), "directory %s", base_metadata);
 
-                    output_list_add_multi(
+                    output_list_add(
                         list, tags, tag_count, color, path_with_slash, metadata
                     );
                 }
@@ -1787,7 +1779,7 @@ static error_t *update_display_summary(
 
                 /* Single tag for policy violation */
                 const char *tags[] = {"plaintext"};
-                output_list_add_multi(
+                output_list_add(
                     list, tags, 1, OUTPUT_COLOR_RED, item->filesystem_path, metadata
                 );
             }
@@ -1875,12 +1867,7 @@ static error_t *update_confirm_operation(
 
     /* Interactive confirmation */
     if (opts->interactive) {
-        printf("Update these items? [y/N] ");
-        fflush(stdout);
-
-        char response[10];
-        if (!fgets(response, sizeof(response), stdin) ||
-            (response[0] != 'y' && response[0] != 'Y')) {
+        if (!output_confirm(out, "Update these items?", false)) {
             output_info(out, "Cancelled");
             *result = CONFIRM_CANCELLED;
             return NULL;
@@ -1891,16 +1878,11 @@ static error_t *update_confirm_operation(
     if (new_count > 0 && config && config->confirm_new_files &&
         !opts->include_new && !opts->only_new && config->auto_detect_new_files) {
 
-        printf("Found %zu new file%s. Add %s to profiles? [y/N] ",
-               new_count, new_count == 1 ? "" : "s", new_count == 1 ? "it" : "them");
-        fflush(stdout);
-
-        char response[10];
-        if (!fgets(response, sizeof(response), stdin) || (response[0] != 'y' && response[0] != 'Y')) {
-            /* User declined - would need to filter out new files */
-            /* For now, just proceed without them - filtering would require
-             * rebuilding the array which is complex. Better to handle this
-             * in the calling code. */
+        char confirm_msg[128];
+        snprintf(confirm_msg, sizeof(confirm_msg),
+                 "Found %zu new file%s. Add %s to profiles?",
+                 new_count, new_count == 1 ? "" : "s", new_count == 1 ? "it" : "them");
+        if (!output_confirm(out, confirm_msg, false)) {
             *result = CONFIRM_SKIP_NEW_FILES;
             return NULL;
         }
@@ -2036,7 +2018,7 @@ error_t *cmd_update(
                 if (err) {
                     /* Hook failed - abort operation */
                     if (hook_result && hook_result->output && hook_result->output[0]) {
-                        output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
+                        output_print(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
                     }
                     hook_result_free(hook_result);
                     err = error_wrap(err, "Pre-update hook failed");
@@ -2313,7 +2295,7 @@ error_t *cmd_update(
             /* Hook failed - warn but don't abort (files already updated) */
             output_warning(out, "Post-update hook failed: %s", error_message(hook_err));
             if (hook_result && hook_result->output && hook_result->output[0]) {
-                output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
+                output_print(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
             }
             error_free(hook_err);
         }

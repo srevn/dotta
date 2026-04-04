@@ -83,14 +83,11 @@ static error_t *print_blob_content(
         return error_wrap(err, "Failed to get file content");
     }
 
-    const char *dim = output_color_code(out, OUTPUT_COLOR_DIM);
-    const char *reset = output_color_code(out, OUTPUT_COLOR_RESET);
-
     /* Symlinks: content is the target path */
     if (filemode == GIT_FILEMODE_LINK) {
         if (!raw) {
-            output_printf(out, OUTPUT_NORMAL, "%s# Type:%s    symlink\n", dim, reset);
-            output_printf(out, OUTPUT_NORMAL, "%s# Target:%s  %.*s\n", dim, reset,
+            output_styled(out, OUTPUT_NORMAL, "{dim}# Type:{reset}    symlink\n");
+            output_styled(out, OUTPUT_NORMAL, "{dim}# Target:{reset}  %.*s\n",
                     (int)buffer_size(content), (const char *)buffer_data(content));
         } else {
             fwrite(buffer_data(content), 1, buffer_size(content), stdout);
@@ -110,12 +107,12 @@ static error_t *print_blob_content(
             char size_buf[32];
             output_format_size(buffer_size(content), size_buf, sizeof(size_buf));
 
-            output_printf(out, OUTPUT_NORMAL, "%s# Type:%s    binary file", dim, reset);
+            output_styled(out, OUTPUT_NORMAL, "{dim}# Type:{reset}    binary file");
             if (encrypted) {
-                output_printf(out, OUTPUT_NORMAL, " (encrypted)");
+                output_print(out, OUTPUT_NORMAL, " (encrypted)");
             }
             output_newline(out);
-            output_printf(out, OUTPUT_NORMAL, "%s# Size:%s    %s\n", dim, reset, size_buf);
+            output_styled(out, OUTPUT_NORMAL, "{dim}# Size:{reset}    %s\n", size_buf);
         }
         /* Don't dump binary content to terminal */
         buffer_free(content);
@@ -124,10 +121,10 @@ static error_t *print_blob_content(
 
     if (!raw) {
         /* File type */
-        output_printf(out, OUTPUT_NORMAL, "%s# Type:%s    %s", dim, reset,
+        output_styled(out, OUTPUT_NORMAL, "{dim}# Type:{reset}    %s",
                 filemode_type_str(filemode));
         if (encrypted) {
-            output_printf(out, OUTPUT_NORMAL, " (encrypted)");
+            output_print(out, OUTPUT_NORMAL, " (encrypted)");
         }
         output_newline(out);
 
@@ -139,20 +136,20 @@ static error_t *print_blob_content(
             item = NULL;
         }
         if (item) {
-            output_printf(out, OUTPUT_NORMAL, "%s# Mode:%s    %04o\n",
-                    dim, reset, (unsigned)item->mode);
+            output_styled(out, OUTPUT_NORMAL, "{dim}# Mode:{reset}    %04o\n",
+                    (unsigned)item->mode);
             if (item->owner) {
-                output_printf(out, OUTPUT_NORMAL, "%s# Owner:%s   %s:%s\n",
-                        dim, reset, item->owner, item->group ? item->group : "");
+                output_styled(out, OUTPUT_NORMAL, "{dim}# Owner:{reset}   %s:%s\n",
+                        item->owner, item->group ? item->group : "");
             }
         }
 
         /* Size */
         char size_buf[32];
         output_format_size(buffer_size(content), size_buf, sizeof(size_buf));
-        output_printf(out, OUTPUT_NORMAL, "%s# Size:%s    %s\n", dim, reset, size_buf);
+        output_styled(out, OUTPUT_NORMAL, "{dim}# Size:{reset}    %s\n", size_buf);
 
-        output_printf(out, OUTPUT_NORMAL, "%s---%s\n", dim, reset);
+        output_styled(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
     }
 
     /* Write content to stdout */
@@ -231,10 +228,6 @@ static error_t *show_file(
 
         /* Print commit context if not raw */
         if (!raw && commit) {
-            const char *dim = output_color_code(out, OUTPUT_COLOR_DIM);
-            const char *yellow = output_color_code(out, OUTPUT_COLOR_YELLOW);
-            const char *reset = output_color_code(out, OUTPUT_COLOR_RESET);
-
             char oid_str[8];
             git_oid_tostr(oid_str, sizeof(oid_str), &commit_oid);
 
@@ -243,23 +236,23 @@ static error_t *show_file(
             char time_str[64];
             format_relative_time(commit_time, time_str, sizeof(time_str));
 
-            output_printf(out, OUTPUT_NORMAL, "%s# Commit:%s  %s%s%s\n",
-                    dim, reset, yellow, oid_str, reset);
-            output_printf(out, OUTPUT_NORMAL, "%s# Date:%s    %s\n",
-                    dim, reset, time_str);
-            output_printf(out, OUTPUT_NORMAL, "%s# Author:%s  %s <%s>\n",
-                    dim, reset, author->name, author->email);
+            output_styled(out, OUTPUT_NORMAL, "{dim}# Commit:{reset}  {yellow}%s{reset}\n",
+                    oid_str);
+            output_styled(out, OUTPUT_NORMAL, "{dim}# Date:{reset}    %s\n",
+                    time_str);
+            output_styled(out, OUTPUT_NORMAL, "{dim}# Author:{reset}  %s <%s>\n",
+                    author->name, author->email);
 
             /* Show first line of commit message */
             const char *msg = git_commit_message(commit);
             if (msg) {
                 const char *newline = strchr(msg, '\n');
                 if (newline) {
-                    output_printf(out, OUTPUT_NORMAL, "%s# Message:%s %.*s\n",
-                            dim, reset, (int)(newline - msg), msg);
+                    output_styled(out, OUTPUT_NORMAL, "{dim}# Message:{reset} %.*s\n",
+                            (int)(newline - msg), msg);
                 } else {
-                    output_printf(out, OUTPUT_NORMAL, "%s# Message:%s %s\n",
-                            dim, reset, msg);
+                    output_styled(out, OUTPUT_NORMAL, "{dim}# Message:{reset} %s\n",
+                            msg);
                 }
             }
         }
@@ -333,50 +326,38 @@ static int print_diff_line_cb(
     (void)delta;
     (void)hunk;
 
-    const char *color = NULL;
+    output_color_t line_color = OUTPUT_COLOR_RESET;
 
-    if (output_colors_enabled(out)) {
-        switch (line->origin) {
-            case GIT_DIFF_LINE_ADDITION:
-                color = output_color_code(out, OUTPUT_COLOR_GREEN);
-                break;
-            case GIT_DIFF_LINE_DELETION:
-                color = output_color_code(out, OUTPUT_COLOR_RED);
-                break;
-            case GIT_DIFF_LINE_FILE_HDR:
-            case GIT_DIFF_LINE_HUNK_HDR:
-                color = output_color_code(out, OUTPUT_COLOR_CYAN);
-                break;
-            default:
-                break;
-        }
+    switch (line->origin) {
+        case GIT_DIFF_LINE_ADDITION:
+            line_color = OUTPUT_COLOR_GREEN;
+            break;
+        case GIT_DIFF_LINE_DELETION:
+            line_color = OUTPUT_COLOR_RED;
+            break;
+        case GIT_DIFF_LINE_FILE_HDR:
+        case GIT_DIFF_LINE_HUNK_HDR:
+            line_color = OUTPUT_COLOR_CYAN;
+            break;
+        default:
+            break;
     }
 
     /* Print line origin character for change lines */
     if (line->origin == GIT_DIFF_LINE_ADDITION ||
         line->origin == GIT_DIFF_LINE_DELETION ||
         line->origin == GIT_DIFF_LINE_CONTEXT) {
-        if (color) {
-            output_printf(out, OUTPUT_NORMAL, "%s%c%.*s%s",
-                    color, line->origin,
-                    (int)line->content_len, line->content,
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "%c%.*s",
-                    line->origin,
-                    (int)line->content_len, line->content);
-        }
+        output_colored(out, OUTPUT_NORMAL, line_color, "%c%.*s",
+                       line->origin, (int)line->content_len, line->content);
     } else {
         /* File/hunk headers - print as-is */
-        if (color) {
-            output_printf(out, OUTPUT_NORMAL, "%s%.*s%s",
-                    color,
-                    (int)line->content_len, line->content,
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "%.*s",
-                    (int)line->content_len, line->content);
-        }
+        output_colored(out, OUTPUT_NORMAL, line_color, "%.*s",
+                       (int)line->content_len, line->content);
+    }
+
+    /* Add newline if not present */
+    if (line->content_len == 0 || line->content[line->content_len - 1] != '\n') {
+        output_print(out, OUTPUT_NORMAL, "\n");
     }
 
     return 0;
@@ -453,32 +434,14 @@ static error_t *show_commit(
         char relative_buf[64];
         format_relative_time(commit_time, relative_buf, sizeof(relative_buf));
 
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "%scommit %s%s %s(%s)%s\n",
-                    output_color_code(out, OUTPUT_COLOR_YELLOW),
-                    oid_str,
-                    output_color_code(out, OUTPUT_COLOR_RESET),
-                    output_color_code(out, OUTPUT_COLOR_CYAN),
-                    profile_name,
-                    output_color_code(out, OUTPUT_COLOR_RESET));
+        output_styled(out, OUTPUT_NORMAL, "{yellow}commit %s{reset} {cyan}(%s){reset}\n",
+                oid_str, profile_name);
 
-            output_printf(out, OUTPUT_NORMAL, "%sAuthor:%s %s <%s>\n",
-                    output_color_code(out, OUTPUT_COLOR_BOLD),
-                    output_color_code(out, OUTPUT_COLOR_RESET),
-                    author->name, author->email);
+        output_styled(out, OUTPUT_NORMAL, "{bold}Author:{reset} %s <%s>\n",
+                author->name, author->email);
 
-            output_printf(out, OUTPUT_NORMAL, "%sDate:%s   %s (%s)\n",
-                    output_color_code(out, OUTPUT_COLOR_BOLD),
-                    output_color_code(out, OUTPUT_COLOR_RESET),
-                    time_buf, relative_buf);
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "commit %s (%s)\n",
-                    oid_str, profile_name);
-            output_printf(out, OUTPUT_NORMAL, "Author: %s <%s>\n",
-                    author->name, author->email);
-            output_printf(out, OUTPUT_NORMAL, "Date:   %s (%s)\n",
-                    time_buf, relative_buf);
-        }
+        output_styled(out, OUTPUT_NORMAL, "{bold}Date:{reset}   %s (%s)\n",
+                time_buf, relative_buf);
 
         output_newline(out);
 
@@ -489,11 +452,11 @@ static error_t *show_commit(
             while (line && *line) {
                 const char *next = strchr(line, '\n');
                 if (next) {
-                    output_printf(out, OUTPUT_NORMAL, "    %.*s\n",
+                    output_print(out, OUTPUT_NORMAL, "    %.*s\n",
                             (int)(next - line), line);
                     line = next + 1;
                 } else {
-                    output_printf(out, OUTPUT_NORMAL, "    %s\n", line);
+                    output_print(out, OUTPUT_NORMAL, "    %s\n", line);
                     break;
                 }
             }
@@ -511,35 +474,18 @@ static error_t *show_commit(
         size_t insertions = git_diff_stats_insertions(stats);
         size_t deletions = git_diff_stats_deletions(stats);
 
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, " %zu file%s changed",
-                    files_changed, files_changed == 1 ? "" : "s");
-            if (insertions > 0) {
-                output_printf(out, OUTPUT_NORMAL, ", %s%zu insertion%s(+)%s",
-                        output_color_code(out, OUTPUT_COLOR_GREEN),
-                        insertions, insertions == 1 ? "" : "s",
-                        output_color_code(out, OUTPUT_COLOR_RESET));
-            }
-            if (deletions > 0) {
-                output_printf(out, OUTPUT_NORMAL, ", %s%zu deletion%s(-)%s",
-                        output_color_code(out, OUTPUT_COLOR_RED),
-                        deletions, deletions == 1 ? "" : "s",
-                        output_color_code(out, OUTPUT_COLOR_RESET));
-            }
-        } else {
-            output_printf(out, OUTPUT_NORMAL, " %zu file%s changed",
-                    files_changed, files_changed == 1 ? "" : "s");
-            if (insertions > 0) {
-                output_printf(out, OUTPUT_NORMAL, ", %zu insertion%s(+)",
-                        insertions, insertions == 1 ? "" : "s");
-            }
-            if (deletions > 0) {
-                output_printf(out, OUTPUT_NORMAL, ", %zu deletion%s(-)",
-                        deletions, deletions == 1 ? "" : "s");
-            }
+        output_print(out, OUTPUT_NORMAL, " %zu file%s changed",
+                files_changed, files_changed == 1 ? "" : "s");
+        if (insertions > 0) {
+            output_styled(out, OUTPUT_NORMAL, ", {green}%zu insertion%s(+){reset}",
+                    insertions, insertions == 1 ? "" : "s");
+        }
+        if (deletions > 0) {
+            output_styled(out, OUTPUT_NORMAL, ", {red}%zu deletion%s(-){reset}",
+                    deletions, deletions == 1 ? "" : "s");
         }
 
-        output_printf(out, OUTPUT_NORMAL, "\n\n");
+        output_print(out, OUTPUT_NORMAL, "\n\n");
     }
 
     /* Print the diff with color */
@@ -757,10 +703,8 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
 
     /* Show the file */
     if (!opts->raw) {
-        const char *dim = output_color_code(out, OUTPUT_COLOR_DIM);
-        const char *reset = output_color_code(out, OUTPUT_COLOR_RESET);
-        output_printf(out, OUTPUT_NORMAL, "%s# Profile:%s %s\n", dim, reset, found_profile);
-        output_printf(out, OUTPUT_NORMAL, "%s# Path:%s    %s\n", dim, reset, search_path);
+        output_styled(out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n", found_profile);
+        output_styled(out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n", search_path);
     }
     err = show_file(repo, found_profile, search_path, NULL, opts->raw, config, out);
 

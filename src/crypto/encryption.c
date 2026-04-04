@@ -433,7 +433,8 @@ error_t *encryption_derive_profile_key(
     );
 
     if (result != 0) {
-        return ERROR(ERR_CRYPTO, "Failed to derive profile key for: %s", profile_name);
+        return ERROR(ERR_CRYPTO,
+            "Failed to derive profile key for: %s", profile_name);
     }
 
     return NULL;
@@ -462,10 +463,11 @@ error_t *encryption_encrypt(
 
     /* Calculate output size with overflow detection */
     if (plaintext_len > SIZE_MAX - ENCRYPTION_OVERHEAD) {
-        return ERROR(ERR_INVALID_ARG, "Plaintext too large (size_t overflow): %zu bytes",
-                     plaintext_len);
+        return ERROR(ERR_INVALID_ARG,
+            "Plaintext too large (size_t overflow): %zu bytes", plaintext_len);
     }
-    size_t total_len = ENCRYPTION_HEADER_SIZE + ENCRYPTION_SIV_SIZE + plaintext_len;
+    size_t total_len =
+        ENCRYPTION_HEADER_SIZE + ENCRYPTION_SIV_SIZE + plaintext_len;
 
     /* Step 1: Derive MAC and CTR subkeys from profile key */
     err = derive_siv_subkeys(profile_key, mac_key, ctr_key);
@@ -587,8 +589,9 @@ error_t *encryption_decrypt(
 
     /* Step 1: Validate minimum size */
     if (ciphertext_len < ENCRYPTION_OVERHEAD) {
-        return ERROR(ERR_CRYPTO, "Invalid ciphertext: too small (expected >= %d, got %zu)",
-                     ENCRYPTION_OVERHEAD, ciphertext_len);
+        return ERROR(ERR_CRYPTO,
+            "Invalid ciphertext: too small (expected >= %d, got %zu)",
+            ENCRYPTION_OVERHEAD, ciphertext_len);
     }
 
     /* Step 2: Verify magic header and version
@@ -597,19 +600,24 @@ error_t *encryption_decrypt(
      * A version mismatch should report the actual version found, not just
      * "invalid magic header". */
     if (memcmp(ciphertext, MAGIC_HEADER, ENCRYPTION_MAGIC_BYTES) != 0) {
-        return ERROR(ERR_CRYPTO, "Invalid magic header (not a dotta encrypted file)");
+        return ERROR(ERR_CRYPTO,
+            "Invalid magic header (not a dotta encrypted file)");
     }
 
     /* Check version */
     if (ciphertext[5] != ENCRYPTION_VERSION) {
-        return ERROR(ERR_CRYPTO, "Unsupported encryption version: %d (expected %d)",
-                     ciphertext[5], ENCRYPTION_VERSION);
+        return ERROR(ERR_CRYPTO,
+            "Unsupported encryption version: %d (expected %d)",
+            ciphertext[5], ENCRYPTION_VERSION);
     }
 
     /* Step 3: Extract SIV and ciphertext body */
-    const unsigned char *siv_received = ciphertext + ENCRYPTION_HEADER_SIZE;
-    const unsigned char *ciphertext_body = ciphertext + ENCRYPTION_HEADER_SIZE + ENCRYPTION_SIV_SIZE;
-    size_t plaintext_len = ciphertext_len - ENCRYPTION_OVERHEAD;
+    const unsigned char *siv_received =
+        ciphertext + ENCRYPTION_HEADER_SIZE;
+    const unsigned char *ciphertext_body =
+        ciphertext + ENCRYPTION_HEADER_SIZE + ENCRYPTION_SIV_SIZE;
+    size_t plaintext_len =
+        ciphertext_len - ENCRYPTION_OVERHEAD;
 
     /* Step 4: Derive MAC and CTR subkeys from profile key */
     err = derive_siv_subkeys(profile_key, mac_key, ctr_key);
@@ -618,7 +626,9 @@ error_t *encryption_decrypt(
     }
 
     /* Step 5: Re-compute SIV over storage_path || ciphertext */
-    err = compute_siv(mac_key, storage_path, ciphertext_body, plaintext_len, siv_computed);
+    err = compute_siv(
+        mac_key, storage_path, ciphertext_body, plaintext_len, siv_computed
+    );
     if (err) {
         goto cleanup;
     }
@@ -626,7 +636,8 @@ error_t *encryption_decrypt(
     /* Step 6: Verify SIV using constant-time comparison */
     if (!hydro_equal(siv_computed, siv_received, ENCRYPTION_SIV_SIZE)) {
         err = ERROR(ERR_CRYPTO,
-                   "Authentication failed - wrong passphrase, corrupted file, or incorrect path");
+            "Authentication failed "
+            "- wrong passphrase, corrupted file, or incorrect path");
         goto cleanup;
     }
 

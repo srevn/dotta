@@ -12,26 +12,6 @@
 #include "utils/output.h"
 
 /**
- * Format bytes in human-readable format
- */
-static void format_bytes(size_t bytes, char *buffer, size_t buffer_size) {
-    const char *units[] = { "B", "KiB", "MiB", "GiB", "TiB" };
-    size_t unit_index = 0;
-    double size = (double)bytes;
-
-    while (size >= 1024.0 && unit_index < 4) {
-        size /= 1024.0;
-        unit_index++;
-    }
-
-    if (unit_index == 0) {
-        snprintf(buffer, buffer_size, "%zu %s", bytes, units[unit_index]);
-    } else {
-        snprintf(buffer, buffer_size, "%.1f %s", size, units[unit_index]);
-    }
-}
-
-/**
  * Finalize the current progress line
  *
  * In ephemeral mode on a TTY, clears the entire line (progress vanishes).
@@ -39,17 +19,14 @@ static void format_bytes(size_t bytes, char *buffer, size_t buffer_size) {
  * Non-TTY ephemeral falls back to newline (ANSI clear requires terminal).
  */
 static void finalize_progress(transfer_context_t *ctx, const char *completion) {
-    if (ctx->ephemeral && ctx->output->color_enabled) {
-        /* TTY: clear the line — progress vanishes */
-        fprintf(ctx->output->stream, "\r\033[2K");
-    } else if (ctx->ephemeral) {
-        /* Non-TTY: can't use ANSI clear, just finish the line */
-        fprintf(ctx->output->stream, "\n");
+    if (ctx->ephemeral) {
+        /* Ephemeral: clear the line — progress vanishes */
+        output_clear_line(ctx->output);
     } else {
         /* Persistent: show completion text */
-        fprintf(ctx->output->stream, "%s", completion);
+        fputs(completion, ctx->output->stream);
+        fflush(ctx->output->stream);
     }
-    fflush(ctx->output->stream);
     ctx->progress_active = false;
 }
 
@@ -145,6 +122,9 @@ int transfer_progress_callback(
         return 0;
     }
 
+    /* Inline progress uses \r — only works on TTY */
+    if (!output_is_tty(ctx->output)) return 0;
+
     /* Update statistics */
     ctx->total_objects = stats->total_objects;
     ctx->indexed_objects = stats->indexed_objects;
@@ -160,7 +140,7 @@ int transfer_progress_callback(
         /* Show receiving progress with percentage and bytes */
         int percent = (received * 100) / total;
         char bytes_str[32];
-        format_bytes(stats->received_bytes, bytes_str, sizeof(bytes_str));
+        output_format_size(stats->received_bytes, bytes_str, sizeof(bytes_str));
 
         /* Display: "Receiving objects: XX% (current/total), X.X MiB" */
         fprintf(ctx->output->stream, "\rReceiving objects: %3d%% (%u/%u), %s",
@@ -175,7 +155,7 @@ int transfer_progress_callback(
     } else if (received > 0) {
         /* Don't know total yet, just show count */
         char bytes_str[32];
-        format_bytes(stats->received_bytes, bytes_str, sizeof(bytes_str));
+        output_format_size(stats->received_bytes, bytes_str, sizeof(bytes_str));
 
         fprintf(ctx->output->stream, "\rReceiving objects: %u, %s",
                 received, bytes_str);
@@ -205,6 +185,9 @@ int transfer_push_progress_callback(
     if (!ctx->output || ctx->output->verbosity < OUTPUT_NORMAL) {
         return 0;
     }
+
+    /* Inline progress uses \r — only works on TTY */
+    if (!output_is_tty(ctx->output)) return 0;
 
     /* Update statistics */
     ctx->total_objects = total;

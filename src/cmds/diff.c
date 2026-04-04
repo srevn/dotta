@@ -124,57 +124,6 @@ static const char *get_status_message_from_item(
 }
 
 /**
- * Print diff text with line-by-line colorization
- *
- * Applies color to unified diff output:
- *   Green  (+): additions
- *   Red    (-): deletions
- *   Cyan  (@@): hunk headers
- *
- * Falls back to plain output when colors are disabled.
- *
- * @param out      Output context (must not be NULL)
- * @param diff_text Diff text to display (can be NULL, no-op)
- */
-static void print_colorized_diff_text(output_ctx_t *out, const char *diff_text) {
-    if (!diff_text) {
-        return;
-    }
-
-    if (!output_colors_enabled(out)) {
-        output_printf(out, OUTPUT_NORMAL, "%s\n", diff_text);
-        return;
-    }
-
-    const char *line = diff_text;
-    const char *next_line;
-
-    while (line && *line) {
-        next_line = strchr(line, '\n');
-        size_t line_len = next_line ? (size_t)(next_line - line) : strlen(line);
-
-        const char *color = NULL;
-        if (line_len > 0 && line[0] == '+' && (line_len == 1 || line[1] != '+')) {
-            color = output_color_code(out, OUTPUT_COLOR_GREEN);
-        } else if (line_len > 0 && line[0] == '-' && (line_len == 1 || line[1] != '-')) {
-            color = output_color_code(out, OUTPUT_COLOR_RED);
-        } else if (line_len > 1 && line[0] == '@' && line[1] == '@') {
-            color = output_color_code(out, OUTPUT_COLOR_CYAN);
-        }
-
-        if (color) {
-            output_printf(out, OUTPUT_NORMAL, "%s%.*s%s\n",
-                    color, (int)line_len, line,
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "%.*s\n", (int)line_len, line);
-        }
-
-        line = next_line ? next_line + 1 : NULL;
-    }
-}
-
-/**
  * Show diff for a single file using workspace data
  *
  * Simplified version of show_file_diff() that uses pre-computed divergence
@@ -206,27 +155,17 @@ static error_t *show_file_diff_from_workspace(
 
     /* Name-only output */
     if (opts->name_only) {
-        output_printf(out, OUTPUT_NORMAL, "%s\n", item->filesystem_path);
+        output_print(out, OUTPUT_NORMAL, "%s\n", item->filesystem_path);
         return NULL;
     }
 
     /* Show file header with colors */
-    if (output_colors_enabled(out)) {
-        output_printf(out, OUTPUT_NORMAL, "%sdiff --dotta a/%s b/%s%s\n",
-                output_color_code(out, OUTPUT_COLOR_BOLD),
-                entry->storage_path, entry->storage_path,
-                output_color_code(out, OUTPUT_COLOR_RESET));
+    output_styled(out, OUTPUT_NORMAL, "{bold}diff --dotta a/%s b/%s{reset}\n",
+            entry->storage_path, entry->storage_path);
 
-        /* Show profile */
-        output_printf(out, OUTPUT_NORMAL, "profile: %s%s%s\n",
-                output_color_code(out, OUTPUT_COLOR_CYAN),
-                entry->source_profile->name,
-                output_color_code(out, OUTPUT_COLOR_RESET));
-    } else {
-        output_printf(out, OUTPUT_NORMAL, "diff --dotta a/%s b/%s\n",
-                entry->storage_path, entry->storage_path);
-        output_printf(out, OUTPUT_NORMAL, "profile: %s\n", entry->source_profile->name);
-    }
+    /* Show profile */
+    output_styled(out, OUTPUT_NORMAL, "profile: {cyan}%s{reset}\n",
+            entry->source_profile->name);
 
     /* Get status message from workspace item (no re-analysis needed) */
     const char *status_msg = get_status_message_from_item(item, direction);
@@ -242,14 +181,8 @@ static error_t *show_file_diff_from_workspace(
     }
 
     /* Show status */
-    if (output_colors_enabled(out)) {
-        output_printf(out, OUTPUT_NORMAL, "status: %s%s%s\n",
-                output_color_code(out, status_color),
-                status_msg,
-                output_color_code(out, OUTPUT_COLOR_RESET));
-    } else {
-        output_printf(out, OUTPUT_NORMAL, "status: %s\n", status_msg);
-    }
+    output_print(out, OUTPUT_NORMAL, "status: ");
+    output_colored(out, OUTPUT_NORMAL, status_color, "%s\n", status_msg);
 
     /* For missing files or type changes, no content diff to show */
     if (item->state == WORKSPACE_STATE_DELETED || item->state == WORKSPACE_STATE_UNDEPLOYED ||
@@ -301,7 +234,7 @@ static error_t *show_file_diff_from_workspace(
     }
 
     if (diff) {
-        print_colorized_diff_text(out, diff->diff_text);
+        output_print_diff(out, diff->diff_text);
     }
 
     compare_free_diff(diff);
@@ -517,39 +450,20 @@ static void print_commit_header(
     format_relative_time(commit_time, relative_buf, sizeof(relative_buf));
 
     /* Print header with colors */
-    if (output_colors_enabled(out)) {
-        output_printf(out, OUTPUT_NORMAL, "%scommit %s%s",
-                output_color_code(out, OUTPUT_COLOR_YELLOW),
-                oid_str,
-                output_color_code(out, OUTPUT_COLOR_RESET));
+    output_styled(out, OUTPUT_NORMAL, "{yellow}commit %s{reset}",
+            oid_str);
 
-        if (profile_name) {
-            output_printf(out, OUTPUT_NORMAL, " %s(%s)%s",
-                    output_color_code(out, OUTPUT_COLOR_CYAN),
-                    profile_name,
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-        }
-        output_newline(out);
-
-        output_printf(out, OUTPUT_NORMAL, "%sAuthor:%s %s <%s>\n",
-                output_color_code(out, OUTPUT_COLOR_BOLD),
-                output_color_code(out, OUTPUT_COLOR_RESET),
-                author->name, author->email);
-
-        output_printf(out, OUTPUT_NORMAL, "%sDate:%s   %s (%s)\n",
-                output_color_code(out, OUTPUT_COLOR_BOLD),
-                output_color_code(out, OUTPUT_COLOR_RESET),
-                time_buf, relative_buf);
-    } else {
-        output_printf(out, OUTPUT_NORMAL, "commit %s", oid_str);
-        if (profile_name) {
-            output_printf(out, OUTPUT_NORMAL, " (%s)", profile_name);
-        }
-        output_newline(out);
-
-        output_printf(out, OUTPUT_NORMAL, "Author: %s <%s>\n", author->name, author->email);
-        output_printf(out, OUTPUT_NORMAL, "Date:   %s (%s)\n", time_buf, relative_buf);
+    if (profile_name) {
+        output_styled(out, OUTPUT_NORMAL, " {cyan}(%s){reset}",
+                profile_name);
     }
+    output_newline(out);
+
+    output_styled(out, OUTPUT_NORMAL, "{bold}Author:{reset} %s <%s>\n",
+            author->name, author->email);
+
+    output_styled(out, OUTPUT_NORMAL, "{bold}Date:{reset}   %s (%s)\n",
+            time_buf, relative_buf);
 
     output_newline(out);
 
@@ -557,12 +471,12 @@ static void print_commit_header(
     const char *message = git_commit_message(commit);
     char *msg_copy = strdup(message);
     if (!msg_copy) {
-        output_printf(out, OUTPUT_NORMAL, "    (message unavailable)\n");
+        output_print(out, OUTPUT_NORMAL, "    (message unavailable)\n");
     } else {
         char *saveptr = NULL;
         char *line = strtok_r(msg_copy, "\n", &saveptr);
         while (line) {
-            output_printf(out, OUTPUT_NORMAL, "    %s\n", line);
+            output_print(out, OUTPUT_NORMAL, "    %s\n", line);
             line = strtok_r(NULL, "\n", &saveptr);
         }
         free(msg_copy);
@@ -592,36 +506,17 @@ static error_t *print_diff_stats(
     size_t deletions = git_diff_stats_deletions(stats);
 
     /* Print stats with color */
-    if (output_colors_enabled(out)) {
-        output_printf(out, OUTPUT_NORMAL, " %zu file%s changed",
-                files_changed, files_changed == 1 ? "" : "s");
+    output_print(out, OUTPUT_NORMAL, " %zu file%s changed",
+            files_changed, files_changed == 1 ? "" : "s");
 
-        if (insertions > 0) {
-            output_printf(out, OUTPUT_NORMAL, ", %s%zu insertion%s(+)%s",
-                    output_color_code(out, OUTPUT_COLOR_GREEN),
-                    insertions, insertions == 1 ? "" : "s",
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-        }
+    if (insertions > 0) {
+        output_styled(out, OUTPUT_NORMAL, ", {green}%zu insertion%s(+){reset}",
+                insertions, insertions == 1 ? "" : "s");
+    }
 
-        if (deletions > 0) {
-            output_printf(out, OUTPUT_NORMAL, ", %s%zu deletion%s(-)%s",
-                    output_color_code(out, OUTPUT_COLOR_RED),
-                    deletions, deletions == 1 ? "" : "s",
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-        }
-    } else {
-        output_printf(out, OUTPUT_NORMAL, " %zu file%s changed",
-                files_changed, files_changed == 1 ? "" : "s");
-
-        if (insertions > 0) {
-            output_printf(out, OUTPUT_NORMAL, ", %zu insertion%s(+)",
-                    insertions, insertions == 1 ? "" : "s");
-        }
-
-        if (deletions > 0) {
-            output_printf(out, OUTPUT_NORMAL, ", %zu deletion%s(-)",
-                    deletions, deletions == 1 ? "" : "s");
-        }
+    if (deletions > 0) {
+        output_styled(out, OUTPUT_NORMAL, ", {red}%zu deletion%s(-){reset}",
+                deletions, deletions == 1 ? "" : "s");
     }
 
     output_newline(out);
@@ -643,54 +538,33 @@ static int print_diff_line_cb(
     (void)delta;
     (void)hunk;
 
-    const char *color = NULL;
+    output_color_t line_color = OUTPUT_COLOR_RESET;
 
-    if (output_colors_enabled(out)) {
-        switch (line->origin) {
-            case GIT_DIFF_LINE_ADDITION:
-                color = output_color_code(out, OUTPUT_COLOR_GREEN);
-                break;
-            case GIT_DIFF_LINE_DELETION:
-                color = output_color_code(out, OUTPUT_COLOR_RED);
-                break;
-            case GIT_DIFF_LINE_CONTEXT:
-                color = NULL;
-                break;
-            case GIT_DIFF_LINE_FILE_HDR:
-            case GIT_DIFF_LINE_HUNK_HDR:
-                color = output_color_code(out, OUTPUT_COLOR_CYAN);
-                break;
-            default:
-                color = NULL;
-                break;
-        }
+    switch (line->origin) {
+        case GIT_DIFF_LINE_ADDITION:
+            line_color = OUTPUT_COLOR_GREEN;
+            break;
+        case GIT_DIFF_LINE_DELETION:
+            line_color = OUTPUT_COLOR_RED;
+            break;
+        case GIT_DIFF_LINE_FILE_HDR:
+        case GIT_DIFF_LINE_HUNK_HDR:
+            line_color = OUTPUT_COLOR_CYAN;
+            break;
+        default:
+            break;
     }
 
-    /* Print line origin if it's a change line */
-    if (line->origin == GIT_DIFF_LINE_ADDITION || line->origin == GIT_DIFF_LINE_DELETION ||
+    /* Print line origin character for change lines */
+    if (line->origin == GIT_DIFF_LINE_ADDITION ||
+        line->origin == GIT_DIFF_LINE_DELETION ||
         line->origin == GIT_DIFF_LINE_CONTEXT) {
-        if (color) {
-            output_printf(out, OUTPUT_NORMAL, "%s%c%.*s%s",
-                    color,
-                    line->origin,
-                    (int)line->content_len, line->content,
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "%c%.*s",
-                    line->origin,
-                    (int)line->content_len, line->content);
-        }
+        output_colored(out, OUTPUT_NORMAL, line_color, "%c%.*s",
+                       line->origin, (int)line->content_len, line->content);
     } else {
         /* File/hunk headers - print as-is */
-        if (color) {
-            output_printf(out, OUTPUT_NORMAL, "%s%.*s%s",
-                    color,
-                    (int)line->content_len, line->content,
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "%.*s",
-                    (int)line->content_len, line->content);
-        }
+        output_colored(out, OUTPUT_NORMAL, line_color, "%.*s",
+                       (int)line->content_len, line->content);
     }
 
     /* Add newline if not present */
@@ -773,7 +647,7 @@ static error_t *compare_manifest_to_filesystem(
             bool exists = (lstat(fs_path, &st) == 0);
 
             if (!exists) {
-                output_printf(out, OUTPUT_NORMAL, "%s\n", fs_path);
+                output_print(out, OUTPUT_NORMAL, "%s\n", fs_path);
                 (*diff_count)++;
                 continue;
             }
@@ -797,7 +671,7 @@ static error_t *compare_manifest_to_filesystem(
             }
 
             if (result != CMP_EQUAL) {
-                output_printf(out, OUTPUT_NORMAL, "%s\n", fs_path);
+                output_print(out, OUTPUT_NORMAL, "%s\n", fs_path);
                 (*diff_count)++;
             }
             continue;
@@ -827,20 +701,11 @@ static error_t *compare_manifest_to_filesystem(
         }
 
         /* Show file header */
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "%sdiff --dotta a/%s b/%s%s\n",
-                    output_color_code(out, OUTPUT_COLOR_BOLD),
-                    storage_path, storage_path,
-                    output_color_code(out, OUTPUT_COLOR_RESET));
+        output_styled(out, OUTPUT_NORMAL, "{bold}diff --dotta a/%s b/%s{reset}\n",
+                storage_path, storage_path);
 
-            output_printf(out, OUTPUT_NORMAL, "profile: %s%s%s\n",
-                    output_color_code(out, OUTPUT_COLOR_CYAN),
-                    profile_name,
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "diff --dotta a/%s b/%s\n", storage_path, storage_path);
-            output_printf(out, OUTPUT_NORMAL, "profile: %s\n", profile_name);
-        }
+        output_styled(out, OUTPUT_NORMAL, "profile: {cyan}%s{reset}\n",
+                profile_name);
 
         /* Show status message */
         const char *status_msg = NULL;
@@ -864,14 +729,8 @@ static error_t *compare_manifest_to_filesystem(
                 break;
         }
 
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "status: %s%s%s\n",
-                    output_color_code(out, status_color),
-                    status_msg,
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "status: %s\n", status_msg);
-        }
+        output_print(out, OUTPUT_NORMAL, "status: ");
+        output_colored(out, OUTPUT_NORMAL, status_color, "%s\n", status_msg);
 
         /* For missing files or type changes, no content diff */
         if (result == CMP_MISSING || result == CMP_TYPE_DIFF) {
@@ -889,7 +748,7 @@ static error_t *compare_manifest_to_filesystem(
         }
 
         if (diff) {
-            print_colorized_diff_text(out, diff->diff_text);
+            output_print_diff(out, diff->diff_text);
         }
 
         compare_free_diff(diff);
@@ -1029,14 +888,8 @@ static error_t *diff_commit_to_workspace(
         output_newline(out);
     }
 
-    if (output_colors_enabled(out)) {
-        output_printf(out, OUTPUT_NORMAL, "%sdiff --dotta %s..workspace%s\n\n",
-                output_color_code(out, OUTPUT_COLOR_BOLD),
-                oid_str,
-                output_color_code(out, OUTPUT_COLOR_RESET));
-    } else {
-        output_printf(out, OUTPUT_NORMAL, "diff --dotta %s..workspace\n\n", oid_str);
-    }
+    output_styled(out, OUTPUT_NORMAL, "{bold}diff --dotta %s..workspace{reset}\n\n",
+            oid_str);
 
     print_commit_header(out, commit, &commit_oid, profile_name);
 
@@ -1245,14 +1098,8 @@ static error_t *diff_commits(
     git_oid_tostr(oid1_str, sizeof(oid1_str), &commit1_oid);
     git_oid_tostr(oid2_str, sizeof(oid2_str), &commit2_oid);
 
-    if (output_colors_enabled(out)) {
-        output_printf(out, OUTPUT_NORMAL, "%sdiff --dotta %s..%s%s\n\n",
-                output_color_code(out, OUTPUT_COLOR_BOLD),
-                oid1_str, oid2_str,
-                output_color_code(out, OUTPUT_COLOR_RESET));
-    } else {
-        output_printf(out, OUTPUT_NORMAL, "diff --dotta %s..%s\n\n", oid1_str, oid2_str);
-    }
+    output_styled(out, OUTPUT_NORMAL, "{bold}diff --dotta %s..%s{reset}\n\n",
+            oid1_str, oid2_str);
 
     /* Print second commit header (the "new" one) */
     print_commit_header(out, commit2, &commit2_oid, profile2_name);

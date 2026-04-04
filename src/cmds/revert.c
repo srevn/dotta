@@ -41,6 +41,7 @@
  * @param repo Repository (must not be NULL)
  * @param storage_path Storage path (must not be NULL)
  * @param profile_name Profile name (must not be NULL)
+ * @param out Output context (must not be NULL)
  * @param out_profile Output profile name (must not be NULL, caller must free)
  * @param out_resolved_path Output storage path (must not be NULL, caller must free)
  * @return Error or NULL on success
@@ -49,18 +50,21 @@ static error_t *discover_file_in_history(
     git_repository *repo,
     const char *storage_path,
     const char *profile_name,
+    const output_ctx_t *out,
     char **out_profile,
     char **out_resolved_path
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile_name);
+    CHECK_NULL(out);
     CHECK_NULL(out_profile);
     CHECK_NULL(out_resolved_path);
 
     /* Inform user about expensive operation */
-    fprintf(stderr, "File not found in current HEAD, searching history of '%s' profile...\n",
-            profile_name);
+    output_info(out,
+        "File not found in current HEAD, searching history of '%s' profile...\n",
+        profile_name);
 
     /* Use stats module to get file history */
     file_history_t *history = NULL;
@@ -82,7 +86,7 @@ static error_t *discover_file_in_history(
     char short_sha[8];
     git_oid_tostr(short_sha, sizeof(short_sha), &history->commits[0].oid);
 
-    fprintf(stderr, "✓ Found in history (last modified: commit %s)\n", short_sha);
+    output_success(out, "Found in history (last modified: commit %s)", short_sha);
 
     stats_free_file_history(history);
 
@@ -116,12 +120,14 @@ static error_t *discover_file(
     const char *file_path,
     const char *profile_hint,
     bool strict_mode,
+    const output_ctx_t *out,
     bool *found_in_history,
     char **out_profile,
     char **out_resolved_path
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(file_path);
+    CHECK_NULL(out);
     CHECK_NULL(found_in_history);
     CHECK_NULL(out_profile);
     CHECK_NULL(out_resolved_path);
@@ -171,7 +177,7 @@ static error_t *discover_file(
         if (!exists) {
             /* File not in HEAD - try history search as fallback */
             err = discover_file_in_history(
-                repo, storage_path, profile_hint, out_profile, out_resolved_path
+                repo, storage_path, profile_hint, out, out_profile, out_resolved_path
             );
             free(storage_path);
 
@@ -256,12 +262,15 @@ static error_t *discover_file(
     }
 
     /* Found in multiple profiles - ambiguous */
-    fprintf(stderr, "File '%s' found in multiple profiles:\n", storage_path);
+    output_print(out, OUTPUT_NORMAL,
+        "File '%s' found in multiple profiles:\n", storage_path);
+
     for (size_t i = 0; i < string_array_size(matching_profiles); i++) {
-        fprintf(stderr, "  • %s\n", string_array_get(matching_profiles, i));
+        output_print(out, OUTPUT_NORMAL,
+            "  • %s\n", string_array_get(matching_profiles, i));
     }
-    fprintf(stderr, "\nPlease specify --profile to disambiguate:\n");
-    fprintf(stderr, "  dotta revert --profile <name> %s\n", storage_path);
+    output_hint(out, "Specify --profile to disambiguate:");
+    output_hint_line(out, "  dotta revert --profile <name> %s", storage_path);
 
     hashmap_free(profile_index, string_array_free);
     profile_list_free(profiles);
@@ -367,29 +376,12 @@ static error_t *show_diff_preview(
     git_patch_line_stats(NULL, &additions, &deletions, patch);
 
     /* Show header */
-    if (output_colors_enabled(out)) {
-        output_printf(out, OUTPUT_NORMAL, "\n%sChanges preview%s\n",
-                output_color_code(out, OUTPUT_COLOR_BOLD),
-                output_color_code(out, OUTPUT_COLOR_RESET));
-    } else {
-        output_printf(out, OUTPUT_NORMAL, "\nChanges preview\n");
-    }
+    output_styled(out, OUTPUT_NORMAL, "\n{bold}Changes preview{reset}\n");
 
     /* Show stats */
-    if (output_colors_enabled(out)) {
-        output_printf(out, OUTPUT_NORMAL, "  File: %s%s%s\n",
-                output_color_code(out, OUTPUT_COLOR_CYAN),
-                file_path,
-                output_color_code(out, OUTPUT_COLOR_RESET));
-        output_printf(out, OUTPUT_NORMAL, "Changes: %s+%zu%s / %s-%zu%s\n",
-                output_color_code(out, OUTPUT_COLOR_GREEN), additions,
-                output_color_code(out, OUTPUT_COLOR_RESET),
-                output_color_code(out, OUTPUT_COLOR_RED), deletions,
-                output_color_code(out, OUTPUT_COLOR_RESET));
-    } else {
-        output_printf(out, OUTPUT_NORMAL, "  File: %s\n", file_path);
-        output_printf(out, OUTPUT_NORMAL, "  Changes: +%zu / -%zu\n", additions, deletions);
-    }
+    output_styled(out, OUTPUT_NORMAL, "  File: {cyan}%s{reset}\n", file_path);
+    output_styled(out, OUTPUT_NORMAL, "  Changes: {green}+%zu{reset} / {red}-%zu{reset}\n",
+           additions, deletions);
     output_newline(out);
 
     /* Print patch */
@@ -398,38 +390,7 @@ static error_t *show_diff_preview(
     if (ret < 0) {
         output_warning(out, "Could not format diff output");
     } else if (buf.ptr) {
-        /* Colorize diff output if colors enabled */
-        if (output_colors_enabled(out)) {
-            char *line = buf.ptr;
-            char *next_line;
-
-            while (line && *line) {
-                next_line = strchr(line, '\n');
-                size_t line_len = next_line ? (size_t)(next_line - line) : strlen(line);
-
-                /* Determine color based on first character */
-                const char *color = NULL;
-                if (line[0] == '+' && line_len > 0 && line[1] != '+') {
-                    color = output_color_code(out, OUTPUT_COLOR_GREEN);
-                } else if (line[0] == '-' && line_len > 0 && line[1] != '-') {
-                    color = output_color_code(out, OUTPUT_COLOR_RED);
-                } else if (line[0] == '@' && line[1] == '@') {
-                    color = output_color_code(out, OUTPUT_COLOR_CYAN);
-                }
-
-                if (color) {
-                    output_printf(out, OUTPUT_NORMAL, "%s%.*s%s\n",
-                            color, (int)line_len, line,
-                            output_color_code(out, OUTPUT_COLOR_RESET));
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, "%.*s\n", (int)line_len, line);
-                }
-
-                line = next_line ? next_line + 1 : NULL;
-            }
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "%s", buf.ptr);
-        }
+        output_print_diff(out, buf.ptr);
     }
 
     git_buf_dispose(&buf);
@@ -655,12 +616,14 @@ static error_t *revert_file_in_branch(
     const char *profile_name,
     const char *file_path,
     const git_oid *target_commit_oid,
-    const char *commit_message
+    const char *commit_message,
+    const output_ctx_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile_name);
     CHECK_NULL(file_path);
     CHECK_NULL(target_commit_oid);
+    CHECK_NULL(out);
 
     error_t *err = NULL;
     git_commit *target_commit = NULL;
@@ -701,7 +664,7 @@ static error_t *revert_file_in_branch(
     if (ret < 0) {
         if (ret == GIT_ENOTFOUND) {
             err = ERROR(ERR_NOT_FOUND,
-                       "File '%s' not found at target commit", file_path);
+                "File '%s' not found at target commit", file_path);
         } else {
             err = error_from_git(ret);
         }
@@ -725,9 +688,12 @@ static error_t *revert_file_in_branch(
         /* Symlinks: only restore ownership metadata if present at target commit.
          * No defaults needed — symlinks have no settable mode or encryption. */
         const metadata_item_t *target_meta_item = NULL;
-        error_t *lookup_err = metadata_get_item(target_metadata, file_path, &target_meta_item);
+        error_t *lookup_err = metadata_get_item(
+            target_metadata, file_path, &target_meta_item
+        );
 
-        if (!lookup_err && target_meta_item && target_meta_item->kind == METADATA_ITEM_SYMLINK) {
+        if (!lookup_err && target_meta_item &&
+            target_meta_item->kind == METADATA_ITEM_SYMLINK) {
             err = metadata_item_clone(target_meta_item, &meta_to_restore);
             if (err) {
                 err = error_wrap(err, "Failed to clone symlink metadata item");
@@ -740,9 +706,12 @@ static error_t *revert_file_in_branch(
         }
     } else {
         const metadata_item_t *target_meta_item = NULL;
-        error_t *lookup_err = metadata_get_item(target_metadata, file_path, &target_meta_item);
+        error_t *lookup_err = metadata_get_item(
+            target_metadata, file_path, &target_meta_item
+        );
 
-        if (!lookup_err && target_meta_item && target_meta_item->kind == METADATA_ITEM_FILE) {
+        if (!lookup_err && target_meta_item &&
+            target_meta_item->kind == METADATA_ITEM_FILE) {
             /* Found metadata entry - clone it */
             err = metadata_item_clone(target_meta_item, &meta_to_restore);
             if (err) {
@@ -754,12 +723,15 @@ static error_t *revert_file_in_branch(
             char oid_str[8];
             git_oid_tostr(oid_str, sizeof(oid_str), target_commit_oid);
 
-            fprintf(stderr,
-                    "Warning: No metadata found for '%s' at commit %s\n"
-                    "         Using defaults (mode=%04o, encrypted=false)\n",
-                    file_path, oid_str, (unsigned int)(target_mode & 0777));
+            output_warning(out,
+                "No metadata found for '%s' at commit %s", file_path, oid_str);
+            output_hint_line(out,
+                "Using defaults (mode=%04o, encrypted=false)",
+                (unsigned int)(target_mode & 0777));
 
-            err = metadata_item_create_file(file_path, target_mode & 0777, false, &meta_to_restore);
+            err = metadata_item_create_file(
+                file_path, target_mode & 0777, false, &meta_to_restore
+            );
             if (err) {
                 err = error_wrap(err, "Failed to create default metadata item");
                 goto cleanup;
@@ -779,7 +751,9 @@ static error_t *revert_file_in_branch(
 
     /* Build branch reference name */
     char ref_name[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", profile_name);
+    err = gitops_build_refname(
+        ref_name, sizeof(ref_name), "refs/heads/%s", profile_name
+    );
     if (err) {
         err = error_wrap(err, "Invalid profile name '%s'", profile_name);
         goto cleanup;
@@ -927,8 +901,9 @@ static error_t *revert_file_in_branch(
     }
 
     /* Build commit message */
-    msg = build_revert_commit_message(config, profile_name, file_path,
-                                      target_commit_oid, commit_message);
+    msg = build_revert_commit_message(
+        config, profile_name, file_path, target_commit_oid, commit_message
+    );
     if (!msg) {
         err = ERROR(ERR_MEMORY, "Failed to allocate commit message");
         goto cleanup;
@@ -1025,7 +1000,7 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     bool found_in_history = false;
     err = discover_file(
         repo, opts->file_path, opts->profile, config->strict_mode,
-        &found_in_history, &profile_name, &resolved_path
+        out, &found_in_history, &profile_name, &resolved_path
     );
     if (err) goto cleanup;
 
@@ -1113,20 +1088,14 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
 
         /* Early exit: Check if file is already at target state */
         if (git_oid_equal(current_blob_oid, target_blob_oid)) {
-            output_info(out, "File '%s' is already at target state (no changes)",
-                        opts->file_path);
+            output_info(out,
+                "File '%s' is already at target state (no changes)", opts->file_path);
             goto cleanup;  /* Not an error, just nothing to do */
         }
     }
 
     /* Step 6: Show preview (always, including dry-run) */
-    if (output_colors_enabled(out)) {
-        output_printf(out, OUTPUT_NORMAL, "\n%sRevert preview:%s\n",
-                output_color_code(out, OUTPUT_COLOR_BOLD),
-                output_color_code(out, OUTPUT_COLOR_RESET));
-    } else {
-        output_printf(out, OUTPUT_NORMAL, "\nRevert preview:\n");
-    }
+    output_styled(out, OUTPUT_NORMAL, "\n{bold}Revert preview:{reset}\n");
 
     char oid_str[8];
     git_oid_tostr(oid_str, sizeof(oid_str), &target_oid);
@@ -1141,28 +1110,15 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
         snprintf(time_buf, sizeof(time_buf), "<invalid time>");
     }
 
-    if (output_colors_enabled(out)) {
-        output_printf(out, OUTPUT_NORMAL, "  Profile: %s%s%s\n",
-                output_color_code(out, OUTPUT_COLOR_CYAN), profile_name,
-                output_color_code(out, OUTPUT_COLOR_RESET));
-        output_printf(out, OUTPUT_NORMAL, "  File: %s\n", resolved_path);
-        output_printf(out, OUTPUT_NORMAL, "  Target commit: %s (%s)\n", oid_str, time_buf);
-    } else {
-        output_printf(out, OUTPUT_NORMAL, "  Profile: %s\n", profile_name);
-        output_printf(out, OUTPUT_NORMAL, "  File: %s\n", resolved_path);
-        output_printf(out, OUTPUT_NORMAL, "  Target commit: %s (%s)\n", oid_str, time_buf);
-    }
+    output_styled(out, OUTPUT_NORMAL, "  Profile: {cyan}%s{reset}\n", profile_name);
+    output_print(out, OUTPUT_NORMAL, "  File: %s\n", resolved_path);
+    output_print(out, OUTPUT_NORMAL, "  Target commit: %s (%s)\n", oid_str, time_buf);
 
     if (found_in_history) {
         /* File was deleted - show simple restoration message */
-        output_printf(out, OUTPUT_NORMAL, "\n");
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "%sRestoring deleted file from commit history%s\n",
-                    output_color_code(out, OUTPUT_COLOR_GREEN),
-                    output_color_code(out, OUTPUT_COLOR_RESET));
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "Restoring deleted file from commit history\n");
-        }
+        output_print(out, OUTPUT_NORMAL, "\n");
+        output_styled(out, OUTPUT_NORMAL,
+               "{green}Restoring deleted file from commit history{reset}\n");
     } else {
         /* File exists - show detailed diff preview with decryption support.
          * Load metadata from both current HEAD and target commit separately
@@ -1215,13 +1171,11 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
         goto cleanup;
     }
 
-    /* Step 8: Prompt for confirmation (unless --force) */
-    if (config->confirm_destructive && !opts->force) {
-        if (!output_confirm(out, "Revert file?", false)) {
-            fprintf(stderr, "Aborted.\n");
-            user_aborted = true;
-            goto cleanup;
-        }
+    /* Step 8: Prompt for confirmation (unless --force or config disables) */
+    if (!output_confirm_destructive(out, config, "Revert file?", opts->force)) {
+        output_info(out, "Aborted.");
+        user_aborted = true;
+        goto cleanup;
     }
 
     /* Free current_commit (no longer needed) */
@@ -1243,7 +1197,8 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
         profile_name,
         resolved_path,
         &target_oid,
-        opts->message
+        opts->message,
+        out
     );
     if (err) {
         err = error_wrap(err, "Failed to revert file");
@@ -1273,17 +1228,10 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
 
     if (!profile_enabled) {
         /* Profile not enabled - manifest update not needed */
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "%s✓%s Reverted %s in profile '%s'\n",
-                    output_color_code(out, OUTPUT_COLOR_GREEN),
-                    output_color_code(out, OUTPUT_COLOR_RESET),
-                    resolved_path, profile_name);
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "✓ Reverted %s in profile '%s'\n",
-                          resolved_path, profile_name);
-        }
-        output_info(out, "\nNote: Profile '%s' is not enabled on this machine",
-                    profile_name);
+        output_success(out,
+            "Reverted %s in profile '%s'", resolved_path, profile_name);
+        output_info(out,
+            "\nNote: Profile '%s' is not enabled on this machine", profile_name);
         goto cleanup;
     }
 
@@ -1295,9 +1243,10 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     );
     if (err) {
         /* Non-fatal: Git succeeded, manifest can recover */
-        output_warning(out, "Failed to get new HEAD for manifest update: %s",
-                       error_message(err));
-        output_hint(out, "Run 'dotta status' or 'dotta apply' to resync manifest");
+        output_warning(out,
+            "Failed to get new HEAD for manifest update: %s", error_message(err));
+        output_hint(out,
+            "Run 'dotta status' or 'dotta apply' to resync manifest");
         error_free(err);
         err = NULL;
         goto success;
@@ -1312,9 +1261,10 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     err = state_load_for_update(repo, &state);
     if (err) {
         /* Non-fatal */
-        output_warning(out, "Failed to open transaction for manifest update: %s",
-                      error_message(err));
-        output_hint(out, "Run 'dotta status' or 'dotta apply' to resync manifest");
+        output_warning(out,
+            "Failed to open transaction for manifest update: %s", error_message(err));
+        output_hint(out,
+            "Run 'dotta status' or 'dotta apply' to resync manifest");
         error_free(err);
         err = NULL;
         goto success;
@@ -1372,19 +1322,12 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
 
 success:
     /* Display success message */
-    if (output_colors_enabled(out)) {
-        output_printf(out, OUTPUT_NORMAL, "%s✓%s Reverted %s in profile '%s'\n",
-                output_color_code(out, OUTPUT_COLOR_GREEN),
-                output_color_code(out, OUTPUT_COLOR_RESET),
-                resolved_path, profile_name);
-    } else {
-        output_printf(out, OUTPUT_NORMAL, "✓ Reverted %s in profile '%s'\n", resolved_path, profile_name);
-    }
+    output_success(out, "Reverted %s in profile '%s'", resolved_path, profile_name);
 
     /* Show manifest sync results if available */
     if (synced > 0 || removed > 0 || fallbacks > 0) {
         output_info(out, "Manifest: %zu staged, %zu removed, %zu fallback%s",
-                   synced, removed, fallbacks, fallbacks == 1 ? "" : "s");
+                    synced, removed, fallbacks, fallbacks == 1 ? "" : "s");
     }
 
     /* Guide user to deploy changes */

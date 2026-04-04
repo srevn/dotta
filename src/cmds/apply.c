@@ -37,16 +37,10 @@ static void print_preflight_results(const output_ctx_t *out, const preflight_res
     if (result->conflicts && string_array_size(result->conflicts) > 0) {
         output_section(out, "Conflicts (files modified locally)");
         for (size_t i = 0; i < string_array_size(result->conflicts); i++) {
-            if (output_colors_enabled(out)) {
-                fprintf(stderr, "  %s✗%s %s\n",
-                       output_color_code(out, OUTPUT_COLOR_RED),
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       string_array_get(result->conflicts, i));
-            } else {
-                fprintf(stderr, "  ✗ %s\n", string_array_get(result->conflicts, i));
-            }
+            output_styled(out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n",
+                   string_array_get(result->conflicts, i));
         }
-        fprintf(stderr, "\n");
+        output_newline(out);
         output_info(out, "Use --force to overwrite local changes");
     }
 
@@ -54,42 +48,20 @@ static void print_preflight_results(const output_ctx_t *out, const preflight_res
     if (result->permission_errors && string_array_size(result->permission_errors) > 0) {
         output_section(out, "Permission errors");
         for (size_t i = 0; i < string_array_size(result->permission_errors); i++) {
-            if (output_colors_enabled(out)) {
-                fprintf(stderr, "  %s✗%s %s\n",
-                       output_color_code(out, OUTPUT_COLOR_RED),
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       string_array_get(result->permission_errors, i));
-            } else {
-                fprintf(stderr, "  ✗ %s\n", string_array_get(result->permission_errors, i));
-            }
+            output_styled(out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n",
+                   string_array_get(result->permission_errors, i));
         }
     }
 
     /* Print profile reassignments */
     if (result->reassignments && result->reassignment_count > 0) {
         output_section(out, "Profile reassignments");
-        output_info(out, "  The following files will change ownership:");
         for (size_t i = 0; i < result->reassignment_count; i++) {
             const reassignment_t *change = &result->reassignments[i];
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s→%s %s: %s%s%s → %s%s%s\n",
-                       output_color_code(out, OUTPUT_COLOR_YELLOW),
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       change->filesystem_path,
-                       output_color_code(out, OUTPUT_COLOR_CYAN),
-                       change->old_profile,
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       output_color_code(out, OUTPUT_COLOR_CYAN),
-                       change->new_profile,
-                       output_color_code(out, OUTPUT_COLOR_RESET));
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  → %s: %s → %s\n",
-                       change->filesystem_path,
-                       change->old_profile,
-                       change->new_profile);
-            }
+            output_styled(out, OUTPUT_NORMAL, "  {yellow}→{reset} %s: {cyan}%s{reset} → {cyan}%s{reset}\n",
+                   change->filesystem_path, change->old_profile, change->new_profile);
         }
-        output_info(out, "  This means these files will now be managed by a different profile.");
+        output_info(out, "  These files will now be managed by a different profile.");
         output_newline(out);
     }
 }
@@ -116,15 +88,8 @@ static void print_deploy_results(const output_ctx_t *out, const deploy_result_t 
         if (result->deployed && string_array_size(result->deployed) > 0) {
             output_section(out, "Deployed files");
             for (size_t i = 0; i < string_array_size(result->deployed); i++) {
-                if (output_colors_enabled(out)) {
-                    output_printf(out, OUTPUT_NORMAL, "  %s✓%s %s\n",
-                           output_color_code(out, OUTPUT_COLOR_GREEN),
-                           output_color_code(out, OUTPUT_COLOR_RESET),
-                           string_array_get(result->deployed, i));
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, "  ✓ %s\n",
-                           string_array_get(result->deployed, i));
-                }
+                output_styled(out, OUTPUT_NORMAL, "  {green}✓{reset} %s\n",
+                       string_array_get(result->deployed, i));
             }
         }
 
@@ -132,15 +97,8 @@ static void print_deploy_results(const output_ctx_t *out, const deploy_result_t 
         if (result->adopted && string_array_size(result->adopted) > 0) {
             output_section(out, "Adopted files");
             for (size_t i = 0; i < string_array_size(result->adopted); i++) {
-                if (output_colors_enabled(out)) {
-                    output_printf(out, OUTPUT_NORMAL, "  %s⊕%s %s\n",
-                           output_color_code(out, OUTPUT_COLOR_YELLOW),
-                           output_color_code(out, OUTPUT_COLOR_RESET),
-                           string_array_get(result->adopted, i));
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, "  ⊕ %s\n",
-                           string_array_get(result->adopted, i));
-                }
+                output_styled(out, OUTPUT_NORMAL, "  {yellow}⊕{reset} %s\n",
+                       string_array_get(result->adopted, i));
             }
         }
 
@@ -148,15 +106,8 @@ static void print_deploy_results(const output_ctx_t *out, const deploy_result_t 
         if (result->unchanged && string_array_size(result->unchanged) > 0) {
             output_section(out, "Unchanged files");
             for (size_t i = 0; i < string_array_size(result->unchanged); i++) {
-                if (output_colors_enabled(out)) {
-                    output_printf(out, OUTPUT_NORMAL, "  %s⊘%s %s\n",
-                           output_color_code(out, OUTPUT_COLOR_CYAN),
-                           output_color_code(out, OUTPUT_COLOR_RESET),
-                           string_array_get(result->unchanged, i));
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, "  ⊘ %s\n",
-                           string_array_get(result->unchanged, i));
-                }
+                output_styled(out, OUTPUT_NORMAL, "  {cyan}⊘{reset} %s\n",
+                       string_array_get(result->unchanged, i));
             }
         }
 
@@ -164,15 +115,8 @@ static void print_deploy_results(const output_ctx_t *out, const deploy_result_t 
         if (result->skipped_existing && string_array_size(result->skipped_existing) > 0) {
             output_section(out, "Skipped files (--skip-existing)");
             for (size_t i = 0; i < string_array_size(result->skipped_existing); i++) {
-                if (output_colors_enabled(out)) {
-                    output_printf(out, OUTPUT_NORMAL, "  %s⊘%s %s\n",
-                           output_color_code(out, OUTPUT_COLOR_CYAN),
-                           output_color_code(out, OUTPUT_COLOR_RESET),
-                           string_array_get(result->skipped_existing, i));
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, "  ⊘ %s\n",
-                           string_array_get(result->skipped_existing, i));
-                }
+                output_styled(out, OUTPUT_NORMAL, "  {cyan}⊘{reset} %s\n",
+                       string_array_get(result->skipped_existing, i));
             }
         }
     }
@@ -181,17 +125,11 @@ static void print_deploy_results(const output_ctx_t *out, const deploy_result_t 
     if (result->failed && string_array_size(result->failed) > 0) {
         output_section(out, "Failed to deploy");
         for (size_t i = 0; i < string_array_size(result->failed); i++) {
-            if (output_colors_enabled(out)) {
-                fprintf(stderr, "  %s✗%s %s\n",
-                       output_color_code(out, OUTPUT_COLOR_RED),
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       string_array_get(result->failed, i));
-            } else {
-                fprintf(stderr, "  ✗ %s\n", string_array_get(result->failed, i));
-            }
+            output_styled(out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n",
+                   string_array_get(result->failed, i));
         }
         if (result->error_message) {
-            fprintf(stderr, "\n");
+            output_newline(out);
             output_error(out, "%s", result->error_message);
         }
     }
@@ -200,62 +138,30 @@ static void print_deploy_results(const output_ctx_t *out, const deploy_result_t 
     if (!verbose) {
         /* Deployed count */
         if (result->deployed_count > 0) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "Deployed %s%zu%s file%s\n",
-                       output_color_code(out, OUTPUT_COLOR_GREEN),
-                       result->deployed_count,
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       result->deployed_count == 1 ? "" : "s");
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "Deployed %zu file%s\n",
-                       result->deployed_count,
-                       result->deployed_count == 1 ? "" : "s");
-            }
+            output_styled(out, OUTPUT_NORMAL, "Deployed {green}%zu{reset} file%s\n",
+                   result->deployed_count,
+                   result->deployed_count == 1 ? "" : "s");
         }
 
         /* Adopted count */
         if (result->adopted_count > 0) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "Adopted %s%zu%s file%s (now tracked)\n",
-                    output_color_code(out, OUTPUT_COLOR_YELLOW),
-                    result->adopted_count,
-                    output_color_code(out, OUTPUT_COLOR_RESET),
-                    result->adopted_count == 1 ? "" : "s");
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "Adopted %zu file%s (now tracked)\n",
-                    result->adopted_count,
-                    result->adopted_count == 1 ? "" : "s");
-            }
+            output_styled(out, OUTPUT_NORMAL, "Adopted {yellow}%zu{reset} file%s (now tracked)\n",
+                   result->adopted_count,
+                   result->adopted_count == 1 ? "" : "s");
         }
 
         /* Unchanged count */
         if (result->unchanged_count > 0) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "Skipped %s%zu%s file%s (unchanged)\n",
-                       output_color_code(out, OUTPUT_COLOR_CYAN),
-                       result->unchanged_count,
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       result->unchanged_count == 1 ? "" : "s");
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "Skipped %zu file%s (unchanged)\n",
-                       result->unchanged_count,
-                       result->unchanged_count == 1 ? "" : "s");
-            }
+            output_styled(out, OUTPUT_NORMAL, "Skipped {cyan}%zu{reset} file%s (unchanged)\n",
+                   result->unchanged_count,
+                   result->unchanged_count == 1 ? "" : "s");
         }
 
         /* Skipped existing count (only shown if --skip-existing was used) */
         if (result->skipped_existing_count > 0) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "Skipped %s%zu%s file%s (--skip-existing)\n",
-                       output_color_code(out, OUTPUT_COLOR_CYAN),
-                       result->skipped_existing_count,
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       result->skipped_existing_count == 1 ? "" : "s");
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "Skipped %zu file%s (--skip-existing)\n",
-                       result->skipped_existing_count,
-                       result->skipped_existing_count == 1 ? "" : "s");
-            }
+            output_styled(out, OUTPUT_NORMAL, "Skipped {cyan}%zu{reset} file%s (--skip-existing)\n",
+                   result->skipped_existing_count,
+                   result->skipped_existing_count == 1 ? "" : "s");
         }
     }
 }
@@ -328,44 +234,23 @@ static void print_safety_violations(
                 reason_display = v->reason;
             }
 
-            if (output_colors_enabled(out)) {
-                const char *reason_color = v->content_modified ?
-                    output_color_code(out, OUTPUT_COLOR_RED) :
-                    output_color_code(out, OUTPUT_COLOR_YELLOW);
+            output_color_t reason = v->content_modified ? OUTPUT_COLOR_RED
+                                                        : OUTPUT_COLOR_YELLOW;
 
-                output_printf(out, OUTPUT_NORMAL, "  %s%s%s %s %s(%s",
-                       reason_color, icon,
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       v->filesystem_path, reason_color, reason_display);
+            output_colored(out, OUTPUT_NORMAL, reason, "  %s", icon);
+            output_print(out, OUTPUT_NORMAL, " %s ", v->filesystem_path);
 
-                if (v->source_profile) {
-                    output_printf(out, OUTPUT_NORMAL, " from %s%s%s",
-                           output_color_code(out, OUTPUT_COLOR_CYAN),
-                           v->source_profile, reason_color);
-                }
-
-                output_printf(out, OUTPUT_NORMAL, ")%s\n",
-                       output_color_code(out, OUTPUT_COLOR_RESET));
-
-                if (v->storage_path) {
-                    output_printf(out, OUTPUT_NORMAL, "      %sstorage: %s%s\n",
-                           output_color_code(out, OUTPUT_COLOR_DIM),
-                           v->storage_path,
-                           output_color_code(out, OUTPUT_COLOR_RESET));
-                }
+            if (v->source_profile) {
+                output_colored(out, OUTPUT_NORMAL, reason, "(%s from ", reason_display);
+                output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", v->source_profile);
+                output_colored(out, OUTPUT_NORMAL, reason, ")\n");
             } else {
-                output_printf(out, OUTPUT_NORMAL, "  %s %s (%s",
-                       icon, v->filesystem_path, reason_display);
+                output_colored(out, OUTPUT_NORMAL, reason, "(%s)\n", reason_display);
+            }
 
-                if (v->source_profile) {
-                    output_printf(out, OUTPUT_NORMAL, " from %s", v->source_profile);
-                }
-
-                output_printf(out, OUTPUT_NORMAL, ")\n");
-
-                if (v->storage_path) {
-                    output_printf(out, OUTPUT_NORMAL, "      storage: %s\n", v->storage_path);
-                }
+            if (v->storage_path) {
+                output_styled(out, OUTPUT_NORMAL, "      {dim}storage: %s{reset}\n",
+                       v->storage_path);
             }
         }
         output_newline(out);
@@ -376,7 +261,6 @@ static void print_safety_violations(
 
         output_hint(out, "Options:");
         output_hint_line(out, "  1. Commit changes to the profile:");
-
         if (example_profile) {
             output_hint_line(out, "     dotta update -p %s <files>", example_profile);
             output_hint_line(out, "     dotta apply");
@@ -384,11 +268,9 @@ static void print_safety_violations(
             output_hint_line(out, "     dotta update <files>");
             output_hint_line(out, "     dotta apply");
         }
-
         output_hint_line(out, "  2. Force removal (discards changes):");
-        output_hint_line(out, "     dotta apply --force");
+        output_hint_line(out, "         dotta apply --force");
         output_hint_line(out, "  3. Keep the profile enabled:");
-
         if (example_profile) {
             output_hint_line(out, "     dotta profile enable %s", example_profile);
         }
@@ -407,32 +289,17 @@ static void print_safety_violations(
                 continue;
             }
 
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s→%s %s",
-                       output_color_code(out, OUTPUT_COLOR_CYAN),
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       v->filesystem_path);
+            output_styled(out, OUTPUT_NORMAL, "  {cyan}→{reset} %s", v->filesystem_path);
 
-                if (v->source_profile) {
-                    output_printf(out, OUTPUT_NORMAL, " %s(from %s)%s",
-                           output_color_code(out, OUTPUT_COLOR_DIM),
-                           v->source_profile,
-                           output_color_code(out, OUTPUT_COLOR_RESET));
-                }
-
-                output_printf(out, OUTPUT_NORMAL, "\n");
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  → %s", v->filesystem_path);
-
-                if (v->source_profile) {
-                    output_printf(out, OUTPUT_NORMAL, " (from %s)", v->source_profile);
-                }
-
-                output_printf(out, OUTPUT_NORMAL, "\n");
+            if (v->source_profile) {
+                output_styled(out, OUTPUT_NORMAL, " {dim}(from %s){reset}", v->source_profile);
             }
+
+            output_newline(out);
         }
 
-        output_info(out, "These files will be left on the filesystem and released from management.");
+        output_info(out,
+            "These files will be left on the filesystem and released from management.");
     }
 }
 
@@ -457,60 +324,32 @@ static void print_cleanup_results(
     if (verbose && result->removed_files && string_array_size(result->removed_files) > 0) {
         output_section(out, "Pruned orphaned files");
         for (size_t i = 0; i < string_array_size(result->removed_files); i++) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s[removed]%s %s\n",
-                       output_color_code(out, OUTPUT_COLOR_GREEN),
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       string_array_get(result->removed_files, i));
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  [removed] %s\n",
-                       string_array_get(result->removed_files, i));
-            }
+            output_styled(out, OUTPUT_NORMAL, "  {green}[removed]{reset} %s\n",
+                   string_array_get(result->removed_files, i));
         }
     }
 
     if (verbose && result->skipped_files && string_array_size(result->skipped_files) > 0) {
         output_section(out, "Skipped orphaned files");
         for (size_t i = 0; i < string_array_size(result->skipped_files); i++) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s[skipped]%s %s (safety violation)\n",
-                       output_color_code(out, OUTPUT_COLOR_YELLOW),
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       string_array_get(result->skipped_files, i));
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  [skipped] %s (safety violation)\n",
-                       string_array_get(result->skipped_files, i));
-            }
+            output_styled(out, OUTPUT_NORMAL, "  {yellow}[skipped]{reset} %s (safety violation)\n",
+                   string_array_get(result->skipped_files, i));
         }
     }
 
     if (verbose && result->released_files && string_array_size(result->released_files) > 0) {
         output_section(out, "Released files (removed from Git externally)");
         for (size_t i = 0; i < string_array_size(result->released_files); i++) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s[released]%s %s\n",
-                       output_color_code(out, OUTPUT_COLOR_CYAN),
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       string_array_get(result->released_files, i));
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  [released] %s\n",
-                       string_array_get(result->released_files, i));
-            }
+            output_styled(out, OUTPUT_NORMAL, "  {cyan}[released]{reset} %s\n",
+                   string_array_get(result->released_files, i));
         }
     }
 
     if (verbose && result->failed_files && string_array_size(result->failed_files) > 0) {
         output_section(out, "Failed to remove orphaned files");
         for (size_t i = 0; i < string_array_size(result->failed_files); i++) {
-            if (output_colors_enabled(out)) {
-                fprintf(stderr, "  %s[fail]%s %s\n",
-                       output_color_code(out, OUTPUT_COLOR_RED),
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       string_array_get(result->failed_files, i));
-            } else {
-                fprintf(stderr, "  [fail] %s\n",
-                       string_array_get(result->failed_files, i));
-            }
+            output_styled(out, OUTPUT_NORMAL, "  {red}[fail]{reset} %s\n",
+                   string_array_get(result->failed_files, i));
         }
     }
 
@@ -518,111 +357,70 @@ static void print_cleanup_results(
     if (verbose && result->removed_dirs && string_array_size(result->removed_dirs) > 0) {
         output_section(out, "Pruned empty tracked directories");
         for (size_t i = 0; i < string_array_size(result->removed_dirs); i++) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s[removed]%s %s\n",
-                       output_color_code(out, OUTPUT_COLOR_GREEN),
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       string_array_get(result->removed_dirs, i));
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  [removed] %s\n",
-                       string_array_get(result->removed_dirs, i));
-            }
+            output_styled(out, OUTPUT_NORMAL, "  {green}[removed]{reset} %s\n",
+                   string_array_get(result->removed_dirs, i));
         }
     }
 
     if (verbose && result->skipped_dirs && string_array_size(result->skipped_dirs) > 0) {
         output_section(out, "Skipped directories (not empty)");
         for (size_t i = 0; i < string_array_size(result->skipped_dirs); i++) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s[skipped]%s %s\n",
-                       output_color_code(out, OUTPUT_COLOR_YELLOW),
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       string_array_get(result->skipped_dirs, i));
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  [skipped] %s\n",
-                       string_array_get(result->skipped_dirs, i));
-            }
+            output_styled(out, OUTPUT_NORMAL, "  {yellow}[skipped]{reset} %s\n",
+                   string_array_get(result->skipped_dirs, i));
         }
     }
 
     if (verbose && result->failed_dirs && string_array_size(result->failed_dirs) > 0) {
         output_section(out, "Failed to remove empty directories");
         for (size_t i = 0; i < string_array_size(result->failed_dirs); i++) {
-            if (output_colors_enabled(out)) {
-                fprintf(stderr, "  %s[fail]%s %s\n",
-                       output_color_code(out, OUTPUT_COLOR_RED),
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       string_array_get(result->failed_dirs, i));
-            } else {
-                fprintf(stderr, "  [fail] %s\n",
-                       string_array_get(result->failed_dirs, i));
-            }
+            output_styled(out, OUTPUT_NORMAL, "  {red}[fail]{reset} %s\n",
+                   string_array_get(result->failed_dirs, i));
         }
     }
 
     /* Print summaries if not verbose */
     if (!verbose) {
         if (result->orphaned_files_removed > 0) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "Pruned %s%zu%s orphaned file%s\n",
-                       output_color_code(out, OUTPUT_COLOR_YELLOW),
-                       result->orphaned_files_removed,
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       result->orphaned_files_removed == 1 ? "" : "s");
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "Pruned %zu orphaned file%s\n",
-                       result->orphaned_files_removed,
-                       result->orphaned_files_removed == 1 ? "" : "s");
-            }
+            output_styled(out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned file%s\n",
+                   result->orphaned_files_removed,
+                   result->orphaned_files_removed == 1 ? "" : "s");
         }
 
         if (result->orphaned_directories_removed > 0) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "Pruned %s%zu%s orphaned director%s\n",
-                       output_color_code(out, OUTPUT_COLOR_YELLOW),
-                       result->orphaned_directories_removed,
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       result->orphaned_directories_removed == 1 ? "y" : "ies");
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "Pruned %zu orphaned director%s\n",
-                       result->orphaned_directories_removed,
-                       result->orphaned_directories_removed == 1 ? "y" : "ies");
-            }
+            output_styled(out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned director%s\n",
+                   result->orphaned_directories_removed,
+                   result->orphaned_directories_removed == 1 ? "y" : "ies");
         }
 
         if (result->orphaned_files_released > 0) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "Released %s%zu%s file%s from management\n",
-                       output_color_code(out, OUTPUT_COLOR_CYAN),
-                       result->orphaned_files_released,
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       result->orphaned_files_released == 1 ? "" : "s");
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "Released %zu file%s from management\n",
-                       result->orphaned_files_released,
-                       result->orphaned_files_released == 1 ? "" : "s");
-            }
+            output_styled(out, OUTPUT_NORMAL, "Released {cyan}%zu{reset} file%s from management\n",
+                   result->orphaned_files_released,
+                   result->orphaned_files_released == 1 ? "" : "s");
         }
 
         if (result->orphaned_files_skipped > 0) {
             output_warning(out, "Skipped %zu orphaned file%s (uncommitted changes)",
                            result->orphaned_files_skipped,
                            result->orphaned_files_skipped == 1 ? "" : "s");
-            output_print(out, OUTPUT_NORMAL, "Use --verbose to see which files were skipped.\n");
-            output_print(out, OUTPUT_NORMAL, "To remove: commit/stash changes, or use --force.\n");
+            output_print(out, OUTPUT_NORMAL,
+                "Use --verbose to see which files were skipped.\n");
+            output_print(out, OUTPUT_NORMAL,
+                "To remove: commit/stash changes, or use --force.\n");
         }
 
         if (result->orphaned_directories_skipped > 0) {
             output_info(out, "Skipped %zu orphaned director%s (not empty)",
                         result->orphaned_directories_skipped,
                         result->orphaned_directories_skipped == 1 ? "y" : "ies");
-            output_print(out, OUTPUT_NORMAL, "Use --verbose to see which directories were skipped.\n");
+            output_print(out, OUTPUT_NORMAL,
+                "Use --verbose to see which directories were skipped.\n");
         }
 
         if (result->orphaned_files_failed > 0 || result->orphaned_directories_failed > 0) {
-            size_t total_failed = result->orphaned_files_failed + result->orphaned_directories_failed;
-            output_warning(out, "Failed to prune %zu item%s",
-                           total_failed, total_failed == 1 ? "" : "s");
+            size_t total_failed = result->orphaned_files_failed +
+                                  result->orphaned_directories_failed;
+            output_warning(out,
+                "Failed to prune %zu item%s", total_failed, total_failed == 1 ? "" : "s");
         }
     }
 }
@@ -663,7 +461,8 @@ static void print_cleanup_preflight_results(
         size_t released_count = 0;
         if (result->safety_violations) {
             for (size_t i = 0; i < result->safety_violations->count; i++) {
-                if (strcmp(result->safety_violations->violations[i].reason, SAFETY_REASON_RELEASED) == 0) {
+                if (strcmp(result->safety_violations->violations[i].reason,
+                    SAFETY_REASON_RELEASED) == 0) {
                     released_count++;
                 }
             }
@@ -672,29 +471,15 @@ static void print_cleanup_preflight_results(
         size_t removal_count = result->orphaned_files_count - released_count;
 
         if (removal_count > 0) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s%zu%s file%s will be removed (no longer in any profile)\n",
-                       output_color_code(out, OUTPUT_COLOR_YELLOW),
-                       removal_count,
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       removal_count == 1 ? "" : "s");
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  %zu file%s will be removed (no longer in any profile)\n",
-                       removal_count, removal_count == 1 ? "" : "s");
-            }
+            output_styled(out, OUTPUT_NORMAL,
+                "  {yellow}%zu{reset} file%s will be removed (no longer in any profile)\n",
+                removal_count, removal_count == 1 ? "" : "s");
         }
 
         if (released_count > 0) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s%zu%s file%s will be released from management\n",
-                       output_color_code(out, OUTPUT_COLOR_CYAN),
-                       released_count,
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       released_count == 1 ? "" : "s");
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  %zu file%s will be released from management\n",
-                       released_count, released_count == 1 ? "" : "s");
-            }
+            output_styled(out, OUTPUT_NORMAL,
+                "  {cyan}%zu{reset} file%s will be released from management\n",
+                released_count, released_count == 1 ? "" : "s");
         }
 
         /* Show individual paths in verbose mode */
@@ -704,20 +489,13 @@ static void print_cleanup_preflight_results(
                                    result->orphaned_files_count : display_limit;
 
             for (size_t i = 0; i < display_count; i++) {
-                if (output_colors_enabled(out)) {
-                    output_printf(out, OUTPUT_NORMAL, "    %s•%s %s\n",
-                           output_color_code(out, OUTPUT_COLOR_CYAN),
-                           output_color_code(out, OUTPUT_COLOR_RESET),
-                           string_array_get(result->orphaned_files, i));
-                } else {
-                    output_printf(out, OUTPUT_NORMAL, "    • %s\n",
-                           string_array_get(result->orphaned_files, i));
-                }
+                output_styled(out, OUTPUT_NORMAL, "    {cyan}•{reset} %s\n",
+                       string_array_get(result->orphaned_files, i));
             }
 
             if (result->orphaned_files_count > display_limit) {
                 size_t remaining = result->orphaned_files_count - display_limit;
-                output_printf(out, OUTPUT_NORMAL, "    ... and %zu more\n", remaining);
+                output_print(out, OUTPUT_NORMAL, "    ... and %zu more\n", remaining);
             }
         }
     }
@@ -732,23 +510,15 @@ static void print_cleanup_preflight_results(
     if (verbose && result->will_prune_directories) {
         output_section(out, "Empty directories");
 
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "  %s%zu%s orphaned director%s will be pruned\n",
-                   output_color_code(out, OUTPUT_COLOR_CYAN),
-                   result->orphaned_directories_count,
-                   output_color_code(out, OUTPUT_COLOR_RESET),
-                   result->orphaned_directories_count == 1 ? "y" : "ies");
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "  %zu orphaned director%s will be pruned\n",
-                   result->orphaned_directories_count,
-                   result->orphaned_directories_count == 1 ? "y" : "ies");
-        }
+        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} orphaned director%s will be pruned\n",
+               result->orphaned_directories_count,
+               result->orphaned_directories_count == 1 ? "y" : "ies");
 
         /* Show directory paths if not too many */
         if (result->orphaned_directories && result->orphaned_directories_count <= 10) {
             for (size_t i = 0; i < result->orphaned_directories_count; i++) {
-                output_printf(out, OUTPUT_NORMAL, "    • %s\n",
-                       string_array_get(result->orphaned_directories, i));
+                output_print(out, OUTPUT_NORMAL,
+                    "    • %s\n", string_array_get(result->orphaned_directories, i));
             }
         }
     }
@@ -1079,13 +849,11 @@ error_t *cmd_apply(
 
         if (repair_stats.updated > 0 || repair_stats.released > 0) {
             output_info(out, "Synchronized %zu file%s, released %zu from management",
-                        repair_stats.updated, repair_stats.updated == 1 ? "" : "s",
-                        repair_stats.released);
+                repair_stats.updated, repair_stats.updated == 1 ? "" : "s", repair_stats.released);
         }
         if (repair_stats.reassigned > 0) {
             output_info(out, "Detected %zu profile reassignment%s from external changes",
-                        repair_stats.reassigned,
-                        repair_stats.reassigned == 1 ? "" : "s");
+                repair_stats.reassigned, repair_stats.reassigned == 1 ? "" : "s");
         }
     }
 
@@ -1109,17 +877,17 @@ error_t *cmd_apply(
     }
 
     if (workspace_profiles->count == 0) {
-        err = ERROR(ERR_NOT_FOUND,
-                   "No enabled profiles found\n"
-                   "Hint: Run 'dotta profile enable <name>' to enable profiles");
+        err = ERROR(ERR_NOT_FOUND, "No enabled profiles found\n"
+                    "Hint: Run 'dotta profile enable <name>' to enable profiles");
         goto cleanup;
     }
 
     /* Phase 2: Load operation profiles */
     if (opts->profiles && opts->profile_count > 0) {
         /* User specified CLI filter - load filter profiles */
-        err = profile_resolve_for_operations(repo, opts->profiles, opts->profile_count,
-                                             config->strict_mode, &operation_profiles);
+        err = profile_resolve_for_operations(
+            repo, opts->profiles, opts->profile_count, config->strict_mode, &operation_profiles
+        );
         if (err) {
             err = error_wrap(err, "Failed to resolve operation profiles");
             goto cleanup;
@@ -1136,17 +904,11 @@ error_t *cmd_apply(
     }
 
     if (opts->verbose) {
-        output_print(out, OUTPUT_VERBOSE, "Using %zu profile%s:\n",
-                    operation_profiles->count, operation_profiles->count == 1 ? "" : "s");
+        output_print(out, OUTPUT_VERBOSE, "Using %zu profile%s:\n", operation_profiles->count,
+                     operation_profiles->count == 1 ? "" : "s");
         for (size_t i = 0; i < operation_profiles->count; i++) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "  %s•%s %s\n",
-                       output_color_code(out, OUTPUT_COLOR_CYAN),
-                       output_color_code(out, OUTPUT_COLOR_RESET),
-                       operation_profiles->profiles[i].name);
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "  • %s\n", operation_profiles->profiles[i].name);
-            }
+            output_styled(out, OUTPUT_NORMAL, "  {cyan}•{reset} %s\n",
+                operation_profiles->profiles[i].name);
         }
     }
 
@@ -1831,7 +1593,7 @@ error_t *cmd_apply(
             if (err) {
                 /* Hook failed - abort operation */
                 if (hook_result && hook_result->output && hook_result->output[0]) {
-                    output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
+                    output_print(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
                 }
                 hook_result_free(hook_result);
                 err = error_wrap(err, "Pre-apply hook failed");
@@ -1930,32 +1692,20 @@ error_t *cmd_apply(
     if (total_excluded > 0) {
         if (opts->verbose) {
             /* Detailed breakdown */
-            output_printf(out, OUTPUT_NORMAL, "Skipped %zu file%s (--exclude patterns):\n",
-                         total_excluded,
-                         total_excluded == 1 ? "" : "s");
+            output_print(out, OUTPUT_NORMAL, "Skipped %zu file%s (--exclude patterns):\n",
+                         total_excluded, total_excluded == 1 ? "" : "s");
             if (excluded_deploy_count > 0) {
-                output_printf(out, OUTPUT_NORMAL, "  • %zu divergent file%s not deployed\n",
-                             excluded_deploy_count,
-                             excluded_deploy_count == 1 ? "" : "s");
+                output_print(out, OUTPUT_NORMAL, "  • %zu divergent file%s not deployed\n",
+                             excluded_deploy_count, excluded_deploy_count == 1 ? "" : "s");
             }
             if (excluded_orphan_count > 0) {
-                output_printf(out, OUTPUT_NORMAL, "  • %zu orphaned file%s not removed\n",
-                             excluded_orphan_count,
-                             excluded_orphan_count == 1 ? "" : "s");
+                output_print(out, OUTPUT_NORMAL, "  • %zu orphaned file%s not removed\n",
+                             excluded_orphan_count, excluded_orphan_count == 1 ? "" : "s");
             }
         } else {
             /* Simple summary */
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "Skipped %s%zu%s file%s (--exclude patterns)\n",
-                             output_color_code(out, OUTPUT_COLOR_CYAN),
-                             total_excluded,
-                             output_color_code(out, OUTPUT_COLOR_RESET),
-                             total_excluded == 1 ? "" : "s");
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "Skipped %zu file%s (--exclude patterns)\n",
-                             total_excluded,
-                             total_excluded == 1 ? "" : "s");
-            }
+            output_styled(out, OUTPUT_NORMAL, "Skipped {cyan}%zu{reset} file%s (--exclude patterns)\n",
+                         total_excluded, total_excluded == 1 ? "" : "s");
         }
     }
 
@@ -2243,8 +1993,7 @@ error_t *cmd_apply(
                      * The timestamp is metadata for display and lifecycle tracking.
                      * Failure here should not abort the entire operation.
                      */
-                    output_warning(out, "Failed to update timestamp for %s: %s", path,
-                                   error_message(err));
+                    output_warning(out, "Failed to update timestamp for %s: %s", path, error_message(err));
                     error_free(err);
                     err = NULL;  /* Don't propagate - continue operation */
                 }
@@ -2331,16 +2080,8 @@ error_t *cmd_apply(
         }
 
         if (cleared > 0) {
-            if (output_colors_enabled(out)) {
-                output_printf(out, OUTPUT_NORMAL, "Acknowledged %s%zu%s profile reassignment%s\n",
-                              output_color_code(out, OUTPUT_COLOR_CYAN),
-                              cleared,
-                              output_color_code(out, OUTPUT_COLOR_RESET),
-                              cleared == 1 ? "" : "s");
-            } else {
-                output_printf(out, OUTPUT_NORMAL, "Acknowledged %zu profile reassignment%s\n",
-                              cleared, cleared == 1 ? "" : "s");
-            }
+            output_styled(out, OUTPUT_NORMAL, "Acknowledged {cyan}%zu{reset} profile reassignment%s\n",
+                         cleared, cleared == 1 ? "" : "s");
         }
 
         /* Commit state transaction (saves both deployment and cleanup state)
@@ -2371,7 +2112,7 @@ error_t *cmd_apply(
             /* Hook failed - warn but don't abort (already deployed) */
             output_warning(out, "Post-apply hook failed: %s", error_message(hook_err));
             if (hook_result && hook_result->output && hook_result->output[0]) {
-                output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
+                output_print(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
             }
             error_free(hook_err);
         }

@@ -522,23 +522,12 @@ static void display_multi_profile_warnings(
 
         const char *fs_path = string_array_get(filesystem_paths, i);
 
-        if (output_colors_enabled(out)) {
-            output_printf(out, OUTPUT_NORMAL, "  %s%s%s also in:",
-                    output_color_code(out, OUTPUT_COLOR_YELLOW), fs_path,
-                    output_color_code(out, OUTPUT_COLOR_RESET));
+        output_styled(out, OUTPUT_NORMAL, "  {yellow}%s{reset} also in:",
+                fs_path);
 
-            for (size_t j = 0; j < string_array_size(other_profiles[i]); j++) {
-                output_printf(out, OUTPUT_NORMAL, " %s%s%s",
-                        output_color_code(out, OUTPUT_COLOR_CYAN),
-                        string_array_get(other_profiles[i], j),
-                        output_color_code(out, OUTPUT_COLOR_RESET));
-            }
-        } else {
-            output_printf(out, OUTPUT_NORMAL, "  %s also in:", fs_path);
-            for (size_t j = 0; j < string_array_size(other_profiles[i]); j++) {
-                output_printf(out, OUTPUT_NORMAL, " %s",
-                        string_array_get(other_profiles[i], j));
-            }
+        for (size_t j = 0; j < string_array_size(other_profiles[i]); j++) {
+            output_styled(out, OUTPUT_NORMAL, " {cyan}%s{reset}",
+                    string_array_get(other_profiles[i], j));
         }
         output_newline(out);
     }
@@ -1020,17 +1009,17 @@ static error_t *remove_files_from_profile(
 
     /* Dry run - just show what would be removed */
     if (opts->dry_run) {
-        output_printf(out, OUTPUT_NORMAL, "Would remove from profile '%s':\n", opts->profile);
+        output_print(out, OUTPUT_NORMAL, "Would remove from profile '%s':\n", opts->profile);
         for (size_t i = 0; i < string_array_size(storage_paths); i++) {
-            output_printf(out, OUTPUT_NORMAL, "  - %s\n", string_array_get(storage_paths, i));
+            output_print(out, OUTPUT_NORMAL, "  - %s\n", string_array_get(storage_paths, i));
         }
-        output_printf(out, OUTPUT_NORMAL, "\nTotal: %zu file%s would be removed from profile\n",
+        output_print(out, OUTPUT_NORMAL, "\nTotal: %zu file%s would be removed from profile\n",
                      string_array_size(storage_paths),
                      string_array_size(storage_paths) == 1 ? "" : "s");
         if (opts->delete_files) {
-            output_printf(out, OUTPUT_NORMAL, "(Deployed files would be removed on 'dotta apply')\n");
+            output_print(out, OUTPUT_NORMAL, "(Deployed files would be removed on 'dotta apply')\n");
         } else {
-            output_printf(out, OUTPUT_NORMAL, "(Deployed files would be released from management)\n");
+            output_print(out, OUTPUT_NORMAL, "(Deployed files would be released from management)\n");
         }
 
         goto cleanup;  /* err is NULL, will return success */
@@ -1038,7 +1027,7 @@ static error_t *remove_files_from_profile(
 
     /* Confirm operation */
     if (!confirm_removal(storage_paths, opts, config, out)) {
-        output_printf(out, OUTPUT_NORMAL, "Cancelled\n");
+        output_print(out, OUTPUT_NORMAL, "Cancelled\n");
         goto cleanup;  /* err is NULL, will return success */
     }
 
@@ -1067,7 +1056,7 @@ static error_t *remove_files_from_profile(
         if (err) {
             /* Hook failed - abort operation */
             if (hook_result && hook_result->output && hook_result->output[0] && out) {
-                output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
+                output_print(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
             }
             hook_result_free(hook_result);
             err = error_wrap(err, "Pre-remove hook failed");
@@ -1110,19 +1099,10 @@ static error_t *remove_files_from_profile(
 
         /* Interactive mode: prompt for each file */
         if (opts->interactive) {
-            /* Interactive prompts go to stdout (user expects them there) */
-            printf("Remove %s? [y/N] ", storage_path);
-            fflush(stdout);
-
-            char response[10];
-            if (!fgets(response, sizeof(response), stdin)) {
-                /* EOF or error - skip this file */
-                continue;
-            }
-
-            if (response[0] != 'y' && response[0] != 'Y') {
-                /* User declined - skip this file */
-                if (opts->verbose && out) {
+            char prompt[PATH_MAX + 16];
+            snprintf(prompt, sizeof(prompt), "Remove %s?", storage_path);
+            if (!output_confirm(out, prompt, false)) {
+                if (opts->verbose) {
                     output_info(out, "Skipped: %s", storage_path);
                 }
                 continue;
@@ -1305,7 +1285,7 @@ static error_t *remove_files_from_profile(
             if (out) {
                 output_warning(out, "Post-remove hook failed: %s", error_message(err));
                 if (hook_result && hook_result->output && hook_result->output[0]) {
-                    output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
+                    output_print(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
                 }
             }
             error_free(err);
@@ -1442,7 +1422,7 @@ static error_t *delete_profile_branch(
 
     /* Dry run */
     if (opts->dry_run) {
-        output_printf(out, OUTPUT_NORMAL, "Would delete profile '%s' (%zu file%s)\n",
+        output_print(out, OUTPUT_NORMAL, "Would delete profile '%s' (%zu file%s)\n",
                       opts->profile, file_count, file_count == 1 ? "" : "s");
         goto cleanup;  /* err is NULL, will return success */
     }
@@ -1560,7 +1540,7 @@ static error_t *delete_profile_branch(
 
     /* Confirm deletion */
     if (!confirm_profile_deletion(opts->profile, file_count, is_auto_detected, opts, config, out)) {
-        output_printf(out, OUTPUT_NORMAL, "Cancelled\n");
+        output_print(out, OUTPUT_NORMAL, "Cancelled\n");
         goto cleanup;  /* err is NULL, will return success */
     }
 
@@ -1608,7 +1588,7 @@ static error_t *delete_profile_branch(
         if (err) {
             /* Hook failed - abort operation */
             if (hook_result && hook_result->output && hook_result->output[0]) {
-                output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
+                output_print(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
             }
             hook_result_free(hook_result);
             err = error_wrap(err, "Pre-remove hook failed");
@@ -1709,7 +1689,7 @@ static error_t *delete_profile_branch(
             goto cleanup;
         }
 
-        output_print(out, OUTPUT_VERBOSE, "✓ Cleaned up manifest entries\n");
+        output_styled(out, OUTPUT_VERBOSE, "{green}✓{reset} Cleaned up manifest entries\n");
     }
 
     /* Delete local branch (NOW safe - manifest already cleaned up) */
@@ -1865,7 +1845,7 @@ static error_t *delete_profile_branch(
             /* Hook failed - warn but don't abort (profile already deleted) */
             output_warning(out, "Post-remove hook failed: %s", error_message(err));
             if (hook_result && hook_result->output && hook_result->output[0]) {
-                output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
+                output_print(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
             }
             error_free(err);
             err = NULL;

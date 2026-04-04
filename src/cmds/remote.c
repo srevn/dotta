@@ -126,9 +126,6 @@ static error_t *remote_list(
         return NULL;
     }
 
-    const char *c = output_color_code(out, OUTPUT_COLOR_CYAN);
-    const char *r = output_color_code(out, OUTPUT_COLOR_RESET);
-
     /* List each remote */
     for (size_t i = 0; i < remotes.count; i++) {
         const char *remote_name = remotes.strings[i];
@@ -152,15 +149,15 @@ static error_t *remote_list(
                 push_url = fetch_url;
             }
 
-            output_printf(out, OUTPUT_NORMAL,
-                "%s%-15s%s %s (fetch)\n", c, remote_name, r, fetch_url);
-            output_printf(out, OUTPUT_NORMAL,
-                "%s%-15s%s %s (push)\n", c, remote_name, r, push_url);
+            output_styled(out, OUTPUT_NORMAL,
+                "{cyan}%-15s{reset} %s (fetch)\n", remote_name, fetch_url);
+            output_styled(out, OUTPUT_NORMAL,
+                "{cyan}%-15s{reset} %s (push)\n", remote_name, push_url);
 
             git_remote_free(remote);
         } else {
             /* Just show names */
-            output_printf(out, OUTPUT_NORMAL, "%s%s%s\n", c, remote_name, r);
+            output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}\n", remote_name);
         }
     }
 
@@ -242,10 +239,7 @@ static error_t *remote_add(
     git_remote_free(remote);
 
     /* Success message */
-    char *colored_name = output_colorize(out, OUTPUT_COLOR_CYAN, name);
-    output_success(out, "Remote '%s' added successfully",
-        colored_name ? colored_name : name);
-    free(colored_name);
+    output_success(out, "Remote '{cyan}%s{reset}' added successfully", name);
 
     config_free(config);
     output_free(out);
@@ -297,10 +291,7 @@ static error_t *remote_remove(
     }
 
     /* Success message */
-    char *colored_name = output_colorize(out, OUTPUT_COLOR_CYAN, name);
-    output_success(out, "Removed remote '%s'",
-        colored_name ? colored_name : name);
-    free(colored_name);
+    output_success(out, "Removed remote '{cyan}%s{reset}'", name);
 
     config_free(config);
     output_free(out);
@@ -363,10 +354,7 @@ static error_t *remote_set_url(
     }
 
     /* Success message */
-    char *colored_name = output_colorize(out, OUTPUT_COLOR_CYAN, name);
-    output_success(out, "Remote '%s' URL updated",
-        colored_name ? colored_name : name);
-    free(colored_name);
+    output_success(out, "Remote '{cyan}%s{reset}' URL updated", name);
 
     config_free(config);
     output_free(out);
@@ -440,7 +428,7 @@ static error_t *remote_rename(
         /* Show warnings about problematic refspecs */
         output_warning(out, "The following refspecs could not be updated:");
         for (size_t i = 0; i < problems.count; i++) {
-            output_printf(out, OUTPUT_NORMAL, "  %s\n", problems.strings[i]);
+            output_print(out, OUTPUT_NORMAL, "  %s\n", problems.strings[i]);
         }
     }
 
@@ -453,13 +441,8 @@ static error_t *remote_rename(
     }
 
     /* Success message */
-    char *old_colored = output_colorize(out, OUTPUT_COLOR_CYAN, old_name);
-    char *new_colored = output_colorize(out, OUTPUT_COLOR_CYAN, new_name);
-    output_success(out, "Renamed remote '%s' to '%s'",
-        old_colored ? old_colored : old_name,
-        new_colored ? new_colored : new_name);
-    free(old_colored);
-    free(new_colored);
+    output_success(out, "Renamed remote '{cyan}%s{reset}' to '{cyan}%s{reset}'",
+        old_name, new_name);
 
     config_free(config);
     output_free(out);
@@ -502,9 +485,7 @@ static error_t *remote_show(
     }
 
     /* Show remote information */
-    const char *c = output_color_code(out, OUTPUT_COLOR_CYAN);
-    const char *r = output_color_code(out, OUTPUT_COLOR_RESET);
-    output_printf(out, OUTPUT_NORMAL, "Remote: %s%s%s\n", c, name, r);
+    output_styled(out, OUTPUT_NORMAL, "Remote: {cyan}%s{reset}\n", name);
 
     const char *fetch_url = git_remote_url(remote);
     const char *push_url = git_remote_pushurl(remote);
@@ -513,16 +494,16 @@ static error_t *remote_show(
         push_url = fetch_url;
     }
 
-    output_printf(out, OUTPUT_NORMAL, "  Fetch URL: %s\n", fetch_url);
-    output_printf(out, OUTPUT_NORMAL, "  Push URL:  %s\n", push_url);
+    output_print(out, OUTPUT_NORMAL, "  Fetch URL: %s\n", fetch_url);
+    output_print(out, OUTPUT_NORMAL, "  Push URL:  %s\n", push_url);
 
     /* Show fetch refspecs */
     git_strarray refspecs = {0};
     git_err = git_remote_get_fetch_refspecs(&refspecs, remote);
     if (git_err == 0 && refspecs.count > 0) {
-        output_printf(out, OUTPUT_NORMAL, "  Fetch refspecs:\n");
+        output_print(out, OUTPUT_NORMAL, "  Fetch refspecs:\n");
         for (size_t i = 0; i < refspecs.count; i++) {
-            output_printf(out, OUTPUT_NORMAL, "    %s\n", refspecs.strings[i]);
+            output_print(out, OUTPUT_NORMAL, "    %s\n", refspecs.strings[i]);
         }
     }
     if (git_err == 0) {
@@ -533,9 +514,9 @@ static error_t *remote_show(
     memset(&refspecs, 0, sizeof(refspecs));
     git_err = git_remote_get_push_refspecs(&refspecs, remote);
     if (git_err == 0 && refspecs.count > 0) {
-        output_printf(out, OUTPUT_NORMAL, "  Push refspecs:\n");
+        output_print(out, OUTPUT_NORMAL, "  Push refspecs:\n");
         for (size_t i = 0; i < refspecs.count; i++) {
-            output_printf(out, OUTPUT_NORMAL, "    %s\n", refspecs.strings[i]);
+            output_print(out, OUTPUT_NORMAL, "    %s\n", refspecs.strings[i]);
         }
     }
     if (git_err == 0) {

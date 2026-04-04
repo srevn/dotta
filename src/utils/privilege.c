@@ -410,45 +410,6 @@ static void display_privilege_requirement(
 }
 
 /**
- * Prompt user for sudo authentication
- *
- * Interactive prompt with sensible defaults (default = yes).
- * Handles EOF, signals, and various input formats gracefully.
- *
- * @param out Output context for displaying prompt
- * @return true if user approves, false otherwise
- */
-static bool prompt_for_elevation(output_ctx_t *out) {
-    /* Display prompt with default indicator [Y/n] */
-    output_print(out, OUTPUT_NORMAL, "\nAuthenticate with sudo? [Y/n] ");
-
-    /* Ensure prompt is visible before reading input */
-    fflush(stdout);
-    fflush(stderr);
-
-    /* Read user response */
-    char response[10];
-    if (!fgets(response, sizeof(response), stdin)) {
-        /* EOF or read error - treat as decline */
-        return false;
-    }
-
-    /* Parse response:
-     * - Empty line (just Enter): YES (default)
-     * - 'Y' or 'y': YES
-     * - Anything else: NO */
-    if (response[0] == '\n') {
-        return true;  /* Default to yes */
-    }
-
-    if (response[0] == 'Y' || response[0] == 'y') {
-        return true;
-    }
-
-    return false;  /* Any other input is treated as no */
-}
-
-/**
  * Re-execute current process with sudo
  *
  * SECURITY CRITICAL:
@@ -591,7 +552,7 @@ error_t *privilege_ensure_for_operation(
     /* Check if we can prompt user interactively */
     if (interactive && terminal_is_tty()) {
         /* Interactive mode: prompt for confirmation */
-        if (prompt_for_elevation(out)) {
+        if (output_confirm(out, "\nAuthenticate with sudo?", true)) {
             /* User approved - re-exec with sudo */
             output_print(out, OUTPUT_NORMAL, "\nRe-executing with sudo...\n\n");
 

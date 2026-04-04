@@ -1245,7 +1245,8 @@ static error_t *test_path_ignore(
 
         /* Print result */
         if (result.ignored) {
-            output_info(out, "✗ IGNORED by profile '%s'", specific_profile);
+            output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED by profile '%s'\n",
+                   specific_profile);
             output_info(out, "  Reason: %s", ignore_source_to_string(result.source));
         } else {
             output_success(out, "NOT IGNORED by profile '%s'", specific_profile);
@@ -1288,7 +1289,7 @@ static error_t *test_path_ignore(
         }
 
         if (result.ignored) {
-            output_info(out, "✗ IGNORED");
+            output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED\n");
             output_info(out, "  Reason: %s", ignore_source_to_string(result.source));
         } else {
             output_success(out, "NOT IGNORED");
@@ -1328,7 +1329,8 @@ static error_t *test_path_ignore(
 
         /* Print result */
         if (result.ignored) {
-            output_info(out, "✗ Profile '%s': IGNORED", profile->name);
+            output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} Profile '%s': IGNORED\n",
+                   profile->name);
             if (verbose) {
                 output_info(out, "    Reason: %s", ignore_source_to_string(result.source));
             }

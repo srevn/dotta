@@ -149,7 +149,6 @@ dotta_config_t *config_create_default(void) {
 
     config->verbosity = strdup("normal");
     config->color = strdup("auto");
-    config->format = strdup("compact");
 
     /* [commit] defaults - match current hardcoded behavior */
     config->commit_title = strdup("{host}: {action} {profile}");
@@ -199,7 +198,6 @@ void config_free(dotta_config_t *config) {
 
     free(config->verbosity);
     free(config->color);
-    free(config->format);
 
     free(config->commit_title);
     free(config->commit_body);
@@ -446,8 +444,8 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
     /* Extract [output] section */
     toml_datum_t output = toml_get(result.toptab, "output");
     if (output.type == TOML_TABLE) {
-        static const char *known[] = {"verbosity", "color", "format"};
-        err = validate_known_keys(output, "output", known, 3);
+        static const char *known[] = {"verbosity", "color"};
+        err = validate_known_keys(output, "output", known, 2);
         if (err) goto cleanup;
 
         toml_datum_t verbosity = toml_get(output, "verbosity");
@@ -459,12 +457,6 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
         toml_datum_t color = toml_get(output, "color");
         if (color.type == TOML_STRING) {
             err = set_string(&config->color, color.u.s);
-            if (err) goto cleanup;
-        }
-
-        toml_datum_t format = toml_get(output, "format");
-        if (format.type == TOML_STRING) {
-            err = set_string(&config->format, format.u.s);
             if (err) goto cleanup;
         }
     }
@@ -611,10 +603,9 @@ error_t *config_validate(const dotta_config_t *config) {
     if (config->verbosity) {
         if (strcmp(config->verbosity, "quiet") != 0 &&
             strcmp(config->verbosity, "normal") != 0 &&
-            strcmp(config->verbosity, "verbose") != 0 &&
-            strcmp(config->verbosity, "debug") != 0) {
+            strcmp(config->verbosity, "verbose") != 0) {
             return ERROR(ERR_INVALID_ARG,
-                "Invalid verbosity: %s (must be quiet/normal/verbose/debug)",
+                "Invalid verbosity: %s (must be quiet/normal/verbose)",
                 config->verbosity);
         }
     }
@@ -626,16 +617,6 @@ error_t *config_validate(const dotta_config_t *config) {
             strcmp(config->color, "never") != 0) {
             return ERROR(ERR_INVALID_ARG,
                 "Invalid color: %s (must be auto/always/never)", config->color);
-        }
-    }
-
-    /* Validate format */
-    if (config->format) {
-        if (strcmp(config->format, "compact") != 0 &&
-            strcmp(config->format, "detailed") != 0 &&
-            strcmp(config->format, "json") != 0) {
-            return ERROR(ERR_INVALID_ARG,
-                "Invalid format: %s (must be compact/detailed/json)", config->format);
         }
     }
 

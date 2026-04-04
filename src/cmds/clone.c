@@ -117,7 +117,7 @@ static error_t *fetch_profiles(
     for (size_t i = 0; i < count; i++) {
         const char *profile_name = profile_names[i];
 
-        if (output_colors_enabled(out)) {
+        if (output_is_tty(out)) {
             output_info(out, "  Fetching %s...", profile_name);
         }
 
@@ -295,21 +295,19 @@ static error_t *initialize_state(
 
     state_free(state);
 
-    if (output_colors_enabled(out)) {
-        /* Build profile list string */
-        char profiles_str[1024] = {0};
-        size_t offset = 0;
-        for (size_t i = 0; i < count && offset < sizeof(profiles_str) - 1; i++) {
-            int written = snprintf(
-                profiles_str + offset, sizeof(profiles_str) - offset,
-                "%s%s", profile_names[i], (i < count - 1) ? ", " : ""
-            );
-            if (written > 0) {
-                offset += written;
-            }
+    /* Build profile list string */
+    char profiles_str[1024] = {0};
+    size_t offset = 0;
+    for (size_t i = 0; i < count && offset < sizeof(profiles_str) - 1; i++) {
+        int written = snprintf(
+            profiles_str + offset, sizeof(profiles_str) - offset,
+            "%s%s", profile_names[i], (i < count - 1) ? ", " : ""
+        );
+        if (written > 0) {
+            offset += written;
         }
-        output_success(out, "Initialized enabled profiles: %s", profiles_str);
     }
+    output_success(out, "Initialized enabled profiles: %s", profiles_str);
 
     return NULL;
 }
@@ -333,7 +331,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     string_array_t *detected_names = NULL;
 
     /* Create output context */
-    out = output_create();
+    out = output_create(stdout, OUTPUT_NORMAL, OUTPUT_COLOR_AUTO);
     if (!out) {
         return ERROR(ERR_MEMORY, "Failed to create output context");
     }
@@ -539,7 +537,9 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             }
         }
 
-        err = initialize_state(repo, profile_names->items, string_array_size(profile_names), out);
+        err = initialize_state(
+            repo, profile_names->items, string_array_size(profile_names), out
+        );
         if (err) {
             output_error(out, "Failed to initialize state: %s", error_message(err));
             error_free(err);
@@ -615,7 +615,8 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             for (size_t i = 0; i < string_array_size(fetched_profiles); i++) {
                 const char *profile_name = string_array_get(fetched_profiles, i);
                 if (bootstrap_exists(repo, profile_name, NULL)) {
-                    output_info(out, "  ✓ %s/.bootstrap", profile_name);
+                    output_styled(out, OUTPUT_NORMAL, "  {green}✓{reset} %s/.bootstrap\n",
+                           profile_name);
                 }
             }
             output_newline(out);
@@ -627,7 +628,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             } else if (!opts->quiet) {
                 /* Prompt user */
                 run_bootstrap = output_confirm(out,
-                        "Would you like to execute bootstrap scripts now?", false);
+                    "Would you like to execute bootstrap scripts now?", false);
             }
         }
     }

@@ -258,7 +258,7 @@ error_t *gitops_list_remote_branches(
     int err = git_branch_iterator_new(&iter, repo, GIT_BRANCH_REMOTE);
     if (err < 0) {
         return error_wrap(error_from_git(err),
-                "Failed to create remote branch iterator");
+            "Failed to create remote branch iterator");
     }
 
     string_array_t *branches = string_array_create();
@@ -623,7 +623,8 @@ static error_t *split_path_to_segments(
     string_array_t **out_segments
 ) {
     if (!file_path || !out_segments) {
-        return ERROR(ERR_INVALID_ARG, "file_path and out_segments cannot be NULL");
+        return ERROR(ERR_INVALID_ARG,
+            "file_path and out_segments cannot be NULL");
     }
 
     /* Skip leading slashes */
@@ -633,12 +634,14 @@ static error_t *split_path_to_segments(
     }
 
     if (*p == '\0') {
-        return ERROR(ERR_INVALID_ARG, "File path cannot be empty or just slashes");
+        return ERROR(ERR_INVALID_ARG,
+            "File path cannot be empty or just slashes");
     }
 
     string_array_t *segments = string_array_create();
     if (!segments) {
-        return ERROR(ERR_MEMORY, "Failed to allocate path segments array");
+        return ERROR(ERR_MEMORY,
+            "Failed to allocate path segments array");
     }
 
     /* Parse segments */
@@ -652,7 +655,8 @@ static error_t *split_path_to_segments(
                 char *segment = malloc(segment_len + 1);
                 if (!segment) {
                     string_array_free(segments);
-                    return ERROR(ERR_MEMORY, "Failed to allocate path segment");
+                    return ERROR(ERR_MEMORY,
+                        "Failed to allocate path segment");
                 }
                 memcpy(segment, segment_start, segment_len);
                 segment[segment_len] = '\0';
@@ -695,7 +699,7 @@ static error_t *split_path_to_segments(
         /* Path ended with slash - not a valid file path */
         string_array_free(segments);
         return ERROR(ERR_INVALID_ARG,
-                    "File path '%s' ends with '/' (directory, not file)", file_path);
+            "File path '%s' ends with '/' (directory, not file)", file_path);
     }
 
     if (string_array_size(segments) == 0) {
@@ -748,7 +752,9 @@ static error_t *build_tree_for_path(
             return error_from_git(git_err);
         }
 
-        git_err = git_treebuilder_insert(NULL, builder, segment, blob_oid, file_mode);
+        git_err = git_treebuilder_insert(
+            NULL, builder, segment, blob_oid, file_mode
+        );
         if (git_err < 0) {
             git_treebuilder_free(builder);
             return error_from_git(git_err);
@@ -800,8 +806,9 @@ static error_t *build_tree_for_path(
 
     /* Recurse to build child tree */
     git_oid child_tree_oid;
-    err = build_tree_for_path(repo, child_tree, segments, depth + 1,
-                              blob_oid, file_mode, &child_tree_oid);
+    err = build_tree_for_path(
+        repo, child_tree, segments, depth + 1, blob_oid, file_mode, &child_tree_oid
+    );
 
     /* Free child_tree if we loaded it */
     if (child_tree) {
@@ -819,8 +826,9 @@ static error_t *build_tree_for_path(
         return error_from_git(git_err);
     }
 
-    git_err = git_treebuilder_insert(NULL, builder, segment,
-                                     &child_tree_oid, GIT_FILEMODE_TREE);
+    git_err = git_treebuilder_insert(
+        NULL, builder, segment, &child_tree_oid, GIT_FILEMODE_TREE
+    );
     if (git_err < 0) {
         git_treebuilder_free(builder);
         return error_from_git(git_err);
@@ -915,8 +923,9 @@ error_t *gitops_update_file(
 
     /* Load current tree from branch */
     char ref_name[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(ref_name, sizeof(ref_name),
-                                        "refs/heads/%s", branch_name);
+    error_t *err = gitops_build_refname(
+        ref_name, sizeof(ref_name), "refs/heads/%s", branch_name
+    );
     if (err) {
         return error_wrap(err, "Invalid branch name '%s'", branch_name);
     }
@@ -1077,8 +1086,8 @@ error_t *gitops_fetch_branch(
     );
     if (err_build) {
         git_remote_free(remote);
-        return error_wrap(err_build, "Invalid branch/remote name '%s/%s'",
-                          remote_name, branch_name);
+        return error_wrap(err_build,
+            "Invalid branch/remote name '%s/%s'", remote_name, branch_name);
     }
 
     const char *refspecs[] = { refspec };
@@ -1155,8 +1164,8 @@ error_t *gitops_fetch_branches(
             branch_names[i], remote_name, branch_names[i]
         );
         if (err_build) {
-            err_result = error_wrap(err_build, "Invalid branch/remote name '%s/%s'",
-                                    remote_name, branch_names[i]);
+            err_result = error_wrap(err_build,
+                "Invalid branch/remote name '%s/%s'", remote_name, branch_names[i]);
             goto cleanup;
         }
     }
@@ -1238,7 +1247,8 @@ error_t *gitops_push_branch(
 
     char refspec[DOTTA_REFSPEC_MAX];
     error_t *err_build = gitops_build_refname(refspec, sizeof(refspec),
-                "refs/heads/%s:refs/heads/%s", branch_name, branch_name);
+        "refs/heads/%s:refs/heads/%s", branch_name, branch_name
+    );
     if (err_build) {
         git_remote_free(remote);
         return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
@@ -1437,7 +1447,8 @@ error_t *gitops_find_file_in_tree(
         normalized_path++;
     }
     if (*normalized_path == '\0') {
-        return ERROR(ERR_INVALID_ARG, "Path cannot be empty or just slashes");
+        return ERROR(ERR_INVALID_ARG,
+            "Path cannot be empty or just slashes");
     }
 
     /* Lookup entry in tree */
@@ -1534,8 +1545,8 @@ error_t *gitops_resolve_commit_in_branch(
     free(allocated_ref);  /* NULL-safe */
 
     if (ret < 0) {
-        return ERROR(ERR_NOT_FOUND, "Commit '%s' not found in branch '%s'",
-                     commit_ref, branch_name);
+        return ERROR(ERR_NOT_FOUND,
+            "Commit '%s' not found in branch '%s'", commit_ref, branch_name);
     }
 
     /* Get the commit OID */
@@ -1706,7 +1717,8 @@ error_t *gitops_create_merge_commit(
 
     /* Check for conflicts */
     if (git_index_has_conflicts(index)) {
-        return ERROR(ERR_CONFLICT, "Cannot create merge commit: index has conflicts");
+        return ERROR(ERR_CONFLICT,
+            "Cannot create merge commit: index has conflicts");
     }
 
     /* Write index to tree

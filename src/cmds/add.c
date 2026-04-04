@@ -72,8 +72,8 @@ static bool is_excluded(
         if (err) {
             /* On error, log and continue without ignoring */
             if (opts->verbose && out) {
-                output_warning(out, "Ignore check failed for %s: %s",
-                               path, error_message(err));
+                output_warning(out,
+                    "Ignore check failed for %s: %s", path, error_message(err));
             }
             error_free(err);
             return false;
@@ -187,8 +187,8 @@ static error_t *collect_files_from_dir(
         int saved_errno = errno;
         closedir(dir);
         string_array_free(files);
-        return ERROR(ERR_FS, "Error reading directory '%s': %s", dir_path,
-                     strerror(saved_errno));
+        return ERROR(ERR_FS,
+            "Error reading directory '%s': %s", dir_path, strerror(saved_errno));
     }
 
     closedir(dir);
@@ -244,8 +244,7 @@ static error_t *add_file_to_worktree(
         if (!opts->force) {
             error_t *exists_err = ERROR(ERR_EXISTS,
                 "File '%s' (as '%s') already exists in profile '%s'. "
-                "Use --force to overwrite.",
-                filesystem_path, storage_path, opts->profile);
+                "Use --force to overwrite.", filesystem_path, storage_path, opts->profile);
             free(dest_path);
             return exists_err;
         }
@@ -298,8 +297,8 @@ static error_t *add_file_to_worktree(
             err = metadata_capture_from_symlink(storage_path, &link_stat, &item);
             if (err) {
                 free(dest_path);
-                return error_wrap(err, "Failed to capture symlink metadata for '%s'",
-                                  filesystem_path);
+                return error_wrap(err,
+                    "Failed to capture symlink metadata for '%s'", filesystem_path);
             }
         }
 
@@ -319,7 +318,8 @@ static error_t *add_file_to_worktree(
         );
         if (err) {
             free(dest_path);
-            return error_wrap(err, "Failed to determine encryption policy for '%s'", storage_path);
+            return error_wrap(err,
+                "Failed to determine encryption policy for '%s'", storage_path);
         }
 
         /* Store file to worktree with optional encryption (handles read → encrypt → write)
@@ -449,7 +449,9 @@ static error_t *init_profile_dottaignore(
         return ERROR(ERR_MEMORY, "Failed to create buffer");
     }
 
-    error_t *err = buffer_append(content, (const uint8_t *)template_content, strlen(template_content));
+    error_t *err = buffer_append(
+        content, (const uint8_t *)template_content, strlen(template_content)
+    );
 
     if (err) {
         buffer_free(content);
@@ -1212,7 +1214,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         if (err) {
             /* Hook failed - abort operation */
             if (hook_result && hook_result->output && hook_result->output[0] && out) {
-                output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
+                output_print(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
             }
             hook_result_free(hook_result);
             err = error_wrap(err, "Pre-add hook failed");
@@ -1251,7 +1253,8 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     if (!profile_exists) {
         err = init_profile_dottaignore(wt, opts, out);
         if (err) {
-            err = error_wrap(err, "Failed to initialize .dottaignore for profile '%s'", opts->profile);
+            err = error_wrap(err,
+                "Failed to initialize .dottaignore for profile '%s'", opts->profile);
             goto cleanup;
         }
     }
@@ -1282,7 +1285,8 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
 
                 if (!prefix_for_conversion || prefix_for_conversion[0] == '\0') {
                     err = ERROR(ERR_INVALID_ARG, "Storage path '%s' requires --prefix flag\n"
-                        "Usage: dotta add -p %s --prefix /path/to/target %s", file, opts->profile, file);
+                                "Usage: dotta add -p %s --prefix /path/to/target %s",
+                                file, opts->profile, file);
                     goto cleanup;
                 }
             }
@@ -1422,7 +1426,8 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     /* Check if we have anything to add (files or directories) */
     if (string_array_size(all_files) == 0 && tracked_dir_count == 0) {
         if (opts->exclude_count > 0) {
-            err = ERROR(ERR_INVALID_ARG, "No files or directories to add (all excluded by patterns)");
+            err = ERROR(ERR_INVALID_ARG,
+                "No files or directories to add (all excluded by patterns)");
         } else {
             err = ERROR(ERR_INVALID_ARG, "No files or directories to add");
         }
@@ -1504,7 +1509,9 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         /* Add file to worktree and capture metadata
          * ARCHITECTURE: add_file_to_worktree now handles both operations atomically,
          * sharing stat() data between content and metadata layers to eliminate race conditions */
-        err = add_file_to_worktree(wt, file_path, storage_path, opts, key_mgr, config, metadata, out);
+        err = add_file_to_worktree(
+            wt, file_path, storage_path, opts, key_mgr, config, metadata, out
+        );
         if (err) {
             free(storage_path);
             err = error_wrap(err, "Failed to add file '%s'", file_path);
@@ -1699,7 +1706,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             if (out) {
                 output_warning(out, "Post-add hook failed: %s", error_message(hook_err));
                 if (hook_result && hook_result->output && hook_result->output[0]) {
-                    output_printf(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
+                    output_print(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
                 }
             }
             error_free(hook_err);

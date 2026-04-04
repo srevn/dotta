@@ -52,8 +52,14 @@ error_t *fs_read_file(const char *path, buffer_t **out);
  * @param gid Target GID for file ownership (use -1 to preserve current)
  * @return Error or NULL on success
  */
-error_t *fs_write_file_raw(const char *path, const unsigned char *data, size_t size,
-                           mode_t mode, uid_t uid, gid_t gid);
+error_t *fs_write_file_raw(
+    const char *path,
+    const unsigned char *data,
+    size_t size,
+    mode_t mode,
+    uid_t uid,
+    gid_t gid
+);
 
 /**
  * Write buffer to file (overwrites if exists)

@@ -331,8 +331,8 @@ static error_t *sync_fetch_enabled_profiles(
     /* Ephemeral fetch progress — shown while fetching, cleared after.
      * On TTY: transfer progress overwrites via \r, then line cleared entirely.
      * On pipe: falls back to persistent line with newline. */
-    bool ephemeral = out->color_enabled;
-    output_printf(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
+    bool ephemeral = output_is_tty(out);
+    output_print(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
     fflush(out->stream);
 
     if (xfer) {
@@ -348,11 +348,10 @@ static error_t *sync_fetch_enabled_profiles(
     char **branch_names = malloc(profiles->count * sizeof(char *));
     if (!branch_names) {
         if (ephemeral) {
-            fprintf(out->stream, "\r\033[2K");
+            output_clear_line(out);
         } else {
-            fprintf(out->stream, "\n");
+            output_newline(out);
         }
-        fflush(out->stream);
         return ERROR(ERR_MEMORY, "Failed to allocate branch names array");
     }
 
@@ -378,11 +377,10 @@ static error_t *sync_fetch_enabled_profiles(
     if (fetch_count == 0) {
         free(branch_names);
         if (ephemeral) {
-            fprintf(out->stream, "\r\033[2K");
+            output_clear_line(out);
         } else {
-            fprintf(out->stream, "\n");
+            output_newline(out);
         }
-        fflush(out->stream);
         return NULL;
     }
 
@@ -398,11 +396,10 @@ static error_t *sync_fetch_enabled_profiles(
         xfer->progress_active = false;
     }
     if (ephemeral) {
-        fprintf(out->stream, "\r\033[2K");
+        output_clear_line(out);
     } else {
-        fprintf(out->stream, "\n");
+        output_newline(out);
     }
-    fflush(out->stream);
 
     if (err) {
         /* Check if this is an authentication error */
@@ -631,16 +628,14 @@ static void handle_remote_ahead(
 ) {
     if (!auto_pull) {
         /* Just warn - don't auto-pull */
-        char *colored = output_colorize(out, OUTPUT_COLOR_YELLOW, result->profile_name);
-        output_info(out, "  ↓ %s: remote has %zu new commit%s",
-               colored ? colored : result->profile_name,
-               result->behind, result->behind == 1 ? "" : "s");
+        output_info(out, "  ↓ {yellow}%s{reset}: remote has %zu new commit%s",
+                    result->profile_name, result->behind, result->behind == 1 ? "" : "s");
+
         if (no_pull) {
             output_hint(out, "     Pull skipped (--no-pull)");
         } else {
             output_hint(out, "     Enable 'auto_pull' in config to pull automatically during sync");
         }
-        free(colored);
         return;
     }
 
@@ -664,9 +659,7 @@ static void handle_remote_ahead(
     if (!pulled) {
         /* Already up-to-date - report in verbose mode */
         if (verbose) {
-            char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
-            output_info(out, "  = %s: already up-to-date", colored ? colored : result->profile_name);
-            free(colored);
+            output_info(out, "  = {green}%s{reset}: already up-to-date", result->profile_name);
         }
         /* Decrement need_pull_count since it was already up-to-date */
         if (results->need_pull_count > 0) {
@@ -688,23 +681,19 @@ static void handle_remote_ahead(
         enabled_profiles, out, &synced, &removed, &fallbacks, &skipped
     );
 
-    char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
     if (!manifest_ok) {
-        output_success(out, "  %s: pulled %zu commit%s (manifest sync failed)",
-               colored ? colored : result->profile_name,
-               result->behind, result->behind == 1 ? "" : "s");
+        output_success(out, "  {green}%s{reset}: pulled %zu commit%s (manifest sync failed)",
+               result->profile_name, result->behind, result->behind == 1 ? "" : "s");
     } else {
-        output_success(out, "  %s: pulled %zu commit%s (%zu staged, %zu removed, %zu fallback%s)",
-               colored ? colored : result->profile_name,
-               result->behind, result->behind == 1 ? "" : "s",
+        output_success(out, "  {green}%s{reset}: pulled %zu commit%s (%zu staged, %zu removed, %zu fallback%s)",
+               result->profile_name, result->behind, result->behind == 1 ? "" : "s",
                synced, removed, fallbacks, fallbacks == 1 ? "" : "s");
     }
     if (skipped > 0) {
         output_warning(out, "     %zu custom file%s skipped (no prefix configured for '%s')",
-                      skipped, skipped == 1 ? "" : "s", result->profile_name);
+               skipped, skipped == 1 ? "" : "s", result->profile_name);
         output_hint(out, "     Run: dotta profile enable --prefix <path> %s", result->profile_name);
     }
-    free(colored);
 }
 
 /**
@@ -826,8 +815,8 @@ static error_t *handle_diverged_ours(
     if (confirm_destructive) {
         char prompt[DOTTA_MESSAGE_MAX];
         snprintf(prompt, sizeof(prompt),
-                "WARNING: This will force push local '%s' and OVERWRITE remote.\n"
-                "Remote commits will be PERMANENTLY LOST. Continue?", result->profile_name);
+                 "WARNING: This will force push local '%s' and OVERWRITE remote.\n"
+                 "Remote commits will be PERMANENTLY LOST. Continue?", result->profile_name);
         if (!output_confirm_or_default(out, prompt, false, false)) {
             output_info(out, "     Operation cancelled by user");
             return NULL;
@@ -868,8 +857,8 @@ static error_t *handle_diverged_theirs(
     if (confirm_destructive) {
         char prompt[DOTTA_MESSAGE_MAX];
         snprintf(prompt, sizeof(prompt),
-                "WARNING: This will reset '%s' to remote and DISCARD local commits.\n"
-                "Local changes will be LOST. Continue?", result->profile_name);
+                 "WARNING: This will reset '%s' to remote and DISCARD local commits.\n"
+                 "Local changes will be LOST. Continue?", result->profile_name);
         if (!output_confirm_or_default(out, prompt, false, false)) {
             output_info(out, "     Operation cancelled by user");
             return NULL;
@@ -939,15 +928,15 @@ static error_t *handle_diverged(
     const string_array_t *enabled_profiles,
     bool no_push
 ) {
-    char *colored = output_colorize(out, OUTPUT_COLOR_RED, result->profile_name);
-    output_warning(out, "  ⚠ %s: diverged (%zu local, %zu remote commits)",
-           colored ? colored : result->profile_name, result->ahead, result->behind);
-    free(colored);
+    output_warning(out, "  ⚠ {red}%s{reset}: diverged (%zu local, %zu remote commits)",
+           result->profile_name, result->ahead, result->behind);
 
     switch (strategy) {
         case DIVERGE_WARN:
-            output_hint(out, "     Use --diverged=<strategy> or set sync.diverged_strategy in config");
-            output_hint_line(out, "     Strategies: rebase, merge, ours (keep local), theirs (keep remote)");
+            output_hint(out,
+                "     Use --diverged=<strategy> or set sync.diverged_strategy in config");
+            output_hint_line(out,
+                "     Strategies: rebase, merge, ours (keep local), theirs (keep remote)");
             break;
 
         case DIVERGE_REBASE:
@@ -1034,9 +1023,7 @@ static error_t *sync_push_phase(
         switch (result->state) {
             case UPSTREAM_UP_TO_DATE: {
                 if (verbose) {
-                    char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
-                    output_info(out, "  = %s: up-to-date", colored ? colored : result->profile_name);
-                    free(colored);
+                    output_info(out, "  = {green}%s{reset}: up-to-date", result->profile_name);
                 }
                 break;
             }
@@ -1045,11 +1032,8 @@ static error_t *sync_push_phase(
                 /* theirs: discard local commits, reset to remote
                  * Blocked by --no-pull since resetting to remote incorporates remote state */
                 if (diverged_strategy == DIVERGE_THEIRS && !no_pull) {
-                    char *colored = output_colorize(out, OUTPUT_COLOR_YELLOW, result->profile_name);
-                    output_info(out, "  ↑ %s: %zu commit%s ahead of remote",
-                                colored ? colored : result->profile_name,
-                                result->ahead, result->ahead == 1 ? "" : "s");
-                    free(colored);
+                    output_info(out, "  ↑ {yellow}%s{reset}: %zu commit%s ahead of remote",
+                                result->profile_name, result->ahead, result->ahead == 1 ? "" : "s");
                     error_t *err = handle_diverged_theirs(
                         repo, remote_name, result, results, out,
                         confirm_destructive, state, enabled_profiles
@@ -1061,41 +1045,35 @@ static error_t *sync_push_phase(
                 }
 
                 if (no_push) {
-                    char *colored = output_colorize(out, OUTPUT_COLOR_YELLOW, result->profile_name);
-                    output_info(out, "  ↑ %s: %zu commit%s ahead (push skipped: --no-push)",
-                           colored ? colored : result->profile_name,
-                           result->ahead, result->ahead == 1 ? "" : "s");
-                    free(colored);
+                    output_info(out, "  ↑ {yellow}%s{reset}: %zu commit%s ahead (push skipped: --no-push)",
+                                result->profile_name, result->ahead, result->ahead == 1 ? "" : "s");
                     break;
                 }
 
                 /* Safe to push - local has new commits */
                 if (verbose) {
                     output_info(out, "  Pushing %s (%zu commit%s)...", result->profile_name,
-                        result->ahead, result->ahead == 1 ? "" : "s");
+                                result->ahead, result->ahead == 1 ? "" : "s");
                 }
 
                 error_t *err = gitops_push_branch(repo, remote_name, result->profile_name, xfer);
                 if (err) {
                     output_error(out, "  ✗ %s: push failed - %s",
-                                result->profile_name, error_message(err));
+                                 result->profile_name, error_message(err));
                     mark_result_failed(result, results, err);
                 } else {
                     result->pushed = true;
                     results->pushed_count++;
-                    char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
-                    output_success(out,
-                        "  %s: pushed %zu commit%s", colored ? colored : result->profile_name,
-                        result->ahead, result->ahead == 1 ? "" : "s");
-                    free(colored);
+                    output_success(out, "  {green}%s{reset}: pushed %zu commit%s", result->profile_name,
+                                   result->ahead, result->ahead == 1 ? "" : "s");
                 }
                 break;
             }
 
             case UPSTREAM_NO_REMOTE: {
                 if (no_push) {
-                    output_info(out,
-                        "  • %s: local only (push skipped: --no-push)", result->profile_name);
+                    output_info(out, "  • %s: local only (push skipped: --no-push)",
+                                result->profile_name);
                     break;
                 }
 
@@ -1112,10 +1090,7 @@ static error_t *sync_push_phase(
                 } else {
                     result->pushed = true;
                     results->pushed_count++;
-                    char *colored = output_colorize(out, OUTPUT_COLOR_GREEN, result->profile_name);
-                    output_success(out, "  %s: created remote branch",
-                           colored ? colored : result->profile_name);
-                    free(colored);
+                    output_success(out, "  {green}%s{reset}: created remote branch", result->profile_name);
                 }
                 break;
             }
@@ -1123,11 +1098,8 @@ static error_t *sync_push_phase(
             case UPSTREAM_REMOTE_AHEAD: {
                 /* ours: force push local, discard remote commits */
                 if (diverged_strategy == DIVERGE_OURS) {
-                    char *colored = output_colorize(out, OUTPUT_COLOR_YELLOW, result->profile_name);
-                    output_info(out,
-                        "  ↓ %s: %zu remote commit%s ahead", colored ? colored : result->profile_name,
-                        result->behind, result->behind == 1 ? "" : "s");
-                    free(colored);
+                    output_info(out, "  ↓ {yellow}%s{reset}: %zu remote commit%s ahead", result->profile_name,
+                                result->behind, result->behind == 1 ? "" : "s");
                     output_warning(out,
                         "     Local is behind — force push will overwrite newer remote commits");
                     error_t *err = handle_diverged_ours(
@@ -1155,14 +1127,12 @@ static error_t *sync_push_phase(
                 /* --no-pull blocks strategies that incorporate remote changes */
                 if (no_pull && diverged_strategy != DIVERGE_WARN &&
                                diverged_strategy != DIVERGE_OURS) {
-                    char *colored = output_colorize(out, OUTPUT_COLOR_RED, result->profile_name);
-                    output_warning(out, "  ⚠ %s: diverged (%zu local, %zu remote commits)",
-                           colored ? colored : result->profile_name, result->ahead, result->behind);
-                    free(colored);
+                    output_warning(out, "  ⚠ {red}%s{reset}: diverged (%zu local, %zu remote commits)",
+                                   result->profile_name, result->ahead, result->behind);
                     const char *name = diverged_strategy == DIVERGE_REBASE ? "rebase" :
                                        diverged_strategy == DIVERGE_MERGE ? "merge" : "theirs";
                     output_hint(out, "     '%s' resolution skipped (--no-pull prevents "
-                                    "incorporating remote changes)", name);
+                                     "incorporating remote changes)", name);
                     break;
                 }
                 error_t *err = handle_diverged(
@@ -1220,8 +1190,8 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     if (strcmp(current_branch, "dotta-worktree") != 0) {
         /* Create error before freeing current_branch to avoid use-after-free */
         err = ERROR(ERR_STATE_INVALID,
-                    "Main worktree must be on 'dotta-worktree' branch (currently on '%s')\n"
-                    "Hint: Run 'dotta git checkout dotta-worktree' to fix", current_branch);
+            "Main worktree must be on 'dotta-worktree' branch (currently on '%s')\n"
+            "Hint: Run 'dotta git checkout dotta-worktree' to fix", current_branch);
         goto cleanup;
     }
     free(current_branch);
@@ -1266,9 +1236,9 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
 
     if (workspace_profiles->count == 0) {
         err = ERROR(ERR_NOT_FOUND,
-                    "No enabled profiles to sync\n"
-                    "Hint: Run 'dotta profile enable <name>' to enable profiles\n"
-                    "      Or run 'dotta profile list --remote' to see available profiles");
+            "No enabled profiles to sync\n"
+            "Hint: Run 'dotta profile enable <name>' to enable profiles\n"
+            "      Or run 'dotta profile list --remote' to see available profiles");
         goto cleanup;
     }
 
@@ -1614,7 +1584,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     bool sync_ephemeral = !opts->verbose && all_quiet;
 
     if (sync_ephemeral) {
-        output_printf(out, OUTPUT_NORMAL, "Syncing...");
+        output_print(out, OUTPUT_NORMAL, "Syncing...");
         fflush(out->stream);
     }
 
@@ -1625,12 +1595,7 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     );
 
     if (sync_ephemeral) {
-        if (out->color_enabled) {
-            fprintf(out->stream, "\r\033[2K");
-        } else {
-            fprintf(out->stream, "\n");
-        }
-        fflush(out->stream);
+        output_clear_line(out);
     }
 
     if (err) {
@@ -1648,123 +1613,43 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     output_section(out, "Sync complete");
 
     if (results->pushed_count > 0) {
-        char *colored_count = output_colorize(out, OUTPUT_COLOR_CYAN, "%zu");
-        if (colored_count) {
-            char num[64];
-            snprintf(num, sizeof(num), colored_count, results->pushed_count);
-            output_success(out, "  %s profile%s pushed",
-                           num, results->pushed_count == 1 ? "" : "s");
-            free(colored_count);
-        } else {
-            output_success(out, "  %zu profile%s pushed",
-                           results->pushed_count,
-                           results->pushed_count == 1 ? "" : "s");
-        }
+        output_success(out, "  {cyan}%zu{reset} profile%s pushed",
+            results->pushed_count, results->pushed_count == 1 ? "" : "s");
     }
 
     if (results->pulled_count > 0) {
-        char *colored_count = output_colorize(out, OUTPUT_COLOR_CYAN, "%zu");
-        if (colored_count) {
-            char num[64];
-            snprintf(num, sizeof(num), colored_count, results->pulled_count);
-            output_success(out, "  %s profile%s updated from remote",
-                           num, results->pulled_count == 1 ? "" : "s");
-            free(colored_count);
-        } else {
-            output_success(out, "  %zu profile%s updated from remote",
-                           results->pulled_count,
-                           results->pulled_count == 1 ? "" : "s");
-        }
+        output_success(out, "  {cyan}%zu{reset} profile%s updated from remote",
+            results->pulled_count, results->pulled_count == 1 ? "" : "s");
     }
 
     if (results->up_to_date_count > 0) {
-        char *colored_count = output_colorize(out, OUTPUT_COLOR_CYAN, "%zu");
-        if (colored_count) {
-            char num[64];
-            snprintf(num, sizeof(num), colored_count, results->up_to_date_count);
-            output_info(out, "  %s profile%s already up-to-date",
-                        num, results->up_to_date_count == 1 ? "" : "s");
-            free(colored_count);
-        } else {
-            output_info(out, "  %zu profile%s already up-to-date",
-                        results->up_to_date_count,
-                        results->up_to_date_count == 1 ? "" : "s");
-        }
+        output_info(out, "  {cyan}%zu{reset} profile%s already up-to-date",
+            results->up_to_date_count, results->up_to_date_count == 1 ? "" : "s");
     }
 
     if (results->need_pull_count > 0) {
-        char *colored_count = output_colorize(out, OUTPUT_COLOR_CYAN, "%zu");
-        if (colored_count) {
-            char num[64];
-            snprintf(num, sizeof(num), colored_count, results->need_pull_count);
-            output_warning(out, "  %s profile%s need pull",
-                           num, results->need_pull_count == 1 ? "" : "s");
-            free(colored_count);
-        } else {
-            output_warning(out, "  %zu profile%s need pull",
-                           results->need_pull_count,
-                           results->need_pull_count == 1 ? "" : "s");
-        }
+        output_warning(out, "  {cyan}%zu{reset} profile%s need pull",
+            results->need_pull_count, results->need_pull_count == 1 ? "" : "s");
     }
 
     if (results->diverged_count > 0) {
-        char *colored_count = output_colorize(out, OUTPUT_COLOR_CYAN, "%zu");
-        if (colored_count) {
-            char num[64];
-            snprintf(num, sizeof(num), colored_count, results->diverged_count);
-            output_warning(out, "  %s profile%s diverged (manual resolution needed)",
-                           num, results->diverged_count == 1 ? "" : "s");
-            free(colored_count);
-        } else {
-            output_warning(out, "  %zu profile%s diverged (manual resolution needed)",
-                           results->diverged_count,
-                           results->diverged_count == 1 ? "" : "s");
-        }
+        output_warning(out, "  {cyan}%zu{reset} profile%s diverged (manual resolution needed)",
+            results->diverged_count, results->diverged_count == 1 ? "" : "s");
     }
 
     if (results->failed_count > 0) {
-        char *colored_count = output_colorize(out, OUTPUT_COLOR_CYAN, "%zu");
-        if (colored_count) {
-            char num[64];
-            snprintf(num, sizeof(num), colored_count, results->failed_count);
-            output_error(out, "  %s profile%s failed",
-                         num, results->failed_count == 1 ? "" : "s");
-            free(colored_count);
-        } else {
-            output_error(out, "  %zu profile%s failed",
-                         results->failed_count,
-                         results->failed_count == 1 ? "" : "s");
-        }
+        output_error(out, "  {cyan}%zu{reset} profile%s failed",
+            results->failed_count, results->failed_count == 1 ? "" : "s");
     }
 
     if (results->fetch_failed_count > 0) {
-        char *colored_count = output_colorize(out, OUTPUT_COLOR_CYAN, "%zu");
-        if (colored_count) {
-            char num[64];
-            snprintf(num, sizeof(num), colored_count, results->fetch_failed_count);
-            output_warning(out, "  %s fetch operation%s failed",
-                           num, results->fetch_failed_count == 1 ? "" : "s");
-            free(colored_count);
-        } else {
-            output_warning(out, "  %zu fetch operation%s failed",
-                           results->fetch_failed_count,
-                           results->fetch_failed_count == 1 ? "" : "s");
-        }
+        output_warning(out, "  {cyan}%zu{reset} fetch operation%s failed",
+            results->fetch_failed_count, results->fetch_failed_count == 1 ? "" : "s");
     }
 
     if (results->auth_failed_count > 0) {
-        char *colored_count = output_colorize(out, OUTPUT_COLOR_CYAN, "%zu");
-        if (colored_count) {
-            char num[64];
-            snprintf(num, sizeof(num), colored_count, results->auth_failed_count);
-            output_error(out, "  %s authentication failure%s",
-                         num, results->auth_failed_count == 1 ? "" : "s");
-            free(colored_count);
-        } else {
-            output_error(out, "  %zu authentication failure%s",
-                         results->auth_failed_count,
-                         results->auth_failed_count == 1 ? "" : "s");
-        }
+        output_error(out, "  {cyan}%zu{reset} authentication failure%s",
+            results->auth_failed_count, results->auth_failed_count == 1 ? "" : "s");
     }
 
     /* Provide guidance on next steps if remote content was pulled/resolved */

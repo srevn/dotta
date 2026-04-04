@@ -90,7 +90,8 @@ static void print_preflight_results(
 static void print_deploy_results(
     const output_ctx_t *out,
     const deploy_result_t *result,
-    bool verbose
+    bool verbose,
+    bool dry_run
 ) {
     if (!result) return;
 
@@ -98,7 +99,7 @@ static void print_deploy_results(
     if (verbose) {
         /* Deployed files */
         if (result->deployed && string_array_size(result->deployed) > 0) {
-            output_section(out, "Deployed files");
+            output_section(out, dry_run ? "Would deploy" : "Deployed files");
             for (size_t i = 0; i < string_array_size(result->deployed); i++) {
                 output_styled(
                     out, OUTPUT_NORMAL, "  {green}✓{reset} %s\n",
@@ -109,7 +110,7 @@ static void print_deploy_results(
 
         /* Adopted files - existing files now managed by dotta */
         if (result->adopted && string_array_size(result->adopted) > 0) {
-            output_section(out, "Adopted files");
+            output_section(out, dry_run ? "Would adopt" : "Adopted files");
             for (size_t i = 0; i < string_array_size(result->adopted); i++) {
                 output_styled(
                     out, OUTPUT_NORMAL, "  {yellow}⊕{reset} %s\n",
@@ -161,7 +162,8 @@ static void print_deploy_results(
         /* Deployed count */
         if (result->deployed_count > 0) {
             output_styled(
-                out, OUTPUT_NORMAL, "Deployed {green}%zu{reset} file%s\n",
+                out, OUTPUT_NORMAL, dry_run ? "Would deploy {green}%zu{reset} file%s\n"
+                                            : "Deployed {green}%zu{reset} file%s\n",
                 result->deployed_count,
                 result->deployed_count == 1 ? "" : "s"
             );
@@ -170,7 +172,8 @@ static void print_deploy_results(
         /* Adopted count */
         if (result->adopted_count > 0) {
             output_styled(
-                out, OUTPUT_NORMAL, "Adopted {yellow}%zu{reset} file%s (now tracked)\n",
+                out, OUTPUT_NORMAL, dry_run ? "Would adopt {yellow}%zu{reset} file%s\n"
+                                            : "Adopted {yellow}%zu{reset} file%s (now tracked)\n",
                 result->adopted_count,
                 result->adopted_count == 1 ? "" : "s"
             );
@@ -1810,7 +1813,7 @@ error_t *cmd_apply(
         );
         if (err) {
             if (deploy_res) {
-                print_deploy_results(out, deploy_res, opts->verbose);
+                print_deploy_results(out, deploy_res, opts->verbose, opts->dry_run);
             }
             /* Free deploy_manifest before error exit */
             free(deploy_manifest->entries);
@@ -1820,7 +1823,7 @@ error_t *cmd_apply(
             goto cleanup;
         }
 
-        print_deploy_results(out, deploy_res, opts->verbose);
+        print_deploy_results(out, deploy_res, opts->verbose, opts->dry_run);
 
         /* Free deploy_manifest after successful deployment */
         free(deploy_manifest->entries);

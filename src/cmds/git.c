@@ -43,7 +43,7 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
      * Format: "git" "-C" "<repo-path>" <user-args...> NULL
      */
     int total_args = 3 + opts->arg_count + 1;  /* git + -C + path + args + NULL */
-    char **argv = malloc((size_t)total_args * sizeof(char *));
+    char **argv = malloc((size_t) total_args * sizeof(char *));
     if (!argv) {
         fprintf(stderr, "Error: Failed to allocate memory\n");
         return 1;
@@ -51,7 +51,7 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
 
     argv[0] = "git";
     argv[1] = "-C";
-    argv[2] = (char *)repo_path;  /* Cast away const for execvp */
+    argv[2] = (char *) repo_path;  /* Cast away const for execvp */
 
     for (int i = 0; i < opts->arg_count; i++) {
         argv[3 + i] = opts->args[i];

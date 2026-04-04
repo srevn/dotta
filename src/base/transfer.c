@@ -92,7 +92,7 @@ int transfer_credentials_callback(
     void *payload
 ) {
     /* Payload is transfer_context_t* */
-    transfer_context_t *ctx = (transfer_context_t *)payload;
+    transfer_context_t *ctx = (transfer_context_t *) payload;
 
     /* Delegate to the credential system */
     return credentials_callback(
@@ -115,7 +115,7 @@ int transfer_progress_callback(
         return 0;
     }
 
-    transfer_context_t *ctx = (transfer_context_t *)payload;
+    transfer_context_t *ctx = (transfer_context_t *) payload;
 
     /* Skip progress if no output context or below NORMAL verbosity */
     if (!ctx->output || ctx->output->verbosity < OUTPUT_NORMAL) {
@@ -143,8 +143,10 @@ int transfer_progress_callback(
         output_format_size(stats->received_bytes, bytes_str, sizeof(bytes_str));
 
         /* Display: "Receiving objects: XX% (current/total), X.X MiB" */
-        fprintf(ctx->output->stream, "\rReceiving objects: %3d%% (%u/%u), %s",
-                percent, received, total, bytes_str);
+        fprintf(
+            ctx->output->stream, "\rReceiving objects: %3d%% (%u/%u), %s",
+            percent, received, total, bytes_str
+        );
         fflush(ctx->output->stream);
         ctx->progress_active = true;
 
@@ -157,8 +159,10 @@ int transfer_progress_callback(
         char bytes_str[32];
         output_format_size(stats->received_bytes, bytes_str, sizeof(bytes_str));
 
-        fprintf(ctx->output->stream, "\rReceiving objects: %u, %s",
-                received, bytes_str);
+        fprintf(
+            ctx->output->stream, "\rReceiving objects: %u, %s",
+            received, bytes_str
+        );
         fflush(ctx->output->stream);
         ctx->progress_active = true;
     }
@@ -179,7 +183,7 @@ int transfer_push_progress_callback(
         return 0;
     }
 
-    transfer_context_t *ctx = (transfer_context_t *)payload;
+    transfer_context_t *ctx = (transfer_context_t *) payload;
 
     /* Skip progress if no output context or below NORMAL verbosity */
     if (!ctx->output || ctx->output->verbosity < OUTPUT_NORMAL) {
@@ -199,8 +203,10 @@ int transfer_push_progress_callback(
         int percent = (current * 100) / total;
 
         /* Display: "Sending objects: XX% (current/total)" */
-        fprintf(ctx->output->stream, "\rSending objects: %3d%% (%u/%u)",
-                percent, current, total);
+        fprintf(
+            ctx->output->stream, "\rSending objects: %3d%% (%u/%u)",
+            percent, current, total
+        );
         fflush(ctx->output->stream);
         ctx->progress_active = true;
 

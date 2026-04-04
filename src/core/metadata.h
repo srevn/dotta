@@ -79,9 +79,9 @@
  * Metadata item kind discriminator
  */
 typedef enum {
-    METADATA_ITEM_FILE = 0,
+    METADATA_ITEM_FILE      = 0,
     METADATA_ITEM_DIRECTORY = 1,
-    METADATA_ITEM_SYMLINK = 2
+    METADATA_ITEM_SYMLINK   = 2
 } metadata_item_kind_t;
 
 /**

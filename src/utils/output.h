@@ -17,8 +17,8 @@
  * Verbosity levels
  */
 typedef enum {
-    OUTPUT_QUIET = 0,   /* Suppress all output except errors */
-    OUTPUT_NORMAL = 1,  /* Normal output */
+    OUTPUT_QUIET   = 0, /* Suppress all output except errors */
+    OUTPUT_NORMAL  = 1, /* Normal output */
     OUTPUT_VERBOSE = 2  /* Verbose output */
 } output_verbosity_t;
 
@@ -176,25 +176,25 @@ void output_colored(
  * Print error message
  */
 void output_error(const output_ctx_t *ctx, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));
+__attribute__((format(printf, 2, 3)));
 
 /**
  * Print warning message
  */
 void output_warning(const output_ctx_t *ctx, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));
+__attribute__((format(printf, 2, 3)));
 
 /**
  * Print success message
  */
 void output_success(const output_ctx_t *ctx, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));
+__attribute__((format(printf, 2, 3)));
 
 /**
  * Print info message
  */
 void output_info(const output_ctx_t *ctx, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));
+__attribute__((format(printf, 2, 3)));
 
 /**
  * Print hint message (always dimmed when colors enabled)
@@ -214,7 +214,7 @@ void output_info(const output_ctx_t *ctx, const char *fmt, ...)
  *   → "  Hint: Run 'dotta profile fetch foo' first" (dimmed, indented)
  */
 void output_hint(const output_ctx_t *ctx, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));
+__attribute__((format(printf, 2, 3)));
 
 /**
  * Print hint continuation line (no "Hint:" prefix, but still dimmed)
@@ -234,7 +234,7 @@ void output_hint(const output_ctx_t *ctx, const char *fmt, ...)
  *   "  dotta bootstrap --profile <profile> --edit" (dimmed)
  */
 void output_hint_line(const output_ctx_t *ctx, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));
+__attribute__((format(printf, 2, 3)));
 
 /**
  * Print newline (respects verbosity)

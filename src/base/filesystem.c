@@ -98,8 +98,10 @@ error_t *fs_read_file(const char *path, buffer_t **out) {
     /* Open file */
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
-        return ERROR(ERR_FS,
-            "Failed to open '%s': %s", path, strerror(errno));
+        return ERROR(
+            ERR_FS, "Failed to open '%s': %s",
+            path, strerror(errno)
+        );
     }
 
     /* Get file size */
@@ -107,8 +109,10 @@ error_t *fs_read_file(const char *path, buffer_t **out) {
     if (fstat(fd, &st) < 0) {
         int saved_errno = errno;
         close(fd);
-        return ERROR(ERR_FS,
-            "Failed to stat '%s': %s", path, strerror(saved_errno));
+        return ERROR(
+            ERR_FS, "Failed to stat '%s': %s",
+            path, strerror(saved_errno)
+        );
     }
 
     /* Create buffer */
@@ -117,8 +121,10 @@ error_t *fs_read_file(const char *path, buffer_t **out) {
     );
     if (!buf) {
         close(fd);
-        return ERROR(ERR_MEMORY,
-            "Failed to allocate buffer for '%s'", path);
+        return ERROR(
+            ERR_MEMORY, "Failed to allocate buffer for '%s'",
+            path
+        );
     }
 
     /* Read file in chunks */
@@ -135,8 +141,10 @@ error_t *fs_read_file(const char *path, buffer_t **out) {
             int saved_errno = errno;
             close(fd);
             buffer_free(buf);
-            return ERROR(ERR_FS,
-                "Read error on '%s': %s", path, strerror(saved_errno));
+            return ERROR(
+                ERR_FS, "Read error on '%s': %s",
+                path, strerror(saved_errno)
+            );
         }
 
         if (bytes_read == 0) {
@@ -166,7 +174,9 @@ error_t *fs_write_file_raw(
 ) {
     RETURN_IF_ERROR(validate_path(path));
     if (size > 0 && !data) {
-        return ERROR(ERR_INVALID_ARG, "Data cannot be NULL when size > 0");
+        return ERROR(
+            ERR_INVALID_ARG, "Data cannot be NULL when size > 0"
+        );
     }
 
     /* Ensure parent directory exists */
@@ -180,8 +190,9 @@ error_t *fs_write_file_raw(
         err = fs_create_dir(parent, true);
         free(parent);
         if (err) {
-            return error_wrap(err,
-                "Failed to create parent directory for '%s'", path);
+            return error_wrap(
+                err, "Failed to create parent directory for '%s'", path
+            );
         }
     } else {
         free(parent);
@@ -198,8 +209,10 @@ error_t *fs_write_file_raw(
      */
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {
-        return ERROR(ERR_FS,
-            "Failed to open '%s' for writing: %s", path, strerror(errno));
+        return ERROR(
+            ERR_FS, "Failed to open '%s' for writing: %s",
+            path, strerror(errno)
+        );
     }
 
     /* SECURITY CRITICAL: Apply ownership BEFORE writing data
@@ -210,12 +223,14 @@ error_t *fs_write_file_raw(
      *
      * Use -1 to skip ownership change (preserve current user ownership).
      */
-    if (uid != (uid_t)-1 || gid != (gid_t)-1) {
+    if (uid != (uid_t) -1 || gid != (gid_t) -1) {
         if (fchown(fd, uid, gid) < 0) {
             int saved_errno = errno;
             close(fd);
-            return ERROR(ERR_FS,
-                "Failed to set ownership on '%s': %s", path, strerror(saved_errno));
+            return ERROR(
+                ERR_FS, "Failed to set ownership on '%s': %s",
+                path, strerror(saved_errno)
+            );
         }
     }
 
@@ -233,8 +248,10 @@ error_t *fs_write_file_raw(
     if (fchmod(fd, mode) < 0) {
         int saved_errno = errno;
         close(fd);
-        return ERROR(ERR_FS,
-            "Failed to set permissions on '%s': %s", path, strerror(saved_errno));
+        return ERROR(
+            ERR_FS, "Failed to set permissions on '%s': %s",
+            path, strerror(saved_errno)
+        );
     }
 
     /* Write data - SAFE: File now has correct ownership + permissions
@@ -256,8 +273,10 @@ error_t *fs_write_file_raw(
             }
             int saved_errno = errno;
             close(fd);
-            return ERROR(ERR_FS, "Write error on '%s': %s",
-                        path, strerror(saved_errno));
+            return ERROR(
+                ERR_FS, "Write error on '%s': %s",
+                path, strerror(saved_errno)
+            );
         }
         written += n;
     }
@@ -266,8 +285,10 @@ error_t *fs_write_file_raw(
     if (fsync(fd) < 0) {
         int saved_errno = errno;
         close(fd);
-        return ERROR(ERR_FS, "Failed to sync '%s': %s",
-                    path, strerror(saved_errno));
+        return ERROR(
+            ERR_FS, "Failed to sync '%s': %s",
+            path, strerror(saved_errno)
+        );
     }
 
     close(fd);
@@ -315,8 +336,9 @@ error_t *fs_copy_file(const char *src, const char *dst) {
      * SECURITY: Use fs_write_file_raw() to set permissions atomically via fchmod(),
      * eliminating the security window where sensitive files (e.g., SSH keys)
      * would have incorrect permissions (0644 instead of 0600). */
-    err = fs_write_file_raw(dst, buffer_data(content), buffer_size(content),
-                           mode, -1, -1);
+    err = fs_write_file_raw(
+        dst, buffer_data(content), buffer_size(content), mode, -1, -1
+    );
     buffer_free(content);
     if (err) {
         return error_wrap(err, "Failed to copy '%s' to '%s'", src, dst);
@@ -332,8 +354,10 @@ error_t *fs_remove_file(const char *path) {
         if (errno == ENOENT) {
             return NULL;  /* Not an error if file doesn't exist */
         }
-        return ERROR(ERR_FS,
-            "Failed to remove '%s': %s", path, strerror(errno));
+        return ERROR(
+            ERR_FS, "Failed to remove '%s': %s",
+            path, strerror(errno)
+        );
     }
 
     return NULL;
@@ -388,8 +412,10 @@ error_t *fs_create_dir(const char *path, bool parents) {
         if (errno == EEXIST && fs_is_directory(path)) {
             return NULL;  /* Race condition - another process created it */
         }
-        return ERROR(ERR_FS,
-            "Failed to create directory '%s': %s", path, strerror(errno));
+        return ERROR(
+            ERR_FS, "Failed to create directory '%s': %s",
+            path, strerror(errno)
+        );
     }
 
     return NULL;
@@ -400,8 +426,9 @@ error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
 
     /* Validate mode */
     if (mode > 0777) {
-        return ERROR(ERR_INVALID_ARG,
-            "Invalid mode: %04o (must be <= 0777)", mode);
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)", mode
+        );
     }
 
     bool existed = fs_is_directory(path);
@@ -432,9 +459,10 @@ error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
             if (errno == EEXIST && fs_is_directory(path)) {
                 existed = true;
             } else {
-                return ERROR(ERR_FS,
-                    "Failed to create directory '%s' with mode %04o: %s",
-                    path, mode, strerror(errno));
+                return ERROR(
+                    ERR_FS, "Failed to create directory '%s' with mode %04o: %s",
+                    path, mode, strerror(errno)
+                );
             }
         }
     }
@@ -455,8 +483,10 @@ error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
      * Matches file behavior (fs_write_file_raw always sets exact mode)
      */
     if (chmod(path, mode) < 0) {
-        return ERROR(ERR_FS, "Failed to set permissions on directory '%s'%s: %s",
-                     path, existed ? " (already existed)" : "", strerror(errno));
+        return ERROR(
+            ERR_FS, "Failed to set permissions on directory '%s'%s: %s",
+            path, existed ? " (already existed)" : "", strerror(errno)
+        );
     }
 
     return NULL;
@@ -473,8 +503,9 @@ error_t *fs_create_dir_with_ownership(
 
     /* Validate mode */
     if (mode > 0777) {
-        return ERROR(ERR_INVALID_ARG,
-            "Invalid mode: %04o (must be <= 0777)", mode);
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)", mode
+        );
     }
 
     /* Try to open existing directory first (eliminates TOCTOU race)
@@ -492,8 +523,10 @@ error_t *fs_create_dir_with_ownership(
     /* Directory doesn't exist - verify it's actually missing */
     if (errno != ENOENT && errno != ENOTDIR) {
         /* Unexpected error (permission denied, etc.) */
-        return ERROR(ERR_FS,
-            "Failed to open directory '%s': %s", path, strerror(errno));
+        return ERROR(
+            ERR_FS, "Failed to open directory '%s': %s",
+            path, strerror(errno)
+        );
     }
 
     /* Create parent directories if requested */
@@ -524,8 +557,10 @@ error_t *fs_create_dir_with_ownership(
             /* Race condition: directory created concurrently, retry via open path */
             return fs_create_dir_with_ownership(path, mode, uid, gid, false);
         }
-        return ERROR(ERR_FS,
-            "Failed to create directory '%s': %s", path, strerror(errno));
+        return ERROR(
+            ERR_FS, "Failed to create directory '%s': %s",
+            path, strerror(errno)
+        );
     }
 
     /* Open newly created directory for atomic operations
@@ -534,8 +569,10 @@ error_t *fs_create_dir_with_ownership(
      * with ELOOP instead of applying ownership to the symlink target. */
     dirfd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
     if (dirfd < 0) {
-        return ERROR(ERR_FS,
-            "Failed to open newly created directory '%s': %s", path, strerror(errno));
+        return ERROR(
+            ERR_FS, "Failed to open newly created directory '%s': %s",
+            path, strerror(errno)
+        );
     }
 
 apply_metadata:
@@ -543,12 +580,14 @@ apply_metadata:
      * SECURITY: Using fchown() on the file descriptor ensures atomicity.
      * The ownership is applied to the directory we have open, not to whatever
      * might be at 'path' if a race condition occurred. */
-    if (uid != (uid_t)-1 || gid != (gid_t)-1) {
+    if (uid != (uid_t) -1 || gid != (gid_t) -1) {
         if (fchown(dirfd, uid, gid) < 0) {
             int saved_errno = errno;
             close(dirfd);
-            return ERROR(ERR_FS,
-                "Failed to set ownership on '%s': %s", path, strerror(saved_errno));
+            return ERROR(
+                ERR_FS, "Failed to set ownership on '%s': %s",
+                path, strerror(saved_errno)
+            );
         }
     }
 
@@ -559,8 +598,10 @@ apply_metadata:
     if (fchmod(dirfd, mode) < 0) {
         int saved_errno = errno;
         close(dirfd);
-        return ERROR(ERR_FS,
-            "Failed to set mode on '%s': %s", path, strerror(saved_errno));
+        return ERROR(
+            ERR_FS, "Failed to set mode on '%s': %s",
+            path, strerror(saved_errno)
+        );
     }
 
     close(dirfd);
@@ -599,10 +640,10 @@ error_t *fs_remove_dir(const char *path, bool recursive) {
             struct stat st;
             if (lstat(full_path, &st) < 0) {
                 /* If lstat fails, try unlink as fallback */
-                err = (errno != ENOENT)
-                    ? ERROR(ERR_FS,
-                        "Failed to stat '%s': %s", full_path, strerror(errno))
-                    : NULL;
+                err = (errno != ENOENT) ? ERROR(
+                    ERR_FS, "Failed to stat '%s': %s",
+                    full_path, strerror(errno)
+                    ) : NULL;
             } else if (S_ISDIR(st.st_mode)) {
                 err = fs_remove_dir(full_path, true);
             } else {
@@ -625,8 +666,10 @@ error_t *fs_remove_dir(const char *path, bool recursive) {
         if (errno == ENOENT) {
             return NULL;  /* Not an error if doesn't exist */
         }
-        return ERROR(ERR_FS,
-            "Failed to remove directory '%s': %s", path, strerror(errno));
+        return ERROR(
+            ERR_FS, "Failed to remove directory '%s': %s",
+            path, strerror(errno)
+        );
     }
 
     return NULL;
@@ -640,7 +683,10 @@ error_t *fs_clear_path(const char *path) {
         if (errno == ENOENT) {
             return NULL;  /* Nothing to clear - success */
         }
-        return ERROR(ERR_FS, "Failed to stat '%s': %s", path, strerror(errno));
+        return ERROR(
+            ERR_FS, "Failed to stat '%s': %s",
+            path, strerror(errno)
+        );
     }
 
     if (S_ISDIR(st.st_mode)) {
@@ -653,7 +699,10 @@ error_t *fs_clear_path(const char *path) {
         if (errno == ENOENT) {
             return NULL;  /* Race condition - already gone, success */
         }
-        return ERROR(ERR_FS, "Failed to remove '%s': %s", path, strerror(errno));
+        return ERROR(
+            ERR_FS, "Failed to remove '%s': %s",
+            path, strerror(errno)
+        );
     }
 
     return NULL;
@@ -698,7 +747,8 @@ bool fs_is_directory_empty(const char *path) {
 
     while ((entry = readdir(dir)) != NULL) {
         /* Skip . and .. entries */
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+        if (strcmp(entry->d_name, ".") == 0 ||
+            strcmp(entry->d_name, "..") == 0) {
             continue;
         }
 
@@ -728,15 +778,19 @@ error_t *fs_list_dir(const char *path, string_array_t **out) {
 
     DIR *dir = opendir(path);
     if (!dir) {
-        return ERROR(ERR_FS, "Failed to open directory '%s': %s",
-                    path, strerror(errno));
+        return ERROR(
+            ERR_FS, "Failed to open directory '%s': %s",
+            path, strerror(errno)
+        );
     }
 
     string_array_t *entries = string_array_create();
     if (!entries) {
         closedir(dir);
-        return ERROR(ERR_MEMORY,
-            "Failed to allocate directory listing for '%s'", path);
+        return ERROR(
+            ERR_MEMORY, "Failed to allocate directory listing for '%s'",
+            path
+        );
     }
 
     struct dirent *entry;
@@ -753,8 +807,10 @@ error_t *fs_list_dir(const char *path, string_array_t **out) {
         if (err) {
             closedir(dir);
             string_array_free(entries);
-            return error_wrap(err,
-                "Failed to build directory listing for '%s'", path);
+            return error_wrap(
+                err, "Failed to build directory listing for '%s'",
+                path
+            );
         }
         errno = 0;
     }
@@ -763,8 +819,10 @@ error_t *fs_list_dir(const char *path, string_array_t **out) {
         int saved_errno = errno;
         closedir(dir);
         string_array_free(entries);
-        return ERROR(ERR_FS,
-            "Error reading directory '%s': %s", path, strerror(saved_errno));
+        return ERROR(
+            ERR_FS, "Error reading directory '%s': %s",
+            path, strerror(saved_errno)
+        );
     }
 
     closedir(dir);
@@ -792,8 +850,10 @@ error_t *fs_make_absolute(const char *path, char **out) {
         /* Relative path - prepend current working directory */
         char cwd[PATH_MAX];
         if (getcwd(cwd, sizeof(cwd)) == NULL) {
-            return ERROR(ERR_FS,
-                "Failed to get current directory: %s", strerror(errno));
+            return ERROR(
+                ERR_FS, "Failed to get current directory: %s",
+                strerror(errno)
+            );
         }
 
         error_t *err = fs_path_join(cwd, path, &absolute);
@@ -809,8 +869,10 @@ error_t *fs_make_absolute(const char *path, char **out) {
     if (lstat(absolute, &st) < 0) {
         int saved_errno = errno;
         free(absolute);
-        return ERROR(ERR_NOT_FOUND,
-            "Path does not exist: '%s': %s", path, strerror(saved_errno));
+        return ERROR(
+            ERR_NOT_FOUND, "Path does not exist: '%s': %s",
+            path, strerror(saved_errno)
+        );
     }
 
     *out = absolute;
@@ -823,14 +885,18 @@ error_t *fs_canonicalize_path(const char *path, char **out) {
 
     char resolved[PATH_MAX];
     if (realpath(path, resolved) == NULL) {
-        return ERROR(ERR_FS,
-            "Failed to resolve path '%s': %s", path, strerror(errno));
+        return ERROR(
+            ERR_FS, "Failed to resolve path '%s': %s",
+            path, strerror(errno)
+        );
     }
 
     *out = strdup(resolved);
     if (!*out) {
-        return ERROR(ERR_MEMORY,
-            "Failed to allocate canonical path for '%s'", path);
+        return ERROR(
+            ERR_MEMORY, "Failed to allocate canonical path for '%s'",
+            path
+        );
     }
 
     return NULL;
@@ -868,15 +934,14 @@ error_t *fs_normalize_path(const char *path, char **out) {
 
     while (token != NULL) {
         if (token[0] == '\0' || strcmp(token, ".") == 0) {
-            /* Empty component or '.': skip */
         } else if (strcmp(token, "..") == 0) {
             /* '..': handle parent directory reference */
             bool push_dotdot = false;
 
             if (stack_size > 0) {
-                /* If we have components on stack */
-                if (!is_absolute && strcmp(components[stack_size - 1], "..") == 0) {
-                    /* Top is '..' (relative path), so push another '..' */
+
+                if (!is_absolute &&
+                    strcmp(components[stack_size - 1], "..") == 0) {
                     push_dotdot = true;
                 } else {
                     /* Top is regular component, pop it */
@@ -888,13 +953,11 @@ error_t *fs_normalize_path(const char *path, char **out) {
                 /* Stack empty and relative path: push '..' */
                 push_dotdot = true;
             }
-            /* If stack empty and absolute, ignore (can't go above root) */
 
             if (push_dotdot) {
                 components[stack_size] = token;
                 stack_size++;
             }
-            /* If stack is empty and absolute path, ignore (can't go above root) */
         } else {
             /* Regular component: push to stack */
             components[stack_size] = token;
@@ -904,15 +967,14 @@ error_t *fs_normalize_path(const char *path, char **out) {
     }
 
     /* Calculate result length */
-    size_t result_len = is_absolute ? 1 : 0;  /* Leading '/' for absolute */
+    size_t result_len = is_absolute ? 1 : 0; /* Leading '/' for absolute */
     for (size_t i = 0; i < stack_size; i++) {
-        if (i > 0) result_len++;  /* Separator '/' */
+        if (i > 0) result_len++;             /* Separator '/' */
         result_len += strlen(components[i]);
     }
 
     /* Handle empty result */
     if (result_len == 0) {
-        /* Relative path that normalized to empty -> "." */
         *out = strdup(".");
         free(path_copy);
         free(components);
@@ -996,8 +1058,10 @@ error_t *fs_get_parent_dir(const char *path, char **out) {
     free(clean_path);
 
     if (!*out) {
-        return ERROR(ERR_MEMORY,
-            "Failed to allocate parent path for '%s'", path);
+        return ERROR(
+            ERR_MEMORY, "Failed to allocate parent path for '%s'",
+            path
+        );
     }
 
     return NULL;
@@ -1011,22 +1075,22 @@ error_t *fs_path_join(const char *base, const char *component, char **out) {
     /* Calculate length */
     size_t base_len = strlen(base);
     size_t comp_len = strlen(component);
-    
+
     /* Determine if we need a separator slash:
-     * - Don't add if base ends with '/' 
+     * - Don't add if base ends with '/'
      * - Don't add if component starts with '/'
      * - Don't add if base is empty
      * - Otherwise add one */
     bool needs_slash = (base_len > 0 && base[base_len - 1] != '/' &&
-                       (comp_len == 0 || component[0] != '/'));
-    
+        (comp_len == 0 || component[0] != '/'));
+
     /* Special case: if base is "/" and component starts with "/" */
     size_t comp_offset = 0;
     if (base_len == 1 && base[0] == '/' && comp_len > 0 && component[0] == '/') {
         comp_offset = 1;  /* Skip leading slash in component */
         comp_len--;
     }
-    
+
     size_t total_len = base_len + comp_len + (needs_slash ? 1 : 0);
 
     /* Allocate */
@@ -1096,8 +1160,10 @@ error_t *fs_create_symlink(const char *target, const char *linkpath) {
     RETURN_IF_ERROR(validate_path(linkpath));
 
     if (symlink(target, linkpath) < 0) {
-        return ERROR(ERR_FS, "Failed to create symlink '%s' -> '%s': %s",
-                    linkpath, target, strerror(errno));
+        return ERROR(
+            ERR_FS, "Failed to create symlink '%s' -> '%s': %s",
+            linkpath, target, strerror(errno)
+        );
     }
 
     return NULL;
@@ -1111,15 +1177,19 @@ error_t *fs_read_symlink(const char *linkpath, char **out) {
     ssize_t len = readlink(linkpath, buf, sizeof(buf) - 1);
 
     if (len < 0) {
-        return ERROR(ERR_FS, "Failed to read symlink '%s': %s",
-                    linkpath, strerror(errno));
+        return ERROR(
+            ERR_FS, "Failed to read symlink '%s': %s",
+            linkpath, strerror(errno)
+        );
     }
 
     buf[len] = '\0';
     *out = strdup(buf);
     if (!*out) {
-        return ERROR(ERR_MEMORY,
-            "Failed to allocate symlink target for '%s'", linkpath);
+        return ERROR(
+            ERR_MEMORY, "Failed to allocate symlink target for '%s'",
+            linkpath
+        );
     }
 
     return NULL;
@@ -1159,8 +1229,10 @@ error_t *fs_set_permissions(const char *path, mode_t mode) {
     RETURN_IF_ERROR(validate_path(path));
 
     if (chmod(path, mode) < 0) {
-        return ERROR(ERR_FS,
-            "Failed to set permissions on '%s': %s", path, strerror(errno));
+        return ERROR(
+            ERR_FS, "Failed to set permissions on '%s': %s",
+            path, strerror(errno)
+        );
     }
 
     return NULL;
@@ -1254,8 +1326,10 @@ error_t *fs_ensure_parent_dirs(const char *path) {
     free(path_copy);
 
     if (err) {
-        return error_wrap(err,
-            "Failed to create parent directories for: %s", path);
+        return error_wrap(
+            err, "Failed to create parent directories for: %s",
+            path
+        );
     }
 
     return NULL;
@@ -1305,8 +1379,8 @@ static int fix_ownership_callback(
     int typeflag,
     struct FTW *ftwbuf
 ) {
-    (void)typeflag;  /* Unused - we handle all types the same way */
-    (void)ftwbuf;    /* Unused - we don't need traversal info */
+    (void) typeflag;  /* Unused - we handle all types the same way */
+    (void) ftwbuf;    /* Unused - we don't need traversal info */
 
     /* Sanity check: context must be set */
     if (!g_fix_context) {
@@ -1350,15 +1424,17 @@ error_t *fs_fix_ownership_recursive(
 
     /* Verify path exists and is a directory */
     if (!fs_is_directory(path)) {
-        return ERROR(ERR_INVALID_ARG,
-            "Path '%s' does not exist or is not a directory", path);
+        return ERROR(
+            ERR_INVALID_ARG, "Path '%s' does not exist or is not a directory",
+            path
+        );
     }
 
     /* Initialize context */
     ownership_fix_context_t context = {
-        .target_uid = uid,
-        .target_gid = gid,
-        .fixed_count = 0,
+        .target_uid   = uid,
+        .target_gid   = gid,
+        .fixed_count  = 0,
         .failed_count = 0
     };
 
@@ -1385,8 +1461,10 @@ error_t *fs_fix_ownership_recursive(
     if (result != 0) {
         /* nftw() returns -1 on error, or non-zero if callback requested stop
          * Since our callback always returns 0, non-zero means nftw() failed */
-        return ERROR(ERR_FS,
-            "Failed to traverse directory '%s': %s", path, strerror(errno));
+        return ERROR(
+            ERR_FS, "Failed to traverse directory '%s': %s",
+            path, strerror(errno)
+        );
     }
 
     /* Return statistics if requested */

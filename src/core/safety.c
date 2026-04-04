@@ -73,7 +73,7 @@ static void free_profile_cache(void *entry) {
     if (!entry) {
         return;
     }
-    profile_cache_t *cache = (profile_cache_t *)entry;
+    profile_cache_t *cache = (profile_cache_t *) entry;
     if (cache->tree) {
         git_tree_free(cache->tree);
     }
@@ -185,8 +185,9 @@ static error_t *check_file_in_tree(
         /* Resolve branch HEAD to tree */
         git_reference *ref = NULL;
         char refname[DOTTA_REFNAME_MAX];
-        error_t *err = gitops_build_refname(refname, sizeof(refname),
-                                            "refs/heads/%s", profile_name);
+        error_t *err = gitops_build_refname(
+            refname, sizeof(refname), "refs/heads/%s", profile_name
+        );
         if (err) {
             return err;
         }
@@ -199,7 +200,9 @@ static error_t *check_file_in_tree(
         const git_oid *target = git_reference_target(ref);
         if (!target) {
             git_reference_free(ref);
-            return ERROR(ERR_GIT, "Symbolic reference for profile '%s'", profile_name);
+            return ERROR(
+                ERR_GIT, "Symbolic reference for profile '%s'", profile_name
+            );
         }
 
         git_commit *commit = NULL;
@@ -207,8 +210,10 @@ static error_t *check_file_in_tree(
         git_reference_free(ref);
 
         if (git_err != 0) {
-            return ERROR(ERR_GIT, "Failed to load commit for profile '%s': %s",
-                profile_name, git_error_last() ? git_error_last()->message : "unknown");
+            return ERROR(
+                ERR_GIT, "Failed to load commit for profile '%s': %s",
+                profile_name, git_error_last() ? git_error_last()->message : "unknown"
+            );
         }
 
         git_tree *tree = NULL;
@@ -216,8 +221,10 @@ static error_t *check_file_in_tree(
         git_commit_free(commit);
 
         if (git_err != 0) {
-            return ERROR(ERR_GIT, "Failed to load tree for profile '%s': %s",
-                profile_name, git_error_last() ? git_error_last()->message : "unknown");
+            return ERROR(
+                ERR_GIT, "Failed to load tree for profile '%s': %s",
+                profile_name, git_error_last() ? git_error_last()->message : "unknown"
+            );
         }
 
         cached->tree = tree;          /* Transfer ownership to cache */
@@ -241,8 +248,10 @@ static error_t *check_file_in_tree(
     } else if (ret != GIT_ENOTFOUND) {
         /* Unexpected error (corrupt tree, OOM). Propagate so caller
          * can use CANNOT_VERIFY instead of RELEASED. */
-        return ERROR(ERR_GIT, "Failed to check tree entry for '%s': %s",
-            storage_path, git_error_last() ? git_error_last()->message : "unknown");
+        return ERROR(
+            ERR_GIT, "Failed to check tree entry for '%s': %s",
+            storage_path, git_error_last() ? git_error_last()->message : "unknown"
+        );
     }
     /* GIT_ENOTFOUND: file not in tree — out_in_tree stays false */
 
@@ -276,8 +285,10 @@ static error_t *add_violation(
             return ERROR(ERR_MEMORY, "Violations array too large");
         }
 
-        safety_violation_t *new_violations = realloc(result->violations,
-                                                     new_capacity * sizeof(safety_violation_t));
+        safety_violation_t *new_violations = realloc(
+            result->violations,
+            new_capacity * sizeof(safety_violation_t)
+        );
         if (!new_violations) {
             return ERROR(ERR_MEMORY, "Failed to grow violations array");
         }
@@ -355,29 +366,37 @@ static check_result_t map_divergence_to_violation(
 
     /* DIVERGENCE_CONTENT: Content differs from Git */
     if (orphan->divergence & DIVERGENCE_CONTENT) {
-        *out_err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
-                                 orphan->profile, SAFETY_REASON_MODIFIED, true);
+        *out_err = add_violation(
+            result, orphan->filesystem_path, orphan->storage_path,
+            orphan->profile, SAFETY_REASON_MODIFIED, true
+        );
         return *out_err ? SAFETY_CHECK_ERROR : SAFETY_CHECK_DONE;
     }
 
     /* DIVERGENCE_TYPE: File type changed (file <-> symlink) */
     if (orphan->divergence & DIVERGENCE_TYPE) {
-        *out_err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
-                                 orphan->profile, SAFETY_REASON_TYPE_CHANGED, true);
+        *out_err = add_violation(
+            result, orphan->filesystem_path, orphan->storage_path,
+            orphan->profile, SAFETY_REASON_TYPE_CHANGED, true
+        );
         return *out_err ? SAFETY_CHECK_ERROR : SAFETY_CHECK_DONE;
     }
 
     /* DIVERGENCE_MODE or DIVERGENCE_OWNERSHIP: Permissions changed */
     if (orphan->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
-        *out_err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
-                                 orphan->profile, SAFETY_REASON_MODE_CHANGED, false);
+        *out_err = add_violation(
+            result, orphan->filesystem_path, orphan->storage_path,
+            orphan->profile, SAFETY_REASON_MODE_CHANGED, false
+        );
         return *out_err ? SAFETY_CHECK_ERROR : SAFETY_CHECK_DONE;
     }
 
     /* DIVERGENCE_UNVERIFIED: Verification failed */
     if (orphan->divergence & DIVERGENCE_UNVERIFIED) {
-        *out_err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
-                                 orphan->profile, SAFETY_REASON_CANNOT_VERIFY, false);
+        *out_err = add_violation(
+            result, orphan->filesystem_path, orphan->storage_path,
+            orphan->profile, SAFETY_REASON_CANNOT_VERIFY, false
+        );
         return *out_err ? SAFETY_CHECK_ERROR : SAFETY_CHECK_DONE;
     }
 
@@ -385,14 +404,16 @@ static check_result_t map_divergence_to_violation(
      * - ENCRYPTION: Policy mismatch (not user modification) — safe
      * - STALE: VWD cache outdated (Git changed) — irrelevant for removal
      * Unknown flags: block removal until explicitly handled above. */
-    static const divergence_type_t known_flags = DIVERGENCE_CONTENT | DIVERGENCE_TYPE |
-        DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP | DIVERGENCE_UNVERIFIED |
-        DIVERGENCE_ENCRYPTION | DIVERGENCE_STALE;
+    static const divergence_type_t known_flags = DIVERGENCE_CONTENT |
+        DIVERGENCE_TYPE | DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP |
+        DIVERGENCE_UNVERIFIED | DIVERGENCE_ENCRYPTION | DIVERGENCE_STALE;
 
     if (orphan->divergence & ~known_flags) {
         /* Unknown divergence type — cannot assess safety, block removal */
-        *out_err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
-                                 orphan->profile, SAFETY_REASON_CANNOT_VERIFY, false);
+        *out_err = add_violation(
+            result, orphan->filesystem_path, orphan->storage_path,
+            orphan->profile, SAFETY_REASON_CANNOT_VERIFY, false
+        );
         return *out_err ? SAFETY_CHECK_ERROR : SAFETY_CHECK_DONE;
     }
 
@@ -451,8 +472,10 @@ static check_result_t check_branch_existence(
     if (err) {
         /* State lookup failed - cannot determine lifecycle */
         error_free(err);
-        err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
-                            orphan->profile, SAFETY_REASON_CANNOT_VERIFY, false);
+        err = add_violation(
+            result, orphan->filesystem_path, orphan->storage_path,
+            orphan->profile, SAFETY_REASON_CANNOT_VERIFY, false
+        );
         if (err) {
             *out_err = err;
             return SAFETY_CHECK_ERROR;
@@ -463,10 +486,13 @@ static check_result_t check_branch_existence(
 
     /* Extract lifecycle state and storage_path before freeing entry */
     bool is_controlled_deletion = state_entry->state &&
-                                  strcmp(state_entry->state, STATE_DELETED) == 0;
+        strcmp(state_entry->state, STATE_DELETED) == 0;
 
-    bool is_stale = state_entry->state && strcmp(state_entry->state, STATE_RELEASED) == 0;
-    char *storage_path = state_entry->storage_path ? strdup(state_entry->storage_path) : NULL;
+    bool is_stale = state_entry->state &&
+        strcmp(state_entry->state, STATE_RELEASED) == 0;
+
+    char *storage_path = state_entry->storage_path
+                       ? strdup(state_entry->storage_path) : NULL;
 
     state_free_entry(state_entry);
 
@@ -493,8 +519,10 @@ static check_result_t check_branch_existence(
          * Auto-release without further checks — the decision was already made.
          */
         free(storage_path);
-        err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
-                            orphan->profile, SAFETY_REASON_RELEASED, false);
+        err = add_violation(
+            result, orphan->filesystem_path, orphan->storage_path,
+            orphan->profile, SAFETY_REASON_RELEASED, false
+        );
         if (err) {
             *out_err = err;
             return SAFETY_CHECK_ERROR;
@@ -514,8 +542,10 @@ static check_result_t check_branch_existence(
         if (error_code(err) == ERR_MEMORY) {
             /* Memory allocation failure — fatal */
             free(storage_path);
-            *out_err = error_wrap(err, "Failed to check profile existence for '%s'",
-                                  orphan->profile);
+            *out_err = error_wrap(
+                err, "Failed to check profile existence for '%s'",
+                orphan->profile
+            );
             return SAFETY_CHECK_ERROR;
         }
         /* Git lookup failed (transient I/O, locked packfile, etc.)
@@ -523,8 +553,10 @@ static check_result_t check_branch_existence(
          * Don't emit RELEASED (would permanently delete state entry). */
         error_free(err);
         free(storage_path);
-        err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
-                            orphan->profile, SAFETY_REASON_CANNOT_VERIFY, false);
+        err = add_violation(
+            result, orphan->filesystem_path, orphan->storage_path,
+            orphan->profile, SAFETY_REASON_CANNOT_VERIFY, false
+        );
         if (err) {
             *out_err = err;
             return SAFETY_CHECK_ERROR;
@@ -535,8 +567,10 @@ static check_result_t check_branch_existence(
     if (!profile_exists) {
         /* Branch deleted externally. Release file from management. */
         free(storage_path);
-        err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
-                            orphan->profile, SAFETY_REASON_RELEASED, false);
+        err = add_violation(
+            result, orphan->filesystem_path, orphan->storage_path,
+            orphan->profile, SAFETY_REASON_RELEASED, false
+        );
         if (err) {
             *out_err = err;
             return SAFETY_CHECK_ERROR;
@@ -555,8 +589,10 @@ static check_result_t check_branch_existence(
     if (!lookup_path) {
         /* No storage path available — cannot verify file in Git tree.
          * Block removal rather than silently bypassing defense-in-depth check. */
-        err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
-                            orphan->profile, SAFETY_REASON_CANNOT_VERIFY, false);
+        err = add_violation(
+            result, orphan->filesystem_path, orphan->storage_path,
+            orphan->profile, SAFETY_REASON_CANNOT_VERIFY, false
+        );
         if (err) {
             *out_err = err;
             return SAFETY_CHECK_ERROR;
@@ -572,8 +608,10 @@ static check_result_t check_branch_existence(
          * don't allow removal (can't confirm Git backing). */
         error_free(err);
         free(storage_path);
-        err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
-                            orphan->profile, SAFETY_REASON_CANNOT_VERIFY, false);
+        err = add_violation(
+            result, orphan->filesystem_path, orphan->storage_path,
+            orphan->profile, SAFETY_REASON_CANNOT_VERIFY, false
+        );
         if (err) {
             *out_err = err;
             return SAFETY_CHECK_ERROR;
@@ -585,8 +623,10 @@ static check_result_t check_branch_existence(
         /* Branch exists but file doesn't — loss of authority.
          * Git cannot back this file. Release from management. */
         free(storage_path);
-        err = add_violation(result, orphan->filesystem_path, orphan->storage_path,
-                            orphan->profile, SAFETY_REASON_RELEASED, false);
+        err = add_violation(
+            result, orphan->filesystem_path, orphan->storage_path,
+            orphan->profile, SAFETY_REASON_RELEASED, false
+        );
         if (err) {
             *out_err = err;
             return SAFETY_CHECK_ERROR;
@@ -625,7 +665,9 @@ error_t *safety_check_orphans(
 
     /* Allow NULL orphans if orphan_count is 0 */
     if (orphan_count > 0 && !orphans) {
-        return ERROR(ERR_INVALID_ARG, "orphans cannot be NULL when orphan_count > 0");
+        return ERROR(
+            ERR_INVALID_ARG, "orphans cannot be NULL when orphan_count > 0"
+        );
     }
 
     error_t *err = NULL;

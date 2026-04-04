@@ -48,14 +48,18 @@ static error_t *validate_script_name(const char *script_name) {
 
     /* Check for path separators to prevent directory traversal */
     if (strchr(script_name, '/') || strchr(script_name, '\\')) {
-        return ERROR(ERR_INVALID_ARG,
-                    "Script name cannot contain path separators: %s", script_name);
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Script name cannot contain path separators: %s", script_name
+        );
     }
 
     /* Check for parent directory references */
     if (strcmp(script_name, ".") == 0 || strcmp(script_name, "..") == 0) {
-        return ERROR(ERR_INVALID_ARG,
-                    "Script name cannot be '.' or '..': %s", script_name);
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Script name cannot be '.' or '..': %s", script_name
+        );
     }
 
     return NULL;
@@ -77,26 +81,34 @@ static error_t *validate_profile_name(const char *profile_name) {
     while (*p) {
         /* Check for dangerous characters */
         if (*p == '\n' || *p == '\r') {
-            return ERROR(ERR_INVALID_ARG,
-                        "Profile name contains invalid characters");
+            return ERROR(
+                ERR_INVALID_ARG,
+                "Profile name contains invalid characters"
+            );
         }
         /* Disallow control characters */
-        if (iscntrl((unsigned char)*p)) {
-            return ERROR(ERR_INVALID_ARG,
-                        "Profile name contains control characters");
+        if (iscntrl((unsigned char) *p)) {
+            return ERROR(
+                ERR_INVALID_ARG,
+                "Profile name contains control characters"
+            );
         }
         /* Check for problematic sequences */
         if (p[0] == '.' && p[1] == '.') {
-            return ERROR(ERR_INVALID_ARG,
-                        "Profile name cannot contain '..'");
+            return ERROR(
+                ERR_INVALID_ARG,
+                "Profile name cannot contain '..'"
+            );
         }
         p++;
     }
 
     /* Check for leading/trailing dots or slashes */
     if (profile_name[0] == '.' || profile_name[strlen(profile_name) - 1] == '.') {
-        return ERROR(ERR_INVALID_ARG,
-                    "Profile name cannot start or end with '.'");
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Profile name cannot start or end with '.'"
+        );
     }
 
     return NULL;
@@ -111,14 +123,18 @@ static error_t *validate_profile_name(const char *profile_name) {
  */
 static error_t *validate_shebang(const unsigned char *content, size_t size) {
     if (size < 3) {
-        return ERROR(ERR_INVALID_ARG,
-                    "Bootstrap script too small (must have shebang line)");
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Bootstrap script too small (must have shebang line)"
+        );
     }
 
     /* Check shebang start */
     if (content[0] != '#' || content[1] != '!') {
-        return ERROR(ERR_INVALID_ARG,
-                    "Bootstrap script must start with shebang (#!)");
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Bootstrap script must start with shebang (#!)"
+        );
     }
 
     /* Find end of shebang line */
@@ -129,8 +145,10 @@ static error_t *validate_shebang(const unsigned char *content, size_t size) {
 
     /* Validate shebang has interpreter path */
     if (shebang_end == 2) {
-        return ERROR(ERR_INVALID_ARG,
-                    "Shebang line must specify interpreter path");
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Shebang line must specify interpreter path"
+        );
     }
 
     /* Extract interpreter path (skip #! and whitespace) */
@@ -140,14 +158,18 @@ static error_t *validate_shebang(const unsigned char *content, size_t size) {
     }
 
     if (path_start >= shebang_end) {
-        return ERROR(ERR_INVALID_ARG,
-                    "Shebang line must specify interpreter path");
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Shebang line must specify interpreter path"
+        );
     }
 
     /* Verify it looks like an absolute path */
     if (content[path_start] != '/') {
-        return ERROR(ERR_INVALID_ARG,
-                    "Shebang interpreter must be an absolute path (start with /)");
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Shebang interpreter must be an absolute path (start with /)"
+        );
     }
 
     return NULL;
@@ -158,7 +180,9 @@ static error_t *validate_shebang(const unsigned char *content, size_t size) {
  */
 error_t *bootstrap_validate_content(const unsigned char *content, size_t size) {
     if (!content) {
-        return ERROR(ERR_INVALID_ARG, "Script content cannot be NULL");
+        return ERROR(
+            ERR_INVALID_ARG, "Script content cannot be NULL"
+        );
     }
     return validate_shebang(content, size);
 }
@@ -202,7 +226,9 @@ bool bootstrap_exists(
 
     /* Build ref name */
     char ref_name[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", profile_name);
+    err = gitops_build_refname(
+        ref_name, sizeof(ref_name), "refs/heads/%s", profile_name
+    );
     if (err) {
         error_free(err);
         return false;
@@ -272,22 +298,32 @@ error_t *bootstrap_extract_to_temp(
 
     /* Build ref name */
     char ref_name[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", profile_name);
+    err = gitops_build_refname(
+        ref_name, sizeof(ref_name), "refs/heads/%s", profile_name
+    );
     if (err) {
-        return error_wrap(err, "Invalid profile name '%s'", profile_name);
+        return error_wrap(
+            err, "Invalid profile name '%s'", profile_name
+        );
     }
 
     /* Load tree from profile branch */
     err = gitops_load_tree(repo, ref_name, &tree);
     if (err) {
-        err = error_wrap(err, "Failed to load tree from profile '%s'", profile_name);
+        err = error_wrap(
+            err, "Failed to load tree from profile '%s'",
+            profile_name
+        );
         goto cleanup;
     }
 
     /* Find bootstrap script in tree */
     const git_tree_entry *entry = git_tree_entry_byname(tree, script_name);
     if (!entry) {
-        err = ERROR(ERR_NOT_FOUND, "Bootstrap script not found in profile '%s'", profile_name);
+        err = ERROR(
+            ERR_NOT_FOUND, "Bootstrap script not found in profile '%s'",
+            profile_name
+        );
         goto cleanup;
     }
 
@@ -305,8 +341,10 @@ error_t *bootstrap_extract_to_temp(
     /* Validate shebang */
     err = validate_shebang(content, size);
     if (err) {
-        err = error_wrap(err, "Invalid bootstrap script '%s' in profile '%s'",
-                        script_name, profile_name);
+        err = error_wrap(
+            err, "Invalid bootstrap script '%s' in profile '%s'",
+            script_name, profile_name
+        );
         goto cleanup;
     }
 
@@ -338,15 +376,20 @@ error_t *bootstrap_extract_to_temp(
             if (errno == EINTR) {
                 continue;  /* Interrupted by signal, retry */
             }
-            err = ERROR(ERR_FS, "Failed to write bootstrap script: %s", strerror(errno));
+            err = ERROR(
+                ERR_FS, "Failed to write bootstrap script: %s",
+                strerror(errno)
+            );
             goto cleanup;
         }
-        bytes_written += (size_t)n;
+        bytes_written += (size_t) n;
     }
 
     /* Set executable permissions (owner only) */
     if (fchmod(fd, 0700) != 0) {
-        err = ERROR(ERR_FS, "Failed to set executable permissions on bootstrap script");
+        err = ERROR(
+            ERR_FS, "Failed to set executable permissions on bootstrap script"
+        );
         goto cleanup;
     }
 
@@ -412,7 +455,9 @@ error_t *bootstrap_read_content(
 
     /* Build ref name */
     char ref_name[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", profile_name);
+    err = gitops_build_refname(
+        ref_name, sizeof(ref_name), "refs/heads/%s", profile_name
+    );
     if (err) {
         return error_wrap(err, "Invalid profile name '%s'", profile_name);
     }
@@ -420,14 +465,20 @@ error_t *bootstrap_read_content(
     /* Load tree from profile branch */
     err = gitops_load_tree(repo, ref_name, &tree);
     if (err) {
-        err = error_wrap(err, "Failed to load tree from profile '%s'", profile_name);
+        err = error_wrap(
+            err, "Failed to load tree from profile '%s'",
+            profile_name
+        );
         goto cleanup;
     }
 
     /* Find bootstrap script in tree */
     const git_tree_entry *entry = git_tree_entry_byname(tree, script_name);
     if (!entry) {
-        err = ERROR(ERR_NOT_FOUND, "Bootstrap script not found in profile '%s'", profile_name);
+        err = ERROR(
+            ERR_NOT_FOUND, "Bootstrap script not found in profile '%s'",
+            profile_name
+        );
         goto cleanup;
     }
 
@@ -445,7 +496,9 @@ error_t *bootstrap_read_content(
     /* Allocate buffer and copy content */
     content_buf = buffer_create();
     if (!content_buf) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate buffer for bootstrap content");
+        err = ERROR(
+            ERR_MEMORY, "Failed to allocate buffer for bootstrap content"
+        );
         goto cleanup;
     }
 
@@ -610,7 +663,9 @@ error_t *bootstrap_execute(
     size_t env_count = 0;
     char **env = build_bootstrap_env(context, &env_count);
     if (!env) {
-        return ERROR(ERR_MEMORY, "Failed to build environment for bootstrap script");
+        return ERROR(
+            ERR_MEMORY, "Failed to build environment for bootstrap script"
+        );
     }
 
     /* Create pipes for capturing output */
@@ -642,14 +697,14 @@ error_t *bootstrap_execute(
             /* Cannot use ERROR() here - we're in child process.
              * Write directly to stderr before it's potentially redirected. */
             const char *msg = "Error: Failed to redirect output\n";
-            (void)write(STDERR_FILENO, msg, strlen(msg));
+            (void) write(STDERR_FILENO, msg, strlen(msg));
             _exit(EXIT_CODE_CANNOT_EXECUTE);
         }
         close(pipefd[1]);
 
         /* Close all inherited file descriptors to prevent leaking
          * parent's libgit2/SQLite handles to the bootstrap script */
-        int max_fd = (int)sysconf(_SC_OPEN_MAX);
+        int max_fd = (int) sysconf(_SC_OPEN_MAX);
         if (max_fd < 0) max_fd = 1024;
         for (int fd = 3; fd < max_fd; fd++) {
             close(fd);
@@ -670,16 +725,16 @@ error_t *bootstrap_execute(
             /* Fallback to repo root - guaranteed to exist */
             /* Inform script about fallback by printing to stderr */
             const char *msg = "Warning: HOME unavailable, using repository directory\n";
-            (void)write(STDERR_FILENO, msg, strlen(msg));
+            (void) write(STDERR_FILENO, msg, strlen(msg));
         } else {
             /* Critical: both HOME and repo_dir failed */
             const char *msg = "Error: Failed to change to working directory\n";
-            (void)write(STDERR_FILENO, msg, strlen(msg));
+            (void) write(STDERR_FILENO, msg, strlen(msg));
             _exit(EXIT_CODE_CANNOT_EXECUTE);
         }
 
         /* Execute bootstrap with environment */
-        char *args[] = { (char *)script_path, NULL };
+        char *args[] = { (char *) script_path, NULL };
         execve(script_path, args, env);
 
         /* If execve returns, it failed */
@@ -713,8 +768,10 @@ error_t *bootstrap_execute(
 
         if (elapsed_seconds >= BOOTSTRAP_TIMEOUT_SECONDS) {
             timed_out = true;
-            fprintf(stderr, "\nWarning: Bootstrap script exceeded timeout (%d seconds)\n",
-                    BOOTSTRAP_TIMEOUT_SECONDS);
+            fprintf(
+                stderr, "\nWarning: Bootstrap script exceeded timeout (%d seconds)\n",
+                BOOTSTRAP_TIMEOUT_SECONDS
+            );
 
             /* Try graceful termination first */
             kill(pid, SIGTERM);
@@ -744,8 +801,8 @@ error_t *bootstrap_execute(
 
         struct timeval timeout;
         if (remaining_seconds > 0) {
-            timeout.tv_sec = (long)remaining_seconds;
-            timeout.tv_usec = (long)((remaining_seconds - timeout.tv_sec) * 1000000);
+            timeout.tv_sec = (long) remaining_seconds;
+            timeout.tv_usec = (long) ((remaining_seconds - timeout.tv_sec) * 1000000);
         } else {
             /* Should be caught by timeout check above, but handle defensively */
             timeout.tv_sec = 0;
@@ -790,7 +847,10 @@ error_t *bootstrap_execute(
                 continue;  /* Interrupted, retry */
             }
             /* Real error */
-            fprintf(stderr, "Warning: Error reading bootstrap output: %s\n", strerror(errno));
+            fprintf(
+                stderr, "Warning: Error reading bootstrap output: %s\n",
+                strerror(errno)
+            );
             break;
         }
 
@@ -800,7 +860,7 @@ error_t *bootstrap_execute(
         }
 
         /* Print output in real-time */
-        (void)write(STDOUT_FILENO, buf, (size_t)n);
+        (void) write(STDOUT_FILENO, buf, (size_t) n);
     }
     close(pipefd[0]);
 
@@ -815,9 +875,13 @@ error_t *bootstrap_execute(
         if (wait_result == -1) {
             free_bootstrap_env(env, env_count);
             if (timed_out) {
-                return ERROR(ERR_FS, "Bootstrap script timed out and failed to terminate");
+                return ERROR(
+                    ERR_FS, "Bootstrap script timed out and failed to terminate"
+                );
             } else {
-                return ERROR(ERR_FS, "Failed to wait for bootstrap process");
+                return ERROR(
+                    ERR_FS, "Failed to wait for bootstrap process"
+                );
             }
         }
     }
@@ -857,15 +921,23 @@ error_t *bootstrap_execute(
     /* Return error if bootstrap failed */
     if (exit_code != 0) {
         if (timed_out) {
-            return ERROR(ERR_INTERNAL,
-                        "Bootstrap script exceeded timeout (%d seconds)",
-                        BOOTSTRAP_TIMEOUT_SECONDS);
+            return ERROR(
+                ERR_INTERNAL,
+                "Bootstrap script exceeded timeout (%d seconds)",
+                BOOTSTRAP_TIMEOUT_SECONDS
+            );
         } else if (was_signaled) {
-            return ERROR(ERR_INTERNAL,
-                        "Bootstrap script terminated by signal %d", signal_num);
+            return ERROR(
+                ERR_INTERNAL,
+                "Bootstrap script terminated by signal %d",
+                signal_num
+            );
         } else {
-            return ERROR(ERR_INTERNAL,
-                        "Bootstrap script failed with exit code %d", exit_code);
+            return ERROR(
+                ERR_INTERNAL,
+                "Bootstrap script failed with exit code %d",
+                exit_code
+            );
         }
     }
 
@@ -886,7 +958,7 @@ error_t *bootstrap_run_for_profiles(
     CHECK_NULL(repo_dir);
     CHECK_NULL(profiles);
 
-    profile_list_t *plist = (profile_list_t *)profiles;
+    profile_list_t *plist = (profile_list_t *) profiles;
     const char *script_name = BOOTSTRAP_DEFAULT_SCRIPT_NAME;
 
     /* Count scripts that exist */
@@ -938,26 +1010,40 @@ error_t *bootstrap_run_for_profiles(
 
         executed++;
 
-        printf("[%zu/%zu] Running %s/%s...\n",
-               executed, script_count, profile->name, script_name);
+        printf(
+            "[%zu/%zu] Running %s/%s...\n",
+            executed, script_count, profile->name, script_name
+        );
 
         /* In dry-run mode, validate the script but don't execute */
         if (dry_run) {
             /* Extract and validate script even in dry-run */
             char *temp_path = NULL;
-            error_t *err = bootstrap_extract_to_temp(repo, profile->name, script_name, &temp_path);
+            error_t *err = bootstrap_extract_to_temp(
+                repo, profile->name, script_name, &temp_path
+            );
             if (err) {
-                printf("  ✗ (dry-run) Validation failed: %s\n", error_message(err));
+                printf(
+                    "  ✗ (dry-run) Validation failed: %s\n",
+                    error_message(err)
+                );
                 error_free(err);
                 if (stop_on_error) {
                     free(all_profiles_str);
                     free(failed_profiles);
-                    return ERROR(ERR_INVALID_ARG,
-                        "Bootstrap script validation failed for %s", profile->name);
+                    return ERROR(
+                        ERR_INVALID_ARG,
+                        "Bootstrap script validation failed for %s",
+                        profile->name
+                    );
                 }
                 failed_profiles[failed_count++] = profile->name;
             } else {
-                printf("  ✓ (dry-run) Would execute bootstrap for profile '%s'\n", profile->name);
+                printf(
+                    "  ✓ (dry-run) Would execute bootstrap for profile '%s'\n",
+                    profile->name
+                );
+
                 if (temp_path) {
                     unlink(temp_path);
                     free(temp_path);
@@ -968,13 +1054,18 @@ error_t *bootstrap_run_for_profiles(
 
         /* Extract script to temporary file */
         char *temp_path = NULL;
-        error_t *err = bootstrap_extract_to_temp(repo, profile->name, script_name, &temp_path);
+        error_t *err = bootstrap_extract_to_temp(
+            repo, profile->name, script_name, &temp_path
+        );
         if (err) {
             printf("  ✗ Failed to extract: %s\n", error_message(err));
             if (stop_on_error) {
                 free(all_profiles_str);
                 free(failed_profiles);
-                return error_wrap(err, "Failed to extract bootstrap script for %s", profile->name);
+                return error_wrap(
+                    err, "Failed to extract bootstrap script for %s",
+                    profile->name
+                );
             }
             error_free(err);
             failed_profiles[failed_count++] = profile->name;
@@ -983,10 +1074,10 @@ error_t *bootstrap_run_for_profiles(
 
         /* Create context */
         bootstrap_context_t ctx = {
-            .repo_dir = repo_dir,
+            .repo_dir     = repo_dir,
             .profile_name = profile->name,
             .all_profiles = all_profiles_str,
-            .dry_run = dry_run
+            .dry_run      = dry_run
         };
 
         /* Execute bootstrap */
@@ -1018,7 +1109,10 @@ error_t *bootstrap_run_for_profiles(
             if (stop_on_error) {
                 free(all_profiles_str);
                 free(failed_profiles);
-                return error_wrap(err, "Bootstrap failed for profile %s", profile->name);
+                return error_wrap(
+                    err, "Bootstrap failed for profile %s",
+                    profile->name
+                );
             }
 
             /* Track failed profile */
@@ -1039,14 +1133,18 @@ error_t *bootstrap_run_for_profiles(
     /* Report and return error on partial failure */
     if (failed_count > 0) {
         printf("\n");
-        fprintf(stderr, "Warning: %zu bootstrap script%s failed:\n",
-               failed_count, failed_count == 1 ? "" : "s");
+        fprintf(
+            stderr, "Warning: %zu bootstrap script%s failed:\n",
+            failed_count, failed_count == 1 ? "" : "s"
+        );
         for (size_t i = 0; i < failed_count; i++) {
             fprintf(stderr, "  - %s\n", failed_profiles[i]);
         }
         free(failed_profiles);
-        return ERROR(ERR_INTERNAL, "%zu of %zu bootstrap script%s failed",
-                     failed_count, script_count, failed_count == 1 ? "" : "s");
+        return ERROR(
+            ERR_INTERNAL, "%zu of %zu bootstrap script%s failed",
+            failed_count, script_count, failed_count == 1 ? "" : "s"
+        );
     }
 
     free(failed_profiles);

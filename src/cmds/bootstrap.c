@@ -94,8 +94,10 @@ static error_t *bootstrap_create_template(
 
     /* Check if script already exists in Git */
     if (bootstrap_exists(repo, profile_name, script_name)) {
-        return ERROR(ERR_EXISTS,
-            "Bootstrap script already exists for profile '%s'", profile_name);
+        return ERROR(
+            ERR_EXISTS, "Bootstrap script already exists for profile '%s'",
+            profile_name
+        );
     }
 
     /* Generate template content */
@@ -117,15 +119,23 @@ static error_t *bootstrap_create_template(
 
     /* Load current tree from profile branch */
     char ref_name[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", profile_name);
+    err = gitops_build_refname(
+        ref_name, sizeof(ref_name), "refs/heads/%s", profile_name
+    );
     if (err) {
-        return error_wrap(err, "Invalid profile name '%s'", profile_name);
+        return error_wrap(
+            err, "Invalid profile name '%s'",
+            profile_name
+        );
     }
 
     git_tree *current_tree = NULL;
     err = gitops_load_tree(repo, ref_name, &current_tree);
     if (err) {
-        return error_wrap(err, "Failed to load tree from profile '%s'", profile_name);
+        return error_wrap(
+            err, "Failed to load tree from profile '%s'",
+            profile_name
+        );
     }
 
     /* Create root tree builder */
@@ -161,7 +171,8 @@ static error_t *bootstrap_create_template(
     }
 
     /* Create commit */
-    char *commit_message = str_format("Add bootstrap script for %s profile", profile_name);
+    char *commit_message =
+        str_format("Add bootstrap script for %s profile", profile_name);
     if (!commit_message) {
         git_tree_free(new_tree);
         return ERROR(ERR_MEMORY, "Failed to allocate commit message");
@@ -205,10 +216,15 @@ static error_t *bootstrap_edit(
     if (!bootstrap_exists(repo, profile_name, script_name)) {
         err = bootstrap_create_template(repo, profile_name, script_name);
         if (err) {
-            return error_wrap(err, "Failed to create bootstrap template");
+            return error_wrap(
+                err, "Failed to create bootstrap template"
+            );
         }
         if (out) {
-            output_success(out, "Created bootstrap script for profile '%s'", profile_name);
+            output_success(
+                out, "Created bootstrap script for profile '%s'",
+                profile_name
+            );
         }
     }
 
@@ -253,8 +269,9 @@ static error_t *bootstrap_edit(
 
     bool was_modified = false;
     err = gitops_update_file(
-        repo, profile_name, script_name, (const char *)buffer_data(content_buf),
-        buffer_size(content_buf), commit_msg, GIT_FILEMODE_BLOB_EXECUTABLE, &was_modified
+        repo, profile_name, script_name, (const char *) buffer_data(content_buf),
+        buffer_size(content_buf), commit_msg, GIT_FILEMODE_BLOB_EXECUTABLE,
+        &was_modified
     );
 
     if (err) {
@@ -265,8 +282,10 @@ static error_t *bootstrap_edit(
     /* Inform user */
     if (out) {
         if (was_modified) {
-            output_success(out, "Updated and committed bootstrap script for profile '%s'",
-                           profile_name);
+            output_success(
+                out, "Updated and committed bootstrap script for profile '%s'",
+                profile_name
+            );
         } else {
             output_info(out, "No changes made to bootstrap script");
         }
@@ -305,13 +324,17 @@ static error_t *bootstrap_show(
 
     /* Check if script exists */
     if (!bootstrap_exists(repo, profile_name, script_name)) {
-        return ERROR(ERR_NOT_FOUND,
-                    "No bootstrap script found for profile '%s'", profile_name);
+        return ERROR(
+            ERR_NOT_FOUND, "No bootstrap script found for profile '%s'",
+            profile_name
+        );
     }
 
     /* Read content from Git blob */
     buffer_t *content = NULL;
-    error_t *err = bootstrap_read_content(repo, profile_name, script_name, &content);
+    error_t *err = bootstrap_read_content(
+        repo, profile_name, script_name, &content
+    );
     if (err) {
         return error_wrap(err, "Failed to read bootstrap script");
     }
@@ -319,8 +342,10 @@ static error_t *bootstrap_show(
     /* Display content */
     if (out && buffer_size(content) > 0) {
         /* Write content as a single block (includes newlines) */
-        output_print(out, OUTPUT_NORMAL, "%.*s", (int)buffer_size(content),
-                     (const char *)buffer_data(content));
+        output_print(
+            out, OUTPUT_NORMAL, "%.*s",
+            (int) buffer_size(content), (const char *) buffer_data(content)
+        );
     }
 
     buffer_free(content);
@@ -343,7 +368,7 @@ static error_t *bootstrap_list(
         script_name = BOOTSTRAP_DEFAULT_SCRIPT_NAME;
     }
 
-    profile_list_t *plist = (profile_list_t *)profiles;
+    profile_list_t *plist = (profile_list_t *) profiles;
 
     if (out) {
         output_section(out, "Bootstrap scripts");
@@ -353,11 +378,17 @@ static error_t *bootstrap_list(
             bool exists = bootstrap_exists(repo, profile->name, script_name);
 
             if (exists) {
-                output_styled(out, OUTPUT_NORMAL, "  {green}✓{reset} %-15s %s/%s\n",
-                    profile->name, profile->name, script_name);
+                output_styled(
+                    out, OUTPUT_NORMAL,
+                    "  {green}✓{reset} %-15s %s/%s\n",
+                    profile->name, profile->name, script_name
+                );
             } else {
-                output_styled(out, OUTPUT_NORMAL, "  {red}✗{reset} %-15s (no bootstrap script)\n",
-                    profile->name);
+                output_styled(
+                    out, OUTPUT_NORMAL,
+                    "  {red}✗{reset} %-15s (no bootstrap script)\n",
+                    profile->name
+                );
             }
         }
 
@@ -406,10 +437,12 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
 
     /* Check if repository exists */
     if (!gitops_is_repository(repo_path)) {
-        err = ERROR(ERR_NOT_FOUND,
+        err = ERROR(
+            ERR_NOT_FOUND,
             "No dotta repository found at: %s\n"
             "Run 'dotta init' to create a new repository or "
-            "'dotta clone' to clone an existing one", repo_path);
+            "'dotta clone' to clone an existing one", repo_path
+        );
         goto cleanup;
     }
 
@@ -424,12 +457,15 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
     if (opts->edit) {
         /* Check profile count */
         if (opts->profile_count > 1) {
-            err = ERROR(ERR_INVALID_ARG, "Can only edit one profile at a time");
+            err = ERROR(
+                ERR_INVALID_ARG, "Can only edit one profile at a time"
+            );
             goto cleanup;
         }
 
         /* Default to 'global' profile if none specified */
-        const char *profile_to_edit = (opts->profile_count == 0) ? "global" : opts->profiles[0];
+        const char *profile_to_edit = (opts->profile_count == 0)
+                                    ? "global" : opts->profiles[0];
 
         /* Edit the bootstrap script */
         err = bootstrap_edit(repo, profile_to_edit, out);
@@ -442,8 +478,9 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
     /* Resolve profiles */
     if (opts->profile_count > 0) {
         /* Use explicitly specified profiles */
-        err = profile_list_load(repo, opts->profiles, opts->profile_count,
-                               true, &profiles);
+        err = profile_list_load(
+            repo, opts->profiles, opts->profile_count, true, &profiles
+        );
         if (err) {
             err = error_wrap(err, "Failed to load profiles");
             goto cleanup;
@@ -474,7 +511,7 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
 
     /* Handle --list flag */
     if (opts->list) {
-        err = bootstrap_list(repo, (struct profile_list *)profiles, NULL, out);
+        err = bootstrap_list(repo, (struct profile_list *) profiles, NULL, out);
         if (err) {
             err = error_wrap(err, "Failed to list bootstrap scripts");
         }
@@ -490,7 +527,8 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
         }
 
         /* Default to 'global' profile if none specified */
-        const char *profile_to_show = (opts->profile_count == 0) ? "global" : opts->profiles[0];
+        const char *profile_to_show = (opts->profile_count == 0)
+                                    ? "global" : opts->profiles[0];
 
         /* Show the bootstrap script */
         err = bootstrap_show(repo, profile_to_show, NULL, out);
@@ -512,8 +550,12 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
         output_info(out, "No bootstrap scripts found in enabled profiles.");
         output_newline(out);
         output_section(out, "Profiles checked");
+
         for (size_t i = 0; i < profiles->count; i++) {
-            output_print(out, OUTPUT_NORMAL, "  - %s\n", profiles->profiles[i].name);
+            output_print(
+                out, OUTPUT_NORMAL, "  - %s\n",
+                profiles->profiles[i].name
+            );
         }
         output_newline(out);
         output_hint(out, "Create a bootstrap script with:");
@@ -525,16 +567,20 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
     output_section(out, "Found bootstrap scripts");
     for (size_t i = 0; i < profiles->count; i++) {
         if (bootstrap_exists(repo, profiles->profiles[i].name, NULL)) {
-            output_styled(out, OUTPUT_NORMAL, "  {green}✓{reset} %s/.bootstrap\n",
-                profiles->profiles[i].name);
+            output_styled(
+                out, OUTPUT_NORMAL, "  {green}✓{reset} %s/.bootstrap\n",
+                profiles->profiles[i].name
+            );
         }
     }
     output_newline(out);
 
     /* Prompt for confirmation unless --yes or --dry-run */
     if (!opts->yes && !opts->dry_run) {
-        bool confirmed = output_confirm(out,
-            "Would you like to execute bootstrap scripts now?", false);
+        bool confirmed = output_confirm(
+            out, "Would you like to execute bootstrap scripts now?", false
+        );
+
         if (!confirmed) {
             output_info(out, "Bootstrap cancelled.");
             goto cleanup;
@@ -545,7 +591,7 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
     bool stop_on_error = !opts->continue_on_error;
     bool had_failures = false;
     err = bootstrap_run_for_profiles(
-        repo, repo_path, (struct profile_list *)profiles, opts->dry_run, stop_on_error
+        repo, repo_path, (struct profile_list *) profiles, opts->dry_run, stop_on_error
     );
     if (err) {
         if (opts->continue_on_error) {

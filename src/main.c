@@ -46,7 +46,7 @@
 static int cmd_init_main(int argc, char **argv) {
     cmd_init_options_t opts = {
         .repo_path = NULL,
-        .quiet = false
+        .quiet     = false
     };
 
     /* Parse arguments */
@@ -77,24 +77,24 @@ static int cmd_init_main(int argc, char **argv) {
  */
 static int cmd_add_main(int argc, char **argv) {
     cmd_add_options_t opts = {
-        .profile = NULL,
-        .files = NULL,
-        .file_count = 0,
-        .custom_prefix = NULL,
-        .message = NULL,
+        .profile          = NULL,
+        .files            = NULL,
+        .file_count       = 0,
+        .custom_prefix    = NULL,
+        .message          = NULL,
         .exclude_patterns = NULL,
-        .exclude_count = 0,
-        .force = false,
-        .verbose = false,
-        .encrypt = false,
-        .no_encrypt = false,
-        .argc = argc,
-        .argv = argv
+        .exclude_count    = 0,
+        .force            = false,
+        .verbose          = false,
+        .encrypt          = false,
+        .no_encrypt       = false,
+        .argc             = argc,
+        .argv             = argv
     };
 
     /* Collect file and exclude pattern arguments */
-    char **files = malloc((size_t)argc * sizeof(char *));
-    char **excludes = malloc((size_t)argc * sizeof(char *));
+    char **files = malloc((size_t) argc * sizeof(char *));
+    char **excludes = malloc((size_t) argc * sizeof(char *));
     if (!files || !excludes) {
         fprintf(stderr, "Failed to allocate memory\n");
         free(files);
@@ -223,21 +223,21 @@ static int cmd_add_main(int argc, char **argv) {
  */
 static int cmd_remove_main(int argc, char **argv) {
     cmd_remove_options_t opts = {
-        .profile = NULL,
-        .paths = NULL,
-        .path_count = 0,
+        .profile        = NULL,
+        .paths          = NULL,
+        .path_count     = 0,
         .delete_profile = false,
-        .dry_run = false,
-        .force = false,
-        .interactive = false,
-        .delete_files = false,
-        .verbose = false,
-        .quiet = false,
-        .message = NULL
+        .dry_run        = false,
+        .force          = false,
+        .interactive    = false,
+        .delete_files   = false,
+        .verbose        = false,
+        .quiet          = false,
+        .message        = NULL
     };
 
     /* Collect path arguments */
-    char **paths = malloc((size_t)argc * sizeof(char *));
+    char **paths = malloc((size_t) argc * sizeof(char *));
     if (!paths) {
         fprintf(stderr, "Failed to allocate memory\n");
         return 1;
@@ -350,26 +350,26 @@ static int cmd_remove_main(int argc, char **argv) {
  */
 static int cmd_apply_main(int argc, char **argv) {
     cmd_apply_options_t opts = {
-        .profiles = NULL,
-        .profile_count = 0,
-        .files = NULL,
-        .file_count = 0,
+        .profiles         = NULL,
+        .profile_count    = 0,
+        .files            = NULL,
+        .file_count       = 0,
         .exclude_patterns = NULL,
-        .exclude_count = 0,
-        .force = false,
-        .dry_run = false,
-        .keep_orphans = false,  /* Default: prune orphaned files */
-        .verbose = false,
-        .skip_existing = false,
-        .skip_unchanged = true,  /* Default: enabled for efficiency */
-        .argc = argc,            /* For privilege re-exec */
-        .argv = argv             /* For privilege re-exec */
+        .exclude_count    = 0,
+        .force            = false,
+        .dry_run          = false,
+        .keep_orphans     = false, /* Default: prune orphaned files */
+        .verbose          = false,
+        .skip_existing    = false,
+        .skip_unchanged   = true, /* Default: enabled for efficiency */
+        .argc             = argc, /* For privilege re-exec */
+        .argv             = argv  /* For privilege re-exec */
     };
 
     /* Collect profile arguments, file paths, and exclude patterns */
-    char **profiles = malloc((size_t)argc * sizeof(char *));
-    char **files = malloc((size_t)argc * sizeof(char *));
-    char **excludes = malloc((size_t)argc * sizeof(char *));
+    char **profiles = malloc((size_t) argc * sizeof(char *));
+    char **files = malloc((size_t) argc * sizeof(char *));
+    char **excludes = malloc((size_t) argc * sizeof(char *));
     if (!profiles || !files || !excludes) {
         fprintf(stderr, "Failed to allocate memory\n");
         free(profiles);
@@ -428,10 +428,8 @@ static int cmd_apply_main(int argc, char **argv) {
              * - Glob characters: *, ?, [
              */
             bool is_file = argv[i][0] == '/' || argv[i][0] == '~' || argv[i][0] == '.' ||
-                           strncmp(argv[i], "home/", 5) == 0 ||
-                           strncmp(argv[i], "root/", 5) == 0 ||
-                           strncmp(argv[i], "custom/", 7) == 0 ||
-                           strpbrk(argv[i], "*?[") != NULL;
+                strncmp(argv[i], "home/", 5) == 0 || strncmp(argv[i], "root/", 5) == 0 ||
+                strncmp(argv[i], "custom/", 7) == 0 || strpbrk(argv[i], "*?[") != NULL;
 
             if (is_file) {
                 files[file_count++] = argv[i];
@@ -496,20 +494,20 @@ static int cmd_apply_main(int argc, char **argv) {
  */
 static int cmd_status_main(int argc, char **argv) {
     cmd_status_options_t opts = {
-        .profiles = NULL,
+        .profiles      = NULL,
         .profile_count = 0,
-        .verbose = false,
-        .show_local = true,   /* Default: show filesystem status */
-        .show_remote = true,  /* Default: show remote status */
-        .no_fetch = false,    /* Default: fetch before remote check */
-        .all_profiles = false,/* Default: show only enabled profiles */
-        .no_sudo = false,     /* Default: prompt for sudo if needed */
-        .argc = argc,         /* For privilege re-exec */
-        .argv = argv          /* For privilege re-exec */
+        .verbose       = false,
+        .show_local    = true,  /* Default: show filesystem status */
+        .show_remote   = true,  /* Default: show remote status */
+        .no_fetch      = false, /* Default: fetch before remote check */
+        .all_profiles  = false,/* Default: show only enabled profiles */
+        .no_sudo       = false, /* Default: prompt for sudo if needed */
+        .argc          = argc,  /* For privilege re-exec */
+        .argv          = argv   /* For privilege re-exec */
     };
 
     /* Collect profile arguments */
-    char **profiles = malloc((size_t)argc * sizeof(char *));
+    char **profiles = malloc((size_t) argc * sizeof(char *));
     if (!profiles) {
         fprintf(stderr, "Failed to allocate memory\n");
         return 1;
@@ -608,11 +606,11 @@ static int cmd_status_main(int argc, char **argv) {
  */
 static int cmd_list_main(int argc, char **argv) {
     cmd_list_options_t opts = {
-        .mode = LIST_PROFILES,
-        .profile = NULL,
+        .mode      = LIST_PROFILES,
+        .profile   = NULL,
         .file_path = NULL,
-        .verbose = false,
-        .remote = false
+        .verbose   = false,
+        .remote    = false
     };
 
     /* Parse arguments */
@@ -693,17 +691,17 @@ static int cmd_list_main(int argc, char **argv) {
  */
 static int cmd_profile_main(int argc, char **argv) {
     cmd_profile_options_t opts = {
-        .subcommand = PROFILE_LIST,  /* Default subcommand */
-        .profiles = NULL,
-        .profile_count = 0,
-        .custom_prefix = NULL,
-        .show_remote = false,
+        .subcommand     = PROFILE_LIST, /* Default subcommand */
+        .profiles       = NULL,
+        .profile_count  = 0,
+        .custom_prefix  = NULL,
+        .show_remote    = false,
         .show_available = true,  /* Default: show available profiles */
-        .fetch_all = false,
-        .all_profiles = false,
-        .fix = false,
-        .verbose = false,
-        .quiet = false
+        .fetch_all      = false,
+        .all_profiles   = false,
+        .fix            = false,
+        .verbose        = false,
+        .quiet          = false
     };
 
     /* Parse subcommand */
@@ -734,7 +732,7 @@ static int cmd_profile_main(int argc, char **argv) {
         opts.subcommand = PROFILE_FETCH;
 
         /* Collect profile arguments */
-        char **profiles = malloc((size_t)argc * sizeof(char *));
+        char **profiles = malloc((size_t) argc * sizeof(char *));
         if (!profiles) {
             fprintf(stderr, "Failed to allocate memory\n");
             return 1;
@@ -767,7 +765,7 @@ static int cmd_profile_main(int argc, char **argv) {
         opts.subcommand = PROFILE_ENABLE;
 
         /* Collect profile arguments */
-        char **profiles = malloc((size_t)argc * sizeof(char *));
+        char **profiles = malloc((size_t) argc * sizeof(char *));
         if (!profiles) {
             fprintf(stderr, "Failed to allocate memory\n");
             return 1;
@@ -810,7 +808,7 @@ static int cmd_profile_main(int argc, char **argv) {
         opts.subcommand = PROFILE_DISABLE;
 
         /* Collect profile arguments */
-        char **profiles = malloc((size_t)argc * sizeof(char *));
+        char **profiles = malloc((size_t) argc * sizeof(char *));
         if (!profiles) {
             fprintf(stderr, "Failed to allocate memory\n");
             return 1;
@@ -847,7 +845,7 @@ static int cmd_profile_main(int argc, char **argv) {
         opts.subcommand = PROFILE_REORDER;
 
         /* Collect profile arguments */
-        char **profiles = malloc((size_t)argc * sizeof(char *));
+        char **profiles = malloc((size_t) argc * sizeof(char *));
         if (!profiles) {
             fprintf(stderr, "Failed to allocate memory\n");
             return 1;
@@ -931,20 +929,20 @@ static int cmd_profile_main(int argc, char **argv) {
  */
 static int cmd_diff_main(int argc, char **argv) {
     cmd_diff_options_t opts = {
-        .mode = DIFF_WORKSPACE,
-        .files = NULL,
-        .file_count = 0,
-        .direction = DIFF_UPSTREAM,  /* Default: show repo → filesystem */
-        .commit1 = NULL,
-        .commit2 = NULL,
-        .profiles = NULL,
+        .mode          = DIFF_WORKSPACE,
+        .files         = NULL,
+        .file_count    = 0,
+        .direction     = DIFF_UPSTREAM, /* Default: show repo → filesystem */
+        .commit1       = NULL,
+        .commit2       = NULL,
+        .profiles      = NULL,
         .profile_count = 0,
-        .name_only = false
+        .name_only     = false
     };
 
     /* Collect positional arguments and profiles */
-    char **positional = malloc((size_t)argc * sizeof(char *));
-    char **profiles = malloc((size_t)argc * sizeof(char *));
+    char **positional = malloc((size_t) argc * sizeof(char *));
+    char **profiles = malloc((size_t) argc * sizeof(char *));
     if (!positional || !profiles) {
         fprintf(stderr, "Failed to allocate memory\n");
         free(positional);
@@ -990,10 +988,8 @@ static int cmd_diff_main(int argc, char **argv) {
              * - Glob characters: *, ?, [
              */
             bool is_file = argv[i][0] == '/' || argv[i][0] == '~' || argv[i][0] == '.' ||
-                           strncmp(argv[i], "home/", 5) == 0 ||
-                           strncmp(argv[i], "root/", 5) == 0 ||
-                           strncmp(argv[i], "custom/", 7) == 0 ||
-                           strpbrk(argv[i], "*?[") != NULL;
+                strncmp(argv[i], "home/", 5) == 0 || strncmp(argv[i], "root/", 5) == 0 ||
+                strncmp(argv[i], "custom/", 7) == 0 || strpbrk(argv[i], "*?[") != NULL;
 
             if (is_file) {
                 positional[positional_count++] = argv[i];
@@ -1089,19 +1085,19 @@ static int cmd_diff_main(int argc, char **argv) {
  */
 static int cmd_clone_main(int argc, char **argv) {
     cmd_clone_options_t opts = {
-        .url = NULL,
-        .path = NULL,
-        .quiet = false,
-        .verbose = false,
-        .bootstrap = false,
-        .no_bootstrap = false,
-        .fetch_all = false,
-        .profiles = NULL,
+        .url           = NULL,
+        .path          = NULL,
+        .quiet         = false,
+        .verbose       = false,
+        .bootstrap     = false,
+        .no_bootstrap  = false,
+        .fetch_all     = false,
+        .profiles      = NULL,
         .profile_count = 0
     };
 
     /* Collect explicit profiles */
-    char **profiles = malloc((size_t)argc * sizeof(char *));
+    char **profiles = malloc((size_t) argc * sizeof(char *));
     if (!profiles) {
         fprintf(stderr, "Failed to allocate memory\n");
         return 1;
@@ -1124,7 +1120,8 @@ static int cmd_clone_main(int argc, char **argv) {
             opts.no_bootstrap = true;
         } else if (strcmp(argv[i], "--all") == 0) {
             opts.fetch_all = true;
-        } else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--profile") == 0 || strcmp(argv[i], "--profiles") == 0) {
+        } else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--profile") == 0 ||
+            strcmp(argv[i], "--profiles") == 0) {
             if (i + 1 >= argc) {
                 free(profiles);
                 fprintf(stderr, "Error: --profile requires an argument\n");
@@ -1175,32 +1172,31 @@ static int cmd_clone_main(int argc, char **argv) {
     return 0;
 }
 
-
 /**
  * Parse update command
  */
 static int cmd_update_main(int argc, char **argv) {
     cmd_update_options_t opts = {
-        .files = NULL,
-        .file_count = 0,
-        .profiles = NULL,
-        .profile_count = 0,
-        .message = NULL,
+        .files            = NULL,
+        .file_count       = 0,
+        .profiles         = NULL,
+        .profile_count    = 0,
+        .message          = NULL,
         .exclude_patterns = NULL,
-        .exclude_count = 0,
-        .dry_run = false,
-        .interactive = false,
-        .verbose = false,
-        .include_new = false,
-        .only_new = false,
-        .argc = argc,
-        .argv = argv
+        .exclude_count    = 0,
+        .dry_run          = false,
+        .interactive      = false,
+        .verbose          = false,
+        .include_new      = false,
+        .only_new         = false,
+        .argc             = argc,
+        .argv             = argv
     };
 
     /* Collect file and profile arguments */
-    char **files = malloc((size_t)argc * sizeof(char *));
-    char **profiles = malloc((size_t)argc * sizeof(char *));
-    char **excludes = malloc((size_t)argc * sizeof(char *));
+    char **files = malloc((size_t) argc * sizeof(char *));
+    char **profiles = malloc((size_t) argc * sizeof(char *));
+    char **excludes = malloc((size_t) argc * sizeof(char *));
     if (!files || !profiles || !excludes) {
         fprintf(stderr, "Failed to allocate memory\n");
         free(files);
@@ -1268,10 +1264,8 @@ static int cmd_update_main(int argc, char **argv) {
                  * - Glob characters: *, ?, [
                  */
                 bool is_file = argv[i][0] == '/' || argv[i][0] == '~' || argv[i][0] == '.' ||
-                               strncmp(argv[i], "home/", 5) == 0 ||
-                               strncmp(argv[i], "root/", 5) == 0 ||
-                               strncmp(argv[i], "custom/", 7) == 0 ||
-                               strpbrk(argv[i], "*?[") != NULL;
+                    strncmp(argv[i], "home/", 5) == 0 || strncmp(argv[i], "root/", 5) == 0 ||
+                    strncmp(argv[i], "custom/", 7) == 0 || strpbrk(argv[i], "*?[") != NULL;
 
                 if (is_file) {
                     files[file_count++] = argv[i];
@@ -1346,13 +1340,13 @@ static int cmd_ignore_main(int argc, char **argv) {
     size_t remove_count = 0;
 
     cmd_ignore_options_t opts = {
-        .profile = NULL,
-        .test_path = NULL,
-        .verbose = false,
-        .add_patterns = NULL,
-        .add_count = 0,
+        .profile         = NULL,
+        .test_path       = NULL,
+        .verbose         = false,
+        .add_patterns    = NULL,
+        .add_count       = 0,
         .remove_patterns = NULL,
-        .remove_count = 0
+        .remove_count    = 0
     };
 
     /* Parse arguments */
@@ -1458,7 +1452,7 @@ static int cmd_git_main(int argc, char **argv) {
 
     /* Build options from remaining arguments */
     cmd_git_options_t opts = {
-        .args = &argv[2],           /* Skip "dotta" and "git" */
+        .args      = &argv[2],      /* Skip "dotta" and "git" */
         .arg_count = argc - 2
     };
 
@@ -1474,18 +1468,18 @@ static int cmd_git_main(int argc, char **argv) {
  */
 static int cmd_sync_main(int argc, char **argv) {
     cmd_sync_options_t opts = {
-        .profiles = NULL,
+        .profiles      = NULL,
         .profile_count = 0,
-        .dry_run = false,
-        .no_push = false,
-        .no_pull = false,
-        .verbose = false,
-        .force = false,
-        .diverged = NULL
+        .dry_run       = false,
+        .no_push       = false,
+        .no_pull       = false,
+        .verbose       = false,
+        .force         = false,
+        .diverged      = NULL
     };
 
     /* Collect profile arguments */
-    char **profiles = malloc((size_t)argc * sizeof(char *));
+    char **profiles = malloc((size_t) argc * sizeof(char *));
     if (!profiles) {
         fprintf(stderr, "Failed to allocate memory\n");
         return 1;
@@ -1568,10 +1562,10 @@ static int cmd_sync_main(int argc, char **argv) {
 static int cmd_remote_main(int argc, char **argv) {
     cmd_remote_options_t opts = {
         .subcommand = REMOTE_LIST,
-        .name = NULL,
-        .url = NULL,
-        .new_name = NULL,
-        .verbose = false
+        .name       = NULL,
+        .url        = NULL,
+        .new_name   = NULL,
+        .verbose    = false
     };
 
     /* Parse subcommand and arguments */
@@ -1665,11 +1659,11 @@ static int cmd_remote_main(int argc, char **argv) {
  */
 static int cmd_show_main(int argc, char **argv) {
     cmd_show_options_t opts = {
-        .mode = SHOW_FILE,  /* Default mode (may be changed) */
-        .profile = NULL,
+        .mode      = SHOW_FILE, /* Default mode (may be changed) */
+        .profile   = NULL,
         .file_path = NULL,
-        .commit = NULL,
-        .raw = false
+        .commit    = NULL,
+        .raw       = false
     };
 
     /* Track allocated memory from parse_refspec */
@@ -1679,7 +1673,7 @@ static int cmd_show_main(int argc, char **argv) {
     int ret = 0;
 
     /* Collect positional arguments */
-    const char *positional_args[3] = {NULL};
+    const char *positional_args[3] = { NULL };
     size_t positional_count = 0;
 
     /* Parse arguments */
@@ -1840,12 +1834,12 @@ cleanup:
 static int cmd_revert_main(int argc, char **argv) {
     cmd_revert_options_t opts = {
         .file_path = NULL,
-        .commit = NULL,
-        .profile = NULL,
-        .message = NULL,
-        .force = false,
-        .dry_run = false,
-        .verbose = false
+        .commit    = NULL,
+        .profile   = NULL,
+        .message   = NULL,
+        .force     = false,
+        .dry_run   = false,
+        .verbose   = false
     };
 
     /* Track allocated memory from parse_refspec */
@@ -1855,7 +1849,7 @@ static int cmd_revert_main(int argc, char **argv) {
     int ret = 0;
 
     /* Collect positional arguments */
-    const char *positional_args[3] = {NULL};
+    const char *positional_args[3] = { NULL };
     size_t positional_count = 0;
 
     /* Parse arguments */
@@ -2072,7 +2066,7 @@ static int cmd_interactive_main(int argc, char **argv) {
  */
 static int cmd_bootstrap_main(int argc, char **argv) {
     /* Collect profile arguments */
-    char **profiles = malloc((size_t)argc * sizeof(char *));
+    char **profiles = malloc((size_t) argc * sizeof(char *));
     if (!profiles) {
         fprintf(stderr, "Failed to allocate memory\n");
         return 1;
@@ -2080,14 +2074,14 @@ static int cmd_bootstrap_main(int argc, char **argv) {
     size_t profile_count = 0;
 
     cmd_bootstrap_options_t opts = {
-        .profiles = NULL,
-        .profile_count = 0,
-        .all_profiles = false,
-        .edit = false,
-        .show = false,
-        .list = false,
-        .dry_run = false,
-        .yes = false,
+        .profiles          = NULL,
+        .profile_count     = 0,
+        .all_profiles      = false,
+        .edit              = false,
+        .show              = false,
+        .list              = false,
+        .dry_run           = false,
+        .yes               = false,
         .continue_on_error = false
     };
 
@@ -2114,7 +2108,8 @@ static int cmd_bootstrap_main(int argc, char **argv) {
             opts.list = true;
         } else if (strcmp(argv[i], "-n") == 0 || strcmp(argv[i], "--dry-run") == 0) {
             opts.dry_run = true;
-        } else if (strcmp(argv[i], "-y") == 0 || strcmp(argv[i], "--yes") == 0 || strcmp(argv[i], "--no-confirm") == 0) {
+        } else if (strcmp(argv[i], "-y") == 0 || strcmp(argv[i], "--yes") == 0 ||
+            strcmp(argv[i], "--no-confirm") == 0) {
             opts.yes = true;
         } else if (strcmp(argv[i], "--continue-on-error") == 0) {
             opts.continue_on_error = true;
@@ -2179,7 +2174,7 @@ static int cmd_key_main(int argc, char **argv) {
     }
 
     cmd_key_options_t opts = {
-        .action = action,
+        .action  = action,
         .verbose = false
     };
 
@@ -2239,11 +2234,11 @@ static int cmd_key_main(int argc, char **argv) {
  */
 static int cmd_completion_main(int argc, char **argv) {
     cmd_completion_options_t opts = {
-        .mode = COMPLETE_CHECK,
-        .profile = NULL,
-        .all = false,
+        .mode          = COMPLETE_CHECK,
+        .profile       = NULL,
+        .all           = false,
         .storage_paths = false,
-        .limit = 20
+        .limit         = 20
     };
 
     /* Need at least: dotta __complete <mode> */
@@ -2273,11 +2268,11 @@ static int cmd_completion_main(int argc, char **argv) {
             opts.all = true;
         } else if (strcmp(argv[i], "--storage") == 0 || strcmp(argv[i], "-s") == 0) {
             opts.storage_paths = true;
-        } else if ((strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--profile") == 0)
-                   && i + 1 < argc) {
+        } else if ((strcmp(argv[i], "-p") == 0 ||
+            strcmp(argv[i], "--profile") == 0) && i + 1 < argc) {
             opts.profile = argv[++i];
-        } else if ((strcmp(argv[i], "--limit") == 0 || strcmp(argv[i], "-l") == 0)
-                   && i + 1 < argc) {
+        } else if ((strcmp(argv[i], "--limit") == 0 ||
+            strcmp(argv[i], "-l") == 0) && i + 1 < argc) {
             opts.limit = atoi(argv[++i]);
         }
         /* Unknown options silently ignored - don't want to break completion */

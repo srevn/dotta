@@ -73,7 +73,7 @@ error_t *buffer_append_string(buffer_t *buf, const char *str);
  * @return Error or NULL on success
  */
 error_t *buffer_append_format(buffer_t *buf, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));
+__attribute__((format(printf, 2, 3)));
 
 /**
  * Clear buffer (reset size to 0, keep capacity)

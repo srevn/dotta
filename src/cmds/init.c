@@ -156,7 +156,9 @@ static error_t *init_dottaignore(git_repository *repo) {
     /* Sync working directory so the file appears on disk */
     err = gitops_sync_worktree(repo, GIT_CHECKOUT_FORCE);
     if (err) {
-        return error_wrap(err, "Failed to sync .dottaignore to working directory");
+        return error_wrap(
+            err, "Failed to sync .dottaignore to working directory"
+        );
     }
 
     return NULL;

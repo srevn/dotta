@@ -115,14 +115,6 @@ error_code_t error_code(const error_t *err);
 void error_print(const error_t *err, FILE *stream);
 
 /**
- * Print error with full context (includes source location)
- *
- * @param err Error
- * @param stream Output stream
- */
-void error_print_full(const error_t *err, FILE *stream);
-
-/**
  * Convenience macros
  */
 
@@ -139,11 +131,6 @@ void error_print_full(const error_t *err, FILE *stream);
 /* Check argument condition */
 #define CHECK_ARG(cond, msg) do { \
     if (!(cond)) return ERROR(ERR_INVALID_ARG, msg); \
-} while(0)
-
-/* Check argument and provide formatted message */
-#define CHECK_ARG_FMT(cond, fmt, ...) do { \
-    if (!(cond)) return ERROR(ERR_INVALID_ARG, fmt, __VA_ARGS__); \
 } while(0)
 
 /* Check for NULL pointer */

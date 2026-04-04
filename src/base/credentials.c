@@ -82,9 +82,9 @@ static bool is_valid_hostname(const char *hostname) {
         } else if (*p == ':') {
             in_port = true;
         } else if (!((*p >= 'a' && *p <= 'z') ||
-                     (*p >= 'A' && *p <= 'Z') ||
-                     (*p >= '0' && *p <= '9') ||
-                     *p == '.' || *p == '-' || *p == '_')) {
+            (*p >= 'A' && *p <= 'Z') ||
+            (*p >= '0' && *p <= '9') ||
+            *p == '.' || *p == '-' || *p == '_')) {
             return false;
         }
     }
@@ -197,7 +197,7 @@ void credential_context_approve(credential_context_t *ctx) {
     /* Extract hostname from URL */
     char *hostname = extract_hostname(ctx->url);
     char *protocol = extract_protocol(ctx->url);
-    
+
     if (!hostname || !protocol) {
         free(hostname);
         free(protocol);
@@ -331,13 +331,15 @@ static int get_credentials_from_helper(
 
     /* Build credential helper command using safe heredoc */
     char cmd[1024];
-    snprintf(cmd, sizeof(cmd),
-            "git credential fill 2>/dev/null <<'EOF'\n"
-            "protocol=%s\n"
-            "host=%s\n"
-            "EOF\n",
-            protocol,
-            hostname);
+    snprintf(
+        cmd, sizeof(cmd),
+        "git credential fill 2>/dev/null <<'EOF'\n"
+        "protocol=%s\n"
+        "host=%s\n"
+        "EOF\n",
+        protocol,
+        hostname
+    );
 
     /* Execute command and read output */
     FILE *fp = popen(cmd, "r");
@@ -452,12 +454,12 @@ static char *extract_protocol(const char *url) {
             return proto;
         }
     }
-    
+
     /* Handle SSH SCP-like syntax (user@host:path) */
     if (strchr(url, '@') && strchr(url, ':') && !strstr(url, "://")) {
         return strdup("ssh");
     }
-    
+
     /* Fallback default */
     return strdup("https");
 }
@@ -509,7 +511,7 @@ int credentials_callback(
     unsigned int allowed_types,
     void *payload
 ) {
-    credential_context_t *ctx = (credential_context_t *)payload;
+    credential_context_t *ctx = (credential_context_t *) payload;
     int err = -1;
 
     if (!url) {
@@ -589,7 +591,8 @@ int credentials_callback(
                 hostname,
                 cred_username,
                 cred_password,
-                CRED_MAX_LEN) == 0
+                CRED_MAX_LEN
+                ) == 0
             ) {
                 err = git_credential_userpass_plaintext_new(
                     out,

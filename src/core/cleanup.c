@@ -213,7 +213,7 @@ static error_t *prune_orphaned_files(
                 for (size_t i = 0; i < opts->preflight_violations->count; i++) {
                     const safety_violation_t *v = &opts->preflight_violations->violations[i];
                     /* Store violation pointer for O(1) reason lookup */
-                    err = hashmap_set(violations_map, v->filesystem_path, (void *)v);
+                    err = hashmap_set(violations_map, v->filesystem_path, (void *) v);
                     if (err) {
                         hashmap_free(violations_map, NULL);
                         return error_wrap(err, "Failed to populate violations map");
@@ -257,7 +257,7 @@ static error_t *prune_orphaned_files(
                 for (size_t i = 0; i < result->safety_violations->count; i++) {
                     const safety_violation_t *v = &result->safety_violations->violations[i];
                     /* Store violation pointer for O(1) reason lookup */
-                    err = hashmap_set(violations_map, v->filesystem_path, (void *)v);
+                    err = hashmap_set(violations_map, v->filesystem_path, (void *) v);
                     if (err) {
                         hashmap_free(violations_map, NULL);
                         return error_wrap(err, "Failed to populate violations map");
@@ -728,8 +728,10 @@ error_t *cleanup_preflight_check(
             if (result->safety_violations && result->safety_violations->count > 0) {
                 size_t blocking_count = 0;
                 for (size_t j = 0; j < result->safety_violations->count; j++) {
-                    if (strcmp(result->safety_violations->violations[j].reason,
-                               SAFETY_REASON_RELEASED) != 0) {
+                    if (strcmp(
+                        result->safety_violations->violations[j].reason,
+                        SAFETY_REASON_RELEASED
+                        ) != 0) {
                         blocking_count++;
                     }
                 }

@@ -48,8 +48,10 @@ static char *generate_worktree_name(void) {
         return NULL;
     }
 
-    snprintf(name, 64, "dotta-temp-%ld-%ld-%ld",
-             (long)getpid(), (long)tv.tv_sec, (long)tv.tv_usec);
+    snprintf(
+        name, 64, "dotta-temp-%ld-%ld-%ld",
+        (long) getpid(), (long) tv.tv_sec, (long) tv.tv_usec
+    );
     return name;
 }
 
@@ -80,7 +82,7 @@ static error_t *generate_temp_path_from_name(
  * are no longer running and cleans up both Git metadata and filesystem
  * directories.
  *
- * This extends the existing self-healing pattern (worktree.c:103-112)
+ * This extends the existing self-healing pattern (cleanup_orphaned_worktrees)
  * to handle cross-process orphans from interrupted operations (Ctrl-C),
  * crashes, and kill -9.
  *
@@ -103,7 +105,7 @@ static void cleanup_orphaned_worktrees(git_repository *repo) {
     }
 
     /* Get worktree list from Git (source of truth for what exists) */
-    git_strarray worktree_names = {0};
+    git_strarray worktree_names = { 0 };
     if (git_worktree_list(&worktree_names, repo) < 0) {
         return; /* Non-fatal - continue with worktree creation */
     }
@@ -145,7 +147,7 @@ static void cleanup_orphaned_worktrees(git_repository *repo) {
          * This is the critical step that unblocks subsequent operations */
         git_worktree *wt = NULL;
         if (git_worktree_lookup(&wt, repo, name) == 0) {
-            git_worktree_prune_options opts = {0};
+            git_worktree_prune_options opts = { 0 };
             opts.version = 1;
             opts.flags = GIT_WORKTREE_PRUNE_VALID; /* Prune even if valid */
             git_worktree_prune(wt, &opts);
@@ -154,8 +156,9 @@ static void cleanup_orphaned_worktrees(git_repository *repo) {
 
         /* Step 2: Delete temporary branch (refs/heads/{name}) */
         char refname[DOTTA_REFNAME_MAX];
-        error_t *err_build = gitops_build_refname(refname, sizeof(refname),
-                                                   "refs/heads/%s", name);
+        error_t *err_build = gitops_build_refname(
+            refname, sizeof(refname), "refs/heads/%s", name
+        );
         if (!err_build) {
             git_reference *ref = NULL;
             if (git_reference_lookup(&ref, repo, refname) == 0) {
@@ -225,9 +228,13 @@ error_t *worktree_create_temp(
 
     /* Create worktree using libgit2 (it will create the directory) */
     git_worktree_add_options opts;
-    git_worktree_add_options_init(&opts, GIT_WORKTREE_ADD_OPTIONS_VERSION);
+    git_worktree_add_options_init(
+        &opts, GIT_WORKTREE_ADD_OPTIONS_VERSION
+    );
 
-    int git_err = git_worktree_add(&wt->worktree, repo, wt->name, wt->path, &opts);
+    int git_err = git_worktree_add(
+        &wt->worktree, repo, wt->name, wt->path, &opts
+    );
     if (git_err < 0) {
         err = error_from_git(git_err);
         goto cleanup;
@@ -264,8 +271,9 @@ error_t *worktree_checkout_branch(
 
     /* Build reference name */
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(refname, sizeof(refname),
-                                        "refs/heads/%s", branch_name);
+    error_t *err = gitops_build_refname(
+        refname, sizeof(refname), "refs/heads/%s", branch_name
+    );
     if (err) {
         return error_wrap(err, "Invalid branch name '%s'", branch_name);
     }
@@ -292,9 +300,11 @@ error_t *worktree_checkout_branch(
 
     if (git_err < 0) {
         if (git_err == GIT_ECONFLICT) {
-            return ERROR(ERR_CONFLICT,
+            return ERROR(
+                ERR_CONFLICT,
                 "Cannot checkout '%s': local modifications would be overwritten",
-                branch_name);
+                branch_name
+            );
         }
         return error_from_git(git_err);
     }
@@ -326,8 +336,9 @@ error_t *worktree_create_orphan(
 
     /* Build reference name */
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err_build = gitops_build_refname(refname, sizeof(refname),
-                                              "refs/heads/%s", branch_name);
+    error_t *err_build = gitops_build_refname(
+        refname, sizeof(refname), "refs/heads/%s", branch_name
+    );
     if (err_build) {
         return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
     }
@@ -382,7 +393,7 @@ void worktree_cleanup(worktree_handle_t **wt_ptr) {
 
     /* Step 2: Prune worktree */
     if (wt->worktree) {
-        git_worktree_prune_options opts = {0};
+        git_worktree_prune_options opts = { 0 };
         opts.version = 1;
         opts.flags = GIT_WORKTREE_PRUNE_VALID;  /* Prune even if valid */
 
@@ -394,8 +405,9 @@ void worktree_cleanup(worktree_handle_t **wt_ptr) {
     /* Step 3: Delete the temporary worktree branch from main repo */
     if (wt->name && wt->main_repo) {
         char refname[DOTTA_REFNAME_MAX];
-        error_t *err_build = gitops_build_refname(refname, sizeof(refname),
-                                                  "refs/heads/%s", wt->name);
+        error_t *err_build = gitops_build_refname(
+            refname, sizeof(refname), "refs/heads/%s", wt->name
+        );
         if (!err_build) {
             git_reference *ref = NULL;
             if (git_reference_lookup(&ref, wt->main_repo, refname) == 0) {

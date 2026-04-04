@@ -238,8 +238,8 @@ error_t *string_array_reserve(string_array_t *arr, size_t capacity) {
  * Comparison function for qsort
  */
 static int compare_strings(const void *a, const void *b) {
-    const char *str_a = *(const char **)a;
-    const char *str_b = *(const char **)b;
+    const char *str_a = *(const char **) a;
+    const char *str_b = *(const char **) b;
     return strcmp(str_a, str_b);
 }
 
@@ -294,7 +294,7 @@ error_t *string_array_difference(
     /* Populate exclusion set - map values are just (void*)1 as existence markers */
     for (size_t i = 0; i < string_array_size(set_b); i++) {
         const char *item = string_array_get(set_b, i);
-        err = hashmap_set(exclude_set, item, (void*)1);
+        err = hashmap_set(exclude_set, item, (void *) 1);
         if (err) {
             err = error_wrap(err, "Failed to build exclusion index");
             goto cleanup;

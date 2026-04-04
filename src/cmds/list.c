@@ -83,7 +83,7 @@ static bool is_file_encrypted(
         return false;  /* Can't load blob - assume not encrypted */
     }
 
-    const unsigned char *data = (const unsigned char *)git_blob_rawcontent(blob);
+    const unsigned char *data = (const unsigned char *) git_blob_rawcontent(blob);
     size_t size = git_blob_rawsize(blob);
     bool encrypted = encryption_is_encrypted(data, size);
 
@@ -114,34 +114,54 @@ static void format_upstream_state(
     switch (info->state) {
         case UPSTREAM_UP_TO_DATE:
             color = OUTPUT_COLOR_GREEN;
-            snprintf(plain, sizeof(plain), "[%s]", symbol);
+            snprintf(
+                plain, sizeof(plain),
+                "[%s]", symbol
+            );
             break;
         case UPSTREAM_LOCAL_AHEAD:
             color = OUTPUT_COLOR_YELLOW;
-            snprintf(plain, sizeof(plain), "[%s%zu]", symbol, info->ahead);
+            snprintf(
+                plain, sizeof(plain),
+                "[%s%zu]", symbol, info->ahead
+            );
             break;
         case UPSTREAM_REMOTE_AHEAD:
             color = OUTPUT_COLOR_YELLOW;
-            snprintf(plain, sizeof(plain), "[%s%zu]", symbol, info->behind);
+            snprintf(
+                plain, sizeof(plain),
+                "[%s%zu]", symbol, info->behind
+            );
             break;
         case UPSTREAM_DIVERGED:
             color = OUTPUT_COLOR_RED;
-            snprintf(plain, sizeof(plain), "[%s%zu+%zu]", symbol, info->ahead, info->behind);
+            snprintf(
+                plain, sizeof(plain),
+                "[%s%zu+%zu]", symbol, info->ahead, info->behind
+            );
             break;
         case UPSTREAM_NO_REMOTE:
             color = OUTPUT_COLOR_CYAN;
-            snprintf(plain, sizeof(plain), "[%s]", symbol);
+            snprintf(
+                plain, sizeof(plain),
+                "[%s]", symbol
+            );
             break;
         case UPSTREAM_UNKNOWN:
         default:
             color = OUTPUT_COLOR_DIM;
-            snprintf(plain, sizeof(plain), "[%s]", symbol);
+            snprintf(
+                plain, sizeof(plain),
+                "[%s]", symbol
+            );
             break;
     }
 
-    snprintf(buffer, buffer_size, "%s%s%s",
-            output_color_code(out, color), plain,
-            output_color_code(out, OUTPUT_COLOR_RESET));
+    snprintf(
+        buffer, buffer_size, "%s%s%s",
+        output_color_code(out, color), plain,
+        output_color_code(out, OUTPUT_COLOR_RESET)
+    );
 }
 
 /**
@@ -179,7 +199,10 @@ static error_t *list_profiles(
     if (opts->remote) {
         err = upstream_detect_remote(repo, &remote_name);
         if (err) {
-            output_warning(out, "Could not detect remote: %s", error_message(err));
+            output_warning(
+                out, "Could not detect remote: %s",
+                error_message(err)
+            );
             error_free(err);
             err = NULL;
         } else {
@@ -233,7 +256,10 @@ static error_t *list_profiles(
 
         /* Simple mode: Just name with enabled indicator */
         if (!opts->verbose && !show_remote) {
-            output_styled(out, OUTPUT_NORMAL, "  %s{cyan}%s{reset}\n", indicator, name);
+            output_styled(
+                out, OUTPUT_NORMAL, "  %s{cyan}%s{reset}\n",
+                indicator, name
+            );
             continue;
         }
 
@@ -242,8 +268,10 @@ static error_t *list_profiles(
         if (opts->verbose) {
             err = profile_load(repo, name, &profile);
             if (err) {
-                output_warning(out, "Failed to load profile '%s': %s",
-                               name, error_message(err));
+                output_warning(
+                    out, "Failed to load profile '%s': %s",
+                    name, error_message(err)
+                );
                 error_free(err);
                 err = NULL;
                 /* profile stays NULL - stats skipped, name still shown */
@@ -251,18 +279,23 @@ static error_t *list_profiles(
         }
 
         /* Start line with indicator and name */
-        output_styled(out, OUTPUT_NORMAL, "  %s{cyan}%-*s{reset}", indicator,
-                (int)max_name_len, name);
+        output_styled(
+            out, OUTPUT_NORMAL, "  %s{cyan}%-*s{reset}",
+            indicator, (int) max_name_len, name
+        );
 
         /* Verbose: Add stats (requires successfully loaded profile) */
         if (opts->verbose && profile) {
-            profile_stats_t stats = {0};
+            profile_stats_t stats = { 0 };
             error_t *stats_err = stats_get_profile_stats(repo, profile->tree, &stats);
             if (!stats_err) {
                 char size_str[32];
                 output_format_size(stats.total_size, size_str, sizeof(size_str));
-                output_print(out, OUTPUT_NORMAL, " %2zu file%s, %8s",
-                       stats.file_count, stats.file_count == 1 ? " " : "s", size_str);
+                output_print(
+                    out, OUTPUT_NORMAL, " %2zu file%s, %8s",
+                    stats.file_count,
+                    stats.file_count == 1 ? " " : "s", size_str
+                );
             }
             error_free(stats_err);
         }
@@ -270,8 +303,9 @@ static error_t *list_profiles(
         /* Verbose: Add last commit info (uses branch name, not profile tree) */
         if (opts->verbose) {
             char refname[DOTTA_REFNAME_MAX];
-            error_t *ref_err = gitops_build_refname(refname, sizeof(refname),
-                                                    "refs/heads/%s", name);
+            error_t *ref_err = gitops_build_refname(
+                refname, sizeof(refname), "refs/heads/%s", name
+            );
             if (!ref_err) {
                 git_commit *last_commit = NULL;
                 error_t *commit_err = gitops_get_commit(repo, refname, &last_commit);
@@ -283,7 +317,7 @@ static error_t *list_profiles(
 
                     const char *message = git_commit_message(last_commit);
                     const char *newline = strchr(message, '\n');
-                    size_t msg_len = newline ? (size_t)(newline - message) : strlen(message);
+                    size_t msg_len = newline ? (size_t) (newline - message) : strlen(message);
                     if (msg_len > 40) {
                         msg_len = 40;
                     }
@@ -292,10 +326,10 @@ static error_t *list_profiles(
                     char time_str[64];
                     format_relative_time(author->when.time, time_str, sizeof(time_str));
 
-                    output_styled(out, OUTPUT_NORMAL, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
-                            oid_str,
-                            (int)msg_len, message,
-                            time_str);
+                    output_styled(
+                        out, OUTPUT_NORMAL, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
+                        oid_str, (int) msg_len, message, time_str
+                    );
 
                     git_commit_free(last_commit);
                 }
@@ -326,12 +360,22 @@ static error_t *list_profiles(
     /* Print remote legend if shown */
     if (show_remote) {
         output_newline(out);
-        output_print(out, OUTPUT_NORMAL,
-            "Remote tracking (from %s):\n", remote_name);
-        output_styled(out, OUTPUT_NORMAL,
-            "  {green}[=]{reset} up-to-date    {yellow}[↑n]{reset} ahead     {yellow}[↓n]{reset} behind\n");
-        output_styled(out, OUTPUT_NORMAL,
-            "  {red}[↕n+m]{reset} diverged   {cyan}[•]{reset}  no remote\n");
+        output_print(
+            out, OUTPUT_NORMAL,
+            "Remote tracking (from %s):\n",
+            remote_name
+        );
+        output_styled(
+            out, OUTPUT_NORMAL,
+            "  {green}[=]{reset} up-to-date  "
+            "  {yellow}[↑n]{reset} ahead  "
+            "  {yellow}[↓n]{reset} behind\n"
+        );
+        output_styled(
+            out, OUTPUT_NORMAL,
+            "  {red}[↕n+m]{reset} diverged  "
+            " {cyan}[•]{reset}  no remote\n"
+        );
     }
 
     /* Cleanup */
@@ -438,11 +482,16 @@ static error_t *list_files(
         /* Print file path (with alignment in verbose mode) */
         if (opts->verbose) {
             /* Verbose: Left-align with padding for column alignment */
-            output_styled(out, OUTPUT_NORMAL, "  {cyan}%-*s{reset}",
-                    (int)max_path_len, file_path);
+            output_styled(
+                out, OUTPUT_NORMAL, "  {cyan}%-*s{reset}",
+                (int) max_path_len, file_path
+            );
         } else {
             /* Simple: No alignment needed */
-            output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", file_path);
+            output_styled(
+                out, OUTPUT_NORMAL, "  {cyan}%s{reset}",
+                file_path
+            );
         }
 
         /* Verbose: Add size and last commit */
@@ -454,19 +503,26 @@ static error_t *list_files(
                 /* Check encryption status and display indicator */
                 bool encrypted = is_file_encrypted(metadata, repo, entry, file_path);
                 if (encrypted) {
-                    output_styled(out, OUTPUT_NORMAL, "  {yellow}[E]{reset} ");
+                    output_styled(
+                        out, OUTPUT_NORMAL, "  {yellow}[E]{reset} "
+                    );
                 } else {
                     /* Space padding to maintain alignment */
-                    output_print(out, OUTPUT_NORMAL, "      ");
+                    output_print(
+                        out, OUTPUT_NORMAL, "      "
+                    );
                 }
 
                 /* Get blob size efficiently */
                 size_t size;
-                error_t *stats_err = stats_get_blob_size(repo, git_tree_entry_id(entry), &size);
+                error_t *stats_err = stats_get_blob_size(
+                    repo, git_tree_entry_id(entry), &size
+                );
                 if (!stats_err) {
                     /* For encrypted files, show content size (subtract fixed overhead) */
-                    size_t display_size = encrypted && size > ENCRYPTION_OVERHEAD ?
-                                          size - ENCRYPTION_OVERHEAD : size;
+                    size_t display_size = encrypted && size > ENCRYPTION_OVERHEAD
+                                        ? size - ENCRYPTION_OVERHEAD : size;
+
                     char size_str[32];
                     output_format_size(display_size, size_str, sizeof(size_str));
                     output_print(out, OUTPUT_NORMAL, " %8s", size_str);
@@ -476,7 +532,9 @@ static error_t *list_files(
 
                 /* Get last commit for this file */
                 if (commit_map) {
-                    const commit_info_t *commit_info = stats_file_commit_map_get(commit_map, file_path);
+                    const commit_info_t *commit_info = stats_file_commit_map_get(
+                        commit_map, file_path
+                    );
                     if (commit_info) {
                         char oid_str[LIST_SHORT_OID_BUF_SIZE];
                         git_oid_tostr(oid_str, sizeof(oid_str), &commit_info->oid);
@@ -489,10 +547,10 @@ static error_t *list_files(
                             summary_len = 40;
                         }
 
-                        output_styled(out, OUTPUT_NORMAL, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
-                                oid_str,
-                                (int)summary_len, commit_info->summary,
-                                time_str);
+                        output_styled(
+                            out, OUTPUT_NORMAL, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
+                            oid_str, (int) summary_len, commit_info->summary, time_str
+                        );
                     }
                 }
 
@@ -511,14 +569,15 @@ static error_t *list_files(
     if (opts->verbose) {
         char size_str[32];
         output_format_size(total_size, size_str, sizeof(size_str));
-        output_print(out, OUTPUT_NORMAL, "Total: %zu file%s, %s\n",
-               string_array_size(files),
-               string_array_size(files) == 1 ? "" : "s",
-               size_str);
+        output_print(
+            out, OUTPUT_NORMAL, "Total: %zu file%s, %s\n",
+            string_array_size(files), string_array_size(files) == 1 ? "" : "s", size_str
+        );
     } else {
-        output_print(out, OUTPUT_NORMAL, "Total: %zu file%s\n",
-               string_array_size(files),
-               string_array_size(files) == 1 ? "" : "s");
+        output_print(
+            out, OUTPUT_NORMAL, "Total: %zu file%s\n",
+            string_array_size(files), string_array_size(files) == 1 ? "" : "s"
+        );
     }
 
     /* Cleanup */
@@ -543,7 +602,7 @@ static error_t *list_files(
  * @return true on success, false if timestamp is invalid
  */
 static bool format_time(git_time_t timestamp, char *buf, size_t buf_size) {
-    time_t t = (time_t)timestamp;
+    time_t t = (time_t) timestamp;
     struct tm tm_info;
     if (!localtime_r(&t, &tm_info)) {
         return false;
@@ -609,16 +668,20 @@ static error_t *list_file_history(
     file_history_t *history = NULL;
     err = stats_get_file_history(repo, opts->profile, storage_path, &history);
     if (err) {
-        error_t *wrapped = error_wrap(err, "Failed to get history for '%s' in profile '%s'",
-                                      storage_path, opts->profile);
+        error_t *wrapped = error_wrap(
+            err, "Failed to get history for '%s' in profile '%s'",
+            storage_path, opts->profile
+        );
         free(storage_path);
         return wrapped;
     }
 
     /* Print header */
     char header[LIST_HEADER_BUFFER_SIZE];
-    snprintf(header, sizeof(header), "History of '%s' in profile '%s'",
-             storage_path, opts->profile);
+    snprintf(
+        header, sizeof(header), "History of '%s' in profile '%s'",
+        storage_path, opts->profile
+    );
     output_section(out, header);
     output_newline(out);
 
@@ -631,6 +694,7 @@ static error_t *list_file_history(
                 max_msg_len = len;
             }
         }
+
         /* Cap to prevent excessive padding from long commit messages */
         if (max_msg_len > LIST_MAX_MSG_ALIGN) {
             max_msg_len = LIST_MAX_MSG_ALIGN;
@@ -646,7 +710,10 @@ static error_t *list_file_history(
             char oid_str[GIT_OID_SHA1_HEXSIZE + 1];
             git_oid_tostr(oid_str, sizeof(oid_str), &commit->oid);
 
-            output_styled(out, OUTPUT_NORMAL, "{bold}commit {yellow}%s{reset}\n", oid_str);
+            output_styled(
+                out, OUTPUT_NORMAL, "{bold}commit {yellow}%s{reset}\n",
+                oid_str
+            );
 
             /* Display timestamp if valid */
             char date_buf[LIST_TIMESTAMP_BUFFER_SIZE];
@@ -654,8 +721,10 @@ static error_t *list_file_history(
                 char relative_str[64];
                 format_relative_time(commit->time, relative_str, sizeof(relative_str));
 
-                output_styled(out, OUTPUT_NORMAL, "Date:   %s {dim}(%s){reset}\n",
-                        date_buf, relative_str);
+                output_styled(
+                    out, OUTPUT_NORMAL, "Date:   %s {dim}(%s){reset}\n",
+                    date_buf, relative_str
+                );
             }
 
             output_print(out, OUTPUT_NORMAL, "\n    %s\n", commit->summary);
@@ -671,11 +740,10 @@ static error_t *list_file_history(
             char time_str[64];
             format_relative_time(commit->time, time_str, sizeof(time_str));
 
-            output_styled(out, OUTPUT_NORMAL, "  {yellow}%s{reset}  %-*s {dim}(%s){reset}\n",
-                    oid_str,
-                    (int)max_msg_len,
-                    commit->summary,
-                    time_str);
+            output_styled(
+                out, OUTPUT_NORMAL, "  {yellow}%s{reset}  %-*s {dim}(%s){reset}\n",
+                oid_str, (int) max_msg_len, commit->summary, time_str
+            );
         }
     }
 

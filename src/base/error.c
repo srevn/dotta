@@ -18,7 +18,7 @@
  */
 static error_t oom_sentinel = {
     .code    = ERR_MEMORY,
-    .message = (char *)"Out of memory",
+    .message = (char *) "Out of memory",
     .file    = NULL,
     .line    = 0,
     .cause   = NULL
@@ -108,23 +108,19 @@ error_t *error_wrap(error_t *cause, const char *fmt, ...) {
     return err;
 }
 
-
 error_t *error_from_git(int git_error_code) {
     const git_error *e = git_error_last();
     const char *msg = e ? e->message : "Unknown git error";
 
     return error_create(
-        ERR_GIT,
-        "Git error (%d): %s",
-        git_error_code,
-        msg
+        ERR_GIT, "Git error (%d): %s",
+        git_error_code, msg
     );
 }
 
 error_t *error_from_errno(int errno_val) {
     return error_create(
-        ERR_FS,
-        "System error: %s",
+        ERR_FS, "System error: %s",
         strerror(errno_val)
     );
 }
@@ -157,34 +153,18 @@ void error_print(const error_t *err, FILE *stream) {
         return;
     }
 
-    fprintf(stream, "Error: %s\n", err->message);
+    fprintf(
+        stream, "Error: %s\n",
+        err->message
+    );
 
     /* Print cause chain */
     const error_t *cause = err->cause;
     while (cause) {
-        fprintf(stream, "  Caused by: %s\n", cause->message);
-        cause = cause->cause;
-    }
-}
-
-void error_print_full(const error_t *err, FILE *stream) {
-    if (!err) {
-        return;
-    }
-
-    fprintf(stream, "Error: %s\n", err->message);
-
-    if (err->file) {
-        fprintf(stream, "  at %s:%d\n", err->file, err->line);
-    }
-
-    /* Print cause chain with locations */
-    const error_t *cause = err->cause;
-    while (cause) {
-        fprintf(stream, "  Caused by: %s\n", cause->message);
-        if (cause->file) {
-            fprintf(stream, "    at %s:%d\n", cause->file, cause->line);
-        }
+        fprintf(
+            stream, "  Caused by: %s\n",
+            cause->message
+        );
         cause = cause->cause;
     }
 }

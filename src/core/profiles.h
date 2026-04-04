@@ -119,8 +119,8 @@ typedef struct {
 typedef struct {
     file_entry_t *entries;
     size_t count;
-    hashmap_t *index;      /* Maps filesystem_path -> index in entries array (offset by 1), can be NULL */
-    profile_t *owned_profile;  /* Owned profile for single-profile manifests, NULL otherwise */
+    hashmap_t *index;         /* Maps filesystem_path -> index in entries array (offset by 1), can be NULL */
+    profile_t *owned_profile; /* Owned profile for single-profile manifests, NULL otherwise */
 } manifest_t;
 
 /**

@@ -29,10 +29,13 @@ error_t *divergence_context_init(
 
     /* Build branch reference name */
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(refname, sizeof(refname),
-                                        "refs/heads/%s", branch_name);
+    error_t *err = gitops_build_refname(
+        refname, sizeof(refname), "refs/heads/%s", branch_name
+    );
     if (err) {
-        return error_wrap(err, "Invalid branch name '%s'", branch_name);
+        return error_wrap(
+            err, "Invalid branch name '%s'", branch_name
+        );
     }
 
     /* Get current branch OID for rollback */
@@ -45,7 +48,10 @@ error_t *divergence_context_init(
     const git_oid *oid = git_reference_target(ref);
     if (!oid) {
         git_reference_free(ref);
-        return ERROR(ERR_GIT, "Branch '%s' has no target OID", branch_name);
+        return ERROR(
+            ERR_GIT, "Branch '%s' has no target OID",
+            branch_name
+        );
     }
 
     /* Initialize context */
@@ -70,11 +76,15 @@ static error_t *resolve_rebase_inmemory(
 
     /* Get remote commit OID (local OID already captured in ctx->saved_oid) */
     char remote_refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(remote_refname, sizeof(remote_refname),
-                       "refs/remotes/%s/%s", ctx->remote_name, ctx->branch_name);
+    error_t *err = gitops_build_refname(
+        remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
+        ctx->remote_name, ctx->branch_name
+    );
     if (err) {
-        return error_wrap(err, "Invalid remote/branch name '%s/%s'",
-                          ctx->remote_name, ctx->branch_name);
+        return error_wrap(
+            err, "Invalid remote/branch name '%s/%s'",
+            ctx->remote_name, ctx->branch_name
+        );
     }
 
     /* Get remote commit OID */
@@ -90,20 +100,28 @@ static error_t *resolve_rebase_inmemory(
         ctx->repo, &ctx->saved_oid, &remote_oid, &rebased_oid
     );
     if (err) {
-        return error_wrap(err, "Rebase failed for branch '%s'", ctx->branch_name);
+        return error_wrap(
+            err, "Rebase failed for branch '%s'",
+            ctx->branch_name
+        );
     }
 
     /* Update branch reference to point to rebased commits */
     char reflog_msg[DOTTA_MESSAGE_MAX];
-    snprintf(reflog_msg, sizeof(reflog_msg), "sync: Rebase onto %s/%s",
-             ctx->remote_name, ctx->branch_name);
+    snprintf(
+        reflog_msg, sizeof(reflog_msg),
+        "sync: Rebase onto %s/%s",
+        ctx->remote_name, ctx->branch_name
+    );
 
     err = gitops_update_branch_reference(
         ctx->repo, ctx->branch_name, &rebased_oid, reflog_msg
     );
     if (err) {
-        return error_wrap(err, "Failed to update branch '%s' after rebase",
-                          ctx->branch_name);
+        return error_wrap(
+            err, "Failed to update branch '%s' after rebase",
+            ctx->branch_name
+        );
     }
 
     if (out_oid) {
@@ -124,33 +142,45 @@ static error_t *resolve_merge_trees(
 
     /* Get remote commit OID (local OID already captured in ctx->saved_oid) */
     char remote_refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(remote_refname, sizeof(remote_refname),
-                       "refs/remotes/%s/%s", ctx->remote_name, ctx->branch_name);
+    error_t *err = gitops_build_refname(
+        remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
+        ctx->remote_name, ctx->branch_name
+    );
     if (err) {
-        return error_wrap(err, "Invalid remote/branch name '%s/%s'",
-                          ctx->remote_name, ctx->branch_name);
+        return error_wrap(
+            err, "Invalid remote/branch name '%s/%s'",
+            ctx->remote_name, ctx->branch_name
+        );
     }
 
     /* Get remote commit OID */
     git_oid remote_oid;
-    int git_err = git_reference_name_to_id(&remote_oid, ctx->repo, remote_refname);
+    int git_err = git_reference_name_to_id(
+        &remote_oid, ctx->repo, remote_refname
+    );
     if (git_err < 0) {
         return error_from_git(git_err);
     }
 
     /* Find merge base */
     git_oid merge_base_oid;
-    err = gitops_find_merge_base(ctx->repo, &ctx->saved_oid, &remote_oid, &merge_base_oid);
+    err = gitops_find_merge_base(
+        ctx->repo, &ctx->saved_oid, &remote_oid, &merge_base_oid
+    );
     if (err) {
         if (error_code(err) == ERR_NOT_FOUND) {
             error_free(err);
-            return ERROR(ERR_NOT_FOUND,
+            return ERROR(
+                ERR_NOT_FOUND,
                 "No common history for branch '%s' - branches may have been "
                 "created independently. Use 'ours' or 'theirs' strategy instead",
-                ctx->branch_name);
+                ctx->branch_name
+            );
         }
-        return error_wrap(err, "Failed to find merge base for branch '%s'",
-                          ctx->branch_name);
+        return error_wrap(
+            err, "Failed to find merge base for branch '%s'",
+            ctx->branch_name
+        );
     }
 
     /* Perform tree merge (never touches HEAD) */
@@ -165,8 +195,10 @@ static error_t *resolve_merge_trees(
     /* Check for conflicts */
     if (git_index_has_conflicts(merged_index)) {
         git_index_free(merged_index);
-        return ERROR(ERR_CONFLICT, "Merge resulted in conflicts for branch '%s'. "
-            "Please resolve manually using 'git merge'.", ctx->branch_name);
+        return ERROR(
+            ERR_CONFLICT, "Merge resulted in conflicts for branch '%s'. "
+            "Please resolve manually using 'git merge'.", ctx->branch_name
+        );
     }
 
     /* Get commit objects for merge commit creation */
@@ -189,33 +221,43 @@ static error_t *resolve_merge_trees(
 
     /* Create merge commit */
     char message[DOTTA_MESSAGE_MAX];
-    snprintf(message, sizeof(message), "Merge remote-tracking branch '%s/%s'",
-             ctx->remote_name, ctx->branch_name);
+    snprintf(
+        message, sizeof(message),
+        "Merge remote-tracking branch '%s/%s'",
+        ctx->remote_name, ctx->branch_name
+    );
 
     err = gitops_create_merge_commit(
-        ctx->repo, merged_index, local_commit,
-        remote_commit, message, &merge_commit_oid
+        ctx->repo, merged_index, local_commit, remote_commit,
+        message, &merge_commit_oid
     );
     git_commit_free(remote_commit);
     git_commit_free(local_commit);
     git_index_free(merged_index);
 
     if (err) {
-        return error_wrap(err,
-            "Failed to create merge commit for branch '%s'", ctx->branch_name);
+        return error_wrap(
+            err, "Failed to create merge commit for branch '%s'",
+            ctx->branch_name
+        );
     }
 
     /* Update branch reference to point to merge commit */
     char reflog_msg[DOTTA_MESSAGE_MAX];
-    snprintf(reflog_msg, sizeof(reflog_msg), "sync: Merge %s/%s",
-             ctx->remote_name, ctx->branch_name);
+    snprintf(
+        reflog_msg, sizeof(reflog_msg),
+        "sync: Merge %s/%s",
+        ctx->remote_name, ctx->branch_name
+    );
 
     err = gitops_update_branch_reference(
         ctx->repo, ctx->branch_name, &merge_commit_oid, reflog_msg
     );
     if (err) {
-        return error_wrap(err,
-            "Failed to update branch '%s' after merge", ctx->branch_name);
+        return error_wrap(
+            err, "Failed to update branch '%s' after merge",
+            ctx->branch_name
+        );
     }
 
     if (out_oid) {
@@ -251,11 +293,15 @@ static error_t *resolve_theirs(divergence_context_t *ctx, git_oid *out_oid) {
 
     /* Get remote reference */
     char remote_refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(remote_refname, sizeof(remote_refname),
-                                "refs/remotes/%s/%s", ctx->remote_name, ctx->branch_name);
+    error_t *err = gitops_build_refname(
+        remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
+        ctx->remote_name, ctx->branch_name
+    );
     if (err) {
-        return error_wrap(err, "Invalid remote/branch name '%s/%s'",
-                          ctx->remote_name, ctx->branch_name);
+        return error_wrap(
+            err, "Invalid remote/branch name '%s/%s'",
+            ctx->remote_name, ctx->branch_name
+        );
     }
 
     /* Get remote commit OID */
@@ -267,14 +313,20 @@ static error_t *resolve_theirs(divergence_context_t *ctx, git_oid *out_oid) {
 
     /* Update local branch to point to remote commit */
     char reflog_msg[DOTTA_MESSAGE_MAX];
-    snprintf(reflog_msg, sizeof(reflog_msg), "sync: Reset to %s/%s (theirs strategy)",
-             ctx->remote_name, ctx->branch_name);
+    snprintf(
+        reflog_msg, sizeof(reflog_msg),
+        "sync: Reset to %s/%s (theirs strategy)",
+        ctx->remote_name, ctx->branch_name
+    );
 
     err = gitops_update_branch_reference(
         ctx->repo, ctx->branch_name, &remote_oid, reflog_msg
     );
     if (err) {
-        return error_wrap(err, "Failed to reset branch '%s' to remote", ctx->branch_name);
+        return error_wrap(
+            err, "Failed to reset branch '%s' to remote",
+            ctx->branch_name
+        );
     }
 
     /* Return the new OID (remote) */
@@ -312,8 +364,10 @@ error_t *divergence_resolve(
             return resolve_theirs(ctx, out_oid);
 
         default:
-            return ERROR(ERR_INVALID_ARG,
-                "Unknown divergence strategy: %d", ctx->strategy);
+            return ERROR(
+                ERR_INVALID_ARG, "Unknown divergence strategy: %d",
+                ctx->strategy
+            );
     }
 }
 
@@ -327,10 +381,14 @@ error_t *divergence_rollback(divergence_context_t *ctx) {
 
     /* Build branch reference name */
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(refname, sizeof(refname),
-                                        "refs/heads/%s", ctx->branch_name);
+    error_t *err = gitops_build_refname(
+        refname, sizeof(refname), "refs/heads/%s", ctx->branch_name
+    );
     if (err) {
-        return error_wrap(err, "Invalid branch name '%s'", ctx->branch_name);
+        return error_wrap(
+            err, "Invalid branch name '%s'",
+            ctx->branch_name
+        );
     }
 
     /* Lookup branch reference */
@@ -374,8 +432,10 @@ error_t *divergence_verify(
         ctx->repo, ctx->remote_name, ctx->branch_name, &info
     );
     if (err) {
-        return error_wrap(err, "Failed to analyze branch '%s' after resolution",
-                          ctx->branch_name);
+        return error_wrap(
+            err, "Failed to analyze branch '%s' after resolution",
+            ctx->branch_name
+        );
     }
 
     /* Extract results */
@@ -389,27 +449,35 @@ error_t *divergence_verify(
 
     /* After successful resolution, we should be ahead of remote (or equal) */
     if (state == UPSTREAM_NO_REMOTE) {
-        return ERROR(ERR_INTERNAL,
+        return ERROR(
+            ERR_INTERNAL,
             "Divergence resolution completed but no remote tracking branch "
-            "found for '%s'", ctx->branch_name);
+            "found for '%s'", ctx->branch_name
+        );
     }
 
     if (state == UPSTREAM_UNKNOWN) {
-        return ERROR(ERR_INTERNAL,
+        return ERROR(
+            ERR_INTERNAL,
             "Divergence resolution completed but could not determine state "
-            "of branch '%s'", ctx->branch_name);
+            "of branch '%s'", ctx->branch_name
+        );
     }
 
     if (state == UPSTREAM_REMOTE_AHEAD) {
-        return ERROR(ERR_INTERNAL,
+        return ERROR(
+            ERR_INTERNAL,
             "Divergence resolution completed but branch '%s' is still "
-            "behind remote (%zu commits)", ctx->branch_name, behind);
+            "behind remote (%zu commits)", ctx->branch_name, behind
+        );
     }
 
     if (state == UPSTREAM_DIVERGED) {
-        return ERROR(ERR_INTERNAL,
+        return ERROR(
+            ERR_INTERNAL,
             "Divergence resolution completed but branch '%s' is still diverged "
-            "(ahead: %zu, behind: %zu)", ctx->branch_name, ahead, behind);
+            "(ahead: %zu, behind: %zu)", ctx->branch_name, ahead, behind
+        );
     }
 
     return NULL;

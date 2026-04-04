@@ -244,15 +244,18 @@ static error_t *extract_file_metadata_from_tree_entry(
             /* Directories should never appear in manifest entries.
              * File entries are extracted from tree walks which skip directories.
              * If we see this, it indicates a bug in the tree traversal logic. */
-            return ERROR(ERR_INTERNAL,
-                "Unexpected directory in manifest tree entry (bug in tree traversal)");
+            return ERROR(
+                ERR_INTERNAL, "Unexpected directory in manifest tree entry"
+            );
 
         default:
             /* Unknown/unsupported filemode - defensive programming.
              * Git may add new filemodes in future versions. Fail explicitly
              * rather than silently mishandling. */
-            return ERROR(ERR_INTERNAL,
-                "Unknown or unsupported git filemode: 0%o", filemode);
+            return ERROR(
+                ERR_INTERNAL, "Unknown or unsupported git filemode: 0%o",
+                filemode
+            );
     }
 
     *out_type = type;
@@ -289,13 +292,18 @@ static error_t *enrich_profiles_with_prefixes(
     /* Validate transient parameters: both or neither */
     if ((transient_profile && !transient_prefix) ||
         (!transient_profile && transient_prefix)) {
-        return ERROR(ERR_INVALID_ARG,
-                    "transient_profile and transient_prefix must be provided together");
+        return ERROR(
+            ERR_INVALID_ARG,
+            "transient_profile and transient_prefix must be provided together"
+        );
     }
 
     /* Validate non-empty prefix */
     if (transient_prefix && transient_prefix[0] == '\0') {
-        return ERROR(ERR_INVALID_ARG, "transient_prefix must not be empty string");
+        return ERROR(
+            ERR_INVALID_ARG,
+            "transient_prefix must not be empty string"
+        );
     }
 
     /* Early return for empty profile list */
@@ -309,7 +317,9 @@ static error_t *enrich_profiles_with_prefixes(
     /* Query custom prefix configuration from state */
     err = state_get_prefix_map(state, &prefix_map);
     if (err) {
-        return error_wrap(err, "Failed to load custom prefix configuration");
+        return error_wrap(
+            err, "Failed to load custom prefix configuration"
+        );
     }
 
     /* Enrich each profile with custom prefix */
@@ -323,7 +333,7 @@ static error_t *enrich_profiles_with_prefixes(
             custom_prefix = transient_prefix;
         } else {
             /* Normal case: query from state */
-            custom_prefix = (const char *)hashmap_get(prefix_map, profile->name);
+            custom_prefix = (const char *) hashmap_get(prefix_map, profile->name);
         }
 
         /* Attach to profile (owned by profile, freed in profile_list_free) */
@@ -331,9 +341,10 @@ static error_t *enrich_profiles_with_prefixes(
             profile->custom_prefix = strdup(custom_prefix);
             if (!profile->custom_prefix) {
                 hashmap_free(prefix_map, free);
-                return ERROR(ERR_MEMORY,
-                            "Failed to duplicate custom_prefix for profile '%s'",
-                            profile->name);
+                return ERROR(
+                    ERR_MEMORY, "Failed to duplicate custom_prefix for profile '%s'",
+                    profile->name
+                );
             }
         }
         /* else: custom_prefix remains NULL (normal for home/root profiles) */
@@ -384,15 +395,17 @@ static error_t *build_manifest(
     manifest_t *manifest = NULL;
 
     /* Load profiles from Git (profiles module - pure Git operations) */
-    err = profile_list_load(repo, profile_names->items, profile_names->count,
-                            false /* strict */, &profiles);
+    err = profile_list_load(
+        repo, profile_names->items, profile_names->count, false /* strict */, &profiles
+    );
     if (err) {
         return error_wrap(err, "Failed to load profiles for manifest build");
     }
 
     /* Enrich profiles with prefixes */
-    err = enrich_profiles_with_prefixes(state, profiles,
-                                        transient_profile, transient_prefix);
+    err = enrich_profiles_with_prefixes(
+        state, profiles, transient_profile, transient_prefix
+    );
     if (err) {
         profile_list_free(profiles);
         return error_wrap(err, "Failed to enrich profiles with prefixes");
@@ -466,8 +479,10 @@ static error_t *sync_entry_to_state(
     /* 1. Extract blob_oid from tree entry */
     const struct git_oid *blob_oid_obj = git_tree_entry_id(manifest_entry->entry);
     if (!blob_oid_obj) {
-        return ERROR(ERR_INTERNAL, "Tree entry has no OID for '%s'",
-                     manifest_entry->storage_path);
+        return ERROR(
+            ERR_INTERNAL, "Tree entry has no OID for '%s'",
+            manifest_entry->storage_path
+        );
     }
 
     char oid_str[GIT_OID_HEXSZ + 1];
@@ -481,9 +496,7 @@ static error_t *sync_entry_to_state(
     /* 2. Get metadata item (may not exist for old profiles) */
     if (metadata) {
         err = metadata_get_item(
-            metadata,
-            manifest_entry->storage_path,
-            (const metadata_item_t **)&meta_item
+            metadata, manifest_entry->storage_path, (const metadata_item_t **) &meta_item
         );
         /* Allow NOT_FOUND (old profiles without metadata) */
         if (err && err->code != ERR_NOT_FOUND) {
@@ -500,9 +513,7 @@ static error_t *sync_entry_to_state(
     mode_t git_mode = 0;
 
     err = extract_file_metadata_from_tree_entry(
-        manifest_entry->entry,
-        &file_type,
-        &git_mode
+        manifest_entry->entry, &file_type, &git_mode
     );
     if (err) {
         goto cleanup;
@@ -518,19 +529,19 @@ static error_t *sync_entry_to_state(
 
     /* 5. Build state entry */
     state_file_entry_t state_entry = {
-        .storage_path = manifest_entry->storage_path,
+        .storage_path    = manifest_entry->storage_path,
         .filesystem_path = manifest_entry->filesystem_path,
-        .profile = manifest_entry->source_profile->name,
-        .type = file_type,
-        .git_oid = (char *)git_oid,
-        .blob_oid = blob_oid,
-        .mode = mode,
-        .owner = meta_item ? meta_item->owner : NULL,
-        .group = meta_item ? meta_item->group : NULL,
-        .encrypted = (meta_item && meta_item->kind == METADATA_ITEM_FILE)
-                     ? meta_item->file.encrypted : false,
-        .state = STATE_ACTIVE,
-        .deployed_at = deployed_at
+        .profile         = manifest_entry->source_profile->name,
+        .type            = file_type,
+        .git_oid         = (char *) git_oid,
+        .blob_oid        = blob_oid,
+        .mode            = mode,
+        .owner           = meta_item ? meta_item->owner : NULL,
+        .group           = meta_item ? meta_item->group : NULL,
+        .encrypted       = (meta_item && meta_item->kind == METADATA_ITEM_FILE)
+                         ? meta_item->file.encrypted : false,
+        .state           = STATE_ACTIVE,
+        .deployed_at     = deployed_at
     };
 
     /* 6. Write entry to state (INSERT OR REPLACE with caller's deployed_at)
@@ -541,8 +552,10 @@ static error_t *sync_entry_to_state(
      */
     err = state_add_file(state, &state_entry);
     if (err) {
-        err = error_wrap(err, "Failed to sync manifest entry for %s",
-                        manifest_entry->storage_path);
+        err = error_wrap(
+            err, "Failed to sync manifest entry for %s",
+            manifest_entry->storage_path
+        );
     }
 
 cleanup:
@@ -602,15 +615,19 @@ error_t *manifest_enable_profile(
     const char *transient_prof = custom_prefix ? profile_name : NULL;
     const char *transient_pfx = custom_prefix;
 
-    err = build_manifest(repo, state, enabled_profiles, transient_prof, transient_pfx,
-                         &manifest, &profiles);
+    err = build_manifest(
+        repo, state, enabled_profiles, transient_prof, transient_pfx, &manifest, &profiles
+    );
     if (err) {
         return error_wrap(err, "Failed to build manifest for profile sync");
     }
 
     /* Defensive: build_manifest should always set outputs on success */
     if (!manifest || !profiles) {
-        err = ERROR(ERR_INTERNAL, "build_manifest succeeded but returned NULL outputs");
+        err = ERROR(
+            ERR_INTERNAL,
+            "build_manifest succeeded but returned NULL outputs"
+        );
         goto cleanup;
     }
 
@@ -836,7 +853,7 @@ static error_t *build_directory_fallback_index(
     }
 
     /* Allocate array to track loaded metadata (for proper cleanup) */
-    loaded_metadata = malloc(string_array_size(remaining_enabled) * sizeof(metadata_t*));
+    loaded_metadata = malloc(string_array_size(remaining_enabled) * sizeof(metadata_t *));
     if (!loaded_metadata) {
         hashmap_free(fallback_dirs, NULL);
         hashmap_free(fallback_dir_profiles, NULL);
@@ -874,11 +891,10 @@ static error_t *build_directory_fallback_index(
          *
          * Unconditionally set/update - later profiles override (last wins).
          * This implements the same precedence as:
-         *   - File fallback: build_manifest() (manifest.c:646-681)
-         *   - Workspace merge: (workspace.c:1936-1939)
-         *   - Metadata merge: metadata_merge() (metadata.c:1816)
+         *   - File fallback: build_manifest()
+         *   - Metadata merge: metadata_merge()
          *
-         * Precedence order: global < OS < host (profiles.h:6-14)
+         * Precedence order: global < OS < host (see profiles.h)
          * Iteration order: same as precedence (low→high)
          * Result: Later iterations override earlier ones → highest precedence wins
          */
@@ -887,8 +903,8 @@ static error_t *build_directory_fallback_index(
             const char *storage_path = dir_item->key;  /* Storage path (portable) */
 
             /* Unconditionally set/update - later profiles override (last wins) */
-            hashmap_set(fallback_dirs, storage_path, (void*)dir_item);
-            hashmap_set(fallback_dir_profiles, storage_path, (void*)profile);
+            hashmap_set(fallback_dirs, storage_path, (void *) dir_item);
+            hashmap_set(fallback_dir_profiles, storage_path, (void *) profile);
         }
 
         /* Free the pointer array (items themselves are owned by metadata) */
@@ -962,8 +978,10 @@ error_t *manifest_disable_profile(
 
     /* 2. Build manifest from remaining profiles (fallback check) */
     if (remaining_enabled->count > 0) {
-        err = build_manifest(repo, state, remaining_enabled, NULL, NULL,
-                            &fallback_manifest, &fallback_profiles);
+        err = build_manifest(
+            repo, state, remaining_enabled, NULL, NULL, &fallback_manifest,
+            &fallback_profiles
+        );
         if (err) {
             state_free_all_files(entries, count);
             return error_wrap(err, "Failed to build fallback manifest");
@@ -1015,7 +1033,7 @@ error_t *manifest_disable_profile(
         if (fallback_manifest && fallback_manifest->index) {
             void *idx_ptr = hashmap_get(fallback_manifest->index, entry->filesystem_path);
             if (idx_ptr) {
-                size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+                size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
                 fallback = &fallback_manifest->entries[idx];
             }
         }
@@ -1043,21 +1061,27 @@ error_t *manifest_disable_profile(
              */
 
             /* Get git_oid from pre-built map (O(1) lookup) */
-            const char *fallback_oid_str = hashmap_get(profile_oids,
-                                                       fallback->source_profile->name);
+            const char *fallback_oid_str = hashmap_get(
+                profile_oids, fallback->source_profile->name
+            );
             if (!fallback_oid_str) {
-                err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'",
-                            fallback->source_profile->name);
+                err = ERROR(
+                    ERR_INTERNAL, "Missing OID for profile '%s'",
+                    fallback->source_profile->name
+                );
                 goto cleanup;
             }
 
             /* Sync to state using proven, tested logic */
             err = sync_entry_to_state(
-                repo, state, fallback, fallback_oid_str, fallback_metadata, entry->deployed_at
+                repo, state, fallback, fallback_oid_str, fallback_metadata,
+                entry->deployed_at
             );
             if (err) {
-                err = error_wrap(err, "Failed to sync entry to fallback for %s",
-                               entry->storage_path);
+                err = error_wrap(
+                    err, "Failed to sync entry to fallback for %s",
+                    entry->storage_path
+                );
                 goto cleanup;
             }
 
@@ -1086,8 +1110,10 @@ error_t *manifest_disable_profile(
             state_file_entry_t *updated_entry = NULL;
             err = state_get_file(state, entry->filesystem_path, &updated_entry);
             if (err) {
-                err = error_wrap(err, "Failed to read entry for reassignment tracking: %s",
-                                 entry->filesystem_path);
+                err = error_wrap(
+                    err, "Failed to read entry for reassignment tracking: %s",
+                    entry->filesystem_path
+                );
                 goto cleanup;
             }
 
@@ -1103,16 +1129,20 @@ error_t *manifest_disable_profile(
             if (!entry->profile) {
                 /* Should never happen - defensive check */
                 state_free_entry(updated_entry);
-                err = ERROR(ERR_INTERNAL, "Manifest entry missing profile field: %s",
-                           entry->storage_path);
+                err = ERROR(
+                    ERR_INTERNAL, "Manifest entry missing profile field: %s",
+                    entry->storage_path
+                );
                 goto cleanup;
             }
 
             err = str_replace_owned(&updated_entry->old_profile, entry->profile);
             if (err) {
                 state_free_entry(updated_entry);
-                err = error_wrap(err, "Failed to set old_profile for %s",
-                                 entry->storage_path);
+                err = error_wrap(
+                    err, "Failed to set old_profile for %s",
+                    entry->storage_path
+                );
                 goto cleanup;
             }
 
@@ -1120,8 +1150,10 @@ error_t *manifest_disable_profile(
             err = state_update_entry(state, updated_entry);
             state_free_entry(updated_entry);  /* Always free, even on success */
             if (err) {
-                err = error_wrap(err, "Failed to persist old_profile for %s",
-                                 entry->storage_path);
+                err = error_wrap(
+                    err, "Failed to persist old_profile for %s",
+                    entry->storage_path
+                );
                 goto cleanup;
             }
 
@@ -1161,8 +1193,10 @@ error_t *manifest_disable_profile(
                 /* Non-fatal: log warning but continue. Even if marking fails,
                  * orphan detection still works (Git validation warning will appear,
                  * but orphan will be detected and can be cleaned up). */
-                fprintf(stderr, "warning: failed to mark '%s' as inactive: %s\n",
-                        entry->filesystem_path, error_message(err));
+                fprintf(
+                    stderr, "warning: failed to mark '%s' as inactive: %s\n",
+                    entry->filesystem_path, error_message(err)
+                );
                 error_free(err);
                 err = NULL;  /* Clear error, continue operation */
             }
@@ -1210,9 +1244,10 @@ error_t *manifest_disable_profile(
      * Uses helper function that implements "last wins" precedence (matching file
      * fallback pattern). See build_directory_fallback_index() for details.
      */
-    err = build_directory_fallback_index(repo, remaining_enabled,
-                                        &fallback_dirs, &fallback_dir_profiles,
-                                        &loaded_metadata, &loaded_metadata_count);
+    err = build_directory_fallback_index(
+        repo, remaining_enabled, &fallback_dirs, &fallback_dir_profiles,
+        &loaded_metadata, &loaded_metadata_count
+    );
     if (err) {
         err = error_wrap(err, "Failed to build directory fallback index");
         goto directory_cleanup;
@@ -1267,8 +1302,10 @@ error_t *manifest_disable_profile(
             /* Update in state (preserves deployed_at) */
             err = state_update_directory(state, entry);
             if (err) {
-                err = error_wrap(err, "Failed to update directory to fallback for %s",
-                                 entry->filesystem_path);
+                err = error_wrap(
+                    err, "Failed to update directory to fallback for %s",
+                    entry->filesystem_path
+                );
                 goto directory_cleanup;
             }
 
@@ -1293,8 +1330,10 @@ error_t *manifest_disable_profile(
                 /* Non-fatal: log warning but continue. Even if marking fails,
                  * orphan detection will still work (directory won't be in merged_metadata).
                  * The explicit state just makes it cleaner. */
-                error_t *wrapped = error_wrap(err,
-                    "Failed to mark directory '%s' as inactive", entry->filesystem_path);
+                error_t *wrapped = error_wrap(
+                    err, "Failed to mark directory '%s' as inactive",
+                    entry->filesystem_path
+                );
                 fprintf(stderr, "Warning: %s\n", error_message(wrapped));
                 error_free(wrapped);  /* Frees wrapped + chained cause (err) */
                 err = NULL;
@@ -1311,7 +1350,7 @@ error_t *manifest_disable_profile(
 
 directory_cleanup:
     /* Free directory-specific resources */
-    if (fallback_dirs) hashmap_free(fallback_dirs, NULL);  /* Values are borrowed */
+    if (fallback_dirs) hashmap_free(fallback_dirs, NULL);                  /* Values are borrowed */
     if (fallback_dir_profiles) hashmap_free(fallback_dir_profiles, NULL);  /* Values are borrowed */
 
     /* Free loaded metadata */
@@ -1404,15 +1443,20 @@ error_t *manifest_remove_files(
     size_t fallback_count = 0;
 
     /* 1. Build fresh manifest from current Git state (post-removal) */
-    err = build_manifest(repo, state, enabled_profiles, NULL, NULL,
-                        &fresh_manifest, &profiles);
+    err = build_manifest(
+        repo, state, enabled_profiles, NULL, NULL, &fresh_manifest, &profiles
+    );
     if (err) {
-        return error_wrap(err, "Failed to build manifest for fallback detection");
+        return error_wrap(
+            err, "Failed to build manifest for fallback detection"
+        );
     }
 
     /* Defensive: build_manifest should always set outputs on success */
     if (!fresh_manifest || !profiles) {
-        err = ERROR(ERR_INTERNAL, "build_manifest succeeded but returned NULL outputs");
+        err = ERROR(
+            ERR_INTERNAL, "build_manifest succeeded but returned NULL outputs"
+        );
         goto cleanup;
     }
 
@@ -1461,7 +1505,10 @@ error_t *manifest_remove_files(
         char *filesystem_path = NULL;
         err = path_from_storage(storage_path, custom_prefix, &filesystem_path);
         if (err) {
-            err = error_wrap(err, "Failed to resolve path: %s", storage_path);
+            err = error_wrap(
+                err, "Failed to resolve path: %s",
+                storage_path
+            );
             goto cleanup;
         }
 
@@ -1493,7 +1540,7 @@ error_t *manifest_remove_files(
         if (fresh_manifest && fresh_manifest->index) {
             void *idx_ptr = hashmap_get(fresh_manifest->index, filesystem_path);
             if (idx_ptr) {
-                size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+                size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
                 fallback = &fresh_manifest->entries[idx];
             }
         }
@@ -1510,7 +1557,10 @@ error_t *manifest_remove_files(
             /* Get HEAD oid for fallback profile (hex string) */
             const char *fallback_oid_str = hashmap_get(profile_oids, fallback_profile);
             if (!fallback_oid_str) {
-                err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'", fallback_profile);
+                err = ERROR(
+                    ERR_INTERNAL, "Missing OID for profile '%s'",
+                    fallback_profile
+                );
                 state_free_entry(current_entry);
                 free(filesystem_path);
                 goto cleanup;
@@ -1547,7 +1597,10 @@ error_t *manifest_remove_files(
                 free(old_profile_name);
                 state_free_entry(current_entry);
                 free(filesystem_path);
-                err = error_wrap(err, "Failed to sync fallback for %s", filesystem_path);
+                err = error_wrap(
+                    err, "Failed to sync fallback for %s",
+                    filesystem_path
+                );
                 goto cleanup;
             }
 
@@ -1570,7 +1623,9 @@ error_t *manifest_remove_files(
                 free(old_profile_name);
                 state_free_entry(current_entry);
                 free(filesystem_path);
-                err = error_wrap(err, "Failed to read entry for old_profile tracking");
+                err = error_wrap(
+                    err, "Failed to read entry for old_profile tracking"
+                );
                 goto cleanup;
             }
 
@@ -1590,7 +1645,9 @@ error_t *manifest_remove_files(
             if (err) {
                 state_free_entry(current_entry);
                 free(filesystem_path);
-                err = error_wrap(err, "Failed to persist old_profile");
+                err = error_wrap(
+                    err, "Failed to persist old_profile"
+                );
                 goto cleanup;
             }
 
@@ -1617,8 +1674,10 @@ error_t *manifest_remove_files(
             err = state_set_file_state(state, filesystem_path, STATE_DELETED);
             if (err) {
                 /* Non-fatal: log warning but continue */
-                fprintf(stderr, "warning: failed to mark '%s' as deleted: %s\n",
-                        filesystem_path, error_message(err));
+                fprintf(
+                    stderr, "warning: failed to mark '%s' as deleted: %s\n",
+                    filesystem_path, error_message(err)
+                );
                 error_free(err);
                 err = NULL;  /* Clear error, continue operation */
             }
@@ -1639,7 +1698,10 @@ error_t *manifest_remove_files(
      * not just the removed files. */
     err = sync_profile_git_oids(repo, state, removed_profile);
     if (err) {
-        err = error_wrap(err, "Failed to sync git_oid for profile '%s'", removed_profile);
+        err = error_wrap(
+            err, "Failed to sync git_oid for profile '%s'",
+            removed_profile
+        );
         goto cleanup;
     }
 
@@ -1730,7 +1792,9 @@ error_t *manifest_rebuild(
     }
 
     /* 3. Build manifest ONCE from all enabled profiles (precedence oracle) */
-    err = build_manifest(repo, state, enabled_profiles, NULL, NULL, &manifest, &profiles);
+    err = build_manifest(
+        repo, state, enabled_profiles, NULL, NULL, &manifest, &profiles
+    );
     if (err) {
         err = error_wrap(err, "Failed to build manifest for rebuild");
         goto cleanup;
@@ -1738,7 +1802,9 @@ error_t *manifest_rebuild(
 
     /* Defensive: build_manifest should always set outputs on success */
     if (!manifest || !profiles) {
-        err = ERROR(ERR_INTERNAL, "build_manifest succeeded but returned NULL outputs");
+        err = ERROR(
+            ERR_INTERNAL, "build_manifest succeeded but returned NULL outputs"
+        );
         goto cleanup;
     }
 
@@ -1771,8 +1837,10 @@ error_t *manifest_rebuild(
         /* Get git_oid for this entry's source profile */
         const char *git_oid = hashmap_get(profile_oids, entry->source_profile->name);
         if (!git_oid) {
-            err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'",
-                       entry->source_profile->name);
+            err = ERROR(
+                ERR_INTERNAL, "Missing OID for profile '%s'",
+                entry->source_profile->name
+            );
             goto cleanup;
         }
 
@@ -1878,7 +1946,7 @@ error_t *manifest_detect_stale_profiles(
         }
 
         /* Mark as checked (store non-NULL sentinel) */
-        err = hashmap_set(checked, entry->profile, (void *)(uintptr_t)1);
+        err = hashmap_set(checked, entry->profile, (void *) (uintptr_t) 1);
         if (err) {
             goto cleanup;
         }
@@ -1987,8 +2055,9 @@ error_t *manifest_repair_stale(
         goto cleanup;
     }
     for (size_t i = 0; i < enabled_profiles->count; i++) {
-        err = hashmap_set(profile_scope, enabled_profiles->items[i],
-                          (void *)(uintptr_t)1);
+        err = hashmap_set(
+            profile_scope, enabled_profiles->items[i], (void *) (uintptr_t) 1
+        );
         if (err) goto cleanup;
     }
 
@@ -2063,7 +2132,7 @@ error_t *manifest_repair_stale(
         if (fresh_manifest && fresh_manifest->index) {
             void *idx_ptr = hashmap_get(fresh_manifest->index, entry->filesystem_path);
             if (idx_ptr) {
-                size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+                size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
                 fresh_entry = &fresh_manifest->entries[idx];
             }
         }
@@ -2077,8 +2146,10 @@ error_t *manifest_repair_stale(
              */
             const char *git_oid = hashmap_get(profile_oids, fresh_entry->source_profile->name);
             if (!git_oid) {
-                err = ERROR(ERR_INTERNAL,
-                    "Missing OID for profile '%s'", fresh_entry->source_profile->name);
+                err = ERROR(
+                    ERR_INTERNAL, "Missing OID for profile '%s'",
+                    fresh_entry->source_profile->name
+                );
                 goto cleanup;
             }
 
@@ -2128,7 +2199,10 @@ error_t *manifest_repair_stale(
                 repo, state, fresh_entry, git_oid, metadata, entry->deployed_at
             );
             if (err) {
-                err = error_wrap(err, "Failed to repair stale entry '%s'", entry->storage_path);
+                err = error_wrap(
+                    err, "Failed to repair stale entry '%s'",
+                    entry->storage_path
+                );
                 goto cleanup;
             }
 
@@ -2147,7 +2221,9 @@ error_t *manifest_repair_stale(
                 state_file_entry_t *updated_entry = NULL;
                 err = state_get_file(state, entry->filesystem_path, &updated_entry);
                 if (err) {
-                    err = error_wrap(err, "Failed to read entry for reassignment tracking");
+                    err = error_wrap(
+                        err, "Failed to read entry for reassignment tracking"
+                    );
                     goto cleanup;
                 }
 
@@ -2160,8 +2236,10 @@ error_t *manifest_repair_stale(
                 err = state_update_entry(state, updated_entry);
                 state_free_entry(updated_entry);
                 if (err) {
-                    err = error_wrap(err, "Failed to track reassignment for '%s'",
-                                     entry->storage_path);
+                    err = error_wrap(
+                        err, "Failed to track reassignment for '%s'",
+                        entry->storage_path
+                    );
                     goto cleanup;
                 }
 
@@ -2184,7 +2262,10 @@ error_t *manifest_repair_stale(
              */
             err = state_set_file_state(state, entry->filesystem_path, STATE_RELEASED);
             if (err) {
-                err = error_wrap(err, "Failed to mark '%s' as stale", entry->storage_path);
+                err = error_wrap(
+                    err, "Failed to mark '%s' as stale",
+                    entry->storage_path
+                );
                 goto cleanup;
             }
 
@@ -2249,8 +2330,9 @@ error_t *manifest_reorder_profiles(
     metadata_t *metadata = NULL;
 
     /* 1. Build new manifest with new precedence order (precedence oracle) */
-    err = build_manifest(repo, state, new_profile_order, NULL, NULL,
-                         &new_manifest, &profiles);
+    err = build_manifest(
+        repo, state, new_profile_order, NULL, NULL, &new_manifest, &profiles
+    );
     if (err) {
         return error_wrap(err, "Failed to build manifest for precedence update");
     }
@@ -2315,11 +2397,12 @@ error_t *manifest_reorder_profiles(
             /* New file (rare in reorder, but handle it) */
 
             /* Get OID from pre-built map (O(1) lookup) */
-            const char *oid_str = hashmap_get(profile_oids,
-                                              new_entry->source_profile->name);
+            const char *oid_str = hashmap_get(profile_oids, new_entry->source_profile->name);
             if (!oid_str) {
-                err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'",
-                           new_entry->source_profile->name);
+                err = ERROR(
+                    ERR_INTERNAL, "Missing OID for profile '%s'",
+                    new_entry->source_profile->name
+                );
                 goto cleanup;
             }
 
@@ -2330,17 +2413,19 @@ error_t *manifest_reorder_profiles(
             }
         } else {
             /* Existing entry - check if owner changed */
-            bool owner_changed = strcmp(old_entry->profile, new_entry->source_profile->name) != 0;
+            bool owner_changed =
+                strcmp(old_entry->profile, new_entry->source_profile->name) != 0;
 
             if (owner_changed) {
                 /* Owner changed - update entry to new owner */
 
                 /* Get OID from pre-built map (O(1) lookup) */
-                const char *oid_str = hashmap_get(profile_oids,
-                                                  new_entry->source_profile->name);
+                const char *oid_str = hashmap_get(profile_oids, new_entry->source_profile->name);
                 if (!oid_str) {
-                    err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'",
-                               new_entry->source_profile->name);
+                    err = ERROR(
+                        ERR_INTERNAL, "Missing OID for profile '%s'",
+                        new_entry->source_profile->name
+                    );
                     goto cleanup;
                 }
 
@@ -2360,8 +2445,10 @@ error_t *manifest_reorder_profiles(
                 state_file_entry_t *updated_entry = NULL;
                 err = state_get_file(state, new_entry->filesystem_path, &updated_entry);
                 if (err) {
-                    err = error_wrap(err, "Failed to read entry for old_profile tracking: %s",
-                                     new_entry->filesystem_path);
+                    err = error_wrap(
+                        err, "Failed to read entry for old_profile tracking: %s",
+                        new_entry->filesystem_path
+                    );
                     goto cleanup;
                 }
 
@@ -2389,7 +2476,7 @@ error_t *manifest_reorder_profiles(
         void *idx_ptr = hashmap_get(new_manifest->index, old_entry->filesystem_path);
         file_entry_t *new_entry = NULL;
         if (idx_ptr) {
-            size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+            size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
             new_entry = &new_manifest->entries[idx];
         }
 
@@ -2408,8 +2495,10 @@ error_t *manifest_reorder_profiles(
             err = state_set_file_state(state, old_entry->filesystem_path, STATE_INACTIVE);
             if (err) {
                 /* Non-fatal: log warning but continue */
-                fprintf(stderr, "warning: failed to mark '%s' as inactive: %s\n",
-                        old_entry->filesystem_path, error_message(err));
+                fprintf(
+                    stderr, "warning: failed to mark '%s' as inactive: %s\n",
+                    old_entry->filesystem_path, error_message(err)
+                );
                 error_free(err);
                 err = NULL;  /* Clear error, continue operation */
             }
@@ -2522,8 +2611,9 @@ error_t *manifest_update_files(
     bool using_cache = (metadata_cache != NULL);
 
     /* 1. Load enabled profiles from Git */
-    err = profile_list_load(repo, enabled_profiles->items,
-                            enabled_profiles->count, false, &profiles);
+    err = profile_list_load(
+        repo, enabled_profiles->items, enabled_profiles->count, false, &profiles
+    );
     if (err) {
         return error_wrap(err, "Failed to load profiles for bulk sync");
     }
@@ -2560,7 +2650,6 @@ error_t *manifest_update_files(
      * CRITICAL: If metadata_cache is NULL, load merged metadata from Git.
      * This ensures we have current metadata including all newly-committed files.
      *
-     * Pattern: Same as manifest_sync_diff() (lines 1671-1688).
      * Merged metadata contains all enabled profiles with precedence applied.
      */
     if (!metadata_cache) {
@@ -2596,7 +2685,7 @@ error_t *manifest_update_files(
             void *idx_ptr = hashmap_get(fresh_manifest->index, item->filesystem_path);
             file_entry_t *fallback = NULL;
             if (idx_ptr) {
-                size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+                size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
                 fallback = &fresh_manifest->entries[idx];
             }
 
@@ -2604,8 +2693,10 @@ error_t *manifest_update_files(
                 /* Fallback exists - update to fallback profile */
                 const char *git_oid = hashmap_get(profile_oids, fallback->source_profile->name);
                 if (!git_oid) {
-                    err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'",
-                                fallback->source_profile->name);
+                    err = ERROR(
+                        ERR_INTERNAL, "Missing OID for profile '%s'",
+                        fallback->source_profile->name
+                    );
                     goto cleanup;
                 }
 
@@ -2621,19 +2712,21 @@ error_t *manifest_update_files(
                 time_t deployed_at = 0;
                 char *old_profile_name = NULL;
                 state_file_entry_t *existing_entry = NULL;
-                error_t *get_err = state_get_file(state, item->filesystem_path, &existing_entry);
-                if (get_err == NULL && existing_entry != NULL) {
+                error_t *get_err1 = state_get_file(
+                    state, item->filesystem_path, &existing_entry
+                );
+                if (get_err1 == NULL && existing_entry != NULL) {
                     deployed_at = existing_entry->deployed_at;
                     /* Save old profile for reassignment tracking */
                     if (existing_entry->profile) {
                         old_profile_name = strdup(existing_entry->profile);
                     }
                     state_free_entry(existing_entry);
-                } else if (get_err) {
-                    if (get_err->code == ERR_NOT_FOUND) {
-                        error_free(get_err);
+                } else if (get_err1) {
+                    if (get_err1->code == ERR_NOT_FOUND) {
+                        error_free(get_err1);
                     } else {
-                        err = get_err;
+                        err = get_err1;
                         goto cleanup;
                     }
                 }
@@ -2641,15 +2734,19 @@ error_t *manifest_update_files(
                 err = sync_entry_to_state(repo, state, fallback, git_oid, metadata, deployed_at);
                 if (err) {
                     free(old_profile_name);
-                    err = error_wrap(err, "Failed to sync fallback for '%s'",
-                                   item->filesystem_path);
+                    err = error_wrap(
+                        err, "Failed to sync fallback for '%s'",
+                        item->filesystem_path
+                    );
                     goto cleanup;
                 }
 
                 /* Update old_profile if profile was reassigned */
                 if (old_profile_name) {
                     state_file_entry_t *updated_entry = NULL;
-                    error_t *get_err2 = state_get_file(state, item->filesystem_path, &updated_entry);
+                    error_t *get_err2 = state_get_file(
+                        state, item->filesystem_path, &updated_entry
+                    );
                     if (get_err2 == NULL && updated_entry != NULL) {
                         /* Set old_profile to track reassignment */
                         err = str_replace_owned(&updated_entry->old_profile, old_profile_name);
@@ -2663,8 +2760,10 @@ error_t *manifest_update_files(
                     free(old_profile_name);
 
                     if (err) {
-                        err = error_wrap(err, "Failed to track reassignment for '%s'",
-                                       item->filesystem_path);
+                        err = error_wrap(
+                            err, "Failed to track reassignment for '%s'",
+                            item->filesystem_path
+                        );
                         goto cleanup;
                     }
                 }
@@ -2685,8 +2784,10 @@ error_t *manifest_update_files(
                 err = state_set_file_state(state, item->filesystem_path, STATE_INACTIVE);
                 if (err) {
                     /* Non-fatal: log warning but continue */
-                    fprintf(stderr, "warning: failed to mark '%s' as inactive: %s\n",
-                            item->filesystem_path, error_message(err));
+                    fprintf(
+                        stderr, "warning: failed to mark '%s' as inactive: %s\n",
+                        item->filesystem_path, error_message(err)
+                    );
                     error_free(err);
                     err = NULL;  /* Clear error, continue operation */
                 }
@@ -2698,7 +2799,7 @@ error_t *manifest_update_files(
             void *idx_ptr = hashmap_get(fresh_manifest->index, item->filesystem_path);
             file_entry_t *entry = NULL;
             if (idx_ptr) {
-                size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+                size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
                 entry = &fresh_manifest->entries[idx];
             }
 
@@ -2722,7 +2823,10 @@ error_t *manifest_update_files(
              * already deployed. We set deployed_at to mark them as known. */
             const char *git_oid = hashmap_get(profile_oids, item->profile);
             if (!git_oid) {
-                err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'", item->profile);
+                err = ERROR(
+                    ERR_INTERNAL, "Missing OID for profile '%s'",
+                    item->profile
+                );
                 goto cleanup;
             }
 
@@ -2736,8 +2840,10 @@ error_t *manifest_update_files(
 
             err = sync_entry_to_state(repo, state, entry, git_oid, metadata, time(NULL));
             if (err) {
-                err = error_wrap(err, "Failed to sync '%s' to manifest",
-                               item->filesystem_path);
+                err = error_wrap(
+                    err, "Failed to sync '%s' to manifest",
+                    item->filesystem_path
+                );
                 goto cleanup;
             }
 
@@ -2894,8 +3000,9 @@ error_t *manifest_add_files(
     bool using_cache = (metadata_cache != NULL);
 
     /* 1. Load enabled profiles from Git */
-    err = profile_list_load(repo, enabled_profiles->items,
-                            enabled_profiles->count, false, &profiles);
+    err = profile_list_load(
+        repo, enabled_profiles->items, enabled_profiles->count, false, &profiles
+    );
     if (err) {
         return error_wrap(err, "Failed to load profiles for bulk sync");
     }
@@ -2962,7 +3069,7 @@ error_t *manifest_add_files(
         void *idx_ptr = hashmap_get(fresh_manifest->index, filesystem_path);
         file_entry_t *entry = NULL;
         if (idx_ptr) {
-            size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+            size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
             entry = &fresh_manifest->entries[idx];
         }
 
@@ -2975,8 +3082,10 @@ error_t *manifest_add_files(
         /* Defensive: Verify entry has source profile (should never be NULL) */
         if (!entry->source_profile) {
             /* Should never happen - indicates data corruption or manifest bug */
-            err = ERROR(ERR_INTERNAL, "Manifest entry '%s' has NULL source_profile",
-                       filesystem_path);
+            err = ERROR(
+                ERR_INTERNAL, "Manifest entry '%s' has NULL source_profile",
+                filesystem_path
+            );
             goto cleanup;
         }
 
@@ -3004,8 +3113,10 @@ error_t *manifest_add_files(
         err = sync_entry_to_state(repo, state, entry, profile_git_oid, metadata, time(NULL));
 
         if (err) {
-            err = error_wrap(err, "Failed to sync '%s' to manifest",
-                           filesystem_path);
+            err = error_wrap(
+                err, "Failed to sync '%s' to manifest",
+                filesystem_path
+            );
             goto cleanup;
         }
 
@@ -3017,7 +3128,10 @@ error_t *manifest_add_files(
      * not just the newly added files. */
     err = sync_profile_git_oids(repo, state, profile_name);
     if (err) {
-        err = error_wrap(err, "Failed to sync git_oid for profile '%s'", profile_name);
+        err = error_wrap(
+            err, "Failed to sync git_oid for profile '%s'",
+            profile_name
+        );
         goto cleanup;
     }
 
@@ -3201,38 +3315,48 @@ error_t *manifest_sync_diff(
     /* Old commit → tree */
     int git_err = git_commit_lookup(&old_commit, repo, old_oid);
     if (git_err != 0) {
-        err = ERROR(ERR_GIT, "Failed to lookup old commit: %s",
-                   git_error_last()->message);
+        err = ERROR(
+            ERR_GIT, "Failed to lookup old commit: %s",
+            git_error_last()->message
+        );
         goto cleanup;
     }
 
     git_err = git_commit_tree(&old_tree, old_commit);
     if (git_err != 0) {
-        err = ERROR(ERR_GIT, "Failed to extract tree from old commit: %s",
-                   git_error_last()->message);
+        err = ERROR(
+            ERR_GIT, "Failed to extract tree from old commit: %s",
+            git_error_last()->message
+        );
         goto cleanup;
     }
 
     /* New commit → tree */
     git_err = git_commit_lookup(&new_commit, repo, new_oid);
     if (git_err != 0) {
-        err = ERROR(ERR_GIT, "Failed to lookup new commit: %s",
-                   git_error_last()->message);
+        err = ERROR(
+            ERR_GIT, "Failed to lookup new commit: %s",
+            git_error_last()->message
+        );
         goto cleanup;
     }
 
     git_err = git_commit_tree(&new_tree, new_commit);
     if (git_err != 0) {
-        err = ERROR(ERR_GIT, "Failed to extract tree from new commit: %s",
-                   git_error_last()->message);
+        err = ERROR(
+            ERR_GIT, "Failed to extract tree from new commit: %s",
+            git_error_last()->message
+        );
         goto cleanup;
     }
 
     /* 2.2. Compute diff between old and new trees */
     git_err = git_diff_tree_to_tree(&diff, repo, old_tree, new_tree, NULL);
     if (git_err != 0) {
-        err = ERROR(ERR_GIT, "Failed to diff trees: %s",
-                   git_error_last()->message);
+        err = ERROR(
+            ERR_GIT, "Failed to diff trees: %s",
+            git_error_last()->message
+        );
         goto cleanup;
     }
 
@@ -3288,7 +3412,7 @@ error_t *manifest_sync_diff(
             void *idx_ptr = hashmap_get(fresh_manifest->index, filesystem_path);
             file_entry_t *entry = NULL;
             if (idx_ptr) {
-                size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+                size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
                 entry = &fresh_manifest->entries[idx];
             }
 
@@ -3318,7 +3442,10 @@ error_t *manifest_sync_diff(
              * We preserve deployed_at to maintain lifecycle tracking. */
             const char *git_oid_str = hashmap_get(profile_oids, profile_name);
             if (!git_oid_str) {
-                err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'", profile_name);
+                err = ERROR(
+                    ERR_INTERNAL, "Missing OID for profile '%s'",
+                    profile_name
+                );
                 free(filesystem_path);
                 goto cleanup;
             }
@@ -3352,7 +3479,10 @@ error_t *manifest_sync_diff(
                 repo, state, entry, git_oid_str, profile_metadata, deployed_at
             );
             if (err) {
-                err = error_wrap(err, "Failed to sync '%s' to manifest", filesystem_path);
+                err = error_wrap(
+                    err, "Failed to sync '%s' to manifest",
+                    filesystem_path
+                );
                 free(filesystem_path);
                 goto cleanup;
             }
@@ -3370,7 +3500,7 @@ error_t *manifest_sync_diff(
             void *idx_ptr = hashmap_get(fresh_manifest->index, filesystem_path);
             file_entry_t *entry = NULL;
             if (idx_ptr) {
-                size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+                size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
                 entry = &fresh_manifest->entries[idx];
             }
 
@@ -3381,11 +3511,15 @@ error_t *manifest_sync_diff(
                  * Update manifest entry to point to the new profile owner.
                  * Preserve deployed_at to maintain lifecycle tracking. */
 
-                const char *fallback_git_oid = hashmap_get(profile_oids,
-                                                           entry->source_profile->name);
+                const char *fallback_git_oid = hashmap_get(
+                    profile_oids,
+                    entry->source_profile->name
+                );
                 if (!fallback_git_oid) {
-                    err = ERROR(ERR_INTERNAL, "Missing OID for profile '%s'",
-                                entry->source_profile->name);
+                    err = ERROR(
+                        ERR_INTERNAL, "Missing OID for profile '%s'",
+                        entry->source_profile->name
+                    );
                     free(filesystem_path);
                     goto cleanup;
                 }
@@ -3425,7 +3559,10 @@ error_t *manifest_sync_diff(
                 );
                 if (err) {
                     free(old_profile_name);
-                    err = error_wrap(err, "Failed to sync fallback for '%s'", filesystem_path);
+                    err = error_wrap(
+                        err, "Failed to sync fallback for '%s'",
+                        filesystem_path
+                    );
                     free(filesystem_path);
                     goto cleanup;
                 }
@@ -3450,8 +3587,10 @@ error_t *manifest_sync_diff(
                     free(old_profile_name);
 
                     if (err) {
-                        err = error_wrap(err, "Failed to track reassignment for '%s'",
-                                       filesystem_path);
+                        err = error_wrap(
+                            err, "Failed to track reassignment for '%s'",
+                            filesystem_path
+                        );
                         free(filesystem_path);
                         goto cleanup;
                     }
@@ -3497,8 +3636,10 @@ error_t *manifest_sync_diff(
                     err = state_set_file_state(state, filesystem_path, STATE_INACTIVE);
                     if (err) {
                         /* Non-fatal: log warning but continue */
-                        fprintf(stderr, "warning: failed to mark '%s' as inactive: %s\n",
-                                filesystem_path, error_message(err));
+                        fprintf(
+                            stderr, "warning: failed to mark '%s' as inactive: %s\n",
+                            filesystem_path, error_message(err)
+                        );
                         error_free(err);
                         err = NULL;  /* Clear error, continue operation */
                     }
@@ -3525,7 +3666,10 @@ error_t *manifest_sync_diff(
      * This maintains the invariant: all files from profile P have git_oid = P's HEAD. */
     err = sync_profile_git_oids(repo, state, profile_name);
     if (err) {
-        err = error_wrap(err, "Failed to sync git_oid for profile '%s'", profile_name);
+        err = error_wrap(
+            err, "Failed to sync git_oid for profile '%s'",
+            profile_name
+        );
         goto cleanup;
     }
 
@@ -3633,14 +3777,17 @@ error_t *manifest_sync_directories(
                 err = NULL;
                 continue;
             }
-            err = error_wrap(err, "Failed to load metadata for profile '%s'", profile_name);
+            err = error_wrap(
+                err, "Failed to load metadata for profile '%s'",
+                profile_name
+            );
             goto cleanup;
         }
 
         /* Lookup custom prefix for this profile */
         const char *custom_prefix = NULL;
         if (prefix_map) {
-            custom_prefix = (const char *)hashmap_get(prefix_map, profile_name);
+            custom_prefix = (const char *) hashmap_get(prefix_map, profile_name);
         }
 
         /* Extract directories from metadata */
@@ -3674,8 +3821,10 @@ error_t *manifest_sync_directories(
             );
 
             if (err) {
-                err = error_wrap(err,
-                    "Failed to create state directory entry for '%s'", directories[j]->key);
+                err = error_wrap(
+                    err, "Failed to create state directory entry for '%s'",
+                    directories[j]->key
+                );
                 break;
             }
 
@@ -3711,7 +3860,7 @@ error_t *manifest_sync_directories(
                  * - storage_path may have changed (different profile conventions)
                  * - UPDATE is cheap (single row, indexed by filesystem_path)
                  * - Ensures state consistency regardless of metadata changes
-                 * - deployed_at is preserved (UPDATE excludes it, see state.c:2046)
+                 * - deployed_at is preserved (stmt_update_entry excludes it)
                  */
                 err = state_set_directory_state(state, state_dir->filesystem_path, STATE_ACTIVE);
 
@@ -3726,8 +3875,10 @@ error_t *manifest_sync_directories(
             state_free_directory_entry(state_dir);
 
             if (err) {
-                err = error_wrap(err,
-                    "Failed to add/update directory '%s' in state", directories[j]->key);
+                err = error_wrap(
+                    err, "Failed to add/update directory '%s' in state",
+                    directories[j]->key
+                );
                 break;
             }
         }

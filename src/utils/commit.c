@@ -155,9 +155,11 @@ static char *format_file_list(char **files, size_t count) {
     /* Add truncation notice if needed */
     if (count > MAX_FILES_DETAIL) {
         char truncate_msg[64];
-        snprintf(truncate_msg, sizeof(truncate_msg),
-                "  ... and %zu more file%s", count - MAX_FILES_DETAIL,
-                (count - MAX_FILES_DETAIL) == 1 ? "" : "s");
+        snprintf(
+            truncate_msg, sizeof(truncate_msg),
+            "  ... and %zu more file%s",
+            count - MAX_FILES_DETAIL, (count - MAX_FILES_DETAIL) == 1 ? "" : "s"
+        );
         err = buffer_append_string(buf, truncate_msg);
         if (err) goto cleanup;
     }
@@ -234,7 +236,7 @@ static char *substitute_template(
             const char *end = strchr(p, '}');
             if (end) {
                 /* Extract variable name */
-                size_t var_len = (size_t)(end - p - 1);
+                size_t var_len = (size_t) (end - p - 1);
                 char var_name[64];
 
                 if (var_len < sizeof(var_name)) {
@@ -269,9 +271,9 @@ static char *substitute_template(
                         err = buffer_append_string(buf, value);
                     } else {
                         /* Unknown variable - keep as-is */
-                        err = buffer_append(buf, (const unsigned char *)"{", 1);
+                        err = buffer_append(buf, (const unsigned char *) "{", 1);
                         if (!err) err = buffer_append_string(buf, var_name);
-                        if (!err) err = buffer_append(buf, (const unsigned char *)"}", 1);
+                        if (!err) err = buffer_append(buf, (const unsigned char *) "}", 1);
                     }
 
                     if (err) goto cleanup;
@@ -280,8 +282,8 @@ static char *substitute_template(
                 }
 
                 /* Variable name too long - preserve as literal text */
-                size_t literal_len = (size_t)(end - p) + 1;
-                err = buffer_append(buf, (const unsigned char *)p, literal_len);
+                size_t literal_len = (size_t) (end - p) + 1;
+                err = buffer_append(buf, (const unsigned char *) p, literal_len);
                 if (err) goto cleanup;
                 p = end + 1;
                 continue;
@@ -289,7 +291,7 @@ static char *substitute_template(
         }
 
         /* Regular character */
-        err = buffer_append(buf, (const unsigned char *)p, 1);
+        err = buffer_append(buf, (const unsigned char *) p, 1);
         if (err) goto cleanup;
         p++;
     }

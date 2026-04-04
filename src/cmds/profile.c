@@ -79,25 +79,39 @@ static void print_manifest_enable_stats(
     if (verbose) {
         /* Detailed breakdown */
         output_section(out, "Manifest Analysis");
-        output_print(out, OUTPUT_NORMAL, "  Profile: %s\n", profile_name);
-        output_print(out, OUTPUT_NORMAL, "  Total files: %zu\n", stats->total_files);
+        output_print(
+            out, OUTPUT_NORMAL, "  Profile: %s\n",
+            profile_name
+        );
+        output_print(
+            out, OUTPUT_NORMAL, "  Total files: %zu\n",
+            stats->total_files
+        );
 
         if (stats->already_deployed > 0) {
-            output_styled(out, OUTPUT_NORMAL, "    - {green}%zu{reset} already deployed and correct\n",
-                          stats->already_deployed);
+            output_styled(
+                out, OUTPUT_NORMAL, "    - {green}%zu{reset} already deployed and correct\n",
+                stats->already_deployed
+            );
         }
 
         if (stats->needs_deployment > 0) {
-            output_styled(out, OUTPUT_NORMAL, "    - {yellow}%zu{reset} need deployment\n",
-                          stats->needs_deployment);
+            output_styled(
+                out, OUTPUT_NORMAL, "    - {yellow}%zu{reset} need deployment\n",
+                stats->needs_deployment
+            );
         }
 
         if (stats->access_errors > 0) {
             output_newline(out);
-            output_warning(out, "Could not access %zu file%s during profile enable",
-                           stats->access_errors, stats->access_errors == 1 ? "" : "s");
-            output_hint(out,
-                "These files are marked as needing deployment. Run 'dotta status' for details.");
+            output_warning(
+                out, "Could not access %zu file%s during profile enable",
+                stats->access_errors, stats->access_errors == 1 ? "" : "s"
+            );
+            output_hint(
+                out, "These files are marked as needing deployment. "
+                "Run 'dotta status' for details."
+            );
         }
 
         output_newline(out);
@@ -105,27 +119,36 @@ static void print_manifest_enable_stats(
         /* Compact summary */
         if (stats->needs_deployment > 0) {
             if (stats->already_deployed > 0) {
-                output_print(out, OUTPUT_NORMAL,
+                output_print(
+                    out, OUTPUT_NORMAL,
                     "  Staged %zu file%s for deployment (%zu already up-to-date)\n",
                     stats->needs_deployment, stats->needs_deployment == 1 ? "" : "s",
-                    stats->already_deployed);
+                    stats->already_deployed
+                );
             } else {
-                output_print(out, OUTPUT_NORMAL,
+                output_print(
+                    out, OUTPUT_NORMAL,
                     "  Staged %zu file%s for deployment\n",
-                    stats->needs_deployment, stats->needs_deployment == 1 ? "" : "s");
+                    stats->needs_deployment, stats->needs_deployment == 1 ? "" : "s"
+                );
             }
         } else if (stats->already_deployed > 0) {
-            output_print(out, OUTPUT_NORMAL,
+            output_print(
+                out, OUTPUT_NORMAL,
                 "  All %zu file%s already deployed\n",
-                stats->already_deployed, stats->already_deployed == 1 ? "" : "s");
+                stats->already_deployed, stats->already_deployed == 1 ? "" : "s"
+            );
         }
 
         if (stats->access_errors > 0) {
-            output_warning(out,
-                "Could not access %zu file%s during profile enable",
-                stats->access_errors, stats->access_errors == 1 ? "" : "s");
-            output_hint(out,
-                "These files are marked as needing deployment. Run 'dotta status' for details.");
+            output_warning(
+                out, "Could not access %zu file%s during profile enable",
+                stats->access_errors, stats->access_errors == 1 ? "" : "s"
+            );
+            output_hint(
+                out, "These files are marked as needing deployment. "
+                "Run 'dotta status' for details."
+            );
         }
     }
 }
@@ -149,36 +172,46 @@ static void print_manifest_disable_stats(
         /* Detailed breakdown */
         output_section(out, "Manifest Analysis");
         output_print(out, OUTPUT_NORMAL, "  Profile: %s\n", profile_name);
-        output_print(out, OUTPUT_NORMAL,
-            "  Total files affected: %zu\n", stats->total_files);
+        output_print(
+            out, OUTPUT_NORMAL,
+            "  Total files affected: %zu\n", stats->total_files
+        );
 
         if (stats->files_with_fallback > 0) {
-            output_styled(out, OUTPUT_NORMAL,
+            output_styled(
+                out, OUTPUT_NORMAL,
                 "    - {green}%zu{reset} file%s with fallback (will revert)\n",
                 stats->files_with_fallback,
-                stats->files_with_fallback == 1 ? "" : "s");
+                stats->files_with_fallback == 1 ? "" : "s"
+            );
         }
 
         if (stats->files_removed > 0) {
-            output_styled(out, OUTPUT_NORMAL,
+            output_styled(
+                out, OUTPUT_NORMAL,
                 "    - {red}%zu{reset} file%s without fallback (will be removed)\n",
                 stats->files_removed,
-                stats->files_removed == 1 ? "" : "s");
+                stats->files_removed == 1 ? "" : "s"
+            );
         }
         output_newline(out);
     } else {
         /* Compact summary */
         if (stats->files_removed > 0) {
-            output_print(out, OUTPUT_NORMAL, 
+            output_print(
+                out, OUTPUT_NORMAL,
                 "  Staged %zu file%s for removal\n",
-                stats->files_removed, stats->files_removed == 1 ? "" : "s");
+                stats->files_removed, stats->files_removed == 1 ? "" : "s"
+            );
         }
 
         if (stats->files_with_fallback > 0) {
-            output_print(out, OUTPUT_NORMAL,
+            output_print(
+                out, OUTPUT_NORMAL,
                 "  %zu file%s reverted to lower precedence\n",
                 stats->files_with_fallback,
-                stats->files_with_fallback == 1 ? "" : "s");
+                stats->files_with_fallback == 1 ? "" : "s"
+            );
         }
     }
 }
@@ -273,19 +306,22 @@ static error_t *profile_list(
 
             /* Show file counts if available, otherwise indicate error */
             if (count_err) {
-                output_styled(out, OUTPUT_NORMAL,
-                       "  %zu. {cyan}%s{reset} (file count unavailable)\n",
-                       i + 1, name);
+                output_styled(
+                    out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (file count unavailable)\n",
+                    i + 1, name
+                );
                 error_free(count_err);
             } else {
-                output_styled(out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (%zu file%s)\n",
-                       i + 1, name, file_count, file_count == 1 ? "" : "s");
+                output_styled(
+                    out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (%zu file%s)\n",
+                    i + 1, name, file_count, file_count == 1 ? "" : "s"
+                );
             }
         }
         output_newline(out);
     } else {
         output_info(out, "No enabled profiles");
-        output_hint(out, "Run 'dotta profile enable <name>' to enable a profile");
+        output_hint(out, "Run 'dotta profile enable <name>'");
     }
 
     /* Print available (disabled) profiles */
@@ -298,12 +334,16 @@ static error_t *profile_list(
 
             /* Show file counts if available, otherwise indicate error */
             if (count_err) {
-                output_styled(out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (file count unavailable)\n",
-                       name);
+                output_styled(
+                    out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (file count unavailable)\n",
+                    name
+                );
                 error_free(count_err);
             } else {
-                output_styled(out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (%zu file%s)\n",
-                       name, file_count, file_count == 1 ? "" : "s");
+                output_styled(
+                    out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (%zu file%s)\n",
+                    name, file_count, file_count == 1 ? "" : "s"
+                );
             }
         }
         output_newline(out);
@@ -313,7 +353,10 @@ static error_t *profile_list(
     if (opts->show_remote) {
         error_t *remote_err = upstream_detect_remote(repo, &remote_name);
         if (remote_err) {
-            output_warning(out, "Could not detect remote: %s", error_message(remote_err));
+            output_warning(
+                out, "Could not detect remote: %s",
+                error_message(remote_err)
+            );
             error_free(remote_err);
         } else {
             /* Get remote URL for credential handling */
@@ -340,7 +383,10 @@ static error_t *profile_list(
                     repo, remote_name, xfer->cred, &remote_branches
                 );
                 if (remote_err) {
-                    output_warning(out, "Could not query remote: %s", error_message(remote_err));
+                    output_warning(
+                        out, "Could not query remote: %s",
+                        error_message(remote_err)
+                    );
                     error_free(remote_err);
                 } else if (string_array_size(remote_branches) > 0) {
                     /*
@@ -351,16 +397,20 @@ static error_t *profile_list(
                         remote_branches, all_branches, &remote_only
                     );
                     if (diff_err) {
-                        output_warning(out,
-                            "Failed to filter remote branches: %s", error_message(diff_err));
+                        output_warning(
+                            out, "Failed to filter remote branches: %s",
+                            error_message(diff_err)
+                        );
                         error_free(diff_err);
                     }
 
                     if (remote_only && string_array_size(remote_only) > 0) {
                         output_section(out, "Remote (not fetched)");
                         for (size_t i = 0; i < string_array_size(remote_only); i++) {
-                            output_print(out, OUTPUT_NORMAL,
-                                "  • %s\n", string_array_get(remote_only, i));
+                            output_print(
+                                out, OUTPUT_NORMAL, "  • %s\n",
+                                string_array_get(remote_only, i)
+                            );
                         }
                         output_newline(out);
                     }
@@ -454,8 +504,10 @@ static error_t *profile_fetch(
 
             error_t *fetch_err = gitops_fetch_branch(repo, remote_name, branch_name, xfer);
             if (fetch_err) {
-                output_error(out,
-                    "Failed to fetch '%s': %s", branch_name, error_message(fetch_err));
+                output_error(
+                    out, "Failed to fetch '%s': %s",
+                    branch_name, error_message(fetch_err)
+                );
                 error_free(fetch_err);
                 failed_count++;
                 continue;
@@ -467,21 +519,27 @@ static error_t *profile_fetch(
                 /* Branch already exists - fetch updated the remote ref */
                 fetched_count++;
                 if (opts->verbose) {
-                    output_styled(out, OUTPUT_NORMAL, "  {green}✓{reset} Updated %s\n",
-                           branch_name);
+                    output_styled(
+                        out, OUTPUT_NORMAL, "  {green}✓{reset} Updated %s\n",
+                        branch_name
+                    );
                 }
             } else {
                 fetch_err = upstream_create_tracking_branch(repo, remote_name, branch_name);
                 if (fetch_err) {
-                    output_error(out, "Failed to create local branch '%s': %s",
-                                 branch_name, error_message(fetch_err));
+                    output_error(
+                        out, "Failed to create local branch '%s': %s",
+                        branch_name, error_message(fetch_err)
+                    );
                     error_free(fetch_err);
                     failed_count++;
                 } else {
                     fetched_count++;
                     if (opts->verbose) {
-                        output_styled(out, OUTPUT_NORMAL, "  {green}✓{reset} Fetched %s\n",
-                               branch_name);
+                        output_styled(
+                            out, OUTPUT_NORMAL, "  {green}✓{reset} Fetched %s\n",
+                            branch_name
+                        );
                     }
                 }
             }
@@ -489,8 +547,10 @@ static error_t *profile_fetch(
     } else {
         /* Fetch specific profiles */
         if (opts->profile_count == 0) {
-            err = ERROR(ERR_INVALID_ARG, "No profiles specified\n"
-                        "Hint: Use 'dotta profile fetch <name>' or '--all'");
+            err = ERROR(
+                ERR_INVALID_ARG, "No profiles specified\n"
+                "Hint: Use 'dotta profile fetch <name>' or '--all'"
+            );
             goto cleanup;
         }
 
@@ -519,8 +579,10 @@ static error_t *profile_fetch(
             }
 
             if (!found) {
-                output_error(out, "Profile '%s' does not exist on remote '%s'",
-                             profile_name, remote_name);
+                output_error(
+                    out, "Profile '%s' does not exist on remote '%s'",
+                    profile_name, remote_name
+                );
                 has_missing = true;
             }
         }
@@ -530,13 +592,17 @@ static error_t *profile_fetch(
             if (string_array_size(available_remote) > 0) {
                 output_section(out, "Available profiles on remote");
                 for (size_t i = 0; i < string_array_size(available_remote); i++) {
-                    output_print(out, OUTPUT_NORMAL,
-                        "  • %s\n", string_array_get(available_remote, i));
+                    output_print(
+                        out, OUTPUT_NORMAL, "  • %s\n",
+                        string_array_get(available_remote, i)
+                    );
                 }
                 output_newline(out);
             }
             string_array_free(available_remote);
-            err = ERROR(ERR_NOT_FOUND, "One or more requested profiles not found on remote");
+            err = ERROR(
+                ERR_NOT_FOUND, "One or more requested profiles not found on remote"
+            );
             goto cleanup;
         }
 
@@ -553,8 +619,10 @@ static error_t *profile_fetch(
 
             error_t *fetch_err = gitops_fetch_branch(repo, remote_name, profile_name, xfer);
             if (fetch_err) {
-                output_error(out,
-                    "Failed to fetch '%s': %s", profile_name, error_message(fetch_err));
+                output_error(
+                    out, "Failed to fetch '%s': %s",
+                    profile_name, error_message(fetch_err)
+                );
                 error_free(fetch_err);
                 failed_count++;
                 continue;
@@ -565,20 +633,26 @@ static error_t *profile_fetch(
                 /* Branch already exists - consider this a successful fetch/update */
                 fetched_count++;
                 if (opts->verbose) {
-                    output_styled(out, OUTPUT_NORMAL, "  {green}✓{reset} Updated %s\n",
-                           profile_name);
+                    output_styled(
+                        out, OUTPUT_NORMAL, "  {green}✓{reset} Updated %s\n",
+                        profile_name
+                    );
                 }
             } else {
                 fetch_err = upstream_create_tracking_branch(repo, remote_name, profile_name);
                 if (fetch_err) {
-                    output_warning(out, "Failed to create local branch '%s': %s",
-                                   profile_name, error_message(fetch_err));
+                    output_warning(
+                        out, "Failed to create local branch '%s': %s",
+                        profile_name, error_message(fetch_err)
+                    );
                     error_free(fetch_err);
                 } else {
                     fetched_count++;
                     if (opts->verbose) {
-                        output_styled(out, OUTPUT_NORMAL, "  {green}✓{reset} Fetched %s\n",
-                               profile_name);
+                        output_styled(
+                            out, OUTPUT_NORMAL, "  {green}✓{reset} Fetched %s\n",
+                            profile_name
+                        );
                     }
                 }
             }
@@ -600,21 +674,29 @@ cleanup:
     /* Summary (only shown on success) */
     output_newline(out);
     if (fetched_count > 0) {
-        output_success(out, "Fetched %zu profile%s",
-                       fetched_count, fetched_count == 1 ? "" : "s");
+        output_success(
+            out, "Fetched %zu profile%s",
+            fetched_count, fetched_count == 1 ? "" : "s"
+        );
     }
     if (failed_count > 0) {
-        output_warning(out, "Failed to fetch %zu profile%s",
-                       failed_count, failed_count == 1 ? "" : "s");
+        output_warning(
+            out, "Failed to fetch %zu profile%s",
+            failed_count, failed_count == 1 ? "" : "s"
+        );
     }
 
     /* Only error if ALL operations failed or no profiles were available */
     if (fetched_count == 0 && failed_count > 0) {
-        return ERROR(ERR_GIT, "All profile fetch operations failed");
+        return ERROR(
+            ERR_GIT, "All profile fetch operations failed"
+        );
     }
 
     if (fetched_count == 0) {
-        return ERROR(ERR_GIT, "No profiles available to fetch");
+        return ERROR(
+            ERR_GIT, "No profiles available to fetch"
+        );
     }
 
     /* Success if at least some profiles were fetched (even if some failed) */
@@ -689,8 +771,10 @@ static error_t *profile_enable(
     } else {
         /* Enable specified profiles */
         if (opts->profile_count == 0) {
-            err = ERROR(ERR_INVALID_ARG, "No profiles specified\n"
-                       "Hint: Use 'dotta profile enable <name>' or '--all'");
+            err = ERROR(
+                ERR_INVALID_ARG, "No profiles specified\n"
+                "Hint: Use 'dotta profile enable <name>' or '--all'"
+            );
             goto cleanup;
         }
 
@@ -707,9 +791,12 @@ static error_t *profile_enable(
     if (opts->custom_prefix && string_array_size(to_enable) > 1) {
         output_error(out, "Cannot use --prefix with multiple profiles");
         output_hint(out, "Enable each profile separately:");
+
         for (size_t i = 0; i < string_array_size(to_enable); i++) {
-            output_hint(out, "dotta profile enable %s --prefix <path>",
-                       string_array_get(to_enable, i));
+            output_hint(
+                out, "dotta profile enable %s --prefix <path>",
+                string_array_get(to_enable, i)
+            );
         }
         err = ERROR(ERR_INVALID_ARG, "Ambiguous --prefix usage");
         goto cleanup;
@@ -730,7 +817,10 @@ static error_t *profile_enable(
 
         if (is_enabled) {
             if (opts->verbose) {
-                output_info(out, "  %s already enabled", profile_name);
+                output_info(
+                    out, "  %s already enabled",
+                    profile_name
+                );
             }
             already_enabled++;
             continue;
@@ -738,8 +828,14 @@ static error_t *profile_enable(
 
         /* Check if profile exists */
         if (!profile_exists(repo, profile_name)) {
-            output_warning(out, "Profile '%s' does not exist locally", profile_name);
-            output_hint(out, "Run 'dotta profile fetch %s' first", profile_name);
+            output_warning(
+                out, "Profile '%s' does not exist locally",
+                profile_name
+            );
+            output_hint(
+                out, "Run 'dotta profile fetch %s' first",
+                profile_name
+            );
             not_found++;
             continue;
         }
@@ -755,10 +851,14 @@ static error_t *profile_enable(
 
         /* Validate custom prefix requirement */
         if (has_custom && !opts->custom_prefix) {
-            output_error(out,
-                "Profile '%s' contains custom/ files but --prefix not provided", profile_name);
-            output_hint(out,
-                "dotta profile enable %s --prefix /path/to/target", profile_name);
+            output_error(
+                out, "Profile '%s' contains custom/ files but --prefix not provided",
+                profile_name
+            );
+            output_hint(
+                out, "dotta profile enable %s --prefix /path/to/target",
+                profile_name
+            );
             not_found++;
             continue;
         }
@@ -767,7 +867,10 @@ static error_t *profile_enable(
         if (opts->custom_prefix) {
             err = path_validate_custom_prefix(opts->custom_prefix);
             if (err) {
-                output_error(out, "Invalid custom prefix: %s", error_message(err));
+                output_error(
+                    out, "Invalid custom prefix: %s",
+                    error_message(err)
+                );
                 error_free(err);
                 err = NULL;
                 not_found++;
@@ -791,24 +894,30 @@ static error_t *profile_enable(
         enabled_count++;
 
         /* Sync profile to manifest and capture stats */
-        manifest_enable_stats_t stats = {0};
+        manifest_enable_stats_t stats = { 0 };
         err = manifest_enable_profile(
             repo, state, profile_name, opts->custom_prefix, enabled, &stats
         );
         if (err) {
-            err = error_wrap(err,
-                "Failed to sync profile '%s' to manifest", profile_name);
+            err = error_wrap(
+                err, "Failed to sync profile '%s' to manifest",
+                profile_name
+            );
             goto cleanup;
         }
 
         /* Show manifest analysis if verbose, otherwise show compact summary */
         if (opts->verbose) {
             print_manifest_enable_stats(out, profile_name, &stats, true);
-            output_styled(out, OUTPUT_NORMAL, "  {green}✓{reset} Enabled %s\n",
-                   profile_name);
+            output_styled(
+                out, OUTPUT_NORMAL, "  {green}✓{reset} Enabled %s\n",
+                profile_name
+            );
         } else {
-            output_styled(out, OUTPUT_NORMAL, "  {green}✓{reset} Enabled %s\n",
-                   profile_name);
+            output_styled(
+                out, OUTPUT_NORMAL, "  {green}✓{reset} Enabled %s\n",
+                profile_name
+            );
             print_manifest_enable_stats(out, profile_name, &stats, false);
         }
     }
@@ -840,21 +949,28 @@ cleanup:
     }
 
     if (enabled_count > 0) {
-        output_success(out,
-            "Enabled %zu profile%s", enabled_count, enabled_count == 1 ? "" : "s");
-        output_info(out,
-            "Files staged for deployment in manifest");
-        output_info(out,
-            "Run 'dotta status' to review or 'dotta apply' to deploy");
+        output_success(
+            out, "Enabled %zu profile%s",
+            enabled_count, enabled_count == 1 ? "" : "s"
+        );
+        output_info(
+            out, "Files staged for deployment in manifest"
+        );
+        output_info(
+            out, "Run 'dotta status' to review or 'dotta apply' to deploy"
+        );
     }
     if (already_enabled > 0 && !opts->quiet) {
-        output_info(out,
-            "%zu profile%s already enabled",
-            already_enabled, already_enabled == 1 ? "" : "s");
+        output_info(
+            out, "%zu profile%s already enabled",
+            already_enabled, already_enabled == 1 ? "" : "s"
+        );
     }
     if (not_found > 0) {
-        output_warning(out,
-            "%zu profile%s not found", not_found, not_found == 1 ? "" : "s");
+        output_warning(
+            out, "%zu profile%s not found",
+            not_found, not_found == 1 ? "" : "s"
+        );
     }
 
     if (enabled_count == 0 && not_found > 0) {
@@ -922,8 +1038,10 @@ static error_t *profile_disable(
     } else {
         /* Disable specified profiles */
         if (opts->profile_count == 0) {
-            err = ERROR(ERR_INVALID_ARG, "No profiles specified\n"
-                        "Hint: Use 'dotta profile disable <name>' or '--all'");
+            err = ERROR(
+                ERR_INVALID_ARG, "No profiles specified\n"
+                "Hint: Use 'dotta profile disable <name>' or '--all'"
+            );
             goto cleanup;
         }
 
@@ -953,9 +1071,12 @@ static error_t *profile_disable(
             if (strcmp(string_array_get(to_disable, j), profile_name) == 0) {
                 should_disable = true;
                 disabled_count++;
+
                 if (opts->verbose) {
-                    output_styled(out, OUTPUT_NORMAL, "  {green}✓{reset} Disabling %s\n",
-                           profile_name);
+                    output_styled(
+                        out, OUTPUT_NORMAL, "  {green}✓{reset} Disabling %s\n",
+                        profile_name
+                    );
                 }
                 break;
             }
@@ -995,8 +1116,11 @@ static error_t *profile_disable(
     if (opts->dry_run) {
         if (disabled_count > 0) {
             output_newline(out);
-            output_info(out, "Would disable %zu profile%s:", disabled_count,
-                        disabled_count == 1 ? "" : "s");
+
+            output_info(
+                out, "Would disable %zu profile%s:", disabled_count,
+                disabled_count == 1 ? "" : "s"
+            );
             for (size_t i = 0; i < string_array_size(to_disable); i++) {
                 const char *profile_name = string_array_get(to_disable, i);
                 /* Check if it was actually enabled */
@@ -1008,7 +1132,10 @@ static error_t *profile_disable(
                     }
                 }
                 if (was_enabled) {
-                    output_print(out, OUTPUT_NORMAL, "  - %s\n", profile_name);
+                    output_print(
+                        out, OUTPUT_NORMAL, "  - %s\n",
+                        profile_name
+                    );
                 }
             }
             output_newline(out);
@@ -1034,13 +1161,15 @@ static error_t *profile_disable(
 
             if (was_enabled) {
                 /* Unsync from manifest (updates to fallback or marks for removal) */
-                manifest_disable_stats_t stats = {0};
+                manifest_disable_stats_t stats = { 0 };
                 err = manifest_disable_profile(
                     repo, state, profile_name, new_enabled, &stats
                 );
                 if (err) {
-                    err = error_wrap(err,
-                        "Failed to unsync profile '%s' from manifest", profile_name);
+                    err = error_wrap(
+                        err, "Failed to unsync profile '%s' from manifest",
+                        profile_name
+                    );
                     goto cleanup;
                 }
 
@@ -1055,8 +1184,10 @@ static error_t *profile_disable(
                 /* Remove from state */
                 err = state_disable_profile(state, profile_name);
                 if (err) {
-                    err = error_wrap(err,
-                        "Failed to remove profile '%s' from state", profile_name);
+                    err = error_wrap(
+                        err, "Failed to remove profile '%s' from state",
+                        profile_name
+                    );
                     goto cleanup;
                 }
             }
@@ -1088,16 +1219,23 @@ cleanup:
     }
 
     if (disabled_count > 0) {
-        output_success(out,
-            "Disabled %zu profile%s", disabled_count, disabled_count == 1 ? "" : "s");
-        output_info(out,
-            "Files updated in manifest (fallback or marked for removal)");
-        output_info(out,
-            "Run 'dotta status' to review or 'dotta apply' to execute changes");
+        output_success(
+            out, "Disabled %zu profile%s",
+            disabled_count, disabled_count == 1 ? "" : "s"
+        );
+        output_info(
+            out, "Files updated in manifest (fallback or marked for removal)"
+        );
+        output_info(
+            out, "Run 'dotta status' to review or 'dotta apply' to execute changes"
+        );
     }
+
     if (not_enabled > 0 && !opts->quiet) {
-        output_info(out,
-            "%zu profile%s were not enabled", not_enabled, not_enabled == 1 ? "" : "s");
+        output_info(
+            out, "%zu profile%s were not enabled",
+            not_enabled, not_enabled == 1 ? "" : "s"
+        );
     }
 
     /* Return success if profiles were already disabled (idempotent) */
@@ -1107,7 +1245,9 @@ cleanup:
 
     /* Only error if nothing was specified or found */
     if (disabled_count == 0) {
-        return ERROR(ERR_NOT_FOUND, "No specified profiles were enabled or found");
+        return ERROR(
+            ERR_NOT_FOUND, "No specified profiles were enabled or found"
+        );
     }
 
     return NULL;
@@ -1134,8 +1274,11 @@ static error_t *profile_reorder(
 
     /* Validation: at least one profile specified */
     if (opts->profile_count == 0) {
-        err = ERROR(ERR_INVALID_ARG, "No profiles specified\n"
-            "Hint: Provide profiles in desired order: dotta profile reorder <p1> <p2> ...");
+        err = ERROR(
+            ERR_INVALID_ARG, "No profiles specified\n"
+            "Hint: Provide profiles in desired order: "
+            "dotta profile reorder <p1> <p2> ..."
+        );
         goto cleanup;
     }
 
@@ -1155,15 +1298,19 @@ static error_t *profile_reorder(
 
     /* Edge case: no enabled profiles */
     if (string_array_size(current_enabled) == 0) {
-        err = ERROR(ERR_VALIDATION, "No enabled profiles to reorder\n"
-                    "Hint: Run 'dotta profile enable <name>' first");
+        err = ERROR(
+            ERR_VALIDATION, "No enabled profiles to reorder\n"
+            "Hint: Run 'dotta profile enable <name>' first"
+        );
         goto cleanup;
     }
 
     /* Edge case: single profile */
     if (string_array_size(current_enabled) == 1) {
         if (!opts->quiet) {
-            output_info(out, "Only one enabled profile, nothing to reorder");
+            output_info(
+                out, "Only one enabled profile, nothing to reorder"
+            );
         }
         goto cleanup;  /* Success, but no-op */
     }
@@ -1172,8 +1319,11 @@ static error_t *profile_reorder(
     for (size_t i = 0; i < opts->profile_count; i++) {
         for (size_t j = i + 1; j < opts->profile_count; j++) {
             if (strcmp(opts->profiles[i], opts->profiles[j]) == 0) {
-                err = ERROR(ERR_VALIDATION,
-                    "Profile '%s' appears multiple times in reorder list", opts->profiles[i]);
+                err = ERROR(
+                    ERR_VALIDATION,
+                    "Profile '%s' appears multiple times in reorder list",
+                    opts->profiles[i]
+                );
                 goto cleanup;
             }
         }
@@ -1189,18 +1339,23 @@ static error_t *profile_reorder(
             }
         }
         if (!is_enabled) {
-            err = ERROR(ERR_VALIDATION, "Profile '%s' is not enabled\n"
-                        "Hint: Only enabled profiles can be reordered."
-                        " Run 'dotta profile list' to see enabled profiles", opts->profiles[i]);
+            err = ERROR(
+                ERR_VALIDATION, "Profile '%s' is not enabled\n"
+                "Hint: Only enabled profiles can be reordered."
+                " Run 'dotta profile list' to see enabled profiles",
+                opts->profiles[i]
+            );
             goto cleanup;
         }
     }
 
     /* Validation 3: Profile count must match */
     if (opts->profile_count != string_array_size(current_enabled)) {
-        err = ERROR(ERR_VALIDATION, "Profile count mismatch: %zu enabled, %zu provided\n"
-                    "Hint: All enabled profiles must be included in reorder",
-                    string_array_size(current_enabled), opts->profile_count);
+        err = ERROR(
+            ERR_VALIDATION, "Profile count mismatch: %zu enabled, %zu provided\n"
+            "Hint: All enabled profiles must be included in reorder",
+            string_array_size(current_enabled), opts->profile_count
+        );
         goto cleanup;
     }
 
@@ -1215,8 +1370,10 @@ static error_t *profile_reorder(
             }
         }
         if (!found) {
-            err = ERROR(ERR_VALIDATION, "Missing enabled profile '%s' from reorder list\n"
-                        "Hint: All enabled profiles must be included", enabled_profile);
+            err = ERROR(
+                ERR_VALIDATION, "Missing enabled profile '%s' from reorder list\n"
+                "Hint: All enabled profiles must be included", enabled_profile
+            );
             goto cleanup;
         }
     }
@@ -1240,15 +1397,22 @@ static error_t *profile_reorder(
     /* Show before/after in verbose mode */
     if (opts->verbose) {
         output_section(out, "Profile order change");
+
         output_print(out, OUTPUT_NORMAL, "  Before:");
         for (size_t i = 0; i < string_array_size(current_enabled); i++) {
-            output_print(out, OUTPUT_NORMAL, " %s", string_array_get(current_enabled, i));
+            output_print(
+                out, OUTPUT_NORMAL, " %s",
+                string_array_get(current_enabled, i)
+            );
         }
         output_newline(out);
 
         output_print(out, OUTPUT_NORMAL, "  After: ");
         for (size_t i = 0; i < opts->profile_count; i++) {
-            output_print(out, OUTPUT_NORMAL, " %s", opts->profiles[i]);
+            output_print(
+                out, OUTPUT_NORMAL, " %s",
+                opts->profiles[i]
+            );
         }
         output_newline(out);
     }
@@ -1271,7 +1435,9 @@ static error_t *profile_reorder(
     err = manifest_reorder_profiles(repo, state, new_order);
     string_array_free(new_order);
     if (err) {
-        err = error_wrap(err, "Failed to update manifest with new precedence");
+        err = error_wrap(
+            err, "Failed to update manifest with new precedence"
+        );
         goto cleanup;
     }
 
@@ -1285,8 +1451,10 @@ static error_t *profile_reorder(
     /* Success message */
     if (!opts->quiet) {
         output_newline(out);
-        output_success(out, "Reordered %zu profile%s", opts->profile_count,
-                       opts->profile_count == 1 ? "" : "s");
+        output_success(
+            out, "Reordered %zu profile%s",
+            opts->profile_count, opts->profile_count == 1 ? "" : "s"
+        );
         output_info(out, "Manifest updated to reflect new precedence");
         output_info(out, "Run 'dotta status' to review changes");
         output_info(out, "Run 'dotta apply' to deploy");
@@ -1367,8 +1535,10 @@ static error_t *profile_validate(
     }
 
     if (string_array_size(missing) > 0) {
-        output_warning(out, "Found %zu missing profile%s in state:",
-            string_array_size(missing), string_array_size(missing) == 1 ? "" : "s");
+        output_warning(
+            out, "Found %zu missing profile%s in state:",
+            string_array_size(missing), string_array_size(missing) == 1 ? "" : "s"
+        );
 
         for (size_t i = 0; i < string_array_size(missing); i++) {
             output_print(out, OUTPUT_NORMAL, "  • %s\n", string_array_get(missing, i));
@@ -1380,8 +1550,10 @@ static error_t *profile_validate(
                 const char *name = string_array_get(missing, i);
                 err = state_disable_profile(state, name);
                 if (err) {
-                    err = error_wrap(err,
-                        "Failed to remove missing profile '%s' from state", name);
+                    err = error_wrap(
+                        err, "Failed to remove missing profile '%s' from state",
+                        name
+                    );
                     goto cleanup;
                 }
             }
@@ -1419,8 +1591,10 @@ static error_t *profile_validate(
     state_free_all_files(state_files, state_file_count);
 
     if (orphaned_files > 0) {
-        output_warning(out, "Found %zu orphaned file entr%s in state",
-                       orphaned_files, orphaned_files == 1 ? "y" : "ies");
+        output_warning(
+            out, "Found %zu orphaned file entr%s in state",
+            orphaned_files, orphaned_files == 1 ? "y" : "ies"
+        );
         output_info(out, "  These reference non-existent profiles");
         output_hint(out, "  Run 'dotta apply' to clean up");
     }
@@ -1444,19 +1618,33 @@ cleanup:
         if (opts->fix) {
             /* Be accurate about what was actually fixed */
             if (fixed_enabled_profiles && !has_orphaned_files) {
-                output_success(out, "Fixed all profile state issues");
+                output_success(
+                    out, "Fixed all profile state issues"
+                );
             } else if (fixed_enabled_profiles && has_orphaned_files) {
-                output_info(out, "Fixed enabled profile list");
-                output_info(out, "Note: Orphaned files require 'dotta apply' to clean up");
+                output_info(
+                    out, "Fixed enabled profile list"
+                );
+                output_info(
+                    out, "Orphaned files require 'dotta apply' to clean up"
+                );
             } else if (!fixed_enabled_profiles && has_orphaned_files) {
-                output_warning(out, "Profile state has issues that require 'dotta apply'");
+                output_warning(
+                    out, "Profile state has issues that require 'dotta apply'"
+                );
             } else {
                 /* Shouldn't reach here, but handle gracefully */
-                output_warning(out, "Profile state has issues");
+                output_warning(
+                    out, "Profile state has issues"
+                );
             }
         } else {
-            output_warning(out, "Profile state has issues");
-            output_info(out, "Run 'dotta profile validate --fix' to fix automatically");
+            output_warning(
+                out, "Profile state has issues"
+            );
+            output_info(
+                out, "Run 'dotta profile validate --fix'"
+            );
         }
     }
 
@@ -1520,7 +1708,9 @@ error_t *cmd_profile(git_repository *repo, const cmd_profile_options_t *opts) {
             break;
 
         default:
-            result = ERROR(ERR_INVALID_ARG, "Unknown subcommand");
+            result = ERROR(
+                ERR_INVALID_ARG, "Unknown subcommand"
+            );
             break;
     }
 

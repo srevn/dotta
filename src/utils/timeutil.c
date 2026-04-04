@@ -22,7 +22,7 @@ static bool is_leap_year(int year) {
  */
 time_t portable_timegm(struct tm *tm) {
     if (!tm) {
-        return (time_t)-1;
+        return (time_t) -1;
     }
 
     /* Validate input ranges. This implementation does not normalize out-of-range values. */
@@ -31,18 +31,18 @@ time_t portable_timegm(struct tm *tm) {
         tm->tm_hour < 0 || tm->tm_hour > 23 ||
         tm->tm_min < 0 || tm->tm_min > 59 ||
         tm->tm_sec < 0 || tm->tm_sec > 60) {  /* 60 for leap seconds */
-        return (time_t)-1;
+        return (time_t) -1;
     }
 
     /* Normalize year (tm_year is years since 1900) */
     int year = 1900 + tm->tm_year;
-    int month = tm->tm_mon;  /* 0-11 */
+    int month = tm->tm_mon;      /* 0-11 */
 
     /* Calculate days since epoch (1970-01-01)
      * Formula: total_days = (year-1970)*365 + leap_days + month_days + day */
 
     /* Days from complete years since 1970 (not including leap days yet) */
-    long long days = (long long)(year - 1970) * 365;
+    long long days = (long long) (year - 1970) * 365;
 
     /* Add leap days between 1970 and 'year'. This is done by calculating the
      * number of leap years up to 'year-1' and subtracting the number of leap
@@ -54,7 +54,7 @@ time_t portable_timegm(struct tm *tm) {
     days += leap_years_until_year - leap_years_until_1970;
 
     /* Days in each month (for non-leap year) */
-    static const int days_in_month[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    static const int days_in_month[] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
 
     /* Add days from complete months in the current year */
     for (int m = 0; m < month; m++) {
@@ -70,9 +70,9 @@ time_t portable_timegm(struct tm *tm) {
 
     /* Convert to seconds and add time components */
     time_t result = days * 86400LL +            /* days to seconds */
-                    tm->tm_hour * 3600 +        /* hours to seconds */
-                    tm->tm_min * 60 +           /* minutes to seconds */
-                    tm->tm_sec;                 /* seconds */
+        tm->tm_hour * 3600 +                    /* hours to seconds */
+        tm->tm_min * 60 +                       /* minutes to seconds */
+        tm->tm_sec;                             /* seconds */
 
     return result;
 }
@@ -80,30 +80,57 @@ time_t portable_timegm(struct tm *tm) {
 /**
  * Format timestamp as relative time string
  */
-void format_relative_time(time_t timestamp, char *buf, size_t buf_size) {
+void format_relative_time(
+    time_t timestamp,
+    char *buf,
+    size_t buf_size
+) {
     time_t now = time(NULL);
     double seconds = difftime(now, timestamp);
 
     if (seconds < 0) {
-        snprintf(buf, buf_size, "in the future");
+        snprintf(
+            buf, buf_size, "in the future"
+        );
     } else if (seconds < 60) {
-        snprintf(buf, buf_size, "%.0f seconds ago", seconds);
+        snprintf(
+            buf, buf_size, "%.0f seconds ago",
+            seconds
+        );
     } else if (seconds < 3600) {
-        snprintf(buf, buf_size, "%.0f minutes ago", seconds / 60);
+        snprintf(
+            buf, buf_size, "%.0f minutes ago",
+            seconds / 60
+        );
     } else if (seconds < 86400) {
-        int hours = (int)(seconds / 3600);
-        snprintf(buf, buf_size, "%d hour%s ago", hours, hours == 1 ? "" : "s");
+        int hours = (int) (seconds / 3600);
+        snprintf(
+            buf, buf_size, "%d hour%s ago",
+            hours, hours == 1 ? "" : "s"
+        );
     } else if (seconds < 604800) {
-        int days = (int)(seconds / 86400);
-        snprintf(buf, buf_size, "%d day%s ago", days, days == 1 ? "" : "s");
+        int days = (int) (seconds / 86400);
+        snprintf(
+            buf, buf_size, "%d day%s ago",
+            days, days == 1 ? "" : "s"
+        );
     } else if (seconds < 2592000) {
-        int weeks = (int)(seconds / 604800);
-        snprintf(buf, buf_size, "%d week%s ago", weeks, weeks == 1 ? "" : "s");
+        int weeks = (int) (seconds / 604800);
+        snprintf(
+            buf, buf_size, "%d week%s ago",
+            weeks, weeks == 1 ? "" : "s"
+        );
     } else if (seconds < 31536000) {
-        int months = (int)(seconds / 2592000);
-        snprintf(buf, buf_size, "%d month%s ago", months, months == 1 ? "" : "s");
+        int months = (int) (seconds / 2592000);
+        snprintf(
+            buf, buf_size, "%d month%s ago",
+            months, months == 1 ? "" : "s"
+        );
     } else {
-        int years = (int)(seconds / 31536000);
-        snprintf(buf, buf_size, "%d year%s ago", years, years == 1 ? "" : "s");
+        int years = (int) (seconds / 31536000);
+        snprintf(
+            buf, buf_size, "%d year%s ago",
+            years, years == 1 ? "" : "s"
+        );
     }
 }

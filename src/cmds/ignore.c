@@ -40,7 +40,7 @@ static bool pattern_exists(const char *content, const char *pattern) {
         }
 
         /* Extract line */
-        size_t line_len = (size_t)(line_end - line_start);
+        size_t line_len = (size_t) (line_end - line_start);
         char *line = malloc(line_len + 1);
         if (!line) {
             return false;
@@ -50,17 +50,21 @@ static bool pattern_exists(const char *content, const char *pattern) {
 
         /* Trim whitespace */
         char *trimmed = line;
-        while (*trimmed && (*trimmed == ' ' || *trimmed == '\t')) {
+        while (*trimmed && (*trimmed == ' ' ||
+            *trimmed == '\t')) {
             trimmed++;
         }
+
         char *end = trimmed + strlen(trimmed) - 1;
-        while (end > trimmed && (*end == ' ' || *end == '\t' || *end == '\r')) {
+        while (end > trimmed && (*end == ' ' ||
+            *end == '\t' || *end == '\r')) {
             *end = '\0';
             end--;
         }
 
         /* Compare with pattern (skip comments) */
-        if (*trimmed != '#' && *trimmed != '\0' && strcmp(trimmed, pattern) == 0) {
+        if (*trimmed != '#' && *trimmed != '\0' &&
+            strcmp(trimmed, pattern) == 0) {
             free(line);
             return true;
         }
@@ -104,8 +108,9 @@ static const char *normalize_pattern(
 
     /* Trim trailing whitespace */
     size_t len = strlen(pattern);
-    while (len > 0 && (pattern[len - 1] == ' ' || pattern[len - 1] == '\t' ||
-                       pattern[len - 1] == '\r')) {
+    while (len > 0 && (pattern[len - 1] == ' ' ||
+        pattern[len - 1] == '\t' ||
+        pattern[len - 1] == '\r')) {
         len--;
     }
     if (len == 0 || len >= buffer_size) {
@@ -130,7 +135,9 @@ static bool is_batch_duplicate(
 ) {
     char buf[4096];
     for (size_t j = 0; j < current_index; j++) {
-        const char *prev = normalize_pattern(patterns[j], buf, sizeof(buf), NULL);
+        const char *prev =
+            normalize_pattern(patterns[j], buf, sizeof(buf), NULL);
+
         if (prev && strcmp(prev, normalized) == 0) {
             return true;
         }
@@ -167,8 +174,9 @@ static error_t *add_patterns_to_content(
     size_t required_size = existing_len;
 
     /* Account for newline separator if existing content doesn't end with one */
-    bool needs_separator = (existing_len > 0 &&
-                            existing_content[existing_len - 1] != '\n');
+    bool needs_separator =
+        (existing_len > 0 && existing_content[existing_len - 1] != '\n');
+
     if (needs_separator) {
         required_size += 1;
     }
@@ -176,13 +184,14 @@ static error_t *add_patterns_to_content(
     for (size_t i = 0; i < pattern_count; i++) {
         char buf[4096];
         size_t plen;
-        const char *p = normalize_pattern(patterns[i], buf, sizeof(buf), &plen);
-        if (!p) {
-            continue;
-        }
+        const char *p = normalize_pattern(
+            patterns[i], buf, sizeof(buf), &plen
+        );
+        if (!p) continue;
 
         /* Skip if already exists in content or earlier in this batch */
-        if (existing_content && pattern_exists(existing_content, p)) {
+        if (existing_content &&
+            pattern_exists(existing_content, p)) {
             continue;
         }
         if (is_batch_duplicate(patterns, i, p)) {
@@ -195,7 +204,9 @@ static error_t *add_patterns_to_content(
     /* Allocate buffer */
     char *result = malloc(required_size + 1);  /* +1 for null terminator */
     if (!result) {
-        return ERROR(ERR_MEMORY, "Failed to allocate content buffer");
+        return ERROR(
+            ERR_MEMORY, "Failed to allocate content buffer"
+        );
     }
 
     /* Build content using tracked position (avoids O(n²) strcat) */
@@ -214,13 +225,14 @@ static error_t *add_patterns_to_content(
     for (size_t i = 0; i < pattern_count; i++) {
         char buf[4096];
         size_t plen;
-        const char *p = normalize_pattern(patterns[i], buf, sizeof(buf), &plen);
-        if (!p) {
-            continue;
-        }
+        const char *p = normalize_pattern(
+            patterns[i], buf, sizeof(buf), &plen
+        );
+        if (!p) continue;
 
         /* Skip if already exists in content or earlier in this batch */
-        if (existing_content && pattern_exists(existing_content, p)) {
+        if (existing_content &&
+            pattern_exists(existing_content, p)) {
             continue;
         }
         if (is_batch_duplicate(patterns, i, p)) {
@@ -300,7 +312,7 @@ static error_t *remove_patterns_from_content(
         }
 
         /* Extract line */
-        size_t line_len = (size_t)(line_end - line_start);
+        size_t line_len = (size_t) (line_end - line_start);
 
         /* Trim leading whitespace for comparison (no allocation) */
         const char *trim_start = line_start;
@@ -328,10 +340,10 @@ static error_t *remove_patterns_from_content(
                 /* Normalize pattern for comparison */
                 char pbuf[4096];
                 size_t plen;
-                const char *p = normalize_pattern(patterns[i], pbuf, sizeof(pbuf), &plen);
-                if (!p) {
-                    continue;
-                }
+                const char *p = normalize_pattern(
+                    patterns[i], pbuf, sizeof(pbuf), &plen
+                );
+                if (!p) continue;
 
                 if (plen == trim_len && memcmp(trim_start, p, plen) == 0) {
                     should_remove = true;
@@ -382,18 +394,22 @@ static error_t *edit_baseline_dottaignore(
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
-    (void)config;  /* Reserved for future use */
+    (void) config;  /* Reserved for future use */
 
     /* Check if dotta-worktree branch exists */
     bool branch_exists = false;
-    error_t *err = gitops_branch_exists(repo, "dotta-worktree", &branch_exists);
+    error_t *err = gitops_branch_exists(
+        repo, "dotta-worktree", &branch_exists
+    );
     if (err) {
         return err;
     }
 
     if (!branch_exists) {
-        return ERROR(ERR_INTERNAL,
-            "dotta-worktree branch does not exist. Run 'dotta init' first.");
+        return ERROR(
+            ERR_INTERNAL, "dotta-worktree branch does not exist. "
+            "Run 'dotta init' first."
+        );
     }
 
     /* Create temporary file */
@@ -429,11 +445,12 @@ static error_t *edit_baseline_dottaignore(
         const git_oid *oid = git_tree_entry_id(entry);
         git_blob *blob = NULL;
         int git_err = git_blob_lookup(&blob, repo, oid);
+
         if (git_err >= 0) {
             const void *content = git_blob_rawcontent(blob);
             size_t size = git_blob_rawsize(blob);
             ssize_t written = write(fd, content, size);
-            if (written < 0 || (size_t)written != size) {
+            if (written < 0 || (size_t) written != size) {
                 git_blob_free(blob);
                 git_tree_free(tree);
                 close(fd);
@@ -448,7 +465,7 @@ static error_t *edit_baseline_dottaignore(
         const char *default_content = ignore_default_dottaignore_content();
         size_t len = strlen(default_content);
         ssize_t written = write(fd, default_content, len);
-        if (written < 0 || (size_t)written != len) {
+        if (written < 0 || (size_t) written != len) {
             git_tree_free(tree);
             close(fd);
             unlink(tmpfile);
@@ -487,7 +504,7 @@ static error_t *edit_baseline_dottaignore(
     }
     fseek(f, 0, SEEK_SET);
 
-    char *new_content = malloc((size_t)fsize + 1);
+    char *new_content = malloc((size_t) fsize + 1);
     if (!new_content) {
         fclose(f);
         unlink(tmpfile);
@@ -495,7 +512,7 @@ static error_t *edit_baseline_dottaignore(
         return ERROR(ERR_MEMORY, "Failed to allocate content buffer");
     }
 
-    size_t read_size = fread(new_content, 1, (size_t)fsize, f);
+    size_t read_size = fread(new_content, 1, (size_t) fsize, f);
     new_content[read_size] = '\0';
     fclose(f);
     unlink(tmpfile);
@@ -538,11 +555,12 @@ static error_t *edit_baseline_dottaignore(
              * Primary operation (pattern update) succeeded.
              * Sync failed due to local modifications - warn but don't fail.
              */
-            output_warning(out,
-                "Patterns saved to Git, but working directory sync failed.\n"
+            output_warning(
+                out, "Patterns saved to Git, but working directory sync failed.\n"
                 "  You may have local modifications to .dottaignore.\n"
                 "  To sync:  dotta git checkout .dottaignore\n"
-                "  To diff:  dotta git diff .dottaignore");
+                "  To diff:  dotta git diff .dottaignore"
+            );
             error_free(sync_err);
         }
     }
@@ -573,8 +591,9 @@ static error_t *edit_profile_dottaignore(
     }
 
     if (!branch_exists) {
-        return ERROR(ERR_INVALID_ARG,
-                    "Profile '%s' does not exist", profile_name);
+        return ERROR(
+            ERR_INVALID_ARG, "Profile '%s' does not exist", profile_name
+        );
     }
 
     /* Create temporary file */
@@ -596,7 +615,9 @@ static error_t *edit_profile_dottaignore(
 
     /* Build ref name */
     char ref_name[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", profile_name);
+    err = gitops_build_refname(
+        ref_name, sizeof(ref_name), "refs/heads/%s", profile_name
+    );
     if (err) {
         close(fd);
         unlink(tmpfile);
@@ -621,11 +642,12 @@ static error_t *edit_profile_dottaignore(
         const git_oid *oid = git_tree_entry_id(entry);
         git_blob *blob = NULL;
         int git_err = git_blob_lookup(&blob, repo, oid);
+
         if (git_err >= 0) {
             const void *content = git_blob_rawcontent(blob);
             size_t size = git_blob_rawsize(blob);
             ssize_t written = write(fd, content, size);
-            if (written < 0 || (size_t)written != size) {
+            if (written < 0 || (size_t) written != size) {
                 git_blob_free(blob);
                 git_tree_free(tree);
                 close(fd);
@@ -640,7 +662,7 @@ static error_t *edit_profile_dottaignore(
         const char *template = ignore_profile_dottaignore_template();
         size_t len = strlen(template);
         ssize_t written = write(fd, template, len);
-        if (written < 0 || (size_t)written != len) {
+        if (written < 0 || (size_t) written != len) {
             git_tree_free(tree);
             close(fd);
             unlink(tmpfile);
@@ -679,7 +701,7 @@ static error_t *edit_profile_dottaignore(
     }
     fseek(f, 0, SEEK_SET);
 
-    char *new_content = malloc((size_t)fsize + 1);
+    char *new_content = malloc((size_t) fsize + 1);
     if (!new_content) {
         fclose(f);
         unlink(tmpfile);
@@ -687,14 +709,17 @@ static error_t *edit_profile_dottaignore(
         return ERROR(ERR_MEMORY, "Failed to allocate content buffer");
     }
 
-    size_t read_size = fread(new_content, 1, (size_t)fsize, f);
+    size_t read_size = fread(new_content, 1, (size_t) fsize, f);
     new_content[read_size] = '\0';
     fclose(f);
     unlink(tmpfile);
     free(tmpfile);
 
     /* Update .dottaignore in profile branch */
-    char *commit_msg = str_format("Update .dottaignore for profile '%s'", profile_name);
+    char *commit_msg = str_format(
+        "Update .dottaignore for profile '%s'",
+        profile_name
+    );
     if (!commit_msg) {
         free(new_content);
         return ERROR(ERR_MEMORY, "Failed to allocate commit message");
@@ -720,11 +745,17 @@ static error_t *edit_profile_dottaignore(
     }
 
     if (!was_modified) {
-        output_info(out, "No changes to .dottaignore for profile '%s'", profile_name);
+        output_info(
+            out, "No changes to .dottaignore for profile '%s'",
+            profile_name
+        );
         return NULL;
     }
 
-    output_success(out, "Updated .dottaignore for profile '%s'", profile_name);
+    output_success(
+        out, "Updated .dottaignore for profile '%s'",
+        profile_name
+    );
     return NULL;
 }
 
@@ -749,8 +780,10 @@ static error_t *modify_baseline_dottaignore(
     }
 
     if (!branch_exists) {
-        return ERROR(ERR_INTERNAL,
-            "dotta-worktree branch does not exist. Run 'dotta init' first.");
+        return ERROR(
+            ERR_INTERNAL, "dotta-worktree branch does not exist. "
+            "Run 'dotta init' first."
+        );
     }
 
     /* Load existing .dottaignore content */
@@ -766,6 +799,7 @@ static error_t *modify_baseline_dottaignore(
         const git_oid *oid = git_tree_entry_id(entry);
         git_blob *blob = NULL;
         int git_err = git_blob_lookup(&blob, repo, oid);
+
         if (git_err >= 0) {
             const void *content = git_blob_rawcontent(blob);
             size_t size = git_blob_rawsize(blob);
@@ -830,7 +864,7 @@ static error_t *modify_baseline_dottaignore(
         size_t not_found = 0;
         char *content_with_removals = NULL;
         err = remove_patterns_from_content(
-            new_content, remove_patterns, remove_count,&content_with_removals,
+            new_content, remove_patterns, remove_count, &content_with_removals,
             &removed, &not_found
         );
         if (err) {
@@ -859,7 +893,7 @@ static error_t *modify_baseline_dottaignore(
         free(existing_content);
 
         if (add_count > 0 && remove_count > 0) {
-            output_info(out, "No changes: all patterns already exist or patterns not found");
+            output_info(out, "No changes: all patterns already exist or not found");
         } else if (add_count > 0) {
             output_info(out, "No changes: all patterns already exist");
         } else {
@@ -873,15 +907,18 @@ static error_t *modify_baseline_dottaignore(
     if (total_added > 0 && total_removed > 0) {
         commit_msg = str_format(
             "Update baseline .dottaignore (added %zu, removed %zu patterns)",
-            total_added, total_removed);
+            total_added, total_removed
+        );
     } else if (total_added > 0) {
         commit_msg = str_format(
             "Add %zu pattern%s to baseline .dottaignore",
-            total_added, total_added == 1 ? "" : "s");
+            total_added, total_added == 1 ? "" : "s"
+        );
     } else {
         commit_msg = str_format(
             "Remove %zu pattern%s from baseline .dottaignore",
-            total_removed, total_removed == 1 ? "" : "s");
+            total_removed, total_removed == 1 ? "" : "s"
+        );
     }
 
     if (!commit_msg) {
@@ -927,11 +964,12 @@ static error_t *modify_baseline_dottaignore(
              * Primary operation (pattern update) succeeded.
              * Sync failed due to local modifications - warn but don't fail.
              */
-            output_warning(out,
-                "Patterns saved to Git, but working directory sync failed.\n"
+            output_warning(
+                out, "Patterns saved to Git, but working directory sync failed.\n"
                 "  You may have local modifications to .dottaignore.\n"
                 "  To sync:  dotta git checkout .dottaignore\n"
-                "  To diff:  dotta git diff .dottaignore");
+                "  To diff:  dotta git diff .dottaignore"
+            );
             error_free(sync_err);
         }
     }
@@ -941,17 +979,22 @@ static error_t *modify_baseline_dottaignore(
 
     /* Report results */
     if (total_added > 0) {
-        output_success(out, "Added %zu pattern%s to baseline .dottaignore",
-                      total_added, total_added == 1 ? "" : "s");
+        output_success(
+            out, "Added %zu pattern%s to baseline .dottaignore",
+            total_added, total_added == 1 ? "" : "s"
+        );
     }
     if (total_removed > 0) {
-        output_success(out, "Removed %zu pattern%s from baseline .dottaignore",
-                      total_removed, total_removed == 1 ? "" : "s");
+        output_success(
+            out, "Removed %zu pattern%s from baseline .dottaignore",
+            total_removed, total_removed == 1 ? "" : "s"
+        );
     }
     if (total_not_found > 0) {
-        output_info(out,
-            "Warning: %zu pattern%s not found (already removed or never added)",
-            total_not_found, total_not_found == 1 ? "" : "s");
+        output_info(
+            out, "Warning: %zu pattern%s not found (already removed or never added)",
+            total_not_found, total_not_found == 1 ? "" : "s"
+        );
     }
 
     return NULL;
@@ -980,15 +1023,22 @@ static error_t *modify_profile_dottaignore(
     }
 
     if (!branch_exists) {
-        return ERROR(ERR_INVALID_ARG,
-                    "Profile '%s' does not exist", profile_name);
+        return ERROR(
+            ERR_INVALID_ARG, "Profile '%s' does not exist",
+            profile_name
+        );
     }
 
     /* Build ref name */
     char ref_name[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", profile_name);
+    err = gitops_build_refname(
+        ref_name, sizeof(ref_name), "refs/heads/%s", profile_name
+    );
     if (err) {
-        return error_wrap(err, "Invalid profile name '%s'", profile_name);
+        return error_wrap(
+            err, "Invalid profile name '%s'",
+            profile_name
+        );
     }
 
     /* Load existing .dottaignore content from profile */
@@ -1005,6 +1055,7 @@ static error_t *modify_profile_dottaignore(
         const git_oid *oid = git_tree_entry_id(entry);
         git_blob *blob = NULL;
         int git_err = git_blob_lookup(&blob, repo, oid);
+
         if (git_err >= 0) {
             const void *content = git_blob_rawcontent(blob);
             size_t size = git_blob_rawsize(blob);
@@ -1023,7 +1074,11 @@ static error_t *modify_profile_dottaignore(
     } else if (!add_patterns) {
         /* No existing .dottaignore and no patterns to add */
         git_tree_free(tree);
-        output_info(out, "No .dottaignore file exists in profile '%s'", profile_name);
+
+        output_info(
+            out, "No .dottaignore file exists in profile '%s'",
+            profile_name
+        );
         return NULL;
     }
 
@@ -1069,8 +1124,8 @@ static error_t *modify_profile_dottaignore(
         size_t not_found = 0;
         char *content_with_removals = NULL;
         err = remove_patterns_from_content(
-            new_content, remove_patterns, remove_count,
-            &content_with_removals, &removed, &not_found
+            new_content, remove_patterns, remove_count, &content_with_removals,
+            &removed, &not_found
         );
         if (err) {
             if (new_content != existing_content) {
@@ -1098,7 +1153,7 @@ static error_t *modify_profile_dottaignore(
         free(existing_content);
 
         if (add_count > 0 && remove_count > 0) {
-            output_info(out, "No changes: all patterns already exist or patterns not found");
+            output_info(out, "No changes: all patterns already exist or not found");
         } else if (add_count > 0) {
             output_info(out, "No changes: all patterns already exist");
         } else {
@@ -1112,15 +1167,18 @@ static error_t *modify_profile_dottaignore(
     if (total_added > 0 && total_removed > 0) {
         commit_msg = str_format(
             "Update .dottaignore for profile '%s' (added %zu, removed %zu patterns)",
-            profile_name, total_added, total_removed);
+            profile_name, total_added, total_removed
+        );
     } else if (total_added > 0) {
         commit_msg = str_format(
             "Add %zu pattern%s to .dottaignore for profile '%s'",
-            total_added, total_added == 1 ? "" : "s", profile_name);
+            total_added, total_added == 1 ? "" : "s", profile_name
+        );
     } else {
         commit_msg = str_format(
             "Remove %zu pattern%s from .dottaignore for profile '%s'",
-            total_removed, total_removed == 1 ? "" : "s", profile_name);
+            total_removed, total_removed == 1 ? "" : "s", profile_name
+        );
     }
 
     if (!commit_msg) {
@@ -1155,17 +1213,22 @@ static error_t *modify_profile_dottaignore(
 
     /* Report results */
     if (total_added > 0) {
-        output_success(out, "Added %zu pattern%s to profile '%s' .dottaignore",
-                      total_added, total_added == 1 ? "" : "s", profile_name);
+        output_success(
+            out, "Added %zu pattern%s to profile '%s' .dottaignore",
+            total_added, total_added == 1 ? "" : "s", profile_name
+        );
     }
     if (total_removed > 0) {
-        output_success(out, "Removed %zu pattern%s from profile '%s' .dottaignore",
-                      total_removed, total_removed == 1 ? "" : "s", profile_name);
+        output_success(
+            out, "Removed %zu pattern%s from profile '%s' .dottaignore",
+            total_removed, total_removed == 1 ? "" : "s", profile_name
+        );
     }
     if (total_not_found > 0) {
-        output_info(out,
-            "Warning: %zu pattern%s not found (already removed or never added)",
-            total_not_found, total_not_found == 1 ? "" : "s");
+        output_info(
+            out, "Warning: %zu pattern%s not found (already removed or never added)",
+            total_not_found, total_not_found == 1 ? "" : "s"
+        );
     }
 
     return NULL;
@@ -1206,6 +1269,7 @@ static error_t *test_path_ignore(
      * there is no filesystem location to resolve. */
     char resolved_buf[4096];
     const char *effective_path = test_path;
+
     if (test_path[0] != '/' && path_exists) {
         if (realpath(test_path, resolved_buf)) {
             effective_path = resolved_buf;
@@ -1222,15 +1286,22 @@ static error_t *test_path_ignore(
         profile_t *profile = NULL;
         error_t *err = profile_load(repo, specific_profile, &profile);
         if (err) {
-            return error_wrap(err, "Failed to load profile '%s'", specific_profile);
+            return error_wrap(
+                err, "Failed to load profile '%s'",
+                specific_profile
+            );
         }
 
         /* Create ignore context for this profile */
         ignore_context_t *ctx = NULL;
-        err = ignore_context_create(repo, config, specific_profile, NULL, 0, &ctx);
+        err = ignore_context_create(
+            repo, config, specific_profile, NULL, 0, &ctx
+        );
         if (err) {
             profile_free(profile);
-            return error_wrap(err, "Failed to create ignore context");
+            return error_wrap(
+                err, "Failed to create ignore context"
+            );
         }
 
         /* Test the path */
@@ -1245,11 +1316,19 @@ static error_t *test_path_ignore(
 
         /* Print result */
         if (result.ignored) {
-            output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED by profile '%s'\n",
-                   specific_profile);
-            output_info(out, "  Reason: %s", ignore_source_to_string(result.source));
+            output_styled(
+                out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED by profile '%s'\n",
+                specific_profile
+            );
+            output_info(
+                out, "  Reason: %s",
+                ignore_source_to_string(result.source)
+            );
         } else {
-            output_success(out, "NOT IGNORED by profile '%s'", specific_profile);
+            output_success(
+                out, "Not ignored by profile '%s'",
+                specific_profile
+            );
         }
 
         return NULL;
@@ -1259,10 +1338,11 @@ static error_t *test_path_ignore(
     profile_list_t *profiles = NULL;
     error_t *err = profile_resolve(
         repo,
-        NULL, 0,  /* No explicit profiles */
-        false,  /* Not strict - skip missing profiles */
+        NULL, 0, /* No explicit profiles */
+        false,   /* Not strict - skip missing profiles */
         &profiles,
-        NULL);
+        NULL
+    );
 
     if (err) {
         return error_wrap(err, "Failed to load profiles");
@@ -1292,7 +1372,7 @@ static error_t *test_path_ignore(
             output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED\n");
             output_info(out, "  Reason: %s", ignore_source_to_string(result.source));
         } else {
-            output_success(out, "NOT IGNORED");
+            output_success(out, "Not ignored");
         }
 
         return NULL;
@@ -1312,8 +1392,10 @@ static error_t *test_path_ignore(
         err = ignore_context_create(repo, config, profile->name, NULL, 0, &ctx);
         if (err) {
             profile_list_free(profiles);
-            return error_wrap(err,
-                "Failed to create ignore context for profile '%s'", profile->name);
+            return error_wrap(
+                err, "Failed to create ignore context for profile '%s'",
+                profile->name
+            );
         }
 
         /* Test the path */
@@ -1323,20 +1405,30 @@ static error_t *test_path_ignore(
 
         if (err) {
             profile_list_free(profiles);
-            return error_wrap(err,
-                "Failed to test path against profile '%s'", profile->name);
+            return error_wrap(
+                err, "Failed to test path against profile '%s'",
+                profile->name
+            );
         }
 
         /* Print result */
         if (result.ignored) {
-            output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} Profile '%s': IGNORED\n",
-                   profile->name);
+            output_styled(
+                out, OUTPUT_NORMAL, "{red}✗{reset} Profile '%s': IGNORED\n",
+                profile->name
+            );
             if (verbose) {
-                output_info(out, "    Reason: %s", ignore_source_to_string(result.source));
+                output_info(
+                    out, "    Reason: %s",
+                    ignore_source_to_string(result.source)
+                );
             }
             any_ignored = true;
         } else {
-            output_success(out, "Profile '%s': NOT IGNORED", profile->name);
+            output_success(
+                out, "Profile '%s': Not ignored",
+                profile->name
+            );
         }
     }
 
@@ -1345,7 +1437,9 @@ static error_t *test_path_ignore(
     /* Summary */
     output_newline(out);
     if (any_ignored) {
-        output_info(out, "Result: Path would be IGNORED during add/update operations");
+        output_info(
+            out, "Result: Path would be IGNORED during add/update operations"
+        );
     } else {
         output_success(out, "Result: Path would be TRACKED");
     }

@@ -124,8 +124,10 @@ static error_t *fetch_profiles(
         /* Fetch the profile branch */
         err = gitops_fetch_branch(repo, remote_name, profile_name, xfer);
         if (err) {
-            output_warning(out, "Failed to fetch '%s': %s",
-                           profile_name, error_message(err));
+            output_warning(
+                out, "Failed to fetch '%s': %s",
+                profile_name, error_message(err)
+            );
             error_free(err);
             continue;
         }
@@ -137,10 +139,14 @@ static error_t *fetch_profiles(
             local_count++;
         } else {
             /* Create new local tracking branch */
-            err = upstream_create_tracking_branch(repo, remote_name, profile_name);
+            err = upstream_create_tracking_branch(
+                repo, remote_name, profile_name
+            );
             if (err) {
-                output_warning(out, "Failed to create local branch '%s': %s",
-                               profile_name, error_message(err));
+                output_warning(
+                    out, "Failed to create local branch '%s': %s",
+                    profile_name, error_message(err)
+                );
                 error_free(err);
                 continue;
             }
@@ -185,16 +191,22 @@ static error_t *fetch_all_profiles(
 
     /* List all remote tracking branches */
     string_array_t *all_branches = NULL;
-    error_t *err = gitops_list_remote_branches(repo, remote_name, &all_branches);
+    error_t *err = gitops_list_remote_branches(
+        repo, remote_name, &all_branches
+    );
     if (err) {
-        return error_wrap(err, "Failed to list remote branches");
+        return error_wrap(
+            err, "Failed to list remote branches"
+        );
     }
 
     /* Create array for successfully fetched profiles */
     string_array_t *successful = string_array_create();
     if (!successful) {
         string_array_free(all_branches);
-        return ERROR(ERR_MEMORY, "Failed to create fetched profiles array");
+        return ERROR(
+            ERR_MEMORY, "Failed to create fetched profiles array"
+        );
     }
 
     /* Fetch and create local branches */
@@ -211,8 +223,10 @@ static error_t *fetch_all_profiles(
         return err;
     }
 
-    output_success(out, "Fetched %zu profile%s",
-                   fetched_count, fetched_count == 1 ? "" : "s");
+    output_success(
+        out, "Fetched %zu profile%s",
+        fetched_count, fetched_count == 1 ? "" : "s"
+    );
 
     *fetched_profiles = successful;
     return NULL;
@@ -237,7 +251,9 @@ static error_t *initialize_state(
     CHECK_NULL(out);
 
     if (count > 0 && !profile_names) {
-        return ERROR(ERR_INVALID_ARG, "profile_names must not be NULL when count > 0");
+        return ERROR(
+            ERR_INVALID_ARG, "profile_names must not be NULL when count > 0"
+        );
     }
 
     /* Create state database (with or without profiles) */
@@ -296,13 +312,15 @@ static error_t *initialize_state(
     state_free(state);
 
     /* Build profile list string */
-    char profiles_str[1024] = {0};
+    char profiles_str[1024] = { 0 };
     size_t offset = 0;
     for (size_t i = 0; i < count && offset < sizeof(profiles_str) - 1; i++) {
+
         int written = snprintf(
             profiles_str + offset, sizeof(profiles_str) - offset,
             "%s%s", profile_names[i], (i < count - 1) ? ", " : ""
         );
+
         if (written > 0) {
             offset += written;
         }
@@ -360,7 +378,9 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             char *expanded_path = NULL;
             err = path_expand_home(config->repo_dir, &expanded_path);
             if (err) {
-                final_err = error_wrap(err, "Failed to expand default repo path");
+                final_err = error_wrap(
+                    err, "Failed to expand default repo path"
+                );
                 goto cleanup;
             }
             local_path = expanded_path;
@@ -369,7 +389,9 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             /* Fallback: extract repo name from URL */
             local_path = extract_repo_name(opts->url);
             if (!local_path) {
-                final_err = ERROR(ERR_MEMORY, "Failed to allocate repository name");
+                final_err = ERROR(
+                    ERR_MEMORY, "Failed to allocate repository name"
+                );
                 goto cleanup;
             }
             allocated_path = true;
@@ -418,14 +440,19 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         );
 
         if (err) {
-            output_error(out, "Failed to fetch profiles: %s", error_message(err));
+            output_error(
+                out, "Failed to fetch profiles: %s",
+                error_message(err)
+            );
             /* Continue - some profiles may have been fetched */
             error_free(err);
         }
 
-        output_success(out, "Fetched %zu of %zu specified profile%s",
-                       fetched_count, opts->profile_count,
-                       opts->profile_count == 1 ? "" : "s");
+        output_success(
+            out, "Fetched %zu of %zu specified profile%s",
+            fetched_count, opts->profile_count,
+            opts->profile_count == 1 ? "" : "s"
+        );
 
     } else if (opts->fetch_all) {
         /* Hub mode - fetch all profiles */
@@ -433,7 +460,10 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         err = fetch_all_profiles(repo, "origin", out, xfer, &all_profiles);
 
         if (err) {
-            output_error(out, "Failed to fetch all profiles: %s", error_message(err));
+            output_error(
+                out, "Failed to fetch all profiles: %s",
+                error_message(err)
+            );
             error_free(err);
         } else {
             /* Use all fetched profiles */
@@ -449,7 +479,10 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         string_array_t *remote_branches = NULL;
         err = gitops_list_remote_branches(repo, "origin", &remote_branches);
         if (err) {
-            output_warning(out, "Failed to list remote branches: %s", error_message(err));
+            output_warning(
+                out, "Failed to list remote branches: %s",
+                error_message(err)
+            );
             error_free(err);
             remote_branches = NULL;
         }
@@ -458,7 +491,10 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         if (remote_branches) {
             err = profile_detect_names(remote_branches, &detected_names);
             if (err) {
-                output_warning(out, "Failed to detect profiles: %s", error_message(err));
+                output_warning(
+                    out, "Failed to detect profiles: %s",
+                    error_message(err)
+                );
                 error_free(err);
             }
         }
@@ -477,13 +513,18 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
                 out, xfer, &fetched_count, fetched_profiles
             );
             if (err) {
-                output_warning(out, "Some profiles failed to fetch: %s", error_message(err));
+                output_warning(
+                    out, "Some profiles failed to fetch: %s",
+                    error_message(err)
+                );
                 error_free(err);
             }
 
             if (fetched_count > 0) {
-                output_success(out, "Fetched %zu profile%s",
-                               fetched_count, fetched_count == 1 ? "" : "s");
+                output_success(
+                    out, "Fetched %zu profile%s",
+                    fetched_count, fetched_count == 1 ? "" : "s"
+                );
             }
 
         } else {
@@ -493,7 +534,10 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             if (remote_branches && string_array_size(remote_branches) > 0) {
                 output_section(out, "Available remote profiles");
                 for (size_t i = 0; i < string_array_size(remote_branches); i++) {
-                    output_info(out, "  • %s", string_array_get(remote_branches, i));
+                    output_info(
+                        out, "  • %s",
+                        string_array_get(remote_branches, i)
+                    );
                 }
                 output_newline(out);
             }
@@ -551,7 +595,10 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         output_warning(out, "No profiles were fetched");
         err = initialize_state(repo, NULL, 0, out);
         if (err) {
-            output_error(out, "Failed to initialize state: %s", error_message(err));
+            output_error(
+                out, "Failed to initialize state: %s",
+                error_message(err)
+            );
             error_free(err);
         }
     }
@@ -560,7 +607,9 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     bool worktree_exists;
     err = gitops_branch_exists(repo, "dotta-worktree", &worktree_exists);
     if (err) {
-        final_err = error_wrap(err, "Failed to check for dotta-worktree branch");
+        final_err = error_wrap(
+            err, "Failed to check for dotta-worktree branch"
+        );
         goto cleanup;
     }
 
@@ -571,7 +620,9 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
 
         err = gitops_create_orphan_branch(repo, "dotta-worktree");
         if (err) {
-            final_err = error_wrap(err, "Failed to create dotta-worktree branch");
+            final_err = error_wrap(
+                err, "Failed to create dotta-worktree branch"
+            );
             goto cleanup;
         }
     }
@@ -615,8 +666,10 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             for (size_t i = 0; i < string_array_size(fetched_profiles); i++) {
                 const char *profile_name = string_array_get(fetched_profiles, i);
                 if (bootstrap_exists(repo, profile_name, NULL)) {
-                    output_styled(out, OUTPUT_NORMAL, "  {green}✓{reset} %s/.bootstrap\n",
-                           profile_name);
+                    output_styled(
+                        out, OUTPUT_NORMAL, "  {green}✓{reset} %s/.bootstrap\n",
+                        profile_name
+                    );
                 }
             }
             output_newline(out);
@@ -627,8 +680,9 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
                 run_bootstrap = true;
             } else if (!opts->quiet) {
                 /* Prompt user */
-                run_bootstrap = output_confirm(out,
-                    "Would you like to execute bootstrap scripts now?", false);
+                run_bootstrap = output_confirm(
+                    out, "Would you like to execute bootstrap scripts now?", false
+                );
             }
         }
     }
@@ -645,17 +699,23 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         if (!err && bootstrap_profiles) {
             output_newline(out);
             err = bootstrap_run_for_profiles(
-                repo, local_path, (struct profile_list *)bootstrap_profiles, false, true
+                repo, local_path, (struct profile_list *) bootstrap_profiles,
+                false, true
             );
             if (err) {
-                output_error(out, "Bootstrap failed: %s", error_message(err));
+                output_error(
+                    out, "Bootstrap failed: %s",
+                    error_message(err)
+                );
                 error_free(err);
                 /* Non-fatal - continue */
             }
             profile_list_free(bootstrap_profiles);
         } else if (err) {
-            output_warning(out, "Failed to load profiles for bootstrap: %s",
-                          error_message(err));
+            output_warning(
+                out, "Failed to load profiles for bootstrap: %s",
+                error_message(err)
+            );
             error_free(err);
         }
     }
@@ -695,7 +755,7 @@ cleanup:
     }
     if (allocated_path && local_path) {
         /* Safe to cast: we know it's heap-allocated when allocated_path is true */
-        free((char *)local_path);
+        free((char *) local_path);
     }
 
     return final_err;

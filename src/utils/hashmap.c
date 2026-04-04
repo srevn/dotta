@@ -50,7 +50,7 @@ static uint64_t hashmap_hash(const char *key) {
     const uint64_t FNV_PRIME = 1099511628211ULL;
 
     uint64_t hash = FNV_OFFSET_BASIS;
-    for (const unsigned char *p = (const unsigned char *)key; *p; p++) {
+    for (const unsigned char *p = (const unsigned char *) key; *p; p++) {
         hash ^= *p;
         hash *= FNV_PRIME;
     }
@@ -63,7 +63,7 @@ static uint64_t hashmap_hash(const char *key) {
 static size_t hashmap_bucket_index(const hashmap_t *map, const char *key) {
     uint64_t hash = hashmap_hash(key);
     /* Fast modulo using bitwise AND (works because bucket_count is power of 2) */
-    return (size_t)(hash & (map->bucket_count - 1));
+    return (size_t) (hash & (map->bucket_count - 1));
 }
 
 /**
@@ -141,7 +141,7 @@ static error_t *hashmap_resize(hashmap_t *map, size_t new_capacity) {
     /* Update map to use new buckets */
     map->buckets = new_buckets;
     map->bucket_count = new_capacity;
-    map->resize_threshold = (size_t)(new_capacity * LOAD_FACTOR_THRESHOLD);
+    map->resize_threshold = (size_t) (new_capacity * LOAD_FACTOR_THRESHOLD);
     map->mod_count++;  /* Structural modification: rehashed all entries */
 
     /* Rehash all entries from old buckets to new buckets */
@@ -200,7 +200,7 @@ hashmap_t *hashmap_create(size_t initial_capacity) {
 
     map->bucket_count = capacity;
     map->entry_count = 0;
-    map->resize_threshold = (size_t)(capacity * LOAD_FACTOR_THRESHOLD);
+    map->resize_threshold = (size_t) (capacity * LOAD_FACTOR_THRESHOLD);
     map->mod_count = 0;
 
     return map;
@@ -254,9 +254,14 @@ error_t *hashmap_set(hashmap_t *map, const char *key, void *value) {
              * As more items are added without resizing, collision chains grow
              * longer, degrading lookup performance from O(1) to O(n).
              */
-            fprintf(stderr, "Warning: Hash map resize failed (%s)\n", error_message(err));
-            fprintf(stderr, "         Performance may degrade. Current size: %zu entries, %zu buckets\n",
-                    map->entry_count, map->bucket_count);
+            fprintf(
+                stderr, "Warning: Hash map resize failed (%s)\n",
+                error_message(err)
+            );
+            fprintf(
+                stderr, "         Current size: %zu entries, %zu buckets\n",
+                map->entry_count, map->bucket_count
+            );
             error_free(err);
         }
     }
@@ -305,7 +310,10 @@ error_t *hashmap_remove(hashmap_t *map, const char *key, void **old_value) {
     hashmap_entry_t *entry = hashmap_find_entry(map->buckets[idx], key, &prev);
 
     if (!entry) {
-        return ERROR(ERR_NOT_FOUND, "Key not found in hash map: %s", key);
+        return ERROR(
+            ERR_NOT_FOUND, "Key not found in hash map: %s",
+            key
+        );
     }
 
     /* Save old value if requested */
@@ -432,11 +440,13 @@ bool hashmap_iter_next(
 
     /* Check for modification */
     if (map->mod_count != iter->snapshot_mod_count) {
-        fprintf(stderr, "warning: hashmap was modified during iteration\n");
+        fprintf(
+            stderr, "warning: hashmap was modified during iteration\n"
+        );
         return false;
     }
 
-    hashmap_entry_t *entry = (hashmap_entry_t *)iter->current_entry_internal;
+    hashmap_entry_t *entry = (hashmap_entry_t *) iter->current_entry_internal;
 
     /* Try to advance in current chain first */
     if (entry && entry->next) {

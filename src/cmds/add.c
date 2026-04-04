@@ -72,8 +72,9 @@ static bool is_excluded(
         if (err) {
             /* On error, log and continue without ignoring */
             if (opts->verbose && out) {
-                output_warning(out,
-                    "Ignore check failed for %s: %s", path, error_message(err));
+                output_warning(
+                    out, "Ignore check failed for %s: %s", path, error_message(err)
+                );
             }
             error_free(err);
             return false;
@@ -148,7 +149,9 @@ static error_t *collect_files_from_dir(
         if (is_dir) {
             /* Recurse into subdirectory */
             string_array_t *subdir_files = NULL;
-            error_t *err = collect_files_from_dir(full_path, opts, ignore_ctx, out, &subdir_files);
+            error_t *err = collect_files_from_dir(
+                full_path, opts, ignore_ctx, out, &subdir_files
+            );
             free(full_path);
 
             if (err) {
@@ -187,8 +190,10 @@ static error_t *collect_files_from_dir(
         int saved_errno = errno;
         closedir(dir);
         string_array_free(files);
-        return ERROR(ERR_FS,
-            "Error reading directory '%s': %s", dir_path, strerror(saved_errno));
+        return ERROR(
+            ERR_FS, "Error reading directory '%s': %s",
+            dir_path, strerror(saved_errno)
+        );
     }
 
     closedir(dir);
@@ -242,16 +247,18 @@ static error_t *add_file_to_worktree(
     /* Handle existing files */
     if (fs_lexists(dest_path)) {
         if (!opts->force) {
-            error_t *exists_err = ERROR(ERR_EXISTS,
-                "File '%s' (as '%s') already exists in profile '%s'. "
-                "Use --force to overwrite.", filesystem_path, storage_path, opts->profile);
+            error_t *exists_err = ERROR(
+                ERR_EXISTS, "File '%s' (as '%s') already exists in profile '%s'. "
+                "Use --force to overwrite.", filesystem_path, storage_path, opts->profile
+            );
             free(dest_path);
             return exists_err;
         }
         err = fs_remove_file(dest_path);
         if (err) {
-            error_t *wrapped = error_wrap(err,
-                "Failed to remove existing file '%s' in worktree", dest_path);
+            error_t *wrapped = error_wrap(
+                err, "Failed to remove existing file '%s' in worktree", dest_path
+            );
             free(dest_path);
             return wrapped;
         }
@@ -297,13 +304,18 @@ static error_t *add_file_to_worktree(
             err = metadata_capture_from_symlink(storage_path, &link_stat, &item);
             if (err) {
                 free(dest_path);
-                return error_wrap(err,
-                    "Failed to capture symlink metadata for '%s'", filesystem_path);
+                return error_wrap(
+                    err, "Failed to capture symlink metadata for '%s'",
+                    filesystem_path
+                );
             }
         }
 
         if (opts->verbose && out) {
-            output_info(out, "Added symlink: %s -> %s", filesystem_path, storage_path);
+            output_info(
+                out, "Added symlink: %s -> %s",
+                filesystem_path, storage_path
+            );
         }
     } else {
         /* Regular file - determine encryption policy using centralized logic */
@@ -318,12 +330,14 @@ static error_t *add_file_to_worktree(
         );
         if (err) {
             free(dest_path);
-            return error_wrap(err,
-                "Failed to determine encryption policy for '%s'", storage_path);
+            return error_wrap(
+                err, "Failed to determine encryption policy for '%s'",
+                storage_path
+            );
         }
 
         /* Store file to worktree with optional encryption (handles read → encrypt → write)
-         * IMPORTANT: This captures stat data to share with metadata layer (eliminates race condition) */
+         * IMPORTANT: This captures stat data to share with metadata layer */
         err = content_store_file_to_worktree(
             filesystem_path,
             dest_path,
@@ -339,11 +353,16 @@ static error_t *add_file_to_worktree(
         }
 
         /* Capture metadata from file using stat data from content layer
-         * SECURITY: Single stat() call eliminates race condition between content and metadata */
-        err = metadata_capture_from_file(filesystem_path, storage_path, &file_stat, &item);
+         * SECURITY: Single stat() call eliminates race condition */
+        err = metadata_capture_from_file(
+            filesystem_path, storage_path, &file_stat, &item
+        );
         if (err) {
             free(dest_path);
-            return error_wrap(err, "Failed to capture metadata for '%s'", filesystem_path);
+            return error_wrap(
+                err, "Failed to capture metadata for '%s'",
+                filesystem_path
+            );
         }
 
         /* Update metadata item with encryption status */
@@ -354,9 +373,15 @@ static error_t *add_file_to_worktree(
         /* Verbose output */
         if (opts->verbose && out) {
             if (should_encrypt) {
-                output_info(out, "Encrypted: %s -> %s", filesystem_path, storage_path);
+                output_info(
+                    out, "Encrypted: %s -> %s",
+                    filesystem_path, storage_path
+                );
             }
-            output_info(out, "Added: %s -> %s", filesystem_path, storage_path);
+            output_info(
+                out, "Added: %s -> %s",
+                filesystem_path, storage_path
+            );
         }
     }
 
@@ -387,18 +412,21 @@ static error_t *add_file_to_worktree(
 
     free(dest_path);
 
-    /* Add metadata item to collection (NULL for home/ prefix symlinks — no metadata needed) */
+    /* Add metadata item to collection (NULL for home/ prefix symlinks) */
     if (item) {
         /* Verbose output for metadata capture */
         if (opts->verbose && out) {
             if (item->owner || item->group) {
-                output_info(out, "Captured metadata: %s (mode: %04o, owner: %s:%s)",
-                            filesystem_path, item->mode,
-                            item->owner ? item->owner : "?",
-                            item->group ? item->group : "?");
+                output_info(
+                    out, "Captured metadata: %s (mode: %04o, owner: %s:%s)",
+                    filesystem_path, item->mode, item->owner ? item->owner : "?",
+                    item->group ? item->group : "?"
+                );
             } else {
-                output_info(out, "Captured metadata: %s (mode: %04o)",
-                            filesystem_path, item->mode);
+                output_info(
+                    out, "Captured metadata: %s (mode: %04o)",
+                    filesystem_path, item->mode
+                );
             }
         }
 
@@ -406,7 +434,10 @@ static error_t *add_file_to_worktree(
         metadata_item_free(item);
 
         if (err) {
-            return error_wrap(err, "Failed to add metadata item for '%s'", filesystem_path);
+            return error_wrap(
+                err, "Failed to add metadata item for '%s'",
+                filesystem_path
+            );
         }
     }
 
@@ -450,7 +481,8 @@ static error_t *init_profile_dottaignore(
     }
 
     error_t *err = buffer_append(
-        content, (const uint8_t *)template_content, strlen(template_content)
+        content, (const uint8_t *) template_content,
+        strlen(template_content)
     );
 
     if (err) {
@@ -490,7 +522,10 @@ static error_t *init_profile_dottaignore(
     }
 
     if (opts->verbose && out) {
-        output_info(out, "Created .dottaignore for profile '%s'", opts->profile);
+        output_info(
+            out, "Created .dottaignore for profile '%s'",
+            opts->profile
+        );
     }
 
     free(dottaignore_path);
@@ -567,7 +602,9 @@ static error_t *create_commit(
         char *storage_path = NULL;
         path_prefix_t prefix;
 
-        derr = path_to_storage(file_path, opts->custom_prefix, &storage_path, &prefix);
+        derr = path_to_storage(
+            file_path, opts->custom_prefix, &storage_path, &prefix
+        );
         if (derr) {
             /* Skip if conversion fails (shouldn't happen at this point) */
             error_free(derr);
@@ -584,11 +621,11 @@ static error_t *create_commit(
 
     /* Build commit message context */
     commit_message_context_t ctx = {
-        .action = COMMIT_ACTION_ADD,
-        .profile = opts->profile,
-        .files = storage_paths->items,
-        .file_count = storage_paths->count,
-        .custom_msg = opts->message,
+        .action        = COMMIT_ACTION_ADD,
+        .profile       = opts->profile,
+        .files         = storage_paths->items,
+        .file_count    = storage_paths->count,
+        .custom_msg    = opts->message,
         .target_commit = NULL
     };
 
@@ -995,7 +1032,10 @@ cleanup:
 /**
  * Add command implementation
  */
-error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
+error_t *cmd_add(
+    git_repository *repo,
+    const cmd_add_options_t *opts
+) {
     CHECK_NULL(repo);
 
     error_t *err = validate_options(opts);
@@ -1098,13 +1138,12 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         /* Storage-path inputs (home/..., root/..., custom/...) — only include
          * paths that actually need elevation in the privilege check. */
         if (str_starts_with(file_path, "home/") ||
-            str_starts_with(file_path, "root/") ||
-            str_starts_with(file_path, "custom/")) {
+            str_starts_with(file_path, "root/") || str_starts_with(file_path, "custom/")) {
             bool needs_elevation = str_starts_with(file_path, "root/") ||
-                                  (str_starts_with(file_path, "custom/") && custom_needs_elevation);
-            if (!needs_elevation) {
-                continue;
-            }
+                (str_starts_with(file_path, "custom/") && custom_needs_elevation);
+
+            if (!needs_elevation) continue;
+
             storage_path = strdup(file_path);
             if (!storage_path) {
                 err = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
@@ -1139,7 +1178,9 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                 if (custom_needs_elevation) {
                     storage_path = strdup("custom/");
                     if (!storage_path) {
-                        err = ERROR(ERR_MEMORY, "Failed to allocate representative path");
+                        err = ERROR(
+                            ERR_MEMORY, "Failed to allocate representative path"
+                        );
                         goto cleanup;
                     }
                     preflight_allocated_paths[preflight_storage_count] = storage_path;
@@ -1173,7 +1214,8 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
      * If re-exec fails or user declines, returns error.
      */
     err = privilege_ensure_for_operation(
-        preflight_storage_paths, preflight_storage_count, "add", true, opts->argc, opts->argv, out
+        preflight_storage_paths, preflight_storage_count, "add",
+        true, opts->argc, opts->argv, out
     );
 
     if (err) {
@@ -1185,12 +1227,16 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
 
     /* Create ignore context */
     err = ignore_context_create(
-        repo, config, opts->profile, opts->exclude_patterns, opts->exclude_count, &ignore_ctx
+        repo, config, opts->profile, opts->exclude_patterns,
+        opts->exclude_count, &ignore_ctx
     );
     if (err) {
         /* Non-fatal: continue without ignore context */
         if (opts->verbose && out) {
-            output_warning(out, "Failed to create ignore context: %s", error_message(err));
+            output_warning(
+                out, "Failed to create ignore context: %s",
+                error_message(err)
+            );
         }
         error_free(err);
         err = NULL;
@@ -1214,7 +1260,10 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         if (err) {
             /* Hook failed - abort operation */
             if (hook_result && hook_result->output && hook_result->output[0] && out) {
-                output_print(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
+                output_print(
+                    out, OUTPUT_NORMAL, "Hook output:\n%s\n",
+                    hook_result->output
+                );
             }
             hook_result_free(hook_result);
             err = error_wrap(err, "Pre-add hook failed");
@@ -1245,7 +1294,10 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     }
 
     if (err) {
-        err = error_wrap(err, "Failed to prepare profile branch '%s'", opts->profile);
+        err = error_wrap(
+            err, "Failed to prepare profile branch '%s'",
+            opts->profile
+        );
         goto cleanup;
     }
 
@@ -1253,8 +1305,10 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     if (!profile_exists) {
         err = init_profile_dottaignore(wt, opts, out);
         if (err) {
-            err = error_wrap(err,
-                "Failed to initialize .dottaignore for profile '%s'", opts->profile);
+            err = error_wrap(
+                err, "Failed to initialize .dottaignore for profile '%s'",
+                opts->profile
+            );
             goto cleanup;
         }
     }
@@ -1273,8 +1327,7 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
 
         /* Check if input is a storage path */
         if (str_starts_with(file, "home/") ||
-            str_starts_with(file, "root/") ||
-            str_starts_with(file, "custom/")) {
+            str_starts_with(file, "root/") || str_starts_with(file, "custom/")) {
 
             /* Determine if we need custom prefix for this storage path */
             const char *prefix_for_conversion = NULL;
@@ -1284,9 +1337,11 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                 prefix_for_conversion = opts->custom_prefix;
 
                 if (!prefix_for_conversion || prefix_for_conversion[0] == '\0') {
-                    err = ERROR(ERR_INVALID_ARG, "Storage path '%s' requires --prefix flag\n"
-                                "Usage: dotta add -p %s --prefix /path/to/target %s",
-                                file, opts->profile, file);
+                    err = ERROR(
+                        ERR_INVALID_ARG, "Storage path '%s' requires --prefix flag\n"
+                        "Usage: dotta add -p %s --prefix /path/to/target %s",
+                        file, opts->profile, file
+                    );
                     goto cleanup;
                 }
             }
@@ -1296,7 +1351,10 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             char *fs_path = NULL;
             err = path_from_storage(file, prefix_for_conversion, &fs_path);
             if (err) {
-                err = error_wrap(err, "Failed to convert storage path '%s'", file);
+                err = error_wrap(
+                    err, "Failed to convert storage path '%s'",
+                    file
+                );
                 goto cleanup;
             }
 
@@ -1304,14 +1362,20 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             err = fs_make_absolute(fs_path, &absolute);
             free(fs_path);
             if (err) {
-                err = error_wrap(err, "Failed to resolve path '%s'", file);
+                err = error_wrap(
+                    err, "Failed to resolve path '%s'",
+                    file
+                );
                 goto cleanup;
             }
         } else {
             /* Regular filesystem path - normalize it */
             err = path_normalize_input(file, opts->custom_prefix, &absolute);
             if (err) {
-                err = error_wrap(err, "Failed to resolve path '%s'", file);
+                err = error_wrap(
+                    err, "Failed to resolve path '%s'",
+                    file
+                );
                 goto cleanup;
             }
         }
@@ -1331,7 +1395,10 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
 
             if (err) {
                 free(absolute);
-                err = error_wrap(err, "Failed to collect files from '%s'", file);
+                err = error_wrap(
+                    err, "Failed to collect files from '%s'",
+                    file
+                );
                 goto cleanup;
             }
 
@@ -1339,7 +1406,10 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             if (string_array_size(dir_files) == 0) {
                 string_array_free(dir_files);
                 if (opts->verbose && out) {
-                    output_info(out, "Skipped directory (all files excluded): %s", absolute);
+                    output_info(
+                        out, "Skipped directory (all files excluded): %s",
+                        absolute
+                    );
                 }
                 free(absolute);
                 continue;
@@ -1380,7 +1450,10 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
             /* Add to tracked directories list */
             if (tracked_dir_count >= tracked_dir_capacity) {
                 size_t new_capacity = tracked_dir_capacity == 0 ? 8 : tracked_dir_capacity * 2;
-                tracked_dir_t *new_dirs = realloc(tracked_dirs, new_capacity * sizeof(tracked_dir_t));
+                tracked_dir_t *new_dirs = realloc(
+                    tracked_dirs, new_capacity * sizeof(
+                        tracked_dir_t)
+                );
                 if (!new_dirs) {
                     free(storage_prefix);
                     free(absolute);
@@ -1426,8 +1499,10 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     /* Check if we have anything to add (files or directories) */
     if (string_array_size(all_files) == 0 && tracked_dir_count == 0) {
         if (opts->exclude_count > 0) {
-            err = ERROR(ERR_INVALID_ARG,
-                "No files or directories to add (all excluded by patterns)");
+            err = ERROR(
+                ERR_INVALID_ARG,
+                "No files or directories to add (all excluded by patterns)"
+            );
         } else {
             err = ERROR(ERR_INVALID_ARG, "No files or directories to add");
         }
@@ -1470,13 +1545,15 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
      *   2. Auto-encrypt patterns configured (files may match patterns)
      */
     bool needs_encryption = opts->encrypt || (config && config->encryption_enabled &&
-                            config->auto_encrypt_patterns && config->auto_encrypt_pattern_count > 0);
+        config->auto_encrypt_patterns && config->auto_encrypt_pattern_count > 0);
 
     if (needs_encryption) {
         if (!config || !config->encryption_enabled) {
-            err = ERROR(ERR_INVALID_ARG,
+            err = ERROR(
+                ERR_INVALID_ARG,
                 "Encryption requested (--encrypt) but encryption is not enabled in config.\n"
-                "Add to config.toml:\n\n  [encryption]\n  enabled = true");
+                "Add to config.toml:\n\n  [encryption]\n  enabled = true"
+            );
             goto cleanup;
         }
         key_mgr = keymanager_get_global(config);
@@ -1532,8 +1609,10 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         if (stat(dir->filesystem_path, &dir_stat) != 0) {
             /* Non-fatal: log warning and continue */
             if (opts->verbose && out) {
-                output_warning(out, "Failed to stat directory '%s': %s",
-                               dir->filesystem_path, strerror(errno));
+                output_warning(
+                    out, "Failed to stat directory '%s': %s",
+                    dir->filesystem_path, strerror(errno)
+                );
             }
             continue;
         }
@@ -1545,8 +1624,10 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         if (err) {
             /* Non-fatal: log warning and continue */
             if (opts->verbose && out) {
-                output_warning(out, "Failed to capture metadata for directory '%s': %s",
-                               dir->filesystem_path, error_message(err));
+                output_warning(
+                    out, "Failed to capture metadata for directory '%s': %s",
+                    dir->filesystem_path, error_message(err)
+                );
             }
             error_free(err);
             err = NULL;
@@ -1556,13 +1637,17 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         /* Verbose output before consuming the item */
         if (opts->verbose && out) {
             if (dir_item->owner || dir_item->group) {
-                output_info(out, "Captured directory metadata: %s (mode: %04o, owner: %s:%s)",
-                            dir->filesystem_path, dir_item->mode,
-                            dir_item->owner ? dir_item->owner : "?",
-                            dir_item->group ? dir_item->group : "?");
+                output_info(
+                    out, "Captured directory metadata: %s (mode: %04o, owner: %s:%s)",
+                    dir->filesystem_path, dir_item->mode,
+                    dir_item->owner ? dir_item->owner : "?",
+                    dir_item->group ? dir_item->group : "?"
+                );
             } else {
-                output_info(out, "Captured directory metadata: %s (mode: %04o)",
-                            dir->filesystem_path, dir_item->mode);
+                output_info(
+                    out, "Captured directory metadata: %s (mode: %04o)",
+                    dir->filesystem_path, dir_item->mode
+                );
             }
         }
 
@@ -1574,16 +1659,20 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         if (err) {
             /* Non-fatal: log warning and continue */
             if (opts->verbose && out) {
-                output_warning(out, "Failed to track directory '%s': %s",
-                               dir->filesystem_path, error_message(err));
+                output_warning(
+                    out, "Failed to track directory '%s': %s",
+                    dir->filesystem_path, error_message(err)
+                );
             }
             error_free(err);
             err = NULL;
         } else {
             dir_tracked_count++;
             if (opts->verbose && out) {
-                output_info(out, "Tracked directory: %s -> %s",
-                            dir->filesystem_path, dir->storage_path);
+                output_info(
+                    out, "Tracked directory: %s -> %s",
+                    dir->filesystem_path, dir->storage_path
+                );
             }
         }
     }
@@ -1619,8 +1708,10 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
 
     /* Verbose summary */
     if (opts->verbose && out && dir_tracked_count > 0) {
-        output_info(out, "Tracked %zu director%s for change detection",
-                    dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies");
+        output_info(
+            out, "Tracked %zu director%s for change detection",
+            dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies"
+        );
     }
 
     /* Create commit */
@@ -1662,8 +1753,14 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         if (enable_err) {
             /* Non-fatal: Git commit succeeded, user can manually enable later */
             if (out) {
-                output_warning(out, "Failed to auto-enable profile: %s", error_message(enable_err));
-                output_hint(out, "Run 'dotta profile enable %s' to enable manually", opts->profile);
+                output_warning(
+                    out, "Failed to auto-enable profile: %s",
+                    error_message(enable_err)
+                );
+                output_hint(
+                    out, "Run 'dotta profile enable %s' to enable manually",
+                    opts->profile
+                );
             }
             error_free(enable_err);
             manifest_updated = false;
@@ -1683,9 +1780,15 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         if (manifest_err) {
             /* Non-fatal: Git commit succeeded */
             if (out) {
-                output_warning(out, "Failed to update manifest: %s", error_message(manifest_err));
+                output_warning(
+                    out, "Failed to update manifest: %s",
+                    error_message(manifest_err)
+                );
                 output_info(out, "Files committed to Git successfully");
-                output_hint(out, "Run 'dotta profile enable %s' to sync manifest", opts->profile);
+                output_hint(
+                    out, "Run 'dotta profile enable %s' to sync manifest",
+                    opts->profile
+                );
             }
             error_free(manifest_err);
             manifest_updated = false;
@@ -1704,9 +1807,15 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
         if (hook_err) {
             /* Hook failed - warn but don't abort (files already added) */
             if (out) {
-                output_warning(out, "Post-add hook failed: %s", error_message(hook_err));
+                output_warning(
+                    out, "Post-add hook failed: %s",
+                    error_message(hook_err)
+                );
                 if (hook_result && hook_result->output && hook_result->output[0]) {
-                    output_print(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
+                    output_print(
+                        out, OUTPUT_NORMAL, "Hook output:\n%s\n",
+                        hook_result->output
+                    );
                 }
             }
             error_free(hook_err);
@@ -1718,26 +1827,35 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
     if ((added_count > 0 || dir_tracked_count > 0) && out) {
         /* Primary success message */
         if (added_count > 0) {
-            output_success(out, "Added %zu file%s to profile '%s'",
-                           added_count, added_count == 1 ? "" : "s", opts->profile);
+            output_success(
+                out, "Added %zu file%s to profile '%s'",
+                added_count, added_count == 1 ? "" : "s", opts->profile
+            );
         } else {
             /* Directory-only add */
-            output_success(out, "Tracking %zu director%s in profile '%s'", dir_tracked_count,
-                           dir_tracked_count == 1 ? "y" : "ies", opts->profile);
+            output_success(
+                out, "Tracking %zu director%s in profile '%s'",
+                dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies", opts->profile
+            );
         }
-    
+
         if (profile_was_new) {
-            output_success(out, "Profile '%s' created and enabled", opts->profile);
+            output_success(
+                out, "Profile '%s' created and enabled",
+                opts->profile
+            );
         }
-    
+
         /* Show directory tracking info only when files were also added */
         if (added_count > 0 && dir_tracked_count > 0) {
-            output_info(out, "Tracking %zu director%s for change detection",
-                        dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies");
+            output_info(
+                out, "Tracking %zu director%s for change detection",
+                dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies"
+            );
         }
-    
+
         output_newline(out);
-    
+
         /* Manifest status feedback */
         if (manifest_updated) {
             if (added_count > 0) {
@@ -1745,38 +1863,52 @@ error_t *cmd_add(git_repository *repo, const cmd_add_options_t *opts) {
                 if (profile_was_new) {
                     /* New profile - show sync results with precedence awareness */
                     if (manifest_synced_count == added_count) {
-                        output_info(out, "Manifest updated (%zu file%s marked as deployed)",
-                                    manifest_synced_count, manifest_synced_count == 1 ? "" : "s");
+                        output_info(
+                            out, "Manifest updated (%zu file%s marked as deployed)",
+                            manifest_synced_count, manifest_synced_count == 1 ? "" : "s"
+                        );
                     } else {
-                        output_info(out, "Manifest updated (%zu/%zu file%s marked as deployed)",
-                                    manifest_synced_count, added_count, added_count == 1 ? "" : "s");
-    
+                        output_info(
+                            out, "Manifest updated (%zu/%zu file%s marked as deployed)",
+                            manifest_synced_count, added_count, added_count == 1 ? "" : "s"
+                        );
+
                         if (manifest_synced_count < added_count) {
                             size_t skipped = added_count - manifest_synced_count;
-                            output_info(out, "Note: %zu file%s overridden by higher-precedence profiles",
-                                        skipped, skipped == 1 ? "" : "s");
+                            output_info(
+                                out, "Note: %zu file%s overridden by higher-precedence profiles",
+                                skipped, skipped == 1 ? "" : "s"
+                            );
                         }
                     }
                 } else {
                     /* Existing enabled profile */
                     if (manifest_synced_count == added_count) {
-                        output_info(out, "Manifest updated (%zu file%s marked as deployed)",
-                                    manifest_synced_count, manifest_synced_count == 1 ? "" : "s");
+                        output_info(
+                            out, "Manifest updated (%zu file%s marked as deployed)",
+                            manifest_synced_count, manifest_synced_count == 1 ? "" : "s"
+                        );
                     } else {
-                        output_info(out, "Manifest updated (%zu/%zu file%s marked as deployed)",
-                                    manifest_synced_count, added_count, added_count == 1 ? "" : "s");
+                        output_info(
+                            out, "Manifest updated (%zu/%zu file%s marked as deployed)",
+                            manifest_synced_count, added_count, added_count == 1 ? "" : "s"
+                        );
                         if (manifest_synced_count < added_count) {
                             size_t skipped = added_count - manifest_synced_count;
-                            output_info(out, "Note: %zu file%s overridden by higher-precedence profiles",
-                                        skipped, skipped == 1 ? "" : "s");
+                            output_info(
+                                out, "Note: %zu file%s overridden by higher-precedence profiles",
+                                skipped, skipped == 1 ? "" : "s"
+                            );
                         }
                     }
                     output_hint(out, "Files captured from filesystem (already deployed)");
                 }
             } else {
                 /* Directory-only add */
-                output_info(out, "Manifest updated (%zu director%s synced)",
-                            dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies");
+                output_info(
+                    out, "Manifest updated (%zu director%s synced)",
+                    dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies"
+                );
             }
             output_hint(out, "Run 'dotta status' to verify");
         } else {

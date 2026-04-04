@@ -34,7 +34,7 @@ static bool extract_string_array(toml_datum_t arr, char ***out_items, size_t *ou
         return true;
     }
 
-    char **items = malloc((size_t)size * sizeof(char *));
+    char **items = malloc((size_t) size * sizeof(char *));
     if (!items) {
         return false;
     }
@@ -60,7 +60,7 @@ static bool extract_string_array(toml_datum_t arr, char ***out_items, size_t *ou
     }
 
     *out_items = items;
-    *out_count = (size_t)size;
+    *out_count = (size_t) size;
     return true;
 }
 
@@ -106,11 +106,15 @@ static error_t *validate_known_keys(
         }
         if (!recognized) {
             if (section_name) {
-                return ERROR(ERR_INVALID_ARG,
-                    "Unknown key '%s' in [%s]", table.u.tab.key[i], section_name);
+                return ERROR(
+                    ERR_INVALID_ARG, "Unknown key '%s' in [%s]",
+                    table.u.tab.key[i], section_name
+                );
             }
-            return ERROR(ERR_INVALID_ARG,
-                "Unknown section [%s]", table.u.tab.key[i]);
+            return ERROR(
+                ERR_INVALID_ARG, "Unknown section [%s]",
+                table.u.tab.key[i]
+            );
         }
     }
     return NULL;
@@ -144,8 +148,8 @@ dotta_config_t *config_create_default(void) {
     /* [ignore] defaults */
     config->ignore_patterns = NULL;
     config->ignore_pattern_count = 0;
-    config->ignore_file = strdup(DEFAULT_IGNORE_FILE);  /* .dottaignore */
-    config->respect_gitignore = true;  /* Default: respect .gitignore */
+    config->ignore_file = strdup(DEFAULT_IGNORE_FILE); /* .dottaignore */
+    config->respect_gitignore = true;                  /* Default: respect .gitignore */
 
     config->verbosity = strdup("normal");
     config->color = strdup("auto");
@@ -164,8 +168,8 @@ dotta_config_t *config_create_default(void) {
     );
 
     /* [sync] defaults */
-    config->auto_pull = true;  /* Default: auto-pull when remote ahead */
-    config->diverged_strategy = strdup("warn");  /* Default: warn on divergence */
+    config->auto_pull = true;                   /* Default: auto-pull when remote ahead */
+    config->diverged_strategy = strdup("warn"); /* Default: warn on divergence */
 
     /* [encryption] defaults */
     config->encryption_enabled = false;        /* Default: disabled (opt-in) */
@@ -242,7 +246,7 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
     error_t *err = NULL;
     char *path = NULL;
     dotta_config_t *config = NULL;
-    toml_result_t result = {0};
+    toml_result_t result = { 0 };
     bool toml_needs_free = false;
 
     /* Determine config path */
@@ -287,7 +291,8 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
 
     /* Validate top-level sections */
     static const char *known[] = {
-        "core", "hooks", "security", "ignore", "output", "commit", "sync", "encryption"
+        "core",   "hooks",  "security", "ignore",
+        "output", "commit", "sync",     "encryption"
     };
     err = validate_known_keys(result.toptab, NULL, known, 8);
     if (err) goto cleanup;
@@ -295,7 +300,7 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
     /* Extract [core] section */
     toml_datum_t core = toml_get(result.toptab, "core");
     if (core.type == TOML_TABLE) {
-        static const char *known[] = {"repo_dir", "strict_mode", "auto_detect_new_files"};
+        static const char *known[] = { "repo_dir", "strict_mode", "auto_detect_new_files" };
         err = validate_known_keys(core, "core", known, 3);
         if (err) goto cleanup;
 
@@ -320,8 +325,8 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
     toml_datum_t hooks = toml_get(result.toptab, "hooks");
     if (hooks.type == TOML_TABLE) {
         static const char *known[] = {
-            "hooks_dir", "timeout", "pre_apply", "post_apply", "pre_add", "post_add",
-            "pre_remove", "post_remove", "pre_update", "post_update"
+            "hooks_dir", "timeout",    "pre_apply",   "post_apply", "pre_add",
+            "post_add",  "pre_remove", "post_remove", "pre_update", "post_update"
         };
         err = validate_known_keys(hooks, "hooks", known, 10);
         if (err) goto cleanup;
@@ -335,12 +340,14 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
         toml_datum_t hook_timeout = toml_get(hooks, "timeout");
         if (hook_timeout.type == TOML_INT64) {
             if (hook_timeout.u.int64 < 0 || hook_timeout.u.int64 > INT32_MAX) {
-                err = ERROR(ERR_INVALID_ARG,
+                err = ERROR(
+                    ERR_INVALID_ARG,
                     "Invalid timeout: %lld (must be between 0 and %d)",
-                    (long long)hook_timeout.u.int64, INT32_MAX);
+                    (long long) hook_timeout.u.int64, INT32_MAX
+                );
                 goto cleanup;
             }
-            config->hook_timeout = (int32_t)hook_timeout.u.int64;
+            config->hook_timeout = (int32_t) hook_timeout.u.int64;
         }
 
         toml_datum_t pre_apply = toml_get(hooks, "pre_apply");
@@ -387,7 +394,7 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
     /* Extract [security] section */
     toml_datum_t security = toml_get(result.toptab, "security");
     if (security.type == TOML_TABLE) {
-        static const char *known[] = {"confirm_destructive", "confirm_new_files"};
+        static const char *known[] = { "confirm_destructive", "confirm_new_files" };
         err = validate_known_keys(security, "security", known, 2);
         if (err) goto cleanup;
 
@@ -405,7 +412,7 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
     /* Extract [ignore] section */
     toml_datum_t ignore = toml_get(result.toptab, "ignore");
     if (ignore.type == TOML_TABLE) {
-        static const char *known[] = {"file", "patterns", "respect_gitignore"};
+        static const char *known[] = { "file", "patterns", "respect_gitignore" };
         err = validate_known_keys(ignore, "ignore", known, 3);
         if (err) goto cleanup;
 
@@ -427,10 +434,14 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
                 config->ignore_patterns = NULL;
                 config->ignore_pattern_count = 0;
             }
-            if (!extract_string_array(patterns, &config->ignore_patterns,
-                                      &config->ignore_pattern_count)) {
-                err = ERROR(ERR_INVALID_ARG,
-                    "Invalid ignore patterns: all elements must be strings");
+            if (!extract_string_array(
+                patterns, &config->ignore_patterns,
+                &config->ignore_pattern_count
+                )) {
+                err = ERROR(
+                    ERR_INVALID_ARG,
+                    "Invalid ignore patterns: all elements must be strings"
+                );
                 goto cleanup;
             }
         }
@@ -444,7 +455,7 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
     /* Extract [output] section */
     toml_datum_t output = toml_get(result.toptab, "output");
     if (output.type == TOML_TABLE) {
-        static const char *known[] = {"verbosity", "color"};
+        static const char *known[] = { "verbosity", "color" };
         err = validate_known_keys(output, "output", known, 2);
         if (err) goto cleanup;
 
@@ -464,7 +475,7 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
     /* Extract [commit] section */
     toml_datum_t commit = toml_get(result.toptab, "commit");
     if (commit.type == TOML_TABLE) {
-        static const char *known[] = {"title", "body"};
+        static const char *known[] = { "title", "body" };
         err = validate_known_keys(commit, "commit", known, 2);
         if (err) goto cleanup;
 
@@ -484,7 +495,7 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
     /* Extract [sync] section */
     toml_datum_t sync = toml_get(result.toptab, "sync");
     if (sync.type == TOML_TABLE) {
-        static const char *known[] = {"auto_pull", "diverged_strategy"};
+        static const char *known[] = { "auto_pull", "diverged_strategy" };
         err = validate_known_keys(sync, "sync", known, 2);
         if (err) goto cleanup;
 
@@ -527,10 +538,14 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
                 config->auto_encrypt_patterns = NULL;
                 config->auto_encrypt_pattern_count = 0;
             }
-            if (!extract_string_array(auto_encrypt, &config->auto_encrypt_patterns,
-                                      &config->auto_encrypt_pattern_count)) {
-                err = ERROR(ERR_INVALID_ARG,
-                    "Invalid auto_encrypt patterns: all elements must be strings");
+            if (!extract_string_array(
+                auto_encrypt, &config->auto_encrypt_patterns,
+                &config->auto_encrypt_pattern_count
+                )) {
+                err = ERROR(
+                    ERR_INVALID_ARG,
+                    "Invalid auto_encrypt patterns: all elements must be strings"
+                );
                 goto cleanup;
             }
         }
@@ -538,34 +553,40 @@ error_t *config_load(const char *config_path, dotta_config_t **out) {
         toml_datum_t opslimit = toml_get(encryption, "opslimit");
         if (opslimit.type == TOML_INT64) {
             if (opslimit.u.int64 < 1) {
-                err = ERROR(ERR_INVALID_ARG,
+                err = ERROR(
+                    ERR_INVALID_ARG,
                     "Invalid opslimit: %lld (must be >= 1)",
-                    (long long)opslimit.u.int64);
+                    (long long) opslimit.u.int64
+                );
                 goto cleanup;
             }
-            config->encryption_opslimit = (uint64_t)opslimit.u.int64;
+            config->encryption_opslimit = (uint64_t) opslimit.u.int64;
         }
 
         toml_datum_t memlimit = toml_get(encryption, "memlimit");
         if (memlimit.type == TOML_INT64) {
             if (memlimit.u.int64 < 0) {
-                err = ERROR(ERR_INVALID_ARG,
+                err = ERROR(
+                    ERR_INVALID_ARG,
                     "Invalid memlimit: %lld (must be >= 0)",
-                    (long long)memlimit.u.int64);
+                    (long long) memlimit.u.int64
+                );
                 goto cleanup;
             }
-            config->encryption_memlimit = (size_t)memlimit.u.int64;
+            config->encryption_memlimit = (size_t) memlimit.u.int64;
         }
 
         toml_datum_t session_timeout = toml_get(encryption, "session_timeout");
         if (session_timeout.type == TOML_INT64) {
             if (session_timeout.u.int64 < -1 || session_timeout.u.int64 > INT32_MAX) {
-                err = ERROR(ERR_INVALID_ARG,
+                err = ERROR(
+                    ERR_INVALID_ARG,
                     "Invalid session_timeout: %lld (must be -1, 0, or positive seconds)",
-                    (long long)session_timeout.u.int64);
+                    (long long) session_timeout.u.int64
+                );
                 goto cleanup;
             }
-            config->session_timeout = (int32_t)session_timeout.u.int64;
+            config->session_timeout = (int32_t) session_timeout.u.int64;
         }
     }
 
@@ -596,7 +617,9 @@ error_t *config_validate(const dotta_config_t *config) {
 
     /* Validate repo_dir */
     if (!config->repo_dir || config->repo_dir[0] == '\0') {
-        return ERROR(ERR_INVALID_ARG, "Invalid repo_dir: must be a non-empty path");
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid repo_dir: must be a non-empty path"
+        );
     }
 
     /* Validate verbosity */
@@ -604,9 +627,11 @@ error_t *config_validate(const dotta_config_t *config) {
         if (strcmp(config->verbosity, "quiet") != 0 &&
             strcmp(config->verbosity, "normal") != 0 &&
             strcmp(config->verbosity, "verbose") != 0) {
-            return ERROR(ERR_INVALID_ARG,
+            return ERROR(
+                ERR_INVALID_ARG,
                 "Invalid verbosity: %s (must be quiet/normal/verbose)",
-                config->verbosity);
+                config->verbosity
+            );
         }
     }
 
@@ -615,8 +640,11 @@ error_t *config_validate(const dotta_config_t *config) {
         if (strcmp(config->color, "auto") != 0 &&
             strcmp(config->color, "always") != 0 &&
             strcmp(config->color, "never") != 0) {
-            return ERROR(ERR_INVALID_ARG,
-                "Invalid color: %s (must be auto/always/never)", config->color);
+            return ERROR(
+                ERR_INVALID_ARG,
+                "Invalid color: %s (must be auto/always/never)",
+                config->color
+            );
         }
     }
 
@@ -627,44 +655,60 @@ error_t *config_validate(const dotta_config_t *config) {
             strcmp(config->diverged_strategy, "merge") != 0 &&
             strcmp(config->diverged_strategy, "ours") != 0 &&
             strcmp(config->diverged_strategy, "theirs") != 0) {
-            return ERROR(ERR_INVALID_ARG,
-                "Invalid diverged_strategy: %s (must be warn/rebase/merge/ours/theirs)",
-                config->diverged_strategy);
+            return ERROR(
+                ERR_INVALID_ARG,
+                "Invalid diverged_strategy: %s "
+                "(must be warn/rebase/merge/ours/theirs)",
+                config->diverged_strategy
+            );
         }
     }
 
     /* Validate hook_timeout */
     if (config->hook_timeout < 0) {
-        return ERROR(ERR_INVALID_ARG,
-            "Invalid hook_timeout: %d (must be >= 0, where 0 means no timeout)",
-            config->hook_timeout);
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Invalid hook_timeout: %d "
+            "(must be >= 0, where 0 means no timeout)",
+            config->hook_timeout
+        );
     }
 
     /* Validate hooks_dir */
     if (config->hooks_dir && config->hooks_dir[0] == '\0') {
-        return ERROR(ERR_INVALID_ARG,
-            "Invalid hooks_dir: empty string (must be a valid path or omitted for default)");
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Invalid hooks_dir: empty string "
+            "(must be a valid path or omitted for default)"
+        );
     }
 
     /* Validate encryption_opslimit */
     if (config->encryption_opslimit == 0) {
-        return ERROR(ERR_INVALID_ARG, "Invalid opslimit: 0 (must be >= 1)");
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid opslimit: 0 (must be >= 1)"
+        );
     }
 
     /* Validate session_timeout */
     if (config->session_timeout < -1) {
-        return ERROR(ERR_INVALID_ARG,
-            "Invalid session_timeout: %d (must be -1, 0, or positive seconds)",
-            config->session_timeout);
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Invalid session_timeout: %d "
+            "(must be -1, 0, or positive seconds)",
+            config->session_timeout
+        );
     }
 
     /* Validate encryption_memlimit (in MB, converted to bytes downstream).
      * Any non-zero size_t value >= 1 meets the 1 MB minimum, so we only
      * need to guard against overflow when converting to bytes. */
     if (config->encryption_memlimit > SIZE_MAX / (1024 * 1024)) {
-        return ERROR(ERR_INVALID_ARG,
+        return ERROR(
+            ERR_INVALID_ARG,
             "Invalid encryption memlimit: %zu MB (value too large)",
-            config->encryption_memlimit);
+            config->encryption_memlimit
+        );
     }
 
     return NULL;

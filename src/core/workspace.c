@@ -97,10 +97,10 @@ struct workspace {
     hashmap_t *metadata_cache;       /* Owned - maps profile_name -> metadata_t* */
 
     /* Unified metadata view with profile precedence applied */
-    hashmap_t *merged_metadata;      /* Owned map: key -> index+1 into merged_entries (as void*) */
-    merged_metadata_entry_t *merged_entries;  /* Owned array of entries */
-    size_t merged_count;             /* Number of merged entries */
-    size_t merged_capacity;          /* Allocated capacity of merged array */
+    hashmap_t *merged_metadata;              /* Owned map: key -> index+1 into merged_entries (as void*) */
+    merged_metadata_entry_t *merged_entries; /* Owned array of entries */
+    size_t merged_count;                     /* Number of merged entries */
+    size_t merged_capacity;                  /* Allocated capacity of merged array */
 
     /* Divergence tracking */
     workspace_item_t *diverged;      /* Array of diverged items (files and directories) */
@@ -115,9 +115,9 @@ struct workspace {
     const hashmap_t *repaired_paths; /* From manifest_repair_stale: path -> old_blob_oid (borrowed) */
 
     /* Stat cache updates (accumulated during divergence analysis) */
-    stat_cache_update_t *stat_updates;  /* Pending slow-path updates (owned) */
-    size_t stat_update_count;        /* Number of pending updates */
-    size_t stat_update_capacity;     /* Allocated capacity of updates array */
+    stat_cache_update_t *stat_updates; /* Pending slow-path updates (owned) */
+    size_t stat_update_count;          /* Number of pending updates */
+    size_t stat_update_capacity;       /* Allocated capacity of updates array */
 
     /* Status cache */
     workspace_status_t status;       /* Cached cleanliness assessment */
@@ -160,7 +160,7 @@ static const merged_metadata_entry_t *merged_metadata_lookup(
     if (!ws->merged_metadata) return NULL;
     void *idx_ptr = hashmap_get(ws->merged_metadata, key);
     if (!idx_ptr) return NULL;
-    size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+    size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
     return &ws->merged_entries[idx];
 }
 
@@ -182,9 +182,9 @@ static error_t *workspace_create_empty(
     }
 
     ws->repo = repo;
-    ws->profiles = profiles;  /* Borrowed reference */
+    ws->profiles = profiles;                /* Borrowed reference */
 
-    ws->profile_index = hashmap_create(32);  /* Initial capacity for profiles */
+    ws->profile_index = hashmap_create(32); /* Initial capacity for profiles */
     if (!ws->profile_index) {
         free(ws);
         return ERROR(ERR_MEMORY, "Failed to create profile index");
@@ -343,8 +343,10 @@ static error_t *workspace_add_diverged(
     /* Grow array if needed */
     if (ws->diverged_count >= ws->diverged_capacity) {
         size_t new_capacity = ws->diverged_capacity == 0 ? 32 : ws->diverged_capacity * 2;
-        workspace_item_t *new_diverged = realloc(ws->diverged,
-                                                 new_capacity * sizeof(workspace_item_t));
+        workspace_item_t *new_diverged = realloc(
+            ws->diverged,
+            new_capacity * sizeof(workspace_item_t)
+        );
         if (!new_diverged) {
             return ERROR(ERR_MEMORY, "Failed to grow diverged array");
         }
@@ -397,8 +399,9 @@ static error_t *workspace_add_diverged(
     }
 
     /* Store array index in hashmap for O(1) lookup */
-    error_t *err = hashmap_set(ws->diverged_index, entry->filesystem_path,
-                              (void *)(uintptr_t)(ws->diverged_count + 1));
+    error_t *err = hashmap_set(
+        ws->diverged_index, entry->filesystem_path, (void *) (uintptr_t) (ws->diverged_count + 1)
+    );
     if (err) {
         free(entry->filesystem_path);
         free(entry->storage_path);
@@ -431,8 +434,10 @@ static void workspace_record_stat_update(
 ) {
     if (ws->stat_update_count >= ws->stat_update_capacity) {
         size_t new_cap = ws->stat_update_capacity ? ws->stat_update_capacity * 2 : 16;
-        stat_cache_update_t *new_arr = realloc(ws->stat_updates,
-                                               new_cap * sizeof(stat_cache_update_t));
+        stat_cache_update_t *new_arr = realloc(
+            ws->stat_updates,
+            new_cap * sizeof(stat_cache_update_t)
+        );
         if (!new_arr) return;
         ws->stat_updates = new_arr;
         ws->stat_update_capacity = new_cap;
@@ -492,7 +497,10 @@ static error_t *analyze_file_divergence(
             on_filesystem = false;
             memset(&initial_stat, 0, sizeof(initial_stat));
         } else {
-            return ERROR(ERR_FS, "Failed to stat '%s': %s", fs_path, strerror(errno));
+            return ERROR(
+                ERR_FS, "Failed to stat '%s': %s",
+                fs_path, strerror(errno)
+            );
         }
     } else {
         on_filesystem = true;
@@ -524,8 +532,10 @@ static error_t *analyze_file_divergence(
         /* Parse blob_oid from VWD cache (defensive validation) */
         git_oid blob_oid;
         if (git_oid_fromstr(&blob_oid, manifest_entry->blob_oid) != 0) {
-            return ERROR(ERR_INTERNAL, "Invalid blob_oid '%s' for '%s' (database corruption?)",
-                         manifest_entry->blob_oid, fs_path);
+            return ERROR(
+                ERR_INTERNAL, "Invalid blob_oid '%s' for '%s' "
+                "(database corruption?)", manifest_entry->blob_oid, fs_path
+            );
         }
 
         /* Extract expected filemode from VWD cache type field
@@ -558,9 +568,9 @@ static error_t *analyze_file_divergence(
          */
         const stat_cache_t *cached = &manifest_entry->stat_cache;
         if (cached->mtime != 0
-            && cached->mtime == (int64_t)initial_stat.st_mtime
-            && cached->size  == (int64_t)initial_stat.st_size
-            && cached->ino   == (uint64_t)initial_stat.st_ino) {
+            && cached->mtime == (int64_t) initial_stat.st_mtime
+            && cached->size == (int64_t) initial_stat.st_size
+            && cached->ino == (uint64_t) initial_stat.st_ino) {
             cmp_result = CMP_EQUAL;
             file_stat = initial_stat;
         } else {
@@ -631,9 +641,10 @@ static error_t *analyze_file_divergence(
             case CMP_TYPE_DIFF:
                 /* Type differs (file vs symlink) - this is a blocking condition.
                  * Return immediately with TYPE divergence. */
-                return workspace_add_diverged(ws, fs_path, storage_path, profile, NULL,
-                                              WORKSPACE_STATE_DEPLOYED, DIVERGENCE_TYPE,
-                                              WORKSPACE_ITEM_FILE, on_filesystem, true, false);
+                return workspace_add_diverged(
+                    ws, fs_path, storage_path, profile, NULL, WORKSPACE_STATE_DEPLOYED,
+                    DIVERGENCE_TYPE, WORKSPACE_ITEM_FILE, on_filesystem, true, false
+                );
 
             case CMP_MISSING:
                 /* File was deleted during analysis (rare edge case).
@@ -781,7 +792,7 @@ static error_t *analyze_file_divergence(
          * Only check when content diverges (file ≠ new expected blob). If content
          * matches new blob, there's no divergence and no need for STALE flag.
          */
-        const char *old_blob_hex = hashmap_get((hashmap_t *)ws->repaired_paths, fs_path);
+        const char *old_blob_hex = hashmap_get((hashmap_t *) ws->repaired_paths, fs_path);
         if (old_blob_hex) {
             git_oid old_blob_oid;
             if (git_oid_fromstr(&old_blob_oid, old_blob_hex) == 0) {
@@ -855,9 +866,10 @@ static error_t *analyze_file_divergence(
 
     /* Add to workspace if there's any state change or divergence */
     if (state != WORKSPACE_STATE_DEPLOYED || divergence != DIVERGENCE_NONE || profile_changed) {
-        error_t *err = workspace_add_diverged(ws, fs_path, storage_path, profile, old_profile,
-                                              state, divergence, WORKSPACE_ITEM_FILE,
-                                              on_filesystem, true, profile_changed);
+        error_t *err = workspace_add_diverged(
+            ws, fs_path, storage_path, profile, old_profile, state,
+            divergence, WORKSPACE_ITEM_FILE, on_filesystem, true, profile_changed
+        );
         if (err) {
             /* On error, free old_profile (ownership only transfers on success) */
             free(old_profile);
@@ -1186,7 +1198,7 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
         void *idx_ptr = hashmap_get(ws->manifest->index, fs_path);
         file_entry_t *manifest_entry = NULL;
         if (idx_ptr) {
-            size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+            size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
             manifest_entry = &ws->manifest->entries[idx];
         }
 
@@ -1207,8 +1219,9 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
              * Orphaned: File out of scope for other reasons (profile disabled,
              * branch deleted, etc.). Standard orphan handling applies.
              */
-            bool is_released = (ws->released_paths && hashmap_get(ws->released_paths, fs_path) != NULL) ||
-                               (state_entry->state && strcmp(state_entry->state, STATE_RELEASED) == 0);
+            bool is_released =
+                (ws->released_paths && hashmap_get(ws->released_paths, fs_path) != NULL) ||
+                (state_entry->state && strcmp(state_entry->state, STATE_RELEASED) == 0);
 
             bool profile_enabled = (hashmap_get(ws->profile_index, profile) != NULL);
 
@@ -1219,7 +1232,7 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
                  * It will be left on filesystem and state entry cleaned up.
                  * Check filesystem presence only for display purposes.
                  */
-                bool on_filesystem = (lstat(fs_path, &(struct stat){0}) == 0);
+                bool on_filesystem = (lstat(fs_path, &(struct stat){ 0 }) == 0);
 
                 err = workspace_add_diverged(
                     ws,
@@ -1611,8 +1624,9 @@ static error_t *scan_directory_for_untracked(
              *    excluded from manifest but already have diverged entries —
              *    adding them as untracked would create duplicates.
              */
-            bool already_tracked = (hashmap_get(ws->manifest->index, full_path) != NULL) ||
-                                   (hashmap_get(ws->diverged_index, full_path) != NULL);
+            bool already_tracked =
+                (hashmap_get(ws->manifest->index, full_path) != NULL) ||
+                (hashmap_get(ws->diverged_index, full_path) != NULL);
 
             if (!already_tracked) {
                 /* This is an untracked file! */
@@ -1656,8 +1670,10 @@ static error_t *scan_directory_for_untracked(
     if (errno != 0) {
         int saved_errno = errno;
         closedir(dir);
-        return ERROR(ERR_FS, "Error reading directory '%s': %s", dir_path,
-                     strerror(saved_errno));
+        return ERROR(
+            ERR_FS, "Error reading directory '%s': %s", dir_path,
+            strerror(saved_errno)
+        );
     }
 
     closedir(dir);
@@ -1692,8 +1708,10 @@ static error_t *analyze_untracked_files(
         size_t dir_count = 0;
         err = state_get_directories_by_profile(ws->state, profile_name, &directories, &dir_count);
         if (err) {
-            fprintf(stderr, "warning: failed to load directories for profile '%s': %s\n",
-                    profile_name, err->message);
+            fprintf(
+                stderr, "warning: failed to load directories for profile '%s': %s\n",
+                profile_name, err->message
+            );
             error_free(err);
             err = NULL;
             continue;
@@ -1718,8 +1736,10 @@ static error_t *analyze_untracked_files(
 
         if (err) {
             /* Non-fatal: continue without ignore filtering */
-            fprintf(stderr, "warning: failed to load ignore patterns for profile '%s': %s\n",
-                    profile_name, err->message);
+            fprintf(
+                stderr, "warning: failed to load ignore patterns for profile '%s': %s\n",
+                profile_name, err->message
+            );
             error_free(err);
             err = NULL;
             ignore_ctx = NULL;
@@ -1741,8 +1761,8 @@ static error_t *analyze_untracked_files(
              * This ensures untracked file detection only applies to active directories.
              */
             if (dir_entry->state && (strcmp(dir_entry->state, STATE_INACTIVE) == 0 ||
-                                     strcmp(dir_entry->state, STATE_DELETED) == 0 ||
-                                     strcmp(dir_entry->state, STATE_RELEASED) == 0)) {
+                strcmp(dir_entry->state, STATE_DELETED) == 0 ||
+                strcmp(dir_entry->state, STATE_RELEASED) == 0)) {
                 continue;  /* Skip silently - these will be handled by orphan detection */
             }
 
@@ -1784,8 +1804,10 @@ static error_t *analyze_untracked_files(
 
             if (err) {
                 /* Non-fatal: continue with other directories */
-                fprintf(stderr, "warning: failed to scan directory '%s' in profile '%s': %s\n",
-                        filesystem_path, profile_name, err->message);
+                fprintf(
+                    stderr, "warning: failed to scan directory '%s' in profile '%s': %s\n",
+                    filesystem_path, profile_name, err->message
+                );
                 error_free(err);
                 err = NULL;
             }
@@ -1847,8 +1869,8 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
          * This mirrors file handling pattern and the untracked directory scan skip.
          */
         if (dir_entry->state && (strcmp(dir_entry->state, STATE_INACTIVE) == 0 ||
-                                 strcmp(dir_entry->state, STATE_DELETED) == 0 ||
-                                 strcmp(dir_entry->state, STATE_RELEASED) == 0)) {
+            strcmp(dir_entry->state, STATE_DELETED) == 0 ||
+            strcmp(dir_entry->state, STATE_RELEASED) == 0)) {
             continue;  /* Skip silently - orphan detection will handle this */
         }
 
@@ -1896,15 +1918,19 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
 
                 if (err) {
                     state_free_all_directories(directories, dir_count);
-                    return error_wrap(err, "Failed to record deleted directory '%s'",
-                                      filesystem_path);
+                    return error_wrap(
+                        err, "Failed to record deleted directory '%s'",
+                        filesystem_path
+                    );
                 }
                 continue;  /* Successfully recorded, check next directory */
             }
 
             /* Stat failed for other reason: race condition or permission issue */
-            fprintf(stderr, "warning: failed to stat directory '%s': %s\n",
-                    filesystem_path, strerror(errno));
+            fprintf(
+                stderr, "warning: failed to stat directory '%s': %s\n",
+                filesystem_path, strerror(errno)
+            );
             continue;  /* Non-fatal, skip this directory */
         }
 
@@ -1936,8 +1962,10 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
 
             if (err) {
                 state_free_all_directories(directories, dir_count);
-                return error_wrap(err, "Failed to record type change for directory '%s'",
-                                  filesystem_path);
+                return error_wrap(
+                    err, "Failed to record type change for directory '%s'",
+                    filesystem_path
+                );
             }
             continue;  /* Recorded, move to next directory */
         }
@@ -1957,8 +1985,10 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
 
         if (err) {
             state_free_all_directories(directories, dir_count);
-            return error_wrap(err, "Failed to check metadata for directory '%s'",
-                              filesystem_path);
+            return error_wrap(
+                err, "Failed to check metadata for directory '%s'",
+                filesystem_path
+            );
         }
 
         /* Record divergence if any metadata differs */
@@ -1984,8 +2014,10 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
 
             if (err) {
                 state_free_all_directories(directories, dir_count);
-                return error_wrap(err, "Failed to record directory metadata divergence for '%s'",
-                                  filesystem_path);
+                return error_wrap(
+                    err, "Failed to record directory metadata divergence for '%s'",
+                    filesystem_path
+                );
             }
         }
     }
@@ -2067,11 +2099,13 @@ static error_t *analyze_encryption_policy_mismatch(
         bool is_encrypted = false;
 
         /* Lazy-load tree entry for encryption magic header check */
-        err = file_entry_ensure_tree_entry((file_entry_t *)manifest_entry, ws->repo);
+        err = file_entry_ensure_tree_entry((file_entry_t *) manifest_entry, ws->repo);
         if (err) {
             /* Non-fatal: encryption analysis is advisory, skip if unavailable */
-            fprintf(stderr, "warning: failed to load tree entry for '%s' in profile '%s': %s\n",
-                    storage_path, profile_name, err->message ? err->message : "unknown error");
+            fprintf(
+                stderr, "warning: failed to load tree entry for '%s' in profile '%s': %s\n",
+                storage_path, profile_name, err->message ? err->message : "unknown error"
+            );
             error_free(err);
             continue;
         }
@@ -2083,14 +2117,16 @@ static error_t *analyze_encryption_policy_mismatch(
 
         if (git_err != 0) {
             /* Non-fatal: can't read blob - skip this file */
-            fprintf(stderr, "warning: failed to read blob for '%s' in profile '%s': %s\n",
-                    storage_path, profile_name,
-                    git_error_last() ? git_error_last()->message : "unknown error");
+            fprintf(
+                stderr, "warning: failed to read blob for '%s' in profile '%s': %s\n",
+                storage_path, profile_name,
+                git_error_last() ? git_error_last()->message : "unknown error"
+            );
             continue;
         }
 
         const unsigned char *blob_data = git_blob_rawcontent(blob);
-        size_t blob_size = (size_t)git_blob_rawsize(blob);
+        size_t blob_size = (size_t) git_blob_rawsize(blob);
         is_encrypted = encryption_is_encrypted(blob_data, blob_size);
 
         /* Free blob immediately — only needed for magic header check above.
@@ -2110,16 +2146,18 @@ static error_t *analyze_encryption_policy_mismatch(
                  * encryption validation for non-FILE kinds. */
                 if (meta_entry->kind != METADATA_ITEM_FILE) {
                     if (meta_entry->kind == METADATA_ITEM_DIRECTORY) {
-                        fprintf(stderr,
-                            "warning: metadata corruption for '%s' in profile '%s': "
+                        fprintf(
+                            stderr, "warning: metadata corruption for '%s' in profile '%s': "
                             "expected FILE, got DIRECTORY. Skipping encryption validation.\n",
-                            storage_path, profile_name);
+                            storage_path, profile_name
+                        );
                     }
                     /* SYMLINK: encryption not applicable, silently skip */
                 } else {
                     /* Detect mismatch between magic header and metadata */
                     if (is_encrypted != meta_entry->file.encrypted) {
-                        fprintf(stderr,
+                        fprintf(
+                            stderr,
                             "warning: metadata corruption detected for '%s' in profile '%s'\n"
                             "  Magic header says: %s\n"
                             "  Metadata says: %s\n"
@@ -2128,7 +2166,8 @@ static error_t *analyze_encryption_policy_mismatch(
                             storage_path, profile_name,
                             is_encrypted ? "encrypted" : "plaintext",
                             is_encrypted ? "plaintext" : "encrypted",
-                            profile_name, storage_path);
+                            profile_name, storage_path
+                        );
                     }
                 }
             }
@@ -2144,7 +2183,7 @@ static error_t *analyze_encryption_policy_mismatch(
             void *idx_ptr = hashmap_get(ws->diverged_index, manifest_entry->filesystem_path);
             workspace_item_t *existing = NULL;
             if (idx_ptr) {
-                size_t idx = (size_t)(uintptr_t)idx_ptr - 1;  /* Convert index+1 back to index */
+                size_t idx = (size_t) (uintptr_t) idx_ptr - 1;  /* Convert index+1 back to index */
                 existing = &ws->diverged[idx];
             }
 
@@ -2162,8 +2201,11 @@ static error_t *analyze_encryption_policy_mismatch(
 
                 if (ws->state) {
                     state_file_entry_t *state_entry = NULL;
-                    error_t *state_err = state_get_file(ws->state,
-                                            manifest_entry->filesystem_path, &state_entry);
+                    error_t *state_err = state_get_file(
+                        ws->state,
+                        manifest_entry->filesystem_path,
+                        &state_entry
+                    );
                     if (state_err == NULL && state_entry) {
                         in_state = true;
                         state_free_entry(state_entry);
@@ -2171,8 +2213,8 @@ static error_t *analyze_encryption_policy_mismatch(
                     error_free(state_err);
                 }
 
-                workspace_state_t item_state = in_state ?
-                               WORKSPACE_STATE_DEPLOYED : WORKSPACE_STATE_UNDEPLOYED;
+                workspace_state_t item_state = in_state ? WORKSPACE_STATE_DEPLOYED
+                                                        : WORKSPACE_STATE_UNDEPLOYED;
 
                 struct stat enc_stat;
                 bool on_filesystem = (lstat(manifest_entry->filesystem_path, &enc_stat) == 0);
@@ -2224,13 +2266,17 @@ static error_t *patch_entry_from_fresh(
 ) {
     /* Extract blob OID from fresh tree entry */
     if (!fresh_entry->entry) {
-        return ERROR(ERR_INTERNAL, "Fresh entry has no tree entry for '%s'",
-                     fresh_entry->storage_path);
+        return ERROR(
+            ERR_INTERNAL, "Fresh entry has no tree entry for '%s'",
+            fresh_entry->storage_path
+        );
     }
     const git_oid *blob_oid = git_tree_entry_id(fresh_entry->entry);
     if (!blob_oid) {
-        return ERROR(ERR_INTERNAL, "Fresh tree entry has no OID for '%s'",
-                     fresh_entry->storage_path);
+        return ERROR(
+            ERR_INTERNAL, "Fresh tree entry has no OID for '%s'",
+            fresh_entry->storage_path
+        );
     }
 
     char blob_hex[GIT_OID_HEXSZ + 1];
@@ -2294,8 +2340,10 @@ static error_t *patch_entry_from_fresh(
         free(dup_blob_oid);
         free(dup_owner);
         free(dup_group);
-        return ERROR(ERR_MEMORY, "Failed to allocate patched fields for '%s'",
-                     fresh_entry->storage_path);
+        return ERROR(
+            ERR_MEMORY, "Failed to allocate patched fields for '%s'",
+            fresh_entry->storage_path
+        );
     }
 
     /* Swap — free old strings, assign pre-allocated replacements */
@@ -2500,8 +2548,8 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
          * and mark them as ORPHANED or RELEASED for cleanup by apply.
          */
         if (state_entry->state && (strcmp(state_entry->state, STATE_INACTIVE) == 0 ||
-                                   strcmp(state_entry->state, STATE_DELETED) == 0 ||
-                                   strcmp(state_entry->state, STATE_RELEASED) == 0)) {
+            strcmp(state_entry->state, STATE_DELETED) == 0 ||
+            strcmp(state_entry->state, STATE_RELEASED) == 0)) {
             free(entry->storage_path);
             free(entry->filesystem_path);
             continue;  /* Don't increment manifest_idx */
@@ -2534,7 +2582,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
 
             if (fresh_idx_ptr) {
                 /* CASE A: File still in Git — populate from state, then patch */
-                size_t fresh_idx = (size_t)(uintptr_t)fresh_idx_ptr - 1;
+                size_t fresh_idx = (size_t) (uintptr_t) fresh_idx_ptr - 1;
                 const file_entry_t *fresh_entry = &fresh_manifest->entries[fresh_idx];
 
                 /* Save old blob_oid before patching — needed to determine if
@@ -2549,7 +2597,9 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                  * overwritten by patch_entry_from_fresh, so transient NULL from
                  * strdup failure is harmless (free(NULL) is safe). Only old_profile
                  * survives without being patched — check it explicitly. */
-                entry->old_profile = state_entry->old_profile ? strdup(state_entry->old_profile) : NULL;
+                entry->old_profile = state_entry->old_profile ? strdup(state_entry->old_profile)
+                                                              : NULL;
+
                 if (state_entry->old_profile && !entry->old_profile) {
                     free(entry->storage_path);
                     free(entry->filesystem_path);
@@ -2579,7 +2629,10 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                     free(entry->blob_oid);
                     free(entry->owner);
                     free(entry->group);
-                    err = error_wrap(err, "Failed to patch stale entry '%s'", state_entry->storage_path);
+                    err = error_wrap(
+                        err, "Failed to patch stale entry '%s'", state_entry->
+                        storage_path
+                    );
                     goto cleanup;
                 }
 
@@ -2595,7 +2648,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                  * need the DIVERGENCE_STALE flag for deployment/display purposes.
                  */
                 bool blob_changed = !old_blob_oid || !entry->blob_oid ||
-                                    strcmp(old_blob_oid, entry->blob_oid) != 0;
+                    strcmp(old_blob_oid, entry->blob_oid) != 0;
 
                 /* Preserve stat cache when blob_oid is unchanged.
                  *
@@ -2611,8 +2664,11 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 }
 
                 if (blob_changed) {
-                    error_t *track_err = hashmap_set(ws->stale_paths,
-                                                     entry->filesystem_path, (void *)(uintptr_t)1);
+                    error_t *track_err = hashmap_set(
+                        ws->stale_paths,
+                        entry->filesystem_path,
+                        (void *) (uintptr_t) 1
+                    );
                     if (track_err) {
                         manifest_idx++;  /* entry populated — track for cleanup */
                         err = track_err;
@@ -2625,7 +2681,11 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                  * No enabled profile contains this file. Add to released_paths
                  * so analyze_orphaned_files emits WORKSPACE_STATE_RELEASED.
                  * Skip from manifest (file is no longer in scope). */
-                err = hashmap_set(ws->released_paths, state_entry->filesystem_path, (void *)(uintptr_t)1);
+                err = hashmap_set(
+                    ws->released_paths,
+                    state_entry->filesystem_path,
+                    (void *) (uintptr_t) 1
+                );
                 if (err) {
                     free(entry->storage_path);
                     free(entry->filesystem_path);
@@ -2659,8 +2719,10 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             entry->entry = NULL;
 
             /* Check for allocation failures in VWD fields */
-            if ((state_entry->old_profile && !entry->old_profile) || (state_entry->git_oid && !entry->git_oid) ||
-                (state_entry->blob_oid && !entry->blob_oid) || (state_entry->owner && !entry->owner) ||
+            if ((state_entry->old_profile && !entry->old_profile) ||
+                (state_entry->git_oid && !entry->git_oid) ||
+                (state_entry->blob_oid && !entry->blob_oid) ||
+                (state_entry->owner && !entry->owner) ||
                 (state_entry->group && !entry->group)) {
 
                 /* Cleanup current entry's allocated fields */
@@ -2685,7 +2747,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
          * manifest_idx already holds the 1-based value after the increment above.
          * The cast through uintptr_t is safe: indices are much smaller than
          * SIZE_MAX, and we never dereference these "pointers". */
-        err = hashmap_set(path_map, entry->filesystem_path, (void *)(uintptr_t)(manifest_idx));
+        err = hashmap_set(path_map, entry->filesystem_path, (void *) (uintptr_t) (manifest_idx));
         if (err) {
             err = error_wrap(err, "Failed to populate manifest index");
             goto cleanup;
@@ -2797,8 +2859,10 @@ error_t *workspace_load(
             error_t *create_err = metadata_create_empty(&metadata);
             if (create_err) {
                 workspace_free(ws);
-                return error_wrap(create_err,
-                    "Failed to create metadata for profile '%s'", profile_name);
+                return error_wrap(
+                    create_err, "Failed to create metadata for profile '%s'",
+                    profile_name
+                );
             }
         }
 
@@ -2806,7 +2870,10 @@ error_t *workspace_load(
         if (set_err) {
             metadata_free(metadata);
             workspace_free(ws);
-            return error_wrap(set_err, "Failed to cache metadata for profile '%s'", profile_name);
+            return error_wrap(
+                set_err, "Failed to cache metadata for profile '%s'",
+                profile_name
+            );
         }
     }
 
@@ -2865,7 +2932,7 @@ error_t *workspace_load(
 
             if (idx_ptr) {
                 /* Update existing entry - last profile wins (precedence) */
-                size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+                size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
                 ws->merged_entries[idx].item = item;
                 ws->merged_entries[idx].profile_name = profile_name;
             } else {
@@ -2890,8 +2957,11 @@ error_t *workspace_load(
                 entry->profile_name = profile_name;
 
                 /* Store index+1 in hashmap (index 0 → value 1, avoiding NULL) */
-                error_t *map_err = hashmap_set(ws->merged_metadata, item->key,
-                                               (void *)(uintptr_t)(ws->merged_count + 1));
+                error_t *map_err = hashmap_set(
+                    ws->merged_metadata,
+                    item->key,
+                    (void *) (uintptr_t) (ws->merged_count + 1)
+                );
                 if (map_err) {
                     workspace_free(ws);
                     return error_wrap(map_err, "Failed to add entry to merged metadata");
@@ -2934,9 +3004,10 @@ error_t *workspace_load(
      * built the index, maintaining consistency with the write path pattern. */
     if (!ws->manifest->index) {
         workspace_free(ws);
-        return ERROR(ERR_INTERNAL,
-            "Manifest index not populated by workspace_build_manifest_from_state() - "
-            "this is a programming error");
+        return ERROR(
+            ERR_INTERNAL, "Manifest index not populated by "
+            "workspace_build_manifest_from_state() - programming error"
+        );
     }
 
     /* Execute analyses based on resolved_opts flags. Each analysis is
@@ -3003,7 +3074,6 @@ workspace_status_t workspace_get_status(const workspace_t *ws) {
     }
     return ws->status;
 }
-
 
 /**
  * Get all diverged items
@@ -3154,7 +3224,7 @@ const workspace_item_t *workspace_get_item(
     }
 
     /* Convert stored index+1 back to actual array index */
-    size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+    size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
     return &ws->diverged[idx];
 }
 
@@ -3396,16 +3466,26 @@ bool workspace_item_extract_display_info(
 
             if (item->profile_changed && item->old_profile) {
                 if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
-                    snprintf(metadata_buf, metadata_size, "%s → %s, metadata from %s",
-                             item->old_profile, item->profile, meta_profile);
+                    snprintf(
+                        metadata_buf, metadata_size, "%s → %s, metadata from %s",
+                        item->old_profile, item->profile, meta_profile
+                    );
                 } else {
-                    snprintf(metadata_buf, metadata_size, "%s → %s",
-                             item->old_profile, item->profile);
+                    snprintf(
+                        metadata_buf, metadata_size, "%s → %s",
+                        item->old_profile, item->profile
+                    );
                 }
             } else if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
-                snprintf(metadata_buf, metadata_size, "metadata from %s", meta_profile);
+                snprintf(
+                    metadata_buf, metadata_size, "metadata from %s",
+                    meta_profile
+                );
             } else {
-                snprintf(metadata_buf, metadata_size, "from %s", item->profile);
+                snprintf(
+                    metadata_buf, metadata_size, "from %s",
+                    item->profile
+                );
             }
             break;
         }
@@ -3531,7 +3611,9 @@ error_t *workspace_flush_stat_caches(workspace_t *ws) {
     if (needs_transaction) {
         error_t *err = state_begin_transaction(ws->state);
         if (err) {
-            return error_wrap(err, "Failed to begin stat cache transaction");
+            return error_wrap(
+                err, "Failed to begin stat cache transaction"
+            );
         }
     }
 
@@ -3545,15 +3627,19 @@ error_t *workspace_flush_stat_caches(workspace_t *ws) {
             if (needs_transaction) {
                 state_rollback_transaction(ws->state);
             }
-            return error_wrap(err, "Failed to flush stat cache for '%s'",
-                              ws->stat_updates[i].filesystem_path);
+            return error_wrap(
+                err, "Failed to flush stat cache for '%s'",
+                ws->stat_updates[i].filesystem_path
+            );
         }
     }
 
     if (needs_transaction) {
         error_t *err = state_commit_transaction(ws->state);
         if (err) {
-            return error_wrap(err, "Failed to commit stat cache transaction");
+            return error_wrap(
+                err, "Failed to commit stat cache transaction"
+            );
         }
     }
 
@@ -3587,7 +3673,7 @@ void workspace_free(workspace_t *ws) {
     hashmap_free(ws->profile_index, NULL);
     hashmap_free(ws->diverged_index, NULL);
 
-    /* Free merged_metadata BEFORE metadata_cache (borrowed pointers) 
+    /* Free merged_metadata BEFORE metadata_cache (borrowed pointers)
      * NULL = don't free values (they're in merged_entries) */
     hashmap_free(ws->merged_metadata, NULL);
 

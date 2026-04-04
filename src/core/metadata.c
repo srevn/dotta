@@ -130,7 +130,10 @@ error_t *metadata_item_create_file(
 
     /* Validate mode */
     if (mode > 0777) {
-        return ERROR(ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)", mode);
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)",
+            mode
+        );
     }
 
     metadata_item_t *item = calloc(1, sizeof(metadata_item_t));
@@ -170,7 +173,10 @@ error_t *metadata_item_create_directory(
 
     /* Validate mode */
     if (mode > 0777) {
-        return ERROR(ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)", mode);
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)",
+            mode
+        );
     }
 
     metadata_item_t *item = calloc(1, sizeof(metadata_item_t));
@@ -412,7 +418,7 @@ error_t *metadata_add_item(
     /* Check if item exists (try hashmap O(1) lookup first) */
     metadata_item_t *existing = NULL;
     if (metadata->index) {
-        existing = (metadata_item_t *)hashmap_get(metadata->index, source->key);
+        existing = (metadata_item_t *) hashmap_get(metadata->index, source->key);
     } else {
         /* Hashmap rebuild failed - fallback to linear search O(n) */
         for (size_t i = 0; i < metadata->count; i++) {
@@ -564,7 +570,7 @@ error_t *metadata_get_item(
 
     /* Try hashmap first (O(1)) */
     if (metadata->index) {
-        item = (const metadata_item_t *)hashmap_get(metadata->index, key);
+        item = (const metadata_item_t *) hashmap_get(metadata->index, key);
     } else {
         /* Hashmap rebuild failed - fallback to linear search (O(n)) */
         for (size_t i = 0; i < metadata->count; i++) {
@@ -603,7 +609,7 @@ error_t *metadata_remove_item(
     ssize_t index = -1;
     for (size_t i = 0; i < metadata->count; i++) {
         if (strcmp(metadata->items[i].key, key) == 0) {
-            index = (ssize_t)i;
+            index = (ssize_t) i;
             break;
         }
     }
@@ -629,7 +635,7 @@ error_t *metadata_remove_item(
     free(item->group);
 
     /* Shift array left to fill gap (if not last item) */
-    if ((size_t)index < metadata->count - 1) {
+    if ((size_t) index < metadata->count - 1) {
         memmove(
             &metadata->items[index],
             &metadata->items[index + 1],
@@ -642,7 +648,7 @@ error_t *metadata_remove_item(
 
     /* Rebuild hashmap since array pointers changed after memmove
      * Non-fatal: if rebuild fails, index is set to NULL and we fall back to linear search */
-    if (metadata->index && (size_t)index < metadata->count) {
+    if (metadata->index && (size_t) index < metadata->count) {
         /* Only rebuild if we moved items (not if we removed the last item) */
         rebuild_hashmap_index(metadata);
     }
@@ -1002,7 +1008,7 @@ error_t *metadata_capture_from_directory(
         return ERROR(ERR_INVALID_ARG, "Path is not a directory: %s", storage_path);
     }
 
-    /* Create directory item via factory 
+    /* Create directory item via factory
      * (handles allocation, key duplication, mode validation) */
     mode_t mode = st->st_mode & 0777;
     metadata_item_t *item = NULL;
@@ -1193,31 +1199,39 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
     /* Parse JSON */
     cJSON *root = cJSON_Parse(json_str);
     if (!root) {
-        return ERROR(ERR_INVALID_ARG, "Failed to parse metadata JSON: %s",
-                    cJSON_GetErrorPtr() ? cJSON_GetErrorPtr() : "unknown error");
+        return ERROR(
+            ERR_INVALID_ARG, "Failed to parse metadata JSON: %s",
+            cJSON_GetErrorPtr() ? cJSON_GetErrorPtr() : "unknown error"
+        );
     }
 
     /* Get and validate version */
     cJSON *version_obj = cJSON_GetObjectItem(root, "version");
     if (!version_obj || !cJSON_IsNumber(version_obj)) {
         cJSON_Delete(root);
-        return ERROR(ERR_INVALID_ARG, "Missing or invalid version in metadata");
+        return ERROR(
+            ERR_INVALID_ARG, "Missing or invalid version in metadata"
+        );
     }
 
     int version = version_obj->valueint;
     if (version != METADATA_VERSION) {
         cJSON_Delete(root);
-        return ERROR(ERR_INVALID_ARG,
-                    "Unsupported metadata version: %d (expected %d). "
-                    "Please re-run 'dotta add' for all your files.",
-                    version, METADATA_VERSION);
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Unsupported metadata version: %d (expected %d). "
+            "Please re-run 'dotta add' for all your files.",
+            version, METADATA_VERSION
+        );
     }
 
     /* Get items array */
     cJSON *items_array = cJSON_GetObjectItem(root, "items");
     if (!items_array || !cJSON_IsArray(items_array)) {
         cJSON_Delete(root);
-        return ERROR(ERR_INVALID_ARG, "Missing or invalid items array in metadata");
+        return ERROR(
+            ERR_INVALID_ARG, "Missing or invalid items array in metadata"
+        );
     }
 
     /* Create metadata collection */
@@ -1236,7 +1250,9 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         if (!cJSON_IsObject(item_obj)) {
             metadata_free(metadata);
             cJSON_Delete(root);
-            return ERROR(ERR_INVALID_ARG, "Invalid item in items array (not an object)");
+            return ERROR(
+                ERR_INVALID_ARG, "Invalid item in items array (not an object)"
+            );
         }
 
         /* Get kind discriminator (required) */
@@ -1244,7 +1260,9 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         if (!kind_obj || !cJSON_IsString(kind_obj) || !kind_obj->valuestring) {
             metadata_free(metadata);
             cJSON_Delete(root);
-            return ERROR(ERR_INVALID_ARG, "Item missing kind field");
+            return ERROR(
+                ERR_INVALID_ARG, "Item missing kind field"
+            );
         }
 
         metadata_item_kind_t kind;
@@ -1257,9 +1275,11 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         } else {
             metadata_free(metadata);
             cJSON_Delete(root);
-            return ERROR(ERR_INVALID_ARG,
-                "Invalid kind value: %s (expected 'file', 'directory', or 'symlink')",
-                kind_obj->valuestring);
+            return ERROR(
+                ERR_INVALID_ARG, "Invalid kind value: %s "
+                "(expected 'file', 'directory', or 'symlink')",
+                kind_obj->valuestring
+            );
         }
 
         /* Get key (required) */
@@ -1267,7 +1287,9 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         if (!key_obj || !cJSON_IsString(key_obj) || !key_obj->valuestring) {
             metadata_free(metadata);
             cJSON_Delete(root);
-            return ERROR(ERR_INVALID_ARG, "Item missing key field");
+            return ERROR(
+                ERR_INVALID_ARG, "Item missing key field"
+            );
         }
 
         /* Validate key format (prevent path traversal) */
@@ -1275,8 +1297,10 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         if (err) {
             metadata_free(metadata);
             cJSON_Delete(root);
-            return error_wrap(err,
-                "Invalid key in metadata: %s", key_obj->valuestring);
+            return error_wrap(
+                err, "Invalid key in metadata: %s",
+                key_obj->valuestring
+            );
         }
 
         /* Get mode (required) */
@@ -1284,8 +1308,10 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         if (!mode_obj || !cJSON_IsString(mode_obj) || !mode_obj->valuestring) {
             metadata_free(metadata);
             cJSON_Delete(root);
-            return ERROR(ERR_INVALID_ARG,
-                "Item missing mode field (key: %s)", key_obj->valuestring);
+            return ERROR(
+                ERR_INVALID_ARG, "Item missing mode field (key: %s)",
+                key_obj->valuestring
+            );
         }
 
         /* Parse mode string */
@@ -1294,8 +1320,10 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         if (err) {
             metadata_free(metadata);
             cJSON_Delete(root);
-            return error_wrap(err,
-                "Failed to parse mode for item: %s", key_obj->valuestring);
+            return error_wrap(
+                err, "Failed to parse mode for item: %s",
+                key_obj->valuestring
+            );
         }
 
         /* Create temporary item structure */
@@ -1360,8 +1388,10 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         if (err) {
             metadata_free(metadata);
             cJSON_Delete(root);
-            return error_wrap(err,
-                "Failed to add item to metadata: %s", key_obj->valuestring);
+            return error_wrap(
+                err, "Failed to add item to metadata: %s",
+                key_obj->valuestring
+            );
         }
     }
 
@@ -1397,8 +1427,9 @@ error_t *metadata_load_from_branch(
 
     /* Look up branch reference */
     char ref_name[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(ref_name, sizeof(ref_name),
-                               "refs/heads/%s", branch_name);
+    err = gitops_build_refname(
+        ref_name, sizeof(ref_name), "refs/heads/%s", branch_name
+    );
     if (err) {
         err = error_wrap(err, "Invalid branch name '%s'", branch_name);
         goto cleanup;
@@ -1432,8 +1463,10 @@ error_t *metadata_load_from_branch(
     git_err = git_tree_entry_bypath(&entry, tree, METADATA_FILE_PATH);
     if (git_err < 0) {
         if (git_err == GIT_ENOTFOUND) {
-            err = ERROR(ERR_NOT_FOUND,
-                "Metadata file not found in branch: %s", branch_name);
+            err = ERROR(
+                ERR_NOT_FOUND, "Metadata file not found in branch: %s",
+                branch_name
+            );
         } else {
             err = error_from_git(git_err);
         }
@@ -1455,7 +1488,7 @@ error_t *metadata_load_from_branch(
     }
 
     /* Get content */
-    const char *content = (const char *)git_blob_rawcontent(blob);
+    const char *content = (const char *) git_blob_rawcontent(blob);
     git_object_size_t size = git_blob_rawsize(blob);
 
     /* Null-terminate content (cJSON requires null-terminated string) */
@@ -1471,8 +1504,10 @@ error_t *metadata_load_from_branch(
     /* Parse JSON */
     err = metadata_from_json(json_str, &metadata);
     if (err) {
-        err = error_wrap(err,
-            "Failed to parse metadata from branch: %s", branch_name);
+        err = error_wrap(
+            err, "Failed to parse metadata from branch: %s",
+            branch_name
+        );
         goto cleanup;
     }
 
@@ -1525,8 +1560,10 @@ error_t *metadata_load_from_tree(
     int git_err = git_tree_entry_bypath(&entry, tree, METADATA_FILE_PATH);
     if (git_err < 0) {
         if (git_err == GIT_ENOTFOUND) {
-            err = ERROR(ERR_NOT_FOUND,
-                "Metadata file not found in profile: %s", profile_name);
+            err = ERROR(
+                ERR_NOT_FOUND, "Metadata file not found in profile: %s",
+                profile_name
+            );
         } else {
             err = error_from_git(git_err);
         }
@@ -1548,7 +1585,7 @@ error_t *metadata_load_from_tree(
     }
 
     /* Get content */
-    const char *content = (const char *)git_blob_rawcontent(blob);
+    const char *content = (const char *) git_blob_rawcontent(blob);
     git_object_size_t size = git_blob_rawsize(blob);
 
     /* Null-terminate content (cJSON requires null-terminated string) */
@@ -1564,8 +1601,10 @@ error_t *metadata_load_from_tree(
     /* Parse JSON */
     err = metadata_from_json(json_str, &metadata);
     if (err) {
-        err = error_wrap(err,
-            "Failed to parse metadata from profile: %s", profile_name);
+        err = error_wrap(
+            err, "Failed to parse metadata from profile: %s",
+            profile_name
+        );
         goto cleanup;
     }
 
@@ -1597,7 +1636,10 @@ error_t *metadata_load_from_file(
 
     /* Check if file exists */
     if (!fs_exists(file_path)) {
-        return ERROR(ERR_NOT_FOUND, "Metadata file not found: %s", file_path);
+        return ERROR(
+            ERR_NOT_FOUND, "Metadata file not found: %s",
+            file_path
+        );
     }
 
     /* Read file content */
@@ -1619,7 +1661,10 @@ error_t *metadata_load_from_file(
     free(json_str);
 
     if (err) {
-        return error_wrap(err, "Failed to parse metadata from file: %s", file_path);
+        return error_wrap(
+            err, "Failed to parse metadata from file: %s",
+            file_path
+        );
     }
 
     *out = metadata;
@@ -1735,12 +1780,14 @@ error_t *metadata_load_from_profiles(
                 /* Real error - clean up and propagate */
                 for (size_t j = 0; j < i; j++) {
                     if (profile_metadata[j]) {
-                        metadata_free((metadata_t *)profile_metadata[j]);
+                        metadata_free((metadata_t *) profile_metadata[j]);
                     }
                 }
                 free(profile_metadata);
-                return error_wrap(load_err,
-                    "Failed to load metadata from profile '%s'", profile_name);
+                return error_wrap(
+                    load_err, "Failed to load metadata from profile '%s'",
+                    profile_name
+                );
             }
         }
 
@@ -1756,7 +1803,7 @@ error_t *metadata_load_from_profiles(
         /* Free individual profile metadata */
         for (size_t i = 0; i < profile_count; i++) {
             if (profile_metadata[i]) {
-                metadata_free((metadata_t *)profile_metadata[i]);
+                metadata_free((metadata_t *) profile_metadata[i]);
             }
         }
         free(profile_metadata);
@@ -1815,7 +1862,10 @@ error_t *metadata_merge(
             err = metadata_add_item(result, item);
             if (err) {
                 metadata_free(result);
-                return error_wrap(err, "Failed to merge metadata item: %s", item->key);
+                return error_wrap(
+                    err, "Failed to merge metadata item: %s",
+                    item->key
+                );
             }
         }
     }
@@ -1840,15 +1890,20 @@ error_t *metadata_parse_mode(const char *mode_str, mode_t *out) {
 
     /* Reject empty/whitespace-only strings and trailing non-octal characters */
     if (endptr == mode_str || *endptr != '\0') {
-        return ERROR(ERR_INVALID_ARG,
-                    "Invalid mode string: '%s' (not valid octal)", mode_str);
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid mode string: '%s' (not valid octal)",
+            mode_str
+        );
     }
 
     if (mode > 0777) {
-        return ERROR(ERR_INVALID_ARG, "Invalid mode: %04lo (must be <= 0777)", mode);
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid mode: %04lo (must be <= 0777)",
+            mode
+        );
     }
 
-    *out = (mode_t)mode;
+    *out = (mode_t) mode;
     return NULL;
 }
 
@@ -1861,12 +1916,17 @@ error_t *metadata_format_mode(mode_t mode, char **out) {
     CHECK_NULL(out);
 
     if (mode > 0777) {
-        return ERROR(ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)", mode);
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)",
+            mode
+        );
     }
 
     char *mode_str = str_format("%04o", mode);
     if (!mode_str) {
-        return ERROR(ERR_MEMORY, "Failed to format mode string");
+        return ERROR(
+            ERR_MEMORY, "Failed to format mode string"
+        );
     }
 
     *out = mode_str;
@@ -1898,8 +1958,8 @@ error_t *metadata_resolve_ownership(
     CHECK_NULL(out_gid);
 
     /* Initialize to "no change" */
-    *out_uid = (uid_t)-1;
-    *out_gid = (gid_t)-1;
+    *out_uid = (uid_t) -1;
+    *out_gid = (gid_t) -1;
 
     /* Skip if no ownership specified */
     if (!owner && !group) {
@@ -1908,16 +1968,19 @@ error_t *metadata_resolve_ownership(
 
     /* Commands enforce privileges upfront to prevent partial operations */
     if (!privilege_is_elevated()) {
-        return ERROR(ERR_PERMISSION,
-                    "Cannot resolve ownership (not running as root)");
+        return ERROR(
+            ERR_PERMISSION, "Cannot resolve ownership (not running as root)"
+        );
     }
 
     /* Resolve owner to UID */
     if (owner) {
         struct passwd *pwd = getpwnam(owner);
         if (!pwd) {
-            return ERROR(ERR_NOT_FOUND,
-                        "User '%s' does not exist on this system", owner);
+            return ERROR(
+                ERR_NOT_FOUND, "User '%s' does not exist on this system",
+                owner
+            );
         }
         *out_uid = pwd->pw_uid;
 
@@ -1928,11 +1991,13 @@ error_t *metadata_resolve_ownership(
     }
 
     /* Resolve group to GID (if specified and not already set from user) */
-    if (group && *out_gid == (gid_t)-1) {
+    if (group && *out_gid == (gid_t) -1) {
         struct group *grp = getgrnam(group);
         if (!grp) {
-            return ERROR(ERR_NOT_FOUND,
-                        "Group '%s' does not exist on this system", group);
+            return ERROR(
+                ERR_NOT_FOUND, "Group '%s' does not exist on this system",
+                group
+            );
         }
         *out_gid = grp->gr_gid;
     }

@@ -113,8 +113,10 @@ static error_t *copy_file_to_worktree(
         /* Capture symlink stat so metadata_capture_from_file detects S_ISLNK */
         if (out_stat) {
             if (lstat(filesystem_path, out_stat) != 0) {
-                err = ERROR(ERR_INTERNAL, "Failed to stat symlink '%s': %s",
-                            filesystem_path, strerror(errno));
+                err = ERROR(
+                    ERR_INTERNAL, "Failed to stat symlink '%s': %s",
+                    filesystem_path, strerror(errno)
+                );
                 goto cleanup;
             }
         }
@@ -139,7 +141,10 @@ static error_t *copy_file_to_worktree(
             &should_encrypt
         );
         if (err) {
-            err = error_wrap(err, "Failed to determine encryption policy for '%s'", storage_path);
+            err = error_wrap(
+                err, "Failed to determine encryption policy for '%s'",
+                storage_path
+            );
             goto cleanup;
         }
 
@@ -429,11 +434,9 @@ static error_t *filter_items_for_update(
         if (!path_filter_matches(file_filter, item->storage_path)) {
             continue;
         }
-
         if (matches_exclude_pattern(item->storage_path, opts)) {
             continue;
         }
-
         /* Apply profile filter (CLI -p filtering) */
         if (!profile_filter_matches(item->profile, operation_profiles)) {
             continue;
@@ -620,7 +623,10 @@ static error_t *update_metadata_for_profile(
                             err = NULL;
                         }
                         if (opts->verbose && out) {
-                            output_info(out, "  Removed metadata: %s", item->filesystem_path);
+                            output_info(
+                                out, "  Removed metadata: %s",
+                                item->filesystem_path
+                            );
                         }
                     }
                     continue;
@@ -645,8 +651,10 @@ static error_t *update_metadata_for_profile(
 
                 if (err) {
                     metadata_free(metadata);
-                    return error_wrap(err, "Failed to capture metadata for: %s",
-                                      item->filesystem_path);
+                    return error_wrap(
+                        err, "Failed to capture metadata for: %s",
+                        item->filesystem_path
+                    );
                 }
 
                 /* meta_item is NULL for home/ prefix symlinks (no metadata needed).
@@ -662,7 +670,7 @@ static error_t *update_metadata_for_profile(
                     char *owner = meta_item->owner ? strdup(meta_item->owner) : NULL;
                     char *group = meta_item->group ? strdup(meta_item->group) : NULL;
                     bool is_encrypted = (meta_item->kind == METADATA_ITEM_FILE)
-                                        ? meta_item->file.encrypted : false;
+                                      ? meta_item->file.encrypted : false;
 
                     /* Add to metadata collection */
                     err = metadata_add_item(metadata, meta_item);
@@ -679,12 +687,16 @@ static error_t *update_metadata_for_profile(
 
                     if (opts->verbose && out) {
                         if (owner || group) {
-                            output_info(out, "  Captured metadata: %s (mode: %04o, owner: %s:%s%s)",
-                                   item->filesystem_path, mode, owner ? owner : "?",
-                                   group ? group : "?", is_encrypted ? ", encrypted" : "");
+                            output_info(
+                                out, "  Captured metadata: %s (mode: %04o, owner: %s:%s%s)",
+                                item->filesystem_path, mode, owner ? owner : "?",
+                                group ? group : "?", is_encrypted ? ", encrypted" : ""
+                            );
                         } else {
-                            output_info(out, "  Captured metadata: %s (mode: %04o%s)",
-                                   item->filesystem_path, mode, is_encrypted ? ", encrypted" : "");
+                            output_info(
+                                out, "  Captured metadata: %s (mode: %04o%s)",
+                                item->filesystem_path, mode, is_encrypted ? ", encrypted" : ""
+                            );
                         }
                     }
                     free(owner);
@@ -701,8 +713,10 @@ static error_t *update_metadata_for_profile(
                 struct stat dir_stat;
                 if (stat(item->filesystem_path, &dir_stat) != 0) {
                     if (opts->verbose && out) {
-                        output_warning(out, "Failed to stat directory '%s': %s",
-                                       item->filesystem_path, strerror(errno));
+                        output_warning(
+                            out, "Failed to stat directory '%s': %s",
+                            item->filesystem_path, strerror(errno)
+                        );
                     }
                     continue;
                 }
@@ -710,15 +724,15 @@ static error_t *update_metadata_for_profile(
                 /* Capture directory metadata */
                 metadata_item_t *meta_item = NULL;
                 err = metadata_capture_from_directory(
-                    item->storage_path,
-                    &dir_stat,
-                    &meta_item
+                    item->storage_path, &dir_stat, &meta_item
                 );
 
                 if (err) {
                     if (opts->verbose && out) {
-                        output_warning(out, "Failed to capture metadata for directory '%s': %s",
-                                       item->filesystem_path, error_message(err));
+                        output_warning(
+                            out, "Failed to capture metadata for directory '%s': %s",
+                            item->filesystem_path, error_message(err)
+                        );
                     }
                     error_free(err);
                     err = NULL;
@@ -738,20 +752,26 @@ static error_t *update_metadata_for_profile(
                     free(owner);
                     free(group);
                     metadata_free(metadata);
-                    return error_wrap(err, "Failed to update directory metadata for '%s'",
-                                      item->filesystem_path);
+                    return error_wrap(
+                        err, "Failed to update directory metadata for '%s'",
+                        item->filesystem_path
+                    );
                 }
 
                 updated_dir_count++;
 
                 if (opts->verbose && out) {
                     if (owner || group) {
-                        output_info(out, "  Updated directory metadata: %s (mode: %04o, owner: %s:%s)",
-                                    item->filesystem_path, mode,
-                                    owner ? owner : "?", group ? group : "?");
+                        output_info(
+                            out, "  Updated directory metadata: %s (mode: %04o, owner: %s:%s)",
+                            item->filesystem_path, mode,
+                            owner ? owner : "?", group ? group : "?"
+                        );
                     } else {
-                        output_info(out, "  Updated directory metadata: %s (mode: %04o)",
-                                    item->filesystem_path, mode);
+                        output_info(
+                            out, "  Updated directory metadata: %s (mode: %04o)",
+                            item->filesystem_path, mode
+                        );
                     }
                 }
 
@@ -796,9 +816,11 @@ static error_t *update_metadata_for_profile(
     }
 
     if (opts->verbose && out && (captured_file_count > 0 || updated_dir_count > 0)) {
-        output_info(out, "Updated metadata for %zu file(s) and %zu director%s",
-               captured_file_count, updated_dir_count,
-               updated_dir_count == 1 ? "y" : "ies");
+        output_info(
+            out, "Updated metadata for %zu file(s) and %zu director%s",
+            captured_file_count, updated_dir_count,
+            updated_dir_count == 1 ? "y" : "ies"
+        );
     }
 
     return NULL;
@@ -864,7 +886,7 @@ static error_t *update_profile(
 
     /* Try to get metadata from workspace cache first */
     if (ws) {
-        existing_metadata = (metadata_t *)workspace_get_metadata(ws, profile->name);
+        existing_metadata = (metadata_t *) workspace_get_metadata(ws, profile->name);
         if (existing_metadata) {
             owns_metadata = false;  /* Borrowed from workspace */
         }
@@ -881,7 +903,10 @@ static error_t *update_profile(
                     return error_wrap(err, "Failed to create empty metadata");
                 }
             } else {
-                return error_wrap(err, "Failed to load metadata from profile '%s'", profile->name);
+                return error_wrap(
+                    err, "Failed to load metadata from profile '%s'",
+                    profile->name
+                );
             }
         }
         owns_metadata = true;
@@ -972,13 +997,18 @@ static error_t *update_profile(
                  */
                 if ((item->divergence & DIVERGENCE_ENCRYPTION) && !item->on_filesystem) {
                     if (opts->verbose) {
-                        output_warning(out,
-                            "Skipping encryption fix for missing file: %s",
-                            item->filesystem_path);
-                        output_info(out,
-                            "  File violates encryption policy but doesn't exist on filesystem.");
-                        output_info(out,
-                            "  To resolve: re-create file and run update, or remove from profile.");
+                        output_warning(
+                            out, "Skipping encryption fix for missing file: %s",
+                            item->filesystem_path
+                        );
+                        output_info(
+                            out, "  File violates encryption policy "
+                            "but doesn't exist on filesystem."
+                        );
+                        output_info(
+                            out, "  To resolve: re-create file and run "
+                            "update, or remove from profile."
+                        );
                     }
                     continue;
                 }
@@ -996,7 +1026,10 @@ static error_t *update_profile(
                     &copy_results[i].stat
                 );
                 if (err) {
-                    err = error_wrap(err, "Failed to copy '%s'", item->filesystem_path);
+                    err = error_wrap(
+                        err, "Failed to copy '%s'",
+                        item->filesystem_path
+                    );
                     goto cleanup;
                 }
 
@@ -1077,11 +1110,11 @@ static error_t *update_profile(
 
     /* Build commit message context */
     commit_message_context_t ctx = {
-        .action = COMMIT_ACTION_UPDATE,
-        .profile = profile->name,
-        .files = storage_paths,
-        .file_count = path_count,
-        .custom_msg = opts->message,
+        .action        = COMMIT_ACTION_UPDATE,
+        .profile       = profile->name,
+        .files         = storage_paths,
+        .file_count    = path_count,
+        .custom_msg    = opts->message,
         .target_commit = NULL
     };
 
@@ -1093,7 +1126,9 @@ static error_t *update_profile(
 
     /* Create commit */
     git_oid commit_oid;
-    err = gitops_create_commit(wt_repo, profile->name, tree, message, &commit_oid);
+    err = gitops_create_commit(
+        wt_repo, profile->name, tree, message, &commit_oid
+    );
     if (err) {
         err = error_wrap(err, "Failed to create commit");
         goto cleanup;
@@ -1342,8 +1377,10 @@ static error_t *update_manifest_after_update(
 
     /* Verbose summary */
     if (opts->verbose && (synced > 0 || removed > 0 || fallbacks > 0)) {
-        output_info(out, "Manifest synced: %zu updated, %zu removed, %zu fallbacks",
-                    synced, removed, fallbacks);
+        output_info(
+            out, "Manifest synced: %zu updated, %zu removed, %zu fallbacks",
+            synced, removed, fallbacks
+        );
     }
 
 cleanup:
@@ -1446,15 +1483,17 @@ static error_t *update_execute_for_all_profiles(
     void *value;
 
     while (hashmap_iter_next(&iter, &profile_name, &value)) {
-        item_array_t *array = (item_array_t *)value;
+        item_array_t *array = (item_array_t *) value;
 
         /* Look up profile pointer */
         profile_t *profile = hashmap_get(profile_index, profile_name);
 
         if (!profile) {
             /* Profile not in enabled set - skip (shouldn't happen due to filtering) */
-            output_warning(out, "Profile '%s' not found in enabled profiles, skipping",
-                          profile_name);
+            output_warning(
+                out, "Profile '%s' not found in enabled profiles, skipping",
+                profile_name
+            );
             continue;
         }
 
@@ -1463,31 +1502,43 @@ static error_t *update_execute_for_all_profiles(
         }
 
         /* Display profile header */
-        output_info(out, "Updating profile '{cyan}%s{reset}':", profile->name);
+        output_info(
+            out, "Updating profile '{cyan}%s{reset}':",
+            profile->name
+        );
 
         /* Checkout profile branch in shared worktree */
         err = worktree_checkout_branch(wt, profile->name);
         if (err) {
-            err = error_wrap(err, "Failed to checkout profile '%s'", profile->name);
+            err = error_wrap(
+                err, "Failed to checkout profile '%s'",
+                profile->name
+            );
             break;
         }
 
         /* Update this profile using shared worktree */
         size_t processed = 0;
         err = update_profile(
-            wt, profile, array->items, array->count, opts, out, config, ws, &processed
+            wt, profile, array->items, array->count, opts,
+            out, config, ws, &processed
         );
 
         if (err) {
-            err = error_wrap(err, "Failed to update profile '%s'", profile->name);
+            err = error_wrap(
+                err, "Failed to update profile '%s'",
+                profile->name
+            );
             break;
         }
 
         *total_updated += processed;
 
         if (!opts->verbose && processed > 0) {
-            output_success(out, "  Updated %zu item%s",
-                          processed, processed == 1 ? "" : "s");
+            output_success(
+                out, "  Updated %zu item%s",
+                processed, processed == 1 ? "" : "s"
+            );
         }
     }
 
@@ -1536,7 +1587,9 @@ static error_t *update_display_summary(
 
     /* Show dry-run banner if applicable */
     if (opts && opts->dry_run) {
-        output_styled(out, OUTPUT_NORMAL, "{bold}DRY RUN MODE{reset} - No changes will be committed\n\n");
+        output_styled(
+            out, OUTPUT_NORMAL, "{bold}Dry Run{reset} - No changes will be committed\n\n"
+        );
     }
 
     /* Show filter context if any filters are active */
@@ -1544,22 +1597,30 @@ static error_t *update_display_summary(
         bool has_filters = false;
 
         if (opts->only_new) {
-            output_info(out, "Filter: Showing only new files (--only-new)");
+            output_info(
+                out, "Filter: Showing only new files (--only-new)"
+            );
             has_filters = true;
         } else if (opts->include_new) {
-            output_info(out, "Filter: Including new files from tracked directories (--include-new)");
+            output_info(
+                out, "Filter: Including new files from tracked directories (--include-new)"
+            );
             has_filters = true;
         }
 
         if (opts->file_count > 0) {
-            output_info(out, "Filter: Limiting to %zu specified file%s",
-                       opts->file_count, opts->file_count == 1 ? "" : "s");
+            output_info(
+                out, "Filter: Limiting to %zu specified file%s",
+                opts->file_count, opts->file_count == 1 ? "" : "s"
+            );
             has_filters = true;
         }
 
         if (opts->exclude_count > 0) {
-            output_info(out, "Filter: Excluding %zu pattern%s",
-                       opts->exclude_count, opts->exclude_count == 1 ? "" : "s");
+            output_info(
+                out, "Filter: Excluding %zu pattern%s",
+                opts->exclude_count, opts->exclude_count == 1 ? "" : "s"
+            );
             has_filters = true;
         }
 
@@ -1611,9 +1672,10 @@ static error_t *update_display_summary(
 
     /* Display modified files section */
     if (modified_count > 0) {
-        output_list_t *list = output_list_create(out,
-            "Modified files",
-            "use \"dotta update\" to commit these changes");
+        output_list_t *list = output_list_create(
+            out, "Modified files",
+            "use \"dotta update\" to commit these changes"
+        );
 
         if (list) {
             for (size_t i = 0; i < item_count; i++) {
@@ -1625,7 +1687,7 @@ static error_t *update_display_summary(
 
                 /* Check if file is deployed and has (non-stale) divergence */
                 bool is_modified = (item->state == WORKSPACE_STATE_DEPLOYED &&
-                                   (item->divergence & ~DIVERGENCE_STALE) != DIVERGENCE_NONE);
+                    (item->divergence & ~DIVERGENCE_STALE) != DIVERGENCE_NONE);
 
                 if (!is_modified) {
                     continue;
@@ -1637,13 +1699,16 @@ static error_t *update_display_summary(
                 output_color_t color;
                 char base_metadata[256];
 
-                if (!workspace_item_extract_display_info(item, tags, &tag_count, &color,
-                                                         base_metadata, sizeof(base_metadata))) {
+                if (!workspace_item_extract_display_info(
+                    item, tags, &tag_count, &color,
+                    base_metadata, sizeof(base_metadata)
+                    )) {
                     continue;
                 }
 
                 output_list_add(
-                    list, tags, tag_count, color, item->filesystem_path, base_metadata
+                    list, tags, tag_count, color,
+                    item->filesystem_path, base_metadata
                 );
             }
 
@@ -1654,24 +1719,29 @@ static error_t *update_display_summary(
 
     /* Display new files section */
     if (new_count > 0) {
-        output_list_t *list = output_list_create(out,
-            "New files",
-            "use \"dotta update --include-new\" to track these files");
+        output_list_t *list = output_list_create(
+            out, "New files",
+            "use \"dotta update --include-new\" to track these files"
+        );
 
         if (list) {
             for (size_t i = 0; i < item_count; i++) {
                 const workspace_item_t *item = items[i];
 
-                if (item->item_kind == WORKSPACE_ITEM_FILE && item->state == WORKSPACE_STATE_UNTRACKED) {
+                if (item->item_kind == WORKSPACE_ITEM_FILE &&
+                    item->state == WORKSPACE_STATE_UNTRACKED) {
                     const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
                     size_t tag_count;
                     output_color_t color;
                     char metadata[256];
 
-                    if (workspace_item_extract_display_info(item, tags, &tag_count, &color,
-                                                            metadata, sizeof(metadata))) {
+                    if (workspace_item_extract_display_info(
+                        item, tags, &tag_count, &color,
+                        metadata, sizeof(metadata)
+                        )) {
                         output_list_add(
-                            list, tags, tag_count, color, item->filesystem_path, metadata
+                            list, tags, tag_count, color,
+                            item->filesystem_path, metadata
                         );
                     }
                 }
@@ -1684,24 +1754,30 @@ static error_t *update_display_summary(
 
     /* Display deleted files section (if any - rare in update context) */
     if (deleted_count > 0) {
-        output_list_t *list = output_list_create(out,
-            "Deleted files",
-            "these files will be removed from the profile");
+        output_list_t *list = output_list_create(
+            out, "Deleted files",
+            "these files will be removed from the profile"
+        );
 
         if (list) {
             for (size_t i = 0; i < item_count; i++) {
                 const workspace_item_t *item = items[i];
 
-                if (item->item_kind == WORKSPACE_ITEM_FILE && item->state == WORKSPACE_STATE_DELETED) {
+                if (item->item_kind == WORKSPACE_ITEM_FILE &&
+                    item->state == WORKSPACE_STATE_DELETED
+                ) {
                     const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
                     size_t tag_count;
                     output_color_t color;
                     char metadata[256];
 
-                    if (workspace_item_extract_display_info(item, tags, &tag_count, &color,
-                                                            metadata, sizeof(metadata))) {
+                    if (workspace_item_extract_display_info(
+                        item, tags, &tag_count, &color,
+                        metadata, sizeof(metadata)
+                        )) {
                         output_list_add(
-                            list, tags, tag_count, color, item->filesystem_path, metadata
+                            list, tags, tag_count, color,
+                            item->filesystem_path, metadata
                         );
                     }
                 }
@@ -1714,9 +1790,10 @@ static error_t *update_display_summary(
 
     /* Display modified directories section */
     if (dir_count > 0) {
-        output_list_t *list = output_list_create(out,
-            "Modified directories",
-            "directory metadata will be updated");
+        output_list_t *list = output_list_create(
+            out, "Modified directories",
+            "directory metadata will be updated"
+        );
 
         if (list) {
             for (size_t i = 0; i < item_count; i++) {
@@ -1732,19 +1809,27 @@ static error_t *update_display_summary(
                 output_color_t color;
                 char base_metadata[256];
 
-                if (workspace_item_extract_display_info(item, tags, &tag_count, &color,
-                                                        base_metadata, sizeof(base_metadata))) {
+                if (workspace_item_extract_display_info(
+                    item, tags, &tag_count, &color,
+                    base_metadata, sizeof(base_metadata)
+                    )) {
                     /* Build custom content with trailing slash for directories */
                     char path_with_slash[PATH_MAX + 2];
-                    snprintf(path_with_slash, sizeof(path_with_slash), "%s/",
-                            item->filesystem_path);
+                    snprintf(
+                        path_with_slash, sizeof(path_with_slash), "%s/",
+                        item->filesystem_path
+                    );
 
                     /* Build custom metadata with explicit "directory" indicator */
                     char metadata[256];
-                    snprintf(metadata, sizeof(metadata), "directory %s", base_metadata);
+                    snprintf(
+                        metadata, sizeof(metadata), "directory %s",
+                        base_metadata
+                    );
 
                     output_list_add(
-                        list, tags, tag_count, color, path_with_slash, metadata
+                        list, tags, tag_count, color,
+                        path_with_slash, metadata
                     );
                 }
             }
@@ -1756,11 +1841,16 @@ static error_t *update_display_summary(
 
     /* Display encryption policy violations section */
     if (encryption_count > 0) {
-        output_warning(out,
-            "The following files match auto-encrypt patterns but are stored as plaintext:");
+        output_warning(
+            out, "The following files match auto-encrypt "
+            "patterns but are stored as plaintext:"
+        );
         output_newline(out);
 
-        output_list_t *list = output_list_create(out, "Encryption policy violations", NULL);
+        output_list_t *list = output_list_create(
+            out, "Encryption policy violations",
+            NULL
+        );
 
         if (list) {
             for (size_t i = 0; i < item_count; i++) {
@@ -1773,14 +1863,19 @@ static error_t *update_display_summary(
 
                 /* Build metadata with profile and resolution status */
                 char metadata[512];
-                const char *status = item->on_filesystem ?
-                                     "will be encrypted" : "file missing - cannot fix";
-                snprintf(metadata, sizeof(metadata), "from %s, %s", item->profile, status);
+                const char *status = item->on_filesystem
+                    ? "will be encrypted" : "file missing - cannot fix";
+
+                snprintf(
+                    metadata, sizeof(metadata), "from %s, %s",
+                    item->profile, status
+                );
 
                 /* Single tag for policy violation */
-                const char *tags[] = {"plaintext"};
+                const char *tags[] = { "plaintext" };
                 output_list_add(
-                    list, tags, 1, OUTPUT_COLOR_RED, item->filesystem_path, metadata
+                    list, tags, 1, OUTPUT_COLOR_RED,
+                    item->filesystem_path, metadata
                 );
             }
 
@@ -1789,10 +1884,14 @@ static error_t *update_display_summary(
         }
 
         output_newline(out);
-        output_info(out,
-            "These files will be re-encrypted according to your auto_encrypt_patterns config.");
-        output_info(out,
-            "To keep a file as plaintext, use: dotta update --no-encrypt <file>");
+        output_info(
+            out, "These files will be re-encrypted according to "
+            "your auto_encrypt_patterns config."
+        );
+        output_info(
+            out, "To keep a file as plaintext, use: "
+            "dotta update --no-encrypt <file>"
+        );
     }
 
     return NULL;
@@ -1850,17 +1949,25 @@ static error_t *update_confirm_operation(
     if (opts->dry_run) {
         output_info(out, "Dry run: no changes will be committed");
         if (modified_count > 0)
-            output_info(out, "  %zu modified file%s to update",
-                        modified_count, modified_count == 1 ? "" : "s");
+            output_info(
+                out, "  %zu modified file%s to update",
+                modified_count, modified_count == 1 ? "" : "s"
+            );
         if (deleted_count > 0)
-            output_info(out, "  %zu deleted file%s to remove",
-                        deleted_count, deleted_count == 1 ? "" : "s");
+            output_info(
+                out, "  %zu deleted file%s to remove",
+                deleted_count, deleted_count == 1 ? "" : "s"
+            );
         if (new_count > 0)
-            output_info(out, "  %zu new file%s to add",
-                        new_count, new_count == 1 ? "" : "s");
+            output_info(
+                out, "  %zu new file%s to add",
+                new_count, new_count == 1 ? "" : "s"
+            );
         if (dir_count > 0)
-            output_info(out, "  %zu director%s to update metadata",
-                        dir_count, dir_count == 1 ? "y" : "ies");
+            output_info(
+                out, "  %zu director%s to update metadata",
+                dir_count, dir_count == 1 ? "y" : "ies"
+            );
         *result = CONFIRM_DRY_RUN;
         return NULL;
     }
@@ -1879,9 +1986,11 @@ static error_t *update_confirm_operation(
         !opts->include_new && !opts->only_new && config->auto_detect_new_files) {
 
         char confirm_msg[128];
-        snprintf(confirm_msg, sizeof(confirm_msg),
-                 "Found %zu new file%s. Add %s to profiles?",
-                 new_count, new_count == 1 ? "" : "s", new_count == 1 ? "it" : "them");
+        snprintf(
+            confirm_msg, sizeof(confirm_msg),
+            "Found %zu new file%s. Add %s to profiles?",
+            new_count, new_count == 1 ? "" : "s", new_count == 1 ? "it" : "them"
+        );
         if (!output_confirm(out, confirm_msg, false)) {
             *result = CONFIRM_SKIP_NEW_FILES;
             return NULL;
@@ -1953,15 +2062,19 @@ error_t *cmd_update(
      */
 
     /* Phase 1: Load workspace profiles (persistent enabled profiles) */
-    err = profile_resolve_for_workspace(repo, config->strict_mode, &workspace_profiles);
+    err = profile_resolve_for_workspace(
+        repo, config->strict_mode, &workspace_profiles
+    );
     if (err) {
         err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
     }
 
     if (workspace_profiles->count == 0) {
-        err = ERROR(ERR_NOT_FOUND, "No enabled profiles found\n"
-                    "Hint: Run 'dotta profile enable <name>' to enable profiles");
+        err = ERROR(
+            ERR_NOT_FOUND, "No enabled profiles found\n"
+            "Hint: Run 'dotta profile enable <name>' to enable profiles"
+        );
         goto cleanup;
     }
 
@@ -1969,7 +2082,8 @@ error_t *cmd_update(
     if (opts->profiles && opts->profile_count > 0) {
         /* CLI filter specified - load operation filter profiles */
         err = profile_resolve_for_operations(
-            repo, opts->profiles, opts->profile_count, config->strict_mode, &operation_profiles
+            repo, opts->profiles, opts->profile_count,
+            config->strict_mode, &operation_profiles
         );
         if (err) {
             err = error_wrap(err, "Failed to resolve operation profiles");
@@ -2018,7 +2132,10 @@ error_t *cmd_update(
                 if (err) {
                     /* Hook failed - abort operation */
                     if (hook_result && hook_result->output && hook_result->output[0]) {
-                        output_print(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
+                        output_print(
+                            out, OUTPUT_NORMAL, "Hook output:\n%s\n",
+                            hook_result->output
+                        );
                     }
                     hook_result_free(hook_result);
                     err = error_wrap(err, "Pre-update hook failed");
@@ -2048,12 +2165,12 @@ error_t *cmd_update(
      * opens later in update_manifest_after_update().
      */
     workspace_load_t ws_opts = {
-        .analyze_files = true,        /* Detect content and metadata changes */
-        .analyze_orphans = false,     /* Update doesn't process orphaned files */
-        .analyze_untracked = (opts->include_new || opts->only_new ||      /* Explicit flags */
-                             (config && config->auto_detect_new_files)),  /* Or config auto-detect */
-        .analyze_directories = true,  /* Directory metadata change detection */
-        .analyze_encryption = true    /* Encryption policy validation */
+        .analyze_files       = true,                                   /* Detect content and metadata changes */
+        .analyze_orphans     = false,                                  /* Update doesn't process orphaned files */
+        .analyze_untracked   = (opts->include_new || opts->only_new || /* Explicit flags */
+            (config && config->auto_detect_new_files)),                /* Or config auto-detect */
+        .analyze_directories = true,                                   /* Directory metadata change detection */
+        .analyze_encryption  = true                                    /* Encryption policy validation */
     };
     err = workspace_load(repo, NULL, workspace_profiles, config, &ws_opts, &ws);
     if (err) {
@@ -2077,14 +2194,16 @@ error_t *cmd_update(
             if (custom_prefixes) {
                 for (size_t i = 0; i < operation_profiles->count; i++) {
                     if (operation_profiles->profiles[i].custom_prefix) {
-                        custom_prefixes[prefix_count++] = operation_profiles->profiles[i].custom_prefix;
+                        custom_prefixes[prefix_count++] = operation_profiles->profiles[i].
+                            custom_prefix;
                     }
                 }
             }
         }
 
         err = path_filter_create(
-            (const char **)opts->files, opts->file_count, custom_prefixes, prefix_count, &file_filter
+            (const char **) opts->files, opts->file_count, custom_prefixes,
+            prefix_count, &file_filter
         );
         free(custom_prefixes);  /* Array only, strings are borrowed from profiles */
 
@@ -2201,7 +2320,9 @@ error_t *cmd_update(
 
     /* Handle user confirmations */
     confirm_result_t confirm_result;
-    err = update_confirm_operation(out, opts, update_items, update_count, config, &confirm_result);
+    err = update_confirm_operation(
+        out, opts, update_items, update_count, config, &confirm_result
+    );
     if (err) {
         goto cleanup;
     }
@@ -2224,7 +2345,9 @@ error_t *cmd_update(
             update_count = filtered;
 
             if (update_count == 0) {
-                output_info(out, "No modified files remaining after skipping new files");
+                output_info(
+                    out, "No modified files remaining after skipping new files"
+                );
                 goto cleanup;
             }
             break;
@@ -2278,7 +2401,11 @@ error_t *cmd_update(
 
     if (manifest_err) {
         /* Non-fatal: commits succeeded but manifest update failed */
-        output_warning(out, "Failed to update manifest: %s", error_message(manifest_err));
+        output_warning(
+            out, "Failed to update manifest: %s",
+            error_message(manifest_err)
+        );
+
         output_info(out, "Files committed to Git successfully");
         output_hint(out, "Run 'dotta status' to check manifest state");
         output_hint(out, "Or run 'dotta profile enable <profile>' to repair");
@@ -2289,13 +2416,21 @@ error_t *cmd_update(
     /* Execute post-update hook */
     if (hook_ctx && !opts->dry_run) {
         hook_result_t *hook_result = NULL;
-        error_t *hook_err = hook_execute(config, HOOK_POST_UPDATE, hook_ctx, &hook_result);
+        error_t *hook_err = hook_execute(
+            config, HOOK_POST_UPDATE, hook_ctx, &hook_result
+        );
 
         if (hook_err) {
             /* Hook failed - warn but don't abort (files already updated) */
-            output_warning(out, "Post-update hook failed: %s", error_message(hook_err));
+            output_warning(
+                out, "Post-update hook failed: %s",
+                error_message(hook_err)
+            );
             if (hook_result && hook_result->output && hook_result->output[0]) {
-                output_print(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
+                output_print(
+                    out, OUTPUT_NORMAL, "Hook output:\n%s\n",
+                    hook_result->output
+                );
             }
             error_free(hook_err);
         }
@@ -2304,20 +2439,32 @@ error_t *cmd_update(
 
     /* Summary (report updated profile count) */
     output_newline(out);
-    output_success(out, "Updated %zu item%s across %zu profile%s",
-                   total_updated, total_updated == 1 ? "" : "s",
-                   updated_profile_count, updated_profile_count == 1 ? "" : "s");
+    output_success(
+        out, "Updated %zu item%s across %zu profile%s",
+        total_updated, total_updated == 1 ? "" : "s",
+        updated_profile_count, updated_profile_count == 1 ? "" : "s"
+    );
 
     /* Manifest status feedback */
     output_newline(out);
     if (manifest_updated) {
-        output_info(out, "Manifest updated (%zu item%s synced)",
-                   total_updated, total_updated == 1 ? "" : "s");
-        output_hint(out, "Files committed from filesystem (marked as DEPLOYED)");
-        output_hint(out, "Run 'dotta status' to verify manifest state");
+        output_info(
+            out, "Manifest updated (%zu item%s synced)",
+            total_updated, total_updated == 1 ? "" : "s"
+        );
+        output_hint(
+            out, "Files committed from filesystem (marked as DEPLOYED)"
+        );
+        output_hint(
+            out, "Run 'dotta status' to verify manifest state"
+        );
     } else {
-        output_info(out, "No enabled profiles - manifest not updated");
-        output_hint(out, "Run 'dotta profile enable <profile>' to activate manifest tracking");
+        output_info(
+            out, "No enabled profiles - manifest not updated"
+        );
+        output_hint(
+            out, "Run 'dotta profile enable <profile>' to activate manifest tracking"
+        );
     }
 
 cleanup:

@@ -107,9 +107,10 @@ static error_t *cmd_key_set(
 ) {
     /* Check if encryption is enabled */
     if (!config->encryption_enabled) {
-        return ERROR(ERR_VALIDATION,
-            "Encryption is disabled in configuration\n"
-            "Set 'encryption.enabled = true' in config file");
+        return ERROR(
+            ERR_VALIDATION, "Encryption is disabled in configuration\n"
+            "Set 'encryption.enabled = true' in config file"
+        );
     }
 
     /* Get global keymanager */
@@ -122,12 +123,14 @@ static error_t *cmd_key_set(
     if (keymanager_probe_key(key_mgr)) {
         int64_t seconds_remaining = keymanager_time_until_expiry(key_mgr, NULL);
         if (seconds_remaining == -1) {
-            output_info(out,
-                "A passphrase is already cached (no expiration)");
+            output_info(
+                out, "A passphrase is already cached (no expiration)"
+            );
         } else if (seconds_remaining > 0) {
-            output_info(out,
-                "A passphrase is already cached (expires in %ld seconds)",
-                (long)seconds_remaining);
+            output_info(
+                out, "A passphrase is already cached (expires in %ld seconds)",
+                (long) seconds_remaining
+            );
         }
         output_info(out, "Enter a new passphrase to replace it.");
         output_newline(out);
@@ -161,19 +164,25 @@ static error_t *cmd_key_set(
 
     /* Display success message */
     if (config->session_timeout == 0) {
-        output_success(out,
-            "Passphrase set (will be prompted on each use)");
+        output_success(
+            out, "Passphrase set (will be prompted on each use)"
+        );
     } else if (config->session_timeout > 0) {
-        output_success(out,
-            "Passphrase cached for %d seconds", config->session_timeout);
+        output_success(
+            out, "Passphrase cached for %d seconds",
+            config->session_timeout
+        );
     } else {
-        output_success(out,
-            "Passphrase cached (no expiration)");
+        output_success(
+            out, "Passphrase cached (no expiration)"
+        );
     }
 
-    output_print(out, OUTPUT_VERBOSE,
+    output_print(
+        out, OUTPUT_VERBOSE,
         "\nThe encryption key will be used for encrypting and decrypting files\n"
-        "in all profiles until the cache expires or is explicitly cleared.\n");
+        "in all profiles until the cache expires or is explicitly cleared.\n"
+    );
 
     return NULL;
 }
@@ -189,9 +198,10 @@ static error_t *cmd_key_clear(
 ) {
     /* Check if encryption is enabled */
     if (!config->encryption_enabled) {
-        return ERROR(ERR_VALIDATION,
-            "Encryption is disabled in configuration\n"
-            "Set 'encryption.enabled = true' in config file");
+        return ERROR(
+            ERR_VALIDATION, "Encryption is disabled in configuration\n"
+            "Set 'encryption.enabled = true' in config file"
+        );
     }
 
     /* Get global keymanager */
@@ -208,17 +218,21 @@ static error_t *cmd_key_clear(
 
     /* Display result */
     if (had_key) {
-        output_success(out,
-            "Encryption key cleared from memory and disk cache");
+        output_success(
+            out, "Encryption key cleared from memory and disk cache"
+        );
     } else {
-        output_success(out,
-            "Disk cache cleared (no key was cached in memory)");
+        output_success(
+            out, "Disk cache cleared (no key was cached in memory)"
+        );
     }
 
-    output_print(out, OUTPUT_VERBOSE,
+    output_print(
+        out, OUTPUT_VERBOSE,
         "\nCache location: ~/.cache/dotta/session\n"
         "You will be prompted for your passphrase on the next "
-        "operation that requires encryption or decryption.\n");
+        "operation that requires encryption or decryption.\n"
+    );
 
     return NULL;
 }
@@ -237,50 +251,68 @@ static error_t *cmd_key_status(
     output_section(out, "Encryption Configuration");
 
     if (config->encryption_enabled) {
-        output_styled(out, OUTPUT_NORMAL,
-            "  Status: {green}enabled{reset}\n");
+        output_styled(
+            out, OUTPUT_NORMAL, "  Status: {green}enabled{reset}\n"
+        );
 
         /* Show configuration parameters */
-        output_print(out, OUTPUT_VERBOSE,
-            "  KDF opslimit: %lu\n", (unsigned long)config->encryption_opslimit);
+        output_print(
+            out, OUTPUT_VERBOSE, "  KDF opslimit: %lu\n",
+            (unsigned long) config->encryption_opslimit
+        );
 
         /* Show session timeout */
-        output_print(out, OUTPUT_NORMAL,
-            "  Session timeout: ");
+        output_print(
+            out, OUTPUT_NORMAL, "  Session timeout: "
+        );
         if (config->session_timeout == 0) {
-            output_print(out, OUTPUT_NORMAL,
-                "always prompt\n");
+            output_print(
+                out, OUTPUT_NORMAL, "always prompt\n"
+            );
         } else if (config->session_timeout > 0) {
-            output_print(out, OUTPUT_NORMAL,
-                "%u seconds", config->session_timeout);
+            output_print(
+                out, OUTPUT_NORMAL, "%u seconds",
+                config->session_timeout
+            );
 
             unsigned int minutes = config->session_timeout / 60;
             unsigned int hours = minutes / 60;
 
             if (hours > 0) {
-                output_print(out, OUTPUT_VERBOSE,
-                    " (%u hour%s)", hours, hours == 1 ? "" : "s");
+                output_print(
+                    out, OUTPUT_VERBOSE, " (%u hour%s)",
+                    hours, hours == 1 ? "" : "s"
+                );
             } else if (minutes > 0) {
-                output_print(out, OUTPUT_VERBOSE,
-                    " (%u minute%s)", minutes, minutes == 1 ? "" : "s");
+                output_print(
+                    out, OUTPUT_VERBOSE, " (%u minute%s)",
+                    minutes, minutes == 1 ? "" : "s"
+                );
             }
             output_newline(out);
         } else {
-            output_print(out, OUTPUT_NORMAL, "no expiration\n");
+            output_print(
+                out, OUTPUT_NORMAL, "no expiration\n"
+            );
         }
 
         /* Show auto-encrypt patterns */
         if (config->auto_encrypt_pattern_count > 0) {
-            output_print(out, OUTPUT_VERBOSE,
-                "  Auto-encrypt patterns: %zu\n",
-                config->auto_encrypt_pattern_count);
+            output_print(
+                out, OUTPUT_VERBOSE, "  Auto-encrypt patterns: %zu\n",
+                config->auto_encrypt_pattern_count
+            );
             for (size_t i = 0; i < config->auto_encrypt_pattern_count; i++) {
-                output_print(out, OUTPUT_VERBOSE,
-                    "    - %s\n", config->auto_encrypt_patterns[i]);
+                output_print(
+                    out, OUTPUT_VERBOSE, "    - %s\n",
+                    config->auto_encrypt_patterns[i]
+                );
             }
         }
     } else {
-        output_styled(out, OUTPUT_NORMAL, "  Status: {red}disabled{reset}\n");
+        output_styled(
+            out, OUTPUT_NORMAL, "  Status: {red}disabled{reset}\n"
+        );
 
         output_newline(out);
         output_hint(out, "To enable encryption, add to config file:");
@@ -301,27 +333,39 @@ static error_t *cmd_key_status(
     }
 
     bool key_cached = keymanager_probe_key(key_mgr);
-    output_print(out, OUTPUT_NORMAL, "  Key cached: ");
+    output_print(
+        out, OUTPUT_NORMAL, "  Key cached: "
+    );
 
     if (key_cached) {
-        output_styled(out, OUTPUT_NORMAL, "{green}yes{reset}");
+        output_styled(
+            out, OUTPUT_NORMAL, "{green}yes{reset}"
+        );
 
         /* Show time until expiry */
         time_t expires_at = 0;
-        int64_t seconds_remaining = keymanager_time_until_expiry(key_mgr, &expires_at);
+        int64_t seconds_remaining =
+            keymanager_time_until_expiry(key_mgr, &expires_at);
 
         if (seconds_remaining == -1) {
-            output_print(out, OUTPUT_NORMAL,
-                " (no expiration)");
+            output_print(
+                out, OUTPUT_NORMAL, " (no expiration)"
+            );
         } else if (seconds_remaining > 0) {
-            output_print(out, OUTPUT_NORMAL,
-                " (expires in %ld seconds", (long)seconds_remaining);
+            output_print(
+                out, OUTPUT_NORMAL, " (expires in %ld seconds",
+                (long) seconds_remaining
+            );
 
             if (expires_at > 0) {
                 struct tm *tm_info = localtime(&expires_at);
+
                 char time_buf[64];
                 strftime(time_buf, sizeof(time_buf), "%H:%M:%S", tm_info);
-                output_print(out, OUTPUT_VERBOSE, " at %s", time_buf);
+                output_print(
+                    out, OUTPUT_VERBOSE, " at %s",
+                    time_buf
+                );
             }
 
             output_print(out, OUTPUT_NORMAL, ")");
@@ -333,8 +377,10 @@ static error_t *cmd_key_status(
     } else {
         output_styled(out, OUTPUT_NORMAL, "{yellow}no{reset}\n");
 
-        output_print(out, OUTPUT_VERBOSE,
-            "  (You will be prompted for passphrase on next use)\n");
+        output_print(
+            out, OUTPUT_VERBOSE,
+            "  (You will be prompted for passphrase on next use)\n"
+        );
     }
 
     output_newline(out);
@@ -346,14 +392,19 @@ static error_t *cmd_key_status(
     error_t *err = count_encrypted_files(repo, &encrypted_count);
     if (err) {
         /* Non-fatal error - concise at normal, detail at verbose */
-        output_print(out, OUTPUT_NORMAL,
-            "  Unable to count encrypted files\n");
-        output_print(out, OUTPUT_VERBOSE,
-            "  %s\n", error_message(err));
+        output_print(
+            out, OUTPUT_NORMAL, "  Unable to count encrypted files\n"
+        );
+        output_print(
+            out, OUTPUT_VERBOSE, "  %s\n",
+            error_message(err)
+        );
         error_free(err);
     } else {
-        output_print(out, OUTPUT_NORMAL,
-            "  Encrypted files in current profiles: %zu\n", encrypted_count);
+        output_print(
+            out, OUTPUT_NORMAL, "  Encrypted files in current profiles: %zu\n",
+            encrypted_count
+        );
 
         if (encrypted_count == 0) {
             output_newline(out);
@@ -406,7 +457,10 @@ error_t *cmd_key(git_repository *repo, const cmd_key_options_t *opts) {
             break;
 
         default:
-            err = ERROR(ERR_INVALID_ARG, "Invalid key action: %d", opts->action);
+            err = ERROR(
+                ERR_INVALID_ARG, "Invalid key action: %d",
+                opts->action
+            );
             break;
     }
 

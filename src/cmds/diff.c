@@ -50,8 +50,9 @@ static bool should_show_item_for_direction(
         return (item->state == WORKSPACE_STATE_UNDEPLOYED) ||
                (item->state == WORKSPACE_STATE_DELETED) ||
                (item->state == WORKSPACE_STATE_DEPLOYED &&
-                ((item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) ||
-                 item->profile_changed));
+               ((item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_MODE |
+               DIVERGENCE_OWNERSHIP)) ||
+               item->profile_changed));
     }
 
     if (direction == DIFF_DOWNSTREAM) {
@@ -59,7 +60,8 @@ static bool should_show_item_for_direction(
         /* Show: deleted, content/mode differs (filesystem → Git) */
         return (item->state == WORKSPACE_STATE_DELETED) ||
                (item->state == WORKSPACE_STATE_DEPLOYED &&
-                (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)));
+               (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_MODE |
+               DIVERGENCE_OWNERSHIP)));
     }
 
     /* DIFF_BOTH is always decomposed into two explicit calls by the caller
@@ -84,34 +86,34 @@ static const char *get_status_message_from_item(
 ) {
     /* Handle state-based messages first */
     if (item->state == WORKSPACE_STATE_UNDEPLOYED) {
-        return direction == DIFF_UPSTREAM ?
-            "not deployed (would be created by apply)" :
-            "new in repository (not deployed yet)";
+        return direction == DIFF_UPSTREAM
+                ? "not deployed (would be created by apply)"
+                : "new in repository (not deployed yet)";
     }
 
     if (item->state == WORKSPACE_STATE_DELETED) {
-        return direction == DIFF_UPSTREAM ?
-            "deleted locally (file missing)" :
-            "deleted locally (would be removed by update)";
+        return direction == DIFF_UPSTREAM
+                ? "deleted locally (file missing)"
+                : "deleted locally (would be removed by update)";
     }
 
     /* Handle divergence-based messages for deployed items */
     if (item->divergence & DIVERGENCE_TYPE) {
-        return direction == DIFF_UPSTREAM ?
-            "type would change on apply" :
-            "type changed locally";
+        return direction == DIFF_UPSTREAM
+                ? "type would change on apply"
+                : "type changed locally";
     }
 
     if (item->divergence & DIVERGENCE_CONTENT) {
-        return direction == DIFF_UPSTREAM ?
-            "would be overwritten by apply" :
-            "modified locally (would be committed by update)";
+        return direction == DIFF_UPSTREAM
+                ? "would be overwritten by apply"
+                : "modified locally (would be committed by update)";
     }
 
     if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
-        return direction == DIFF_UPSTREAM ?
-            "mode would change on apply" :
-            "mode changed locally";
+        return direction == DIFF_UPSTREAM
+                ? "mode would change on apply"
+                : "mode changed locally";
     }
 
     /* Profile reassignment with no content/metadata divergence.
@@ -160,19 +162,24 @@ static error_t *show_file_diff_from_workspace(
     }
 
     /* Show file header with colors */
-    output_styled(out, OUTPUT_NORMAL, "{bold}diff --dotta a/%s b/%s{reset}\n",
-            entry->storage_path, entry->storage_path);
+    output_styled(
+        out, OUTPUT_NORMAL, "{bold}diff --dotta a/%s b/%s{reset}\n",
+        entry->storage_path, entry->storage_path
+    );
 
     /* Show profile */
-    output_styled(out, OUTPUT_NORMAL, "profile: {cyan}%s{reset}\n",
-            entry->source_profile->name);
+    output_styled(
+        out, OUTPUT_NORMAL, "profile: {cyan}%s{reset}\n",
+        entry->source_profile->name
+    );
 
     /* Get status message from workspace item (no re-analysis needed) */
     const char *status_msg = get_status_message_from_item(item, direction);
 
     /* Determine status color */
     output_color_t status_color = OUTPUT_COLOR_YELLOW;
-    if (item->state == WORKSPACE_STATE_DELETED || item->state == WORKSPACE_STATE_UNDEPLOYED) {
+    if (item->state == WORKSPACE_STATE_DELETED ||
+        item->state == WORKSPACE_STATE_UNDEPLOYED) {
         status_color = OUTPUT_COLOR_RED;
     } else if (item->divergence & DIVERGENCE_TYPE) {
         status_color = OUTPUT_COLOR_RED;
@@ -185,7 +192,8 @@ static error_t *show_file_diff_from_workspace(
     output_colored(out, OUTPUT_NORMAL, status_color, "%s\n", status_msg);
 
     /* For missing files or type changes, no content diff to show */
-    if (item->state == WORKSPACE_STATE_DELETED || item->state == WORKSPACE_STATE_UNDEPLOYED ||
+    if (item->state == WORKSPACE_STATE_DELETED ||
+        item->state == WORKSPACE_STATE_UNDEPLOYED ||
         (item->divergence & DIVERGENCE_TYPE)) {
         return NULL;
     }
@@ -204,33 +212,43 @@ static error_t *show_file_diff_from_workspace(
     /* Lazy-load tree entry for content and mode access.
      * Note: Placed after early returns (name-only, missing files, mode-only, reassignment-only)
      * to avoid unnecessary Git operations when tree entry not needed. */
-    error_t *err = file_entry_ensure_tree_entry((file_entry_t *)entry, repo);
+    error_t *err = file_entry_ensure_tree_entry((file_entry_t *) entry, repo);
     if (err) {
-        return error_wrap(err, "Failed to load tree entry for '%s'", item->filesystem_path);
+        return error_wrap(
+            err, "Failed to load tree entry for '%s'",
+            item->filesystem_path
+        );
     }
 
     /* Get content from cache (borrowed reference - don't free) */
     const buffer_t *content = NULL;
     err = content_cache_get_from_tree_entry(
-        cache, entry->entry, entry->storage_path,
-        entry->source_profile->name, entry->encrypted, &content
+        cache, entry->entry, entry->storage_path, entry->source_profile->name,
+        entry->encrypted, &content
     );
     if (err) {
-        return error_wrap(err, "Failed to get content for '%s'", item->filesystem_path);
+        return error_wrap(
+            err, "Failed to get content for '%s'",
+            item->filesystem_path
+        );
     }
 
     /* Generate diff */
     git_filemode_t mode = git_tree_entry_filemode(entry->entry);
-    compare_direction_t cmp_dir = (direction == DIFF_UPSTREAM) ?
-                                                CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM;
+    compare_direction_t cmp_dir = (direction == DIFF_UPSTREAM)
+                                ? CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM;
 
     file_diff_t *diff = NULL;
     err = compare_generate_diff(
-        content, item->filesystem_path, entry->storage_path, mode, NULL, cmp_dir, &diff
+        content, item->filesystem_path, entry->storage_path, mode, NULL,
+        cmp_dir, &diff
     );
 
     if (err) {
-        return error_wrap(err, "Failed to generate diff for '%s'", item->filesystem_path);
+        return error_wrap(
+            err, "Failed to generate diff for '%s'",
+            item->filesystem_path
+        );
     }
 
     if (diff) {
@@ -330,7 +348,7 @@ static error_t *present_diffs_for_direction(
             continue;
         }
 
-        size_t idx = (size_t)(uintptr_t)idx_ptr - 1;
+        size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
         if (idx >= manifest->count) {
             /* Index out of bounds - shouldn't happen */
             continue;
@@ -393,12 +411,15 @@ static error_t *resolve_commit_in_profiles(
             /* Found it! */
             if (out_profile_name) {
                 *out_profile_name = strdup(profile_name);
+
                 if (!*out_profile_name) {
                     if (out_commit && *out_commit) {
                         git_commit_free(*out_commit);
                         *out_commit = NULL;
                     }
-                    return ERROR(ERR_MEMORY, "Failed to allocate profile name");
+                    return ERROR(
+                        ERR_MEMORY, "Failed to allocate profile name"
+                    );
                 }
             }
             if (last_err) {
@@ -416,12 +437,17 @@ static error_t *resolve_commit_in_profiles(
 
     /* Not found in any profile */
     if (last_err) {
-        error_t *wrapped = error_wrap(last_err,
-            "Commit '%s' not found in any enabled profile", commit_ref);
+        error_t *wrapped = error_wrap(
+            last_err, "Commit '%s' not found in any enabled profile",
+            commit_ref
+        );
         return wrapped;
     }
 
-    return ERROR(ERR_NOT_FOUND, "Commit '%s' not found in any enabled profile", commit_ref);
+    return ERROR(
+        ERR_NOT_FOUND, "Commit '%s' not found in any enabled profile",
+        commit_ref
+    );
 }
 
 /**
@@ -437,7 +463,7 @@ static void print_commit_header(
     git_oid_tostr(oid_str, sizeof(oid_str), commit_oid);
 
     const git_signature *author = git_commit_author(commit);
-    time_t commit_time = (time_t)author->when.time;
+    time_t commit_time = (time_t) author->when.time;
 
     /* Format absolute time */
     struct tm tm_info;
@@ -450,20 +476,28 @@ static void print_commit_header(
     format_relative_time(commit_time, relative_buf, sizeof(relative_buf));
 
     /* Print header with colors */
-    output_styled(out, OUTPUT_NORMAL, "{yellow}commit %s{reset}",
-            oid_str);
+    output_styled(
+        out, OUTPUT_NORMAL, "{yellow}commit %s{reset}",
+        oid_str
+    );
 
     if (profile_name) {
-        output_styled(out, OUTPUT_NORMAL, " {cyan}(%s){reset}",
-                profile_name);
+        output_styled(
+            out, OUTPUT_NORMAL, " {cyan}(%s){reset}",
+            profile_name
+        );
     }
     output_newline(out);
 
-    output_styled(out, OUTPUT_NORMAL, "{bold}Author:{reset} %s <%s>\n",
-            author->name, author->email);
+    output_styled(
+        out, OUTPUT_NORMAL, "{bold}Author:{reset} %s <%s>\n",
+        author->name, author->email
+    );
 
-    output_styled(out, OUTPUT_NORMAL, "{bold}Date:{reset}   %s (%s)\n",
-            time_buf, relative_buf);
+    output_styled(
+        out, OUTPUT_NORMAL, "{bold}Date:{reset}   %s (%s)\n",
+        time_buf, relative_buf
+    );
 
     output_newline(out);
 
@@ -476,7 +510,9 @@ static void print_commit_header(
         char *saveptr = NULL;
         char *line = strtok_r(msg_copy, "\n", &saveptr);
         while (line) {
-            output_print(out, OUTPUT_NORMAL, "    %s\n", line);
+            output_print(
+                out, OUTPUT_NORMAL, "    %s\n", line
+            );
             line = strtok_r(NULL, "\n", &saveptr);
         }
         free(msg_copy);
@@ -506,17 +542,23 @@ static error_t *print_diff_stats(
     size_t deletions = git_diff_stats_deletions(stats);
 
     /* Print stats with color */
-    output_print(out, OUTPUT_NORMAL, " %zu file%s changed",
-            files_changed, files_changed == 1 ? "" : "s");
+    output_print(
+        out, OUTPUT_NORMAL, " %zu file%s changed",
+        files_changed, files_changed == 1 ? "" : "s"
+    );
 
     if (insertions > 0) {
-        output_styled(out, OUTPUT_NORMAL, ", {green}%zu insertion%s(+){reset}",
-                insertions, insertions == 1 ? "" : "s");
+        output_styled(
+            out, OUTPUT_NORMAL, ", {green}%zu insertion%s(+){reset}",
+            insertions, insertions == 1 ? "" : "s"
+        );
     }
 
     if (deletions > 0) {
-        output_styled(out, OUTPUT_NORMAL, ", {red}%zu deletion%s(-){reset}",
-                deletions, deletions == 1 ? "" : "s");
+        output_styled(
+            out, OUTPUT_NORMAL, ", {red}%zu deletion%s(-){reset}",
+            deletions, deletions == 1 ? "" : "s"
+        );
     }
 
     output_newline(out);
@@ -534,9 +576,9 @@ static int print_diff_line_cb(
     const git_diff_line *line,
     void *payload
 ) {
-    output_ctx_t *out = (output_ctx_t *)payload;
-    (void)delta;
-    (void)hunk;
+    output_ctx_t *out = (output_ctx_t *) payload;
+    (void) delta;
+    (void) hunk;
 
     output_color_t line_color = OUTPUT_COLOR_RESET;
 
@@ -559,12 +601,16 @@ static int print_diff_line_cb(
     if (line->origin == GIT_DIFF_LINE_ADDITION ||
         line->origin == GIT_DIFF_LINE_DELETION ||
         line->origin == GIT_DIFF_LINE_CONTEXT) {
-        output_colored(out, OUTPUT_NORMAL, line_color, "%c%.*s",
-                       line->origin, (int)line->content_len, line->content);
+        output_colored(
+            out, OUTPUT_NORMAL, line_color, "%c%.*s",
+            line->origin, (int) line->content_len, line->content
+        );
     } else {
         /* File/hunk headers - print as-is */
-        output_colored(out, OUTPUT_NORMAL, line_color, "%.*s",
-                       (int)line->content_len, line->content);
+        output_colored(
+            out, OUTPUT_NORMAL, line_color, "%.*s",
+            (int) line->content_len, line->content
+        );
     }
 
     /* Add newline if not present */
@@ -655,16 +701,21 @@ static error_t *compare_manifest_to_filesystem(
             /* Get content from historical commit (cached) */
             const buffer_t *hist_content = NULL;
             err = content_cache_get_from_tree_entry(
-                cache, entry->entry, storage_path, profile_name, encrypted, &hist_content
+                cache, entry->entry, storage_path, profile_name,
+                encrypted, &hist_content
             );
             if (err) {
-                err = error_wrap(err, "Failed to get historical content for '%s'", fs_path);
+                err = error_wrap(
+                    err, "Failed to get historical content for '%s'", fs_path
+                );
                 goto cleanup;
             }
 
             /* Compare with filesystem */
             compare_result_t result;
-            err = compare_buffer_to_disk(hist_content, fs_path, mode, NULL, &result, NULL);
+            err = compare_buffer_to_disk(
+                hist_content, fs_path, mode, NULL, &result, NULL
+            );
             if (err) {
                 err = error_wrap(err, "Failed to compare '%s'", fs_path);
                 goto cleanup;
@@ -680,18 +731,27 @@ static error_t *compare_manifest_to_filesystem(
         /* Full diff output */
         const buffer_t *hist_content = NULL;
         err = content_cache_get_from_tree_entry(
-            cache, entry->entry, storage_path, profile_name, encrypted, &hist_content
+            cache, entry->entry, storage_path, profile_name, encrypted,
+            &hist_content
         );
         if (err) {
-            err = error_wrap(err, "Failed to get historical content for '%s'", fs_path);
+            err = error_wrap(
+                err, "Failed to get historical content for '%s'",
+                fs_path
+            );
             goto cleanup;
         }
 
         /* Compare with filesystem */
         compare_result_t result;
-        err = compare_buffer_to_disk(hist_content, fs_path, mode, NULL, &result, NULL);
+        err = compare_buffer_to_disk(
+            hist_content, fs_path, mode, NULL, &result, NULL
+        );
         if (err) {
-            err = error_wrap(err, "Failed to compare '%s'", fs_path);
+            err = error_wrap(
+                err, "Failed to compare '%s'",
+                fs_path
+            );
             goto cleanup;
         }
 
@@ -701,11 +761,15 @@ static error_t *compare_manifest_to_filesystem(
         }
 
         /* Show file header */
-        output_styled(out, OUTPUT_NORMAL, "{bold}diff --dotta a/%s b/%s{reset}\n",
-                storage_path, storage_path);
+        output_styled(
+            out, OUTPUT_NORMAL, "{bold}diff --dotta a/%s b/%s{reset}\n",
+            storage_path, storage_path
+        );
 
-        output_styled(out, OUTPUT_NORMAL, "profile: {cyan}%s{reset}\n",
-                profile_name);
+        output_styled(
+            out, OUTPUT_NORMAL, "profile: {cyan}%s{reset}\n",
+            profile_name
+        );
 
         /* Show status message */
         const char *status_msg = NULL;
@@ -739,8 +803,8 @@ static error_t *compare_manifest_to_filesystem(
         }
 
         err = compare_generate_diff(
-            hist_content, fs_path, storage_path,
-            mode, NULL, CMP_DIR_DOWNSTREAM, &diff
+            hist_content, fs_path, storage_path, mode, NULL,
+            CMP_DIR_DOWNSTREAM, &diff
         );
         if (err) {
             err = error_wrap(err, "Failed to generate diff for '%s'", fs_path);
@@ -787,6 +851,7 @@ static size_t validate_filter_paths(
     hashmap_iter_t iter;
     hashmap_iter_init(&iter, file_filter->exact_paths);
     const char *filter_path;
+
     while (hashmap_iter_next(&iter, &filter_path, NULL)) {
         bool found = false;
         size_t filter_len = strlen(filter_path);
@@ -798,14 +863,18 @@ static size_t validate_filter_paths(
                 break;
             }
             /* Directory prefix: filter path is ancestor of storage path */
-            if (strncmp(sp, filter_path, filter_len) == 0 && sp[filter_len] == '/') {
+            if (strncmp(sp, filter_path, filter_len) == 0 &&
+                sp[filter_len] == '/') {
                 found = true;
                 break;
             }
         }
 
         if (!found) {
-            output_warning(out, "No managed file matches '%s'", filter_path);
+            output_warning(
+                out, "No managed file matches '%s'",
+                filter_path
+            );
             unmatched++;
         }
     }
@@ -814,15 +883,20 @@ static size_t validate_filter_paths(
     for (size_t g = 0; g < file_filter->glob_count; g++) {
         bool found = false;
         for (size_t i = 0; i < manifest->count; i++) {
-            if (match_pattern(file_filter->glob_patterns[g],
-                              manifest->entries[i].storage_path, MATCH_DOUBLESTAR)) {
+            if (match_pattern(
+                file_filter->glob_patterns[g],
+                manifest->entries[i].storage_path,
+                MATCH_DOUBLESTAR
+                )) {
                 found = true;
                 break;
             }
         }
         if (!found) {
-            output_warning(out, "No managed file matches pattern '%s'",
-                           file_filter->glob_patterns[g]);
+            output_warning(
+                out, "No managed file matches pattern '%s'",
+                file_filter->glob_patterns[g]
+            );
             unmatched++;
         }
     }
@@ -883,13 +957,18 @@ static error_t *diff_commit_to_workspace(
     /* Warn when multiple profiles are enabled: only the profile containing
      * the commit is compared against the filesystem. */
     if (profiles->count > 1) {
-        output_info(out, "Note: comparing commit against profile '%s' only "
-        "(commit-to-workspace compares one profile at a time)\n", profile_name);
+        output_info(
+            out, "Note: comparing commit against profile '%s' only "
+            "(commit-to-workspace compares one profile at a time)\n",
+            profile_name
+        );
         output_newline(out);
     }
 
-    output_styled(out, OUTPUT_NORMAL, "{bold}diff --dotta %s..workspace{reset}\n\n",
-            oid_str);
+    output_styled(
+        out, OUTPUT_NORMAL, "{bold}diff --dotta %s..workspace{reset}\n\n",
+        oid_str
+    );
 
     print_commit_header(out, commit, &commit_oid, profile_name);
 
@@ -923,7 +1002,9 @@ static error_t *diff_commit_to_workspace(
         }
     }
 
-    err = profile_build_manifest_from_tree(tree, profile_name, custom_prefix, &manifest);
+    err = profile_build_manifest_from_tree(
+        tree, profile_name, custom_prefix, &manifest
+    );
     if (err) {
         err = error_wrap(err, "Failed to build manifest from commit");
         goto cleanup;
@@ -932,7 +1013,8 @@ static error_t *diff_commit_to_workspace(
     /* Step 6: Compare historical manifest against current filesystem */
     size_t diff_count = 0;
     err = compare_manifest_to_filesystem(
-        repo, manifest, metadata, profile_name, file_filter, opts, config, out, &diff_count
+        repo, manifest, metadata, profile_name, file_filter, opts,
+        config, out, &diff_count
     );
     if (err) {
         goto cleanup;
@@ -940,11 +1022,16 @@ static error_t *diff_commit_to_workspace(
 
     if (diff_count == 0 && !opts->name_only) {
         size_t unmatched = validate_filter_paths(file_filter, manifest, out);
+
         if (unmatched > 0) {
-            output_hint(out, "Use 'dotta list <profile>' to see managed files");
+            output_hint(
+                out, "Use 'dotta list <profile>' to see managed files"
+            );
         }
         if (unmatched == 0 || (file_filter && unmatched < file_filter->count)) {
-            output_info(out, "No differences between commit and workspace\n");
+            output_info(
+                out, "No differences between commit and workspace\n"
+            );
         }
     }
 
@@ -997,7 +1084,9 @@ static error_t *build_diff_pathspec(
     /* Allocate pointer array for all paths (exact + globs) */
     char **strings = calloc(filter->count, sizeof(char *));
     if (!strings) {
-        return ERROR(ERR_MEMORY, "Failed to allocate memory for diff pathspec");
+        return ERROR(
+            ERR_MEMORY, "Failed to allocate memory for diff pathspec"
+        );
     }
 
     size_t index = 0;
@@ -1014,7 +1103,7 @@ static error_t *build_diff_pathspec(
 
     while (hashmap_iter_next(&iter, &key, NULL)) {
         if (index < filter->count) {
-            strings[index++] = (char *)key;  /* Borrow pointer from hashmap */
+            strings[index++] = (char *) key;  /* Borrow pointer from hashmap */
         }
     }
 
@@ -1033,7 +1122,7 @@ static error_t *build_diff_pathspec(
     /* Populate pathspec in diff options */
     opts->pathspec.strings = strings;
     opts->pathspec.count = index;
-    
+
     return NULL;
 }
 
@@ -1086,10 +1175,12 @@ static error_t *diff_commits(
      * Dotta profiles are orphan branches — comparing commits across profiles
      * would diff two completely unrelated trees, producing meaningless output. */
     if (strcmp(profile1_name, profile2_name) != 0) {
-        err = ERROR(ERR_VALIDATION,
+        err = ERROR(
+            ERR_VALIDATION,
             "Commits belong to different profiles ('%s' and '%s'); "
             "cross-profile commit comparison is not supported",
-            profile1_name, profile2_name);
+            profile1_name, profile2_name
+        );
         goto cleanup;
     }
 
@@ -1098,8 +1189,10 @@ static error_t *diff_commits(
     git_oid_tostr(oid1_str, sizeof(oid1_str), &commit1_oid);
     git_oid_tostr(oid2_str, sizeof(oid2_str), &commit2_oid);
 
-    output_styled(out, OUTPUT_NORMAL, "{bold}diff --dotta %s..%s{reset}\n\n",
-            oid1_str, oid2_str);
+    output_styled(
+        out, OUTPUT_NORMAL, "{bold}diff --dotta %s..%s{reset}\n\n",
+        oid1_str, oid2_str
+    );
 
     /* Print second commit header (the "new" one) */
     print_commit_header(out, commit2, &commit2_oid, profile2_name);
@@ -1107,13 +1200,19 @@ static error_t *diff_commits(
     /* Get trees from commits */
     err = gitops_get_tree_from_commit(repo, &commit1_oid, &tree1);
     if (err) {
-        err = error_wrap(err, "Failed to get tree from commit %s", oid1_str);
+        err = error_wrap(
+            err, "Failed to get tree from commit %s",
+            oid1_str
+        );
         goto cleanup;
     }
 
     err = gitops_get_tree_from_commit(repo, &commit2_oid, &tree2);
     if (err) {
-        err = error_wrap(err, "Failed to get tree from commit %s", oid2_str);
+        err = error_wrap(
+            err, "Failed to get tree from commit %s",
+            oid2_str
+        );
         goto cleanup;
     }
 
@@ -1126,7 +1225,7 @@ static error_t *diff_commits(
     }
 
     err = gitops_diff_trees(repo, tree1, tree2, &diff_opts, &diff);
-    
+
     /* Free pathspec strings if they were allocated */
     if (diff_opts.pathspec.strings) {
         free(diff_opts.pathspec.strings);
@@ -1139,7 +1238,9 @@ static error_t *diff_commits(
 
     if (opts->name_only) {
         /* Name-only: list changed file paths without diff content or stats */
-        int ret = git_diff_print(diff, GIT_DIFF_FORMAT_NAME_ONLY, print_diff_line_cb, out);
+        int ret = git_diff_print(
+            diff, GIT_DIFF_FORMAT_NAME_ONLY, print_diff_line_cb, out
+        );
         if (ret < 0) {
             err = error_from_git(ret);
             goto cleanup;
@@ -1153,7 +1254,9 @@ static error_t *diff_commits(
 
         output_newline(out);
 
-        int ret = git_diff_print(diff, GIT_DIFF_FORMAT_PATCH, print_diff_line_cb, out);
+        int ret = git_diff_print(
+            diff, GIT_DIFF_FORMAT_PATCH, print_diff_line_cb, out
+        );
         if (ret < 0) {
             err = error_from_git(ret);
             goto cleanup;
@@ -1209,11 +1312,11 @@ static error_t *diff_workspace(
 
     /* Step 1: Load workspace with full file analysis */
     workspace_load_t ws_opts = {
-        .analyze_files = true,        /* File content divergence detection */
-        .analyze_orphans = true,      /* Orphaned state entries */
-        .analyze_untracked = false,   /* Not needed for diff (expensive) */
+        .analyze_files       = true,  /* File content divergence detection */
+        .analyze_orphans     = true,  /* Orphaned state entries */
+        .analyze_untracked   = false, /* Not needed for diff (expensive) */
         .analyze_directories = false, /* Not needed for diff */
-        .analyze_encryption = false   /* Not needed for diff */
+        .analyze_encryption  = false  /* Not needed for diff */
     };
 
     /* Pass NULL for state - diff is read-only, workspace allocates its own state */
@@ -1364,7 +1467,9 @@ error_t *cmd_diff(
      * Workspace operations use persistent profiles. Diff operations filter
      * by CLI profiles when specified.
      */
-    err = profile_resolve_for_workspace(repo, config->strict_mode, &workspace_profiles);
+    err = profile_resolve_for_workspace(
+        repo, config->strict_mode, &workspace_profiles
+    );
     if (err) {
         err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
@@ -1372,14 +1477,15 @@ error_t *cmd_diff(
 
     if (workspace_profiles->count == 0) {
         output_info(out, "No enabled profiles found");
-        output_hint(out, "Run 'dotta profile enable <name>' to enable profiles");
+        output_hint(out, "Run 'dotta profile enable <name>'");
         goto cleanup;
     }
 
     /* Load diff profiles (CLI filter or shared pointer) */
     if (opts->profiles && opts->profile_count > 0) {
         err = profile_resolve_for_operations(
-            repo, opts->profiles, opts->profile_count, config->strict_mode, &diff_profiles
+            repo, opts->profiles, opts->profile_count, config->strict_mode,
+            &diff_profiles
         );
         if (err) {
             err = error_wrap(err, "Failed to resolve diff profiles");
@@ -1401,18 +1507,23 @@ error_t *cmd_diff(
         size_t prefix_count = 0;
 
         if (diff_profiles && diff_profiles->count > 0) {
-            custom_prefixes = calloc(diff_profiles->count, sizeof(char *));
+            custom_prefixes = calloc(
+                diff_profiles->count,
+                sizeof(char *)
+            );
             if (custom_prefixes) {
                 for (size_t i = 0; i < diff_profiles->count; i++) {
                     if (diff_profiles->profiles[i].custom_prefix) {
-                        custom_prefixes[prefix_count++] = diff_profiles->profiles[i].custom_prefix;
+                        custom_prefixes[prefix_count++] =
+                            diff_profiles->profiles[i].custom_prefix;
                     }
                 }
             }
         }
 
         err = path_filter_create(
-            (const char **)opts->files, opts->file_count, custom_prefixes, prefix_count, &file_filter
+            (const char **) opts->files, opts->file_count, custom_prefixes,
+            prefix_count, &file_filter
         );
         free(custom_prefixes);  /* Array only, strings borrowed from profiles */
 
@@ -1427,14 +1538,16 @@ error_t *cmd_diff(
         case DIFF_COMMIT_TO_COMMIT:
             /* Diff two commits */
             err = diff_commits(
-                repo, opts->commit1, opts->commit2, diff_profiles, file_filter, opts, out
+                repo, opts->commit1, opts->commit2, diff_profiles,
+                file_filter, opts, out
             );
             goto cleanup;
 
         case DIFF_COMMIT_TO_WORKSPACE:
             /* Use commit-to-workspace diff */
             err = diff_commit_to_workspace(
-                repo, opts->commit1, diff_profiles, file_filter, opts, config, out
+                repo, opts->commit1, diff_profiles, file_filter,
+                opts, config, out
             );
             goto cleanup;
 
@@ -1442,7 +1555,8 @@ error_t *cmd_diff(
             /* Workspace diff uses workspace_profiles for accurate analysis,
              * diff_profiles for filtering output */
             err = diff_workspace(
-                repo, workspace_profiles, diff_profiles, file_filter, config, opts, out
+                repo, workspace_profiles, diff_profiles, file_filter,
+                config, opts, out
             );
             goto cleanup;
     }

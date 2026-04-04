@@ -169,8 +169,8 @@ static error_t *session_cache_save(
     size_t machine_id_len = 0;
     FILE *fp = NULL;
 
-    uint8_t cache_key[32] = {0};
-    uint8_t stream[32] = {0};
+    uint8_t cache_key[32] = { 0 };
+    uint8_t stream[32] = { 0 };
 
     /* Get cache path */
     err = session_cache_get_path(&cache_path);
@@ -197,17 +197,17 @@ static error_t *session_cache_save(
     }
 
     /* Build cache file */
-    struct session_cache_file cache = {0};
+    struct session_cache_file cache = { 0 };
     memcpy(cache.magic, SESSION_CACHE_MAGIC, 8);
     cache.version = SESSION_CACHE_VERSION;
 
-    cache.created_at = (uint64_t)time(NULL);
+    cache.created_at = (uint64_t) time(NULL);
 
     /* Calculate expiry */
     if (session_timeout < 0) {
         cache.expires_at = 0;  /* Never expire */
     } else {
-        cache.expires_at = cache.created_at + (uint64_t)session_timeout;
+        cache.expires_at = cache.created_at + (uint64_t) session_timeout;
     }
 
     /* Generate random salt */
@@ -224,9 +224,15 @@ static error_t *session_cache_save(
         err = ERROR(ERR_CRYPTO, "Failed to initialize hash for cache key");
         goto cleanup;
     }
-    hydro_hash_update(&hash_state, (uint8_t *)machine_id, machine_id_len);
-    hydro_hash_update(&hash_state, cache.machine_salt, sizeof(cache.machine_salt));
-    hydro_hash_final(&hash_state, cache_key, 32);
+    hydro_hash_update(
+        &hash_state, (uint8_t *) machine_id, machine_id_len
+    );
+    hydro_hash_update(
+        &hash_state, cache.machine_salt, sizeof(cache.machine_salt)
+    );
+    hydro_hash_final(
+        &hash_state, cache_key, 32
+    );
     hydro_memzero(&hash_state, sizeof(hash_state));
 
     /* Encrypt master key using deterministic stream cipher */
@@ -243,10 +249,18 @@ static error_t *session_cache_save(
         goto cleanup;
     }
 
-    hydro_hash_update(&mac_state, (uint8_t *)&cache.created_at, 8);
-    hydro_hash_update(&mac_state, (uint8_t *)&cache.expires_at, 8);
-    hydro_hash_update(&mac_state, cache.machine_salt, 16);
-    hydro_hash_update(&mac_state, cache.encrypted_key, 32);
+    hydro_hash_update(
+        &mac_state, (uint8_t *) &cache.created_at, 8
+    );
+    hydro_hash_update(
+        &mac_state, (uint8_t *) &cache.expires_at, 8
+    );
+    hydro_hash_update(
+        &mac_state, cache.machine_salt, 16
+    );
+    hydro_hash_update(
+        &mac_state, cache.encrypted_key, 32
+    );
 
     hydro_hash_final(&mac_state, cache.mac, 32);
     hydro_memzero(&mac_state, sizeof(mac_state));
@@ -263,7 +277,10 @@ static error_t *session_cache_save(
      */
     int fd = open(cache_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {
-        err = ERROR(ERR_FS, "Failed to create cache file: %s", strerror(errno));
+        err = ERROR(
+            ERR_FS, "Failed to create cache file: %s",
+            strerror(errno)
+        );
         goto cleanup;
     }
 
@@ -273,7 +290,10 @@ static error_t *session_cache_save(
     fp = fdopen(fd, "wb");
     if (!fp) {
         close(fd);  /* fdopen failed - must close fd manually to prevent leak */
-        err = ERROR(ERR_FS, "Failed to fdopen cache file: %s", strerror(errno));
+        err = ERROR(
+            ERR_FS, "Failed to fdopen cache file: %s",
+            strerror(errno)
+        );
         goto cleanup;
     }
 
@@ -282,13 +302,18 @@ static error_t *session_cache_save(
      * and guards against any umask interference. Using fchmod() (not chmod())
      * operates on the open file descriptor, which is safer than pathname-based chmod(). */
     if (fchmod(fileno(fp), 0600) != 0) {
-        err = ERROR(ERR_FS, "Failed to set cache file permissions: %s", strerror(errno));
+        err = ERROR(
+            ERR_FS, "Failed to set cache file permissions: %s",
+            strerror(errno)
+        );
         goto cleanup;
     }
 
     /* Write cache data structure to file */
     if (fwrite(&cache, sizeof(cache), 1, fp) != 1) {
-        err = ERROR(ERR_FS, "Failed to write cache file");
+        err = ERROR(
+            ERR_FS, "Failed to write cache file"
+        );
         goto cleanup;
     }
 
@@ -297,12 +322,18 @@ static error_t *session_cache_save(
      * file writing pattern used throughout the codebase (see fs_write_file_raw()).
      * fflush() writes buffered data to the kernel, fsync() commits to physical disk. */
     if (fflush(fp) != 0) {
-        err = ERROR(ERR_FS, "Failed to flush cache file: %s", strerror(errno));
+        err = ERROR(
+            ERR_FS, "Failed to flush cache file: %s",
+            strerror(errno)
+        );
         goto cleanup;
     }
 
     if (fsync(fileno(fp)) != 0) {
-        err = ERROR(ERR_FS, "Failed to sync cache file to disk: %s", strerror(errno));
+        err = ERROR(
+            ERR_FS, "Failed to sync cache file to disk: %s",
+            strerror(errno)
+        );
         goto cleanup;
     }
 
@@ -341,9 +372,9 @@ static error_t *session_cache_load(
     FILE *fp = NULL;
 
     struct session_cache_file cache;
-    uint8_t cache_key[32] = {0};
-    uint8_t stream[32] = {0};
-    uint8_t computed_mac[32] = {0};
+    uint8_t cache_key[32] = { 0 };
+    uint8_t stream[32] = { 0 };
+    uint8_t computed_mac[32] = { 0 };
 
     /* Get cache path */
     err = session_cache_get_path(&cache_path);
@@ -352,13 +383,18 @@ static error_t *session_cache_load(
     /* Check if cache exists */
     if (!fs_exists(cache_path)) {
         free(cache_path);
-        return ERROR(ERR_NOT_FOUND, "Cache file does not exist");
+        return ERROR(
+            ERR_NOT_FOUND, "Cache file does not exist"
+        );
     }
 
     /* Check permissions (must be 0600) */
     struct stat st;
     if (stat(cache_path, &st) != 0) {
-        err = ERROR(ERR_FS, "Failed to stat cache file: %s", strerror(errno));
+        err = ERROR(
+            ERR_FS, "Failed to stat cache file: %s",
+            strerror(errno)
+        );
         free(cache_path);
         return err;
     }
@@ -367,13 +403,18 @@ static error_t *session_cache_load(
         /* Wrong permissions - delete and fail */
         unlink(cache_path);
         free(cache_path);
-        return ERROR(ERR_CRYPTO, "Cache file has wrong permissions (expected 0600)");
+        return ERROR(
+            ERR_CRYPTO, "Cache file has wrong permissions (expected 0600)"
+        );
     }
 
     /* Read cache file */
     fp = fopen(cache_path, "rb");
     if (!fp) {
-        err = ERROR(ERR_FS, "Failed to open cache file: %s", strerror(errno));
+        err = ERROR(
+            ERR_FS, "Failed to open cache file: %s",
+            strerror(errno)
+        );
         free(cache_path);
         return err;
     }
@@ -383,7 +424,9 @@ static error_t *session_cache_load(
         hydro_memzero(&cache, sizeof(cache));
         unlink(cache_path);
         free(cache_path);
-        return ERROR(ERR_CRYPTO, "Cache file corrupted (incomplete read)");
+        return ERROR(
+            ERR_CRYPTO, "Cache file corrupted (incomplete read)"
+        );
     }
 
     fclose(fp);
@@ -394,7 +437,9 @@ static error_t *session_cache_load(
         hydro_memzero(&cache, sizeof(cache));
         unlink(cache_path);
         free(cache_path);
-        return ERROR(ERR_CRYPTO, "Cache file corrupted (bad magic)");
+        return ERROR(
+            ERR_CRYPTO, "Cache file corrupted (bad magic)"
+        );
     }
 
     /* Check version */
@@ -402,13 +447,15 @@ static error_t *session_cache_load(
         hydro_memzero(&cache, sizeof(cache));
         unlink(cache_path);
         free(cache_path);
-        return ERROR(ERR_CRYPTO, "Unsupported cache version: %d", cache.version);
+        return ERROR(
+            ERR_CRYPTO, "Unsupported cache version: %d", cache.version
+        );
     }
 
     /* Check expiry (if not 0 = never expire) */
     if (cache.expires_at != 0) {
         time_t now = time(NULL);
-        if ((uint64_t)now >= cache.expires_at) {
+        if ((uint64_t) now >= cache.expires_at) {
             hydro_memzero(&cache, sizeof(cache));
             unlink(cache_path);
             free(cache_path);
@@ -428,32 +475,51 @@ static error_t *session_cache_load(
      * Must match the derivation in session_cache_save() */
     hydro_hash_state hash_state;
     if (hydro_hash_init(&hash_state, "dottacch", NULL) != 0) {
-        err = ERROR(ERR_CRYPTO, "Failed to initialize hash for cache key");
+        err = ERROR(
+            ERR_CRYPTO, "Failed to initialize hash for cache key"
+        );
         goto cleanup;
     }
-    hydro_hash_update(&hash_state, (uint8_t *)machine_id, machine_id_len);
-    hydro_hash_update(&hash_state, cache.machine_salt, sizeof(cache.machine_salt));
+    hydro_hash_update(
+        &hash_state, (uint8_t *) machine_id, machine_id_len
+    );
+    hydro_hash_update(
+        &hash_state, cache.machine_salt, sizeof(cache.machine_salt)
+    );
+
     hydro_hash_final(&hash_state, cache_key, 32);
     hydro_memzero(&hash_state, sizeof(hash_state));
 
     /* Verify MAC using cache_key */
     hydro_hash_state mac_state;
     if (hydro_hash_init(&mac_state, "dottamac", cache_key) != 0) {
-        err = ERROR(ERR_CRYPTO, "Failed to initialize MAC verification");
+        err = ERROR(
+            ERR_CRYPTO, "Failed to initialize MAC verification"
+        );
         goto cleanup;
     }
 
-    hydro_hash_update(&mac_state, (uint8_t *)&cache.created_at, 8);
-    hydro_hash_update(&mac_state, (uint8_t *)&cache.expires_at, 8);
-    hydro_hash_update(&mac_state, cache.machine_salt, 16);
-    hydro_hash_update(&mac_state, cache.encrypted_key, 32);
+    hydro_hash_update(
+        &mac_state, (uint8_t *) &cache.created_at, 8
+    );
+    hydro_hash_update(
+        &mac_state, (uint8_t *) &cache.expires_at, 8
+    );
+    hydro_hash_update(
+        &mac_state, cache.machine_salt, 16
+    );
+    hydro_hash_update(
+        &mac_state, cache.encrypted_key, 32
+    );
 
     hydro_hash_final(&mac_state, computed_mac, 32);
     hydro_memzero(&mac_state, sizeof(mac_state));
 
     if (!hydro_equal(computed_mac, cache.mac, 32)) {
         unlink(cache_path);
-        err = ERROR(ERR_CRYPTO, "Cache MAC verification failed (tampered or wrong machine)");
+        err = ERROR(
+            ERR_CRYPTO, "Cache MAC verification failed (tampered or wrong machine)"
+        );
         goto cleanup;
     }
 
@@ -501,7 +567,7 @@ static void session_cache_clear(void) {
      * the original key data on disk. */
     FILE *fp = fopen(cache_path, "r+b");
     if (fp) {
-        struct session_cache_file zero = {0};
+        struct session_cache_file zero = { 0 };
         fwrite(&zero, sizeof(zero), 1, fp);
         fflush(fp);
         fsync(fileno(fp));
@@ -568,7 +634,7 @@ error_t *keymanager_create(
     } else {
         /* mlock failed - log warning but don't fail initialization
          * Common reasons: insufficient permissions, RLIMIT_MEMLOCK exceeded */
-        fprintf(stderr, "Warning: Failed to lock keymanager memory (mlock): %s\n", strerror(errno));
+        fprintf(stderr, "Warning: Failed to lock keymanager memory: %s\n", strerror(errno));
         fprintf(stderr, "         Master key may be swapped to disk.\n");
         fprintf(stderr, "         Consider running with elevated privileges\n");
         fprintf(stderr, "         or increasing RLIMIT_MEMLOCK for enhanced security.\n");
@@ -717,7 +783,7 @@ int64_t keymanager_time_until_expiry(
      * This prevents cache lifetime manipulation via clock changes */
     time_t now_monotonic = get_monotonic_time();
     time_t elapsed = now_monotonic - mgr->cached_at;
-    int64_t remaining = (int64_t)(mgr->session_timeout - elapsed);
+    int64_t remaining = (int64_t) (mgr->session_timeout - elapsed);
 
     if (remaining < 0) {
         remaining = 0;
@@ -763,7 +829,9 @@ error_t *keymanager_set_passphrase(
     CHECK_NULL(passphrase);
 
     if (passphrase_len == 0) {
-        return ERROR(ERR_INVALID_ARG, "Passphrase cannot be empty");
+        return ERROR(
+            ERR_INVALID_ARG, "Passphrase cannot be empty"
+        );
     }
 
     /* Clear profile keys cache before deriving new master key
@@ -805,8 +873,10 @@ error_t *keymanager_set_passphrase(
         error_t *save_err = session_cache_save(mgr->master_key, mgr->session_timeout);
         if (save_err) {
             /* Log warning but don't fail - in-memory cache still works */
-            fprintf(stderr, "Warning: Failed to save session cache: %s\n",
-                    error_message(save_err));
+            fprintf(
+                stderr, "Warning: Failed to save session cache: %s\n",
+                error_message(save_err)
+            );
             error_free(save_err);
         }
     }
@@ -835,14 +905,18 @@ error_t *keymanager_prompt_passphrase(
     /* Disable echo if TTY */
     if (is_tty) {
         if (tcgetattr(STDIN_FILENO, &old_term) != 0) {
-            return ERROR(ERR_FS, "Failed to get terminal attributes");
+            return ERROR(
+                ERR_FS, "Failed to get terminal attributes"
+            );
         }
 
         new_term = old_term;
         new_term.c_lflag &= ~ECHO;  /* Disable echo */
 
         if (tcsetattr(STDIN_FILENO, TCSANOW, &new_term) != 0) {
-            return ERROR(ERR_FS, "Failed to disable echo");
+            return ERROR(
+                ERR_FS, "Failed to disable echo"
+            );
         }
 
         echo_disabled = true;
@@ -859,7 +933,9 @@ error_t *keymanager_prompt_passphrase(
         if (echo_disabled) {
             tcsetattr(STDIN_FILENO, TCSANOW, &old_term);
         }
-        return ERROR(ERR_MEMORY, "Failed to allocate passphrase buffer");
+        return ERROR(
+            ERR_MEMORY, "Failed to allocate passphrase buffer"
+        );
     }
 
     /* Lock memory to prevent passphrase from being swapped to disk */
@@ -902,9 +978,10 @@ error_t *keymanager_prompt_passphrase(
         munlock(passphrase, MAX_PASSPHRASE_LENGTH + 1);
         hydro_memzero(passphrase, MAX_PASSPHRASE_LENGTH + 1);
         free(passphrase);
-        return ERROR(ERR_INVALID_ARG,
-                    "Passphrase too long (maximum %d characters)",
-                    MAX_PASSPHRASE_LENGTH - 1);
+        return ERROR(
+            ERR_INVALID_ARG, "Passphrase too long (maximum %d characters)",
+            MAX_PASSPHRASE_LENGTH - 1
+        );
     }
 
     /* Trim trailing newline */
@@ -1024,8 +1101,10 @@ error_t *keymanager_get_key(
             error_free(err);
         } else {
             /* Unexpected error (file I/O) - warn but don't fail */
-            fprintf(stderr, "Warning: Failed to load session cache: %s\n",
-                    error_message(err));
+            fprintf(
+                stderr, "Warning: Failed to load session cache: %s\n",
+                error_message(err)
+            );
             error_free(err);
         }
     }
@@ -1050,9 +1129,12 @@ error_t *keymanager_get_key(
         );
     } else if (err == NULL) {
         /* Warn user that env var is being used (security risk) */
-        fprintf(stderr, "Warning: Using passphrase from DOTTA_ENCRYPTION_PASSPHRASE environment variable\n");
-        fprintf(stderr, "         This is insecure - environment variables can leak in process listings\n");
-        fprintf(stderr, "         and are inherited by child processes. Use interactive prompt instead.\n");
+        fprintf(
+            stderr,
+            "Warning: Using passphrase from DOTTA_ENCRYPTION_PASSPHRASE environment variable\n"
+            "         This is insecure - environment variables can leak in process listings\n"
+            "         and are inherited by child processes. Use interactive prompt instead.\n"
+        );
     }
 
     if (err) {
@@ -1166,8 +1248,10 @@ error_t *keymanager_get_profile_key(
     err = hashmap_set(mgr->profile_keys, profile_name, profile_key);
     if (err) {
         /* Non-fatal: continue without caching */
-        fprintf(stderr, "Warning: Failed to cache profile key for '%s': %s\n",
-                profile_name, error_message(err));
+        fprintf(
+            stderr, "Warning: Failed to cache profile key for '%s': %s\n",
+            profile_name, error_message(err)
+        );
         error_free(err);
 
         /* Copy key to output and return (no caching) */
@@ -1210,7 +1294,7 @@ keymanager_t *keymanager_get_global(const dotta_config_t *config) {
     }
 
     /* Create new keymanager */
-    dotta_config_t *cfg = (dotta_config_t *)config;
+    dotta_config_t *cfg = (dotta_config_t *) config;
     bool allocated_config = false;
 
     if (!cfg) {
@@ -1228,7 +1312,10 @@ keymanager_t *keymanager_get_global(const dotta_config_t *config) {
     }
 
     if (err) {
-        fprintf(stderr, "Failed to create global keymanager: %s\n", error_message(err));
+        fprintf(
+            stderr, "Failed to create global keymanager: %s\n",
+            error_message(err)
+        );
         error_free(err);
         return NULL;
     }

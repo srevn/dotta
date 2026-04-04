@@ -88,8 +88,8 @@ static inline git_filemode_t state_type_to_git_filemode(state_file_type_t type) 
  * simply never benefits from the fast path — correct, just not optimized.
  */
 typedef struct {
-    int64_t  mtime;   /* st_mtime seconds at last known-good state (0 = unset) */
-    int64_t  size;    /* st_size at last known-good state */
+    int64_t mtime;    /* st_mtime seconds at last known-good state (0 = unset) */
+    int64_t size;     /* st_size at last known-good state */
     uint64_t ino;     /* st_ino at last known-good state */
 } stat_cache_t;
 
@@ -104,9 +104,9 @@ typedef struct {
  */
 static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
     return (stat_cache_t){
-        .mtime = (int64_t)st->st_mtime,
-        .size  = (int64_t)st->st_size,
-        .ino   = (uint64_t)st->st_ino,
+        .mtime = (int64_t) st->st_mtime,
+        .size = (int64_t) st->st_size,
+        .ino = (uint64_t) st->st_ino,
     };
 }
 
@@ -118,7 +118,7 @@ static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
  *
  * SCOPE-BASED ARCHITECTURE:
  * - Manifest existence = file should be managed
- * - deployed_at = lifecycle tracking (see SCOPE_BASED_ARCHITECTURE_PLAN.md)
+ * - deployed_at = lifecycle tracking
  *   - 0 = file never deployed by dotta (shows as [undeployed] if missing)
  *   - > 0 = file known to dotta (either deployed or existed when profile enabled)
  *

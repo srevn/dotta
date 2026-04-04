@@ -147,16 +147,16 @@ static const char *PROFILE_DOTTAIGNORE =
     "# This profile's ignore patterns work in layers (in precedence order):\n"
     "#   1. CLI --exclude flags (highest priority - per-operation)\n"
     "#   2. Combined .dottaignore (baseline + this file, evaluated together):\n"
-    "#      - Baseline .dottaignore (from dotta-worktree, applies to ALL profiles)\n"
+    "#      - Baseline .dottaignore (from dotta-worktree, applies to all profiles)\n"
     "#      - Profile .dottaignore (this file - later rules override baseline)\n"
     "#   3. Config file patterns (from ~/.config/dotta/config.toml)\n"
     "#   4. Source .gitignore (lowest priority - when adding from git repos)\n"
     "#\n"
-    "# IMPORTANT: This profile automatically inherits ALL baseline patterns.\n"
+    "# Important: This profile automatically inherits all baseline patterns.\n"
     "# Use negation patterns (!) to override baseline. Example:\n"
     "#   Baseline has: *.log\n"
     "#   Profile adds: !important.log\n"
-    "#   Result: important.log is NOT ignored in this profile\n"
+    "#   Result: important.log is not ignored in this profile\n"
     "#\n"
     "# This file uses standard .gitignore syntax:\n"
     "#   - Use # for comments\n"
@@ -293,9 +293,14 @@ static error_t *load_profile_dottaignore(
 
     /* Build ref name */
     char ref_name[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(ref_name, sizeof(ref_name), "refs/heads/%s", profile_name);
+    err = gitops_build_refname(
+        ref_name, sizeof(ref_name), "refs/heads/%s", profile_name
+    );
     if (err) {
-        return error_wrap(err, "Invalid profile name '%s'", profile_name);
+        return error_wrap(
+            err, "Invalid profile name '%s'",
+            profile_name
+        );
     }
 
     /* Load tree from profile branch
@@ -304,7 +309,10 @@ static error_t *load_profile_dottaignore(
     git_tree *tree = NULL;
     err = gitops_load_tree(repo, ref_name, &tree);
     if (err) {
-        return error_wrap(err, "Failed to load tree for profile '%s'", profile_name);
+        return error_wrap(
+            err, "Failed to load tree for profile '%s'",
+            profile_name
+        );
     }
 
     /* Look for .dottaignore entry */
@@ -338,7 +346,9 @@ static error_t *load_profile_dottaignore(
     if (size > MAX_DOTTAIGNORE_SIZE) {
         git_blob_free(blob);
         git_tree_free(tree);
-        return ERROR(ERR_VALIDATION, "Profile .dottaignore file too large (max 1MB)");
+        return ERROR(
+            ERR_VALIDATION, "Profile .dottaignore file too large (max 1MB)"
+        );
     }
 
     if (size > 0) {
@@ -666,8 +676,9 @@ error_t *ignore_context_create(
         /* Validate pattern count to prevent overflow and DoS */
         if (cli_exclude_count > MAX_PATTERN_COUNT) {
             free(ctx);
-            return ERROR(ERR_VALIDATION,
-                "Too many CLI exclude patterns (max 10000)");
+            return ERROR(
+                ERR_VALIDATION, "Too many CLI exclude patterns (max 10000)"
+            );
         }
 
         ctx->cli_patterns = malloc(cli_exclude_count * sizeof(char *));
@@ -685,8 +696,9 @@ error_t *ignore_context_create(
                 }
                 free(ctx->cli_patterns);
                 free(ctx);
-                return ERROR(ERR_VALIDATION,
-                    "CLI exclude pattern too long (max 4096 chars)");
+                return ERROR(
+                    ERR_VALIDATION, "CLI exclude pattern too long (max 4096 chars)"
+                );
             }
 
             ctx->cli_patterns[i] = strdup(cli_excludes[i]);
@@ -735,9 +747,11 @@ error_t *ignore_context_create(
 
     if (ctx->baseline_dottaignore_content && ctx->profile_dottaignore_content) {
         /* Both exist: combine with baseline first, profile second */
-        ctx->combined_dottaignore_content = str_format("%s\n%s",
+        ctx->combined_dottaignore_content = str_format(
+            "%s\n%s",
             ctx->baseline_dottaignore_content,
-            ctx->profile_dottaignore_content);
+            ctx->profile_dottaignore_content
+        );
         if (!ctx->combined_dottaignore_content) {
             ignore_context_free(ctx);
             return ERROR(ERR_MEMORY, "Failed to combine .dottaignore content");
@@ -768,8 +782,9 @@ error_t *ignore_context_create(
         /* Validate pattern count to prevent overflow and DoS */
         if (config->ignore_pattern_count > MAX_PATTERN_COUNT) {
             ignore_context_free(ctx);
-            return ERROR(ERR_VALIDATION,
-                "Too many config ignore patterns (max 10000)");
+            return ERROR(
+                ERR_VALIDATION, "Too many config ignore patterns (max 10000)"
+            );
         }
 
         ctx->config_patterns = malloc(config->ignore_pattern_count * sizeof(char *));
@@ -790,8 +805,9 @@ error_t *ignore_context_create(
                 ctx->config_patterns = NULL;
                 ctx->config_pattern_count = 0;
                 ignore_context_free(ctx);
-                return ERROR(ERR_VALIDATION,
-                    "Config ignore pattern too long (max 4096 chars)");
+                return ERROR(
+                    ERR_VALIDATION, "Config ignore pattern too long (max 4096 chars)"
+                );
             }
 
             ctx->config_patterns[i] = strdup(config->ignore_patterns[i]);
@@ -885,8 +901,11 @@ error_t *ignore_should_ignore(
 
     /* Layer 1: CLI patterns (highest priority) */
     if (matches_cli_patterns(
-        rel_path, is_directory, ctx->cli_patterns, ctx->cli_pattern_count)
-    ) {
+        rel_path,
+        is_directory,
+        ctx->cli_patterns,
+        ctx->cli_pattern_count
+        )) {
         *ignored = true;
         return NULL;
     }
@@ -918,8 +937,11 @@ error_t *ignore_should_ignore(
 
     /* Layer 4: Config patterns (user-level rules) */
     if (matches_config_patterns(
-        rel_path, is_directory, ctx->config_patterns, ctx->config_pattern_count)
-    ) {
+        rel_path,
+        is_directory,
+        ctx->config_patterns,
+        ctx->config_pattern_count
+        )) {
         *ignored = true;
         return NULL;
     }
@@ -927,7 +949,9 @@ error_t *ignore_should_ignore(
     /* Layer 5: Source .gitignore (lowest priority, when enabled) */
     if (ctx->respect_gitignore && abs_path[0] == '/') {
         bool matched = false;
-        error_t *err = matches_source_gitignore(ctx, abs_path, is_directory, &matched);
+        error_t *err = matches_source_gitignore(
+            ctx, abs_path, is_directory, &matched
+        );
         if (err) {
             /* Non-fatal - continue without source .gitignore checking */
             error_free(err);
@@ -977,7 +1001,7 @@ static bool content_has_matching_pattern(
 
         /* Find trimmed region (no allocation) */
         const char *start = line;
-        size_t len = (size_t)(eol - line);
+        size_t len = (size_t) (eol - line);
 
         /* Skip leading whitespace */
         while (len > 0 && (*start == ' ' || *start == '\t')) {
@@ -1058,8 +1082,11 @@ error_t *ignore_test_path(
 
     /* Layer 1: CLI patterns (highest priority) */
     if (matches_cli_patterns(
-        rel_path, is_directory, ctx->cli_patterns, ctx->cli_pattern_count)
-    ) {
+        rel_path,
+        is_directory,
+        ctx->cli_patterns,
+        ctx->cli_pattern_count
+        )) {
         result->ignored = true;
         result->source = IGNORE_SOURCE_CLI;
         return NULL;
@@ -1092,9 +1119,10 @@ error_t *ignore_test_path(
                      * Accurate for simple cases. May misattribute when
                      * negation patterns interact between layers. */
                     result->source = content_has_matching_pattern(
-                            ctx->baseline_dottaignore_content, rel_path, is_directory
+                        ctx->baseline_dottaignore_content, rel_path, is_directory
                         ) ? IGNORE_SOURCE_BASELINE_DOTTAIGNORE
                           : IGNORE_SOURCE_PROFILE_DOTTAIGNORE;
+
                 } else if (ctx->profile_dottaignore_content) {
                     result->source = IGNORE_SOURCE_PROFILE_DOTTAIGNORE;
                 } else {
@@ -1110,8 +1138,8 @@ error_t *ignore_test_path(
         rel_path,
         is_directory,
         ctx->config_patterns,
-        ctx->config_pattern_count)
-    ) {
+        ctx->config_pattern_count
+        )) {
         result->ignored = true;
         result->source = IGNORE_SOURCE_CONFIG;
         return NULL;
@@ -1120,7 +1148,9 @@ error_t *ignore_test_path(
     /* Layer 5: Source .gitignore (lowest priority, when enabled) */
     if (ctx->respect_gitignore && abs_path[0] == '/') {
         bool matched = false;
-        error_t *err = matches_source_gitignore(ctx, abs_path, is_directory, &matched);
+        error_t *err = matches_source_gitignore(
+            ctx, abs_path, is_directory, &matched
+        );
         if (err) {
             /* Non-fatal - continue without source .gitignore checking */
             error_free(err);

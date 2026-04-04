@@ -117,7 +117,7 @@ error_t *buffer_append_string(buffer_t *buf, const char *str) {
     CHECK_NULL(str);
 
     size_t len = strlen(str);  /* Don't include null terminator in buffer */
-    return buffer_append(buf, (const unsigned char *)str, len);
+    return buffer_append(buf, (const unsigned char *) str, len);
 }
 
 error_t *buffer_append_format(buffer_t *buf, const char *fmt, ...) {
@@ -139,7 +139,7 @@ error_t *buffer_append_format(buffer_t *buf, const char *fmt, ...) {
     }
 
     /* Ensure capacity (account for vsnprintf null terminator, with overflow check) */
-    size_t required = buf->size + (size_t)len + 1;
+    size_t required = buf->size + (size_t) len + 1;
     if (required <= buf->size) {
         va_end(args);
         return ERROR(ERR_MEMORY, "Buffer size overflow");
@@ -162,8 +162,8 @@ error_t *buffer_append_format(buffer_t *buf, const char *fmt, ...) {
     }
 
     /* Format directly into buffer */
-    vsnprintf((char *)(buf->data + buf->size), len + 1, fmt, args);
-    buf->size += (size_t)len;
+    vsnprintf((char *) (buf->data + buf->size), len + 1, fmt, args);
+    buf->size += (size_t) len;
 
     va_end(args);
     return NULL;
@@ -227,7 +227,7 @@ error_t *buffer_release_data(buffer_t *buf, char **out) {
     buf->data[buf->size] = '\0';
 
     /* Transfer ownership */
-    *out = (char *)buf->data;
+    *out = (char *) buf->data;
 
     /* Free only the structure, not the data */
     free(buf);

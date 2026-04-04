@@ -50,7 +50,10 @@ static void complete_enabled_profiles(git_repository *repo) {
     string_array_sort(profiles);
 
     for (size_t i = 0; i < string_array_size(profiles); i++) {
-        printf("%s\tEnabled Profile\n", string_array_get(profiles, i));
+        printf(
+            "%s\tEnabled Profile\n",
+            string_array_get(profiles, i)
+        );
     }
 
     string_array_free(profiles);
@@ -87,7 +90,10 @@ static void complete_all_profiles(git_repository *repo) {
         if (upstream_discover_branches(repo, remote_name, &remote_branches) == NULL) {
             string_array_sort(remote_branches);
             for (size_t i = 0; i < string_array_size(remote_branches); i++) {
-                printf("%s\tRemote Profile\n", string_array_get(remote_branches, i));
+                printf(
+                    "%s\tRemote Profile\n",
+                    string_array_get(remote_branches, i)
+                );
             }
             string_array_free(remote_branches);
         }
@@ -103,7 +109,7 @@ static void complete_all_profiles(git_repository *repo) {
  * Output configured git remotes
  */
 static void complete_remotes(git_repository *repo) {
-    git_strarray remotes = {0};
+    git_strarray remotes = { 0 };
     int git_err = git_remote_list(&remotes, repo);
     if (git_err == 0) {
         for (size_t i = 0; i < remotes.count; i++) {
@@ -111,7 +117,10 @@ static void complete_remotes(git_repository *repo) {
             const char *name = remotes.strings[i];
             if (git_remote_lookup(&remote, repo, name) == 0) {
                 const char *url = git_remote_url(remote);
-                printf("%s\t%s\n", name, url ? url : "Remote");
+                printf(
+                    "%s\t%s\n",
+                    name, url ? url : "Remote"
+                );
                 git_remote_free(remote);
             } else {
                 printf("%s\tRemote\n", name);
@@ -144,9 +153,13 @@ static void complete_files(
     size_t count = 0;
 
     if (profile) {
-        err = state_get_entries_by_profile(state, profile, &entries, &count);
+        err = state_get_entries_by_profile(
+            state, profile, &entries, &count
+        );
     } else {
-        err = state_get_all_files(state, &entries, &count);
+        err = state_get_all_files(
+            state, &entries, &count
+        );
     }
 
     if (err) {
@@ -159,14 +172,16 @@ static void complete_files(
         /* Skip entries staged for removal */
         if (entries[i].state &&
             (strcmp(entries[i].state, STATE_DELETED) == 0 ||
-             strcmp(entries[i].state, STATE_RELEASED) == 0)) {
+            strcmp(entries[i].state, STATE_RELEASED) == 0)) {
             continue;
         }
-        const char *path = storage_paths
-            ? entries[i].storage_path
-            : entries[i].filesystem_path;
+        const char *path = storage_paths ? entries[i].storage_path
+                                         : entries[i].filesystem_path;
         if (path) {
-            printf("%s\t%s\n", path, entries[i].profile);
+            printf(
+                "%s\t%s\n",
+                path, entries[i].profile
+            );
         }
     }
 
@@ -274,13 +289,15 @@ static void complete_commits(
             continue;
         }
         const char *newline = strchr(message, '\n');
-        size_t msg_len = newline ? (size_t)(newline - message) : strlen(message);
+        size_t msg_len =
+            newline ? (size_t) (newline - message) : strlen(message);
+
         if (msg_len > COMPLETE_COMMIT_SUMMARY_MAX) {
             msg_len = COMPLETE_COMMIT_SUMMARY_MAX;
         }
 
         /* Output: <oid>\t<summary> */
-        printf("%s\t%.*s\n", oid_str, (int)msg_len, message);
+        printf("%s\t%.*s\n", oid_str, (int) msg_len, message);
 
         git_commit_free(commit);
         count++;

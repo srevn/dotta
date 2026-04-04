@@ -54,11 +54,17 @@ static void display_enabled_profiles(
                 /* Format both absolute and relative time */
                 struct tm tm_storage;
                 localtime_r(&profile_deploy_time, &tm_storage);
-                strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", &tm_storage);
+                strftime(
+                    time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S",
+                    &tm_storage
+                );
                 format_relative_time(profile_deploy_time, relative_buf, sizeof(relative_buf));
 
                 /* Display dimmed timestamp */
-                output_styled(out, OUTPUT_NORMAL, "  {dim}(deployed %s){reset}", relative_buf);
+                output_styled(
+                    out, OUTPUT_NORMAL, "  {dim}(deployed %s){reset}",
+                    relative_buf
+                );
             }
         }
 
@@ -71,8 +77,10 @@ static void display_enabled_profiles(
                     profile_file_count++;
                 }
             }
-            output_print(out, OUTPUT_NORMAL, "\n    %zu file%s",
-                         profile_file_count, profile_file_count == 1 ? "" : "s");
+            output_print(
+                out, OUTPUT_NORMAL, "\n    %zu file%s",
+                profile_file_count, profile_file_count == 1 ? "" : "s"
+            );
         }
 
         output_newline(out);
@@ -125,7 +133,9 @@ static void display_workspace_status(
         if (manifest) {
             for (size_t i = 0; i < manifest->count; i++) {
                 if (manifest->entries[i].source_profile &&
-                    profile_filter_matches(manifest->entries[i].source_profile->name, profile_filter)) {
+                    profile_filter_matches(
+                    manifest->entries[i].source_profile->name, profile_filter
+                    )) {
                     profile_file_count++;
                 }
             }
@@ -164,18 +174,27 @@ static void display_workspace_status(
         if (filtered_diverged == 0) {
             status_color = OUTPUT_COLOR_GREEN;
             if (profile_file_count > 0) {
-                snprintf(status_buf, sizeof(status_buf), "Clean - %zu file%s aligned",
-                         profile_file_count, profile_file_count == 1 ? "" : "s");
+                snprintf(
+                    status_buf, sizeof(status_buf), "Clean - %zu file%s aligned",
+                    profile_file_count, profile_file_count == 1 ? "" : "s"
+                );
             } else {
-                snprintf(status_buf, sizeof(status_buf), "Clean - no files in profile");
+                snprintf(
+                    status_buf, sizeof(status_buf), "Clean - no files in profile"
+                );
             }
         } else {
             status_color = OUTPUT_COLOR_YELLOW;
-            snprintf(status_buf, sizeof(status_buf), "Dirty - %zu item%s diverged",
-                     filtered_diverged, filtered_diverged == 1 ? "" : "s");
+            snprintf(
+                status_buf, sizeof(status_buf), "Dirty - %zu item%s diverged",
+                filtered_diverged, filtered_diverged == 1 ? "" : "s"
+            );
         }
 
-        output_colored(out, OUTPUT_NORMAL, status_color, "  %s\n", status_buf);
+        output_colored(
+            out, OUTPUT_NORMAL, status_color, "  %s\n",
+            status_buf
+        );
     } else {
         /* Global status */
         output_color_t status_color = OUTPUT_COLOR_GREEN;
@@ -185,12 +204,15 @@ static void display_workspace_status(
         switch (ws_status) {
             case WORKSPACE_CLEAN:
                 if (manifest && manifest->count > 0) {
-                    snprintf(status_buf, sizeof(status_buf), "Clean - %zu file%s aligned",
-                             manifest->count, manifest->count == 1 ? "" : "s");
+                    snprintf(
+                        status_buf, sizeof(status_buf), "Clean - %zu file%s aligned",
+                        manifest->count, manifest->count == 1 ? "" : "s"
+                    );
                     status_msg = status_buf;
                 } else {
                     status_msg = "Clean - all states aligned";
                 }
+
                 status_color = OUTPUT_COLOR_GREEN;
                 break;
 
@@ -212,8 +234,10 @@ static void display_workspace_status(
 
     /* Staleness warning — external Git changes detected */
     if (workspace_is_stale(ws)) {
-        output_warning(out, "External Git changes detected — manifest is stale\n"
-                       "  Hint: Run 'dotta apply' to synchronize state");
+        output_warning(
+            out, "External Git changes detected — manifest is stale\n"
+            "  Hint: Run 'dotta apply' to synchronize state"
+        );
     }
 
     /* Show sectioned output for dirty/invalid workspace */
@@ -225,19 +249,21 @@ static void display_workspace_status(
              * Memory layout: [uncommitted][undeployed][new_files][orphaned][reassigned]
              * This provides cache-friendly contiguous memory with single malloc/free. */
             const workspace_item_t **categorized =
-                                malloc(all_count * 5 * sizeof(workspace_item_t *));
+                malloc(all_count * 5 * sizeof(workspace_item_t *));
             if (!categorized) {
-                output_error(out,
-                    "Failed to allocate memory for status display (%zu items)", all_count);
+                output_error(
+                    out, "Failed to allocate memory for status display (%zu items)",
+                    all_count
+                );
                 return;
             }
 
             /* Category arrays (pointer arithmetic into single allocation) */
             const workspace_item_t **uncommitted = categorized;
-            const workspace_item_t **undeployed  = categorized + all_count;
-            const workspace_item_t **new_files   = categorized + all_count * 2;
-            const workspace_item_t **orphaned    = categorized + all_count * 3;
-            const workspace_item_t **reassigned  = categorized + all_count * 4;
+            const workspace_item_t **undeployed = categorized + all_count;
+            const workspace_item_t **new_files = categorized + all_count * 2;
+            const workspace_item_t **orphaned = categorized + all_count * 3;
+            const workspace_item_t **reassigned = categorized + all_count * 4;
 
             size_t uncommitted_count = 0;
             size_t undeployed_count = 0;
@@ -294,9 +320,10 @@ static void display_workspace_status(
 
             /* Section 1: Uncommitted Changes */
             if (uncommitted_count > 0) {
-                output_list_t *list = output_list_create(out,
-                    "Uncommitted changes",
-                    "use \"dotta update\" to commit these changes");
+                output_list_t *list = output_list_create(
+                    out, "Uncommitted changes",
+                    "use \"dotta update\" to commit these changes"
+                );
 
                 if (list) {
                     for (size_t i = 0; i < uncommitted_count; i++) {
@@ -305,10 +332,13 @@ static void display_workspace_status(
                         output_color_t color;
                         char metadata[256];
 
-                        if (workspace_item_extract_display_info(uncommitted[i], tags, &tag_count,
-                                                                &color, metadata, sizeof(metadata))) {
+                        if (workspace_item_extract_display_info(
+                            uncommitted[i], tags, &tag_count,
+                            &color, metadata, sizeof(metadata)
+                            )) {
                             output_list_add(
-                                list, tags, tag_count, color, uncommitted[i]->filesystem_path, metadata
+                                list, tags, tag_count, color,
+                                uncommitted[i]->filesystem_path, metadata
                             );
                         }
                     }
@@ -320,9 +350,10 @@ static void display_workspace_status(
 
             /* Section 2: Profile Reassignments */
             if (reassigned_count > 0) {
-                output_list_t *list = output_list_create(out,
-                    "Profile reassignments",
-                    "run \"dotta apply\" to acknowledge");
+                output_list_t *list = output_list_create(
+                    out, "Profile reassignments",
+                    "run \"dotta apply\" to acknowledge"
+                );
 
                 if (list) {
                     for (size_t i = 0; i < reassigned_count; i++) {
@@ -331,10 +362,13 @@ static void display_workspace_status(
                         output_color_t color;
                         char metadata[256];
 
-                        if (workspace_item_extract_display_info(reassigned[i], tags, &tag_count,
-                                                                &color, metadata, sizeof(metadata))) {
+                        if (workspace_item_extract_display_info(
+                            reassigned[i], tags, &tag_count,
+                            &color, metadata, sizeof(metadata)
+                            )) {
                             output_list_add(
-                                list, tags, tag_count, color, reassigned[i]->filesystem_path, metadata
+                                list, tags, tag_count, color,
+                                reassigned[i]->filesystem_path, metadata
                             );
                         }
                     }
@@ -346,9 +380,10 @@ static void display_workspace_status(
 
             /* Section 3: Undeployed Files */
             if (undeployed_count > 0) {
-                output_list_t *list = output_list_create(out,
-                    "Undeployed files",
-                    "use \"dotta apply\" to deploy these files");
+                output_list_t *list = output_list_create(
+                    out, "Undeployed files",
+                    "use \"dotta apply\" to deploy these files"
+                );
 
                 if (list) {
                     for (size_t i = 0; i < undeployed_count; i++) {
@@ -357,10 +392,13 @@ static void display_workspace_status(
                         output_color_t color;
                         char metadata[256];
 
-                        if (workspace_item_extract_display_info(undeployed[i], tags, &tag_count,
-                                                                &color, metadata, sizeof(metadata))) {
+                        if (workspace_item_extract_display_info(
+                            undeployed[i], tags, &tag_count,
+                            &color, metadata, sizeof(metadata)
+                            )) {
                             output_list_add(
-                                list, tags, tag_count, color, undeployed[i]->filesystem_path, metadata
+                                list, tags, tag_count, color,
+                                undeployed[i]->filesystem_path, metadata
                             );
                         }
                     }
@@ -372,9 +410,10 @@ static void display_workspace_status(
 
             /* Section 4: New Files */
             if (new_count > 0) {
-                output_list_t *list = output_list_create(out,
-                    "New files",
-                    "use \"dotta update --include-new\" to track these files");
+                output_list_t *list = output_list_create(
+                    out, "New files",
+                    "use \"dotta update --include-new\" to track these files"
+                );
 
                 if (list) {
                     for (size_t i = 0; i < new_count; i++) {
@@ -383,10 +422,13 @@ static void display_workspace_status(
                         output_color_t color;
                         char metadata[256];
 
-                        if (workspace_item_extract_display_info(new_files[i], tags, &tag_count,
-                                                                &color, metadata, sizeof(metadata))) {
+                        if (workspace_item_extract_display_info(
+                            new_files[i], tags, &tag_count,
+                            &color, metadata, sizeof(metadata)
+                            )) {
                             output_list_add(
-                                list, tags, tag_count, color, new_files[i]->filesystem_path, metadata
+                                list, tags, tag_count, color,
+                                new_files[i]->filesystem_path, metadata
                             );
                         }
                     }
@@ -398,9 +440,10 @@ static void display_workspace_status(
 
             /* Section 5: Issues (orphaned) */
             if (orphaned_count > 0) {
-                output_list_t *list = output_list_create(out,
-                    "Issues",
-                    "run \"dotta apply\" to remove orphaned files");
+                output_list_t *list = output_list_create(
+                    out, "Issues",
+                    "run \"dotta apply\" to remove orphaned files"
+                );
 
                 if (list) {
                     /* Check if any orphans have divergence
@@ -416,10 +459,13 @@ static void display_workspace_status(
                         output_color_t color;
                         char metadata[256];
 
-                        if (workspace_item_extract_display_info(orphaned[i], tags, &tag_count,
-                                                                &color, metadata, sizeof(metadata))) {
+                        if (workspace_item_extract_display_info(
+                            orphaned[i], tags, &tag_count,
+                            &color, metadata, sizeof(metadata)
+                            )) {
                             output_list_add(
-                                list, tags, tag_count, color, orphaned[i]->filesystem_path, metadata
+                                list, tags, tag_count, color,
+                                orphaned[i]->filesystem_path, metadata
                             );
                         }
 
@@ -435,15 +481,39 @@ static void display_workspace_status(
                     /* Show detailed guidance only for diverged orphans */
                     if (has_diverged_orphans) {
                         output_hint(out, "Orphaned file states:");
-                        output_hint_line(out, "  [orphaned]              - Clean, will be removed by 'dotta apply'");
-                        output_hint_line(out, "  [orphaned] [modified]   - Has uncommitted changes, skipped by 'dotta apply'");
-                        output_hint_line(out, "  [orphaned] [mode]       - Permissions changed, skipped by 'dotta apply'");
-                        output_hint_line(out, "  [orphaned] [unverified] - Cannot verify (e.g., missing key), skipped by 'dotta apply'");
+                        output_hint_line(
+                            out, "  [orphaned]              "
+                            "- Clean, will be removed by 'dotta apply'"
+                        );
+                        output_hint_line(
+                            out, "  [orphaned] [modified]   "
+                            "- Has uncommitted changes, skipped by 'dotta apply'"
+                        );
+                        output_hint_line(
+                            out, "  [orphaned] [mode]       "
+                            "- Permissions changed, skipped by 'dotta apply'"
+                        );
+                        output_hint_line(
+                            out, "  [orphaned] [unverified] "
+                            "- Cannot verify (e.g., missing key), skipped by 'dotta apply'"
+                        );
                         output_newline(out);
                         output_hint(out, "To resolve:");
-                        output_hint_line(out, "  • Keep changes: Re-enable profile and run 'dotta update <profile> <path>'");
-                        output_hint_line(out, "  • Discard changes: Manually revert file to match profile version");
-                        output_hint_line(out, "  • Force removal: 'dotta apply --force' (WARNING: DATA LOSS)");
+                        output_hint_line(
+                            out,
+                            "  • Keep changes: Re-enable profile and "
+                            "run 'dotta update <profile> <path>'"
+                        );
+                        output_hint_line(
+                            out,
+                            "  • Discard changes: Manually revert file "
+                            "to match profile version"
+                        );
+                        output_hint_line(
+                            out,
+                            "  • Force removal: 'dotta apply --force' "
+                            "(warning: data loss)"
+                        );
                     }
                 }
             }
@@ -454,8 +524,10 @@ static void display_workspace_status(
 
         /* Show hidden items note when profile filter is active */
         if (profile_filter && hidden_count > 0) {
-            output_print(out, OUTPUT_NORMAL, "  (%zu item%s from other profiles hidden)\n",
-                          hidden_count, hidden_count == 1 ? "" : "s");
+            output_print(
+                out, OUTPUT_NORMAL, "  (%zu item%s from other profiles hidden)\n",
+                hidden_count, hidden_count == 1 ? "" : "s"
+            );
         }
     }
 }
@@ -501,7 +573,7 @@ static error_t *display_remote_status(
         should_free_profiles = true;
     } else {
         /* Default: show only enabled profiles (consistent with workspace status) */
-        profiles_to_check = (profile_list_t*)enabled_profiles;  /* Borrowed reference */
+        profiles_to_check = (profile_list_t *) enabled_profiles;  /* Borrowed reference */
     }
 
     if (profiles_to_check->count == 0) {
@@ -521,7 +593,10 @@ static error_t *display_remote_status(
             /* Ephemeral fetch message (no newline — resolved after fetch).
              * On TTY: progress overwrites via \r, then line is cleared entirely.
              * On pipe: falls back to inline text resolution. */
-            output_print(out, OUTPUT_NORMAL, "Fetching from '%s'...", remote_name);
+            output_print(
+                out, OUTPUT_NORMAL, "Fetching from '%s'...",
+                remote_name
+            );
             fflush(out->stream);
 
             /* Create transfer context for progress reporting */
@@ -553,12 +628,14 @@ static error_t *display_remote_status(
                 } else {
                     output_newline(out);
                 }
-                output_warning(out, "Failed to allocate memory for fetch operation");
+                output_warning(
+                    out, "Failed to allocate memory for fetch operation"
+                );
             }
         } else {
             /* Populate array with borrowed references to profile names */
             for (size_t i = 0; i < profiles_to_check->count; i++) {
-                branch_names[i] = (char *)profiles_to_check->profiles[i].name;
+                branch_names[i] = (char *) profiles_to_check->profiles[i].name;
             }
 
             /* Perform batched fetch - single network operation for all branches */
@@ -590,8 +667,10 @@ static error_t *display_remote_status(
             if (fetch_err) {
                 /* Non-fatal: just warn and continue with status display */
                 if (verbose) {
-                    output_warning(out, "Failed to fetch branches: %s",
-                                   error_message(fetch_err));
+                    output_warning(
+                        out, "Failed to fetch branches: %s",
+                        error_message(fetch_err)
+                    );
                 }
                 error_free(fetch_err);
             }
@@ -611,7 +690,10 @@ static error_t *display_remote_status(
 
     /* Display remote sync status section */
     char section_title[256];
-    snprintf(section_title, sizeof(section_title), "Remote sync status (%s)", remote_name);
+    snprintf(
+        section_title, sizeof(section_title), "Remote sync status (%s)",
+        remote_name
+    );
     output_section(out, section_title);
 
     /* Analyze and display each profile's sync state */
@@ -642,34 +724,50 @@ static error_t *display_remote_status(
         switch (info->state) {
             case UPSTREAM_UP_TO_DATE:
                 color = OUTPUT_COLOR_GREEN;
-                snprintf(status_str, sizeof(status_str), "%s up-to-date", symbol);
+                snprintf(
+                    status_str, sizeof(status_str), "%s up-to-date",
+                    symbol
+                );
                 up_to_date++;
                 break;
             case UPSTREAM_LOCAL_AHEAD:
                 color = OUTPUT_COLOR_YELLOW;
-                snprintf(status_str, sizeof(status_str), "%s %zu ahead", symbol, info->ahead);
+                snprintf(
+                    status_str, sizeof(status_str), "%s %zu ahead",
+                    symbol, info->ahead
+                );
                 ahead++;
                 break;
             case UPSTREAM_REMOTE_AHEAD:
                 color = OUTPUT_COLOR_YELLOW;
-                snprintf(status_str, sizeof(status_str), "%s %zu behind", symbol, info->behind);
+                snprintf(
+                    status_str, sizeof(status_str), "%s %zu behind",
+                    symbol, info->behind
+                );
                 behind++;
                 break;
             case UPSTREAM_DIVERGED:
                 color = OUTPUT_COLOR_RED;
-                snprintf(status_str, sizeof(status_str), "%s diverged (%zu ahead, %zu behind)",
-                         symbol, info->ahead, info->behind);
+                snprintf(
+                    status_str, sizeof(status_str), "%s diverged (%zu ahead, %zu behind)",
+                    symbol, info->ahead, info->behind
+                );
                 diverged++;
                 break;
             case UPSTREAM_NO_REMOTE:
                 color = OUTPUT_COLOR_CYAN;
-                snprintf(status_str, sizeof(status_str), "%s no remote", symbol);
+                snprintf(
+                    status_str, sizeof(status_str), "%s no remote",
+                    symbol
+                );
                 no_remote++;
                 break;
             case UPSTREAM_UNKNOWN:
             default:
                 color = OUTPUT_COLOR_DIM;
-                snprintf(status_str, sizeof(status_str), "? unknown");
+                snprintf(
+                    status_str, sizeof(status_str), "? unknown"
+                );
                 break;
         }
 
@@ -677,19 +775,28 @@ static error_t *display_remote_status(
         if (verbose && info->state != UPSTREAM_NO_REMOTE && info->state != UPSTREAM_UNKNOWN) {
             /* Verbose mode: show detailed commit info */
             output_newline(out);
-            output_print(out, OUTPUT_NORMAL, "Profile: %s\n", profile_name);
+            output_print(
+                out, OUTPUT_NORMAL, "Profile: %s\n",
+                profile_name
+            );
 
             /* Get local commit info */
             char local_ref[DOTTA_REFNAME_MAX];
-            error_t *local_ref_err = gitops_build_refname(local_ref, sizeof(local_ref),
-                                                          "refs/heads/%s", profile_name);
+            error_t *local_ref_err = gitops_build_refname(
+                local_ref, sizeof(local_ref), "refs/heads/%s", profile_name
+            );
             git_commit *local_commit = NULL;
-            error_t *commit_err = local_ref_err ?
-                                  local_ref_err : gitops_get_commit(repo, local_ref, &local_commit);
+            error_t *commit_err = local_ref_err ? local_ref_err
+                                : gitops_get_commit(repo, local_ref, &local_commit);
 
             /* Status line — always shown regardless of commit loading */
-            output_print(out, OUTPUT_NORMAL, "  Status:         ");
-            output_colored(out, OUTPUT_NORMAL, color, "%s\n", status_str);
+            output_print(
+                out, OUTPUT_NORMAL, "  Status:         "
+            );
+            output_colored(
+                out, OUTPUT_NORMAL, color, "%s\n",
+                status_str
+            );
 
             if (!commit_err && local_commit) {
                 const git_oid *local_oid = git_commit_id(local_commit);
@@ -702,8 +809,10 @@ static error_t *display_remote_status(
                 char time_str[64];
                 format_relative_time(local_time, time_str, sizeof(time_str));
 
-                output_print(out, OUTPUT_NORMAL, "  Local commit:   %s %s (%s)\n",
-                              local_oid_str, local_summary, time_str);
+                output_print(
+                    out, OUTPUT_NORMAL, "  Local commit:   %s %s (%s)\n",
+                    local_oid_str, local_summary, time_str
+                );
 
                 git_commit_free(local_commit);
             }
@@ -712,12 +821,13 @@ static error_t *display_remote_status(
             /* Get remote commit info if it exists */
             if (info->exists_remotely) {
                 char remote_ref[DOTTA_REFNAME_MAX];
-                error_t *remote_ref_err = gitops_build_refname(remote_ref, sizeof(remote_ref),
-                                                               "refs/remotes/%s/%s",
-                                                               remote_name, profile_name);
+                error_t *remote_ref_err = gitops_build_refname(
+                    remote_ref, sizeof(remote_ref), "refs/remotes/%s/%s",
+                    remote_name, profile_name
+                );
                 git_commit *remote_commit = NULL;
-                commit_err = remote_ref_err ?
-                             remote_ref_err : gitops_get_commit(repo, remote_ref, &remote_commit);
+                commit_err = remote_ref_err ? remote_ref_err
+                                            : gitops_get_commit(repo, remote_ref, &remote_commit);
 
                 if (!commit_err && remote_commit) {
                     const git_oid *remote_oid = git_commit_id(remote_commit);
@@ -730,8 +840,10 @@ static error_t *display_remote_status(
                     char time_str[64];
                     format_relative_time(remote_time, time_str, sizeof(time_str));
 
-                    output_print(out, OUTPUT_NORMAL, "  Remote commit:  %s %s (%s)\n",
-                                  remote_oid_str, remote_summary, time_str);
+                    output_print(
+                        out, OUTPUT_NORMAL, "  Remote commit:  %s %s (%s)\n",
+                        remote_oid_str, remote_summary, time_str
+                    );
 
                     git_commit_free(remote_commit);
                 }
@@ -739,10 +851,16 @@ static error_t *display_remote_status(
             }
         } else {
             /* Compact mode: single line matching enabled profiles format */
-            output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile_name);
+            output_styled(
+                out, OUTPUT_NORMAL, "  {cyan}%s{reset}",
+                profile_name
+            );
 
             /* Display status in dimmed parentheses */
-            output_styled(out, OUTPUT_NORMAL, "  {dim}(%s){reset}\n", status_str);
+            output_styled(
+                out, OUTPUT_NORMAL, "  {dim}(%s){reset}\n",
+                status_str
+            );
         }
 
         upstream_info_free(info);
@@ -754,19 +872,34 @@ static error_t *display_remote_status(
     output_section(out, "Sync summary");
 
     if (up_to_date > 0) {
-        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} up-to-date\n", up_to_date);
+        output_styled(
+            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} up-to-date\n",
+            up_to_date
+        );
     }
     if (ahead > 0) {
-        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} ahead\n", ahead);
+        output_styled(
+            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} ahead\n",
+            ahead
+        );
     }
     if (behind > 0) {
-        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} behind\n", behind);
+        output_styled(
+            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} behind\n",
+            behind
+        );
     }
     if (diverged > 0) {
-        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} diverged\n", diverged);
+        output_styled(
+            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} diverged\n",
+            diverged
+        );
     }
     if (no_remote > 0) {
-        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no remote\n", no_remote);
+        output_styled(
+            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no remote\n",
+            no_remote
+        );
     }
 
     /* Free profiles if we allocated them */
@@ -880,7 +1013,9 @@ error_t *cmd_status(
      * Workspace always loads with persistent profiles to maintain accurate
      * orphan detection. Display operations filter by CLI profiles if specified.
      */
-    err = profile_resolve_for_workspace(repo, config->strict_mode, &workspace_profiles);
+    err = profile_resolve_for_workspace(
+        repo, config->strict_mode, &workspace_profiles
+    );
     if (err) {
         err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
@@ -888,14 +1023,15 @@ error_t *cmd_status(
 
     if (workspace_profiles->count == 0) {
         output_info(out, "No enabled profiles found");
-        output_hint(out, "Run 'dotta profile enable <name>' to enable profiles");
+        output_hint(out, "Run 'dotta profile enable <name>'");
         goto cleanup;
     }
 
     /* Load display profiles (CLI filter or shared pointer) */
     if (opts->profiles && opts->profile_count > 0) {
         err = profile_resolve_for_operations(
-            repo, opts->profiles, opts->profile_count, config->strict_mode, &display_profiles
+            repo, opts->profiles, opts->profile_count,
+            config->strict_mode, &display_profiles
         );
         if (err) {
             err = error_wrap(err, "Failed to resolve display profiles");
@@ -917,11 +1053,11 @@ error_t *cmd_status(
      */
     if (opts->show_local) {
         workspace_load_t ws_opts = {
-            .analyze_files = true,
-            .analyze_orphans = true,
-            .analyze_untracked = (config && config->auto_detect_new_files),
+            .analyze_files       = true,
+            .analyze_orphans     = true,
+            .analyze_untracked   = (config && config->auto_detect_new_files),
             .analyze_directories = true,
-            .analyze_encryption = true
+            .analyze_encryption  = true
         };
         err = workspace_load(repo, NULL, workspace_profiles, config, &ws_opts, &ws);
         if (err) {
@@ -977,12 +1113,18 @@ error_t *cmd_status(
                     /* User declined elevation or non-interactive mode */
                     output_newline(out);
                     output_warning(out, "Status check will be INCOMPLETE:\n");
-                    output_styled(out, OUTPUT_NORMAL,
-                           "  {green}✓{reset} Content changes will be detected\n");
-                    output_styled(out, OUTPUT_NORMAL,
-                           "  {green}✓{reset} Permission mode changes will be detected\n");
-                    output_styled(out, OUTPUT_NORMAL,
-                           "  {red}✗{reset} Ownership changes will NOT be detected\n");
+                    output_styled(
+                        out, OUTPUT_NORMAL,
+                        "  {green}✓{reset} Content changes will be detected\n"
+                    );
+                    output_styled(
+                        out, OUTPUT_NORMAL,
+                        "  {green}✓{reset} Permission mode changes will be detected\n"
+                    );
+                    output_styled(
+                        out, OUTPUT_NORMAL,
+                        "  {red}✗{reset} Ownership changes will not be detected\n"
+                    );
                     output_newline(out);
 
                     error_free(priv_err);
@@ -993,7 +1135,7 @@ error_t *cmd_status(
                 error_free(extract_err);
             }
 
-            free((void *)storage_paths);
+            free((void *) storage_paths);
         }
     }
 

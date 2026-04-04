@@ -94,15 +94,16 @@ error_t *encryption_policy_should_encrypt(
      */
     if (is_protected_meta_file(storage_path)) {
         if (explicit_encrypt) {
-            return ERROR(ERR_VALIDATION,
+            return ERROR(
+                ERR_VALIDATION,
                 "Cannot encrypt system file '%s': this file must remain plaintext "
                 "for dotta to function correctly.\n\n"
                 "System files that cannot be encrypted:\n"
                 "  - .bootstrap (must be executable)\n"
                 "  - .dottaignore (must be readable for ignore patterns)\n"
-                "  - .dotta/metadata.json (must be readable for file tracking)\n\n"
-                "These files are critical for dotta operations and should never be encrypted.",
-                storage_path);
+                "  - .dotta/metadata.json (must be readable for file tracking)\n\n",
+                storage_path
+            );
         }
 
         /* Meta-file protection silently overrides auto-encrypt patterns and
@@ -133,7 +134,9 @@ error_t *encryption_policy_should_encrypt(
      */
     if (metadata) {
         const metadata_item_t *existing = NULL;
-        error_t *err = metadata_get_item(metadata, storage_path, &existing);
+        error_t *err = metadata_get_item(
+            metadata, storage_path, &existing
+        );
 
         if (err == NULL && existing &&
             existing->kind == METADATA_ITEM_FILE &&
@@ -146,7 +149,9 @@ error_t *encryption_policy_should_encrypt(
         /* ERR_NOT_FOUND is expected for new files - not an error */
         if (err && err->code != ERR_NOT_FOUND) {
             /* Real error (corruption, etc.) - propagate */
-            return error_wrap(err, "Failed to check metadata for '%s'", storage_path);
+            return error_wrap(
+                err, "Failed to check metadata for '%s'", storage_path
+            );
         }
 
         /* Clean up ERR_NOT_FOUND */
@@ -217,7 +222,8 @@ error_t *encryption_policy_matches_auto_patterns(
     }
 
     /* If no patterns configured, never auto-encrypt */
-    if (!config->auto_encrypt_patterns || config->auto_encrypt_pattern_count == 0) {
+    if (!config->auto_encrypt_patterns ||
+        config->auto_encrypt_pattern_count == 0) {
         return NULL;
     }
 

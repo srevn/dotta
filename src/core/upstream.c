@@ -46,19 +46,28 @@ error_t *upstream_analyze_profile(
     char remote_refname[DOTTA_REFNAME_MAX];
     error_t *err;
 
-    err = gitops_build_refname(local_refname, sizeof(local_refname),
-                               "refs/heads/%s", profile_name);
+    err = gitops_build_refname(
+        local_refname, sizeof(local_refname), "refs/heads/%s",
+        profile_name
+    );
     if (err) {
         upstream_info_free(info);
-        return error_wrap(err, "Invalid profile name '%s'", profile_name);
+        return error_wrap(
+            err, "Invalid profile name '%s'",
+            profile_name
+        );
     }
 
-    err = gitops_build_refname(remote_refname, sizeof(remote_refname),
-                    "refs/remotes/%s/%s", remote_name, profile_name);
+    err = gitops_build_refname(
+        remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
+        remote_name, profile_name
+    );
     if (err) {
         upstream_info_free(info);
-        return error_wrap(err, "Invalid remote/profile name '%s/%s'",
-                          remote_name, profile_name);
+        return error_wrap(
+            err, "Invalid remote/profile name '%s/%s'",
+            remote_name, profile_name
+        );
     }
 
     /* Check local branch exists */
@@ -116,7 +125,9 @@ error_t *upstream_analyze_profile(
 
     /* Calculate ahead/behind */
     size_t ahead = 0, behind = 0;
-    git_err = git_graph_ahead_behind(&ahead, &behind, repo, local_oid, remote_oid);
+    git_err = git_graph_ahead_behind(
+        &ahead, &behind, repo, local_oid, remote_oid
+    );
     git_reference_free(local_ref);
     git_reference_free(remote_ref);
 
@@ -179,7 +190,7 @@ error_t *upstream_detect_remote(git_repository *repo, char **out_remote) {
     *out_remote = NULL;
 
     /* Get list of remotes */
-    git_strarray remotes = {0};
+    git_strarray remotes = { 0 };
     int git_err = git_remote_list(&remotes, repo);
     if (git_err < 0) {
         return error_from_git(git_err);
@@ -187,8 +198,10 @@ error_t *upstream_detect_remote(git_repository *repo, char **out_remote) {
 
     if (remotes.count == 0) {
         git_strarray_dispose(&remotes);
-        return ERROR(ERR_NOT_FOUND, "No remotes configured\n"
-                    "Hint: Add a remote with 'dotta remote add <name> <url>'");
+        return ERROR(
+            ERR_NOT_FOUND, "No remotes configured\n"
+            "Hint: Add a remote with 'dotta remote add <name> <url>'"
+        );
     }
 
     /* Check if "origin" exists */
@@ -203,20 +216,26 @@ error_t *upstream_detect_remote(git_repository *repo, char **out_remote) {
     if (has_origin) {
         *out_remote = strdup("origin");
         git_strarray_dispose(&remotes);
-        return *out_remote ? NULL : ERROR(ERR_MEMORY, "Failed to allocate remote name");
+        return *out_remote ? NULL : ERROR(
+            ERR_MEMORY, "Failed to allocate remote name"
+        );
     }
 
     /* If exactly one remote, use it */
     if (remotes.count == 1) {
         *out_remote = strdup(remotes.strings[0]);
         git_strarray_dispose(&remotes);
-        return *out_remote ? NULL : ERROR(ERR_MEMORY, "Failed to allocate remote name");
+        return *out_remote ? NULL : ERROR(
+            ERR_MEMORY, "Failed to allocate remote name"
+        );
     }
 
     /* Multiple remotes, no origin - need explicit remote name */
     git_strarray_dispose(&remotes);
-    return ERROR(ERR_INVALID_ARG, "Multiple remotes configured, but no 'origin' found\n"
-                "Hint: Specify remote explicitly or rename preferred remote to 'origin'");
+    return ERROR(
+        ERR_INVALID_ARG, "Multiple remotes configured, but no 'origin' found\n"
+        "Hint: Specify remote explicitly or rename preferred remote to 'origin'"
+    );
 }
 
 /**
@@ -301,8 +320,9 @@ error_t *upstream_query_remote_branches(
     }
 
     /* Connect to remote (network operation) */
-    git_err = git_remote_connect(remote, GIT_DIRECTION_FETCH,
-                    &callbacks, NULL, NULL);
+    git_err = git_remote_connect(
+        remote, GIT_DIRECTION_FETCH, &callbacks, NULL, NULL
+    );
     if (git_err < 0) {
         if (cred_ctx) {
             credential_context_reject(cred_ctx);
@@ -381,11 +401,15 @@ error_t *upstream_create_tracking_branch(
 
     /* Get remote ref */
     char remote_refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(remote_refname, sizeof(remote_refname),
-                                        "refs/remotes/%s/%s", remote_name, branch_name);
+    error_t *err = gitops_build_refname(
+        remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
+        remote_name, branch_name
+    );
     if (err) {
-        return error_wrap(err, "Invalid remote/branch name '%s/%s'",
-                          remote_name, branch_name);
+        return error_wrap(
+            err, "Invalid remote/branch name '%s/%s'",
+            remote_name, branch_name
+        );
     }
 
     git_reference *remote_ref = NULL;
@@ -397,22 +421,31 @@ error_t *upstream_create_tracking_branch(
     const git_oid *target_oid = git_reference_target(remote_ref);
     if (!target_oid) {
         git_reference_free(remote_ref);
-        return ERROR(ERR_GIT, "Remote ref '%s' has no target",
-                    remote_refname);
+        return ERROR(
+            ERR_GIT, "Remote ref '%s' has no target",
+            remote_refname
+        );
     }
 
     /* Create local branch */
     char local_refname[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(local_refname, sizeof(local_refname),
-                               "refs/heads/%s", branch_name);
+    err = gitops_build_refname(
+        local_refname, sizeof(local_refname), "refs/heads/%s",
+        branch_name
+    );
     if (err) {
         git_reference_free(remote_ref);
-        return error_wrap(err, "Invalid branch name '%s'", branch_name);
+        return error_wrap(
+            err, "Invalid branch name '%s'",
+            branch_name
+        );
     }
 
     git_reference *local_ref = NULL;
-    git_err = git_reference_create(&local_ref, repo, local_refname,
-                                   target_oid, 0, NULL);
+    git_err = git_reference_create(
+        &local_ref, repo, local_refname,
+        target_oid, 0, NULL
+    );
     git_reference_free(remote_ref);
 
     if (git_err < 0) {

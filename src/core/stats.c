@@ -132,10 +132,10 @@ static char *extract_commit_summary(const char *message) {
 
     /* Find first newline */
     const char *newline = strchr(message, '\n');
-    size_t len = newline ? (size_t)(newline - message) : strlen(message);
+    size_t len = newline ? (size_t) (newline - message) : strlen(message);
 
     /* Trim trailing whitespace */
-    while (len > 0 && isspace((unsigned char)message[len - 1])) {
+    while (len > 0 && isspace((unsigned char) message[len - 1])) {
         len--;
     }
 
@@ -257,9 +257,9 @@ static error_t *populate_tree_paths(
     CHECK_NULL(out_count);
 
     struct tree_populate_data data = {
-        .map = map,
+        .map        = map,
         .file_count = 0,
-        .error = NULL
+        .error      = NULL
     };
 
     error_t *err = gitops_tree_walk(
@@ -286,8 +286,8 @@ static int tree_walk_callback(
     const git_tree_entry *entry,
     void *payload
 ) {
-    (void)root;  /* Unused */
-    struct tree_walk_data *data = (struct tree_walk_data *)payload;
+    (void) root;  /* Unused */
+    struct tree_walk_data *data = (struct tree_walk_data *) payload;
 
     /* Defensive check */
     if (!data) {
@@ -310,8 +310,9 @@ static int tree_walk_callback(
 
     /* Overflow protection */
     if (data->total_size > SIZE_MAX - size) {
-        data->error = ERROR(ERR_INTERNAL,
-            "Profile size exceeds maximum representable value");
+        data->error = ERROR(
+            ERR_INTERNAL, "Profile size exceeds maximum representable value"
+        );
         return -1;
     }
 
@@ -347,7 +348,9 @@ static error_t *walk_commits(
 
     /* Build refname */
     char refname[REFNAME_BUFFER_SIZE];
-    err = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
+    err = gitops_build_refname(
+        refname, sizeof(refname), "refs/heads/%s", branch_name
+    );
     if (err) {
         return error_wrap(err, "Invalid branch name '%s'", branch_name);
     }
@@ -454,12 +457,10 @@ static error_t *walk_commits(
             size_t num_deltas = git_diff_num_deltas(diff);
             for (size_t i = 0; i < num_deltas; i++) {
                 const git_diff_delta *delta = git_diff_get_delta(diff, i);
-                const char *path = delta->new_file.path ?
-                                   delta->new_file.path : delta->old_file.path;
+                const char *path = delta->new_file.path ? delta->new_file.path
+                                                        : delta->old_file.path;
 
-                if (!path) {
-                    continue;
-                }
+                if (!path) continue;
 
                 /* Only map files that exist in the current tree.
                  * The map is pre-populated with current-tree paths (NULL values).
@@ -504,7 +505,7 @@ static error_t *walk_commits(
                 ctx->files_found++;
             }
 
-        } else /* WALK_MODE_HISTORY */ {
+        } else { /* WALK_MODE_HISTORY */
             /* HISTORY mode: Check if diff contains target file */
             size_t num_deltas = git_diff_num_deltas(diff);
             bool found = false;
@@ -512,7 +513,7 @@ static error_t *walk_commits(
             for (size_t i = 0; i < num_deltas; i++) {
                 const git_diff_delta *delta = git_diff_get_delta(diff, i);
                 const char *path = delta->new_file.path ?
-                                        delta->new_file.path : delta->old_file.path;
+                    delta->new_file.path : delta->old_file.path;
 
                 if (path && strcmp(path, ctx->target_path) == 0) {
                     found = true;
@@ -616,10 +617,10 @@ error_t *stats_get_profile_stats(
 
     /* Initialize walk data */
     struct tree_walk_data data = {
-        .odb = odb,
+        .odb        = odb,
         .file_count = 0,
         .total_size = 0,
-        .error = NULL
+        .error      = NULL
     };
 
     /* Walk tree */
@@ -694,14 +695,14 @@ error_t *stats_build_file_commit_map(
 
     /* Initialize walk context */
     walk_ctx_t ctx = {
-        .mode = WALK_MODE_MAP,
-        .target_path = NULL,
-        .map = map->map,
-        .commits = NULL,
-        .commits_count = 0,
+        .mode             = WALK_MODE_MAP,
+        .target_path      = NULL,
+        .map              = map->map,
+        .commits          = NULL,
+        .commits_count    = 0,
         .commits_capacity = 0,
-        .files_found = 0,
-        .files_needed = files_needed
+        .files_found      = 0,
+        .files_needed     = files_needed
     };
 
     /* Walk commits to build map */
@@ -738,14 +739,14 @@ error_t *stats_get_file_history(
 
     /* Initialize walk context */
     walk_ctx_t ctx = {
-        .mode = WALK_MODE_HISTORY,
-        .target_path = file_path,
-        .map = NULL,
-        .commits = NULL,
-        .commits_count = 0,
+        .mode             = WALK_MODE_HISTORY,
+        .target_path      = file_path,
+        .map              = NULL,
+        .commits          = NULL,
+        .commits_count    = 0,
         .commits_capacity = 0,
-        .files_found = 0,
-        .files_needed = 0
+        .files_found      = 0,
+        .files_needed     = 0
     };
 
     /* Walk commits to collect history */
@@ -763,8 +764,10 @@ error_t *stats_get_file_history(
     /* Check if we found any commits */
     if (ctx.commits_count == 0) {
         free(history);
-        return ERROR(ERR_NOT_FOUND, "No history found for file '%s' in branch '%s'",
-                    file_path, branch_name);
+        return ERROR(
+            ERR_NOT_FOUND, "No history found for file '%s' in branch '%s'",
+            file_path, branch_name
+        );
     }
 
     /* Fill history */
@@ -786,7 +789,7 @@ const commit_info_t *stats_file_commit_map_get(
         return NULL;
     }
 
-    return (const commit_info_t *)hashmap_get(map->map, file_path);
+    return (const commit_info_t *) hashmap_get(map->map, file_path);
 }
 
 /**

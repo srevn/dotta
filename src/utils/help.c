@@ -71,9 +71,11 @@ void print_version(void) {
     if (build_type && strcmp(build_type, "debug") == 0) {
         printf(" (with sanitizers)");
     }
-    printf(" - %s %s\n",
-           dotta_version_build_date(),
-           dotta_version_build_time());
+    printf(
+        " - %s %s\n",
+        dotta_version_build_date(),
+        dotta_version_build_time()
+    );
 
     /* Print compiler information */
     const char *cc = dotta_version_build_cc();
@@ -265,7 +267,7 @@ void print_apply_help(const char *prog_name) {
     printf("                  Accepts filesystem or storage path (home/..., root/...)\n");
     printf("Options:\n");
     printf("  -p, --profile <name>      Specify profile(s) to apply\n");
-    printf("  -e, --exclude <pattern>   Skip files matching pattern (prevents deployment AND removal)\n");
+    printf("  -e, --exclude <pattern>   Skip matching files (prevents deploy and removal)\n");
     printf("  -f, --force               Overwrite modified files\n");
     printf("  -n, --dry-run             Don't actually deploy\n");
     printf("  --keep-orphans            Don't remove orphaned files (advanced)\n");
@@ -380,7 +382,7 @@ void print_diff_help(const char *prog_name) {
     printf("  <commit> <commit>     Compare two commits (must be in the same profile)\n");
     printf("  [<file>...]           Workspace diff for specific files\n\n");
     printf("Direction options (workspace mode only):\n");
-    printf("  --upstream            '-' is current filesystem, '+' is repo (preview apply) [default]\n");
+    printf("  --upstream            '-' is filesystem, '+' is repo (preview apply) [default]\n");
     printf("  --downstream          '-' is repo content, '+' is local changes (preview update)\n");
     printf("  -a, --all             Show both directions with labelled sections\n");
     printf("\nOther options:\n");
@@ -492,7 +494,7 @@ void print_sync_help(const char *prog_name) {
     printf("Usage: %s sync [profile]... [options]\n\n", prog_name);
     printf("Synchronize local profiles with a remote repository\n\n");
     printf("Fetches from the remote, analyzes branch states, and pushes or pulls changes\n");
-    printf("By default, this command operates on all enabled profiles and requires a clean workspace\n");
+    printf("By default, operates on all enabled profiles and requires a clean workspace\n");
     printf("Use 'dotta update' to commit local changes before syncing\n\n");
     printf("Arguments:\n");
     printf("  [profile]...           Optional list of profiles to sync (default: all enabled)\n");
@@ -514,8 +516,8 @@ void print_sync_help(const char *prog_name) {
     printf("  5. Pushes changes if the local is ahead\n");
     printf("  6. Resolves diverged branches using the configured strategy\n");
     printf("\nTypical Workflow:\n");
-    printf("  %s update                  # Commit local changes to one or more profiles\n", prog_name);
-    printf("  %s sync                    # Synchronize all enabled profiles with the remote\n", prog_name);
+    printf("  %s update                  # Commit local changes to profiles\n", prog_name);
+    printf("  %s sync                    # Sync enabled profiles with the remote\n", prog_name);
     printf("\nConfiguration:\n");
     printf("  Set defaults in ~/.config/dotta/config.toml:\n");
     printf("    [sync]\n");
@@ -527,8 +529,8 @@ void print_sync_help(const char *prog_name) {
     printf("  %s sync global darwin      # Sync multiple specific profiles\n", prog_name);
     printf("  %s sync --dry-run          # Preview the actions sync would take\n", prog_name);
     printf("  %s sync --force            # Sync even with uncommitted changes\n", prog_name);
-    printf("  %s sync --no-pull          # Push local changes only, skipping remote pulls\n", prog_name);
-    printf("  %s sync --diverged rebase  # Use the 'rebase' strategy for diverged branches\n", prog_name);
+    printf("  %s sync --no-pull          # Push only, skip remote pulls\n", prog_name);
+    printf("  %s sync --diverged rebase  # Use 'rebase' for diverged branches\n", prog_name);
     printf("\n");
 }
 
@@ -545,7 +547,7 @@ void print_profile_help(const char *prog_name) {
     printf("  list                     Show all profiles and their enabled status\n");
     printf("  fetch <name>...          Download profiles from a remote without enabling them\n");
     printf("  enable <name>...         Enable profiles for deployment\n");
-    printf("  disable <name>...        Disable profiles, marking them for removal on the next apply\n");
+    printf("  disable <name>...        Disable profiles, mark for removal on next apply\n");
     printf("  reorder <name>...        Change the layering order of enabled profiles\n");
     printf("  validate                 Check for and fix inconsistencies in the profile state\n");
     printf("\nOptions (list):\n");
@@ -574,7 +576,7 @@ void print_profile_help(const char *prog_name) {
     printf("\nExamples:\n");
     printf("  %s profile list --all              # Show local and remote profiles\n", prog_name);
     printf("  %s profile fetch darwin            # Download a profile\n", prog_name);
-    printf("  %s profile enable darwin           # Enable a profile for the current workspace\n", prog_name);
+    printf("  %s profile enable darwin           # Enable a profile for deployment\n", prog_name);
     printf("  %s profile disable --all           # Disable all enabled profiles\n", prog_name);
     printf("  %s profile reorder global darwin   # Change layering priority\n", prog_name);
     printf("  %s profile validate --fix          # Fix state inconsistencies\n", prog_name);
@@ -616,8 +618,8 @@ void print_ignore_help(const char *prog_name) {
     printf("  Test mode (--test):    Check if a path would be ignored\n\n");
     printf("Options:\n");
     printf("  -p, --profile <name>   Profile name\n");
-    printf("  --add <pattern>        Add pattern to .dottaignore (can be used multiple times)\n");
-    printf("  --remove <pattern>     Remove pattern from .dottaignore (can be used multiple times)\n");
+    printf("  --add <pattern>        Add pattern to .dottaignore (repeatable)\n");
+    printf("  --remove <pattern>     Remove pattern from .dottaignore (repeatable)\n");
     printf("  --test <path>          Test if path would be ignored by enabled profiles\n");
     printf("  -v, --verbose          Print verbose output (test mode: show all patterns)\n");
     printf("  -h, --help             Show this help message\n");
@@ -636,7 +638,7 @@ void print_ignore_help(const char *prog_name) {
     printf("\nProfile .dottaignore Behavior:\n");
     printf("  - Profile .dottaignore files start EMPTY and inherit all baseline patterns\n");
     printf("  - Use negation (!) to override baseline patterns in specific profiles\n");
-    printf("  - Example: Baseline has '*.log', profile adds '!important.log' → important.log NOT ignored\n");
+    printf("  - Example: baseline '*.log' + profile '!important.log' → file not ignored\n");
     printf("\nEditor Selection (for edit mode):\n");
     printf("  $DOTTA_EDITOR → $VISUAL → $EDITOR → vi\n");
     printf("\nExamples:\n");
@@ -761,7 +763,7 @@ void print_key_help(const char *prog_name) {
     printf("    opslimit = 10000            # CPU cost\n");
     printf("Security Notes:\n");
     printf("  - The passphrase is never stored on disk\n");
-    printf("  - The derived key is cached in memory and encrypted on disk (~/.cache/dotta/session)\n");
+    printf("  - Derived key cached in memory, encrypted on disk (~/.cache/dotta/session)\n");
     printf("  - Disk cache is machine-bound and expires per session timeout\n");
     printf("  - Keys are securely cleared from memory and disk on timeout or clear\n");
     printf("  - If you forget your passphrase, encrypted files cannot be recovered\n\n");

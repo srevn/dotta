@@ -57,14 +57,14 @@ struct content_cache {
  * @param buf_ptr Buffer to free (cast from void* for hashmap_free compatibility)
  */
 static void buffer_free_secure(void *buf_ptr) {
-    buffer_t *buf = (buffer_t *)buf_ptr;
+    buffer_t *buf = (buffer_t *) buf_ptr;
     if (!buf) {
         return;
     }
 
     /* Zero sensitive plaintext data before freeing (defense in depth) */
     if (buffer_data(buf) && buffer_size(buf) > 0) {
-        hydro_memzero((void *)buffer_data(buf), buffer_size(buf));
+        hydro_memzero((void *) buffer_data(buf), buffer_size(buf));
     }
 
     buffer_free(buf);
@@ -112,7 +112,7 @@ static error_t *get_plaintext_from_blob(
     CHECK_NULL(out_content);
 
     const unsigned char *blob_data = git_blob_rawcontent(blob);
-    size_t blob_size = (size_t)git_blob_rawsize(blob);
+    size_t blob_size = (size_t) git_blob_rawsize(blob);
 
     /* Step 1: Check magic header for encryption (source of truth) */
     bool is_encrypted = encryption_is_encrypted(blob_data, blob_size);
@@ -128,26 +128,30 @@ static error_t *get_plaintext_from_blob(
      * expected state to catch inconsistencies early.
      */
     if (is_encrypted != expected_encrypted) {
-        return ERROR(ERR_STATE_INVALID,
+        return ERROR(
+            ERR_STATE_INVALID,
             "Encryption state mismatch for '%s':\n"
             "  Magic header indicates: %s\n"
             "  Expected state indicates: %s\n\n"
-            "This indicates state corruption or manual git manipulation.\n"
+            "This means state corruption or manual git manipulation.\n"
             "To fix, run: dotta update -p %s '%s'",
             storage_path, is_encrypted ? "encrypted" : "plaintext",
             expected_encrypted ? "encrypted" : "plaintext",
-            profile_name, storage_path);
+            profile_name, storage_path
+        );
     }
 
     /* Step 3: Handle encrypted files */
     if (is_encrypted) {
         /* Check we have keymanager */
         if (!km) {
-            return ERROR(ERR_CRYPTO,
+            return ERROR(
+                ERR_CRYPTO,
                 "File '%s' is encrypted but no key manager provided.\n\n"
                 "To decrypt this file, ensure encryption is configured:\n"
                 "  1. Set passphrase: dotta key set\n"
-                "  2. Configure encryption in config.toml", storage_path);
+                "  2. Configure encryption in config.toml", storage_path
+            );
         }
 
         /* Get profile key */
@@ -167,12 +171,13 @@ static error_t *get_plaintext_from_blob(
         hydro_memzero(profile_key, sizeof(profile_key));
 
         if (err) {
-            return error_wrap(err,
-                "Failed to decrypt '%s'.\n\n"
-                "Possible causes:\n"
+            return error_wrap(
+                err,
+                "Failed to decrypt '%s'.\n\nPossible causes:\n"
                 "  - Wrong passphrase (try: dotta key clear)\n"
                 "  - File corrupted in repository\n"
-                "  - File encrypted with different passphrase", storage_path);
+                "  - File encrypted with different passphrase", storage_path
+            );
         }
 
         *out_content = plaintext;
@@ -217,8 +222,10 @@ error_t *content_get_from_blob_oid(
     int git_err = git_blob_lookup(&blob, repo, blob_oid);
     if (git_err != 0) {
         const git_error *e = git_error_last();
-        return ERROR(ERR_NOT_FOUND,
-            "Failed to load blob: %s", e ? e->message : "unknown error");
+        return ERROR(
+            ERR_NOT_FOUND, "Failed to load blob: %s",
+            e ? e->message : "unknown error"
+        );
     }
 
     /* Get plaintext content */
@@ -248,12 +255,15 @@ error_t *content_get_from_tree_entry(
     /* Get OID from tree entry */
     const git_oid *blob_oid = git_tree_entry_id(entry);
     if (!blob_oid) {
-        return ERROR(ERR_INTERNAL, "Failed to get OID from tree entry");
+        return ERROR(
+            ERR_INTERNAL, "Failed to get OID from tree entry"
+        );
     }
 
     /* Delegate to blob OID variant */
     return content_get_from_blob_oid(
-        repo, blob_oid, storage_path, profile_name, expected_encrypted, km, out_content
+        repo, blob_oid, storage_path, profile_name,
+        expected_encrypted, km, out_content
     );
 }
 
@@ -272,7 +282,9 @@ content_cache_t *content_cache_create(
 
     cache->repo = repo;
     cache->km = km;
-    cache->cache_map = hashmap_create(64);  /* Initial capacity: 64 entries */
+
+    /* Initial capacity: 64 entries */
+    cache->cache_map = hashmap_create(64);
 
     if (!cache->cache_map) {
         free(cache);
@@ -315,15 +327,17 @@ error_t *content_cache_get_from_blob_oid(
     int git_err = git_blob_lookup(&blob, cache->repo, blob_oid);
     if (git_err != 0) {
         const git_error *e = git_error_last();
-        return ERROR(ERR_NOT_FOUND,
-            "Failed to load blob: %s", e ? e->message : "unknown error");
+        return ERROR(
+            ERR_NOT_FOUND, "Failed to load blob: %s",
+            e ? e->message : "unknown error"
+        );
     }
 
     /* Get plaintext content */
     buffer_t *content = NULL;
     error_t *err = get_plaintext_from_blob(
-        cache->repo, blob, storage_path, profile_name, expected_encrypted, cache->km,
-        &content
+        cache->repo, blob, storage_path, profile_name, expected_encrypted,
+        cache->km, &content
     );
 
     git_blob_free(blob);
@@ -367,7 +381,8 @@ error_t *content_cache_get_from_tree_entry(
 
     /* Delegate to blob OID variant */
     return content_cache_get_from_blob_oid(
-        cache, blob_oid, storage_path, profile_name, expected_encrypted, out_content
+        cache, blob_oid, storage_path, profile_name,
+        expected_encrypted, out_content
     );
 }
 
@@ -406,12 +421,14 @@ error_t *content_store_to_blob(
 
     /* Validate file size (security: prevent DoS via huge files) */
     if (size > MAX_ENCRYPTED_FILE_SIZE) {
-        return ERROR(ERR_INVALID_ARG,
+        return ERROR(
+            ERR_INVALID_ARG,
             "Content too large: %zu bytes (max %d bytes).\n\n"
             "Rationale: Dotfiles should be small configuration files.\n"
             "If you need to manage files larger than 100MB, consider whether\n"
             "they belong in a dotfile manager or should use a different tool.",
-            size, MAX_ENCRYPTED_FILE_SIZE);
+            size, MAX_ENCRYPTED_FILE_SIZE
+        );
     }
 
     buffer_t *ciphertext = NULL;
@@ -419,19 +436,24 @@ error_t *content_store_to_blob(
     /* Handle encryption if requested */
     if (should_encrypt) {
         if (!km) {
-            return ERROR(ERR_CRYPTO,
-                "Encryption requested but no keymanager provided");
+            return ERROR(
+                ERR_CRYPTO, "Encryption requested but no keymanager provided"
+            );
         }
 
         /* Get profile key (cached in keymanager for performance) */
         uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
         error_t *err = keymanager_get_profile_key(km, profile_name, profile_key);
         if (err) {
-            return error_wrap(err, "Failed to get profile key for '%s'", profile_name);
+            return error_wrap(
+                err, "Failed to get profile key for '%s'", profile_name
+            );
         }
 
         /* Encrypt */
-        err = encryption_encrypt(data, size, profile_key, storage_path, &ciphertext);
+        err = encryption_encrypt(
+            data, size, profile_key, storage_path, &ciphertext
+        );
 
         /* Clear profile key immediately (defense in depth) */
         hydro_memzero(profile_key, sizeof(profile_key));
@@ -455,8 +477,10 @@ error_t *content_store_to_blob(
 
     if (ret < 0) {
         const git_error *git_err = git_error_last();
-        return ERROR(ERR_GIT,
-            "Failed to create git blob: %s", git_err ? git_err->message : "unknown error");
+        return ERROR(
+            ERR_GIT, "Failed to create git blob: %s",
+            git_err ? git_err->message : "unknown error"
+        );
     }
 
     return NULL;
@@ -479,7 +503,10 @@ error_t *content_store_file_to_worktree(
     /* Step 1: Validate file type (security: prevent symlink/special file confusion) */
     struct stat st;
     if (lstat(filesystem_path, &st) < 0) {
-        return ERROR(ERR_FS, "Failed to stat '%s': %s", filesystem_path, strerror(errno));
+        return ERROR(
+            ERR_FS, "Failed to stat '%s': %s",
+            filesystem_path, strerror(errno)
+        );
     }
 
     /* Return stat data to caller if requested (before error checks) */
@@ -489,26 +516,30 @@ error_t *content_store_file_to_worktree(
 
     if (!S_ISREG(st.st_mode)) {
         const char *type = S_ISLNK(st.st_mode) ? "symlink" :
-                           S_ISDIR(st.st_mode) ? "directory" :
-                           S_ISFIFO(st.st_mode) ? "FIFO" :
-                           S_ISSOCK(st.st_mode) ? "socket" :
-                           S_ISCHR(st.st_mode) ? "character device" :
-                           S_ISBLK(st.st_mode) ? "block device" : "special file";
+            S_ISDIR(st.st_mode) ? "directory" :
+            S_ISFIFO(st.st_mode) ? "FIFO" :
+            S_ISSOCK(st.st_mode) ? "socket" :
+            S_ISCHR(st.st_mode) ? "character device" :
+            S_ISBLK(st.st_mode) ? "block device" : "special file";
 
-        return ERROR(ERR_INVALID_ARG,
+        return ERROR(
+            ERR_INVALID_ARG,
             "Cannot store '%s': it is a %s, not a regular file.\n\n"
             "Dotta only manages regular configuration files.\n"
-            "Symlinks and special files are not supported.", filesystem_path, type);
+            "Symlinks and special files are not supported.", filesystem_path, type
+        );
     }
 
     /* Step 2: Validate file size before reading (prevent memory exhaustion) */
-    if ((size_t)st.st_size > MAX_ENCRYPTED_FILE_SIZE) {
-        return ERROR(ERR_INVALID_ARG,
+    if ((size_t) st.st_size > MAX_ENCRYPTED_FILE_SIZE) {
+        return ERROR(
+            ERR_INVALID_ARG,
             "File '%s' is too large: %zu bytes (max %d bytes).\n\n"
             "Rationale: Dotfiles should be small configuration files.\n"
             "If you need to manage files larger than 100MB, consider whether\n"
             "they belong in a dotfile manager or should use a different tool.",
-            filesystem_path, (size_t)st.st_size, MAX_ENCRYPTED_FILE_SIZE);
+            filesystem_path, (size_t) st.st_size, MAX_ENCRYPTED_FILE_SIZE
+        );
     }
 
     /* Step 3: Read file from filesystem */
@@ -528,8 +559,9 @@ error_t *content_store_file_to_worktree(
     if (should_encrypt) {
         if (!km) {
             buffer_free_secure(content);
-            return ERROR(ERR_CRYPTO,
-                "Encryption requested but no keymanager provided");
+            return ERROR(
+                ERR_CRYPTO, "Encryption requested but no keymanager provided"
+            );
         }
 
         /* Get profile key (cached in keymanager) */
@@ -537,7 +569,10 @@ error_t *content_store_file_to_worktree(
         err = keymanager_get_profile_key(km, profile_name, profile_key);
         if (err) {
             buffer_free_secure(content);
-            return error_wrap(err, "Failed to get profile key for '%s'", profile_name);
+            return error_wrap(
+                err, "Failed to get profile key for '%s'",
+                profile_name
+            );
         }
 
         /* Encrypt */
@@ -554,7 +589,9 @@ error_t *content_store_file_to_worktree(
 
         if (err) {
             buffer_free_secure(content);
-            return error_wrap(err, "Failed to encrypt '%s'", storage_path);
+            return error_wrap(
+                err, "Failed to encrypt '%s'", storage_path
+            );
         }
 
         /* Use encrypted data for writing */
@@ -580,7 +617,9 @@ error_t *content_store_file_to_worktree(
     }
 
     if (err) {
-        return error_wrap(err, "Failed to write to worktree '%s'", worktree_path);
+        return error_wrap(
+            err, "Failed to write to worktree '%s'", worktree_path
+        );
     }
 
     return NULL;

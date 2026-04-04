@@ -77,10 +77,10 @@
  * Match flags - control matching behavior
  */
 typedef enum {
-    MATCH_DEFAULT     = 0,        /* Default behavior */
-    MATCH_PATHNAME    = 1 << 0,   /* Wildcards don't match / (always on for *) */
-    MATCH_DIRECTORY   = 1 << 1,   /* Path is a directory (enables trailing /) */
-    MATCH_DOUBLESTAR  = 1 << 2,   /* Enable ** recursive glob support */
+    MATCH_DEFAULT    = 0,         /* Default behavior */
+    MATCH_PATHNAME   = 1 << 0,    /* Wildcards don't match / (always on for *) */
+    MATCH_DIRECTORY  = 1 << 1,    /* Path is a directory (enables trailing /) */
+    MATCH_DOUBLESTAR = 1 << 2,    /* Enable ** recursive glob support */
 } match_flags_t;
 
 /**

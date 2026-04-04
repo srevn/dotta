@@ -114,7 +114,11 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
 
     for (size_t i = 0; i < all_profiles->count; i++) {
         /* Store (index + 1) to avoid NULL for index 0 */
-        err = hashmap_set(profile_map, all_profiles->profiles[i].name, (void*)(uintptr_t)(i + 1));
+        err = hashmap_set(
+            profile_map,
+            all_profiles->profiles[i].name,
+            (void *) (uintptr_t) (i + 1)
+        );
         if (err) {
             goto cleanup;
         }
@@ -147,7 +151,7 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
             }
 
             /* Subtract 1 to get actual index (we stored i + 1) */
-            size_t profile_idx = (size_t)(uintptr_t)idx_ptr - 1;
+            size_t profile_idx = (size_t) (uintptr_t) idx_ptr - 1;
             used[profile_idx] = true;
 
             /* Add to items */
@@ -166,9 +170,7 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
     /* Second: Add remaining profiles not in state (disabled, at bottom) */
     for (size_t i = 0; i < all_profiles->count; i++) {
         /* O(1) check if already added */
-        if (used[i]) {
-            continue;
-        }
+        if (used[i]) continue;
 
         profile_t *p = &all_profiles->profiles[i];
 
@@ -381,7 +383,7 @@ int interactive_get_required_lines(const interactive_state_t *state) {
     }
 
     /* Header + blank + profiles + blank + footer */
-    return 1 + 1 + (int)state->item_count + 1 + 1;
+    return 1 + 1 + (int) state->item_count + 1 + 1;
 }
 
 int interactive_render(const interactive_state_t *state) {
@@ -394,9 +396,13 @@ int interactive_render(const interactive_state_t *state) {
     /* Header */
     fprintf(stdout, "\r" ANSI_CLEAR_LINE);
     if (state->modified) {
-        fprintf(stdout, "  \033[1mProfiles:\033[0m \033[33m(modified)\033[0m\r\n");
+        fprintf(
+            stdout, "  \033[1mProfiles:\033[0m \033[33m(modified)\033[0m\r\n"
+        );
     } else {
-        fprintf(stdout, "  \033[1mProfiles:\033[0m\r\n");
+        fprintf(
+            stdout, "  \033[1mProfiles:\033[0m\r\n"
+        );
     }
     lines_rendered++;
 
@@ -418,9 +424,15 @@ int interactive_render(const interactive_state_t *state) {
 
         /* Profile name (dim if not selected) - all aligned at same column */
         if (item->enabled || i == state->cursor) {
-            fprintf(stdout, "  %s %s %s\r\n", cursor, checkbox, item->name);
+            fprintf(
+                stdout, "  %s %s %s\r\n",
+                cursor, checkbox, item->name
+            );
         } else {
-            fprintf(stdout, "  %s %s \033[2m%s\033[0m\r\n", cursor, checkbox, item->name);
+            fprintf(
+                stdout, "  %s %s \033[2m%s\033[0m\r\n",
+                cursor, checkbox, item->name
+            );
         }
         lines_rendered++;
     }
@@ -433,17 +445,21 @@ int interactive_render(const interactive_state_t *state) {
     fprintf(stdout, "\r" ANSI_CLEAR_LINE);
     if (state->modified) {
         /* Show modified mode keys with save highlighted */
-        fprintf(stdout, "\033[2m↑↓\033[0m navigate  "
-                        "\033[2mspace\033[0m toggle  "
-                        "\033[2mJ/K\033[0m move  "
-                        "\033[1;33mw\033[0m \033[1;33msave\033[0m  "
-                        "\033[2mq\033[0m quit");
+        fprintf(
+            stdout, "\033[2m↑↓\033[0m navigate  "
+            "\033[2mspace\033[0m toggle  "
+            "\033[2mJ/K\033[0m move  "
+            "\033[1;33mw\033[0m \033[1;33msave\033[0m  "
+            "\033[2mq\033[0m quit"
+        );
     } else {
         /* Show normal mode keys */
-        fprintf(stdout, "\033[2m↑↓\033[0m navigate  "
-                        "\033[2mspace\033[0m toggle  "
-                        "\033[2mJ/K\033[0m move  "
-                        "\033[2mq\033[0m quit");
+        fprintf(
+            stdout, "\033[2m↑↓\033[0m navigate  "
+            "\033[2mspace\033[0m toggle  "
+            "\033[2mJ/K\033[0m move  "
+            "\033[2mq\033[0m quit"
+        );
     }
     lines_rendered++;
 
@@ -556,12 +572,16 @@ interactive_result_t interactive_handle_key(
 
 error_t *interactive_run(git_repository *repo) {
     if (!repo) {
-        return error_create(ERR_INVALID_ARG, "repo cannot be NULL");
+        return error_create(
+            ERR_INVALID_ARG, "repo cannot be NULL"
+        );
     }
 
     /* Check if terminal is a TTY */
     if (!terminal_is_tty()) {
-        return error_create(ERR_INVALID_ARG, "interactive mode requires a TTY");
+        return error_create(
+            ERR_INVALID_ARG, "interactive mode requires a TTY"
+        );
     }
 
     /* Initialize terminal */
@@ -592,9 +612,10 @@ error_t *interactive_run(git_repository *repo) {
     if (required_lines > size.rows) {
         interactive_state_free(state);
         terminal_restore(term);
-        return error_create(ERR_INVALID_ARG,
-            "terminal too small (need %d lines, have %d)",
-            required_lines, size.rows);
+        return error_create(
+            ERR_INVALID_ARG, "terminal too small (need %d lines, have %d)",
+            required_lines, size.rows
+        );
     }
 
     /* Check terminal width to prevent line wrapping.
@@ -621,12 +642,14 @@ error_t *interactive_run(git_repository *repo) {
 
     /* Check if longest name + UI elements fits in terminal width */
     const int UI_OVERHEAD = 10;  /* Extra margin for safety */
-    if (max_name_len + UI_OVERHEAD > (size_t)size.cols) {
+    if (max_name_len + UI_OVERHEAD > (size_t) size.cols) {
         interactive_state_free(state);
         terminal_restore(term);
-        return error_create(ERR_INVALID_ARG,
-            "terminal too narrow (longest profile name: %zu chars, need %d columns, have %d)",
-            max_name_len, (int)max_name_len + UI_OVERHEAD, size.cols);
+        return error_create(
+            ERR_INVALID_ARG, "terminal too narrow (longest profile name: "
+            "%zu chars, need %d columns, have %d)", max_name_len,
+            (int) max_name_len + UI_OVERHEAD, size.cols
+        );
     }
 
     /* Hide cursor */
@@ -648,7 +671,8 @@ error_t *interactive_run(git_repository *repo) {
         /* Re-render: move cursor up, then redraw */
         if (result == INTERACTIVE_CONTINUE) {
             /* Move up to start of first line
-             * We drew N lines, cursor is on line N, need to move up N-1 to get to line 1 */
+             * We drew N lines, cursor is on line N,
+             * need to move up N-1 to get to line 1 */
             if (lines_drawn > 0) {
                 terminal_cursor_up(lines_drawn - 1);
             }
@@ -672,7 +696,9 @@ error_t *interactive_run(git_repository *repo) {
         if (loop_err) {
             return loop_err;
         }
-        return error_create(ERR_INTERNAL, "interactive mode exited with error");
+        return error_create(
+            ERR_INTERNAL, "interactive mode exited with error"
+        );
     }
 
     return NULL;

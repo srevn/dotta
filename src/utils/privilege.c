@@ -197,7 +197,7 @@ bool privilege_path_is_under_home(const char *filesystem_path) {
         return false;
     }
 
-    struct passwd *pw = getpwuid((uid_t)parsed_uid);
+    struct passwd *pw = getpwuid((uid_t) parsed_uid);
     if (!pw || !pw->pw_dir) {
         return false;
     }
@@ -280,27 +280,33 @@ error_t *privilege_get_actual_user(uid_t *uid, gid_t *gid) {
         errno = 0;
         long parsed_uid = strtol(sudo_uid_str, &endptr, 10);
         if (errno != 0 || *endptr != '\0' || parsed_uid < 0) {
-            return ERROR(ERR_INVALID_ARG,
-                "Invalid SUDO_UID environment variable: %s", sudo_uid_str);
+            return ERROR(
+                ERR_INVALID_ARG, "Invalid SUDO_UID environment variable: %s",
+                sudo_uid_str
+            );
         }
 
         /* Parse GID */
         errno = 0;
         long parsed_gid = strtol(sudo_gid_str, &endptr, 10);
         if (errno != 0 || *endptr != '\0' || parsed_gid < 0) {
-            return ERROR(ERR_INVALID_ARG,
-                "Invalid SUDO_GID environment variable: %s", sudo_gid_str);
+            return ERROR(
+                ERR_INVALID_ARG, "Invalid SUDO_GID environment variable: %s",
+                sudo_gid_str
+            );
         }
 
         /* Validate that the UID actually exists in the system */
-        struct passwd *pw = getpwuid((uid_t)parsed_uid);
+        struct passwd *pw = getpwuid((uid_t) parsed_uid);
         if (!pw) {
-            return ERROR(ERR_NOT_FOUND,
-                "User with UID %ld (from SUDO_UID) not found in system", parsed_uid);
+            return ERROR(
+                ERR_NOT_FOUND, "User with UID %ld not found in system",
+                parsed_uid
+            );
         }
 
-        *uid = (uid_t)parsed_uid;
-        *gid = (gid_t)parsed_gid;
+        *uid = (uid_t) parsed_uid;
+        *gid = (gid_t) parsed_gid;
         return NULL;
     }
 
@@ -351,7 +357,9 @@ static error_t *collect_privileged_paths(
     /* Allocate array for privileged path pointers */
     const char **priv_paths = calloc(priv_count, sizeof(char *));
     if (!priv_paths) {
-        return ERROR(ERR_MEMORY, "Failed to allocate privileged paths array");
+        return ERROR(
+            ERR_MEMORY, "Failed to allocate privileged paths array"
+        );
     }
 
     /* Populate array */
@@ -385,28 +393,41 @@ static void display_privilege_requirement(
     output_ctx_t *out
 ) {
     /* Header */
-    output_error(out, "\nRoot privileges required for this operation.\n");
+    output_error(
+        out, "\nRoot privileges required for this operation.\n"
+    );
 
     /* Operation name */
-    output_print(out, OUTPUT_NORMAL, "\nOperation: %s\n", operation);
+    output_print(
+        out, OUTPUT_NORMAL, "\nOperation: %s\n", operation
+    );
 
     /* List files requiring root (limit to 10 for readability) */
-    output_print(out, OUTPUT_NORMAL, "\nFiles requiring root privileges:\n");
+    output_print(
+        out, OUTPUT_NORMAL, "\nFiles requiring root privileges:\n"
+    );
 
     size_t display_count = priv_count > 10 ? 10 : priv_count;
     for (size_t i = 0; i < display_count; i++) {
-        output_print(out, OUTPUT_NORMAL, "  %s\n", priv_paths[i]);
+        output_print(
+            out, OUTPUT_NORMAL, "  %s\n",
+            priv_paths[i]
+        );
     }
 
     if (priv_count > 10) {
-        output_print(out, OUTPUT_NORMAL, "  ... and %zu more\n", priv_count - 10);
+        output_print(
+            out, OUTPUT_NORMAL, "  ... and %zu more\n",
+            priv_count - 10
+        );
     }
 
     /* Explain why root is needed */
-    output_print(out, OUTPUT_NORMAL,
-        "\nReason: These files require ownership metadata capture,\n");
-    output_print(out, OUTPUT_NORMAL,
-        "          which requires root privileges to access.\n");
+    output_print(
+        out, OUTPUT_NORMAL,
+        "\nReason: These files require ownership metadata capture,\n"
+        "          which requires root privileges to access.\n"
+    );
 }
 
 /**
@@ -448,7 +469,7 @@ static error_t *reexec_with_sudo(int argc, char **argv) {
      */
 
     /* Allocate new argv array: sudo, -E, original args, NULL */
-    char **sudo_argv = calloc((size_t)argc + 3, sizeof(char *));
+    char **sudo_argv = calloc((size_t) argc + 3, sizeof(char *));
     if (!sudo_argv) {
         return ERROR(ERR_MEMORY, "Failed to allocate sudo argv array");
     }
@@ -474,12 +495,15 @@ static error_t *reexec_with_sudo(int argc, char **argv) {
 
     /* Provide helpful error message based on errno */
     if (saved_errno == ENOENT) {
-        return ERROR(ERR_PERMISSION,
-            "Failed to execute sudo: command not found\n"
-            "Ensure sudo is installed and in PATH");
+        return ERROR(
+            ERR_PERMISSION, "Failed to execute sudo: command not found\n"
+            "Ensure sudo is installed and in PATH"
+        );
     } else {
-        return ERROR(ERR_PERMISSION,
-            "Failed to execute sudo: %s", strerror(saved_errno));
+        return ERROR(
+            ERR_PERMISSION, "Failed to execute sudo: %s",
+            strerror(saved_errno)
+        );
     }
 }
 
@@ -532,13 +556,13 @@ error_t *privilege_ensure_for_operation(
 
     /* Early exit: no privileged paths means no privilege check needed */
     if (priv_count == 0) {
-        free((void *)priv_paths);
+        free((void *) priv_paths);
         return NULL;
     }
 
     /* Early exit: already elevated means we have required privileges */
     if (privilege_is_elevated()) {
-        free((void *)priv_paths);
+        free((void *) priv_paths);
         return NULL;
     }
 
@@ -560,7 +584,7 @@ error_t *privilege_ensure_for_operation(
             result = reexec_with_sudo(argc, argv);
 
             /* If we reach here, re-exec failed */
-            free((void *)priv_paths);
+            free((void *) priv_paths);
             return result;
         } else {
             /* User declined elevation */
@@ -571,10 +595,12 @@ error_t *privilege_ensure_for_operation(
         output_print(out, OUTPUT_NORMAL, "\nTo proceed, run with sudo:\n");
         output_print(out, OUTPUT_NORMAL, "  sudo %s %s ...\n\n", argv[0], operation_name);
 
-        result = ERROR(ERR_PERMISSION,
-            "Root privileges required but cannot prompt (non-interactive mode)");
+        result = ERROR(
+            ERR_PERMISSION,
+            "Root privileges required but cannot prompt (non-interactive mode)"
+        );
     }
 
-    free((void *)priv_paths);
+    free((void *) priv_paths);
     return result;
 }

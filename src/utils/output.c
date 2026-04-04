@@ -46,16 +46,16 @@
 
 /* Indexed by output_color_t enum for O(1) runtime lookup */
 static const char *ANSI_CODES[] = {
-    [OUTPUT_COLOR_RESET]   = ANSI_RESET,
-    [OUTPUT_COLOR_BOLD]    = ANSI_BOLD,
-    [OUTPUT_COLOR_DIM]     = ANSI_DIM,
-    [OUTPUT_COLOR_RED]     = ANSI_RED,
-    [OUTPUT_COLOR_GREEN]   = ANSI_GREEN,
-    [OUTPUT_COLOR_YELLOW]  = ANSI_YELLOW,
-    [OUTPUT_COLOR_BLUE]    = ANSI_BLUE,
+    [OUTPUT_COLOR_RESET] = ANSI_RESET,
+    [OUTPUT_COLOR_BOLD] = ANSI_BOLD,
+    [OUTPUT_COLOR_DIM] = ANSI_DIM,
+    [OUTPUT_COLOR_RED] = ANSI_RED,
+    [OUTPUT_COLOR_GREEN] = ANSI_GREEN,
+    [OUTPUT_COLOR_YELLOW] = ANSI_YELLOW,
+    [OUTPUT_COLOR_BLUE] = ANSI_BLUE,
     [OUTPUT_COLOR_MAGENTA] = ANSI_MAGENTA,
-    [OUTPUT_COLOR_CYAN]    = ANSI_CYAN,
-    [OUTPUT_COLOR_WHITE]   = ANSI_WHITE,
+    [OUTPUT_COLOR_CYAN] = ANSI_CYAN,
+    [OUTPUT_COLOR_WHITE] = ANSI_WHITE,
 };
 
 #define ANSI_CODE_COUNT (sizeof(ANSI_CODES) / sizeof(ANSI_CODES[0]))
@@ -177,7 +177,7 @@ static const style_tag_t TAG_TABLE[] = {
  */
 static const style_tag_t *resolve_tag(const char *name, size_t len) {
     int lo = 0;
-    int hi = (int)TAG_COUNT - 1;
+    int hi = (int) TAG_COUNT - 1;
 
     while (lo <= hi) {
         int mid = lo + (hi - lo) / 2;
@@ -233,8 +233,8 @@ static bool expand_tag(
 
     /* First pass: resolve all parts (reject if any unknown) */
     while (p < end) {
-        const char *semi = memchr(p, ';', (size_t)(end - p));
-        size_t part_len = semi ? (size_t)(semi - p) : (size_t)(end - p);
+        const char *semi = memchr(p, ';', (size_t) (end - p));
+        size_t part_len = semi ? (size_t) (semi - p) : (size_t) (end - p);
 
         if (part_len > 0) {
             if (count >= sizeof(resolved) / sizeof(resolved[0]))
@@ -287,7 +287,7 @@ static bool expand_format(bool color_on, const char *fmt, style_buf_t *sb) {
             const char *run = p;
             while (*p && *p != '{')
                 p++;
-            style_buf_puts(sb, run, (size_t)(p - run));
+            style_buf_puts(sb, run, (size_t) (p - run));
             continue;
         }
 
@@ -296,8 +296,8 @@ static bool expand_format(bool color_on, const char *fmt, style_buf_t *sb) {
         const char *tag_end = NULL;
 
         for (const char *q = tag_start;
-             *q && (size_t)(q - tag_start) < TAG_SCAN_LIMIT;
-             q++) {
+            *q && (size_t) (q - tag_start) < TAG_SCAN_LIMIT;
+            q++) {
             if (*q == '}') {
                 tag_end = q;
                 break;
@@ -311,8 +311,10 @@ static bool expand_format(bool color_on, const char *fmt, style_buf_t *sb) {
             continue;
         }
 
-        if (expand_tag(sb, color_on, tag_start,
-                        (size_t)(tag_end - tag_start))) {
+        if (expand_tag(
+            sb, color_on, tag_start,
+            (size_t) (tag_end - tag_start)
+            )) {
             has_tags = true;
             p = tag_end + 1;  /* Advance past '}' */
         } else {
@@ -392,10 +394,10 @@ static bool fd_supports_color(int fd) {
 
 static bool should_enable_colors(output_color_mode_t mode, FILE *stream) {
     switch (mode) {
-    case OUTPUT_COLOR_ALWAYS:  return true;
-    case OUTPUT_COLOR_NEVER:   return false;
-    case OUTPUT_COLOR_AUTO:    return fd_supports_color(fileno(stream));
-    default:                   return false;
+        case OUTPUT_COLOR_ALWAYS:  return true;
+        case OUTPUT_COLOR_NEVER:   return false;
+        case OUTPUT_COLOR_AUTO:    return fd_supports_color(fileno(stream));
+        default:                   return false;
     }
 }
 
@@ -436,7 +438,7 @@ void output_set_verbosity(output_ctx_t *ctx, output_verbosity_t verbosity) {
 
 static output_verbosity_t parse_verbosity(const char *str) {
     if (!str) return OUTPUT_NORMAL;
-    
+
     if (strcmp(str, "normal") == 0)    return OUTPUT_NORMAL;
     if (strcmp(str, "quiet") == 0)     return OUTPUT_QUIET;
     if (strcmp(str, "verbose") == 0)   return OUTPUT_VERBOSE;
@@ -488,7 +490,7 @@ const char *output_color_code(const output_ctx_t *ctx, output_color_t color) {
     if (!ctx || !ctx->color_enabled)
         return EMPTY;
 
-    if ((unsigned)color >= ANSI_CODE_COUNT)
+    if ((unsigned) color >= ANSI_CODE_COUNT)
         return EMPTY;
 
     return ANSI_CODES[color];
@@ -539,7 +541,7 @@ void output_colored(
     if (ctx->verbosity < min_level) return;
 
     bool apply_color = color != OUTPUT_COLOR_RESET
-        && ctx->color_enabled && (unsigned)color < ANSI_CODE_COUNT;
+        && ctx->color_enabled && (unsigned) color < ANSI_CODE_COUNT;
 
     if (apply_color) fputs(ANSI_CODES[color], ctx->stream);
 
@@ -554,8 +556,10 @@ void output_colored(
 void output_error(const output_ctx_t *ctx, const char *fmt, ...) {
     if (!ctx || !fmt) return;
 
-    styled_fputs(ctx->stderr_color_enabled, stderr,
-        "{bold;red}Error:{reset} ");
+    styled_fputs(
+        ctx->stderr_color_enabled, stderr,
+        "{bold;red}Error:{reset} "
+    );
 
     va_list args;
     va_start(args, fmt);
@@ -569,8 +573,10 @@ void output_warning(const output_ctx_t *ctx, const char *fmt, ...) {
     if (!ctx || !fmt) return;
     if (ctx->verbosity < OUTPUT_NORMAL) return;
 
-    styled_fputs(ctx->stderr_color_enabled, stderr,
-        "{bold;yellow}Warning:{reset} ");
+    styled_fputs(
+        ctx->stderr_color_enabled, stderr,
+        "{bold;yellow}Warning:{reset} "
+    );
 
     va_list args;
     va_start(args, fmt);
@@ -584,8 +590,10 @@ void output_success(const output_ctx_t *ctx, const char *fmt, ...) {
     if (!ctx || !fmt) return;
     if (ctx->verbosity < OUTPUT_NORMAL) return;
 
-    styled_fputs(ctx->color_enabled, ctx->stream,
-        "{green}\xe2\x9c\x93{reset} ");
+    styled_fputs(
+        ctx->color_enabled, ctx->stream,
+        "{green}\xe2\x9c\x93{reset} "
+    );
 
     va_list args;
     va_start(args, fmt);
@@ -614,10 +622,10 @@ void output_hint(const output_ctx_t *ctx, const char *fmt, ...) {
     /* Preserve leading whitespace (printed uncolored for indentation) */
     const char *p = fmt;
     while (*p == ' ' || *p == '\t') p++;
-    size_t leading_ws = (size_t)(p - fmt);
+    size_t leading_ws = (size_t) (p - fmt);
 
     if (leading_ws > 0)
-        fprintf(ctx->stream, "%.*s", (int)leading_ws, fmt);
+        fprintf(ctx->stream, "%.*s", (int) leading_ws, fmt);
 
     /* Dim wraps the entire hint: prefix + body */
     if (ctx->color_enabled) fputs(ANSI_DIM, ctx->stream);
@@ -687,7 +695,7 @@ void output_print_diff(const output_ctx_t *ctx, const char *diff_text) {
     const char *line = diff_text;
     while (line && *line) {
         const char *next = strchr(line, '\n');
-        size_t len = next ? (size_t)(next - line) : strlen(line);
+        size_t len = next ? (size_t) (next - line) : strlen(line);
 
         const char *color = NULL;
         if (len > 0 && line[0] == '+' && (len == 1 || line[1] != '+'))
@@ -698,10 +706,12 @@ void output_print_diff(const output_ctx_t *ctx, const char *diff_text) {
             color = ANSI_CYAN;
 
         if (color)
-            fprintf(ctx->stream, "%s%.*s" ANSI_RESET "\n",
-                    color, (int)len, line);
+            fprintf(
+                ctx->stream, "%s%.*s" ANSI_RESET "\n",
+                color, (int) len, line
+            );
         else
-            fprintf(ctx->stream, "%.*s\n", (int)len, line);
+            fprintf(ctx->stream, "%.*s\n", (int) len, line);
 
         line = next ? next + 1 : NULL;
     }
@@ -715,14 +725,25 @@ void output_format_size(size_t bytes, char *buffer, size_t buffer_size) {
     if (!buffer || buffer_size == 0) return;
 
     if (bytes < 1024)
-        snprintf(buffer, buffer_size, "%zu B", bytes);
+        snprintf(
+            buffer, buffer_size, "%zu B",
+            bytes
+        );
     else if (bytes < 1024 * 1024)
-        snprintf(buffer, buffer_size, "%.1f KiB", bytes / 1024.0);
-    else if (bytes < (size_t)1024 * 1024 * 1024)
-        snprintf(buffer, buffer_size, "%.1f MiB", bytes / (1024.0 * 1024.0));
+        snprintf(
+            buffer, buffer_size, "%.1f KiB",
+            bytes / 1024.0
+        );
+    else if (bytes < (size_t) 1024 * 1024 * 1024)
+        snprintf(
+            buffer, buffer_size, "%.1f MiB",
+            bytes / (1024.0 * 1024.0)
+        );
     else
-        snprintf(buffer, buffer_size, "%.1f GiB",
-                 bytes / (1024.0 * 1024.0 * 1024.0));
+        snprintf(
+            buffer, buffer_size, "%.1f GiB",
+            bytes / (1024.0 * 1024.0 * 1024.0)
+        );
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -779,15 +800,25 @@ bool output_confirm_or_default(
 
     if (!isatty(STDIN_FILENO)) {
         if (non_interactive_default) {
-            styled_fputs(ctx->stderr_color_enabled, stderr,
-                "{bold;yellow}Warning:{reset} ");
-            fprintf(stderr,
-                "Running non-interactively, auto-confirming: %s\n", message);
+            styled_fputs(
+                ctx->stderr_color_enabled, stderr,
+                "{bold;yellow}Warning:{reset} "
+            );
+            fprintf(
+                stderr,
+                "Running non-interactively, auto-confirming: %s\n",
+                message
+            );
         } else {
-            styled_fputs(ctx->stderr_color_enabled, stderr,
-                "{bold;red}Error:{reset} ");
-            fprintf(stderr,
-                "Running non-interactively, refusing: %s\n", message);
+            styled_fputs(
+                ctx->stderr_color_enabled, stderr,
+                "{bold;red}Error:{reset} "
+            );
+            fprintf(
+                stderr,
+                "Running non-interactively, refusing: %s\n",
+                message
+            );
         }
         return non_interactive_default;
     }
@@ -808,16 +839,22 @@ bool output_confirm_destructive(
     if (!require_confirmation) return true;
 
     if (!isatty(STDIN_FILENO)) {
-        styled_fputs(ctx->stderr_color_enabled, stderr,
-            "{bold;red}Error:{reset} ");
-        fprintf(stderr,
+        styled_fputs(
+            ctx->stderr_color_enabled, stderr,
+            "{bold;red}Error:{reset} "
+        );
+        fprintf(
+            stderr,
             "Running non-interactively, refusing destructive operation: %s\n",
-            message);
+            message
+        );
         return false;
     }
 
-    styled_fputs(ctx->stderr_color_enabled, stderr,
-        "{bold;yellow}Warning:{reset} This is a destructive operation!\n");
+    styled_fputs(
+        ctx->stderr_color_enabled, stderr,
+        "{bold;yellow}Warning:{reset} This is a destructive operation!\n"
+    );
 
     return output_confirm(ctx, message, false);
 }
@@ -868,8 +905,10 @@ static int list_ensure_capacity(output_list_t *list) {
 
     list->items = new_items;
     list->capacity = new_capacity;
-    memset(&list->items[list->count], 0,
-           (new_capacity - list->count) * sizeof(list_item_t));
+    memset(
+        &list->items[list->count], 0,
+        (new_capacity - list->count) * sizeof(list_item_t)
+    );
 
     return 0;
 }
@@ -890,8 +929,9 @@ static void format_tags_with_brackets(
         if (i > 0 && offset < buffer_size - 1) {
             offset += snprintf(buffer + offset, buffer_size - offset, " ");
         }
-        offset += snprintf(buffer + offset, buffer_size - offset,
-                           "[%s]", tags[i]);
+        offset += snprintf(
+            buffer + offset, buffer_size - offset, "[%s]", tags[i]
+        );
     }
 }
 
@@ -1005,9 +1045,11 @@ void output_list_render(output_list_t *list) {
     const char *dim = output_color_code(ctx, OUTPUT_COLOR_DIM);
     const char *reset = output_color_code(ctx, OUTPUT_COLOR_RESET);
 
-    fprintf(ctx->stream, "%s%s (%zu item%s)%s",
-            bold, list->title, list->count,
-            list->count == 1 ? "" : "s", reset);
+    fprintf(
+        ctx->stream, "%s%s (%zu item%s)%s",
+        bold, list->title, list->count,
+        list->count == 1 ? "" : "s", reset
+    );
 
     if (list->hint)
         fprintf(ctx->stream, " %s(%s)%s", dim, list->hint, reset);
@@ -1019,17 +1061,23 @@ void output_list_render(output_list_t *list) {
         list_item_t *item = &list->items[i];
 
         char tag_buf[256];
-        format_tags_with_brackets(item->tags, item->tag_count,
-                                  tag_buf, sizeof(tag_buf));
+        format_tags_with_brackets(
+            item->tags, item->tag_count, tag_buf, sizeof(tag_buf)
+        );
 
         const char *color = output_color_code(ctx, item->color);
 
-        fprintf(ctx->stream, "  %s%-*s%s %s",
-                color, (int)max_tag_width, tag_buf,
-                reset, item->content);
+        fprintf(
+            ctx->stream, "  %s%-*s%s %s",
+            color, (int) max_tag_width, tag_buf,
+            reset, item->content
+        );
 
         if (item->metadata)
-            fprintf(ctx->stream, " %s(%s)%s", dim, item->metadata, reset);
+            fprintf(
+                ctx->stream, " %s(%s)%s",
+                dim, item->metadata, reset
+            );
 
         fputc('\n', ctx->stream);
     }

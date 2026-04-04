@@ -108,8 +108,10 @@ static error_t *sqlite_error(sqlite3 *db, const char *context) {
     const char *errmsg = db ? sqlite3_errmsg(db) : "unknown error";
     int errcode = db ? sqlite3_errcode(db) : SQLITE_ERROR;
 
-    return ERROR(ERR_STATE_INVALID, "%s: %s (SQLite error %d)",
-        context, errmsg, errcode);
+    return ERROR(
+        ERR_STATE_INVALID, "%s: %s (SQLite error %d)",
+        context, errmsg, errcode
+    );
 }
 
 /**
@@ -204,8 +206,10 @@ static error_t *initialize_schema(sqlite3 *db) {
     /* Execute schema SQL */
     rc = sqlite3_exec(db, schema_sql, NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(ERR_STATE_INVALID, "Failed to initialize schema: %s",
-            errmsg ? errmsg : sqlite3_errstr(rc));
+        error_t *err = ERROR(
+            ERR_STATE_INVALID, "Failed to initialize schema: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc)
+        );
         sqlite3_free(errmsg);
         return err;
     }
@@ -231,8 +235,10 @@ static error_t *verify_schema_version(sqlite3 *db) {
 
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        return ERROR(ERR_STATE_INVALID,
-            "Database missing schema_meta table - corrupted or wrong format");
+        return ERROR(
+            ERR_STATE_INVALID,
+            "Database missing schema_meta table - corrupted or wrong format"
+        );
     }
 
     rc = sqlite3_step(stmt);
@@ -241,7 +247,7 @@ static error_t *verify_schema_version(sqlite3 *db) {
         return ERROR(ERR_STATE_INVALID, "Database missing schema version");
     }
 
-    const char *db_version = (const char *)sqlite3_column_text(stmt, 0);
+    const char *db_version = (const char *) sqlite3_column_text(stmt, 0);
     if (!db_version) {
         sqlite3_finalize(stmt);
         return ERROR(ERR_STATE_INVALID, "Schema version is NULL");
@@ -249,10 +255,12 @@ static error_t *verify_schema_version(sqlite3 *db) {
 
     /* Must match exactly */
     if (strcmp(db_version, STATE_SCHEMA_VERSION) != 0) {
-        error_t *err = ERROR(ERR_STATE_INVALID,
+        error_t *err = ERROR(
+            ERR_STATE_INVALID,
             "Schema version mismatch: database has version %s, code expects %s\n"
             "Database was created by different version of dotta",
-            db_version, STATE_SCHEMA_VERSION);
+            db_version, STATE_SCHEMA_VERSION
+        );
         sqlite3_finalize(stmt);
         return err;
     }
@@ -283,8 +291,10 @@ static error_t *configure_db(sqlite3 *db) {
     /* 1. Enable WAL mode (critical for performance) */
     rc = sqlite3_exec(db, "PRAGMA journal_mode=WAL;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(ERR_STATE_INVALID, "Failed to enable WAL mode: %s",
-            errmsg ? errmsg : sqlite3_errstr(rc));
+        error_t *err = ERROR(
+            ERR_STATE_INVALID, "Failed to enable WAL mode: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc)
+        );
         sqlite3_free(errmsg);
         return err;
     }
@@ -292,8 +302,10 @@ static error_t *configure_db(sqlite3 *db) {
     /* 2. Fast synchronization (safe on crash, fast on commit) */
     rc = sqlite3_exec(db, "PRAGMA synchronous=NORMAL;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(ERR_STATE_INVALID, "Failed to set synchronous mode: %s",
-            errmsg ? errmsg : sqlite3_errstr(rc));
+        error_t *err = ERROR(
+            ERR_STATE_INVALID, "Failed to set synchronous mode: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc)
+        );
         sqlite3_free(errmsg);
         return err;
     }
@@ -301,8 +313,10 @@ static error_t *configure_db(sqlite3 *db) {
     /* 3. Larger cache (10MB instead of default 2MB) */
     rc = sqlite3_exec(db, "PRAGMA cache_size=10000;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(ERR_STATE_INVALID, "Failed to set cache size: %s",
-            errmsg ? errmsg : sqlite3_errstr(rc));
+        error_t *err = ERROR(
+            ERR_STATE_INVALID, "Failed to set cache size: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc)
+        );
         sqlite3_free(errmsg);
         return err;
     }
@@ -310,8 +324,10 @@ static error_t *configure_db(sqlite3 *db) {
     /* 4. Store temp tables in memory (faster) */
     rc = sqlite3_exec(db, "PRAGMA temp_store=MEMORY;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(ERR_STATE_INVALID, "Failed to set temp store: %s",
-            errmsg ? errmsg : sqlite3_errstr(rc));
+        error_t *err = ERROR(
+            ERR_STATE_INVALID, "Failed to set temp store: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc)
+        );
         sqlite3_free(errmsg);
         return err;
     }
@@ -359,8 +375,10 @@ static error_t *open_db(const char *db_path, bool create_if_missing, sqlite3 **o
             return NULL;
         }
 
-        err = ERROR(ERR_FS, "Failed to open database: %s",
-                    db ? sqlite3_errmsg(db) : sqlite3_errstr(rc));
+        err = ERROR(
+            ERR_FS, "Failed to open database: %s",
+            db ? sqlite3_errmsg(db) : sqlite3_errstr(rc)
+        );
 
         if (db) sqlite3_close(db);
         return err;
@@ -376,9 +394,10 @@ static error_t *open_db(const char *db_path, bool create_if_missing, sqlite3 **o
     /* Initialize or verify schema */
     bool db_is_new = false;
     sqlite3_stmt *check_stmt = NULL;
-    rc = sqlite3_prepare_v2(db,
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_meta';",
-        -1, &check_stmt, NULL);
+    rc = sqlite3_prepare_v2(
+        db, "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_meta';",
+        -1, &check_stmt, NULL
+    );
 
     if (rc == SQLITE_OK) {
         rc = sqlite3_step(check_stmt);
@@ -480,8 +499,9 @@ static error_t *prepare_statements(state_t *state) {
         "SET deployed_at = ?, stat_mtime = ?, stat_size = ?, stat_ino = ? "
         "WHERE filesystem_path = ?;";
 
-    rc = sqlite3_prepare_v2(state->db, sql_update_post_deploy, -1,
-                            &state->stmt_update_post_deploy, NULL);
+    rc = sqlite3_prepare_v2(
+        state->db, sql_update_post_deploy, -1, &state->stmt_update_post_deploy, NULL
+    );
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
         return sqlite_error(state->db, "Failed to prepare update post-deploy statement");
@@ -493,8 +513,9 @@ static error_t *prepare_statements(state_t *state) {
         "SET stat_mtime = ?, stat_size = ?, stat_ino = ? "
         "WHERE filesystem_path = ?;";
 
-    rc = sqlite3_prepare_v2(state->db, sql_update_stat_cache, -1,
-                            &state->stmt_update_stat_cache, NULL);
+    rc = sqlite3_prepare_v2(
+        state->db, sql_update_stat_cache, -1, &state->stmt_update_stat_cache, NULL
+    );
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
         sqlite3_finalize(state->stmt_update_post_deploy);
@@ -523,8 +544,9 @@ static error_t *prepare_statements(state_t *state) {
         "             THEN ?15 ELSE virtual_manifest.stat_ino END "
         "WHERE filesystem_path = ?16;";
 
-    rc = sqlite3_prepare_v2(state->db, sql_update_entry, -1,
-                            &state->stmt_update_entry, NULL);
+    rc = sqlite3_prepare_v2(
+        state->db, sql_update_entry, -1, &state->stmt_update_entry, NULL
+    );
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
         sqlite3_finalize(state->stmt_update_post_deploy);
@@ -566,8 +588,7 @@ static error_t *prepare_statements(state_t *state) {
     const char *sql_by_profile =
         "SELECT filesystem_path, storage_path, profile, old_profile, git_oid, blob_oid, "
         "type, mode, owner, \"group\", encrypted, state, deployed_at, "
-        "stat_mtime, stat_size, stat_ino "
-        "FROM virtual_manifest WHERE profile = ?;";
+        "stat_mtime, stat_size, stat_ino FROM virtual_manifest WHERE profile = ?;";
 
     rc = sqlite3_prepare_v2(state->db, sql_by_profile, -1, &state->stmt_get_by_profile, NULL);
     if (rc != SQLITE_OK) {
@@ -754,7 +775,7 @@ static error_t *load_profiles(state_t *state) {
 
     error_t *err = NULL;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
-        const char *name = (const char *)sqlite3_column_text(stmt, 0);
+        const char *name = (const char *) sqlite3_column_text(stmt, 0);
         if (!name) {
             err = ERROR(ERR_STATE_INVALID, "Profile name is NULL");
             break;
@@ -791,7 +812,7 @@ error_t *state_get_profiles(const state_t *state, string_array_t **out) {
     CHECK_NULL(out);
 
     /* Load if not cached (cast away const for internal mutation) */
-    error_t *err = load_profiles((state_t *)state);
+    error_t *err = load_profiles((state_t *) state);
     if (err) return err;
 
     /* Return copy (caller owns) */
@@ -829,7 +850,7 @@ bool state_has_profile(const state_t *state, const char *profile_name) {
     }
 
     /* Load if not cached (cast away const for internal mutation) */
-    error_t *err = load_profiles((state_t *)state);
+    error_t *err = load_profiles((state_t *) state);
     if (err) {
         error_free(err);
         return false;
@@ -878,7 +899,7 @@ error_t *state_get_deployed_profiles(const state_t *state, string_array_t **out)
     /* Collect profile names */
     error_t *err = NULL;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
-        const char *profile_name = (const char *)sqlite3_column_text(stmt, 0);
+        const char *profile_name = (const char *) sqlite3_column_text(stmt, 0);
 
         if (!profile_name) {
             /* NULL profile name should never happen (NOT NULL constraint) */
@@ -1023,8 +1044,8 @@ error_t *state_get_prefix_map(
 
     /* Populate map */
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
-        const char *name_db = (const char *)sqlite3_column_text(stmt, 0);
-        const char *prefix_db = (const char *)sqlite3_column_text(stmt, 1);
+        const char *name_db = (const char *) sqlite3_column_text(stmt, 0);
+        const char *prefix_db = (const char *) sqlite3_column_text(stmt, 1);
 
         /* Allocate owned copies (map owns these strings) */
         char *name = strdup(name_db);
@@ -1047,7 +1068,7 @@ error_t *state_get_prefix_map(
             hashmap_free(map, free);
             return err;
         }
-        
+
         /* Free name - hashmap made its own copy of the key */
         free(name);
     }
@@ -1100,12 +1121,13 @@ error_t *state_set_profiles(
 
     /* Delete all existing profiles */
     char *errmsg = NULL;
-    int rc = sqlite3_exec(state->db, "DELETE FROM enabled_profiles;",
-                         NULL, NULL, &errmsg);
+    int rc = sqlite3_exec(state->db, "DELETE FROM enabled_profiles;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
         hashmap_free(prefix_map, free);
-        err = ERROR(ERR_STATE_INVALID, "Failed to clear profiles: %s",
-                    errmsg ? errmsg : sqlite3_errstr(rc));
+        err = ERROR(
+            ERR_STATE_INVALID, "Failed to clear profiles: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc)
+        );
         sqlite3_free(errmsg);
         return err;
     }
@@ -1118,12 +1140,12 @@ error_t *state_set_profiles(
         sqlite3_clear_bindings(state->stmt_insert_profile);
 
         /* Bind parameters: position, name, enabled_at, custom_prefix */
-        sqlite3_bind_int64(state->stmt_insert_profile, 1, (sqlite3_int64)i);
+        sqlite3_bind_int64(state->stmt_insert_profile, 1, (sqlite3_int64) i);
         sqlite3_bind_text(state->stmt_insert_profile, 2, profiles[i], -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int64(state->stmt_insert_profile, 3, (sqlite3_int64)now);
+        sqlite3_bind_int64(state->stmt_insert_profile, 3, (sqlite3_int64) now);
 
         /* Lookup and bind preserved custom_prefix (or NULL if not set) */
-        const char *custom_prefix = (const char *)hashmap_get(prefix_map, profiles[i]);
+        const char *custom_prefix = (const char *) hashmap_get(prefix_map, profiles[i]);
         if (custom_prefix) {
             sqlite3_bind_text(state->stmt_insert_profile, 4, custom_prefix, -1, SQLITE_STATIC);
         } else {
@@ -1180,37 +1202,25 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
     sqlite3_clear_bindings(state->stmt_insert_file);
 
     /* Bind parameters */
-    /* 1. filesystem_path */
-    sqlite3_bind_text(state->stmt_insert_file, 1,
-                      entry->filesystem_path, -1, SQLITE_TRANSIENT);
-
-    /* 2. storage_path */
-    sqlite3_bind_text(state->stmt_insert_file, 2,
-                      entry->storage_path, -1, SQLITE_TRANSIENT);
-
-    /* 3. profile */
-    sqlite3_bind_text(state->stmt_insert_file, 3,
-                      entry->profile, -1, SQLITE_TRANSIENT);
+    /* 1-3. filesystem_path, storage_path, profile */
+    sqlite3_bind_text(state->stmt_insert_file, 1, entry->filesystem_path, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(state->stmt_insert_file, 2, entry->storage_path, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(state->stmt_insert_file, 3, entry->profile, -1, SQLITE_TRANSIENT);
 
     /* 4. old_profile */
     if (entry->old_profile) {
-        sqlite3_bind_text(state->stmt_insert_file, 4,
-                          entry->old_profile, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(state->stmt_insert_file, 4, entry->old_profile, -1, SQLITE_TRANSIENT);
     } else {
         sqlite3_bind_null(state->stmt_insert_file, 4);
     }
 
-    /* 5. git_oid */
-    sqlite3_bind_text(state->stmt_insert_file, 5,
-                      entry->git_oid, -1, SQLITE_TRANSIENT);
-
-    /* 6. blob_oid */
-    sqlite3_bind_text(state->stmt_insert_file, 6,
-                      entry->blob_oid, -1, SQLITE_TRANSIENT);
+    /* 5-6. git_oid & blob_oid*/
+    sqlite3_bind_text(state->stmt_insert_file, 5, entry->git_oid, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(state->stmt_insert_file, 6, entry->blob_oid, -1, SQLITE_TRANSIENT);
 
     /* 7. type */
-    const char *type_str = entry->type == STATE_FILE_REGULAR ? "file" :
-                           entry->type == STATE_FILE_SYMLINK ? "symlink" : "executable";
+    const char *type_str = entry->type == STATE_FILE_REGULAR ? "file"
+                         : entry->type == STATE_FILE_SYMLINK ? "symlink" : "executable";
     sqlite3_bind_text(state->stmt_insert_file, 7, type_str, -1, SQLITE_STATIC);
 
     /* 8. mode */
@@ -1222,16 +1232,14 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
 
     /* 9. owner */
     if (entry->owner) {
-        sqlite3_bind_text(state->stmt_insert_file, 9,
-                          entry->owner, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(state->stmt_insert_file, 9, entry->owner, -1, SQLITE_TRANSIENT);
     } else {
         sqlite3_bind_null(state->stmt_insert_file, 9);
     }
 
     /* 10. group */
     if (entry->group) {
-        sqlite3_bind_text(state->stmt_insert_file, 10,
-                          entry->group, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(state->stmt_insert_file, 10, entry->group, -1, SQLITE_TRANSIENT);
     } else {
         sqlite3_bind_null(state->stmt_insert_file, 10);
     }
@@ -1247,12 +1255,14 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
     }
 
     /* 13. deployed_at */
-    sqlite3_bind_int64(state->stmt_insert_file, 13, (sqlite3_int64)entry->deployed_at);
+    sqlite3_bind_int64(
+        state->stmt_insert_file, 13, (sqlite3_int64) entry->deployed_at
+    );
 
     /* 14-16. stat cache (fast-path divergence detection) */
     sqlite3_bind_int64(state->stmt_insert_file, 14, entry->stat_cache.mtime);
     sqlite3_bind_int64(state->stmt_insert_file, 15, entry->stat_cache.size);
-    sqlite3_bind_int64(state->stmt_insert_file, 16, (sqlite3_int64)entry->stat_cache.ino);
+    sqlite3_bind_int64(state->stmt_insert_file, 16, (sqlite3_int64) entry->stat_cache.ino);
 
     /* Execute (don't finalize - statement is reused) */
     int rc = sqlite3_step(state->stmt_insert_file);
@@ -1315,7 +1325,7 @@ bool state_file_exists(const state_t *state, const char *filesystem_path) {
     }
 
     /* Reset and bind (cast away const for statement reuse) */
-    sqlite3_stmt *stmt = ((state_t *)state)->stmt_file_exists;
+    sqlite3_stmt *stmt = ((state_t *) state)->stmt_file_exists;
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
 
@@ -1351,7 +1361,7 @@ error_t *state_get_file(
     CHECK_NULL(state->stmt_get_file);
 
     /* Reset and bind (cast away const) */
-    sqlite3_stmt *stmt = ((state_t *)state)->stmt_get_file;
+    sqlite3_stmt *stmt = ((state_t *) state)->stmt_get_file;
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
 
@@ -1369,36 +1379,38 @@ error_t *state_get_file(
 
     /* Extract columns from scope-based schema
      * Columns 0-11: core fields, 12-14: stat cache */
-    const char *storage_path = (const char *)sqlite3_column_text(stmt, 0);
-    const char *profile = (const char *)sqlite3_column_text(stmt, 1);
-    const char *old_profile = (const char *)sqlite3_column_text(stmt, 2);
-    const char *git_oid = (const char *)sqlite3_column_text(stmt, 3);
-    const char *blob_oid = (const char *)sqlite3_column_text(stmt, 4);
-    const char *type_str = (const char *)sqlite3_column_text(stmt, 5);
+    const char *storage_path = (const char *) sqlite3_column_text(stmt, 0);
+    const char *profile = (const char *) sqlite3_column_text(stmt, 1);
+    const char *old_profile = (const char *) sqlite3_column_text(stmt, 2);
+    const char *git_oid = (const char *) sqlite3_column_text(stmt, 3);
+    const char *blob_oid = (const char *) sqlite3_column_text(stmt, 4);
+    const char *type_str = (const char *) sqlite3_column_text(stmt, 5);
 
     /* Read mode as integer (0 if NULL) */
     mode_t mode = 0;
     if (sqlite3_column_type(stmt, 6) != SQLITE_NULL) {
-        mode = (mode_t)sqlite3_column_int(stmt, 6);
+        mode = (mode_t) sqlite3_column_int(stmt, 6);
     }
 
-    const char *owner = (const char *)sqlite3_column_text(stmt, 7);
-    const char *group = (const char *)sqlite3_column_text(stmt, 8);
+    const char *owner = (const char *) sqlite3_column_text(stmt, 7);
+    const char *group = (const char *) sqlite3_column_text(stmt, 8);
     int encrypted = sqlite3_column_int(stmt, 9);
-    const char *state_str = (const char *)sqlite3_column_text(stmt, 10);
+    const char *state_str = (const char *) sqlite3_column_text(stmt, 10);
     sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 11);
 
     /* Stat cache (fast-path divergence detection) */
     stat_cache_t stat_cache = {
-        .mtime = sqlite3_column_int64(stmt, 12),
-        .size  = sqlite3_column_int64(stmt, 13),
-        .ino   = (uint64_t)sqlite3_column_int64(stmt, 14),
+        .mtime = sqlite3_column_int64(stmt,            12),
+        .size  = sqlite3_column_int64(stmt,            13),
+        .ino   = (uint64_t) sqlite3_column_int64(stmt, 14),
     };
 
     /* Validate required columns */
     if (!storage_path || !profile || !git_oid || !blob_oid || !type_str) {
-        return ERROR(ERR_STATE_INVALID,
-            "NULL value in required column for file: %s", filesystem_path);
+        return ERROR(
+            ERR_STATE_INVALID,
+            "NULL value in required column for file: %s", filesystem_path
+        );
     }
 
     /* Parse file type */
@@ -1424,7 +1436,7 @@ error_t *state_get_file(
         group,
         encrypted != 0,
         state_str,
-        (time_t)deployed_at,
+        (time_t) deployed_at,
         &entry
     );
 
@@ -1478,7 +1490,7 @@ error_t *state_get_all_files(
         return sqlite_error(state->db, "Failed to count files");
     }
 
-    size_t file_count = (size_t)sqlite3_column_int64(stmt_count, 0);
+    size_t file_count = (size_t) sqlite3_column_int64(stmt_count, 0);
     sqlite3_finalize(stmt_count);
 
     if (file_count == 0) {
@@ -1509,31 +1521,31 @@ error_t *state_get_all_files(
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < file_count) {
         /* Get columns with NULL checking (scope-based schema)
          * Columns 0-12: core fields, 13-15: stat cache */
-        const char *fs_path = (const char *)sqlite3_column_text(stmt, 0);
-        const char *storage_path = (const char *)sqlite3_column_text(stmt, 1);
-        const char *profile = (const char *)sqlite3_column_text(stmt, 2);
-        const char *old_profile = (const char *)sqlite3_column_text(stmt, 3);
-        const char *git_oid = (const char *)sqlite3_column_text(stmt, 4);
-        const char *blob_oid = (const char *)sqlite3_column_text(stmt, 5);
-        const char *type_str = (const char *)sqlite3_column_text(stmt, 6);
+        const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
+        const char *storage_path = (const char *) sqlite3_column_text(stmt, 1);
+        const char *profile = (const char *) sqlite3_column_text(stmt, 2);
+        const char *old_profile = (const char *) sqlite3_column_text(stmt, 3);
+        const char *git_oid = (const char *) sqlite3_column_text(stmt, 4);
+        const char *blob_oid = (const char *) sqlite3_column_text(stmt, 5);
+        const char *type_str = (const char *) sqlite3_column_text(stmt, 6);
 
         /* Read mode as integer (0 if NULL) */
         mode_t mode = 0;
         if (sqlite3_column_type(stmt, 7) != SQLITE_NULL) {
-            mode = (mode_t)sqlite3_column_int(stmt, 7);
+            mode = (mode_t) sqlite3_column_int(stmt, 7);
         }
 
-        const char *owner = (const char *)sqlite3_column_text(stmt, 8);
-        const char *group = (const char *)sqlite3_column_text(stmt, 9);
+        const char *owner = (const char *) sqlite3_column_text(stmt, 8);
+        const char *group = (const char *) sqlite3_column_text(stmt, 9);
         int encrypted = sqlite3_column_int(stmt, 10);
-        const char *state_str = (const char *)sqlite3_column_text(stmt, 11);
+        const char *state_str = (const char *) sqlite3_column_text(stmt, 11);
         sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 12);
 
         /* Stat cache (fast-path divergence detection) */
         stat_cache_t stat_cache = {
-            .mtime = sqlite3_column_int64(stmt, 13),
-            .size  = sqlite3_column_int64(stmt, 14),
-            .ino   = (uint64_t)sqlite3_column_int64(stmt, 15),
+            .mtime = sqlite3_column_int64(stmt,            13),
+            .size  = sqlite3_column_int64(stmt,            14),
+            .ino   = (uint64_t) sqlite3_column_int64(stmt, 15),
         };
 
         /* Validate non-nullable columns */
@@ -1567,7 +1579,7 @@ error_t *state_get_all_files(
         /* Set other fields */
         entries[i].encrypted = (encrypted != 0);
         entries[i].state = state_str ? strdup(state_str) : strdup(STATE_ACTIVE);
-        entries[i].deployed_at = (time_t)deployed_at;
+        entries[i].deployed_at = (time_t) deployed_at;
         entries[i].stat_cache = stat_cache;
 
         /* Check allocation success */
@@ -1632,8 +1644,10 @@ error_t *state_clear_files(state_t *state) {
     char *errmsg = NULL;
     int rc = sqlite3_exec(state->db, "DELETE FROM virtual_manifest;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(ERR_STATE_INVALID, "Failed to clear virtual manifest: %s",
-                             errmsg ? errmsg : sqlite3_errstr(rc));
+        error_t *err = ERROR(
+            ERR_STATE_INVALID, "Failed to clear virtual manifest: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc)
+        );
         sqlite3_free(errmsg);
         return err;
     }
@@ -1669,7 +1683,10 @@ error_t *state_directory_entry_create_from_metadata(
         if (meta_item->kind == METADATA_ITEM_FILE) kind_str = "FILE";
         else if (meta_item->kind == METADATA_ITEM_SYMLINK) kind_str = "SYMLINK";
 
-        return ERROR(ERR_INVALID_ARG, "Expected DIRECTORY metadata item, got %s", kind_str);
+        return ERROR(
+            ERR_INVALID_ARG, "Expected DIRECTORY metadata item, got %s",
+            kind_str
+        );
     }
 
     state_directory_entry_t *entry = calloc(1, sizeof(state_directory_entry_t));
@@ -1678,11 +1695,15 @@ error_t *state_directory_entry_create_from_metadata(
     }
 
     /* Derive filesystem path from storage path with appropriate prefix */
-    error_t *err = path_from_storage(meta_item->key, custom_prefix, &entry->filesystem_path);
+    error_t *err = path_from_storage(
+        meta_item->key, custom_prefix, &entry->filesystem_path
+    );
     if (err) {
         free(entry);
-        return error_wrap(err, "Failed to derive filesystem path from storage path: %s",
-                          meta_item->key);
+        return error_wrap(
+            err, "Failed to derive filesystem path from storage path: %s",
+            meta_item->key
+        );
     }
 
     /* Copy storage path */
@@ -1836,18 +1857,20 @@ error_t *state_get_all_directories(
     *count = 0;
 
     /* Prepare statement if needed (const cast is safe for read-only ops) */
-    state_t *mutable_state = (state_t *)state;
+    state_t *mutable_state = (state_t *) state;
     if (!mutable_state->stmt_get_all_directories) {
         const char *sql =
             "SELECT filesystem_path, storage_path, profile, mode, owner, \"group\", state, deployed_at "
-            "FROM tracked_directories "
-            "ORDER BY filesystem_path;";
+            "FROM tracked_directories ORDER BY filesystem_path;";
 
-        int rc = sqlite3_prepare_v2(mutable_state->db, sql, -1,
-                                    &mutable_state->stmt_get_all_directories, NULL);
+        int rc = sqlite3_prepare_v2(
+            mutable_state->db, sql, -1,
+            &mutable_state->stmt_get_all_directories, NULL
+        );
         if (rc != SQLITE_OK) {
-            return sqlite_error(mutable_state->db,
-                "Failed to prepare get all directories statement");
+            return sqlite_error(
+                mutable_state->db, "Failed to prepare get all directories statement"
+            );
         }
     }
 
@@ -1888,7 +1911,7 @@ error_t *state_get_all_directories(
         if (entry_count >= capacity) {
             capacity *= 2;
             state_directory_entry_t *new_entries =
-                            realloc(entries, capacity * sizeof(state_directory_entry_t));
+                realloc(entries, capacity * sizeof(state_directory_entry_t));
             if (!new_entries) {
                 /* Cleanup on error */
                 for (size_t i = 0; i < entry_count; i++) {
@@ -1911,38 +1934,38 @@ error_t *state_get_all_directories(
         memset(entry, 0, sizeof(state_directory_entry_t));
 
         /* filesystem_path (column 0) */
-        const char *fs_path = (const char *)sqlite3_column_text(stmt, 0);
+        const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
         entry->filesystem_path = strdup(fs_path ? fs_path : "");
 
         /* storage_path (column 1) */
-        const char *storage = (const char *)sqlite3_column_text(stmt, 1);
+        const char *storage = (const char *) sqlite3_column_text(stmt, 1);
         entry->storage_path = strdup(storage ? storage : "");
 
         /* profile (column 2) */
-        const char *profile = (const char *)sqlite3_column_text(stmt, 2);
+        const char *profile = (const char *) sqlite3_column_text(stmt, 2);
         entry->profile = strdup(profile ? profile : "");
 
         /* mode (column 3, optional) */
         if (sqlite3_column_type(stmt, 3) != SQLITE_NULL) {
-            entry->mode = (mode_t)sqlite3_column_int(stmt, 3);
+            entry->mode = (mode_t) sqlite3_column_int(stmt, 3);
         } else {
             entry->mode = 0;
         }
 
         /* owner (column 4, optional) */
-        const char *owner = (const char *)sqlite3_column_text(stmt, 4);
+        const char *owner = (const char *) sqlite3_column_text(stmt, 4);
         if (owner) {
             entry->owner = strdup(owner);
         }
 
         /* group (column 5, optional) */
-        const char *group = (const char *)sqlite3_column_text(stmt, 5);
+        const char *group = (const char *) sqlite3_column_text(stmt, 5);
         if (group) {
             entry->group = strdup(group);
         }
 
         /* state (column 6) */
-        const char *state_str = (const char *)sqlite3_column_text(stmt, 6);
+        const char *state_str = (const char *) sqlite3_column_text(stmt, 6);
         if (state_str) {
             entry->state = strdup(state_str);
         }
@@ -1989,7 +2012,7 @@ error_t *state_get_directories_by_profile(
     *count = 0;
 
     /* Prepare statement if needed (const cast is safe for read-only ops) */
-    state_t *mutable_state = (state_t *)state;
+    state_t *mutable_state = (state_t *) state;
     if (!mutable_state->stmt_get_directories_by_profile) {
         const char *sql =
             "SELECT filesystem_path, storage_path, profile, mode, owner, \"group\", state, deployed_at "
@@ -1997,11 +2020,14 @@ error_t *state_get_directories_by_profile(
             "WHERE profile = ? "
             "ORDER BY filesystem_path;";
 
-        int rc = sqlite3_prepare_v2(mutable_state->db, sql, -1,
-                                    &mutable_state->stmt_get_directories_by_profile, NULL);
+        int rc = sqlite3_prepare_v2(
+            mutable_state->db, sql, -1,
+            &mutable_state->stmt_get_directories_by_profile, NULL
+        );
         if (rc != SQLITE_OK) {
-            return sqlite_error(mutable_state->db,
-                "Failed to prepare get directories by profile statement");
+            return sqlite_error(
+                mutable_state->db, "Failed to prepare get directories by profile statement"
+            );
         }
     }
 
@@ -2044,7 +2070,7 @@ error_t *state_get_directories_by_profile(
         if (entry_count >= capacity) {
             capacity *= 2;
             state_directory_entry_t *new_entries =
-                            realloc(entries, capacity * sizeof(state_directory_entry_t));
+                realloc(entries, capacity * sizeof(state_directory_entry_t));
             if (!new_entries) {
                 /* Cleanup on error */
                 for (size_t i = 0; i < entry_count; i++) {
@@ -2067,38 +2093,38 @@ error_t *state_get_directories_by_profile(
         memset(entry, 0, sizeof(state_directory_entry_t));
 
         /* filesystem_path (column 0) */
-        const char *fs_path = (const char *)sqlite3_column_text(stmt, 0);
+        const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
         entry->filesystem_path = strdup(fs_path ? fs_path : "");
 
         /* storage_path (column 1) */
-        const char *storage = (const char *)sqlite3_column_text(stmt, 1);
+        const char *storage = (const char *) sqlite3_column_text(stmt, 1);
         entry->storage_path = strdup(storage ? storage : "");
 
         /* profile (column 2) */
-        const char *profile_str = (const char *)sqlite3_column_text(stmt, 2);
+        const char *profile_str = (const char *) sqlite3_column_text(stmt, 2);
         entry->profile = strdup(profile_str ? profile_str : "");
 
         /* mode (column 3, optional) */
         if (sqlite3_column_type(stmt, 3) != SQLITE_NULL) {
-            entry->mode = (mode_t)sqlite3_column_int(stmt, 3);
+            entry->mode = (mode_t) sqlite3_column_int(stmt, 3);
         } else {
             entry->mode = 0;
         }
 
         /* owner (column 4, optional) */
-        const char *owner = (const char *)sqlite3_column_text(stmt, 4);
+        const char *owner = (const char *) sqlite3_column_text(stmt, 4);
         if (owner) {
             entry->owner = strdup(owner);
         }
 
         /* group (column 5, optional) */
-        const char *group = (const char *)sqlite3_column_text(stmt, 5);
+        const char *group = (const char *) sqlite3_column_text(stmt, 5);
         if (group) {
             entry->group = strdup(group);
         }
 
         /* state (column 6) */
-        const char *state_str = (const char *)sqlite3_column_text(stmt, 6);
+        const char *state_str = (const char *) sqlite3_column_text(stmt, 6);
         if (state_str) {
             entry->state = strdup(state_str);
         }
@@ -2204,8 +2230,10 @@ error_t *state_update_directory(
     /* Check if row was actually updated */
     int changes = sqlite3_changes(state->db);
     if (changes == 0) {
-        return ERROR(ERR_NOT_FOUND, "Directory not found in state: %s",
-                     entry->filesystem_path);
+        return ERROR(
+            ERR_NOT_FOUND, "Directory not found in state: %s",
+            entry->filesystem_path
+        );
     }
 
     return NULL;
@@ -2232,7 +2260,9 @@ error_t *state_remove_directory(state_t *state, const char *filesystem_path) {
 
         int rc = sqlite3_prepare_v2(state->db, sql, -1, &state->stmt_remove_directory, NULL);
         if (rc != SQLITE_OK) {
-            return sqlite_error(state->db, "Failed to prepare remove directory statement");
+            return sqlite_error(
+                state->db, "Failed to prepare remove directory statement"
+            );
         }
     }
 
@@ -2265,8 +2295,10 @@ error_t *state_clear_directories(state_t *state) {
     char *errmsg = NULL;
     int rc = sqlite3_exec(state->db, "DELETE FROM tracked_directories;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(ERR_STATE_INVALID, "Failed to clear tracked directories: %s",
-            errmsg ? errmsg : sqlite3_errstr(rc));
+        error_t *err = ERROR(
+            ERR_STATE_INVALID, "Failed to clear tracked directories: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc)
+        );
         sqlite3_free(errmsg);
         return err;
     }
@@ -2297,18 +2329,21 @@ error_t *state_get_directory(
     *out = NULL;
 
     /* Prepare statement if needed (const cast is safe for read-only ops) */
-    state_t *mutable_state = (state_t *)state;
+    state_t *mutable_state = (state_t *) state;
     if (!mutable_state->stmt_get_directory) {
         const char *sql =
             "SELECT filesystem_path, storage_path, profile, mode, owner, \"group\", state, deployed_at "
             "FROM tracked_directories "
             "WHERE filesystem_path = ?;";
 
-        int rc = sqlite3_prepare_v2(mutable_state->db, sql, -1,
-                                    &mutable_state->stmt_get_directory, NULL);
+        int rc = sqlite3_prepare_v2(
+            mutable_state->db, sql, -1,
+            &mutable_state->stmt_get_directory, NULL
+        );
         if (rc != SQLITE_OK) {
-            return sqlite_error(mutable_state->db,
-                "Failed to prepare get directory statement");
+            return sqlite_error(
+                mutable_state->db, "Failed to prepare get directory statement"
+            );
         }
     }
 
@@ -2337,38 +2372,38 @@ error_t *state_get_directory(
 
     /* Parse row */
     /* filesystem_path (column 0) */
-    const char *fs_path = (const char *)sqlite3_column_text(stmt, 0);
+    const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
     entry->filesystem_path = strdup(fs_path ? fs_path : "");
 
     /* storage_path (column 1) */
-    const char *storage = (const char *)sqlite3_column_text(stmt, 1);
+    const char *storage = (const char *) sqlite3_column_text(stmt, 1);
     entry->storage_path = strdup(storage ? storage : "");
 
     /* profile (column 2) */
-    const char *profile = (const char *)sqlite3_column_text(stmt, 2);
+    const char *profile = (const char *) sqlite3_column_text(stmt, 2);
     entry->profile = strdup(profile ? profile : "");
 
     /* mode (column 3, optional) */
     if (sqlite3_column_type(stmt, 3) != SQLITE_NULL) {
-        entry->mode = (mode_t)sqlite3_column_int(stmt, 3);
+        entry->mode = (mode_t) sqlite3_column_int(stmt, 3);
     } else {
         entry->mode = 0;
     }
 
     /* owner (column 4, optional) */
-    const char *owner = (const char *)sqlite3_column_text(stmt, 4);
+    const char *owner = (const char *) sqlite3_column_text(stmt, 4);
     if (owner) {
         entry->owner = strdup(owner);
     }
 
     /* group (column 5, optional) */
-    const char *group = (const char *)sqlite3_column_text(stmt, 5);
+    const char *group = (const char *) sqlite3_column_text(stmt, 5);
     if (group) {
         entry->group = strdup(group);
     }
 
     /* state (column 6) */
-    const char *state_str = (const char *)sqlite3_column_text(stmt, 6);
+    const char *state_str = (const char *) sqlite3_column_text(stmt, 6);
     if (state_str) {
         entry->state = strdup(state_str);
     }
@@ -2406,8 +2441,11 @@ error_t *state_set_directory_state(
     /* Validate state value */
     if (strcmp(new_state, STATE_ACTIVE) != 0 && strcmp(new_state, STATE_INACTIVE) != 0 &&
         strcmp(new_state, STATE_DELETED) != 0 && strcmp(new_state, STATE_RELEASED) != 0) {
-        return ERROR(ERR_INVALID_ARG,
-            "Invalid state '%s' (must be 'active', 'inactive', 'deleted', or 'released')", new_state);
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Invalid state '%s' (must be 'active', 'inactive', 'deleted', or 'released')",
+            new_state
+        );
     }
 
     /* Prepare statement if needed */
@@ -2459,11 +2497,14 @@ error_t *state_mark_all_directories_inactive(state_t *state) {
     if (!state->stmt_mark_all_directories_inactive) {
         const char *sql = "UPDATE tracked_directories SET state = 'inactive'";
 
-        int rc = sqlite3_prepare_v2(state->db, sql, -1,
-                                    &state->stmt_mark_all_directories_inactive, NULL);
+        int rc = sqlite3_prepare_v2(
+            state->db, sql, -1,
+            &state->stmt_mark_all_directories_inactive, NULL
+        );
         if (rc != SQLITE_OK) {
-            return sqlite_error(state->db,
-                "Failed to prepare mark all directories inactive statement");
+            return sqlite_error(
+                state->db, "Failed to prepare mark all directories inactive statement"
+            );
         }
     }
 
@@ -2637,10 +2678,11 @@ error_t *state_load_for_update(git_repository *repo, state_t **out) {
     char *errmsg = NULL;
     int rc = sqlite3_exec(db, "BEGIN IMMEDIATE;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        err = ERROR(ERR_CONFLICT,
-            "Failed to acquire write lock: %s\n"
+        err = ERROR(
+            ERR_CONFLICT, "Failed to acquire write lock: %s\n"
             "Another process may be writing to the database",
-            errmsg ? errmsg : sqlite3_errstr(rc));
+            errmsg ? errmsg : sqlite3_errstr(rc)
+        );
         sqlite3_free(errmsg);
         finalize_statements(state);
         sqlite3_close(db);
@@ -2675,8 +2717,10 @@ error_t *state_save(git_repository *repo, state_t *state) {
         char *errmsg = NULL;
         int rc = sqlite3_exec(state->db, "COMMIT;", NULL, NULL, &errmsg);
         if (rc != SQLITE_OK) {
-            err = ERROR(ERR_STATE_INVALID, "Failed to commit transaction: %s",
-                errmsg ? errmsg : sqlite3_errstr(rc));
+            err = ERROR(
+                ERR_STATE_INVALID, "Failed to commit transaction: %s",
+                errmsg ? errmsg : sqlite3_errstr(rc)
+            );
             sqlite3_free(errmsg);
             return err;
         }
@@ -2715,8 +2759,10 @@ error_t *state_save(git_repository *repo, state_t *state) {
         char *errmsg = NULL;
         int rc = sqlite3_exec(db, "BEGIN IMMEDIATE;", NULL, NULL, &errmsg);
         if (rc != SQLITE_OK) {
-            err = ERROR(ERR_CONFLICT, "Failed to acquire write lock: %s",
-                        errmsg ? errmsg : sqlite3_errstr(rc));
+            err = ERROR(
+                ERR_CONFLICT, "Failed to acquire write lock: %s",
+                errmsg ? errmsg : sqlite3_errstr(rc)
+            );
             sqlite3_free(errmsg);
             finalize_statements(state);
             sqlite3_close(db);
@@ -2726,7 +2772,7 @@ error_t *state_save(git_repository *repo, state_t *state) {
 
         /* Write profiles if any */
         if (state->profiles && string_array_size(state->profiles) > 0) {
-            char **profile_names = calloc(string_array_size(state->profiles), sizeof(char*));
+            char **profile_names = calloc(string_array_size(state->profiles), sizeof(char *));
             if (!profile_names) {
                 sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
                 finalize_statements(state);
@@ -2736,7 +2782,7 @@ error_t *state_save(git_repository *repo, state_t *state) {
             }
 
             for (size_t i = 0; i < string_array_size(state->profiles); i++) {
-                profile_names[i] = (char *)string_array_get(state->profiles, i);
+                profile_names[i] = (char *) string_array_get(state->profiles, i);
             }
 
             err = state_set_profiles(state, profile_names, string_array_size(state->profiles));
@@ -2754,8 +2800,10 @@ error_t *state_save(git_repository *repo, state_t *state) {
         /* Commit transaction */
         rc = sqlite3_exec(db, "COMMIT;", NULL, NULL, &errmsg);
         if (rc != SQLITE_OK) {
-            err = ERROR(ERR_STATE_INVALID, "Failed to commit transaction: %s",
-                        errmsg ? errmsg : sqlite3_errstr(rc));
+            err = ERROR(
+                ERR_STATE_INVALID, "Failed to commit transaction: %s",
+                errmsg ? errmsg : sqlite3_errstr(rc)
+            );
             sqlite3_free(errmsg);
             finalize_statements(state);
             sqlite3_close(db);
@@ -2784,8 +2832,10 @@ error_t *state_begin_transaction(state_t *state) {
     char *errmsg = NULL;
     int rc = sqlite3_exec(state->db, "BEGIN IMMEDIATE;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(ERR_CONFLICT, "Failed to acquire write lock: %s",
-            errmsg ? errmsg : sqlite3_errstr(rc));
+        error_t *err = ERROR(
+            ERR_CONFLICT, "Failed to acquire write lock: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc)
+        );
         sqlite3_free(errmsg);
         return err;
     }
@@ -2808,8 +2858,10 @@ error_t *state_commit_transaction(state_t *state) {
     char *errmsg = NULL;
     int rc = sqlite3_exec(state->db, "COMMIT;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        error_t *err = ERROR(ERR_STATE_INVALID, "Failed to commit transaction: %s",
-            errmsg ? errmsg : sqlite3_errstr(rc));
+        error_t *err = ERROR(
+            ERR_STATE_INVALID, "Failed to commit transaction: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc)
+        );
         sqlite3_free(errmsg);
         return err;
     }
@@ -2894,8 +2946,9 @@ void state_free(state_t *state) {
     /* Checkpoint WAL before close (non-blocking, best effort) */
     if (state->db) {
         /* PASSIVE checkpoint: merge WAL into main db */
-        sqlite3_wal_checkpoint_v2(state->db, NULL,
-                                  SQLITE_CHECKPOINT_PASSIVE, NULL, NULL);
+        sqlite3_wal_checkpoint_v2(
+            state->db, NULL, SQLITE_CHECKPOINT_PASSIVE, NULL, NULL
+        );
         sqlite3_close(state->db);
         state->db = NULL;
     }
@@ -3011,12 +3064,12 @@ error_t *state_update_post_deploy(
 
     /* SQL: SET deployed_at = ?, stat_mtime = ?, stat_size = ?, stat_ino = ?
      *      WHERE filesystem_path = ? */
-    sqlite3_bind_int64(state->stmt_update_post_deploy, 1, (sqlite3_int64)deployed_at);
+    sqlite3_bind_int64(state->stmt_update_post_deploy, 1, (sqlite3_int64) deployed_at);
 
     if (stat_cache) {
         sqlite3_bind_int64(state->stmt_update_post_deploy, 2, stat_cache->mtime);
         sqlite3_bind_int64(state->stmt_update_post_deploy, 3, stat_cache->size);
-        sqlite3_bind_int64(state->stmt_update_post_deploy, 4, (sqlite3_int64)stat_cache->ino);
+        sqlite3_bind_int64(state->stmt_update_post_deploy, 4, (sqlite3_int64) stat_cache->ino);
     } else {
         sqlite3_bind_int64(state->stmt_update_post_deploy, 2, 0);
         sqlite3_bind_int64(state->stmt_update_post_deploy, 3, 0);
@@ -3077,7 +3130,7 @@ error_t *state_update_stat_cache(
      *      WHERE filesystem_path = ? */
     sqlite3_bind_int64(state->stmt_update_stat_cache, 1, stat_cache->mtime);
     sqlite3_bind_int64(state->stmt_update_stat_cache, 2, stat_cache->size);
-    sqlite3_bind_int64(state->stmt_update_stat_cache, 3, (sqlite3_int64)stat_cache->ino);
+    sqlite3_bind_int64(state->stmt_update_stat_cache, 3, (sqlite3_int64) stat_cache->ino);
     sqlite3_bind_text(state->stmt_update_stat_cache, 4, filesystem_path, -1, SQLITE_TRANSIENT);
 
     /* Execute */
@@ -3170,8 +3223,11 @@ error_t *state_set_file_state(
     /* Validate state value */
     if (strcmp(new_state, STATE_ACTIVE) != 0 && strcmp(new_state, STATE_INACTIVE) != 0 &&
         strcmp(new_state, STATE_DELETED) != 0 && strcmp(new_state, STATE_RELEASED) != 0) {
-        return ERROR(ERR_INVALID_ARG,
-            "Invalid state '%s' (must be 'active', 'inactive', 'deleted', or 'released')", new_state);
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Invalid state '%s' (must be 'active', 'inactive', 'deleted', or 'released')",
+            new_state
+        );
     }
 
     const char *sql = "UPDATE virtual_manifest SET state = ? WHERE filesystem_path = ?";
@@ -3220,8 +3276,8 @@ error_t *state_update_entry(
     CHECK_NULL(state->stmt_update_entry);
 
     /* Convert type enum to string */
-    const char *type_str = entry->type == STATE_FILE_REGULAR ? "file" :
-                           entry->type == STATE_FILE_SYMLINK ? "symlink" : "executable";
+    const char *type_str = entry->type == STATE_FILE_REGULAR ? "file"
+                         : entry->type == STATE_FILE_SYMLINK ? "symlink" : "executable";
 
     /* Reset and bind all 15 fields + filesystem_path for WHERE clause */
     sqlite3_reset(state->stmt_update_entry);
@@ -3268,7 +3324,7 @@ error_t *state_update_entry(
     }
 
     /* 12. deployed_at */
-    sqlite3_bind_int64(state->stmt_update_entry, 12, (sqlite3_int64)entry->deployed_at);
+    sqlite3_bind_int64(state->stmt_update_entry, 12, (sqlite3_int64) entry->deployed_at);
 
     /* 13-15. stat cache (fast-path divergence detection)
      *
@@ -3276,7 +3332,7 @@ error_t *state_update_entry(
      * When blob_oid is unchanged, the existing DB values are preserved. */
     sqlite3_bind_int64(state->stmt_update_entry, 13, entry->stat_cache.mtime);
     sqlite3_bind_int64(state->stmt_update_entry, 14, entry->stat_cache.size);
-    sqlite3_bind_int64(state->stmt_update_entry, 15, (sqlite3_int64)entry->stat_cache.ino);
+    sqlite3_bind_int64(state->stmt_update_entry, 15, (sqlite3_int64) entry->stat_cache.ino);
 
     /* 16. filesystem_path for WHERE clause */
     sqlite3_bind_text(state->stmt_update_entry, 16, entry->filesystem_path, -1, SQLITE_TRANSIENT);
@@ -3339,8 +3395,10 @@ error_t *state_update_git_oid_for_profile(
     sqlite3_stmt *stmt = NULL;
     int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        return ERROR(ERR_STATE_INVALID, "Failed to prepare git_oid update: %s",
-                     sqlite3_errmsg(state->db));
+        return ERROR(
+            ERR_STATE_INVALID, "Failed to prepare git_oid update: %s",
+            sqlite3_errmsg(state->db)
+        );
     }
 
     /* Bind parameters */
@@ -3352,8 +3410,10 @@ error_t *state_update_git_oid_for_profile(
     sqlite3_finalize(stmt);
 
     if (rc != SQLITE_DONE) {
-        return ERROR(ERR_STATE_INVALID, "Failed to update git_oid for profile '%s': %s",
-                     profile_name, sqlite3_errmsg(state->db));
+        return ERROR(
+            ERR_STATE_INVALID, "Failed to update git_oid for profile '%s': %s",
+            profile_name, sqlite3_errmsg(state->db)
+        );
     }
 
     return NULL;
@@ -3389,11 +3449,15 @@ error_t *state_get_entries_by_profile(
 
     /* First, count entries */
     char count_sql[512];
-    snprintf(count_sql, sizeof(count_sql),
-             "SELECT COUNT(*) FROM virtual_manifest WHERE profile = ?;");
+    snprintf(
+        count_sql, sizeof(count_sql),
+        "SELECT COUNT(*) FROM virtual_manifest WHERE profile = ?;"
+    );
 
     sqlite3_stmt *stmt_count = NULL;
-    int rc = sqlite3_prepare_v2(((state_t *)state)->db, count_sql, -1, &stmt_count, NULL);
+    int rc = sqlite3_prepare_v2(
+        ((state_t *) state)->db, count_sql, -1, &stmt_count, NULL
+    );
     if (rc != SQLITE_OK) {
         return sqlite_error(state->db, "Failed to prepare count query");
     }
@@ -3406,7 +3470,7 @@ error_t *state_get_entries_by_profile(
         return sqlite_error(state->db, "Failed to count entries");
     }
 
-    size_t entry_count = (size_t)sqlite3_column_int64(stmt_count, 0);
+    size_t entry_count = (size_t) sqlite3_column_int64(stmt_count, 0);
     sqlite3_finalize(stmt_count);
 
     if (entry_count == 0) {
@@ -3420,7 +3484,7 @@ error_t *state_get_entries_by_profile(
     }
 
     /* Reset and bind profile */
-    sqlite3_stmt *stmt = ((state_t *)state)->stmt_get_by_profile;
+    sqlite3_stmt *stmt = ((state_t *) state)->stmt_get_by_profile;
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
     sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_TRANSIENT);
@@ -3428,31 +3492,31 @@ error_t *state_get_entries_by_profile(
     /* Fetch all entries */
     size_t i = 0;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < entry_count) {
-        const char *fs_path = (const char *)sqlite3_column_text(stmt, 0);
-        const char *storage_path = (const char *)sqlite3_column_text(stmt, 1);
-        const char *profile = (const char *)sqlite3_column_text(stmt, 2);
-        const char *old_profile = (const char *)sqlite3_column_text(stmt, 3);
-        const char *git_oid = (const char *)sqlite3_column_text(stmt, 4);
-        const char *blob_oid = (const char *)sqlite3_column_text(stmt, 5);
-        const char *type_str = (const char *)sqlite3_column_text(stmt, 6);
+        const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
+        const char *storage_path = (const char *) sqlite3_column_text(stmt, 1);
+        const char *profile = (const char *) sqlite3_column_text(stmt, 2);
+        const char *old_profile = (const char *) sqlite3_column_text(stmt, 3);
+        const char *git_oid = (const char *) sqlite3_column_text(stmt, 4);
+        const char *blob_oid = (const char *) sqlite3_column_text(stmt, 5);
+        const char *type_str = (const char *) sqlite3_column_text(stmt, 6);
 
         /* Read mode as integer (0 if NULL) */
         mode_t mode = 0;
         if (sqlite3_column_type(stmt, 7) != SQLITE_NULL) {
-            mode = (mode_t)sqlite3_column_int(stmt, 7);
+            mode = (mode_t) sqlite3_column_int(stmt, 7);
         }
 
-        const char *owner = (const char *)sqlite3_column_text(stmt, 8);
-        const char *group = (const char *)sqlite3_column_text(stmt, 9);
+        const char *owner = (const char *) sqlite3_column_text(stmt, 8);
+        const char *group = (const char *) sqlite3_column_text(stmt, 9);
         int encrypted = sqlite3_column_int(stmt, 10);
-        const char *state_str = (const char *)sqlite3_column_text(stmt, 11);
+        const char *state_str = (const char *) sqlite3_column_text(stmt, 11);
         sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 12);
 
         /* Stat cache (fast-path divergence detection) */
         stat_cache_t stat_cache = {
-            .mtime = sqlite3_column_int64(stmt, 13),
-            .size  = sqlite3_column_int64(stmt, 14),
-            .ino   = (uint64_t)sqlite3_column_int64(stmt, 15),
+            .mtime = sqlite3_column_int64(stmt,            13),
+            .size  = sqlite3_column_int64(stmt,            14),
+            .ino   = (uint64_t) sqlite3_column_int64(stmt, 15),
         };
 
         if (!fs_path || !storage_path || !profile || !git_oid || !blob_oid || !type_str) {
@@ -3480,7 +3544,7 @@ error_t *state_get_entries_by_profile(
 
         entries[i].encrypted = (encrypted != 0);
         entries[i].state = state_str ? strdup(state_str) : strdup(STATE_ACTIVE);
-        entries[i].deployed_at = (time_t)deployed_at;
+        entries[i].deployed_at = (time_t) deployed_at;
         entries[i].stat_cache = stat_cache;
 
         if (!entries[i].filesystem_path || !entries[i].storage_path || !entries[i].profile ||
@@ -3520,7 +3584,7 @@ time_t state_get_profile_timestamp(const state_t *state, const char *profile_nam
     sqlite3_stmt *stmt = NULL;
 
     /* Cast away const for statement preparation */
-    sqlite3 *db = ((state_t *)state)->db;
+    sqlite3 *db = ((state_t *) state)->db;
 
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
@@ -3532,7 +3596,7 @@ time_t state_get_profile_timestamp(const state_t *state, const char *profile_nam
     time_t timestamp = 0;
     rc = sqlite3_step(stmt);
     if (rc == SQLITE_ROW) {
-        timestamp = (time_t)sqlite3_column_int64(stmt, 0);
+        timestamp = (time_t) sqlite3_column_int64(stmt, 0);
     }
 
     sqlite3_finalize(stmt);

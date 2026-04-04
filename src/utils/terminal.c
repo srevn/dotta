@@ -28,25 +28,33 @@ struct terminal {
 
 error_t *terminal_init(terminal_t **out) {
     if (!out) {
-        return error_create(ERR_INVALID_ARG, "out cannot be NULL");
+        return error_create(
+            ERR_INVALID_ARG, "out cannot be NULL"
+        );
     }
 
     /* Check if stdin is a TTY */
     if (!isatty(STDIN_FILENO)) {
-        return error_create(ERR_INVALID_ARG, "stdin is not a terminal");
+        return error_create(
+            ERR_INVALID_ARG, "stdin is not a terminal"
+        );
     }
 
     /* Allocate terminal state */
     terminal_t *term = calloc(1, sizeof(terminal_t));
     if (!term) {
-        return error_create(ERR_MEMORY, "failed to allocate terminal state");
+        return error_create(
+            ERR_MEMORY, "failed to allocate terminal state"
+        );
     }
 
     /* Save original terminal settings */
     if (tcgetattr(STDIN_FILENO, &term->orig_termios) < 0) {
         free(term);
-        return error_create(ERR_FS,
-            "failed to get terminal attributes: %s", strerror(errno));
+        return error_create(
+            ERR_FS, "failed to get terminal attributes: %s",
+            strerror(errno)
+        );
     }
 
     /* Configure raw mode */
@@ -61,14 +69,10 @@ error_t *terminal_init(terminal_t **out) {
      */
     raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
 
-    /* Output flags:
-     * - OPOST: disable output processing
-     */
+    /* Output flags - OPOST: disable output processing */
     raw.c_oflag &= ~(OPOST);
 
-    /* Control flags:
-     * - CS8: set 8 bits per byte
-     */
+    /* Control flags - CS8: set 8 bits per byte */
     raw.c_cflag |= (CS8);
 
     /* Local flags:
@@ -89,8 +93,10 @@ error_t *terminal_init(terminal_t **out) {
     /* Apply raw mode settings */
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) < 0) {
         free(term);
-        return error_create(ERR_FS,
-            "failed to enable raw mode: %s", strerror(errno));
+        return error_create(
+            ERR_FS, "failed to enable raw mode: %s",
+            strerror(errno)
+        );
     }
 
     term->raw_mode_enabled = true;
@@ -119,19 +125,25 @@ void terminal_restore(terminal_t *term) {
 
 error_t *terminal_get_size(terminal_size_t *out) {
     if (!out) {
-        return error_create(ERR_INVALID_ARG, "out cannot be NULL");
+        return error_create(
+            ERR_INVALID_ARG, "out cannot be NULL"
+        );
     }
 
     struct winsize ws;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) < 0) {
-        return error_create(ERR_FS,
-            "failed to get terminal size: %s", strerror(errno));
+        return error_create(
+            ERR_FS, "failed to get terminal size: %s",
+            strerror(errno)
+        );
     }
 
     /* Validate terminal size */
     if (ws.ws_row == 0 || ws.ws_col == 0) {
-        return error_create(ERR_FS,
-            "invalid terminal size: %ux%u rows x cols", ws.ws_row, ws.ws_col);
+        return error_create(
+            ERR_FS, "invalid terminal size: %ux%u rows x cols",
+            ws.ws_row, ws.ws_col
+        );
     }
 
     out->rows = ws.ws_row;

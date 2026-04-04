@@ -18,13 +18,13 @@
 
 /* Hook script names */
 static const char *HOOK_NAMES[] = {
-    [HOOK_PRE_ADD]     = "pre-add",
-    [HOOK_POST_ADD]    = "post-add",
-    [HOOK_PRE_REMOVE]  = "pre-remove",
+    [HOOK_PRE_ADD] = "pre-add",
+    [HOOK_POST_ADD] = "post-add",
+    [HOOK_PRE_REMOVE] = "pre-remove",
     [HOOK_POST_REMOVE] = "post-remove",
-    [HOOK_PRE_APPLY]   = "pre-apply",
-    [HOOK_POST_APPLY]  = "post-apply",
-    [HOOK_PRE_UPDATE]  = "pre-update",
+    [HOOK_PRE_APPLY] = "pre-apply",
+    [HOOK_POST_APPLY] = "post-apply",
+    [HOOK_PRE_UPDATE] = "pre-update",
     [HOOK_POST_UPDATE] = "post-update"
 };
 
@@ -47,24 +47,24 @@ bool hook_is_enabled(const dotta_config_t *config, hook_type_t type) {
     }
 
     switch (type) {
-    case HOOK_PRE_ADD:
-        return config->pre_add;
-    case HOOK_POST_ADD:
-        return config->post_add;
-    case HOOK_PRE_REMOVE:
-        return config->pre_remove;
-    case HOOK_POST_REMOVE:
-        return config->post_remove;
-    case HOOK_PRE_APPLY:
-        return config->pre_apply;
-    case HOOK_POST_APPLY:
-        return config->post_apply;
-    case HOOK_PRE_UPDATE:
-        return config->pre_update;
-    case HOOK_POST_UPDATE:
-        return config->post_update;
-    default:
-        return false;
+        case HOOK_PRE_ADD:
+            return config->pre_add;
+        case HOOK_POST_ADD:
+            return config->post_add;
+        case HOOK_PRE_REMOVE:
+            return config->pre_remove;
+        case HOOK_POST_REMOVE:
+            return config->post_remove;
+        case HOOK_PRE_APPLY:
+            return config->pre_apply;
+        case HOOK_POST_APPLY:
+            return config->post_apply;
+        case HOOK_PRE_UPDATE:
+            return config->pre_update;
+        case HOOK_POST_UPDATE:
+            return config->post_update;
+        default:
+            return false;
     }
 }
 
@@ -163,11 +163,8 @@ static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
      * - NULL terminator
      */
     size_t needed = 3 + /* DOTTA_DRY_RUN, DOTTA_FILE_COUNT, NULL */
-                    (context->repo_dir ? 1 : 0) +
-                    (context->command ? 1 : 0) +
-                    (context->profile ? 1 : 0) +
-                    context->file_count + /* DOTTA_FILE_N indexed vars */
-                    system_env_count;
+        (context->repo_dir ? 1 : 0) + (context->command ? 1 : 0) +
+        (context->profile ? 1 : 0) + context->file_count + system_env_count;
 
     /* Allocate environment array */
     char **env = calloc(needed, sizeof(char *));
@@ -276,7 +273,7 @@ static void free_hook_env(char **env, size_t count) {
  * Just needs to interrupt waitpid() - no action required
  */
 static void hook_timeout_handler(int sig) {
-    (void)sig;  /* Unused */
+    (void) sig;  /* Unused */
     /* Handler does nothing - just interrupts waitpid() */
 }
 
@@ -322,7 +319,7 @@ error_t *hook_execute(
     char *hook_path = NULL;
     char **env = NULL;
     size_t env_count = 0;
-    int pipefd[2] = {-1, -1};
+    int pipefd[2] = { -1, -1 };
     char *output = NULL;
     size_t output_size = 0;
     size_t output_capacity = 0;
@@ -347,16 +344,20 @@ error_t *hook_execute(
 
     /* Check if hook is executable */
     if (!fs_is_executable(hook_path)) {
-        err = ERROR(ERR_PERMISSION,
-                   "Hook '%s' is not executable", hook_type_name(type));
+        err = ERROR(
+            ERR_PERMISSION,
+            "Hook '%s' is not executable", hook_type_name(type)
+        );
         goto cleanup;
     }
 
     /* Sanity check: prevent excessive file counts from creating huge environments */
     if (context->file_count > 10000) {
-        err = ERROR(ERR_INVALID_ARG,
-                   "Hook '%s': too many files in context (%zu, limit: 10000)",
-                   hook_type_name(type), context->file_count);
+        err = ERROR(
+            ERR_INVALID_ARG,
+            "Hook '%s': too many files in context (%zu, limit: 10000)",
+            hook_type_name(type), context->file_count
+        );
         goto cleanup;
     }
 
@@ -369,20 +370,24 @@ error_t *hook_execute(
 
     /* Create pipe for capturing hook output */
     if (pipe(pipefd) == -1) {
-        err = ERROR(ERR_FS, "Failed to create pipe for hook output: %s",
-                   strerror(errno));
+        err = ERROR(
+            ERR_FS, "Failed to create pipe for hook output: %s",
+            strerror(errno)
+        );
         goto cleanup;
     }
 
     /* Set close-on-exec flags for security */
-    (void)fcntl(pipefd[0], F_SETFD, FD_CLOEXEC);
-    (void)fcntl(pipefd[1], F_SETFD, FD_CLOEXEC);
+    (void) fcntl(pipefd[0], F_SETFD, FD_CLOEXEC);
+    (void) fcntl(pipefd[1], F_SETFD, FD_CLOEXEC);
 
     /* Fork to execute hook */
     pid = fork();
     if (pid == -1) {
-        err = ERROR(ERR_FS, "Failed to fork for hook execution: %s",
-                   strerror(errno));
+        err = ERROR(
+            ERR_FS, "Failed to fork for hook execution: %s",
+            strerror(errno)
+        );
         goto cleanup;
     }
 
@@ -409,7 +414,7 @@ error_t *hook_execute(
             if (dup2(devnull, STDIN_FILENO) == -1) {
                 /* stdin redirect failed - non-fatal, continue */
                 const char *msg = "dotta: warning: failed to redirect stdin\n";
-                (void)write(STDERR_FILENO, msg, strlen(msg));
+                (void) write(STDERR_FILENO, msg, strlen(msg));
             }
             close(devnull);
         }
@@ -419,14 +424,14 @@ error_t *hook_execute(
         /* Redirect stdout and stderr to pipe - critical for capturing hook output */
         if (dup2(pipefd[1], STDOUT_FILENO) == -1) {
             const char *msg = "dotta: error: failed to redirect stdout\n";
-            (void)write(STDERR_FILENO, msg, strlen(msg));
+            (void) write(STDERR_FILENO, msg, strlen(msg));
             close(pipefd[1]);
             _exit(126);
         }
         if (dup2(pipefd[1], STDERR_FILENO) == -1) {
             /* stdout already redirected, write error there so parent captures it */
             const char *msg = "dotta: error: failed to redirect stderr\n";
-            (void)write(STDOUT_FILENO, msg, strlen(msg));
+            (void) write(STDOUT_FILENO, msg, strlen(msg));
             close(pipefd[1]);
             _exit(126);
         }
@@ -435,7 +440,7 @@ error_t *hook_execute(
         /* Close all inherited file descriptors to prevent leaks to hook */
         long maxfd = sysconf(_SC_OPEN_MAX);
         if (maxfd < 0 || maxfd > 65536) maxfd = 1024;
-        for (int fd = STDERR_FILENO + 1; fd < (int)maxfd; fd++) {
+        for (int fd = STDERR_FILENO + 1; fd < (int) maxfd; fd++) {
             close(fd);
         }
 
@@ -453,7 +458,7 @@ error_t *hook_execute(
      */
 
     /* Ensure child's process group exists (races with child's setpgid) */
-    (void)setpgid(pid, pid);
+    (void) setpgid(pid, pid);
 
     /* Close write end of pipe (child owns it now) */
     close(pipefd[1]);
@@ -475,7 +480,7 @@ error_t *hook_execute(
         }
 
         /* Start timeout countdown NOW (before reading) */
-        prev_alarm = alarm((unsigned int)config->hook_timeout);
+        prev_alarm = alarm((unsigned int) config->hook_timeout);
     }
 
     /* Allocate buffer for reading hook output */
@@ -494,7 +499,7 @@ error_t *hook_execute(
     char buf[1024];
     while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) {
         /* Expand buffer if needed */
-        if (output_size + (size_t)n + 1 > output_capacity) {
+        if (output_size + (size_t) n + 1 > output_capacity) {
             output_capacity *= 2;
             char *new_output = realloc(output, output_capacity);
             if (!new_output) {
@@ -503,8 +508,8 @@ error_t *hook_execute(
             }
             output = new_output;
         }
-        memcpy(output + output_size, buf, (size_t)n);
-        output_size += (size_t)n;
+        memcpy(output + output_size, buf, (size_t) n);
+        output_size += (size_t) n;
     }
 
     /*
@@ -520,7 +525,10 @@ error_t *hook_execute(
             timed_out = true;
         } else {
             /* Real I/O error */
-            err = ERROR(ERR_FS, "Failed to read hook output: %s", strerror(errno));
+            err = ERROR(
+                ERR_FS, "Failed to read hook output: %s",
+                strerror(errno)
+            );
             goto cleanup;
         }
     }
@@ -555,8 +563,10 @@ error_t *hook_execute(
         alarm(0);
 
         pid = -1;  /* Process reaped */
-        err = ERROR(ERR_INTERNAL, "Hook '%s' exceeded timeout of %d seconds",
-                    hook_type_name(type), config->hook_timeout);
+        err = ERROR(
+            ERR_INTERNAL, "Hook '%s' exceeded timeout of %d seconds",
+            hook_type_name(type), config->hook_timeout
+        );
         goto cleanup;
     }
 
@@ -580,14 +590,18 @@ error_t *hook_execute(
                 alarm(0);
 
                 pid = -1;
-                err = ERROR(ERR_INTERNAL,
-                           "Hook '%s' exceeded timeout of %d seconds",
-                           hook_type_name(type), config->hook_timeout);
+                err = ERROR(
+                    ERR_INTERNAL,
+                    "Hook '%s' exceeded timeout of %d seconds",
+                    hook_type_name(type), config->hook_timeout
+                );
                 goto cleanup;
             } else {
                 /* Other error */
-                err = ERROR(ERR_FS, "Failed to wait for hook process: %s",
-                            strerror(errno));
+                err = ERROR(
+                    ERR_FS, "Failed to wait for hook process: %s",
+                    strerror(errno)
+                );
                 goto cleanup;
             }
         }
@@ -596,14 +610,15 @@ error_t *hook_execute(
     } else {
         /* No timeout configured - simple wait */
         if (waitpid(pid, &status, 0) == -1) {
-            err = ERROR(ERR_FS, "Failed to wait for hook process: %s",
-                        strerror(errno));
+            err = ERROR(
+                ERR_FS, "Failed to wait for hook process: %s",
+                strerror(errno)
+            );
             goto cleanup;
         }
     }
 
     pid = -1;  /* Process reaped */
-
 
     /* Check exit status */
     int exit_code;
@@ -633,17 +648,23 @@ error_t *hook_execute(
     /* Return error if hook failed */
     if (exit_code != 0) {
         if (exit_code == 126) {
-            err = ERROR(ERR_INTERNAL,
-                       "Hook '%s' failed: child process setup error (exit code %d)",
-                       hook_type_name(type), exit_code);
+            err = ERROR(
+                ERR_INTERNAL,
+                "Hook '%s' failed: child process setup error (exit code %d)",
+                hook_type_name(type), exit_code
+            );
         } else if (exit_code == 127) {
-            err = ERROR(ERR_INTERNAL,
-                       "Hook '%s' failed: command not found or not executable (exit code %d)",
-                       hook_type_name(type), exit_code);
+            err = ERROR(
+                ERR_INTERNAL,
+                "Hook '%s' failed: command not found or not executable (exit code %d)",
+                hook_type_name(type), exit_code
+            );
         } else {
-            err = ERROR(ERR_INTERNAL,
-                       "Hook '%s' failed with exit code %d",
-                       hook_type_name(type), exit_code);
+            err = ERROR(
+                ERR_INTERNAL,
+                "Hook '%s' failed with exit code %d",
+                hook_type_name(type), exit_code
+            );
         }
         goto cleanup;
     }

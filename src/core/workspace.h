@@ -178,7 +178,6 @@ error_t *workspace_load(
  */
 workspace_status_t workspace_get_status(const workspace_t *ws);
 
-
 /**
  * Get all diverged items
  *

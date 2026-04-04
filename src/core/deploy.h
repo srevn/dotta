@@ -110,7 +110,7 @@ typedef struct {
  * @param out Pre-flight results (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *deploy_preflight_check_from_workspace(
+error_t *deploy_workspace_preflight(
     const workspace_t *ws,
     const manifest_t *manifest,
     const deploy_options_t *opts,

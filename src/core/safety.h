@@ -71,8 +71,8 @@ typedef struct {
  */
 typedef struct {
     safety_violation_t *violations;  /* Array of violations (owns memory) */
-    size_t count;                     /* Number of violations */
-    size_t capacity;                  /* Allocated capacity (internal use) */
+    size_t count;                    /* Number of violations */
+    size_t capacity;                 /* Allocated capacity (internal use) */
 } safety_result_t;
 
 /**

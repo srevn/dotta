@@ -33,7 +33,7 @@
  * - Preflight (this function) = Decision Layer
  * - Deploy = Execution Layer
  */
-error_t *deploy_preflight_check_from_workspace(
+error_t *deploy_workspace_preflight(
     const workspace_t *ws,
     const manifest_t *manifest,
     const deploy_options_t *opts,
@@ -237,8 +237,8 @@ static error_t *resolve_deployment_ownership(
     CHECK_NULL(out_gid);
 
     /* Initialize to "no change" */
-    *out_uid = (uid_t)-1;
-    *out_gid = (gid_t)-1;
+    *out_uid = (uid_t) -1;
+    *out_gid = (gid_t) -1;
 
     /* Determine prefix type */
     bool is_home_prefix = str_starts_with(storage_path, "home/");
@@ -259,8 +259,10 @@ static error_t *resolve_deployment_ownership(
         if (deploys_to_home) {
             error_t *err = privilege_get_actual_user(out_uid, out_gid);
             if (err) {
-                return error_wrap(err,
-                    "Failed to determine actual user for home path: %s", storage_path);
+                return error_wrap(
+                    err, "Failed to determine actual user for home path: %s",
+                    storage_path
+                );
             }
             return NULL;
         }
@@ -284,27 +286,32 @@ static error_t *resolve_deployment_ownership(
 
             if (should_fail) {
                 /* Fatal: Return error to abort deployment */
-                return error_wrap(err,
-                    "Ownership resolution failed for '%s' (strict_mode enabled)\n"
+                return error_wrap(
+                    err, "Ownership resolution failed for '%s' (strict_mode enabled)\n"
                     "Hint: Create the user/group on this system, or disable strict_mode",
-                    storage_path);
+                    storage_path
+                );
             }
 
             /* Non-fatal: Log appropriate message and continue */
             if (dry_run && is_resolution_failure && strict_ownership) {
                 /* Dry-run with strict mode: Show what would fail */
-                fprintf(stderr, "Would fail: %s - %s (strict_mode enabled)\n",
-                        storage_path, error_message(err));
+                fprintf(
+                    stderr, "Would fail: %s - %s (strict_mode enabled)\n",
+                    storage_path, error_message(err)
+                );
             } else if (verbose || err->code != ERR_PERMISSION) {
                 /* Standard warning (suppress ERR_PERMISSION unless verbose) */
-                fprintf(stderr, "Warning: Could not resolve ownership for %s: %s\n",
-                        storage_path, error_message(err));
+                fprintf(
+                    stderr, "Warning: Could not resolve ownership for %s: %s\n",
+                    storage_path, error_message(err)
+                );
             }
 
             error_free(err);
             /* Reset to "no change" */
-            *out_uid = (uid_t)-1;
-            *out_gid = (gid_t)-1;
+            *out_uid = (uid_t) -1;
+            *out_gid = (gid_t) -1;
         }
         return NULL;
     }
@@ -343,8 +350,10 @@ error_t *deploy_file(
     /* Lazy-load tree entry for blob content and file mode */
     err = file_entry_ensure_tree_entry(entry, repo);
     if (err) {
-        return error_wrap(err, "Failed to load tree entry for '%s'",
-                          entry->filesystem_path);
+        return error_wrap(
+            err, "Failed to load tree entry for '%s'",
+            entry->filesystem_path
+        );
     }
 
     /* Get file mode from tree entry */
@@ -352,8 +361,10 @@ error_t *deploy_file(
     git_object_t type = git_tree_entry_type(entry->entry);
 
     if (type != GIT_OBJECT_BLOB) {
-        err = ERROR(ERR_INTERNAL,
-                    "Unsupported object type for '%s'", entry->storage_path);
+        err = ERROR(
+            ERR_INTERNAL, "Unsupported object type for '%s'",
+            entry->storage_path
+        );
         goto cleanup;
     }
 
@@ -365,14 +376,18 @@ error_t *deploy_file(
         /* Parse cached blob_oid */
         git_oid oid;
         if (!entry->blob_oid) {
-            err = ERROR(ERR_INTERNAL,
-                        "Missing blob_oid for symlink '%s'", entry->storage_path);
+            err = ERROR(
+                ERR_INTERNAL, "Missing blob_oid for symlink '%s'",
+                entry->storage_path
+            );
             goto cleanup;
         }
 
         if (git_oid_fromstr(&oid, entry->blob_oid) != 0) {
-            err = ERROR(ERR_INTERNAL,
-                        "Invalid blob_oid for symlink '%s'", entry->storage_path);
+            err = ERROR(
+                ERR_INTERNAL, "Invalid blob_oid for symlink '%s'",
+                entry->storage_path
+            );
             goto cleanup;
         }
 
@@ -383,7 +398,7 @@ error_t *deploy_file(
             goto cleanup;
         }
 
-        const char *target = (const char *)git_blob_rawcontent(blob);
+        const char *target = (const char *) git_blob_rawcontent(blob);
         size_t target_len = git_blob_rawsize(blob);
 
         /* Null-terminate target */
@@ -409,14 +424,19 @@ error_t *deploy_file(
          */
         err = fs_clear_path(entry->filesystem_path);
         if (err) {
-            err = error_wrap(err, "Failed to prepare path for symlink deployment");
+            err = error_wrap(
+                err, "Failed to prepare path for symlink deployment"
+            );
             goto cleanup;
         }
 
         /* Create symlink */
         err = fs_create_symlink(target_str, entry->filesystem_path);
         if (err) {
-            err = error_wrap(err, "Failed to deploy symlink '%s'", entry->filesystem_path);
+            err = error_wrap(
+                err, "Failed to deploy symlink '%s'",
+                entry->filesystem_path
+            );
             goto cleanup;
         }
 
@@ -440,21 +460,28 @@ error_t *deploy_file(
             opts->verbose
         );
         if (err) {
-            err = error_wrap(err, "Failed to resolve ownership for symlink '%s'",
-                             entry->filesystem_path);
+            err = error_wrap(
+                err, "Failed to resolve ownership for symlink '%s'",
+                entry->filesystem_path
+            );
             goto cleanup;
         }
 
-        if (link_uid != (uid_t)-1 || link_gid != (gid_t)-1) {
+        if (link_uid != (uid_t) -1 || link_gid != (gid_t) -1) {
             if (lchown(entry->filesystem_path, link_uid, link_gid) != 0) {
-                err = ERROR(ERR_FS, "Failed to set ownership on symlink '%s': %s",
-                            entry->filesystem_path, strerror(errno));
+                err = ERROR(
+                    ERR_FS, "Failed to set ownership on symlink '%s': %s",
+                    entry->filesystem_path, strerror(errno)
+                );
                 goto cleanup;
             }
         }
 
         if (opts->verbose) {
-            printf("Deployed symlink: %s\n", entry->filesystem_path);
+            printf(
+                "Deployed symlink: %s\n",
+                entry->filesystem_path
+            );
         }
 
         /* Success for symlink - goto cleanup will handle freeing */
@@ -493,13 +520,15 @@ error_t *deploy_file(
         file_mode = (mode == GIT_FILEMODE_BLOB_EXECUTABLE) ? 0755 : 0644;
 
         if (opts->verbose) {
-            fprintf(stderr,
+            fprintf(
+                stderr,
                 "Warning: Missing mode in state for '%s', using git mode %04o\n"
                 "         This may indicate state database corruption. Consider running:\n"
                 "         dotta profile disable %s && dotta profile enable %s\n",
                 entry->filesystem_path, file_mode,
                 entry->source_profile ? entry->source_profile->name : "<profile>",
-                entry->source_profile ? entry->source_profile->name : "<profile>");
+                entry->source_profile ? entry->source_profile->name : "<profile>"
+            );
         }
     }
 
@@ -531,7 +560,10 @@ error_t *deploy_file(
         opts->verbose
     );
     if (err) {
-        err = error_wrap(err, "Failed to resolve ownership for '%s'", entry->filesystem_path);
+        err = error_wrap(
+            err, "Failed to resolve ownership for '%s'",
+            entry->filesystem_path
+        );
         goto cleanup;
     }
 
@@ -551,7 +583,10 @@ error_t *deploy_file(
     if (lstat(entry->filesystem_path, &target_stat) == 0 && S_ISDIR(target_stat.st_mode)) {
         err = fs_remove_dir(entry->filesystem_path, true);
         if (err) {
-            err = error_wrap(err, "Failed to clear directory at '%s'", entry->filesystem_path);
+            err = error_wrap(
+                err, "Failed to clear directory at '%s'",
+                entry->filesystem_path
+            );
             goto cleanup;
         }
     }
@@ -562,29 +597,37 @@ error_t *deploy_file(
      * This is the ONLY place where ownership is applied - metadata layer only resolves. */
     err = fs_write_file_raw(
         entry->filesystem_path,
-        (const unsigned char *)content,
-        (size_t)size,
+        (const unsigned char *) content,
+        (size_t) size,
         file_mode,
         target_uid,
         target_gid
     );
 
     if (err) {
-        err = error_wrap(err, "Failed to deploy file '%s'", entry->filesystem_path);
+        err = error_wrap(
+            err, "Failed to deploy file '%s'",
+            entry->filesystem_path
+        );
         goto cleanup;
     }
 
     /* Verbose output */
     if (opts->verbose) {
-        bool has_ownership = (entry->owner || entry->group) && target_uid != (uid_t)-1;
+        bool has_ownership = (entry->owner || entry->group) && target_uid != (uid_t) -1;
 
         if (has_ownership) {
-            printf("Deployed: %s (mode: %04o, owner: %s:%s)\n",
-                   entry->filesystem_path, file_mode,
-                   entry->owner ? entry->owner : "?",
-                   entry->group ? entry->group : "?");
+            printf(
+                "Deployed: %s (mode: %04o, owner: %s:%s)\n",
+                entry->filesystem_path, file_mode,
+                entry->owner ? entry->owner : "?",
+                entry->group ? entry->group : "?"
+            );
         } else {
-            printf("Deployed: %s (mode: %04o)\n", entry->filesystem_path, file_mode);
+            printf(
+                "Deployed: %s (mode: %04o)\n",
+                entry->filesystem_path, file_mode
+            );
         }
     }
 
@@ -646,7 +689,7 @@ static error_t *calculate_required_directories(
     }
 
     for (size_t i = 0; i < dir_count; i++) {
-        err = hashmap_set(tracked, directories[i].filesystem_path, (void *)1);
+        err = hashmap_set(tracked, directories[i].filesystem_path, (void *) 1);
         if (err) {
             hashmap_free(tracked, NULL);
             state_free_all_directories(directories, dir_count);
@@ -678,13 +721,13 @@ static error_t *calculate_required_directories(
         while (true) {
             char *slash = strrchr(parent, '/');
             if (!slash || slash == parent) {
-                break;  /* Reached root */
+                break;     /* Reached root */
             }
-            *slash = '\0';  /* Truncate to parent */
+            *slash = '\0'; /* Truncate to parent */
 
             /* If this parent is tracked, add to required set */
             if (hashmap_has(tracked, parent)) {
-                err = hashmap_set(required, parent, (void *)1);
+                err = hashmap_set(required, parent, (void *) 1);
                 if (err) {
                     free(parent);
                     hashmap_free(required, NULL);
@@ -761,17 +804,23 @@ static error_t *deploy_tracked_directories(
             /* File filter: strictly ancestors only */
             size_t required_count = required_dirs ? hashmap_size(required_dirs) : 0;
             if (required_count > 0) {
-                printf("Checking %zu tracked director%s (scoped to deployment)...\n",
-                       required_count, required_count == 1 ? "y" : "ies");
+                printf(
+                    "Checking %zu tracked director%s (scoped to deployment)...\n",
+                    required_count, required_count == 1 ? "y" : "ies"
+                );
             }
             /* If required_count == 0, no directories to process - skip message */
         } else if (opts->profile_scope) {
             /* Profile filter: ancestors + profile-owned directories */
-            printf("Processing tracked directories (scoped to profile)...\n");
+            printf(
+                "Processing tracked directories (scoped to profile)...\n"
+            );
         } else {
             /* Full sync: all directories */
-            printf("Creating %zu tracked director%s with metadata...\n",
-                   dir_count, dir_count == 1 ? "y" : "ies");
+            printf(
+                "Creating %zu tracked director%s with metadata...\n",
+                dir_count, dir_count == 1 ? "y" : "ies"
+            );
         }
     }
 
@@ -796,14 +845,16 @@ static error_t *deploy_tracked_directories(
          *    - Only ancestors of specific files, regardless of profile ownership
          */
         bool in_required = required_dirs &&
-                           hashmap_has(required_dirs, dir_entry->filesystem_path);
+            hashmap_has(required_dirs, dir_entry->filesystem_path);
 
         if (opts->targeted_mode) {
             /* Strict ancestor-only mode (file filter active) */
             if (!in_required) {
                 if (opts->verbose) {
-                    printf("  Skipped: %s (not ancestor of targeted files)\n",
-                          dir_entry->filesystem_path);
+                    printf(
+                        "  Skipped: %s (not ancestor of targeted files)\n",
+                        dir_entry->filesystem_path
+                    );
                 }
                 continue;
             }
@@ -816,8 +867,10 @@ static error_t *deploy_tracked_directories(
             if (!in_required &&
                 !profile_filter_matches(dir_entry->profile, opts->profile_scope)) {
                 if (opts->verbose) {
-                    printf("  Skipped: %s (outside profile scope)\n",
-                           dir_entry->filesystem_path);
+                    printf(
+                        "  Skipped: %s (outside profile scope)\n",
+                        dir_entry->filesystem_path
+                    );
                 }
                 continue;
             }
@@ -830,9 +883,12 @@ static error_t *deploy_tracked_directories(
          * or confirmed deletion). They should NOT be deployed.
          */
         if (dir_entry->state && (strcmp(dir_entry->state, STATE_INACTIVE) == 0 ||
-                                 strcmp(dir_entry->state, STATE_DELETED) == 0)) {
+            strcmp(dir_entry->state, STATE_DELETED) == 0)) {
             if (opts->verbose) {
-                printf("  Skipped: %s (staged for removal)\n", dir_entry->filesystem_path);
+                printf(
+                    "  Skipped: %s (staged for removal)\n",
+                    dir_entry->filesystem_path
+                );
             }
             continue;
         }
@@ -858,13 +914,15 @@ static error_t *deploy_tracked_directories(
             dir_mode = 0755;  /* Safe default for directories */
 
             if (opts->verbose) {
-                fprintf(stderr,
+                fprintf(
+                    stderr,
                     "Warning: Missing mode in state for directory '%s', using default %04o\n"
                     "         This may indicate state database corruption. Consider running:\n"
                     "         dotta profile disable %s && dotta profile enable %s\n",
                     filesystem_path, dir_mode,
                     dir_entry->profile ? dir_entry->profile : "<profile>",
-                    dir_entry->profile ? dir_entry->profile : "<profile>");
+                    dir_entry->profile ? dir_entry->profile : "<profile>"
+                );
             }
         }
 
@@ -894,8 +952,13 @@ static error_t *deploy_tracked_directories(
         if (ws_item && (ws_item->divergence & DIVERGENCE_TYPE)) {
             if (!opts->force) {
                 /* Without --force, skip (preflight should have blocked) */
-                fprintf(stderr, "  Conflict: %s is not a directory (skipping)\n", filesystem_path);
-                fprintf(stderr, "  Use --force to clear and recreate as directory\n");
+                fprintf(
+                    stderr, "  Conflict: %s is not a directory (skipping)\n",
+                    filesystem_path
+                );
+                fprintf(
+                    stderr, "  Use --force to clear and recreate as directory\n"
+                );
                 continue;
             }
 
@@ -906,15 +969,19 @@ static error_t *deploy_tracked_directories(
              * proceeds below.
              */
             if (opts->verbose) {
-                printf("  Clearing type conflict at %s (recreating as directory)\n",
-                       filesystem_path);
+                printf(
+                    "  Clearing type conflict at %s (recreating as directory)\n",
+                    filesystem_path
+                );
             }
 
             error_t *clear_err = fs_clear_path(filesystem_path);
             if (clear_err) {
                 state_free_all_directories(directories, dir_count);
-                return error_wrap(clear_err, "Failed to clear type conflict at '%s'",
-                            filesystem_path);
+                return error_wrap(
+                    clear_err, "Failed to clear type conflict at '%s'",
+                    filesystem_path
+                );
             }
 
             /* Path cleared - update tracking flag for verbose output */
@@ -935,13 +1002,17 @@ static error_t *deploy_tracked_directories(
             if (opts->verbose) {
                 const char *action = directory_existed ? "Would fix" : "Would create";
                 if (dir_entry->owner || dir_entry->group) {
-                    printf("  %s: %s (mode: %04o, owner: %s:%s)\n",
-                          action, filesystem_path, dir_mode,
-                          dir_entry->owner ? dir_entry->owner : "?",
-                          dir_entry->group ? dir_entry->group : "?");
+                    printf(
+                        "  %s: %s (mode: %04o, owner: %s:%s)\n",
+                        action, filesystem_path, dir_mode,
+                        dir_entry->owner ? dir_entry->owner : "?",
+                        dir_entry->group ? dir_entry->group : "?"
+                    );
                 } else {
-                    printf("  %s: %s (mode: %04o)\n",
-                          action, filesystem_path, dir_mode);
+                    printf(
+                        "  %s: %s (mode: %04o)\n",
+                        action, filesystem_path, dir_mode
+                    );
                 }
             }
             continue;
@@ -969,8 +1040,10 @@ static error_t *deploy_tracked_directories(
         );
         if (err) {
             state_free_all_directories(directories, dir_count);
-            return error_wrap(err,
-                "Failed to resolve ownership for directory: %s", dir_entry->storage_path);
+            return error_wrap(
+                err, "Failed to resolve ownership for directory: %s",
+                dir_entry->storage_path
+            );
         }
 
         /* Create directory with ATOMIC ownership and permissions
@@ -986,22 +1059,30 @@ static error_t *deploy_tracked_directories(
 
         if (err) {
             state_free_all_directories(directories, dir_count);
-            return error_wrap(err, "Failed to create tracked directory: %s", filesystem_path);
+            return error_wrap(
+                err, "Failed to create tracked directory: %s",
+                filesystem_path
+            );
         }
 
         /* Verbose output - distinguish creation from metadata fix */
         if (opts->verbose) {
             const char *action = directory_existed ? "Fixed" : "Created";
-            bool has_ownership = (dir_entry->owner || dir_entry->group) && target_uid != (uid_t)-1;
+            bool has_ownership =
+                (dir_entry->owner || dir_entry->group) && target_uid != (uid_t) -1;
 
             if (has_ownership) {
-                printf("  %s: %s (mode: %04o, owner: %s:%s)\n",
-                      action, filesystem_path, dir_mode,
-                      dir_entry->owner ? dir_entry->owner : "?",
-                      dir_entry->group ? dir_entry->group : "?");
+                printf(
+                    "  %s: %s (mode: %04o, owner: %s:%s)\n",
+                    action, filesystem_path, dir_mode,
+                    dir_entry->owner ? dir_entry->owner : "?",
+                    dir_entry->group ? dir_entry->group : "?"
+                );
             } else {
-                printf("  %s: %s (mode: %04o)\n",
-                      action, filesystem_path, dir_mode);
+                printf(
+                    "  %s: %s (mode: %04o)\n",
+                    action, filesystem_path, dir_mode
+                );
             }
         }
     }
@@ -1093,7 +1174,7 @@ error_t *deploy_execute(
     /* Deploy each file */
     for (size_t i = 0; i < manifest->count; i++) {
         /* Non-const: deploy_file may lazy-load git tree entry */
-        file_entry_t *entry = (file_entry_t *)&manifest->entries[i];
+        file_entry_t *entry = (file_entry_t *) &manifest->entries[i];
 
         /* Check --skip-existing first (user explicitly chose not to overwrite) */
         if (opts->skip_existing && fs_exists(entry->filesystem_path) && !opts->force) {
@@ -1160,7 +1241,10 @@ error_t *deploy_execute(
             string_array_push(result->failed, entry->filesystem_path);
             result->error_message = strdup(error_message(err));
             *out = result;
-            return error_wrap(err, "Deployment failed at '%s'", entry->filesystem_path);
+            return error_wrap(
+                err, "Deployment failed at '%s'",
+                entry->filesystem_path
+            );
         }
 
         /* Record success */

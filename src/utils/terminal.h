@@ -58,7 +58,7 @@ typedef struct {
  */
 typedef enum {
     TERM_KEY_UNKNOWN = -1,
-    TERM_KEY_UP = 1000,
+    TERM_KEY_UP      = 1000,
     TERM_KEY_DOWN,
     TERM_KEY_LEFT,
     TERM_KEY_RIGHT,
@@ -68,12 +68,12 @@ typedef enum {
     TERM_KEY_PAGE_DOWN,
     TERM_KEY_DELETE,
     TERM_KEY_BACKSPACE = 127,
-    TERM_KEY_ENTER = '\r',
-    TERM_KEY_ESCAPE = 27,
-    TERM_KEY_TAB = '\t',
-    TERM_KEY_SPACE = ' ',
-    TERM_KEY_CTRL_C = 3,
-    TERM_KEY_CTRL_D = 4
+    TERM_KEY_ENTER     = '\r',
+    TERM_KEY_ESCAPE    = 27,
+    TERM_KEY_TAB       = '\t',
+    TERM_KEY_SPACE     = ' ',
+    TERM_KEY_CTRL_C    = 3,
+    TERM_KEY_CTRL_D    = 4
 } term_key_t;
 
 /**

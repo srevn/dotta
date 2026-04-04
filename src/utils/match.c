@@ -237,7 +237,7 @@ static const char *match_path_prefix(
     }
 
     /* Extract path prefix up to boundary */
-    size_t len = (size_t)(end - path);
+    size_t len = (size_t) (end - path);
     char buf[4096];
     if (len >= sizeof(buf)) {
         return NULL;
@@ -278,7 +278,7 @@ static bool match_doublestar_pattern(
     size_t prefix_len = doublestar - pattern;
 
     /* Extract prefix (before **) */
-    char prefix[4096] = {0};
+    char prefix[4096] = { 0 };
     if (prefix_len > 0) {
         if (prefix_len >= sizeof(prefix)) {
             return false; /* Pattern too long */
@@ -518,7 +518,7 @@ bool match_pattern(const char *pattern, const char *path, match_flags_t flags) {
 
         if (is_basename_pattern) {
             /* Try pattern against this individual component */
-            size_t comp_len = (size_t)(slash - comp_start);
+            size_t comp_len = (size_t) (slash - comp_start);
             char comp[4096];
             if (comp_len < sizeof(comp)) {
                 memcpy(comp, comp_start, comp_len);
@@ -529,7 +529,7 @@ bool match_pattern(const char *pattern, const char *path, match_flags_t flags) {
             }
         } else {
             /* Try pattern against path prefix up to this boundary */
-            size_t plen = (size_t)(slash - normalized_path);
+            size_t plen = (size_t) (slash - normalized_path);
             char pbuf[4096];
             if (plen < sizeof(pbuf)) {
                 memcpy(pbuf, normalized_path, plen);

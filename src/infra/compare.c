@@ -68,8 +68,10 @@ error_t *compare_buffer_to_disk(
                 }
                 return NULL;
             }
-            return ERROR(ERR_FS,
-                "Failed to stat '%s': %s", disk_path, strerror(errno));
+            return ERROR(
+                ERR_FS, "Failed to stat '%s': %s",
+                disk_path, strerror(errno)
+            );
         }
         stat_ptr = &st;
         if (out_stat) {
@@ -88,12 +90,14 @@ error_t *compare_buffer_to_disk(
         char *disk_target = NULL;
         error_t *err = fs_read_symlink(disk_path, &disk_target);
         if (err) {
-            return error_wrap(err, "Failed to read symlink '%s'", disk_path);
+            return error_wrap(
+                err, "Failed to read symlink '%s'", disk_path
+            );
         }
 
         size_t expected_len = buffer_size(content);
         bool targets_equal = (strlen(disk_target) == expected_len) &&
-                             (memcmp(buffer_data(content), disk_target, expected_len) == 0);
+            (memcmp(buffer_data(content), disk_target, expected_len) == 0);
 
         free(disk_target);
         *result = targets_equal ? CMP_EQUAL : CMP_DIFFERENT;
@@ -116,7 +120,7 @@ error_t *compare_buffer_to_disk(
         }
 
         /* Fast path: compare sizes using captured stat (no open needed yet) */
-        if (buffer_size(content) != (size_t)stat_ptr->st_size) {
+        if (buffer_size(content) != (size_t) stat_ptr->st_size) {
             *result = CMP_DIFFERENT;
             return NULL;
         }
@@ -126,11 +130,16 @@ error_t *compare_buffer_to_disk(
             /* Open file for content comparison */
             int fd = open(disk_path, O_RDONLY);
             if (fd < 0) {
-                return ERROR(ERR_FS, "Failed to open '%s': %s", disk_path, strerror(errno));
+                return ERROR(
+                    ERR_FS, "Failed to open '%s': %s",
+                    disk_path, strerror(errno)
+                );
             }
 
             /* Memory-map for efficient comparison */
-            void *disk_data = mmap(NULL, stat_ptr->st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+            void *disk_data = mmap(
+                NULL, stat_ptr->st_size, PROT_READ, MAP_PRIVATE, fd, 0
+            );
             if (disk_data == MAP_FAILED) {
                 /* mmap failed - fall back to buffered reading */
                 close(fd);
@@ -143,8 +152,9 @@ error_t *compare_buffer_to_disk(
 
                 /* Re-check size: file may have changed between stat and read */
                 bool equal = (buffer_size(disk_content) == buffer_size(content)) &&
-                             (memcmp(buffer_data(content), buffer_data(disk_content),
-                                     buffer_size(content)) == 0);
+                    (memcmp(
+                    buffer_data(content), buffer_data(disk_content), buffer_size(content)
+                    ) == 0);
                 buffer_free(disk_content);
 
                 if (!equal) {
@@ -236,8 +246,10 @@ error_t *compare_oid_to_disk(
                 }
                 return NULL;
             }
-            return ERROR(ERR_FS, "Failed to stat '%s': %s", disk_path,
-                         strerror(errno));
+            return ERROR(
+                ERR_FS, "Failed to stat '%s': %s",
+                disk_path, strerror(errno)
+            );
         }
         stat_ptr = &st;
         if (out_stat) {
@@ -271,8 +283,10 @@ error_t *compare_oid_to_disk(
 
         if (ret != 0) {
             const git_error *git_err = git_error_last();
-            return ERROR(ERR_GIT, "Failed to hash symlink target: %s",
-                         git_err ? git_err->message : "unknown error");
+            return ERROR(
+                ERR_GIT, "Failed to hash symlink target: %s",
+                git_err ? git_err->message : "unknown error"
+            );
         }
     } else {
         /* Expected regular file (BLOB or BLOB_EXECUTABLE) */
@@ -296,8 +310,10 @@ error_t *compare_oid_to_disk(
         int ret = git_odb_hashfile(&computed, disk_path, GIT_OBJECT_BLOB);
         if (ret != 0) {
             const git_error *git_err = git_error_last();
-            return ERROR(ERR_GIT, "Failed to hash file '%s': %s", disk_path,
-                         git_err ? git_err->message : "unknown error");
+            return ERROR(
+                ERR_GIT, "Failed to hash file '%s': %s", disk_path,
+                git_err ? git_err->message : "unknown error"
+            );
         }
     }
 
@@ -315,11 +331,11 @@ static int diff_line_callback(
     const git_diff_line *line,
     void *payload
 ) {
-    buffer_t *output = (buffer_t *)payload;
+    buffer_t *output = (buffer_t *) payload;
 
     /* Suppress unused parameter warnings */
-    (void)delta;
-    (void)hunk;
+    (void) delta;
+    (void) hunk;
 
     if (!output) {
         return -1;
@@ -342,11 +358,11 @@ static int diff_line_callback(
     if (line->origin == GIT_DIFF_LINE_CONTEXT ||
         line->origin == GIT_DIFF_LINE_ADDITION ||
         line->origin == GIT_DIFF_LINE_DELETION) {
-        buffer_append(output, (const unsigned char *)&line->origin, 1);
+        buffer_append(output, (const unsigned char *) &line->origin, 1);
     }
 
     /* Add line content */
-    buffer_append(output, (const unsigned char *)line->content, line->content_len);
+    buffer_append(output, (const unsigned char *) line->content, line->content_len);
 
     /* Handle files without trailing newline like git diff does */
     if (line->content_len == 0 || line->content[line->content_len - 1] != '\n') {
@@ -372,7 +388,7 @@ static error_t *generate_symlink_diff(
     CHECK_NULL(disk_path);
     CHECK_NULL(diff_text);
 
-    const char *blob_target = (const char *)buffer_data(content);
+    const char *blob_target = (const char *) buffer_data(content);
     size_t blob_target_len = buffer_size(content);
 
     /* Read disk symlink target (lstat-based check handles broken symlinks) */
@@ -402,12 +418,12 @@ static error_t *generate_symlink_diff(
             buffer_append_string(buf, "(not a symlink)");
         }
         buffer_append_string(buf, "\n+ ");
-        buffer_append(buf, (const unsigned char *)blob_target, blob_target_len);
+        buffer_append(buf, (const unsigned char *) blob_target, blob_target_len);
         buffer_append_string(buf, "\n");
     } else {
         /* Downstream: show repo → filesystem (what update would commit) */
         buffer_append_string(buf, "- ");
-        buffer_append(buf, (const unsigned char *)blob_target, blob_target_len);
+        buffer_append(buf, (const unsigned char *) blob_target, blob_target_len);
         buffer_append_string(buf, "\n+ ");
         if (disk_target) {
             buffer_append_string(buf, disk_target);
@@ -593,8 +609,10 @@ error_t *compare_generate_diff(
             actual = fs_stat_is_symlink(&file_stat) ? "symlink" : "regular file";
         }
 
-        if (asprintf(&diff->diff_text,
-                "Type mismatch: expected %s, found %s", expected, actual) < 0) {
+        if (asprintf(
+            &diff->diff_text,
+            "Type mismatch: expected %s, found %s", expected, actual
+            ) < 0) {
             diff->diff_text = NULL;
         }
     } else if (diff->status == CMP_DIFFERENT) {

@@ -43,7 +43,7 @@ char *str_trim(char *str) {
 
     /* Trim leading whitespace */
     char *start = str;
-    while (*start && isspace((unsigned char)*start)) {
+    while (*start && isspace((unsigned char) *start)) {
         start++;
     }
 
@@ -55,14 +55,14 @@ char *str_trim(char *str) {
 
     /* Trim trailing whitespace */
     char *end = start + strlen(start) - 1;
-    while (end > start && isspace((unsigned char)*end)) {
+    while (end > start && isspace((unsigned char) *end)) {
         end--;
     }
     *(end + 1) = '\0';
 
     /* Move trimmed string to beginning if necessary */
     if (start != str) {
-        size_t trimmed_len = (size_t)(end - start) + 1;
+        size_t trimmed_len = (size_t) (end - start) + 1;
         memmove(str, start, trimmed_len + 1);  /* +1 for null terminator */
     }
 
@@ -162,7 +162,9 @@ error_t *str_dup(const char *str, char **out) {
 
     *out = strdup(str);
     if (!*out) {
-        return error_create(ERR_MEMORY, "Failed to duplicate string");
+        return error_create(
+            ERR_MEMORY, "Failed to duplicate string"
+        );
     }
 
     return NULL;
@@ -179,7 +181,9 @@ error_t *str_replace_owned(char **target, const char *new_value) {
     if (new_value) {
         *target = strdup(new_value);
         if (!*target) {
-            return error_create(ERR_MEMORY, "Failed to allocate string");
+            return error_create(
+                ERR_MEMORY, "Failed to allocate string"
+            );
         }
     }
 
@@ -207,7 +211,7 @@ bool str_looks_like_git_ref(const char *str) {
     if (len >= 7 && len <= 40) {
         bool all_hex = true;
         for (size_t i = 0; i < len; i++) {
-            if (!isxdigit((unsigned char)str[i])) {
+            if (!isxdigit((unsigned char) str[i])) {
                 all_hex = false;
                 break;
             }
@@ -222,7 +226,7 @@ bool str_looks_like_git_ref(const char *str) {
     size_t hex_count = 0;
 
     /* Count leading hex chars */
-    while (*p && isxdigit((unsigned char)*p)) {
+    while (*p && isxdigit((unsigned char) *p)) {
         hex_count++;
         p++;
     }

@@ -30,8 +30,10 @@ error_t *resolve_repo_path(char **out) {
      * config_get_repo_dir handles NULL correctly (env var → default). */
     err = config_load(NULL, &config);
     if (err) {
-        fprintf(stderr, "warning: %s (using default settings)\n",
-                error_message(err));
+        fprintf(
+            stderr, "warning: %s (using default settings)\n",
+            error_message(err)
+        );
         error_free(err);
         config = NULL;
     }
@@ -48,7 +50,9 @@ error_t *resolve_repo_path(char **out) {
         /* Path expansion failed (e.g., invalid home directory).
          * This is a genuine error that should be propagated.
          */
-        return error_wrap(err, "Failed to resolve repository path");
+        return error_wrap(
+            err, "Failed to resolve repository path"
+        );
     }
 
     *out = repo_dir;
@@ -89,9 +93,11 @@ static error_t *repo_ensure_dotta_worktree(git_repository *repo) {
     }
 
     if (!worktree_exists) {
-        return ERROR(ERR_NOT_FOUND,
+        return ERROR(
+            ERR_NOT_FOUND,
             "Repository is not initialized (dotta-worktree branch missing)\n"
-            "Run 'dotta init' to initialize the repository");
+            "Run 'dotta init' to initialize the repository"
+        );
     }
 
     /* Fast path: check if already on dotta-worktree */
@@ -133,8 +139,9 @@ static error_t *repo_ensure_dotta_worktree(git_repository *repo) {
      * 4. set_head just moves the pointer after state is updated
      */
     git_object *target_commit = NULL;
-    int git_err = git_revparse_single(&target_commit, repo,
-                                      "refs/heads/dotta-worktree");
+    int git_err = git_revparse_single(
+        &target_commit, repo, "refs/heads/dotta-worktree"
+    );
     if (git_err < 0) {
         free(old_branch);
         return error_from_git(git_err);
@@ -151,16 +158,20 @@ static error_t *repo_ensure_dotta_worktree(git_repository *repo) {
         const char *branch_desc = old_branch ? old_branch : "detached HEAD";
 
         if (git_err == GIT_ECONFLICT) {
-            err = ERROR(ERR_CONFLICT,
+            err = ERROR(
+                ERR_CONFLICT,
                 "Cannot auto-recover to 'dotta-worktree' (currently on '%s')\n\n"
                 "Your working directory has modifications that prevent switching.\n"
                 "To resolve manually:\n"
                 "  dotta git stash          # Save your changes\n"
                 "  dotta git checkout dotta-worktree\n"
-                "  dotta git stash pop      # Restore changes (if needed)", branch_desc);
+                "  dotta git stash pop      # Restore changes (if needed)", branch_desc
+            );
         } else {
-            err = error_wrap(error_from_git(git_err),
-                "Failed to checkout dotta-worktree (was on '%s')", branch_desc);
+            err = error_wrap(
+                error_from_git(git_err),
+                "Failed to checkout dotta-worktree (was on '%s')", branch_desc
+            );
         }
 
         free(old_branch);
@@ -182,13 +193,15 @@ static error_t *repo_ensure_dotta_worktree(git_repository *repo) {
      */
     const char *workdir = git_repository_workdir(repo);
     if (workdir) {
-        (void)chdir(workdir);
+        (void) chdir(workdir);
     }
 
     /* Success - inform user about the automated recovery */
     const char *branch_desc = old_branch ? old_branch : "detached HEAD";
-    fprintf(stderr, "info: Recovered to 'dotta-worktree' (was on '%s')\n",
-            branch_desc);
+    fprintf(
+        stderr, "info: Recovered to 'dotta-worktree' (was on '%s')\n",
+        branch_desc
+    );
     free(old_branch);
 
     return NULL;
@@ -216,12 +229,16 @@ error_t *repo_open(git_repository **repo_out, char **path_out) {
         const char *env_repo = getenv("DOTTA_REPO_DIR");
 
         if (env_repo) {
-            err = ERROR(ERR_NOT_FOUND, "No dotta repository found at: %s\n\n"
+            err = ERROR(
+                ERR_NOT_FOUND, "No dotta repository found at: %s\n\n"
                 "Run 'dotta init' to create a new repository\n"
-                "Note: DOTTA_REPO_DIR is set to: %s", repo_path, env_repo);
+                "Note: DOTTA_REPO_DIR is set to: %s", repo_path, env_repo
+            );
         } else {
-            err = ERROR(ERR_NOT_FOUND, "No dotta repository found at: %s\n\n"
-                "Run 'dotta init' to create a new repository", repo_path);
+            err = ERROR(
+                ERR_NOT_FOUND, "No dotta repository found at: %s\n\n"
+                "Run 'dotta init' to create a new repository", repo_path
+            );
         }
 
         free(repo_path);
@@ -231,8 +248,10 @@ error_t *repo_open(git_repository **repo_out, char **path_out) {
     /* Open repository */
     err = gitops_open_repository(&repo, repo_path);
     if (err) {
-        error_t *wrapped = error_wrap(err, "Failed to open repository at: %s",
-                        repo_path);
+        error_t *wrapped = error_wrap(
+            err, "Failed to open repository at: %s",
+            repo_path
+        );
         free(repo_path);
         return wrapped;
     }
@@ -282,7 +301,9 @@ error_t *repo_fix_ownership_if_needed(const char *repo_path) {
     gid_t actual_gid = 0;
     error_t *err = privilege_get_actual_user(&actual_uid, &actual_gid);
     if (err) {
-        return error_wrap(err, "Failed to determine actual user for ownership fix");
+        return error_wrap(
+            err, "Failed to determine actual user for ownership fix"
+        );
     }
 
     /* Build path to .git directory */
@@ -303,23 +324,29 @@ error_t *repo_fix_ownership_if_needed(const char *repo_path) {
     /* Fix ownership of the repository directory itself.
      * Without this, libgit2 ownership validation (CVE-2022-24765 mitigations)
      * may reject the repository on subsequent non-sudo runs. */
-    (void)chown(repo_path, actual_uid, actual_gid);
+    (void) chown(repo_path, actual_uid, actual_gid);
 
     /* Fix .git/ ownership recursively */
     size_t fixed_count = 0;
     size_t failed_count = 0;
-    err = fs_fix_ownership_recursive(git_dir, actual_uid, actual_gid,
-                                     &fixed_count, &failed_count);
+    err = fs_fix_ownership_recursive(
+        git_dir, actual_uid, actual_gid,
+        &fixed_count, &failed_count
+    );
     free(git_dir);
 
     if (err) {
-        return error_wrap(err, "Failed to fix repository ownership");
+        return error_wrap(
+            err, "Failed to fix repository ownership"
+        );
     }
 
     /* Only warn if there were failures */
     if (failed_count > 0) {
-        fprintf(stderr, "Warning: Failed to restore ownership for %zu files\n",
-                failed_count);
+        fprintf(
+            stderr, "Warning: Failed to restore ownership for %zu files\n",
+            failed_count
+        );
     }
 
     return NULL;

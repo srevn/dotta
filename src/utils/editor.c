@@ -45,18 +45,22 @@ error_t *editor_launch(const char *editor, const char *file_path) {
 
     /* Validate editor is not empty */
     if (*editor == '\0') {
-        return ERROR(ERR_INVALID_ARG, "Editor command cannot be empty");
+        return ERROR(
+            ERR_INVALID_ARG, "Editor command cannot be empty"
+        );
     }
 
     /* Fork and execute editor */
     pid_t pid = fork();
     if (pid == -1) {
-        return ERROR(ERR_FS, "Failed to fork for editor");
+        return ERROR(
+            ERR_FS, "Failed to fork for editor"
+        );
     }
 
     if (pid == 0) {
         /* Child process */
-        execlp(editor, editor, file_path, (char *)NULL);
+        execlp(editor, editor, file_path, (char *) NULL);
         /* If execlp returns, it failed */
         _exit(127);
     }
@@ -71,13 +75,22 @@ error_t *editor_launch(const char *editor, const char *file_path) {
     if (WIFEXITED(status)) {
         int exit_code = WEXITSTATUS(status);
         if (exit_code == 127) {
-            return ERROR(ERR_NOT_FOUND, "Editor command not found: %s", editor);
+            return ERROR(
+                ERR_NOT_FOUND, "Editor command not found: %s",
+                editor
+            );
         }
         if (exit_code != 0) {
-            return ERROR(ERR_INTERNAL, "Editor exited with non-zero status: %d", exit_code);
+            return ERROR(
+                ERR_INTERNAL, "Editor exited with non-zero status: %d",
+                exit_code
+            );
         }
     } else if (WIFSIGNALED(status)) {
-        return ERROR(ERR_INTERNAL, "Editor was terminated by signal: %d", WTERMSIG(status));
+        return ERROR(
+            ERR_INTERNAL, "Editor was terminated by signal: %d",
+            WTERMSIG(status)
+        );
     }
 
     return NULL;
@@ -88,7 +101,10 @@ error_t *editor_launch(const char *editor, const char *file_path) {
  *
  * Convenience function that combines editor_get_from_env() and editor_launch().
  */
-error_t *editor_launch_with_env(const char *file_path, const char *default_editor) {
+error_t *editor_launch_with_env(
+    const char *file_path,
+    const char *default_editor
+) {
     CHECK_NULL(file_path);
 
     const char *editor = editor_get_from_env(default_editor);

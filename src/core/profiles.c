@@ -68,15 +68,23 @@ error_t *profile_load(
 
     /* Load reference */
     char refname[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", name);
+    err = gitops_build_refname(
+        refname, sizeof(refname), "refs/heads/%s", name
+    );
     if (err) {
-        err = error_wrap(err, "Invalid profile name '%s'", name);
+        err = error_wrap(
+            err, "Invalid profile name '%s'",
+            name
+        );
         goto cleanup;
     }
 
     err = gitops_lookup_reference(repo, refname, &profile->ref);
     if (err) {
-        err = error_wrap(err, "Profile not found: %s", name);
+        err = error_wrap(
+            err, "Profile not found: %s",
+            name
+        );
         goto cleanup;
     }
 
@@ -112,24 +120,28 @@ error_t *profile_load_tree(git_repository *repo, profile_t *profile) {
         int git_err = git_reference_peel(&obj, profile->ref, GIT_OBJECT_ANY);
         if (git_err < 0) {
             error_t *err = error_from_git(git_err);
-            return error_wrap(err, "Failed to peel reference for profile '%s'",
-                              profile->name);
+            return error_wrap(
+                err, "Failed to peel reference for profile '%s'",
+                profile->name
+            );
         }
 
         git_object_t obj_type = git_object_type(obj);
         if (obj_type == GIT_OBJECT_COMMIT) {
-            git_commit *commit = (git_commit *)obj;
+            git_commit *commit = (git_commit *) obj;
             git_err = git_commit_tree(&profile->tree, commit);
             git_object_free(obj);
             if (git_err < 0) {
                 return error_from_git(git_err);
             }
         } else if (obj_type == GIT_OBJECT_TREE) {
-            profile->tree = (git_tree *)obj;
+            profile->tree = (git_tree *) obj;
         } else {
             git_object_free(obj);
-            return ERROR(ERR_GIT, "Profile '%s': unexpected object type %d",
-                         profile->name, (int)obj_type);
+            return ERROR(
+                ERR_GIT, "Profile '%s': unexpected object type %d",
+                profile->name, (int) obj_type
+            );
         }
 
         return NULL;
@@ -137,10 +149,14 @@ error_t *profile_load_tree(git_repository *repo, profile_t *profile) {
 
     /* Fallback: resolve by name (for profiles without cached reference) */
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(refname, sizeof(refname),
-                                        "refs/heads/%s", profile->name);
+    error_t *err = gitops_build_refname(
+        refname, sizeof(refname), "refs/heads/%s", profile->name
+    );
     if (err) {
-        return error_wrap(err, "Invalid profile name '%s'", profile->name);
+        return error_wrap(
+            err, "Invalid profile name '%s'",
+            profile->name
+        );
     }
 
     return gitops_load_tree(repo, refname, &profile->tree);
@@ -163,21 +179,29 @@ error_t *file_entry_ensure_tree_entry(
     /* Load profile tree (cached in profile structure) */
     error_t *err = profile_load_tree(repo, entry->source_profile);
     if (err) {
-        return error_wrap(err, "Failed to load tree for profile '%s'",
-                          entry->source_profile->name);
+        return error_wrap(
+            err, "Failed to load tree for profile '%s'",
+            entry->source_profile->name
+        );
     }
 
     /* Lookup tree entry from Git (creates owned reference) */
-    int git_err = git_tree_entry_bypath(&entry->entry, entry->source_profile->tree,
-                                        entry->storage_path);
+    int git_err = git_tree_entry_bypath(
+        &entry->entry, entry->source_profile->tree,
+        entry->storage_path
+    );
     if (git_err != 0) {
         if (git_err == GIT_ENOTFOUND) {
-            return ERROR(ERR_NOT_FOUND, "File '%s' not found in profile '%s' Git tree",
-                         entry->storage_path, entry->source_profile->name);
+            return ERROR(
+                ERR_NOT_FOUND, "File '%s' not found in profile '%s' Git tree",
+                entry->storage_path, entry->source_profile->name
+            );
         }
         err = error_from_git(git_err);
-        return error_wrap(err, "Failed to lookup tree entry for '%s' in profile '%s'",
-                          entry->storage_path, entry->source_profile->name);
+        return error_wrap(
+            err, "Failed to lookup tree entry for '%s' in profile '%s'",
+            entry->storage_path, entry->source_profile->name
+        );
     }
 
     return NULL;
@@ -204,7 +228,9 @@ static error_t *match_hierarchical_names(
 
     string_array_t *sub_profiles = string_array_create();
     if (!sub_profiles) {
-        return ERROR(ERR_MEMORY, "Failed to allocate sub-profiles array");
+        return ERROR(
+            ERR_MEMORY, "Failed to allocate sub-profiles array"
+        );
     }
 
     for (size_t i = 0; i < string_array_size(available); i++) {
@@ -290,7 +316,7 @@ error_t *profile_detect_names(
 
         /* Safe tolower: cast to unsigned char to avoid UB with negative values */
         for (char *p = os_name; *p; p++) {
-            *p = (char)tolower((unsigned char)*p);
+            *p = (char) tolower((unsigned char) *p);
         }
 
         err = match_hierarchical_names(available_branches, os_name, names);
@@ -309,7 +335,7 @@ error_t *profile_detect_names(
 
         char host_prefix[DOTTA_REFNAME_MAX];
         int ret = snprintf(host_prefix, sizeof(host_prefix), "hosts/%s", hostname);
-        if (ret >= 0 && (size_t)ret < sizeof(host_prefix)) {
+        if (ret >= 0 && (size_t) ret < sizeof(host_prefix)) {
             err = match_hierarchical_names(available_branches, host_prefix, names);
             if (err) {
                 /* Non-fatal: skip host profiles if detection fails */
@@ -367,7 +393,10 @@ error_t *profile_list_load(
         if (err) {
             if (strict) {
                 /* In strict mode, fail on missing profiles */
-                err = error_wrap(err, "Failed to load profile '%s'", names[i]);
+                err = error_wrap(
+                    err, "Failed to load profile '%s'",
+                    names[i]
+                );
                 goto cleanup;
             } else {
                 /* In non-strict mode, skip missing profiles silently */
@@ -418,7 +447,7 @@ static error_t *enrich_profiles_from_state(
         const char *custom_prefix = NULL;
 
         /* Query from state */
-        custom_prefix = (const char *)hashmap_get(prefix_map, profile->name);
+        custom_prefix = (const char *) hashmap_get(prefix_map, profile->name);
 
         /* Attach to profile (owned by profile, freed in profile_list_free) */
         if (custom_prefix) {
@@ -427,9 +456,10 @@ static error_t *enrich_profiles_from_state(
             profile->custom_prefix = strdup(custom_prefix);
             if (!profile->custom_prefix) {
                 hashmap_free(prefix_map, free);
-                return ERROR(ERR_MEMORY,
-                    "Failed to allocate custom_prefix for profile '%s'",
-                    profile->name);
+                return ERROR(
+                    ERR_MEMORY, "Failed to allocate custom_prefix for profile '%s'",
+                    profile->name
+                );
             }
         } else {
             /* No custom prefix - ensure field is NULL */
@@ -644,8 +674,10 @@ error_t *profile_resolve(
         for (size_t i = 0; i < string_array_size(missing_profiles); i++) {
             fprintf(stderr, "  • %s\n", string_array_get(missing_profiles, i));
         }
-        fprintf(stderr, "\nHint: Run 'dotta profile validate' to fix state,\n");
-        fprintf(stderr, "      or 'dotta profile enable <name>' to enable profiles\n\n");
+        fprintf(
+            stderr, "\nHint: Run 'dotta profile validate' to fix state,\n"
+            "      or 'dotta profile enable <name>' to enable profiles\n\n"
+        );
     }
     string_array_free(missing_profiles);
     missing_profiles = NULL;
@@ -664,7 +696,7 @@ error_t *profile_resolve(
     }
 
     for (size_t i = 0; i < count; i++) {
-        names[i] = (char *)string_array_get(valid_profiles, i);
+        names[i] = (char *) string_array_get(valid_profiles, i);
     }
 
     err = profile_list_load(repo, names, count, strict_mode, out);
@@ -694,18 +726,20 @@ error_t *profile_resolve(
 
 no_profiles:
     /* No profiles found from any source - return helpful error */
-    err = ERROR(ERR_NOT_FOUND,
-                "No enabled profiles found\n\n"
-                "To enable profiles:\n"
-                "  dotta profile enable <name>         # Enable specific profile\n"
-                "  dotta profile enable --all          # Enable all local profiles\n\n"
-                "To create and enable a new profile:\n"
-                "  dotta add -p <name> <file>          # Automatically enables new profiles\n\n"
-                "To use profiles without enabling:\n"
-                "  dotta status -p <name>              # Use -p flag for any command\n\n"
-                "To see available profiles:\n"
-                "  dotta profile list                  # List local profiles\n"
-                "  dotta profile list --remote         # List remote profiles");
+    err = ERROR(
+        ERR_NOT_FOUND,
+        "No enabled profiles found\n\n"
+        "To enable profiles:\n"
+        "  dotta profile enable <name>         # Enable specific profile\n"
+        "  dotta profile enable --all          # Enable all local profiles\n\n"
+        "To create and enable a new profile:\n"
+        "  dotta add -p <name> <file>          # Automatically enables new profiles\n\n"
+        "To use profiles without enabling:\n"
+        "  dotta status -p <name>              # Use -p flag for any command\n\n"
+        "To see available profiles:\n"
+        "  dotta profile list                  # List local profiles\n"
+        "  dotta profile list --remote         # List remote profiles"
+    );
 
 cleanup:
     free(names);
@@ -757,7 +791,9 @@ error_t *profile_resolve_for_operations(
     }
 
     /* Load explicitly specified profiles */
-    error_t *err = profile_list_load(repo, cli_profiles, cli_count, strict_mode, out);
+    error_t *err = profile_list_load(
+        repo, cli_profiles, cli_count, strict_mode, out
+    );
     if (err) {
         return err;
     }
@@ -803,8 +839,11 @@ error_t *profile_validate_filter(
         }
 
         if (!found) {
-            return ERROR(ERR_INVALID_ARG, "Profile '%s' is not enabled\n"
-                "Hint: Run 'dotta profile enable %s' first", filter_name, filter_name);
+            return ERROR(
+                ERR_INVALID_ARG, "Profile '%s' is not enabled\n"
+                "Hint: Run 'dotta profile enable %s' first",
+                filter_name, filter_name
+            );
         }
     }
 
@@ -911,7 +950,10 @@ error_t *profile_list_all_local(
             }
             capacity *= 2;
 
-            profile_t *new_profiles = realloc(list->profiles, capacity * sizeof(profile_t));
+            profile_t *new_profiles = realloc(
+                list->profiles,
+                capacity * sizeof(profile_t)
+            );
             if (!new_profiles) {
                 err = ERROR(ERR_MEMORY, "Failed to grow profiles array");
                 goto cleanup;
@@ -968,11 +1010,12 @@ struct walk_data {
 /**
  * Tree walk callback
  */
-static int tree_walk_callback(const char *root,
+static int tree_walk_callback(
+    const char *root,
     const git_tree_entry *entry,
     void *payload
 ) {
-    struct walk_data *data = (struct walk_data *)payload;
+    struct walk_data *data = (struct walk_data *) payload;
 
     /* Only process blobs (files) */
     if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
@@ -985,15 +1028,23 @@ static int tree_walk_callback(const char *root,
     int ret;
 
     if (root && root[0] != '\0') {
-        ret = snprintf(full_path, sizeof(full_path), "%s%s", root, name);
+        ret = snprintf(
+            full_path, sizeof(full_path), "%s%s",
+            root, name
+        );
     } else {
-        ret = snprintf(full_path, sizeof(full_path), "%s", name);
+        ret = snprintf(
+            full_path, sizeof(full_path), "%s",
+            name
+        );
     }
 
     /* Check for truncation */
-    if (ret < 0 || (size_t)ret >= sizeof(full_path)) {
-        data->error = ERROR(ERR_INTERNAL, "Path exceeds maximum length: %s%s",
-                            root ? root : "", name);
+    if (ret < 0 || (size_t) ret >= sizeof(full_path)) {
+        data->error = ERROR(
+            ERR_INTERNAL, "Path exceeds maximum length: %s%s",
+            root ? root : "", name
+        );
         return -1;
     }
 
@@ -1066,7 +1117,7 @@ static int manifest_build_callback(
     const git_tree_entry *entry,
     void *payload
 ) {
-    struct manifest_build_ctx *ctx = (struct manifest_build_ctx *)payload;
+    struct manifest_build_ctx *ctx = (struct manifest_build_ctx *) payload;
 
     /* Only process blobs (files), skip directories */
     if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
@@ -1079,15 +1130,23 @@ static int manifest_build_callback(
     int ret;
 
     if (root && root[0] != '\0') {
-        ret = snprintf(storage_path, sizeof(storage_path), "%s%s", root, name);
+        ret = snprintf(
+            storage_path, sizeof(storage_path), "%s%s",
+            root, name
+        );
     } else {
-        ret = snprintf(storage_path, sizeof(storage_path), "%s", name);
+        ret = snprintf(
+            storage_path, sizeof(storage_path), "%s",
+            name
+        );
     }
 
     /* Check for path truncation */
-    if (ret < 0 || (size_t)ret >= sizeof(storage_path)) {
-        ctx->error = ERROR(ERR_INTERNAL, "Path exceeds maximum length: %s%s",
-                           root ? root : "", name);
+    if (ret < 0 || (size_t) ret >= sizeof(storage_path)) {
+        ctx->error = ERROR(
+            ERR_INTERNAL, "Path exceeds maximum length: %s%s",
+            root ? root : "", name
+        );
         return -1;
     }
 
@@ -1117,8 +1176,10 @@ static int manifest_build_callback(
     } else {
         err = path_from_storage(storage_path, ctx->custom_prefix, &filesystem_path);
         if (err) {
-            ctx->error = error_wrap(err, "Failed to convert path '%s' from profile '%s'",
-                                    storage_path, ctx->profile->name);
+            ctx->error = error_wrap(
+                err, "Failed to convert path '%s' from profile '%s'",
+                storage_path, ctx->profile->name
+            );
             return -1;
         }
     }
@@ -1128,8 +1189,10 @@ static int manifest_build_callback(
     int git_err = git_tree_entry_dup(&dup_entry, entry);
     if (git_err != 0) {
         free(filesystem_path);
-        ctx->error = ERROR(ERR_GIT, "Failed to duplicate tree entry: %s",
-                           git_error_last() ? git_error_last()->message : "unknown");
+        ctx->error = ERROR(
+            ERR_GIT, "Failed to duplicate tree entry: %s",
+            git_error_last() ? git_error_last()->message : "unknown"
+        );
         return -1;
     }
 
@@ -1144,7 +1207,7 @@ static int manifest_build_callback(
          * Safe because: indices are always << SIZE_MAX, uintptr_t can hold
          * any valid pointer value, and we never store actual pointers here.
          */
-        size_t existing_idx = (size_t)(uintptr_t)idx_ptr - 1;
+        size_t existing_idx = (size_t) (uintptr_t) idx_ptr - 1;
 
         /* Duplicate storage path before freeing old */
         char *dup_storage_path = strdup(storage_path);
@@ -1192,8 +1255,10 @@ static int manifest_build_callback(
             }
             size_t new_capacity = ctx->capacity * 2;
 
-            file_entry_t *new_entries = realloc(ctx->manifest->entries,
-                                                new_capacity * sizeof(file_entry_t));
+            file_entry_t *new_entries = realloc(
+                ctx->manifest->entries,
+                new_capacity * sizeof(file_entry_t)
+            );
             if (!new_entries) {
                 free(filesystem_path);
                 git_tree_entry_free(dup_entry);
@@ -1253,8 +1318,9 @@ static int manifest_build_callback(
         new_entry->stat_cache = STAT_CACHE_UNSET;
 
         /* Store index in hashmap (offset by 1 to distinguish from NULL) */
-        err = hashmap_set(ctx->path_map, filesystem_path,
-                         (void *)(uintptr_t)(ctx->manifest->count + 1));
+        err = hashmap_set(
+            ctx->path_map, filesystem_path, (void *) (uintptr_t) (ctx->manifest->count + 1)
+        );
         if (err) {
             /* Entry already added to manifest, but hashmap failed.
              * This is a partial state - we need to clean up the entry. */
@@ -1293,7 +1359,7 @@ error_t *profile_list_files(
     }
 
     /* Walk tree */
-    struct walk_data data = {0};
+    struct walk_data data = { 0 };
     data.paths = string_array_create();
     if (!data.paths) {
         return ERROR(ERR_MEMORY, "Failed to allocate paths array");
@@ -1406,7 +1472,10 @@ error_t *profile_build_manifest(
         /* Load tree (lazy loading - cached in profile struct) */
         err = profile_load_tree(repo, profile);
         if (err) {
-            err = error_wrap(err, "Failed to load tree for profile '%s'", profile->name);
+            err = error_wrap(
+                err, "Failed to load tree for profile '%s'",
+                profile->name
+            );
             goto cleanup;
         }
 
@@ -1416,18 +1485,21 @@ error_t *profile_build_manifest(
          * converts paths, handles precedence override, and populates
          * file_entry_t directly—all in O(N) time. */
         struct manifest_build_ctx ctx = {
-            .manifest = manifest,
-            .capacity = capacity,
-            .path_map = path_map,
-            .profile = profile,
+            .manifest      = manifest,
+            .capacity      = capacity,
+            .path_map      = path_map,
+            .profile       = profile,
             .custom_prefix = profile->custom_prefix,
-            .error = NULL
+            .error         = NULL
         };
 
         err = gitops_tree_walk(profile->tree, manifest_build_callback, &ctx);
         if (err || ctx.error) {
             err = ctx.error ? ctx.error : err;
-            err = error_wrap(err, "Failed to build manifest for profile '%s'", profile->name);
+            err = error_wrap(
+                err, "Failed to build manifest for profile '%s'",
+                profile->name
+            );
             goto cleanup;
         }
 
@@ -1660,12 +1732,12 @@ error_t *profile_build_manifest_from_tree(
      * The callback captures owned tree entries with git_tree_entry_dup(),
      * converts paths, and populates file_entry_t directly—all in O(N) time. */
     struct manifest_build_ctx ctx = {
-        .manifest = manifest,
-        .capacity = capacity,
-        .path_map = path_map,
-        .profile = temp_profile,
+        .manifest      = manifest,
+        .capacity      = capacity,
+        .path_map      = path_map,
+        .profile       = temp_profile,
         .custom_prefix = custom_prefix,  /* May be NULL for graceful degradation */
-        .error = NULL
+        .error         = NULL
     };
 
     err = gitops_tree_walk(tree, manifest_build_callback, &ctx);

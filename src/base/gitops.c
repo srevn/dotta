@@ -92,8 +92,9 @@ error_t *gitops_branch_exists(
 
     git_reference *ref = NULL;
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err_build = gitops_build_refname(refname, sizeof(refname),
-                                              "refs/heads/%s", name);
+    error_t *err_build = gitops_build_refname(
+        refname, sizeof(refname), "refs/heads/%s", name
+    );
     if (err_build) {
         return error_wrap(err_build, "Invalid branch name '%s'", name);
     }
@@ -128,23 +129,29 @@ error_t *gitops_create_orphan_branch(
 
     err = git_treebuilder_new(&tb, repo, NULL);
     if (err < 0) {
-        return error_wrap(error_from_git(err),
-                "Failed to create tree builder for orphan branch '%s'", name);
+        return error_wrap(
+            error_from_git(err),
+            "Failed to create tree builder for orphan branch '%s'", name
+        );
     }
 
     err = git_treebuilder_write(&tree_oid, tb);
     git_treebuilder_free(tb);
     if (err < 0) {
-        return error_wrap(error_from_git(err),
-                "Failed to write empty tree for orphan branch '%s'", name);
+        return error_wrap(
+            error_from_git(err),
+            "Failed to write empty tree for orphan branch '%s'", name
+        );
     }
 
     /* Get tree object */
     git_tree *tree = NULL;
     err = git_tree_lookup(&tree, repo, &tree_oid);
     if (err < 0) {
-        return error_wrap(error_from_git(err),
-                "Failed to lookup tree for orphan branch '%s'", name);
+        return error_wrap(
+            error_from_git(err),
+            "Failed to lookup tree for orphan branch '%s'", name
+        );
     }
 
     /* Get default signature */
@@ -152,15 +159,18 @@ error_t *gitops_create_orphan_branch(
     err = git_signature_default(&sig, repo);
     if (err < 0) {
         git_tree_free(tree);
-        return error_wrap(error_from_git(err),
-                "Failed to get signature for orphan branch '%s'", name);
+        return error_wrap(
+            error_from_git(err),
+            "Failed to get signature for orphan branch '%s'", name
+        );
     }
 
     /* Create orphan commit (no parents) */
     git_oid commit_oid;
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err_build = gitops_build_refname(refname, sizeof(refname),
-                                              "refs/heads/%s", name);
+    error_t *err_build = gitops_build_refname(
+        refname, sizeof(refname), "refs/heads/%s", name
+    );
     if (err_build) {
         git_signature_free(sig);
         git_tree_free(tree);
@@ -184,8 +194,10 @@ error_t *gitops_create_orphan_branch(
     git_tree_free(tree);
 
     if (err < 0) {
-        return error_wrap(error_from_git(err),
-                "Failed to create orphan commit for branch '%s'", name);
+        return error_wrap(
+            error_from_git(err),
+            "Failed to create orphan commit for branch '%s'", name
+        );
     }
 
     return NULL;
@@ -249,16 +261,19 @@ error_t *gitops_list_remote_branches(
     /* Build prefix to strip: "<remote_name>/" */
     char prefix[DOTTA_REFNAME_MAX];
     int ret = snprintf(prefix, sizeof(prefix), "%s/", remote_name);
-    if (ret < 0 || (size_t)ret >= sizeof(prefix)) {
+
+    if (ret < 0 || (size_t) ret >= sizeof(prefix)) {
         return ERROR(ERR_INVALID_ARG, "Remote name too long");
     }
-    size_t prefix_len = (size_t)ret;
+    size_t prefix_len = (size_t) ret;
 
     git_branch_iterator *iter = NULL;
     int err = git_branch_iterator_new(&iter, repo, GIT_BRANCH_REMOTE);
     if (err < 0) {
-        return error_wrap(error_from_git(err),
-            "Failed to create remote branch iterator");
+        return error_wrap(
+            error_from_git(err),
+            "Failed to create remote branch iterator"
+        );
     }
 
     string_array_t *branches = string_array_create();
@@ -317,21 +332,30 @@ error_t *gitops_delete_branch(
 
     git_reference *ref = NULL;
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err_build = gitops_build_refname(refname, sizeof(refname),
-                                              "refs/heads/%s", name);
+    error_t *err_build = gitops_build_refname(
+        refname, sizeof(refname), "refs/heads/%s", name
+    );
     if (err_build) {
-        return error_wrap(err_build, "Invalid branch name '%s'", name);
+        return error_wrap(
+            err_build, "Invalid branch name '%s'", name
+        );
     }
 
     int err = git_reference_lookup(&ref, repo, refname);
     if (err < 0) {
-        return error_wrap(error_from_git(err), "Failed to lookup branch '%s'", name);
+        return error_wrap(
+            error_from_git(err),
+            "Failed to lookup branch '%s'", name
+        );
     }
 
     err = git_branch_delete(ref);
     git_reference_free(ref);
     if (err < 0) {
-        return error_wrap(error_from_git(err), "Failed to delete branch '%s'", name);
+        return error_wrap(
+            error_from_git(err),
+            "Failed to delete branch '%s'", name
+        );
     }
 
     return NULL;
@@ -348,10 +372,14 @@ error_t *gitops_current_branch(
     int err = git_repository_head(&head, repo);
     if (err < 0) {
         if (err == GIT_EUNBORNBRANCH) {
-            return ERROR(ERR_NOT_FOUND, "HEAD points to an unborn branch");
+            return ERROR(
+                ERR_NOT_FOUND, "HEAD points to an unborn branch"
+            );
         }
         if (err == GIT_ENOTFOUND) {
-            return ERROR(ERR_NOT_FOUND, "Repository has no HEAD reference");
+            return ERROR(
+                ERR_NOT_FOUND, "Repository has no HEAD reference"
+            );
         }
         return error_from_git(err);
     }
@@ -361,14 +389,18 @@ error_t *gitops_current_branch(
     err = git_branch_name(&name, head);
     if (err < 0) {
         git_reference_free(head);
-        return ERROR(ERR_NOT_FOUND, "HEAD is detached (not on any branch)");
+        return ERROR(
+            ERR_NOT_FOUND, "HEAD is detached (not on any branch)"
+        );
     }
 
     *out = strdup(name);
     git_reference_free(head);
 
     if (!*out) {
-        return ERROR(ERR_MEMORY, "Failed to allocate branch name");
+        return ERROR(
+            ERR_MEMORY, "Failed to allocate branch name"
+        );
     }
 
     return NULL;
@@ -439,8 +471,10 @@ error_t *gitops_load_tree(
     git_reference *ref = NULL;
     int err = git_reference_lookup(&ref, repo, ref_name);
     if (err < 0) {
-        return error_wrap(error_from_git(err),
-                "Failed to lookup reference '%s'", ref_name);
+        return error_wrap(
+            error_from_git(err),
+            "Failed to lookup reference '%s'", ref_name
+        );
     }
 
     /* Peel reference to get the underlying object */
@@ -448,8 +482,10 @@ error_t *gitops_load_tree(
     err = git_reference_peel(&obj, ref, GIT_OBJECT_ANY);
     git_reference_free(ref);
     if (err < 0) {
-        return error_wrap(error_from_git(err),
-                "Failed to peel reference '%s'", ref_name);
+        return error_wrap(
+            error_from_git(err),
+            "Failed to peel reference '%s'", ref_name
+        );
     }
 
     /* Handle different object types */
@@ -459,7 +495,7 @@ error_t *gitops_load_tree(
         /* Normal branch pointing to commit - get tree from commit
          * SAFETY: We verified obj_type == GIT_OBJECT_COMMIT, so this cast is safe
          */
-        git_commit *commit = (git_commit *)obj;
+        git_commit *commit = (git_commit *) obj;
         err = git_commit_tree(out, commit);
         git_object_free(obj);
         if (err < 0) {
@@ -469,13 +505,15 @@ error_t *gitops_load_tree(
         /* Orphan branch pointing directly to tree
          * SAFETY: We verified obj_type == GIT_OBJECT_TREE, so this cast is safe
          */
-        *out = (git_tree *)obj;
+        *out = (git_tree *) obj;
         /* Don't free obj - we're transferring ownership to caller */
     } else {
         /* Unexpected object type */
         git_object_free(obj);
-        return ERROR(ERR_GIT,
-            "Reference '%s' points to unexpected object type: %d", ref_name, obj_type);
+        return ERROR(
+            ERR_GIT, "Reference '%s' points to unexpected object type: %d",
+            ref_name, obj_type
+        );
     }
 
     return NULL;
@@ -524,12 +562,15 @@ error_t *gitops_create_commit(
     git_oid commit_oid;
     git_commit *parent = NULL;
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err_build = gitops_build_refname(refname, sizeof(refname),
-                                              "refs/heads/%s", branch_name);
+    error_t *err_build = gitops_build_refname(
+        refname, sizeof(refname), "refs/heads/%s", branch_name
+    );
     if (err_build) {
         git_signature_free(sig);
         /* NOTE: Do not free 'tree' - it is owned by the caller */
-        return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
+        return error_wrap(
+            err_build, "Invalid branch name '%s'", branch_name
+        );
     }
 
     err = git_reference_name_to_id(&commit_oid, repo, refname);
@@ -552,16 +593,8 @@ error_t *gitops_create_commit(
     int parent_count = parent ? 1 : 0;
 
     err = git_commit_create(
-        &commit_oid,
-        repo,
-        refname,
-        sig,
-        sig,
-        NULL,
-        message,
-        tree,
-        parent_count,
-        parents
+        &commit_oid, repo, refname, sig, sig, NULL,
+        message, tree, parent_count, parents
     );
 
     git_signature_free(sig);
@@ -592,14 +625,18 @@ error_t *gitops_get_commit(
     git_oid oid;
     int err = git_reference_name_to_id(&oid, repo, ref_name);
     if (err < 0) {
-        return error_wrap(error_from_git(err),
-                "Failed to resolve reference '%s'", ref_name);
+        return error_wrap(
+            error_from_git(err),
+            "Failed to resolve reference '%s'", ref_name
+        );
     }
 
     err = git_commit_lookup(out, repo, &oid);
     if (err < 0) {
-        return error_wrap(error_from_git(err),
-                "Failed to lookup commit for reference '%s'", ref_name);
+        return error_wrap(
+            error_from_git(err),
+            "Failed to lookup commit for reference '%s'", ref_name
+        );
     }
 
     return NULL;
@@ -623,8 +660,10 @@ static error_t *split_path_to_segments(
     string_array_t **out_segments
 ) {
     if (!file_path || !out_segments) {
-        return ERROR(ERR_INVALID_ARG,
-            "file_path and out_segments cannot be NULL");
+        return ERROR(
+            ERR_INVALID_ARG,
+            "file_path and out_segments cannot be NULL"
+        );
     }
 
     /* Skip leading slashes */
@@ -634,14 +673,18 @@ static error_t *split_path_to_segments(
     }
 
     if (*p == '\0') {
-        return ERROR(ERR_INVALID_ARG,
-            "File path cannot be empty or just slashes");
+        return ERROR(
+            ERR_INVALID_ARG,
+            "File path cannot be empty or just slashes"
+        );
     }
 
     string_array_t *segments = string_array_create();
     if (!segments) {
-        return ERROR(ERR_MEMORY,
-            "Failed to allocate path segments array");
+        return ERROR(
+            ERR_MEMORY,
+            "Failed to allocate path segments array"
+        );
     }
 
     /* Parse segments */
@@ -649,14 +692,15 @@ static error_t *split_path_to_segments(
     while (*p != '\0') {
         if (*p == '/') {
             /* End of segment */
-            size_t segment_len = (size_t)(p - segment_start);
+            size_t segment_len = (size_t) (p - segment_start);
             if (segment_len > 0) {
                 /* Non-empty segment - add it */
                 char *segment = malloc(segment_len + 1);
                 if (!segment) {
                     string_array_free(segments);
-                    return ERROR(ERR_MEMORY,
-                        "Failed to allocate path segment");
+                    return ERROR(
+                        ERR_MEMORY, "Failed to allocate path segment"
+                    );
                 }
                 memcpy(segment, segment_start, segment_len);
                 segment[segment_len] = '\0';
@@ -679,12 +723,14 @@ static error_t *split_path_to_segments(
     }
 
     /* Handle final segment (after last slash or entire path if no slashes) */
-    size_t segment_len = (size_t)(p - segment_start);
+    size_t segment_len = (size_t) (p - segment_start);
     if (segment_len > 0) {
         char *segment = malloc(segment_len + 1);
         if (!segment) {
             string_array_free(segments);
-            return ERROR(ERR_MEMORY, "Failed to allocate final path segment");
+            return ERROR(
+                ERR_MEMORY, "Failed to allocate final path segment"
+            );
         }
         memcpy(segment, segment_start, segment_len);
         segment[segment_len] = '\0';
@@ -693,18 +739,25 @@ static error_t *split_path_to_segments(
         if (err) {
             free(segment);
             string_array_free(segments);
-            return error_wrap(err, "Failed to add final path segment");
+            return error_wrap(
+                err, "Failed to add final path segment"
+            );
         }
     } else {
         /* Path ended with slash - not a valid file path */
         string_array_free(segments);
-        return ERROR(ERR_INVALID_ARG,
-            "File path '%s' ends with '/' (directory, not file)", file_path);
+        return ERROR(
+            ERR_INVALID_ARG, "File path '%s' ends with '/' (directory, not file)",
+            file_path
+        );
     }
 
     if (string_array_size(segments) == 0) {
         string_array_free(segments);
-        return ERROR(ERR_INVALID_ARG, "File path contains no valid segments");
+        return ERROR(
+            ERR_INVALID_ARG,
+            "File path contains no valid segments"
+        );
     }
 
     *out_segments = segments;
@@ -796,9 +849,11 @@ static error_t *build_tree_for_path(
                 }
             } else {
                 /* Conflict: path component exists but is not a directory */
-                return ERROR(ERR_CONFLICT,
+                return ERROR(
+                    ERR_CONFLICT,
                     "Cannot create path: '%s' exists as a file, not a directory",
-                    segment);
+                    segment
+                );
             }
         }
         /* If entry is NULL, child_tree remains NULL (new directory) */
@@ -881,8 +936,8 @@ static bool file_matches_oid_and_mode(
     }
 
     bool matches = (git_tree_entry_type(entry) == GIT_OBJECT_BLOB &&
-                    git_oid_equal(git_tree_entry_id(entry), target_oid) &&
-                    git_tree_entry_filemode(entry) == target_mode);
+        git_oid_equal(git_tree_entry_id(entry), target_oid) &&
+        git_tree_entry_filemode(entry) == target_mode);
     git_tree_entry_free(entry);
     return matches;
 }
@@ -910,8 +965,10 @@ error_t *gitops_update_file(
 
     /* Validate file mode */
     if (file_mode != GIT_FILEMODE_BLOB && file_mode != GIT_FILEMODE_BLOB_EXECUTABLE) {
-        return ERROR(ERR_INVALID_ARG,
-            "Invalid file mode: must be GIT_FILEMODE_BLOB or GIT_FILEMODE_BLOB_EXECUTABLE");
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid file mode: "
+            "must be GIT_FILEMODE_BLOB or GIT_FILEMODE_BLOB_EXECUTABLE"
+        );
     }
 
     /* Compute blob OID without writing to ODB (avoids orphan objects on no-op) */
@@ -933,7 +990,9 @@ error_t *gitops_update_file(
     git_tree *current_tree = NULL;
     err = gitops_load_tree(repo, ref_name, &current_tree);
     if (err) {
-        return error_wrap(err, "Failed to load tree from branch '%s'", branch_name);
+        return error_wrap(
+            err, "Failed to load tree from branch '%s'", branch_name
+        );
     }
 
     /* Check for no-op: file exists with identical content AND mode.
@@ -970,15 +1029,18 @@ error_t *gitops_update_file(
 
     /* Build tree recursively */
     git_oid new_tree_oid;
-    err = build_tree_for_path(repo, current_tree, segments, 0,
-                              &blob_oid, file_mode, &new_tree_oid);
+    err = build_tree_for_path(
+        repo, current_tree, segments, 0, &blob_oid, file_mode, &new_tree_oid
+    );
 
     /* Cleanup: segments and current_tree no longer needed */
     string_array_free(segments);
     git_tree_free(current_tree);
 
     if (err) {
-        return error_wrap(err, "Failed to build tree for path '%s'", file_path);
+        return error_wrap(
+            err, "Failed to build tree for path '%s'", file_path
+        );
     }
 
     /* Load the new tree */
@@ -1081,17 +1143,20 @@ error_t *gitops_fetch_branch(
     }
 
     char refspec[DOTTA_REFSPEC_MAX];
-    error_t *err_build = gitops_build_refname(refspec, sizeof(refspec),
-        "refs/heads/%s:refs/remotes/%s/%s", branch_name, remote_name, branch_name
+    error_t *err_build = gitops_build_refname(
+        refspec, sizeof(refspec), "refs/heads/%s:refs/remotes/%s/%s",
+        branch_name, remote_name, branch_name
     );
     if (err_build) {
         git_remote_free(remote);
-        return error_wrap(err_build,
-            "Invalid branch/remote name '%s/%s'", remote_name, branch_name);
+        return error_wrap(
+            err_build, "Invalid branch/remote name '%s/%s'",
+            remote_name, branch_name
+        );
     }
 
     const char *refspecs[] = { refspec };
-    git_strarray refs = { (char **)refspecs, 1 };
+    git_strarray refs = { (char **) refspecs, 1 };
 
     err = git_remote_fetch(remote, &refs, &fetch_opts, NULL);
     git_remote_free(remote);
@@ -1143,11 +1208,15 @@ error_t *gitops_fetch_branches(
     error_t *err_result = NULL;
     for (size_t i = 0; i < branch_count; i++) {
         if (!branch_names[i]) {
-            err_result = ERROR(ERR_INVALID_ARG, "branch_names[%zu] is NULL", i);
+            err_result = ERROR(
+                ERR_INVALID_ARG, "branch_names[%zu] is NULL", i
+            );
             goto cleanup;
         }
         if (branch_names[i][0] == '\0') {
-            err_result = ERROR(ERR_INVALID_ARG, "branch_names[%zu] cannot be empty", i);
+            err_result = ERROR(
+                ERR_INVALID_ARG, "branch_names[%zu] cannot be empty", i
+            );
             goto cleanup;
         }
 
@@ -1164,8 +1233,10 @@ error_t *gitops_fetch_branches(
             branch_names[i], remote_name, branch_names[i]
         );
         if (err_build) {
-            err_result = error_wrap(err_build,
-                "Invalid branch/remote name '%s/%s'", remote_name, branch_names[i]);
+            err_result = error_wrap(
+                err_build, "Invalid branch/remote name '%s/%s'",
+                remote_name, branch_names[i]
+            );
             goto cleanup;
         }
     }
@@ -1246,8 +1317,9 @@ error_t *gitops_push_branch(
     }
 
     char refspec[DOTTA_REFSPEC_MAX];
-    error_t *err_build = gitops_build_refname(refspec, sizeof(refspec),
-        "refs/heads/%s:refs/heads/%s", branch_name, branch_name
+    error_t *err_build = gitops_build_refname(
+        refspec, sizeof(refspec), "refs/heads/%s:refs/heads/%s",
+        branch_name, branch_name
     );
     if (err_build) {
         git_remote_free(remote);
@@ -1255,7 +1327,7 @@ error_t *gitops_push_branch(
     }
 
     const char *refspecs[] = { refspec };
-    git_strarray refs = { (char **)refspecs, 1 };
+    git_strarray refs = { (char **) refspecs, 1 };
 
     err = git_remote_push(remote, &refs, &push_opts);
     git_remote_free(remote);
@@ -1308,15 +1380,16 @@ error_t *gitops_delete_remote_branch(
 
     /* Delete remote branch using empty refspec: :refs/heads/branch */
     char refspec[DOTTA_REFSPEC_MAX];
-    error_t *err_build = gitops_build_refname(refspec, sizeof(refspec),
-                                              ":refs/heads/%s", branch_name);
+    error_t *err_build = gitops_build_refname(
+        refspec, sizeof(refspec), ":refs/heads/%s", branch_name
+    );
     if (err_build) {
         git_remote_free(remote);
         return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
     }
 
     const char *refspecs[] = { refspec };
-    git_strarray refs = { (char **)refspecs, 1 };
+    git_strarray refs = { (char **) refspecs, 1 };
 
     err = git_remote_push(remote, &refs, &push_opts);
     git_remote_free(remote);
@@ -1447,8 +1520,9 @@ error_t *gitops_find_file_in_tree(
         normalized_path++;
     }
     if (*normalized_path == '\0') {
-        return ERROR(ERR_INVALID_ARG,
-            "Path cannot be empty or just slashes");
+        return ERROR(
+            ERR_INVALID_ARG, "Path cannot be empty or just slashes"
+        );
     }
 
     /* Lookup entry in tree */
@@ -1484,10 +1558,14 @@ error_t *gitops_resolve_commit_in_branch(
 
     /* Build reference name for branch */
     char ref_name[DOTTA_REFNAME_MAX];
-    error_t *err_build = gitops_build_refname(ref_name, sizeof(ref_name),
-                                              "refs/heads/%s", branch_name);
+    error_t *err_build = gitops_build_refname(
+        ref_name, sizeof(ref_name), "refs/heads/%s", branch_name
+    );
     if (err_build) {
-        return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
+        return error_wrap(
+            err_build, "Invalid branch name '%s'",
+            branch_name
+        );
     }
 
     /* Get the branch reference */
@@ -1512,7 +1590,10 @@ error_t *gitops_resolve_commit_in_branch(
         const git_oid *branch_oid = git_reference_target(branch_ref);
         if (!branch_oid) {
             git_reference_free(branch_ref);
-            return ERROR(ERR_GIT, "Branch '%s' has no target", branch_name);
+            return ERROR(
+                ERR_GIT, "Branch '%s' has no target",
+                branch_name
+            );
         }
         git_oid_cpy(out_oid, branch_oid);
         git_reference_free(branch_ref);
@@ -1525,7 +1606,7 @@ error_t *gitops_resolve_commit_in_branch(
         }
         return NULL;
     } else if (str_starts_with(commit_ref, "HEAD~") ||
-               str_starts_with(commit_ref, "HEAD^")) {
+        str_starts_with(commit_ref, "HEAD^")) {
         /* HEAD~N or HEAD^N - resolve relative to branch name.
          * Strip "HEAD" (4 chars) and prepend the branch name, giving e.g.
          * "mybranch~2" which git_revparse_single understands natively. */
@@ -1545,8 +1626,10 @@ error_t *gitops_resolve_commit_in_branch(
     free(allocated_ref);  /* NULL-safe */
 
     if (ret < 0) {
-        return ERROR(ERR_NOT_FOUND,
-            "Commit '%s' not found in branch '%s'", commit_ref, branch_name);
+        return ERROR(
+            ERR_NOT_FOUND, "Commit '%s' not found in branch '%s'",
+            commit_ref, branch_name
+        );
     }
 
     /* Get the commit OID */
@@ -1625,7 +1708,9 @@ error_t *gitops_find_merge_base(
     int err = git_merge_base(out_oid, repo, one, two);
     if (err < 0) {
         if (err == GIT_ENOTFOUND) {
-            return ERROR(ERR_NOT_FOUND, "No merge base found between commits");
+            return ERROR(
+                ERR_NOT_FOUND, "No merge base found between commits"
+            );
         }
         return error_from_git(err);
     }
@@ -1717,8 +1802,10 @@ error_t *gitops_create_merge_commit(
 
     /* Check for conflicts */
     if (git_index_has_conflicts(index)) {
-        return ERROR(ERR_CONFLICT,
-            "Cannot create merge commit: index has conflicts");
+        return ERROR(
+            ERR_CONFLICT,
+            "Cannot create merge commit: index has conflicts"
+        );
     }
 
     /* Write index to tree
@@ -1855,8 +1942,10 @@ error_t *gitops_rebase_inmemory_safe(
              * Both GIT_EMERGECONFLICT (-13) and GIT_EUNMERGED (-10) indicate conflicts
              */
             if (git_err == GIT_EMERGECONFLICT || git_err == GIT_EUNMERGED) {
-                return ERROR(ERR_CONFLICT, "Rebase resulted in conflicts. "
-                    "Resolve manually using 'git rebase' or try merge strategy instead.");
+                return ERROR(
+                    ERR_CONFLICT, "Rebase resulted in conflicts. "
+                    "Resolve manually using 'git rebase' or try merge strategy instead."
+                );
             }
 
             err = error_from_git(git_err);
@@ -1904,8 +1993,9 @@ error_t *gitops_update_branch_reference(
 
     /* Build reference name */
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(refname, sizeof(refname),
-                                        "refs/heads/%s", branch_name);
+    error_t *err = gitops_build_refname(
+        refname, sizeof(refname), "refs/heads/%s", branch_name
+    );
     if (err) {
         return error_wrap(err, "Invalid branch name '%s'", branch_name);
     }
@@ -1921,7 +2011,9 @@ error_t *gitops_update_branch_reference(
      * This is an atomic operation that updates the branch without touching HEAD
      */
     git_reference *new_ref = NULL;
-    git_err = git_reference_set_target(&new_ref, ref, new_oid, reflog_msg);
+    git_err = git_reference_set_target(
+        &new_ref, ref, new_oid, reflog_msg
+    );
     git_reference_free(ref);
 
     if (git_err < 0) {
@@ -1958,12 +2050,14 @@ error_t *gitops_sync_worktree(
              * SAFE checkout failed - likely due to local modifications.
              * Provide a clear, actionable error message.
              */
-            return ERROR(ERR_CONFLICT,
+            return ERROR(
+                ERR_CONFLICT,
                 "Working directory has local modifications that conflict with HEAD.\n"
                 "Your changes have been preserved. To resolve:\n"
                 "  git checkout .   Discard all local changes\n"
                 "  git stash        Save changes temporarily\n"
-                "  git diff         View what differs");
+                "  git diff         View what differs"
+            );
         }
         return error_from_git(err);
     }
@@ -1987,7 +2081,9 @@ error_t *gitops_diff_trees(
 
     /* Note: old_tree and new_tree can be NULL for added/deleted semantics */
 
-    int ret = git_diff_tree_to_tree(out_diff, repo, old_tree, new_tree, opts);
+    int ret = git_diff_tree_to_tree(
+        out_diff, repo, old_tree, new_tree, opts
+    );
     if (ret < 0) {
         return error_from_git(ret);
     }
@@ -2054,10 +2150,11 @@ error_t *gitops_build_refname(
         return ERROR(ERR_INTERNAL, "Failed to format reference name");
     }
 
-    if ((size_t)written >= buffer_size) {
-        return ERROR(ERR_INVALID_ARG,
-            "Reference name too long (truncated): needs %d bytes, buffer is %zu bytes",
-            written + 1, buffer_size);
+    if ((size_t) written >= buffer_size) {
+        return ERROR(
+            ERR_INVALID_ARG, "Reference name too long (truncated): "
+            "needs %d bytes, buffer is %zu bytes", written + 1, buffer_size
+        );
     }
 
     return NULL;

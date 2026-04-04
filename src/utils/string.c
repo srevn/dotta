@@ -238,3 +238,27 @@ bool str_looks_like_git_ref(const char *str) {
 
     return false;
 }
+
+bool str_looks_like_file_path(const char *str) {
+    if (!str || !*str) {
+        return false;
+    }
+
+    /* Absolute, tilde, or relative paths */
+    if (str[0] == '/' || str[0] == '~' || str[0] == '.') {
+        return true;
+    }
+
+    /* Storage path prefixes (home/, root/, custom/) */
+    if (str_starts_with(str, "home/") || str_starts_with(str, "root/") ||
+        str_starts_with(str, "custom/")) {
+        return true;
+    }
+
+    /* Glob pattern characters */
+    if (strpbrk(str, "*?[") != NULL) {
+        return true;
+    }
+
+    return false;
+}

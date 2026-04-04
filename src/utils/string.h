@@ -105,6 +105,24 @@ error_t *str_replace_owned(char **target, const char *new_value);
 bool str_looks_like_git_ref(const char *str);
 
 /**
+ * Check if string looks like a file path or glob pattern
+ *
+ * Recognizes:
+ * - Absolute paths: starts with '/'
+ * - Tilde paths: starts with '~'
+ * - Relative paths: starts with '.'
+ * - Storage paths: starts with "home/", "root/", "custom/"
+ * - Glob patterns: contains *, ?, [
+ *
+ * Counterpart to str_looks_like_git_ref(). Together they classify
+ * positional arguments without repo access.
+ *
+ * @param str String to check (can be NULL)
+ * @return true if str looks like a file path or pattern
+ */
+bool str_looks_like_file_path(const char *str);
+
+/**
  * RAII cleanup for strings
  */
 static inline void cleanup_string(char **str) {

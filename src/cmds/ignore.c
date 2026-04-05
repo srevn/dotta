@@ -21,55 +21,55 @@
 #include "utils/string.h"
 
 /**
- * Check if a pattern already exists in content
+ * Check if a pattern already exists in content (zero-allocation)
+ *
+ * Scans content line by line, trimming whitespace, then compares against the
+ * given pattern using length + memcmp.  All non-empty lines are compared.
+ * Pattern must already be normalized (no leading/trailing whitespace).
  */
 static bool pattern_exists(const char *content, const char *pattern) {
     if (!content || !pattern) {
         return false;
     }
 
-    /* Parse content line by line */
+    size_t pat_len = strlen(pattern);
+    if (pat_len == 0) {
+        return false;
+    }
+
     const char *line_start = content;
-    const char *line_end;
 
     while (*line_start) {
         /* Find end of line */
-        line_end = strchr(line_start, '\n');
+        const char *line_end = strchr(line_start, '\n');
         if (!line_end) {
             line_end = line_start + strlen(line_start);
         }
 
-        /* Extract line */
-        size_t line_len = (size_t) (line_end - line_start);
-        char *line = malloc(line_len + 1);
-        if (!line) {
-            return false;
-        }
-        memcpy(line, line_start, line_len);
-        line[line_len] = '\0';
+        /* Trim leading whitespace (no allocation) */
+        const char *trim_start = line_start;
+        size_t trim_len = (size_t) (line_end - line_start);
 
-        /* Trim whitespace */
-        char *trimmed = line;
-        while (*trimmed && (*trimmed == ' ' ||
-            *trimmed == '\t')) {
-            trimmed++;
+        while (trim_len > 0 && (*trim_start == ' ' || *trim_start == '\t')) {
+            trim_start++;
+            trim_len--;
         }
 
-        char *end = trimmed + strlen(trimmed) - 1;
-        while (end > trimmed && (*end == ' ' ||
-            *end == '\t' || *end == '\r')) {
-            *end = '\0';
-            end--;
+        /* Trim trailing whitespace */
+        while (trim_len > 0) {
+            char c = trim_start[trim_len - 1];
+            if (c == ' ' || c == '\t' || c == '\r') {
+                trim_len--;
+            } else {
+                break;
+            }
         }
 
-        /* Compare with pattern (skip comments) */
-        if (*trimmed != '#' && *trimmed != '\0' &&
-            strcmp(trimmed, pattern) == 0) {
-            free(line);
+        /* Compare with pattern (skip empty lines) */
+        if (trim_len > 0 && trim_len == pat_len &&
+            memcmp(trim_start, pattern, pat_len) == 0) {
             return true;
         }
-
-        free(line);
 
         /* Move to next line */
         if (*line_end == '\n') {
@@ -126,30 +126,15 @@ static const char *normalize_pattern(
 }
 
 /**
- * Check if a normalized pattern duplicates an earlier entry in the batch
- */
-static bool is_batch_duplicate(
-    char **patterns,
-    size_t current_index,
-    const char *normalized
-) {
-    char buf[4096];
-    for (size_t j = 0; j < current_index; j++) {
-        const char *prev =
-            normalize_pattern(patterns[j], buf, sizeof(buf), NULL);
-
-        if (prev && strcmp(prev, normalized) == 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/**
  * Add patterns to .dottaignore content
  *
  * Returns new content with patterns appended.
  * Skips patterns that already exist or are duplicates within the batch.
+ *
+ * Uses upper-bound allocation with a single pass. Deduplication against both
+ * existing content and earlier batch entries is handled by checking
+ * pattern_exists() against the accumulated result buffer, which grows as
+ * patterns are appended.
  */
 static error_t *add_patterns_to_content(
     const char *existing_content,
@@ -171,57 +156,42 @@ static error_t *add_patterns_to_content(
 
     /* Calculate required buffer size */
     size_t existing_len = existing_content ? strlen(existing_content) : 0;
-    size_t required_size = existing_len;
 
-    /* Account for newline separator if existing content doesn't end with one */
-    bool needs_separator =
-        (existing_len > 0 && existing_content[existing_len - 1] != '\n');
-
-    if (needs_separator) {
-        required_size += 1;
-    }
-
+    /* Upper-bound allocation: normalization only trims, so raw lengths suffice */
+    size_t max_size = existing_len + 1;  /* +1 for possible separator */
     for (size_t i = 0; i < pattern_count; i++) {
-        char buf[4096];
-        size_t plen;
-        const char *p = normalize_pattern(
-            patterns[i], buf, sizeof(buf), &plen
-        );
-        if (!p) continue;
-
-        /* Skip if already exists in content or earlier in this batch */
-        if (existing_content &&
-            pattern_exists(existing_content, p)) {
-            continue;
+        if (patterns[i]) {
+            max_size += strlen(patterns[i]) + 1;  /* pattern + newline */
         }
-        if (is_batch_duplicate(patterns, i, p)) {
-            continue;
-        }
-
-        required_size += plen + 1;  /* pattern + newline */
     }
 
-    /* Allocate buffer */
-    char *result = malloc(required_size + 1);  /* +1 for null terminator */
+    char *result = malloc(max_size + 1);  /* +1 for null terminator */
     if (!result) {
         return ERROR(
             ERR_MEMORY, "Failed to allocate content buffer"
         );
     }
 
-    /* Build content using tracked position (avoids O(n²) strcat) */
+    /* Seed result with existing content */
     char *pos = result;
 
     if (existing_content && existing_len > 0) {
         memcpy(pos, existing_content, existing_len);
         pos += existing_len;
 
-        if (needs_separator) {
+        if (existing_content[existing_len - 1] != '\n') {
             *pos++ = '\n';
         }
     }
+    *pos = '\0';
 
-    /* Append new patterns */
+    /*
+     * Single pass: normalize, deduplicate, append.
+     *
+     * Checking pattern_exists() against the accumulated result buffer
+     * handles both existing-content dedup and batch dedup in one call:
+     * previously appended patterns are already in the buffer.
+     */
     for (size_t i = 0; i < pattern_count; i++) {
         char buf[4096];
         size_t plen;
@@ -230,22 +200,17 @@ static error_t *add_patterns_to_content(
         );
         if (!p) continue;
 
-        /* Skip if already exists in content or earlier in this batch */
-        if (existing_content &&
-            pattern_exists(existing_content, p)) {
-            continue;
-        }
-        if (is_batch_duplicate(patterns, i, p)) {
+        if (pattern_exists(result, p)) {
             continue;
         }
 
         memcpy(pos, p, plen);
         pos += plen;
         *pos++ = '\n';
+        *pos = '\0';  /* Keep result valid for next pattern_exists call */
         (*added_count)++;
     }
 
-    *pos = '\0';
     *new_content = result;
     return NULL;
 }

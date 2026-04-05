@@ -161,16 +161,14 @@ static error_t *show_file_diff_from_workspace(
         return NULL;
     }
 
-    /* Show file header with colors */
+    /* Show file header */
     output_styled(
-        out, OUTPUT_NORMAL, "{bold}diff --dotta a/%s b/%s{reset}\n",
-        entry->storage_path, entry->storage_path
-    );
-
-    /* Show profile */
-    output_styled(
-        out, OUTPUT_NORMAL, "profile: {cyan}%s{reset}\n",
+        out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
         entry->source_profile->name
+    );
+    output_styled(
+        out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n",
+        entry->storage_path
     );
 
     /* Get status message from workspace item (no re-analysis needed) */
@@ -188,7 +186,7 @@ static error_t *show_file_diff_from_workspace(
     }
 
     /* Show status */
-    output_print(out, OUTPUT_NORMAL, "status: ");
+    output_styled(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  ");
     output_colored(out, OUTPUT_NORMAL, status_color, "%s\n", status_msg);
 
     /* For missing files or type changes, no content diff to show */
@@ -252,6 +250,7 @@ static error_t *show_file_diff_from_workspace(
     }
 
     if (diff) {
+        output_styled(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
         output_print_diff(out, diff->diff_text);
     }
 
@@ -355,6 +354,11 @@ static error_t *present_diffs_for_direction(
         }
 
         const file_entry_t *entry = &manifest->entries[idx];
+
+        /* Blank line between entries for readability */
+        if (*diff_count > 0 && !opts->name_only) {
+            output_newline(out);
+        }
 
         /* Show the diff (content already analyzed by workspace) */
         err = show_file_diff_from_workspace(
@@ -760,15 +764,19 @@ static error_t *compare_manifest_to_filesystem(
             continue;
         }
 
+        /* Blank line between entries for readability */
+        if (*diff_count > 0) {
+            output_newline(out);
+        }
+
         /* Show file header */
         output_styled(
-            out, OUTPUT_NORMAL, "{bold}diff --dotta a/%s b/%s{reset}\n",
-            storage_path, storage_path
-        );
-
-        output_styled(
-            out, OUTPUT_NORMAL, "profile: {cyan}%s{reset}\n",
+            out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
             profile_name
+        );
+        output_styled(
+            out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n",
+            storage_path
         );
 
         /* Show status message */
@@ -793,7 +801,7 @@ static error_t *compare_manifest_to_filesystem(
                 break;
         }
 
-        output_print(out, OUTPUT_NORMAL, "status: ");
+        output_styled(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  ");
         output_colored(out, OUTPUT_NORMAL, status_color, "%s\n", status_msg);
 
         /* For missing files or type changes, no content diff */
@@ -812,6 +820,7 @@ static error_t *compare_manifest_to_filesystem(
         }
 
         if (diff) {
+            output_styled(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
             output_print_diff(out, diff->diff_text);
         }
 

@@ -183,7 +183,6 @@ static error_t *check_file_in_tree(
      * Only set tree_loaded on success — failures allow retries. */
     if (!cached->tree_loaded) {
         /* Resolve branch HEAD to tree */
-        git_reference *ref = NULL;
         char refname[DOTTA_REFNAME_MAX];
         error_t *err = gitops_build_refname(
             refname, sizeof(refname), "refs/heads/%s", profile_name
@@ -192,39 +191,10 @@ static error_t *check_file_in_tree(
             return err;
         }
 
-        err = gitops_lookup_reference(repo, refname, &ref);
+        git_tree *tree = NULL;
+        err = gitops_load_tree(repo, refname, &tree);
         if (err) {
             return err;
-        }
-
-        const git_oid *target = git_reference_target(ref);
-        if (!target) {
-            git_reference_free(ref);
-            return ERROR(
-                ERR_GIT, "Symbolic reference for profile '%s'", profile_name
-            );
-        }
-
-        git_commit *commit = NULL;
-        int git_err = git_commit_lookup(&commit, repo, target);
-        git_reference_free(ref);
-
-        if (git_err != 0) {
-            return ERROR(
-                ERR_GIT, "Failed to load commit for profile '%s': %s",
-                profile_name, git_error_last() ? git_error_last()->message : "unknown"
-            );
-        }
-
-        git_tree *tree = NULL;
-        git_err = git_commit_tree(&tree, commit);
-        git_commit_free(commit);
-
-        if (git_err != 0) {
-            return ERROR(
-                ERR_GIT, "Failed to load tree for profile '%s': %s",
-                profile_name, git_error_last() ? git_error_last()->message : "unknown"
-            );
         }
 
         cached->tree = tree;          /* Transfer ownership to cache */

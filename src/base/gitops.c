@@ -21,7 +21,6 @@
 /**
  * Repository operations
  */
-
 error_t *gitops_open_repository(git_repository **out, const char *path) {
     CHECK_NULL(out);
     CHECK_NULL(path);
@@ -79,7 +78,6 @@ error_t *gitops_discover_and_open(git_repository **out, const char *start_path) 
 /**
  * Branch/Reference operations
  */
-
 error_t *gitops_branch_exists(
     git_repository *repo,
     const char *name,
@@ -96,7 +94,9 @@ error_t *gitops_branch_exists(
         refname, sizeof(refname), "refs/heads/%s", name
     );
     if (err_build) {
-        return error_wrap(err_build, "Invalid branch name '%s'", name);
+        return error_wrap(
+            err_build, "Invalid branch name '%s'", name
+        );
     }
 
     int err = git_reference_lookup(&ref, repo, refname);
@@ -110,6 +110,7 @@ error_t *gitops_branch_exists(
     }
 
     git_reference_free(ref);
+
     *exists = true;
     return NULL;
 }
@@ -213,7 +214,9 @@ error_t *gitops_list_branches(
     git_branch_iterator *iter = NULL;
     int err = git_branch_iterator_new(&iter, repo, GIT_BRANCH_LOCAL);
     if (err < 0) {
-        return error_wrap(error_from_git(err), "Failed to create branch iterator");
+        return error_wrap(
+            error_from_git(err), "Failed to create branch iterator"
+        );
     }
 
     string_array_t *branches = string_array_create();
@@ -232,7 +235,9 @@ error_t *gitops_list_branches(
             git_reference_free(ref);
             git_branch_iterator_free(iter);
             string_array_free(branches);
-            return error_wrap(error_from_git(err), "Failed to get branch name");
+            return error_wrap(
+                error_from_git(err), "Failed to get branch name"
+            );
         }
 
         error_t *derr = string_array_push(branches, name);
@@ -245,6 +250,7 @@ error_t *gitops_list_branches(
     }
 
     git_branch_iterator_free(iter);
+
     *out = branches;
     return NULL;
 }
@@ -318,6 +324,7 @@ error_t *gitops_list_remote_branches(
     }
 
     git_branch_iterator_free(iter);
+
     *out = branches;
     return NULL;
 }
@@ -450,13 +457,13 @@ error_t *gitops_is_current_branch(
     *is_current = (strcmp(current_name, branch_name) == 0);
 
     git_reference_free(head);
+
     return NULL;
 }
 
 /**
  * Tree operations
  */
-
 error_t *gitops_load_tree(
     git_repository *repo,
     const char *ref_name,
@@ -483,8 +490,8 @@ error_t *gitops_load_tree(
     git_reference_free(ref);
     if (err < 0) {
         return error_wrap(
-            error_from_git(err),
-            "Failed to peel reference '%s'", ref_name
+            error_from_git(err), "Failed to peel reference '%s'",
+            ref_name
         );
     }
 
@@ -538,7 +545,6 @@ error_t *gitops_tree_walk(
 /**
  * Commit operations
  */
-
 error_t *gitops_create_commit(
     git_repository *repo,
     const char *branch_name,
@@ -679,6 +685,16 @@ static error_t *split_path_to_segments(
         );
     }
 
+    /* Reject trailing slashes (directory path, not a file path) */
+    size_t normalized_len = strlen(p);
+    if (p[normalized_len - 1] == '/') {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "File path '%s' ends with '/' (directory, not file)",
+            file_path
+        );
+    }
+
     string_array_t *segments = string_array_create();
     if (!segments) {
         return ERROR(
@@ -687,76 +703,56 @@ static error_t *split_path_to_segments(
         );
     }
 
-    /* Parse segments */
-    const char *segment_start = p;
+    /* Parse segments using strchr to find delimiters.
+     * Loop invariant: p points to the start of a non-empty segment
+     * (guaranteed by leading/trailing slash rejection and slash-skipping). */
     while (*p != '\0') {
-        if (*p == '/') {
-            /* End of segment */
-            size_t segment_len = (size_t) (p - segment_start);
-            if (segment_len > 0) {
-                /* Non-empty segment - add it */
-                char *segment = malloc(segment_len + 1);
-                if (!segment) {
-                    string_array_free(segments);
-                    return ERROR(
-                        ERR_MEMORY, "Failed to allocate path segment"
-                    );
-                }
-                memcpy(segment, segment_start, segment_len);
-                segment[segment_len] = '\0';
+        const char *end = strchr(p, '/');
+        size_t seg_len = end ? (size_t) (end - p) : strlen(p);
 
-                error_t *err = string_array_push_take(segments, segment);
-                if (err) {
-                    free(segment);
-                    string_array_free(segments);
-                    return error_wrap(err, "Failed to add path segment");
-                }
-            }
-            /* Skip consecutive slashes */
-            while (*p == '/') {
-                p++;
-            }
-            segment_start = p;
-        } else {
-            p++;
-        }
-    }
-
-    /* Handle final segment (after last slash or entire path if no slashes) */
-    size_t segment_len = (size_t) (p - segment_start);
-    if (segment_len > 0) {
-        char *segment = malloc(segment_len + 1);
-        if (!segment) {
+        /* Reject . and .. components (invalid in Git trees) */
+        if ((seg_len == 1 && p[0] == '.') ||
+            (seg_len == 2 && p[0] == '.' && p[1] == '.')) {
             string_array_free(segments);
             return ERROR(
-                ERR_MEMORY, "Failed to allocate final path segment"
+                ERR_INVALID_ARG,
+                "File path '%s' contains invalid component '%.*s'",
+                file_path, (int) seg_len, p
             );
         }
-        memcpy(segment, segment_start, segment_len);
-        segment[segment_len] = '\0';
+
+        char *segment = strndup(p, seg_len);
+        if (!segment) {
+            string_array_free(segments);
+            return ERROR(ERR_MEMORY, "Failed to allocate path segment");
+        }
 
         error_t *err = string_array_push_take(segments, segment);
         if (err) {
             free(segment);
             string_array_free(segments);
-            return error_wrap(
-                err, "Failed to add final path segment"
-            );
+            return error_wrap(err, "Failed to add path segment");
         }
-    } else {
-        /* Path ended with slash - not a valid file path */
-        string_array_free(segments);
-        return ERROR(
-            ERR_INVALID_ARG, "File path '%s' ends with '/' (directory, not file)",
-            file_path
-        );
+
+        /* Advance past segment; skip consecutive slashes */
+        if (!end) {
+            break;
+        }
+        p = end + 1;
+        while (*p == '/') {
+            p++;
+        }
     }
 
-    if (string_array_size(segments) == 0) {
+    /* Guard against pathologically deep paths that would cause stack
+     * overflow in recursive tree construction. Real-world dotfile paths
+     * rarely exceed ~10 levels; 64 is extremely generous. */
+    if (string_array_size(segments) > 64) {
         string_array_free(segments);
         return ERROR(
             ERR_INVALID_ARG,
-            "File path contains no valid segments"
+            "File path '%s' has too many components (%zu, max 64)",
+            file_path, string_array_size(segments)
         );
     }
 
@@ -938,7 +934,9 @@ static bool file_matches_oid_and_mode(
     bool matches = (git_tree_entry_type(entry) == GIT_OBJECT_BLOB &&
         git_oid_equal(git_tree_entry_id(entry), target_oid) &&
         git_tree_entry_filemode(entry) == target_mode);
+
     git_tree_entry_free(entry);
+
     return matches;
 }
 
@@ -1039,7 +1037,8 @@ error_t *gitops_update_file(
 
     if (err) {
         return error_wrap(
-            err, "Failed to build tree for path '%s'", file_path
+            err, "Failed to build tree for path '%s'",
+            file_path
         );
     }
 
@@ -1070,7 +1069,6 @@ error_t *gitops_update_file(
 /**
  * Remote operations
  */
-
 error_t *gitops_clone(
     git_repository **out,
     const char *url,
@@ -1323,7 +1321,9 @@ error_t *gitops_push_branch(
     );
     if (err_build) {
         git_remote_free(remote);
-        return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
+        return error_wrap(
+            err_build, "Invalid branch name '%s'", branch_name
+        );
     }
 
     const char *refspecs[] = { refspec };
@@ -1385,7 +1385,9 @@ error_t *gitops_delete_remote_branch(
     );
     if (err_build) {
         git_remote_free(remote);
-        return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
+        return error_wrap(
+            err_build, "Invalid branch name '%s'", branch_name
+        );
     }
 
     const char *refspecs[] = { refspec };
@@ -1410,10 +1412,44 @@ error_t *gitops_delete_remote_branch(
     return NULL;
 }
 
+error_t *gitops_get_remote_url(
+    git_repository *repo,
+    const char *remote_name,
+    char **out_url
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(remote_name);
+    CHECK_NULL(out_url);
+    CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
+
+    git_remote *remote = NULL;
+    int err = git_remote_lookup(&remote, repo, remote_name);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    const char *url = git_remote_url(remote);
+    if (!url) {
+        git_remote_free(remote);
+        return ERROR(
+            ERR_NOT_FOUND, "Remote '%s' has no URL configured",
+            remote_name
+        );
+    }
+
+    *out_url = strdup(url);
+    git_remote_free(remote);
+
+    if (!*out_url) {
+        return ERROR(ERR_MEMORY, "Failed to duplicate remote URL");
+    }
+
+    return NULL;
+}
+
 /**
  * Reference operations
  */
-
 error_t *gitops_create_reference(
     git_repository *repo,
     const char *name,
@@ -1451,10 +1487,35 @@ error_t *gitops_lookup_reference(
     return NULL;
 }
 
+error_t *gitops_resolve_reference_oid(
+    git_repository *repo,
+    const char *ref_name,
+    git_oid *out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(ref_name);
+    CHECK_NULL(out);
+
+    int err = git_reference_name_to_id(out, repo, ref_name);
+    if (err < 0) {
+        if (err == GIT_ENOTFOUND) {
+            return ERROR(
+                ERR_NOT_FOUND, "Reference '%s' not found",
+                ref_name
+            );
+        }
+        return error_wrap(
+            error_from_git(err),
+            "Failed to resolve reference '%s'", ref_name
+        );
+    }
+
+    return NULL;
+}
+
 /**
  * Index operations
  */
-
 error_t *gitops_get_index(git_repository *repo, git_index **out) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
@@ -1536,6 +1597,47 @@ error_t *gitops_find_file_in_tree(
     }
 
     *out = temp_entry;
+    return NULL;
+}
+
+/**
+ * Read blob content by OID
+ */
+error_t *gitops_read_blob_content(
+    git_repository *repo,
+    const git_oid *oid,
+    void **out_content,
+    size_t *out_size
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(oid);
+    CHECK_NULL(out_content);
+    CHECK_NULL(out_size);
+
+    git_blob *blob = NULL;
+    int git_err = git_blob_lookup(&blob, repo, oid);
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    const void *raw = git_blob_rawcontent(blob);
+    size_t size = (size_t) git_blob_rawsize(blob);
+
+    void *content = malloc(size + 1);
+    if (!content) {
+        git_blob_free(blob);
+        return ERROR(ERR_MEMORY, "Failed to allocate blob content buffer");
+    }
+
+    if (size > 0) {
+        memcpy(content, raw, size);
+    }
+    ((char *) content)[size] = '\0';
+
+    git_blob_free(blob);
+
+    *out_content = content;
+    *out_size = size;
     return NULL;
 }
 
@@ -1657,10 +1759,6 @@ error_t *gitops_resolve_commit_in_branch(
 
     return NULL;
 }
-
-/**
- * Advanced merge/rebase operations (HEAD-safe)
- */
 
 /**
  * Get tree from commit OID
@@ -1997,7 +2095,9 @@ error_t *gitops_update_branch_reference(
         refname, sizeof(refname), "refs/heads/%s", branch_name
     );
     if (err) {
-        return error_wrap(err, "Invalid branch name '%s'", branch_name);
+        return error_wrap(
+            err, "Invalid branch name '%s'", branch_name
+        );
     }
 
     /* Lookup existing reference */
@@ -2027,7 +2127,6 @@ error_t *gitops_update_branch_reference(
 /**
  * Worktree operations
  */
-
 error_t *gitops_sync_worktree(
     git_repository *repo,
     git_checkout_strategy_t strategy
@@ -2068,7 +2167,6 @@ error_t *gitops_sync_worktree(
 /**
  * Diff operations
  */
-
 error_t *gitops_diff_trees(
     git_repository *repo,
     git_tree *old_tree,
@@ -2155,6 +2253,21 @@ error_t *gitops_build_refname(
             ERR_INVALID_ARG, "Reference name too long (truncated): "
             "needs %d bytes, buffer is %zu bytes", written + 1, buffer_size
         );
+    }
+
+    /* Validate reference name against Git naming rules */
+    if (!strchr(buffer, ':')) {
+        int valid = 0;
+        int ret = git_reference_name_is_valid(&valid, buffer);
+        if (ret < 0) {
+            return ERROR(ERR_INTERNAL, "Failed to validate reference name");
+        }
+        if (!valid) {
+            return ERROR(
+                ERR_INVALID_ARG, "Invalid Git reference name: '%s'",
+                buffer
+            );
+        }
     }
 
     return NULL;

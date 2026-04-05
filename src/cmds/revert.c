@@ -539,7 +539,7 @@ static error_t *load_metadata_from_commit(
     error_t *err = NULL;
     git_tree *tree = NULL;
     git_tree_entry *entry = NULL;
-    git_blob *blob = NULL;
+    char *json_str = NULL;
 
     /* Get commit's tree */
     int ret = git_commit_tree(&tree, commit);
@@ -559,29 +559,22 @@ static error_t *load_metadata_from_commit(
         goto cleanup;
     }
 
-    /* Load and parse metadata blob */
-    const git_oid *blob_oid = git_tree_entry_id(entry);
-    ret = git_blob_lookup(&blob, repo, blob_oid);
-    if (ret < 0) {
-        err = error_from_git(ret);
-        goto cleanup;
-    }
-
-    const char *json_content = (const char *) git_blob_rawcontent(blob);
-    if (!json_content) {
-        err = ERROR(ERR_INVALID_ARG, "Metadata blob has no content");
-        goto cleanup;
-    }
+    /* Read blob content (null-terminated for JSON parsing) */
+    size_t size = 0;
+    err = gitops_read_blob_content(
+        repo, git_tree_entry_id(entry), (void **) &json_str, &size
+    );
+    if (err) goto cleanup;
 
     /* Parse JSON content */
-    err = metadata_from_json(json_content, out);
+    err = metadata_from_json(json_str, out);
     if (err) {
         err = error_wrap(err, "Failed to parse metadata from commit");
         goto cleanup;
     }
 
 cleanup:
-    if (blob) git_blob_free(blob);
+    if (json_str) free(json_str);
     if (entry) git_tree_entry_free(entry);
     if (tree) git_tree_free(tree);
 
@@ -622,14 +615,12 @@ static error_t *revert_file_in_branch(
     git_tree_entry *target_entry = NULL;
     metadata_t *target_metadata = NULL;
     metadata_item_t *meta_to_restore = NULL;
-    git_reference *branch_ref = NULL;
     git_commit *head_commit = NULL;
     git_tree *head_tree = NULL;
     metadata_t *current_metadata = NULL;
     buffer_t *metadata_json_buf = NULL;
     git_index *index = NULL;
     git_tree *new_tree = NULL;
-    git_signature *sig = NULL;
     char *msg = NULL;
     git_oid target_blob_oid_copy;
     git_filemode_t target_mode = 0;
@@ -755,19 +746,13 @@ static error_t *revert_file_in_branch(
         goto cleanup;
     }
 
-    ret = git_reference_lookup(&branch_ref, repo, ref_name);
-    if (ret < 0) {
-        err = error_from_git(ret);
+    git_oid head_oid;
+    err = gitops_resolve_reference_oid(repo, ref_name, &head_oid);
+    if (err) {
         goto cleanup;
     }
 
-    const git_oid *head_oid = git_reference_target(branch_ref);
-    if (!head_oid) {
-        err = ERROR(ERR_GIT, "Branch '%s' has no target", profile_name);
-        goto cleanup;
-    }
-
-    ret = git_commit_lookup(&head_commit, repo, head_oid);
+    ret = git_commit_lookup(&head_commit, repo, &head_oid);
     if (ret < 0) {
         err = error_from_git(ret);
         goto cleanup;
@@ -889,42 +874,17 @@ static error_t *revert_file_in_branch(
         goto cleanup;
     }
 
-    /* Get signature */
-    ret = git_signature_default(&sig, repo);
-    if (ret < 0) {
-        err = error_from_git(ret);
-        goto cleanup;
-    }
-
     /* Build commit message */
     msg = build_revert_commit_message(
-        config, profile_name, file_path, target_commit_oid,
-        commit_message
+        config, profile_name, file_path, target_commit_oid, commit_message
     );
     if (!msg) {
         err = ERROR(ERR_MEMORY, "Failed to allocate commit message");
         goto cleanup;
     }
 
-    /* Create commit */
-    git_oid new_commit_oid;
-    const git_commit *parents[] = { head_commit };
-    ret = git_commit_create(
-        &new_commit_oid,
-        repo,
-        git_reference_name(branch_ref), /* Update the branch */
-        sig,        /* author */
-        sig,        /* committer */
-        NULL,       /* encoding (NULL = UTF-8) */
-        msg,        /* message */
-        new_tree,
-        1,          /* parent count */
-        parents
-    );
-
-    if (ret < 0) {
-        err = error_from_git(ret);
-    }
+    /* Create commit (handles signature and parent lookup internally) */
+    err = gitops_create_commit(repo, profile_name, new_tree, msg, NULL);
 
 cleanup:
     if (target_commit) git_commit_free(target_commit);
@@ -932,14 +892,12 @@ cleanup:
     if (target_entry) git_tree_entry_free(target_entry);
     if (target_metadata) metadata_free(target_metadata);
     if (meta_to_restore) metadata_item_free(meta_to_restore);
-    if (branch_ref) git_reference_free(branch_ref);
     if (head_commit) git_commit_free(head_commit);
     if (head_tree) git_tree_free(head_tree);
     if (current_metadata) metadata_free(current_metadata);
     if (metadata_json_buf) buffer_free(metadata_json_buf);
     if (index) git_index_free(index);
     if (new_tree) git_tree_free(new_tree);
-    if (sig) git_signature_free(sig);
     if (msg) free(msg);
 
     return err;

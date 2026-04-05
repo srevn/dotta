@@ -27,7 +27,7 @@ error_t *divergence_context_init(
     CHECK_NULL(remote_name);
     CHECK_NULL(branch_name);
 
-    /* Build branch reference name */
+    /* Get current branch OID for rollback */
     char refname[DOTTA_REFNAME_MAX];
     error_t *err = gitops_build_refname(
         refname, sizeof(refname), "refs/heads/%s", branch_name
@@ -39,19 +39,10 @@ error_t *divergence_context_init(
     }
 
     /* Get current branch OID for rollback */
-    git_reference *ref = NULL;
-    int git_err = git_reference_lookup(&ref, repo, refname);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    const git_oid *oid = git_reference_target(ref);
-    if (!oid) {
-        git_reference_free(ref);
-        return ERROR(
-            ERR_GIT, "Branch '%s' has no target OID",
-            branch_name
-        );
+    git_oid saved_oid;
+    err = gitops_resolve_reference_oid(repo, refname, &saved_oid);
+    if (err) {
+        return err;
     }
 
     /* Initialize context */
@@ -59,9 +50,8 @@ error_t *divergence_context_init(
     ctx->remote_name = remote_name;
     ctx->branch_name = branch_name;
     ctx->strategy = strategy;
-    git_oid_cpy(&ctx->saved_oid, oid);
+    git_oid_cpy(&ctx->saved_oid, &saved_oid);
 
-    git_reference_free(ref);
     return NULL;
 }
 
@@ -89,9 +79,9 @@ static error_t *resolve_rebase_inmemory(
 
     /* Get remote commit OID */
     git_oid remote_oid;
-    int git_err = git_reference_name_to_id(&remote_oid, ctx->repo, remote_refname);
-    if (git_err < 0) {
-        return error_from_git(git_err);
+    err = gitops_resolve_reference_oid(ctx->repo, remote_refname, &remote_oid);
+    if (err) {
+        return err;
     }
 
     /* Perform in-memory rebase (never touches HEAD) */
@@ -155,11 +145,9 @@ static error_t *resolve_merge_trees(
 
     /* Get remote commit OID */
     git_oid remote_oid;
-    int git_err = git_reference_name_to_id(
-        &remote_oid, ctx->repo, remote_refname
-    );
-    if (git_err < 0) {
-        return error_from_git(git_err);
+    err = gitops_resolve_reference_oid(ctx->repo, remote_refname, &remote_oid);
+    if (err) {
+        return err;
     }
 
     /* Find merge base */
@@ -206,7 +194,7 @@ static error_t *resolve_merge_trees(
     git_commit *remote_commit = NULL;
     git_oid merge_commit_oid;
 
-    git_err = git_commit_lookup(&local_commit, ctx->repo, &ctx->saved_oid);
+    int git_err = git_commit_lookup(&local_commit, ctx->repo, &ctx->saved_oid);
     if (git_err < 0) {
         git_index_free(merged_index);
         return error_from_git(git_err);
@@ -306,9 +294,9 @@ static error_t *resolve_theirs(divergence_context_t *ctx, git_oid *out_oid) {
 
     /* Get remote commit OID */
     git_oid remote_oid;
-    int git_err = git_reference_name_to_id(&remote_oid, ctx->repo, remote_refname);
-    if (git_err < 0) {
-        return error_from_git(git_err);
+    err = gitops_resolve_reference_oid(ctx->repo, remote_refname, &remote_oid);
+    if (err) {
+        return err;
     }
 
     /* Update local branch to point to remote commit */
@@ -379,38 +367,12 @@ error_t *divergence_rollback(divergence_context_t *ctx) {
     CHECK_NULL(ctx->repo);
     CHECK_NULL(ctx->branch_name);
 
-    /* Build branch reference name */
-    char refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(
-        refname, sizeof(refname), "refs/heads/%s", ctx->branch_name
+    return gitops_update_branch_reference(
+        ctx->repo,
+        ctx->branch_name,
+        &ctx->saved_oid,
+        "sync: Rollback after failure"
     );
-    if (err) {
-        return error_wrap(
-            err, "Invalid branch name '%s'",
-            ctx->branch_name
-        );
-    }
-
-    /* Lookup branch reference */
-    git_reference *ref = NULL;
-    int git_err = git_reference_lookup(&ref, ctx->repo, refname);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    /* Reset branch to saved OID */
-    git_reference *new_ref = NULL;
-    git_err = git_reference_set_target(
-        &new_ref, ref, &ctx->saved_oid, "sync: Rollback after failure"
-    );
-    git_reference_free(ref);
-
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    git_reference_free(new_ref);
-    return NULL;
 }
 
 /**

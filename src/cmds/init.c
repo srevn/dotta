@@ -54,6 +54,7 @@ static error_t *init_repository(const char *path, git_repository **out, bool *is
 
     *out = repo;
     *is_new = true;
+
     return NULL;
 }
 
@@ -69,6 +70,7 @@ static error_t *is_initialized(git_repository *repo, bool *out) {
     if (err) {
         return error_wrap(err, "Failed to check initialization status");
     }
+
     return NULL;
 }
 
@@ -269,5 +271,6 @@ cleanup:
     if (resolved_path) free(resolved_path);
     if (out) output_free(out);
     if (config) config_free(config);
+
     return err;
 }

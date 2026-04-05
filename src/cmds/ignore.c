@@ -442,24 +442,24 @@ static error_t *edit_baseline_dottaignore(
     const git_tree_entry *entry = git_tree_entry_byname(tree, ".dottaignore");
     if (entry) {
         /* Load existing content */
-        const git_oid *oid = git_tree_entry_id(entry);
-        git_blob *blob = NULL;
-        int git_err = git_blob_lookup(&blob, repo, oid);
-
-        if (git_err >= 0) {
-            const void *content = git_blob_rawcontent(blob);
-            size_t size = git_blob_rawsize(blob);
+        void *content = NULL;
+        size_t size = 0;
+        error_t *blob_err = gitops_read_blob_content(
+            repo, git_tree_entry_id(entry), &content, &size
+        );
+        if (!blob_err) {
             ssize_t written = write(fd, content, size);
             if (written < 0 || (size_t) written != size) {
-                git_blob_free(blob);
+                free(content);
                 git_tree_free(tree);
                 close(fd);
                 unlink(tmpfile);
                 free(tmpfile);
                 return ERROR(ERR_FS, "Failed to write to temporary file");
             }
-            git_blob_free(blob);
         }
+        free(content);
+        error_free(blob_err);
     } else {
         /* No existing .dottaignore, create with defaults */
         const char *default_content = ignore_default_dottaignore_content();
@@ -639,24 +639,24 @@ static error_t *edit_profile_dottaignore(
     const git_tree_entry *entry = git_tree_entry_byname(tree, ".dottaignore");
     if (entry) {
         /* Load existing content */
-        const git_oid *oid = git_tree_entry_id(entry);
-        git_blob *blob = NULL;
-        int git_err = git_blob_lookup(&blob, repo, oid);
-
-        if (git_err >= 0) {
-            const void *content = git_blob_rawcontent(blob);
-            size_t size = git_blob_rawsize(blob);
+        void *content = NULL;
+        size_t size = 0;
+        error_t *blob_err = gitops_read_blob_content(
+            repo, git_tree_entry_id(entry), &content, &size
+        );
+        if (!blob_err) {
             ssize_t written = write(fd, content, size);
             if (written < 0 || (size_t) written != size) {
-                git_blob_free(blob);
+                free(content);
                 git_tree_free(tree);
                 close(fd);
                 unlink(tmpfile);
                 free(tmpfile);
                 return ERROR(ERR_FS, "Failed to write to temporary file");
             }
-            git_blob_free(blob);
         }
+        free(content);
+        error_free(blob_err);
     } else {
         /* No existing profile .dottaignore - use canonical template */
         const char *template = ignore_profile_dottaignore_template();
@@ -756,6 +756,7 @@ static error_t *edit_profile_dottaignore(
         out, "Updated .dottaignore for profile '%s'",
         profile_name
     );
+
     return NULL;
 }
 
@@ -796,25 +797,17 @@ static error_t *modify_baseline_dottaignore(
 
     const git_tree_entry *entry = git_tree_entry_byname(tree, ".dottaignore");
     if (entry) {
-        const git_oid *oid = git_tree_entry_id(entry);
-        git_blob *blob = NULL;
-        int git_err = git_blob_lookup(&blob, repo, oid);
-
-        if (git_err >= 0) {
-            const void *content = git_blob_rawcontent(blob);
-            size_t size = git_blob_rawsize(blob);
-            if (size > 0) {
-                existing_content = malloc(size + 1);
-                if (!existing_content) {
-                    git_blob_free(blob);
-                    git_tree_free(tree);
-                    return ERROR(ERR_MEMORY, "Failed to allocate content");
-                }
-                memcpy(existing_content, content, size);
-                existing_content[size] = '\0';
-            }
-            git_blob_free(blob);
+        void *content = NULL;
+        size_t size = 0;
+        error_t *blob_err = gitops_read_blob_content(
+            repo, git_tree_entry_id(entry), &content, &size
+        );
+        if (!blob_err && size > 0) {
+            existing_content = content;
+        } else {
+            free(content);
         }
+        error_free(blob_err);
     } else if (!add_patterns) {
         /* No existing .dottaignore and no patterns to add */
         git_tree_free(tree);
@@ -1052,25 +1045,17 @@ static error_t *modify_profile_dottaignore(
 
     const git_tree_entry *entry = git_tree_entry_byname(tree, ".dottaignore");
     if (entry) {
-        const git_oid *oid = git_tree_entry_id(entry);
-        git_blob *blob = NULL;
-        int git_err = git_blob_lookup(&blob, repo, oid);
-
-        if (git_err >= 0) {
-            const void *content = git_blob_rawcontent(blob);
-            size_t size = git_blob_rawsize(blob);
-            if (size > 0) {
-                existing_content = malloc(size + 1);
-                if (!existing_content) {
-                    git_blob_free(blob);
-                    git_tree_free(tree);
-                    return ERROR(ERR_MEMORY, "Failed to allocate content");
-                }
-                memcpy(existing_content, content, size);
-                existing_content[size] = '\0';
-            }
-            git_blob_free(blob);
+        void *content = NULL;
+        size_t size = 0;
+        error_t *blob_err = gitops_read_blob_content(
+            repo, git_tree_entry_id(entry), &content, &size
+        );
+        if (!blob_err && size > 0) {
+            existing_content = content;
+        } else {
+            free(content);
         }
+        error_free(blob_err);
     } else if (!add_patterns) {
         /* No existing .dottaignore and no patterns to add */
         git_tree_free(tree);
@@ -1511,5 +1496,6 @@ error_t *cmd_ignore(git_repository *repo, const cmd_ignore_options_t *opts) {
 
     output_free(out);
     config_free(config);
+
     return err;
 }

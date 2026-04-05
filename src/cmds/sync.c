@@ -1646,16 +1646,11 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
         }
     }
 
-    /* Create transfer context for progress reporting and credentials */
-    git_remote *remote_obj = NULL;
-    if (git_remote_lookup(&remote_obj, repo, remote_name) == 0) {
-        const char *url = git_remote_url(remote_obj);
-        if (url) {
-            remote_url = strdup(url);
-        }
-        git_remote_free(remote_obj);
-    }
+    /* Get remote URL for credential handling */
+    error_t *url_err = gitops_get_remote_url(repo, remote_name, &remote_url);
+    error_free(url_err);
 
+    /* Create transfer context for progress reporting */
     xfer = transfer_context_create(out, remote_url);
     free(remote_url);
     remote_url = NULL;

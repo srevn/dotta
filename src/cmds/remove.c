@@ -363,22 +363,9 @@ static error_t *remove_file_from_worktree(
     }
 
     /* Stage deletion */
-    git_index *index = NULL;
-    err = worktree_get_index(wt, &index);
+    err = worktree_unstage_file(wt, storage_path);
     if (err) {
-        return error_wrap(err, "Failed to get worktree index");
-    }
-
-    int git_err = git_index_remove_bypath(index, storage_path);
-    if (git_err < 0) {
-        git_index_free(index);
-        return error_from_git(git_err);
-    }
-
-    git_err = git_index_write(index);
-    git_index_free(index);
-    if (git_err < 0) {
-        return error_from_git(git_err);
+        return error_wrap(err, "Failed to unstage file");
     }
 
     if (opts->verbose && out) {
@@ -703,41 +690,14 @@ static bool confirm_profile_deletion(
  * Create commit for removal
  */
 static error_t *create_removal_commit(
-    git_repository *repo,
     worktree_handle_t *wt,
     const cmd_remove_options_t *opts,
     const string_array_t *removed_paths,
     const dotta_config_t *config
 ) {
-    CHECK_NULL(repo);
     CHECK_NULL(wt);
     CHECK_NULL(opts);
     CHECK_NULL(removed_paths);
-
-    git_repository *wt_repo = worktree_get_repo(wt);
-    if (!wt_repo) {
-        return ERROR(ERR_INTERNAL, "Worktree repository is NULL");
-    }
-
-    /* Get index tree */
-    git_index *index = NULL;
-    error_t *err = worktree_get_index(wt, &index);
-    if (err) {
-        return error_wrap(err, "Failed to get worktree index");
-    }
-
-    git_oid tree_oid;
-    int git_err = git_index_write_tree(&tree_oid, index);
-    git_index_free(index);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    git_tree *tree = NULL;
-    git_err = git_tree_lookup(&tree, wt_repo, &tree_oid);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
 
     /* Build commit message context */
     commit_message_context_t ctx = {
@@ -751,22 +711,12 @@ static error_t *create_removal_commit(
 
     char *message = build_commit_message(config, &ctx);
     if (!message) {
-        git_tree_free(tree);
         return ERROR(ERR_MEMORY, "Failed to build commit message");
     }
 
     /* Create commit */
-    git_oid commit_oid;
-    err = gitops_create_commit(
-        wt_repo,
-        opts->profile,
-        tree,
-        message,
-        &commit_oid
-    );
-
+    error_t *err = worktree_commit(wt, opts->profile, message, NULL);
     free(message);
-    git_tree_free(tree);
 
     if (err) {
         return error_wrap(err, "Failed to create commit");
@@ -938,22 +888,9 @@ static error_t *cleanup_metadata(
     }
 
     /* Stage metadata.json file */
-    git_index *index = NULL;
-    err = worktree_get_index(wt, &index);
+    err = worktree_stage_file(wt, METADATA_FILE_PATH);
     if (err) {
-        return error_wrap(err, "Failed to get worktree index");
-    }
-
-    int git_err = git_index_add_bypath(index, METADATA_FILE_PATH);
-    if (git_err < 0) {
-        git_index_free(index);
-        return error_from_git(git_err);
-    }
-
-    git_err = git_index_write(index);
-    git_index_free(index);
-    if (git_err < 0) {
-        return error_from_git(git_err);
+        return error_wrap(err, "Failed to stage metadata");
     }
 
     if (opts->verbose && out && removed_count > 0) {
@@ -1228,7 +1165,7 @@ static error_t *remove_files_from_profile(
     }
 
     /* Create commit */
-    err = create_removal_commit(repo, wt, opts, removed_paths, config);
+    err = create_removal_commit(wt, opts, removed_paths, config);
     if (err) {
         goto cleanup;
     }
@@ -2082,5 +2019,6 @@ error_t *cmd_remove(git_repository *repo, const cmd_remove_options_t *opts) {
     if (opts->delete_profile) {
         return delete_profile_branch(repo, opts);
     }
+
     return remove_files_from_profile(repo, opts);
 }

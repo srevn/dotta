@@ -8,7 +8,6 @@
 
 #include "completion.h"
 
-#include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -113,18 +112,15 @@ static void complete_remotes(git_repository *repo) {
     int git_err = git_remote_list(&remotes, repo);
     if (git_err == 0) {
         for (size_t i = 0; i < remotes.count; i++) {
-            git_remote *remote = NULL;
             const char *name = remotes.strings[i];
-            if (git_remote_lookup(&remote, repo, name) == 0) {
-                const char *url = git_remote_url(remote);
-                printf(
-                    "%s\t%s\n",
-                    name, url ? url : "Remote"
-                );
-                git_remote_free(remote);
-            } else {
-                printf("%s\tRemote\n", name);
-            }
+            char *url = NULL;
+            error_t *url_err = gitops_get_remote_url(repo, name, &url);
+            printf(
+                "%s\t%s\n",
+                name, url ? url : "Remote"
+            );
+            free(url);
+            error_free(url_err);
         }
         git_strarray_dispose(&remotes);
     }

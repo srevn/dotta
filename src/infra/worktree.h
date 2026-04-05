@@ -117,6 +117,50 @@ git_repository *worktree_get_repo(const worktree_handle_t *wt);
 error_t *worktree_get_index(worktree_handle_t *wt, git_index **out);
 
 /**
+ * Stage a file in the worktree index
+ *
+ * Gets the worktree index, adds the file by path, writes the index,
+ * and frees the index handle. Atomic single-file staging.
+ *
+ * @param wt Worktree handle (must not be NULL)
+ * @param path Path relative to worktree root (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *worktree_stage_file(worktree_handle_t *wt, const char *path);
+
+/**
+ * Unstage (remove) a file from the worktree index
+ *
+ * Gets the worktree index, removes the file by path, writes the index,
+ * and frees the index handle. Atomic single-file unstaging.
+ *
+ * @param wt Worktree handle (must not be NULL)
+ * @param path Path relative to worktree root (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *worktree_unstage_file(worktree_handle_t *wt, const char *path);
+
+/**
+ * Commit current worktree index to a branch
+ *
+ * Writes the worktree index as a tree and creates a commit on the
+ * specified branch. All desired files must be staged in the worktree
+ * index before calling.
+ *
+ * @param wt Worktree handle (must not be NULL)
+ * @param branch_name Target branch (must not be NULL)
+ * @param message Commit message (must not be NULL)
+ * @param out_oid Commit OID (can be NULL if not needed)
+ * @return Error or NULL on success
+ */
+error_t *worktree_commit(
+    worktree_handle_t *wt,
+    const char *branch_name,
+    const char *message,
+    git_oid *out_oid
+);
+
+/**
  * RAII cleanup helper
  *
  * Note: This is provided for convenience, but explicit cleanup

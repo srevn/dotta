@@ -42,33 +42,15 @@ static error_t *get_branch_head_oid(
     CHECK_NULL(branch_name);
     CHECK_NULL(out_oid);
 
-    error_t *err = NULL;
-    git_reference *ref = NULL;
-
-    /* Construct reference name */
     char refname[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", branch_name);
+    error_t *err = gitops_build_refname(
+        refname, sizeof(refname), "refs/heads/%s", branch_name
+    );
     if (err) {
         return error_wrap(err, "Invalid branch name '%s'", branch_name);
     }
 
-    /* Lookup reference */
-    err = gitops_lookup_reference(repo, refname, &ref);
-    if (err) {
-        return error_wrap(err, "Failed to lookup branch '%s'", branch_name);
-    }
-
-    /* Get target oid */
-    const git_oid *target = git_reference_target(ref);
-    if (!target) {
-        git_reference_free(ref);
-        return ERROR(ERR_GIT, "Branch '%s' has no target", branch_name);
-    }
-
-    git_oid_cpy(out_oid, target);
-    git_reference_free(ref);
-
-    return NULL;
+    return gitops_resolve_reference_oid(repo, refname, out_oid);
 }
 
 /**
@@ -3226,8 +3208,6 @@ error_t *manifest_sync_diff(
     manifest_t *fresh_manifest = NULL;
     hashmap_t *profile_oids = NULL;
     metadata_t *metadata_merged = NULL;
-    git_commit *old_commit = NULL;
-    git_commit *new_commit = NULL;
     git_tree *old_tree = NULL;
     git_tree *new_tree = NULL;
     git_diff *diff = NULL;
@@ -3306,57 +3286,23 @@ error_t *manifest_sync_diff(
     }
 
     /* PHASE 2: COMPUTE DIFF (O(D)) */
-    /* 2.1. Lookup commits and extract trees for diff
-     *
-     * Note: old_oid and new_oid are commit OIDs (from branch refs), not tree OIDs.
-     * We must lookup the commit object first, then extract the tree from it.
-     * This is the standard pattern used throughout the codebase. */
-
-    /* Old commit → tree */
-    int git_err = git_commit_lookup(&old_commit, repo, old_oid);
-    if (git_err != 0) {
-        err = ERROR(
-            ERR_GIT, "Failed to lookup old commit: %s",
-            git_error_last()->message
-        );
+    /* 2.1. Extract trees from old and new commits for diff */
+    err = gitops_get_tree_from_commit(repo, old_oid, &old_tree);
+    if (err) {
+        err = error_wrap(err, "Failed to get tree from old commit");
         goto cleanup;
     }
 
-    git_err = git_commit_tree(&old_tree, old_commit);
-    if (git_err != 0) {
-        err = ERROR(
-            ERR_GIT, "Failed to extract tree from old commit: %s",
-            git_error_last()->message
-        );
-        goto cleanup;
-    }
-
-    /* New commit → tree */
-    git_err = git_commit_lookup(&new_commit, repo, new_oid);
-    if (git_err != 0) {
-        err = ERROR(
-            ERR_GIT, "Failed to lookup new commit: %s",
-            git_error_last()->message
-        );
-        goto cleanup;
-    }
-
-    git_err = git_commit_tree(&new_tree, new_commit);
-    if (git_err != 0) {
-        err = ERROR(
-            ERR_GIT, "Failed to extract tree from new commit: %s",
-            git_error_last()->message
-        );
+    err = gitops_get_tree_from_commit(repo, new_oid, &new_tree);
+    if (err) {
+        err = error_wrap(err, "Failed to get tree from new commit");
         goto cleanup;
     }
 
     /* 2.2. Compute diff between old and new trees */
-    git_err = git_diff_tree_to_tree(&diff, repo, old_tree, new_tree, NULL);
-    if (git_err != 0) {
-        err = ERROR(
-            ERR_GIT, "Failed to diff trees: %s",
-            git_error_last()->message
-        );
+    err = gitops_diff_trees(repo, old_tree, new_tree, NULL, &diff);
+    if (err) {
+        err = error_wrap(err, "Failed to diff trees");
         goto cleanup;
     }
 
@@ -3684,8 +3630,6 @@ cleanup:
     if (diff) git_diff_free(diff);
     if (new_tree) git_tree_free(new_tree);
     if (old_tree) git_tree_free(old_tree);
-    if (new_commit) git_commit_free(new_commit);
-    if (old_commit) git_commit_free(old_commit);
     if (metadata_merged) metadata_free(metadata_merged);
     if (profile_oids) hashmap_free(profile_oids, free);
     if (fresh_manifest) manifest_free(fresh_manifest);

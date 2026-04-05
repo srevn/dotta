@@ -546,6 +546,7 @@ validate:
 cleanup:
     free(home);
     free(home_canonical);
+
     return err;
 }
 
@@ -609,14 +610,19 @@ error_t *path_from_storage(
 
         *filesystem_path = str_format("%s%s", custom_prefix, relative_path);
         if (!*filesystem_path) {
-            return ERROR(ERR_MEMORY, "Failed to format custom filesystem path");
+            return ERROR(
+                ERR_MEMORY, "Failed to format custom filesystem path"
+            );
         }
 
         return NULL;
 
     } else {
         /* Should never happen due to validation */
-        return ERROR(ERR_INTERNAL, "Invalid storage path prefix: '%s'", storage_path);
+        return ERROR(
+            ERR_INTERNAL, "Invalid storage path prefix: '%s'",
+            storage_path
+        );
     }
 }
 

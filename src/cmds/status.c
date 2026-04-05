@@ -585,14 +585,8 @@ static error_t *display_remote_status(
 
             /* Create transfer context for progress reporting */
             char *remote_url = NULL;
-            git_remote *remote_obj = NULL;
-            if (git_remote_lookup(&remote_obj, repo, remote_name) == 0) {
-                const char *url = git_remote_url(remote_obj);
-                if (url) {
-                    remote_url = strdup(url);
-                }
-                git_remote_free(remote_obj);
-            }
+            error_t *url_err = gitops_get_remote_url(repo, remote_name, &remote_url);
+            error_free(url_err);
             xfer = transfer_context_create(out, remote_url);
             free(remote_url);
 

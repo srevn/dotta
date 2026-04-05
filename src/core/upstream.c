@@ -412,46 +412,27 @@ error_t *upstream_create_tracking_branch(
         );
     }
 
-    git_reference *remote_ref = NULL;
-    int git_err = git_reference_lookup(&remote_ref, repo, remote_refname);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    const git_oid *target_oid = git_reference_target(remote_ref);
-    if (!target_oid) {
-        git_reference_free(remote_ref);
-        return ERROR(
-            ERR_GIT, "Remote ref '%s' has no target",
+    git_oid target_oid;
+    err = gitops_resolve_reference_oid(repo, remote_refname, &target_oid);
+    if (err) {
+        return error_wrap(
+            err, "Failed to resolve remote ref '%s'",
             remote_refname
         );
     }
 
-    /* Create local branch */
+    /* Create local branch pointing to the same commit */
     char local_refname[DOTTA_REFNAME_MAX];
     err = gitops_build_refname(
         local_refname, sizeof(local_refname), "refs/heads/%s",
         branch_name
     );
     if (err) {
-        git_reference_free(remote_ref);
         return error_wrap(
             err, "Invalid branch name '%s'",
             branch_name
         );
     }
 
-    git_reference *local_ref = NULL;
-    git_err = git_reference_create(
-        &local_ref, repo, local_refname,
-        target_oid, 0, NULL
-    );
-    git_reference_free(remote_ref);
-
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    git_reference_free(local_ref);
-    return NULL;
+    return gitops_create_reference(repo, local_refname, &target_oid, false);
 }

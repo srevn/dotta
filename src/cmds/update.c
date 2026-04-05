@@ -15,7 +15,6 @@
 
 #include "base/error.h"
 #include "base/filesystem.h"
-#include "base/gitops.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
@@ -797,22 +796,9 @@ static error_t *update_metadata_for_profile(
     }
 
     /* Stage metadata.json file (single stage operation) */
-    git_index *index = NULL;
-    err = worktree_get_index(wt, &index);
+    err = worktree_stage_file(wt, METADATA_FILE_PATH);
     if (err) {
-        return error_wrap(err, "Failed to get worktree index");
-    }
-
-    int git_err = git_index_add_bypath(index, METADATA_FILE_PATH);
-    if (git_err < 0) {
-        git_index_free(index);
-        return error_from_git(git_err);
-    }
-
-    git_err = git_index_write(index);
-    git_index_free(index);
-    if (git_err < 0) {
-        return error_from_git(git_err);
+        return error_wrap(err, "Failed to stage metadata");
     }
 
     if (opts->verbose && out && (captured_file_count > 0 || updated_dir_count > 0)) {
@@ -875,7 +861,6 @@ static error_t *update_profile(
 
     /* Initialize all resources to NULL for goto cleanup */
     git_index *index = NULL;
-    git_tree *tree = NULL;
     char **storage_paths = NULL;
     char *message = NULL;
     error_t *err = NULL;
@@ -1064,20 +1049,6 @@ static error_t *update_profile(
 
     /* Note: metadata function already wrote the index */
 
-    /* Create commit */
-    git_oid tree_oid;
-    int git_err = git_index_write_tree(&tree_oid, index);
-    if (git_err < 0) {
-        err = error_from_git(git_err);
-        goto cleanup;
-    }
-
-    git_err = git_tree_lookup(&tree, wt_repo, &tree_oid);
-    if (git_err < 0) {
-        err = error_from_git(git_err);
-        goto cleanup;
-    }
-
     /* Build array of storage paths for commit message */
     storage_paths = malloc(item_count * sizeof(char *));
     if (!storage_paths) {
@@ -1125,10 +1096,7 @@ static error_t *update_profile(
     }
 
     /* Create commit */
-    git_oid commit_oid;
-    err = gitops_create_commit(
-        wt_repo, profile->name, tree, message, &commit_oid
-    );
+    err = worktree_commit(wt, profile->name, message, NULL);
     if (err) {
         err = error_wrap(err, "Failed to create commit");
         goto cleanup;
@@ -1140,7 +1108,6 @@ cleanup:
     /* Free resources in reverse order */
     if (message) free(message);
     if (storage_paths) free(storage_paths);
-    if (tree) git_tree_free(tree);
     if (index) git_index_free(index);
     if (owns_metadata && existing_metadata) metadata_free(existing_metadata);
     if (copy_results) free(copy_results);

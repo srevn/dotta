@@ -89,7 +89,10 @@ static error_t *bootstrap_create_template(
     }
 
     if (!exists) {
-        return ERROR(ERR_NOT_FOUND, "Profile '%s' does not exist", profile_name);
+        return ERROR(
+            ERR_NOT_FOUND, "Profile '%s' does not exist",
+            profile_name
+        );
     }
 
     /* Check if script already exists in Git */
@@ -107,83 +110,31 @@ static error_t *bootstrap_create_template(
     if (!content) {
         return ERROR(ERR_MEMORY, "Failed to generate bootstrap template");
     }
-
-    /* Create blob from template content */
-    git_oid blob_oid;
     size_t content_len = strlen(content);
-    int git_err = git_blob_create_from_buffer(&blob_oid, repo, content, content_len);
-    free(content);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    /* Load current tree from profile branch */
-    char ref_name[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(
-        ref_name, sizeof(ref_name), "refs/heads/%s", profile_name
-    );
-    if (err) {
-        return error_wrap(
-            err, "Invalid profile name '%s'",
-            profile_name
-        );
-    }
-
-    git_tree *current_tree = NULL;
-    err = gitops_load_tree(repo, ref_name, &current_tree);
-    if (err) {
-        return error_wrap(
-            err, "Failed to load tree from profile '%s'",
-            profile_name
-        );
-    }
-
-    /* Create root tree builder */
-    git_treebuilder *root_builder = NULL;
-    git_err = git_treebuilder_new(&root_builder, repo, current_tree);
-    git_tree_free(current_tree);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    /* Insert bootstrap script directly into root tree */
-    git_err = git_treebuilder_insert(
-        NULL, root_builder, script_name, &blob_oid, GIT_FILEMODE_BLOB_EXECUTABLE
-    );
-    if (git_err < 0) {
-        git_treebuilder_free(root_builder);
-        return error_from_git(git_err);
-    }
-
-    /* Write the root tree */
-    git_oid tree_oid;
-    git_err = git_treebuilder_write(&tree_oid, root_builder);
-    git_treebuilder_free(root_builder);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    /* Load the new tree */
-    git_tree *new_tree = NULL;
-    git_err = git_tree_lookup(&new_tree, repo, &tree_oid);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
 
     /* Create commit */
-    char *commit_message =
-        str_format("Add bootstrap script for %s profile", profile_name);
+    char *commit_message = str_format(
+        "Add bootstrap script for %s profile", profile_name
+    );
     if (!commit_message) {
-        git_tree_free(new_tree);
+        free(content);
         return ERROR(ERR_MEMORY, "Failed to allocate commit message");
     }
 
-    err = gitops_create_commit(
-        repo, profile_name, new_tree, commit_message, NULL
+    /* Create bootstrap script in Git (atomic: blob + tree + commit) */
+    err = gitops_update_file(
+        repo,
+        profile_name,
+        script_name,
+        content,
+        content_len,
+        commit_message,
+        GIT_FILEMODE_BLOB_EXECUTABLE,
+        NULL
     );
 
+    free(content);
     free(commit_message);
-    git_tree_free(new_tree);
 
     if (err) {
         return error_wrap(err, "Failed to commit bootstrap script");
@@ -624,5 +575,6 @@ cleanup:
     if (repo_path) free(repo_path);
     if (out) output_free(out);
     if (config) config_free(config);
+
     return err;
 }

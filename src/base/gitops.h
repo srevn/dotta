@@ -208,6 +208,26 @@ error_t *gitops_find_file_in_tree(
 );
 
 /**
+ * Read blob content by OID
+ *
+ * Looks up a blob by OID, copies its content into a caller-owned
+ * null-terminated buffer. The returned size is the raw blob size
+ * (not including the null terminator).
+ *
+ * @param repo Repository (must not be NULL)
+ * @param oid Blob OID (must not be NULL)
+ * @param out_content Content buffer (must not be NULL, caller must free)
+ * @param out_size Content size in bytes (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *gitops_read_blob_content(
+    git_repository *repo,
+    const git_oid *oid,
+    void **out_content,
+    size_t *out_size
+);
+
+/**
  * Commit operations
  */
 
@@ -413,6 +433,22 @@ error_t *gitops_delete_remote_branch(
 );
 
 /**
+ * Get URL for a remote
+ *
+ * Looks up a remote by name and returns a copy of its URL.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param remote_name Remote name (must not be NULL)
+ * @param out_url URL string (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+error_t *gitops_get_remote_url(
+    git_repository *repo,
+    const char *remote_name,
+    char **out_url
+);
+
+/**
  * Reference operations
  */
 
@@ -444,6 +480,24 @@ error_t *gitops_lookup_reference(
     git_repository *repo,
     const char *name,
     git_reference **out
+);
+
+/**
+ * Resolve reference name to OID
+ *
+ * Convenience function that resolves a reference name directly to its
+ * target OID without exposing the intermediate reference object. Handles
+ * symbolic references transparently.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param ref_name Full reference name (e.g., "refs/heads/main") (must not be NULL)
+ * @param out Target OID (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *gitops_resolve_reference_oid(
+    git_repository *repo,
+    const char *ref_name,
+    git_oid *out
 );
 
 /**

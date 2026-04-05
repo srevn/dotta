@@ -86,6 +86,7 @@ static bool is_file_encrypted(
     bool encrypted = encryption_is_encrypted(data, size);
 
     git_blob_free(blob);
+
     return encrypted;
 }
 
@@ -396,7 +397,10 @@ static error_t *list_files(
     profile_t *profile = NULL;
     error_t *err = profile_load(repo, opts->profile, &profile);
     if (err) {
-        return error_wrap(err, "Failed to load profile '%s'", opts->profile);
+        return error_wrap(
+            err, "Failed to load profile '%s'",
+            opts->profile
+        );
     }
 
     /* List files */
@@ -404,7 +408,10 @@ static error_t *list_files(
     err = profile_list_files(repo, profile, &files);
     if (err) {
         profile_free(profile);
-        return error_wrap(err, "Failed to list files in profile '%s'", opts->profile);
+        return error_wrap(
+            err, "Failed to list files in profile '%s'",
+            opts->profile
+        );
     }
 
     if (string_array_size(files) == 0) {
@@ -427,7 +434,10 @@ static error_t *list_files(
         err = stats_build_file_commit_map(repo, opts->profile, profile->tree, &commit_map);
         if (err) {
             /* Non-fatal: continue without commit info */
-            output_warning(out, "Failed to load commit history: %s", error_message(err));
+            output_warning(
+                out, "Failed to load commit history: %s",
+                error_message(err)
+            );
             error_free(err);
             err = NULL;
         }
@@ -529,9 +539,7 @@ static error_t *list_files(
                         format_relative_time(commit_info->time, time_str, sizeof(time_str));
 
                         size_t summary_len = strlen(commit_info->summary);
-                        if (summary_len > 40) {
-                            summary_len = 40;
-                        }
+                        if (summary_len > 40) summary_len = 40;
 
                         output_styled(
                             out, OUTPUT_NORMAL, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
@@ -557,12 +565,14 @@ static error_t *list_files(
         output_format_size(total_size, size_str, sizeof(size_str));
         output_print(
             out, OUTPUT_NORMAL, "Total: %zu file%s, %s\n",
-            string_array_size(files), string_array_size(files) == 1 ? "" : "s", size_str
+            string_array_size(files),
+            string_array_size(files) == 1 ? "" : "s", size_str
         );
     } else {
         output_print(
             out, OUTPUT_NORMAL, "Total: %zu file%s\n",
-            string_array_size(files), string_array_size(files) == 1 ? "" : "s"
+            string_array_size(files),
+            string_array_size(files) == 1 ? "" : "s"
         );
     }
 
@@ -595,6 +605,7 @@ static bool format_time(git_time_t timestamp, char *buf, size_t buf_size) {
         return false;
     }
     strftime(buf, buf_size, "%a %b %d %H:%M:%S %Y", &tm_info);
+
     return true;
 }
 
@@ -637,8 +648,7 @@ static error_t *list_file_history(
             if (error_code(err) == ERR_NOT_FOUND) {
                 error_free(err);
                 err = ERROR(
-                    ERR_NOT_FOUND,
-                    "File '%s' not found in enabled profiles\n"
+                    ERR_NOT_FOUND, "File '%s' not found in enabled profiles\n"
                     "Hint: Use 'dotta list -p <profile> %s' to specify a profile",
                     storage_path, opts->file_path
                 );
@@ -707,9 +717,7 @@ static error_t *list_file_history(
     if (!opts->verbose) {
         for (size_t i = 0; i < history->count; i++) {
             size_t len = strlen(history->commits[i].summary);
-            if (len > max_msg_len) {
-                max_msg_len = len;
-            }
+            if (len > max_msg_len) max_msg_len = len;
         }
 
         /* Cap to prevent excessive padding from long commit messages */
@@ -820,5 +828,6 @@ error_t *cmd_list(git_repository *repo, const cmd_list_options_t *opts) {
     /* Cleanup */
     config_free(config);
     output_free(out);
+
     return err;
 }

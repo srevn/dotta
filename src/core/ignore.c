@@ -210,45 +210,25 @@ static error_t *load_baseline_dottaignore(
         return NULL;
     }
 
-    /* Get blob OID */
-    const git_oid *oid = git_tree_entry_id(entry);
-    if (!oid) {
-        git_tree_free(tree);
-        return ERROR(ERR_INTERNAL, "Failed to get .dottaignore OID");
-    }
-
-    /* Load blob */
-    git_blob *blob = NULL;
-    int git_err = git_blob_lookup(&blob, repo, oid);
-    if (git_err < 0) {
-        git_tree_free(tree);
-        return error_from_git(git_err);
-    }
-
-    /* Extract content */
-    const void *raw_content = git_blob_rawcontent(blob);
-    size_t size = git_blob_rawsize(blob);
+    /* Read blob content */
+    void *content = NULL;
+    size_t size = 0;
+    err = gitops_read_blob_content(repo, git_tree_entry_id(entry), &content, &size);
+    git_tree_free(tree);
+    if (err) return err;
 
     /* Validate size to prevent excessive memory allocation */
     if (size > MAX_DOTTAIGNORE_SIZE) {
-        git_blob_free(blob);
-        git_tree_free(tree);
+        free(content);
         return ERROR(ERR_VALIDATION, "Baseline .dottaignore file too large (max 1MB)");
     }
 
     if (size > 0) {
-        *out_content = malloc(size + 1);
-        if (!*out_content) {
-            git_blob_free(blob);
-            git_tree_free(tree);
-            return ERROR(ERR_MEMORY, "Failed to allocate .dottaignore content");
-        }
-        memcpy(*out_content, raw_content, size);
-        (*out_content)[size] = '\0';
+        *out_content = content;
+    } else {
+        free(content);
     }
 
-    git_blob_free(blob);
-    git_tree_free(tree);
     return NULL;
 }
 
@@ -323,47 +303,27 @@ static error_t *load_profile_dottaignore(
         return NULL;
     }
 
-    /* Get blob OID */
-    const git_oid *oid = git_tree_entry_id(entry);
-    if (!oid) {
-        git_tree_free(tree);
-        return ERROR(ERR_INTERNAL, "Failed to get .dottaignore OID");
-    }
-
-    /* Load blob */
-    git_blob *blob = NULL;
-    int git_err = git_blob_lookup(&blob, repo, oid);
-    if (git_err < 0) {
-        git_tree_free(tree);
-        return error_from_git(git_err);
-    }
-
-    /* Extract content */
-    const void *raw_content = git_blob_rawcontent(blob);
-    size_t size = git_blob_rawsize(blob);
+    /* Read blob content */
+    void *content = NULL;
+    size_t size = 0;
+    err = gitops_read_blob_content(repo, git_tree_entry_id(entry), &content, &size);
+    git_tree_free(tree);
+    if (err) return err;
 
     /* Validate size to prevent excessive memory allocation */
     if (size > MAX_DOTTAIGNORE_SIZE) {
-        git_blob_free(blob);
-        git_tree_free(tree);
+        free(content);
         return ERROR(
             ERR_VALIDATION, "Profile .dottaignore file too large (max 1MB)"
         );
     }
 
     if (size > 0) {
-        *out_content = malloc(size + 1);
-        if (!*out_content) {
-            git_blob_free(blob);
-            git_tree_free(tree);
-            return ERROR(ERR_MEMORY, "Failed to allocate .dottaignore content");
-        }
-        memcpy(*out_content, raw_content, size);
-        (*out_content)[size] = '\0';
+        *out_content = content;
+    } else {
+        free(content);
     }
 
-    git_blob_free(blob);
-    git_tree_free(tree);
     return NULL;
 }
 

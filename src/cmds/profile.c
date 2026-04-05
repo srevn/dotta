@@ -90,14 +90,16 @@ static void print_manifest_enable_stats(
 
         if (stats->already_deployed > 0) {
             output_styled(
-                out, OUTPUT_NORMAL, "    - {green}%zu{reset} already deployed and correct\n",
+                out, OUTPUT_NORMAL,
+                "    - {green}%zu{reset} already deployed and correct\n",
                 stats->already_deployed
             );
         }
 
         if (stats->needs_deployment > 0) {
             output_styled(
-                out, OUTPUT_NORMAL, "    - {yellow}%zu{reset} need deployment\n",
+                out, OUTPUT_NORMAL,
+                "    - {yellow}%zu{reset} need deployment\n",
                 stats->needs_deployment
             );
         }
@@ -236,7 +238,6 @@ static error_t *profile_list(
     string_array_t *available = NULL;
     char *remote_name = NULL;
     char *remote_url = NULL;
-    git_remote *remote_obj = NULL;
     transfer_context_t *xfer = NULL;
     string_array_t *remote_branches = NULL;
     string_array_t *remote_only = NULL;
@@ -289,7 +290,9 @@ static error_t *profile_list(
         if (!is_enabled) {
             err = string_array_push(available, name);
             if (err) {
-                err = error_wrap(err, "Failed to add profile to available list");
+                err = error_wrap(
+                    err, "Failed to add profile to available list"
+                );
                 goto cleanup;
             }
         }
@@ -357,14 +360,8 @@ static error_t *profile_list(
             error_free(remote_err);
         } else {
             /* Get remote URL for credential handling */
-            if (git_remote_lookup(&remote_obj, repo, remote_name) == 0) {
-                const char *url = git_remote_url(remote_obj);
-                if (url) {
-                    remote_url = strdup(url);
-                }
-                git_remote_free(remote_obj);
-                remote_obj = NULL;
-            }
+            error_t *url_err = gitops_get_remote_url(repo, remote_name, &remote_url);
+            error_free(url_err);
 
             /* Create transfer context for credentials */
             xfer = transfer_context_create(out, remote_url);
@@ -448,7 +445,6 @@ static error_t *profile_fetch(
     /* Resource tracking for cleanup */
     char *remote_name = NULL;
     char *remote_url = NULL;
-    git_remote *remote_obj = NULL;
     transfer_context_t *xfer = NULL;
     string_array_t *remote_branches = NULL;
     error_t *err = NULL;
@@ -464,16 +460,11 @@ static error_t *profile_fetch(
         goto cleanup;
     }
 
-    /* Create transfer context for progress and credentials */
-    if (git_remote_lookup(&remote_obj, repo, remote_name) == 0) {
-        const char *url = git_remote_url(remote_obj);
-        if (url) {
-            remote_url = strdup(url);
-        }
-        git_remote_free(remote_obj);
-        remote_obj = NULL;
-    }
+    /* Get remote URL for credential handling */
+    error_t *url_err = gitops_get_remote_url(repo, remote_name, &remote_url);
+    error_free(url_err);
 
+    /* Create transfer context for progress reporting and credentials */
     xfer = transfer_context_create(out, remote_url);
     if (!xfer) {
         err = ERROR(ERR_MEMORY, "Failed to create transfer context");
@@ -611,7 +602,10 @@ static error_t *profile_fetch(
             /* Check if already exists locally */
             bool already_exists = profile_exists(repo, profile_name);
             if (already_exists && opts->verbose) {
-                output_info(out, "  %s already exists locally (updating...)", profile_name);
+                output_info(
+                    out, "  %s already exists locally (updating...)",
+                    profile_name
+                );
             }
 
             error_t *fetch_err = gitops_fetch_branch(repo, remote_name, profile_name, xfer);

@@ -292,7 +292,7 @@ error_t *bootstrap_extract_to_temp(
     /* Declare resources for cleanup */
     error_t *err = NULL;
     git_tree *tree = NULL;
-    git_blob *blob = NULL;
+    void *content = NULL;
     char *temp_path = NULL;
     int fd = -1;
 
@@ -327,16 +327,10 @@ error_t *bootstrap_extract_to_temp(
         goto cleanup;
     }
 
-    /* Load blob */
-    const git_oid *oid = git_tree_entry_id(entry);
-    int git_err = git_blob_lookup(&blob, repo, oid);
-    if (git_err < 0) {
-        err = error_from_git(git_err);
-        goto cleanup;
-    }
-
-    const unsigned char *content = git_blob_rawcontent(blob);
-    size_t size = git_blob_rawsize(blob);
+    /* Read blob content */
+    size_t size = 0;
+    err = gitops_read_blob_content(repo, git_tree_entry_id(entry), &content, &size);
+    if (err) goto cleanup;
 
     /* Validate shebang */
     err = validate_shebang(content, size);
@@ -371,7 +365,7 @@ error_t *bootstrap_extract_to_temp(
      * interrupted by signals (EINTR). Loop until all bytes are written. */
     size_t bytes_written = 0;
     while (bytes_written < size) {
-        ssize_t n = write(fd, content + bytes_written, size - bytes_written);
+        ssize_t n = write(fd, (char *) content + bytes_written, size - bytes_written);
         if (n < 0) {
             if (errno == EINTR) {
                 continue;  /* Interrupted by signal, retry */
@@ -407,7 +401,7 @@ cleanup:
         unlink(temp_path);
         free(temp_path);
     }
-    if (blob) git_blob_free(blob);
+    free(content);
     if (tree) git_tree_free(tree);
 
     return err;
@@ -450,7 +444,7 @@ error_t *bootstrap_read_content(
     /* Declare resources for cleanup */
     error_t *err = NULL;
     git_tree *tree = NULL;
-    git_blob *blob = NULL;
+    void *raw_content = NULL;
     buffer_t *content_buf = NULL;
 
     /* Build ref name */
@@ -482,16 +476,10 @@ error_t *bootstrap_read_content(
         goto cleanup;
     }
 
-    /* Load blob */
-    const git_oid *oid = git_tree_entry_id(entry);
-    int git_err = git_blob_lookup(&blob, repo, oid);
-    if (git_err < 0) {
-        err = error_from_git(git_err);
-        goto cleanup;
-    }
-
-    const unsigned char *content = git_blob_rawcontent(blob);
-    size_t size = git_blob_rawsize(blob);
+    /* Read blob content */
+    size_t size = 0;
+    err = gitops_read_blob_content(repo, git_tree_entry_id(entry), &raw_content, &size);
+    if (err) goto cleanup;
 
     /* Allocate buffer and copy content */
     content_buf = buffer_create();
@@ -503,7 +491,7 @@ error_t *bootstrap_read_content(
     }
 
     if (size > 0) {
-        err = buffer_append(content_buf, content, size);
+        err = buffer_append(content_buf, raw_content, size);
         if (err) {
             err = error_wrap(err, "Failed to append content to buffer");
             goto cleanup;
@@ -517,7 +505,7 @@ error_t *bootstrap_read_content(
 
 cleanup:
     if (content_buf) buffer_free(content_buf);
-    if (blob) git_blob_free(blob);
+    if (raw_content) free(raw_content);
     if (tree) git_tree_free(tree);
 
     return err;

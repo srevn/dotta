@@ -12,6 +12,7 @@
 
 #include "base/error.h"
 #include "base/filesystem.h"
+#include "base/gitops.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/workspace.h"
@@ -391,27 +392,9 @@ error_t *deploy_file(
             goto cleanup;
         }
 
-        git_blob *blob = NULL;
-        int git_err = git_blob_lookup(&blob, repo, &oid);
-        if (git_err < 0) {
-            err = error_from_git(git_err);
-            goto cleanup;
-        }
-
-        const char *target = (const char *) git_blob_rawcontent(blob);
-        size_t target_len = git_blob_rawsize(blob);
-
-        /* Null-terminate target */
-        target_str = malloc(target_len + 1);
-        if (!target_str) {
-            git_blob_free(blob);
-            err = ERROR(ERR_MEMORY, "Failed to allocate symlink target");
-            goto cleanup;
-        }
-        memcpy(target_str, target, target_len);
-        target_str[target_len] = '\0';
-
-        git_blob_free(blob);
+        size_t target_len = 0;
+        err = gitops_read_blob_content(repo, &oid, (void **) &target_str, &target_len);
+        if (err) goto cleanup;
 
         /* Clear path for symlink deployment (handles files, symlinks, and directories)
          *
@@ -1005,31 +988,30 @@ static error_t *deploy_tracked_directories(
         /* Dry-run: print what would happen with divergence detail */
         if (opts->dry_run) {
             if (opts->verbose) {
-                const char *action = directory_existed ? "Would fix" : "Would create";
+                const char *verb = directory_existed ? "Would fix" : "Would create";
 
                 /* Build divergence detail from workspace analysis */
-                char detail[32] = "";
+                char action[32] = "";
                 if (ws_item && directory_existed) {
                     bool has_mode = ws_item->divergence & DIVERGENCE_MODE;
                     bool has_own = ws_item->divergence & DIVERGENCE_OWNERSHIP;
                     snprintf(
-                        detail, sizeof(detail), " [%s%s%s]",
-                        has_mode ? "mode" : "", (has_mode && has_own) ? ", " : "",
-                        has_own ? "ownership" : ""
+                        action, sizeof(action), " [%s%s%s]", has_mode ? "mode" : "",
+                        (has_mode && has_own) ? ", " : "", has_own ? "ownership" : ""
                     );
                 }
 
                 if (dir_entry->owner || dir_entry->group) {
                     printf(
                         "  %s: %s (mode: %04o, owner: %s:%s)%s\n",
-                        action, filesystem_path, dir_mode,
+                        verb, filesystem_path, dir_mode,
                         dir_entry->owner ? dir_entry->owner : "?",
-                        dir_entry->group ? dir_entry->group : "?", detail
+                        dir_entry->group ? dir_entry->group : "?", action
                     );
                 } else {
                     printf(
                         "  %s: %s (mode: %04o)%s\n",
-                        action, filesystem_path, dir_mode, detail
+                        verb, filesystem_path, dir_mode, action
                     );
                 }
             }
@@ -1085,34 +1067,32 @@ static error_t *deploy_tracked_directories(
 
         /* Verbose output - distinguish creation from metadata fix */
         if (opts->verbose) {
-            const char *action = directory_existed ? "Fixed" : "Created";
+            const char *verb = directory_existed ? "Fixed" : "Created";
             bool has_ownership =
                 (dir_entry->owner || dir_entry->group) && target_uid != (uid_t) -1;
 
             /* Build divergence detail from workspace analysis */
-            char detail[32] = "";
+            char action[32] = "";
             if (ws_item && directory_existed) {
                 bool has_mode = ws_item->divergence & DIVERGENCE_MODE;
                 bool has_own = ws_item->divergence & DIVERGENCE_OWNERSHIP;
                 snprintf(
-                    detail, sizeof(detail), " [%s%s%s]",
-                    has_mode ? "mode" : "",
-                    (has_mode && has_own) ? ", " : "",
-                    has_own ? "ownership" : ""
+                    action, sizeof(action), " [%s%s%s]", has_mode ? "mode" : "",
+                    (has_mode && has_own) ? ", " : "", has_own ? "ownership" : ""
                 );
             }
 
             if (has_ownership) {
                 printf(
                     "  %s: %s (mode: %04o, owner: %s:%s)%s\n",
-                    action, filesystem_path, dir_mode,
+                    verb, filesystem_path, dir_mode,
                     dir_entry->owner ? dir_entry->owner : "?",
-                    dir_entry->group ? dir_entry->group : "?", detail
+                    dir_entry->group ? dir_entry->group : "?", action
                 );
             } else {
                 printf(
                     "  %s: %s (mode: %04o)%s\n",
-                    action, filesystem_path, dir_mode, detail
+                    verb, filesystem_path, dir_mode, action
                 );
             }
         }

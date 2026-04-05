@@ -1421,7 +1421,6 @@ error_t *metadata_load_from_branch(
     git_commit *commit = NULL;
     git_tree *tree = NULL;
     git_tree_entry *entry = NULL;
-    git_blob *blob = NULL;
     char *json_str = NULL;
     metadata_t *metadata = NULL;
 
@@ -1473,33 +1472,12 @@ error_t *metadata_load_from_branch(
         goto cleanup;
     }
 
-    /* Get OID */
-    const git_oid *oid = git_tree_entry_id(entry);
-    if (!oid) {
-        err = ERROR(ERR_INTERNAL, "Failed to get metadata file OID");
-        goto cleanup;
-    }
-
-    /* Get blob */
-    git_err = git_blob_lookup(&blob, repo, oid);
-    if (git_err < 0) {
-        err = error_from_git(git_err);
-        goto cleanup;
-    }
-
-    /* Get content */
-    const char *content = (const char *) git_blob_rawcontent(blob);
-    git_object_size_t size = git_blob_rawsize(blob);
-
-    /* Null-terminate content (cJSON requires null-terminated string) */
-    json_str = malloc(size + 1);
-    if (!json_str) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate JSON buffer");
-        goto cleanup;
-    }
-
-    memcpy(json_str, content, size);
-    json_str[size] = '\0';
+    /* Read blob content (null-terminated for JSON parsing) */
+    size_t size = 0;
+    err = gitops_read_blob_content(
+        repo, git_tree_entry_id(entry), (void **) &json_str, &size
+    );
+    if (err) goto cleanup;
 
     /* Parse JSON */
     err = metadata_from_json(json_str, &metadata);
@@ -1517,7 +1495,6 @@ error_t *metadata_load_from_branch(
 
 cleanup:
     if (json_str) free(json_str);
-    if (blob) git_blob_free(blob);
     if (entry) git_tree_entry_free(entry);
     if (tree) git_tree_free(tree);
     if (commit) git_commit_free(commit);
@@ -1552,7 +1529,6 @@ error_t *metadata_load_from_tree(
 
     error_t *err = NULL;
     git_tree_entry *entry = NULL;
-    git_blob *blob = NULL;
     char *json_str = NULL;
     metadata_t *metadata = NULL;
 
@@ -1570,33 +1546,12 @@ error_t *metadata_load_from_tree(
         goto cleanup;
     }
 
-    /* Get OID */
-    const git_oid *oid = git_tree_entry_id(entry);
-    if (!oid) {
-        err = ERROR(ERR_INTERNAL, "Failed to get metadata file OID");
-        goto cleanup;
-    }
-
-    /* Get blob */
-    git_err = git_blob_lookup(&blob, repo, oid);
-    if (git_err < 0) {
-        err = error_from_git(git_err);
-        goto cleanup;
-    }
-
-    /* Get content */
-    const char *content = (const char *) git_blob_rawcontent(blob);
-    git_object_size_t size = git_blob_rawsize(blob);
-
-    /* Null-terminate content (cJSON requires null-terminated string) */
-    json_str = malloc(size + 1);
-    if (!json_str) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate JSON buffer");
-        goto cleanup;
-    }
-
-    memcpy(json_str, content, size);
-    json_str[size] = '\0';
+    /* Read blob content (null-terminated for JSON parsing) */
+    size_t size = 0;
+    err = gitops_read_blob_content(
+        repo, git_tree_entry_id(entry), (void **) &json_str, &size
+    );
+    if (err) goto cleanup;
 
     /* Parse JSON */
     err = metadata_from_json(json_str, &metadata);
@@ -1614,7 +1569,6 @@ error_t *metadata_load_from_tree(
 
 cleanup:
     if (json_str) free(json_str);
-    if (blob) git_blob_free(blob);
     if (entry) git_tree_entry_free(entry);
     if (metadata) metadata_free(metadata);
 

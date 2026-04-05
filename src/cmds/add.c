@@ -68,12 +68,18 @@ static bool is_excluded(
     /* If we have an ignore context, use it */
     if (ignore_ctx) {
         bool ignored = false;
-        error_t *err = ignore_should_ignore(ignore_ctx, path, is_directory, &ignored);
+        error_t *err = ignore_should_ignore(
+            ignore_ctx,
+            path,
+            is_directory,
+            &ignored
+        );
         if (err) {
             /* On error, log and continue without ignoring */
             if (opts->verbose && out) {
                 output_warning(
-                    out, "Ignore check failed for %s: %s", path, error_message(err)
+                    out, "Ignore check failed for %s: %s",
+                    path, error_message(err)
                 );
             }
             error_free(err);
@@ -118,8 +124,9 @@ static error_t *collect_files_from_dir(
     errno = 0;
     while ((entry = readdir(dir)) != NULL) {
         /* Skip . and .. */
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-            errno = 0;  /* Clear before next readdir() — see post-loop check */
+        if (strcmp(entry->d_name, ".") == 0 ||
+            strcmp(entry->d_name, "..") == 0) {
+            errno = 0;  /* Clear before next readdir() */
             continue;
         }
 
@@ -249,7 +256,8 @@ static error_t *add_file_to_worktree(
         if (!opts->force) {
             error_t *exists_err = ERROR(
                 ERR_EXISTS, "File '%s' (as '%s') already exists in profile '%s'. "
-                "Use --force to overwrite.", filesystem_path, storage_path, opts->profile
+                "Use --force to overwrite.", filesystem_path, storage_path,
+                opts->profile
             );
             free(dest_path);
             return exists_err;
@@ -257,7 +265,8 @@ static error_t *add_file_to_worktree(
         err = fs_remove_file(dest_path);
         if (err) {
             error_t *wrapped = error_wrap(
-                err, "Failed to remove existing file '%s' in worktree", dest_path
+                err, "Failed to remove existing file '%s' in worktree",
+                dest_path
             );
             free(dest_path);
             return wrapped;
@@ -286,7 +295,10 @@ static error_t *add_file_to_worktree(
         err = fs_read_symlink(filesystem_path, &target);
         if (err) {
             free(dest_path);
-            return error_wrap(err, "Failed to read symlink '%s'", filesystem_path);
+            return error_wrap(
+                err, "Failed to read symlink '%s'",
+                filesystem_path
+            );
         }
 
         err = fs_create_symlink(target, dest_path);
@@ -386,28 +398,13 @@ static error_t *add_file_to_worktree(
     }
 
     /* Stage file */
-    git_index *index = NULL;
-    err = worktree_get_index(wt, &index);
+    err = worktree_stage_file(wt, storage_path);
     if (err) {
-        free(dest_path);
-        return error_wrap(err, "Failed to get worktree index");
-    }
-
-    int git_err = git_index_add_bypath(index, storage_path);
-    if (git_err < 0) {
-        git_index_free(index);
-        free(dest_path);
-        return error_from_git(git_err);
-    }
-
-    git_err = git_index_write(index);
-    git_index_free(index);
-    if (git_err < 0) {
         free(dest_path);
         if (item) {
             metadata_item_free(item);
         }
-        return error_from_git(git_err);
+        return error_wrap(err, "Failed to stage file");
     }
 
     free(dest_path);
@@ -500,25 +497,10 @@ static error_t *init_profile_dottaignore(
     }
 
     /* Stage the file */
-    git_index *index = NULL;
-    err = worktree_get_index(wt, &index);
+    err = worktree_stage_file(wt, ".dottaignore");
     if (err) {
         free(dottaignore_path);
-        return error_wrap(err, "Failed to get worktree index");
-    }
-
-    int git_err = git_index_add_bypath(index, ".dottaignore");
-    if (git_err < 0) {
-        git_index_free(index);
-        free(dottaignore_path);
-        return error_from_git(git_err);
-    }
-
-    git_err = git_index_write(index);
-    git_index_free(index);
-    if (git_err < 0) {
-        free(dottaignore_path);
-        return error_from_git(git_err);
+        return error_wrap(err, "Failed to stage .dottaignore");
     }
 
     if (opts->verbose && out) {
@@ -529,6 +511,7 @@ static error_t *init_profile_dottaignore(
     }
 
     free(dottaignore_path);
+
     return NULL;
 }
 
@@ -543,7 +526,6 @@ typedef struct {
 /**
  * Create commit in worktree
  *
- * @param repo Repository
  * @param wt Worktree handle
  * @param opts Command options
  * @param added_files Files that were added
@@ -552,69 +534,42 @@ typedef struct {
  * @return Error or NULL on success
  */
 static error_t *create_commit(
-    git_repository *repo,
     worktree_handle_t *wt,
     const cmd_add_options_t *opts,
     string_array_t *added_files,
     const dotta_config_t *config,
     git_oid *out_commit_oid
 ) {
-    CHECK_NULL(repo);
     CHECK_NULL(wt);
     CHECK_NULL(opts);
     CHECK_NULL(added_files);
 
-    git_repository *wt_repo = worktree_get_repo(wt);
-    if (!wt_repo) {
-        return ERROR(ERR_INTERNAL, "Worktree repository is NULL");
-    }
-
-    /* Get index tree */
-    git_index *index = NULL;
-    error_t *derr = worktree_get_index(wt, &index);
-    if (derr) {
-        return error_wrap(derr, "Failed to get worktree index");
-    }
-
-    git_oid tree_oid;
-    int git_err = git_index_write_tree(&tree_oid, index);
-    git_index_free(index);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    git_tree *tree = NULL;
-    git_err = git_tree_lookup(&tree, wt_repo, &tree_oid);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
     /* Build commit message using storage paths */
     string_array_t *storage_paths = string_array_create();
     if (!storage_paths) {
-        git_tree_free(tree);
         return ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
     }
 
     /* Convert filesystem paths to storage paths for commit message */
+    error_t *err = NULL;
     for (size_t i = 0; i < string_array_size(added_files); i++) {
         const char *file_path = string_array_get(added_files, i);
         char *storage_path = NULL;
         path_prefix_t prefix;
 
-        derr = path_to_storage(
+        err = path_to_storage(
             file_path, opts->custom_prefix, &storage_path, &prefix
         );
-        if (derr) {
+        if (err) {
             /* Skip if conversion fails (shouldn't happen at this point) */
-            error_free(derr);
+            error_free(err);
             continue;
         }
 
-        derr = string_array_push(storage_paths, storage_path);
+        err = string_array_push(storage_paths, storage_path);
         free(storage_path);
-        if (derr) {
-            error_free(derr);
+        if (err) {
+            error_free(err);
             break;
         }
     }
@@ -633,30 +588,15 @@ static error_t *create_commit(
     string_array_free(storage_paths);
 
     if (!message) {
-        git_tree_free(tree);
         return ERROR(ERR_MEMORY, "Failed to build commit message");
     }
 
     /* Create commit */
-    git_oid commit_oid;
-    derr = gitops_create_commit(
-        wt_repo,
-        opts->profile,
-        tree,
-        message,
-        &commit_oid
-    );
-
+    err = worktree_commit(wt, opts->profile, message, out_commit_oid);
     free(message);
-    git_tree_free(tree);
 
-    if (derr) {
-        return error_wrap(derr, "Failed to create commit");
-    }
-
-    /* Copy commit OID to output if requested */
-    if (out_commit_oid) {
-        git_oid_cpy(out_commit_oid, &commit_oid);
+    if (err) {
+        return error_wrap(err, "Failed to create commit");
     }
 
     return NULL;
@@ -830,9 +770,7 @@ static error_t *auto_enable_and_sync_profile(
 
     /* Success */
     *out_updated = true;
-    if (out_synced) {
-        *out_synced = synced_count;
-    }
+    if (out_synced) *out_synced = synced_count;
 
 cleanup:
     if (enabled_profiles) {
@@ -1014,9 +952,7 @@ static error_t *update_manifest_after_add(
 
     /* Success */
     *out_updated = true;
-    if (out_synced) {
-        *out_synced = synced_count;
-    }
+    if (out_synced) *out_synced = synced_count;
 
 cleanup:
     if (enabled_profiles) {
@@ -1039,9 +975,7 @@ error_t *cmd_add(
     CHECK_NULL(repo);
 
     error_t *err = validate_options(opts);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* Initialize all resources to NULL for safe cleanup */
     dotta_config_t *config = NULL;
@@ -1059,7 +993,7 @@ error_t *cmd_add(
     metadata_t *metadata = NULL;
     keymanager_t *key_mgr = NULL;
 
-    /* Pre-flight privilege check arrays (cleaned up in main cleanup block) */
+    /* Pre-flight privilege check arrays */
     const char **preflight_storage_paths = NULL;
     char **preflight_allocated_paths = NULL;
     size_t preflight_storage_count = 0;
@@ -1178,9 +1112,7 @@ error_t *cmd_add(
                 if (custom_needs_elevation) {
                     storage_path = strdup("custom/");
                     if (!storage_path) {
-                        err = ERROR(
-                            ERR_MEMORY, "Failed to allocate representative path"
-                        );
+                        err = ERROR(ERR_MEMORY, "Failed to allocate representative path");
                         goto cleanup;
                     }
                     preflight_allocated_paths[preflight_storage_count] = storage_path;
@@ -1282,9 +1214,7 @@ error_t *cmd_add(
     /* Checkout or create profile branch */
     bool profile_exists = false;
     err = gitops_branch_exists(repo, opts->profile, &profile_exists);
-    if (err) {
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     if (profile_exists) {
         err = worktree_checkout_branch(wt, opts->profile);
@@ -1331,7 +1261,6 @@ error_t *cmd_add(
 
             /* Determine if we need custom prefix for this storage path */
             const char *prefix_for_conversion = NULL;
-
             if (str_starts_with(file, "custom/")) {
                 /* custom/ paths require --prefix flag */
                 prefix_for_conversion = opts->custom_prefix;
@@ -1351,10 +1280,7 @@ error_t *cmd_add(
             char *fs_path = NULL;
             err = path_from_storage(file, prefix_for_conversion, &fs_path);
             if (err) {
-                err = error_wrap(
-                    err, "Failed to convert storage path '%s'",
-                    file
-                );
+                err = error_wrap(err, "Failed to convert storage path '%s'", file);
                 goto cleanup;
             }
 
@@ -1362,20 +1288,14 @@ error_t *cmd_add(
             err = fs_make_absolute(fs_path, &absolute);
             free(fs_path);
             if (err) {
-                err = error_wrap(
-                    err, "Failed to resolve path '%s'",
-                    file
-                );
+                err = error_wrap(err, "Failed to resolve path '%s'", file);
                 goto cleanup;
             }
         } else {
             /* Regular filesystem path - normalize it */
             err = path_normalize_input(file, opts->custom_prefix, &absolute);
             if (err) {
-                err = error_wrap(
-                    err, "Failed to resolve path '%s'",
-                    file
-                );
+                err = error_wrap(err, "Failed to resolve path '%s'", file);
                 goto cleanup;
             }
         }
@@ -1395,10 +1315,7 @@ error_t *cmd_add(
 
             if (err) {
                 free(absolute);
-                err = error_wrap(
-                    err, "Failed to collect files from '%s'",
-                    file
-                );
+                err = error_wrap(err, "Failed to collect files from '%s'", file);
                 goto cleanup;
             }
 
@@ -1451,8 +1368,8 @@ error_t *cmd_add(
             if (tracked_dir_count >= tracked_dir_capacity) {
                 size_t new_capacity = tracked_dir_capacity == 0 ? 8 : tracked_dir_capacity * 2;
                 tracked_dir_t *new_dirs = realloc(
-                    tracked_dirs, new_capacity * sizeof(
-                        tracked_dir_t)
+                    tracked_dirs,
+                    new_capacity * sizeof(tracked_dir_t)
                 );
                 if (!new_dirs) {
                     free(storage_prefix);
@@ -1685,24 +1602,9 @@ error_t *cmd_add(
     }
 
     /* Stage metadata.json file */
-    git_index *index = NULL;
-    err = worktree_get_index(wt, &index);
+    err = worktree_stage_file(wt, METADATA_FILE_PATH);
     if (err) {
-        err = error_wrap(err, "Failed to get worktree index");
-        goto cleanup;
-    }
-
-    int git_err = git_index_add_bypath(index, METADATA_FILE_PATH);
-    if (git_err < 0) {
-        git_index_free(index);
-        err = error_from_git(git_err);
-        goto cleanup;
-    }
-
-    git_err = git_index_write(index);
-    git_index_free(index);
-    if (git_err < 0) {
-        err = error_from_git(git_err);
+        err = error_wrap(err, "Failed to stage metadata");
         goto cleanup;
     }
 
@@ -1715,7 +1617,7 @@ error_t *cmd_add(
     }
 
     /* Create commit */
-    err = create_commit(repo, wt, opts, all_files, config, NULL);
+    err = create_commit(wt, opts, all_files, config, NULL);
     if (err) {
         goto cleanup;
     }
@@ -1784,7 +1686,9 @@ error_t *cmd_add(
                     out, "Failed to update manifest: %s",
                     error_message(manifest_err)
                 );
-                output_info(out, "Files committed to Git successfully");
+                output_info(
+                    out, "Files committed to Git successfully"
+                );
                 output_hint(
                     out, "Run 'dotta profile enable %s' to sync manifest",
                     opts->profile
@@ -1829,13 +1733,15 @@ error_t *cmd_add(
         if (added_count > 0) {
             output_success(
                 out, "Added %zu file%s to profile '%s'",
-                added_count, added_count == 1 ? "" : "s", opts->profile
+                added_count, added_count == 1 ? "" : "s",
+                opts->profile
             );
         } else {
             /* Directory-only add */
             output_success(
                 out, "Tracking %zu director%s in profile '%s'",
-                dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies", opts->profile
+                dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies",
+                opts->profile
             );
         }
 

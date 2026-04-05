@@ -466,3 +466,93 @@ error_t *worktree_get_index(worktree_handle_t *wt, git_index **out) {
 
     return NULL;
 }
+
+error_t *worktree_stage_file(worktree_handle_t *wt, const char *path) {
+    CHECK_NULL(wt);
+    CHECK_NULL(path);
+
+    git_index *index = NULL;
+    error_t *err = worktree_get_index(wt, &index);
+    if (err) return err;
+
+    int git_err = git_index_add_bypath(index, path);
+    if (git_err < 0) {
+        git_index_free(index);
+        return error_from_git(git_err);
+    }
+
+    git_err = git_index_write(index);
+    git_index_free(index);
+    if (git_err < 0) return error_from_git(git_err);
+
+    return NULL;
+}
+
+error_t *worktree_unstage_file(worktree_handle_t *wt, const char *path) {
+    CHECK_NULL(wt);
+    CHECK_NULL(path);
+
+    git_index *index = NULL;
+    error_t *err = worktree_get_index(wt, &index);
+    if (err) return err;
+
+    int git_err = git_index_remove_bypath(index, path);
+    if (git_err < 0) {
+        git_index_free(index);
+        return error_from_git(git_err);
+    }
+
+    git_err = git_index_write(index);
+    git_index_free(index);
+    if (git_err < 0) return error_from_git(git_err);
+
+    return NULL;
+}
+
+error_t *worktree_commit(
+    worktree_handle_t *wt,
+    const char *branch_name,
+    const char *message,
+    git_oid *out_oid
+) {
+    CHECK_NULL(wt);
+    CHECK_NULL(branch_name);
+    CHECK_NULL(message);
+
+    git_repository *wt_repo = worktree_get_repo(wt);
+    if (!wt_repo) {
+        return ERROR(ERR_INTERNAL, "Worktree repository is NULL");
+    }
+
+    git_index *index = NULL;
+    error_t *err = worktree_get_index(wt, &index);
+    if (err) return err;
+
+    git_oid tree_oid;
+    int git_err = git_index_write_tree(&tree_oid, index);
+    git_index_free(index);
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    git_tree *tree = NULL;
+    git_err = git_tree_lookup(&tree, wt_repo, &tree_oid);
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    git_oid commit_oid;
+    err = gitops_create_commit(
+        wt_repo, branch_name, tree, message, &commit_oid
+    );
+    git_tree_free(tree);
+    if (err) {
+        return err;
+    }
+
+    if (out_oid) {
+        git_oid_cpy(out_oid, &commit_oid);
+    }
+
+    return NULL;
+}

@@ -342,7 +342,7 @@ error_t *deploy_file(
     if (opts->dry_run) {
         /* Dry-run mode - just print */
         if (opts->verbose) {
-            printf("Would deploy: %s\n", entry->filesystem_path);
+            printf("  Would deploy: %s\n", entry->filesystem_path);
         }
         return NULL;
     }
@@ -620,8 +620,7 @@ error_t *deploy_file(
             printf(
                 "Deployed: %s (mode: %04o, owner: %s:%s)\n",
                 entry->filesystem_path, file_mode,
-                entry->owner ? entry->owner : "?",
-                entry->group ? entry->group : "?"
+                entry->owner ? entry->owner : "?", entry->group ? entry->group : "?"
             );
         } else {
             printf(
@@ -805,7 +804,7 @@ static error_t *deploy_tracked_directories(
             size_t required_count = required_dirs ? hashmap_size(required_dirs) : 0;
             if (required_count > 0) {
                 printf(
-                    "Checking %zu tracked director%s (scoped to deployment)...\n",
+                    "Processing %zu tracked director%s (scoped to deployment)...\n",
                     required_count, required_count == 1 ? "y" : "ies"
                 );
             }
@@ -818,7 +817,7 @@ static error_t *deploy_tracked_directories(
         } else {
             /* Full sync: all directories */
             printf(
-                "Creating %zu tracked director%s with metadata...\n",
+                "Processing %zu tracked director%s...\n",
                 dir_count, dir_count == 1 ? "y" : "ies"
             );
         }
@@ -935,10 +934,14 @@ static error_t *deploy_tracked_directories(
          */
         const workspace_item_t *ws_item = workspace_get_item(ws, filesystem_path);
 
-        /* Track existence for verbose output
+        /* Track existence for output messaging and missing-directory creation
          *
-         * Using fs_is_directory is fine here - it determines "was there a directory"
-         * for messaging purposes. Type divergence detection uses workspace (lstat-based). */
+         * Uses fs_is_directory (stat-based) rather than deriving from ws_item because:
+         * - When ws_item is NULL, directory SHOULD exist (workspace found no divergence),
+         *   but this provides a safety net for edge cases (e.g., analyze_directories=false)
+         * - Type divergence detection uses workspace (lstat-based) — the distinction matters
+         *   for symlink-to-directory detection
+         * Mutable: type conflict branch below may clear the path and update this. */
         bool directory_existed = fs_is_directory(filesystem_path);
 
         /* Type conflict: workspace detected directory replaced by file/symlink
@@ -989,29 +992,44 @@ static error_t *deploy_tracked_directories(
         }
 
         /* Skip if directory is CLEAN (no divergence and exists on filesystem)
-         * Force flag bypasses this check to allow manual re-application */
-        if (!ws_item && directory_existed && !opts->force) {
+         *
+         * Workspace divergence analysis is authoritative - if ws_item is NULL,
+         * mode and ownership already match expected state. Continue. */
+        if (!ws_item && directory_existed) {
             if (opts->verbose) {
                 printf("  Skipped: %s (unchanged)\n", filesystem_path);
             }
             continue;
         }
 
-        /* Dry-run: just print what would happen */
+        /* Dry-run: print what would happen with divergence detail */
         if (opts->dry_run) {
             if (opts->verbose) {
                 const char *action = directory_existed ? "Would fix" : "Would create";
+
+                /* Build divergence detail from workspace analysis */
+                char detail[32] = "";
+                if (ws_item && directory_existed) {
+                    bool has_mode = ws_item->divergence & DIVERGENCE_MODE;
+                    bool has_own = ws_item->divergence & DIVERGENCE_OWNERSHIP;
+                    snprintf(
+                        detail, sizeof(detail), " [%s%s%s]",
+                        has_mode ? "mode" : "", (has_mode && has_own) ? ", " : "",
+                        has_own ? "ownership" : ""
+                    );
+                }
+
                 if (dir_entry->owner || dir_entry->group) {
                     printf(
-                        "  %s: %s (mode: %04o, owner: %s:%s)\n",
+                        "  %s: %s (mode: %04o, owner: %s:%s)%s\n",
                         action, filesystem_path, dir_mode,
                         dir_entry->owner ? dir_entry->owner : "?",
-                        dir_entry->group ? dir_entry->group : "?"
+                        dir_entry->group ? dir_entry->group : "?", detail
                     );
                 } else {
                     printf(
-                        "  %s: %s (mode: %04o)\n",
-                        action, filesystem_path, dir_mode
+                        "  %s: %s (mode: %04o)%s\n",
+                        action, filesystem_path, dir_mode, detail
                     );
                 }
             }
@@ -1071,17 +1089,30 @@ static error_t *deploy_tracked_directories(
             bool has_ownership =
                 (dir_entry->owner || dir_entry->group) && target_uid != (uid_t) -1;
 
+            /* Build divergence detail from workspace analysis */
+            char detail[32] = "";
+            if (ws_item && directory_existed) {
+                bool has_mode = ws_item->divergence & DIVERGENCE_MODE;
+                bool has_own = ws_item->divergence & DIVERGENCE_OWNERSHIP;
+                snprintf(
+                    detail, sizeof(detail), " [%s%s%s]",
+                    has_mode ? "mode" : "",
+                    (has_mode && has_own) ? ", " : "",
+                    has_own ? "ownership" : ""
+                );
+            }
+
             if (has_ownership) {
                 printf(
-                    "  %s: %s (mode: %04o, owner: %s:%s)\n",
+                    "  %s: %s (mode: %04o, owner: %s:%s)%s\n",
                     action, filesystem_path, dir_mode,
                     dir_entry->owner ? dir_entry->owner : "?",
-                    dir_entry->group ? dir_entry->group : "?"
+                    dir_entry->group ? dir_entry->group : "?", detail
                 );
             } else {
                 printf(
-                    "  %s: %s (mode: %04o)\n",
-                    action, filesystem_path, dir_mode
+                    "  %s: %s (mode: %04o)%s\n",
+                    action, filesystem_path, dir_mode, detail
                 );
             }
         }
@@ -1172,6 +1203,13 @@ error_t *deploy_execute(
     }
 
     /* Deploy each file */
+    if (opts->verbose && manifest->count > 0) {
+        printf(
+            "Processing %zu file%s for deployment...\n",
+            manifest->count, manifest->count == 1 ? "" : "s"
+        );
+    }
+
     for (size_t i = 0; i < manifest->count; i++) {
         /* Non-const: deploy_file may lazy-load git tree entry */
         file_entry_t *entry = (file_entry_t *) &manifest->entries[i];

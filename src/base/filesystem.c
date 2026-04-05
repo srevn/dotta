@@ -25,6 +25,9 @@
 /* Buffer size for file I/O */
 #define IO_BUFFER_SIZE 8192
 
+/* Maximum file size for fs_read_file (256 MB) */
+#define FS_MAX_READ_SIZE (256 * 1024 * 1024)
+
 /**
  * Helper: Validate path argument
  */
@@ -90,7 +93,6 @@ bool fs_is_os_metadata_file(const char *filename) {
 /**
  * File operations
  */
-
 error_t *fs_read_file(const char *path, buffer_t **out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);
@@ -112,6 +114,15 @@ error_t *fs_read_file(const char *path, buffer_t **out) {
         return ERROR(
             ERR_FS, "Failed to stat '%s': %s",
             path, strerror(saved_errno)
+        );
+    }
+
+    /* Guard against unreasonably large files */
+    if (st.st_size > FS_MAX_READ_SIZE) {
+        close(fd);
+        return ERROR(
+            ERR_FS, "File '%s' too large (%lld bytes, max %d)",
+            path, (long long) st.st_size, FS_MAX_READ_SIZE
         );
     }
 
@@ -164,7 +175,27 @@ error_t *fs_read_file(const char *path, buffer_t **out) {
     return NULL;
 }
 
-error_t *fs_write_file_raw(
+/**
+ * Helper: Apply metadata, write data, sync, and close a file descriptor
+ *
+ * Core write sequence shared by both the atomic (temp file) and direct
+ * (O_TRUNC fallback) paths. Ownership and permissions are set via fd-based
+ * operations (fchown/fchmod) BEFORE any data is written, preserving the
+ * security invariant that sensitive content is never exposed with wrong metadata.
+ *
+ * The fd is always closed on return (both success and error).
+ *
+ * @param fd Open file descriptor (ownership transferred, always closed)
+ * @param path Target path (for error messages only, not accessed)
+ * @param data Raw data bytes (can be NULL if size is 0)
+ * @param size Number of bytes to write
+ * @param mode Permission mode
+ * @param uid Target UID (-1 to skip)
+ * @param gid Target GID (-1 to skip)
+ * @return Error or NULL on success
+ */
+static error_t *write_and_close_fd(
+    int fd,
     const char *path,
     const unsigned char *data,
     size_t size,
@@ -172,49 +203,6 @@ error_t *fs_write_file_raw(
     uid_t uid,
     gid_t gid
 ) {
-    RETURN_IF_ERROR(validate_path(path));
-    if (size > 0 && !data) {
-        return ERROR(
-            ERR_INVALID_ARG, "Data cannot be NULL when size > 0"
-        );
-    }
-
-    /* Ensure parent directory exists */
-    char *parent = NULL;
-    error_t *err = fs_get_parent_dir(path, &parent);
-    if (err) {
-        return err;
-    }
-
-    if (parent && !fs_exists(parent)) {
-        err = fs_create_dir(parent, true);
-        free(parent);
-        if (err) {
-            return error_wrap(
-                err, "Failed to create parent directory for '%s'", path
-            );
-        }
-    } else {
-        free(parent);
-    }
-
-    /* SECURITY: Open with restrictive mode 0600 initially
-     *
-     * Rationale: We must set ownership and permissions BEFORE writing any data
-     * to prevent security windows. Using 0600 ensures that even if the process
-     * is killed after open() but before fchmod(), the file remains protected.
-     *
-     * The umask cannot make this less restrictive (can only clear bits, not set them),
-     * so 0600 is safe regardless of the process umask setting.
-     */
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (fd < 0) {
-        return ERROR(
-            ERR_FS, "Failed to open '%s' for writing: %s",
-            path, strerror(errno)
-        );
-    }
-
     /* SECURITY CRITICAL: Apply ownership BEFORE writing data
      *
      * This ensures that if the file contains sensitive data (e.g., SSH keys,
@@ -292,6 +280,132 @@ error_t *fs_write_file_raw(
     }
 
     close(fd);
+    return NULL;
+}
+
+/**
+ * Helper: Direct (non-atomic) write to target path
+ *
+ * Fallback for situations where atomic rename is not possible:
+ * - Cross-filesystem writes (rename fails with EXDEV)
+ * - Temp file creation fails (read-only parent dir edge cases)
+ *
+ * Opens target with O_TRUNC, destroying existing content before writing.
+ * This has a data-loss window if the process is killed during write, but
+ * is unavoidable when atomic rename cannot be used.
+ */
+static error_t *write_file_direct(
+    const char *path,
+    const unsigned char *data,
+    size_t size,
+    mode_t mode,
+    uid_t uid,
+    gid_t gid
+) {
+    /* SECURITY: Open with restrictive mode 0600 initially
+     *
+     * Rationale: We must set ownership and permissions BEFORE writing any data
+     * to prevent security windows. Using 0600 ensures that even if the process
+     * is killed after open() but before fchmod(), the file remains protected.
+     *
+     * The umask cannot make this less restrictive (can only clear bits, not set them),
+     * so 0600 is safe regardless of the process umask setting.
+     */
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
+        return ERROR(
+            ERR_FS, "Failed to open '%s' for writing: %s",
+            path, strerror(errno)
+        );
+    }
+
+    return write_and_close_fd(fd, path, data, size, mode, uid, gid);
+}
+
+error_t *fs_write_file_raw(
+    const char *path,
+    const unsigned char *data,
+    size_t size,
+    mode_t mode,
+    uid_t uid,
+    gid_t gid
+) {
+    RETURN_IF_ERROR(validate_path(path));
+    if (size > 0 && !data) {
+        return ERROR(
+            ERR_INVALID_ARG, "Data cannot be NULL when size > 0"
+        );
+    }
+
+    /* Ensure parent directory exists */
+    char *parent = NULL;
+    error_t *err = fs_get_parent_dir(path, &parent);
+    if (err) {
+        return err;
+    }
+
+    if (parent && !fs_exists(parent)) {
+        err = fs_create_dir(parent, true);
+        if (err) {
+            free(parent);
+            return error_wrap(
+                err, "Failed to create parent directory for '%s'",
+                path
+            );
+        }
+    }
+
+    /* Build temp file path in same directory as target.
+     * Same directory guarantees same filesystem for atomic rename(). */
+    char tmp_path[PATH_MAX];
+    int n = snprintf(
+        tmp_path, sizeof(tmp_path), "%s/.dotta-tmp-XXXXXX",
+        parent ? parent : "."
+    );
+    free(parent);
+
+    if (n < 0 || (size_t) n >= sizeof(tmp_path)) {
+        return ERROR(
+            ERR_FS, "Path too long for atomic write of '%s'",
+            path
+        );
+    }
+
+    /* Create temp file with restrictive 0600 mode (mkstemp guarantee).
+     * If creation fails (e.g., parent dir lacks write permission but
+     * existing target file is writable), fall back to direct write. */
+    int fd = mkstemp(tmp_path);
+    if (fd < 0) {
+        return write_file_direct(path, data, size, mode, uid, gid);
+    }
+
+    /* Write data to temp file with correct ownership and permissions.
+     * SECURITY: All metadata is applied via fd operations before data is
+     * written. If anything fails, the original file is untouched. */
+    err = write_and_close_fd(fd, path, data, size, mode, uid, gid);
+    if (err) {
+        unlink(tmp_path);
+        return err;
+    }
+
+    /* Atomic replace: rename temp over target.
+     * POSIX guarantees this is atomic on the same filesystem — at no point
+     * does the target path contain partial content. */
+    if (rename(tmp_path, path) < 0) {
+        int saved_errno = errno;
+        unlink(tmp_path);
+
+        if (saved_errno == EXDEV) {
+            /* Cross-filesystem: atomic rename impossible, fall back */
+            return write_file_direct(path, data, size, mode, uid, gid);
+        }
+
+        return ERROR(
+            ERR_FS, "Failed to replace '%s': %s",
+            path, strerror(saved_errno)
+        );
+    }
+
     return NULL;
 }
 
@@ -379,7 +493,6 @@ bool fs_file_exists(const char *path) {
 /**
  * Directory operations
  */
-
 error_t *fs_create_dir(const char *path, bool parents) {
     RETURN_IF_ERROR(validate_path(path));
 
@@ -504,7 +617,8 @@ error_t *fs_create_dir_with_ownership(
     /* Validate mode */
     if (mode > 0777) {
         return ERROR(
-            ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)", mode
+            ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)",
+            mode
         );
     }
 
@@ -554,8 +668,15 @@ error_t *fs_create_dir_with_ownership(
      * then atomically set final mode via fchmod() on the file descriptor. */
     if (mkdir(path, 0700) < 0) {
         if (errno == EEXIST) {
-            /* Race condition: directory created concurrently, retry via open path */
-            return fs_create_dir_with_ownership(path, mode, uid, gid, false);
+            /* Race condition: directory created concurrently, open it directly */
+            dirfd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+            if (dirfd < 0) {
+                return ERROR(
+                    ERR_FS, "Directory '%s' created but cannot open: %s",
+                    path, strerror(errno)
+                );
+            }
+            goto apply_metadata;
         }
         return ERROR(
             ERR_FS, "Failed to create directory '%s': %s",
@@ -726,7 +847,7 @@ bool fs_is_directory_empty(const char *path) {
         return true;  /* NULL path is considered "empty" */
     }
 
-    /* Try to open directory (no need for separate stat - opendir checks internally) */
+    /* Try to open directory (opendir checks stat internally) */
     DIR *dir = opendir(path);
     if (!dir) {
         /* Can't open (doesn't exist, not a dir, or permission denied).
@@ -833,7 +954,6 @@ error_t *fs_list_dir(const char *path, string_array_t **out) {
 /**
  * Path operations
  */
-
 error_t *fs_make_absolute(const char *path, char **out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);
@@ -906,109 +1026,66 @@ error_t *fs_normalize_path(const char *path, char **out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);
 
-    size_t path_len = strlen(path);
-    if (path_len == 0) {
-        return ERROR(ERR_INVALID_ARG, "Cannot normalize empty path");
-    }
-
+    size_t len = strlen(path);
     bool is_absolute = (path[0] == '/');
 
-    /* Allocate component stack (max components = path_len/2 + 1) */
-    size_t max_components = path_len / 2 + 2;
-    char **components = calloc(max_components, sizeof(char *));
-    if (!components) {
-        return ERROR(ERR_MEMORY, "Failed to allocate component stack");
-    }
-    size_t stack_size = 0;
+    /* Component stack: pointers into original string */
+    typedef struct { const char *s; size_t n; } comp_t;
+    comp_t *stack = malloc((len / 2 + 2) * sizeof *stack);
+    if (!stack)
+        return ERROR(
+            ERR_MEMORY, "Failed to allocate path components"
+        );
 
-    /* Make a mutable copy for tokenization */
-    char *path_copy = strdup(path);
-    if (!path_copy) {
-        free(components);
-        return ERROR(ERR_MEMORY, "Failed to copy path");
-    }
+    /* Parse path and resolve . and ..  */
+    size_t depth = 0;
+    size_t dotdots = 0; /* leading ".." count */
+    const char *rel = path;
 
-    /* Tokenize by '/' and process each component */
-    char *saveptr = NULL;
-    char *token = strtok_r(path_copy, "/", &saveptr);
+    while (*rel) {
+        while (*rel == '/') rel++;
+        if (!*rel) break;
 
-    while (token != NULL) {
-        if (token[0] == '\0' || strcmp(token, ".") == 0) {
-        } else if (strcmp(token, "..") == 0) {
-            /* '..': handle parent directory reference */
-            bool push_dotdot = false;
+        const char *seg = rel;
+        while (*rel && *rel != '/') rel++;
+        size_t n = (size_t) (rel - seg);
 
-            if (stack_size > 0) {
-
-                if (!is_absolute &&
-                    strcmp(components[stack_size - 1], "..") == 0) {
-                    push_dotdot = true;
-                } else {
-                    /* Top is regular component, pop it */
-                    stack_size--;
-                    /* No need to free component, it points to path_copy */
-                    components[stack_size] = NULL;
-                }
-            } else if (!is_absolute) {
-                /* Stack empty and relative path: push '..' */
-                push_dotdot = true;
-            }
-
-            if (push_dotdot) {
-                components[stack_size] = token;
-                stack_size++;
-            }
-        } else {
-            /* Regular component: push to stack */
-            components[stack_size] = token;
-            stack_size++;
+        if (n == 1 && seg[0] == '.') continue;
+        if (n == 2 && seg[0] == '.' && seg[1] == '.') {
+            if (depth > 0) depth--;
+            else if (!is_absolute) dotdots++;
+            continue;
         }
-        token = strtok_r(NULL, "/", &saveptr);
+
+        stack[depth++] = (comp_t){ seg, n };
     }
 
-    /* Calculate result length */
-    size_t result_len = is_absolute ? 1 : 0; /* Leading '/' for absolute */
-    for (size_t i = 0; i < stack_size; i++) {
-        if (i > 0) result_len++;             /* Separator '/' */
-        result_len += strlen(components[i]);
-    }
-
-    /* Handle empty result */
-    if (result_len == 0) {
-        *out = strdup(".");
-        free(path_copy);
-        free(components);
-        if (!*out) {
-            return ERROR(ERR_MEMORY, "Failed to allocate result");
-        }
-        return NULL;
-    }
-
-    /* Build result string */
-    char *result = malloc(result_len + 1);
+    /* Build result (normalization never lengthens) */
+    char *result = malloc(len + 2);
     if (!result) {
-        free(path_copy);
-        free(components);
-        return ERROR(ERR_MEMORY, "Failed to allocate normalized path");
+        free(stack);
+        return ERROR(
+            ERR_MEMORY, "Failed to allocate normalized path"
+        );
     }
 
-    char *ptr = result;
-    if (is_absolute) {
-        *ptr++ = '/';
+    char *w = result;
+    if (is_absolute) *w++ = '/';
+    for (size_t i = 0; i < dotdots; i++) {
+        if (i > 0) *w++ = '/';
+        *w++ = '.'; *w++ = '.';
     }
 
-    for (size_t i = 0; i < stack_size; i++) {
-        if (i > 0) {
-            *ptr++ = '/';
-        }
-        size_t comp_len = strlen(components[i]);
-        memcpy(ptr, components[i], comp_len);
-        ptr += comp_len;
+    for (size_t i = 0; i < depth; i++) {
+        if (i > 0 || dotdots > 0) *w++ = '/';
+        memcpy(w, stack[i].s, stack[i].n);
+        w += stack[i].n;
     }
-    *ptr = '\0';
 
-    free(path_copy);
-    free(components);
+    if (w == result) *w++ = '.';
+    *w = '\0';
+
+    free(stack);
     *out = result;
     return NULL;
 }
@@ -1148,13 +1225,13 @@ bool fs_is_writable(const char *path) {
     /* Check if the existing ancestor directory is writable */
     bool writable = check_path && access(check_path, W_OK) == 0;
     free(check_path);
+
     return writable;
 }
 
 /**
  * Symlink operations
  */
-
 error_t *fs_create_symlink(const char *target, const char *linkpath) {
     RETURN_IF_ERROR(validate_path(target));
     RETURN_IF_ERROR(validate_path(linkpath));
@@ -1211,14 +1288,16 @@ bool fs_is_symlink(const char *path) {
 /**
  * Permission operations
  */
-
 error_t *fs_get_permissions(const char *path, mode_t *out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);
 
     struct stat st;
     if (stat(path, &st) < 0) {
-        return ERROR(ERR_FS, "Failed to stat '%s': %s", path, strerror(errno));
+        return ERROR(
+            ERR_FS, "Failed to stat '%s': %s",
+            path, strerror(errno)
+        );
     }
 
     *out = st.st_mode & 0777;
@@ -1267,11 +1346,11 @@ bool fs_lexists(const char *path) {
 /**
  * Stat-based type checking helpers
  */
-
 bool fs_stat_is_symlink(const struct stat *st) {
     if (!st) {
         return false;
     }
+
     return S_ISLNK(st->st_mode);
 }
 
@@ -1279,6 +1358,7 @@ bool fs_stat_is_regular(const struct stat *st) {
     if (!st) {
         return false;
     }
+
     return S_ISREG(st->st_mode);
 }
 
@@ -1286,6 +1366,7 @@ bool fs_stat_is_directory(const struct stat *st) {
     if (!st) {
         return false;
     }
+
     return S_ISDIR(st->st_mode);
 }
 
@@ -1293,6 +1374,7 @@ bool fs_stat_is_executable(const struct stat *st) {
     if (!st) {
         return false;
     }
+
     return (st->st_mode & S_IXUSR) != 0;
 }
 

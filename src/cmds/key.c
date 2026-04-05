@@ -260,6 +260,10 @@ static error_t *cmd_key_status(
             out, OUTPUT_VERBOSE, "  KDF opslimit: %lu\n",
             (unsigned long) config->encryption_opslimit
         );
+        output_print(
+            out, OUTPUT_VERBOSE, "  KDF memlimit: %zu MB\n",
+            config->encryption_memlimit
+        );
 
         /* Show session timeout */
         output_print(

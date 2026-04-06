@@ -11,12 +11,45 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "credentials.h"
 #include "error.h"
 #include "transfer.h"
 #include "utils/array.h"
 #include "utils/string.h"
+
+/**
+ * Get commit signature with fallback for missing git config
+ *
+ * Tries git_signature_default() first (reads user.name/user.email from
+ * .gitconfig). If that fails (common on fresh machines before dotfiles
+ * are deployed), falls back to user@hostname from the environment.
+ */
+static error_t *gitops_get_signature(git_signature **out, git_repository *repo) {
+    if (git_signature_default(out, repo) == 0) {
+        return NULL;
+    }
+
+    const char *user = getenv("USER");
+    if (!user || !*user) user = "dotta";
+
+    char hostname[256];
+    if (gethostname(hostname, sizeof(hostname)) != 0) {
+        strncpy(hostname, "localhost", sizeof(hostname));
+    }
+    hostname[sizeof(hostname) - 1] = '\0';
+
+    char email[512];
+    snprintf(email, sizeof(email), "%s@%s", user, hostname);
+
+    int err = git_signature_now(out, user, email);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    return NULL;
+}
 
 /**
  * Repository operations
@@ -155,14 +188,13 @@ error_t *gitops_create_orphan_branch(
         );
     }
 
-    /* Get default signature */
+    /* Get signature with fallback */
     git_signature *sig = NULL;
-    err = git_signature_default(&sig, repo);
-    if (err < 0) {
+    error_t *sig_err = gitops_get_signature(&sig, repo);
+    if (sig_err) {
         git_tree_free(tree);
         return error_wrap(
-            error_from_git(err),
-            "Failed to get signature for orphan branch '%s'", name
+            sig_err, "Failed to get signature for orphan branch '%s'", name
         );
     }
 
@@ -557,12 +589,10 @@ error_t *gitops_create_commit(
     CHECK_NULL(tree);
     CHECK_NULL(message);
 
-    /* Get default signature */
+    /* Get signature with fallback */
     git_signature *sig = NULL;
-    int err = git_signature_default(&sig, repo);
-    if (err < 0) {
-        return error_from_git(err);
-    }
+    error_t *sig_err = gitops_get_signature(&sig, repo);
+    if (sig_err) return sig_err;
 
     /* Get parent commit if branch exists */
     git_oid commit_oid;
@@ -579,7 +609,7 @@ error_t *gitops_create_commit(
         );
     }
 
-    err = git_reference_name_to_id(&commit_oid, repo, refname);
+    int err = git_reference_name_to_id(&commit_oid, repo, refname);
     if (err == 0) {
         /* Branch exists - look up parent commit */
         err = git_commit_lookup(&parent, repo, &commit_oid);
@@ -1923,12 +1953,12 @@ error_t *gitops_create_merge_commit(
         return error_from_git(err);
     }
 
-    /* Get signature */
+    /* Get signature with fallback */
     git_signature *sig = NULL;
-    err = git_signature_default(&sig, repo);
-    if (err < 0) {
+    error_t *sig_err = gitops_get_signature(&sig, repo);
+    if (sig_err) {
         git_tree_free(tree);
-        return error_from_git(err);
+        return sig_err;
     }
 
     /* Create merge commit with two parents
@@ -2008,9 +2038,8 @@ error_t *gitops_rebase_inmemory_safe(
     }
 
     /* Get signature once for all rebase operations */
-    git_err = git_signature_default(&sig, repo);
-    if (git_err < 0) {
-        err = error_from_git(git_err);
+    err = gitops_get_signature(&sig, repo);
+    if (err) {
         git_rebase_abort(rebase);
         git_rebase_free(rebase);
         return error_wrap(err, "Failed to get signature for rebase");

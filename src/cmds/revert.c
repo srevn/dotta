@@ -302,7 +302,7 @@ static error_t *show_diff_preview(
      * Each blob uses its own encryption flag since the state may differ
      * between the current HEAD and the target commit.
      */
-    buffer_t *current_plaintext = NULL;
+    buffer_t current_plaintext = BUFFER_INIT;
     error_t *err = content_get_from_blob_oid(
         repo,
         current_oid,
@@ -316,7 +316,7 @@ static error_t *show_diff_preview(
         return error_wrap(err, "Failed to get current file content");
     }
 
-    buffer_t *target_plaintext = NULL;
+    buffer_t target_plaintext = BUFFER_INIT;
     err = content_get_from_blob_oid(
         repo,
         target_oid,
@@ -327,7 +327,7 @@ static error_t *show_diff_preview(
         &target_plaintext
     );
     if (err) {
-        buffer_free(current_plaintext);
+        buffer_free(&current_plaintext);
         return error_wrap(err, "Failed to get target file content");
     }
 
@@ -339,14 +339,14 @@ static error_t *show_diff_preview(
     git_patch *patch = NULL;
     int ret = git_patch_from_buffers(
         &patch,
-        buffer_data(current_plaintext), buffer_size(current_plaintext), file_path,
-        buffer_data(target_plaintext), buffer_size(target_plaintext), file_path,
+        current_plaintext.data, current_plaintext.size, file_path,
+        target_plaintext.data, target_plaintext.size, file_path,
         NULL  /* options */
     );
 
     if (ret < 0) {
-        buffer_free(current_plaintext);
-        buffer_free(target_plaintext);
+        buffer_free(&current_plaintext);
+        buffer_free(&target_plaintext);
         return error_from_git(ret);
     }
 
@@ -384,8 +384,8 @@ static error_t *show_diff_preview(
     git_patch_free(patch);
 
     /* Free plaintext buffers */
-    buffer_free(current_plaintext);
-    buffer_free(target_plaintext);
+    buffer_free(&current_plaintext);
+    buffer_free(&target_plaintext);
 
     return NULL;
 }
@@ -617,7 +617,7 @@ static error_t *revert_file_in_branch(
     git_commit *head_commit = NULL;
     git_tree *head_tree = NULL;
     metadata_t *current_metadata = NULL;
-    buffer_t *metadata_json_buf = NULL;
+    buffer_t metadata_json_buf = BUFFER_INIT;
     git_index *index = NULL;
     git_tree *new_tree = NULL;
     char *msg = NULL;
@@ -832,7 +832,7 @@ static error_t *revert_file_in_branch(
     git_oid metadata_blob_oid;
     ret = git_blob_create_from_buffer(
         &metadata_blob_oid, repo,
-        buffer_data(metadata_json_buf), buffer_size(metadata_json_buf)
+        metadata_json_buf.data, metadata_json_buf.size
     );
     if (ret < 0) {
         err = error_from_git(ret);
@@ -894,7 +894,7 @@ cleanup:
     if (head_commit) git_commit_free(head_commit);
     if (head_tree) git_tree_free(head_tree);
     if (current_metadata) metadata_free(current_metadata);
-    if (metadata_json_buf) buffer_free(metadata_json_buf);
+    buffer_free(&metadata_json_buf);
     if (index) git_index_free(index);
     if (new_tree) git_tree_free(new_tree);
     if (msg) free(msg);

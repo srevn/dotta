@@ -134,20 +134,17 @@ static char *format_file_list(char **files, size_t count) {
         return strdup("  (no files)");
     }
 
-    buffer_t *buf = buffer_create();
-    if (!buf) {
-        return NULL;
-    }
+    buffer_t buf = BUFFER_INIT;
 
     /* Show up to MAX_FILES_DETAIL files */
     size_t show_count = count < MAX_FILES_DETAIL ? count : MAX_FILES_DETAIL;
     error_t *err = NULL;
 
     for (size_t i = 0; i < show_count; i++) {
-        err = buffer_append_string(buf, "  - ");
-        if (!err) err = buffer_append_string(buf, files[i]);
+        err = buffer_append_string(&buf, "  - ");
+        if (!err) err = buffer_append_string(&buf, files[i]);
         if (!err && (i < show_count - 1 || count > MAX_FILES_DETAIL)) {
-            err = buffer_append_string(buf, "\n");
+            err = buffer_append_string(&buf, "\n");
         }
         if (err) goto cleanup;
     }
@@ -160,23 +157,19 @@ static char *format_file_list(char **files, size_t count) {
             "  ... and %zu more file%s",
             count - MAX_FILES_DETAIL, (count - MAX_FILES_DETAIL) == 1 ? "" : "s"
         );
-        err = buffer_append_string(buf, truncate_msg);
+        err = buffer_append_string(&buf, truncate_msg);
         if (err) goto cleanup;
     }
 
     /* Transfer ownership from buffer to avoid copy */
     char *result = NULL;
-    err = buffer_release_data(buf, &result);
-    if (err) {
-        error_free(err);
-        return NULL;
-    }
+    result = buffer_detach(&buf);
 
     return result;
 
 cleanup:
     error_free(err);
-    buffer_free(buf);
+    buffer_free(&buf);
     return NULL;
 }
 
@@ -217,10 +210,7 @@ static char *substitute_template(
         return NULL;
     }
 
-    buffer_t *buf = buffer_create();
-    if (!buf) {
-        return NULL;
-    }
+    buffer_t buf = BUFFER_INIT;
 
     /* File count as string */
     char count_str[32];
@@ -268,12 +258,12 @@ static char *substitute_template(
                     }
 
                     if (value) {
-                        err = buffer_append_string(buf, value);
+                        err = buffer_append_string(&buf, value);
                     } else {
                         /* Unknown variable - keep as-is */
-                        err = buffer_append(buf, (const unsigned char *) "{", 1);
-                        if (!err) err = buffer_append_string(buf, var_name);
-                        if (!err) err = buffer_append(buf, (const unsigned char *) "}", 1);
+                        err = buffer_append(&buf, "{", 1);
+                        if (!err) err = buffer_append_string(&buf, var_name);
+                        if (!err) err = buffer_append(&buf, "}", 1);
                     }
 
                     if (err) goto cleanup;
@@ -283,7 +273,7 @@ static char *substitute_template(
 
                 /* Variable name too long - preserve as literal text */
                 size_t literal_len = (size_t) (end - p) + 1;
-                err = buffer_append(buf, (const unsigned char *) p, literal_len);
+                err = buffer_append(&buf, p, literal_len);
                 if (err) goto cleanup;
                 p = end + 1;
                 continue;
@@ -291,24 +281,20 @@ static char *substitute_template(
         }
 
         /* Regular character */
-        err = buffer_append(buf, (const unsigned char *) p, 1);
+        err = buffer_append(&buf, p, 1);
         if (err) goto cleanup;
         p++;
     }
 
     /* Transfer ownership from buffer to avoid copy */
     char *result = NULL;
-    err = buffer_release_data(buf, &result);
-    if (err) {
-        error_free(err);
-        return NULL;
-    }
+    result = buffer_detach(&buf);
 
     return result;
 
 cleanup:
     error_free(err);
-    buffer_free(buf);
+    buffer_free(&buf);
     return NULL;
 }
 

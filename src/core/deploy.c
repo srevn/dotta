@@ -18,7 +18,6 @@
 #include "core/workspace.h"
 #include "infra/content.h"
 #include "utils/array.h"
-#include "utils/buffer.h"
 #include "utils/hashmap.h"
 #include "utils/privilege.h"
 #include "utils/string.h"
@@ -488,8 +487,8 @@ error_t *deploy_file(
     }
 
     /* Get content pointer and size from buffer */
-    const unsigned char *content = buffer_data(content_buffer);
-    size_t size = buffer_size(content_buffer);
+    const unsigned char *content = (const unsigned char *) content_buffer->data;
+    size_t size = content_buffer->size;
 
     /* Determine permissions from manifest cache
      *

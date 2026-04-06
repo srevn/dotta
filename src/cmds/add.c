@@ -458,26 +458,20 @@ static error_t *init_profile_dottaignore(
     const char *template_content = ignore_profile_dottaignore_template();
 
     /* Create buffer with template content */
-    buffer_t *content = buffer_create();
-    if (!content) {
-        free(dottaignore_path);
-        return ERROR(ERR_MEMORY, "Failed to create buffer");
-    }
+    buffer_t content = BUFFER_INIT;
 
     error_t *err = buffer_append(
-        content, (const uint8_t *) template_content,
-        strlen(template_content)
+        &content, template_content, strlen(template_content)
     );
-
     if (err) {
-        buffer_free(content);
+        buffer_free(&content);
         free(dottaignore_path);
         return error_wrap(err, "Failed to populate buffer");
     }
 
     /* Write to file */
-    err = fs_write_file(dottaignore_path, content);
-    buffer_free(content);
+    err = fs_write_file(dottaignore_path, &content);
+    buffer_free(&content);
     if (err) {
         free(dottaignore_path);
         return error_wrap(err, "Failed to write .dottaignore");

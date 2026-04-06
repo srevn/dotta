@@ -176,7 +176,7 @@ error_t *encryption_encrypt(
     size_t plaintext_len,
     const uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE],
     const char *storage_path,
-    buffer_t **out_ciphertext
+    buffer_t *out_ciphertext
 );
 
 /**
@@ -211,7 +211,7 @@ error_t *encryption_decrypt(
     size_t ciphertext_len,
     const uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE],
     const char *storage_path,
-    buffer_t **out_plaintext
+    buffer_t *out_plaintext
 );
 
 /**

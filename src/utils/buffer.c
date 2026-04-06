@@ -1,133 +1,159 @@
 /**
  * buffer.c - Dynamic byte buffer implementation
+ *
+ * Stack-allocable, always null-terminated when non-empty.
  */
 
 #include "buffer.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "base/error.h"
 
-#define INITIAL_CAPACITY 4096
+#define MIN_CAPACITY 64
 
-buffer_t *buffer_create(void) {
-    return buffer_create_with_capacity(INITIAL_CAPACITY);
-}
+/**
+ * Ensure buffer can hold at least alloc content bytes.
+ * Allocates alloc+1 internally (for null terminator).
+ */
+error_t *buffer_grow(buffer_t *buf, size_t alloc) {
+    CHECK_NULL(buf);
 
-buffer_t *buffer_create_with_capacity(size_t capacity) {
-    buffer_t *buf = calloc(1, sizeof(buffer_t));
-    if (!buf) {
+    /* Account for null terminator */
+    size_t needed = alloc + 1;
+    if (needed == 0) {
+        return ERROR(
+            ERR_MEMORY,
+            "Buffer capacity overflow"
+        );
+    }
+
+    if (needed <= buf->capacity) {
         return NULL;
     }
 
-    if (capacity > 0) {
-        buf->data = malloc(capacity);
-        if (!buf->data) {
-            free(buf);
-            return NULL;
+    /* Growth strategy: double from current
+     * or MIN_CAPACITY, whichever is larger */
+    size_t cap = buf->capacity ? buf->capacity : MIN_CAPACITY;
+    while (cap < needed) {
+        if (cap > SIZE_MAX / 2) {
+            return ERROR(
+                ERR_MEMORY,
+                "Buffer capacity overflow"
+            );
         }
-        buf->capacity = capacity;
+        cap *= 2;
     }
 
-    buf->size = 0;
-    return buf;
-}
-
-buffer_t *buffer_create_from_data(const unsigned char *data, size_t size) {
-    if (!data || size == 0) {
-        return buffer_create();
+    char *new_data = realloc(buf->data, cap);
+    if (!new_data) {
+        return ERROR(
+            ERR_MEMORY,
+            "Failed to grow buffer to %zu bytes", cap
+        );
     }
 
-    buffer_t *buf = buffer_create_with_capacity(size);
-    if (!buf) {
-        return NULL;
-    }
+    buf->data = new_data;
+    buf->capacity = cap;
+    buf->data[buf->size] = '\0';
 
-    memcpy(buf->data, data, size);
-    buf->size = size;
-
-    return buf;
+    return NULL;
 }
 
 void buffer_free(buffer_t *buf) {
     if (!buf) {
         return;
     }
+    free(buf->data);
+    *buf = (buffer_t){ 0 };
+}
 
+buffer_t *buffer_new(size_t capacity) {
+    buffer_t *buf = calloc(1, sizeof(*buf));
+    if (!buf) {
+        return NULL;
+    }
+
+    if (capacity > 0) {
+        error_t *err = buffer_grow(buf, capacity);
+        if (err) {
+            error_free(err);
+            free(buf);
+            return NULL;
+        }
+    }
+
+    return buf;
+}
+
+void buffer_destroy(void *ptr) {
+    buffer_t *buf = ptr;
+    if (!buf) {
+        return;
+    }
     free(buf->data);
     free(buf);
 }
 
-error_t *buffer_reserve(buffer_t *buf, size_t capacity) {
+error_t *buffer_append(buffer_t *buf, const void *data, size_t len) {
     CHECK_NULL(buf);
 
-    if (capacity <= buf->capacity) {
-        return NULL;  /* Already have enough capacity */
-    }
-
-    unsigned char *new_data = realloc(buf->data, capacity);
-    if (!new_data) {
-        return error_create(ERR_MEMORY, "Failed to grow buffer");
-    }
-
-    buf->data = new_data;
-    buf->capacity = capacity;
-
-    return NULL;
-}
-
-error_t *buffer_append(buffer_t *buf, const unsigned char *data, size_t size) {
-    CHECK_NULL(buf);
-    CHECK_NULL(data);
-
-    if (size == 0) {
+    if (len == 0) {
         return NULL;
     }
+    CHECK_NULL(data);
 
-    /* Ensure capacity (with overflow check) */
-    size_t required = buf->size + size;
-    if (required < buf->size) {
-        return ERROR(ERR_MEMORY, "Buffer size overflow");
-    }
-    if (required > buf->capacity) {
-        size_t new_capacity = buf->capacity == 0 ? INITIAL_CAPACITY : buf->capacity;
-        while (new_capacity < required) {
-            if (new_capacity > SIZE_MAX / 2) {
-                return ERROR(ERR_MEMORY, "Buffer capacity overflow");
-            }
-            new_capacity *= 2;
-        }
-
-        error_t *err = buffer_reserve(buf, new_capacity);
-        if (err) {
-            return err;
-        }
+    /* Overflow check */
+    size_t new_size = buf->size + len;
+    if (new_size < buf->size) {
+        return ERROR(
+            ERR_MEMORY,
+            "Buffer size overflow"
+        );
     }
 
-    memcpy(buf->data + buf->size, data, size);
-    buf->size += size;
+    /* Save offset if data points into this buffer */
+    const char *src = data;
+    size_t src_offset = 0;
+    bool self_ref = buf->data && src >= buf->data
+        && src < buf->data + buf->capacity;
+    if (self_ref) {
+        src_offset = (size_t) (src - buf->data);
+    }
+
+    error_t *err = buffer_grow(buf, new_size);
+    if (err) {
+        return err;
+    }
+
+    if (self_ref) {
+        src = buf->data + src_offset;
+    }
+
+    memmove(buf->data + buf->size, src, len);
+    buf->size = new_size;
+    buf->data[buf->size] = '\0';
 
     return NULL;
 }
 
 error_t *buffer_append_string(buffer_t *buf, const char *str) {
-    CHECK_NULL(buf);
     CHECK_NULL(str);
 
-    size_t len = strlen(str);  /* Don't include null terminator in buffer */
-    return buffer_append(buf, (const unsigned char *) str, len);
+    return buffer_append(buf, str, strlen(str));
 }
 
-error_t *buffer_append_format(buffer_t *buf, const char *fmt, ...) {
+error_t *buffer_appendf(buffer_t *buf, const char *fmt, ...) {
     CHECK_NULL(buf);
     CHECK_NULL(fmt);
 
     va_list args;
     va_start(args, fmt);
 
-    /* Calculate required size */
+    /* Measure required size */
     va_list args_copy;
     va_copy(args_copy, args);
     int len = vsnprintf(NULL, 0, fmt, args_copy);
@@ -135,35 +161,34 @@ error_t *buffer_append_format(buffer_t *buf, const char *fmt, ...) {
 
     if (len < 0) {
         va_end(args);
-        return ERROR(ERR_INVALID_ARG, "Invalid format string");
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Invalid format string"
+        );
     }
 
-    /* Ensure capacity (account for vsnprintf null terminator, with overflow check) */
-    size_t required = buf->size + (size_t) len + 1;
-    if (required <= buf->size) {
+    /* Overflow check */
+    size_t new_size = buf->size + (size_t) len;
+    if (new_size < buf->size) {
         va_end(args);
-        return ERROR(ERR_MEMORY, "Buffer size overflow");
+        return ERROR(
+            ERR_MEMORY,
+            "Buffer size overflow"
+        );
     }
-    if (required > buf->capacity) {
-        size_t new_capacity = buf->capacity == 0 ? INITIAL_CAPACITY : buf->capacity;
-        while (new_capacity < required) {
-            if (new_capacity > SIZE_MAX / 2) {
-                va_end(args);
-                return ERROR(ERR_MEMORY, "Buffer capacity overflow");
-            }
-            new_capacity *= 2;
-        }
 
-        error_t *err = buffer_reserve(buf, new_capacity);
-        if (err) {
-            va_end(args);
-            return err;
-        }
+    error_t *err = buffer_grow(buf, new_size);
+    if (err) {
+        va_end(args);
+        return err;
     }
 
     /* Format directly into buffer */
-    vsnprintf((char *) (buf->data + buf->size), len + 1, fmt, args);
-    buf->size += (size_t) len;
+    vsnprintf(
+        buf->data + buf->size,
+        (size_t) len + 1, fmt, args
+    );
+    buf->size = new_size;
 
     va_end(args);
     return NULL;
@@ -174,63 +199,26 @@ void buffer_clear(buffer_t *buf) {
         return;
     }
     buf->size = 0;
-}
-
-const unsigned char *buffer_data(const buffer_t *buf) {
-    if (!buf) {
-        return NULL;
+    if (buf->data) {
+        buf->data[0] = '\0';
     }
-    return buf->data;
 }
 
-size_t buffer_size(const buffer_t *buf) {
-    if (!buf) {
-        return 0;
-    }
-    return buf->size;
-}
-
-size_t buffer_capacity(const buffer_t *buf) {
-    if (!buf) {
-        return 0;
-    }
-    return buf->capacity;
-}
-
-error_t *buffer_release_data(buffer_t *buf, char **out) {
-    CHECK_NULL(buf);
-    CHECK_NULL(out);
-
-    /* Handle empty buffer */
-    if (buf->size == 0) {
-        /* Allocate minimal string */
-        *out = malloc(1);
-        if (!*out) {
-            buffer_free(buf);
-            return ERROR(ERR_MEMORY, "Failed to allocate empty string");
+char *buffer_detach(buffer_t *buf) {
+    if (!buf || !buf->data) {
+        if (buf) {
+            *buf = (buffer_t){ 0 };
         }
-        (*out)[0] = '\0';
-        buffer_free(buf);
-        return NULL;
-    }
-
-    /* Ensure space for null terminator */
-    if (buf->size >= buf->capacity) {
-        error_t *err = buffer_reserve(buf, buf->size + 1);
-        if (err) {
-            buffer_free(buf);
-            return err;
+        char *empty = malloc(1);
+        if (empty) {
+            empty[0] = '\0';
         }
+        return empty;
     }
 
-    /* Null-terminate the buffer */
-    buf->data[buf->size] = '\0';
+    /* data is already null-terminated by invariant */
+    char *data = buf->data;
+    *buf = (buffer_t){ 0 };
 
-    /* Transfer ownership */
-    *out = (char *) buf->data;
-
-    /* Free only the structure, not the data */
-    free(buf);
-
-    return NULL;
+    return data;
 }

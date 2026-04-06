@@ -30,7 +30,7 @@
  * @param out Output buffer (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *fs_read_file(const char *path, buffer_t **out);
+error_t *fs_read_file(const char *path, buffer_t *out);
 
 /**
  * Write raw bytes to file (overwrites if exists)

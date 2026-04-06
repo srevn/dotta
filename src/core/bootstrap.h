@@ -107,7 +107,7 @@ error_t *bootstrap_read_content(
     git_repository *repo,
     const char *profile_name,
     const char *script_name,
-    buffer_t **out_content
+    buffer_t *out_content
 );
 
 /**

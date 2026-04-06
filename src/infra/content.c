@@ -56,18 +56,18 @@ struct content_cache {
  *
  * @param buf_ptr Buffer to free (cast from void* for hashmap_free compatibility)
  */
-static void buffer_free_secure(void *buf_ptr) {
-    buffer_t *buf = (buffer_t *) buf_ptr;
+static void buffer_destroy_secure(void *ptr) {
+    buffer_t *buf = ptr;
     if (!buf) {
         return;
     }
 
     /* Zero sensitive plaintext data before freeing (defense in depth) */
-    if (buffer_data(buf) && buffer_size(buf) > 0) {
-        hydro_memzero((void *) buffer_data(buf), buffer_size(buf));
+    if (buf->data && buf->size > 0) {
+        hydro_memzero(buf->data, buf->size);
     }
 
-    buffer_free(buf);
+    buffer_destroy(buf);
 }
 
 /**
@@ -103,13 +103,15 @@ static error_t *get_plaintext_from_blob(
     const char *profile_name,
     bool expected_encrypted,
     keymanager_t *km,
-    buffer_t **out_content
+    buffer_t *out_content
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(blob);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile_name);
     CHECK_NULL(out_content);
+
+    *out_content = (buffer_t){ 0 };
 
     const unsigned char *blob_data = git_blob_rawcontent(blob);
     size_t blob_size = (size_t) git_blob_rawsize(blob);
@@ -162,9 +164,8 @@ static error_t *get_plaintext_from_blob(
         }
 
         /* Decrypt */
-        buffer_t *plaintext = NULL;
         err = encryption_decrypt(
-            blob_data, blob_size, profile_key, storage_path, &plaintext
+            blob_data, blob_size, profile_key, storage_path, out_content
         );
 
         /* Clear profile key immediately (security) */
@@ -180,25 +181,17 @@ static error_t *get_plaintext_from_blob(
             );
         }
 
-        *out_content = plaintext;
         return NULL;
     }
 
     /* Step 4: Handle plaintext files */
-    buffer_t *content = buffer_create();
-    if (!content) {
-        return ERROR(ERR_MEMORY, "Failed to allocate buffer");
-    }
-
     if (blob_size > 0) {
-        error_t *err = buffer_append(content, blob_data, blob_size);
+        error_t *err = buffer_append(out_content, blob_data, blob_size);
         if (err) {
-            buffer_free(content);
             return error_wrap(err, "Failed to copy blob content");
         }
     }
 
-    *out_content = content;
     return NULL;
 }
 
@@ -209,7 +202,7 @@ error_t *content_get_from_blob_oid(
     const char *profile_name,
     bool expected_encrypted,
     keymanager_t *km,
-    buffer_t **out_content
+    buffer_t *out_content
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(blob_oid);
@@ -244,7 +237,7 @@ error_t *content_get_from_tree_entry(
     const char *profile_name,
     bool expected_encrypted,
     keymanager_t *km,
-    buffer_t **out_content
+    buffer_t *out_content
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(entry);
@@ -333,16 +326,23 @@ error_t *content_cache_get_from_blob_oid(
         );
     }
 
+    /* Heap-allocate buffer for cache storage */
+    buffer_t *content = buffer_new(0);
+    if (!content) {
+        git_blob_free(blob);
+        return ERROR(ERR_MEMORY, "Failed to allocate content buffer");
+    }
+
     /* Get plaintext content */
-    buffer_t *content = NULL;
     error_t *err = get_plaintext_from_blob(
         cache->repo, blob, storage_path, profile_name, expected_encrypted,
-        cache->km, &content
+        cache->km, content
     );
 
     git_blob_free(blob);
 
     if (err) {
+        buffer_destroy(content);
         return err;
     }
 
@@ -351,7 +351,7 @@ error_t *content_cache_get_from_blob_oid(
     if (err) {
         /* Fatal - cannot return borrowed reference if caching fails */
         /* Ownership contract requires cache to own the buffer */
-        buffer_free(content);
+        buffer_destroy(content);
         return error_wrap(err, "Failed to cache content for blob");
     }
 
@@ -395,7 +395,7 @@ void content_cache_free(content_cache_t *cache) {
      * SECURITY: Use buffer_free_secure() to zero plaintext memory before freeing.
      * The cache contains decrypted sensitive data that must not linger in memory. */
     if (cache->cache_map) {
-        hashmap_free(cache->cache_map, buffer_free_secure);
+        hashmap_free(cache->cache_map, buffer_destroy_secure);
     }
 
     free(cache);
@@ -416,8 +416,8 @@ error_t *content_store_to_blob(
     CHECK_NULL(profile_name);
     CHECK_NULL(out_oid);
 
-    const uint8_t *data = buffer_data(plaintext);
-    size_t size = buffer_size(plaintext);
+    const unsigned char *data = (const unsigned char *) plaintext->data;
+    size_t size = plaintext->size;
 
     /* Validate file size (security: prevent DoS via huge files) */
     if (size > MAX_ENCRYPTED_FILE_SIZE) {
@@ -431,7 +431,7 @@ error_t *content_store_to_blob(
         );
     }
 
-    buffer_t *ciphertext = NULL;
+    buffer_t ciphertext = BUFFER_INIT;
 
     /* Handle encryption if requested */
     if (should_encrypt) {
@@ -463,17 +463,15 @@ error_t *content_store_to_blob(
         }
 
         /* Use encrypted data */
-        data = buffer_data(ciphertext);
-        size = buffer_size(ciphertext);
+        data = (const unsigned char *) ciphertext.data;
+        size = ciphertext.size;
     }
 
     /* Create git blob */
     int ret = git_blob_create_from_buffer(out_oid, repo, data, size);
 
-    /* Free ciphertext if we allocated it */
-    if (ciphertext) {
-        buffer_free(ciphertext);
-    }
+    /* Free ciphertext */
+    buffer_free(&ciphertext);
 
     if (ret < 0) {
         const git_error *git_err = git_error_last();
@@ -543,7 +541,7 @@ error_t *content_store_file_to_worktree(
     }
 
     /* Step 3: Read file from filesystem */
-    buffer_t *content = NULL;
+    buffer_t content = BUFFER_INIT;
     error_t *err = fs_read_file(filesystem_path, &content);
     if (err) {
         return error_wrap(err, "Failed to read file '%s'", filesystem_path);
@@ -553,12 +551,13 @@ error_t *content_store_file_to_worktree(
     mode_t mode = st.st_mode;  /* Reuse mode from stat() above */
 
     /* Step 5: Encrypt if requested */
-    buffer_t *data_to_write = content;  /* Default: write plaintext */
-    buffer_t *ciphertext = NULL;
+    buffer_t *data_to_write = &content;  /* Default: write plaintext */
+    buffer_t ciphertext = BUFFER_INIT;
 
     if (should_encrypt) {
         if (!km) {
-            buffer_free_secure(content);
+            if (content.data) hydro_memzero(content.data, content.size);
+            buffer_free(&content);
             return ERROR(
                 ERR_CRYPTO, "Encryption requested but no keymanager provided"
             );
@@ -568,7 +567,8 @@ error_t *content_store_file_to_worktree(
         uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
         err = keymanager_get_profile_key(km, profile_name, profile_key);
         if (err) {
-            buffer_free_secure(content);
+            if (content.data) hydro_memzero(content.data, content.size);
+            buffer_free(&content);
             return error_wrap(
                 err, "Failed to get profile key for '%s'",
                 profile_name
@@ -577,8 +577,8 @@ error_t *content_store_file_to_worktree(
 
         /* Encrypt */
         err = encryption_encrypt(
-            buffer_data(content),
-            buffer_size(content),
+            (const unsigned char *) content.data,
+            content.size,
             profile_key,
             storage_path,
             &ciphertext
@@ -588,14 +588,15 @@ error_t *content_store_file_to_worktree(
         hydro_memzero(profile_key, sizeof(profile_key));
 
         if (err) {
-            buffer_free_secure(content);
+            if (content.data) hydro_memzero(content.data, content.size);
+            buffer_free(&content);
             return error_wrap(
                 err, "Failed to encrypt '%s'", storage_path
             );
         }
 
         /* Use encrypted data for writing */
-        data_to_write = ciphertext;
+        data_to_write = &ciphertext;
     }
 
     /* Step 6: Write to worktree with original mode
@@ -603,18 +604,17 @@ error_t *content_store_file_to_worktree(
      * This ensures git mode matches metadata mode, preventing spurious MODE diffs. */
     err = fs_write_file_raw(
         worktree_path,
-        buffer_data(data_to_write),
-        buffer_size(data_to_write),
+        (const unsigned char *) data_to_write->data,
+        data_to_write->size,
         mode,  /* Preserve source mode */
         -1,    /* Don't change ownership */
         -1     /* Don't change ownership */
     );
 
     /* Cleanup (secure: plaintext may contain sensitive data) */
-    buffer_free_secure(content);
-    if (ciphertext) {
-        buffer_free(ciphertext);
-    }
+    if (content.data) hydro_memzero(content.data, content.size);
+    buffer_free(&content);
+    buffer_free(&ciphertext);
 
     if (err) {
         return error_wrap(

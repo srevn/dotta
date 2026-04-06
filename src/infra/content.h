@@ -105,7 +105,7 @@ error_t *content_get_from_tree_entry(
     const char *profile_name,
     bool expected_encrypted,
     keymanager_t *km,
-    buffer_t **out_content
+    buffer_t *out_content
 );
 
 /**
@@ -131,7 +131,7 @@ error_t *content_get_from_blob_oid(
     const char *profile_name,
     bool expected_encrypted,
     keymanager_t *km,
-    buffer_t **out_content
+    buffer_t *out_content
 );
 
 /**

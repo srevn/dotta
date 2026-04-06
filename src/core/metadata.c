@@ -19,7 +19,6 @@
 #include "base/filesystem.h"
 #include "base/gitops.h"
 #include "infra/path.h"
-#include "utils/array.h"
 #include "utils/buffer.h"
 #include "utils/hashmap.h"
 #include "utils/privilege.h"
@@ -1033,7 +1032,7 @@ error_t *metadata_capture_from_directory(
  * Creates unified JSON with single "items" array containing both files and directories.
  * Each item has explicit "kind" discriminator.
  */
-error_t *metadata_to_json(const metadata_t *metadata, buffer_t **out) {
+error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
     CHECK_NULL(metadata);
     CHECK_NULL(out);
 
@@ -1041,7 +1040,7 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t **out) {
     cJSON *root = NULL;
     cJSON *items_array = NULL;
     char *json_str = NULL;
-    buffer_t *buf = NULL;
+    buffer_t buf = BUFFER_INIT;
 
     /* Create root object */
     root = cJSON_CreateObject();
@@ -1161,20 +1160,15 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t **out) {
     }
 
     /* Create buffer from string */
-    buf = buffer_create();
-    if (!buf) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate buffer");
-        goto cleanup;
-    }
+    err = buffer_append_string(&buf, json_str);
+    if (err) goto cleanup;
 
-    buffer_append_string(buf, json_str);
-
-    /* Success - transfer ownership to caller */
+    /* Success - transfer to caller */
     *out = buf;
-    buf = NULL;
+    buf = (buffer_t){ 0 };
 
 cleanup:
-    if (buf) buffer_free(buf);
+    buffer_free(&buf);
     if (json_str) cJSON_free(json_str);
     if (items_array) cJSON_Delete(items_array);  /* Only if not added to root */
     if (root) cJSON_Delete(root);
@@ -1593,7 +1587,7 @@ error_t *metadata_load_from_file(
     }
 
     /* Read file content */
-    buffer_t *content = NULL;
+    buffer_t content = BUFFER_INIT;
     error_t *err = fs_read_file(file_path, &content);
     if (err) {
         return error_wrap(err, "Failed to read metadata file");
@@ -1601,10 +1595,7 @@ error_t *metadata_load_from_file(
 
     /* Parse JSON - release buffer as null-terminated string */
     char *json_str = NULL;
-    err = buffer_release_data(content, &json_str);
-    if (err) {
-        return error_wrap(err, "Failed to release buffer");
-    }
+    json_str = buffer_detach(&content);
 
     metadata_t *metadata = NULL;
     err = metadata_from_json(json_str, &metadata);
@@ -1637,7 +1628,7 @@ error_t *metadata_save_to_worktree(
     error_t *err = NULL;
     char *dotta_dir = NULL;
     char *metadata_path = NULL;
-    buffer_t *json_buf = NULL;
+    buffer_t json_buf = BUFFER_INIT;
 
     /* Build path to .dotta directory */
     dotta_dir = str_format("%s/.dotta", worktree_path);
@@ -1668,14 +1659,14 @@ error_t *metadata_save_to_worktree(
     }
 
     /* Write to file */
-    err = fs_write_file(metadata_path, json_buf);
+    err = fs_write_file(metadata_path, &json_buf);
     if (err) {
         err = error_wrap(err, "Failed to write metadata file");
         goto cleanup;
     }
 
 cleanup:
-    if (json_buf) buffer_free(json_buf);
+    buffer_free(&json_buf);
     if (metadata_path) free(metadata_path);
     if (dotta_dir) free(dotta_dir);
 

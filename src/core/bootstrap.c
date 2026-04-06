@@ -420,7 +420,7 @@ error_t *bootstrap_read_content(
     git_repository *repo,
     const char *profile_name,
     const char *script_name,
-    buffer_t **out_content
+    buffer_t *out_content
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile_name);
@@ -445,7 +445,7 @@ error_t *bootstrap_read_content(
     error_t *err = NULL;
     git_tree *tree = NULL;
     void *raw_content = NULL;
-    buffer_t *content_buf = NULL;
+    buffer_t content_buf = BUFFER_INIT;
 
     /* Build ref name */
     char ref_name[DOTTA_REFNAME_MAX];
@@ -481,30 +481,22 @@ error_t *bootstrap_read_content(
     err = gitops_read_blob_content(repo, git_tree_entry_id(entry), &raw_content, &size);
     if (err) goto cleanup;
 
-    /* Allocate buffer and copy content */
-    content_buf = buffer_create();
-    if (!content_buf) {
-        err = ERROR(
-            ERR_MEMORY, "Failed to allocate buffer for bootstrap content"
-        );
-        goto cleanup;
-    }
-
+    /* Copy content into buffer */
     if (size > 0) {
-        err = buffer_append(content_buf, raw_content, size);
+        err = buffer_append(&content_buf, raw_content, size);
         if (err) {
             err = error_wrap(err, "Failed to append content to buffer");
             goto cleanup;
         }
     }
 
-    /* Success - transfer ownership to caller */
+    /* Success - transfer to caller */
     *out_content = content_buf;
-    content_buf = NULL;
+    content_buf = (buffer_t){ 0 };
     err = NULL;
 
 cleanup:
-    if (content_buf) buffer_free(content_buf);
+    buffer_free(&content_buf);
     if (raw_content) free(raw_content);
     if (tree) git_tree_free(tree);
 

@@ -48,7 +48,7 @@ typedef struct {
  * Buffer - dynamic byte buffer
  */
 typedef struct {
-    unsigned char *data;
+    char *data;
     size_t size;
     size_t capacity;
 } buffer_t;

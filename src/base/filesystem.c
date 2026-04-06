@@ -93,9 +93,11 @@ bool fs_is_os_metadata_file(const char *filename) {
 /**
  * File operations
  */
-error_t *fs_read_file(const char *path, buffer_t **out) {
+error_t *fs_read_file(const char *path, buffer_t *out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);
+
+    *out = (buffer_t){ 0 };
 
     /* Open file */
     int fd = open(path, O_RDONLY);
@@ -126,20 +128,17 @@ error_t *fs_read_file(const char *path, buffer_t **out) {
         );
     }
 
-    /* Create buffer */
-    buffer_t *buf = buffer_create_with_capacity(
-        st.st_size > 0 ? st.st_size : IO_BUFFER_SIZE
+    /* Pre-allocate */
+    error_t *err = buffer_grow(
+        out, st.st_size > 0 ? (size_t) st.st_size : IO_BUFFER_SIZE
     );
-    if (!buf) {
+    if (err) {
         close(fd);
-        return ERROR(
-            ERR_MEMORY, "Failed to allocate buffer for '%s'",
-            path
-        );
+        return err;
     }
 
     /* Read file in chunks */
-    unsigned char chunk[IO_BUFFER_SIZE];
+    char chunk[IO_BUFFER_SIZE];
     ssize_t bytes_read;
 
     for (;;) {
@@ -151,7 +150,7 @@ error_t *fs_read_file(const char *path, buffer_t **out) {
             }
             int saved_errno = errno;
             close(fd);
-            buffer_free(buf);
+            buffer_free(out);
             return ERROR(
                 ERR_FS, "Read error on '%s': %s",
                 path, strerror(saved_errno)
@@ -162,16 +161,15 @@ error_t *fs_read_file(const char *path, buffer_t **out) {
             break;  /* EOF */
         }
 
-        error_t *err = buffer_append(buf, chunk, bytes_read);
+        err = buffer_append(out, chunk, bytes_read);
         if (err) {
             close(fd);
-            buffer_free(buf);
+            buffer_free(out);
             return error_wrap(err, "Failed to read '%s'", path);
         }
     }
 
     close(fd);
-    *out = buf;
     return NULL;
 }
 
@@ -415,8 +413,8 @@ error_t *fs_write_file(const char *path, const buffer_t *content) {
 
     return fs_write_file_raw(
         path,
-        buffer_data(content),
-        buffer_size(content),
+        (const unsigned char *) content->data,
+        content->size,
         0644,
         -1,
         -1
@@ -440,7 +438,7 @@ error_t *fs_copy_file(const char *src, const char *dst) {
     }
 
     /* Read source */
-    buffer_t *content = NULL;
+    buffer_t content = BUFFER_INIT;
     err = fs_read_file(src, &content);
     if (err) {
         return error_wrap(err, "Failed to copy '%s' to '%s'", src, dst);
@@ -451,9 +449,9 @@ error_t *fs_copy_file(const char *src, const char *dst) {
      * eliminating the security window where sensitive files (e.g., SSH keys)
      * would have incorrect permissions (0644 instead of 0600). */
     err = fs_write_file_raw(
-        dst, buffer_data(content), buffer_size(content), mode, -1, -1
+        dst, (const unsigned char *) content.data, content.size, mode, -1, -1
     );
-    buffer_free(content);
+    buffer_free(&content);
     if (err) {
         return error_wrap(err, "Failed to copy '%s' to '%s'", src, dst);
     }

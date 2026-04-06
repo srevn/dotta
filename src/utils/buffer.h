@@ -1,7 +1,21 @@
 /**
- * buffer.h - Dynamic byte buffer utilities
+ * buffer.h - Dynamic byte buffer (stack-allocable, null-terminated)
  *
- * Provides a dynamic byte buffer for handling file contents.
+ * Invariants:
+ *   - When data is non-NULL: data[size] == '\0' (always a valid C string)
+ *   - When data is NULL: size == 0 && capacity == 0 (zero-initialized state)
+ *   - buffer_free() resets to zero state; safe to call multiple times
+ *
+ * Stack usage (common):
+ *   buffer_t buf = BUFFER_INIT;
+ *   buffer_append_string(&buf, "hello");
+ *   printf("%s\n", buf.data);   // direct access, always null-terminated
+ *   buffer_free(&buf);
+ *
+ * Heap usage (for caches/collections):
+ *   buffer_t *buf = buffer_new(0);
+ *   buffer_append_string(buf, "hello");
+ *   buffer_destroy(buf);        // frees data + struct
  */
 
 #ifndef DOTTA_BUFFER_H
@@ -9,137 +23,102 @@
 
 #include <types.h>
 
-/**
- * Create a new buffer
- *
- * @return Newly allocated buffer (must be freed with buffer_free)
- */
-buffer_t *buffer_create(void);
+/** Zero-initializer for stack-allocated buffers */
+#define BUFFER_INIT {0}
 
 /**
- * Create buffer with initial capacity
+ * Free buffer data and reset to zero state
  *
- * @param capacity Initial capacity in bytes
- * @return Newly allocated buffer
- */
-buffer_t *buffer_create_with_capacity(size_t capacity);
-
-/**
- * Create buffer from existing data (copies data)
+ * After this call, buf is equivalent to BUFFER_INIT.
+ * Safe to call on zero-initialized or already-freed buffers.
  *
- * @param data Data to copy
- * @param size Size of data in bytes
- * @return Newly allocated buffer
- */
-buffer_t *buffer_create_from_data(const unsigned char *data, size_t size);
-
-/**
- * Free buffer
- *
- * @param buf Buffer to free (can be NULL)
+ * @param buf Buffer (can be NULL)
  */
 void buffer_free(buffer_t *buf);
 
 /**
- * Append data to buffer
+ * Heap-allocate a buffer (for caches and collections)
  *
- * @param buf Buffer
- * @param data Data to append
- * @param size Size of data in bytes
- * @return Error or NULL on success
+ * @param capacity Initial capacity in content bytes (0 for empty)
+ * @return Heap-allocated buffer, or NULL on failure
  */
-error_t *buffer_append(buffer_t *buf, const unsigned char *data, size_t size);
+buffer_t *buffer_new(size_t capacity);
 
 /**
- * Append string to buffer (excluding null terminator)
+ * Free buffer data and the struct itself
  *
- * The null terminator is not included in the buffer data. Use buffer_release_data()
- * to get a null-terminated string when needed.
+ * Accepts void* for hashmap_free() compatibility.
  *
- * @param buf Buffer
- * @param str String to append
+ * @param buf Buffer to destroy (can be NULL)
+ */
+void buffer_destroy(void *buf);
+
+/**
+ * Ensure buffer can hold at least alloc content bytes
+ *
+ * Allocates alloc+1 bytes internally (for null terminator).
+ * No-op if capacity is already sufficient.
+ *
+ * @param buf Buffer (must not be NULL)
+ * @param alloc Minimum content bytes the buffer must accommodate
+ * @return Error or NULL on success
+ */
+error_t *buffer_grow(buffer_t *buf, size_t alloc);
+
+/**
+ * Append raw bytes to buffer
+ *
+ * @param buf  Buffer (must not be NULL)
+ * @param data Data to append (must not be NULL when len > 0)
+ * @param len  Number of bytes to append
+ * @return Error or NULL on success
+ */
+error_t *buffer_append(buffer_t *buf, const void *data, size_t len);
+
+/**
+ * Append a null-terminated string (excluding its terminator)
+ *
+ * @param buf Buffer (must not be NULL)
+ * @param str String to append (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *buffer_append_string(buffer_t *buf, const char *str);
 
 /**
- * Append formatted string to buffer
+ * Append a formatted string
  *
- * Like sprintf but appends to buffer. Does not include null terminator in buffer data.
- *
- * @param buf Buffer
+ * @param buf Buffer (must not be NULL)
  * @param fmt Format string
- * @param ... Format arguments
  * @return Error or NULL on success
  */
-error_t *buffer_append_format(buffer_t *buf, const char *fmt, ...)
+error_t *buffer_appendf(buffer_t *buf, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
 
 /**
- * Clear buffer (reset size to 0, keep capacity)
+ * Reset size to 0 without freeing memory
  *
- * @param buf Buffer
+ * @param buf Buffer (can be NULL)
  */
 void buffer_clear(buffer_t *buf);
 
 /**
- * Get buffer data
+ * Transfer ownership of buffer data to caller
  *
- * @param buf Buffer
- * @return Pointer to data (valid until buffer is modified or freed)
+ * Returns the internal data pointer (already null-terminated) and resets
+ * the buffer to zero state. Caller must free() the returned pointer.
+ * Returns strdup("") for empty/uninitialized buffers.
+ *
+ * @param buf Buffer (reset to BUFFER_INIT after call)
+ * @return Null-terminated string (caller must free), or NULL on allocation failure
  */
-const unsigned char *buffer_data(const buffer_t *buf);
+char *buffer_detach(buffer_t *buf);
 
-/**
- * Get buffer size
- *
- * @param buf Buffer
- * @return Size in bytes
- */
-size_t buffer_size(const buffer_t *buf);
-
-/**
- * Get buffer capacity
- *
- * @param buf Buffer
- * @return Capacity in bytes
- */
-size_t buffer_capacity(const buffer_t *buf);
-
-/**
- * Reserve buffer capacity
- *
- * Ensures buffer has at least the specified capacity.
- *
- * @param buf Buffer
- * @param capacity Desired capacity
- * @return Error or NULL on success
- */
-error_t *buffer_reserve(buffer_t *buf, size_t capacity);
-
-/**
- * Release buffer data and transfer ownership to caller
- *
- * This function transfers ownership of the internal buffer data to the caller,
- * null-terminates it (adding a byte if needed), and frees the buffer structure.
- * Useful for avoiding unnecessary memory copies when converting buffer to string.
- *
- * @param buf Buffer (will be freed, must not be used after this call)
- * @param out Pointer to receive the null-terminated string (caller must free)
- * @return Error or NULL on success
- */
-error_t *buffer_release_data(buffer_t *buf, char **out);
-
-/**
- * RAII cleanup attribute helper
- */
-static inline void cleanup_buffer(buffer_t **buf) {
-    if (buf && *buf) {
-        buffer_free(*buf);
-        *buf = NULL;
-    }
+/** Cleanup function for __attribute__((cleanup)) on stack-allocated buffers */
+static inline void buffer_cleanup_fn(buffer_t *buf) {
+    buffer_free(buf);
 }
 
-#define BUFFER_CLEANUP __attribute__((cleanup(cleanup_buffer)))
+/** RAII attribute: automatically frees buffer data when variable goes out of scope */
+#define BUFFER_CLEANUP __attribute__((cleanup(buffer_cleanup_fn)))
 
 #endif /* DOTTA_BUFFER_H */

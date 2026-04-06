@@ -488,7 +488,7 @@ error_t *encryption_encrypt(
     size_t plaintext_len,
     const uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE],
     const char *storage_path,
-    buffer_t **out_ciphertext
+    buffer_t *out_ciphertext
 ) {
     CHECK_NULL(plaintext);
     CHECK_NULL(profile_key);
@@ -502,7 +502,9 @@ error_t *encryption_encrypt(
     uint8_t siv[ENCRYPTION_SIV_SIZE] = { 0 };
     uint8_t *keystream = NULL;
     unsigned char *ciphertext = NULL;
-    buffer_t *output = NULL;
+    buffer_t output = BUFFER_INIT;
+
+    *out_ciphertext = (buffer_t){ 0 };
 
     /* Calculate output size with overflow detection */
     if (plaintext_len > SIZE_MAX - ENCRYPTION_OVERHEAD) {
@@ -559,37 +561,31 @@ error_t *encryption_encrypt(
     }
 
     /* Step 6: Assemble output: [Magic Header][SIV][Ciphertext] */
-    output = buffer_create_with_capacity(total_len);
-    if (!output) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate encryption buffer");
-        goto cleanup;
-    }
-
-    /* Write magic header */
-    err = buffer_append(output, MAGIC_HEADER, sizeof(MAGIC_HEADER));
+    err = buffer_grow(&output, total_len);
     if (err) {
-        err = error_wrap(err, "Failed to write magic header");
         goto cleanup;
     }
 
-    /* Write SIV */
-    err = buffer_append(output, siv, sizeof(siv));
+    err = buffer_append(&output, MAGIC_HEADER, sizeof(MAGIC_HEADER));
     if (err) {
-        err = error_wrap(err, "Failed to write SIV");
         goto cleanup;
     }
 
-    /* Write ciphertext */
+    err = buffer_append(&output, siv, sizeof(siv));
+    if (err) {
+        goto cleanup;
+    }
+
     if (plaintext_len > 0) {
-        err = buffer_append(output, ciphertext, plaintext_len);
+        err = buffer_append(&output, ciphertext, plaintext_len);
         if (err) {
-            err = error_wrap(err, "Failed to write ciphertext");
             goto cleanup;
         }
     }
 
+    /* Transfer to caller */
     *out_ciphertext = output;
-    output = NULL;  /* Transfer ownership, don't free */
+    output = (buffer_t){ 0 };
 
 cleanup:
     /* Securely clear sensitive data */
@@ -608,8 +604,9 @@ cleanup:
         free(ciphertext);
     }
 
-    if (output) {
-        buffer_free(output);
+    if (output.data) {
+        hydro_memzero(output.data, output.size);
+        buffer_free(&output);
     }
 
     return err;
@@ -620,7 +617,7 @@ error_t *encryption_decrypt(
     size_t ciphertext_len,
     const uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE],
     const char *storage_path,
-    buffer_t **out_plaintext
+    buffer_t *out_plaintext
 ) {
     CHECK_NULL(ciphertext);
     CHECK_NULL(profile_key);
@@ -634,7 +631,9 @@ error_t *encryption_decrypt(
     uint8_t siv_computed[ENCRYPTION_SIV_SIZE] = { 0 };
     uint8_t *keystream = NULL;
     unsigned char *plaintext_data = NULL;
-    buffer_t *output = NULL;
+    buffer_t output = BUFFER_INIT;
+
+    *out_plaintext = (buffer_t){ 0 };
 
     /* Step 1: Validate minimum size */
     if (ciphertext_len < ENCRYPTION_OVERHEAD) {
@@ -725,14 +724,14 @@ error_t *encryption_decrypt(
     }
 
     /* Step 10: Create output buffer */
-    output = buffer_create_from_data(plaintext_data, plaintext_len);
-    if (!output) {
-        err = ERROR(ERR_MEMORY, "Failed to create output buffer");
+    err = buffer_append(&output, plaintext_data, plaintext_len);
+    if (err) {
         goto cleanup;
     }
 
+    /* Transfer to caller */
     *out_plaintext = output;
-    output = NULL;  /* Transfer ownership, don't free */
+    output = (buffer_t){ 0 };
 
 cleanup:
     /* Securely clear sensitive data */
@@ -751,8 +750,9 @@ cleanup:
         free(plaintext_data);
     }
 
-    if (output) {
-        buffer_free(output);
+    if (output.data) {
+        hydro_memzero(output.data, output.size);
+        buffer_free(&output);
     }
 
     return err;

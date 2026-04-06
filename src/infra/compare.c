@@ -95,9 +95,9 @@ error_t *compare_buffer_to_disk(
             );
         }
 
-        size_t expected_len = buffer_size(content);
+        size_t expected_len = content->size;
         bool targets_equal = (strlen(disk_target) == expected_len) &&
-            (memcmp(buffer_data(content), disk_target, expected_len) == 0);
+            (memcmp(content->data, disk_target, expected_len) == 0);
 
         free(disk_target);
         *result = targets_equal ? CMP_EQUAL : CMP_DIFFERENT;
@@ -120,7 +120,7 @@ error_t *compare_buffer_to_disk(
         }
 
         /* Fast path: compare sizes using captured stat (no open needed yet) */
-        if (buffer_size(content) != (size_t) stat_ptr->st_size) {
+        if (content->size != (size_t) stat_ptr->st_size) {
             *result = CMP_DIFFERENT;
             return NULL;
         }
@@ -144,18 +144,18 @@ error_t *compare_buffer_to_disk(
                 /* mmap failed - fall back to buffered reading */
                 close(fd);
 
-                buffer_t *disk_content = NULL;
+                buffer_t disk_content = BUFFER_INIT;
                 error_t *err = fs_read_file(disk_path, &disk_content);
                 if (err) {
                     return error_wrap(err, "Failed to read '%s'", disk_path);
                 }
 
                 /* Re-check size: file may have changed between stat and read */
-                bool equal = (buffer_size(disk_content) == buffer_size(content)) &&
+                bool equal = (disk_content.size == content->size) &&
                     (memcmp(
-                    buffer_data(content), buffer_data(disk_content), buffer_size(content)
+                    content->data, disk_content.data, content->size
                     ) == 0);
-                buffer_free(disk_content);
+                buffer_free(&disk_content);
 
                 if (!equal) {
                     *result = CMP_DIFFERENT;
@@ -163,7 +163,7 @@ error_t *compare_buffer_to_disk(
                 }
             } else {
                 /* Compare using memory-mapped data */
-                int cmp = memcmp(buffer_data(content), disk_data, buffer_size(content));
+                int cmp = memcmp(content->data, disk_data, content->size);
 
                 /* Cleanup */
                 munmap(disk_data, stat_ptr->st_size);
@@ -354,22 +354,31 @@ static int diff_line_callback(
         return 0;
     }
 
+    error_t *err = NULL;
+
     /* Add origin character for context/addition/deletion */
     if (line->origin == GIT_DIFF_LINE_CONTEXT ||
         line->origin == GIT_DIFF_LINE_ADDITION ||
         line->origin == GIT_DIFF_LINE_DELETION) {
-        buffer_append(output, (const unsigned char *) &line->origin, 1);
+        err = buffer_append(output, &line->origin, 1);
+        if (err) goto cleanup;
     }
 
     /* Add line content */
-    buffer_append(output, (const unsigned char *) line->content, line->content_len);
+    err = buffer_append(output, line->content, line->content_len);
+    if (err) goto cleanup;
 
     /* Handle files without trailing newline like git diff does */
     if (line->content_len == 0 || line->content[line->content_len - 1] != '\n') {
-        buffer_append_string(output, "\n\\ No newline at end of file\n");
+        err = buffer_append_string(output, "\n\\ No newline at end of file\n");
+        if (err) goto cleanup;
     }
 
     return 0;
+
+cleanup:
+    error_free(err);
+    return -1;
 }
 
 /**
@@ -388,8 +397,8 @@ static error_t *generate_symlink_diff(
     CHECK_NULL(disk_path);
     CHECK_NULL(diff_text);
 
-    const char *blob_target = (const char *) buffer_data(content);
-    size_t blob_target_len = buffer_size(content);
+    const char *blob_target = (const char *) content->data;
+    size_t blob_target_len = content->size;
 
     /* Read disk symlink target (lstat-based check handles broken symlinks) */
     char *disk_target = NULL;
@@ -401,47 +410,37 @@ static error_t *generate_symlink_diff(
     }
 
     /* Format diff based on direction */
-    buffer_t *buf = buffer_create();
-    if (!buf) {
-        free(disk_target);
-        return ERROR(ERR_MEMORY, "Failed to allocate buffer");
-    }
+    error_t *err = NULL;
+    buffer_t buf = BUFFER_INIT;
+    const char *disk_label = disk_target ? disk_target : "(not a symlink)";
 
-    buffer_append_string(buf, "Symlink target changed:\n");
+    err = buffer_append_string(&buf, "Symlink target changed:\n");
+    if (err) goto cleanup;
 
     if (direction == CMP_DIR_UPSTREAM) {
         /* Upstream: show filesystem → repo (what apply would do) */
-        buffer_append_string(buf, "- ");
-        if (disk_target) {
-            buffer_append_string(buf, disk_target);
-        } else {
-            buffer_append_string(buf, "(not a symlink)");
-        }
-        buffer_append_string(buf, "\n+ ");
-        buffer_append(buf, (const unsigned char *) blob_target, blob_target_len);
-        buffer_append_string(buf, "\n");
+        err = buffer_append_string(&buf, "- ");
+        if (!err) err = buffer_append_string(&buf, disk_label);
+        if (!err) err = buffer_append_string(&buf, "\n+ ");
+        if (!err) err = buffer_append(&buf, blob_target, blob_target_len);
+        if (!err) err = buffer_append_string(&buf, "\n");
     } else {
         /* Downstream: show repo → filesystem (what update would commit) */
-        buffer_append_string(buf, "- ");
-        buffer_append(buf, (const unsigned char *) blob_target, blob_target_len);
-        buffer_append_string(buf, "\n+ ");
-        if (disk_target) {
-            buffer_append_string(buf, disk_target);
-        } else {
-            buffer_append_string(buf, "(not a symlink)");
-        }
-        buffer_append_string(buf, "\n");
+        err = buffer_append_string(&buf, "- ");
+        if (!err) err = buffer_append(&buf, blob_target, blob_target_len);
+        if (!err) err = buffer_append_string(&buf, "\n+ ");
+        if (!err) err = buffer_append_string(&buf, disk_label);
+        if (!err) err = buffer_append_string(&buf, "\n");
     }
+    if (err) goto cleanup;
 
     /* Transfer ownership and free buffer structure */
-    error_t *err = buffer_release_data(buf, diff_text);
+    *diff_text = buffer_detach(&buf);
+
+cleanup:
+    buffer_free(&buf);
     free(disk_target);
-
-    if (err) {
-        return error_wrap(err, "Failed to release symlink diff text");
-    }
-
-    return NULL;
+    return err;
 }
 
 /**
@@ -462,11 +461,11 @@ static error_t *generate_text_diff(
     CHECK_NULL(diff_text);
 
     error_t *err = NULL;
-    buffer_t *disk_content = NULL;
+    buffer_t disk_content = BUFFER_INIT;
 
     /* Get repo buffer pointers (from input parameter - decrypted content) */
-    const void *repo_data = buffer_data(content);
-    size_t repo_size = buffer_size(content);
+    const void *repo_data = content->data;
+    size_t repo_size = content->size;
 
     /* Read disk file content
      * This function is only called when compare_buffer_to_disk returned
@@ -479,15 +478,11 @@ static error_t *generate_text_diff(
     if (err) {
         return error_wrap(err, "Failed to read disk file");
     }
-    disk_data = buffer_data(disk_content);
-    disk_size = buffer_size(disk_content);
+    disk_data = disk_content.data;
+    disk_size = disk_content.size;
 
     /* Output buffer passed directly as callback payload */
-    buffer_t *diff_output = buffer_create();
-    if (!diff_output) {
-        buffer_free(disk_content);
-        return ERROR(ERR_MEMORY, "Failed to allocate diff buffer");
-    }
+    buffer_t diff_output = BUFFER_INIT;
 
     /* Configure diff options */
     git_diff_options diff_opts;
@@ -511,7 +506,7 @@ static error_t *generate_text_diff(
             NULL,  /* binary callback */
             NULL,  /* hunk callback */
             diff_line_callback,
-            diff_output
+            &diff_output
         );
     } else {
         /* Downstream: repo → filesystem (what update would commit) */
@@ -526,27 +521,24 @@ static error_t *generate_text_diff(
             NULL,  /* binary callback */
             NULL,  /* hunk callback */
             diff_line_callback,
-            diff_output
+            &diff_output
         );
     }
 
     /* Cleanup disk content buffer */
-    if (disk_content) buffer_free(disk_content);
+    buffer_free(&disk_content);
 
     if (git_err < 0) {
-        buffer_free(diff_output);
+        buffer_free(&diff_output);
         return error_from_git(git_err);
     }
 
     /* Extract result - transfer ownership and free buffer structure */
-    if (buffer_size(diff_output) > 0) {
-        err = buffer_release_data(diff_output, diff_text);
-        if (err) {
-            return error_wrap(err, "Failed to release diff text");
-        }
+    if (diff_output.size > 0) {
+        *diff_text = buffer_detach(&diff_output);
     } else {
         *diff_text = NULL;
-        buffer_free(diff_output);
+        buffer_free(&diff_output);
     }
 
     return NULL;

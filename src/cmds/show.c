@@ -76,7 +76,7 @@ static error_t *print_blob_content(
     /* Get plaintext content (handles encryption transparently) */
     bool encrypted = metadata_get_file_encrypted(metadata, storage_path);
 
-    buffer_t *content = NULL;
+    buffer_t content = BUFFER_INIT;
     error_t *err = content_get_from_blob_oid(
         repo, blob_oid, storage_path, profile_name, encrypted, km, &content
     );
@@ -92,26 +92,26 @@ static error_t *print_blob_content(
             );
             output_styled(
                 out, OUTPUT_NORMAL, "{dim}# Target:{reset}  %.*s\n",
-                (int) buffer_size(content), (const char *) buffer_data(content)
+                (int) content.size, (const char *) content.data
             );
         } else {
-            fwrite(buffer_data(content), 1, buffer_size(content), stdout);
-            const char *data = (const char *) buffer_data(content);
-            if (buffer_size(content) > 0 &&
-                data[buffer_size(content) - 1] != '\n') {
+            fwrite(content.data, 1, content.size, stdout);
+            const char *data = (const char *) content.data;
+            if (content.size > 0 &&
+                data[content.size - 1] != '\n') {
                 fputc('\n', stdout);
             }
         }
-        buffer_free(content);
+        buffer_free(&content);
         return NULL;
     }
 
     /* Binary detection (on plaintext, after decryption) */
-    if (buffer_size(content) > 0 &&
-        content_is_binary(buffer_data(content), buffer_size(content))) {
+    if (content.size > 0 &&
+        content_is_binary((const unsigned char *) content.data, content.size)) {
         if (!raw) {
             char size_buf[32];
-            output_format_size(buffer_size(content), size_buf, sizeof(size_buf));
+            output_format_size(content.size, size_buf, sizeof(size_buf));
 
             output_styled(
                 out, OUTPUT_NORMAL, "{dim}# Type:{reset}    binary file"
@@ -128,7 +128,7 @@ static error_t *print_blob_content(
             );
         }
         /* Don't dump binary content to terminal */
-        buffer_free(content);
+        buffer_free(&content);
         return NULL;
     }
 
@@ -165,7 +165,7 @@ static error_t *print_blob_content(
 
         /* Size */
         char size_buf[32];
-        output_format_size(buffer_size(content), size_buf, sizeof(size_buf));
+        output_format_size(content.size, size_buf, sizeof(size_buf));
         output_styled(
             out, OUTPUT_NORMAL, "{dim}# Size:{reset}    %s\n",
             size_buf
@@ -177,17 +177,17 @@ static error_t *print_blob_content(
     }
 
     /* Write content to stdout */
-    if (buffer_size(content) > 0) {
-        fwrite(buffer_data(content), 1, buffer_size(content), stdout);
+    if (content.size > 0) {
+        fwrite(content.data, 1, content.size, stdout);
 
         /* Ensure trailing newline */
-        const char *data = (const char *) buffer_data(content);
-        if (data[buffer_size(content) - 1] != '\n') {
+        const char *data = (const char *) content.data;
+        if (data[content.size - 1] != '\n') {
             fputc('\n', stdout);
         }
     }
 
-    buffer_free(content);
+    buffer_free(&content);
     return NULL;
 }
 

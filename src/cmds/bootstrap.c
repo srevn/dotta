@@ -160,7 +160,7 @@ static error_t *bootstrap_edit(
     const char *script_name = BOOTSTRAP_DEFAULT_SCRIPT_NAME;
     error_t *err = NULL;
     char *temp_path = NULL;
-    buffer_t *content_buf = NULL;
+    buffer_t content_buf = BUFFER_INIT;
     char *commit_msg = NULL;
 
     /* Create script if it doesn't exist */
@@ -198,12 +198,12 @@ static error_t *bootstrap_edit(
     }
 
     /* Validate edited content before committing */
-    if (buffer_size(content_buf) == 0) {
+    if (content_buf.size == 0) {
         err = ERROR(ERR_INVALID_ARG, "Bootstrap script cannot be empty");
         goto cleanup;
     }
 
-    err = bootstrap_validate_content(buffer_data(content_buf), buffer_size(content_buf));
+    err = bootstrap_validate_content((const unsigned char *) content_buf.data, content_buf.size);
     if (err) {
         err = error_wrap(err, "Edited bootstrap script has invalid content");
         goto cleanup;
@@ -218,8 +218,8 @@ static error_t *bootstrap_edit(
 
     bool was_modified = false;
     err = gitops_update_file(
-        repo, profile_name, script_name, (const char *) buffer_data(content_buf),
-        buffer_size(content_buf), commit_msg, GIT_FILEMODE_BLOB_EXECUTABLE,
+        repo, profile_name, script_name, (const char *) content_buf.data,
+        content_buf.size, commit_msg, GIT_FILEMODE_BLOB_EXECUTABLE,
         &was_modified
     );
 
@@ -247,7 +247,7 @@ cleanup:
         unlink(temp_path);
         free(temp_path);
     }
-    if (content_buf) buffer_free(content_buf);
+    buffer_free(&content_buf);
     if (commit_msg) free(commit_msg);
 
     return err;
@@ -280,7 +280,7 @@ static error_t *bootstrap_show(
     }
 
     /* Read content from Git blob */
-    buffer_t *content = NULL;
+    buffer_t content = BUFFER_INIT;
     error_t *err = bootstrap_read_content(
         repo, profile_name, script_name, &content
     );
@@ -289,15 +289,15 @@ static error_t *bootstrap_show(
     }
 
     /* Display content */
-    if (out && buffer_size(content) > 0) {
+    if (out && content.size > 0) {
         /* Write content as a single block (includes newlines) */
         output_print(
             out, OUTPUT_NORMAL, "%.*s",
-            (int) buffer_size(content), (const char *) buffer_data(content)
+            (int) content.size, (const char *) content.data
         );
     }
 
-    buffer_free(content);
+    buffer_free(&content);
 
     return NULL;
 }

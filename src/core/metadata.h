@@ -518,7 +518,7 @@ error_t *metadata_load_from_tree(
  */
 error_t *metadata_to_json(
     const metadata_t *metadata,
-    buffer_t **out
+    buffer_t *out
 );
 
 /**

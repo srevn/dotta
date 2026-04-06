@@ -1,18 +1,24 @@
 /**
- * hashmap.h - Hash table for string keys
+ * hashmap.h - Open-addressed hash table with Robin Hood probing
  *
- * Simple, efficient hash map implementation using separate chaining.
- * Keys are strings (duplicated internally), values are void pointers.
+ * String-keyed hash map using Robin Hood hashing with backward-shift
+ * deletion. Keys are strings (duplicated internally), values are void
+ * pointers.
+ *
+ * Robin Hood probing bounds probe-sequence variance: entries that hashed
+ * far from their ideal slot "steal" from entries closer to theirs,
+ * keeping all chains short. Backward-shift deletion avoids tombstones
+ * entirely, so the table never degrades over insert/remove cycles.
  *
  * Memory ownership:
  * - Map owns keys (duplicates on insert, frees on remove/destroy)
  * - Caller owns values (map only stores pointers)
- * - Optional free_value callback for cleanup
+ * - Optional free_value callback for cleanup on clear/free
  *
- * Performance characteristics:
- * - Average case: O(1) insert, lookup, delete
- * - Worst case: O(n) if all keys hash to same bucket
- * - Automatic resizing when load factor exceeds 0.75
+ * Performance:
+ * - Average O(1) insert, lookup, delete with excellent cache locality
+ * - Automatic growth when load factor exceeds 75%
+ * - No tombstones — backward-shift keeps the table clean
  */
 
 #ifndef DOTTA_HASHMAP_H
@@ -27,68 +33,91 @@ typedef struct hashmap hashmap_t;
 typedef struct error error_t;
 
 /**
- * Iterator callback function
- *
- * @param key Entry key (read-only)
- * @param value Entry value (can be modified)
- * @param user_data User-provided context
- * @return true to continue iteration, false to stop
- */
-typedef bool (*hashmap_iter_fn)(const char *key, void *value, void *user_data);
-
-/**
  * Value destructor callback
  *
  * Called when removing entries or destroying the map.
  *
  * @param value The value to free
  */
-typedef void (*hashmap_value_free_fn)(void *value);
+typedef void (*hashmap_free_fn)(void *value);
 
 /**
  * Hash map iterator
  *
- * Stack-allocated structure for iterating over hashmap entries.
- * Initialize with hashmap_iter_init(), advance with hashmap_iter_next().
+ * Stack-allocated. Initialize with hashmap_iter_init(), advance with
+ * hashmap_iter_next(). Iteration order is undefined but deterministic
+ * for a given map state.
  *
- * Iteration order is undefined but deterministic (same order for same map state).
- *
- * SAFETY: Iterator becomes invalid if hashmap is modified during iteration.
- * Modification will be detected and hashmap_iter_next() will return false.
+ * SAFETY: If the map is modified after init, hashmap_iter_next()
+ * detects this and returns false.
  */
 typedef struct hashmap_iter {
-    const hashmap_t *map;              /* Borrowed reference */
-    size_t bucket_index;               /* Current bucket (0 to bucket_count) */
-    void *current_entry_internal;      /* Current entry (hashmap_entry_t* cast) */
-    uint64_t snapshot_mod_count;       /* Modification counter snapshot */
+    const hashmap_t *map;
+    size_t index;                      /* Next slot to examine */
+    uint64_t snapshot_mod_count;
 } hashmap_iter_t;
 
 /**
  * Create new hash map
  *
- * @param initial_capacity Initial number of buckets (0 = default)
+ * @param initial_capacity Hint for expected entry count (0 = default 16).
+ *                         Rounded up to next power of two internally.
  * @return New hash map, or NULL on allocation failure
  */
 hashmap_t *hashmap_create(size_t initial_capacity);
 
 /**
- * Insert or update key-value pair
+ * Remove all entries without freeing the map itself
  *
- * If key already exists, old value is replaced. The caller is responsible
- * for freeing the old value if needed (use hashmap_get first to retrieve it).
+ * @param map Hash map (NULL is a no-op)
+ * @param free_fn Optional callback to free each value, or NULL
+ */
+void hashmap_clear(hashmap_t *map, hashmap_free_fn free_fn);
+
+/**
+ * Free hash map and all entries
  *
- * @param map Hash map
- * @param key Key string (will be duplicated)
+ * @param map Hash map (NULL is a no-op)
+ * @param free_fn Optional callback to free each value, or NULL
+ */
+void hashmap_free(hashmap_t *map, hashmap_free_fn free_fn);
+
+/**
+ * Insert or update a key-value pair
+ *
+ * If the key already exists, its value is replaced. The caller is
+ * responsible for the old value's lifetime (retrieve it first with
+ * hashmap_get if needed, or use hashmap_put for old-value retrieval).
+ *
+ * @param map Hash map (must not be NULL)
+ * @param key Key string (will be duplicated; must not be NULL)
  * @param value Value pointer (map does not take ownership)
- * @return NULL on success, error otherwise
+ * @return NULL on success, error on allocation failure
  */
 error_t *hashmap_set(hashmap_t *map, const char *key, void *value);
 
 /**
+ * Insert or update, returning the previous value
+ *
+ * Like hashmap_set but writes the displaced value (if any) to *out_prev.
+ * When the key is new, *out_prev is set to NULL.
+ *
+ * @param map Hash map (must not be NULL)
+ * @param key Key string (will be duplicated; must not be NULL)
+ * @param value New value pointer
+ * @param out_prev Receives the previous value, or NULL if key was new
+ * @return NULL on success, error on allocation failure
+ */
+error_t *hashmap_put(hashmap_t *map, const char *key, void *value, void **out_prev);
+
+/**
  * Get value for key
  *
- * @param map Hash map
- * @param key Key string
+ * Returns NULL both when the key is absent and when its value is NULL.
+ * Use hashmap_has() to distinguish the two cases.
+ *
+ * @param map Hash map (NULL returns NULL)
+ * @param key Key string (NULL returns NULL)
  * @return Value pointer, or NULL if not found
  */
 void *hashmap_get(const hashmap_t *map, const char *key);
@@ -96,102 +125,53 @@ void *hashmap_get(const hashmap_t *map, const char *key);
 /**
  * Check if key exists
  *
- * @param map Hash map
- * @param key Key string
- * @return true if key exists, false otherwise
+ * @param map Hash map (NULL returns false)
+ * @param key Key string (NULL returns false)
+ * @return true if key exists
  */
 bool hashmap_has(const hashmap_t *map, const char *key);
 
 /**
- * Remove key-value pair
+ * Remove a key-value pair
  *
- * @param map Hash map
- * @param key Key to remove
- * @param old_value Optional output for removed value (can be NULL)
- * @return NULL on success, error if key not found
+ * Uses backward-shift deletion (no tombstones).
+ *
+ * @param map Hash map (NULL returns false)
+ * @param key Key to remove (NULL returns false)
+ * @param out_old If non-NULL and key existed, receives the removed value
+ * @return true if key was found and removed, false if absent
  */
-error_t *hashmap_remove(hashmap_t *map, const char *key, void **old_value);
+bool hashmap_remove(hashmap_t *map, const char *key, void **out_old);
 
 /**
- * Iterate over all entries
- *
- * Iteration order is undefined. Do not modify the map during iteration.
- *
- * @param map Hash map
- * @param fn Iterator callback
- * @param user_data User context passed to callback
- */
-void hashmap_foreach(const hashmap_t *map, hashmap_iter_fn fn, void *user_data);
-
-/**
- * Get number of entries
- *
- * @param map Hash map
- * @return Number of key-value pairs
+ * @return Number of key-value pairs (0 if map is NULL)
  */
 size_t hashmap_size(const hashmap_t *map);
 
 /**
- * Check if map is empty
- *
- * @param map Hash map
- * @return true if empty
+ * @return true if map is NULL or contains no entries
  */
 bool hashmap_is_empty(const hashmap_t *map);
 
 /**
- * Remove all entries
+ * Initialize an iterator
  *
- * @param map Hash map
- * @param free_value Optional callback to free values
- */
-void hashmap_clear(hashmap_t *map, hashmap_value_free_fn free_value);
-
-/**
- * Initialize iterator for hashmap
- *
- * Creates a snapshot of hashmap's modification state. If hashmap is modified
- * after initialization, subsequent hashmap_iter_next() calls detect this and
- * return false.
+ * Takes a snapshot of the map's modification counter. If the map is
+ * modified after this call, hashmap_iter_next() will return false.
  *
  * @param iter Iterator to initialize (must not be NULL)
- * @param map Hashmap to iterate (can be NULL or empty, iteration will be empty)
+ * @param map  Map to iterate (NULL produces an empty iteration)
  */
 void hashmap_iter_init(hashmap_iter_t *iter, const hashmap_t *map);
 
 /**
  * Advance iterator to next entry
  *
- * Returns next key-value pair from hashmap. Iteration order is undefined
- * but deterministic (same for same map state).
- *
- * SAFETY: Returns false and prints warning if hashmap was modified during iteration.
- *
  * @param iter Iterator (must not be NULL)
- * @param out_key Output for key (can be NULL to skip)
- * @param out_value Output for value (can be NULL to skip)
- * @return true if entry retrieved, false if end reached or map modified
+ * @param out_key Receives key pointer (can be NULL to skip)
+ * @param out_value Receives value pointer (can be NULL to skip)
+ * @return true if an entry was retrieved, false at end or on stale iterator
  */
-bool hashmap_iter_next(
-    hashmap_iter_t *iter,
-    const char **out_key,
-    void **out_value
-);
-
-/**
- * Check if iterator is stale (hashmap modified during iteration)
- *
- * @param iter Iterator (must not be NULL)
- * @return true if hashmap was modified since initialization
- */
-bool hashmap_iter_is_stale(const hashmap_iter_t *iter);
-
-/**
- * Free hash map
- *
- * @param map Hash map (can be NULL)
- * @param free_value Optional callback to free values
- */
-void hashmap_free(hashmap_t *map, hashmap_value_free_fn free_value);
+bool hashmap_iter_next(hashmap_iter_t *iter, const char **out_key, void **out_value);
 
 #endif /* DOTTA_HASHMAP_H */

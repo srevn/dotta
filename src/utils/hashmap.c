@@ -1,506 +1,497 @@
 /**
- * hashmap.c - Hash table implementation
+ * hashmap.c - Robin Hood hash table implementation
  *
- * Uses FNV-1a hash function with separate chaining for collisions.
- * Automatically resizes when load factor exceeds 0.75.
+ * Open addressing with linear probing and Robin Hood displacement.
+ * Backward-shift deletion keeps the table tombstone-free.
+ *
+ * Slot layout:
+ *   key != NULL  →  occupied (key is owned, heap-allocated)
+ *   key == NULL  →  empty
+ *
+ * Hash: FNV-1a (64-bit compute, XOR-folded to 32-bit for compact slots).
+ * Capacity: always a power of two for fast masking.
  */
 
 #include "hashmap.h"
 
-#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "base/error.h"
 
 /* Default initial capacity (must be power of 2 for fast modulo) */
-#define DEFAULT_CAPACITY 16
+#define HASHMAP_DEFAULT_CAPACITY    16
+#define HASHMAP_MIN_CAPACITY        4      /* Floor to avoid degenerate grow_at */
+#define HASHMAP_LOAD_PERCENT        75     /* Resize at 75% occupancy */
 
-/* Resize when load factor exceeds this threshold */
-#define LOAD_FACTOR_THRESHOLD 0.75
+/* FNV-1a 64-bit parameters */
+#define FNV_OFFSET  14695981039346656037ULL
+#define FNV_PRIME   1099511628211ULL
 
-/**
- * Hash map entry (linked list node)
- */
-typedef struct hashmap_entry {
-    char *key;                      /* Owned by entry */
-    void *value;                    /* Not owned, just pointer */
-    struct hashmap_entry *next;     /* Next in chain */
-} hashmap_entry_t;
+/* Slot */
+typedef struct {
+    char *key;          /* NULL = empty slot; owned when non-NULL */
+    void *value;
+    uint32_t hash;      /* Cached XOR-folded 32 bits of FNV-1a */
+} hashmap_slot_t;
 
-/**
- * Hash map structure
- */
+/* Map */
 struct hashmap {
-    hashmap_entry_t **buckets;      /* Array of bucket chains */
-    size_t bucket_count;            /* Number of buckets */
-    size_t entry_count;             /* Number of entries */
-    size_t resize_threshold;        /* When to resize */
-    uint64_t mod_count;             /* Modification counter for iterator safety */
+    hashmap_slot_t *slots;
+    size_t capacity;            /* Always power of 2 */
+    size_t count;               /* Number of occupied slots */
+    size_t grow_at;             /* count threshold triggering resize */
+    uint64_t mod_count;         /* Mutation counter for iterator safety */
 };
 
-/**
- * FNV-1a hash function for strings
- *
- * Fast, simple, good distribution for string keys
- */
-static uint64_t hashmap_hash(const char *key) {
-    /* FNV-1a parameters */
-    const uint64_t FNV_OFFSET_BASIS = 14695981039346656037ULL;
-    const uint64_t FNV_PRIME = 1099511628211ULL;
-
-    uint64_t hash = FNV_OFFSET_BASIS;
+/* FNV-1a hash function for strings */
+static uint32_t hash_key(const char *key) {
+    uint64_t hash = FNV_OFFSET;
     for (const unsigned char *p = (const unsigned char *) key; *p; p++) {
         hash ^= *p;
         hash *= FNV_PRIME;
     }
-    return hash;
+    /* XOR-fold: mix upper bits into lower 32 for better distribution */
+    return (uint32_t) (hash ^ (hash >> 32));
 }
 
-/**
- * Get bucket index for key
- */
-static size_t hashmap_bucket_index(const hashmap_t *map, const char *key) {
-    uint64_t hash = hashmap_hash(key);
-    /* Fast modulo using bitwise AND (works because bucket_count is power of 2) */
-    return (size_t) (hash & (map->bucket_count - 1));
+/* Ideal slot for a given hash */
+static inline size_t ideal_slot(uint32_t hash, size_t mask) {
+    return (size_t) hash & mask;
 }
 
-/**
- * Find entry in bucket chain
- *
- * @param bucket Head of bucket chain
- * @param key Key to find
- * @param prev Output: previous entry in chain (NULL if first)
- * @return Entry if found, NULL otherwise
- */
-static hashmap_entry_t *hashmap_find_entry(
-    hashmap_entry_t *bucket,
-    const char *key,
-    hashmap_entry_t **prev
+/* Distance from ideal slot (probe sequence length) */
+static inline size_t probe_dist(size_t slot, uint32_t hash, size_t mask) {
+    return (slot - ideal_slot(hash, mask)) & mask;
+}
+
+/* Resize-only insert (no key dup, no update check) */
+static void insert_for_resize(
+    hashmap_t *map,
+    char *key,
+    void *value,
+    uint32_t hash
 ) {
-    hashmap_entry_t *entry = bucket;
-    hashmap_entry_t *previous = NULL;
+    size_t mask = map->capacity - 1;
+    size_t pos = ideal_slot(hash, mask);
+    size_t dist = 0;
 
-    while (entry) {
-        if (strcmp(entry->key, key) == 0) {
-            if (prev) *prev = previous;
-            return entry;
+    for (;;) {
+        hashmap_slot_t *slot = &map->slots[pos];
+
+        if (!slot->key) {
+            slot->key = key;
+            slot->value = value;
+            slot->hash = hash;
+            map->count++;
+            return;
         }
-        previous = entry;
-        entry = entry->next;
-    }
 
-    if (prev) *prev = NULL;
-    return NULL;
+        size_t existing = probe_dist(pos, slot->hash, mask);
+        if (dist > existing) {
+            /* Robin Hood swap: displace the richer entry */
+            char *tk = slot->key;
+            void *tv = slot->value;
+            uint32_t th = slot->hash;
+
+            slot->key = key;
+            slot->value = value;
+            slot->hash = hash;
+
+            key = tk;
+            value = tv;
+            hash = th;
+            dist = existing;
+        }
+
+        pos = (pos + 1) & mask;
+        dist++;
+    }
 }
 
-/**
- * Create new entry
- */
-static hashmap_entry_t *hashmap_entry_create(const char *key, void *value) {
-    hashmap_entry_t *entry = calloc(1, sizeof(hashmap_entry_t));
-    if (!entry) {
-        return NULL;
+/* Internal: grow */
+static error_t *hashmap_grow(hashmap_t *map) {
+    size_t new_cap = map->capacity * 2;
+    if (new_cap <= map->capacity) {
+        return ERROR(
+            ERR_MEMORY,
+            "Hash map capacity overflow"
+        );
     }
 
-    entry->key = strdup(key);
-    if (!entry->key) {
-        free(entry);
-        return NULL;
+    hashmap_slot_t *new_slots = calloc(new_cap, sizeof(hashmap_slot_t));
+    if (!new_slots) {
+        return ERROR(
+            ERR_MEMORY,
+            "Failed to allocate hash map slots for resize"
+        );
     }
 
-    entry->value = value;
-    entry->next = NULL;
-    return entry;
-}
+    hashmap_slot_t *old_slots = map->slots;
+    size_t old_cap = map->capacity;
 
-/**
- * Free entry (does not free value)
- */
-static void hashmap_entry_free(hashmap_entry_t *entry) {
-    if (!entry) return;
-    free(entry->key);
-    free(entry);
-}
+    map->slots = new_slots;
+    map->capacity = new_cap;
+    map->grow_at = new_cap * HASHMAP_LOAD_PERCENT / 100;
+    map->count = 0;
 
-/**
- * Resize hash map to new capacity
- */
-static error_t *hashmap_resize(hashmap_t *map, size_t new_capacity) {
-    /* Allocate new bucket array */
-    hashmap_entry_t **new_buckets = calloc(new_capacity, sizeof(hashmap_entry_t *));
-    if (!new_buckets) {
-        return ERROR(ERR_MEMORY, "Failed to allocate buckets for resize");
-    }
-
-    /* Save old buckets */
-    hashmap_entry_t **old_buckets = map->buckets;
-    size_t old_capacity = map->bucket_count;
-
-    /* Update map to use new buckets */
-    map->buckets = new_buckets;
-    map->bucket_count = new_capacity;
-    map->resize_threshold = (size_t) (new_capacity * LOAD_FACTOR_THRESHOLD);
-    map->mod_count++;  /* Structural modification: rehashed all entries */
-
-    /* Rehash all entries from old buckets to new buckets */
-    for (size_t i = 0; i < old_capacity; i++) {
-        hashmap_entry_t *entry = old_buckets[i];
-        while (entry) {
-            hashmap_entry_t *next = entry->next;
-
-            /* Compute new bucket index */
-            size_t new_idx = hashmap_bucket_index(map, entry->key);
-
-            /* Insert at head of new bucket chain */
-            entry->next = map->buckets[new_idx];
-            map->buckets[new_idx] = entry;
-
-            entry = next;
+    for (size_t i = 0; i < old_cap; i++) {
+        if (old_slots[i].key) {
+            insert_for_resize(
+                map,
+                old_slots[i].key,
+                old_slots[i].value,
+                old_slots[i].hash
+            );
         }
     }
 
-    /* Free old bucket array (entries have been moved) */
-    free(old_buckets);
+    free(old_slots);
+    map->mod_count++;
 
     return NULL;
 }
 
 /**
- * Create new hash map
+ * Shared insert/update implementation.
+ *
+ * @param map       Target map
+ * @param key       Caller's key (const — will be strdup'd if needed)
+ * @param value     Value to store
+ * @param out_prev  If non-NULL, receives the previous value when updating
+ *                  an existing key (set to NULL when inserting a new key).
+ * @return NULL on success, error on OOM
  */
-hashmap_t *hashmap_create(size_t initial_capacity) {
-    /* Use default if not specified */
-    if (initial_capacity == 0) {
-        initial_capacity = DEFAULT_CAPACITY;
-    }
+static error_t *hashmap_insert(
+    hashmap_t *map,
+    const char *key,
+    void *value,
+    void **out_prev
+) {
+    if (out_prev) *out_prev = NULL;
 
-    /* Round up to next power of 2 for fast modulo */
-    size_t capacity = 1;
-    while (capacity < initial_capacity) {
-        if (capacity > SIZE_MAX / 2) {
-            return NULL;  /* Requested capacity too large */
-        }
-        capacity *= 2;
-    }
-
-    /* Allocate map structure */
-    hashmap_t *map = calloc(1, sizeof(hashmap_t));
-    if (!map) {
-        return NULL;
-    }
-
-    /* Allocate bucket array */
-    map->buckets = calloc(capacity, sizeof(hashmap_entry_t *));
-    if (!map->buckets) {
-        free(map);
-        return NULL;
-    }
-
-    map->bucket_count = capacity;
-    map->entry_count = 0;
-    map->resize_threshold = (size_t) (capacity * LOAD_FACTOR_THRESHOLD);
-    map->mod_count = 0;
-
-    return map;
-}
-
-/**
- * Insert or update key-value pair
- */
-error_t *hashmap_set(hashmap_t *map, const char *key, void *value) {
-    if (!map) {
-        return ERROR(ERR_INVALID_ARG, "Hash map is NULL");
-    }
-    if (!key) {
-        return ERROR(ERR_INVALID_ARG, "Key is NULL");
-    }
-
-    /* Find bucket */
-    size_t idx = hashmap_bucket_index(map, key);
-    hashmap_entry_t *existing = hashmap_find_entry(map->buckets[idx], key, NULL);
-
-    if (existing) {
-        /* Update existing entry */
-        existing->value = value;
-        return NULL;
-    }
-
-    /* Create new entry */
-    hashmap_entry_t *new_entry = hashmap_entry_create(key, value);
-    if (!new_entry) {
-        return ERROR(ERR_MEMORY, "Failed to allocate hash map entry");
-    }
-
-    /* Insert at head of bucket chain */
-    new_entry->next = map->buckets[idx];
-    map->buckets[idx] = new_entry;
-    map->entry_count++;
-    map->mod_count++;  /* Structural modification: new entry added */
-
-    /* Check if resize needed */
-    if (map->entry_count > map->resize_threshold) {
-        /* Guard against bucket_count overflow */
-        size_t new_bucket_count = (map->bucket_count <= SIZE_MAX / 2)
-            ? map->bucket_count * 2
-            : map->bucket_count;  /* Skip resize at maximum capacity */
-        error_t *err = (new_bucket_count > map->bucket_count)
-            ? hashmap_resize(map, new_bucket_count)
-            : NULL;
+    /* Grow before insert so there is always at least one empty slot */
+    if (map->count >= map->grow_at) {
+        error_t *err = hashmap_grow(map);
         if (err) {
-            /* Resize failed, but insertion succeeded.
-             * Continue with current size, but warn about performance degradation.
-             * As more items are added without resizing, collision chains grow
-             * longer, degrading lookup performance from O(1) to O(n).
+            if (map->count >= map->capacity) {
+                /* Table completely full — probe loop would never terminate */
+                return error_wrap(
+                    err, "Hash map at capacity, cannot insert"
+                );
+            }
+            /*
+             * Non-fatal: current load < 100%.  At 75% threshold with
+             * power-of-2 capacity we still have ≥25% empty slots.
              */
             fprintf(
-                stderr, "Warning: Hash map resize failed (%s)\n",
+                stderr, "warning: hash map resize failed (%s)\n",
                 error_message(err)
             );
             fprintf(
-                stderr, "         Current size: %zu entries, %zu buckets\n",
-                map->entry_count, map->bucket_count
+                stderr, "         %zu entries in %zu slots\n",
+                map->count, map->capacity
             );
             error_free(err);
         }
     }
 
-    return NULL;
+    uint32_t h = hash_key(key);
+    size_t mask = map->capacity - 1;
+    size_t pos = ideal_slot(h, mask);
+    size_t dist = 0;
+
+    /* Key we are carrying (NULL until we need to allocate) */
+    char *carry_key = NULL;
+    void *carry_val = value;
+    uint32_t carry_h = h;
+
+    for (;;) {
+        hashmap_slot_t *slot = &map->slots[pos];
+
+        /* Empty slot — insert */
+        if (!slot->key) {
+            if (!carry_key) {
+                carry_key = strdup(key);
+                if (!carry_key) {
+                    return ERROR(
+                        ERR_MEMORY,
+                        "Failed to allocate hash map key"
+                    );
+                }
+            }
+            slot->key = carry_key;
+            slot->value = carry_val;
+            slot->hash = carry_h;
+            map->count++;
+            map->mod_count++;
+            return NULL;
+        }
+
+        /* Exact match — update value */
+        if (slot->hash == h && strcmp(slot->key, key) == 0) {
+            if (out_prev) *out_prev = slot->value;
+            slot->value = value;
+            /* No mod_count bump: value-only update is not structural */
+            return NULL;
+        }
+
+        /* Robin Hood: displace richer entries */
+        size_t existing = probe_dist(pos, slot->hash, mask);
+        if (dist > existing) {
+            if (!carry_key) {
+                carry_key = strdup(key);
+                if (!carry_key) {
+                    return ERROR(
+                        ERR_MEMORY,
+                        "Failed to allocate hash map key"
+                    );
+                }
+            }
+
+            /* Swap our entry into this slot, carry the displaced one */
+            char *tk = slot->key;
+            void *tv = slot->value;
+            uint32_t th = slot->hash;
+
+            slot->key = carry_key;
+            slot->value = carry_val;
+            slot->hash = carry_h;
+
+            carry_key = tk;
+            carry_val = tv;
+            carry_h = th;
+            dist = existing;
+        }
+
+        pos = (pos + 1) & mask;
+        dist++;
+    }
 }
 
 /**
- * Get value for key
+ * Find a slot by key.
+ *
+ * Returns pointer to the occupied slot, or NULL if absent. Uses Robin
+ * Hood early termination: if our probe distance exceeds the slot's,
+ * the key cannot be present.
  */
-void *hashmap_get(const hashmap_t *map, const char *key) {
-    if (!map || !key) {
+static const hashmap_slot_t *hashmap_find(
+    const hashmap_t *map,
+    const char *key,
+    uint32_t h
+) {
+    size_t mask = map->capacity - 1;
+    size_t pos = ideal_slot(h, mask);
+    size_t dist = 0;
+
+    for (;;) {
+        const hashmap_slot_t *slot = &map->slots[pos];
+
+        if (!slot->key)
+            return NULL;
+
+        if (slot->hash == h && strcmp(slot->key, key) == 0)
+            return slot;
+
+        if (dist > probe_dist(pos, slot->hash, mask))
+            return NULL;     /* Robin Hood guarantee: key would be here */
+
+        pos = (pos + 1) & mask;
+        dist++;
+    }
+}
+
+/* Capacity helper */
+static size_t next_power_of_two(size_t n) {
+    size_t p = 1;
+    while (p < n) {
+        if (p > SIZE_MAX / 2) return 0;   /* Overflow */
+        p *= 2;
+    }
+
+    return p;
+}
+
+/* Create new hash map */
+hashmap_t *hashmap_create(size_t initial_capacity) {
+    if (initial_capacity == 0)
+        initial_capacity = HASHMAP_DEFAULT_CAPACITY;
+    else if (initial_capacity < HASHMAP_MIN_CAPACITY)
+        initial_capacity = HASHMAP_MIN_CAPACITY;
+
+    size_t cap = next_power_of_two(initial_capacity);
+    if (cap == 0) return NULL;
+
+    hashmap_t *map = calloc(1, sizeof(hashmap_t));
+    if (!map) return NULL;
+
+    map->slots = calloc(cap, sizeof(hashmap_slot_t));
+    if (!map->slots) {
+        free(map);
         return NULL;
     }
 
-    size_t idx = hashmap_bucket_index(map, key);
-    hashmap_entry_t *entry = hashmap_find_entry(map->buckets[idx], key, NULL);
-    return entry ? entry->value : NULL;
+    map->capacity = cap;
+    map->grow_at = cap * HASHMAP_LOAD_PERCENT / 100;
+
+    return map;
 }
 
-/**
- * Check if key exists
- */
+/* Remove all entries without freeing the map itself */
+void hashmap_clear(hashmap_t *map, hashmap_free_fn free_fn) {
+    if (!map) return;
+
+    for (size_t i = 0; i < map->capacity; i++) {
+        hashmap_slot_t *slot = &map->slots[i];
+        if (slot->key) {
+            if (free_fn && slot->value)
+                free_fn(slot->value);
+            free(slot->key);
+            *slot = (hashmap_slot_t){ 0 };
+        }
+    }
+
+    map->count = 0;
+    map->mod_count++;
+}
+
+/* Free hash map and all entries */
+void hashmap_free(hashmap_t *map, hashmap_free_fn free_fn) {
+    if (!map) return;
+
+    hashmap_clear(map, free_fn);
+    free(map->slots);
+    free(map);
+}
+
+/* Insert or update a key-value pair */
+error_t *hashmap_set(hashmap_t *map, const char *key, void *value) {
+    if (!map) return ERROR(ERR_INVALID_ARG, "Hash map is NULL");
+    if (!key) return ERROR(ERR_INVALID_ARG, "Key is NULL");
+
+    return hashmap_insert(map, key, value, NULL);
+}
+
+/* Insert or update, returning the previous value */
+error_t *hashmap_put(hashmap_t *map, const char *key, void *value, void **out_prev) {
+    if (!map) return ERROR(ERR_INVALID_ARG, "Hash map is NULL");
+    if (!key) return ERROR(ERR_INVALID_ARG, "Key is NULL");
+    if (!out_prev) return ERROR(ERR_INVALID_ARG, "out_prev is NULL");
+
+    return hashmap_insert(map, key, value, out_prev);
+}
+
+/** Get value for key */
+void *hashmap_get(const hashmap_t *map, const char *key) {
+    if (!map || !key || map->count == 0) return NULL;
+    const hashmap_slot_t *slot = hashmap_find(map, key, hash_key(key));
+
+    return slot ? slot->value : NULL;
+}
+
+/* Check if key exists */
 bool hashmap_has(const hashmap_t *map, const char *key) {
-    if (!map || !key) {
-        return false;
-    }
+    if (!map || !key || map->count == 0) return false;
 
-    size_t idx = hashmap_bucket_index(map, key);
-    return hashmap_find_entry(map->buckets[idx], key, NULL) != NULL;
+    return hashmap_find(map, key, hash_key(key)) != NULL;
 }
 
-/**
- * Remove key-value pair
- */
-error_t *hashmap_remove(hashmap_t *map, const char *key, void **old_value) {
-    if (!map) {
-        return ERROR(ERR_INVALID_ARG, "Hash map is NULL");
-    }
-    if (!key) {
-        return ERROR(ERR_INVALID_ARG, "Key is NULL");
-    }
+/* Remove key-value pair */
+bool hashmap_remove(hashmap_t *map, const char *key, void **out_old) {
+    if (!map || !key || map->count == 0) return false;
 
-    size_t idx = hashmap_bucket_index(map, key);
-    hashmap_entry_t *prev = NULL;
-    hashmap_entry_t *entry = hashmap_find_entry(map->buckets[idx], key, &prev);
+    uint32_t h = hash_key(key);
+    size_t mask = map->capacity - 1;
+    size_t pos = ideal_slot(h, mask);
+    size_t dist = 0;
 
-    if (!entry) {
-        return ERROR(
-            ERR_NOT_FOUND, "Key not found in hash map: %s",
-            key
-        );
-    }
+    /* Locate the entry */
+    for (;;) {
+        hashmap_slot_t *slot = &map->slots[pos];
 
-    /* Save old value if requested */
-    if (old_value) {
-        *old_value = entry->value;
-    }
+        if (!slot->key)
+            return false;
 
-    /* Remove from chain */
-    if (prev) {
-        prev->next = entry->next;
-    } else {
-        map->buckets[idx] = entry->next;
+        if (slot->hash == h && strcmp(slot->key, key) == 0)
+            break;   /* Found at pos */
+
+        if (dist > probe_dist(pos, slot->hash, mask))
+            return false;
+
+        pos = (pos + 1) & mask;
+        dist++;
     }
 
-    /* Free entry */
-    hashmap_entry_free(entry);
-    map->entry_count--;
-    map->mod_count++;  /* Structural modification: entry removed */
+    /* Harvest value and free key */
+    if (out_old) *out_old = map->slots[pos].value;
+    free(map->slots[pos].key);
 
-    return NULL;
+    /*
+     * Backward-shift deletion: pull subsequent displaced entries back
+     * one slot until we hit an empty slot or one at its ideal position.
+     */
+    for (;;) {
+        size_t next = (pos + 1) & mask;
+        hashmap_slot_t *next_slot = &map->slots[next];
+
+        if (!next_slot->key || probe_dist(next, next_slot->hash, mask) == 0)
+            break;
+
+        map->slots[pos] = *next_slot;
+        pos = next;
+    }
+
+    map->slots[pos] = (hashmap_slot_t){ 0 };
+    map->count--;
+    map->mod_count++;
+
+    return true;
 }
 
-/**
- * Iterate over all entries
- */
-void hashmap_foreach(const hashmap_t *map, hashmap_iter_fn fn, void *user_data) {
-    if (!map || !fn) {
-        return;
-    }
-
-    for (size_t i = 0; i < map->bucket_count; i++) {
-        hashmap_entry_t *entry = map->buckets[i];
-        while (entry) {
-            /* Save next pointer before callback (in case entry is modified) */
-            hashmap_entry_t *next = entry->next;
-
-            /* Call iterator */
-            bool continue_iter = fn(entry->key, entry->value, user_data);
-            if (!continue_iter) {
-                return;
-            }
-
-            entry = next;
-        }
-    }
-}
-
-/**
- * Get number of entries
- */
+/* Get number of entries */
 size_t hashmap_size(const hashmap_t *map) {
-    return map ? map->entry_count : 0;
+    return map ? map->count : 0;
 }
 
-/**
- * Check if empty
- */
+/* Check if empty */
 bool hashmap_is_empty(const hashmap_t *map) {
-    return !map || map->entry_count == 0;
+    return !map || map->count == 0;
 }
 
-/**
- * Remove all entries
- */
-void hashmap_clear(hashmap_t *map, hashmap_value_free_fn free_value) {
-    if (!map) {
-        return;
-    }
-
-    for (size_t i = 0; i < map->bucket_count; i++) {
-        hashmap_entry_t *entry = map->buckets[i];
-        while (entry) {
-            hashmap_entry_t *next = entry->next;
-
-            /* Free value if callback provided */
-            if (free_value && entry->value) {
-                free_value(entry->value);
-            }
-
-            /* Free entry */
-            hashmap_entry_free(entry);
-
-            entry = next;
-        }
-        map->buckets[i] = NULL;
-    }
-
-    map->entry_count = 0;
-    map->mod_count++;  /* Structural modification: all entries removed */
-}
-
-/**
- * Initialize iterator for hashmap
- */
+/* Initialize iterator for hashmap */
 void hashmap_iter_init(hashmap_iter_t *iter, const hashmap_t *map) {
-    if (!iter) {
-        return;  /* Defensive: should not happen in correct usage */
-    }
+    if (!iter) return;
 
     iter->map = map;
-    iter->bucket_index = 0;
-    iter->current_entry_internal = NULL;
+    iter->index = 0;
     iter->snapshot_mod_count = map ? map->mod_count : 0;
 }
 
-/**
- * Advance iterator to next entry
- */
+/* Advance iterator to next entry */
 bool hashmap_iter_next(
     hashmap_iter_t *iter,
     const char **out_key,
     void **out_value
 ) {
-    if (!iter) {
-        return false;
-    }
+    if (!iter || !iter->map) return false;
 
     const hashmap_t *map = iter->map;
 
-    /* Check for NULL or empty map */
-    if (!map || map->entry_count == 0) {
-        return false;
-    }
-
-    /* Check for modification */
     if (map->mod_count != iter->snapshot_mod_count) {
-        fprintf(
-            stderr, "warning: hashmap was modified during iteration\n"
-        );
+        fprintf(stderr, "warning: hashmap modified during iteration\n");
         return false;
     }
 
-    hashmap_entry_t *entry = (hashmap_entry_t *) iter->current_entry_internal;
-
-    /* Try to advance in current chain first */
-    if (entry && entry->next) {
-        entry = entry->next;
-        iter->current_entry_internal = entry;
-        goto found_entry;
-    }
-
-    /* Chain exhausted or no current entry - find next non-empty bucket */
-    for (size_t i = iter->bucket_index; i < map->bucket_count; i++) {
-        entry = map->buckets[i];
-        if (entry) {
-            /* Found non-empty bucket */
-            iter->bucket_index = i + 1;  /* Next search starts after this bucket */
-            iter->current_entry_internal = entry;
-            goto found_entry;
+    while (iter->index < map->capacity) {
+        const hashmap_slot_t *slot = &map->slots[iter->index++];
+        if (slot->key) {
+            if (out_key)   *out_key = slot->key;
+            if (out_value) *out_value = slot->value;
+            return true;
         }
     }
 
-    /* No more entries */
     return false;
-
-found_entry:
-    /* Unified return path: output entry data */
-    if (out_key) *out_key = entry->key;
-    if (out_value) *out_value = entry->value;
-    return true;
-}
-
-/**
- * Check if iterator is stale
- */
-bool hashmap_iter_is_stale(const hashmap_iter_t *iter) {
-    if (!iter || !iter->map) {
-        return false;  /* No map, can't be stale */
-    }
-
-    return iter->map->mod_count != iter->snapshot_mod_count;
-}
-
-/**
- * Free hash map
- */
-void hashmap_free(hashmap_t *map, hashmap_value_free_fn free_value) {
-    if (!map) {
-        return;
-    }
-
-    /* Clear all entries */
-    hashmap_clear(map, free_value);
-
-    /* Free bucket array */
-    free(map->buckets);
-
-    /* Free map structure */
-    free(map);
 }

@@ -622,11 +622,7 @@ error_t *metadata_remove_item(
 
     /* Remove from hashmap first (before freeing key) */
     if (metadata->index) {
-        error_t *err = hashmap_remove(metadata->index, item->key, NULL);
-        if (err) {
-            /* Non-fatal: hashmap is now inconsistent but we continue with removal */
-            error_free(err);
-        }
+        hashmap_remove(metadata->index, item->key, NULL);
     }
 
     /* Free item's allocated fields */

@@ -28,15 +28,12 @@ static void display_enabled_profiles(
     output_ctx_t *out,
     const profile_list_t *profiles,
     const manifest_t *manifest,
-    const state_t *state,
-    bool verbose
+    const state_t *state
 ) {
-    if (!out || !profiles) {
-        return;
-    }
+    if (!out || !profiles) return;
 
     /* Show enabled profiles */
-    output_section(out, "Enabled profiles");
+    output_section(out, OUTPUT_NORMAL, "Enabled profiles");
 
     for (size_t i = 0; i < profiles->count; i++) {
         const profile_t *profile = &profiles->profiles[i];
@@ -69,7 +66,7 @@ static void display_enabled_profiles(
         }
 
         /* In verbose mode, show file count for this profile */
-        if (verbose && manifest) {
+        if (output_is_verbose(out) && manifest) {
             size_t profile_file_count = 0;
             for (size_t j = 0; j < manifest->count; j++) {
                 if (manifest->entries[j].source_profile &&
@@ -83,7 +80,7 @@ static void display_enabled_profiles(
             );
         }
 
-        output_newline(out);
+        output_newline(out, OUTPUT_NORMAL);
     }
 }
 
@@ -108,12 +105,9 @@ static void display_workspace_status(
     workspace_t *ws,
     const profile_list_t *profile_filter,
     const manifest_t *manifest,
-    output_ctx_t *out,
-    bool verbose
+    output_ctx_t *out
 ) {
-    if (!ws || !out) {
-        return;
-    }
+    if (!ws || !out) return;
 
     /* Get workspace status from provided workspace */
     workspace_status_t ws_status = workspace_get_status(ws);
@@ -158,11 +152,11 @@ static void display_workspace_status(
      */
     bool has_divergence = profile_filter ? (filtered_diverged > 0)
                                          : (ws_status != WORKSPACE_CLEAN);
-    if (!has_divergence && hidden_count == 0 && !verbose) {
+    if (!has_divergence && hidden_count == 0 && !output_is_verbose(out)) {
         return;
     }
 
-    output_section(out, "Workspace status");
+    output_section(out, OUTPUT_NORMAL, "Workspace status");
 
     /* Display status line */
     if (profile_filter) {
@@ -224,7 +218,7 @@ static void display_workspace_status(
     /* Staleness warning — external Git changes detected */
     if (workspace_is_stale(ws)) {
         output_warning(
-            out, "External Git changes detected — manifest is stale\n"
+            out, OUTPUT_NORMAL, "External Git changes detected — manifest is stale\n"
             "  Hint: Run 'dotta apply' to synchronize state"
         );
     }
@@ -464,39 +458,21 @@ static void display_workspace_status(
 
                     /* Show detailed guidance only for diverged orphans */
                     if (has_diverged_orphans) {
-                        output_hint(out, "Orphaned file states:");
-                        output_hint_line(
-                            out, "  [orphaned]              "
+                        output_hint(
+                            out, OUTPUT_NORMAL,
+                            "Diverged orphans blocking safe removal."
+                        );
+                        output_hintline(
+                            out, OUTPUT_NORMAL, "  [orphaned]              "
                             "- Clean, will be removed by 'dotta apply'"
                         );
-                        output_hint_line(
-                            out, "  [orphaned] [modified]   "
+                        output_hintline(
+                            out, OUTPUT_NORMAL, "  [orphaned] [modified]   "
                             "- Has uncommitted changes, skipped by 'dotta apply'"
                         );
-                        output_hint_line(
-                            out, "  [orphaned] [mode]       "
+                        output_hintline(
+                            out, OUTPUT_NORMAL, "  [orphaned] [mode]       "
                             "- Permissions changed, skipped by 'dotta apply'"
-                        );
-                        output_hint_line(
-                            out, "  [orphaned] [unverified] "
-                            "- Cannot verify (e.g., missing key), skipped by 'dotta apply'"
-                        );
-                        output_newline(out);
-                        output_hint(out, "To resolve:");
-                        output_hint_line(
-                            out,
-                            "  • Keep changes: Re-enable profile and "
-                            "run 'dotta update <profile> <path>'"
-                        );
-                        output_hint_line(
-                            out,
-                            "  • Discard changes: Manually revert file "
-                            "to match profile version"
-                        );
-                        output_hint_line(
-                            out,
-                            "  • Force removal: 'dotta apply --force' "
-                            "(warning: data loss)"
                         );
                     }
                 }
@@ -527,12 +503,13 @@ static error_t *display_remote_status(
     const profile_list_t *enabled_profiles,
     output_ctx_t *out,
     bool show_all_profiles,
-    bool verbose,
     bool no_fetch
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(enabled_profiles);
     CHECK_NULL(out);
+
+    bool verbose = output_is_verbose(out);
 
     /* Detect remote */
     char *remote_name = NULL;
@@ -578,7 +555,7 @@ static error_t *display_remote_status(
              * On TTY: progress overwrites via \r, then line is cleared entirely.
              * On pipe: falls back to inline text resolution. */
             output_print(
-                out, OUTPUT_NORMAL, "Fetching from '%s'...",
+                out, OUTPUT_VERBOSE, "Fetching from '%s'...",
                 remote_name
             );
             fflush(out->stream);
@@ -604,10 +581,11 @@ static error_t *display_remote_status(
                 if (ephemeral) {
                     output_clear_line(out);
                 } else {
-                    output_newline(out);
+                    output_newline(out, OUTPUT_VERBOSE);
                 }
                 output_warning(
-                    out, "Failed to allocate memory for fetch operation"
+                    out, OUTPUT_VERBOSE,
+                    "Failed to allocate memory for fetch operation"
                 );
             }
         } else {
@@ -634,22 +612,20 @@ static error_t *display_remote_status(
                     output_clear_line(out);
                 } else if (fetch_err) {
                     /* Non-TTY: finish the line before warning */
-                    output_newline(out);
+                    output_newline(out, OUTPUT_VERBOSE);
                 } else if (!xfer || xfer->total_objects == 0) {
                     /* Non-TTY, up-to-date: resolve inline */
-                    output_print(out, OUTPUT_NORMAL, " done.\n");
+                    output_print(out, OUTPUT_VERBOSE, " done.\n");
                 }
                 /* Non-TTY with objects: callback wrote ", done.\n" */
             }
 
             if (fetch_err) {
                 /* Non-fatal: just warn and continue with status display */
-                if (verbose) {
-                    output_warning(
-                        out, "Failed to fetch branches: %s",
-                        error_message(fetch_err)
-                    );
-                }
+                output_warning(
+                    out, OUTPUT_VERBOSE, "Failed to fetch branches: %s",
+                    error_message(fetch_err)
+                );
                 error_free(fetch_err);
             }
 
@@ -661,7 +637,7 @@ static error_t *display_remote_status(
     }
 
     /* Display remote sync status section */
-    output_section(out, "Remote sync status (%s)", remote_name);
+    output_section(out, OUTPUT_NORMAL, "Remote sync status (%s)", remote_name);
 
     /* Analyze and display each profile's sync state */
     size_t up_to_date = 0;
@@ -741,11 +717,8 @@ static error_t *display_remote_status(
         /* Display with colors */
         if (verbose && info->state != UPSTREAM_NO_REMOTE && info->state != UPSTREAM_UNKNOWN) {
             /* Verbose mode: show detailed commit info */
-            output_newline(out);
-            output_print(
-                out, OUTPUT_NORMAL, "Profile: %s\n",
-                profile_name
-            );
+            output_newline(out, OUTPUT_VERBOSE);
+            output_print(out, OUTPUT_VERBOSE, "Profile: %s\n", profile_name);
 
             /* Get local commit info */
             char local_ref[DOTTA_REFNAME_MAX];
@@ -757,13 +730,8 @@ static error_t *display_remote_status(
                                 : gitops_get_commit(repo, local_ref, &local_commit);
 
             /* Status line — always shown regardless of commit loading */
-            output_print(
-                out, OUTPUT_NORMAL, "  Status:         "
-            );
-            output_colored(
-                out, OUTPUT_NORMAL, color, "%s\n",
-                status_str
-            );
+            output_print(out, OUTPUT_VERBOSE, "  Status:         ");
+            output_colored(out, OUTPUT_VERBOSE, color, "%s\n", status_str);
 
             if (!commit_err && local_commit) {
                 const git_oid *local_oid = git_commit_id(local_commit);
@@ -777,7 +745,7 @@ static error_t *display_remote_status(
                 format_relative_time(local_time, time_str, sizeof(time_str));
 
                 output_print(
-                    out, OUTPUT_NORMAL, "  Local commit:   %s %s (%s)\n",
+                    out, OUTPUT_VERBOSE, "  Local commit:   %s %s (%s)\n",
                     local_oid_str, local_summary, time_str
                 );
 
@@ -808,7 +776,7 @@ static error_t *display_remote_status(
                     format_relative_time(remote_time, time_str, sizeof(time_str));
 
                     output_print(
-                        out, OUTPUT_NORMAL, "  Remote commit:  %s %s (%s)\n",
+                        out, OUTPUT_VERBOSE, "  Remote commit:  %s %s (%s)\n",
                         remote_oid_str, remote_summary, time_str
                     );
 
@@ -818,53 +786,30 @@ static error_t *display_remote_status(
             }
         } else {
             /* Compact mode: single line matching enabled profiles format */
-            output_styled(
-                out, OUTPUT_NORMAL, "  {cyan}%s{reset}",
-                profile_name
-            );
-
-            /* Display status in dimmed parentheses */
-            output_styled(
-                out, OUTPUT_NORMAL, "  {dim}(%s){reset}\n",
-                status_str
-            );
+            output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile_name);
+            output_styled(out, OUTPUT_NORMAL, "  {dim}(%s){reset}\n", status_str);
         }
 
         upstream_info_free(info);
     }
 
     /* Display summary section */
-    output_section(out, "Sync summary");
+    output_section(out, OUTPUT_NORMAL, "Sync summary");
 
     if (up_to_date > 0) {
-        output_styled(
-            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} up-to-date\n",
-            up_to_date
-        );
+        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} up-to-date\n", up_to_date);
     }
     if (ahead > 0) {
-        output_styled(
-            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} ahead\n",
-            ahead
-        );
+        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} ahead\n", ahead);
     }
     if (behind > 0) {
-        output_styled(
-            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} behind\n",
-            behind
-        );
+        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} behind\n", behind);
     }
     if (diverged > 0) {
-        output_styled(
-            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} diverged\n",
-            diverged
-        );
+        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} diverged\n", diverged);
     }
     if (no_remote > 0) {
-        output_styled(
-            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no remote\n",
-            no_remote
-        );
+        output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no remote\n", no_remote);
     }
 
     /* Free profiles if we allocated them */
@@ -873,6 +818,7 @@ static error_t *display_remote_status(
     }
 
     free(remote_name);
+
     return NULL;
 }
 
@@ -987,8 +933,8 @@ error_t *cmd_status(
     }
 
     if (workspace_profiles->count == 0) {
-        output_info(out, "No enabled profiles found");
-        output_hint(out, "Run 'dotta profile enable <name>'");
+        output_info(out, OUTPUT_NORMAL, "No enabled profiles found");
+        output_hint(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>'");
         goto cleanup;
     }
 
@@ -1004,9 +950,7 @@ error_t *cmd_status(
         }
 
         err = profile_validate_filter(workspace_profiles, display_profiles);
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
     } else {
         display_profiles = workspace_profiles;
     }
@@ -1076,8 +1020,8 @@ error_t *cmd_status(
 
                 if (priv_err) {
                     /* User declined elevation or non-interactive mode */
-                    output_newline(out);
-                    output_warning(out, "Status check will be INCOMPLETE:\n");
+                    output_newline(out, OUTPUT_NORMAL);
+                    output_warning(out, OUTPUT_NORMAL, "Status check will be incomplete:\n");
                     output_styled(
                         out, OUTPUT_NORMAL,
                         "  {green}✓{reset} Content changes will be detected\n"
@@ -1090,7 +1034,7 @@ error_t *cmd_status(
                         out, OUTPUT_NORMAL,
                         "  {red}✗{reset} Ownership changes will not be detected\n"
                     );
-                    output_newline(out);
+                    output_newline(out, OUTPUT_NORMAL);
 
                     error_free(priv_err);
                     /* Continue with partial status */
@@ -1105,7 +1049,7 @@ error_t *cmd_status(
     }
 
     /* Display enabled profiles and last deployment info */
-    display_enabled_profiles(out, display_profiles, manifest, state, opts->verbose);
+    display_enabled_profiles(out, display_profiles, manifest, state);
 
     /* Display workspace status (with profile filtering for Coherent Scope)
      *
@@ -1121,14 +1065,14 @@ error_t *cmd_status(
     if (opts->show_local) {
         bool has_display_filter = (opts->profiles != NULL && opts->profile_count > 0);
         display_workspace_status(
-            ws, has_display_filter ? display_profiles : NULL, manifest, out, opts->verbose
+            ws, has_display_filter ? display_profiles : NULL, manifest, out
         );
     }
 
     /* Show remote sync status (if requested) */
     if (opts->show_remote) {
         err = display_remote_status(
-            repo, display_profiles, out, opts->all_profiles, opts->verbose, opts->no_fetch
+            repo, display_profiles, out, opts->all_profiles, opts->no_fetch
         );
         if (err) {
             /* Non-fatal: might not have remote configured */

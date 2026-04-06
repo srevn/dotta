@@ -118,14 +118,14 @@ static error_t *fetch_profiles(
         const char *profile_name = profile_names[i];
 
         if (output_is_tty(out)) {
-            output_info(out, "  Fetching %s...", profile_name);
+            output_info(out, OUTPUT_NORMAL, "  Fetching %s...", profile_name);
         }
 
         /* Fetch the profile branch */
         err = gitops_fetch_branch(repo, remote_name, profile_name, xfer);
         if (err) {
             output_warning(
-                out, "Failed to fetch '%s': %s",
+                out, OUTPUT_NORMAL, "Failed to fetch '%s': %s",
                 profile_name, error_message(err)
             );
             error_free(err);
@@ -144,7 +144,7 @@ static error_t *fetch_profiles(
             );
             if (err) {
                 output_warning(
-                    out, "Failed to create local branch '%s': %s",
+                    out, OUTPUT_NORMAL, "Failed to create local branch '%s': %s",
                     profile_name, error_message(err)
                 );
                 error_free(err);
@@ -187,7 +187,7 @@ static error_t *fetch_all_profiles(
     CHECK_NULL(out);
     CHECK_NULL(fetched_profiles);
 
-    output_section(out, "Fetching all remote profiles");
+    output_section(out, OUTPUT_NORMAL, "Fetching all remote profiles");
 
     /* List all remote tracking branches */
     string_array_t *all_branches = NULL;
@@ -205,7 +205,8 @@ static error_t *fetch_all_profiles(
     if (!successful) {
         string_array_free(all_branches);
         return ERROR(
-            ERR_MEMORY, "Failed to create fetched profiles array"
+            ERR_MEMORY,
+            "Failed to create fetched profiles array"
         );
     }
 
@@ -224,7 +225,7 @@ static error_t *fetch_all_profiles(
     }
 
     output_success(
-        out, "Fetched %zu profile%s",
+        out, OUTPUT_NORMAL, "Fetched %zu profile%s",
         fetched_count, fetched_count == 1 ? "" : "s"
     );
 
@@ -252,7 +253,8 @@ static error_t *initialize_state(
 
     if (count > 0 && !profile_names) {
         return ERROR(
-            ERR_INVALID_ARG, "profile_names must not be NULL when count > 0"
+            ERR_INVALID_ARG,
+            "profile_names must not be NULL when count > 0"
         );
     }
 
@@ -321,11 +323,13 @@ static error_t *initialize_state(
             "%s%s", profile_names[i], (i < count - 1) ? ", " : ""
         );
 
-        if (written > 0) {
-            offset += written;
-        }
+        if (written > 0) offset += written;
     }
-    output_success(out, "Initialized enabled profiles: %s", profiles_str);
+
+    output_success(
+        out, OUTPUT_NORMAL, "Initialized enabled profiles: %s",
+        profiles_str
+    );
 
     return NULL;
 }
@@ -390,7 +394,8 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             local_path = extract_repo_name(opts->url);
             if (!local_path) {
                 final_err = ERROR(
-                    ERR_MEMORY, "Failed to allocate repository name"
+                    ERR_MEMORY,
+                    "Failed to allocate repository name"
                 );
                 goto cleanup;
             }
@@ -403,9 +408,9 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         }
     }
 
-    output_section(out, "Cloning dotta repository");
-    output_info(out, "  URL: %s", opts->url);
-    output_info(out, "  Path: %s", local_path);
+    output_section(out, OUTPUT_NORMAL, "Cloning dotta repository");
+    output_info(out, OUTPUT_NORMAL, "  URL: %s", opts->url);
+    output_info(out, OUTPUT_NORMAL, "  Path: %s", local_path);
 
     /* Create transfer context for progress reporting and credentials */
     xfer = transfer_context_create(out, opts->url);
@@ -430,7 +435,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
 
     if (opts->profiles && opts->profile_count > 0) {
         /* Explicit profile management */
-        output_section(out, "Fetching specified profiles");
+        output_section(out, OUTPUT_NORMAL, "Fetching specified profiles");
 
         size_t fetched_count = 0;
         err = fetch_profiles(
@@ -448,7 +453,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         }
 
         output_success(
-            out, "Fetched %zu of %zu specified profile%s",
+            out, OUTPUT_NORMAL, "Fetched %zu of %zu specified profile%s",
             fetched_count, opts->profile_count,
             opts->profile_count == 1 ? "" : "s"
         );
@@ -472,14 +477,14 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
 
     } else {
         /* Default: auto-detect profiles for this machine */
-        output_section(out, "Auto-detecting profiles for this system");
+        output_section(out, OUTPUT_NORMAL, "Auto-detecting profiles for this system");
 
         /* List all remote tracking branches (available after clone) */
         string_array_t *remote_branches = NULL;
         err = gitops_list_remote_branches(repo, "origin", &remote_branches);
         if (err) {
             output_warning(
-                out, "Failed to list remote branches: %s",
+                out, OUTPUT_NORMAL, "Failed to list remote branches: %s",
                 error_message(err)
             );
             error_free(err);
@@ -491,7 +496,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             err = profile_detect_names(remote_branches, &detected_names);
             if (err) {
                 output_warning(
-                    out, "Failed to detect profiles: %s",
+                    out, OUTPUT_NORMAL, "Failed to detect profiles: %s",
                     error_message(err)
                 );
                 error_free(err);
@@ -501,9 +506,9 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         if (detected_names && string_array_size(detected_names) > 0) {
             /* Show detected profiles */
             for (size_t i = 0; i < string_array_size(detected_names); i++) {
-                output_info(out, "  • %s", string_array_get(detected_names, i));
+                output_info(out, OUTPUT_NORMAL, "  • %s", string_array_get(detected_names, i));
             }
-            output_newline(out);
+            output_newline(out, OUTPUT_NORMAL);
 
             /* Fetch detected profiles */
             size_t fetched_count = 0;
@@ -513,7 +518,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             );
             if (err) {
                 output_warning(
-                    out, "Some profiles failed to fetch: %s",
+                    out, OUTPUT_NORMAL, "Some profiles failed to fetch: %s",
                     error_message(err)
                 );
                 error_free(err);
@@ -521,27 +526,24 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
 
             if (fetched_count > 0) {
                 output_success(
-                    out, "Fetched %zu profile%s",
+                    out, OUTPUT_NORMAL, "Fetched %zu profile%s",
                     fetched_count, fetched_count == 1 ? "" : "s"
                 );
             }
 
         } else {
             /* No profiles detected — show available remote branches as guidance */
-            output_warning(out, "No profiles auto-detected for this system");
+            output_warning(out, OUTPUT_NORMAL, "No profiles auto-detected for this system");
 
             if (remote_branches && string_array_size(remote_branches) > 0) {
-                output_section(out, "Available remote profiles");
+                output_section(out, OUTPUT_NORMAL, "Available remote profiles");
                 for (size_t i = 0; i < string_array_size(remote_branches); i++) {
-                    output_info(
-                        out, "  • %s",
-                        string_array_get(remote_branches, i)
-                    );
+                    output_info(out, OUTPUT_NORMAL, "  • %s", string_array_get(remote_branches, i));
                 }
-                output_newline(out);
+                output_newline(out, OUTPUT_NORMAL);
             }
 
-            output_info(out, "Run 'dotta profile enable <name>' after setup");
+            output_info(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>' after setup");
         }
 
         string_array_free(remote_branches);
@@ -573,8 +575,14 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             }
 
             if (has_custom) {
-                output_warning(out, "Profile '%s' requires --prefix (not enabled)", name);
-                output_hint(out, "Run: dotta profile enable --prefix <path> %s", name);
+                output_warning(
+                    out, OUTPUT_NORMAL, "Profile '%s' requires --prefix (not enabled)",
+                    name
+                );
+                output_hint(
+                    out, OUTPUT_NORMAL, "Run: dotta profile enable --prefix <path> %s",
+                    name
+                );
             } else {
                 string_array_push(profile_names, name);
             }
@@ -591,7 +599,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         string_array_free(profile_names);
     } else {
         /* No profiles fetched - initialize empty state */
-        output_warning(out, "No profiles were fetched");
+        output_warning(out, OUTPUT_NORMAL, "No profiles were fetched");
         err = initialize_state(repo, NULL, 0, out);
         if (err) {
             output_error(
@@ -613,9 +621,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     }
 
     if (!worktree_exists) {
-        if (opts->verbose) {
-            output_info(out, "Creating dotta-worktree branch...");
-        }
+        output_info(out, OUTPUT_VERBOSE, "Creating dotta-worktree branch...");
 
         err = gitops_create_orphan_branch(repo, "dotta-worktree");
         if (err) {
@@ -659,7 +665,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         }
 
         if (bootstrap_available) {
-            output_section(out, "Bootstrap scripts available");
+            output_section(out, OUTPUT_NORMAL, "Bootstrap scripts available");
 
             for (size_t i = 0; i < string_array_size(fetched_profiles); i++) {
                 const char *profile_name = string_array_get(fetched_profiles, i);
@@ -670,7 +676,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
                     );
                 }
             }
-            output_newline(out);
+            output_newline(out, OUTPUT_NORMAL);
 
             /* Determine if we should run bootstrap */
             if (opts->bootstrap) {
@@ -679,7 +685,8 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             } else if (!opts->quiet) {
                 /* Prompt user */
                 run_bootstrap = output_confirm(
-                    out, "Would you like to execute bootstrap scripts now?", false
+                    out, "Would you like to execute bootstrap scripts now?",
+                    false
                 );
             }
         }
@@ -695,23 +702,20 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         );
 
         if (!err && bootstrap_profiles) {
-            output_newline(out);
+            output_newline(out, OUTPUT_NORMAL);
             err = bootstrap_run_for_profiles(
                 repo, local_path, (struct profile_list *) bootstrap_profiles,
                 false, true
             );
             if (err) {
-                output_error(
-                    out, "Bootstrap failed: %s",
-                    error_message(err)
-                );
+                output_error(out, "Bootstrap failed: %s", error_message(err));
                 error_free(err);
                 /* Non-fatal - continue */
             }
             profile_list_free(bootstrap_profiles);
         } else if (err) {
             output_warning(
-                out, "Failed to load profiles for bootstrap: %s",
+                out, OUTPUT_NORMAL, "Failed to load profiles for bootstrap: %s",
                 error_message(err)
             );
             error_free(err);
@@ -719,21 +723,18 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     }
 
     /* Success - print messages before cleanup */
-    output_newline(out);
-    output_success(out, "Dotta repository cloned successfully!");
+    output_newline(out, OUTPUT_NORMAL);
+    output_success(out, OUTPUT_NORMAL, "Dotta repository cloned successfully!");
 
-    if (run_bootstrap) {
-        output_success(out, "Bootstrap complete!");
-    }
+    if (run_bootstrap) output_success(out, OUTPUT_NORMAL, "Bootstrap complete!");
 
-    output_section(out, "Next steps");
+    output_hintline(out, OUTPUT_NORMAL, "Next steps:");
     if (!run_bootstrap && bootstrap_available) {
-        output_info(out, "  dotta bootstrap        # Run bootstrap scripts");
+        output_hintline(out, OUTPUT_NORMAL, "  Run bootstrap:  dotta bootstrap");
     }
-    output_info(out, "  dotta profile list     # View enabled profiles");
-    output_info(out, "  dotta apply            # Apply profiles to your system");
-    output_info(out, "  dotta status           # View current state");
-    output_newline(out);
+    output_hintline(out, OUTPUT_NORMAL, "  List profiles:  dotta profile list");
+    output_hintline(out, OUTPUT_NORMAL, "  Apply profiles: dotta apply");
+    output_hintline(out, OUTPUT_NORMAL, "  View state:     dotta status");
 
 cleanup:
     /* Cleanup resources */

@@ -61,9 +61,8 @@ static error_t *discover_file_in_history(
 
     /* Inform user about expensive operation */
     output_info(
-        out, "File not found in current HEAD, "
-        "searching history of '%s' profile...\n",
-        profile_name
+        out, OUTPUT_NORMAL, "File not found in current HEAD, "
+        "searching history of '%s' profile...\n", profile_name
     );
 
     /* Use stats module to get file history */
@@ -91,7 +90,7 @@ static error_t *discover_file_in_history(
     git_oid_tostr(short_sha, sizeof(short_sha), &history->commits[0].oid);
 
     output_success(
-        out, "Found in history (last modified: commit %s)",
+        out, OUTPUT_NORMAL, "Found in history (last modified: commit %s)",
         short_sha
     );
 
@@ -251,8 +250,8 @@ static error_t *discover_file(
             string_array_get(matches, i)
         );
     }
-    output_hint(out, "Specify --profile to disambiguate:");
-    output_hint_line(out, "  dotta revert --profile <name> %s", storage_path);
+    output_hint(out, OUTPUT_NORMAL, "Specify --profile to disambiguate:");
+    output_hintline(out, OUTPUT_NORMAL, "  dotta revert --profile <name> %s", storage_path);
 
     string_array_free(matches);
     free(storage_path);
@@ -291,7 +290,7 @@ static error_t *show_diff_preview(
 
     /* Check if blobs are identical */
     if (git_oid_equal(current_oid, target_oid)) {
-        output_info(out, "File is already at target state (no changes)");
+        output_info(out, OUTPUT_NORMAL, "File is already at target state (no changes)");
         return NULL;
     }
 
@@ -370,13 +369,13 @@ static error_t *show_diff_preview(
         out, OUTPUT_NORMAL, "  Changes: {green}+%zu{reset} / {red}-%zu{reset}\n",
         additions, deletions
     );
-    output_newline(out);
+    output_newline(out, OUTPUT_NORMAL);
 
     /* Print patch */
     git_buf buf = { 0 };
     ret = git_patch_to_buf(&buf, patch);
     if (ret < 0) {
-        output_warning(out, "Could not format diff output");
+        output_warning(out, OUTPUT_NORMAL, "Could not format diff output");
     } else if (buf.ptr) {
         output_print_diff(out, buf.ptr);
     }
@@ -708,11 +707,11 @@ static error_t *revert_file_in_branch(
             git_oid_tostr(oid_str, sizeof(oid_str), target_commit_oid);
 
             output_warning(
-                out, "No metadata found for '%s' at commit %s",
+                out, OUTPUT_NORMAL, "No metadata found for '%s' at commit %s",
                 file_path, oid_str
             );
-            output_hint_line(
-                out, "Using defaults (mode=%04o, encrypted=false)",
+            output_hintline(
+                out, OUTPUT_NORMAL, "Using defaults (mode=%04o, encrypted=false)",
                 (unsigned int) (target_mode & 0777)
             );
 
@@ -963,7 +962,8 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
 
     if (found_in_history) {
         output_info(
-            out, "File was deleted from HEAD, reverting from history"
+            out, OUTPUT_NORMAL,
+            "File was deleted from HEAD, reverting from history"
         );
     }
 
@@ -1060,7 +1060,7 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
         /* Early exit: Check if file is already at target state */
         if (git_oid_equal(current_blob_oid, target_blob_oid)) {
             output_info(
-                out, "File '%s' is already at target state (no changes)",
+                out, OUTPUT_NORMAL, "File '%s' is already at target state (no changes)",
                 opts->file_path
             );
             goto cleanup;  /* Not an error, just nothing to do */
@@ -1068,9 +1068,7 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     }
 
     /* Step 6: Show preview (always, including dry-run) */
-    output_styled(
-        out, OUTPUT_NORMAL, "\n{bold}Revert preview:{reset}\n"
-    );
+    output_styled(out, OUTPUT_NORMAL, "\n{bold}Revert preview:{reset}\n");
 
     char oid_str[8];
     git_oid_tostr(oid_str, sizeof(oid_str), &target_oid);
@@ -1081,15 +1079,9 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
 
     char time_buf[64];
     if (tm_info) {
-        strftime(
-            time_buf, sizeof(time_buf),
-            "%Y-%m-%d %H:%M:%S", tm_info
-        );
+        strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
     } else {
-        snprintf(
-            time_buf, sizeof(time_buf),
-            "<invalid time>"
-        );
+        snprintf(time_buf, sizeof(time_buf), "<invalid time>");
     }
 
     output_styled(
@@ -1107,7 +1099,7 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
 
     if (found_in_history) {
         /* File was deleted - show simple restoration message */
-        output_print(out, OUTPUT_NORMAL, "\n");
+        output_newline(out, OUTPUT_NORMAL);
         output_styled(
             out, OUTPUT_NORMAL,
             "{green}Restoring deleted file from commit history{reset}\n"
@@ -1142,7 +1134,10 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
         if (err) {
             /* Non-fatal: the revert itself doesn't need decryption (copies blobs).
              * Show warning and continue to confirmation — user decides. */
-            output_warning(out, "Could not show diff preview: %s", error_message(err));
+            output_warning(
+                out, OUTPUT_NORMAL, "Could not show diff preview: %s",
+                error_message(err)
+            );
             error_free(err);
             err = NULL;
         }
@@ -1160,13 +1155,13 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
 
     /* Step 7: Early exit for dry-run (preview shown, no changes to make) */
     if (opts->dry_run) {
-        output_info(out, "\nDry-run mode: No changes made");
+        output_info(out, OUTPUT_NORMAL, "\nDry-run mode: No changes made");
         goto cleanup;
     }
 
     /* Step 8: Prompt for confirmation (unless --force or config disables) */
     if (!output_confirm_destructive(out, config, "Revert file?", opts->force)) {
-        output_info(out, "Aborted.");
+        output_info(out, OUTPUT_NORMAL, "Aborted.");
         user_aborted = true;
         goto cleanup;
     }
@@ -1222,11 +1217,11 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     if (!profile_enabled) {
         /* Profile not enabled - manifest update not needed */
         output_success(
-            out, "Reverted %s in profile '%s'",
+            out, OUTPUT_NORMAL, "Reverted %s in profile '%s'",
             resolved_path, profile_name
         );
         output_info(
-            out, "\nNote: Profile '%s' is not enabled on this machine",
+            out, OUTPUT_NORMAL, "\nNote: Profile '%s' is not enabled on this machine",
             profile_name
         );
         goto cleanup;
@@ -1241,11 +1236,11 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     if (err) {
         /* Non-fatal: Git succeeded, manifest can recover */
         output_warning(
-            out, "Failed to get new HEAD for manifest update: %s",
+            out, OUTPUT_NORMAL, "Failed to get new HEAD for manifest update: %s",
             error_message(err)
         );
         output_hint(
-            out, "Run 'dotta status' or 'dotta apply' to resync manifest"
+            out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync manifest"
         );
         error_free(err);
         err = NULL;
@@ -1262,11 +1257,11 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     if (err) {
         /* Non-fatal */
         output_warning(
-            out, "Failed to open transaction for manifest update: %s",
+            out, OUTPUT_NORMAL, "Failed to open transaction for manifest update: %s",
             error_message(err)
         );
         output_hint(
-            out, "Run 'dotta status' or 'dotta apply' to resync manifest"
+            out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync manifest"
         );
         error_free(err);
         err = NULL;
@@ -1278,7 +1273,7 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     err = state_get_profiles(state, &enabled_profiles);
     if (err) {
         output_warning(
-            out, "Failed to get enabled profiles: %s",
+            out, OUTPUT_NORMAL, "Failed to get enabled profiles: %s",
             error_message(err)
         );
         state_free(state);
@@ -1305,11 +1300,11 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     if (manifest_err) {
         /* Non-fatal: Git succeeded, manifest can recover */
         output_warning(
-            out, "Manifest sync failed: %s",
+            out, OUTPUT_NORMAL, "Manifest sync failed: %s",
             error_message(manifest_err)
         );
         output_hint(
-            out, "Run 'dotta status' or 'dotta apply' to resync manifest"
+            out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync manifest"
         );
         error_free(manifest_err);
         state_free(state);
@@ -1325,11 +1320,11 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     if (err) {
         /* Non-fatal */
         output_warning(
-            out, "Failed to save manifest updates: %s",
+            out, OUTPUT_NORMAL, "Failed to save manifest updates: %s",
             error_message(err)
         );
         output_hint(
-            out, "Run 'dotta status' or 'dotta apply' to resync manifest"
+            out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync manifest"
         );
         error_free(err);
         err = NULL;
@@ -1339,21 +1334,20 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
 success:
     /* Display success message */
     output_success(
-        out, "Reverted %s in profile '%s'",
-        resolved_path, profile_name
+        out, OUTPUT_NORMAL, "Reverted %s in profile '%s'", resolved_path, profile_name
     );
 
     /* Show manifest sync results if available */
     if (synced > 0 || removed > 0 || fallbacks > 0) {
         output_info(
-            out, "Manifest: %zu staged, %zu removed, %zu fallback%s",
+            out, OUTPUT_NORMAL, "Manifest: %zu staged, %zu removed, %zu fallback%s",
             synced, removed, fallbacks, fallbacks == 1 ? "" : "s"
         );
     }
 
     /* Guide user to deploy changes */
     output_info(
-        out, "\nRun 'dotta apply' to deploy changes to filesystem"
+        out, OUTPUT_NORMAL, "\nRun 'dotta apply' to deploy changes to filesystem"
     );
 
 cleanup:

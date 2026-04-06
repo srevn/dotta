@@ -121,7 +121,7 @@ static error_t *print_blob_content(
                     out, OUTPUT_NORMAL, " (encrypted)"
                 );
             }
-            output_newline(out);
+            output_newline(out, OUTPUT_NORMAL);
             output_styled(
                 out, OUTPUT_NORMAL, "{dim}# Size:{reset}    %s\n",
                 size_buf
@@ -141,7 +141,7 @@ static error_t *print_blob_content(
         if (encrypted) {
             output_print(out, OUTPUT_NORMAL, " (encrypted)");
         }
-        output_newline(out);
+        output_newline(out, OUTPUT_NORMAL);
 
         /* Mode and ownership from metadata */
         const metadata_item_t *item = NULL;
@@ -240,9 +240,7 @@ static error_t *show_file(
         err = gitops_resolve_commit_in_branch(
             repo, profile_name, commit_ref, &commit_oid, &commit
         );
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
 
         err = gitops_get_tree_from_commit(repo, &commit_oid, &tree);
         if (err) {
@@ -449,9 +447,7 @@ static error_t *show_commit(
     if (parent_count > 0) {
         const git_oid *parent_oid = git_commit_parent_id(commit, 0);
         err = gitops_get_tree_from_commit(repo, parent_oid, &parent_tree);
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
     }
 
     /* Generate diff between parent and commit */
@@ -494,7 +490,7 @@ static error_t *show_commit(
             time_buf, relative_buf
         );
 
-        output_newline(out);
+        output_newline(out, OUTPUT_NORMAL);
 
         /* Commit message (indented) */
         const char *msg = git_commit_message(commit);
@@ -504,27 +500,23 @@ static error_t *show_commit(
                 const char *next = strchr(line, '\n');
                 if (next) {
                     output_print(
-                        out, OUTPUT_NORMAL, "    %.*s\n",
-                        (int) (next - line), line
+                        out, OUTPUT_NORMAL, "    %.*s\n", (int) (next - line), line
                     );
                     line = next + 1;
                 } else {
                     output_print(
-                        out, OUTPUT_NORMAL, "    %s\n",
-                        line
+                        out, OUTPUT_NORMAL, "    %s\n", line
                     );
                     break;
                 }
             }
         }
 
-        output_newline(out);
+        output_newline(out, OUTPUT_NORMAL);
 
         /* Diff stats with color */
         err = gitops_diff_get_stats(diff, &stats);
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
 
         size_t files_changed = git_diff_stats_files_changed(stats);
         size_t insertions = git_diff_stats_insertions(stats);
@@ -565,6 +557,7 @@ cleanup:
     if (parent_tree) git_tree_free(parent_tree);
     if (commit_tree) git_tree_free(commit_tree);
     if (commit) git_commit_free(commit);
+
     return err;
 }
 
@@ -649,14 +642,9 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
         /* Profile specified - show commit from that profile */
         bool exists = false;
         err = gitops_branch_exists(repo, profile_name, &exists);
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
         if (!exists) {
-            err = ERROR(
-                ERR_NOT_FOUND, "Profile '%s' not found",
-                profile_name
-            );
+            err = ERROR(ERR_NOT_FOUND, "Profile '%s' not found", profile_name);
             goto cleanup;
         }
 
@@ -685,9 +673,7 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
         /* Profile specified - show from that profile */
         bool exists = false;
         err = gitops_branch_exists(repo, opts->profile, &exists);
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
         if (!exists) {
             err = ERROR(ERR_NOT_FOUND, "Profile '%s' not found", opts->profile);
             goto cleanup;

@@ -171,12 +171,10 @@ static error_t *bootstrap_edit(
                 err, "Failed to create bootstrap template"
             );
         }
-        if (out) {
-            output_success(
-                out, "Created bootstrap script for profile '%s'",
-                profile_name
-            );
-        }
+        output_success(
+            out, OUTPUT_NORMAL, "Created bootstrap script for profile '%s'",
+            profile_name
+        );
     }
 
     /* Extract script to temporary file for editing */
@@ -231,15 +229,15 @@ static error_t *bootstrap_edit(
     }
 
     /* Inform user */
-    if (out) {
-        if (was_modified) {
-            output_success(
-                out, "Updated and committed bootstrap script for profile '%s'",
-                profile_name
-            );
-        } else {
-            output_info(out, "No changes made to bootstrap script");
-        }
+    if (was_modified) {
+        output_success(
+            out, OUTPUT_NORMAL, "Updated and committed bootstrap script for profile '%s'",
+            profile_name
+        );
+    } else {
+        output_info(
+            out, OUTPUT_NORMAL, "No changes made to bootstrap script"
+        );
     }
 
     err = NULL;
@@ -300,6 +298,7 @@ static error_t *bootstrap_show(
     }
 
     buffer_free(content);
+
     return NULL;
 }
 
@@ -322,7 +321,7 @@ static error_t *bootstrap_list(
     profile_list_t *plist = (profile_list_t *) profiles;
 
     if (out) {
-        output_section(out, "Bootstrap scripts");
+        output_section(out, OUTPUT_NORMAL, "Bootstrap scripts");
 
         for (size_t i = 0; i < plist->count; i++) {
             profile_t *profile = &plist->profiles[i];
@@ -343,9 +342,9 @@ static error_t *bootstrap_list(
             }
         }
 
-        output_newline(out);
-        output_hint(out, "Create a bootstrap script with:");
-        output_hint_line(out, "  dotta bootstrap --profile <profile> --edit");
+        output_newline(out, OUTPUT_NORMAL);
+        output_hint(out, OUTPUT_NORMAL, "Create a bootstrap script with:");
+        output_hintline(out, OUTPUT_NORMAL, "  dotta bootstrap --profile <profile> --edit");
     }
 
     return NULL;
@@ -389,8 +388,7 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
     /* Check if repository exists */
     if (!gitops_is_repository(repo_path)) {
         err = ERROR(
-            ERR_NOT_FOUND,
-            "No dotta repository found at: %s\n"
+            ERR_NOT_FOUND, "No dotta repository found at: %s\n"
             "Run 'dotta init' to create a new repository or "
             "'dotta clone' to clone an existing one", repo_path
         );
@@ -449,9 +447,9 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
         if (err) {
             if (error_code(err) == ERR_NOT_FOUND) {
                 /* No profiles enabled — expected case, show guidance */
-                output_info(out, "No enabled profiles found.");
-                output_hint(out, "Enable profiles first:");
-                output_hint_line(out, "  dotta profile enable <name>");
+                output_info(out, OUTPUT_NORMAL, "No enabled profiles found.");
+                output_hint(out, OUTPUT_NORMAL, "Enable profiles first:");
+                output_hintline(out, OUTPUT_NORMAL, "  dotta profile enable <name>");
                 error_free(err);
                 err = NULL;
             }
@@ -498,24 +496,21 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
     }
 
     if (script_count == 0) {
-        output_info(out, "No bootstrap scripts found in enabled profiles.");
-        output_newline(out);
-        output_section(out, "Profiles checked");
+        output_info(out, OUTPUT_NORMAL, "No bootstrap scripts found in enabled profiles.");
+        output_newline(out, OUTPUT_NORMAL);
+        output_section(out, OUTPUT_NORMAL, "Profiles checked");
 
         for (size_t i = 0; i < profiles->count; i++) {
-            output_print(
-                out, OUTPUT_NORMAL, "  - %s\n",
-                profiles->profiles[i].name
-            );
+            output_print(out, OUTPUT_NORMAL, "  - %s\n", profiles->profiles[i].name);
         }
-        output_newline(out);
-        output_hint(out, "Create a bootstrap script with:");
-        output_hint_line(out, "  dotta bootstrap --profile <profile> --edit");
+        output_newline(out, OUTPUT_NORMAL);
+        output_hint(out, OUTPUT_NORMAL, "Create a bootstrap script with:");
+        output_hintline(out, OUTPUT_NORMAL, "  dotta bootstrap --profile <profile> --edit");
         goto cleanup;
     }
 
     /* Display what will be executed */
-    output_section(out, "Found bootstrap scripts");
+    output_section(out, OUTPUT_NORMAL, "Found bootstrap scripts");
     for (size_t i = 0; i < profiles->count; i++) {
         if (bootstrap_exists(repo, profiles->profiles[i].name, NULL)) {
             output_styled(
@@ -524,7 +519,7 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
             );
         }
     }
-    output_newline(out);
+    output_newline(out, OUTPUT_NORMAL);
 
     /* Prompt for confirmation unless --yes or --dry-run */
     if (!opts->yes && !opts->dry_run) {
@@ -533,7 +528,7 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
         );
 
         if (!confirmed) {
-            output_info(out, "Bootstrap cancelled.");
+            output_info(out, OUTPUT_NORMAL, "Bootstrap cancelled.");
             goto cleanup;
         }
     }
@@ -557,16 +552,16 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
     }
 
     if (!opts->dry_run) {
-        output_newline(out);
+        output_newline(out, OUTPUT_NORMAL);
         if (had_failures) {
-            output_warning(out, "Bootstrap completed with errors.");
+            output_warning(out, OUTPUT_NORMAL, "Bootstrap completed with errors.");
         } else {
-            output_success(out, "Bootstrap complete!");
+            output_success(out, OUTPUT_NORMAL, "Bootstrap complete!");
         }
-        output_newline(out);
-        output_hint(out, "Next steps:");
-        output_hint_line(out, "  dotta apply            # Apply profiles to your system");
-        output_hint_line(out, "  dotta status           # View current state");
+        output_newline(out, OUTPUT_NORMAL);
+        output_hintline(out, OUTPUT_NORMAL, "Next steps:");
+        output_hintline(out, OUTPUT_NORMAL, "  Apply profiles:  dotta apply");
+        output_hintline(out, OUTPUT_NORMAL, "  View state:      dotta status");
     }
 
 cleanup:

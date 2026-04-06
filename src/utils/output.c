@@ -214,10 +214,10 @@ static const style_tag_t *resolve_tag(const char *name, size_t len) {
  * literally). Empty parts from leading/trailing/double semicolons
  * are silently skipped.
  *
- * @param sb        Buffer to append ANSI codes to
- * @param color_on  Whether to emit ANSI codes (false = strip tags)
- * @param tag       Tag content (between '{' and '}')
- * @param tag_len   Length of tag content
+ * @param sb Buffer to append ANSI codes to
+ * @param color_on Whether to emit ANSI codes (false = strip tags)
+ * @param tag Tag content (between '{' and '}')
+ * @param tag_len Length of tag content
  * @return true if tag was recognized, false to pass through literally
  */
 static bool expand_tag(
@@ -241,8 +241,7 @@ static bool expand_tag(
                 return false;
 
             const style_tag_t *entry = resolve_tag(p, part_len);
-            if (!entry)
-                return false;
+            if (!entry) return false;
 
             resolved[count++] = entry;
         }
@@ -250,8 +249,7 @@ static bool expand_tag(
         p = semi ? semi + 1 : end;
     }
 
-    if (count == 0)
-        return false;
+    if (count == 0) return false;
 
     /* Second pass: emit ANSI codes */
     if (color_on) {
@@ -568,9 +566,14 @@ void output_error(const output_ctx_t *ctx, const char *fmt, ...) {
     fputc('\n', stderr);
 }
 
-void output_warning(const output_ctx_t *ctx, const char *fmt, ...) {
+void output_warning(
+    const output_ctx_t *ctx,
+    output_verbosity_t min_level,
+    const char *fmt,
+    ...
+) {
     if (!ctx || !fmt) return;
-    if (ctx->verbosity < OUTPUT_NORMAL) return;
+    if (ctx->verbosity < min_level) return;
 
     styled_fputs(
         ctx->stderr_color_enabled, stderr,
@@ -585,9 +588,14 @@ void output_warning(const output_ctx_t *ctx, const char *fmt, ...) {
     fputc('\n', stderr);
 }
 
-void output_success(const output_ctx_t *ctx, const char *fmt, ...) {
+void output_success(
+    const output_ctx_t *ctx,
+    output_verbosity_t min_level,
+    const char *fmt,
+    ...
+) {
     if (!ctx || !fmt) return;
-    if (ctx->verbosity < OUTPUT_NORMAL) return;
+    if (ctx->verbosity < min_level) return;
 
     styled_fputs(
         ctx->color_enabled, ctx->stream,
@@ -602,9 +610,14 @@ void output_success(const output_ctx_t *ctx, const char *fmt, ...) {
     fputc('\n', ctx->stream);
 }
 
-void output_info(const output_ctx_t *ctx, const char *fmt, ...) {
+void output_info(
+    const output_ctx_t *ctx,
+    output_verbosity_t min_level,
+    const char *fmt,
+    ...
+) {
     if (!ctx || !fmt) return;
-    if (ctx->verbosity < OUTPUT_NORMAL) return;
+    if (ctx->verbosity < min_level) return;
 
     va_list args;
     va_start(args, fmt);
@@ -614,9 +627,14 @@ void output_info(const output_ctx_t *ctx, const char *fmt, ...) {
     fputc('\n', ctx->stream);
 }
 
-void output_hint(const output_ctx_t *ctx, const char *fmt, ...) {
+void output_hint(
+    const output_ctx_t *ctx,
+    output_verbosity_t min_level,
+    const char *fmt,
+    ...
+) {
     if (!ctx || !fmt) return;
-    if (ctx->verbosity < OUTPUT_NORMAL) return;
+    if (ctx->verbosity < min_level) return;
 
     /* Preserve leading whitespace (printed uncolored for indentation) */
     const char *p = fmt;
@@ -639,9 +657,14 @@ void output_hint(const output_ctx_t *ctx, const char *fmt, ...) {
     fputc('\n', ctx->stream);
 }
 
-void output_hint_line(const output_ctx_t *ctx, const char *fmt, ...) {
+void output_hintline(
+    const output_ctx_t *ctx,
+    output_verbosity_t min_level,
+    const char *fmt,
+    ...
+) {
     if (!ctx || !fmt) return;
-    if (ctx->verbosity < OUTPUT_NORMAL) return;
+    if (ctx->verbosity < min_level) return;
 
     if (ctx->color_enabled) fputs(ANSI_DIM, ctx->stream);
 
@@ -654,14 +677,19 @@ void output_hint_line(const output_ctx_t *ctx, const char *fmt, ...) {
     fputc('\n', ctx->stream);
 }
 
-void output_newline(const output_ctx_t *ctx) {
-    if (!ctx || ctx->verbosity < OUTPUT_NORMAL) return;
+void output_newline(const output_ctx_t *ctx, output_verbosity_t min_level) {
+    if (!ctx || ctx->verbosity < min_level) return;
     fputc('\n', ctx->stream);
 }
 
-void output_section(const output_ctx_t *ctx, const char *fmt, ...) {
+void output_section(
+    const output_ctx_t *ctx,
+    output_verbosity_t min_level,
+    const char *fmt,
+    ...
+) {
     if (!ctx || !fmt) return;
-    if (ctx->verbosity < OUTPUT_NORMAL) return;
+    if (ctx->verbosity < min_level) return;
 
     /* Automatic section separator */
     if (ctx->has_content) {

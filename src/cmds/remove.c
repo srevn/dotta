@@ -169,12 +169,10 @@ static error_t *resolve_paths_to_remove(
                 goto cleanup;
             }
             /* With --force, skip this path */
-            if (opts->verbose && out) {
-                output_warning(
-                    out, "Skipping invalid path '%s': %s",
-                    input_path, error_message(err)
-                );
-            }
+            output_warning(
+                out, OUTPUT_VERBOSE, "Skipping invalid path '%s': %s",
+                input_path, error_message(err)
+            );
             error_free(err);
             err = NULL;
             continue;
@@ -234,9 +232,10 @@ static error_t *resolve_paths_to_remove(
                     char *file_fs_path = NULL;
                     err = path_from_storage(profile_file, custom_prefix, &file_fs_path);
                     if (err) {
-                        if ((opts->verbose || !opts->force) && out) {
+                        if (opts->verbose || !opts->force) {
                             output_warning(
-                                out, "Failed to resolve filesystem path for '%s': %s",
+                                out, OUTPUT_NORMAL,
+                                "Failed to resolve filesystem path for '%s': %s",
                                 profile_file, error_message(err)
                             );
                         }
@@ -281,12 +280,10 @@ static error_t *resolve_paths_to_remove(
                 goto cleanup;
             }
             /* With --force, warn and skip */
-            if (opts->verbose && out) {
-                output_warning(
-                    out, "File '%s' not found in profile, skipping",
-                    storage_path
-                );
-            }
+            output_warning(
+                out, OUTPUT_VERBOSE, "File '%s' not found in profile, skipping",
+                storage_path
+            );
         }
 
         free(storage_path);
@@ -368,9 +365,7 @@ static error_t *remove_file_from_worktree(
         return error_wrap(err, "Failed to unstage file");
     }
 
-    if (opts->verbose && out) {
-        output_info(out, "Removed: %s", storage_path);
-    }
+    output_info(out, OUTPUT_VERBOSE, "Removed: %s", storage_path);
 
     return NULL;
 }
@@ -512,13 +507,11 @@ static void display_multi_profile_warnings(
     bool has_deployed_from_other,
     const char *current_profile
 ) {
-    if (!out || multi_profile_count == 0) {
-        return;
-    }
+    if (!out || multi_profile_count == 0) return;
 
-    output_section(out, "Multi-profile file warning");
+    output_section(out, OUTPUT_NORMAL, "Multi-profile file warning");
     output_warning(
-        out, "%zu file%s exist%s in multiple profiles:",
+        out, OUTPUT_NORMAL, "%zu file%s exist%s in multiple profiles:",
         multi_profile_count,
         multi_profile_count == 1 ? "" : "s",
         multi_profile_count == 1 ? "s" : ""
@@ -542,30 +535,30 @@ static void display_multi_profile_warnings(
                 string_array_get(other_profiles[i], j)
             );
         }
-        output_newline(out);
+        output_newline(out, OUTPUT_NORMAL);
     }
 
     /* Explain implications */
-    output_newline(out);
+    output_newline(out, OUTPUT_NORMAL);
     output_info(
-        out, "These files will be removed only from profile '%s'.",
+        out, OUTPUT_NORMAL, "These files will be removed only from profile '%s'.",
         current_profile
     );
 
     if (has_deployed_from_other) {
         output_warning(
-            out, "Some files are currently deployed from other profiles."
+            out, OUTPUT_NORMAL, "Some files are currently deployed from other profiles."
         );
         output_info(
-            out, "Those files will remain on the filesystem."
+            out, OUTPUT_NORMAL, "Those files will remain on the filesystem."
         );
     } else {
         output_info(
-            out, "Files deployed from '%s' will remain until 'dotta apply'.",
+            out, OUTPUT_NORMAL, "Files deployed from '%s' will remain until 'dotta apply'.",
             current_profile
         );
     }
-    output_newline(out);
+    output_newline(out, OUTPUT_NORMAL);
 }
 
 /**
@@ -660,26 +653,28 @@ static bool confirm_profile_deletion(
     /* Extra warning for auto-detected profiles */
     if (is_auto_detected) {
         output_warning(
-            out, "'%s' is an auto-detected profile",
+            out, OUTPUT_NORMAL, "'%s' is an auto-detected profile",
             profile_name
         );
     }
 
-    output_newline(out);
+    output_newline(out, OUTPUT_NORMAL);
     output_warning(
-        out, "This will delete profile '%s' (%zu file%s)",
+        out, OUTPUT_NORMAL, "This will delete profile '%s' (%zu file%s)",
         profile_name, file_count, file_count == 1 ? "" : "s"
     );
     if (opts->delete_files) {
         output_info(
-            out, "         Deployed files will be removed when you run 'dotta apply'."
+            out, OUTPUT_NORMAL,
+            "         Deployed files will be removed when you run 'dotta apply'."
         );
     } else {
         output_info(
-            out, "         Deployed files will be released from management."
+            out, OUTPUT_NORMAL,
+            "         Deployed files will be released from management."
         );
     }
-    output_newline(out);
+    output_newline(out, OUTPUT_NORMAL);
 
     bool confirmed = output_confirm_destructive(out, config, "Continue?", opts->force);
 
@@ -734,7 +729,6 @@ static error_t *create_removal_commit(
 static error_t *cleanup_metadata(
     worktree_handle_t *wt,
     const string_array_t *removed_paths,
-    const cmd_remove_options_t *opts,
     output_ctx_t *out
 ) {
     CHECK_NULL(wt);
@@ -784,12 +778,7 @@ static error_t *cleanup_metadata(
 
             removed_count++;
 
-            if (opts->verbose && out) {
-                output_info(
-                    out, "Removed metadata: %s",
-                    storage_path
-                );
-            }
+            output_info(out, OUTPUT_VERBOSE, "Removed metadata: %s", storage_path);
         }
     }
 
@@ -860,12 +849,10 @@ static error_t *cleanup_metadata(
 
             removed_count++;
 
-            if (opts->verbose && out) {
-                output_info(
-                    out, "Removed orphaned directory metadata: %s",
-                    string_array_get(orphaned_dirs, i)
-                );
-            }
+            output_info(
+                out, OUTPUT_VERBOSE, "Removed orphaned directory metadata: %s",
+                string_array_get(orphaned_dirs, i)
+            );
         }
 
         string_array_free(orphaned_dirs);
@@ -893,9 +880,9 @@ static error_t *cleanup_metadata(
         return error_wrap(err, "Failed to stage metadata");
     }
 
-    if (opts->verbose && out && removed_count > 0) {
+    if (removed_count > 0) {
         output_info(
-            out, "Cleaned up metadata for %zu file(s)",
+            out, OUTPUT_VERBOSE, "Cleaned up metadata for %zu file(s)",
             removed_count
         );
     }
@@ -1064,7 +1051,7 @@ static error_t *remove_files_from_profile(
 
         if (err) {
             /* Hook failed - abort operation */
-            if (hook_result && hook_result->output && hook_result->output[0] && out) {
+            if (hook_result && hook_result->output && hook_result->output[0]) {
                 output_print(
                     out, OUTPUT_NORMAL, "Hook output:\n%s\n",
                     hook_result->output
@@ -1119,9 +1106,7 @@ static error_t *remove_files_from_profile(
             char prompt[PATH_MAX + 16];
             snprintf(prompt, sizeof(prompt), "Remove %s?", storage_path);
             if (!output_confirm(out, prompt, false)) {
-                if (opts->verbose) {
-                    output_info(out, "Skipped: %s", storage_path);
-                }
+                output_info(out, OUTPUT_VERBOSE, "Skipped: %s", storage_path);
                 continue;
             }
         }
@@ -1130,9 +1115,7 @@ static error_t *remove_files_from_profile(
         if (err) {
             /* If interactive or force, continue on error */
             if (opts->interactive || opts->force) {
-                if (out) {
-                    output_warning(out, "%s", error_message(err));
-                }
+                output_warning(out, OUTPUT_NORMAL, "%s", error_message(err));
                 error_free(err);
                 err = NULL;
                 continue;
@@ -1151,14 +1134,12 @@ static error_t *remove_files_from_profile(
 
     /* Nothing was removed (e.g., all declined in interactive mode) */
     if (removed_count == 0) {
-        if (out) {
-            output_info(out, "No files removed");
-        }
+        output_info(out, OUTPUT_NORMAL, "No files removed");
         goto cleanup;
     }
 
     /* Clean up metadata for actually-removed files only */
-    err = cleanup_metadata(wt, removed_paths, opts, out);
+    err = cleanup_metadata(wt, removed_paths, out);
     if (err) {
         err = error_wrap(err, "Failed to clean up metadata");
         goto cleanup;
@@ -1193,13 +1174,13 @@ static error_t *remove_files_from_profile(
         err = state_load_for_update(repo, &update_state);
         if (err) {
             /* Non-fatal */
-            if (out) {
-                output_warning(
-                    out, "Failed to open transaction for manifest update: %s",
-                    error_message(err)
-                );
-                output_hint(out, "Run 'dotta status' or 'dotta apply' to resync manifest");
-            }
+            output_warning(
+                out, OUTPUT_NORMAL, "Failed to open transaction for manifest update: %s",
+                error_message(err)
+            );
+            output_hint(
+                out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync manifest"
+            );
             error_free(err);
             err = NULL;
         } else {
@@ -1207,15 +1188,13 @@ static error_t *remove_files_from_profile(
             string_array_t *enabled_profiles = NULL;
             err = state_get_profiles(update_state, &enabled_profiles);
             if (err) {
-                if (out) {
-                    output_warning(
-                        out, "Failed to get enabled profiles: %s",
-                        error_message(err)
-                    );
-                    output_hint(
-                        out, "Run 'dotta status' or 'dotta apply' to resync manifest"
-                    );
-                }
+                output_warning(
+                    out, OUTPUT_NORMAL, "Failed to get enabled profiles: %s",
+                    error_message(err)
+                );
+                output_hint(
+                    out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync"
+                );
                 error_free(err);
                 err = NULL;
                 state_free(update_state);
@@ -1233,15 +1212,13 @@ static error_t *remove_files_from_profile(
 
                 if (manifest_err) {
                     /* Non-fatal: Git succeeded, manifest can recover */
-                    if (out) {
-                        output_warning(
-                            out, "Manifest update failed: %s",
-                            error_message(manifest_err)
-                        );
-                        output_hint(
-                            out, "Run 'dotta status' or 'dotta apply' to resync manifest"
-                        );
-                    }
+                    output_warning(
+                        out, OUTPUT_NORMAL, "Manifest update failed: %s",
+                        error_message(manifest_err)
+                    );
+                    output_hint(
+                        out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync"
+                    );
                     error_free(manifest_err);
                 } else {
                     /* manifest_remove_files() marks entries STATE_DELETED.
@@ -1274,30 +1251,29 @@ static error_t *remove_files_from_profile(
                     /* Commit transaction */
                     err = state_save(repo, update_state);
                     if (err) {
-                        if (out) {
-                            output_warning(
-                                out, "Failed to save manifest updates: %s",
-                                error_message(err)
-                            );
-                            output_hint(
-                                out, "Run 'dotta status' or 'dotta apply' to resync manifest"
-                            );
-                        }
+                        output_warning(
+                            out, OUTPUT_NORMAL, "Failed to save manifest updates: %s",
+                            error_message(err)
+                        );
+                        output_hint(
+                            out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync"
+                        );
                         error_free(err);
                         err = NULL;
                     } else {
                         /* Display manifest sync results */
-                        if ((manifest_removed_count > 0 || manifest_fallback_count > 0) &&
-                            out && opts->verbose){
+                        if (manifest_removed_count > 0 || manifest_fallback_count > 0) {
                             if (opts->delete_files) {
                                 output_info(
-                                    out, "Manifest: %zu staged for removal, %zu fallback%s",
+                                    out, OUTPUT_VERBOSE,
+                                    "Manifest: %zu staged for removal, %zu fallback%s",
                                     manifest_removed_count, manifest_fallback_count,
                                     manifest_fallback_count == 1 ? "" : "s"
                                 );
                             } else {
                                 output_info(
-                                    out, "Manifest: %zu released, %zu fallback%s",
+                                    out, OUTPUT_VERBOSE,
+                                    "Manifest: %zu released, %zu fallback%s",
                                     manifest_removed_count, manifest_fallback_count,
                                     manifest_fallback_count == 1 ? "" : "s"
                                 );
@@ -1310,8 +1286,8 @@ static error_t *remove_files_from_profile(
                 string_array_free(enabled_profiles);
             }
         }
-    } else if (opts->verbose && out) {
-        output_info(out, "Profile not enabled, Git updated only");
+    } else {
+        output_info(out, OUTPUT_VERBOSE, "Profile not enabled, Git updated only");
     }
 
     /* Execute post-remove hook */
@@ -1321,18 +1297,16 @@ static error_t *remove_files_from_profile(
 
         if (err) {
             /* Hook failed - warn but don't abort (files already removed) */
-            if (out) {
-                output_warning(
-                    out, "Post-remove hook failed: %s",
-                    error_message(err)
-                );
+            output_warning(
+                out, OUTPUT_NORMAL, "Post-remove hook failed: %s",
+                error_message(err)
+            );
 
-                if (hook_result && hook_result->output && hook_result->output[0]) {
-                    output_print(
-                        out, OUTPUT_NORMAL, "Hook output:\n%s\n",
-                        hook_result->output
-                    );
-                }
+            if (hook_result && hook_result->output && hook_result->output[0]) {
+                output_print(
+                    out, OUTPUT_NORMAL, "Hook output:\n%s\n",
+                    hook_result->output
+                );
             }
             error_free(err);
             err = NULL;
@@ -1343,19 +1317,19 @@ static error_t *remove_files_from_profile(
     /* Success */
     if (!opts->quiet) {
         output_success(
-            out, "Removed %zu file%s from profile '%s'",
+            out, OUTPUT_NORMAL, "Removed %zu file%s from profile '%s'",
             removed_count, removed_count == 1 ? "" : "s", opts->profile
         );
         if (opts->delete_files) {
             output_info(
-                out, "Run 'dotta apply' to remove files from filesystem"
+                out, OUTPUT_NORMAL, "Run 'dotta apply' to remove files from filesystem"
             );
         } else {
             output_info(
-                out, "Files released from management (no apply needed)"
+                out, OUTPUT_NORMAL, "Files released from management (no apply needed)"
             );
         }
-        output_newline(out);
+        output_newline(out, OUTPUT_NORMAL);
     }
 
 cleanup:
@@ -1436,12 +1410,10 @@ static error_t *delete_profile_branch(
             goto cleanup;
         }
         /* With --force, just warn and exit */
-        if (opts->verbose) {
-            output_warning(
-                out, "Profile '%s' does not exist",
-                opts->profile
-            );
-        }
+        output_warning(
+            out, OUTPUT_VERBOSE, "Profile '%s' does not exist",
+            opts->profile
+        );
         goto cleanup;  /* err is NULL, will return success */
     }
 
@@ -1527,15 +1499,14 @@ static error_t *delete_profile_branch(
 
     /* Warn about unpushed changes (only if profile has remote tracking) */
     if (has_unpushed && !opts->force) {
-        output_newline(out);
-        output_warning(out, "Profile '%s' has unpushed changes!", opts->profile);
-        output_info(out, "         Deleting now may result in data loss.");
-        output_info(out, "         Consider running 'dotta sync' first.");
-        output_newline(out);
-    } else if (is_local_only && opts->verbose) {
+        output_newline(out, OUTPUT_NORMAL);
+        output_warning(out, OUTPUT_NORMAL, "Profile '%s' has unpushed changes!", opts->profile);
+        output_hint(out, OUTPUT_NORMAL, "Run 'dotta sync' first to avoid data loss");
+        output_newline(out, OUTPUT_NORMAL);
+    } else if (is_local_only) {
         /* Inform about local-only status in verbose mode (not a warning) */
         output_info(
-            out, "Note: Profile '%s' is local-only (not pushed to remote)",
+            out, OUTPUT_VERBOSE, "Note: Profile '%s' is local-only (not pushed to remote)",
             opts->profile
         );
     }
@@ -1597,20 +1568,26 @@ static error_t *delete_profile_branch(
     }
 
     /* Inform about deployed files (informational, not a warning) */
-    if (deployed_count > 0 && opts->verbose) {
-        output_newline(out);
+    if (deployed_count > 0) {
+        output_newline(out, OUTPUT_VERBOSE);
 
         output_info(
-            out, "Note: Profile '%s' has %zu deployed file%s",
+            out, OUTPUT_VERBOSE, "Note: Profile '%s' has %zu deployed file%s",
             opts->profile, deployed_count, deployed_count == 1 ? "" : "s"
         );
 
         if (opts->delete_files) {
-            output_info(out, "      These will be removed when you run 'dotta apply'.");
+            output_info(
+                out, OUTPUT_VERBOSE,
+                "      These will be removed when you run 'dotta apply'."
+            );
         } else {
-            output_info(out, "      These files will be released from management.");
+            output_info(
+                out, OUTPUT_VERBOSE,
+                "      These files will be released from management."
+            );
         }
-        output_newline(out);
+        output_newline(out, OUTPUT_VERBOSE);
     }
 
     /* Confirm deletion */
@@ -1878,19 +1855,19 @@ static error_t *delete_profile_branch(
         delete_err = state_save(repo, delete_state);
         if (delete_err) {
             output_warning(
-                out, "Failed to update state after branch deletion: %s",
+                out, OUTPUT_NORMAL, "Failed to update state after branch deletion: %s",
                 error_message(delete_err)
             );
             error_free(delete_err);
-        } else if (released_count > 0 && opts->verbose) {
+        } else if (released_count > 0) {
             if (opts->delete_files) {
                 output_info(
-                    out, "%zu file%s staged for removal",
+                    out, OUTPUT_VERBOSE, "%zu file%s staged for removal",
                     released_count, released_count == 1 ? "" : "s"
                 );
             } else {
                 output_info(
-                    out, "%zu file%s released from management",
+                    out, OUTPUT_VERBOSE, "%zu file%s released from management",
                     released_count, released_count == 1 ? "" : "s"
                 );
             }
@@ -1900,7 +1877,7 @@ static error_t *delete_profile_branch(
     } else if (delete_err) {
         /* Non-fatal: safety module will handle this conservatively */
         output_warning(
-            out, "Failed to open state for post-deletion update: %s",
+            out, OUTPUT_NORMAL, "Failed to open state for post-deletion update: %s",
             error_message(delete_err)
         );
         error_free(delete_err);
@@ -1911,7 +1888,7 @@ static error_t *delete_profile_branch(
      */
     if (remote_name && !is_local_only) {
         output_info(
-            out, "Pushing profile deletion to remote '%s'...",
+            out, OUTPUT_NORMAL, "Pushing profile deletion to remote '%s'...",
             remote_name
         );
 
@@ -1922,20 +1899,22 @@ static error_t *delete_profile_branch(
              * The local branch is already deleted, so this is just about syncing
              */
             output_warning(
-                out, "Failed to push deletion to remote: %s",
+                out, OUTPUT_NORMAL, "Failed to push deletion to remote: %s",
                 error_message(err)
             );
             output_info(
-                out, "         The profile was deleted locally, but sync could fail."
+                out, OUTPUT_NORMAL,
+                "         The profile was deleted locally, but sync could fail."
             );
             output_info(
-                out, "         You can manually push the deletion with: git push %s :%s",
+                out, OUTPUT_NORMAL,
+                "         You can manually push the deletion with: git push %s :%s",
                 remote_name, opts->profile
             );
             error_free(err);
             err = NULL;
         } else {
-            output_info(out, "Profile deletion pushed to remote");
+            output_info(out, OUTPUT_NORMAL, "Profile deletion pushed to remote");
         }
 
         free(remote_name);
@@ -1955,9 +1934,15 @@ static error_t *delete_profile_branch(
 
         if (err) {
             /* Hook failed - warn but don't abort (profile already deleted) */
-            output_warning(out, "Post-remove hook failed: %s", error_message(err));
+            output_warning(
+                out, OUTPUT_NORMAL, "Post-remove hook failed: %s",
+                error_message(err)
+            );
             if (hook_result && hook_result->output && hook_result->output[0]) {
-                output_print(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
+                output_print(
+                    out, OUTPUT_NORMAL, "Hook output:\n%s\n",
+                    hook_result->output
+                );
             }
             error_free(err);
             err = NULL;
@@ -1967,21 +1952,20 @@ static error_t *delete_profile_branch(
 
     /* Success message (only on actual deletion, not dry-run/cancel/error) */
     if (performed && !opts->quiet) {
-        output_success(
-            out, "Profile '%s' deleted",
-            opts->profile
-        );
+        output_success(out, OUTPUT_NORMAL, "Profile '%s' deleted", opts->profile);
 
         if (opts->delete_files) {
             output_info(
-                out, "Run 'dotta apply' to remove deployed files from filesystem"
+                out, OUTPUT_NORMAL,
+                "Run 'dotta apply' to remove deployed files from filesystem"
             );
         } else {
             output_info(
-                out, "Files released from management (no apply needed)"
+                out, OUTPUT_NORMAL,
+                "Files released from management (no apply needed)"
             );
         }
-        output_newline(out);
+        output_newline(out, OUTPUT_NORMAL);
     }
 
 cleanup:

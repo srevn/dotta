@@ -124,16 +124,16 @@ static error_t *cmd_key_set(
         int64_t seconds_remaining = keymanager_time_until_expiry(key_mgr, NULL);
         if (seconds_remaining == -1) {
             output_info(
-                out, "A passphrase is already cached (no expiration)"
+                out, OUTPUT_NORMAL, "A passphrase is already cached (no expiration)"
             );
         } else if (seconds_remaining > 0) {
             output_info(
-                out, "A passphrase is already cached (expires in %ld seconds)",
+                out, OUTPUT_NORMAL, "A passphrase is already cached (expires in %ld seconds)",
                 (long) seconds_remaining
             );
         }
-        output_info(out, "Enter a new passphrase to replace it.");
-        output_newline(out);
+        output_info(out, OUTPUT_NORMAL, "Enter a new passphrase to replace it.");
+        output_newline(out, OUTPUT_NORMAL);
     }
 
     /* Prompt for passphrase */
@@ -165,16 +165,16 @@ static error_t *cmd_key_set(
     /* Display success message */
     if (config->session_timeout == 0) {
         output_success(
-            out, "Passphrase set (will be prompted on each use)"
+            out, OUTPUT_NORMAL, "Passphrase set (will be prompted on each use)"
         );
     } else if (config->session_timeout > 0) {
         output_success(
-            out, "Passphrase cached for %d seconds",
+            out, OUTPUT_NORMAL, "Passphrase cached for %d seconds",
             config->session_timeout
         );
     } else {
         output_success(
-            out, "Passphrase cached (no expiration)"
+            out, OUTPUT_NORMAL, "Passphrase cached (no expiration)"
         );
     }
 
@@ -219,11 +219,11 @@ static error_t *cmd_key_clear(
     /* Display result */
     if (had_key) {
         output_success(
-            out, "Encryption key cleared from memory and disk cache"
+            out, OUTPUT_NORMAL, "Encryption key cleared from memory and disk cache"
         );
     } else {
         output_success(
-            out, "Disk cache cleared (no key was cached in memory)"
+            out, OUTPUT_NORMAL, "Disk cache cleared (no key was cached in memory)"
         );
     }
 
@@ -248,7 +248,7 @@ static error_t *cmd_key_status(
     output_ctx_t *out
 ) {
     /* Display encryption status */
-    output_section(out, "Encryption Configuration");
+    output_section(out, OUTPUT_NORMAL, "Encryption Configuration");
 
     if (config->encryption_enabled) {
         output_styled(
@@ -293,7 +293,7 @@ static error_t *cmd_key_status(
                     minutes, minutes == 1 ? "" : "s"
                 );
             }
-            output_newline(out);
+            output_newline(out, OUTPUT_NORMAL);
         } else {
             output_print(
                 out, OUTPUT_NORMAL, "no expiration\n"
@@ -318,16 +318,16 @@ static error_t *cmd_key_status(
             out, OUTPUT_NORMAL, "  Status: {red}disabled{reset}\n"
         );
 
-        output_newline(out);
-        output_hint(out, "To enable encryption, add to config file:");
-        output_hint_line(out, "  [encryption]");
-        output_hint_line(out, "  enabled = true");
+        output_newline(out, OUTPUT_NORMAL);
+        output_hint(out, OUTPUT_NORMAL, "To enable encryption, add to config file:");
+        output_hintline(out, OUTPUT_NORMAL, "  [encryption]");
+        output_hintline(out, OUTPUT_NORMAL, "  enabled = true");
 
         return NULL;
     }
 
     /* Display key cache status */
-    output_section(out, "Key Cache Status");
+    output_section(out, OUTPUT_NORMAL, "Key Cache Status");
 
     keymanager_t *key_mgr = keymanager_get_global(config);
     if (!key_mgr) {
@@ -375,7 +375,7 @@ static error_t *cmd_key_status(
             output_print(out, OUTPUT_NORMAL, " (expired)");
         }
 
-        output_newline(out);
+        output_newline(out, OUTPUT_NORMAL);
     } else {
         output_styled(out, OUTPUT_NORMAL, "{yellow}no{reset}\n");
 
@@ -386,7 +386,7 @@ static error_t *cmd_key_status(
     }
 
     /* Count and display encrypted files */
-    output_section(out, "Encrypted Files");
+    output_section(out, OUTPUT_NORMAL, "Encrypted Files");
 
     size_t encrypted_count = 0;
     error_t *err = count_encrypted_files(repo, &encrypted_count);
@@ -407,9 +407,9 @@ static error_t *cmd_key_status(
         );
 
         if (encrypted_count == 0) {
-            output_newline(out);
-            output_hint(out, "To encrypt files, use:");
-            output_hint_line(out, "  dotta add --encrypt -p <profile> <file>");
+            output_newline(out, OUTPUT_NORMAL);
+            output_hint(out, OUTPUT_NORMAL, "To encrypt files, use:");
+            output_hintline(out, OUTPUT_NORMAL, "  dotta add --encrypt -p <profile> <file>");
         }
     }
 

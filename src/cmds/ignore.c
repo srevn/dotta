@@ -363,12 +363,8 @@ static error_t *edit_baseline_dottaignore(
 
     /* Check if dotta-worktree branch exists */
     bool branch_exists = false;
-    error_t *err = gitops_branch_exists(
-        repo, "dotta-worktree", &branch_exists
-    );
-    if (err) {
-        return err;
-    }
+    error_t *err = gitops_branch_exists(repo, "dotta-worktree", &branch_exists);
+    if (err) return err;
 
     if (!branch_exists) {
         return ERROR(
@@ -503,7 +499,7 @@ static error_t *edit_baseline_dottaignore(
     }
 
     if (!was_modified) {
-        output_info(out, "No changes to baseline .dottaignore");
+        output_info(out, OUTPUT_NORMAL, "No changes to baseline .dottaignore");
         return NULL;
     }
 
@@ -521,7 +517,8 @@ static error_t *edit_baseline_dottaignore(
              * Sync failed due to local modifications - warn but don't fail.
              */
             output_warning(
-                out, "Patterns saved to Git, but working directory sync failed.\n"
+                out, OUTPUT_NORMAL,
+                "Patterns saved to Git, but working directory sync failed.\n"
                 "  You may have local modifications to .dottaignore.\n"
                 "  To sync:  dotta git checkout .dottaignore\n"
                 "  To diff:  dotta git diff .dottaignore"
@@ -529,11 +526,12 @@ static error_t *edit_baseline_dottaignore(
             error_free(sync_err);
         }
     }
-    if (branch_err) {
-        error_free(branch_err);
-    }
+    if (branch_err) error_free(branch_err);
 
-    output_success(out, "Updated baseline .dottaignore in dotta-worktree branch");
+    output_success(
+        out, OUTPUT_NORMAL, "Updated baseline .dottaignore in dotta-worktree branch"
+    );
+
     return NULL;
 }
 
@@ -551,21 +549,18 @@ static error_t *edit_profile_dottaignore(
     /* Check if profile branch exists */
     bool branch_exists = false;
     error_t *err = gitops_branch_exists(repo, profile_name, &branch_exists);
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     if (!branch_exists) {
         return ERROR(
-            ERR_INVALID_ARG, "Profile '%s' does not exist", profile_name
+            ERR_INVALID_ARG, "Profile '%s' does not exist",
+            profile_name
         );
     }
 
     /* Create temporary file */
     const char *tmpdir = getenv("TMPDIR");
-    if (!tmpdir) {
-        tmpdir = "/tmp";
-    }
+    if (!tmpdir) tmpdir = "/tmp";
 
     char *tmpfile = str_format("%s/dotta-ignore-XXXXXX", tmpdir);
     if (!tmpfile) {
@@ -682,8 +677,7 @@ static error_t *edit_profile_dottaignore(
 
     /* Update .dottaignore in profile branch */
     char *commit_msg = str_format(
-        "Update .dottaignore for profile '%s'",
-        profile_name
+        "Update .dottaignore for profile '%s'", profile_name
     );
     if (!commit_msg) {
         free(new_content);
@@ -711,14 +705,14 @@ static error_t *edit_profile_dottaignore(
 
     if (!was_modified) {
         output_info(
-            out, "No changes to .dottaignore for profile '%s'",
+            out, OUTPUT_NORMAL, "No changes to .dottaignore for profile '%s'",
             profile_name
         );
         return NULL;
     }
 
     output_success(
-        out, "Updated .dottaignore for profile '%s'",
+        out, OUTPUT_NORMAL, "Updated .dottaignore for profile '%s'",
         profile_name
     );
 
@@ -776,7 +770,7 @@ static error_t *modify_baseline_dottaignore(
     } else if (!add_patterns) {
         /* No existing .dottaignore and no patterns to add */
         git_tree_free(tree);
-        output_info(out, "No .dottaignore file exists in baseline");
+        output_info(out, OUTPUT_NORMAL, "No .dottaignore file exists in baseline");
         return NULL;
     }
 
@@ -851,11 +845,11 @@ static error_t *modify_baseline_dottaignore(
         free(existing_content);
 
         if (add_count > 0 && remove_count > 0) {
-            output_info(out, "No changes: all patterns already exist or not found");
+            output_info(out, OUTPUT_NORMAL, "No changes: all patterns already exist or not found");
         } else if (add_count > 0) {
-            output_info(out, "No changes: all patterns already exist");
+            output_info(out, OUTPUT_NORMAL, "No changes: all patterns already exist");
         } else {
-            output_info(out, "No changes: patterns not found");
+            output_info(out, OUTPUT_NORMAL, "No changes: patterns not found");
         }
         return NULL;
     }
@@ -923,7 +917,8 @@ static error_t *modify_baseline_dottaignore(
              * Sync failed due to local modifications - warn but don't fail.
              */
             output_warning(
-                out, "Patterns saved to Git, but working directory sync failed.\n"
+                out, OUTPUT_NORMAL,
+                "Patterns saved to Git, but working directory sync failed.\n"
                 "  You may have local modifications to .dottaignore.\n"
                 "  To sync:  dotta git checkout .dottaignore\n"
                 "  To diff:  dotta git diff .dottaignore"
@@ -938,19 +933,22 @@ static error_t *modify_baseline_dottaignore(
     /* Report results */
     if (total_added > 0) {
         output_success(
-            out, "Added %zu pattern%s to baseline .dottaignore",
+            out, OUTPUT_NORMAL,
+            "Added %zu pattern%s to baseline .dottaignore",
             total_added, total_added == 1 ? "" : "s"
         );
     }
     if (total_removed > 0) {
         output_success(
-            out, "Removed %zu pattern%s from baseline .dottaignore",
+            out, OUTPUT_NORMAL,
+            "Removed %zu pattern%s from baseline .dottaignore",
             total_removed, total_removed == 1 ? "" : "s"
         );
     }
     if (total_not_found > 0) {
         output_info(
-            out, "Warning: %zu pattern%s not found (already removed or never added)",
+            out, OUTPUT_NORMAL,
+            "Warning: %zu pattern%s not found (already removed or never added)",
             total_not_found, total_not_found == 1 ? "" : "s"
         );
     }
@@ -982,8 +980,7 @@ static error_t *modify_profile_dottaignore(
 
     if (!branch_exists) {
         return ERROR(
-            ERR_INVALID_ARG, "Profile '%s' does not exist",
-            profile_name
+            ERR_INVALID_ARG, "Profile '%s' does not exist", profile_name
         );
     }
 
@@ -993,10 +990,7 @@ static error_t *modify_profile_dottaignore(
         ref_name, sizeof(ref_name), "refs/heads/%s", profile_name
     );
     if (err) {
-        return error_wrap(
-            err, "Invalid profile name '%s'",
-            profile_name
-        );
+        return error_wrap(err, "Invalid profile name '%s'", profile_name);
     }
 
     /* Load existing .dottaignore content from profile */
@@ -1026,7 +1020,7 @@ static error_t *modify_profile_dottaignore(
         git_tree_free(tree);
 
         output_info(
-            out, "No .dottaignore file exists in profile '%s'",
+            out, OUTPUT_NORMAL, "No .dottaignore file exists in profile '%s'",
             profile_name
         );
         return NULL;
@@ -1103,11 +1097,11 @@ static error_t *modify_profile_dottaignore(
         free(existing_content);
 
         if (add_count > 0 && remove_count > 0) {
-            output_info(out, "No changes: all patterns already exist or not found");
+            output_info(out, OUTPUT_NORMAL, "No changes: all patterns already exist or not found");
         } else if (add_count > 0) {
-            output_info(out, "No changes: all patterns already exist");
+            output_info(out, OUTPUT_NORMAL, "No changes: all patterns already exist");
         } else {
-            output_info(out, "No changes: patterns not found");
+            output_info(out, OUTPUT_NORMAL, "No changes: patterns not found");
         }
         return NULL;
     }
@@ -1164,19 +1158,22 @@ static error_t *modify_profile_dottaignore(
     /* Report results */
     if (total_added > 0) {
         output_success(
-            out, "Added %zu pattern%s to profile '%s' .dottaignore",
+            out, OUTPUT_NORMAL,
+            "Added %zu pattern%s to profile '%s' .dottaignore",
             total_added, total_added == 1 ? "" : "s", profile_name
         );
     }
     if (total_removed > 0) {
         output_success(
-            out, "Removed %zu pattern%s from profile '%s' .dottaignore",
+            out, OUTPUT_NORMAL,
+            "Removed %zu pattern%s from profile '%s' .dottaignore",
             total_removed, total_removed == 1 ? "" : "s", profile_name
         );
     }
     if (total_not_found > 0) {
         output_info(
-            out, "Warning: %zu pattern%s not found (already removed or never added)",
+            out, OUTPUT_NORMAL,
+            "Warning: %zu pattern%s not found (already removed or never added)",
             total_not_found, total_not_found == 1 ? "" : "s"
         );
     }
@@ -1192,7 +1189,6 @@ static error_t *test_path_ignore(
     const dotta_config_t *config,
     const char *test_path,
     const char *specific_profile,
-    bool verbose,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
@@ -1226,8 +1222,8 @@ static error_t *test_path_ignore(
         }
     }
 
-    if (!path_exists && verbose) {
-        output_info(out, "Path does not exist: %s", test_path);
+    if (!path_exists) {
+        output_info(out, OUTPUT_VERBOSE, "Path does not exist: %s", test_path);
     }
 
     /* If specific profile requested, test only that one */
@@ -1271,12 +1267,12 @@ static error_t *test_path_ignore(
                 specific_profile
             );
             output_info(
-                out, "  Reason: %s",
+                out, OUTPUT_NORMAL, "  Reason: %s",
                 ignore_source_to_string(result.source)
             );
         } else {
             output_success(
-                out, "Not ignored by profile '%s'",
+                out, OUTPUT_NORMAL, "Not ignored by profile '%s'",
                 specific_profile
             );
         }
@@ -1300,8 +1296,12 @@ static error_t *test_path_ignore(
 
     if (!profiles || profiles->count == 0) {
         profile_list_free(profiles);
-        output_info(out, "No enabled profiles found");
-        output_info(out, "Testing against baseline .dottaignore only");
+        output_info(
+            out, OUTPUT_NORMAL, "No enabled profiles found"
+        );
+        output_info(
+            out, OUTPUT_NORMAL, "Testing against baseline .dottaignore only"
+        );
 
         /* Test with no profile */
         ignore_context_t *ctx = NULL;
@@ -1319,19 +1319,26 @@ static error_t *test_path_ignore(
         }
 
         if (result.ignored) {
-            output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED\n");
-            output_info(out, "  Reason: %s", ignore_source_to_string(result.source));
+            output_styled(
+                out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED\n"
+            );
+            output_info(
+                out, OUTPUT_NORMAL, "  Reason: %s",
+                ignore_source_to_string(result.source)
+            );
         } else {
-            output_success(out, "Not ignored");
+            output_success(
+                out, OUTPUT_NORMAL, "Not ignored"
+            );
         }
 
         return NULL;
     }
 
     /* Test against each enabled profile */
-    output_info(out, "Testing path: %s", test_path);
-    output_info(out, "Enabled profiles: %zu", profiles->count);
-    output_newline(out);
+    output_info(out, OUTPUT_NORMAL, "Testing path: %s", test_path);
+    output_info(out, OUTPUT_NORMAL, "Enabled profiles: %zu", profiles->count);
+    output_newline(out, OUTPUT_NORMAL);
 
     bool any_ignored = false;
     for (size_t i = 0; i < profiles->count; i++) {
@@ -1367,16 +1374,16 @@ static error_t *test_path_ignore(
                 out, OUTPUT_NORMAL, "{red}✗{reset} Profile '%s': IGNORED\n",
                 profile->name
             );
-            if (verbose) {
+            if (output_is_verbose(out)) {
                 output_info(
-                    out, "    Reason: %s",
+                    out, OUTPUT_NORMAL, "    Reason: %s",
                     ignore_source_to_string(result.source)
                 );
             }
             any_ignored = true;
         } else {
             output_success(
-                out, "Profile '%s': Not ignored",
+                out, OUTPUT_NORMAL, "Profile '%s': NOT IGNORED",
                 profile->name
             );
         }
@@ -1385,13 +1392,17 @@ static error_t *test_path_ignore(
     profile_list_free(profiles);
 
     /* Summary */
-    output_newline(out);
+    output_newline(out, OUTPUT_NORMAL);
     if (any_ignored) {
         output_info(
-            out, "Result: Path would be IGNORED during add/update operations"
+            out, OUTPUT_NORMAL,
+            "Result: Path would be IGNORED during add/update operations"
         );
     } else {
-        output_success(out, "Result: Path would be TRACKED");
+        output_success(
+            out, OUTPUT_NORMAL,
+            "Result: Path would be TRACKED"
+        );
     }
 
     return NULL;
@@ -1419,6 +1430,11 @@ error_t *cmd_ignore(git_repository *repo, const cmd_ignore_options_t *opts) {
         return ERROR(ERR_MEMORY, "Failed to create output context");
     }
 
+    /* CLI flags override config */
+    if (opts->verbose) {
+        output_set_verbosity(out, OUTPUT_VERBOSE);
+    }
+
     /* Validate mutual exclusivity */
     bool has_add = opts->add_count > 0;
     bool has_remove = opts->remove_count > 0;
@@ -1435,7 +1451,7 @@ error_t *cmd_ignore(git_repository *repo, const cmd_ignore_options_t *opts) {
     if (has_test) {
         /* Test mode */
         err = test_path_ignore(
-            repo, config, opts->test_path, opts->profile, opts->verbose, out
+            repo, config, opts->test_path, opts->profile, out
         );
     } else if (has_modify) {
         /* Add/remove mode */

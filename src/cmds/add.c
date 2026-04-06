@@ -58,12 +58,9 @@ static bool is_excluded(
     const char *path,
     bool is_directory,
     ignore_context_t *ignore_ctx,
-    const cmd_add_options_t *opts,
     output_ctx_t *out
 ) {
-    if (!path) {
-        return false;
-    }
+    if (!path) return false;
 
     /* If we have an ignore context, use it */
     if (ignore_ctx) {
@@ -76,12 +73,10 @@ static bool is_excluded(
         );
         if (err) {
             /* On error, log and continue without ignoring */
-            if (opts->verbose && out) {
-                output_warning(
-                    out, "Ignore check failed for %s: %s",
-                    path, error_message(err)
-                );
-            }
+            output_warning(
+                out, OUTPUT_VERBOSE, "Ignore check failed for %s: %s",
+                path, error_message(err)
+            );
             error_free(err);
             return false;
         }
@@ -143,10 +138,8 @@ static error_t *collect_files_from_dir(
         bool is_dir = !is_symlink && fs_is_directory(full_path);
 
         /* Check exclude patterns */
-        if (is_excluded(full_path, is_dir, ignore_ctx, opts, out)) {
-            if (opts->verbose && out) {
-                output_info(out, "Excluded: %s", full_path);
-            }
+        if (is_excluded(full_path, is_dir, ignore_ctx, out)) {
+            output_info(out, OUTPUT_VERBOSE, "Excluded: %s", full_path);
             free(full_path);
             errno = 0;
             continue;
@@ -323,12 +316,10 @@ static error_t *add_file_to_worktree(
             }
         }
 
-        if (opts->verbose && out) {
-            output_info(
-                out, "Added symlink: %s -> %s",
-                filesystem_path, storage_path
-            );
-        }
+        output_info(
+            out, OUTPUT_VERBOSE, "Added symlink: %s -> %s",
+            filesystem_path, storage_path
+        );
     } else {
         /* Regular file - determine encryption policy using centralized logic */
         bool should_encrypt = false;
@@ -383,27 +374,23 @@ static error_t *add_file_to_worktree(
         }
 
         /* Verbose output */
-        if (opts->verbose && out) {
-            if (should_encrypt) {
-                output_info(
-                    out, "Encrypted: %s -> %s",
-                    filesystem_path, storage_path
-                );
-            }
+        if (should_encrypt) {
             output_info(
-                out, "Added: %s -> %s",
+                out, OUTPUT_VERBOSE, "Encrypted: %s -> %s",
                 filesystem_path, storage_path
             );
         }
+        output_info(
+            out, OUTPUT_VERBOSE, "Added: %s -> %s",
+            filesystem_path, storage_path
+        );
     }
 
     /* Stage file */
     err = worktree_stage_file(wt, storage_path);
     if (err) {
         free(dest_path);
-        if (item) {
-            metadata_item_free(item);
-        }
+        if (item) metadata_item_free(item);
         return error_wrap(err, "Failed to stage file");
     }
 
@@ -412,19 +399,19 @@ static error_t *add_file_to_worktree(
     /* Add metadata item to collection (NULL for home/ prefix symlinks) */
     if (item) {
         /* Verbose output for metadata capture */
-        if (opts->verbose && out) {
-            if (item->owner || item->group) {
-                output_info(
-                    out, "Captured metadata: %s (mode: %04o, owner: %s:%s)",
-                    filesystem_path, item->mode, item->owner ? item->owner : "?",
-                    item->group ? item->group : "?"
-                );
-            } else {
-                output_info(
-                    out, "Captured metadata: %s (mode: %04o)",
-                    filesystem_path, item->mode
-                );
-            }
+        if (item->owner || item->group) {
+            output_info(
+                out, OUTPUT_VERBOSE,
+                "Captured metadata: %s (mode: %04o, owner: %s:%s)",
+                filesystem_path, item->mode, item->owner ? item->owner : "?",
+                item->group ? item->group : "?"
+            );
+        } else {
+            output_info(
+                out, OUTPUT_VERBOSE,
+                "Captured metadata: %s (mode: %04o)",
+                filesystem_path, item->mode
+            );
         }
 
         err = metadata_add_item(metadata, item);
@@ -503,12 +490,10 @@ static error_t *init_profile_dottaignore(
         return error_wrap(err, "Failed to stage .dottaignore");
     }
 
-    if (opts->verbose && out) {
-        output_info(
-            out, "Created .dottaignore for profile '%s'",
-            opts->profile
-        );
-    }
+    output_info(
+        out, OUTPUT_VERBOSE, "Created .dottaignore for profile '%s'",
+        opts->profile
+    );
 
     free(dottaignore_path);
 
@@ -1026,9 +1011,7 @@ error_t *cmd_add(
     /* Validate custom prefix if provided */
     if (opts->custom_prefix) {
         err = path_validate_custom_prefix(opts->custom_prefix);
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
     }
 
     /* PRE-FLIGHT PRIVILEGE CHECK
@@ -1164,12 +1147,10 @@ error_t *cmd_add(
     );
     if (err) {
         /* Non-fatal: continue without ignore context */
-        if (opts->verbose && out) {
-            output_warning(
-                out, "Failed to create ignore context: %s",
-                error_message(err)
-            );
-        }
+        output_warning(
+            out, OUTPUT_VERBOSE, "Failed to create ignore context: %s",
+            error_message(err)
+        );
         error_free(err);
         err = NULL;
     }
@@ -1191,7 +1172,7 @@ error_t *cmd_add(
 
         if (err) {
             /* Hook failed - abort operation */
-            if (hook_result && hook_result->output && hook_result->output[0] && out) {
+            if (hook_result && hook_result->output && hook_result->output[0]) {
                 output_print(
                     out, OUTPUT_NORMAL, "Hook output:\n%s\n",
                     hook_result->output
@@ -1322,12 +1303,10 @@ error_t *cmd_add(
             /* If all files were excluded, skip this directory entirely */
             if (string_array_size(dir_files) == 0) {
                 string_array_free(dir_files);
-                if (opts->verbose && out) {
-                    output_info(
-                        out, "Skipped directory (all files excluded): %s",
-                        absolute
-                    );
-                }
+                output_info(
+                    out, OUTPUT_VERBOSE, "Skipped directory (all files excluded): %s",
+                    absolute
+                );
                 free(absolute);
                 continue;
             }
@@ -1347,9 +1326,7 @@ error_t *cmd_add(
             }
             string_array_free(dir_files);
 
-            if (opts->verbose && out) {
-                output_info(out, "Added directory: %s", absolute);
-            }
+            output_info(out, OUTPUT_VERBOSE, "Added directory: %s", absolute);
 
             /* Track this directory for metadata capture */
             char *storage_prefix = NULL;
@@ -1359,8 +1336,8 @@ error_t *cmd_add(
                 /* Non-fatal: directory that equals the custom prefix root has no
                  * storage path representation. Individual files are still added. */
                 error_free(err);
-                err = NULL;
                 free(absolute);
+                err = NULL;
                 continue;
             }
 
@@ -1392,10 +1369,8 @@ error_t *cmd_add(
             tracked_dir_count++;
         } else {
             /* Single file or symlink - check if excluded */
-            if (is_excluded(absolute, false, ignore_ctx, opts, out)) {
-                if (opts->verbose && out) {
-                    output_info(out, "Excluded: %s", absolute);
-                }
+            if (is_excluded(absolute, false, ignore_ctx, out)) {
+                output_info(out, OUTPUT_VERBOSE, "Excluded: %s", absolute);
                 free(absolute);
                 continue;
             }
@@ -1442,9 +1417,7 @@ error_t *cmd_add(
             /* No existing metadata - create new */
             error_free(err);
             err = metadata_create_empty(&metadata);
-            if (err) {
-                goto cleanup;
-            }
+            if (err) goto cleanup;
         } else {
             /* Real error - propagate */
             err = error_wrap(err, "Failed to load existing metadata");
@@ -1501,8 +1474,8 @@ error_t *cmd_add(
         }
 
         /* Add file to worktree and capture metadata
-         * ARCHITECTURE: add_file_to_worktree now handles both operations atomically,
-         * sharing stat() data between content and metadata layers to eliminate race conditions */
+         * ARCHITECTURE: add_file_to_worktree handles both operations atomically,
+         * sharing stat() data between content and metadata layers to eliminate TOCTOU */
         err = add_file_to_worktree(
             wt, file_path, storage_path, opts, key_mgr, config, metadata, out
         );
@@ -1525,12 +1498,10 @@ error_t *cmd_add(
         struct stat dir_stat;
         if (stat(dir->filesystem_path, &dir_stat) != 0) {
             /* Non-fatal: log warning and continue */
-            if (opts->verbose && out) {
-                output_warning(
-                    out, "Failed to stat directory '%s': %s",
-                    dir->filesystem_path, strerror(errno)
-                );
-            }
+            output_warning(
+                out, OUTPUT_VERBOSE, "Failed to stat directory '%s': %s",
+                dir->filesystem_path, strerror(errno)
+            );
             continue;
         }
 
@@ -1540,32 +1511,31 @@ error_t *cmd_add(
 
         if (err) {
             /* Non-fatal: log warning and continue */
-            if (opts->verbose && out) {
-                output_warning(
-                    out, "Failed to capture metadata for directory '%s': %s",
-                    dir->filesystem_path, error_message(err)
-                );
-            }
+            output_warning(
+                out, OUTPUT_VERBOSE,
+                "Failed to capture metadata for directory '%s': %s",
+                dir->filesystem_path, error_message(err)
+            );
             error_free(err);
             err = NULL;
             continue;
         }
 
         /* Verbose output before consuming the item */
-        if (opts->verbose && out) {
-            if (dir_item->owner || dir_item->group) {
-                output_info(
-                    out, "Captured directory metadata: %s (mode: %04o, owner: %s:%s)",
-                    dir->filesystem_path, dir_item->mode,
-                    dir_item->owner ? dir_item->owner : "?",
-                    dir_item->group ? dir_item->group : "?"
-                );
-            } else {
-                output_info(
-                    out, "Captured directory metadata: %s (mode: %04o)",
-                    dir->filesystem_path, dir_item->mode
-                );
-            }
+        if (dir_item->owner || dir_item->group) {
+            output_info(
+                out, OUTPUT_VERBOSE,
+                "Captured directory metadata: %s (mode: %04o, owner: %s:%s)",
+                dir->filesystem_path, dir_item->mode,
+                dir_item->owner ? dir_item->owner : "?",
+                dir_item->group ? dir_item->group : "?"
+            );
+        } else {
+            output_info(
+                out, OUTPUT_VERBOSE,
+                "Captured directory metadata: %s (mode: %04o)",
+                dir->filesystem_path, dir_item->mode
+            );
         }
 
         /* Add directory to metadata */
@@ -1575,22 +1545,18 @@ error_t *cmd_add(
 
         if (err) {
             /* Non-fatal: log warning and continue */
-            if (opts->verbose && out) {
-                output_warning(
-                    out, "Failed to track directory '%s': %s",
-                    dir->filesystem_path, error_message(err)
-                );
-            }
+            output_warning(
+                out, OUTPUT_VERBOSE, "Failed to track directory '%s': %s",
+                dir->filesystem_path, error_message(err)
+            );
             error_free(err);
             err = NULL;
         } else {
             dir_tracked_count++;
-            if (opts->verbose && out) {
-                output_info(
-                    out, "Tracked directory: %s -> %s",
-                    dir->filesystem_path, dir->storage_path
-                );
-            }
+            output_info(
+                out, OUTPUT_VERBOSE, "Tracked directory: %s -> %s",
+                dir->filesystem_path, dir->storage_path
+            );
         }
     }
 
@@ -1609,18 +1575,17 @@ error_t *cmd_add(
     }
 
     /* Verbose summary */
-    if (opts->verbose && out && dir_tracked_count > 0) {
+    if (dir_tracked_count > 0) {
         output_info(
-            out, "Tracked %zu director%s for change detection",
+            out, OUTPUT_VERBOSE,
+            "Tracked %zu director%s for change detection",
             dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies"
         );
     }
 
     /* Create commit */
     err = create_commit(wt, opts, all_files, config, NULL);
-    if (err) {
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Update manifest - auto-enable new profiles, sync existing enabled profiles
      *
@@ -1648,22 +1613,20 @@ error_t *cmd_add(
          * - Matches VWD architecture specification
          */
         error_t *enable_err = auto_enable_and_sync_profile(
-            repo, opts->profile, opts->custom_prefix, all_files,
-            &manifest_updated, &manifest_synced_count
+            repo, opts->profile, opts->custom_prefix, all_files, &manifest_updated,
+            &manifest_synced_count
         );
 
         if (enable_err) {
             /* Non-fatal: Git commit succeeded, user can manually enable later */
-            if (out) {
-                output_warning(
-                    out, "Failed to auto-enable profile: %s",
-                    error_message(enable_err)
-                );
-                output_hint(
-                    out, "Run 'dotta profile enable %s' to enable manually",
-                    opts->profile
-                );
-            }
+            output_warning(
+                out, OUTPUT_NORMAL, "Failed to auto-enable profile: %s",
+                error_message(enable_err)
+            );
+            output_hint(
+                out, OUTPUT_NORMAL, "Run 'dotta profile enable %s' to enable manually",
+                opts->profile
+            );
             error_free(enable_err);
             manifest_updated = false;
             manifest_synced_count = 0;
@@ -1675,25 +1638,23 @@ error_t *cmd_add(
          * If not enabled, skips manifest update (user must explicitly enable).
          */
         error_t *manifest_err = update_manifest_after_add(
-            repo, opts->profile, opts->custom_prefix, all_files,
-            &manifest_updated, &manifest_synced_count
+            repo, opts->profile, opts->custom_prefix, all_files, &manifest_updated,
+            &manifest_synced_count
         );
 
         if (manifest_err) {
             /* Non-fatal: Git commit succeeded */
-            if (out) {
-                output_warning(
-                    out, "Failed to update manifest: %s",
-                    error_message(manifest_err)
-                );
-                output_info(
-                    out, "Files committed to Git successfully"
-                );
-                output_hint(
-                    out, "Run 'dotta profile enable %s' to sync manifest",
-                    opts->profile
-                );
-            }
+            output_warning(
+                out, OUTPUT_NORMAL, "Failed to update manifest: %s",
+                error_message(manifest_err)
+            );
+            output_info(
+                out, OUTPUT_NORMAL, "Files committed to Git successfully"
+            );
+            output_hint(
+                out, OUTPUT_NORMAL, "Run 'dotta profile enable %s' to sync manifest",
+                opts->profile
+            );
             error_free(manifest_err);
             manifest_updated = false;
             manifest_synced_count = 0;
@@ -1710,17 +1671,15 @@ error_t *cmd_add(
 
         if (hook_err) {
             /* Hook failed - warn but don't abort (files already added) */
-            if (out) {
-                output_warning(
-                    out, "Post-add hook failed: %s",
-                    error_message(hook_err)
+            output_warning(
+                out, OUTPUT_NORMAL, "Post-add hook failed: %s",
+                error_message(hook_err)
+            );
+            if (hook_result && hook_result->output && hook_result->output[0]) {
+                output_print(
+                    out, OUTPUT_NORMAL, "Hook output:\n%s\n",
+                    hook_result->output
                 );
-                if (hook_result && hook_result->output && hook_result->output[0]) {
-                    output_print(
-                        out, OUTPUT_NORMAL, "Hook output:\n%s\n",
-                        hook_result->output
-                    );
-                }
             }
             error_free(hook_err);
         }
@@ -1728,18 +1687,18 @@ error_t *cmd_add(
     }
 
     /* Show summary on success */
-    if ((added_count > 0 || dir_tracked_count > 0) && out) {
+    if ((added_count > 0 || dir_tracked_count > 0)) {
         /* Primary success message */
         if (added_count > 0) {
             output_success(
-                out, "Added %zu file%s to profile '%s'",
+                out, OUTPUT_NORMAL, "Added %zu file%s to profile '%s'",
                 added_count, added_count == 1 ? "" : "s",
                 opts->profile
             );
         } else {
             /* Directory-only add */
             output_success(
-                out, "Tracking %zu director%s in profile '%s'",
+                out, OUTPUT_NORMAL, "Tracking %zu director%s in profile '%s'",
                 dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies",
                 opts->profile
             );
@@ -1747,7 +1706,7 @@ error_t *cmd_add(
 
         if (profile_was_new) {
             output_success(
-                out, "Profile '%s' created and enabled",
+                out, OUTPUT_NORMAL, "Profile '%s' created and enabled",
                 opts->profile
             );
         }
@@ -1755,12 +1714,12 @@ error_t *cmd_add(
         /* Show directory tracking info only when files were also added */
         if (added_count > 0 && dir_tracked_count > 0) {
             output_info(
-                out, "Tracking %zu director%s for change detection",
+                out, OUTPUT_NORMAL, "Tracking %zu director%s for change detection",
                 dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies"
             );
         }
 
-        output_newline(out);
+        output_newline(out, OUTPUT_NORMAL);
 
         /* Manifest status feedback */
         if (manifest_updated) {
@@ -1770,19 +1729,22 @@ error_t *cmd_add(
                     /* New profile - show sync results with precedence awareness */
                     if (manifest_synced_count == added_count) {
                         output_info(
-                            out, "Manifest updated (%zu file%s marked as deployed)",
+                            out, OUTPUT_NORMAL,
+                            "Manifest updated (%zu file%s marked as deployed)",
                             manifest_synced_count, manifest_synced_count == 1 ? "" : "s"
                         );
                     } else {
                         output_info(
-                            out, "Manifest updated (%zu/%zu file%s marked as deployed)",
+                            out, OUTPUT_NORMAL,
+                            "Manifest updated (%zu/%zu file%s marked as deployed)",
                             manifest_synced_count, added_count, added_count == 1 ? "" : "s"
                         );
 
                         if (manifest_synced_count < added_count) {
                             size_t skipped = added_count - manifest_synced_count;
                             output_info(
-                                out, "Note: %zu file%s overridden by higher-precedence profiles",
+                                out, OUTPUT_NORMAL,
+                                "Note: %zu file%s overridden by higher-precedence profiles",
                                 skipped, skipped == 1 ? "" : "s"
                             );
                         }
@@ -1791,37 +1753,47 @@ error_t *cmd_add(
                     /* Existing enabled profile */
                     if (manifest_synced_count == added_count) {
                         output_info(
-                            out, "Manifest updated (%zu file%s marked as deployed)",
+                            out, OUTPUT_NORMAL,
+                            "Manifest updated (%zu file%s marked as deployed)",
                             manifest_synced_count, manifest_synced_count == 1 ? "" : "s"
                         );
                     } else {
                         output_info(
-                            out, "Manifest updated (%zu/%zu file%s marked as deployed)",
+                            out, OUTPUT_NORMAL,
+                            "Manifest updated (%zu/%zu file%s marked as deployed)",
                             manifest_synced_count, added_count, added_count == 1 ? "" : "s"
                         );
                         if (manifest_synced_count < added_count) {
                             size_t skipped = added_count - manifest_synced_count;
                             output_info(
-                                out, "Note: %zu file%s overridden by higher-precedence profiles",
+                                out, OUTPUT_NORMAL,
+                                "Note: %zu file%s overridden by higher-precedence profiles",
                                 skipped, skipped == 1 ? "" : "s"
                             );
                         }
                     }
-                    output_hint(out, "Files captured from filesystem (already deployed)");
+                    output_hint(
+                        out, OUTPUT_NORMAL,
+                        "Files captured from filesystem (already deployed)"
+                    );
                 }
             } else {
                 /* Directory-only add */
                 output_info(
-                    out, "Manifest updated (%zu director%s synced)",
+                    out, OUTPUT_NORMAL, "Manifest updated (%zu director%s synced)",
                     dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies"
                 );
             }
-            output_hint(out, "Run 'dotta status' to verify");
+            output_hint(out, OUTPUT_NORMAL, "Run 'dotta status' to verify");
         } else {
             /* Existing disabled profile - original behavior */
-            output_info(out, "Profile not enabled - manifest not updated");
-            output_hint(out, "Run 'dotta profile enable %s' to activate", opts->profile);
-            output_hint(out, "Run 'dotta apply -p %s' to deploy files", opts->profile);
+            output_info(
+                out, OUTPUT_NORMAL, "Profile not enabled - manifest not updated"
+            );
+            output_hint(
+                out, OUTPUT_NORMAL, "Run 'dotta profile enable %s' to activate and deploy",
+                opts->profile
+            );
         }
     }
 
@@ -1848,7 +1820,7 @@ cleanup:
         }
         free(preflight_allocated_paths);
     }
-    free(preflight_storage_paths);
+    if (preflight_storage_paths) free(preflight_storage_paths);
     if (out) output_free(out);
     if (config) config_free(config);
 

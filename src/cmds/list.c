@@ -173,6 +173,8 @@ static error_t *list_profiles(
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
+    bool verbose = output_is_verbose(out);
+
     /* Get all branches */
     string_array_t *branches = NULL;
     error_t *err = gitops_list_branches(repo, &branches);
@@ -182,7 +184,7 @@ static error_t *list_profiles(
 
     if (string_array_size(branches) == 0) {
         string_array_free(branches);
-        output_info(out, "No profiles found");
+        output_info(out, OUTPUT_NORMAL, "No profiles found");
         return NULL;
     }
 
@@ -193,7 +195,7 @@ static error_t *list_profiles(
         err = upstream_detect_remote(repo, &remote_name);
         if (err) {
             output_warning(
-                out, "Could not detect remote: %s",
+                out, OUTPUT_NORMAL, "Could not detect remote: %s",
                 error_message(err)
             );
             error_free(err);
@@ -213,7 +215,7 @@ static error_t *list_profiles(
 
     /* Calculate max branch name length for column alignment */
     size_t max_name_len = 0;
-    if (opts->verbose || show_remote) {
+    if (verbose || show_remote) {
         for (size_t i = 0; i < string_array_size(branches); i++) {
             const char *bname = string_array_get(branches, i);
             if (strcmp(bname, "dotta-worktree") == 0) {
@@ -233,7 +235,7 @@ static error_t *list_profiles(
     }
 
     /* Print header */
-    output_section(out, "Available profiles");
+    output_section(out, OUTPUT_NORMAL, "Available profiles");
 
     /* List profiles */
     for (size_t i = 0; i < string_array_size(branches); i++) {
@@ -248,7 +250,7 @@ static error_t *list_profiles(
         const char *indicator = is_enabled ? "* " : "  ";
 
         /* Simple mode: Just name with enabled indicator */
-        if (!opts->verbose && !show_remote) {
+        if (!verbose && !show_remote) {
             output_styled(
                 out, OUTPUT_NORMAL, "  %s{cyan}%s{reset}\n",
                 indicator, name
@@ -258,11 +260,11 @@ static error_t *list_profiles(
 
         /* Verbose/remote: Load profile for stats */
         profile_t *profile = NULL;
-        if (opts->verbose) {
+        if (verbose) {
             err = profile_load(repo, name, &profile);
             if (err) {
                 output_warning(
-                    out, "Failed to load profile '%s': %s",
+                    out, OUTPUT_NORMAL, "Failed to load profile '%s': %s",
                     name, error_message(err)
                 );
                 error_free(err);
@@ -278,14 +280,14 @@ static error_t *list_profiles(
         );
 
         /* Verbose: Add stats (requires successfully loaded profile) */
-        if (opts->verbose && profile) {
+        if (verbose && profile) {
             profile_stats_t stats = { 0 };
             error_t *stats_err = stats_get_profile_stats(repo, profile->tree, &stats);
             if (!stats_err) {
                 char size_str[32];
                 output_format_size(stats.total_size, size_str, sizeof(size_str));
                 output_print(
-                    out, OUTPUT_NORMAL, " %2zu file%s, %8s",
+                    out, OUTPUT_VERBOSE, " %2zu file%s, %8s",
                     stats.file_count,
                     stats.file_count == 1 ? " " : "s", size_str
                 );
@@ -294,7 +296,7 @@ static error_t *list_profiles(
         }
 
         /* Verbose: Add last commit info (uses branch name, not profile tree) */
-        if (opts->verbose) {
+        if (verbose) {
             char refname[DOTTA_REFNAME_MAX];
             error_t *ref_err = gitops_build_refname(
                 refname, sizeof(refname), "refs/heads/%s", name
@@ -320,7 +322,7 @@ static error_t *list_profiles(
                     format_relative_time(author->when.time, time_str, sizeof(time_str));
 
                     output_styled(
-                        out, OUTPUT_NORMAL, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
+                        out, OUTPUT_VERBOSE, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
                         oid_str, (int) msg_len, message, time_str
                     );
 
@@ -344,13 +346,13 @@ static error_t *list_profiles(
             }
         }
 
-        output_newline(out);
+        output_newline(out, OUTPUT_NORMAL);
         profile_free(profile);
     }
 
     /* Print remote legend if shown */
     if (show_remote) {
-        output_newline(out);
+        output_newline(out, OUTPUT_NORMAL);
         output_print(
             out, OUTPUT_NORMAL,
             "Remote tracking (from %s):\n",
@@ -393,6 +395,8 @@ static error_t *list_files(
     CHECK_NULL(opts->profile);
     CHECK_NULL(out);
 
+    bool verbose = output_is_verbose(out);
+
     /* Load profile */
     profile_t *profile = NULL;
     error_t *err = profile_load(repo, opts->profile, &profile);
@@ -415,27 +419,27 @@ static error_t *list_files(
     }
 
     if (string_array_size(files) == 0) {
-        output_info(out, "No files in profile '%s'", opts->profile);
+        output_info(out, OUTPUT_NORMAL, "No files in profile '%s'", opts->profile);
         string_array_free(files);
         profile_free(profile);
         return NULL;
     }
 
     /* Print header */
-    output_section(out, "Files in profile '%s'", opts->profile);
-    output_newline(out);
+    output_section(out, OUTPUT_NORMAL, "Files in profile '%s'", opts->profile);
+    output_newline(out, OUTPUT_NORMAL);
 
     /* Sort for consistent output */
     string_array_sort(files);
 
     /* Build file→commit map if verbose */
     file_commit_map_t *commit_map = NULL;
-    if (opts->verbose) {
+    if (verbose) {
         err = stats_build_file_commit_map(repo, opts->profile, profile->tree, &commit_map);
         if (err) {
             /* Non-fatal: continue without commit info */
             output_warning(
-                out, "Failed to load commit history: %s",
+                out, OUTPUT_NORMAL, "Failed to load commit history: %s",
                 error_message(err)
             );
             error_free(err);
@@ -445,7 +449,7 @@ static error_t *list_files(
 
     /* Load metadata for encryption status (verbose mode only) */
     metadata_t *metadata = NULL;
-    if (opts->verbose) {
+    if (verbose) {
         err = metadata_load_from_branch(repo, opts->profile, &metadata);
         if (err) {
             /* Non-fatal: continue without encryption indicators */
@@ -457,7 +461,7 @@ static error_t *list_files(
 
     /* Calculate max path length for alignment (verbose mode only) */
     size_t max_path_len = 0;
-    if (opts->verbose) {
+    if (verbose) {
         for (size_t i = 0; i < string_array_size(files); i++) {
             size_t len = strlen(string_array_get(files, i));
             if (len > max_path_len) {
@@ -476,10 +480,10 @@ static error_t *list_files(
         const char *file_path = string_array_get(files, i);
 
         /* Print file path (with alignment in verbose mode) */
-        if (opts->verbose) {
+        if (verbose) {
             /* Verbose: Left-align with padding for column alignment */
             output_styled(
-                out, OUTPUT_NORMAL, "  {cyan}%-*s{reset}",
+                out, OUTPUT_VERBOSE, "  {cyan}%-*s{reset}",
                 (int) max_path_len, file_path
             );
         } else {
@@ -491,7 +495,7 @@ static error_t *list_files(
         }
 
         /* Verbose: Add size and last commit */
-        if (opts->verbose) {
+        if (verbose) {
             /* Get file stats */
             git_tree_entry *entry = NULL;
             int git_err = git_tree_entry_bypath(&entry, profile->tree, file_path);
@@ -500,12 +504,12 @@ static error_t *list_files(
                 bool encrypted = is_file_encrypted(metadata, repo, entry, file_path);
                 if (encrypted) {
                     output_styled(
-                        out, OUTPUT_NORMAL, "  {yellow}[E]{reset} "
+                        out, OUTPUT_VERBOSE, "  {yellow}[E]{reset} "
                     );
                 } else {
                     /* Space padding to maintain alignment */
                     output_print(
-                        out, OUTPUT_NORMAL, "      "
+                        out, OUTPUT_VERBOSE, "      "
                     );
                 }
 
@@ -521,7 +525,7 @@ static error_t *list_files(
 
                     char size_str[32];
                     output_format_size(display_size, size_str, sizeof(size_str));
-                    output_print(out, OUTPUT_NORMAL, " %8s", size_str);
+                    output_print(out, OUTPUT_VERBOSE, " %8s", size_str);
                     total_size += display_size;
                 }
                 error_free(stats_err);
@@ -542,7 +546,7 @@ static error_t *list_files(
                         if (summary_len > 40) summary_len = 40;
 
                         output_styled(
-                            out, OUTPUT_NORMAL, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
+                            out, OUTPUT_VERBOSE, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
                             oid_str, (int) summary_len, commit_info->summary, time_str
                         );
                     }
@@ -551,20 +555,20 @@ static error_t *list_files(
                 git_tree_entry_free(entry);
             } else {
                 /* Tree entry lookup failed unexpectedly */
-                output_styled(out, OUTPUT_NORMAL, "  {dim}[?]{reset}");
+                output_styled(out, OUTPUT_VERBOSE, "  {dim}[?]{reset}");
             }
         }
 
-        output_newline(out);
+        output_newline(out, OUTPUT_NORMAL);
     }
 
     /* Print summary */
-    output_newline(out);
-    if (opts->verbose) {
+    output_newline(out, OUTPUT_NORMAL);
+    if (verbose) {
         char size_str[32];
         output_format_size(total_size, size_str, sizeof(size_str));
         output_print(
-            out, OUTPUT_NORMAL, "Total: %zu file%s, %s\n",
+            out, OUTPUT_VERBOSE, "Total: %zu file%s, %s\n",
             string_array_size(files),
             string_array_size(files) == 1 ? "" : "s", size_str
         );
@@ -625,6 +629,8 @@ static error_t *list_file_history(
     CHECK_NULL(opts->file_path);
     CHECK_NULL(out);
 
+    bool verbose = output_is_verbose(out);
+
     char *discovered_profile = NULL;
 
     /* Resolve input path to storage format (handles absolute, tilde, relative,
@@ -682,7 +688,7 @@ static error_t *list_file_history(
     if (!err) {
         git_tree_entry *check = NULL;
         if (git_tree_entry_bypath(&check, profile->tree, storage_path) != 0) {
-            output_info(out, "File not in current tree, searching history...");
+            output_info(out, OUTPUT_NORMAL, "File not in current tree, searching history...");
         } else {
             git_tree_entry_free(check);
         }
@@ -707,14 +713,14 @@ static error_t *list_file_history(
 
     /* Print header */
     output_section(
-        out, "History of '%s' in profile '%s'",
+        out, OUTPUT_NORMAL, "History of '%s' in profile '%s'",
         storage_path, profile_name
     );
-    output_newline(out);
+    output_newline(out, OUTPUT_NORMAL);
 
     /* Calculate max message length for alignment (oneline mode only) */
     size_t max_msg_len = 0;
-    if (!opts->verbose) {
+    if (!verbose) {
         for (size_t i = 0; i < history->count; i++) {
             size_t len = strlen(history->commits[i].summary);
             if (len > max_msg_len) max_msg_len = len;
@@ -730,13 +736,13 @@ static error_t *list_file_history(
     for (size_t i = 0; i < history->count; i++) {
         commit_info_t *commit = &history->commits[i];
 
-        if (opts->verbose) {
+        if (verbose) {
             /* Verbose: Full commit format */
             char oid_str[GIT_OID_SHA1_HEXSIZE + 1];
             git_oid_tostr(oid_str, sizeof(oid_str), &commit->oid);
 
             output_styled(
-                out, OUTPUT_NORMAL, "{bold}commit {yellow}%s{reset}\n",
+                out, OUTPUT_VERBOSE, "{bold}commit {yellow}%s{reset}\n",
                 oid_str
             );
 
@@ -747,15 +753,15 @@ static error_t *list_file_history(
                 format_relative_time(commit->time, relative_str, sizeof(relative_str));
 
                 output_styled(
-                    out, OUTPUT_NORMAL, "Date:   %s {dim}(%s){reset}\n",
+                    out, OUTPUT_VERBOSE, "Date:   %s {dim}(%s){reset}\n",
                     date_buf, relative_str
                 );
             }
 
-            output_print(out, OUTPUT_NORMAL, "\n    %s\n", commit->summary);
+            output_print(out, OUTPUT_VERBOSE, "\n    %s\n", commit->summary);
 
             if (i < history->count - 1) {
-                output_newline(out);
+                output_newline(out, OUTPUT_NORMAL);
             }
         } else {
             /* Default: Oneline format */
@@ -811,7 +817,7 @@ error_t *cmd_list(git_repository *repo, const cmd_list_options_t *opts) {
 
     /* Warn about flags that don't apply to the current mode */
     if (opts->remote && opts->mode != LIST_PROFILES) {
-        output_warning(out, "--remote only applies when listing profiles");
+        output_warning(out, OUTPUT_NORMAL, "--remote only applies when listing profiles");
     }
 
     /* Dispatch to appropriate list function based on mode */

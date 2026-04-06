@@ -245,9 +245,9 @@ format:
 	@echo "Formatting code..."
 	@find src include -name "*.c" -o -name "*.h" | xargs -I{} uncrustify -c $(UNCRUSTIFY_CFG) -l C --no-backup {}
 	@echo "Post-processing uncrustify output..."
-	@find src include -name "*.c" -o -name "*.h" -exec perl -0777 -pi -e 's/\)\n\s+;/);/g' {} +
-	@find src include -name "*.c" -o -name "*.h" -exec perl -0777 -pi -e 's/,\s*&\n(\s+)(\w)/,\n$$1\&$$2/g' {} +
-	@find src include -name "*.c" -o -name "*.h" -exec perl -0777 -pi -e 's/\)\n(\s+)\) \{/\)\) \{/g' {} +
+	@find src include \( -name "*.c" -o -name "*.h" \) -exec perl -0777 -pi -e 's/\)\n\s+;/);/g' {} +
+	@find src include \( -name "*.c" -o -name "*.h" \) -exec perl -0777 -pi -e 's/,\s*&\n(\s+)(\w)/,\n$$1\&$$2/g' {} +
+	@find src include \( -name "*.c" -o -name "*.h" \) -exec perl -0777 -pi -e 's/\)\n(\s+)\) \{/\)\) \{/g' {} +
 
 # Check formatting without modifying files
 .PHONY: format-check

@@ -300,9 +300,7 @@ error_t *profile_detect_names(
     /* 1. "global" — always first if present */
     if (string_array_contains(available_branches, "global")) {
         err = string_array_push(names, "global");
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
     }
 
     /* 2. OS-specific profiles (darwin, linux, freebsd, ...) */
@@ -414,9 +412,8 @@ error_t *profile_list_load(
     return NULL;
 
 cleanup:
-    if (err) {
-        profile_list_free(list);
-    }
+    if (err) profile_list_free(list);
+
     return err;
 }
 
@@ -501,9 +498,7 @@ error_t *profiles_enrich_with_prefixes(
         return NULL;
     }
 
-    if (!state) {
-        return NULL;  /* No state database = no prefixes */
-    }
+    if (!state) return NULL;  /* No state database = no prefixes */
 
     err = enrich_profiles_from_state(profiles, state);
     state_free(state);
@@ -572,14 +567,14 @@ static error_t *validate_state_profiles(
 
     /* Success */
     *out_valid_profiles = valid;
-    if (out_missing_profiles) {
-        *out_missing_profiles = missing;
-    }
+    if (out_missing_profiles) *out_missing_profiles = missing;
+
     return NULL;
 
 cleanup:
     string_array_free(valid);
     string_array_free(missing);
+
     return err;
 }
 

@@ -357,7 +357,7 @@ static error_t *present_diffs_for_direction(
 
         /* Blank line between entries for readability */
         if (*diff_count > 0 && !opts->name_only) {
-            output_newline(out);
+            output_newline(out, OUTPUT_NORMAL);
         }
 
         /* Show the diff (content already analyzed by workspace) */
@@ -484,26 +484,23 @@ static void print_commit_header(
         out, OUTPUT_NORMAL, "{yellow}commit %s{reset}",
         oid_str
     );
-
     if (profile_name) {
         output_styled(
             out, OUTPUT_NORMAL, " {cyan}(%s){reset}",
             profile_name
         );
     }
-    output_newline(out);
+    output_newline(out, OUTPUT_NORMAL);
 
     output_styled(
         out, OUTPUT_NORMAL, "{bold}Author:{reset} %s <%s>\n",
         author->name, author->email
     );
-
     output_styled(
         out, OUTPUT_NORMAL, "{bold}Date:{reset}   %s (%s)\n",
         time_buf, relative_buf
     );
-
-    output_newline(out);
+    output_newline(out, OUTPUT_NORMAL);
 
     /* Print commit message with indentation */
     const char *message = git_commit_message(commit);
@@ -514,15 +511,12 @@ static void print_commit_header(
         char *saveptr = NULL;
         char *line = strtok_r(msg_copy, "\n", &saveptr);
         while (line) {
-            output_print(
-                out, OUTPUT_NORMAL, "    %s\n", line
-            );
+            output_print(out, OUTPUT_NORMAL, "    %s\n", line);
             line = strtok_r(NULL, "\n", &saveptr);
         }
         free(msg_copy);
     }
-
-    output_newline(out);
+    output_newline(out, OUTPUT_NORMAL);
 }
 
 /**
@@ -565,7 +559,7 @@ static error_t *print_diff_stats(
         );
     }
 
-    output_newline(out);
+    output_newline(out, OUTPUT_NORMAL);
 
     git_diff_stats_free(stats);
     return NULL;
@@ -619,7 +613,7 @@ static int print_diff_line_cb(
 
     /* Add newline if not present */
     if (line->content_len == 0 || line->content[line->content_len - 1] != '\n') {
-        output_newline(out);
+        output_newline(out, OUTPUT_NORMAL);
     }
 
     return 0;
@@ -766,7 +760,7 @@ static error_t *compare_manifest_to_filesystem(
 
         /* Blank line between entries for readability */
         if (*diff_count > 0) {
-            output_newline(out);
+            output_newline(out, OUTPUT_NORMAL);
         }
 
         /* Show file header */
@@ -881,7 +875,7 @@ static size_t validate_filter_paths(
 
         if (!found) {
             output_warning(
-                out, "No managed file matches '%s'",
+                out, OUTPUT_NORMAL, "No managed file matches '%s'",
                 filter_path
             );
             unmatched++;
@@ -903,7 +897,7 @@ static size_t validate_filter_paths(
         }
         if (!found) {
             output_warning(
-                out, "No managed file matches pattern '%s'",
+                out, OUTPUT_NORMAL, "No managed file matches pattern '%s'",
                 file_filter->glob_patterns[g]
             );
             unmatched++;
@@ -967,11 +961,10 @@ static error_t *diff_commit_to_workspace(
      * the commit is compared against the filesystem. */
     if (profiles->count > 1) {
         output_info(
-            out, "Note: comparing commit against profile '%s' only "
-            "(commit-to-workspace compares one profile at a time)\n",
-            profile_name
+            out, OUTPUT_NORMAL, "Note: comparing commit against profile '%s' only "
+            "(commit-to-workspace compares one profile at a time)\n", profile_name
         );
-        output_newline(out);
+        output_newline(out, OUTPUT_NORMAL);
     }
 
     output_styled(
@@ -995,9 +988,7 @@ static error_t *diff_commit_to_workspace(
         /* Graceful: if no metadata in commit, use empty metadata */
         error_free(err);
         err = metadata_create_empty(&metadata);
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
     }
 
     /* Step 5: Build manifest from historical tree
@@ -1034,12 +1025,12 @@ static error_t *diff_commit_to_workspace(
 
         if (unmatched > 0) {
             output_hint(
-                out, "Use 'dotta list <profile>' to see managed files"
+                out, OUTPUT_NORMAL, "Use 'dotta list <profile>' to see managed files"
             );
         }
         if (unmatched == 0 || (file_filter && unmatched < file_filter->count)) {
             output_info(
-                out, "No differences between commit and workspace\n"
+                out, OUTPUT_NORMAL, "No differences between commit and workspace\n"
             );
         }
     }
@@ -1094,7 +1085,8 @@ static error_t *build_diff_pathspec(
     char **strings = calloc(filter->count, sizeof(char *));
     if (!strings) {
         return ERROR(
-            ERR_MEMORY, "Failed to allocate memory for diff pathspec"
+            ERR_MEMORY,
+            "Failed to allocate memory for diff pathspec"
         );
     }
 
@@ -1257,11 +1249,9 @@ static error_t *diff_commits(
     } else {
         /* Full diff: statistics followed by patch */
         err = print_diff_stats(out, diff);
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
 
-        output_newline(out);
+        output_newline(out, OUTPUT_NORMAL);
 
         int ret = git_diff_print(
             diff, GIT_DIFF_FORMAT_PATCH, print_diff_line_cb, out
@@ -1278,8 +1268,8 @@ cleanup:
     if (tree1) git_tree_free(tree1);
     if (commit2) git_commit_free(commit2);
     if (commit1) git_commit_free(commit1);
-    free(profile2_name);
-    free(profile1_name);
+    if (profile2_name) free(profile2_name);
+    if (profile1_name) free(profile1_name);
 
     return err;
 }
@@ -1353,7 +1343,7 @@ static error_t *diff_workspace(
     if (file_filter) {
         size_t unmatched = validate_filter_paths(file_filter, manifest, out);
         if (unmatched > 0) {
-            output_hint(out, "Use 'dotta list <profile>' to see managed files");
+            output_hint(out, OUTPUT_NORMAL, "Use 'dotta list <profile>' to see managed files");
             if (unmatched == file_filter->count) {
                 /* All filter paths are invalid — nothing to diff */
                 goto cleanup;
@@ -1382,8 +1372,8 @@ static error_t *diff_workspace(
         size_t upstream_count = 0, downstream_count = 0;
 
         /* Upstream section */
-        output_section(out, "Upstream (repository → filesystem)");
-        output_info(out, "Shows what 'dotta apply' would change\n");
+        output_section(out, OUTPUT_NORMAL, "Upstream (repository → filesystem)");
+        output_info(out, OUTPUT_NORMAL, "Shows what 'dotta apply' would change\n");
 
         err = present_diffs_for_direction(
             diverged, diverged_count, manifest, cache, repo, DIFF_UPSTREAM,
@@ -1392,12 +1382,12 @@ static error_t *diff_workspace(
         if (err) goto cleanup;
 
         if (upstream_count == 0 && !opts->name_only) {
-            output_info(out, "No upstream differences\n");
+            output_info(out, OUTPUT_NORMAL, "No upstream differences\n");
         }
 
         /* Downstream section */
-        output_section(out, "Downstream (filesystem → repository)");
-        output_info(out, "Shows what 'dotta update' would commit\n");
+        output_section(out, OUTPUT_NORMAL, "Downstream (filesystem → repository)");
+        output_info(out, OUTPUT_NORMAL, "Shows what 'dotta update' would commit\n");
 
         err = present_diffs_for_direction(
             diverged, diverged_count, manifest, cache, repo, DIFF_DOWNSTREAM,
@@ -1406,7 +1396,7 @@ static error_t *diff_workspace(
         if (err) goto cleanup;
 
         if (downstream_count == 0 && !opts->name_only) {
-            output_info(out, "No downstream differences\n");
+            output_info(out, OUTPUT_NORMAL, "No downstream differences\n");
         }
 
         total_diff_count = upstream_count + downstream_count;
@@ -1421,9 +1411,12 @@ static error_t *diff_workspace(
 
         if (total_diff_count == 0 && !opts->name_only) {
             if (opts->direction == DIFF_UPSTREAM) {
-                output_info(out, "No differences (repository and filesystem in sync)");
+                output_info(
+                    out, OUTPUT_NORMAL,
+                    "No differences (repository and filesystem in sync)"
+                );
             } else {
-                output_info(out, "No local changes to commit");
+                output_info(out, OUTPUT_NORMAL, "No local changes to commit");
             }
         }
     }
@@ -1484,8 +1477,8 @@ error_t *cmd_diff(
     }
 
     if (workspace_profiles->count == 0) {
-        output_info(out, "No enabled profiles found");
-        output_hint(out, "Run 'dotta profile enable <name>'");
+        output_info(out, OUTPUT_NORMAL, "No enabled profiles found");
+        output_hint(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>'");
         goto cleanup;
     }
 
@@ -1501,9 +1494,7 @@ error_t *cmd_diff(
         }
 
         err = profile_validate_filter(workspace_profiles, diff_profiles);
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
     } else {
         diff_profiles = workspace_profiles;
     }

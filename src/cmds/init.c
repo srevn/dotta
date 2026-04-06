@@ -236,7 +236,9 @@ error_t *cmd_init(const cmd_init_options_t *opts) {
         goto cleanup;
     }
     if (initialized) {
-        output_info(out, "Dotta already initialized in this repository");
+        output_info(
+            out, OUTPUT_NORMAL, "Dotta already initialized in this repository"
+        );
         goto cleanup;
     }
 
@@ -259,12 +261,12 @@ error_t *cmd_init(const cmd_init_options_t *opts) {
     }
 
     /* Success */
-    output_success(out, "Initialized dotta repository in %s", path);
-    output_newline(out);
+    output_success(out, OUTPUT_NORMAL, "Initialized dotta repository in %s", path);
+    output_newline(out, OUTPUT_NORMAL);
 
-    output_hint(out, "Next steps:");
-    output_hint_line(out, "  1. Create a profile: dotta add --profile global ~/.bashrc");
-    output_hint_line(out, "  2. Apply profiles: dotta apply");
+    output_hintline(out, OUTPUT_NORMAL, "Next steps:");
+    output_hintline(out, OUTPUT_NORMAL, "  Create profile: dotta add --profile global ~/.bashrc");
+    output_hintline(out, OUTPUT_NORMAL, "  Apply profiles: dotta apply");
 
 cleanup:
     if (repo) git_repository_free(repo);

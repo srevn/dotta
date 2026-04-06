@@ -914,9 +914,7 @@ error_t *path_resolve_input(
 
         /* Get HOME directory for path classification */
         err = path_get_home(&home);
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
 
         /* Canonicalize HOME to handle symlinks (e.g., /tmp -> /private/tmp on macOS)
          * This ensures consistent comparison with normalized paths.
@@ -1123,9 +1121,7 @@ error_t *path_filter_create(
         /* Store in hashmap (hashmap duplicates key internally) */
         err = hashmap_set(filter->exact_paths, resolved, (void *) 1);
         free(resolved);
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
         filter->count++;
     }
 

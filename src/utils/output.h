@@ -87,6 +87,15 @@ void output_free(output_ctx_t *ctx);
 void output_set_verbosity(output_ctx_t *ctx, output_verbosity_t verbosity);
 
 /**
+ * Check if verbose output is enabled
+ *
+ * NULL-safe: returns false if ctx is NULL.
+ */
+static inline bool output_is_verbose(const output_ctx_t *ctx) {
+    return ctx && ctx->verbosity >= OUTPUT_VERBOSE;
+}
+
+/**
  * Check if colors are enabled for the given context
  */
 bool output_colors_enabled(const output_ctx_t *ctx);
@@ -182,40 +191,57 @@ __attribute__((format(printf, 2, 3)));
 /**
  * Print warning message
  */
-void output_warning(const output_ctx_t *ctx, const char *fmt, ...)
-__attribute__((format(printf, 2, 3)));
+void output_warning(
+    const output_ctx_t *ctx,
+    output_verbosity_t min_level,
+    const char *fmt,
+    ...
+) __attribute__((format(printf, 3, 4)));
 
 /**
  * Print success message
  */
-void output_success(const output_ctx_t *ctx, const char *fmt, ...)
-__attribute__((format(printf, 2, 3)));
+void output_success(
+    const output_ctx_t *ctx,
+    output_verbosity_t min_level,
+    const char *fmt,
+    ...
+) __attribute__((format(printf, 3, 4)));
 
 /**
  * Print info message
  */
-void output_info(const output_ctx_t *ctx, const char *fmt, ...)
-__attribute__((format(printf, 2, 3)));
+void output_info(
+    const output_ctx_t *ctx,
+    output_verbosity_t min_level,
+    const char *fmt,
+    ...
+) __attribute__((format(printf, 3, 4)));
 
 /**
  * Print hint message (always dimmed when colors enabled)
  *
  * Automatically adds "Hint: " prefix and applies DIM styling to the entire
- * message. Supports printf-style formatting. Respects verbosity (requires
- * OUTPUT_NORMAL). Leading whitespace is preserved for indentation support.
+ * message. Supports printf-style formatting. Leading whitespace is preserved
+ * for indentation support.
  *
  * @param ctx Output context
+ * @param min_level Minimum verbosity level
  * @param fmt Printf-style format string
  *
  * Examples:
- *   output_hint(out, "Run 'dotta apply' to deploy files");
+ *   output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy files");
  *   → "Hint: Run 'dotta apply' to deploy files" (entire line dimmed)
  *
- *   output_hint(out, "  Run 'dotta profile fetch %s' first", name);
+ *   output_hint(out, OUTPUT_NORMAL, "  Run 'dotta profile fetch %s' first", name);
  *   → "  Hint: Run 'dotta profile fetch foo' first" (dimmed, indented)
  */
-void output_hint(const output_ctx_t *ctx, const char *fmt, ...)
-__attribute__((format(printf, 2, 3)));
+void output_hint(
+    const output_ctx_t *ctx,
+    output_verbosity_t min_level,
+    const char *fmt,
+    ...
+) __attribute__((format(printf, 3, 4)));
 
 /**
  * Print hint continuation line (no "Hint:" prefix, but still dimmed)
@@ -225,25 +251,33 @@ __attribute__((format(printf, 2, 3)));
  * Leading whitespace is preserved for indentation.
  *
  * @param ctx Output context
+ * @param min_level Minimum verbosity level
  * @param fmt Printf-style format string
  *
  * Example:
- *   output_hint(out, "Create a bootstrap script with:");
- *   output_hint_line(out, "  dotta bootstrap --profile <profile> --edit");
+ *   output_hint(out, OUTPUT_NORMAL, "Create a bootstrap script with:");
+ *   output_hintline(out, OUTPUT_NORMAL, "  dotta bootstrap --profile <profile> --edit");
  *   → Output:
  *   "Hint: Create a bootstrap script with:" (dimmed)
  *   "  dotta bootstrap --profile <profile> --edit" (dimmed)
  */
-void output_hint_line(const output_ctx_t *ctx, const char *fmt, ...)
-__attribute__((format(printf, 2, 3)));
+void output_hintline(
+    const output_ctx_t *ctx,
+    output_verbosity_t min_level,
+    const char *fmt,
+    ...
+) __attribute__((format(printf, 3, 4)));
 
 /**
  * Print newline (respects verbosity)
  *
  * Use this instead of fprintf(out->stream, "\n") for consistent
  * output that respects verbosity settings.
+ *
+ * @param ctx Output context
+ * @param min_level Minimum verbosity level
  */
-void output_newline(const output_ctx_t *ctx);
+void output_newline(const output_ctx_t *ctx, output_verbosity_t min_level);
 
 /**
  * Print section header
@@ -252,12 +286,20 @@ void output_newline(const output_ctx_t *ctx);
  * Automatically adds a leading blank line between sections
  * (tracked via has_content in output context).
  *
+ * @param ctx Output context
+ * @param min_level Minimum verbosity level
+ * @param fmt Printf-style format string
+ *
  * Example:
- *   output_section(out, "First Section");    // no leading blank (first section)
- *   output_section(out, "Second Section");   // automatic blank line before
+ *   output_section(out, OUTPUT_NORMAL, "First Section");
+ *   output_section(out, OUTPUT_NORMAL, "Second Section");
  */
-void output_section(const output_ctx_t *ctx, const char *fmt, ...)
-__attribute__((format(printf, 2, 3)));
+void output_section(
+    const output_ctx_t *ctx,
+    output_verbosity_t min_level,
+    const char *fmt,
+    ...
+) __attribute__((format(printf, 3, 4)));
 
 /**
  * Clear current line and flush (for inline progress)

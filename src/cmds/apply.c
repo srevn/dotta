@@ -38,20 +38,20 @@ static void print_preflight_results(
 
     /* Print conflicts */
     if (result->conflicts && string_array_size(result->conflicts) > 0) {
-        output_section(out, "Conflicts (files modified locally)");
+        output_section(out, OUTPUT_NORMAL, "Conflicts (files modified locally)");
         for (size_t i = 0; i < string_array_size(result->conflicts); i++) {
             output_styled(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n",
                 string_array_get(result->conflicts, i)
             );
         }
-        output_newline(out);
-        output_info(out, "Use --force to overwrite local changes");
+        output_newline(out, OUTPUT_NORMAL);
+        output_info(out, OUTPUT_NORMAL, "Use --force to overwrite local changes");
     }
 
     /* Print permission errors */
     if (result->permission_errors && string_array_size(result->permission_errors) > 0) {
-        output_section(out, "Permission errors");
+        output_section(out, OUTPUT_NORMAL, "Permission errors");
         for (size_t i = 0; i < string_array_size(result->permission_errors); i++) {
             output_styled(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n",
@@ -62,7 +62,7 @@ static void print_preflight_results(
 
     /* Print profile reassignments */
     if (result->reassignments && result->reassignment_count > 0) {
-        output_section(out, "Profile reassignments");
+        output_section(out, OUTPUT_NORMAL, "Profile reassignments");
         for (size_t i = 0; i < result->reassignment_count; i++) {
             const reassignment_t *change = &result->reassignments[i];
             output_styled(
@@ -70,7 +70,10 @@ static void print_preflight_results(
                 change->filesystem_path, change->old_profile, change->new_profile
             );
         }
-        output_info(out, "  These files will now be managed by a different profile.");
+        output_info(
+            out, OUTPUT_NORMAL,
+            "  These files will now be managed by a different profile."
+        );
     }
 }
 
@@ -90,61 +93,57 @@ static void print_preflight_results(
 static void print_deploy_results(
     const output_ctx_t *out,
     const deploy_result_t *result,
-    bool verbose,
     bool dry_run
 ) {
     if (!result) return;
 
     /* Verbose mode: show individual files per category */
-    if (verbose) {
-        /* Deployed files */
-        if (result->deployed && string_array_size(result->deployed) > 0) {
-            output_section(out, dry_run ? "Would deploy" : "Deployed files");
-            for (size_t i = 0; i < string_array_size(result->deployed); i++) {
-                output_styled(
-                    out, OUTPUT_NORMAL, "  {green}✓{reset} %s\n",
-                    string_array_get(result->deployed, i)
-                );
-            }
+    if (result->deployed && string_array_size(result->deployed) > 0) {
+        output_section(out, OUTPUT_VERBOSE, dry_run ? "Would deploy" : "Deployed files");
+        for (size_t i = 0; i < string_array_size(result->deployed); i++) {
+            output_styled(
+                out, OUTPUT_VERBOSE, "  {green}✓{reset} %s\n",
+                string_array_get(result->deployed, i)
+            );
         }
+    }
 
-        /* Adopted files - existing files now managed by dotta */
-        if (result->adopted && string_array_size(result->adopted) > 0) {
-            output_section(out, dry_run ? "Would adopt" : "Adopted files");
-            for (size_t i = 0; i < string_array_size(result->adopted); i++) {
-                output_styled(
-                    out, OUTPUT_NORMAL, "  {yellow}⊕{reset} %s\n",
-                    string_array_get(result->adopted, i)
-                );
-            }
+    /* Adopted files - existing files now managed by dotta */
+    if (result->adopted && string_array_size(result->adopted) > 0) {
+        output_section(out, OUTPUT_VERBOSE, dry_run ? "Would adopt" : "Adopted files");
+        for (size_t i = 0; i < string_array_size(result->adopted); i++) {
+            output_styled(
+                out, OUTPUT_VERBOSE, "  {yellow}⊕{reset} %s\n",
+                string_array_get(result->adopted, i)
+            );
         }
+    }
 
-        /* Unchanged files - already tracked, still correct */
-        if (result->unchanged && string_array_size(result->unchanged) > 0) {
-            output_section(out, "Unchanged files");
-            for (size_t i = 0; i < string_array_size(result->unchanged); i++) {
-                output_styled(
-                    out, OUTPUT_NORMAL, "  {cyan}⊘{reset} %s\n",
-                    string_array_get(result->unchanged, i)
-                );
-            }
+    /* Unchanged files - already tracked, still correct */
+    if (result->unchanged && string_array_size(result->unchanged) > 0) {
+        output_section(out, OUTPUT_VERBOSE, "Unchanged files");
+        for (size_t i = 0; i < string_array_size(result->unchanged); i++) {
+            output_styled(
+                out, OUTPUT_VERBOSE, "  {cyan}⊘{reset} %s\n",
+                string_array_get(result->unchanged, i)
+            );
         }
+    }
 
-        /* Skipped files (--skip-existing) */
-        if (result->skipped_existing && string_array_size(result->skipped_existing) > 0) {
-            output_section(out, "Skipped files (--skip-existing)");
-            for (size_t i = 0; i < string_array_size(result->skipped_existing); i++) {
-                output_styled(
-                    out, OUTPUT_NORMAL, "  {cyan}⊘{reset} %s\n",
-                    string_array_get(result->skipped_existing, i)
-                );
-            }
+    /* Skipped files (--skip-existing) */
+    if (result->skipped_existing && string_array_size(result->skipped_existing) > 0) {
+        output_section(out, OUTPUT_VERBOSE, "Skipped files (--skip-existing)");
+        for (size_t i = 0; i < string_array_size(result->skipped_existing); i++) {
+            output_styled(
+                out, OUTPUT_VERBOSE, "  {cyan}⊘{reset} %s\n",
+                string_array_get(result->skipped_existing, i)
+            );
         }
     }
 
     /* Failed files (always shown, regardless of verbose) */
     if (result->failed && string_array_size(result->failed) > 0) {
-        output_section(out, "Failed to deploy");
+        output_section(out, OUTPUT_NORMAL, "Failed to deploy");
         for (size_t i = 0; i < string_array_size(result->failed); i++) {
             output_styled(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n",
@@ -152,13 +151,13 @@ static void print_deploy_results(
             );
         }
         if (result->error_message) {
-            output_newline(out);
+            output_newline(out, OUTPUT_NORMAL);
             output_error(out, "%s", result->error_message);
         }
     }
 
     /* Non-verbose: summary counts only */
-    if (!verbose) {
+    if (!output_is_verbose(out)) {
         /* Deployed count */
         if (result->deployed_count > 0) {
             output_styled(
@@ -228,10 +227,12 @@ static void print_safety_violations(
 
     /* Display blocking violations (modified, type changed, etc.) */
     if (blocking_count > 0) {
-        output_section(out, "Modified orphaned files detected");
-        output_newline(out);
+        output_section(out, OUTPUT_NORMAL, "Modified orphaned files detected");
+        output_newline(out, OUTPUT_NORMAL);
 
-        output_warning(out, "The following files cannot be safely removed:");
+        output_warning(
+            out, OUTPUT_NORMAL, "The following files cannot be safely removed:"
+        );
 
         /* Get first blocking violation's profile for example commands */
         const char *example_profile = NULL;
@@ -280,42 +281,35 @@ static void print_safety_violations(
             } else {
                 output_colored(out, OUTPUT_NORMAL, reason, "(%s)\n", reason_display);
             }
-
-            if (v->storage_path) {
-                output_styled(
-                    out, OUTPUT_NORMAL, "      {dim}storage: %s{reset}\n",
-                    v->storage_path
-                );
-            }
         }
-        output_newline(out);
 
-        output_info(out, "These files have uncommitted changes that would be lost.");
-        output_info(out, "To prevent data loss, commit changes before removing:");
-        output_newline(out);
+        output_newline(out, OUTPUT_NORMAL);
+        output_info(out, OUTPUT_NORMAL, "Uncommitted changes would be lost.");
+        output_newline(out, OUTPUT_NORMAL);
 
-        output_hint(out, "Options:");
-        output_hint_line(out, "  1. Commit changes to the profile:");
+        output_hintline(out, OUTPUT_NORMAL, "Options:");
+        output_hintline(out, OUTPUT_NORMAL, "  1. Commit changes to the profile:");
         if (example_profile) {
-            output_hint_line(out, "     dotta update -p %s <files>", example_profile);
-            output_hint_line(out, "     dotta apply");
+            output_hintline(out, OUTPUT_NORMAL, "     dotta update -p %s <files>", example_profile);
+            output_hintline(out, OUTPUT_NORMAL, "     dotta apply");
         } else {
-            output_hint_line(out, "     dotta update <files>");
-            output_hint_line(out, "     dotta apply");
+            output_hintline(out, OUTPUT_NORMAL, "     dotta update <files>");
+            output_hintline(out, OUTPUT_NORMAL, "     dotta apply");
         }
-        output_hint_line(out, "  2. Force removal (discards changes):");
-        output_hint_line(out, "         dotta apply --force");
-        output_hint_line(out, "  3. Keep the profile enabled:");
+        output_hintline(out, OUTPUT_NORMAL, "  2. Force removal (discards changes):");
+        output_hintline(out, OUTPUT_NORMAL, "         dotta apply --force");
+        output_hintline(out, OUTPUT_NORMAL, "  3. Keep the profile enabled:");
         if (example_profile) {
-            output_hint_line(out, "     dotta profile enable %s", example_profile);
+            output_hintline(out, OUTPUT_NORMAL, "     dotta profile enable %s", example_profile);
+        } else {
+            output_hintline(out, OUTPUT_NORMAL, "     dotta profile enable <profile>");
         }
     }
 
     /* Display released files (informational, non-blocking) */
     if (released_count > 0) {
-        output_section(out, "Released files");
-
-        output_info(out, "The following files were removed from Git externally:");
+        output_section(out, OUTPUT_NORMAL, "Released files");
+        output_info(out, OUTPUT_NORMAL, "The following files were removed from Git externally:");
 
         for (size_t i = 0; i < safety_result->count; i++) {
             const safety_violation_t *v = &safety_result->violations[i];
@@ -328,11 +322,12 @@ static void print_safety_violations(
             if (v->source_profile) {
                 output_styled(out, OUTPUT_NORMAL, " {dim}(from %s){reset}", v->source_profile);
             }
-            output_newline(out);
+            output_newline(out, OUTPUT_NORMAL);
         }
 
         output_info(
-            out, "These files will be left on the filesystem and released from management."
+            out, OUTPUT_NORMAL,
+            "These files will be left on the filesystem and released from management."
         );
     }
 }
@@ -342,12 +337,9 @@ static void print_safety_violations(
  */
 static void print_cleanup_results(
     const output_ctx_t *out,
-    const cleanup_result_t *result,
-    bool verbose
+    const cleanup_result_t *result
 ) {
-    if (!result) {
-        return;
-    }
+    if (!result) return;
 
     /* Display safety violations first (most important) */
     if (result->safety_violations) {
@@ -355,79 +347,79 @@ static void print_cleanup_results(
     }
 
     /* Display orphaned files */
-    if (verbose && result->removed_files && string_array_size(result->removed_files) > 0) {
-        output_section(out, "Pruned orphaned files");
+    if (result->removed_files && string_array_size(result->removed_files) > 0) {
+        output_section(out, OUTPUT_VERBOSE, "Pruned orphaned files");
         for (size_t i = 0; i < string_array_size(result->removed_files); i++) {
             output_styled(
-                out, OUTPUT_NORMAL, "  {green}[removed]{reset} %s\n",
+                out, OUTPUT_VERBOSE, "  {green}[removed]{reset} %s\n",
                 string_array_get(result->removed_files, i)
             );
         }
     }
 
-    if (verbose && result->skipped_files && string_array_size(result->skipped_files) > 0) {
-        output_section(out, "Skipped orphaned files");
+    if (result->skipped_files && string_array_size(result->skipped_files) > 0) {
+        output_section(out, OUTPUT_VERBOSE, "Skipped orphaned files");
         for (size_t i = 0; i < string_array_size(result->skipped_files); i++) {
             output_styled(
-                out, OUTPUT_NORMAL, "  {yellow}[skipped]{reset} %s (safety violation)\n",
+                out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s (safety violation)\n",
                 string_array_get(result->skipped_files, i)
             );
         }
     }
 
-    if (verbose && result->released_files && string_array_size(result->released_files) > 0) {
-        output_section(out, "Released files (removed from Git externally)");
+    if (result->released_files && string_array_size(result->released_files) > 0) {
+        output_section(out, OUTPUT_VERBOSE, "Released files (removed from Git externally)");
         for (size_t i = 0; i < string_array_size(result->released_files); i++) {
             output_styled(
-                out, OUTPUT_NORMAL, "  {cyan}[released]{reset} %s\n",
+                out, OUTPUT_VERBOSE, "  {cyan}[released]{reset} %s\n",
                 string_array_get(result->released_files, i)
             );
         }
     }
 
-    if (verbose && result->failed_files && string_array_size(result->failed_files) > 0) {
-        output_section(out, "Failed to remove orphaned files");
+    if (result->failed_files && string_array_size(result->failed_files) > 0) {
+        output_section(out, OUTPUT_VERBOSE, "Failed to remove orphaned files");
         for (size_t i = 0; i < string_array_size(result->failed_files); i++) {
             output_styled(
-                out, OUTPUT_NORMAL, "  {red}[fail]{reset} %s\n",
+                out, OUTPUT_VERBOSE, "  {red}[fail]{reset} %s\n",
                 string_array_get(result->failed_files, i)
             );
         }
     }
 
     /* Display empty directories */
-    if (verbose && result->removed_dirs && string_array_size(result->removed_dirs) > 0) {
-        output_section(out, "Pruned empty tracked directories");
+    if (result->removed_dirs && string_array_size(result->removed_dirs) > 0) {
+        output_section(out, OUTPUT_VERBOSE, "Pruned empty tracked directories");
         for (size_t i = 0; i < string_array_size(result->removed_dirs); i++) {
             output_styled(
-                out, OUTPUT_NORMAL, "  {green}[removed]{reset} %s\n",
+                out, OUTPUT_VERBOSE, "  {green}[removed]{reset} %s\n",
                 string_array_get(result->removed_dirs, i)
             );
         }
     }
 
-    if (verbose && result->skipped_dirs && string_array_size(result->skipped_dirs) > 0) {
-        output_section(out, "Skipped directories (not empty)");
+    if (result->skipped_dirs && string_array_size(result->skipped_dirs) > 0) {
+        output_section(out, OUTPUT_VERBOSE, "Skipped directories (not empty)");
         for (size_t i = 0; i < string_array_size(result->skipped_dirs); i++) {
             output_styled(
-                out, OUTPUT_NORMAL, "  {yellow}[skipped]{reset} %s\n",
+                out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
                 string_array_get(result->skipped_dirs, i)
             );
         }
     }
 
-    if (verbose && result->failed_dirs && string_array_size(result->failed_dirs) > 0) {
-        output_section(out, "Failed to remove empty directories");
+    if (result->failed_dirs && string_array_size(result->failed_dirs) > 0) {
+        output_section(out, OUTPUT_VERBOSE, "Failed to remove empty directories");
         for (size_t i = 0; i < string_array_size(result->failed_dirs); i++) {
             output_styled(
-                out, OUTPUT_NORMAL, "  {red}[fail]{reset} %s\n",
+                out, OUTPUT_VERBOSE, "  {red}[fail]{reset} %s\n",
                 string_array_get(result->failed_dirs, i)
             );
         }
     }
 
     /* Print summaries if not verbose */
-    if (!verbose) {
+    if (!output_is_verbose(out)) {
         if (result->orphaned_files_removed > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned file%s\n",
@@ -454,39 +446,36 @@ static void print_cleanup_results(
 
         if (result->orphaned_files_skipped > 0) {
             output_warning(
-                out, "Skipped %zu orphaned file%s (uncommitted changes)",
+                out, OUTPUT_NORMAL, "Skipped %zu orphaned file%s (uncommitted changes)",
                 result->orphaned_files_skipped,
                 result->orphaned_files_skipped == 1 ? "" : "s"
             );
-            output_print(
-                out, OUTPUT_NORMAL,
-                "Use --verbose to see which files were skipped.\n"
+            output_info(
+                out, OUTPUT_NORMAL, "Use --verbose to see which files were skipped."
             );
-            output_print(
-                out, OUTPUT_NORMAL,
-                "To remove: commit/stash changes, or use --force.\n"
+            output_info(
+                out, OUTPUT_NORMAL, "To remove: commit/stash changes, or use --force."
             );
         }
 
         if (result->orphaned_directories_skipped > 0) {
             output_info(
-                out, "Skipped %zu orphaned director%s (not empty)",
+                out, OUTPUT_NORMAL, "Skipped %zu orphaned director%s (not empty)",
                 result->orphaned_directories_skipped,
                 result->orphaned_directories_skipped == 1 ? "y" : "ies"
             );
-            output_print(
+            output_info(
                 out, OUTPUT_NORMAL,
-                "Use --verbose to see which directories were skipped.\n"
+                "Use --verbose to see which directories were skipped."
             );
         }
 
         if (result->orphaned_files_failed > 0 || result->orphaned_directories_failed > 0) {
-
             size_t total_failed =
                 result->orphaned_files_failed + result->orphaned_directories_failed;
 
             output_warning(
-                out, "Failed to prune %zu item%s",
+                out, OUTPUT_NORMAL, "Failed to prune %zu item%s",
                 total_failed, total_failed == 1 ? "" : "s"
             );
         }
@@ -501,20 +490,15 @@ static void print_cleanup_results(
  */
 static void print_cleanup_preflight_results(
     const output_ctx_t *out,
-    const cleanup_preflight_result_t *result,
-    bool verbose
+    const cleanup_preflight_result_t *result
 ) {
-    if (!result) {
-        return;
-    }
+    if (!result) return;
 
     /* Case 1: No orphans and no directories - nothing to display */
     if (!result->will_prune_orphans && !result->will_prune_directories) {
-        if (verbose) {
-            output_print(
-                out, OUTPUT_VERBOSE, "No orphaned files or directories to prune\n"
-            );
-        }
+        output_print(
+            out, OUTPUT_VERBOSE, "No orphaned files or directories to prune\n"
+        );
         return;
     }
 
@@ -525,7 +509,7 @@ static void print_cleanup_preflight_results(
      * count must exclude them to avoid misleading the user.
      */
     if (result->will_prune_orphans) {
-        output_section(out, "Orphaned files");
+        output_section(out, OUTPUT_NORMAL, "Orphaned files");
 
         /* Count released files from safety violations */
         size_t released_count = 0;
@@ -558,14 +542,14 @@ static void print_cleanup_preflight_results(
         }
 
         /* Show individual paths in verbose mode */
-        if (verbose && result->orphaned_files && result->orphaned_files_count > 0) {
+        if (result->orphaned_files && result->orphaned_files_count > 0) {
             size_t display_limit = 20;  /* Don't flood the terminal */
             size_t display_count = result->orphaned_files_count < display_limit
                                  ? result->orphaned_files_count : display_limit;
 
             for (size_t i = 0; i < display_count; i++) {
                 output_styled(
-                    out, OUTPUT_NORMAL, "    {cyan}•{reset} %s\n",
+                    out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
                     string_array_get(result->orphaned_files, i)
                 );
             }
@@ -573,7 +557,7 @@ static void print_cleanup_preflight_results(
             if (result->orphaned_files_count > display_limit) {
                 size_t remaining = result->orphaned_files_count - display_limit;
                 output_print(
-                    out, OUTPUT_NORMAL, "    ... and %zu more\n",
+                    out, OUTPUT_VERBOSE, "    ... and %zu more\n",
                     remaining
                 );
             }
@@ -586,11 +570,11 @@ static void print_cleanup_preflight_results(
     }
 
     /* Case 4: Empty directories - only in verbose mode */
-    if (verbose && result->will_prune_directories) {
-        output_section(out, "Empty directories");
+    if (result->will_prune_directories) {
+        output_section(out, OUTPUT_VERBOSE, "Empty directories");
 
         output_styled(
-            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} orphaned director%s will be pruned\n",
+            out, OUTPUT_VERBOSE, "  {cyan}%zu{reset} orphaned director%s will be pruned\n",
             result->orphaned_directories_count,
             result->orphaned_directories_count == 1 ? "y" : "ies"
         );
@@ -599,14 +583,14 @@ static void print_cleanup_preflight_results(
         if (result->orphaned_directories && result->orphaned_directories_count <= 10) {
             for (size_t i = 0; i < result->orphaned_directories_count; i++) {
                 output_print(
-                    out, OUTPUT_NORMAL, "    • %s\n",
+                    out, OUTPUT_VERBOSE, "    • %s\n",
                     string_array_get(result->orphaned_directories, i)
                 );
             }
         }
     }
 
-    output_newline(out);
+    output_newline(out, OUTPUT_NORMAL);
 }
 
 /**
@@ -710,6 +694,7 @@ static error_t *ensure_complete_apply_privileges(
     }
 
     string_array_free(root_paths);
+
     return err;
 }
 
@@ -888,9 +873,7 @@ error_t *cmd_apply(
     /* Get repository directory for hooks */
     if (config) {
         err = config_get_repo_dir(config, &repo_dir);
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
     }
 
     /* Load state (with locking for write transaction) */
@@ -934,14 +917,14 @@ error_t *cmd_apply(
 
         if (repair_stats.updated > 0 || repair_stats.released > 0) {
             output_info(
-                out, "Synchronized %zu file%s, released %zu from management",
+                out, OUTPUT_NORMAL, "Synchronized %zu file%s, released %zu from management",
                 repair_stats.updated, repair_stats.updated == 1 ? "" : "s",
                 repair_stats.released
             );
         }
         if (repair_stats.reassigned > 0) {
             output_info(
-                out, "Detected %zu profile reassignment%s from external changes",
+                out, OUTPUT_NORMAL, "Detected %zu profile reassignment%s from external changes",
                 repair_stats.reassigned, repair_stats.reassigned == 1 ? "" : "s"
             );
         }
@@ -960,9 +943,7 @@ error_t *cmd_apply(
     output_print(out, OUTPUT_VERBOSE, "Loading profiles...\n");
 
     /* Phase 1: Load workspace profiles (ALWAYS persistent, ignore CLI overrides) */
-    err = profile_resolve_for_workspace(
-        repo, config->strict_mode, &workspace_profiles
-    );
+    err = profile_resolve_for_workspace(repo, config->strict_mode, &workspace_profiles);
     if (err) {
         err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
@@ -990,25 +971,21 @@ error_t *cmd_apply(
 
         /* Validate: filter profiles must be enabled in workspace */
         err = profile_validate_filter(workspace_profiles, operation_profiles);
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
     } else {
         /* No CLI filter - share workspace profiles */
         operation_profiles = workspace_profiles;
     }
 
-    if (opts->verbose) {
-        output_print(
-            out, OUTPUT_VERBOSE, "Using %zu profile%s:\n",
-            operation_profiles->count, operation_profiles->count == 1 ? "" : "s"
+    output_print(
+        out, OUTPUT_VERBOSE, "Using %zu profile%s:\n",
+        operation_profiles->count, operation_profiles->count == 1 ? "" : "s"
+    );
+    for (size_t i = 0; i < operation_profiles->count; i++) {
+        output_styled(
+            out, OUTPUT_VERBOSE, "  {cyan}•{reset} %s\n",
+            operation_profiles->profiles[i].name
         );
-        for (size_t i = 0; i < operation_profiles->count; i++) {
-            output_styled(
-                out, OUTPUT_NORMAL, "  {cyan}•{reset} %s\n",
-                operation_profiles->profiles[i].name
-            );
-        }
     }
 
     /* Explicit profile filter detection (Coherent Scope)
@@ -1045,8 +1022,8 @@ error_t *cmd_apply(
         }
 
         err = path_filter_create(
-            (const char **) opts->files, opts->file_count,
-            custom_prefixes, prefix_count, &file_filter
+            (const char **) opts->files, opts->file_count, custom_prefixes,
+            prefix_count, &file_filter
         );
         free(custom_prefixes);  /* Array only, strings are borrowed from profiles */
 
@@ -1055,7 +1032,7 @@ error_t *cmd_apply(
             goto cleanup;
         }
 
-        if (opts->verbose && file_filter) {
+        if (file_filter) {
             output_print(
                 out, OUTPUT_VERBOSE, "\nFile filter: %zu file%s specified\n",
                 file_filter->count, file_filter->count == 1 ? "" : "s"
@@ -1108,12 +1085,10 @@ error_t *cmd_apply(
         goto cleanup;
     }
 
-    if (opts->verbose) {
-        output_print(
-            out, OUTPUT_VERBOSE, "Workspace loaded: %zu file%s in manifest\n",
-            manifest->count, manifest->count == 1 ? "" : "s"
-        );
-    }
+    output_print(
+        out, OUTPUT_VERBOSE, "Workspace loaded: %zu file%s in manifest\n",
+        manifest->count, manifest->count == 1 ? "" : "s"
+    );
 
     /* CONVERGENCE MODEL: Analyze files for divergence and build deployment list
      *
@@ -1207,12 +1182,10 @@ error_t *cmd_apply(
             /* Filter by exclusion pattern (skip excluded files) */
             if (matches_exclude_pattern(entry->storage_path, opts)) {
                 /* Already counted in Pass 1, just skip */
-                if (opts->verbose) {
-                    output_print(
-                        out, OUTPUT_VERBOSE, "  Skipping (excluded): %s\n",
-                        entry->filesystem_path
-                    );
-                }
+                output_print(
+                    out, OUTPUT_VERBOSE, "  Skipping (excluded): %s\n",
+                    entry->filesystem_path
+                );
                 continue;
             }
 
@@ -1249,21 +1222,19 @@ error_t *cmd_apply(
         deploy_manifest->entries = NULL;
     }
 
-    if (opts->verbose) {
-        output_print(
-            out, OUTPUT_VERBOSE, "  %zu file%s need deployment (missing or divergent)\n",
-            deploy_manifest->count, deploy_manifest->count == 1 ? "" : "s"
-        );
-        output_print(
-            out, OUTPUT_VERBOSE, "  %zu file%s already up-to-date (skipped)\n",
-            clean_count, clean_count == 1 ? "" : "s"
-        );
-    }
+    output_print(
+        out, OUTPUT_VERBOSE, "  %zu file%s need deployment (missing or divergent)\n",
+        deploy_manifest->count, deploy_manifest->count == 1 ? "" : "s"
+    );
+    output_print(
+        out, OUTPUT_VERBOSE, "  %zu file%s already up-to-date (skipped)\n",
+        clean_count, clean_count == 1 ? "" : "s"
+    );
 
     /* Warn if file filter was specified but no files matched */
     if (file_filter && deploy_manifest->count == 0 && clean_count == 0) {
-        output_warning(out, "No matching files found in enabled profiles");
-        output_hint(out, "Check if the file path is correct and profile is enabled");
+        output_warning(out, OUTPUT_NORMAL, "No matching files found in enabled profiles");
+        output_hint(out, OUTPUT_NORMAL, "Check if the file path is correct and profile is enabled");
     }
 
     /* Extract orphans from workspace (unless --keep-orphans or file filter active)
@@ -1330,12 +1301,10 @@ error_t *cmd_apply(
             for (size_t i = 0; i < total_file_orphans; i++) {
                 if (matches_exclude_pattern(all_file_orphans[i]->storage_path, opts)) {
                     excluded_orphan_count++;
-                    if (opts->verbose) {
-                        output_print(
-                            out, OUTPUT_VERBOSE, "  Preserving orphan (excluded): %s\n",
-                            all_file_orphans[i]->filesystem_path
-                        );
-                    }
+                    output_print(
+                        out, OUTPUT_VERBOSE, "  Preserving orphan (excluded): %s\n",
+                        all_file_orphans[i]->filesystem_path
+                    );
                 } else {
                     all_file_orphans[f_idx++] = all_file_orphans[i];
                 }
@@ -1346,12 +1315,10 @@ error_t *cmd_apply(
             for (size_t i = 0; i < total_dir_orphans; i++) {
                 if (matches_exclude_pattern(all_dir_orphans[i]->storage_path, opts)) {
                     excluded_orphan_count++;
-                    if (opts->verbose) {
-                        output_print(
-                            out, OUTPUT_VERBOSE, "  Preserving orphan (excluded): %s\n",
-                            all_dir_orphans[i]->filesystem_path
-                        );
-                    }
+                    output_print(
+                        out, OUTPUT_VERBOSE, "  Preserving orphan (excluded): %s\n",
+                        all_dir_orphans[i]->filesystem_path
+                    );
                 } else {
                     all_dir_orphans[d_idx++] = all_dir_orphans[i];
                 }
@@ -1365,53 +1332,51 @@ error_t *cmd_apply(
         dir_orphans = all_dir_orphans;
         dir_orphan_count = total_dir_orphans;
 
-        if (opts->verbose) {
-            if (file_orphan_count > 0) {
+        if (file_orphan_count > 0) {
+            output_print(
+                out, OUTPUT_VERBOSE, "Found %zu orphaned file%s\n",
+                file_orphan_count, file_orphan_count == 1 ? "" : "s"
+            );
+        }
+        if (dir_orphan_count > 0) {
+            output_print(
+                out, OUTPUT_VERBOSE, "Found %zu orphaned director%s\n",
+                dir_orphan_count, dir_orphan_count == 1 ? "y" : "ies"
+            );
+        }
+
+        /* Show breakdown by profile status */
+        if (file_orphan_count > 0 || dir_orphan_count > 0) {
+            size_t disabled_count = 0;
+            size_t enabled_count = 0;
+
+            /* Count using already-extracted orphan arrays */
+            for (size_t i = 0; i < file_orphan_count; i++) {
+                if (file_orphans[i]->profile_enabled) {
+                    enabled_count++;
+                } else {
+                    disabled_count++;
+                }
+            }
+            for (size_t i = 0; i < dir_orphan_count; i++) {
+                if (dir_orphans[i]->profile_enabled) {
+                    enabled_count++;
+                } else {
+                    disabled_count++;
+                }
+            }
+
+            if (disabled_count > 0) {
                 output_print(
-                    out, OUTPUT_VERBOSE, "Found %zu orphaned file%s\n",
-                    file_orphan_count, file_orphan_count == 1 ? "" : "s"
+                    out, OUTPUT_VERBOSE, "  %zu from disabled profile%s\n",
+                    disabled_count, disabled_count == 1 ? "" : "s"
                 );
             }
-            if (dir_orphan_count > 0) {
+            if (enabled_count > 0) {
                 output_print(
-                    out, OUTPUT_VERBOSE, "Found %zu orphaned director%s\n",
-                    dir_orphan_count, dir_orphan_count == 1 ? "y" : "ies"
+                    out, OUTPUT_VERBOSE, "  %zu from enabled profiles (deleted from Git)\n",
+                    enabled_count
                 );
-            }
-
-            /* Show breakdown by profile status */
-            if (file_orphan_count > 0 || dir_orphan_count > 0) {
-                size_t disabled_count = 0;
-                size_t enabled_count = 0;
-
-                /* Count using already-extracted orphan arrays */
-                for (size_t i = 0; i < file_orphan_count; i++) {
-                    if (file_orphans[i]->profile_enabled) {
-                        enabled_count++;
-                    } else {
-                        disabled_count++;
-                    }
-                }
-                for (size_t i = 0; i < dir_orphan_count; i++) {
-                    if (dir_orphans[i]->profile_enabled) {
-                        enabled_count++;
-                    } else {
-                        disabled_count++;
-                    }
-                }
-
-                if (disabled_count > 0) {
-                    output_print(
-                        out, OUTPUT_VERBOSE, "  %zu from disabled profile%s\n",
-                        disabled_count, disabled_count == 1 ? "" : "s"
-                    );
-                }
-                if (enabled_count > 0) {
-                    output_print(
-                        out, OUTPUT_VERBOSE, "  %zu from enabled profiles (deleted from Git)\n",
-                        enabled_count
-                    );
-                }
             }
         }
     } else if (file_filter != NULL && !opts->keep_orphans) {
@@ -1467,11 +1432,11 @@ error_t *cmd_apply(
         size_t total_excluded = excluded_deploy_count + excluded_orphan_count;
         if (total_excluded > 0) {
             output_info(
-                out, "Nothing to deploy (%zu file%s excluded by --exclude)",
+                out, OUTPUT_NORMAL, "Nothing to deploy (%zu file%s excluded by --exclude)",
                 total_excluded, total_excluded == 1 ? "" : "s"
             );
         } else {
-            output_info(out, "Nothing to deploy (workspace is clean)");
+            output_info(out, OUTPUT_NORMAL, "Nothing to deploy (workspace is clean)");
         }
 
         /* Commit transaction to persist stat cache updates from workspace flush */
@@ -1512,7 +1477,7 @@ error_t *cmd_apply(
                 error_t *clear_err = state_clear_old_profile(state, all_items[i].filesystem_path);
                 if (clear_err) {
                     output_warning(
-                        out, "Failed to clear profile reassignment flag for %s: %s",
+                        out, OUTPUT_NORMAL, "Failed to clear profile reassignment flag for %s: %s",
                         all_items[i].filesystem_path, error_message(clear_err)
                     );
                     error_free(clear_err);
@@ -1523,7 +1488,7 @@ error_t *cmd_apply(
 
             if (cleared > 0) {
                 output_info(
-                    out, "Acknowledged %zu profile reassignment%s",
+                    out, OUTPUT_NORMAL, "Acknowledged %zu profile reassignment%s",
                     cleared, cleared == 1 ? "" : "s"
                 );
             }
@@ -1535,7 +1500,7 @@ error_t *cmd_apply(
             }
         } else {
             output_info(
-                out, "Would acknowledge %zu profile reassignment%s (dry-run)",
+                out, OUTPUT_NORMAL, "Would acknowledge %zu profile reassignment%s (dry-run)",
                 acknowledged_count, acknowledged_count == 1 ? "" : "s"
             );
         }
@@ -1604,9 +1569,7 @@ error_t *cmd_apply(
         .profile_scope    = has_profile_filter ? operation_profiles : NULL
     };
 
-    err = deploy_workspace_preflight(
-        ws, deploy_manifest, &deploy_opts, &preflight
-    );
+    err = deploy_workspace_preflight(ws, deploy_manifest, &deploy_opts, &preflight);
     if (err) {
         err = error_wrap(err, "Pre-flight checks failed");
         goto cleanup;
@@ -1646,7 +1609,7 @@ error_t *cmd_apply(
         }
 
         /* Display cleanup preflight results */
-        print_cleanup_preflight_results(out, cleanup_preflight, opts->verbose);
+        print_cleanup_preflight_results(out, cleanup_preflight);
 
         /* Warn about safety violations but allow partial cleanup
          *
@@ -1676,7 +1639,7 @@ error_t *cmd_apply(
             }
 
             output_warning(
-                out, "%zu orphaned file%s %s uncommitted changes.",
+                out, OUTPUT_NORMAL, "%zu orphaned file%s %s uncommitted changes.",
                 blocking_violation_count,
                 blocking_violation_count == 1 ? "" : "s",
                 blocking_violation_count == 1 ? "has" : "have"
@@ -1789,7 +1752,7 @@ error_t *cmd_apply(
         }
 
         if (!output_confirm(out, prompt, false)) {
-            output_info(out, "Cancelled");
+            output_info(out, OUTPUT_NORMAL, "Cancelled");
             err = NULL;  /* Not an error - user cancelled */
             goto cleanup;
         }
@@ -1813,7 +1776,7 @@ error_t *cmd_apply(
         );
         if (err) {
             if (deploy_res) {
-                print_deploy_results(out, deploy_res, opts->verbose, opts->dry_run);
+                print_deploy_results(out, deploy_res, opts->dry_run);
             }
             /* Free deploy_manifest before error exit */
             free(deploy_manifest->entries);
@@ -1823,7 +1786,7 @@ error_t *cmd_apply(
             goto cleanup;
         }
 
-        print_deploy_results(out, deploy_res, opts->verbose, opts->dry_run);
+        print_deploy_results(out, deploy_res, opts->dry_run);
 
         /* Free deploy_manifest after successful deployment */
         free(deploy_manifest->entries);
@@ -1848,21 +1811,21 @@ error_t *cmd_apply(
     /* Report exclusion statistics (shown regardless of deployment activity) */
     size_t total_excluded = excluded_deploy_count + excluded_orphan_count;
     if (total_excluded > 0) {
-        if (opts->verbose) {
+        if (output_is_verbose(out)) {
             /* Detailed breakdown */
             output_print(
-                out, OUTPUT_NORMAL, "Skipped %zu file%s (--exclude patterns):\n",
+                out, OUTPUT_VERBOSE, "Skipped %zu file%s (--exclude patterns):\n",
                 total_excluded, total_excluded == 1 ? "" : "s"
             );
             if (excluded_deploy_count > 0) {
                 output_print(
-                    out, OUTPUT_NORMAL, "  • %zu divergent file%s not deployed\n",
+                    out, OUTPUT_VERBOSE, "  • %zu divergent file%s not deployed\n",
                     excluded_deploy_count, excluded_deploy_count == 1 ? "" : "s"
                 );
             }
             if (excluded_orphan_count > 0) {
                 output_print(
-                    out, OUTPUT_NORMAL, "  • %zu orphaned file%s not removed\n",
+                    out, OUTPUT_VERBOSE, "  • %zu orphaned file%s not removed\n",
                     excluded_orphan_count, excluded_orphan_count == 1 ? "" : "s"
                 );
             }
@@ -1921,11 +1884,11 @@ error_t *cmd_apply(
                 .orphaned_directories       = dir_orphans,  /* Workspace item array */
                 .orphaned_directories_count = dir_orphan_count,
                 .preflight_violations       = interactive_delay
-                    ? NULL                                /* Stale - force fresh safety check */
+                    ? NULL                                  /* Stale - force fresh safety check */
                     : (cleanup_preflight ? cleanup_preflight->safety_violations : NULL),
-                .dry_run                    = false,      /* Dry-run handled at deployment level */
+                .dry_run                    = false,        /* Dry-run handled at deployment level */
                 .force                      = opts->force,
-                .skip_safety_check          = false       /* Run safety when preflight_violations is NULL */
+                .skip_safety_check          = false         /* Run safety when preflight_violations is NULL */
             };
 
             /* Execute cleanup (non-fatal - deployment already succeeded)
@@ -1958,13 +1921,13 @@ error_t *cmd_apply(
                  * - User sees confusing [undeployed] status on working files
                  */
                 output_warning(
-                    out, "Deployment successful, but orphan cleanup failed: %s",
+                    out, OUTPUT_NORMAL, "Deployment successful, but orphan cleanup failed: %s",
                     error_message(cleanup_err)
                 );
 
                 /* Display partial results if available (cleanup_res may be partial or NULL) */
                 if (cleanup_res) {
-                    print_cleanup_results(out, cleanup_res, opts->verbose);
+                    print_cleanup_results(out, cleanup_res);
                 }
 
                 error_free(cleanup_err);
@@ -1972,7 +1935,7 @@ error_t *cmd_apply(
             } else {
                 /* Cleanup succeeded - display results */
                 if (cleanup_res) {
-                    print_cleanup_results(out, cleanup_res, opts->verbose);
+                    print_cleanup_results(out, cleanup_res);
                 }
             }
 
@@ -2014,7 +1977,7 @@ error_t *cmd_apply(
                          * State cleanup failure is a warning, not a fatal error.
                          */
                         output_warning(
-                            out, "Failed to remove state entry for %s: %s",
+                            out, OUTPUT_NORMAL, "Failed to remove state entry for %s: %s",
                             path, error_message(err)
                         );
                         error_free(err);
@@ -2057,7 +2020,7 @@ error_t *cmd_apply(
                     if (err) {
                         /* Non-fatal - file is safe on filesystem */
                         output_warning(
-                            out, "Failed to release state entry for %s: %s",
+                            out, OUTPUT_NORMAL, "Failed to release state entry for %s: %s",
                             path, error_message(err)
                         );
                         error_free(err);
@@ -2116,7 +2079,7 @@ error_t *cmd_apply(
                          * State cleanup failure is a warning, not a fatal error.
                          */
                         output_warning(
-                            out, "Failed to remove directory state entry for %s: %s",
+                            out, OUTPUT_NORMAL, "Failed to remove directory state entry for %s: %s",
                             path, error_message(err)
                         );
                         error_free(err);
@@ -2177,7 +2140,7 @@ error_t *cmd_apply(
                      * Failure here should not abort the entire operation.
                      */
                     output_warning(
-                        out, "Failed to update timestamp for %s: %s",
+                        out, OUTPUT_NORMAL, "Failed to update timestamp for %s: %s",
                         path, error_message(err)
                     );
                     error_free(err);
@@ -2222,7 +2185,7 @@ error_t *cmd_apply(
                      * with correct content) is true regardless of database state.
                      */
                     output_warning(
-                        out, "Failed to record adoption for %s: %s",
+                        out, OUTPUT_NORMAL, "Failed to record adoption for %s: %s",
                         path, error_message(err)
                     );
                     error_free(err);
@@ -2265,7 +2228,7 @@ error_t *cmd_apply(
             error_t *clear_err = state_clear_old_profile(state, all_items[i].filesystem_path);
             if (clear_err) {
                 output_warning(
-                    out, "Failed to clear profile reassignment flag for %s: %s",
+                    out, OUTPUT_NORMAL, "Failed to clear profile reassignment flag for %s: %s",
                     all_items[i].filesystem_path, error_message(clear_err)
                 );
                 error_free(clear_err);
@@ -2307,9 +2270,15 @@ error_t *cmd_apply(
 
         if (hook_err) {
             /* Hook failed - warn but don't abort (already deployed) */
-            output_warning(out, "Post-apply hook failed: %s", error_message(hook_err));
+            output_warning(
+                out, OUTPUT_NORMAL, "Post-apply hook failed: %s",
+                error_message(hook_err)
+            );
             if (hook_result && hook_result->output && hook_result->output[0]) {
-                output_print(out, OUTPUT_NORMAL, "Hook output:\n%s\n", hook_result->output);
+                output_print(
+                    out, OUTPUT_NORMAL, "Hook output:\n%s\n",
+                    hook_result->output
+                );
             }
             error_free(hook_err);
         }

@@ -119,9 +119,7 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
             all_profiles->profiles[i].name,
             (void *) (uintptr_t) (i + 1)
         );
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
     }
 
     /* Allocate tracking array to mark used profiles */

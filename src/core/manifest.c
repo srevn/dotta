@@ -731,9 +731,7 @@ error_t *manifest_enable_profile(
 
         /* Sync entry with deployed_at timestamp */
         err = sync_entry_to_state(repo, state, entry, head_oid_str, metadata, deployed_at);
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
     }
 
     /* Populate output stats if requested */
@@ -1847,9 +1845,7 @@ error_t *manifest_rebuild(
 
         /* Sync to state with preserved/computed deployed_at */
         err = sync_entry_to_state(repo, state, entry, git_oid, metadata, deployed_at);
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
     }
 
     /* 7. Sync tracked directories */
@@ -1929,9 +1925,7 @@ error_t *manifest_detect_stale_profiles(
 
         /* Mark as checked (store non-NULL sentinel) */
         err = hashmap_set(checked, entry->profile, (void *) (uintptr_t) 1);
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
 
         /* Get profile's current HEAD */
         git_oid head_oid;
@@ -3833,9 +3827,7 @@ error_t *manifest_sync_directories(
         metadata_free(metadata);
         metadata = NULL;
 
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
     }
 
 cleanup:

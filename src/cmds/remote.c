@@ -110,6 +110,10 @@ static error_t *remote_list(
         return ERROR(ERR_MEMORY, "Failed to create output context");
     }
 
+    if (verbose) {
+        output_set_verbosity(out, OUTPUT_VERBOSE);
+    }
+
     git_strarray remotes = { 0 };
     int git_err = git_remote_list(&remotes, repo);
     if (git_err < 0) {
@@ -119,7 +123,7 @@ static error_t *remote_list(
     }
 
     if (remotes.count == 0) {
-        output_info(out, "No remotes configured");
+        output_info(out, OUTPUT_NORMAL, "No remotes configured");
         git_strarray_dispose(&remotes);
         config_free(config);
         output_free(out);
@@ -130,7 +134,7 @@ static error_t *remote_list(
     for (size_t i = 0; i < remotes.count; i++) {
         const char *remote_name = remotes.strings[i];
 
-        if (verbose) {
+        if (output_is_verbose(out)) {
             /* Show URLs for fetch and push */
             git_remote *remote = NULL;
             git_err = git_remote_lookup(&remote, repo, remote_name);
@@ -168,7 +172,7 @@ static error_t *remote_list(
         }
     }
 
-    output_newline(out);
+    output_newline(out, OUTPUT_NORMAL);
 
     git_strarray_dispose(&remotes);
     config_free(config);
@@ -254,10 +258,7 @@ static error_t *remote_add(
     git_remote_free(remote);
 
     /* Success message */
-    output_success(
-        out, "Remote '{cyan}%s{reset}' added successfully",
-        name
-    );
+    output_success(out, OUTPUT_NORMAL, "Remote '{cyan}%s{reset}' added successfully", name);
 
     config_free(config);
     output_free(out);
@@ -309,7 +310,7 @@ static error_t *remote_remove(
     }
 
     /* Success message */
-    output_success(out, "Removed remote '{cyan}%s{reset}'", name);
+    output_success(out, OUTPUT_NORMAL, "Removed remote '{cyan}%s{reset}'", name);
 
     config_free(config);
     output_free(out);
@@ -375,8 +376,8 @@ static error_t *remote_set_url(
 
     /* Success message */
     output_success(
-        out, "Remote '{cyan}%s{reset}' URL updated",
-        name
+        out, OUTPUT_NORMAL,
+        "Remote '{cyan}%s{reset}' URL updated", name
     );
 
     config_free(config);
@@ -452,7 +453,7 @@ static error_t *remote_rename(
 
     if (problems.count > 0) {
         /* Show warnings about problematic refspecs */
-        output_warning(out, "The following refspecs could not be updated:");
+        output_warning(out, OUTPUT_NORMAL, "The following refspecs could not be updated:");
 
         for (size_t i = 0; i < problems.count; i++) {
             output_print(
@@ -472,7 +473,7 @@ static error_t *remote_rename(
 
     /* Success message */
     output_success(
-        out, "Renamed remote '{cyan}%s{reset}' to '{cyan}%s{reset}'",
+        out, OUTPUT_NORMAL, "Renamed remote '{cyan}%s{reset}' to '{cyan}%s{reset}'",
         old_name, new_name
     );
 

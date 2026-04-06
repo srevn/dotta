@@ -809,7 +809,7 @@ static error_t *build_directory_fallback_index(
     size_t loaded_metadata_count = 0;
 
     /* Handle empty profile list (edge case: all profiles disabled) */
-    if (string_array_size(remaining_enabled) == 0) {
+    if (remaining_enabled->count == 0) {
         *out_fallback_dirs = hashmap_create(1);  /* Empty hashmap */
         *out_fallback_profiles = hashmap_create(1);
         if (!*out_fallback_dirs || !*out_fallback_profiles) {
@@ -833,7 +833,7 @@ static error_t *build_directory_fallback_index(
     }
 
     /* Allocate array to track loaded metadata (for proper cleanup) */
-    loaded_metadata = malloc(string_array_size(remaining_enabled) * sizeof(metadata_t *));
+    loaded_metadata = malloc(remaining_enabled->count * sizeof(metadata_t *));
     if (!loaded_metadata) {
         hashmap_free(fallback_dirs, NULL);
         hashmap_free(fallback_dir_profiles, NULL);
@@ -841,8 +841,8 @@ static error_t *build_directory_fallback_index(
     }
 
     /* Load metadata from each profile and build index with "last wins" precedence */
-    for (size_t i = 0; i < string_array_size(remaining_enabled); i++) {
-        const char *profile = string_array_get(remaining_enabled, i);
+    for (size_t i = 0; i < remaining_enabled->count; i++) {
+        const char *profile = remaining_enabled->items[i];
         metadata_t *metadata = NULL;
 
         /* Load metadata (may not exist for old profiles - gracefully skip) */
@@ -1475,8 +1475,8 @@ error_t *manifest_remove_files(
     }
 
     /* 5. Process each removed file */
-    for (size_t i = 0; i < string_array_size(removed_storage_paths); i++) {
-        const char *storage_path = string_array_get(removed_storage_paths, i);
+    for (size_t i = 0; i < removed_storage_paths->count; i++) {
+        const char *storage_path = removed_storage_paths->items[i];
 
         /* Use custom prefix from profile (attached by orchestrator) */
         const char *custom_prefix = removed_profile_custom_prefix;
@@ -2830,7 +2830,7 @@ error_t *manifest_update_files(
     /* After updating files, synchronize git_oid for ALL files from affected profiles.
      * Each profile that had files updated has a new HEAD commit.
      * Build set of unique profile names from items and sync each. */
-    string_array_t *updated_profiles = string_array_create();
+    string_array_t *updated_profiles = string_array_new(0);
     if (!updated_profiles) {
         err = ERROR(ERR_MEMORY, "Failed to allocate updated_profiles array");
         goto cleanup;
@@ -2841,8 +2841,8 @@ error_t *manifest_update_files(
 
         /* Check if already processed */
         bool found = false;
-        for (size_t j = 0; j < string_array_size(updated_profiles); j++) {
-            if (strcmp(string_array_get(updated_profiles, j), prof) == 0) {
+        for (size_t j = 0; j < updated_profiles->count; j++) {
+            if (strcmp(updated_profiles->items[j], prof) == 0) {
                 found = true;
                 break;
             }
@@ -2858,8 +2858,8 @@ error_t *manifest_update_files(
     }
 
     /* Sync git_oid for each unique profile */
-    for (size_t i = 0; i < string_array_size(updated_profiles); i++) {
-        const char *prof = string_array_get(updated_profiles, i);
+    for (size_t i = 0; i < updated_profiles->count; i++) {
+        const char *prof = updated_profiles->items[i];
         err = sync_profile_git_oids(repo, state, prof);
         if (err) {
             string_array_free(updated_profiles);
@@ -2961,7 +2961,7 @@ error_t *manifest_add_files(
     /* Initialize output */
     *out_synced = 0;
 
-    if (string_array_size(filesystem_paths) == 0) {
+    if (filesystem_paths->count == 0) {
         /* No files to add, but still sync directories.
          * Handles directory-only adds where filesystem_paths
          * is empty but metadata.json has tracked directories. */
@@ -3038,8 +3038,8 @@ error_t *manifest_add_files(
     }
 
     /* 7. Process each file */
-    for (size_t i = 0; i < string_array_size(filesystem_paths); i++) {
-        const char *filesystem_path = string_array_get(filesystem_paths, i);
+    for (size_t i = 0; i < filesystem_paths->count; i++) {
+        const char *filesystem_path = filesystem_paths->items[i];
 
         /* Lookup in fresh manifest using filesystem_path */
         void *idx_ptr = hashmap_get(fresh_manifest->index, filesystem_path);
@@ -3699,8 +3699,8 @@ error_t *manifest_sync_directories(
     }
 
     /* 3. Rebuild from each enabled profile */
-    for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
-        const char *profile_name = string_array_get(enabled_profiles, i);
+    for (size_t i = 0; i < enabled_profiles->count; i++) {
+        const char *profile_name = enabled_profiles->items[i];
 
         /* Reset per-iteration state */
         metadata = NULL;

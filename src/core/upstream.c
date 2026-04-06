@@ -266,15 +266,27 @@ error_t *upstream_discover_branches(
     }
 
     /* Set difference: remote branches not yet present locally */
-    string_array_t *new_branches = NULL;
-    err = string_array_difference(remote_branches, local_branches, &new_branches);
+    string_array_t *new_branches = string_array_new(remote_branches->count);
+    if (!new_branches) {
+        string_array_free(remote_branches);
+        string_array_free(local_branches);
+        return ERROR(ERR_MEMORY, "Failed to allocate branch list");
+    }
+
+    for (size_t i = 0; i < remote_branches->count; i++) {
+        if (!string_array_contains(local_branches, remote_branches->items[i])) {
+            err = string_array_push(new_branches, remote_branches->items[i]);
+            if (err) {
+                string_array_free(new_branches);
+                string_array_free(remote_branches);
+                string_array_free(local_branches);
+                return err;
+            }
+        }
+    }
 
     string_array_free(remote_branches);
     string_array_free(local_branches);
-
-    if (err) {
-        return err;
-    }
 
     *out_branches = new_branches;
     return NULL;
@@ -299,7 +311,7 @@ error_t *upstream_query_remote_branches(
     error_t *err = NULL;
 
     /* Create branch array */
-    branches = string_array_create();
+    branches = string_array_new(0);
     if (!branches) {
         return ERROR(ERR_MEMORY, "Failed to create branch array");
     }

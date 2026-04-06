@@ -226,15 +226,15 @@ static error_t *match_hierarchical_names(
     error_t *err = NULL;
     size_t prefix_len = strlen(prefix);
 
-    string_array_t *sub_profiles = string_array_create();
+    string_array_t *sub_profiles = string_array_new(0);
     if (!sub_profiles) {
         return ERROR(
             ERR_MEMORY, "Failed to allocate sub-profiles array"
         );
     }
 
-    for (size_t i = 0; i < string_array_size(available); i++) {
-        const char *name = string_array_get(available, i);
+    for (size_t i = 0; i < available->count; i++) {
+        const char *name = available->items[i];
 
         /* Check if branch starts with prefix */
         if (!str_starts_with(name, prefix)) {
@@ -262,13 +262,13 @@ static error_t *match_hierarchical_names(
     }
 
     /* Sort sub-profiles alphabetically for deterministic ordering */
-    if (string_array_size(sub_profiles) > 1) {
+    if (sub_profiles->count > 1) {
         string_array_sort(sub_profiles);
     }
 
     /* Append sorted sub-profiles after base */
-    for (size_t i = 0; i < string_array_size(sub_profiles); i++) {
-        err = string_array_push(out, string_array_get(sub_profiles, i));
+    for (size_t i = 0; i < sub_profiles->count; i++) {
+        err = string_array_push(out, sub_profiles->items[i]);
         if (err) {
             goto cleanup;
         }
@@ -292,7 +292,7 @@ error_t *profile_detect_names(
     error_t *err = NULL;
     char *os_name = NULL;
 
-    string_array_t *names = string_array_create();
+    string_array_t *names = string_array_new(0);
     if (!names) {
         return ERROR(ERR_MEMORY, "Failed to allocate profile names array");
     }
@@ -531,14 +531,14 @@ static error_t *validate_state_profiles(
     string_array_t *valid = NULL;
     string_array_t *missing = NULL;
 
-    valid = string_array_create();
+    valid = string_array_new(0);
     if (!valid) {
         err = ERROR(ERR_MEMORY, "Failed to allocate valid profiles array");
         goto cleanup;
     }
 
     if (out_missing_profiles) {
-        missing = string_array_create();
+        missing = string_array_new(0);
         if (!missing) {
             err = ERROR(ERR_MEMORY, "Failed to allocate missing profiles array");
             goto cleanup;
@@ -546,8 +546,8 @@ static error_t *validate_state_profiles(
     }
 
     /* Check each profile */
-    for (size_t i = 0; i < string_array_size(state_profiles); i++) {
-        const char *name = string_array_get(state_profiles, i);
+    for (size_t i = 0; i < state_profiles->count; i++) {
+        const char *name = state_profiles->items[i];
 
         if (profile_exists(repo, name)) {
             err = string_array_push(valid, name);
@@ -645,7 +645,7 @@ error_t *profile_resolve(
         goto no_profiles;
     }
 
-    if (!state_profiles || string_array_size(state_profiles) == 0) {
+    if (!state_profiles || state_profiles->count == 0) {
         goto no_profiles;
     }
 
@@ -664,10 +664,10 @@ error_t *profile_resolve(
      * without access to an output_ctx_t. This is consistent with other core
      * modules (deploy.c, workspace.c) that also write diagnostic warnings to stderr.
      */
-    if (missing_profiles && string_array_size(missing_profiles) > 0) {
+    if (missing_profiles && missing_profiles->count > 0) {
         fprintf(stderr, "Warning: State references non-existent profiles:\n");
-        for (size_t i = 0; i < string_array_size(missing_profiles); i++) {
-            fprintf(stderr, "  • %s\n", string_array_get(missing_profiles, i));
+        for (size_t i = 0; i < missing_profiles->count; i++) {
+            fprintf(stderr, "  • %s\n", missing_profiles->items[i]);
         }
         fprintf(
             stderr, "\nHint: Run 'dotta profile validate' to fix state,\n"
@@ -678,12 +678,12 @@ error_t *profile_resolve(
     missing_profiles = NULL;
 
     /* Use valid profiles if any exist */
-    if (string_array_size(valid_profiles) == 0) {
+    if (valid_profiles->count == 0) {
         goto no_profiles;
     }
 
     /* Convert string_array to const char** for profile_list_load */
-    size_t count = string_array_size(valid_profiles);
+    size_t count = valid_profiles->count;
     names = malloc(count * sizeof(char *));
     if (!names) {
         err = ERROR(ERR_MEMORY, "Failed to allocate profile names");
@@ -691,7 +691,7 @@ error_t *profile_resolve(
     }
 
     for (size_t i = 0; i < count; i++) {
-        names[i] = (char *) string_array_get(valid_profiles, i);
+        names[i] = (char *) valid_profiles->items[i];
     }
 
     err = profile_list_load(repo, names, count, strict_mode, out);
@@ -1355,7 +1355,7 @@ error_t *profile_list_files(
 
     /* Walk tree */
     struct walk_data data = { 0 };
-    data.paths = string_array_create();
+    data.paths = string_array_new(0);
     if (!data.paths) {
         return ERROR(ERR_MEMORY, "Failed to allocate paths array");
     }
@@ -1554,8 +1554,8 @@ error_t *profile_build_file_index(
     }
 
     /* Load each profile once and index its files */
-    for (size_t i = 0; i < string_array_size(all_branches); i++) {
-        const char *branch_name = string_array_get(all_branches, i);
+    for (size_t i = 0; i < all_branches->count; i++) {
+        const char *branch_name = all_branches->items[i];
 
         /* Skip excluded profile and dotta-worktree */
         if (strcmp(branch_name, "dotta-worktree") == 0) {
@@ -1587,13 +1587,13 @@ error_t *profile_build_file_index(
         }
 
         /* Add this profile to the index for each of its files */
-        for (size_t j = 0; j < string_array_size(files); j++) {
-            const char *storage_path = string_array_get(files, j);
+        for (size_t j = 0; j < files->count; j++) {
+            const char *storage_path = files->items[j];
 
             /* Get or create profile list for this storage path */
             string_array_t *profile_list = hashmap_get(index, storage_path);
             if (!profile_list) {
-                profile_list = string_array_create();
+                profile_list = string_array_new(0);
                 if (!profile_list) {
                     err = ERROR(ERR_MEMORY, "Failed to create profile list for file");
                     goto cleanup;
@@ -1630,7 +1630,7 @@ cleanup:
     string_array_free(all_branches);
     if (index) {
         /* Free index and all its arrays */
-        hashmap_free(index, string_array_free);
+        hashmap_free(index, string_array_free_cb);
     }
     return err;
 }
@@ -1672,7 +1672,7 @@ error_t *profile_discover_file(
             return err;
         }
 
-        string_array_t *profiles = string_array_create();
+        string_array_t *profiles = string_array_new(0);
         if (!profiles) {
             state_free_entry(entry);
             state_free(state);
@@ -1704,8 +1704,8 @@ error_t *profile_discover_file(
 
     string_array_t *matches = hashmap_get(index, storage_path);
 
-    if (!matches || string_array_size(matches) == 0) {
-        hashmap_free(index, string_array_free);
+    if (!matches || matches->count == 0) {
+        hashmap_free(index, string_array_free_cb);
         return ERROR(
             ERR_NOT_FOUND, "File '%s' not found in any profile",
             storage_path
@@ -1713,11 +1713,18 @@ error_t *profile_discover_file(
     }
 
     /* Clone the result — hashmap owns the original */
-    string_array_t *result = string_array_clone(matches);
-    hashmap_free(index, string_array_free);
-
+    string_array_t *result = string_array_new(matches->count);
     if (!result) {
-        return ERROR(ERR_MEMORY, "Failed to clone profile matches");
+        hashmap_free(index, string_array_free_cb);
+        return ERROR(ERR_MEMORY, "Failed to allocate profile matches");
+    }
+
+    error_t *clone_err = string_array_clone(matches, result);
+    hashmap_free(index, string_array_free_cb);
+
+    if (clone_err) {
+        string_array_free(result);
+        return clone_err;
     }
 
     *out_profiles = result;

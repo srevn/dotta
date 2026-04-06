@@ -182,7 +182,7 @@ static error_t *list_profiles(
         return error_wrap(err, "Failed to list branches");
     }
 
-    if (string_array_size(branches) == 0) {
+    if (branches->count == 0) {
         string_array_free(branches);
         output_info(out, OUTPUT_NORMAL, "No profiles found");
         return NULL;
@@ -216,8 +216,8 @@ static error_t *list_profiles(
     /* Calculate max branch name length for column alignment */
     size_t max_name_len = 0;
     if (verbose || show_remote) {
-        for (size_t i = 0; i < string_array_size(branches); i++) {
-            const char *bname = string_array_get(branches, i);
+        for (size_t i = 0; i < branches->count; i++) {
+            const char *bname = branches->items[i];
             if (strcmp(bname, "dotta-worktree") == 0) {
                 continue;
             }
@@ -238,8 +238,8 @@ static error_t *list_profiles(
     output_section(out, OUTPUT_NORMAL, "Available profiles");
 
     /* List profiles */
-    for (size_t i = 0; i < string_array_size(branches); i++) {
-        const char *name = string_array_get(branches, i);
+    for (size_t i = 0; i < branches->count; i++) {
+        const char *name = branches->items[i];
 
         /* Skip dotta-worktree branch */
         if (strcmp(name, "dotta-worktree") == 0) {
@@ -418,7 +418,7 @@ static error_t *list_files(
         );
     }
 
-    if (string_array_size(files) == 0) {
+    if (files->count == 0) {
         output_info(out, OUTPUT_NORMAL, "No files in profile '%s'", opts->profile);
         string_array_free(files);
         profile_free(profile);
@@ -462,8 +462,8 @@ static error_t *list_files(
     /* Calculate max path length for alignment (verbose mode only) */
     size_t max_path_len = 0;
     if (verbose) {
-        for (size_t i = 0; i < string_array_size(files); i++) {
-            size_t len = strlen(string_array_get(files, i));
+        for (size_t i = 0; i < files->count; i++) {
+            size_t len = strlen(files->items[i]);
             if (len > max_path_len) {
                 max_path_len = len;
             }
@@ -476,8 +476,8 @@ static error_t *list_files(
 
     /* List files */
     size_t total_size = 0;
-    for (size_t i = 0; i < string_array_size(files); i++) {
-        const char *file_path = string_array_get(files, i);
+    for (size_t i = 0; i < files->count; i++) {
+        const char *file_path = files->items[i];
 
         /* Print file path (with alignment in verbose mode) */
         if (verbose) {
@@ -569,14 +569,14 @@ static error_t *list_files(
         output_format_size(total_size, size_str, sizeof(size_str));
         output_print(
             out, OUTPUT_VERBOSE, "Total: %zu file%s, %s\n",
-            string_array_size(files),
-            string_array_size(files) == 1 ? "" : "s", size_str
+            files->count,
+            files->count == 1 ? "" : "s", size_str
         );
     } else {
         output_print(
             out, OUTPUT_NORMAL, "Total: %zu file%s\n",
-            string_array_size(files),
-            string_array_size(files) == 1 ? "" : "s"
+            files->count,
+            files->count == 1 ? "" : "s"
         );
     }
 
@@ -663,7 +663,7 @@ static error_t *list_file_history(
             return err;
         }
 
-        discovered_profile = strdup(string_array_get(matches, 0));
+        discovered_profile = strdup(matches->items[0]);
         string_array_free(matches);
         if (!discovered_profile) {
             free(storage_path);

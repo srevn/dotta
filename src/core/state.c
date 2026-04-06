@@ -787,7 +787,7 @@ static error_t *load_profiles(state_t *state) {
 
     /* Create array if needed */
     if (!state->profiles) {
-        state->profiles = string_array_create();
+        state->profiles = string_array_new(0);
         if (!state->profiles) {
             return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
         }
@@ -845,13 +845,13 @@ error_t *state_get_profiles(const state_t *state, string_array_t **out) {
     if (err) return err;
 
     /* Return copy (caller owns) */
-    string_array_t *copy = string_array_create();
+    string_array_t *copy = string_array_new(0);
     if (!copy) {
         return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
     }
 
-    for (size_t i = 0; i < string_array_size(state->profiles); i++) {
-        err = string_array_push(copy, string_array_get(state->profiles, i));
+    for (size_t i = 0; i < state->profiles->count; i++) {
+        err = string_array_push(copy, state->profiles->items[i]);
         if (err) {
             string_array_free(copy);
             return err;
@@ -886,8 +886,8 @@ bool state_has_profile(const state_t *state, const char *profile_name) {
     }
 
     /* Check if profile exists in enabled list */
-    for (size_t i = 0; i < string_array_size(state->profiles); i++) {
-        if (strcmp(string_array_get(state->profiles, i), profile_name) == 0) {
+    for (size_t i = 0; i < state->profiles->count; i++) {
+        if (strcmp(state->profiles->items[i], profile_name) == 0) {
             return true;
         }
     }
@@ -909,7 +909,7 @@ error_t *state_get_deployed_profiles(const state_t *state, string_array_t **out)
     *out = NULL;
 
     /* Create output array */
-    string_array_t *profiles = string_array_create();
+    string_array_t *profiles = string_array_new(0);
     if (!profiles) {
         return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
     }
@@ -1195,7 +1195,7 @@ error_t *state_set_profiles(
     if (state->profiles) {
         string_array_clear(state->profiles);
     } else {
-        state->profiles = string_array_create();
+        state->profiles = string_array_new(0);
         if (!state->profiles) {
             return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
         }
@@ -2878,8 +2878,8 @@ error_t *state_save(git_repository *repo, state_t *state) {
         }
 
         /* Write profiles if any */
-        if (state->profiles && string_array_size(state->profiles) > 0) {
-            char **profile_names = calloc(string_array_size(state->profiles), sizeof(char *));
+        if (state->profiles && state->profiles->count > 0) {
+            char **profile_names = calloc(state->profiles->count, sizeof(char *));
             if (!profile_names) {
                 sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
                 finalize_statements(state);
@@ -2888,11 +2888,11 @@ error_t *state_save(git_repository *repo, state_t *state) {
                 return ERROR(ERR_MEMORY, "Failed to allocate profile array");
             }
 
-            for (size_t i = 0; i < string_array_size(state->profiles); i++) {
-                profile_names[i] = (char *) string_array_get(state->profiles, i);
+            for (size_t i = 0; i < state->profiles->count; i++) {
+                profile_names[i] = (char *) state->profiles->items[i];
             }
 
-            err = state_set_profiles(state, profile_names, string_array_size(state->profiles));
+            err = state_set_profiles(state, profile_names, state->profiles->count);
             free(profile_names);
 
             if (err) {
@@ -3009,7 +3009,7 @@ error_t *state_create_empty(state_t **out) {
     state->db = NULL;
     state->db_path = NULL;
     state->in_transaction = false;
-    state->profiles = string_array_create();
+    state->profiles = string_array_new(0);
     state->profiles_loaded = true;  /* Empty array is loaded */
 
     if (!state->profiles) {

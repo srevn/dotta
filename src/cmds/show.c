@@ -710,7 +710,7 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
         goto cleanup;
     }
 
-    found_profile = string_array_get(matches, 0);
+    found_profile = matches->items[0];
 
     /* Show the file */
     if (!opts->raw) {

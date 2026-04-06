@@ -109,7 +109,7 @@ static error_t *collect_files_from_dir(
         return ERROR(ERR_FS, "Failed to open directory: %s", dir_path);
     }
 
-    string_array_t *files = string_array_create();
+    string_array_t *files = string_array_new(0);
     if (!files) {
         closedir(dir);
         return ERROR(ERR_MEMORY, "Failed to allocate file list");
@@ -161,8 +161,8 @@ static error_t *collect_files_from_dir(
             }
 
             /* Merge subdirectory files */
-            for (size_t i = 0; i < string_array_size(subdir_files); i++) {
-                err = string_array_push(files, string_array_get(subdir_files, i));
+            for (size_t i = 0; i < subdir_files->count; i++) {
+                err = string_array_push(files, subdir_files->items[i]);
                 if (err) {
                     string_array_free(subdir_files);
                     string_array_free(files);
@@ -530,15 +530,15 @@ static error_t *create_commit(
     CHECK_NULL(added_files);
 
     /* Build commit message using storage paths */
-    string_array_t *storage_paths = string_array_create();
+    string_array_t *storage_paths = string_array_new(0);
     if (!storage_paths) {
         return ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
     }
 
     /* Convert filesystem paths to storage paths for commit message */
     error_t *err = NULL;
-    for (size_t i = 0; i < string_array_size(added_files); i++) {
-        const char *file_path = string_array_get(added_files, i);
+    for (size_t i = 0; i < added_files->count; i++) {
+        const char *file_path = added_files->items[i];
         char *storage_path = NULL;
         path_prefix_t prefix;
 
@@ -651,7 +651,7 @@ static error_t *auto_enable_and_sync_profile(
             /* No state file yet - create empty enabled list */
             error_free(err);
             err = NULL;
-            enabled_profiles = string_array_create();
+            enabled_profiles = string_array_new(0);
             if (!enabled_profiles) {
                 return ERROR(ERR_MEMORY, "Failed to create enabled profiles list");
             }
@@ -670,8 +670,8 @@ static error_t *auto_enable_and_sync_profile(
     }
 
     /* STEP 2: Check if already enabled (defensive) */
-    for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
-        if (strcmp(string_array_get(enabled_profiles, i), profile_name) == 0) {
+    for (size_t i = 0; i < enabled_profiles->count; i++) {
+        if (strcmp(enabled_profiles->items[i], profile_name) == 0) {
             /* Already enabled - idempotent success */
             string_array_free(enabled_profiles);
             *out_updated = true;
@@ -736,8 +736,8 @@ static error_t *auto_enable_and_sync_profile(
      * lstat() is cheap (kernel cache hot from recent content_store_file_to_worktree).
      * state_update_stat_cache returns success on not-found (file may have been
      * filtered by precedence, so not all added_files end up in manifest). */
-    for (size_t i = 0; i < string_array_size(added_files); i++) {
-        const char *path = string_array_get(added_files, i);
+    for (size_t i = 0; i < added_files->count; i++) {
+        const char *path = added_files->items[i];
         struct stat st;
         if (lstat(path, &st) == 0) {
             stat_cache_t sc = stat_cache_from_stat(&st);
@@ -859,8 +859,8 @@ static error_t *update_manifest_after_add(
 
     /* Check if this profile is enabled */
     bool is_enabled = false;
-    for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
-        if (strcmp(string_array_get(enabled_profiles, i), profile_name) == 0) {
+    for (size_t i = 0; i < enabled_profiles->count; i++) {
+        if (strcmp(enabled_profiles->items[i], profile_name) == 0) {
             is_enabled = true;
             break;
         }
@@ -919,8 +919,8 @@ static error_t *update_manifest_after_add(
     }
 
     /* STEP 5: Record stat cache for added files */
-    for (size_t i = 0; i < string_array_size(added_files); i++) {
-        const char *path = string_array_get(added_files, i);
+    for (size_t i = 0; i < added_files->count; i++) {
+        const char *path = added_files->items[i];
         struct stat st;
         if (lstat(path, &st) == 0) {
             stat_cache_t sc = stat_cache_from_stat(&st);
@@ -1225,7 +1225,7 @@ error_t *cmd_add(
     }
 
     /* Collect all files to add (expanding directories) */
-    all_files = string_array_create();
+    all_files = string_array_new(0);
     if (!all_files) {
         err = ERROR(ERR_MEMORY, "Failed to allocate file list");
         goto cleanup;
@@ -1301,7 +1301,7 @@ error_t *cmd_add(
             }
 
             /* If all files were excluded, skip this directory entirely */
-            if (string_array_size(dir_files) == 0) {
+            if (dir_files->count == 0) {
                 string_array_free(dir_files);
                 output_info(
                     out, OUTPUT_VERBOSE, "Skipped directory (all files excluded): %s",
@@ -1312,8 +1312,8 @@ error_t *cmd_add(
             }
 
             /* Merge directory files into all_files (dedup against explicit file args) */
-            for (size_t j = 0; j < string_array_size(dir_files); j++) {
-                const char *dir_file = string_array_get(dir_files, j);
+            for (size_t j = 0; j < dir_files->count; j++) {
+                const char *dir_file = dir_files->items[j];
                 if (string_array_contains(all_files, dir_file)) {
                     continue;
                 }
@@ -1389,7 +1389,7 @@ error_t *cmd_add(
     }
 
     /* Check if we have anything to add (files or directories) */
-    if (string_array_size(all_files) == 0 && tracked_dir_count == 0) {
+    if (all_files->count == 0 && tracked_dir_count == 0) {
         if (opts->exclude_count > 0) {
             err = ERROR(
                 ERR_INVALID_ARG,
@@ -1454,8 +1454,8 @@ error_t *cmd_add(
     }
 
     /* Single-pass: add files and capture metadata inline */
-    for (size_t i = 0; i < string_array_size(all_files); i++) {
-        const char *file_path = string_array_get(all_files, i);
+    for (size_t i = 0; i < all_files->count; i++) {
+        const char *file_path = all_files->items[i];
 
         /* Compute storage path once */
         char *storage_path = NULL;

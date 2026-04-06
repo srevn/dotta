@@ -37,12 +37,12 @@ static void print_preflight_results(
     if (!result) return;
 
     /* Print conflicts */
-    if (result->conflicts && string_array_size(result->conflicts) > 0) {
+    if (result->conflicts && result->conflicts->count > 0) {
         output_section(out, OUTPUT_NORMAL, "Conflicts (files modified locally)");
-        for (size_t i = 0; i < string_array_size(result->conflicts); i++) {
+        for (size_t i = 0; i < result->conflicts->count; i++) {
             output_styled(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n",
-                string_array_get(result->conflicts, i)
+                result->conflicts->items[i]
             );
         }
         output_newline(out, OUTPUT_NORMAL);
@@ -50,12 +50,12 @@ static void print_preflight_results(
     }
 
     /* Print permission errors */
-    if (result->permission_errors && string_array_size(result->permission_errors) > 0) {
+    if (result->permission_errors && result->permission_errors->count > 0) {
         output_section(out, OUTPUT_NORMAL, "Permission errors");
-        for (size_t i = 0; i < string_array_size(result->permission_errors); i++) {
+        for (size_t i = 0; i < result->permission_errors->count; i++) {
             output_styled(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n",
-                string_array_get(result->permission_errors, i)
+                result->permission_errors->items[i]
             );
         }
     }
@@ -98,56 +98,56 @@ static void print_deploy_results(
     if (!result) return;
 
     /* Verbose mode: show individual files per category */
-    if (result->deployed && string_array_size(result->deployed) > 0) {
+    if (result->deployed && result->deployed->count > 0) {
         output_section(out, OUTPUT_VERBOSE, dry_run ? "Would deploy" : "Deployed files");
-        for (size_t i = 0; i < string_array_size(result->deployed); i++) {
+        for (size_t i = 0; i < result->deployed->count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s\n",
-                string_array_get(result->deployed, i)
+                result->deployed->items[i]
             );
         }
     }
 
     /* Adopted files - existing files now managed by dotta */
-    if (result->adopted && string_array_size(result->adopted) > 0) {
+    if (result->adopted && result->adopted->count > 0) {
         output_section(out, OUTPUT_VERBOSE, dry_run ? "Would adopt" : "Adopted files");
-        for (size_t i = 0; i < string_array_size(result->adopted); i++) {
+        for (size_t i = 0; i < result->adopted->count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {yellow}⊕{reset} %s\n",
-                string_array_get(result->adopted, i)
+                result->adopted->items[i]
             );
         }
     }
 
     /* Unchanged files - already tracked, still correct */
-    if (result->unchanged && string_array_size(result->unchanged) > 0) {
+    if (result->unchanged && result->unchanged->count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Unchanged files");
-        for (size_t i = 0; i < string_array_size(result->unchanged); i++) {
+        for (size_t i = 0; i < result->unchanged->count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}⊘{reset} %s\n",
-                string_array_get(result->unchanged, i)
+                result->unchanged->items[i]
             );
         }
     }
 
     /* Skipped files (--skip-existing) */
-    if (result->skipped_existing && string_array_size(result->skipped_existing) > 0) {
+    if (result->skipped_existing && result->skipped_existing->count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Skipped files (--skip-existing)");
-        for (size_t i = 0; i < string_array_size(result->skipped_existing); i++) {
+        for (size_t i = 0; i < result->skipped_existing->count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}⊘{reset} %s\n",
-                string_array_get(result->skipped_existing, i)
+                result->skipped_existing->items[i]
             );
         }
     }
 
     /* Failed files (always shown, regardless of verbose) */
-    if (result->failed && string_array_size(result->failed) > 0) {
+    if (result->failed && result->failed->count > 0) {
         output_section(out, OUTPUT_NORMAL, "Failed to deploy");
-        for (size_t i = 0; i < string_array_size(result->failed); i++) {
+        for (size_t i = 0; i < result->failed->count; i++) {
             output_styled(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n",
-                string_array_get(result->failed, i)
+                result->failed->items[i]
             );
         }
         if (result->error_message) {
@@ -347,73 +347,73 @@ static void print_cleanup_results(
     }
 
     /* Display orphaned files */
-    if (result->removed_files && string_array_size(result->removed_files) > 0) {
+    if (result->removed_files && result->removed_files->count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Pruned orphaned files");
-        for (size_t i = 0; i < string_array_size(result->removed_files); i++) {
+        for (size_t i = 0; i < result->removed_files->count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}[removed]{reset} %s\n",
-                string_array_get(result->removed_files, i)
+                result->removed_files->items[i]
             );
         }
     }
 
-    if (result->skipped_files && string_array_size(result->skipped_files) > 0) {
+    if (result->skipped_files && result->skipped_files->count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Skipped orphaned files");
-        for (size_t i = 0; i < string_array_size(result->skipped_files); i++) {
+        for (size_t i = 0; i < result->skipped_files->count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s (safety violation)\n",
-                string_array_get(result->skipped_files, i)
+                result->skipped_files->items[i]
             );
         }
     }
 
-    if (result->released_files && string_array_size(result->released_files) > 0) {
+    if (result->released_files && result->released_files->count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Released files (removed from Git externally)");
-        for (size_t i = 0; i < string_array_size(result->released_files); i++) {
+        for (size_t i = 0; i < result->released_files->count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}[released]{reset} %s\n",
-                string_array_get(result->released_files, i)
+                result->released_files->items[i]
             );
         }
     }
 
-    if (result->failed_files && string_array_size(result->failed_files) > 0) {
+    if (result->failed_files && result->failed_files->count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Failed to remove orphaned files");
-        for (size_t i = 0; i < string_array_size(result->failed_files); i++) {
+        for (size_t i = 0; i < result->failed_files->count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {red}[fail]{reset} %s\n",
-                string_array_get(result->failed_files, i)
+                result->failed_files->items[i]
             );
         }
     }
 
     /* Display empty directories */
-    if (result->removed_dirs && string_array_size(result->removed_dirs) > 0) {
+    if (result->removed_dirs && result->removed_dirs->count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Pruned empty tracked directories");
-        for (size_t i = 0; i < string_array_size(result->removed_dirs); i++) {
+        for (size_t i = 0; i < result->removed_dirs->count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}[removed]{reset} %s\n",
-                string_array_get(result->removed_dirs, i)
+                result->removed_dirs->items[i]
             );
         }
     }
 
-    if (result->skipped_dirs && string_array_size(result->skipped_dirs) > 0) {
+    if (result->skipped_dirs && result->skipped_dirs->count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Skipped directories (not empty)");
-        for (size_t i = 0; i < string_array_size(result->skipped_dirs); i++) {
+        for (size_t i = 0; i < result->skipped_dirs->count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
-                string_array_get(result->skipped_dirs, i)
+                result->skipped_dirs->items[i]
             );
         }
     }
 
-    if (result->failed_dirs && string_array_size(result->failed_dirs) > 0) {
+    if (result->failed_dirs && result->failed_dirs->count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Failed to remove empty directories");
-        for (size_t i = 0; i < string_array_size(result->failed_dirs); i++) {
+        for (size_t i = 0; i < result->failed_dirs->count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {red}[fail]{reset} %s\n",
-                string_array_get(result->failed_dirs, i)
+                result->failed_dirs->items[i]
             );
         }
     }
@@ -550,7 +550,7 @@ static void print_cleanup_preflight_results(
             for (size_t i = 0; i < display_count; i++) {
                 output_styled(
                     out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
-                    string_array_get(result->orphaned_files, i)
+                    result->orphaned_files->items[i]
                 );
             }
 
@@ -584,7 +584,7 @@ static void print_cleanup_preflight_results(
             for (size_t i = 0; i < result->orphaned_directories_count; i++) {
                 output_print(
                     out, OUTPUT_VERBOSE, "    • %s\n",
-                    string_array_get(result->orphaned_directories, i)
+                    result->orphaned_directories->items[i]
                 );
             }
         }
@@ -626,7 +626,7 @@ static error_t *ensure_complete_apply_privileges(
         return NULL;  /* Read-only operation, no privileges needed */
     }
 
-    string_array_t *root_paths = string_array_create();
+    string_array_t *root_paths = string_array_new(0);
     if (!root_paths) {
         return ERROR(ERR_MEMORY, "Failed to allocate root paths list");
     }
@@ -681,7 +681,7 @@ static error_t *ensure_complete_apply_privileges(
 
     /* 4. Check privileges if any root/ paths found */
     error_t *err = NULL;
-    if (string_array_size(root_paths) > 0) {
+    if (root_paths->count > 0) {
         err = privilege_ensure_for_operation(
             (const char **) root_paths->items,
             root_paths->count,
@@ -1957,12 +1957,12 @@ error_t *cmd_apply(
              * - Next 'apply' will retry full cleanup with fresh workspace analysis
              */
             if (cleanup_res && cleanup_res->removed_files &&
-                string_array_size(cleanup_res->removed_files) > 0) {
+                cleanup_res->removed_files->count > 0) {
 
                 output_print(out, OUTPUT_VERBOSE, "\nRemoving orphaned entries from state...\n");
 
-                for (size_t i = 0; i < string_array_size(cleanup_res->removed_files); i++) {
-                    const char *path = string_array_get(cleanup_res->removed_files, i);
+                for (size_t i = 0; i < cleanup_res->removed_files->count; i++) {
+                    const char *path = cleanup_res->removed_files->items[i];
 
                     /* Delete entry from virtual_manifest table
                      *
@@ -1987,8 +1987,8 @@ error_t *cmd_apply(
 
                 output_print(
                     out, OUTPUT_VERBOSE, "  Removed %zu orphaned entr%s from state\n",
-                    string_array_size(cleanup_res->removed_files),
-                    string_array_size(cleanup_res->removed_files) == 1 ? "y" : "ies"
+                    cleanup_res->removed_files->count,
+                    cleanup_res->removed_files->count == 1 ? "y" : "ies"
                 );
             }
 
@@ -2003,12 +2003,12 @@ error_t *cmd_apply(
              * tracking them and they become normal unmanaged files.
              */
             if (cleanup_res && cleanup_res->released_files &&
-                string_array_size(cleanup_res->released_files) > 0) {
+                cleanup_res->released_files->count > 0) {
 
                 output_print(out, OUTPUT_VERBOSE, "\nReleasing files from management...\n");
 
-                for (size_t i = 0; i < string_array_size(cleanup_res->released_files); i++) {
-                    const char *path = string_array_get(cleanup_res->released_files, i);
+                for (size_t i = 0; i < cleanup_res->released_files->count; i++) {
+                    const char *path = cleanup_res->released_files->items[i];
 
                     /* Delete entry from virtual_manifest table
                      *
@@ -2030,8 +2030,8 @@ error_t *cmd_apply(
 
                 output_print(
                     out, OUTPUT_VERBOSE, "  Released %zu file%s from management\n",
-                    string_array_size(cleanup_res->released_files),
-                    string_array_size(cleanup_res->released_files) == 1 ? "" : "s"
+                    cleanup_res->released_files->count,
+                    cleanup_res->released_files->count == 1 ? "" : "s"
                 );
             }
 
@@ -2056,15 +2056,15 @@ error_t *cmd_apply(
              * - Next 'apply' will retry full cleanup with fresh workspace analysis
              */
             if (cleanup_res && cleanup_res->removed_dirs &&
-                string_array_size(cleanup_res->removed_dirs) > 0) {
+                cleanup_res->removed_dirs->count > 0) {
 
                 output_print(
                     out, OUTPUT_VERBOSE,
                     "\nRemoving orphaned directory entries from state...\n"
                 );
 
-                for (size_t i = 0; i < string_array_size(cleanup_res->removed_dirs); i++) {
-                    const char *path = string_array_get(cleanup_res->removed_dirs, i);
+                for (size_t i = 0; i < cleanup_res->removed_dirs->count; i++) {
+                    const char *path = cleanup_res->removed_dirs->items[i];
 
                     /* Delete entry from tracked_directories table
                      *
@@ -2089,8 +2089,8 @@ error_t *cmd_apply(
 
                 output_print(
                     out, OUTPUT_VERBOSE, "  Removed %zu orphaned directory entr%s from state\n",
-                    string_array_size(cleanup_res->removed_dirs),
-                    string_array_size(cleanup_res->removed_dirs) == 1 ? "y" : "ies"
+                    cleanup_res->removed_dirs->count,
+                    cleanup_res->removed_dirs->count == 1 ? "y" : "ies"
                 );
             }
 
@@ -2113,13 +2113,13 @@ error_t *cmd_apply(
          * Non-critical operation: deployment already succeeded physically, so
          * timestamp update failures are non-fatal warnings (preserve consistency).
          */
-        if (deploy_res && deploy_res->deployed && string_array_size(deploy_res->deployed) > 0) {
+        if (deploy_res && deploy_res->deployed && deploy_res->deployed->count > 0) {
             time_t now = time(NULL);
 
             output_print(out, OUTPUT_VERBOSE, "\nUpdating deployment timestamps...\n");
 
-            for (size_t i = 0; i < string_array_size(deploy_res->deployed); i++) {
-                const char *path = string_array_get(deploy_res->deployed, i);
+            for (size_t i = 0; i < deploy_res->deployed->count; i++) {
+                const char *path = deploy_res->deployed->items[i];
 
                 /* Capture stat from just-deployed file for fast-path cache.
                  *
@@ -2150,8 +2150,8 @@ error_t *cmd_apply(
 
             output_print(
                 out, OUTPUT_VERBOSE, "  Updated %zu timestamp%s\n",
-                string_array_size(deploy_res->deployed),
-                string_array_size(deploy_res->deployed) == 1 ? "" : "s"
+                deploy_res->deployed->count,
+                deploy_res->deployed->count == 1 ? "" : "s"
             );
         }
 
@@ -2162,13 +2162,13 @@ error_t *cmd_apply(
          * - Were never tracked by dotta (deployed_at == 0)
          * - Were added to deploy_res->adopted by deploy_execute
          */
-        if (deploy_res->adopted && string_array_size(deploy_res->adopted) > 0) {
+        if (deploy_res->adopted && deploy_res->adopted->count > 0) {
             time_t now = time(NULL);
 
             output_print(out, OUTPUT_VERBOSE, "\nRecording adopted files in state...\n");
 
-            for (size_t i = 0; i < string_array_size(deploy_res->adopted); i++) {
-                const char *path = string_array_get(deploy_res->adopted, i);
+            for (size_t i = 0; i < deploy_res->adopted->count; i++) {
+                const char *path = deploy_res->adopted->items[i];
 
                 /* Capture stat from adopted file for fast-path cache.
                  *
@@ -2195,8 +2195,8 @@ error_t *cmd_apply(
 
             output_print(
                 out, OUTPUT_VERBOSE, "  Recorded %zu adopted file%s\n",
-                string_array_size(deploy_res->adopted),
-                string_array_size(deploy_res->adopted) == 1 ? "" : "s"
+                deploy_res->adopted->count,
+                deploy_res->adopted->count == 1 ? "" : "s"
             );
         }
 

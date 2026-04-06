@@ -744,8 +744,8 @@ error_t *fs_remove_dir(const char *path, bool recursive) {
             return err;
         }
 
-        for (size_t i = 0; i < string_array_size(entries); i++) {
-            const char *entry = string_array_get(entries, i);
+        for (size_t i = 0; i < entries->count; i++) {
+            const char *entry = entries->items[i];
             char *full_path = NULL;
             err = fs_path_join(path, entry, &full_path);
             if (err) {
@@ -905,7 +905,7 @@ error_t *fs_list_dir(const char *path, string_array_t **out) {
         );
     }
 
-    string_array_t *entries = string_array_create();
+    string_array_t *entries = string_array_new(0);
     if (!entries) {
         closedir(dir);
         return ERROR(

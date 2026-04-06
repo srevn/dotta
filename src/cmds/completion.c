@@ -48,10 +48,10 @@ static void complete_enabled_profiles(git_repository *repo) {
     /* Sort enabled profiles alphabetically for easier completion */
     string_array_sort(profiles);
 
-    for (size_t i = 0; i < string_array_size(profiles); i++) {
+    for (size_t i = 0; i < profiles->count; i++) {
         printf(
             "%s\tEnabled Profile\n",
-            string_array_get(profiles, i)
+            profiles->items[i]
         );
     }
 
@@ -71,8 +71,8 @@ static void complete_all_profiles(git_repository *repo) {
     error_t *err = gitops_list_branches(repo, &branches);
     if (!err) {
         string_array_sort(branches);
-        for (size_t i = 0; i < string_array_size(branches); i++) {
-            const char *name = string_array_get(branches, i);
+        for (size_t i = 0; i < branches->count; i++) {
+            const char *name = branches->items[i];
             /* Skip internal worktree branch */
             if (strcmp(name, "dotta-worktree") != 0) {
                 printf("%s\tProfile\n", name);
@@ -88,10 +88,10 @@ static void complete_all_profiles(git_repository *repo) {
         string_array_t *remote_branches = NULL;
         if (upstream_discover_branches(repo, remote_name, &remote_branches) == NULL) {
             string_array_sort(remote_branches);
-            for (size_t i = 0; i < string_array_size(remote_branches); i++) {
+            for (size_t i = 0; i < remote_branches->count; i++) {
                 printf(
                     "%s\tRemote Profile\n",
-                    string_array_get(remote_branches, i)
+                    remote_branches->items[i]
                 );
             }
             string_array_free(remote_branches);
@@ -228,8 +228,8 @@ static void complete_commits(
             return;
         }
 
-        if (string_array_size(profiles) > 0) {
-            target_profile = string_array_get(profiles, 0);
+        if (profiles->count > 0) {
+            target_profile = profiles->items[0];
         }
     }
 

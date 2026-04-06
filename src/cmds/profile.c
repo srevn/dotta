@@ -54,7 +54,7 @@ static error_t *count_profile_files(
         return error_wrap(err, "Failed to list files");
     }
 
-    *count = string_array_size(files);
+    *count = files->count;
     string_array_free(files);
     profile_free(profile);
     return NULL;
@@ -253,14 +253,14 @@ static error_t *profile_list(
     }
 
     /* Separate into enabled and available */
-    available = string_array_create();
+    available = string_array_new(0);
     if (!available) {
         err = ERROR(ERR_MEMORY, "Failed to create array");
         goto cleanup;
     }
 
-    for (size_t i = 0; i < string_array_size(all_branches); i++) {
-        const char *name = string_array_get(all_branches, i);
+    for (size_t i = 0; i < all_branches->count; i++) {
+        const char *name = all_branches->items[i];
 
         /* Skip dotta-worktree */
         if (strcmp(name, "dotta-worktree") == 0) {
@@ -269,8 +269,8 @@ static error_t *profile_list(
 
         /* Check if enabled */
         bool is_enabled = false;
-        for (size_t j = 0; j < string_array_size(enabled_profiles); j++) {
-            if (strcmp(string_array_get(enabled_profiles, j), name) == 0) {
+        for (size_t j = 0; j < enabled_profiles->count; j++) {
+            if (strcmp(enabled_profiles->items[j], name) == 0) {
                 is_enabled = true;
                 break;
             }
@@ -288,10 +288,10 @@ static error_t *profile_list(
     }
 
     /* Print enabled profiles */
-    if (string_array_size(enabled_profiles) > 0) {
+    if (enabled_profiles->count > 0) {
         output_section(out, OUTPUT_NORMAL, "Enabled profiles (in layering order)");
-        for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
-            const char *name = string_array_get(enabled_profiles, i);
+        for (size_t i = 0; i < enabled_profiles->count; i++) {
+            const char *name = enabled_profiles->items[i];
             size_t file_count = 0;
             error_t *count_err = count_profile_files(repo, name, &file_count);
 
@@ -315,10 +315,10 @@ static error_t *profile_list(
     }
 
     /* Print available (disabled) profiles */
-    if (string_array_size(available) > 0 && opts->show_available) {
+    if (available->count > 0 && opts->show_available) {
         output_section(out, OUTPUT_NORMAL, "Available (disabled)");
-        for (size_t i = 0; i < string_array_size(available); i++) {
-            const char *name = string_array_get(available, i);
+        for (size_t i = 0; i < available->count; i++) {
+            const char *name = available->items[i];
             size_t file_count = 0;
             error_t *count_err = count_profile_files(repo, name, &file_count);
 
@@ -371,28 +371,23 @@ static error_t *profile_list(
                         error_message(remote_err)
                     );
                     error_free(remote_err);
-                } else if (string_array_size(remote_branches) > 0) {
-                    /*
-                     * Filter out branches that already exist locally
-                     * Uses string_array_difference() for O(n+m) set difference
-                     */
-                    error_t *diff_err = string_array_difference(
-                        remote_branches, all_branches, &remote_only
-                    );
-                    if (diff_err) {
-                        output_warning(
-                            out, OUTPUT_NORMAL, "Failed to filter remote branches: %s",
-                            error_message(diff_err)
-                        );
-                        error_free(diff_err);
+                } else if (remote_branches->count > 0) {
+                    /* Filter out branches that already exist locally */
+                    remote_only = string_array_new(remote_branches->count);
+                    if (remote_only) {
+                        for (size_t ri = 0; ri < remote_branches->count; ri++) {
+                            if (!string_array_contains(all_branches, remote_branches->items[ri])) {
+                                string_array_push(remote_only, remote_branches->items[ri]);
+                            }
+                        }
                     }
 
-                    if (remote_only && string_array_size(remote_only) > 0) {
+                    if (remote_only && remote_only->count > 0) {
                         output_section(out, OUTPUT_NORMAL, "Remote (not fetched)");
-                        for (size_t i = 0; i < string_array_size(remote_only); i++) {
+                        for (size_t i = 0; i < remote_only->count; i++) {
                             output_print(
                                 out, OUTPUT_NORMAL, "  • %s\n",
-                                string_array_get(remote_only, i)
+                                remote_only->items[i]
                             );
                         }
                         output_newline(out, OUTPUT_NORMAL);
@@ -472,8 +467,8 @@ static error_t *profile_fetch(
             goto cleanup;
         }
 
-        for (size_t i = 0; i < string_array_size(remote_branches); i++) {
-            const char *branch_name = string_array_get(remote_branches, i);
+        for (size_t i = 0; i < remote_branches->count; i++) {
+            const char *branch_name = remote_branches->items[i];
 
             output_info(out, OUTPUT_VERBOSE, "  Fetching %s...", branch_name);
 
@@ -542,8 +537,8 @@ static error_t *profile_fetch(
             bool found = false;
 
             /* Check if profile exists on remote */
-            for (size_t j = 0; j < string_array_size(available_remote); j++) {
-                if (strcmp(string_array_get(available_remote, j), profile_name) == 0) {
+            for (size_t j = 0; j < available_remote->count; j++) {
+                if (strcmp(available_remote->items[j], profile_name) == 0) {
                     found = true;
                     break;
                 }
@@ -560,12 +555,12 @@ static error_t *profile_fetch(
 
         /* If any profiles are missing, show available profiles and error */
         if (has_missing) {
-            if (string_array_size(available_remote) > 0) {
+            if (available_remote->count > 0) {
                 output_section(out, OUTPUT_NORMAL, "Available profiles on remote");
-                for (size_t i = 0; i < string_array_size(available_remote); i++) {
+                for (size_t i = 0; i < available_remote->count; i++) {
                     output_print(
                         out, OUTPUT_NORMAL, "  • %s\n",
-                        string_array_get(available_remote, i)
+                        available_remote->items[i]
                     );
                 }
                 output_newline(out, OUTPUT_NORMAL);
@@ -714,7 +709,7 @@ static error_t *profile_enable(
     }
 
     /* Determine which profiles to enable */
-    to_enable = string_array_create();
+    to_enable = string_array_new(0);
     if (!to_enable) {
         err = ERROR(ERR_MEMORY, "Failed to create array");
         goto cleanup;
@@ -728,8 +723,8 @@ static error_t *profile_enable(
             goto cleanup;
         }
 
-        for (size_t i = 0; i < string_array_size(all_branches); i++) {
-            const char *name = string_array_get(all_branches, i);
+        for (size_t i = 0; i < all_branches->count; i++) {
+            const char *name = all_branches->items[i];
             if (strcmp(name, "dotta-worktree") != 0) {
                 err = string_array_push(to_enable, name);
                 if (err) {
@@ -758,14 +753,14 @@ static error_t *profile_enable(
     }
 
     /* Validation: --prefix requires exactly ONE profile */
-    if (opts->custom_prefix && string_array_size(to_enable) > 1) {
+    if (opts->custom_prefix && to_enable->count > 1) {
         output_error(out, "Cannot use --prefix with multiple profiles");
         output_hint(out, OUTPUT_NORMAL, "Enable each profile separately:");
 
-        for (size_t i = 0; i < string_array_size(to_enable); i++) {
+        for (size_t i = 0; i < to_enable->count; i++) {
             output_hint(
                 out, OUTPUT_NORMAL, "dotta profile enable %s --prefix <path>",
-                string_array_get(to_enable, i)
+                to_enable->items[i]
             );
         }
         err = ERROR(ERR_INVALID_ARG, "Ambiguous --prefix usage");
@@ -773,13 +768,13 @@ static error_t *profile_enable(
     }
 
     /* Process each profile */
-    for (size_t i = 0; i < string_array_size(to_enable); i++) {
-        const char *profile_name = string_array_get(to_enable, i);
+    for (size_t i = 0; i < to_enable->count; i++) {
+        const char *profile_name = to_enable->items[i];
 
         /* Check if already enabled */
         bool is_enabled = false;
-        for (size_t j = 0; j < string_array_size(enabled); j++) {
-            if (strcmp(string_array_get(enabled, j), profile_name) == 0) {
+        for (size_t j = 0; j < enabled->count; j++) {
+            if (strcmp(enabled->items[j], profile_name) == 0) {
                 is_enabled = true;
                 break;
             }
@@ -980,7 +975,7 @@ static error_t *profile_disable(
     }
 
     /* Determine which profiles to disable */
-    to_disable = string_array_create();
+    to_disable = string_array_new(0);
     if (!to_disable) {
         err = ERROR(ERR_MEMORY, "Failed to create array");
         goto cleanup;
@@ -988,8 +983,8 @@ static error_t *profile_disable(
 
     if (opts->all_profiles) {
         /* Disable all */
-        for (size_t i = 0; i < string_array_size(enabled); i++) {
-            err = string_array_push(to_disable, string_array_get(enabled, i));
+        for (size_t i = 0; i < enabled->count; i++) {
+            err = string_array_push(to_disable, enabled->items[i]);
             if (err) {
                 err = error_wrap(err, "Failed to add profile to disable list");
                 goto cleanup;
@@ -1015,20 +1010,20 @@ static error_t *profile_disable(
     }
 
     /* Count profiles and build new_enabled for manifest operations */
-    new_enabled = string_array_create();
+    new_enabled = string_array_new(0);
     if (!new_enabled) {
         err = ERROR(ERR_MEMORY, "Failed to create array");
         goto cleanup;
     }
 
     /* Build new_enabled list (for manifest_disable_profile) and count */
-    for (size_t i = 0; i < string_array_size(enabled); i++) {
-        const char *profile_name = string_array_get(enabled, i);
+    for (size_t i = 0; i < enabled->count; i++) {
+        const char *profile_name = enabled->items[i];
 
         /* Check if this profile should be disabled */
         bool should_disable = false;
-        for (size_t j = 0; j < string_array_size(to_disable); j++) {
-            if (strcmp(string_array_get(to_disable, j), profile_name) == 0) {
+        for (size_t j = 0; j < to_disable->count; j++) {
+            if (strcmp(to_disable->items[j], profile_name) == 0) {
                 should_disable = true;
                 disabled_count++;
 
@@ -1051,12 +1046,12 @@ static error_t *profile_disable(
     }
 
     /* Check for profiles that weren't enabled */
-    for (size_t i = 0; i < string_array_size(to_disable); i++) {
-        const char *profile_name = string_array_get(to_disable, i);
+    for (size_t i = 0; i < to_disable->count; i++) {
+        const char *profile_name = to_disable->items[i];
 
         bool was_enabled = false;
-        for (size_t j = 0; j < string_array_size(enabled); j++) {
-            if (strcmp(string_array_get(enabled, j), profile_name) == 0) {
+        for (size_t j = 0; j < enabled->count; j++) {
+            if (strcmp(enabled->items[j], profile_name) == 0) {
                 was_enabled = true;
                 break;
             }
@@ -1077,12 +1072,12 @@ static error_t *profile_disable(
                 out, OUTPUT_NORMAL, "Would disable %zu profile%s:", disabled_count,
                 disabled_count == 1 ? "" : "s"
             );
-            for (size_t i = 0; i < string_array_size(to_disable); i++) {
-                const char *profile_name = string_array_get(to_disable, i);
+            for (size_t i = 0; i < to_disable->count; i++) {
+                const char *profile_name = to_disable->items[i];
                 /* Check if it was actually enabled */
                 bool was_enabled = false;
-                for (size_t j = 0; j < string_array_size(enabled); j++) {
-                    if (strcmp(string_array_get(enabled, j), profile_name) == 0) {
+                for (size_t j = 0; j < enabled->count; j++) {
+                    if (strcmp(enabled->items[j], profile_name) == 0) {
                         was_enabled = true;
                         break;
                     }
@@ -1103,13 +1098,13 @@ static error_t *profile_disable(
     /* Update state with disabled profiles */
     if (disabled_count > 0) {
         /* Process each disabled profile */
-        for (size_t i = 0; i < string_array_size(to_disable); i++) {
-            const char *profile_name = string_array_get(to_disable, i);
+        for (size_t i = 0; i < to_disable->count; i++) {
+            const char *profile_name = to_disable->items[i];
 
             /* Check if this profile was actually enabled */
             bool was_enabled = false;
-            for (size_t j = 0; j < string_array_size(enabled); j++) {
-                if (strcmp(string_array_get(enabled, j), profile_name) == 0) {
+            for (size_t j = 0; j < enabled->count; j++) {
+                if (strcmp(enabled->items[j], profile_name) == 0) {
                     was_enabled = true;
                     break;
                 }
@@ -1246,7 +1241,7 @@ static error_t *profile_reorder(
     }
 
     /* Edge case: no enabled profiles */
-    if (string_array_size(current_enabled) == 0) {
+    if (current_enabled->count == 0) {
         err = ERROR(
             ERR_VALIDATION, "No enabled profiles to reorder\n"
             "Hint: Run 'dotta profile enable <name>' first"
@@ -1255,7 +1250,7 @@ static error_t *profile_reorder(
     }
 
     /* Edge case: single profile */
-    if (string_array_size(current_enabled) == 1) {
+    if (current_enabled->count == 1) {
         if (!opts->quiet) {
             output_info(
                 out, OUTPUT_NORMAL, "Only one enabled profile, nothing to reorder"
@@ -1281,8 +1276,8 @@ static error_t *profile_reorder(
     /* Validation 2: All provided profiles must be currently enabled */
     for (size_t i = 0; i < opts->profile_count; i++) {
         bool is_enabled = false;
-        for (size_t j = 0; j < string_array_size(current_enabled); j++) {
-            if (strcmp(opts->profiles[i], string_array_get(current_enabled, j)) == 0) {
+        for (size_t j = 0; j < current_enabled->count; j++) {
+            if (strcmp(opts->profiles[i], current_enabled->items[j]) == 0) {
                 is_enabled = true;
                 break;
             }
@@ -1299,18 +1294,18 @@ static error_t *profile_reorder(
     }
 
     /* Validation 3: Profile count must match */
-    if (opts->profile_count != string_array_size(current_enabled)) {
+    if (opts->profile_count != current_enabled->count) {
         err = ERROR(
             ERR_VALIDATION, "Profile count mismatch: %zu enabled, %zu provided\n"
             "Hint: All enabled profiles must be included in reorder",
-            string_array_size(current_enabled), opts->profile_count
+            current_enabled->count, opts->profile_count
         );
         goto cleanup;
     }
 
     /* Validation 4: All currently enabled profiles must be included */
-    for (size_t i = 0; i < string_array_size(current_enabled); i++) {
-        const char *enabled_profile = string_array_get(current_enabled, i);
+    for (size_t i = 0; i < current_enabled->count; i++) {
+        const char *enabled_profile = current_enabled->items[i];
         bool found = false;
         for (size_t j = 0; j < opts->profile_count; j++) {
             if (strcmp(opts->profiles[j], enabled_profile) == 0) {
@@ -1330,7 +1325,7 @@ static error_t *profile_reorder(
     /* Check if order actually changed (idempotency) */
     bool order_changed = false;
     for (size_t i = 0; i < opts->profile_count; i++) {
-        if (strcmp(opts->profiles[i], string_array_get(current_enabled, i)) != 0) {
+        if (strcmp(opts->profiles[i], current_enabled->items[i]) != 0) {
             order_changed = true;
             break;
         }
@@ -1347,10 +1342,10 @@ static error_t *profile_reorder(
     output_section(out, OUTPUT_VERBOSE, "Profile order change");
 
     output_print(out, OUTPUT_VERBOSE, "  Before:");
-    for (size_t i = 0; i < string_array_size(current_enabled); i++) {
+    for (size_t i = 0; i < current_enabled->count; i++) {
         output_print(
             out, OUTPUT_VERBOSE, " %s",
-            string_array_get(current_enabled, i)
+            current_enabled->items[i]
         );
     }
     output_newline(out, OUTPUT_VERBOSE);
@@ -1463,14 +1458,14 @@ static error_t *profile_validate(
     output_section(out, OUTPUT_NORMAL, "Validating profile state");
 
     /* Check 1: Enabled profiles exist as branches */
-    missing = string_array_create();
+    missing = string_array_new(0);
     if (!missing) {
         err = ERROR(ERR_MEMORY, "Failed to create array");
         goto cleanup;
     }
 
-    for (size_t i = 0; i < string_array_size(enabled); i++) {
-        const char *profile_name = string_array_get(enabled, i);
+    for (size_t i = 0; i < enabled->count; i++) {
+        const char *profile_name = enabled->items[i];
 
         if (!profile_exists(repo, profile_name)) {
             err = string_array_push(missing, profile_name);
@@ -1482,20 +1477,20 @@ static error_t *profile_validate(
         }
     }
 
-    if (string_array_size(missing) > 0) {
+    if (missing->count > 0) {
         output_warning(
             out, OUTPUT_NORMAL, "Found %zu missing profile%s in state:",
-            string_array_size(missing), string_array_size(missing) == 1 ? "" : "s"
+            missing->count, missing->count == 1 ? "" : "s"
         );
 
-        for (size_t i = 0; i < string_array_size(missing); i++) {
-            output_print(out, OUTPUT_NORMAL, "  • %s\n", string_array_get(missing, i));
+        for (size_t i = 0; i < missing->count; i++) {
+            output_print(out, OUTPUT_NORMAL, "  • %s\n", missing->items[i]);
         }
 
         if (opts->fix) {
             /* Remove missing profiles from state */
-            for (size_t i = 0; i < string_array_size(missing); i++) {
-                const char *name = string_array_get(missing, i);
+            for (size_t i = 0; i < missing->count; i++) {
+                const char *name = missing->items[i];
                 err = state_disable_profile(state, name);
                 if (err) {
                     err = error_wrap(

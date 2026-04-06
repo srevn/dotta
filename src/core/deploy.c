@@ -52,8 +52,8 @@ error_t *deploy_workspace_preflight(
     }
 
     result->has_errors = false;
-    result->conflicts = string_array_create();
-    result->permission_errors = string_array_create();
+    result->conflicts = string_array_new(0);
+    result->permission_errors = string_array_new(0);
     result->reassignments = NULL;
     result->reassignment_count = 0;
 
@@ -1133,11 +1133,11 @@ error_t *deploy_execute(
         return ERROR(ERR_MEMORY, "Failed to allocate deploy result");
     }
 
-    result->deployed = string_array_create();
-    result->adopted = string_array_create();
-    result->unchanged = string_array_create();
-    result->skipped_existing = string_array_create();
-    result->failed = string_array_create();
+    result->deployed = string_array_new(0);
+    result->adopted = string_array_new(0);
+    result->unchanged = string_array_new(0);
+    result->skipped_existing = string_array_new(0);
+    result->failed = string_array_new(0);
 
     result->deployed_count = 0;
     result->adopted_count = 0;

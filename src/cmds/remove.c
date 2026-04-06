@@ -113,8 +113,8 @@ static error_t *resolve_paths_to_remove(
     }
 
     /* Allocate arrays */
-    storage_paths = string_array_create();
-    filesystem_paths = string_array_create();
+    storage_paths = string_array_new(0);
+    filesystem_paths = string_array_new(0);
     if (!storage_paths || !filesystem_paths) {
         err = ERROR(ERR_MEMORY, "Failed to allocate path arrays");
         goto cleanup;
@@ -138,14 +138,14 @@ static error_t *resolve_paths_to_remove(
     }
 
     /* Build hashmap index for O(1) lookups */
-    profile_files_map = hashmap_create(string_array_size(profile_files));
+    profile_files_map = hashmap_create(profile_files->count);
     if (!profile_files_map) {
         err = ERROR(ERR_MEMORY, "Failed to create profile files index");
         goto cleanup;
     }
 
-    for (size_t i = 0; i < string_array_size(profile_files); i++) {
-        const char *file = string_array_get(profile_files, i);
+    for (size_t i = 0; i < profile_files->count; i++) {
+        const char *file = profile_files->items[i];
         err = hashmap_set(profile_files_map, file, (void *) 1);  /* Dummy value */
         if (err) {
             err = error_wrap(err, "Failed to index profile files");
@@ -216,8 +216,8 @@ static error_t *resolve_paths_to_remove(
         }
 
         /* Check for directory prefix matches - requires iteration */
-        for (size_t j = 0; j < string_array_size(profile_files); j++) {
-            const char *profile_file = string_array_get(profile_files, j);
+        for (size_t j = 0; j < profile_files->count; j++) {
+            const char *profile_file = profile_files->items[j];
 
             /* Skip if already matched as exact */
             if (strcmp(profile_file, storage_path) == 0) {
@@ -291,7 +291,7 @@ static error_t *resolve_paths_to_remove(
     }
 
     /* Check if we found any files */
-    if (string_array_size(storage_paths) == 0) {
+    if (storage_paths->count == 0) {
         err = ERROR(
             ERR_NOT_FOUND, "No files found to remove from profile '%s'",
             profile_name
@@ -435,7 +435,7 @@ static error_t *analyze_multi_profile_conflicts(
     CHECK_NULL(has_deployed_from_other_out);
 
     error_t *err = NULL;
-    size_t file_count = string_array_size(storage_paths);
+    size_t file_count = storage_paths->count;
 
     /* Allocate array to hold other_profiles for each file */
     string_array_t **other_profiles = calloc(file_count, sizeof(string_array_t *));
@@ -457,18 +457,18 @@ static error_t *analyze_multi_profile_conflicts(
 
     /* Check each file using O(1) index lookups */
     for (size_t i = 0; i < file_count; i++) {
-        const char *storage_path = string_array_get(storage_paths, i);
-        const char *filesystem_path = string_array_get(filesystem_paths, i);
+        const char *storage_path = storage_paths->items[i];
+        const char *filesystem_path = filesystem_paths->items[i];
 
         /* Lookup profiles containing this file - O(1) */
         string_array_t *indexed_profiles = hashmap_get(profile_index, storage_path);
 
-        if (indexed_profiles && string_array_size(indexed_profiles) > 0) {
+        if (indexed_profiles && indexed_profiles->count > 0) {
             /* Create a copy for the output (index owns the original) */
-            other_profiles[i] = string_array_create();
+            other_profiles[i] = string_array_new(0);
             if (other_profiles[i]) {
-                for (size_t j = 0; j < string_array_size(indexed_profiles); j++) {
-                    string_array_push(other_profiles[i], string_array_get(indexed_profiles, j));
+                for (size_t j = 0; j < indexed_profiles->count; j++) {
+                    string_array_push(other_profiles[i], indexed_profiles->items[j]);
                 }
                 multi_profile_count++;
 
@@ -484,7 +484,7 @@ static error_t *analyze_multi_profile_conflicts(
     }
 
     /* Free the index (and all its string arrays) */
-    hashmap_free(profile_index, string_array_free);
+    hashmap_free(profile_index, string_array_free_cb);
 
     *other_profiles_out = other_profiles;
     *multi_profile_count_out = multi_profile_count;
@@ -519,20 +519,20 @@ static void display_multi_profile_warnings(
 
     /* Display each multi-profile file */
     for (size_t i = 0; i < file_count; i++) {
-        if (!other_profiles[i] || string_array_size(other_profiles[i]) == 0) {
+        if (!other_profiles[i] || other_profiles[i]->count == 0) {
             continue;
         }
 
-        const char *fs_path = string_array_get(filesystem_paths, i);
+        const char *fs_path = filesystem_paths->items[i];
         output_styled(
             out, OUTPUT_NORMAL, "  {yellow}%s{reset} also in:",
             fs_path
         );
 
-        for (size_t j = 0; j < string_array_size(other_profiles[i]); j++) {
+        for (size_t j = 0; j < other_profiles[i]->count; j++) {
             output_styled(
                 out, OUTPUT_NORMAL, " {cyan}%s{reset}",
-                string_array_get(other_profiles[i], j)
+                other_profiles[i]->items[j]
             );
         }
         output_newline(out, OUTPUT_NORMAL);
@@ -598,7 +598,7 @@ static bool confirm_removal(
         return true;
     }
 
-    size_t count = string_array_size(storage_paths);
+    size_t count = storage_paths->count;
 
     /* Check config threshold */
     size_t threshold = 5; /* Default threshold */
@@ -762,8 +762,8 @@ static error_t *cleanup_metadata(
 
     /* Remove metadata entries for each removed file */
     size_t removed_count = 0;
-    for (size_t i = 0; i < string_array_size(removed_paths); i++) {
-        const char *storage_path = string_array_get(removed_paths, i);
+    for (size_t i = 0; i < removed_paths->count; i++) {
+        const char *storage_path = removed_paths->items[i];
 
         /* Check if metadata item exists */
         if (metadata_has_item(metadata, storage_path)) {
@@ -803,7 +803,7 @@ static error_t *cleanup_metadata(
             metadata_get_items_by_kind(metadata, METADATA_ITEM_FILE, &file_count);
 
         /* Collect orphaned keys first (can't modify metadata during iteration) */
-        string_array_t *orphaned_dirs = string_array_create();
+        string_array_t *orphaned_dirs = string_array_new(0);
         if (!orphaned_dirs) {
             free(files);
             free(directories);
@@ -837,8 +837,8 @@ static error_t *cleanup_metadata(
         }
 
         /* Remove orphaned directories */
-        for (size_t i = 0; i < string_array_size(orphaned_dirs); i++) {
-            err = metadata_remove_item(metadata, string_array_get(orphaned_dirs, i));
+        for (size_t i = 0; i < orphaned_dirs->count; i++) {
+            err = metadata_remove_item(metadata, orphaned_dirs->items[i]);
             if (err) {
                 string_array_free(orphaned_dirs);
                 free(files);
@@ -851,7 +851,7 @@ static error_t *cleanup_metadata(
 
             output_info(
                 out, OUTPUT_VERBOSE, "Removed orphaned directory metadata: %s",
-                string_array_get(orphaned_dirs, i)
+                orphaned_dirs->items[i]
             );
         }
 
@@ -985,7 +985,7 @@ static error_t *remove_files_from_profile(
         out,
         filesystem_paths,
         other_profiles,
-        string_array_size(storage_paths),
+        storage_paths->count,
         multi_profile_count,
         has_deployed_from_other,
         opts->profile
@@ -997,16 +997,16 @@ static error_t *remove_files_from_profile(
             out, OUTPUT_NORMAL, "Would remove from profile '%s':\n",
             opts->profile
         );
-        for (size_t i = 0; i < string_array_size(storage_paths); i++) {
+        for (size_t i = 0; i < storage_paths->count; i++) {
             output_print(
                 out, OUTPUT_NORMAL, "  - %s\n",
-                string_array_get(storage_paths, i)
+                storage_paths->items[i]
             );
         }
         output_print(
             out, OUTPUT_NORMAL, "\nTotal: %zu file%s would be removed from profile\n",
-            string_array_size(storage_paths),
-            string_array_size(storage_paths) == 1 ? "" : "s"
+            storage_paths->count,
+            storage_paths->count == 1 ? "" : "s"
         );
         if (opts->delete_files) {
             output_print(
@@ -1028,7 +1028,7 @@ static error_t *remove_files_from_profile(
     }
 
     /* Cleanup multi-profile tracking - done with it */
-    free_multi_profile_tracking(other_profiles, string_array_size(storage_paths));
+    free_multi_profile_tracking(other_profiles, storage_paths->count);
     other_profiles = NULL;
 
     /* Get repository directory for hooks */
@@ -1092,14 +1092,14 @@ static error_t *remove_files_from_profile(
 
     /* Remove each file from worktree, tracking which files are actually removed */
     size_t removed_count = 0;
-    removed_paths = string_array_create();
+    removed_paths = string_array_new(0);
     if (!removed_paths) {
         err = ERROR(ERR_MEMORY, "Failed to allocate removed paths array");
         goto cleanup;
     }
 
-    for (size_t i = 0; i < string_array_size(storage_paths); i++) {
-        const char *storage_path = string_array_get(storage_paths, i);
+    for (size_t i = 0; i < storage_paths->count; i++) {
+        const char *storage_path = storage_paths->items[i];
 
         /* Interactive mode: prompt for each file */
         if (opts->interactive) {
@@ -1339,7 +1339,7 @@ cleanup:
     if (hook_ctx) hook_context_free(hook_ctx);
     if (repo_dir) free(repo_dir);
     if (other_profiles) free_multi_profile_tracking(
-        other_profiles, string_array_size(storage_paths)
+        other_profiles, storage_paths->count
     );
     if (filesystem_paths) string_array_free(filesystem_paths);
     if (storage_paths) string_array_free(storage_paths);
@@ -1447,7 +1447,7 @@ static error_t *delete_profile_branch(
         goto cleanup;
     }
 
-    size_t file_count = string_array_size(files);
+    size_t file_count = files->count;
     bool is_auto_detected = profile->auto_detected;
 
     /* Keep files alive for hook context; freed in cleanup */
@@ -1607,19 +1607,19 @@ static error_t *delete_profile_branch(
     /* Convert storage paths to filesystem paths for hook consistency.
      * The file removal path passes filesystem paths to hooks; do the same here. */
     if (files) {
-        hook_fs_paths = string_array_create();
+        hook_fs_paths = string_array_new(0);
         if (hook_fs_paths) {
-            for (size_t i = 0; i < string_array_size(files); i++) {
+            for (size_t i = 0; i < files->count; i++) {
                 char *fs_path = NULL;
                 error_t *conv_err = path_from_storage(
-                    string_array_get(files, i), hook_custom_prefix, &fs_path
+                    files->items[i], hook_custom_prefix, &fs_path
                 );
                 if (!conv_err && fs_path) {
                     string_array_push(hook_fs_paths, fs_path);
                     free(fs_path);
                 } else {
                     /* Fall back to storage path (e.g., custom/ without prefix) */
-                    string_array_push(hook_fs_paths, string_array_get(files, i));
+                    string_array_push(hook_fs_paths, files->items[i]);
                     if (conv_err) error_free(conv_err);
                 }
             }
@@ -1687,7 +1687,7 @@ static error_t *delete_profile_branch(
         }
 
         /* Build list of remaining profiles (exclude opts->profile) */
-        string_array_t *remaining = string_array_create();
+        string_array_t *remaining = string_array_new(0);
         if (!remaining) {
             err = ERROR(ERR_MEMORY, "Failed to allocate remaining profiles array");
             state_free(manifest_state);
@@ -1695,8 +1695,8 @@ static error_t *delete_profile_branch(
             goto cleanup;
         }
 
-        for (size_t i = 0; i < string_array_size(enabled_profiles); i++) {
-            const char *enabled = string_array_get(enabled_profiles, i);
+        for (size_t i = 0; i < enabled_profiles->count; i++) {
+            const char *enabled = enabled_profiles->items[i];
             if (strcmp(enabled, opts->profile) != 0) {
                 err = string_array_push(remaining, enabled);
                 if (err) {

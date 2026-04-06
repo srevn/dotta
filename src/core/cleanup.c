@@ -51,13 +51,13 @@ static error_t *create_result(cleanup_result_t **out) {
     }
 
     /* Allocate detailed tracking arrays (for caller display) */
-    result->removed_files = string_array_create();
-    result->skipped_files = string_array_create();
-    result->failed_files = string_array_create();
-    result->released_files = string_array_create();
-    result->removed_dirs = string_array_create();
-    result->skipped_dirs = string_array_create();
-    result->failed_dirs = string_array_create();
+    result->removed_files = string_array_new(0);
+    result->skipped_files = string_array_new(0);
+    result->failed_files = string_array_new(0);
+    result->released_files = string_array_new(0);
+    result->removed_dirs = string_array_new(0);
+    result->skipped_dirs = string_array_new(0);
+    result->failed_dirs = string_array_new(0);
 
     /* Check allocations */
     if (!result->removed_files || !result->skipped_files ||
@@ -679,7 +679,7 @@ error_t *cleanup_preflight_check(
 
     /* Convert file orphans to string array for display */
     if (file_orphan_count > 0) {
-        orphaned_files = string_array_create();
+        orphaned_files = string_array_new(0);
         if (!orphaned_files) {
             err = ERROR(ERR_MEMORY, "Failed to allocate orphan file list for display");
             goto cleanup;
@@ -743,7 +743,7 @@ error_t *cleanup_preflight_check(
     /* Preview orphaned directories (check which are non-empty) */
     if (dir_orphan_count > 0) {
         /* Allocate directory array for preview */
-        orphaned_dirs_display = string_array_create();
+        orphaned_dirs_display = string_array_new(0);
         if (!orphaned_dirs_display) {
             err = ERROR(ERR_MEMORY, "Failed to allocate orphan directory list for display");
             goto cleanup;

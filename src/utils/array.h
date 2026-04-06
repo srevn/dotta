@@ -1,7 +1,13 @@
 /**
- * array.h - Dynamic string array utilities
+ * array.h - Dynamic string array
  *
- * Provides a dynamic array of strings with automatic growth.
+ * Growable array of heap-allocated strings with ownership semantics.
+ * The struct is transparent: direct field access (arr->count, arr->items[i])
+ * is the intended usage pattern.
+ *
+ * Supports both stack and heap allocation:
+ *   Stack:  string_array_t arr = {0};  ... string_array_deinit(&arr);
+ *   Heap:   string_array_t *arr = string_array_new(0);  ... string_array_free(arr);
  */
 
 #ifndef DOTTA_ARRAY_H
@@ -10,158 +16,120 @@
 #include <types.h>
 
 /**
- * Create a new string array
- *
- * @return Newly allocated array (must be freed with string_array_free)
+ * Initialize array to empty state.
+ * Equivalent to zero-initialization: string_array_t arr = {0};
  */
-string_array_t *string_array_create(void);
+void string_array_init(string_array_t *arr);
 
 /**
- * Create string array with initial capacity
+ * Initialize array with pre-allocated capacity.
  *
- * @param capacity Initial capacity
- * @return Newly allocated array
+ * @param arr Array to initialize
+ * @param cap Desired initial capacity
+ * @return Error on allocation failure
  */
-string_array_t *string_array_create_with_capacity(size_t capacity);
+error_t *string_array_init_cap(string_array_t *arr, size_t cap);
 
 /**
- * Free string array and all contained strings
- *
- * Generic callback signature for use with containers (e.g., hashmap_free).
- * Accepts void* to match standard C cleanup callback pattern.
- *
- * @param ptr Array to free (can be NULL)
+ * Release all owned memory (strings + backing array).
+ * Resets struct to zero state. Safe to call on zero-initialized or
+ * already-deinitialized arrays. No-op on NULL.
  */
-void string_array_free(void *ptr);
+void string_array_deinit(string_array_t *arr);
 
 /**
- * Deep clone string array
+ * Allocate and initialize a new array on the heap.
  *
- * Creates a new array with duplicates of all strings. The returned array
- * is completely independent of the source array.
- *
- * @param src Source array (can be NULL)
- * @return Cloned array or NULL if src is NULL or allocation fails (must free with string_array_free)
+ * @param cap Initial capacity (0 for no pre-allocation)
+ * @return New array, or NULL on allocation failure
  */
-string_array_t *string_array_clone(const string_array_t *src);
+string_array_t *string_array_new(size_t cap);
 
 /**
- * Push a string to the array (copies the string)
+ * Deinitialize and free a heap-allocated array. No-op on NULL.
+ */
+void string_array_free(string_array_t *arr);
+
+/**
+ * Callback-compatible free for use with hashmap_free() and similar APIs.
+ * Casts void* to string_array_t* and calls string_array_free().
+ */
+void string_array_free_cb(void *ptr);
+
+/**
+ * Append a copy of str to the array.
  *
- * @param arr Array
- * @param str String to push (will be duplicated)
- * @return Error or NULL on success
+ * @param arr Array (must not be NULL)
+ * @param str String to copy and append (must not be NULL)
+ * @return Error on allocation failure
  */
 error_t *string_array_push(string_array_t *arr, const char *str);
 
 /**
- * Push a string without copying (transfers ownership)
+ * Append str to the array, transferring ownership.
+ * str must be heap-allocated. On error, caller retains ownership.
  *
- * @param arr Array
- * @param str String to push (must be heap-allocated, ownership transferred)
- * @return Error or NULL on success
+ * @param arr Array (must not be NULL)
+ * @param str Heap-allocated string (must not be NULL, ownership transferred)
+ * @return Error on allocation failure
  */
-error_t *string_array_push_take(string_array_t *arr, char *str);
+error_t *string_array_push_owned(string_array_t *arr, char *str);
 
 /**
- * Get string at index
+ * Ensure capacity for at least cap elements without reallocation.
  *
- * @param arr Array
- * @param index Index
- * @return String at index (NULL if out of bounds)
+ * @return Error on allocation failure
  */
-const char *string_array_get(const string_array_t *arr, size_t index);
+error_t *string_array_reserve(string_array_t *arr, size_t cap);
 
 /**
- * Remove string at index
- *
- * @param arr Array
- * @param index Index
- * @return Error or NULL on success
+ * Remove element at index, shifting subsequent elements left. O(n).
+ * No-op if arr is NULL or index is out of bounds.
  */
-error_t *string_array_remove(string_array_t *arr, size_t index);
+void string_array_remove(string_array_t *arr, size_t index);
 
 /**
- * Remove string by value (first occurrence)
- *
- * @param arr Array
- * @param str String to remove
- * @return Error or NULL on success (not an error if not found)
+ * Remove element at index by swapping with the last element. O(1).
+ * Does not preserve order. No-op if arr is NULL or index is out of bounds.
  */
-error_t *string_array_remove_value(string_array_t *arr, const char *str);
+void string_array_swap_remove(string_array_t *arr, size_t index);
 
 /**
- * Check if array contains string
+ * Remove first occurrence of str (strcmp match).
  *
- * @param arr Array
- * @param str String to search for
- * @return true if found, false otherwise
+ * @return true if found and removed, false otherwise
  */
-bool string_array_contains(const string_array_t *arr, const char *str);
+bool string_array_remove_value(string_array_t *arr, const char *str);
 
 /**
- * Clear array (removes all strings)
- *
- * @param arr Array
+ * Remove all elements, freeing each string. Retains allocated capacity.
  */
 void string_array_clear(string_array_t *arr);
 
 /**
- * Get array size
+ * Linear search for str (strcmp match).
  *
- * @param arr Array
- * @return Number of strings in array
+ * @return true if found
  */
-size_t string_array_size(const string_array_t *arr);
+bool string_array_contains(const string_array_t *arr, const char *str);
 
 /**
- * Reserve capacity for array
- *
- * Ensures array can hold at least the specified number of elements
- * without reallocation.
- *
- * @param arr Array
- * @param capacity Desired minimum capacity
- * @return Error or NULL on success
- */
-error_t *string_array_reserve(string_array_t *arr, size_t capacity);
-
-/**
- * Sort array alphabetically
- *
- * @param arr Array
+ * Sort elements lexicographically in place (strcmp order).
  */
 void string_array_sort(string_array_t *arr);
 
 /**
- * Compute set difference (A - B)
+ * Deep-copy src into dst.
+ * dst is initialized by this function — caller must deinit any previous
+ * contents before calling to avoid leaks.
  *
- * Returns all elements in set_a that are NOT in set_b.
- * Uses hashmap internally for efficient O(n+m) performance.
- *
- * Duplicates in either set are handled naturally - each occurrence
- * in set_a is checked independently against set_b.
- *
- * Examples:
- *   A = ["a", "b", "c"], B = ["b", "d"] → Result = ["a", "c"]
- *   A = ["x", "y"], B = [] → Result = ["x", "y"]
- *   A = [], B = ["a"] → Result = []
- *   A = ["a", "a"], B = ["a"] → Result = []
- *
- * @param set_a Elements to filter (must not be NULL)
- * @param set_b Elements to exclude (must not be NULL)
- * @param out_difference Result array (must not be NULL, caller must free)
- * @return Error or NULL on success
+ * @param src Source array (must not be NULL)
+ * @param dst Destination (must not be NULL, overwritten)
+ * @return Error on allocation failure (dst left in clean zero state)
  */
-error_t *string_array_difference(
-    const string_array_t *set_a,
-    const string_array_t *set_b,
-    string_array_t **out_difference
-);
+error_t *string_array_clone(const string_array_t *src, string_array_t *dst);
 
-/**
- * RAII cleanup attribute helper
- */
+/** Cleanup helper for heap-allocated arrays (string_array_t *) */
 static inline void cleanup_string_array(string_array_t **arr) {
     if (arr && *arr) {
         string_array_free(*arr);
@@ -169,6 +137,17 @@ static inline void cleanup_string_array(string_array_t **arr) {
     }
 }
 
+/** Cleanup helper for stack/embedded arrays (string_array_t) */
+static inline void cleanup_string_array_val(string_array_t *arr) {
+    if (arr) {
+        string_array_deinit(arr);
+    }
+}
+
+/** For heap-allocated: string_array_t *p STRING_ARRAY_CLEANUP = ...; */
 #define STRING_ARRAY_CLEANUP __attribute__((cleanup(cleanup_string_array)))
+
+/** For stack/embedded: string_array_t arr STRING_ARRAY_AUTO = {0}; */
+#define STRING_ARRAY_AUTO __attribute__((cleanup(cleanup_string_array_val)))
 
 #endif /* DOTTA_ARRAY_H */

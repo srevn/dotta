@@ -1248,7 +1248,7 @@ static error_t *update_manifest_after_update(
         return error_wrap(err, "Failed to get enabled profiles");
     }
 
-    if (string_array_size(enabled_profiles) == 0) {
+    if (enabled_profiles->count == 0) {
         string_array_free(enabled_profiles);
         state_free(state);
         return NULL;  /* No profiles enabled - nothing to do */

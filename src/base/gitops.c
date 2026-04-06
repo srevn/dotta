@@ -251,7 +251,7 @@ error_t *gitops_list_branches(
         );
     }
 
-    string_array_t *branches = string_array_create();
+    string_array_t *branches = string_array_new(0);
     if (!branches) {
         git_branch_iterator_free(iter);
         return ERROR(ERR_MEMORY, "Failed to allocate branch list");
@@ -314,7 +314,7 @@ error_t *gitops_list_remote_branches(
         );
     }
 
-    string_array_t *branches = string_array_create();
+    string_array_t *branches = string_array_new(0);
     if (!branches) {
         git_branch_iterator_free(iter);
         return ERROR(ERR_MEMORY, "Failed to allocate branch list");
@@ -725,7 +725,7 @@ static error_t *split_path_to_segments(
         );
     }
 
-    string_array_t *segments = string_array_create();
+    string_array_t *segments = string_array_new(0);
     if (!segments) {
         return ERROR(
             ERR_MEMORY,
@@ -757,7 +757,7 @@ static error_t *split_path_to_segments(
             return ERROR(ERR_MEMORY, "Failed to allocate path segment");
         }
 
-        error_t *err = string_array_push_take(segments, segment);
+        error_t *err = string_array_push_owned(segments, segment);
         if (err) {
             free(segment);
             string_array_free(segments);
@@ -777,12 +777,12 @@ static error_t *split_path_to_segments(
     /* Guard against pathologically deep paths that would cause stack
      * overflow in recursive tree construction. Real-world dotfile paths
      * rarely exceed ~10 levels; 64 is extremely generous. */
-    if (string_array_size(segments) > 64) {
+    if (segments->count > 64) {
         string_array_free(segments);
         return ERROR(
             ERR_INVALID_ARG,
             "File path '%s' has too many components (%zu, max 64)",
-            file_path, string_array_size(segments)
+            file_path, segments->count
         );
     }
 
@@ -814,8 +814,8 @@ static error_t *build_tree_for_path(
     git_filemode_t file_mode,
     git_oid *out_tree_oid
 ) {
-    const char *segment = string_array_get(segments, depth);
-    bool is_final = (depth == string_array_size(segments) - 1);
+    const char *segment = segments->items[depth];
+    bool is_final = (depth == segments->count - 1);
     int git_err;
 
     if (is_final) {

@@ -201,7 +201,7 @@ static error_t *fetch_all_profiles(
     }
 
     /* Create array for successfully fetched profiles */
-    string_array_t *successful = string_array_create();
+    string_array_t *successful = string_array_new(0);
     if (!successful) {
         string_array_free(all_branches);
         return ERROR(
@@ -274,7 +274,7 @@ static error_t *initialize_state(
         }
 
         /* Build string_array_t for manifest_rebuild */
-        string_array_t *profiles_array = string_array_create_with_capacity(count);
+        string_array_t *profiles_array = string_array_new(count);
         if (!profiles_array) {
             state_free(state);
             return ERROR(ERR_MEMORY, "Failed to allocate profile array");
@@ -427,7 +427,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     }
 
     /* Determine which profiles to fetch */
-    fetched_profiles = string_array_create();
+    fetched_profiles = string_array_new(0);
     if (!fetched_profiles) {
         final_err = ERROR(ERR_MEMORY, "Failed to create profile array");
         goto cleanup;
@@ -503,17 +503,17 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             }
         }
 
-        if (detected_names && string_array_size(detected_names) > 0) {
+        if (detected_names && detected_names->count > 0) {
             /* Show detected profiles */
-            for (size_t i = 0; i < string_array_size(detected_names); i++) {
-                output_info(out, OUTPUT_NORMAL, "  • %s", string_array_get(detected_names, i));
+            for (size_t i = 0; i < detected_names->count; i++) {
+                output_info(out, OUTPUT_NORMAL, "  • %s", detected_names->items[i]);
             }
             output_newline(out, OUTPUT_NORMAL);
 
             /* Fetch detected profiles */
             size_t fetched_count = 0;
             err = fetch_profiles(
-                repo, "origin", detected_names->items, string_array_size(detected_names),
+                repo, "origin", detected_names->items, detected_names->count,
                 out, xfer, &fetched_count, fetched_profiles
             );
             if (err) {
@@ -535,10 +535,10 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
             /* No profiles detected — show available remote branches as guidance */
             output_warning(out, OUTPUT_NORMAL, "No profiles auto-detected for this system");
 
-            if (remote_branches && string_array_size(remote_branches) > 0) {
+            if (remote_branches && remote_branches->count > 0) {
                 output_section(out, OUTPUT_NORMAL, "Available remote profiles");
-                for (size_t i = 0; i < string_array_size(remote_branches); i++) {
-                    output_info(out, OUTPUT_NORMAL, "  • %s", string_array_get(remote_branches, i));
+                for (size_t i = 0; i < remote_branches->count; i++) {
+                    output_info(out, OUTPUT_NORMAL, "  • %s", remote_branches->items[i]);
                 }
                 output_newline(out, OUTPUT_NORMAL);
             }
@@ -555,15 +555,15 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
      * deployment paths. Without it, enabling them creates half-configured state
      * that breaks other operations. Filter them out and hint the user instead.
      * The branch data is already fetched and available locally. */
-    if (string_array_size(fetched_profiles) > 0) {
-        string_array_t *profile_names = string_array_create();
+    if (fetched_profiles->count > 0) {
+        string_array_t *profile_names = string_array_new(0);
         if (!profile_names) {
             final_err = ERROR(ERR_MEMORY, "Failed to allocate profile array");
             goto cleanup;
         }
 
-        for (size_t i = 0; i < string_array_size(fetched_profiles); i++) {
-            const char *name = string_array_get(fetched_profiles, i);
+        for (size_t i = 0; i < fetched_profiles->count; i++) {
+            const char *name = fetched_profiles->items[i];
             bool has_custom = false;
 
             error_t *check_err = profile_has_custom_files(repo, name, &has_custom);
@@ -589,7 +589,7 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         }
 
         err = initialize_state(
-            repo, profile_names->items, string_array_size(profile_names), out
+            repo, profile_names->items, profile_names->count, out
         );
         if (err) {
             output_error(out, "Failed to initialize state: %s", error_message(err));
@@ -654,10 +654,10 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     bool bootstrap_available = false;
 
     /* Check bootstrap scripts in all fetched profiles */
-    if (!opts->no_bootstrap && string_array_size(fetched_profiles) > 0) {
+    if (!opts->no_bootstrap && fetched_profiles->count > 0) {
         /* Check if any fetched profiles have bootstrap scripts */
-        for (size_t i = 0; i < string_array_size(fetched_profiles); i++) {
-            const char *profile_name = string_array_get(fetched_profiles, i);
+        for (size_t i = 0; i < fetched_profiles->count; i++) {
+            const char *profile_name = fetched_profiles->items[i];
             if (bootstrap_exists(repo, profile_name, NULL)) {
                 bootstrap_available = true;
                 break;
@@ -667,8 +667,8 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
         if (bootstrap_available) {
             output_section(out, OUTPUT_NORMAL, "Bootstrap scripts available");
 
-            for (size_t i = 0; i < string_array_size(fetched_profiles); i++) {
-                const char *profile_name = string_array_get(fetched_profiles, i);
+            for (size_t i = 0; i < fetched_profiles->count; i++) {
+                const char *profile_name = fetched_profiles->items[i];
                 if (bootstrap_exists(repo, profile_name, NULL)) {
                     output_styled(
                         out, OUTPUT_NORMAL, "  {green}✓{reset} %s/.bootstrap\n",
@@ -693,11 +693,11 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     }
 
     /* Execute bootstrap if requested */
-    if (run_bootstrap && string_array_size(fetched_profiles) > 0) {
+    if (run_bootstrap && fetched_profiles->count > 0) {
         /* Load profiles for bootstrap execution */
         profile_list_t *bootstrap_profiles = NULL;
         err = profile_list_load(
-            repo, fetched_profiles->items, string_array_size(fetched_profiles),
+            repo, fetched_profiles->items, fetched_profiles->count,
             false, /* non-strict: skip non-existent */ &bootstrap_profiles
         );
 

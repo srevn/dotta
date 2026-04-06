@@ -224,9 +224,9 @@ static error_t *discover_file(
         return err;
     }
 
-    if (string_array_size(matches) == 1) {
+    if (matches->count == 1) {
         /* Found in exactly one profile */
-        *out_profile = strdup(string_array_get(matches, 0));
+        *out_profile = strdup(matches->items[0]);
         string_array_free(matches);
 
         if (!*out_profile) {
@@ -244,10 +244,10 @@ static error_t *discover_file(
         storage_path
     );
 
-    for (size_t i = 0; i < string_array_size(matches); i++) {
+    for (size_t i = 0; i < matches->count; i++) {
         output_print(
             out, OUTPUT_NORMAL, "  • %s\n",
-            string_array_get(matches, i)
+            matches->items[i]
         );
     }
     output_hint(out, OUTPUT_NORMAL, "Specify --profile to disambiguate:");

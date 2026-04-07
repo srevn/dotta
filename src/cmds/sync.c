@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <config.h>
 
 #include "base/credentials.h"
 #include "base/error.h"
@@ -21,7 +22,6 @@
 #include "core/upstream.h"
 #include "core/workspace.h"
 #include "utils/array.h"
-#include "utils/config.h"
 #include "utils/output.h"
 
 /**
@@ -1303,13 +1303,12 @@ static error_t *sync_push_phase(
 /**
  * Sync command implementation
  */
-error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
+error_t *cmd_sync(git_repository *repo, const config_t *config, const cmd_sync_options_t *opts) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
     /* Declare all resources, initialized to NULL */
     error_t *err = NULL;
-    dotta_config_t *config = NULL;
     output_ctx_t *out = NULL;
     profile_list_t *workspace_profiles = NULL;
     profile_list_t *sync_profiles = NULL;
@@ -1340,19 +1339,6 @@ error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts) {
     }
     free(current_branch);
     current_branch = NULL;
-
-    /* Load configuration */
-    err = config_load(NULL, &config);
-    if (err) {
-        /* Non-fatal: continue with defaults */
-        error_free(err);
-        err = NULL;
-        config = config_create_default();
-        if (!config) {
-            err = ERROR(ERR_MEMORY, "Failed to create default configuration");
-            goto cleanup;
-        }
-    }
 
     /* Create output context from config */
     out = output_create_from_config(config);
@@ -1864,7 +1850,6 @@ cleanup:
         profile_list_free(workspace_profiles);
     }
     if (out) output_free(out);
-    if (config) config_free(config);
 
     return err;
 }

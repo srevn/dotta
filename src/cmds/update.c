@@ -47,7 +47,7 @@ static error_t *copy_file_to_worktree(
     const char *storage_path,
     const char *profile_name,
     keymanager_t *km,
-    const dotta_config_t *config,
+    const config_t *config,
     const metadata_t *metadata,
     bool *out_was_encrypted,
     struct stat *out_stat
@@ -276,7 +276,7 @@ static bool matches_exclude_pattern(
 static bool is_update_candidate(
     const workspace_item_t *item,
     const cmd_update_options_t *opts,
-    const dotta_config_t *config
+    const config_t *config
 ) {
     /* Determine if item should be included based on state + divergence */
     switch (item->state) {
@@ -358,7 +358,7 @@ static error_t *filter_items_for_update(
     const cmd_update_options_t *opts,
     const path_filter_t *file_filter,
     const profile_list_t *operation_profiles,
-    const dotta_config_t *config,
+    const config_t *config,
     output_ctx_t *out,
     const workspace_item_t ***out_items,
     size_t *count_out
@@ -827,7 +827,7 @@ static error_t *update_profile(
     size_t item_count,
     const cmd_update_options_t *opts,
     output_ctx_t *out,
-    const dotta_config_t *config,
+    const config_t *config,
     workspace_t *ws,
     size_t *out_processed
 ) {
@@ -1372,7 +1372,7 @@ static error_t *update_execute_for_all_profiles(
     size_t update_count,
     const cmd_update_options_t *opts,
     output_ctx_t *out,
-    const dotta_config_t *config,
+    const config_t *config,
     workspace_t *ws,
     size_t *total_updated,
     hashmap_t **out_by_profile
@@ -1867,7 +1867,7 @@ static error_t *update_confirm_operation(
     const cmd_update_options_t *opts,
     const workspace_item_t **items,
     size_t item_count,
-    const dotta_config_t *config,
+    const config_t *config,
     confirm_result_t *result
 ) {
     CHECK_NULL(out);
@@ -1959,14 +1959,15 @@ static error_t *update_confirm_operation(
  */
 error_t *cmd_update(
     git_repository *repo,
+    const config_t *config,
     const cmd_update_options_t *opts
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(config);
     CHECK_NULL(opts);
 
     /* Declare all resources at top, initialized to NULL */
     error_t *err = NULL;
-    dotta_config_t *config = NULL;
     output_ctx_t *out = NULL;
     profile_list_t *workspace_profiles = NULL;
     profile_list_t *operation_profiles = NULL;
@@ -1978,19 +1979,6 @@ error_t *cmd_update(
     const workspace_item_t **update_items = NULL;
     size_t update_count = 0;
     size_t total_updated = 0;
-
-    /* Load configuration */
-    err = config_load(NULL, &config);
-    if (err) {
-        /* Non-fatal: continue with defaults */
-        error_free(err);
-        err = NULL;
-        config = config_create_default();
-        if (!config) {
-            err = ERROR(ERR_MEMORY, "Failed to create default configuration");
-            goto cleanup;
-        }
-    }
 
     /* Create output context from config */
     out = output_create_from_config(config);
@@ -2437,7 +2425,6 @@ cleanup:
     }
     if (workspace_profiles) profile_list_free(workspace_profiles);
     if (out) output_free(out);
-    if (config) config_free(config);
 
     return err;
 }

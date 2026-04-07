@@ -35,6 +35,7 @@
 #include "cmds/update.h"
 #include "crypto/encryption.h"
 #include "crypto/keymanager.h"
+#include "utils/config.h"
 #include "utils/help.h"
 #include "utils/privilege.h"
 #include "utils/repo.h"
@@ -43,7 +44,7 @@
 /**
  * Parse init command
  */
-static int cmd_init_main(int argc, char **argv) {
+static int cmd_init_main(int argc, char **argv, const config_t *config) {
     cmd_init_options_t opts = {
         .repo_path = NULL,
         .quiet     = false
@@ -62,7 +63,7 @@ static int cmd_init_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    error_t *err = cmd_init(&opts);
+    error_t *err = cmd_init(config, &opts);
     if (err) {
         error_print(err, stderr);
         error_free(err);
@@ -75,7 +76,7 @@ static int cmd_init_main(int argc, char **argv) {
 /**
  * Parse add command
  */
-static int cmd_add_main(int argc, char **argv) {
+static int cmd_add_main(int argc, char **argv, const config_t *config) {
     cmd_add_options_t opts = {
         .profile          = NULL,
         .files            = NULL,
@@ -194,7 +195,7 @@ static int cmd_add_main(int argc, char **argv) {
 
     /* Open resolved repository */
     git_repository *repo = NULL;
-    error_t *err = repo_open(&repo, NULL);
+    error_t *err = repo_open(config, &repo, NULL);
     if (err) {
         error_print(err, stderr);
         error_free(err);
@@ -204,7 +205,7 @@ static int cmd_add_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    err = cmd_add(repo, &opts);
+    err = cmd_add(repo, config, &opts);
     free(files);
     free(excludes);
     git_repository_free(repo);
@@ -221,7 +222,7 @@ static int cmd_add_main(int argc, char **argv) {
 /**
  * Parse remove command
  */
-static int cmd_remove_main(int argc, char **argv) {
+static int cmd_remove_main(int argc, char **argv, const config_t *config) {
     cmd_remove_options_t opts = {
         .profile        = NULL,
         .paths          = NULL,
@@ -323,7 +324,7 @@ static int cmd_remove_main(int argc, char **argv) {
 
     /* Open resolved repository */
     git_repository *repo = NULL;
-    error_t *err = repo_open(&repo, NULL);
+    error_t *err = repo_open(config, &repo, NULL);
     if (err) {
         error_print(err, stderr);
         error_free(err);
@@ -332,7 +333,7 @@ static int cmd_remove_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    err = cmd_remove(repo, &opts);
+    err = cmd_remove(repo, config, &opts);
     free(paths);
     git_repository_free(repo);
 
@@ -348,7 +349,7 @@ static int cmd_remove_main(int argc, char **argv) {
 /**
  * Parse apply command
  */
-static int cmd_apply_main(int argc, char **argv) {
+static int cmd_apply_main(int argc, char **argv, const config_t *config) {
     cmd_apply_options_t opts = {
         .profiles         = NULL,
         .profile_count    = 0,
@@ -453,7 +454,7 @@ static int cmd_apply_main(int argc, char **argv) {
 
     /* Open resolved repository */
     git_repository *repo = NULL;
-    error_t *err = repo_open(&repo, NULL);
+    error_t *err = repo_open(config, &repo, NULL);
     if (err) {
         error_print(err, stderr);
         error_free(err);
@@ -464,7 +465,7 @@ static int cmd_apply_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    err = cmd_apply(repo, &opts);
+    err = cmd_apply(repo, config, &opts);
     free(profiles);
     free(files);
     free(excludes);
@@ -482,7 +483,7 @@ static int cmd_apply_main(int argc, char **argv) {
 /**
  * Parse status command
  */
-static int cmd_status_main(int argc, char **argv) {
+static int cmd_status_main(int argc, char **argv, const config_t *config) {
     cmd_status_options_t opts = {
         .profiles      = NULL,
         .profile_count = 0,
@@ -569,7 +570,7 @@ static int cmd_status_main(int argc, char **argv) {
 
     /* Open resolved repository */
     git_repository *repo = NULL;
-    error_t *err = repo_open(&repo, NULL);
+    error_t *err = repo_open(config, &repo, NULL);
     if (err) {
         error_print(err, stderr);
         error_free(err);
@@ -578,7 +579,7 @@ static int cmd_status_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    err = cmd_status(repo, &opts);
+    err = cmd_status(repo, config, &opts);
     free(profiles);
     git_repository_free(repo);
 
@@ -594,7 +595,7 @@ static int cmd_status_main(int argc, char **argv) {
 /**
  * Parse list command
  */
-static int cmd_list_main(int argc, char **argv) {
+static int cmd_list_main(int argc, char **argv, const config_t *config) {
     cmd_list_options_t opts = {
         .mode      = LIST_PROFILES,
         .profile   = NULL,
@@ -657,7 +658,7 @@ static int cmd_list_main(int argc, char **argv) {
 
     /* Open resolved repository */
     git_repository *repo = NULL;
-    error_t *err = repo_open(&repo, NULL);
+    error_t *err = repo_open(config, &repo, NULL);
     if (err) {
         error_print(err, stderr);
         error_free(err);
@@ -665,7 +666,7 @@ static int cmd_list_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    err = cmd_list(repo, &opts);
+    err = cmd_list(repo, config, &opts);
     git_repository_free(repo);
 
     if (err) {
@@ -680,7 +681,7 @@ static int cmd_list_main(int argc, char **argv) {
 /**
  * Parse profile command
  */
-static int cmd_profile_main(int argc, char **argv) {
+static int cmd_profile_main(int argc, char **argv, const config_t *config) {
     cmd_profile_options_t opts = {
         .subcommand     = PROFILE_LIST, /* Default subcommand */
         .profiles       = NULL,
@@ -889,7 +890,7 @@ static int cmd_profile_main(int argc, char **argv) {
 
     /* Open resolved repository */
     git_repository *repo = NULL;
-    error_t *err = repo_open(&repo, NULL);
+    error_t *err = repo_open(config, &repo, NULL);
     if (err) {
         error_print(err, stderr);
         error_free(err);
@@ -900,7 +901,7 @@ static int cmd_profile_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    err = cmd_profile(repo, &opts);
+    err = cmd_profile(repo, config, &opts);
     if (opts.profiles) {
         free(opts.profiles);
     }
@@ -918,7 +919,7 @@ static int cmd_profile_main(int argc, char **argv) {
 /**
  * Parse diff command
  */
-static int cmd_diff_main(int argc, char **argv) {
+static int cmd_diff_main(int argc, char **argv, const config_t *config) {
     cmd_diff_options_t opts = {
         .mode          = DIFF_WORKSPACE,
         .files         = NULL,
@@ -1039,7 +1040,7 @@ static int cmd_diff_main(int argc, char **argv) {
 
     /* Open resolved repository */
     git_repository *repo = NULL;
-    error_t *err = repo_open(&repo, NULL);
+    error_t *err = repo_open(config, &repo, NULL);
     if (err) {
         error_print(err, stderr);
         error_free(err);
@@ -1050,7 +1051,7 @@ static int cmd_diff_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    err = cmd_diff(repo, &opts);
+    err = cmd_diff(repo, config, &opts);
     free(git_refs);
     free(files);
     free(profiles);
@@ -1068,7 +1069,7 @@ static int cmd_diff_main(int argc, char **argv) {
 /**
  * Parse clone command
  */
-static int cmd_clone_main(int argc, char **argv) {
+static int cmd_clone_main(int argc, char **argv, const config_t *config) {
     cmd_clone_options_t opts = {
         .url           = NULL,
         .path          = NULL,
@@ -1145,7 +1146,7 @@ static int cmd_clone_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    error_t *err = cmd_clone(&opts);
+    error_t *err = cmd_clone(config, &opts);
     free(profiles);
 
     if (err) {
@@ -1160,7 +1161,7 @@ static int cmd_clone_main(int argc, char **argv) {
 /**
  * Parse update command
  */
-static int cmd_update_main(int argc, char **argv) {
+static int cmd_update_main(int argc, char **argv, const config_t *config) {
     cmd_update_options_t opts = {
         .files            = NULL,
         .file_count       = 0,
@@ -1278,7 +1279,7 @@ static int cmd_update_main(int argc, char **argv) {
 
     /* Open resolved repository */
     git_repository *repo = NULL;
-    error_t *err = repo_open(&repo, NULL);
+    error_t *err = repo_open(config, &repo, NULL);
     if (err) {
         error_print(err, stderr);
         error_free(err);
@@ -1289,7 +1290,7 @@ static int cmd_update_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    err = cmd_update(repo, &opts);
+    err = cmd_update(repo, config, &opts);
     free(files);
     free(profiles);
     free(excludes);
@@ -1307,7 +1308,7 @@ static int cmd_update_main(int argc, char **argv) {
 /**
  * Parse ignore command
  */
-static int cmd_ignore_main(int argc, char **argv) {
+static int cmd_ignore_main(int argc, char **argv, const config_t *config) {
     /* Temporary storage for patterns (max 100 each) */
     char *add_patterns_temp[100];
     char *remove_patterns_temp[100];
@@ -1387,7 +1388,7 @@ static int cmd_ignore_main(int argc, char **argv) {
 
     /* Open resolved repository */
     git_repository *repo = NULL;
-    error_t *err = repo_open(&repo, NULL);
+    error_t *err = repo_open(config, &repo, NULL);
     if (err) {
         error_print(err, stderr);
         error_free(err);
@@ -1395,7 +1396,7 @@ static int cmd_ignore_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    err = cmd_ignore(repo, &opts);
+    err = cmd_ignore(repo, config, &opts);
     git_repository_free(repo);
 
     if (err) {
@@ -1410,11 +1411,11 @@ static int cmd_ignore_main(int argc, char **argv) {
 /**
  * Parse git command
  */
-static int cmd_git_main(int argc, char **argv) {
+static int cmd_git_main(int argc, char **argv, const config_t *config) {
     /* Open repository and get path */
     git_repository *repo = NULL;
     char *repo_path = NULL;
-    error_t *err = repo_open(&repo, &repo_path);
+    error_t *err = repo_open(config, &repo, &repo_path);
     if (err) {
         error_print(err, stderr);
         error_free(err);
@@ -1441,7 +1442,7 @@ static int cmd_git_main(int argc, char **argv) {
 /**
  * Parse sync command
  */
-static int cmd_sync_main(int argc, char **argv) {
+static int cmd_sync_main(int argc, char **argv, const config_t *config) {
     cmd_sync_options_t opts = {
         .profiles      = NULL,
         .profile_count = 0,
@@ -1509,7 +1510,7 @@ static int cmd_sync_main(int argc, char **argv) {
 
     /* Open resolved repository */
     git_repository *repo = NULL;
-    error_t *err = repo_open(&repo, NULL);
+    error_t *err = repo_open(config, &repo, NULL);
     if (err) {
         error_print(err, stderr);
         error_free(err);
@@ -1518,7 +1519,7 @@ static int cmd_sync_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    err = cmd_sync(repo, &opts);
+    err = cmd_sync(repo, config, &opts);
     free(profiles);
     git_repository_free(repo);
 
@@ -1534,7 +1535,7 @@ static int cmd_sync_main(int argc, char **argv) {
 /**
  * Parse remote command
  */
-static int cmd_remote_main(int argc, char **argv) {
+static int cmd_remote_main(int argc, char **argv, const config_t *config) {
     cmd_remote_options_t opts = {
         .subcommand = REMOTE_LIST,
         .name       = NULL,
@@ -1609,7 +1610,7 @@ static int cmd_remote_main(int argc, char **argv) {
 
     /* Open resolved repository */
     git_repository *repo = NULL;
-    error_t *err = repo_open(&repo, NULL);
+    error_t *err = repo_open(config, &repo, NULL);
     if (err) {
         error_print(err, stderr);
         error_free(err);
@@ -1617,7 +1618,7 @@ static int cmd_remote_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    err = cmd_remote(repo, &opts);
+    err = cmd_remote(repo, config, &opts);
     git_repository_free(repo);
 
     if (err) {
@@ -1632,7 +1633,7 @@ static int cmd_remote_main(int argc, char **argv) {
 /**
  * Parse show command
  */
-static int cmd_show_main(int argc, char **argv) {
+static int cmd_show_main(int argc, char **argv, const config_t *config) {
     cmd_show_options_t opts = {
         .mode      = SHOW_FILE, /* Default mode (may be changed) */
         .profile   = NULL,
@@ -1775,7 +1776,7 @@ static int cmd_show_main(int argc, char **argv) {
 
     /* Open resolved repository */
     git_repository *repo = NULL;
-    err = repo_open(&repo, NULL);
+    err = repo_open(config, &repo, NULL);
     if (err) {
         error_print(err, stderr);
         error_free(err);
@@ -1784,7 +1785,7 @@ static int cmd_show_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    err = cmd_show(repo, &opts);
+    err = cmd_show(repo, config, &opts);
     git_repository_free(repo);
 
     if (err) {
@@ -1806,7 +1807,7 @@ cleanup:
 /**
  * Parse revert command
  */
-static int cmd_revert_main(int argc, char **argv) {
+static int cmd_revert_main(int argc, char **argv, const config_t *config) {
     cmd_revert_options_t opts = {
         .file_path = NULL,
         .commit    = NULL,
@@ -1971,7 +1972,7 @@ static int cmd_revert_main(int argc, char **argv) {
 
     /* Open resolved repository */
     git_repository *repo = NULL;
-    err = repo_open(&repo, NULL);
+    err = repo_open(config, &repo, NULL);
     if (err) {
         error_print(err, stderr);
         error_free(err);
@@ -1980,7 +1981,7 @@ static int cmd_revert_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    err = cmd_revert(repo, &opts);
+    err = cmd_revert(repo, config, &opts);
     git_repository_free(repo);
 
     if (err) {
@@ -2002,7 +2003,7 @@ cleanup:
 /**
  * Parse interactive command
  */
-static int cmd_interactive_main(int argc, char **argv) {
+static int cmd_interactive_main(int argc, char **argv, const config_t *config) {
     /* Parse arguments */
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -2016,7 +2017,7 @@ static int cmd_interactive_main(int argc, char **argv) {
 
     /* Open resolved repository */
     git_repository *repo = NULL;
-    error_t *err = repo_open(&repo, NULL);
+    error_t *err = repo_open(config, &repo, NULL);
     if (err) {
         error_print(err, stderr);
         error_free(err);
@@ -2039,7 +2040,7 @@ static int cmd_interactive_main(int argc, char **argv) {
 /**
  * Parse bootstrap command
  */
-static int cmd_bootstrap_main(int argc, char **argv) {
+static int cmd_bootstrap_main(int argc, char **argv, const config_t *config) {
     /* Collect profile arguments */
     char **profiles = malloc((size_t) argc * sizeof(char *));
     if (!profiles) {
@@ -2104,7 +2105,7 @@ static int cmd_bootstrap_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    error_t *err = cmd_bootstrap(&opts);
+    error_t *err = cmd_bootstrap(config, &opts);
     free(profiles);
 
     if (err) {
@@ -2119,7 +2120,7 @@ static int cmd_bootstrap_main(int argc, char **argv) {
 /**
  * Parse key command
  */
-static int cmd_key_main(int argc, char **argv) {
+static int cmd_key_main(int argc, char **argv, const config_t *config) {
     /* Check for help flag first (before requiring action) */
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -2169,7 +2170,7 @@ static int cmd_key_main(int argc, char **argv) {
 
     /* Open repository */
     git_repository *repo = NULL;
-    error_t *err = repo_open(&repo, NULL);
+    error_t *err = repo_open(config, &repo, NULL);
     if (err) {
         error_print(err, stderr);
         error_free(err);
@@ -2177,7 +2178,7 @@ static int cmd_key_main(int argc, char **argv) {
     }
 
     /* Execute command */
-    err = cmd_key(repo, &opts);
+    err = cmd_key(repo, config, &opts);
 
     int ret = 0;
     if (err) {
@@ -2207,7 +2208,7 @@ static int cmd_key_main(int argc, char **argv) {
  *   dotta __complete commits -p <prof>  # Recent commits from specific profile
  *   dotta __complete commits --limit N  # Limit number of commits
  */
-static int cmd_completion_main(int argc, char **argv) {
+static int cmd_completion_main(int argc, char **argv, const config_t *config) {
     cmd_completion_options_t opts = {
         .mode          = COMPLETE_CHECK,
         .profile       = NULL,
@@ -2256,7 +2257,7 @@ static int cmd_completion_main(int argc, char **argv) {
     /* Check mode: just try to open repo */
     if (opts.mode == COMPLETE_CHECK) {
         git_repository *repo = NULL;
-        error_t *err = repo_open(&repo, NULL);
+        error_t *err = repo_open(config, &repo, NULL);
         if (err) {
             error_free(err);
             return 1;  /* Not in a dotta repo */
@@ -2267,7 +2268,7 @@ static int cmd_completion_main(int argc, char **argv) {
 
     /* Open repository for other modes */
     git_repository *repo = NULL;
-    error_t *err = repo_open(&repo, NULL);
+    error_t *err = repo_open(config, &repo, NULL);
     if (err) {
         error_free(err);
         return 0;  /* Silent failure - output nothing */
@@ -2341,6 +2342,15 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    /* Load configuration once for entire process.
+     * Non-fatal: if config file is missing or invalid, use defaults. */
+    config_t *config = NULL;
+    error_t *cfg_err = config_load(NULL, &config);
+    if (cfg_err) {
+        error_free(cfg_err);
+        config = config_create_default();
+    }
+
     const char *command = argv[1];
     int ret = 0;
 
@@ -2349,45 +2359,45 @@ int main(int argc, char **argv) {
     } else if (strcmp(command, "--version") == 0 || strcmp(command, "-v") == 0) {
         print_version();
     } else if (strcmp(command, "--interactive") == 0 || strcmp(command, "-i") == 0) {
-        ret = cmd_interactive_main(argc, argv);
+        ret = cmd_interactive_main(argc, argv, config);
     } else if (strcmp(command, "init") == 0) {
-        ret = cmd_init_main(argc, argv);
+        ret = cmd_init_main(argc, argv, config);
     } else if (strcmp(command, "clone") == 0) {
-        ret = cmd_clone_main(argc, argv);
+        ret = cmd_clone_main(argc, argv, config);
     } else if (strcmp(command, "add") == 0) {
-        ret = cmd_add_main(argc, argv);
+        ret = cmd_add_main(argc, argv, config);
     } else if (strcmp(command, "remove") == 0) {
-        ret = cmd_remove_main(argc, argv);
+        ret = cmd_remove_main(argc, argv, config);
     } else if (strcmp(command, "apply") == 0) {
-        ret = cmd_apply_main(argc, argv);
+        ret = cmd_apply_main(argc, argv, config);
     } else if (strcmp(command, "status") == 0) {
-        ret = cmd_status_main(argc, argv);
+        ret = cmd_status_main(argc, argv, config);
     } else if (strcmp(command, "list") == 0) {
-        ret = cmd_list_main(argc, argv);
+        ret = cmd_list_main(argc, argv, config);
     } else if (strcmp(command, "profile") == 0) {
-        ret = cmd_profile_main(argc, argv);
+        ret = cmd_profile_main(argc, argv, config);
     } else if (strcmp(command, "diff") == 0) {
-        ret = cmd_diff_main(argc, argv);
+        ret = cmd_diff_main(argc, argv, config);
     } else if (strcmp(command, "show") == 0) {
-        ret = cmd_show_main(argc, argv);
+        ret = cmd_show_main(argc, argv, config);
     } else if (strcmp(command, "revert") == 0) {
-        ret = cmd_revert_main(argc, argv);
+        ret = cmd_revert_main(argc, argv, config);
     } else if (strcmp(command, "remote") == 0) {
-        ret = cmd_remote_main(argc, argv);
+        ret = cmd_remote_main(argc, argv, config);
     } else if (strcmp(command, "update") == 0) {
-        ret = cmd_update_main(argc, argv);
+        ret = cmd_update_main(argc, argv, config);
     } else if (strcmp(command, "sync") == 0) {
-        ret = cmd_sync_main(argc, argv);
+        ret = cmd_sync_main(argc, argv, config);
     } else if (strcmp(command, "ignore") == 0) {
-        ret = cmd_ignore_main(argc, argv);
+        ret = cmd_ignore_main(argc, argv, config);
     } else if (strcmp(command, "bootstrap") == 0) {
-        ret = cmd_bootstrap_main(argc, argv);
+        ret = cmd_bootstrap_main(argc, argv, config);
     } else if (strcmp(command, "key") == 0) {
-        ret = cmd_key_main(argc, argv);
+        ret = cmd_key_main(argc, argv, config);
     } else if (strcmp(command, "git") == 0) {
-        ret = cmd_git_main(argc, argv);
+        ret = cmd_git_main(argc, argv, config);
     } else if (strcmp(command, "__complete") == 0) {
-        ret = cmd_completion_main(argc, argv);
+        ret = cmd_completion_main(argc, argv, config);
     } else {
         fprintf(stderr, "Error: Unknown command '%s'\n", command);
         print_usage(argv[0]);
@@ -2408,7 +2418,7 @@ int main(int argc, char **argv) {
      */
     if (privilege_is_sudo()) {
         char *repo_path = NULL;
-        error_t *err = resolve_repo_path(&repo_path);
+        error_t *err = resolve_repo_path(config, &repo_path);
 
         if (!err) {
             /* Fix ownership of .git directory */
@@ -2432,5 +2442,7 @@ int main(int argc, char **argv) {
     }
 
     git_libgit2_shutdown();
+    config_free(config);
+
     return ret;
 }

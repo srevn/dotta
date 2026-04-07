@@ -8,8 +8,7 @@
 #define DOTTA_COMMIT_H
 
 #include <stddef.h>
-
-#include "utils/config.h"
+#include <types.h>
 
 /**
  * Action types for commit messages
@@ -56,7 +55,7 @@ typedef struct {
  * @param ctx Context with action, profile, files (required)
  * @return Allocated commit message string (caller must free), or NULL on error
  */
-char *build_commit_message(const dotta_config_t *config, const commit_message_context_t *ctx);
+char *build_commit_message(const config_t *config, const commit_message_context_t *ctx);
 
 /**
  * Get action name in present tense

@@ -120,8 +120,8 @@ static error_t *validate_known_keys(
     return NULL;
 }
 
-dotta_config_t *config_create_default(void) {
-    dotta_config_t *config = calloc(1, sizeof(dotta_config_t));
+config_t *config_create_default(void) {
+    config_t *config = calloc(1, sizeof(config_t));
     if (!config) {
         return NULL;
     }
@@ -182,7 +182,7 @@ dotta_config_t *config_create_default(void) {
     return config;
 }
 
-void config_free(dotta_config_t *config) {
+void config_free(config_t *config) {
     if (!config) {
         return;
     }
@@ -240,12 +240,12 @@ error_t *config_get_path(char **out) {
     return err;
 }
 
-error_t *config_load(const char *config_path, dotta_config_t **out) {
+error_t *config_load(const char *config_path, config_t **out) {
     CHECK_NULL(out);
 
     error_t *err = NULL;
     char *path = NULL;
-    dotta_config_t *config = NULL;
+    config_t *config = NULL;
     toml_result_t result = { 0 };
     bool toml_needs_free = false;
 
@@ -612,7 +612,7 @@ cleanup:
     return err;
 }
 
-error_t *config_validate(const dotta_config_t *config) {
+error_t *config_validate(const config_t *config) {
     CHECK_NULL(config);
 
     /* Validate repo_dir */
@@ -714,7 +714,7 @@ error_t *config_validate(const dotta_config_t *config) {
     return NULL;
 }
 
-error_t *config_get_repo_dir(const dotta_config_t *config, char **out) {
+error_t *config_get_repo_dir(const config_t *config, char **out) {
     CHECK_NULL(out);
 
     /* Priority 1: Environment variable */

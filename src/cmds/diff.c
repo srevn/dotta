@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <config.h>
 
 #include "base/error.h"
 #include "base/gitops.h"
@@ -19,7 +20,6 @@
 #include "infra/compare.h"
 #include "infra/content.h"
 #include "infra/path.h"
-#include "utils/config.h"
 #include "utils/hashmap.h"
 #include "utils/match.h"
 #include "utils/output.h"
@@ -643,7 +643,7 @@ static error_t *compare_manifest_to_filesystem(
     const char *profile_name,
     const path_filter_t *file_filter,
     const cmd_diff_options_t *opts,
-    const dotta_config_t *config,
+    const config_t *config,
     output_ctx_t *out,
     size_t *diff_count
 ) {
@@ -928,7 +928,7 @@ static error_t *diff_commit_to_workspace(
     profile_list_t *profiles,
     const path_filter_t *file_filter,
     const cmd_diff_options_t *opts,
-    const dotta_config_t *config,
+    const config_t *config,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
@@ -1296,7 +1296,7 @@ static error_t *diff_workspace(
     profile_list_t *profiles,
     const profile_list_t *filter_profiles,
     const path_filter_t *file_filter,
-    const dotta_config_t *config,
+    const config_t *config,
     const cmd_diff_options_t *opts,
     output_ctx_t *out
 ) {
@@ -1431,26 +1431,17 @@ cleanup:
  */
 error_t *cmd_diff(
     git_repository *repo,
+    const config_t *config,
     const cmd_diff_options_t *opts
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
     error_t *err = NULL;
-    dotta_config_t *config = NULL;
     output_ctx_t *out = NULL;
     profile_list_t *workspace_profiles = NULL;
     profile_list_t *diff_profiles = NULL;
     path_filter_t *file_filter = NULL;
-
-    /* Load configuration */
-    err = config_load(NULL, &config);
-    if (err) {
-        /* Non-fatal: continue with defaults */
-        error_free(err);
-        err = NULL;
-        config = config_create_default();
-    }
 
     /* Create output context from config */
     out = output_create_from_config(config);
@@ -1567,7 +1558,6 @@ cleanup:
     }
     if (workspace_profiles) profile_list_free(workspace_profiles);
     if (out) output_free(out);
-    if (config) config_free(config);
 
     return err;
 }

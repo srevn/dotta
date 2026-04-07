@@ -15,7 +15,6 @@
 #include "base/gitops.h"
 #include "core/ignore.h"
 #include "core/profiles.h"
-#include "utils/config.h"
 #include "utils/editor.h"
 #include "utils/output.h"
 #include "utils/string.h"
@@ -355,7 +354,7 @@ static error_t *remove_patterns_from_content(
  */
 static error_t *edit_baseline_dottaignore(
     git_repository *repo,
-    const dotta_config_t *config,
+    const config_t *config,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
@@ -1186,7 +1185,7 @@ static error_t *modify_profile_dottaignore(
  */
 static error_t *test_path_ignore(
     git_repository *repo,
-    const dotta_config_t *config,
+    const config_t *config,
     const char *test_path,
     const char *specific_profile,
     output_ctx_t *out
@@ -1411,22 +1410,15 @@ static error_t *test_path_ignore(
 /**
  * Main command implementation
  */
-error_t *cmd_ignore(git_repository *repo, const cmd_ignore_options_t *opts) {
+error_t *cmd_ignore(git_repository *repo, const config_t *config, const cmd_ignore_options_t *opts) {
     CHECK_NULL(repo);
+    CHECK_NULL(config);
     CHECK_NULL(opts);
 
-    /* Load configuration */
-    dotta_config_t *config = NULL;
-    error_t *err = config_load(NULL, &config);
-    if (err) {
-        /* Non-fatal: continue with defaults */
-        config = config_create_default();
-    }
-
     /* Create output context */
+    error_t *err = NULL;
     output_ctx_t *out = output_create_from_config(config);
     if (!out) {
-        config_free(config);
         return ERROR(ERR_MEMORY, "Failed to create output context");
     }
 
@@ -1443,7 +1435,6 @@ error_t *cmd_ignore(git_repository *repo, const cmd_ignore_options_t *opts) {
 
     if (has_test && has_modify) {
         output_free(out);
-        config_free(config);
         return ERROR(ERR_INVALID_ARG, "Cannot use --test with --add or --remove");
     }
 
@@ -1476,7 +1467,6 @@ error_t *cmd_ignore(git_repository *repo, const cmd_ignore_options_t *opts) {
     }
 
     output_free(out);
-    config_free(config);
 
     return err;
 }

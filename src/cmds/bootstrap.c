@@ -17,7 +17,6 @@
 #include "core/bootstrap.h"
 #include "core/profiles.h"
 #include "utils/buffer.h"
-#include "utils/config.h"
 #include "utils/editor.h"
 #include "utils/output.h"
 #include "utils/repo.h"
@@ -353,23 +352,15 @@ static error_t *bootstrap_list(
 /**
  * Execute bootstrap command
  */
-error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
+error_t *cmd_bootstrap(const config_t *config, const cmd_bootstrap_options_t *opts) {
+    CHECK_NULL(config);
     CHECK_NULL(opts);
 
     error_t *err = NULL;
     git_repository *repo = NULL;
     char *repo_path = NULL;
     profile_list_t *profiles = NULL;
-    dotta_config_t *config = NULL;
     output_ctx_t *out = NULL;
-
-    /* Load config */
-    err = config_load(NULL, &config);
-    if (err) {
-        /* Non-fatal - use defaults */
-        error_free(err);
-        config = config_create_default();
-    }
 
     /* Create output context from config */
     out = output_create_from_config(config);
@@ -379,7 +370,7 @@ error_t *cmd_bootstrap(const cmd_bootstrap_options_t *opts) {
     }
 
     /* Resolve repository path */
-    err = resolve_repo_path(&repo_path);
+    err = resolve_repo_path(config, &repo_path);
     if (err) {
         err = error_wrap(err, "Failed to resolve repository path");
         goto cleanup;
@@ -569,7 +560,6 @@ cleanup:
     if (repo) gitops_close_repository(repo);
     if (repo_path) free(repo_path);
     if (out) output_free(out);
-    if (config) config_free(config);
 
     return err;
 }

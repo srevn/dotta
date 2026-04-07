@@ -162,7 +162,7 @@ error_t *workspace_load(
     git_repository *repo,
     state_t *state,
     profile_list_t *profiles,
-    const struct dotta_config *config,
+    const struct config *config,
     const workspace_load_t *options,
     workspace_t **out
 );

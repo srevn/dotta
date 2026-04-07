@@ -581,7 +581,7 @@ static void free_multi_profile_tracking(string_array_t **other_profiles, size_t 
 static bool confirm_removal(
     const string_array_t *storage_paths,
     const cmd_remove_options_t *opts,
-    const dotta_config_t *config,
+    const config_t *config,
     output_ctx_t *out
 ) {
     if (!storage_paths || !opts || !out) {
@@ -638,7 +638,7 @@ static bool confirm_profile_deletion(
     size_t file_count,
     bool is_auto_detected,
     const cmd_remove_options_t *opts,
-    const dotta_config_t *config,
+    const config_t *config,
     output_ctx_t *out
 ) {
     if (!profile_name || !out) {
@@ -688,7 +688,7 @@ static error_t *create_removal_commit(
     worktree_handle_t *wt,
     const cmd_remove_options_t *opts,
     const string_array_t *removed_paths,
-    const dotta_config_t *config
+    const config_t *config
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(opts);
@@ -895,6 +895,7 @@ static error_t *cleanup_metadata(
  */
 static error_t *remove_files_from_profile(
     git_repository *repo,
+    const config_t *config,
     const cmd_remove_options_t *opts
 ) {
     CHECK_NULL(repo);
@@ -902,7 +903,6 @@ static error_t *remove_files_from_profile(
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
-    dotta_config_t *config = NULL;
     output_ctx_t *out = NULL;
     string_array_t *storage_paths = NULL;
     string_array_t *filesystem_paths = NULL;
@@ -914,15 +914,6 @@ static error_t *remove_files_from_profile(
     string_array_t *removed_paths = NULL;
     state_t *state = NULL;
     bool profile_enabled = false;
-
-    /* Load configuration */
-    err = config_load(NULL, &config);
-    if (err) {
-        /* Non-fatal: continue without config */
-        error_free(err);
-        err = NULL;
-        config = config_create_default();
-    }
 
     /* Create output context from config */
     out = output_create_from_config(config);
@@ -1345,7 +1336,6 @@ cleanup:
     if (storage_paths) string_array_free(storage_paths);
     if (state) state_free(state);
     if (out) output_free(out);
-    if (config) config_free(config);
 
     return err;
 }
@@ -1355,6 +1345,7 @@ cleanup:
  */
 static error_t *delete_profile_branch(
     git_repository *repo,
+    const config_t *config,
     const cmd_remove_options_t *opts
 ) {
     CHECK_NULL(repo);
@@ -1362,7 +1353,6 @@ static error_t *delete_profile_branch(
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
-    dotta_config_t *config = NULL;
     output_ctx_t *out = NULL;
     char *remote_name = NULL;
     upstream_info_t *upstream_info = NULL;
@@ -1375,15 +1365,6 @@ static error_t *delete_profile_branch(
     string_array_t *hook_fs_paths = NULL;
     char *hook_custom_prefix = NULL;
     bool performed = false;
-
-    /* Load config first */
-    err = config_load(NULL, &config);
-    if (err) {
-        /* Non-fatal */
-        error_free(err);
-        err = NULL;
-        config = config_create_default();
-    }
 
     /* Create output context from config */
     out = output_create_from_config(config);
@@ -1978,7 +1959,6 @@ cleanup:
     if (upstream_info) upstream_info_free(upstream_info);
     if (remote_name) free(remote_name);
     if (out) output_free(out);
-    if (config) config_free(config);
     if (files) string_array_free(files);
     if (profile) profile_free(profile);
     if (all_profiles) profile_list_free(all_profiles);
@@ -1989,7 +1969,7 @@ cleanup:
 /**
  * Remove command implementation
  */
-error_t *cmd_remove(git_repository *repo, const cmd_remove_options_t *opts) {
+error_t *cmd_remove(git_repository *repo, const config_t *config, const cmd_remove_options_t *opts) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
@@ -2001,8 +1981,8 @@ error_t *cmd_remove(git_repository *repo, const cmd_remove_options_t *opts) {
 
     /* Branch: Delete profile or remove files */
     if (opts->delete_profile) {
-        return delete_profile_branch(repo, opts);
+        return delete_profile_branch(repo, config, opts);
     }
 
-    return remove_files_from_profile(repo, opts);
+    return remove_files_from_profile(repo, config, opts);
 }

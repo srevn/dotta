@@ -29,6 +29,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <config.h>
 
 #include "base/error.h"
 #include "base/filesystem.h"
@@ -40,7 +41,6 @@
 #include "crypto/policy.h"
 #include "infra/compare.h"
 #include "infra/content.h"
-#include "utils/config.h"
 #include "utils/arena.h"
 #include "utils/hashmap.h"
 #include "utils/privilege.h"
@@ -1676,7 +1676,7 @@ static error_t *scan_directory_for_untracked(
  */
 static error_t *analyze_untracked_files(
     workspace_t *ws,
-    const dotta_config_t *config
+    const config_t *config
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->state);
@@ -2034,7 +2034,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
  */
 static error_t *analyze_encryption_policy_mismatch(
     workspace_t *ws,
-    const dotta_config_t *config
+    const config_t *config
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->manifest);
@@ -2711,7 +2711,7 @@ error_t *workspace_load(
     git_repository *repo,
     state_t *state,
     profile_list_t *profiles,
-    const dotta_config_t *config,
+    const config_t *config,
     const workspace_load_t *options,
     workspace_t **out
 ) {

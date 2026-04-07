@@ -7,11 +7,11 @@
 
 #include "crypto/policy.h"
 
+#include <config.h>
 #include <string.h>
 
 #include "base/error.h"
 #include "core/metadata.h"
-#include "utils/config.h"
 #include "utils/match.h"
 #include "utils/string.h"
 
@@ -63,7 +63,7 @@ static bool is_protected_meta_file(const char *storage_path) {
 }
 
 error_t *encryption_policy_should_encrypt(
-    const dotta_config_t *config,
+    const config_t *config,
     const char *storage_path,
     bool explicit_encrypt,
     bool explicit_no_encrypt,
@@ -201,7 +201,7 @@ error_t *encryption_policy_should_encrypt(
 }
 
 error_t *encryption_policy_matches_auto_patterns(
-    const dotta_config_t *config,
+    const config_t *config,
     const char *storage_path,
     bool *out_matches
 ) {

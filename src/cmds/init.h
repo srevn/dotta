@@ -24,9 +24,10 @@ typedef struct {
  * Creates or opens a git repository and sets up dotta branch structure.
  * Creates initial empty state file.
  *
+ * @param config Configuration (must not be NULL)
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_init(const cmd_init_options_t *opts);
+error_t *cmd_init(const config_t *config, const cmd_init_options_t *opts);
 
 #endif /* DOTTA_CMD_INIT_H */

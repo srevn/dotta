@@ -30,6 +30,6 @@ typedef struct {
 /**
  * Execute show command
  */
-error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts);
+error_t *cmd_show(git_repository *repo, const config_t *config, const cmd_show_options_t *opts);
 
 #endif /* DOTTA_CMD_SHOW_H */

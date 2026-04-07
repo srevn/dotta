@@ -8,60 +8,8 @@
 #ifndef DOTTA_CONFIG_H
 #define DOTTA_CONFIG_H
 
-#include <stdbool.h>
 #include <types.h>
-
-/**
- * Configuration structure
- */
-typedef struct dotta_config {
-    /* [core] */
-    char *repo_dir;
-    bool strict_mode;
-    bool auto_detect_new_files;  /* Auto-detect new files in tracked directories */
-
-    /* [hooks] */
-    char *hooks_dir;
-    int32_t hook_timeout;         /* Hook execution timeout in seconds (default: 30, 0 = no timeout) */
-    bool pre_apply;
-    bool post_apply;
-    bool pre_add;
-    bool post_add;
-    bool pre_remove;
-    bool post_remove;
-    bool pre_update;
-    bool post_update;
-
-    /* [security] */
-    bool confirm_destructive;
-    bool confirm_new_files;       /* Require confirmation before adding new files */
-
-    /* [ignore] */
-    char **ignore_patterns;       /* Array of patterns from config */
-    size_t ignore_pattern_count;
-    char *ignore_file;            /* Path to .dottaignore (default: $REPO/.dottaignore) */
-    bool respect_gitignore;       /* Check .gitignore in source directories */
-
-    /* [output] */
-    char *verbosity;              /* "quiet", "normal", "verbose" */
-    char *color;                  /* "auto", "always", "never" */
-
-    /* [commit] */
-    char *commit_title;           /* Title template for commits */
-    char *commit_body;            /* Body template for commits */
-
-    /* [sync] */
-    bool auto_pull;               /* Auto-pull when remote is ahead (default: true) */
-    char *diverged_strategy;      /* Strategy for diverged branches: warn, rebase, merge, ours, theirs */
-
-    /* [encryption] */
-    bool encryption_enabled;      /* Enable encryption feature (default: false) */
-    char **auto_encrypt_patterns; /* Auto-encrypt patterns (gitignore-style) */
-    size_t auto_encrypt_pattern_count;
-    uint64_t encryption_opslimit; /* CPU cost for password hashing (default: 10000) */
-    size_t encryption_memlimit;   /* Memory cost for balloon hashing in MB (default: 64, 0 = disabled) */
-    int32_t session_timeout;      /* Key cache timeout in seconds (default: 3600, 0 = always prompt, -1 = never expire) */
-} dotta_config_t;
+#include <config.h>
 
 /**
  * Load configuration from file
@@ -71,17 +19,17 @@ typedef struct dotta_config {
  *
  * Returns default config if file doesn't exist (not an error).
  */
-error_t *config_load(const char *config_path, dotta_config_t **out);
+error_t *config_load(const char *config_path, config_t **out);
 
 /**
  * Create config with default values
  */
-dotta_config_t *config_create_default(void);
+config_t *config_create_default(void);
 
 /**
  * Free configuration
  */
-void config_free(dotta_config_t *config);
+void config_free(config_t *config);
 
 /**
  * Get config file path (checks env vars and defaults)
@@ -91,7 +39,7 @@ error_t *config_get_path(char **out);
 /**
  * Validate configuration
  */
-error_t *config_validate(const dotta_config_t *config);
+error_t *config_validate(const config_t *config);
 
 /**
  * Get repository directory from config or environment
@@ -101,6 +49,6 @@ error_t *config_validate(const dotta_config_t *config);
  *   2. Config file repo_dir
  *   3. Default: ~/.local/share/dotta/repo
  */
-error_t *config_get_repo_dir(const dotta_config_t *config, char **out);
+error_t *config_get_repo_dir(const config_t *config, char **out);
 
 #endif /* DOTTA_CONFIG_H */

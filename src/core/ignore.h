@@ -30,8 +30,6 @@
 #include <stdbool.h>
 #include <types.h>
 
-#include "utils/config.h"
-
 /**
  * Ignore context - manages all ignore rules and precedence
  *
@@ -95,7 +93,7 @@ typedef struct {
  */
 error_t *ignore_context_create(
     git_repository *repo,
-    const dotta_config_t *config,
+    const config_t *config,
     const char *profile_name,
     char **cli_excludes,
     size_t cli_exclude_count,

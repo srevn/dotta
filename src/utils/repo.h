@@ -29,10 +29,11 @@
  * is emitted to stderr and the resolution continues without config
  * (env var and default are still respected).
  *
+ * @param config Loaded configuration (must not be NULL)
  * @param out Resolved repository path (caller must free)
  * @return Error or NULL on success
  */
-error_t *resolve_repo_path(char **out);
+error_t *resolve_repo_path(const config_t *config, char **out);
 
 /**
  * Open dotta repository
@@ -62,11 +63,12 @@ error_t *resolve_repo_path(char **out);
  * - Caller must free path_out (if requested) with free()
  * - On error, outputs are not modified
  *
+ * @param config Loaded configuration (must not be NULL)
  * @param repo_out Repository handle (must not be NULL, caller must free)
  * @param path_out Optional resolved path (can be NULL, caller must free if set)
  * @return Error or NULL on success
  */
-error_t *repo_open(git_repository **repo_out, char **path_out);
+error_t *repo_open(const config_t *config, git_repository **repo_out, char **path_out);
 
 /**
  * Fix repository ownership if running under sudo

@@ -9,13 +9,13 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <config.h>
 
 #include "base/error.h"
 #include "core/metadata.h"
 #include "core/state.h"
 #include "crypto/keymanager.h"
 #include "utils/array.h"
-#include "utils/config.h"
 #include "utils/output.h"
 
 /**
@@ -102,7 +102,7 @@ static error_t *count_encrypted_files(
  * Prompts user for passphrase and caches it in the global keymanager.
  */
 static error_t *cmd_key_set(
-    const dotta_config_t *config,
+    const config_t *config,
     output_ctx_t *out
 ) {
     /* Check if encryption is enabled */
@@ -193,7 +193,7 @@ static error_t *cmd_key_set(
  * Clears the cached passphrase from the global keymanager.
  */
 static error_t *cmd_key_clear(
-    const dotta_config_t *config,
+    const config_t *config,
     output_ctx_t *out
 ) {
     /* Check if encryption is enabled */
@@ -244,7 +244,7 @@ static error_t *cmd_key_clear(
  */
 static error_t *cmd_key_status(
     git_repository *repo,
-    const dotta_config_t *config,
+    const config_t *config,
     output_ctx_t *out
 ) {
     /* Display encryption status */
@@ -419,21 +419,13 @@ static error_t *cmd_key_status(
 /**
  * Execute key command
  */
-error_t *cmd_key(git_repository *repo, const cmd_key_options_t *opts) {
+error_t *cmd_key(git_repository *repo, const config_t *config, const cmd_key_options_t *opts) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
-
-    /* Load configuration */
-    dotta_config_t *config = NULL;
-    error_t *err = config_load(NULL, &config);
-    if (err) {
-        return error_wrap(err, "Failed to load configuration");
-    }
 
     /* Create output context */
     output_ctx_t *out = output_create_from_config(config);
     if (!out) {
-        config_free(config);
         return ERROR(ERR_MEMORY, "Failed to create output context");
     }
 
@@ -443,6 +435,7 @@ error_t *cmd_key(git_repository *repo, const cmd_key_options_t *opts) {
     }
 
     /* Dispatch to appropriate action */
+    error_t *err = NULL;
     switch (opts->action) {
         case KEY_ACTION_SET:
             err = cmd_key_set(config, out);
@@ -465,6 +458,5 @@ error_t *cmd_key(git_repository *repo, const cmd_key_options_t *opts) {
     }
 
     output_free(out);
-    config_free(config);
     return err;
 }

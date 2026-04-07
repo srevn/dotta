@@ -25,7 +25,6 @@
 #include "crypto/encryption.h"
 #include "infra/path.h"
 #include "utils/array.h"
-#include "utils/config.h"
 #include "utils/output.h"
 #include "utils/timeutil.h"
 
@@ -789,24 +788,15 @@ static error_t *list_file_history(
 /**
  * List command implementation
  */
-error_t *cmd_list(git_repository *repo, const cmd_list_options_t *opts) {
+error_t *cmd_list(git_repository *repo, const config_t *config, const cmd_list_options_t *opts) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
-    /* Load configuration */
-    dotta_config_t *config = NULL;
-    error_t *err = config_load(NULL, &config);
-    if (err) {
-        /* Non-fatal: continue with defaults */
-        error_free(err);
-        err = NULL;
-        config = config_create_default();
-    }
+    error_t *err = NULL;
 
     /* Create output context from config */
     output_ctx_t *out = output_create_from_config(config);
     if (!out) {
-        config_free(config);
         return ERROR(ERR_MEMORY, "Failed to create output context");
     }
 
@@ -832,7 +822,6 @@ error_t *cmd_list(git_repository *repo, const cmd_list_options_t *opts) {
     }
 
     /* Cleanup */
-    config_free(config);
     output_free(out);
 
     return err;

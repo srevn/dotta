@@ -25,7 +25,7 @@
 #include <types.h>
 
 /* Forward declarations */
-typedef struct dotta_config dotta_config_t;
+typedef struct config config_t;
 typedef struct metadata metadata_t;
 
 /**
@@ -76,7 +76,7 @@ typedef struct metadata metadata_t;
  * - ERR_*: Propagated from metadata lookup (serious errors only)
  */
 error_t *encryption_policy_should_encrypt(
-    const dotta_config_t *config,
+    const config_t *config,
     const char *storage_path,
     bool explicit_encrypt,
     bool explicit_no_encrypt,
@@ -127,7 +127,7 @@ error_t *encryption_policy_should_encrypt(
  * and does not perform I/O or allocations that could fail.
  */
 error_t *encryption_policy_matches_auto_patterns(
-    const dotta_config_t *config,
+    const config_t *config,
     const char *storage_path,
     bool *out_matches
 );

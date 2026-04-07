@@ -40,9 +40,10 @@ typedef struct {
  * 6. Creates commit with restored file and metadata
  *
  * @param repo Repository (must not be NULL)
+ * @param config Configuration (must not be NULL)
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts);
+error_t *cmd_revert(git_repository *repo, const config_t *config, const cmd_revert_options_t *opts);
 
 #endif /* DOTTA_CMD_REVERT_H */

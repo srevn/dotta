@@ -14,7 +14,6 @@
 #include "base/gitops.h"
 #include "core/ignore.h"
 #include "core/state.h"
-#include "utils/config.h"
 #include "utils/output.h"
 #include "utils/repo.h"
 
@@ -169,24 +168,15 @@ static error_t *init_dottaignore(git_repository *repo) {
 /**
  * Initialize command implementation
  */
-error_t *cmd_init(const cmd_init_options_t *opts) {
+error_t *cmd_init(const config_t *config, const cmd_init_options_t *opts) {
+    CHECK_NULL(config);
     CHECK_NULL(opts);
 
     git_repository *repo = NULL;
     error_t *err = NULL;
     char *resolved_path = NULL;
     const char *path = NULL;
-    dotta_config_t *config = NULL;
     output_ctx_t *out = NULL;
-
-    /* Load configuration */
-    err = config_load(NULL, &config);
-    if (err) {
-        /* Non-fatal: continue with defaults */
-        error_free(err);
-        err = NULL;
-        config = config_create_default();
-    }
 
     /* Create output context from config */
     out = output_create_from_config(config);
@@ -206,7 +196,7 @@ error_t *cmd_init(const cmd_init_options_t *opts) {
         path = opts->repo_path;
     } else {
         /* Use resolved repository location */
-        err = resolve_repo_path(&resolved_path);
+        err = resolve_repo_path(config, &resolved_path);
         if (err) {
             err = error_wrap(err, "Failed to resolve repository path");
             goto cleanup;
@@ -272,7 +262,6 @@ cleanup:
     if (repo) git_repository_free(repo);
     if (resolved_path) free(resolved_path);
     if (out) output_free(out);
-    if (config) config_free(config);
 
     return err;
 }

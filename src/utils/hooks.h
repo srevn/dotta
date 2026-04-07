@@ -11,8 +11,6 @@
 #include <stdbool.h>
 #include <types.h>
 
-#include "config.h"
-
 /**
  * Hook types
  */
@@ -53,18 +51,18 @@ typedef struct {
 /**
  * Check if a hook is enabled in config
  */
-bool hook_is_enabled(const dotta_config_t *config, hook_type_t type);
+bool hook_is_enabled(const config_t *config, hook_type_t type);
 
 /**
  * Check if hook script exists
  */
-bool hook_exists(const dotta_config_t *config, hook_type_t type);
+bool hook_exists(const config_t *config, hook_type_t type);
 
 /**
  * Get hook script path
  */
 error_t *hook_get_path(
-    const dotta_config_t *config,
+    const config_t *config,
     hook_type_t type,
     char **out
 );
@@ -82,7 +80,7 @@ error_t *hook_get_path(
  * @return Error or NULL on success
  */
 error_t *hook_execute(
-    const dotta_config_t *config,
+    const config_t *config,
     hook_type_t type,
     const hook_context_t *context,
     hook_result_t **result

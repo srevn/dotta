@@ -23,8 +23,6 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "config.h"
-
 /* ═══════════════════════════════════════════════════════════════════
  * ANSI Escape Codes
  *
@@ -455,7 +453,7 @@ static output_color_mode_t parse_color_mode(const char *str) {
     return OUTPUT_COLOR_AUTO;
 }
 
-output_ctx_t *output_create_from_config(const dotta_config_t *config) {
+output_ctx_t *output_create_from_config(const config_t *config) {
     output_verbosity_t verbosity = OUTPUT_NORMAL;
     output_color_mode_t color_mode = OUTPUT_COLOR_AUTO;
 
@@ -868,7 +866,7 @@ bool output_confirm_or_default(
 
 bool output_confirm_destructive(
     const output_ctx_t *ctx,
-    const dotta_config_t *config,
+    const config_t *config,
     const char *message,
     bool force_flag
 ) {

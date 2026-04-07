@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <config.h>
 
 #include "base/error.h"
 #include "base/gitops.h"
@@ -25,7 +26,6 @@
 #include "core/upstream.h"
 #include "infra/path.h"
 #include "utils/array.h"
-#include "utils/config.h"
 #include "utils/output.h"
 
 /* Default repository name when URL parsing fails */
@@ -337,7 +337,8 @@ static error_t *initialize_state(
 /**
  * Clone command implementation
  */
-error_t *cmd_clone(const cmd_clone_options_t *opts) {
+error_t *cmd_clone(const config_t *config, const cmd_clone_options_t *opts) {
+    CHECK_NULL(config);
     CHECK_NULL(opts);
     CHECK_NULL(opts->url);
 
@@ -346,7 +347,6 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     git_repository *repo = NULL;
     const char *local_path = NULL;
     bool allocated_path = false;
-    dotta_config_t *config = NULL;
     output_ctx_t *out = NULL;
     transfer_context_t *xfer = NULL;
     string_array_t *fetched_profiles = NULL;
@@ -368,17 +368,8 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
     if (opts->path) {
         local_path = opts->path;
     } else {
-        /* Try to load config to get default repo location */
-        err = config_load(NULL, &config);
-        if (err) {
-            /* If config doesn't exist, create default config */
-            error_free(err);
-            err = NULL;
-            config = config_create_default();
-        }
-
-        if (config && config->repo_dir) {
-            /* Use default repo location */
+        if (config->repo_dir) {
+            /* Use default repo location from config */
             char *expanded_path = NULL;
             err = path_expand_home(config->repo_dir, &expanded_path);
             if (err) {
@@ -400,11 +391,6 @@ error_t *cmd_clone(const cmd_clone_options_t *opts) {
                 goto cleanup;
             }
             allocated_path = true;
-        }
-
-        if (config) {
-            config_free(config);
-            config = NULL;
         }
     }
 

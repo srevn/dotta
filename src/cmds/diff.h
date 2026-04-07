@@ -62,9 +62,10 @@ typedef struct {
  * Compares files in profiles with their deployed versions.
  *
  * @param repo Repository (must not be NULL)
+ * @param config Configuration (must not be NULL)
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_diff(git_repository *repo, const cmd_diff_options_t *opts);
+error_t *cmd_diff(git_repository *repo, const config_t *config, const cmd_diff_options_t *opts);
 
 #endif /* DOTTA_CMD_DIFF_H */

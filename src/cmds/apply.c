@@ -17,7 +17,6 @@
 #include "core/safety.h"
 #include "core/state.h"
 #include "core/workspace.h"
-#include "crypto/keymanager.h"
 #include "infra/content.h"
 #include "infra/path.h"
 #include "utils/array.h"
@@ -817,6 +816,7 @@ static bool needs_deployment(const workspace_item_t *ws_item) {
  */
 error_t *cmd_apply(
     git_repository *repo,
+    const config_t *config,
     const cmd_apply_options_t *opts
 ) {
     CHECK_NULL(repo);
@@ -824,7 +824,6 @@ error_t *cmd_apply(
 
     /* Declare all resources at the top, initialized to NULL */
     error_t *err = NULL;
-    dotta_config_t *config = NULL;
     output_ctx_t *out = NULL;
     char *repo_dir = NULL;
     state_t *state = NULL;
@@ -845,18 +844,6 @@ error_t *cmd_apply(
     char *profiles_str = NULL;
     deploy_result_t *deploy_res = NULL;
     path_filter_t *file_filter = NULL;
-
-    /* Load configuration */
-    err = config_load(NULL, &config);
-    if (err) {
-        /* Non-fatal: continue with defaults */
-        error_free(err);
-        err = NULL;
-        config = config_create_default();
-        if (!config) {
-            return ERROR(ERR_MEMORY, "Failed to create default configuration");
-        }
-    }
 
     /* Create output context from config */
     out = output_create_from_config(config);
@@ -2311,7 +2298,6 @@ cleanup:
     if (workspace_profiles) profile_list_free(workspace_profiles);
     if (state) state_free(state);
     if (repo_dir) free(repo_dir);
-    if (config) config_free(config);
     if (out) output_free(out);
 
     return err;

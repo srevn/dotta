@@ -21,7 +21,6 @@
 #include "core/upstream.h"
 #include "infra/path.h"
 #include "utils/array.h"
-#include "utils/config.h"
 #include "utils/output.h"
 
 /**
@@ -1595,21 +1594,12 @@ cleanup:
 /**
  * Profile command dispatcher
  */
-error_t *cmd_profile(git_repository *repo, const cmd_profile_options_t *opts) {
+error_t *cmd_profile(git_repository *repo, const config_t *config, const cmd_profile_options_t *opts) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
-    /* Load config for output context */
-    dotta_config_t *config = NULL;
-    error_t *err = config_load(NULL, &config);
-    if (err) {
-        /* Non-fatal: use defaults */
-        config = config_create_default();
-    }
-
     output_ctx_t *out = output_create_from_config(config);
     if (!out) {
-        config_free(config);
         return ERROR(ERR_MEMORY, "Failed to create output context");
     }
 
@@ -1656,6 +1646,6 @@ error_t *cmd_profile(git_repository *repo, const cmd_profile_options_t *opts) {
     }
 
     output_free(out);
-    config_free(config);
+
     return result;
 }

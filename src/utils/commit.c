@@ -4,6 +4,7 @@
 
 #include "commit.h"
 
+#include <config.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,7 +13,6 @@
 
 #include "base/error.h"
 #include "buffer.h"
-#include "config.h"
 
 /* Maximum length for hostname and username */
 #define MAX_HOSTNAME 256
@@ -295,6 +295,7 @@ static char *substitute_template(
 cleanup:
     error_free(err);
     buffer_free(&buf);
+
     return NULL;
 }
 
@@ -316,6 +317,7 @@ static char *build_full_message(const char *title, const char *body) {
     }
 
     snprintf(message, size, "%s\n\n%s", title, body);
+
     return message;
 }
 
@@ -323,7 +325,7 @@ static char *build_full_message(const char *title, const char *body) {
  * Build commit message from context
  */
 char *build_commit_message(
-    const dotta_config_t *config,
+    const config_t *config,
     const commit_message_context_t *ctx
 ) {
     /* Validate input */
@@ -334,16 +336,6 @@ char *build_commit_message(
     /* If custom message provided, use it directly */
     if (ctx->custom_msg) {
         return strdup(ctx->custom_msg);
-    }
-
-    /* Load config if not provided */
-    dotta_config_t *temp_config = NULL;
-    if (!config) {
-        temp_config = config_create_default();
-        if (!temp_config) {
-            return NULL;
-        }
-        config = temp_config;
     }
 
     /* Get components */
@@ -362,7 +354,7 @@ char *build_commit_message(
         free(date);
         free(datetime);
         free(file_list);
-        config_free(temp_config);
+
         return NULL;
     }
 
@@ -387,7 +379,7 @@ char *build_commit_message(
         free(date);
         free(datetime);
         free(file_list);
-        config_free(temp_config);
+
         return NULL;
     }
 
@@ -412,7 +404,6 @@ char *build_commit_message(
     free(date);
     free(datetime);
     free(file_list);
-    config_free(temp_config);
 
     if (!body) {
         free(title);

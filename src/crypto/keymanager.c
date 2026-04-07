@@ -603,7 +603,7 @@ static time_t get_monotonic_time(void) {
 }
 
 error_t *keymanager_create(
-    const dotta_config_t *config,
+    const config_t *config,
     keymanager_t **out
 ) {
     CHECK_NULL(config);
@@ -1288,13 +1288,13 @@ static keymanager_t *global_keymanager = NULL;
  * @param config Configuration (can be NULL for defaults)
  * @return Global keymanager instance or NULL on error
  */
-keymanager_t *keymanager_get_global(const dotta_config_t *config) {
+keymanager_t *keymanager_get_global(const config_t *config) {
     if (global_keymanager) {
         return global_keymanager;
     }
 
     /* Create new keymanager */
-    dotta_config_t *cfg = (dotta_config_t *) config;
+    config_t *cfg = (config_t *) config;
     bool allocated_config = false;
 
     if (!cfg) {

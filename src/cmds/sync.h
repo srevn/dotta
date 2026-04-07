@@ -56,9 +56,10 @@ typedef struct {
  * Run 'update' command first to commit local changes to profile branches.
  *
  * @param repo Repository (must not be NULL)
+ * @param config Configuration (must not be NULL)
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_sync(git_repository *repo, const cmd_sync_options_t *opts);
+error_t *cmd_sync(git_repository *repo, const config_t *config, const cmd_sync_options_t *opts);
 
 #endif /* DOTTA_CMD_SYNC_H */

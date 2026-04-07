@@ -18,34 +18,16 @@
 /**
  * Resolve repository path
  */
-error_t *resolve_repo_path(char **out) {
+error_t *resolve_repo_path(const config_t *config, char **out) {
+    CHECK_NULL(config);
     CHECK_NULL(out);
-
-    dotta_config_t *config = NULL;
-    error_t *err = NULL;
-
-    /* Load configuration.
-     * config_load returns default config if file doesn't exist (not an error).
-     * If config parsing fails, warn and continue with NULL config —
-     * config_get_repo_dir handles NULL correctly (env var → default). */
-    err = config_load(NULL, &config);
-    if (err) {
-        fprintf(
-            stderr, "warning: %s (using default settings)\n",
-            error_message(err)
-        );
-        error_free(err);
-        config = NULL;
-    }
 
     /* Resolve repository directory using full priority chain:
      * 1. DOTTA_REPO_DIR environment variable
-     * 2. Config file repo_dir setting (skipped when config is NULL)
+     * 2. Config file repo_dir setting
      * 3. Default: ~/.local/share/dotta/repo */
     char *repo_dir = NULL;
-    err = config_get_repo_dir(config, &repo_dir);
-    config_free(config);
-
+    error_t *err = config_get_repo_dir(config, &repo_dir);
     if (err) {
         /* Path expansion failed (e.g., invalid home directory).
          * This is a genuine error that should be propagated.
@@ -210,7 +192,8 @@ static error_t *repo_ensure_dotta_worktree(git_repository *repo) {
 /**
  * Open dotta repository
  */
-error_t *repo_open(git_repository **repo_out, char **path_out) {
+error_t *repo_open(const config_t *config, git_repository **repo_out, char **path_out) {
+    CHECK_NULL(config);
     CHECK_NULL(repo_out);
 
     char *repo_path = NULL;
@@ -218,7 +201,7 @@ error_t *repo_open(git_repository **repo_out, char **path_out) {
     error_t *err = NULL;
 
     /* Resolve repository path */
-    err = resolve_repo_path(&repo_path);
+    err = resolve_repo_path(config, &repo_path);
     if (err) {
         return error_wrap(err, "Failed to resolve repository path");
     }

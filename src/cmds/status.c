@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <config.h>
 
 #include "base/error.h"
 #include "base/gitops.h"
@@ -16,7 +17,6 @@
 #include "core/state.h"
 #include "core/upstream.h"
 #include "core/workspace.h"
-#include "utils/config.h"
 #include "utils/output.h"
 #include "utils/privilege.h"
 #include "utils/timeutil.h"
@@ -875,6 +875,7 @@ static error_t *extract_elevation_paths_from_manifest(
  */
 error_t *cmd_status(
     git_repository *repo,
+    const config_t *config,
     const cmd_status_options_t *opts
 ) {
     CHECK_NULL(repo);
@@ -882,26 +883,12 @@ error_t *cmd_status(
 
     /* Declare all resources at top and initialize to NULL */
     error_t *err = NULL;
-    dotta_config_t *config = NULL;
     profile_list_t *workspace_profiles = NULL;
     profile_list_t *display_profiles = NULL;
     const manifest_t *manifest = NULL;
     const state_t *state = NULL;
     workspace_t *ws = NULL;
     output_ctx_t *out = NULL;
-
-    /* Load configuration */
-    err = config_load(NULL, &config);
-    if (err) {
-        /* Non-fatal: continue with defaults */
-        error_free(err);
-        err = NULL;
-        config = config_create_default();
-        if (!config) {
-            err = ERROR(ERR_MEMORY, "Failed to create default config");
-            goto cleanup;
-        }
-    }
 
     /* Create output context from config */
     out = output_create_from_config(config);
@@ -1088,7 +1075,6 @@ cleanup:
         profile_list_free(display_profiles);
     }
     profile_list_free(workspace_profiles);
-    config_free(config);
     output_free(out);
 
     return err;

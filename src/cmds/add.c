@@ -223,7 +223,7 @@ static error_t *add_file_to_worktree(
     const char *storage_path,
     const cmd_add_options_t *opts,
     keymanager_t *km,
-    const dotta_config_t *config,
+    const config_t *config,
     metadata_t *metadata,
     output_ctx_t *out
 ) {
@@ -516,7 +516,7 @@ static error_t *create_commit(
     worktree_handle_t *wt,
     const cmd_add_options_t *opts,
     string_array_t *added_files,
-    const dotta_config_t *config,
+    const config_t *config,
     git_oid *out_commit_oid
 ) {
     CHECK_NULL(wt);
@@ -949,6 +949,7 @@ cleanup:
  */
 error_t *cmd_add(
     git_repository *repo,
+    const config_t *config,
     const cmd_add_options_t *opts
 ) {
     CHECK_NULL(repo);
@@ -957,7 +958,6 @@ error_t *cmd_add(
     if (err) return err;
 
     /* Initialize all resources to NULL for safe cleanup */
-    dotta_config_t *config = NULL;
     output_ctx_t *out = NULL;
     ignore_context_t *ignore_ctx = NULL;
     char *repo_dir = NULL;
@@ -976,19 +976,6 @@ error_t *cmd_add(
     const char **preflight_storage_paths = NULL;
     char **preflight_allocated_paths = NULL;
     size_t preflight_storage_count = 0;
-
-    /* Load configuration for hooks and ignore patterns */
-    err = config_load(NULL, &config);
-    if (err) {
-        /* Non-fatal: continue with default config */
-        error_free(err);
-        err = NULL;
-        config = config_create_default();
-        if (!config) {
-            err = ERROR(ERR_MEMORY, "Failed to create default config");
-            goto cleanup;
-        }
-    }
 
     /* Create output context from config */
     out = output_create_from_config(config);
@@ -1816,7 +1803,6 @@ cleanup:
     }
     if (preflight_storage_paths) free(preflight_storage_paths);
     if (out) output_free(out);
-    if (config) config_free(config);
 
     return err;
 }

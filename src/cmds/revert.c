@@ -23,7 +23,6 @@
 #include "utils/array.h"
 #include "utils/buffer.h"
 #include "utils/commit.h"
-#include "utils/config.h"
 #include "utils/output.h"
 
 /**
@@ -486,7 +485,7 @@ static error_t *load_metadata_graceful(
  * @return Allocated message string (caller must free), or NULL on allocation failure
  */
 static char *build_revert_commit_message(
-    const dotta_config_t *config,
+    const config_t *config,
     const char *profile_name,
     const char *file_path,
     const git_oid *target_commit_oid,
@@ -595,7 +594,7 @@ cleanup:
  */
 static error_t *revert_file_in_branch(
     git_repository *repo,
-    const dotta_config_t *config,
+    const config_t *config,
     const char *profile_name,
     const char *file_path,
     const git_oid *target_commit_oid,
@@ -905,14 +904,13 @@ cleanup:
 /**
  * Revert command implementation
  */
-error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
+error_t *cmd_revert(git_repository *repo, const config_t *config, const cmd_revert_options_t *opts) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
     CHECK_NULL(opts->file_path);
     CHECK_NULL(opts->commit);
 
     error_t *err = NULL;
-    dotta_config_t *config = NULL;
     char *profile_name = NULL;
     char *resolved_path = NULL;
     git_oid current_oid = { { 0 } };
@@ -927,19 +925,9 @@ error_t *cmd_revert(git_repository *repo, const cmd_revert_options_t *opts) {
     keymanager_t *km = NULL;
     bool user_aborted = false;
 
-    /* Step 1: Load configuration */
-    err = config_load(NULL, &config);
-    if (err) {
-        /* Non-fatal: continue with defaults */
-        error_free(err);
-        err = NULL;
-        config = config_create_default();
-    }
-
     /* Create output context from config */
     out = output_create_from_config(config);
     if (!out) {
-        config_free(config);
         return ERROR(ERR_MEMORY, "Failed to create output context");
     }
 
@@ -1359,9 +1347,7 @@ cleanup:
     if (target_commit) git_commit_free(target_commit);
     if (profile_name) free(profile_name);
     if (resolved_path) free(resolved_path);
-
     if (out) output_free(out);
-    if (config) config_free(config);
 
     /* Don't return error if user aborted */
     if (user_aborted) {

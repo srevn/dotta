@@ -37,7 +37,7 @@
 #include <types.h>
 
 /* Forward declarations */
-typedef struct dotta_config dotta_config_t;
+typedef struct config config_t;
 
 /**
  * Key manager (opaque)
@@ -58,7 +58,7 @@ typedef struct keymanager keymanager_t;
  * @return Error or NULL on success
  */
 error_t *keymanager_create(
-    const dotta_config_t *config,
+    const config_t *config,
     keymanager_t **out
 );
 
@@ -226,7 +226,7 @@ error_t *keymanager_prompt_passphrase(
  * @param config Configuration (can be NULL for defaults)
  * @return Global keymanager instance or NULL on error
  */
-keymanager_t *keymanager_get_global(const dotta_config_t *config);
+keymanager_t *keymanager_get_global(const config_t *config);
 
 /**
  * Cleanup global keymanager

@@ -8,10 +8,9 @@
 #ifndef DOTTA_OUTPUT_H
 #define DOTTA_OUTPUT_H
 
-#include <stdbool.h>
+#include <config.h>
 #include <stdio.h>
-
-#include "config.h"
+#include <types.h>
 
 /**
  * Verbosity levels
@@ -74,7 +73,7 @@ output_ctx_t *output_create(
  * Parses config settings and creates output context.
  * Falls back to defaults if config is NULL or parsing fails.
  */
-output_ctx_t *output_create_from_config(const dotta_config_t *config);
+output_ctx_t *output_create_from_config(const config_t *config);
 
 /**
  * Free output context
@@ -411,7 +410,7 @@ bool output_confirm_or_default(
  */
 bool output_confirm_destructive(
     const output_ctx_t *ctx,
-    const dotta_config_t *config,
+    const config_t *config,
     const char *message,
     bool force_flag
 );

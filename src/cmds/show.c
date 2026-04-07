@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <config.h>
 
 #include "base/error.h"
 #include "base/gitops.h"
@@ -19,7 +20,6 @@
 #include "infra/path.h"
 #include "utils/array.h"
 #include "utils/buffer.h"
-#include "utils/config.h"
 #include "utils/output.h"
 #include "utils/timeutil.h"
 
@@ -200,7 +200,7 @@ static error_t *show_file(
     const char *file_path,
     const char *commit_ref,
     bool raw,
-    const dotta_config_t *config,
+    const config_t *config,
     output_ctx_t *out
 ) {
     error_t *err = NULL;
@@ -564,25 +564,16 @@ cleanup:
 /**
  * Show command implementation
  */
-error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
+error_t *cmd_show(git_repository *repo, const config_t *config, const cmd_show_options_t *opts) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
     error_t *err = NULL;
-    dotta_config_t *config = NULL;
     output_ctx_t *out = NULL;
     profile_list_t *profiles = NULL;
     string_array_t *matches = NULL;
     char *converted = NULL;
     const char *found_profile = NULL;
-
-    /* Load configuration (non-fatal, fall back to defaults) */
-    err = config_load(NULL, &config);
-    if (err) {
-        error_free(err);
-        err = NULL;
-        config = config_create_default();
-    }
 
     /* Create output context */
     out = output_create_from_config(config);
@@ -729,7 +720,6 @@ error_t *cmd_show(git_repository *repo, const cmd_show_options_t *opts) {
 
 cleanup:
     output_free(out);
-    if (config) config_free(config);
     if (profiles) profile_list_free(profiles);
     if (matches) string_array_free(matches);
     if (converted) free(converted);

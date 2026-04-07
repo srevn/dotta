@@ -150,11 +150,11 @@ static void complete_files(
 
     if (profile) {
         err = state_get_entries_by_profile(
-            state, profile, &entries, &count
+            state, profile, NULL, &entries, &count
         );
     } else {
         err = state_get_all_files(
-            state, &entries, &count
+            state, NULL, &entries, &count
         );
     }
 

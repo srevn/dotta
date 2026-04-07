@@ -652,7 +652,7 @@ static error_t *calculate_required_directories(
     /* Get all tracked directories for O(1) membership check */
     state_directory_entry_t *directories = NULL;
     size_t dir_count = 0;
-    err = state_get_all_directories(state, &directories, &dir_count);
+    err = state_get_all_directories(state, NULL, &directories, &dir_count);
     if (err) {
         return err;
     }
@@ -769,7 +769,7 @@ static error_t *deploy_tracked_directories(
     /* Get all tracked directories from state database */
     state_directory_entry_t *directories = NULL;
     size_t dir_count = 0;
-    error_t *err = state_get_all_directories(state, &directories, &dir_count);
+    error_t *err = state_get_all_directories(state, NULL, &directories, &dir_count);
     if (err) {
         return error_wrap(err, "Failed to load tracked directories from state");
     }

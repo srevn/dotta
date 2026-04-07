@@ -15,6 +15,7 @@
  * Forward declarations
  */
 typedef struct error error_t;
+typedef struct arena arena_t;
 
 /**
  * Error codes

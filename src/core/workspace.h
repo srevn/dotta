@@ -48,16 +48,18 @@
  * fit in first cache line (64 bytes), followed by scalars.
  *
  * Lifetime notes:
- * - filesystem_path, storage_path, profile, metadata_profile, old_profile: owned strings (must free)
+ * - filesystem_path, storage_path: borrowed from arena-backed manifest/state entries
+ * - profile, metadata_profile: arena_strdup'd (arena-owned, freed via arena_destroy)
+ * - old_profile: borrowed from arena-backed manifest entry (can be NULL)
  * - source_profile: borrowed pointer, valid while workspace lives
  *   (workspace borrows profiles list from caller, so pointer is safe)
  */
 typedef struct {
-    char *filesystem_path;      /* Target path on filesystem (owned) */
-    char *storage_path;         /* Path in profile, e.g., home/.bashrc (owned) */
-    char *profile;              /* Winning profile name (owned) */
-    char *metadata_profile;     /* Which profile's metadata won, can differ from profile (owned) */
-    char *old_profile;          /* Previous profile from state, NULL if unchanged (owned) */
+    char *filesystem_path;      /* Target path on filesystem (arena-borrowed) */
+    char *storage_path;         /* Path in profile, e.g., home/.bashrc (arena-borrowed) */
+    char *profile;              /* Winning profile name (arena-owned) */
+    char *metadata_profile;     /* Which profile's metadata won, can differ from profile (arena-owned) */
+    char *old_profile;          /* Previous profile from state, NULL if unchanged (arena-borrowed) */
 
     /* Direct pointer to profile structure for convenience (borrowed, can be NULL if not enabled) */
     profile_t *source_profile;

@@ -1517,7 +1517,7 @@ static error_t *profile_validate(
     /* Check 2: State file entries reference valid profiles */
     size_t state_file_count = 0;
     state_file_entry_t *state_files = NULL;
-    err = state_get_all_files(state, &state_files, &state_file_count);
+    err = state_get_all_files(state, NULL, &state_files, &state_file_count);
     if (err) {
         goto cleanup;
     }

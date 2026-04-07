@@ -348,19 +348,20 @@ error_t *state_get_file_by_storage(
 /**
  * Get all file entries
  *
- * BREAKING CHANGE: Memory ownership changed from original API.
- * Returns allocated array that caller MUST free with state_free_all_files().
- *
- * This change is necessary because SQLite implementation doesn't keep
- * all files in memory - they're queried on demand.
+ * When arena is NULL, returns heap-allocated array that caller must free
+ * with state_free_all_files(). When arena is non-NULL, all allocations
+ * (entries array + string fields) use the arena — caller must NOT call
+ * state_free_all_files() (arena_destroy handles everything).
  *
  * @param state State (must not be NULL)
- * @param out Output array (must not be NULL, caller must free with state_free_all_files)
+ * @param arena Arena for allocations (NULL = heap with state_free_all_files)
+ * @param out Output array (must not be NULL)
  * @param count Output count (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *state_get_all_files(
     const state_t *state,
+    arena_t *arena,
     state_file_entry_t **out,
     size_t *count
 );
@@ -730,17 +731,20 @@ error_t *state_update_git_oid_for_profile(
  * Returns all manifest entries from the specified profile.
  * Used by profile disable to determine impact of disabling a profile.
  *
- * Returns allocated array that caller must free with state_free_all_files().
+ * When arena is NULL, returns heap-allocated array (free with state_free_all_files).
+ * When arena is non-NULL, all allocations use the arena.
  *
  * @param state State (must not be NULL)
  * @param profile Profile name to filter by (must not be NULL)
- * @param out Output array (must not be NULL, caller must free with state_free_all_files)
+ * @param arena Arena for allocations (NULL = heap with state_free_all_files)
+ * @param out Output array (must not be NULL)
  * @param count Output count (must not be NULL)
  * @return Error or NULL on success (empty array if no matches)
  */
 error_t *state_get_entries_by_profile(
     const state_t *state,
     const char *profile,
+    arena_t *arena,
     state_file_entry_t **out,
     size_t *count
 );
@@ -761,6 +765,7 @@ error_t *state_directory_entry_create_from_metadata(
     const metadata_item_t *meta_item,
     const char *profile_name,
     const char *custom_prefix,
+    arena_t *arena,
     state_directory_entry_t **out
 );
 
@@ -779,15 +784,20 @@ error_t *state_add_directory(
 /**
  * Get all tracked directories
  *
- * Returns allocated array that caller must free with state_free_all_directories().
+ * When arena is NULL, returns heap-allocated array that caller must free
+ * with state_free_all_directories(). When arena is non-NULL, all allocations
+ * (entries array + string fields) use the arena — caller must NOT call
+ * state_free_all_directories() (arena_destroy handles everything).
  *
  * @param state State (must not be NULL)
+ * @param arena Arena for allocations (NULL = heap with state_free_all_directories)
  * @param out Output array (must not be NULL)
  * @param count Output count (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *state_get_all_directories(
     const state_t *state,
+    arena_t *arena,
     state_directory_entry_t **out,
     size_t *count
 );
@@ -798,10 +808,12 @@ error_t *state_get_all_directories(
  * Returns all directory entries from the specified profile.
  * Used by profile disable to determine impact on directories.
  *
- * Returns allocated array that caller must free with state_free_all_directories().
+ * When arena is NULL, returns heap-allocated array (free with state_free_all_directories).
+ * When arena is non-NULL, all allocations use the arena.
  *
  * @param state State (must not be NULL)
  * @param profile Profile name to filter by (must not be NULL)
+ * @param arena Arena for allocations (NULL = heap with state_free_all_directories)
  * @param out Output array (must not be NULL, caller must free)
  * @param count Output count (must not be NULL)
  * @return Error or NULL on success (empty array if no matches)
@@ -809,6 +821,7 @@ error_t *state_get_all_directories(
 error_t *state_get_directories_by_profile(
     const state_t *state,
     const char *profile,
+    arena_t *arena,
     state_directory_entry_t **out,
     size_t *count
 );

@@ -16,6 +16,7 @@
 #include "base/gitops.h"
 #include "core/state.h"
 #include "infra/path.h"
+#include "utils/arena.h"
 #include "utils/array.h"
 #include "utils/hashmap.h"
 #include "utils/string.h"
@@ -93,6 +94,7 @@ error_t *profile_load(
     profile->auto_detected = false;
 
     *out = profile;
+
     return NULL;
 
 cleanup:
@@ -269,13 +271,12 @@ static error_t *match_hierarchical_names(
     /* Append sorted sub-profiles after base */
     for (size_t i = 0; i < sub_profiles->count; i++) {
         err = string_array_push(out, sub_profiles->items[i]);
-        if (err) {
-            goto cleanup;
-        }
+        if (err) goto cleanup;
     }
 
 cleanup:
     string_array_free(sub_profiles);
+
     return err;
 }
 
@@ -347,11 +348,13 @@ error_t *profile_detect_names(
     /* Success */
     free(os_name);
     *out_names = names;
+
     return NULL;
 
 cleanup:
     free(os_name);
     string_array_free(names);
+
     return err;
 }
 
@@ -409,6 +412,7 @@ error_t *profile_list_load(
     }
 
     *out = list;
+
     return NULL;
 
 cleanup:
@@ -467,6 +471,7 @@ static error_t *enrich_profiles_from_state(
 
     /* Cleanup temporary resources */
     hashmap_free(prefix_map, free);
+
     return NULL;
 }
 
@@ -502,6 +507,7 @@ error_t *profiles_enrich_with_prefixes(
 
     err = enrich_profiles_from_state(profiles, state);
     state_free(state);
+
     return err;
 }
 
@@ -717,6 +723,7 @@ error_t *profile_resolve(
     string_array_free(valid_profiles);
     string_array_free(state_profiles);
     state_free(state);
+
     return NULL;
 
 no_profiles:
@@ -742,6 +749,7 @@ cleanup:
     string_array_free(missing_profiles);
     string_array_free(state_profiles);
     state_free(state);
+
     return err;
 }
 
@@ -979,6 +987,7 @@ error_t *profile_list_all_local(
     /* Success */
     git_reference_iterator_free(iter);
     *out = list;
+
     return NULL;
 
 cleanup:
@@ -1085,6 +1094,7 @@ struct manifest_build_ctx {
     hashmap_t *path_map;        /* For O(1) dedup/override detection */
     profile_t *profile;         /* Current profile (borrowed) */
     const char *custom_prefix;  /* For path_from_storage (can be NULL) */
+    arena_t *arena;             /* Arena for string allocations (NULL = heap) */
     error_t *error;             /* Error propagation (set on failure) */
 };
 
@@ -1169,7 +1179,8 @@ static int manifest_build_callback(
          */
         return 0;  /* Skip, continue walk */
     } else {
-        err = path_from_storage(storage_path, ctx->custom_prefix, &filesystem_path);
+        char *heap_path = NULL;
+        err = path_from_storage(storage_path, ctx->custom_prefix, &heap_path);
         if (err) {
             ctx->error = error_wrap(
                 err, "Failed to convert path '%s' from profile '%s'",
@@ -1177,13 +1188,23 @@ static int manifest_build_callback(
             );
             return -1;
         }
+        if (ctx->arena) {
+            filesystem_path = arena_strdup(ctx->arena, heap_path);
+            free(heap_path);
+            if (!filesystem_path) {
+                ctx->error = ERROR(ERR_MEMORY, "Failed to arena-copy filesystem path");
+                return -1;
+            }
+        } else {
+            filesystem_path = heap_path;
+        }
     }
 
     /* Get owned copy of tree entry */
     git_tree_entry *dup_entry = NULL;
     int git_err = git_tree_entry_dup(&dup_entry, entry);
     if (git_err != 0) {
-        free(filesystem_path);
+        if (!ctx->arena) free(filesystem_path);
         ctx->error = ERROR(
             ERR_GIT, "Failed to duplicate tree entry: %s",
             git_error_last() ? git_error_last()->message : "unknown"
@@ -1204,18 +1225,22 @@ static int manifest_build_callback(
          */
         size_t existing_idx = (size_t) (uintptr_t) idx_ptr - 1;
 
-        /* Duplicate storage path before freeing old */
-        char *dup_storage_path = strdup(storage_path);
+        /* Duplicate storage path */
+        char *dup_storage_path = ctx->arena
+            ? arena_strdup(ctx->arena, storage_path)
+            : strdup(storage_path);
         if (!dup_storage_path) {
-            free(filesystem_path);
+            if (!ctx->arena) free(filesystem_path);
             git_tree_entry_free(dup_entry);
             ctx->error = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
             return -1;
         }
 
-        /* Free old resources */
-        free(ctx->manifest->entries[existing_idx].storage_path);
-        free(ctx->manifest->entries[existing_idx].filesystem_path);
+        /* Free old resources — strings abandoned when arena-backed */
+        if (!ctx->arena) {
+            free(ctx->manifest->entries[existing_idx].storage_path);
+            free(ctx->manifest->entries[existing_idx].filesystem_path);
+        }
         git_tree_entry_free(ctx->manifest->entries[existing_idx].entry);
 
         /* Update with new values */
@@ -1243,7 +1268,7 @@ static int manifest_build_callback(
         /* Add new entry - grow array if needed */
         if (ctx->manifest->count >= ctx->capacity) {
             if (ctx->capacity > SIZE_MAX / 2) {
-                free(filesystem_path);
+                if (!ctx->arena) free(filesystem_path);
                 git_tree_entry_free(dup_entry);
                 ctx->error = ERROR(ERR_INTERNAL, "Manifest capacity overflow");
                 return -1;
@@ -1255,7 +1280,7 @@ static int manifest_build_callback(
                 new_capacity * sizeof(file_entry_t)
             );
             if (!new_entries) {
-                free(filesystem_path);
+                if (!ctx->arena) free(filesystem_path);
                 git_tree_entry_free(dup_entry);
                 ctx->error = ERROR(ERR_MEMORY, "Failed to grow manifest");
                 return -1;
@@ -1265,9 +1290,11 @@ static int manifest_build_callback(
         }
 
         /* Duplicate storage path */
-        char *dup_storage_path = strdup(storage_path);
+        char *dup_storage_path = ctx->arena
+            ? arena_strdup(ctx->arena, storage_path)
+            : strdup(storage_path);
         if (!dup_storage_path) {
-            free(filesystem_path);
+            if (!ctx->arena) free(filesystem_path);
             git_tree_entry_free(dup_entry);
             ctx->error = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
             return -1;
@@ -1318,10 +1345,12 @@ static int manifest_build_callback(
         );
         if (err) {
             /* Entry already added to manifest, but hashmap failed.
-             * This is a partial state - we need to clean up the entry. */
-            free(new_entry->storage_path);
+             * Clean up the entry (strings abandoned when arena-backed). */
+            if (!ctx->arena) {
+                free(new_entry->storage_path);
+                free(new_entry->filesystem_path);
+            }
             new_entry->storage_path = NULL;
-            free(new_entry->filesystem_path);
             new_entry->filesystem_path = NULL;
             git_tree_entry_free(new_entry->entry);
             new_entry->entry = NULL;
@@ -1368,6 +1397,7 @@ error_t *profile_list_files(
     }
 
     *out = data.paths;
+
     return NULL;
 }
 
@@ -1411,6 +1441,7 @@ error_t *profile_has_custom_files(
     }
 
     profile_free(profile);
+
     return NULL;
 }
 
@@ -1424,6 +1455,7 @@ error_t *profile_has_custom_files(
 error_t *profile_build_manifest(
     git_repository *repo,
     profile_list_t *profiles,
+    arena_t *arena,
     manifest_t **out
 ) {
     CHECK_NULL(repo);
@@ -1485,6 +1517,7 @@ error_t *profile_build_manifest(
             .path_map      = path_map,
             .profile       = profile,
             .custom_prefix = profile->custom_prefix,
+            .arena         = arena,
             .error         = NULL
         };
 
@@ -1504,7 +1537,9 @@ error_t *profile_build_manifest(
 
     /* Success - transfer index ownership to manifest */
     manifest->index = path_map;
+    manifest->arena_backed = (arena != NULL);
     *out = manifest;
+
     return NULL;
 
 cleanup:
@@ -1623,6 +1658,7 @@ error_t *profile_build_file_index(
     /* Success */
     string_array_free(all_branches);
     *out_index = index;
+
     return NULL;
 
 cleanup:
@@ -1689,6 +1725,7 @@ error_t *profile_discover_file(
         }
 
         *out_profiles = profiles;
+
         return NULL;
     }
 
@@ -1728,6 +1765,7 @@ error_t *profile_discover_file(
     }
 
     *out_profiles = result;
+
     return NULL;
 }
 
@@ -1828,6 +1866,7 @@ error_t *profile_build_manifest_from_tree(
         .path_map      = path_map,
         .profile       = temp_profile,
         .custom_prefix = custom_prefix,  /* May be NULL for graceful degradation */
+        .arena         = NULL,
         .error         = NULL
     };
 
@@ -1912,28 +1951,24 @@ void manifest_free(manifest_t *manifest) {
     }
 
     for (size_t i = 0; i < manifest->count; i++) {
-        /* Free path fields */
-        free(manifest->entries[i].storage_path);
-        free(manifest->entries[i].filesystem_path);
-
-        /* Free Git tree entry */
+        /* Free Git tree entry (always libgit2-allocated, never arena) */
         if (manifest->entries[i].entry) {
             git_tree_entry_free(manifest->entries[i].entry);
         }
 
-        /* Free VWD expected state cache fields
-         *
-         * These fields are populated when manifest is built from state database
-         * (workspace_build_manifest_from_state). For manifests built from Git
-         * trees (profile_build_manifest), these will be NULL and free() is safe. */
-        free(manifest->entries[i].old_profile);
-        free(manifest->entries[i].git_oid);
-        free(manifest->entries[i].blob_oid);
-        free(manifest->entries[i].owner);
-        free(manifest->entries[i].group);
-        /* Note: type, mode, encrypted, deployed_at are not pointers, no cleanup needed */
+        /* Skip string field frees when arena-backed */
+        if (!manifest->arena_backed) {
+            free(manifest->entries[i].storage_path);
+            free(manifest->entries[i].filesystem_path);
+            free(manifest->entries[i].old_profile);
+            free(manifest->entries[i].git_oid);
+            free(manifest->entries[i].blob_oid);
+            free(manifest->entries[i].owner);
+            free(manifest->entries[i].group);
+        }
     }
 
+    /* entries array, index, owned_profile, and manifest struct are always heap */
     free(manifest->entries);
 
     /* Free index if present */

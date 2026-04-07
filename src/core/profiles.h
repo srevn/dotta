@@ -121,6 +121,7 @@ typedef struct {
     size_t count;
     hashmap_t *index;         /* Maps filesystem_path -> index in entries array (offset by 1), can be NULL */
     profile_t *owned_profile; /* Owned profile for single-profile manifests, NULL otherwise */
+    bool arena_backed;        /* If true, entry string fields are arena-owned (skip free) */
 } manifest_t;
 
 /**
@@ -443,6 +444,7 @@ error_t *profile_has_custom_files(
 error_t *profile_build_manifest(
     git_repository *repo,
     profile_list_t *profiles,
+    arena_t *arena,
     manifest_t **out
 );
 

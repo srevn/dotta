@@ -1228,7 +1228,7 @@ static error_t *remove_files_from_profile(
                         state_file_entry_t *delete_entries = NULL;
                         size_t delete_count = 0;
                         error_t *delete_err = state_get_entries_by_profile(
-                            update_state, opts->profile, &delete_entries, &delete_count
+                            update_state, opts->profile, NULL, &delete_entries, &delete_count
                         );
                         if (!delete_err) {
                             for (size_t di = 0; di < delete_count; di++) {
@@ -1537,7 +1537,7 @@ static error_t *delete_profile_branch(
         size_t state_file_count = 0;
         state_file_entry_t *state_files = NULL;
         error_t *state_err = state_get_all_files(
-            state, &state_files, &state_file_count
+            state, NULL, &state_files, &state_file_count
         );
         if (!state_err && state_files) {
             for (size_t i = 0; i < state_file_count; i++) {
@@ -1786,7 +1786,7 @@ static error_t *delete_profile_branch(
         state_file_entry_t *file_entries = NULL;
         size_t entry_count = 0;
         delete_err = state_get_entries_by_profile(
-            delete_state, opts->profile, &file_entries, &entry_count
+            delete_state, opts->profile, NULL, &file_entries, &entry_count
         );
         if (!delete_err) {
             for (size_t i = 0; i < entry_count; i++) {
@@ -1822,7 +1822,7 @@ static error_t *delete_profile_branch(
         state_directory_entry_t *dir_entries = NULL;
         size_t dir_count = 0;
         delete_err = state_get_directories_by_profile(
-            delete_state, opts->profile, &dir_entries, &dir_count
+            delete_state, opts->profile, NULL, &dir_entries, &dir_count
         );
         if (!delete_err) {
             for (size_t i = 0; i < dir_count; i++) {

@@ -26,6 +26,7 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/path.h"
+#include "utils/arena.h"
 #include "utils/array.h"
 #include "utils/hashmap.h"
 #include "utils/string.h"
@@ -103,6 +104,7 @@ static error_t *sync_profile_git_oids(
 static error_t *build_profile_oid_map(
     git_repository *repo,
     const profile_list_t *profiles,
+    arena_t *arena,
     hashmap_t **out_map
 ) {
     CHECK_NULL(repo);
@@ -125,14 +127,16 @@ static error_t *build_profile_oid_map(
         /* Get branch HEAD */
         err = get_branch_head_oid(repo, profile->name, &oid);
         if (err) {
-            hashmap_free(map, free);
+            hashmap_free(map, arena ? NULL : free);
             return error_wrap(err, "Failed to get HEAD for profile '%s'", profile->name);
         }
 
         /* Convert to hex string */
-        char *oid_str = malloc(GIT_OID_HEXSZ + 1);
+        char *oid_str = arena
+            ? arena_alloc(arena, GIT_OID_HEXSZ + 1)
+            : malloc(GIT_OID_HEXSZ + 1);
         if (!oid_str) {
-            hashmap_free(map, free);
+            hashmap_free(map, arena ? NULL : free);
             return ERROR(ERR_MEMORY, "Failed to allocate oid string");
         }
 
@@ -141,8 +145,8 @@ static error_t *build_profile_oid_map(
         /* Store in map */
         err = hashmap_set(map, profile->name, oid_str);
         if (err) {
-            free(oid_str);
-            hashmap_free(map, free);
+            if (!arena) free(oid_str);
+            hashmap_free(map, arena ? NULL : free);
             return error_wrap(err, "Failed to add oid to map");
         }
     }
@@ -363,6 +367,7 @@ static error_t *build_manifest(
     const string_array_t *profile_names,
     const char *transient_profile,
     const char *transient_prefix,
+    arena_t *arena,
     manifest_t **out_manifest,
     profile_list_t **out_profiles
 ) {
@@ -394,7 +399,7 @@ static error_t *build_manifest(
     }
 
     /* Build manifest from enriched profiles (applies precedence rules) */
-    err = profile_build_manifest(repo, profiles, &manifest);
+    err = profile_build_manifest(repo, profiles, arena, &manifest);
     if (err) {
         profile_list_free(profiles);
         return error_wrap(err, "Failed to build manifest from profiles");
@@ -446,7 +451,8 @@ static error_t *sync_entry_to_state(
     const file_entry_t *manifest_entry,
     const char *git_oid,
     const metadata_t *metadata,
-    time_t deployed_at
+    time_t deployed_at,
+    arena_t *arena
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -470,7 +476,7 @@ static error_t *sync_entry_to_state(
     char oid_str[GIT_OID_HEXSZ + 1];
     git_oid_tostr(oid_str, sizeof(oid_str), blob_oid_obj);
 
-    blob_oid = strdup(oid_str);
+    blob_oid = arena ? arena_strdup(arena, oid_str) : strdup(oid_str);
     if (!blob_oid) {
         return ERROR(ERR_MEMORY, "Failed to allocate blob_oid string");
     }
@@ -541,7 +547,7 @@ static error_t *sync_entry_to_state(
     }
 
 cleanup:
-    free(blob_oid);
+    if (!arena) free(blob_oid);
     return err;
 }
 
@@ -580,9 +586,13 @@ error_t *manifest_enable_profile(
     git_oid head_oid;
     char head_oid_str[GIT_OID_HEXSZ + 1];
 
+    arena_t *arena = arena_create(64 * 1024);
+    if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
+
     /* 1. Get HEAD oid for profile */
     err = get_branch_head_oid(repo, profile_name, &head_oid);
     if (err) {
+        arena_destroy(arena);
         return error_wrap(err, "Failed to get HEAD for profile '%s'", profile_name);
     }
     git_oid_tostr(head_oid_str, sizeof(head_oid_str), &head_oid);
@@ -598,9 +608,10 @@ error_t *manifest_enable_profile(
     const char *transient_pfx = custom_prefix;
 
     err = build_manifest(
-        repo, state, enabled_profiles, transient_prof, transient_pfx, &manifest, &profiles
+        repo, state, enabled_profiles, transient_prof, transient_pfx, arena, &manifest, &profiles
     );
     if (err) {
+        arena_destroy(arena);
         return error_wrap(err, "Failed to build manifest for profile sync");
     }
 
@@ -730,7 +741,7 @@ error_t *manifest_enable_profile(
         }
 
         /* Sync entry with deployed_at timestamp */
-        err = sync_entry_to_state(repo, state, entry, head_oid_str, metadata, deployed_at);
+        err = sync_entry_to_state(repo, state, entry, head_oid_str, metadata, deployed_at, arena);
         if (err) goto cleanup;
     }
 
@@ -751,6 +762,7 @@ cleanup:
     if (profiles) profile_list_free(profiles);
     if (metadata) metadata_free(metadata);
     if (manifest) manifest_free(manifest);
+    arena_destroy(arena);
 
     return err;
 }
@@ -940,37 +952,42 @@ error_t *manifest_disable_profile(
     hashmap_t *profile_oids = NULL;
     metadata_t *fallback_metadata = NULL;
 
+    arena_t *arena = arena_create(64 * 1024);
+    if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
+
     /* Track stats for output */
     size_t total_files = 0;
     size_t fallback_count = 0;
     size_t removed_count = 0;
 
     /* 1. Get all entries from disabled profile */
-    err = state_get_entries_by_profile(state, profile_name, &entries, &count);
+    err = state_get_entries_by_profile(state, profile_name, arena, &entries, &count);
     if (err) {
+        arena_destroy(arena);
         return error_wrap(err, "Failed to get entries for profile '%s'", profile_name);
     }
 
     if (count == 0) {
         /* No entries, nothing to do */
+        arena_destroy(arena);
         return NULL;
     }
 
     /* 2. Build manifest from remaining profiles (fallback check) */
     if (remaining_enabled->count > 0) {
         err = build_manifest(
-            repo, state, remaining_enabled, NULL, NULL, &fallback_manifest,
+            repo, state, remaining_enabled, NULL, NULL, arena, &fallback_manifest,
             &fallback_profiles
         );
         if (err) {
-            state_free_all_files(entries, count);
+            arena_destroy(arena);
             return error_wrap(err, "Failed to build fallback manifest");
         }
     }
 
     /* Build profile→oid map for O(1) lookups in fallback processing */
     if (fallback_profiles) {
-        err = build_profile_oid_map(repo, fallback_profiles, &profile_oids);
+        err = build_profile_oid_map(repo, fallback_profiles, arena, &profile_oids);
         if (err) {
             err = error_wrap(err, "Failed to build profile OID map");
             goto cleanup;
@@ -1055,7 +1072,7 @@ error_t *manifest_disable_profile(
             /* Sync to state using proven, tested logic */
             err = sync_entry_to_state(
                 repo, state, fallback, fallback_oid_str, fallback_metadata,
-                entry->deployed_at
+                entry->deployed_at, arena
             );
             if (err) {
                 err = error_wrap(
@@ -1209,7 +1226,7 @@ error_t *manifest_disable_profile(
     metadata_t **loaded_metadata = NULL;      /* Array of loaded metadata (for cleanup) */
     size_t loaded_metadata_count = 0;
 
-    err = state_get_directories_by_profile(state, profile_name, &dir_entries, &dir_count);
+    err = state_get_directories_by_profile(state, profile_name, arena, &dir_entries, &dir_count);
     if (err) {
         goto directory_cleanup;
     }
@@ -1341,14 +1358,12 @@ directory_cleanup:
         free(loaded_metadata);
     }
 
-    state_free_all_directories(dir_entries, dir_count);
-
 cleanup:
     if (fallback_metadata) metadata_free(fallback_metadata);
-    if (profile_oids) hashmap_free(profile_oids, free);
+    if (profile_oids) hashmap_free(profile_oids, NULL);
     if (fallback_profiles) profile_list_free(fallback_profiles);
     if (fallback_manifest) manifest_free(fallback_manifest);
-    state_free_all_files(entries, count);
+    arena_destroy(arena);
     return err;
 }
 
@@ -1422,11 +1437,15 @@ error_t *manifest_remove_files(
     size_t removed_count = 0;
     size_t fallback_count = 0;
 
+    arena_t *arena = arena_create(64 * 1024);
+    if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
+
     /* 1. Build fresh manifest from current Git state (post-removal) */
     err = build_manifest(
-        repo, state, enabled_profiles, NULL, NULL, &fresh_manifest, &profiles
+        repo, state, enabled_profiles, NULL, NULL, arena, &fresh_manifest, &profiles
     );
     if (err) {
+        arena_destroy(arena);
         return error_wrap(
             err, "Failed to build manifest for fallback detection"
         );
@@ -1441,7 +1460,7 @@ error_t *manifest_remove_files(
     }
 
     /* 2. Build profile→oid map (profile_name → git_oid string) for fast lookups */
-    err = build_profile_oid_map(repo, profiles, &profile_oids);
+    err = build_profile_oid_map(repo, profiles, arena, &profile_oids);
     if (err) {
         err = error_wrap(err, "Failed to build profile OID map");
         goto cleanup;
@@ -1555,7 +1574,7 @@ error_t *manifest_remove_files(
              * state_add_file (INSERT OR REPLACE) and overwrites the entry.
              * current_entry->profile is guaranteed non-NULL (verified above).
              */
-            char *old_profile_name = strdup(current_entry->profile);
+            char *old_profile_name = arena_strdup(arena, current_entry->profile);
             if (!old_profile_name) {
                 err = ERROR(ERR_MEMORY, "Failed to copy old profile name");
                 state_free_entry(current_entry);
@@ -1571,10 +1590,9 @@ error_t *manifest_remove_files(
              * 3. Uses INSERT OR REPLACE for atomic, complete entry update
              */
             err = sync_entry_to_state(
-                repo, state, fallback, fallback_oid_str, metadata, preserved_deployed_at
+                repo, state, fallback, fallback_oid_str, metadata, preserved_deployed_at, arena
             );
             if (err) {
-                free(old_profile_name);
                 state_free_entry(current_entry);
                 free(filesystem_path);
                 err = error_wrap(
@@ -1600,7 +1618,6 @@ error_t *manifest_remove_files(
             state_file_entry_t *updated_entry = NULL;
             err = state_get_file(state, filesystem_path, &updated_entry);
             if (err) {
-                free(old_profile_name);
                 state_free_entry(current_entry);
                 free(filesystem_path);
                 err = error_wrap(
@@ -1610,7 +1627,6 @@ error_t *manifest_remove_files(
             }
 
             err = str_replace_owned(&updated_entry->old_profile, old_profile_name);
-            free(old_profile_name);
             old_profile_name = NULL;
 
             if (err) {
@@ -1693,9 +1709,10 @@ error_t *manifest_remove_files(
 
 cleanup:
     if (metadata) metadata_free(metadata);
-    if (profile_oids) hashmap_free(profile_oids, free);
+    if (profile_oids) hashmap_free(profile_oids, NULL);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);
+    arena_destroy(arena);
 
     return err;
 }
@@ -1735,16 +1752,20 @@ error_t *manifest_rebuild(
     hashmap_t *profile_oids = NULL;
     metadata_t *metadata = NULL;
 
+    arena_t *arena = arena_create(64 * 1024);
+    if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
+
     /* 1. Snapshot existing entries BEFORE clearing (for deployed_at preservation) */
-    err = state_get_all_files(state, &old_entries, &old_count);
+    err = state_get_all_files(state, arena, &old_entries, &old_count);
     if (err) {
+        arena_destroy(arena);
         return error_wrap(err, "Failed to snapshot manifest for rebuild");
     }
 
     /* Build hashmap for O(1) old entry lookups */
     old_map = hashmap_create(old_count > 0 ? old_count : 16);
     if (!old_map) {
-        state_free_all_files(old_entries, old_count);
+        arena_destroy(arena);
         return ERROR(ERR_MEMORY, "Failed to create old entries hashmap");
     }
 
@@ -1753,7 +1774,7 @@ error_t *manifest_rebuild(
         if (err) {
             err = error_wrap(err, "Failed to populate old entries hashmap");
             hashmap_free(old_map, NULL);  /* Don't free values - they're in old_entries */
-            state_free_all_files(old_entries, old_count);
+            arena_destroy(arena);
             return err;
         }
     }
@@ -1773,7 +1794,7 @@ error_t *manifest_rebuild(
 
     /* 3. Build manifest ONCE from all enabled profiles (precedence oracle) */
     err = build_manifest(
-        repo, state, enabled_profiles, NULL, NULL, &manifest, &profiles
+        repo, state, enabled_profiles, NULL, NULL, arena, &manifest, &profiles
     );
     if (err) {
         err = error_wrap(err, "Failed to build manifest for rebuild");
@@ -1789,7 +1810,7 @@ error_t *manifest_rebuild(
     }
 
     /* 4. Build profile→oid map for git_oid field */
-    err = build_profile_oid_map(repo, profiles, &profile_oids);
+    err = build_profile_oid_map(repo, profiles, arena, &profile_oids);
     if (err) {
         err = error_wrap(err, "Failed to build profile oid map");
         goto cleanup;
@@ -1844,7 +1865,7 @@ error_t *manifest_rebuild(
         }
 
         /* Sync to state with preserved/computed deployed_at */
-        err = sync_entry_to_state(repo, state, entry, git_oid, metadata, deployed_at);
+        err = sync_entry_to_state(repo, state, entry, git_oid, metadata, deployed_at, arena);
         if (err) goto cleanup;
     }
 
@@ -1856,11 +1877,11 @@ error_t *manifest_rebuild(
 
 cleanup:
     if (old_map) hashmap_free(old_map, NULL);
-    state_free_all_files(old_entries, old_count);
-    if (profile_oids) hashmap_free(profile_oids, free);
+    if (profile_oids) hashmap_free(profile_oids, NULL);
     if (profiles) profile_list_free(profiles);
     if (metadata) metadata_free(metadata);
     if (manifest) manifest_free(manifest);
+    arena_destroy(arena);
 
     return err;
 }
@@ -2012,6 +2033,9 @@ error_t *manifest_repair_stale(
     hashmap_t *repaired_paths = NULL;
     metadata_t *metadata = NULL;
 
+    arena_t *arena = arena_create(64 * 1024);
+    if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
+
     /* Phase 1: Load all state entries and detect staleness (single DB query).
      *
      * Loads all entries once, then single-pass detects stale profiles via
@@ -2019,8 +2043,9 @@ error_t *manifest_repair_stale(
      * Phase 3, eliminating per-profile DB queries entirely.
      *
      * If no profile is stale, exits immediately (zero cost common case). */
-    err = state_get_all_files(state, &all_entries, &all_count);
+    err = state_get_all_files(state, arena, &all_entries, &all_count);
     if (err) {
+        arena_destroy(arena);
         return error_wrap(err, "Failed to load state entries for stale detection");
     }
 
@@ -2061,7 +2086,7 @@ error_t *manifest_repair_stale(
     /* Phase 2: Build fresh manifest from current Git state.
      * This gives us the ground truth for what files should exist. */
     err = build_manifest(
-        repo, state, enabled_profiles, NULL, NULL, &fresh_manifest, &fresh_profiles
+        repo, state, enabled_profiles, NULL, NULL, arena, &fresh_manifest, &fresh_profiles
     );
     if (err) {
         err = error_wrap(err, "Failed to build fresh manifest for stale repair");
@@ -2069,7 +2094,7 @@ error_t *manifest_repair_stale(
     }
 
     /* Build profile→oid map for git_oid field updates */
-    err = build_profile_oid_map(repo, fresh_profiles, &profile_oids);
+    err = build_profile_oid_map(repo, fresh_profiles, arena, &profile_oids);
     if (err) {
         err = error_wrap(err, "Failed to build profile oid map for repair");
         goto cleanup;
@@ -2159,6 +2184,7 @@ error_t *manifest_repair_stale(
              * content-divergence guard would skip them anyway.
              */
             if (repaired_paths && entry->blob_oid && blob_changed) {
+                /* Heap-allocate: values escape to caller, outliving this arena */
                 char *old_blob = strdup(entry->blob_oid);
                 if (!old_blob) {
                     err = ERROR(ERR_MEMORY, "Failed to save old blob_oid");
@@ -2172,7 +2198,7 @@ error_t *manifest_repair_stale(
             }
 
             err = sync_entry_to_state(
-                repo, state, fresh_entry, git_oid, metadata, entry->deployed_at
+                repo, state, fresh_entry, git_oid, metadata, entry->deployed_at, arena
             );
             if (err) {
                 err = error_wrap(
@@ -2268,12 +2294,12 @@ error_t *manifest_repair_stale(
 cleanup:
     if (stale_profiles) hashmap_free(stale_profiles, free);
     if (profile_scope) hashmap_free(profile_scope, NULL);
-    state_free_all_files(all_entries, all_count);
-    if (profile_oids) hashmap_free(profile_oids, free);
+    if (profile_oids) hashmap_free(profile_oids, NULL);
     if (fresh_profiles) profile_list_free(fresh_profiles);
     if (metadata) metadata_free(metadata);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (repaired_paths) hashmap_free(repaired_paths, free);
+    arena_destroy(arena);
 
     return err;
 }
@@ -2305,11 +2331,15 @@ error_t *manifest_reorder_profiles(
     hashmap_t *profile_oids = NULL;
     metadata_t *metadata = NULL;
 
+    arena_t *arena = arena_create(64 * 1024);
+    if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
+
     /* 1. Build new manifest with new precedence order (precedence oracle) */
     err = build_manifest(
-        repo, state, new_profile_order, NULL, NULL, &new_manifest, &profiles
+        repo, state, new_profile_order, NULL, NULL, arena, &new_manifest, &profiles
     );
     if (err) {
+        arena_destroy(arena);
         return error_wrap(err, "Failed to build manifest for precedence update");
     }
 
@@ -2326,7 +2356,7 @@ error_t *manifest_reorder_profiles(
     }
 
     /* 3. Get all current manifest entries and build hashmap for O(1) lookups */
-    err = state_get_all_files(state, &old_entries, &old_count);
+    err = state_get_all_files(state, arena, &old_entries, &old_count);
     if (err) {
         goto cleanup;
     }
@@ -2356,7 +2386,7 @@ error_t *manifest_reorder_profiles(
         err = NULL;
     }
 
-    err = build_profile_oid_map(repo, profiles, &profile_oids);
+    err = build_profile_oid_map(repo, profiles, arena, &profile_oids);
     if (err) {
         err = error_wrap(err, "Failed to build profile OID map");
         goto cleanup;
@@ -2383,7 +2413,7 @@ error_t *manifest_reorder_profiles(
             }
 
             /* New file - deployed_at=0 (never deployed) */
-            err = sync_entry_to_state(repo, state, new_entry, oid_str, metadata, 0);
+            err = sync_entry_to_state(repo, state, new_entry, oid_str, metadata, 0, arena);
             if (err) {
                 goto cleanup;
             }
@@ -2407,7 +2437,7 @@ error_t *manifest_reorder_profiles(
 
                 /* Sync with new owner, preserve existing deployed_at */
                 err = sync_entry_to_state(
-                    repo, state, new_entry, oid_str, metadata, old_entry->deployed_at
+                    repo, state, new_entry, oid_str, metadata, old_entry->deployed_at, arena
                 );
                 if (err) {
                     goto cleanup;
@@ -2488,12 +2518,12 @@ error_t *manifest_reorder_profiles(
     }
 
 cleanup:
-    if (profile_oids) hashmap_free(profile_oids, free);
+    if (profile_oids) hashmap_free(profile_oids, NULL);
     if (old_map) hashmap_free(old_map, NULL);
     if (profiles) profile_list_free(profiles);
     if (metadata) metadata_free(metadata);
-    state_free_all_files(old_entries, old_count);
     if (new_manifest) manifest_free(new_manifest);
+    arena_destroy(arena);
 
     return err;
 }
@@ -2586,11 +2616,15 @@ error_t *manifest_update_files(
     metadata_t *metadata_merged = NULL;
     bool using_cache = (metadata_cache != NULL);
 
+    arena_t *arena = arena_create(64 * 1024);
+    if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
+
     /* 1. Load enabled profiles from Git */
     err = profile_list_load(
         repo, enabled_profiles->items, enabled_profiles->count, false, &profiles
     );
     if (err) {
+        arena_destroy(arena);
         return error_wrap(err, "Failed to load profiles for bulk sync");
     }
 
@@ -2598,13 +2632,15 @@ error_t *manifest_update_files(
     err = enrich_profiles_with_prefixes(state, profiles, NULL, NULL);
     if (err) {
         profile_list_free(profiles);
+        arena_destroy(arena);
         return error_wrap(err, "Failed to enrich profiles with prefixes");
     }
 
     /* 3. Build FRESH manifest from Git (post-commit state) */
-    err = profile_build_manifest(repo, profiles, &fresh_manifest);
+    err = profile_build_manifest(repo, profiles, arena, &fresh_manifest);
     if (err) {
         profile_list_free(profiles);
+        arena_destroy(arena);
         return error_wrap(err, "Failed to build fresh manifest for bulk sync");
     }
 
@@ -2615,7 +2651,7 @@ error_t *manifest_update_files(
     }
 
     /* 5. Build profile oid map (profile_name -> git_oid string) */
-    err = build_profile_oid_map(repo, profiles, &profile_oids);
+    err = build_profile_oid_map(repo, profiles, arena, &profile_oids);
     if (err) {
         err = error_wrap(err, "Failed to build profile oid map");
         goto cleanup;
@@ -2695,7 +2731,7 @@ error_t *manifest_update_files(
                     deployed_at = existing_entry->deployed_at;
                     /* Save old profile for reassignment tracking */
                     if (existing_entry->profile) {
-                        old_profile_name = strdup(existing_entry->profile);
+                        old_profile_name = arena_strdup(arena, existing_entry->profile);
                     }
                     state_free_entry(existing_entry);
                 } else if (get_err1) {
@@ -2707,9 +2743,10 @@ error_t *manifest_update_files(
                     }
                 }
 
-                err = sync_entry_to_state(repo, state, fallback, git_oid, metadata, deployed_at);
+                err = sync_entry_to_state(
+                    repo, state, fallback, git_oid, metadata, deployed_at, arena
+                );
                 if (err) {
-                    free(old_profile_name);
                     err = error_wrap(
                         err, "Failed to sync fallback for '%s'",
                         item->filesystem_path
@@ -2733,7 +2770,6 @@ error_t *manifest_update_files(
                     } else if (get_err2) {
                         error_free(get_err2);
                     }
-                    free(old_profile_name);
 
                     if (err) {
                         err = error_wrap(
@@ -2814,7 +2850,7 @@ error_t *manifest_update_files(
                 metadata = metadata_merged;
             }
 
-            err = sync_entry_to_state(repo, state, entry, git_oid, metadata, time(NULL));
+            err = sync_entry_to_state(repo, state, entry, git_oid, metadata, time(NULL), arena);
             if (err) {
                 err = error_wrap(
                     err, "Failed to sync '%s' to manifest",
@@ -2878,9 +2914,10 @@ error_t *manifest_update_files(
 
 cleanup:
     if (metadata_merged) metadata_free(metadata_merged);
-    if (profile_oids) hashmap_free(profile_oids, free);
+    if (profile_oids) hashmap_free(profile_oids, NULL);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);
+    arena_destroy(arena);
 
     return err;
 }
@@ -2975,11 +3012,15 @@ error_t *manifest_add_files(
     metadata_t *metadata_merged = NULL;
     bool using_cache = (metadata_cache != NULL);
 
+    arena_t *arena = arena_create(64 * 1024);
+    if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
+
     /* 1. Load enabled profiles from Git */
     err = profile_list_load(
         repo, enabled_profiles->items, enabled_profiles->count, false, &profiles
     );
     if (err) {
+        arena_destroy(arena);
         return error_wrap(err, "Failed to load profiles for bulk sync");
     }
 
@@ -2987,13 +3028,15 @@ error_t *manifest_add_files(
     err = enrich_profiles_with_prefixes(state, profiles, NULL, NULL);
     if (err) {
         profile_list_free(profiles);
+        arena_destroy(arena);
         return error_wrap(err, "Failed to enrich profiles with prefixes");
     }
 
     /* 3. Build FRESH manifest from Git (post-commit state) */
-    err = profile_build_manifest(repo, profiles, &fresh_manifest);
+    err = profile_build_manifest(repo, profiles, arena, &fresh_manifest);
     if (err) {
         profile_list_free(profiles);
+        arena_destroy(arena);
         return error_wrap(err, "Failed to build fresh manifest for bulk sync");
     }
 
@@ -3004,7 +3047,7 @@ error_t *manifest_add_files(
     }
 
     /* 5. Build profile oid map (profile_name -> git_oid string) */
-    err = build_profile_oid_map(repo, profiles, &profile_oids);
+    err = build_profile_oid_map(repo, profiles, arena, &profile_oids);
     if (err) {
         err = error_wrap(err, "Failed to build profile oid map");
         goto cleanup;
@@ -3086,7 +3129,7 @@ error_t *manifest_add_files(
             metadata = metadata_merged;
         }
 
-        err = sync_entry_to_state(repo, state, entry, profile_git_oid, metadata, time(NULL));
+        err = sync_entry_to_state(repo, state, entry, profile_git_oid, metadata, time(NULL), arena);
 
         if (err) {
             err = error_wrap(
@@ -3119,9 +3162,10 @@ error_t *manifest_add_files(
 
 cleanup:
     if (metadata_merged) metadata_free(metadata_merged);
-    if (profile_oids) hashmap_free(profile_oids, free);
+    if (profile_oids) hashmap_free(profile_oids, NULL);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);
+    arena_destroy(arena);
 
     return err;
 }
@@ -3206,6 +3250,9 @@ error_t *manifest_sync_diff(
     git_tree *new_tree = NULL;
     git_diff *diff = NULL;
 
+    arena_t *arena = arena_create(64 * 1024);
+    if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
+
     size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
 
     /* PHASE 1: BUILD CONTEXT (O(M)) */
@@ -3235,7 +3282,7 @@ error_t *manifest_sync_diff(
      * not from specific OIDs, because profile_build_manifest() reads current state.
      * This is correct because after pull/rebase/merge, branch HEAD already points
      * to the new commit. */
-    err = profile_build_manifest(repo, profiles, &fresh_manifest);
+    err = profile_build_manifest(repo, profiles, arena, &fresh_manifest);
     if (err) {
         err = error_wrap(err, "Failed to build fresh manifest");
         goto cleanup;
@@ -3248,7 +3295,7 @@ error_t *manifest_sync_diff(
     }
 
     /* 1.4. Build profile→oid map (profile_name -> git_oid string) */
-    err = build_profile_oid_map(repo, profiles, &profile_oids);
+    err = build_profile_oid_map(repo, profiles, arena, &profile_oids);
     if (err) {
         err = error_wrap(err, "Failed to build profile oid map");
         goto cleanup;
@@ -3416,7 +3463,7 @@ error_t *manifest_sync_diff(
             }
 
             err = sync_entry_to_state(
-                repo, state, entry, git_oid_str, profile_metadata, deployed_at
+                repo, state, entry, git_oid_str, profile_metadata, deployed_at, arena
             );
             if (err) {
                 err = error_wrap(
@@ -3481,7 +3528,7 @@ error_t *manifest_sync_diff(
                     deployed_at = existing_fb->deployed_at;
                     /* Save old profile for reassignment tracking */
                     if (existing_fb->profile) {
-                        old_profile_name = strdup(existing_fb->profile);
+                        old_profile_name = arena_strdup(arena, existing_fb->profile);
                     }
                     state_free_entry(existing_fb);
                 } else if (get_err_fb) {
@@ -3495,10 +3542,9 @@ error_t *manifest_sync_diff(
                 }
 
                 err = sync_entry_to_state(
-                    repo, state, entry, fallback_git_oid, fallback_metadata, deployed_at
+                    repo, state, entry, fallback_git_oid, fallback_metadata, deployed_at, arena
                 );
                 if (err) {
-                    free(old_profile_name);
                     err = error_wrap(
                         err, "Failed to sync fallback for '%s'",
                         filesystem_path
@@ -3524,7 +3570,6 @@ error_t *manifest_sync_diff(
                     } else if (get_err2) {
                         error_free(get_err2);
                     }
-                    free(old_profile_name);
 
                     if (err) {
                         err = error_wrap(
@@ -3625,9 +3670,10 @@ cleanup:
     if (new_tree) git_tree_free(new_tree);
     if (old_tree) git_tree_free(old_tree);
     if (metadata_merged) metadata_free(metadata_merged);
-    if (profile_oids) hashmap_free(profile_oids, free);
+    if (profile_oids) hashmap_free(profile_oids, NULL);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);
+    arena_destroy(arena);
 
     return err;
 }
@@ -3682,6 +3728,11 @@ error_t *manifest_sync_directories(
     metadata_t *metadata = NULL;
     const metadata_item_t **directories = NULL;
 
+    arena_t *arena = arena_create(8 * 1024);
+    if (!arena) {
+        return ERROR(ERR_MEMORY, "Failed to create directory sync arena");
+    }
+
     /* 1. Mark all directories as inactive (soft delete for orphan detection)
      *
      * This preserves directory entries for orphan detection instead of deleting them.
@@ -3689,12 +3740,14 @@ error_t *manifest_sync_directories(
      */
     err = state_mark_all_directories_inactive(state);
     if (err) {
+        arena_destroy(arena);
         return error_wrap(err, "Failed to mark directories inactive");
     }
 
     /* 2. Load prefix map from state for custom prefix resolution */
     err = state_get_prefix_map(state, &prefix_map);
     if (err) {
+        arena_destroy(arena);
         return error_wrap(err, "Failed to load prefix map from state");
     }
 
@@ -3755,6 +3808,7 @@ error_t *manifest_sync_directories(
                 directories[j],
                 profile_name,  /* Profile attribution */
                 custom_prefix, /* Custom prefix for path resolution */
+                arena,
                 &state_dir
             );
 
@@ -3772,7 +3826,6 @@ error_t *manifest_sync_directories(
 
             if (get_err && get_err->code != ERR_NOT_FOUND) {
                 /* Fatal error - failed to query state */
-                state_free_directory_entry(state_dir);
                 if (existing) state_free_directory_entry(existing);
                 err = error_wrap(get_err, "Failed to check directory state");
                 break;
@@ -3781,9 +3834,8 @@ error_t *manifest_sync_directories(
             if (get_err && get_err->code == ERR_NOT_FOUND) {
                 /* New directory - add with STATE_ACTIVE */
                 error_free(get_err);
-                state_dir->state = strdup(STATE_ACTIVE);
+                state_dir->state = arena_strdup(arena, STATE_ACTIVE);
                 if (!state_dir->state) {
-                    state_free_directory_entry(state_dir);
                     err = ERROR(ERR_MEMORY, "Failed to allocate state string");
                     break;
                 }
@@ -3810,8 +3862,6 @@ error_t *manifest_sync_directories(
                 state_free_directory_entry(existing);
             }
 
-            state_free_directory_entry(state_dir);
-
             if (err) {
                 err = error_wrap(
                     err, "Failed to add/update directory '%s' in state",
@@ -3837,6 +3887,7 @@ cleanup:
     free(directories);
     if (metadata) metadata_free(metadata);
     if (prefix_map) hashmap_free(prefix_map, free);
+    arena_destroy(arena);
 
     /* After rebuild, any directories still in STATE_INACTIVE are orphaned
      * (belonged to disabled profiles with no fallback).

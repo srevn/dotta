@@ -41,6 +41,7 @@
 #include "infra/compare.h"
 #include "infra/content.h"
 #include "utils/config.h"
+#include "utils/arena.h"
 #include "utils/hashmap.h"
 #include "utils/privilege.h"
 #include "utils/string.h"
@@ -78,6 +79,7 @@ typedef struct {
  */
 struct workspace {
     git_repository *repo;            /* Borrowed reference */
+    arena_t *arena;                  /* Bump allocator for workspace-lifetime strings */
 
     /* State data */
     manifest_t *manifest;            /* Profile state (owned) */
@@ -358,9 +360,11 @@ static error_t *workspace_add_diverged(
     workspace_item_t *entry = &ws->diverged[ws->diverged_count];
     memset(entry, 0, sizeof(workspace_item_t));
 
-    entry->filesystem_path = strdup(filesystem_path);
-    entry->storage_path = storage_path ? strdup(storage_path) : NULL;
-    entry->profile = profile ? strdup(profile) : NULL;
+    /* Borrow filesystem_path and storage_path directly — callers must
+     * ensure these are arena-backed or arena_strdup'd before passing. */
+    entry->filesystem_path = (char *) filesystem_path;
+    entry->storage_path = (char *) storage_path;
+    entry->profile = arena_strdup(ws->arena, profile);
     entry->metadata_profile = NULL;  /* Will be set below if metadata exists */
 
     /* Lookup profile pointer from profile_index (borrowed, can be NULL if profile not in enabled set) */
@@ -374,12 +378,7 @@ static error_t *workspace_add_diverged(
     entry->profile_changed = profile_changed;
     entry->old_profile = old_profile;  /* Ownership transfers on success (can be NULL) */
 
-    if (!entry->filesystem_path ||
-        (storage_path && !entry->storage_path) ||
-        (profile && !entry->profile)) {
-        free(entry->filesystem_path);
-        free(entry->storage_path);
-        free(entry->profile);
+    if (profile && !entry->profile) {
         return ERROR(ERR_MEMORY, "Failed to allocate diverged entry");
     }
 
@@ -388,11 +387,8 @@ static error_t *workspace_add_diverged(
     if (storage_path) {
         const merged_metadata_entry_t *meta_entry = merged_metadata_lookup(ws, storage_path);
         if (meta_entry && meta_entry->profile_name) {
-            entry->metadata_profile = strdup(meta_entry->profile_name);
+            entry->metadata_profile = arena_strdup(ws->arena, meta_entry->profile_name);
             if (!entry->metadata_profile) {
-                free(entry->filesystem_path);
-                free(entry->storage_path);
-                free(entry->profile);
                 return ERROR(ERR_MEMORY, "Failed to allocate metadata_profile");
             }
         }
@@ -403,10 +399,6 @@ static error_t *workspace_add_diverged(
         ws->diverged_index, entry->filesystem_path, (void *) (uintptr_t) (ws->diverged_count + 1)
     );
     if (err) {
-        free(entry->filesystem_path);
-        free(entry->storage_path);
-        free(entry->profile);
-        free(entry->metadata_profile);
         return error_wrap(err, "Failed to index diverged entry");
     }
 
@@ -855,13 +847,12 @@ static error_t *analyze_file_divergence(
      * The old_profile field is persisted in the database and populated
      * into the VWD cache during workspace_build_manifest_from_state().
      * It remains set until acknowledged by successful deployment.
+     * Borrow from arena-backed manifest entry (same lifetime as workspace)
      */
     bool profile_changed = (manifest_entry->old_profile != NULL);
-    char *old_profile = profile_changed ? strdup(manifest_entry->old_profile) : NULL;
+    char *old_profile = profile_changed ? manifest_entry->old_profile : NULL;
 
-    /* Maintain invariant: profile_changed implies old_profile is non-NULL.
-     * On strdup failure, degrade gracefully by dropping the transition flag
-     * rather than propagating inconsistent state to consumers. */
+    /* Maintain invariant: profile_changed implies old_profile is non-NULL */
     if (profile_changed && !old_profile) profile_changed = false;
 
     /* Add to workspace if there's any state change or divergence */
@@ -870,14 +861,7 @@ static error_t *analyze_file_divergence(
             ws, fs_path, storage_path, profile, old_profile, state,
             divergence, WORKSPACE_ITEM_FILE, on_filesystem, true, profile_changed
         );
-        if (err) {
-            /* On error, free old_profile (ownership only transfers on success) */
-            free(old_profile);
-            return err;
-        }
-    } else {
-        /* No divergence - free old_profile if allocated */
-        free(old_profile);
+        if (err) return err;
     }
 
     return NULL;
@@ -1360,15 +1344,14 @@ static error_t *analyze_orphaned_directories(workspace_t *ws) {
     state_directory_entry_t *state_dirs = NULL;
     size_t state_count = 0;
 
-    /* Get all directories in state */
-    err = state_get_all_directories(ws->state, &state_dirs, &state_count);
+    /* Get all directories in state (arena-allocated, freed with ws->arena) */
+    err = state_get_all_directories(ws->state, ws->arena, &state_dirs, &state_count);
     if (err) {
         return error_wrap(err, "Failed to get state directories");
     }
 
     /* Early exit: no directories in state means no orphans */
     if (state_count == 0) {
-        state_free_all_directories(state_dirs, state_count);
         return NULL;
     }
 
@@ -1393,8 +1376,8 @@ static error_t *analyze_orphaned_directories(workspace_t *ws) {
 
             err = workspace_add_diverged(
                 ws,
-                dir_path,
-                storage_path,
+                dir_path,                  /* Already arena-allocated */
+                storage_path,              /* Already arena-allocated */
                 profile,
                 NULL,                      /* No old_profile for orphans */
                 WORKSPACE_STATE_ORPHANED,  /* State: in state, not in profile */
@@ -1406,13 +1389,11 @@ static error_t *analyze_orphaned_directories(workspace_t *ws) {
             );
 
             if (err) {
-                state_free_all_directories(state_dirs, state_count);
                 return error_wrap(err, "Failed to add orphaned directory");
             }
         }
     }
 
-    state_free_all_directories(state_dirs, state_count);
     return NULL;
 }
 
@@ -1637,10 +1618,21 @@ static error_t *scan_directory_for_untracked(
                     return ERROR(ERR_MEMORY, "Failed to allocate storage path");
                 }
 
+                /* Arena-copy heap strings — originals freed immediately after */
+                char *arena_fp = arena_strdup(ws->arena, full_path);
+                char *arena_sp = arena_strdup(ws->arena, storage_path);
+                free(storage_path);
+                free(full_path);
+
+                if (!arena_fp || !arena_sp) {
+                    closedir(dir);
+                    return ERROR(ERR_MEMORY, "Failed to arena-copy untracked paths");
+                }
+
                 error_t *err = workspace_add_diverged(
                     ws,
-                    full_path,
-                    storage_path,
+                    arena_fp,
+                    arena_sp,
                     profile,
                     NULL,                       /* No old_profile for untracked */
                     WORKSPACE_STATE_UNTRACKED,  /* State: on filesystem in tracked dir */
@@ -1650,9 +1642,6 @@ static error_t *scan_directory_for_untracked(
                     true,                       /* profile_enabled */
                     false                       /* No profile change */
                 );
-
-                free(storage_path);
-                free(full_path);
 
                 if (err) {
                     closedir(dir);
@@ -1706,7 +1695,9 @@ static error_t *analyze_untracked_files(
         /* Get tracked directories from state database for this profile */
         state_directory_entry_t *directories = NULL;
         size_t dir_count = 0;
-        err = state_get_directories_by_profile(ws->state, profile_name, &directories, &dir_count);
+        err = state_get_directories_by_profile(
+            ws->state, profile_name, ws->arena, &directories, &dir_count
+        );
         if (err) {
             fprintf(
                 stderr, "warning: failed to load directories for profile '%s': %s\n",
@@ -1719,7 +1710,6 @@ static error_t *analyze_untracked_files(
 
         if (dir_count == 0) {
             /* Profile has no tracked directories - skip */
-            state_free_all_directories(directories, dir_count);
             continue;
         }
 
@@ -1815,9 +1805,6 @@ static error_t *analyze_untracked_files(
 
         /* Free ignore context after scanning all directories in this profile */
         ignore_context_free(ignore_ctx);
-
-        /* Free state directory entries for this profile */
-        state_free_all_directories(directories, dir_count);
     }
 
     return NULL;
@@ -1842,16 +1829,15 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->state);
 
-    /* Get all tracked directories from state database */
+    /* Get all tracked directories from state database (arena-allocated) */
     state_directory_entry_t *directories = NULL;
     size_t dir_count = 0;
-    error_t *err = state_get_all_directories(ws->state, &directories, &dir_count);
+    error_t *err = state_get_all_directories(ws->state, ws->arena, &directories, &dir_count);
     if (err) {
         return error_wrap(err, "Failed to load tracked directories from state");
     }
 
     if (dir_count == 0) {
-        state_free_all_directories(directories, dir_count);
         return NULL;  /* No tracked directories */
     }
 
@@ -1885,9 +1871,8 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
          * - storage_path: Portable path
          * - profile: Source profile
          * - mode, owner, group: Expected metadata
-         */
-
-        /* Use filesystem path directly from state (already resolved) */
+         *
+         * All strings are arena-allocated — no explicit free needed. */
         const char *filesystem_path = dir_entry->filesystem_path;
         const char *storage_path = dir_entry->storage_path;
         const char *profile_name = dir_entry->profile;
@@ -1917,7 +1902,6 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 );
 
                 if (err) {
-                    state_free_all_directories(directories, dir_count);
                     return error_wrap(
                         err, "Failed to record deleted directory '%s'",
                         filesystem_path
@@ -1961,7 +1945,6 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
             );
 
             if (err) {
-                state_free_all_directories(directories, dir_count);
                 return error_wrap(
                     err, "Failed to record type change for directory '%s'",
                     filesystem_path
@@ -1984,7 +1967,6 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
         );
 
         if (err) {
-            state_free_all_directories(directories, dir_count);
             return error_wrap(
                 err, "Failed to check metadata for directory '%s'",
                 filesystem_path
@@ -2013,7 +1995,6 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
             );
 
             if (err) {
-                state_free_all_directories(directories, dir_count);
                 return error_wrap(
                     err, "Failed to record directory metadata divergence for '%s'",
                     filesystem_path
@@ -2021,9 +2002,6 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
             }
         }
     }
-
-    /* Free state directory entries */
-    state_free_all_directories(directories, dir_count);
 
     return NULL;  /* Success - all directories checked */
 }
@@ -2262,7 +2240,8 @@ static error_t *patch_entry_from_fresh(
     file_entry_t *vwd_entry,
     const file_entry_t *fresh_entry,
     const char *head_oid_hex,
-    const metadata_t *metadata
+    const metadata_t *metadata,
+    arena_t *arena
 ) {
     /* Extract blob OID from fresh tree entry */
     if (!fresh_entry->entry) {
@@ -2327,39 +2306,26 @@ static error_t *patch_entry_from_fresh(
         }
     }
 
-    /* Allocate all new strings before modifying the entry. This
-     * ensures the entry stays consistent if any allocation fails. */
-    char *dup_git_oid = strdup(head_oid_hex);
-    char *dup_blob_oid = strdup(blob_hex);
-    char *dup_owner = new_owner ? strdup(new_owner) : NULL;
-    char *dup_group = new_group ? strdup(new_group) : NULL;
+    /* Arena-allocate replacement strings. The VWD entry fields
+     * being overwritten are borrowed from cached_state_files */
+    char *dup_git_oid = arena_strdup(arena, head_oid_hex);
+    char *dup_blob_oid = arena_strdup(arena, blob_hex);
+    char *dup_owner = arena_strdup(arena, new_owner);
+    char *dup_group = arena_strdup(arena, new_group);
 
     if (!dup_git_oid || !dup_blob_oid ||
         (new_owner && !dup_owner) || (new_group && !dup_group)) {
-        free(dup_git_oid);
-        free(dup_blob_oid);
-        free(dup_owner);
-        free(dup_group);
         return ERROR(
             ERR_MEMORY, "Failed to allocate patched fields for '%s'",
             fresh_entry->storage_path
         );
     }
 
-    /* Swap — free old strings, assign pre-allocated replacements */
-    free(vwd_entry->git_oid);
     vwd_entry->git_oid = dup_git_oid;
-
-    free(vwd_entry->blob_oid);
     vwd_entry->blob_oid = dup_blob_oid;
-
     vwd_entry->type = new_type;
     vwd_entry->mode = new_mode;
-
-    free(vwd_entry->owner);
     vwd_entry->owner = dup_owner;
-
-    free(vwd_entry->group);
     vwd_entry->group = dup_group;
 
     vwd_entry->encrypted = new_encrypted;
@@ -2418,11 +2384,18 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
     hashmap_t *stale_profiles = NULL;
     manifest_t *fresh_manifest = NULL;
 
-    /* Read all entries from manifest table.
+    /* Create workspace arena for all workspace-lifetime string allocations.
+     * 128 KB fits ~200 files comfortably in a single block. */
+    ws->arena = arena_create(128 * 1024);
+    if (!ws->arena) {
+        return ERROR(ERR_MEMORY, "Failed to create workspace arena");
+    }
+
+    /* Read all entries from manifest table (arena-allocated).
      *
-     * Cached on workspace for reuse by analyze_orphaned_files(),
-     * avoiding a redundant full-table scan. Freed in workspace_free(). */
-    err = state_get_all_files(ws->state, &state_entries, &state_count);
+     * Cached on workspace for reuse by analyze_orphaned_files().
+     * Arena handles cleanup — no state_free_all_files() needed. */
+    err = state_get_all_files(ws->state, ws->arena, &state_entries, &state_count);
     if (err) {
         return error_wrap(err, "Failed to read manifest from state");
     }
@@ -2458,7 +2431,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
     if (stale_profiles) {
         ws->manifest_stale = true;
 
-        err = profile_build_manifest(ws->repo, ws->profiles, &fresh_manifest);
+        err = profile_build_manifest(ws->repo, ws->profiles, NULL, &fresh_manifest);
         if (err) {
             hashmap_free(stale_profiles, free);
             return error_wrap(err, "Failed to build fresh manifest for stale repair");
@@ -2529,17 +2502,9 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             continue;
         }
 
-        /* Copy paths (owned by manifest) */
-        entry->storage_path = strdup(state_entry->storage_path);
-        entry->filesystem_path = strdup(state_entry->filesystem_path);
-
-        if (!entry->storage_path || !entry->filesystem_path) {
-            /* Cleanup on allocation failure */
-            free(entry->storage_path);
-            free(entry->filesystem_path);
-            err = ERROR(ERR_MEMORY, "Failed to allocate manifest entry paths");
-            goto cleanup;
-        }
+        /* Borrow paths from arena-backed state entries (same lifetime) */
+        entry->storage_path = state_entry->storage_path;
+        entry->filesystem_path = state_entry->filesystem_path;
 
         /* Skip non-active entries (marked for removal or stale)
          *
@@ -2550,8 +2515,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         if (state_entry->state && (strcmp(state_entry->state, STATE_INACTIVE) == 0 ||
             strcmp(state_entry->state, STATE_DELETED) == 0 ||
             strcmp(state_entry->state, STATE_RELEASED) == 0)) {
-            free(entry->storage_path);
-            free(entry->filesystem_path);
             continue;  /* Don't increment manifest_idx */
         }
 
@@ -2593,25 +2556,16 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
 
                 /* Populate VWD fields from state (baseline).
                  *
-                 * Most string fields (git_oid, blob_oid, owner, group) will be
-                 * overwritten by patch_entry_from_fresh, so transient NULL from
-                 * strdup failure is harmless (free(NULL) is safe). Only old_profile
-                 * survives without being patched — check it explicitly. */
-                entry->old_profile = state_entry->old_profile ? strdup(state_entry->old_profile)
-                                                              : NULL;
-
-                if (state_entry->old_profile && !entry->old_profile) {
-                    free(entry->storage_path);
-                    free(entry->filesystem_path);
-                    err = ERROR(ERR_MEMORY, "Failed to allocate old_profile for stale entry");
-                    goto cleanup;
-                }
-                entry->git_oid = state_entry->git_oid ? strdup(state_entry->git_oid) : NULL;
-                entry->blob_oid = state_entry->blob_oid ? strdup(state_entry->blob_oid) : NULL;
+                 * Borrow arena-backed strings from state entries.
+                 * Most string fields (git_oid, blob_oid, owner, group)
+                 * will be overwritten by patch_entry_from_fresh. */
+                entry->old_profile = state_entry->old_profile;
+                entry->git_oid = state_entry->git_oid;
+                entry->blob_oid = state_entry->blob_oid;
                 entry->type = state_entry->type;
                 entry->mode = state_entry->mode;
-                entry->owner = state_entry->owner ? strdup(state_entry->owner) : NULL;
-                entry->group = state_entry->group ? strdup(state_entry->group) : NULL;
+                entry->owner = state_entry->owner;
+                entry->group = state_entry->group;
                 entry->encrypted = state_entry->encrypted;
                 entry->deployed_at = state_entry->deployed_at;
                 /* stat_cache set after blob_changed check below — preserved when
@@ -2620,15 +2574,8 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
 
                 /* Now overwrite stale fields from fresh manifest */
                 const metadata_t *meta = ws_get_metadata(ws, fresh_entry->source_profile->name);
-                err = patch_entry_from_fresh(entry, fresh_entry, head_oid_hex, meta);
+                err = patch_entry_from_fresh(entry, fresh_entry, head_oid_hex, meta, ws->arena);
                 if (err) {
-                    free(entry->storage_path);
-                    free(entry->filesystem_path);
-                    free(entry->old_profile);
-                    free(entry->git_oid);
-                    free(entry->blob_oid);
-                    free(entry->owner);
-                    free(entry->group);
                     err = error_wrap(
                         err, "Failed to patch stale entry '%s'", state_entry->
                         storage_path
@@ -2687,56 +2634,30 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                     (void *) (uintptr_t) 1
                 );
                 if (err) {
-                    free(entry->storage_path);
-                    free(entry->filesystem_path);
                     goto cleanup;
                 }
 
-                free(entry->storage_path);
-                free(entry->filesystem_path);
                 continue;  /* Don't add to manifest */
             }
         } else {
-            /* Non-stale entry — populate VWD cache from state database
+            /* Non-stale entry — borrow VWD cache from arena-backed state entries.
              *
              * These fields enable O(1) divergence checking without N database queries.
              * They represent the cached expected state that workspace divergence
              * analysis will compare against filesystem reality.
              *
-             * NULL fields: Some optional fields (mode, owner, group, git_oid, blob_oid)
-             * may be NULL in state database. Use conditional strdup to handle gracefully.
-             */
-            entry->old_profile = state_entry->old_profile ? strdup(state_entry->old_profile) : NULL;
-            entry->git_oid = state_entry->git_oid ? strdup(state_entry->git_oid) : NULL;
-            entry->blob_oid = state_entry->blob_oid ? strdup(state_entry->blob_oid) : NULL;
+             * Both state entries and manifest entries share the workspace lifetime. */
+            entry->old_profile = state_entry->old_profile;
+            entry->git_oid = state_entry->git_oid;
+            entry->blob_oid = state_entry->blob_oid;
             entry->type = state_entry->type;
             entry->mode = state_entry->mode;
-            entry->owner = state_entry->owner ? strdup(state_entry->owner) : NULL;
-            entry->group = state_entry->group ? strdup(state_entry->group) : NULL;
+            entry->owner = state_entry->owner;
+            entry->group = state_entry->group;
             entry->encrypted = state_entry->encrypted;
             entry->deployed_at = state_entry->deployed_at;
             entry->stat_cache = state_entry->stat_cache;
             entry->entry = NULL;
-
-            /* Check for allocation failures in VWD fields */
-            if ((state_entry->old_profile && !entry->old_profile) ||
-                (state_entry->git_oid && !entry->git_oid) ||
-                (state_entry->blob_oid && !entry->blob_oid) ||
-                (state_entry->owner && !entry->owner) ||
-                (state_entry->group && !entry->group)) {
-
-                /* Cleanup current entry's allocated fields */
-                free(entry->storage_path);
-                free(entry->filesystem_path);
-                free(entry->old_profile);
-                free(entry->git_oid);
-                free(entry->blob_oid);
-                free(entry->owner);
-                free(entry->group);
-
-                err = ERROR(ERR_MEMORY, "Failed to allocate VWD cache fields");
-                goto cleanup;
-            }
         }
 
         /* Track entry for cleanup — must precede any further fallible operations
@@ -2760,21 +2681,16 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
 
     /* Set final count (may be less than state_count due to filtering) */
     ws->manifest->count = manifest_idx;
+    ws->manifest->arena_backed = true;
 
     manifest_free(fresh_manifest);
     hashmap_free(stale_profiles, free);
     return NULL;
 
 cleanup:
-    /* Centralized error cleanup */
+    /* Simplified error cleanup — arena handles all string fields.
+     * Only free heap-allocated structures and libgit2 objects. */
     for (size_t j = 0; j < manifest_idx; j++) {
-        free(ws->manifest->entries[j].storage_path);
-        free(ws->manifest->entries[j].filesystem_path);
-        free(ws->manifest->entries[j].old_profile);
-        free(ws->manifest->entries[j].git_oid);
-        free(ws->manifest->entries[j].blob_oid);
-        free(ws->manifest->entries[j].owner);
-        free(ws->manifest->entries[j].group);
         if (ws->manifest->entries[j].entry) {
             git_tree_entry_free(ws->manifest->entries[j].entry);
         }
@@ -3656,14 +3572,7 @@ void workspace_free(workspace_t *ws) {
         return;
     }
 
-    /* Free diverged entries */
-    for (size_t i = 0; i < ws->diverged_count; i++) {
-        free(ws->diverged[i].filesystem_path);
-        free(ws->diverged[i].storage_path);
-        free(ws->diverged[i].profile);
-        free(ws->diverged[i].metadata_profile);
-        free(ws->diverged[i].old_profile);  /* Free profile change tracking */
-    }
+    /* Free diverged array (string fields are arena-backed, not freed individually) */
     free(ws->diverged);
 
     /* Free stat cache updates (paths are borrowed, stat is plain data) */
@@ -3691,11 +3600,14 @@ void workspace_free(workspace_t *ws) {
     hashmap_free(ws->stale_paths, NULL);
     hashmap_free(ws->released_paths, NULL);
 
-    /* Free cached state query (NULL-safe) */
-    state_free_all_files(ws->cached_state_files, ws->cached_state_count);
-
-    /* Free owned state */
+    /* Free manifest (arena_backed mode: frees git_tree_entry objects,
+     * entries array, hashmap, and struct — all heap-allocated) */
     manifest_free(ws->manifest);
+
+    /* Free arena AFTER manifest_free — arena owns all string fields
+     * in manifest entries, state entries, and diverged items.
+     * Also frees cached_state_files array (arena_calloc'd). */
+    arena_destroy(ws->arena);
 
     /* Only free state if we own it (allocated via state_load).
      * If borrowed from caller (state_load_for_update), caller is responsible. */

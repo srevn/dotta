@@ -11,7 +11,8 @@
  * entirely, so the table never degrades over insert/remove cycles.
  *
  * Memory ownership:
- * - Map owns keys (duplicates on insert, frees on remove/destroy)
+ * - Default: map owns keys (duplicates on insert, frees on remove/destroy)
+ * - Borrowing mode: map stores key pointers directly (no strdup/free)
  * - Caller owns values (map only stores pointers)
  * - Optional free_value callback for cleanup on clear/free
  *
@@ -58,13 +59,28 @@ typedef struct hashmap_iter {
 } hashmap_iter_t;
 
 /**
- * Create new hash map
+ * Create new hash map (owning mode — keys are strdup'd on insert, freed on remove)
  *
  * @param initial_capacity Hint for expected entry count (0 = default 16).
  *                         Rounded up to next power of two internally.
  * @return New hash map, or NULL on allocation failure
  */
 hashmap_t *hashmap_create(size_t initial_capacity);
+
+/**
+ * Create hash map in borrowing mode — keys stored by reference, not copied.
+ *
+ * The caller MUST guarantee:
+ * - All key strings outlive the hashmap
+ * - Keys are not modified after insertion
+ * - Keys are not freed before the hashmap is freed/cleared
+ *
+ * hashmap_remove() will NOT free the key — the original owner is responsible.
+ *
+ * @param initial_capacity Hint for expected entry count (0 = default 16).
+ * @return New hash map, or NULL on allocation failure
+ */
+hashmap_t *hashmap_borrow(size_t initial_capacity);
 
 /**
  * Remove all entries without freeing the map itself
@@ -90,7 +106,7 @@ void hashmap_free(hashmap_t *map, hashmap_free_fn free_fn);
  * hashmap_get if needed, or use hashmap_put for old-value retrieval).
  *
  * @param map Hash map (must not be NULL)
- * @param key Key string (will be duplicated; must not be NULL)
+ * @param key Key string (duplicated in owning mode, stored directly in borrowing mode; must not be NULL)
  * @param value Value pointer (map does not take ownership)
  * @return NULL on success, error on allocation failure
  */
@@ -103,7 +119,7 @@ error_t *hashmap_set(hashmap_t *map, const char *key, void *value);
  * When the key is new, *out_prev is set to NULL.
  *
  * @param map Hash map (must not be NULL)
- * @param key Key string (will be duplicated; must not be NULL)
+ * @param key Key string (duplicated in owning mode, stored directly in borrowing mode; must not be NULL)
  * @param value New value pointer
  * @param out_prev Receives the previous value, or NULL if key was new
  * @return NULL on success, error on allocation failure

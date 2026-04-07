@@ -114,7 +114,7 @@ static error_t *build_profile_oid_map(
     error_t *err = NULL;
 
     /* Create hashmap */
-    hashmap_t *map = hashmap_create(profiles->count);
+    hashmap_t *map = hashmap_borrow(profiles->count);
     if (!map) {
         return ERROR(ERR_MEMORY, "Failed to create profile oid map");
     }
@@ -835,8 +835,8 @@ static error_t *build_directory_fallback_index(
     }
 
     /* Initialize hashmaps */
-    fallback_dirs = hashmap_create(64);  /* Initial capacity: 64 directories */
-    fallback_dir_profiles = hashmap_create(64);
+    fallback_dirs = hashmap_borrow(64);
+    fallback_dir_profiles = hashmap_borrow(64);
 
     if (!fallback_dirs || !fallback_dir_profiles) {
         if (fallback_dirs) hashmap_free(fallback_dirs, NULL);
@@ -1763,7 +1763,7 @@ error_t *manifest_rebuild(
     }
 
     /* Build hashmap for O(1) old entry lookups */
-    old_map = hashmap_create(old_count > 0 ? old_count : 16);
+    old_map = hashmap_borrow(old_count > 0 ? old_count : 16);
     if (!old_map) {
         arena_destroy(arena);
         return ERROR(ERR_MEMORY, "Failed to create old entries hashmap");
@@ -1920,7 +1920,7 @@ error_t *manifest_detect_stale_profiles(
     hashmap_t *stale_map = NULL;
 
     /* Track which profiles we've already checked (avoid redundant ref lookups) */
-    hashmap_t *checked = hashmap_create(16);
+    hashmap_t *checked = hashmap_borrow(16);
     if (!checked) {
         return ERROR(ERR_MEMORY, "Failed to create profile check set");
     }
@@ -1964,7 +1964,7 @@ error_t *manifest_detect_stale_profiles(
         if (strcmp(entry->git_oid, head_hex) != 0) {
             /* Profile is stale — HEAD moved since last dotta operation */
             if (!stale_map) {
-                stale_map = hashmap_create(16);
+                stale_map = hashmap_borrow(16);
                 if (!stale_map) {
                     err = ERROR(ERR_MEMORY, "Failed to create stale profile map");
                     goto cleanup;
@@ -2050,7 +2050,7 @@ error_t *manifest_repair_stale(
     }
 
     /* Build profile scope hashmap for O(1) lookups during detection */
-    profile_scope = hashmap_create(enabled_profiles->count);
+    profile_scope = hashmap_borrow(enabled_profiles->count);
     if (!profile_scope) {
         err = ERROR(ERR_MEMORY, "Failed to create profile scope map");
         goto cleanup;
@@ -2362,7 +2362,7 @@ error_t *manifest_reorder_profiles(
     }
 
     /* Build hashmap for O(1) old entry lookups */
-    old_map = hashmap_create(old_count > 0 ? old_count : 16);
+    old_map = hashmap_borrow(old_count > 0 ? old_count : 16);
     if (!old_map) {
         err = ERROR(ERR_MEMORY, "Failed to create old entries hashmap");
         goto cleanup;

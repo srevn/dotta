@@ -186,13 +186,13 @@ static error_t *workspace_create_empty(
     ws->repo = repo;
     ws->profiles = profiles;                /* Borrowed reference */
 
-    ws->profile_index = hashmap_create(32); /* Initial capacity for profiles */
+    ws->profile_index = hashmap_borrow(32); /* Keys: profile->name (borrowed from caller) */
     if (!ws->profile_index) {
         free(ws);
         return ERROR(ERR_MEMORY, "Failed to create profile index");
     }
 
-    ws->diverged_index = hashmap_create(256);  /* Initial capacity */
+    ws->diverged_index = hashmap_borrow(256);  /* Keys: arena-backed filesystem_path */
     if (!ws->diverged_index) {
         hashmap_free(ws->profile_index, NULL);
         free(ws);
@@ -2438,8 +2438,8 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         }
 
         /* Allocate tracking hashmaps */
-        ws->stale_paths = hashmap_create(64);
-        ws->released_paths = hashmap_create(16);
+        ws->stale_paths = hashmap_borrow(64);
+        ws->released_paths = hashmap_borrow(16);
         if (!ws->stale_paths || !ws->released_paths) {
             manifest_free(fresh_manifest);
             hashmap_free(stale_profiles, free);
@@ -2470,7 +2470,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
      * Maps: filesystem_path -> index in entries array (offset by 1)
      * Use state_count as initial capacity (optimal sizing, no rehashing needed)
      */
-    hashmap_t *path_map = hashmap_create(state_count > 0 ? state_count : 64);
+    hashmap_t *path_map = hashmap_borrow(state_count > 0 ? state_count : 64);
     if (!path_map) {
         free(ws->manifest->entries);
         free(ws->manifest);
@@ -2753,7 +2753,7 @@ error_t *workspace_load(
         return ERROR(ERR_MEMORY, "Failed to create content cache");
     }
 
-    ws->metadata_cache = hashmap_create(16);
+    ws->metadata_cache = hashmap_borrow(16);
     if (!ws->metadata_cache) {
         workspace_free(ws);
         return ERROR(ERR_MEMORY, "Failed to create metadata cache");
@@ -2803,7 +2803,7 @@ error_t *workspace_load(
     ws->merged_count = 0;
     ws->merged_capacity = 0;
 
-    ws->merged_metadata = hashmap_create(256);
+    ws->merged_metadata = hashmap_borrow(256);
     if (!ws->merged_metadata) {
         workspace_free(ws);
         return ERROR(ERR_MEMORY, "Failed to create merged metadata map");

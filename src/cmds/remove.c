@@ -138,7 +138,7 @@ static error_t *resolve_paths_to_remove(
     }
 
     /* Build hashmap index for O(1) lookups */
-    profile_files_map = hashmap_create(profile_files->count);
+    profile_files_map = hashmap_borrow(profile_files->count);
     if (!profile_files_map) {
         err = ERROR(ERR_MEMORY, "Failed to create profile files index");
         goto cleanup;

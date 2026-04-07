@@ -45,7 +45,7 @@ error_t *metadata_create_empty(metadata_t **out) {
     }
 
     /* Create unified hashmap for O(1) lookups */
-    metadata->index = hashmap_create(INITIAL_CAPACITY);
+    metadata->index = hashmap_borrow(INITIAL_CAPACITY);
     if (!metadata->index) {
         free(metadata->items);
         free(metadata);
@@ -95,6 +95,11 @@ void metadata_free(void *ptr) {
         return;
     }
 
+    /* Free index first — it borrows key pointers from items array */
+    if (metadata->index) {
+        hashmap_free(metadata->index, NULL);
+    }
+
     /* Free all items (files, directories, and symlinks) */
     for (size_t i = 0; i < metadata->count; i++) {
         metadata_item_t *item = &metadata->items[i];
@@ -106,12 +111,6 @@ void metadata_free(void *ptr) {
     }
 
     free(metadata->items);
-
-    /* Free unified hashmap (values point to items array, so no value free callback) */
-    if (metadata->index) {
-        hashmap_free(metadata->index, NULL);
-    }
-
     free(metadata);
 }
 

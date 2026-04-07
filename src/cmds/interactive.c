@@ -106,7 +106,7 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
 
     /* Build hashmap for O(1) profile lookups: name -> (index + 1) in all_profiles
      * We store (i + 1) instead of i because NULL (0) means "not found" */
-    profile_map = hashmap_create(0);
+    profile_map = hashmap_borrow(0);
     if (!profile_map) {
         err = error_create(ERR_MEMORY, "failed to create profile hashmap");
         goto cleanup;

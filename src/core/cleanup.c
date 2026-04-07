@@ -205,7 +205,7 @@ static error_t *prune_orphaned_files(
              */
             if (opts->preflight_violations->count > 0) {
                 /* Build violations map for files to skip */
-                violations_map = hashmap_create(opts->preflight_violations->count);
+                violations_map = hashmap_borrow(opts->preflight_violations->count);
                 if (!violations_map) {
                     return ERROR(ERR_MEMORY, "Failed to create violations hashmap");
                 }
@@ -249,7 +249,7 @@ static error_t *prune_orphaned_files(
 
             /* Build violations map for O(1) lookup during removal */
             if (result->safety_violations && result->safety_violations->count > 0) {
-                violations_map = hashmap_create(result->safety_violations->count);
+                violations_map = hashmap_borrow(result->safety_violations->count);
                 if (!violations_map) {
                     return ERROR(ERR_MEMORY, "Failed to create violations hashmap");
                 }

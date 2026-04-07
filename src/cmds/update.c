@@ -469,7 +469,7 @@ static error_t *group_items_by_profile(
     CHECK_NULL(items);
     CHECK_NULL(out_groups);
 
-    hashmap_t *groups = hashmap_create(32);
+    hashmap_t *groups = hashmap_borrow(32);
     if (!groups) {
         return ERROR(ERR_MEMORY, "Failed to create profile groups hashmap");
     }
@@ -1412,7 +1412,7 @@ static error_t *update_execute_for_all_profiles(
     }
 
     /* Create hashmap for O(1) profile lookup */
-    profile_index = hashmap_create(32);
+    profile_index = hashmap_borrow(32);
     if (!profile_index) {
         err = ERROR(ERR_MEMORY, "Failed to create profile index");
         goto cleanup;

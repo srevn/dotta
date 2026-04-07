@@ -1485,8 +1485,12 @@ error_t *profile_build_manifest(
     /*
      * Create hash map for O(1) duplicate detection
      * Maps: filesystem_path -> index in entries array
+     *
+     * Borrow keys when arena-backed (arena outlives hashmap).
+     * In non-arena mode, manifest_free() frees entry strings before
+     * the hashmap, so keys must be owned copies.
      */
-    path_map = hashmap_create(128);
+    path_map = arena ? hashmap_borrow(128) : hashmap_create(128);
     if (!path_map) {
         err = ERROR(ERR_MEMORY, "Failed to create hashmap");
         goto cleanup;

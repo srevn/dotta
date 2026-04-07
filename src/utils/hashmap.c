@@ -5,7 +5,7 @@
  * Backward-shift deletion keeps the table tombstone-free.
  *
  * Slot layout:
- *   key != NULL  →  occupied (key is owned, heap-allocated)
+ *   key != NULL  →  occupied (key is owned or borrowed per borrow_keys flag)
  *   key == NULL  →  empty
  *
  * Hash: FNV-1a (64-bit compute, XOR-folded to 32-bit for compact slots).
@@ -31,7 +31,7 @@
 
 /* Slot */
 typedef struct {
-    char *key;          /* NULL = empty slot; owned when non-NULL */
+    char *key;          /* NULL = empty slot; owned or borrowed per map->borrow_keys */
     void *value;
     uint32_t hash;      /* Cached XOR-folded 32 bits of FNV-1a */
 } hashmap_slot_t;
@@ -43,6 +43,7 @@ struct hashmap {
     size_t count;               /* Number of occupied slots */
     size_t grow_at;             /* count threshold triggering resize */
     uint64_t mod_count;         /* Mutation counter for iterator safety */
+    bool borrow_keys;           /* If true: keys stored by reference, not strdup'd */
 };
 
 /* FNV-1a hash function for strings */
@@ -213,12 +214,16 @@ static error_t *hashmap_insert(
         /* Empty slot — insert */
         if (!slot->key) {
             if (!carry_key) {
-                carry_key = strdup(key);
-                if (!carry_key) {
-                    return ERROR(
-                        ERR_MEMORY,
-                        "Failed to allocate hash map key"
-                    );
+                if (map->borrow_keys) {
+                    carry_key = (char *) key;
+                } else {
+                    carry_key = strdup(key);
+                    if (!carry_key) {
+                        return ERROR(
+                            ERR_MEMORY,
+                            "Failed to allocate hash map key"
+                        );
+                    }
                 }
             }
             slot->key = carry_key;
@@ -241,12 +246,16 @@ static error_t *hashmap_insert(
         size_t existing = probe_dist(pos, slot->hash, mask);
         if (dist > existing) {
             if (!carry_key) {
-                carry_key = strdup(key);
-                if (!carry_key) {
-                    return ERROR(
-                        ERR_MEMORY,
-                        "Failed to allocate hash map key"
-                    );
+                if (map->borrow_keys) {
+                    carry_key = (char *) key;
+                } else {
+                    carry_key = strdup(key);
+                    if (!carry_key) {
+                        return ERROR(
+                            ERR_MEMORY,
+                            "Failed to allocate hash map key"
+                        );
+                    }
                 }
             }
 
@@ -339,6 +348,14 @@ hashmap_t *hashmap_create(size_t initial_capacity) {
     return map;
 }
 
+/* Create hash map with borrowed keys (caller must ensure key lifetimes) */
+hashmap_t *hashmap_borrow(size_t initial_capacity) {
+    hashmap_t *map = hashmap_create(initial_capacity);
+    if (map) map->borrow_keys = true;
+
+    return map;
+}
+
 /* Remove all entries without freeing the map itself */
 void hashmap_clear(hashmap_t *map, hashmap_free_fn free_fn) {
     if (!map) return;
@@ -348,7 +365,7 @@ void hashmap_clear(hashmap_t *map, hashmap_free_fn free_fn) {
         if (slot->key) {
             if (free_fn && slot->value)
                 free_fn(slot->value);
-            free(slot->key);
+            if (!map->borrow_keys) free(slot->key);
             *slot = (hashmap_slot_t){ 0 };
         }
     }
@@ -426,7 +443,7 @@ bool hashmap_remove(hashmap_t *map, const char *key, void **out_old) {
 
     /* Harvest value and free key */
     if (out_old) *out_old = map->slots[pos].value;
-    free(map->slots[pos].key);
+    if (!map->borrow_keys) free(map->slots[pos].key);
 
     /*
      * Backward-shift deletion: pull subsequent displaced entries back

@@ -1294,22 +1294,20 @@ keymanager_t *keymanager_get_global(const config_t *config) {
     }
 
     /* Create new keymanager */
-    config_t *cfg = (config_t *) config;
-    bool allocated_config = false;
+    const config_t *cfg = config;
+    config_t *default_config = NULL;
 
     if (!cfg) {
-        cfg = config_create_default();
-        if (!cfg) {
+        default_config = config_create_default();
+        if (!default_config) {
             return NULL;
         }
-        allocated_config = true;
+        cfg = default_config;
     }
 
     error_t *err = keymanager_create(cfg, &global_keymanager);
 
-    if (allocated_config) {
-        config_free(cfg);
-    }
+    config_free(default_config);
 
     if (err) {
         fprintf(

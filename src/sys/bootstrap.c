@@ -21,7 +21,6 @@
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/string.h"
-#include "core/profiles.h"
 #include "sys/gitops.h"
 
 /* Exit codes for bootstrap script execution */
@@ -930,21 +929,21 @@ error_t *bootstrap_execute(
 error_t *bootstrap_run_for_profiles(
     git_repository *repo,
     const char *repo_dir,
-    struct profile_list *profiles,
+    const char *const *profile_names,
+    size_t profile_count,
     bool dry_run,
     bool stop_on_error
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(repo_dir);
-    CHECK_NULL(profiles);
+    CHECK_NULL(profile_names);
 
-    profile_list_t *plist = (profile_list_t *) profiles;
     const char *script_name = BOOTSTRAP_DEFAULT_SCRIPT_NAME;
 
     /* Count scripts that exist */
     size_t script_count = 0;
-    for (size_t i = 0; i < plist->count; i++) {
-        if (bootstrap_exists(repo, plist->profiles[i].name, script_name)) {
+    for (size_t i = 0; i < profile_count; i++) {
+        if (bootstrap_exists(repo, profile_names[i], script_name)) {
             script_count++;
         }
     }
@@ -954,37 +953,26 @@ error_t *bootstrap_run_for_profiles(
         return NULL;
     }
 
-    /* Build space-separated list of all profiles */
-    char **profile_names = malloc(plist->count * sizeof(char *));
-    if (!profile_names) {
-        return ERROR(ERR_MEMORY, "Failed to allocate profile names array");
-    }
-
-    for (size_t i = 0; i < plist->count; i++) {
-        profile_names[i] = plist->profiles[i].name;
-    }
-
-    char *all_profiles_str = str_join(profile_names, plist->count, " ");
-    free(profile_names);
-
-    if (!all_profiles_str) {
+    /* Build space-separated list of all profiles for environment variable */
+    char *all_profiles = str_join(profile_names, profile_count, " ");
+    if (!all_profiles) {
         return ERROR(ERR_MEMORY, "Failed to join profile names");
     }
 
     /* Execute scripts in order */
     size_t executed = 0;
     size_t failed_count = 0;
-    char **failed_profiles = malloc(script_count * sizeof(char *));
-    if (!failed_profiles) {
-        free(all_profiles_str);
+    const char **failed_names = malloc(script_count * sizeof(const char *));
+    if (!failed_names) {
+        free(all_profiles);
         return ERROR(ERR_MEMORY, "Failed to allocate failed profiles array");
     }
 
-    for (size_t i = 0; i < plist->count; i++) {
-        profile_t *profile = &plist->profiles[i];
+    for (size_t i = 0; i < profile_count; i++) {
+        const char *profile_name = profile_names[i];
 
         /* Check if bootstrap script exists */
-        if (!bootstrap_exists(repo, profile->name, script_name)) {
+        if (!bootstrap_exists(repo, profile_name, script_name)) {
             continue;
         }
 
@@ -992,7 +980,7 @@ error_t *bootstrap_run_for_profiles(
 
         printf(
             "[%zu/%zu] Running %s/%s...\n",
-            executed, script_count, profile->name, script_name
+            executed, script_count, profile_name, script_name
         );
 
         /* In dry-run mode, validate the script but don't execute */
@@ -1000,7 +988,7 @@ error_t *bootstrap_run_for_profiles(
             /* Extract and validate script even in dry-run */
             char *temp_path = NULL;
             error_t *err = bootstrap_extract_to_temp(
-                repo, profile->name, script_name, &temp_path
+                repo, profile_name, script_name, &temp_path
             );
             if (err) {
                 printf(
@@ -1009,19 +997,19 @@ error_t *bootstrap_run_for_profiles(
                 );
                 error_free(err);
                 if (stop_on_error) {
-                    free(all_profiles_str);
-                    free(failed_profiles);
+                    free(all_profiles);
+                    free(failed_names);
                     return ERROR(
                         ERR_INVALID_ARG,
                         "Bootstrap script validation failed for %s",
-                        profile->name
+                        profile_name
                     );
                 }
-                failed_profiles[failed_count++] = profile->name;
+                failed_names[failed_count++] = profile_name;
             } else {
                 printf(
                     "  ✓ (dry-run) Would execute bootstrap for profile '%s'\n",
-                    profile->name
+                    profile_name
                 );
 
                 if (temp_path) {
@@ -1035,28 +1023,28 @@ error_t *bootstrap_run_for_profiles(
         /* Extract script to temporary file */
         char *temp_path = NULL;
         error_t *err = bootstrap_extract_to_temp(
-            repo, profile->name, script_name, &temp_path
+            repo, profile_name, script_name, &temp_path
         );
         if (err) {
             printf("  ✗ Failed to extract: %s\n", error_message(err));
             if (stop_on_error) {
-                free(all_profiles_str);
-                free(failed_profiles);
+                free(all_profiles);
+                free(failed_names);
                 return error_wrap(
                     err, "Failed to extract bootstrap script for %s",
-                    profile->name
+                    profile_name
                 );
             }
             error_free(err);
-            failed_profiles[failed_count++] = profile->name;
+            failed_names[failed_count++] = profile_name;
             continue;
         }
 
         /* Create context */
         bootstrap_context_t ctx = {
             .repo_dir     = repo_dir,
-            .profile_name = profile->name,
-            .all_profiles = all_profiles_str,
+            .profile_name = profile_name,
+            .all_profiles = all_profiles,
             .dry_run      = dry_run
         };
 
@@ -1087,16 +1075,16 @@ error_t *bootstrap_run_for_profiles(
             }
 
             if (stop_on_error) {
-                free(all_profiles_str);
-                free(failed_profiles);
+                free(all_profiles);
+                free(failed_names);
                 return error_wrap(
                     err, "Bootstrap failed for profile %s",
-                    profile->name
+                    profile_name
                 );
             }
 
             /* Track failed profile */
-            failed_profiles[failed_count++] = profile->name;
+            failed_names[failed_count++] = profile_name;
             error_free(err);
             continue;
         }
@@ -1108,7 +1096,7 @@ error_t *bootstrap_run_for_profiles(
         }
     }
 
-    free(all_profiles_str);
+    free(all_profiles);
 
     /* Report and return error on partial failure */
     if (failed_count > 0) {
@@ -1118,16 +1106,16 @@ error_t *bootstrap_run_for_profiles(
             failed_count, failed_count == 1 ? "" : "s"
         );
         for (size_t i = 0; i < failed_count; i++) {
-            fprintf(stderr, "  - %s\n", failed_profiles[i]);
+            fprintf(stderr, "  - %s\n", failed_names[i]);
         }
-        free(failed_profiles);
+        free(failed_names);
         return ERROR(
             ERR_INTERNAL, "%zu of %zu bootstrap script%s failed",
             failed_count, script_count, failed_count == 1 ? "" : "s"
         );
     }
 
-    free(failed_profiles);
+    free(failed_names);
 
     return NULL;
 }

@@ -306,37 +306,36 @@ static error_t *bootstrap_show(
  */
 static error_t *bootstrap_list(
     git_repository *repo,
-    struct profile_list *profiles,
+    const char *const *profile_names,
+    size_t profile_count,
     const char *script_name,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profiles);
+    CHECK_NULL(profile_names);
 
     if (!script_name) {
         script_name = BOOTSTRAP_DEFAULT_SCRIPT_NAME;
     }
 
-    profile_list_t *plist = (profile_list_t *) profiles;
-
     if (out) {
         output_section(out, OUTPUT_NORMAL, "Bootstrap scripts");
 
-        for (size_t i = 0; i < plist->count; i++) {
-            profile_t *profile = &plist->profiles[i];
-            bool exists = bootstrap_exists(repo, profile->name, script_name);
+        for (size_t i = 0; i < profile_count; i++) {
+            const char *name = profile_names[i];
+            bool exists = bootstrap_exists(repo, name, script_name);
 
             if (exists) {
                 output_styled(
                     out, OUTPUT_NORMAL,
                     "  {green}✓{reset} %-15s %s/%s\n",
-                    profile->name, profile->name, script_name
+                    name, name, script_name
                 );
             } else {
                 output_styled(
                     out, OUTPUT_NORMAL,
                     "  {red}✗{reset} %-15s (no bootstrap script)\n",
-                    profile->name
+                    name
                 );
             }
         }
@@ -364,6 +363,8 @@ error_t *cmd_bootstrap(
     git_repository *repo = NULL;
     char *repo_path = NULL;
     profile_list_t *profiles = NULL;
+    const char **profile_names = NULL;
+    size_t profile_name_count = 0;
 
     /* Resolve repository path */
     err = resolve_repo_path(config, &repo_path);
@@ -445,9 +446,20 @@ error_t *cmd_bootstrap(
         }
     }
 
+    /* Extract profile names for bootstrap operations (name-only consumers) */
+    profile_name_count = profiles->count;
+    profile_names = malloc(profile_name_count * sizeof(const char *));
+    if (!profile_names) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate profile names");
+        goto cleanup;
+    }
+    for (size_t i = 0; i < profile_name_count; i++) {
+        profile_names[i] = profiles->profiles[i].name;
+    }
+
     /* Handle --list flag */
     if (opts->list) {
-        err = bootstrap_list(repo, (struct profile_list *) profiles, NULL, out);
+        err = bootstrap_list(repo, profile_names, profile_name_count, NULL, out);
         if (err) {
             err = error_wrap(err, "Failed to list bootstrap scripts");
         }
@@ -476,8 +488,8 @@ error_t *cmd_bootstrap(
 
     /* Count bootstrap scripts that exist */
     size_t script_count = 0;
-    for (size_t i = 0; i < profiles->count; i++) {
-        if (bootstrap_exists(repo, profiles->profiles[i].name, NULL)) {
+    for (size_t i = 0; i < profile_name_count; i++) {
+        if (bootstrap_exists(repo, profile_names[i], NULL)) {
             script_count++;
         }
     }
@@ -487,8 +499,8 @@ error_t *cmd_bootstrap(
         output_newline(out, OUTPUT_NORMAL);
         output_section(out, OUTPUT_NORMAL, "Profiles checked");
 
-        for (size_t i = 0; i < profiles->count; i++) {
-            output_print(out, OUTPUT_NORMAL, "  - %s\n", profiles->profiles[i].name);
+        for (size_t i = 0; i < profile_name_count; i++) {
+            output_print(out, OUTPUT_NORMAL, "  - %s\n", profile_names[i]);
         }
         output_newline(out, OUTPUT_NORMAL);
         output_hint(out, OUTPUT_NORMAL, "Create a bootstrap script with:");
@@ -498,11 +510,11 @@ error_t *cmd_bootstrap(
 
     /* Display what will be executed */
     output_section(out, OUTPUT_NORMAL, "Found bootstrap scripts");
-    for (size_t i = 0; i < profiles->count; i++) {
-        if (bootstrap_exists(repo, profiles->profiles[i].name, NULL)) {
+    for (size_t i = 0; i < profile_name_count; i++) {
+        if (bootstrap_exists(repo, profile_names[i], NULL)) {
             output_styled(
                 out, OUTPUT_NORMAL, "  {green}✓{reset} %s/.bootstrap\n",
-                profiles->profiles[i].name
+                profile_names[i]
             );
         }
     }
@@ -524,7 +536,7 @@ error_t *cmd_bootstrap(
     bool stop_on_error = !opts->continue_on_error;
     bool had_failures = false;
     err = bootstrap_run_for_profiles(
-        repo, repo_path, (struct profile_list *) profiles, opts->dry_run, stop_on_error
+        repo, repo_path, profile_names, profile_name_count, opts->dry_run, stop_on_error
     );
     if (err) {
         if (opts->continue_on_error) {
@@ -552,6 +564,7 @@ error_t *cmd_bootstrap(
     }
 
 cleanup:
+    if (profile_names) free(profile_names);
     if (profiles) profile_list_free(profiles);
     if (repo) gitops_close_repository(repo);
     if (repo_path) free(repo_path);

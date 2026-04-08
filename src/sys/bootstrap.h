@@ -18,9 +18,6 @@
 #include <stdbool.h>
 #include <types.h>
 
-/* Forward declarations */
-struct profile_list;
-
 /**
  * Default bootstrap script name
  */
@@ -146,7 +143,8 @@ error_t *bootstrap_execute(
  *
  * @param repo Repository (must not be NULL)
  * @param repo_dir Repository directory (must not be NULL)
- * @param profiles Profile list (must not be NULL)
+ * @param profile_names Array of profile name strings (must not be NULL)
+ * @param profile_count Number of profiles
  * @param dry_run If true, show what would be executed without running
  * @param stop_on_error If true, stop on first error; if false, continue
  * @return Error or NULL on success
@@ -154,7 +152,8 @@ error_t *bootstrap_execute(
 error_t *bootstrap_run_for_profiles(
     git_repository *repo,
     const char *repo_dir,
-    struct profile_list *profiles,
+    const char *const *profile_names,
+    size_t profile_count,
     bool dry_run,
     bool stop_on_error
 );

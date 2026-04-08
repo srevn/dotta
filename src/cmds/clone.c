@@ -679,31 +679,15 @@ error_t *cmd_clone(
 
     /* Execute bootstrap if requested */
     if (run_bootstrap && fetched_profiles->count > 0) {
-        /* Load profiles for bootstrap execution */
-        profile_list_t *bootstrap_profiles = NULL;
-        err = profile_list_load(
-            repo, fetched_profiles->items, fetched_profiles->count,
-            false, /* non-strict: skip non-existent */ &bootstrap_profiles
+        output_newline(out, OUTPUT_NORMAL);
+        err = bootstrap_run_for_profiles(
+            repo, local_path, (const char *const *) fetched_profiles->items,
+            fetched_profiles->count, false, true
         );
-
-        if (!err && bootstrap_profiles) {
-            output_newline(out, OUTPUT_NORMAL);
-            err = bootstrap_run_for_profiles(
-                repo, local_path, (struct profile_list *) bootstrap_profiles,
-                false, true
-            );
-            if (err) {
-                output_error(out, "Bootstrap failed: %s", error_message(err));
-                error_free(err);
-                /* Non-fatal - continue */
-            }
-            profile_list_free(bootstrap_profiles);
-        } else if (err) {
-            output_warning(
-                out, OUTPUT_NORMAL, "Failed to load profiles for bootstrap: %s",
-                error_message(err)
-            );
+        if (err) {
+            output_error(out, "Bootstrap failed: %s", error_message(err));
             error_free(err);
+            /* Non-fatal - continue */
         }
     }
 

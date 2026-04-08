@@ -290,7 +290,8 @@ static error_t *present_diffs_for_direction(
     content_cache_t *content_cache,
     git_repository *repo,
     diff_direction_t direction,
-    const profile_list_t *filter_profiles,
+    const char *const *filter_names,
+    size_t filter_count,
     const path_filter_t *file_filter,
     const cmd_diff_options_t *opts,
     output_ctx_t *out,
@@ -330,7 +331,7 @@ static error_t *present_diffs_for_direction(
         }
 
         /* Filter 4: Profile filter (CLI filtering) */
-        if (!profile_filter_matches(item->profile, filter_profiles)) {
+        if (!profile_filter_matches(item->profile, filter_names, filter_count)) {
             continue;
         }
 
@@ -1296,7 +1297,8 @@ cleanup:
 static error_t *diff_workspace(
     git_repository *repo,
     profile_list_t *profiles,
-    const profile_list_t *filter_profiles,
+    const char *const *filter_names,
+    size_t filter_count,
     const path_filter_t *file_filter,
     const config_t *config,
     const cmd_diff_options_t *opts,
@@ -1379,7 +1381,7 @@ static error_t *diff_workspace(
 
         err = present_diffs_for_direction(
             diverged, diverged_count, manifest, cache, repo, DIFF_UPSTREAM,
-            filter_profiles, file_filter, opts, out, &upstream_count
+            filter_names, filter_count, file_filter, opts, out, &upstream_count
         );
         if (err) goto cleanup;
 
@@ -1393,7 +1395,7 @@ static error_t *diff_workspace(
 
         err = present_diffs_for_direction(
             diverged, diverged_count, manifest, cache, repo, DIFF_DOWNSTREAM,
-            filter_profiles, file_filter, opts, out, &downstream_count
+            filter_names, filter_count, file_filter, opts, out, &downstream_count
         );
         if (err) goto cleanup;
 
@@ -1407,7 +1409,7 @@ static error_t *diff_workspace(
         /* Single direction */
         err = present_diffs_for_direction(
             diverged, diverged_count, manifest, cache, repo, opts->direction,
-            filter_profiles, file_filter, opts, out, &total_diff_count
+            filter_names, filter_count, file_filter, opts, out, &total_diff_count
         );
         if (err) goto cleanup;
 
@@ -1444,6 +1446,8 @@ error_t *cmd_diff(
     error_t *err = NULL;
     profile_list_t *workspace_profiles = NULL;
     profile_list_t *diff_profiles = NULL;
+    const char **filter_names = NULL;
+    size_t filter_count = 0;
     path_filter_t *file_filter = NULL;
 
     /* Load profiles
@@ -1482,6 +1486,13 @@ error_t *cmd_diff(
 
         err = profile_validate_filter(workspace_profiles, diff_profiles);
         if (err) goto cleanup;
+
+        /* Extract filter names for downstream filtering (name-only consumers) */
+        filter_names = profile_list_extract_names(diff_profiles, &filter_count);
+        if (!filter_names) {
+            err = ERROR(ERR_MEMORY, "Failed to extract filter profile names");
+            goto cleanup;
+        }
     } else {
         diff_profiles = workspace_profiles;
     }
@@ -1541,14 +1552,15 @@ error_t *cmd_diff(
             /* Workspace diff uses workspace_profiles for accurate analysis,
              * diff_profiles for filtering output */
             err = diff_workspace(
-                repo, workspace_profiles, diff_profiles, file_filter,
-                config, opts, out
+                repo, workspace_profiles, filter_names, filter_count,
+                file_filter, config, opts, out
             );
             goto cleanup;
     }
 
 cleanup:
     if (file_filter) path_filter_free(file_filter);
+    if (filter_names) free(filter_names);
     if (diff_profiles && diff_profiles != workspace_profiles) {
         profile_list_free(diff_profiles);
     }

@@ -222,9 +222,10 @@ const workspace_item_t *workspace_get_all_diverged(
  * - profile_filter with no matches: Returns success with count=0
  *
  * @param ws Workspace (must not be NULL)
- * @param profile_filter Optional profile filter (NULL = all orphans)
- *                       When non-NULL, only extracts orphans from profiles
- *                       matching the filter (uses profile_filter_matches)
+ * @param filter_names Optional profile name filter (NULL = all orphans)
+ *                     When non-NULL, only extracts orphans from profiles
+ *                     matching the filter (uses profile_filter_matches)
+ * @param filter_count Number of names in filter (ignored when filter_names is NULL)
  * @param out_file_orphans Output file array (caller frees, NULL to skip)
  * @param out_file_count Output file count (set to 0 if out_file_orphans is NULL)
  * @param out_dir_orphans Output directory array (caller frees, NULL to skip)
@@ -233,7 +234,8 @@ const workspace_item_t *workspace_get_all_diverged(
  */
 error_t *workspace_extract_orphans(
     const workspace_t *ws,
-    const profile_list_t *profile_filter,
+    const char *const *filter_names,
+    size_t filter_count,
     const workspace_item_t ***out_file_orphans,
     size_t *out_file_count,
     const workspace_item_t ***out_dir_orphans,

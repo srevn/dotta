@@ -791,7 +791,7 @@ static error_t *deploy_tracked_directories(
                 );
             }
             /* If required_count == 0, no directories to process - skip message */
-        } else if (opts->profile_scope) {
+        } else if (opts->scope_names) {
             /* Profile filter: ancestors + profile-owned directories */
             printf(
                 "Processing tracked directories (scoped to profile)...\n"
@@ -839,14 +839,14 @@ static error_t *deploy_tracked_directories(
                 }
                 continue;
             }
-        } else if (opts->profile_scope) {
+        } else if (opts->scope_names) {
             /* Profile scope: ancestors OR profile-owned directories
              *
              * Inclusive Ancestry: ancestor directories are always processed
              * to ensure file deployment succeeds, even if owned by different profile.
              */
             if (!in_required &&
-                !profile_filter_matches(dir_entry->profile, opts->profile_scope)) {
+                !profile_filter_matches(dir_entry->profile, opts->scope_names, opts->scope_count)) {
                 if (opts->verbose) {
                     printf(
                         "  Skipped: %s (outside profile scope)\n",
@@ -1163,7 +1163,7 @@ error_t *deploy_execute(
      * determine which directories are ancestors of files being deployed.
      */
     hashmap_t *required_dirs = NULL;
-    if ((opts->targeted_mode || opts->profile_scope) && manifest->count > 0 && state) {
+    if ((opts->targeted_mode || opts->scope_names) && manifest->count > 0 && state) {
         err = calculate_required_directories(manifest, state, &required_dirs);
         if (err) {
             deploy_result_free(result);

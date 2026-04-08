@@ -857,7 +857,8 @@ error_t *profile_validate_filter(
  */
 bool profile_filter_matches(
     const char *profile_name,
-    const profile_list_t *filter
+    const char *const *filter_names,
+    size_t filter_count
 ) {
     /* NULL name never matches (defensive) */
     if (!profile_name) {
@@ -865,18 +866,45 @@ bool profile_filter_matches(
     }
 
     /* NULL filter matches all (no filter = match all) */
-    if (!filter) {
+    if (!filter_names) {
         return true;
     }
 
     /* Check if name is in filter list */
-    for (size_t i = 0; i < filter->count; i++) {
-        if (strcmp(profile_name, filter->profiles[i].name) == 0) {
+    for (size_t i = 0; i < filter_count; i++) {
+        if (strcmp(profile_name, filter_names[i]) == 0) {
             return true;
         }
     }
 
     return false;
+}
+
+/**
+ * Extract name pointers from profile list
+ */
+const char **profile_list_extract_names(
+    const profile_list_t *list,
+    size_t *out_count
+) {
+    if (!out_count) return NULL;
+    *out_count = 0;
+
+    if (!list || list->count == 0) {
+        return NULL;
+    }
+
+    const char **names = malloc(list->count * sizeof(const char *));
+    if (!names) {
+        return NULL;
+    }
+
+    for (size_t i = 0; i < list->count; i++) {
+        names[i] = list->profiles[i].name;
+    }
+
+    *out_count = list->count;
+    return names;
 }
 
 /**

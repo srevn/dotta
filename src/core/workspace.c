@@ -3018,7 +3018,8 @@ const workspace_item_t *workspace_get_all_diverged(
  */
 error_t *workspace_extract_orphans(
     const workspace_t *ws,
-    const profile_list_t *profile_filter,
+    const char *const *filter_names,
+    size_t filter_count,
     const workspace_item_t ***out_file_orphans,
     size_t *out_file_count,
     const workspace_item_t ***out_dir_orphans,
@@ -3049,8 +3050,8 @@ error_t *workspace_extract_orphans(
         if (ws->diverged[i].state == WORKSPACE_STATE_ORPHANED ||
             ws->diverged[i].state == WORKSPACE_STATE_RELEASED) {
             /* Apply profile filter if specified */
-            if (profile_filter &&
-                !profile_filter_matches(ws->diverged[i].profile, profile_filter)) {
+            if (filter_names &&
+                !profile_filter_matches(ws->diverged[i].profile, filter_names, filter_count)) {
                 continue;  /* Skip orphans from other profiles */
             }
 
@@ -3092,8 +3093,8 @@ error_t *workspace_extract_orphans(
         if (ws->diverged[i].state == WORKSPACE_STATE_ORPHANED ||
             ws->diverged[i].state == WORKSPACE_STATE_RELEASED) {
             /* Apply same profile filter as Pass 1 */
-            if (profile_filter &&
-                !profile_filter_matches(ws->diverged[i].profile, profile_filter)) {
+            if (filter_names &&
+                !profile_filter_matches(ws->diverged[i].profile, filter_names, filter_count)) {
                 continue;
             }
 

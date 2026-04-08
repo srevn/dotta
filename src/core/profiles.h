@@ -320,12 +320,30 @@ error_t *profile_validate_filter(
  * NULL name semantics: Returns false (defensive, NULL name never matches).
  *
  * @param profile_name Profile name to check (NULL returns false)
- * @param filter Operation filter (NULL returns true - matches all)
+ * @param filter_names Array of profile names to match against (NULL = match all)
+ * @param filter_count Number of names in filter (ignored when filter_names is NULL)
  * @return true if profile matches filter, false otherwise
  */
 bool profile_filter_matches(
     const char *profile_name,
-    const profile_list_t *filter
+    const char *const *filter_names,
+    size_t filter_count
+);
+
+/**
+ * Extract name pointers from profile list
+ *
+ * Returns a malloc'd array of borrowed const char * pointers into the
+ * profile list's name fields. Caller must free the returned array (not
+ * the strings — they are borrowed from the profile list).
+ *
+ * @param list Profile list (can be NULL)
+ * @param out_count Output count (must not be NULL, set to 0 on NULL/empty/error)
+ * @return Array of name pointers (caller frees), NULL on failure or empty input
+ */
+const char **profile_list_extract_names(
+    const profile_list_t *list,
+    size_t *out_count
 );
 
 /**

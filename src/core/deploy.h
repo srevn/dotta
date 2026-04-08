@@ -61,7 +61,7 @@ typedef struct {
     bool targeted_mode;       /* Scope directory processing to manifest file ancestors */
 
     /**
-     * Profile scope for directory processing
+     * Profile scope for directory processing (name filter)
      *
      * When non-NULL, directory processing is scoped to:
      * 1. Directories that are ancestors of files being deployed
@@ -69,7 +69,8 @@ typedef struct {
      *
      * NULL = process all directories (full sync mode)
      */
-    const profile_list_t *profile_scope;
+    const char *const *scope_names;
+    size_t scope_count;
 } deploy_options_t;
 
 /**

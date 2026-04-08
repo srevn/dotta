@@ -359,7 +359,8 @@ static error_t *filter_items_for_update(
     const workspace_t *ws,
     const cmd_update_options_t *opts,
     const path_filter_t *file_filter,
-    const profile_list_t *operation_profiles,
+    const char *const *filter_names,
+    size_t filter_count,
     const config_t *config,
     output_ctx_t *out,
     const workspace_item_t ***out_items,
@@ -403,7 +404,7 @@ static error_t *filter_items_for_update(
         }
 
         /* Apply profile filter (CLI -p filtering) */
-        if (!profile_filter_matches(item->profile, operation_profiles)) {
+        if (!profile_filter_matches(item->profile, filter_names, filter_count)) {
             continue;
         }
 
@@ -437,7 +438,7 @@ static error_t *filter_items_for_update(
             continue;
         }
         /* Apply profile filter (CLI -p filtering) */
-        if (!profile_filter_matches(item->profile, operation_profiles)) {
+        if (!profile_filter_matches(item->profile, filter_names, filter_count)) {
             continue;
         }
 
@@ -1977,6 +1978,8 @@ error_t *cmd_update(
     error_t *err = NULL;
     profile_list_t *workspace_profiles = NULL;
     profile_list_t *operation_profiles = NULL;
+    const char **filter_names = NULL;
+    size_t filter_count = 0;
     workspace_t *ws = NULL;
     hook_context_t *hook_ctx = NULL;
     char *repo_dir = NULL;
@@ -2033,6 +2036,13 @@ error_t *cmd_update(
         /* Validate: filter profiles must be enabled in workspace */
         err = profile_validate_filter(workspace_profiles, operation_profiles);
         if (err) goto cleanup;
+
+        /* Extract filter names for downstream filtering (name-only consumers) */
+        filter_names = profile_list_extract_names(operation_profiles, &filter_count);
+        if (!filter_names) {
+            err = ERROR(ERR_MEMORY, "Failed to extract filter profile names");
+            goto cleanup;
+        }
     } else {
         /* No CLI filter - share workspace profiles (optimization) */
         operation_profiles = workspace_profiles;
@@ -2157,7 +2167,8 @@ error_t *cmd_update(
      * matches execution - only items from specified profiles are shown.
      */
     err = filter_items_for_update(
-        ws, opts, file_filter, operation_profiles, config, out, &update_items, &update_count
+        ws, opts, file_filter, filter_names, filter_count, config, out,
+        &update_items, &update_count
     );
     if (err) {
         err = error_wrap(err, "Failed to filter items for update");
@@ -2419,6 +2430,7 @@ cleanup:
     if (file_filter) path_filter_free(file_filter);
     if (repo_dir) free(repo_dir);
     /* Free operation profiles only if not shared with workspace profiles */
+    if (filter_names) free(filter_names);
     if (operation_profiles && operation_profiles != workspace_profiles) {
         profile_list_free(operation_profiles);
     }

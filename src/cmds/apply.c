@@ -829,6 +829,8 @@ error_t *cmd_apply(
     state_t *state = NULL;
     profile_list_t *workspace_profiles = NULL;
     profile_list_t *operation_profiles = NULL;
+    const char **filter_names = NULL;
+    size_t filter_count = 0;
     const manifest_t *manifest = NULL;
     manifest_t *deploy_manifest = NULL;
     workspace_t *ws = NULL;
@@ -975,6 +977,15 @@ error_t *cmd_apply(
      */
     bool has_profile_filter = (opts->profiles != NULL && opts->profile_count > 0);
 
+    /* Extract filter names for downstream filtering (name-only consumers) */
+    if (has_profile_filter) {
+        filter_names = profile_list_extract_names(operation_profiles, &filter_count);
+        if (!filter_names) {
+            err = ERROR(ERR_MEMORY, "Failed to extract filter profile names");
+            goto cleanup;
+        }
+    }
+
     /* Create file filter from CLI arguments
      *
      * Extract custom prefixes from operation profiles to enable proper resolution
@@ -1095,7 +1106,7 @@ error_t *cmd_apply(
 
         /* Filter by operation profiles (skip files not in filter) */
         if (entry->source_profile &&
-            !profile_filter_matches(entry->source_profile->name, operation_profiles)) {
+            !profile_filter_matches(entry->source_profile->name, filter_names, filter_count)) {
             continue;
         }
 
@@ -1150,7 +1161,7 @@ error_t *cmd_apply(
 
             /* Filter by operation profiles (skip files not in filter) */
             if (entry->source_profile &&
-                !profile_filter_matches(entry->source_profile->name, operation_profiles)) {
+                !profile_filter_matches(entry->source_profile->name, filter_names, filter_count)) {
                 continue;
             }
 
@@ -1264,8 +1275,8 @@ error_t *cmd_apply(
         size_t total_file_orphans = 0, total_dir_orphans = 0;
 
         err = workspace_extract_orphans(
-            ws, has_profile_filter ? operation_profiles : NULL, &all_file_orphans,
-            &total_file_orphans, &all_dir_orphans, &total_dir_orphans
+            ws, filter_names, filter_count, &all_file_orphans, &total_file_orphans,
+            &all_dir_orphans, &total_dir_orphans
         );
         if (err) {
             err = error_wrap(err, "Failed to extract orphans from workspace");
@@ -1392,7 +1403,7 @@ error_t *cmd_apply(
         }
 
         /* Coherent Scope: same filters as deployment pipeline */
-        if (!profile_filter_matches(all_items[i].profile, operation_profiles)) {
+        if (!profile_filter_matches(all_items[i].profile, filter_names, filter_count)) {
             continue;
         }
         if (!path_filter_matches(file_filter, all_items[i].storage_path)) {
@@ -1444,7 +1455,7 @@ error_t *cmd_apply(
                     continue;
                 }
 
-                if (!profile_filter_matches(all_items[i].profile, operation_profiles)) {
+                if (!profile_filter_matches(all_items[i].profile, filter_names, filter_count)) {
                     continue;
                 }
                 if (!path_filter_matches(file_filter, all_items[i].storage_path)) {
@@ -1546,7 +1557,8 @@ error_t *cmd_apply(
         .skip_unchanged   = opts->skip_unchanged,
         .strict_ownership = config->strict_mode,
         .targeted_mode    = (file_filter != NULL),
-        .profile_scope    = has_profile_filter ? operation_profiles : NULL
+        .scope_names      = filter_names,
+        .scope_count      = filter_count
     };
 
     err = deploy_workspace_preflight(ws, deploy_manifest, &deploy_opts, &preflight);
@@ -2195,7 +2207,7 @@ error_t *cmd_apply(
                 continue;
             }
 
-            if (!profile_filter_matches(all_items[i].profile, operation_profiles)) {
+            if (!profile_filter_matches(all_items[i].profile, filter_names, filter_count)) {
                 continue;
             }
             if (!path_filter_matches(file_filter, all_items[i].storage_path)) {
@@ -2285,6 +2297,7 @@ cleanup:
     if (file_orphans) free(file_orphans);
     if (repaired_paths) hashmap_free(repaired_paths, free);
     if (ws) workspace_free(ws);
+    if (filter_names) free(filter_names);
     if (operation_profiles && operation_profiles != workspace_profiles) {
         profile_list_free(operation_profiles);
     }

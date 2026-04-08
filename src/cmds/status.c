@@ -103,7 +103,8 @@ static void display_enabled_profiles(
  */
 static void display_workspace_status(
     workspace_t *ws,
-    const profile_list_t *profile_filter,
+    const char *const *filter_names,
+    size_t filter_count,
     const manifest_t *manifest,
     output_ctx_t *out
 ) {
@@ -122,13 +123,13 @@ static void display_workspace_status(
     size_t filtered_diverged = 0;
     size_t hidden_count = 0;
 
-    if (profile_filter) {
+    if (filter_names) {
         /* Count total managed files from manifest for filtered profile(s) */
         if (manifest) {
             for (size_t i = 0; i < manifest->count; i++) {
                 if (manifest->entries[i].source_profile &&
                     profile_filter_matches(
-                    manifest->entries[i].source_profile->name, profile_filter
+                    manifest->entries[i].source_profile->name, filter_names, filter_count
                     )) {
                     profile_file_count++;
                 }
@@ -137,7 +138,7 @@ static void display_workspace_status(
 
         /* Partition diverged items into filtered vs hidden */
         for (size_t i = 0; i < all_count; i++) {
-            if (profile_filter_matches(all_items[i].profile, profile_filter)) {
+            if (profile_filter_matches(all_items[i].profile, filter_names, filter_count)) {
                 filtered_diverged++;
             } else {
                 hidden_count++;
@@ -150,8 +151,8 @@ static void display_workspace_status(
      * - Clean with hidden divergence from other profiles: always show
      * - Clean with no divergence anywhere: show only with verbose
      */
-    bool has_divergence = profile_filter ? (filtered_diverged > 0)
-                                         : (ws_status != WORKSPACE_CLEAN);
+    bool has_divergence = filter_names ? (filtered_diverged > 0)
+                                       : (ws_status != WORKSPACE_CLEAN);
     if (!has_divergence && hidden_count == 0 && !output_is_verbose(out)) {
         return;
     }
@@ -159,7 +160,7 @@ static void display_workspace_status(
     output_section(out, OUTPUT_NORMAL, "Workspace status");
 
     /* Display status line */
-    if (profile_filter) {
+    if (filter_names) {
         /* Profile-scoped status: reflects the filtered profile */
         if (filtered_diverged == 0) {
             if (profile_file_count > 0) {
@@ -226,7 +227,7 @@ static void display_workspace_status(
     /* Show sectioned output for dirty/invalid workspace */
     if (ws_status != WORKSPACE_CLEAN) {
         /* When filter active and filtered profile is clean, skip detailed sections */
-        if (!profile_filter || filtered_diverged > 0) {
+        if (!filter_names || filtered_diverged > 0) {
 
             /* Single allocation for all category pointers (5 categories × all_count slots)
              * Memory layout: [uncommitted][undeployed][new_files][orphaned][reassigned]
@@ -261,7 +262,8 @@ static void display_workspace_status(
                  * When profile filter is active, only show items from matching
                  * profiles. This ensures status output matches what apply would do.
                  */
-                if (profile_filter && !profile_filter_matches(item->profile, profile_filter)) {
+                if (filter_names &&
+                    !profile_filter_matches(item->profile, filter_names, filter_count)) {
                     continue;  /* Skip items from other profiles */
                 }
 
@@ -483,7 +485,7 @@ static void display_workspace_status(
         }
 
         /* Show hidden items note when profile filter is active */
-        if (profile_filter && hidden_count > 0) {
+        if (filter_names && hidden_count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "  {dim}(%zu item%s from other profiles hidden){reset}\n",
                 hidden_count, hidden_count == 1 ? "" : "s"
@@ -887,6 +889,8 @@ error_t *cmd_status(
     error_t *err = NULL;
     profile_list_t *workspace_profiles = NULL;
     profile_list_t *display_profiles = NULL;
+    const char **filter_names = NULL;
+    size_t filter_count = 0;
     const manifest_t *manifest = NULL;
     const state_t *state = NULL;
     workspace_t *ws = NULL;
@@ -932,6 +936,13 @@ error_t *cmd_status(
 
         err = profile_validate_filter(workspace_profiles, display_profiles);
         if (err) goto cleanup;
+
+        /* Extract filter names for downstream filtering (name-only consumers) */
+        filter_names = profile_list_extract_names(display_profiles, &filter_count);
+        if (!filter_names) {
+            err = ERROR(ERR_MEMORY, "Failed to extract filter profile names");
+            goto cleanup;
+        }
     } else {
         display_profiles = workspace_profiles;
     }
@@ -1044,9 +1055,8 @@ error_t *cmd_status(
      * pointer comparison and matches the pattern used in apply.c.
      */
     if (opts->show_local) {
-        bool has_display_filter = (opts->profiles != NULL && opts->profile_count > 0);
         display_workspace_status(
-            ws, has_display_filter ? display_profiles : NULL, manifest, out
+            ws, filter_names, filter_count, manifest, out
         );
     }
 
@@ -1064,7 +1074,8 @@ error_t *cmd_status(
 
 cleanup:
     /* Free all resources (safe with NULL pointers) */
-    workspace_free(ws);
+    if (ws) workspace_free(ws);
+    if (filter_names) free(filter_names);
     if (display_profiles && display_profiles != workspace_profiles) {
         profile_list_free(display_profiles);
     }

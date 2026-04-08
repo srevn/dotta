@@ -15,9 +15,9 @@
  * Verbosity levels
  */
 typedef enum {
-    OUTPUT_QUIET   = 0, /* Suppress all output except errors */
-    OUTPUT_NORMAL  = 1, /* Normal output */
-    OUTPUT_VERBOSE = 2  /* Verbose output */
+    OUTPUT_QUIET   = 0,   /* Suppress all output except errors */
+    OUTPUT_NORMAL  = 1,   /* Normal output */
+    OUTPUT_VERBOSE = 2    /* Verbose output */
 } output_verbosity_t;
 
 /**
@@ -359,11 +359,6 @@ void output_format_size(size_t bytes, char *buffer, size_t buffer_size);
  * @param message Confirmation message to display
  * @param default_value Default if user just presses Enter (true=Y, false=N)
  * @return true if user confirms (y/Y), false otherwise
- *
- * Example:
- *   if (output_confirm(out, "Delete all files?", false)) {
- *       // User confirmed
- *   }
  */
 bool output_confirm(
     const output_ctx_t *ctx,
@@ -383,12 +378,6 @@ bool output_confirm(
  * @param default_value Default for Enter key in interactive mode
  * @param non_interactive_default Return value when not a TTY
  * @return true if confirmed or non_interactive_default if not a TTY
- *
- * Example:
- *   // In sync operations, auto-confirm non-destructive pulls
- *   if (output_confirm_or_default(out, "Pull changes?", true, true)) {
- *       // Proceed
- *   }
  */
 bool output_confirm_or_default(
     const output_ctx_t *ctx,
@@ -398,26 +387,20 @@ bool output_confirm_or_default(
 );
 
 /**
- * Prompt for destructive operation (checks config)
+ * Prompt for destructive operation
  *
- * Specialized confirmation for destructive operations. Respects the
- * config->confirm_destructive setting and force_flag. Shows warning
+ * Specialized confirmation for destructive operations. Shows warning
  * before prompting. Always defaults to NO for safety.
  *
  * @param ctx Output context
- * @param config Config (checks confirm_destructive setting, can be NULL)
+ * @param confirm_destructive Whether to require confirmation (false = skip prompt)
  * @param message Confirmation message
  * @param force_flag If true, skip confirmation and return true
  * @return true if should proceed, false if user declined
- *
- * Example:
- *   if (output_confirm_destructive(out, config, "Remove all files?", opts->force)) {
- *       // User confirmed or force flag set
- *   }
  */
 bool output_confirm_destructive(
     const output_ctx_t *ctx,
-    const config_t *config,
+    bool confirm_destructive,
     const char *message,
     bool force_flag
 );

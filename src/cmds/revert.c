@@ -1146,7 +1146,9 @@ error_t *cmd_revert(
     }
 
     /* Step 8: Prompt for confirmation (unless --force or config disables) */
-    if (!output_confirm_destructive(out, config, "Revert file?", opts->force)) {
+    if (!output_confirm_destructive(
+        out, config ? config->confirm_destructive : true, "Revert file?", opts->force
+        )) {
         output_info(out, OUTPUT_NORMAL, "Aborted.");
         user_aborted = true;
         goto cleanup;

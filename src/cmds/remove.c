@@ -676,7 +676,9 @@ static bool confirm_profile_deletion(
     }
     output_newline(out, OUTPUT_NORMAL);
 
-    bool confirmed = output_confirm_destructive(out, config, "Continue?", opts->force);
+    bool confirmed = output_confirm_destructive(
+        out, config ? config->confirm_destructive : true, "Continue?", opts->force
+    );
 
     return confirmed;
 }

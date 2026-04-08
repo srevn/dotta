@@ -18,7 +18,6 @@
 
 #include "base/output.h"
 
-#include <config.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -854,15 +853,13 @@ bool output_confirm_or_default(
 
 bool output_confirm_destructive(
     const output_ctx_t *ctx,
-    const config_t *config,
+    bool confirm_destructive,
     const char *message,
     bool force_flag
 ) {
     if (!ctx || !message) return false;
     if (force_flag) return true;
-
-    bool require_confirmation = config ? config->confirm_destructive : true;
-    if (!require_confirmation) return true;
+    if (!confirm_destructive) return true;
 
     if (!isatty(STDIN_FILENO)) {
         styled_fputs(

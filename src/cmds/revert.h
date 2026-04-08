@@ -10,6 +10,7 @@
 
 #include <git2.h>
 #include <types.h>
+#include <config.h>
 
 /**
  * Revert command options

@@ -867,6 +867,7 @@ static error_t *extract_elevation_paths_from_manifest(
 
     *paths_out = paths;
     *count_out = count;
+
     return NULL;
 }
 
@@ -876,6 +877,7 @@ static error_t *extract_elevation_paths_from_manifest(
 error_t *cmd_status(
     git_repository *repo,
     const config_t *config,
+    output_ctx_t *out,
     const cmd_status_options_t *opts
 ) {
     CHECK_NULL(repo);
@@ -888,14 +890,6 @@ error_t *cmd_status(
     const manifest_t *manifest = NULL;
     const state_t *state = NULL;
     workspace_t *ws = NULL;
-    output_ctx_t *out = NULL;
-
-    /* Create output context from config */
-    out = output_create_from_config(config);
-    if (!out) {
-        err = ERROR(ERR_MEMORY, "Failed to create output context");
-        goto cleanup;
-    }
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1075,7 +1069,6 @@ cleanup:
         profile_list_free(display_profiles);
     }
     profile_list_free(workspace_profiles);
-    output_free(out);
 
     return err;
 }

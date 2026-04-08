@@ -28,8 +28,22 @@ typedef struct {
 } cmd_show_options_t;
 
 /**
- * Execute show command
+ * Show file content or commit details
+ *
+ * In SHOW_FILE mode, displays the content of a file from a profile branch.
+ * In SHOW_COMMIT mode, displays a commit with its diff.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param config Configuration (must not be NULL)
+ * @param out Output context (must not be NULL)
+ * @param opts Command options (must not be NULL)
+ * @return Error or NULL on success
  */
-error_t *cmd_show(git_repository *repo, const config_t *config, const cmd_show_options_t *opts);
+error_t *cmd_show(
+    git_repository *repo,
+    const config_t *config,
+    output_ctx_t *out,
+    const cmd_show_options_t *opts
+);
 
 #endif /* DOTTA_CMD_SHOW_H */

@@ -788,17 +788,15 @@ static error_t *list_file_history(
 /**
  * List command implementation
  */
-error_t *cmd_list(git_repository *repo, const config_t *config, const cmd_list_options_t *opts) {
+error_t *cmd_list(
+    git_repository *repo,
+    output_ctx_t *out,
+    const cmd_list_options_t *opts
+) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
     error_t *err = NULL;
-
-    /* Create output context from config */
-    output_ctx_t *out = output_create_from_config(config);
-    if (!out) {
-        return ERROR(ERR_MEMORY, "Failed to create output context");
-    }
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -820,9 +818,6 @@ error_t *cmd_list(git_repository *repo, const config_t *config, const cmd_list_o
     } else {
         err = ERROR(ERR_INVALID_ARG, "Invalid list mode");
     }
-
-    /* Cleanup */
-    output_free(out);
 
     return err;
 }

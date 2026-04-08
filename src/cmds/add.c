@@ -198,6 +198,7 @@ static error_t *collect_files_from_dir(
 
     closedir(dir);
     *out_files = files;
+
     return NULL;
 }
 
@@ -950,6 +951,7 @@ cleanup:
 error_t *cmd_add(
     git_repository *repo,
     const config_t *config,
+    output_ctx_t *out,
     const cmd_add_options_t *opts
 ) {
     CHECK_NULL(repo);
@@ -958,7 +960,6 @@ error_t *cmd_add(
     if (err) return err;
 
     /* Initialize all resources to NULL for safe cleanup */
-    output_ctx_t *out = NULL;
     ignore_context_t *ignore_ctx = NULL;
     char *repo_dir = NULL;
     hook_context_t *hook_ctx = NULL;
@@ -976,13 +977,6 @@ error_t *cmd_add(
     const char **preflight_storage_paths = NULL;
     char **preflight_allocated_paths = NULL;
     size_t preflight_storage_count = 0;
-
-    /* Create output context from config */
-    out = output_create_from_config(config);
-    if (!out) {
-        err = ERROR(ERR_MEMORY, "Failed to create output context");
-        goto cleanup;
-    }
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1802,7 +1796,6 @@ cleanup:
         free(preflight_allocated_paths);
     }
     if (preflight_storage_paths) free(preflight_storage_paths);
-    if (out) output_free(out);
 
     return err;
 }

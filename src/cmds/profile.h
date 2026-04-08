@@ -60,9 +60,10 @@ typedef struct {
  * Execute profile command
  *
  * @param repo Repository (must not be NULL)
+ * @param out Output context (must not be NULL)
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_profile(git_repository *repo, const config_t *config, const cmd_profile_options_t *opts);
+error_t *cmd_profile(git_repository *repo, output_ctx_t *out, const cmd_profile_options_t *opts);
 
 #endif /* DOTTA_CMD_PROFILE_H */

@@ -896,6 +896,7 @@ static error_t *cleanup_metadata(
 static error_t *remove_files_from_profile(
     git_repository *repo,
     const config_t *config,
+    output_ctx_t *out,
     const cmd_remove_options_t *opts
 ) {
     CHECK_NULL(repo);
@@ -903,7 +904,6 @@ static error_t *remove_files_from_profile(
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
-    output_ctx_t *out = NULL;
     string_array_t *storage_paths = NULL;
     string_array_t *filesystem_paths = NULL;
     string_array_t **other_profiles = NULL;
@@ -914,13 +914,6 @@ static error_t *remove_files_from_profile(
     string_array_t *removed_paths = NULL;
     state_t *state = NULL;
     bool profile_enabled = false;
-
-    /* Create output context from config */
-    out = output_create_from_config(config);
-    if (!out) {
-        err = ERROR(ERR_MEMORY, "Failed to create output context");
-        goto cleanup;
-    }
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1335,7 +1328,6 @@ cleanup:
     if (filesystem_paths) string_array_free(filesystem_paths);
     if (storage_paths) string_array_free(storage_paths);
     if (state) state_free(state);
-    if (out) output_free(out);
 
     return err;
 }
@@ -1346,6 +1338,7 @@ cleanup:
 static error_t *delete_profile_branch(
     git_repository *repo,
     const config_t *config,
+    output_ctx_t *out,
     const cmd_remove_options_t *opts
 ) {
     CHECK_NULL(repo);
@@ -1353,7 +1346,6 @@ static error_t *delete_profile_branch(
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
-    output_ctx_t *out = NULL;
     char *remote_name = NULL;
     upstream_info_t *upstream_info = NULL;
     state_t *state = NULL;
@@ -1365,13 +1357,6 @@ static error_t *delete_profile_branch(
     string_array_t *hook_fs_paths = NULL;
     char *hook_custom_prefix = NULL;
     bool performed = false;
-
-    /* Create output context from config */
-    out = output_create_from_config(config);
-    if (!out) {
-        err = ERROR(ERR_MEMORY, "Failed to create output context");
-        goto cleanup;
-    }
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1958,7 +1943,6 @@ cleanup:
     if (state) state_free(state);
     if (upstream_info) upstream_info_free(upstream_info);
     if (remote_name) free(remote_name);
-    if (out) output_free(out);
     if (files) string_array_free(files);
     if (profile) profile_free(profile);
     if (all_profiles) profile_list_free(all_profiles);
@@ -1969,7 +1953,12 @@ cleanup:
 /**
  * Remove command implementation
  */
-error_t *cmd_remove(git_repository *repo, const config_t *config, const cmd_remove_options_t *opts) {
+error_t *cmd_remove(
+    git_repository *repo,
+    const config_t *config,
+    output_ctx_t *out,
+    const cmd_remove_options_t *opts
+) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
@@ -1981,8 +1970,8 @@ error_t *cmd_remove(git_repository *repo, const config_t *config, const cmd_remo
 
     /* Branch: Delete profile or remove files */
     if (opts->delete_profile) {
-        return delete_profile_branch(repo, config, opts);
+        return delete_profile_branch(repo, config, out, opts);
     }
 
-    return remove_files_from_profile(repo, config, opts);
+    return remove_files_from_profile(repo, config, out, opts);
 }

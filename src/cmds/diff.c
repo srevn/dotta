@@ -562,6 +562,7 @@ static error_t *print_diff_stats(
     output_newline(out, OUTPUT_NORMAL);
 
     git_diff_stats_free(stats);
+
     return NULL;
 }
 
@@ -826,6 +827,7 @@ static error_t *compare_manifest_to_filesystem(
 cleanup:
     compare_free_diff(diff);
     content_cache_free(cache);
+
     return err;
 }
 
@@ -1423,6 +1425,7 @@ static error_t *diff_workspace(
 
 cleanup:
     workspace_free(ws);
+
     return err;
 }
 
@@ -1432,23 +1435,16 @@ cleanup:
 error_t *cmd_diff(
     git_repository *repo,
     const config_t *config,
+    output_ctx_t *out,
     const cmd_diff_options_t *opts
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
     error_t *err = NULL;
-    output_ctx_t *out = NULL;
     profile_list_t *workspace_profiles = NULL;
     profile_list_t *diff_profiles = NULL;
     path_filter_t *file_filter = NULL;
-
-    /* Create output context from config */
-    out = output_create_from_config(config);
-    if (!out) {
-        err = ERROR(ERR_MEMORY, "Failed to create output context");
-        goto cleanup;
-    }
 
     /* Load profiles
      *
@@ -1557,7 +1553,6 @@ cleanup:
         profile_list_free(diff_profiles);
     }
     if (workspace_profiles) profile_list_free(workspace_profiles);
-    if (out) output_free(out);
 
     return err;
 }

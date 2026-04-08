@@ -817,6 +817,7 @@ static bool needs_deployment(const workspace_item_t *ws_item) {
 error_t *cmd_apply(
     git_repository *repo,
     const config_t *config,
+    output_ctx_t *out,
     const cmd_apply_options_t *opts
 ) {
     CHECK_NULL(repo);
@@ -824,7 +825,6 @@ error_t *cmd_apply(
 
     /* Declare all resources at the top, initialized to NULL */
     error_t *err = NULL;
-    output_ctx_t *out = NULL;
     char *repo_dir = NULL;
     state_t *state = NULL;
     profile_list_t *workspace_profiles = NULL;
@@ -844,13 +844,6 @@ error_t *cmd_apply(
     char *profiles_str = NULL;
     deploy_result_t *deploy_res = NULL;
     path_filter_t *file_filter = NULL;
-
-    /* Create output context from config */
-    out = output_create_from_config(config);
-    if (!out) {
-        err = ERROR(ERR_MEMORY, "Failed to create output context");
-        goto cleanup;
-    }
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -2298,7 +2291,6 @@ cleanup:
     if (workspace_profiles) profile_list_free(workspace_profiles);
     if (state) state_free(state);
     if (repo_dir) free(repo_dir);
-    if (out) output_free(out);
 
     return err;
 }

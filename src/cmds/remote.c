@@ -93,15 +93,10 @@ static bool validate_remote_url(const char *url) {
  */
 static error_t *remote_list(
     git_repository *repo,
-    const config_t *config,
+    output_ctx_t *out,
     bool verbose
 ) {
     CHECK_NULL(repo);
-
-    output_ctx_t *out = output_create_from_config(config);
-    if (!out) {
-        return ERROR(ERR_MEMORY, "Failed to create output context");
-    }
 
     if (verbose) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
@@ -110,14 +105,12 @@ static error_t *remote_list(
     git_strarray remotes = { 0 };
     int git_err = git_remote_list(&remotes, repo);
     if (git_err < 0) {
-        output_free(out);
         return error_from_git(git_err);
     }
 
     if (remotes.count == 0) {
         output_info(out, OUTPUT_NORMAL, "No remotes configured");
         git_strarray_dispose(&remotes);
-        output_free(out);
         return NULL;
     }
 
@@ -131,7 +124,6 @@ static error_t *remote_list(
             git_err = git_remote_lookup(&remote, repo, remote_name);
             if (git_err < 0) {
                 git_strarray_dispose(&remotes);
-                output_free(out);
                 return error_from_git(git_err);
             }
 
@@ -165,7 +157,7 @@ static error_t *remote_list(
     output_newline(out, OUTPUT_NORMAL);
 
     git_strarray_dispose(&remotes);
-    output_free(out);
+
     return NULL;
 }
 
@@ -174,7 +166,7 @@ static error_t *remote_list(
  */
 static error_t *remote_add(
     git_repository *repo,
-    const config_t *config,
+    output_ctx_t *out,
     const char *name,
     const char *url
 ) {
@@ -182,14 +174,8 @@ static error_t *remote_add(
     CHECK_NULL(name);
     CHECK_NULL(url);
 
-    output_ctx_t *out = output_create_from_config(config);
-    if (!out) {
-        return ERROR(ERR_MEMORY, "Failed to create output context");
-    }
-
     /* Validate remote name */
     if (!validate_remote_name(name)) {
-        output_free(out);
         return ERROR(
             ERR_INVALID_ARG, "Invalid remote name '%s'\n"
             "Only letters, numbers, hyphens, and underscores allowed",
@@ -199,7 +185,6 @@ static error_t *remote_add(
 
     /* Validate URL */
     if (!validate_remote_url(url)) {
-        output_free(out);
         return ERROR(
             ERR_INVALID_ARG, "Invalid remote URL '%s'\n"
             "Expected: https://..., git@host:path, ssh://..., or /local/path",
@@ -213,7 +198,6 @@ static error_t *remote_add(
     if (git_err == 0) {
         /* Remote exists */
         git_remote_free(existing);
-        output_free(out);
         return ERROR(
             ERR_EXISTS, "Remote '%s' already exists\n"
             "Hint: Use 'dotta remote set-url %s <url>' to change the URL",
@@ -221,7 +205,6 @@ static error_t *remote_add(
         );
     } else if (git_err != GIT_ENOTFOUND) {
         /* Unexpected error */
-        output_free(out);
         return error_from_git(git_err);
     }
 
@@ -229,16 +212,17 @@ static error_t *remote_add(
     git_remote *remote = NULL;
     git_err = git_remote_create(&remote, repo, name, url);
     if (git_err < 0) {
-        output_free(out);
         return error_from_git(git_err);
     }
 
     git_remote_free(remote);
 
     /* Success message */
-    output_success(out, OUTPUT_NORMAL, "Remote '{cyan}%s{reset}' added successfully", name);
+    output_success(
+        out, OUTPUT_NORMAL, "Remote '{cyan}%s{reset}' added successfully",
+        name
+    );
 
-    output_free(out);
     return NULL;
 }
 
@@ -247,25 +231,18 @@ static error_t *remote_add(
  */
 static error_t *remote_remove(
     git_repository *repo,
-    const config_t *config,
+    output_ctx_t *out,
     const char *name
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
 
-    output_ctx_t *out = output_create_from_config(config);
-    if (!out) {
-        return ERROR(ERR_MEMORY, "Failed to create output context");
-    }
-
     /* Check if remote exists */
     git_remote *remote = NULL;
     int git_err = git_remote_lookup(&remote, repo, name);
     if (git_err == GIT_ENOTFOUND) {
-        output_free(out);
         return ERROR(ERR_NOT_FOUND, "Remote '%s' not found", name);
     } else if (git_err < 0) {
-        output_free(out);
         return error_from_git(git_err);
     }
     git_remote_free(remote);
@@ -273,14 +250,15 @@ static error_t *remote_remove(
     /* Delete remote */
     git_err = git_remote_delete(repo, name);
     if (git_err < 0) {
-        output_free(out);
         return error_from_git(git_err);
     }
 
     /* Success message */
-    output_success(out, OUTPUT_NORMAL, "Removed remote '{cyan}%s{reset}'", name);
+    output_success(
+        out, OUTPUT_NORMAL, "Removed remote '{cyan}%s{reset}'",
+        name
+    );
 
-    output_free(out);
     return NULL;
 }
 
@@ -289,7 +267,7 @@ static error_t *remote_remove(
  */
 static error_t *remote_set_url(
     git_repository *repo,
-    const config_t *config,
+    output_ctx_t *out,
     const char *name,
     const char *new_url
 ) {
@@ -297,14 +275,8 @@ static error_t *remote_set_url(
     CHECK_NULL(name);
     CHECK_NULL(new_url);
 
-    output_ctx_t *out = output_create_from_config(config);
-    if (!out) {
-        return ERROR(ERR_MEMORY, "Failed to create output context");
-    }
-
     /* Validate URL */
     if (!validate_remote_url(new_url)) {
-        output_free(out);
         return ERROR(
             ERR_INVALID_ARG, "Invalid remote URL '%s'\n"
             "Expected: https://..., git@host:path, ssh://..., or /local/path",
@@ -316,10 +288,8 @@ static error_t *remote_set_url(
     git_remote *remote = NULL;
     int git_err = git_remote_lookup(&remote, repo, name);
     if (git_err == GIT_ENOTFOUND) {
-        output_free(out);
         return ERROR(ERR_NOT_FOUND, "Remote '%s' not found", name);
     } else if (git_err < 0) {
-        output_free(out);
         return error_from_git(git_err);
     }
     git_remote_free(remote);
@@ -327,17 +297,15 @@ static error_t *remote_set_url(
     /* Set new URL */
     git_err = git_remote_set_url(repo, name, new_url);
     if (git_err < 0) {
-        output_free(out);
         return error_from_git(git_err);
     }
 
     /* Success message */
     output_success(
-        out, OUTPUT_NORMAL,
-        "Remote '{cyan}%s{reset}' URL updated", name
+        out, OUTPUT_NORMAL, "Remote '{cyan}%s{reset}' URL updated",
+        name
     );
 
-    output_free(out);
     return NULL;
 }
 
@@ -346,7 +314,7 @@ static error_t *remote_set_url(
  */
 static error_t *remote_rename(
     git_repository *repo,
-    const config_t *config,
+    output_ctx_t *out,
     const char *old_name,
     const char *new_name
 ) {
@@ -354,14 +322,8 @@ static error_t *remote_rename(
     CHECK_NULL(old_name);
     CHECK_NULL(new_name);
 
-    output_ctx_t *out = output_create_from_config(config);
-    if (!out) {
-        return ERROR(ERR_MEMORY, "Failed to create output context");
-    }
-
     /* Validate new name */
     if (!validate_remote_name(new_name)) {
-        output_free(out);
         return ERROR(
             ERR_INVALID_ARG, "Invalid remote name '%s'\n"
             "Only letters, numbers, hyphens, and underscores allowed",
@@ -373,10 +335,8 @@ static error_t *remote_rename(
     git_remote *remote = NULL;
     int git_err = git_remote_lookup(&remote, repo, old_name);
     if (git_err == GIT_ENOTFOUND) {
-        output_free(out);
         return ERROR(ERR_NOT_FOUND, "Remote '%s' not found", old_name);
     } else if (git_err < 0) {
-        output_free(out);
         return error_from_git(git_err);
     }
     git_remote_free(remote);
@@ -385,10 +345,8 @@ static error_t *remote_rename(
     git_err = git_remote_lookup(&remote, repo, new_name);
     if (git_err == 0) {
         git_remote_free(remote);
-        output_free(out);
         return ERROR(ERR_EXISTS, "Remote '%s' already exists", new_name);
     } else if (git_err != GIT_ENOTFOUND) {
-        output_free(out);
         return error_from_git(git_err);
     }
 
@@ -398,7 +356,9 @@ static error_t *remote_rename(
 
     if (problems.count > 0) {
         /* Show warnings about problematic refspecs */
-        output_warning(out, OUTPUT_NORMAL, "The following refspecs could not be updated:");
+        output_warning(
+            out, OUTPUT_NORMAL, "The following refspecs could not be updated:"
+        );
 
         for (size_t i = 0; i < problems.count; i++) {
             output_print(
@@ -411,7 +371,6 @@ static error_t *remote_rename(
     git_strarray_dispose(&problems);
 
     if (git_err < 0) {
-        output_free(out);
         return error_from_git(git_err);
     }
 
@@ -421,7 +380,6 @@ static error_t *remote_rename(
         old_name, new_name
     );
 
-    output_free(out);
     return NULL;
 }
 
@@ -430,25 +388,18 @@ static error_t *remote_rename(
  */
 static error_t *remote_show(
     git_repository *repo,
-    const config_t *config,
+    output_ctx_t *out,
     const char *name
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
 
-    output_ctx_t *out = output_create_from_config(config);
-    if (!out) {
-        return ERROR(ERR_MEMORY, "Failed to create output context");
-    }
-
     /* Lookup remote */
     git_remote *remote = NULL;
     int git_err = git_remote_lookup(&remote, repo, name);
     if (git_err == GIT_ENOTFOUND) {
-        output_free(out);
         return ERROR(ERR_NOT_FOUND, "Remote '%s' not found", name);
     } else if (git_err < 0) {
-        output_free(out);
         return error_from_git(git_err);
     }
 
@@ -498,7 +449,7 @@ static error_t *remote_show(
     }
 
     git_remote_free(remote);
-    output_free(out);
+
     return NULL;
 }
 
@@ -507,7 +458,7 @@ static error_t *remote_show(
  */
 error_t *cmd_remote(
     git_repository *repo,
-    const config_t *config,
+    output_ctx_t *out,
     const cmd_remote_options_t *opts
 ) {
     CHECK_NULL(repo);
@@ -515,7 +466,7 @@ error_t *cmd_remote(
 
     switch (opts->subcommand) {
         case REMOTE_LIST:
-            return remote_list(repo, config, opts->verbose);
+            return remote_list(repo, out, opts->verbose);
 
         case REMOTE_ADD:
             if (!opts->name || !opts->url) {
@@ -523,13 +474,13 @@ error_t *cmd_remote(
                     ERR_INVALID_ARG, "Remote name and URL are required"
                 );
             }
-            return remote_add(repo, config, opts->name, opts->url);
+            return remote_add(repo, out, opts->name, opts->url);
 
         case REMOTE_REMOVE:
             if (!opts->name) {
                 return ERROR(ERR_INVALID_ARG, "Remote name is required");
             }
-            return remote_remove(repo, config, opts->name);
+            return remote_remove(repo, out, opts->name);
 
         case REMOTE_SET_URL:
             if (!opts->name || !opts->url) {
@@ -537,7 +488,7 @@ error_t *cmd_remote(
                     ERR_INVALID_ARG, "Remote name and new URL are required"
                 );
             }
-            return remote_set_url(repo, config, opts->name, opts->url);
+            return remote_set_url(repo, out, opts->name, opts->url);
 
         case REMOTE_RENAME:
             if (!opts->name || !opts->new_name) {
@@ -545,13 +496,13 @@ error_t *cmd_remote(
                     ERR_INVALID_ARG, "Old and new remote names are required"
                 );
             }
-            return remote_rename(repo, config, opts->name, opts->new_name);
+            return remote_rename(repo, out, opts->name, opts->new_name);
 
         case REMOTE_SHOW:
             if (!opts->name) {
                 return ERROR(ERR_INVALID_ARG, "Remote name is required");
             }
-            return remote_show(repo, config, opts->name);
+            return remote_show(repo, out, opts->name);
 
         default:
             return ERROR(ERR_INVALID_ARG, "Unknown remote subcommand");

@@ -93,6 +93,7 @@ static error_t *count_encrypted_files(
     metadata_free(metadata);
     string_array_free(profile_names);
     state_free(state);
+
     return NULL;
 }
 
@@ -419,15 +420,14 @@ static error_t *cmd_key_status(
 /**
  * Execute key command
  */
-error_t *cmd_key(git_repository *repo, const config_t *config, const cmd_key_options_t *opts) {
+error_t *cmd_key(
+    git_repository *repo,
+    const config_t *config,
+    output_ctx_t *out,
+    const cmd_key_options_t *opts
+) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
-
-    /* Create output context */
-    output_ctx_t *out = output_create_from_config(config);
-    if (!out) {
-        return ERROR(ERR_MEMORY, "Failed to create output context");
-    }
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -457,6 +457,5 @@ error_t *cmd_key(git_repository *repo, const config_t *config, const cmd_key_opt
             break;
     }
 
-    output_free(out);
     return err;
 }

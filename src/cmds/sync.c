@@ -311,6 +311,7 @@ static error_t *pull_branch_ff(
 
     git_reference_free(updated_ref);
     *updated = true;
+
     return NULL;
 }
 
@@ -579,6 +580,7 @@ static bool sync_manifest(
     if (out_removed) *out_removed = removed;
     if (out_fallbacks) *out_fallbacks = fallbacks;
     if (out_skipped) *out_skipped = skipped;
+
     return true;
 }
 
@@ -647,6 +649,7 @@ static error_t *attempt_rollback(
     }
 
     output_info(out, OUTPUT_NORMAL, "     ↺ Rolled back to original state");
+
     return NULL;
 }
 
@@ -1303,13 +1306,17 @@ static error_t *sync_push_phase(
 /**
  * Sync command implementation
  */
-error_t *cmd_sync(git_repository *repo, const config_t *config, const cmd_sync_options_t *opts) {
+error_t *cmd_sync(
+    git_repository *repo,
+    const config_t *config,
+    output_ctx_t *out,
+    const cmd_sync_options_t *opts
+) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
     /* Declare all resources, initialized to NULL */
     error_t *err = NULL;
-    output_ctx_t *out = NULL;
     profile_list_t *workspace_profiles = NULL;
     profile_list_t *sync_profiles = NULL;
     sync_results_t *results = NULL;
@@ -1339,13 +1346,6 @@ error_t *cmd_sync(git_repository *repo, const config_t *config, const cmd_sync_o
     }
     free(current_branch);
     current_branch = NULL;
-
-    /* Create output context from config */
-    out = output_create_from_config(config);
-    if (!out) {
-        err = ERROR(ERR_MEMORY, "Failed to create output context");
-        goto cleanup;
-    }
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1849,7 +1849,6 @@ cleanup:
     if (workspace_profiles) {
         profile_list_free(workspace_profiles);
     }
-    if (out) output_free(out);
 
     return err;
 }

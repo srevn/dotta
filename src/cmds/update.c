@@ -180,6 +180,7 @@ cleanup:
     if (target) free(target);
     if (parent) free(parent);
     if (dest_path) free(dest_path);
+
     return err;
 }
 
@@ -311,6 +312,7 @@ static bool is_update_candidate(
              * - RELEASED: handled by apply command */
             return false;
     }
+
     return false;
 }
 
@@ -444,6 +446,7 @@ static error_t *filter_items_for_update(
 
     *out_items = results;
     *count_out = match_count;
+
     return NULL;
 }
 
@@ -531,6 +534,7 @@ static error_t *group_items_by_profile(
     }
 
     *out_groups = groups;
+
     return NULL;
 }
 
@@ -1154,6 +1158,7 @@ static error_t *flatten_items_to_array(
 
     *out_items = items;
     *out_count = total_count;
+
     return NULL;
 }
 
@@ -1951,6 +1956,7 @@ static error_t *update_confirm_operation(
     }
 
     *result = CONFIRM_PROCEED;
+
     return NULL;
 }
 
@@ -1960,6 +1966,7 @@ static error_t *update_confirm_operation(
 error_t *cmd_update(
     git_repository *repo,
     const config_t *config,
+    output_ctx_t *out,
     const cmd_update_options_t *opts
 ) {
     CHECK_NULL(repo);
@@ -1968,7 +1975,6 @@ error_t *cmd_update(
 
     /* Declare all resources at top, initialized to NULL */
     error_t *err = NULL;
-    output_ctx_t *out = NULL;
     profile_list_t *workspace_profiles = NULL;
     profile_list_t *operation_profiles = NULL;
     workspace_t *ws = NULL;
@@ -1979,13 +1985,6 @@ error_t *cmd_update(
     const workspace_item_t **update_items = NULL;
     size_t update_count = 0;
     size_t total_updated = 0;
-
-    /* Create output context from config */
-    out = output_create_from_config(config);
-    if (!out) {
-        err = ERROR(ERR_MEMORY, "Failed to create output context");
-        goto cleanup;
-    }
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -2104,12 +2103,12 @@ error_t *cmd_update(
      * opens later in update_manifest_after_update().
      */
     workspace_load_t ws_opts = {
-        .analyze_files       = true,                                   /* Detect content and metadata changes */
-        .analyze_orphans     = false,                                  /* Update doesn't process orphaned files */
-        .analyze_untracked   = (opts->include_new || opts->only_new || /* Explicit flags */
-            (config && config->auto_detect_new_files)),                /* Or config auto-detect */
-        .analyze_directories = true,                                   /* Directory metadata change detection */
-        .analyze_encryption  = true                                    /* Encryption policy validation */
+        .analyze_files       = true,                    /* Detect content and metadata changes */
+        .analyze_orphans     = false,                   /* Update doesn't process orphaned files */
+        .analyze_untracked   = (opts->include_new || opts->only_new ||
+            (config && config->auto_detect_new_files)), /* Explicit flags or config auto-detect */
+        .analyze_directories = true,                    /* Directory metadata change detection */
+        .analyze_encryption  = true                     /* Encryption policy validation */
     };
     err = workspace_load(repo, NULL, workspace_profiles, config, &ws_opts, &ws);
     if (err) {
@@ -2424,7 +2423,6 @@ cleanup:
         profile_list_free(operation_profiles);
     }
     if (workspace_profiles) profile_list_free(workspace_profiles);
-    if (out) output_free(out);
 
     return err;
 }

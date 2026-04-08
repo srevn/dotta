@@ -121,6 +121,7 @@ static const char *normalize_pattern(
     if (out_len) {
         *out_len = len;
     }
+
     return buffer;
 }
 
@@ -211,6 +212,7 @@ static error_t *add_patterns_to_content(
     }
 
     *new_content = result;
+
     return NULL;
 }
 
@@ -346,6 +348,7 @@ static error_t *remove_patterns_from_content(
 
     free(pattern_found);
     *new_content = result;
+
     return NULL;
 }
 
@@ -1410,17 +1413,15 @@ static error_t *test_path_ignore(
 /**
  * Main command implementation
  */
-error_t *cmd_ignore(git_repository *repo, const config_t *config, const cmd_ignore_options_t *opts) {
+error_t *cmd_ignore(
+    git_repository *repo,
+    const config_t *config,
+    output_ctx_t *out,
+    const cmd_ignore_options_t *opts
+) {
     CHECK_NULL(repo);
     CHECK_NULL(config);
     CHECK_NULL(opts);
-
-    /* Create output context */
-    error_t *err = NULL;
-    output_ctx_t *out = output_create_from_config(config);
-    if (!out) {
-        return ERROR(ERR_MEMORY, "Failed to create output context");
-    }
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1432,9 +1433,9 @@ error_t *cmd_ignore(git_repository *repo, const config_t *config, const cmd_igno
     bool has_remove = opts->remove_count > 0;
     bool has_test = opts->test_path != NULL;
     bool has_modify = has_add || has_remove;
+    error_t *err = NULL;
 
     if (has_test && has_modify) {
-        output_free(out);
         return ERROR(ERR_INVALID_ARG, "Cannot use --test with --add or --remove");
     }
 
@@ -1465,8 +1466,6 @@ error_t *cmd_ignore(git_repository *repo, const config_t *config, const cmd_igno
             err = edit_baseline_dottaignore(repo, config, out);
         }
     }
-
-    output_free(out);
 
     return err;
 }

@@ -29,9 +29,14 @@ typedef struct {
  * Execute bootstrap command
  *
  * @param config Configuration (must not be NULL)
+ * @param out Output context (must not be NULL)
  * @param opts Bootstrap options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_bootstrap(const config_t *config, const cmd_bootstrap_options_t *opts);
+error_t *cmd_bootstrap(
+    const config_t *config,
+    output_ctx_t *out,
+    const cmd_bootstrap_options_t *opts
+);
 
 #endif /* DOTTA_CMD_BOOTSTRAP_H */

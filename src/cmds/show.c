@@ -188,6 +188,7 @@ static error_t *print_blob_content(
     }
 
     buffer_free(&content);
+
     return NULL;
 }
 
@@ -340,6 +341,7 @@ cleanup:
     if (entry) git_tree_entry_free(entry);
     if (tree) git_tree_free(tree);
     if (commit) git_commit_free(commit);
+
     return err;
 }
 
@@ -564,23 +566,20 @@ cleanup:
 /**
  * Show command implementation
  */
-error_t *cmd_show(git_repository *repo, const config_t *config, const cmd_show_options_t *opts) {
+error_t *cmd_show(
+    git_repository *repo,
+    const config_t *config,
+    output_ctx_t *out,
+    const cmd_show_options_t *opts
+) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
 
     error_t *err = NULL;
-    output_ctx_t *out = NULL;
     profile_list_t *profiles = NULL;
     string_array_t *matches = NULL;
     char *converted = NULL;
     const char *found_profile = NULL;
-
-    /* Create output context */
-    out = output_create_from_config(config);
-    if (!out) {
-        err = ERROR(ERR_MEMORY, "Failed to create output context");
-        goto cleanup;
-    }
 
     /* Handle SHOW_COMMIT mode */
     if (opts->mode == SHOW_COMMIT) {
@@ -719,7 +718,6 @@ error_t *cmd_show(git_repository *repo, const config_t *config, const cmd_show_o
     );
 
 cleanup:
-    output_free(out);
     if (profiles) profile_list_free(profiles);
     if (matches) string_array_free(matches);
     if (converted) free(converted);

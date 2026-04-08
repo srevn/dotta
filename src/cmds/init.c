@@ -168,7 +168,7 @@ static error_t *init_dottaignore(git_repository *repo) {
 /**
  * Initialize command implementation
  */
-error_t *cmd_init(const config_t *config, const cmd_init_options_t *opts) {
+error_t *cmd_init(const config_t *config, output_ctx_t *out, const cmd_init_options_t *opts) {
     CHECK_NULL(config);
     CHECK_NULL(opts);
 
@@ -176,14 +176,6 @@ error_t *cmd_init(const config_t *config, const cmd_init_options_t *opts) {
     error_t *err = NULL;
     char *resolved_path = NULL;
     const char *path = NULL;
-    output_ctx_t *out = NULL;
-
-    /* Create output context from config */
-    out = output_create_from_config(config);
-    if (!out) {
-        err = ERROR(ERR_MEMORY, "Failed to create output context");
-        goto cleanup;
-    }
 
     /* Handle quiet flag */
     if (opts->quiet) {
@@ -261,7 +253,6 @@ error_t *cmd_init(const config_t *config, const cmd_init_options_t *opts) {
 cleanup:
     if (repo) git_repository_free(repo);
     if (resolved_path) free(resolved_path);
-    if (out) output_free(out);
 
     return err;
 }

@@ -17,6 +17,7 @@
 typedef struct error error_t;
 typedef struct arena arena_t;
 typedef struct config config_t;
+typedef struct output_ctx output_ctx_t;
 
 /**
  * Error codes

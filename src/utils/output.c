@@ -18,6 +18,7 @@
 
 #include "output.h"
 
+#include <config.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -431,7 +432,7 @@ void output_set_verbosity(output_ctx_t *ctx, output_verbosity_t verbosity) {
     }
 }
 
-static output_verbosity_t parse_verbosity(const char *str) {
+output_verbosity_t output_parse_verbosity(const char *str) {
     if (!str) return OUTPUT_NORMAL;
 
     if (strcmp(str, "normal") == 0)    return OUTPUT_NORMAL;
@@ -442,7 +443,7 @@ static output_verbosity_t parse_verbosity(const char *str) {
     return OUTPUT_NORMAL;
 }
 
-static output_color_mode_t parse_color_mode(const char *str) {
+output_color_mode_t output_parse_color_mode(const char *str) {
     if (!str) return OUTPUT_COLOR_AUTO;
 
     if (strcmp(str, "auto") == 0)      return OUTPUT_COLOR_AUTO;
@@ -451,19 +452,6 @@ static output_color_mode_t parse_color_mode(const char *str) {
 
     /* Invalid value, use default */
     return OUTPUT_COLOR_AUTO;
-}
-
-output_ctx_t *output_create_from_config(const config_t *config) {
-    output_verbosity_t verbosity = OUTPUT_NORMAL;
-    output_color_mode_t color_mode = OUTPUT_COLOR_AUTO;
-
-    /* Parse config if provided */
-    if (config) {
-        verbosity = parse_verbosity(config->verbosity);
-        color_mode = parse_color_mode(config->color);
-    }
-
-    return output_create(stdout, verbosity, color_mode);
 }
 
 /* ═══════════════════════════════════════════════════════════════════

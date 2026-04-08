@@ -25,9 +25,10 @@ typedef struct {
  * Creates initial empty state file.
  *
  * @param config Configuration (must not be NULL)
+ * @param out Output context (must not be NULL)
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_init(const config_t *config, const cmd_init_options_t *opts);
+error_t *cmd_init(const config_t *config, output_ctx_t *out, const cmd_init_options_t *opts);
 
 #endif /* DOTTA_CMD_INIT_H */

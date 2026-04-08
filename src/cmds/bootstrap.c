@@ -352,7 +352,11 @@ static error_t *bootstrap_list(
 /**
  * Execute bootstrap command
  */
-error_t *cmd_bootstrap(const config_t *config, const cmd_bootstrap_options_t *opts) {
+error_t *cmd_bootstrap(
+    const config_t *config,
+    output_ctx_t *out,
+    const cmd_bootstrap_options_t *opts
+) {
     CHECK_NULL(config);
     CHECK_NULL(opts);
 
@@ -360,14 +364,6 @@ error_t *cmd_bootstrap(const config_t *config, const cmd_bootstrap_options_t *op
     git_repository *repo = NULL;
     char *repo_path = NULL;
     profile_list_t *profiles = NULL;
-    output_ctx_t *out = NULL;
-
-    /* Create output context from config */
-    out = output_create_from_config(config);
-    if (!out) {
-        err = ERROR(ERR_MEMORY, "Failed to create output context");
-        goto cleanup;
-    }
 
     /* Resolve repository path */
     err = resolve_repo_path(config, &repo_path);
@@ -559,7 +555,6 @@ cleanup:
     if (profiles) profile_list_free(profiles);
     if (repo) gitops_close_repository(repo);
     if (repo_path) free(repo_path);
-    if (out) output_free(out);
 
     return err;
 }

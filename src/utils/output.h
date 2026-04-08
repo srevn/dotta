@@ -8,7 +8,6 @@
 #ifndef DOTTA_OUTPUT_H
 #define DOTTA_OUTPUT_H
 
-#include <config.h>
 #include <stdio.h>
 #include <types.h>
 
@@ -49,7 +48,7 @@ typedef enum {
 /**
  * Output context
  */
-typedef struct {
+typedef struct output_ctx {
     FILE *stream;
     output_verbosity_t verbosity;
     output_color_mode_t color_mode;
@@ -59,6 +58,22 @@ typedef struct {
 } output_ctx_t;
 
 /**
+ * Parse verbosity string from config
+ *
+ * Converts config verbosity string ("quiet", "normal", "verbose") to enum.
+ * Returns OUTPUT_NORMAL for NULL or unrecognized values.
+ */
+output_verbosity_t output_parse_verbosity(const char *str);
+
+/**
+ * Parse color mode string from config
+ *
+ * Converts config color string ("auto", "always", "never") to enum.
+ * Returns OUTPUT_COLOR_AUTO for NULL or unrecognized values.
+ */
+output_color_mode_t output_parse_color_mode(const char *str);
+
+/**
  * Create output context
  */
 output_ctx_t *output_create(
@@ -66,14 +81,6 @@ output_ctx_t *output_create(
     output_verbosity_t verbosity,
     output_color_mode_t color_mode
 );
-
-/**
- * Create output context from config
- *
- * Parses config settings and creates output context.
- * Falls back to defaults if config is NULL or parsing fails.
- */
-output_ctx_t *output_create_from_config(const config_t *config);
 
 /**
  * Free output context

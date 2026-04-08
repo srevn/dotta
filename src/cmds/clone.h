@@ -28,9 +28,14 @@ typedef struct {
  * Clones remote repository and sets up dotta-worktree branch.
  *
  * @param config Configuration (must not be NULL)
+ * @param out Output context (must not be NULL)
  * @param opts Clone options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_clone(const config_t *config, const cmd_clone_options_t *opts);
+error_t *cmd_clone(
+    const config_t *config,
+    output_ctx_t *out,
+    const cmd_clone_options_t *opts
+);
 
 #endif /* DOTTA_CMD_CLONE_H */

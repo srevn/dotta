@@ -1594,14 +1594,9 @@ cleanup:
 /**
  * Profile command dispatcher
  */
-error_t *cmd_profile(git_repository *repo, const config_t *config, const cmd_profile_options_t *opts) {
+error_t *cmd_profile(git_repository *repo, output_ctx_t *out, const cmd_profile_options_t *opts) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
-
-    output_ctx_t *out = output_create_from_config(config);
-    if (!out) {
-        return ERROR(ERR_MEMORY, "Failed to create output context");
-    }
 
     /* Override verbosity from CLI */
     if (opts->verbose) {
@@ -1644,8 +1639,6 @@ error_t *cmd_profile(git_repository *repo, const config_t *config, const cmd_pro
             );
             break;
     }
-
-    output_free(out);
 
     return result;
 }

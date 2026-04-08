@@ -81,6 +81,7 @@ static char *extract_repo_name(const char *url) {
 
     memcpy(repo_name, name, len);
     repo_name[len] = '\0';
+
     return repo_name;
 }
 
@@ -230,6 +231,7 @@ static error_t *fetch_all_profiles(
     );
 
     *fetched_profiles = successful;
+
     return NULL;
 }
 
@@ -337,7 +339,11 @@ static error_t *initialize_state(
 /**
  * Clone command implementation
  */
-error_t *cmd_clone(const config_t *config, const cmd_clone_options_t *opts) {
+error_t *cmd_clone(
+    const config_t *config,
+    output_ctx_t *out,
+    const cmd_clone_options_t *opts
+) {
     CHECK_NULL(config);
     CHECK_NULL(opts);
     CHECK_NULL(opts->url);
@@ -347,16 +353,9 @@ error_t *cmd_clone(const config_t *config, const cmd_clone_options_t *opts) {
     git_repository *repo = NULL;
     const char *local_path = NULL;
     bool allocated_path = false;
-    output_ctx_t *out = NULL;
     transfer_context_t *xfer = NULL;
     string_array_t *fetched_profiles = NULL;
     string_array_t *detected_names = NULL;
-
-    /* Create output context */
-    out = output_create(stdout, OUTPUT_NORMAL, OUTPUT_COLOR_AUTO);
-    if (!out) {
-        return ERROR(ERR_MEMORY, "Failed to create output context");
-    }
 
     if (opts->quiet) {
         output_set_verbosity(out, OUTPUT_QUIET);
@@ -733,9 +732,6 @@ cleanup:
     }
     if (repo) {
         gitops_close_repository(repo);
-    }
-    if (out) {
-        output_free(out);
     }
     if (allocated_path && local_path) {
         /* Safe to cast: we know it's heap-allocated when allocated_path is true */

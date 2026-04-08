@@ -904,7 +904,12 @@ cleanup:
 /**
  * Revert command implementation
  */
-error_t *cmd_revert(git_repository *repo, const config_t *config, const cmd_revert_options_t *opts) {
+error_t *cmd_revert(
+    git_repository *repo,
+    const config_t *config,
+    output_ctx_t *out,
+    const cmd_revert_options_t *opts
+) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
     CHECK_NULL(opts->file_path);
@@ -921,15 +926,8 @@ error_t *cmd_revert(git_repository *repo, const config_t *config, const cmd_reve
     git_tree *target_tree = NULL;
     git_tree_entry *current_entry = NULL;
     git_tree_entry *target_entry = NULL;
-    output_ctx_t *out = NULL;
     keymanager_t *km = NULL;
     bool user_aborted = false;
-
-    /* Create output context from config */
-    out = output_create_from_config(config);
-    if (!out) {
-        return ERROR(ERR_MEMORY, "Failed to create output context");
-    }
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1347,7 +1345,6 @@ cleanup:
     if (target_commit) git_commit_free(target_commit);
     if (profile_name) free(profile_name);
     if (resolved_path) free(resolved_path);
-    if (out) output_free(out);
 
     /* Don't return error if user aborted */
     if (user_aborted) {

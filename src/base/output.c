@@ -16,7 +16,7 @@
  * Auto-reset appends ANSI_RESET when an unclosed color span is detected.
  */
 
-#include "output.h"
+#include "base/output.h"
 
 #include <config.h>
 #include <stdarg.h>

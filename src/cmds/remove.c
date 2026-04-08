@@ -2,7 +2,7 @@
  * remove.c - Remove files from profiles or delete profiles
  */
 
-#include "remove.h"
+#include "cmds/remove.h"
 
 #include <git2.h>
 #include <limits.h>
@@ -11,23 +11,23 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/array.h"
 #include "base/error.h"
-#include "base/filesystem.h"
-#include "base/gitops.h"
+#include "base/hashmap.h"
+#include "base/output.h"
+#include "base/string.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "core/upstream.h"
 #include "infra/path.h"
 #include "infra/worktree.h"
-#include "utils/array.h"
+#include "sys/filesystem.h"
+#include "sys/gitops.h"
+#include "sys/upstream.h"
 #include "utils/commit.h"
 #include "utils/config.h"
-#include "utils/hashmap.h"
 #include "utils/hooks.h"
-#include "utils/output.h"
-#include "utils/string.h"
 
 /**
  * Validate command options

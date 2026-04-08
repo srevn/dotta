@@ -2,7 +2,7 @@
  * repo.c - Repository path resolution implementation
  */
 
-#include "repo.h"
+#include "utils/repo.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,8 +10,8 @@
 #include <unistd.h>
 
 #include "base/error.h"
-#include "base/filesystem.h"
-#include "base/gitops.h"
+#include "sys/filesystem.h"
+#include "sys/gitops.h"
 #include "utils/config.h"
 #include "utils/privilege.h"
 

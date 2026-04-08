@@ -2,7 +2,7 @@
  * add.c - Add files to profiles
  */
 
-#include "add.h"
+#include "cmds/add.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -11,9 +11,11 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "base/array.h"
+#include "base/buffer.h"
 #include "base/error.h"
-#include "base/filesystem.h"
-#include "base/gitops.h"
+#include "base/output.h"
+#include "base/string.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
@@ -23,14 +25,12 @@
 #include "infra/content.h"
 #include "infra/path.h"
 #include "infra/worktree.h"
-#include "utils/array.h"
-#include "utils/buffer.h"
+#include "sys/filesystem.h"
+#include "sys/gitops.h"
 #include "utils/commit.h"
 #include "utils/config.h"
 #include "utils/hooks.h"
-#include "utils/output.h"
 #include "utils/privilege.h"
-#include "utils/string.h"
 
 /**
  * Validate command options

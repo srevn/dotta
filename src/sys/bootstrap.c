@@ -2,7 +2,7 @@
  * bootstrap.c - Bootstrap script execution system implementation
  */
 
-#include "bootstrap.h"
+#include "sys/bootstrap.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -18,11 +18,11 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "base/buffer.h"
 #include "base/error.h"
-#include "base/gitops.h"
+#include "base/string.h"
 #include "core/profiles.h"
-#include "utils/buffer.h"
-#include "utils/string.h"
+#include "sys/gitops.h"
 
 /* Exit codes for bootstrap script execution */
 #define EXIT_CODE_TIMEOUT 124              /* Standard timeout exit code */

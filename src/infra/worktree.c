@@ -7,7 +7,7 @@
  * - Safe to call cleanup multiple times
  */
 
-#include "worktree.h"
+#include "infra/worktree.h"
 
 #include <errno.h>
 #include <git2.h>
@@ -18,8 +18,8 @@
 #include <unistd.h>
 
 #include "base/error.h"
-#include "base/filesystem.h"
-#include "base/gitops.h"
+#include "sys/filesystem.h"
+#include "sys/gitops.h"
 
 /**
  * Worktree handle structure

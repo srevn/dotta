@@ -12,7 +12,7 @@
  *   - Metadata Integration: Uses metadata_load_from_profiles() for merged view
  */
 
-#include "manifest.h"
+#include "core/manifest.h"
 
 #include <errno.h>
 #include <stdlib.h>
@@ -20,16 +20,16 @@
 #include <sys/stat.h>
 #include <time.h>
 
+#include "base/arena.h"
+#include "base/array.h"
 #include "base/error.h"
-#include "base/gitops.h"
+#include "base/hashmap.h"
+#include "base/string.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/path.h"
-#include "utils/arena.h"
-#include "utils/array.h"
-#include "utils/hashmap.h"
-#include "utils/string.h"
+#include "sys/gitops.h"
 
 /**
  * Get current HEAD oid for branch

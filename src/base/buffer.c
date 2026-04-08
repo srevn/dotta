@@ -4,7 +4,7 @@
  * Stack-allocable, always null-terminated when non-empty.
  */
 
-#include "buffer.h"
+#include "base/buffer.h"
 
 #include <stdarg.h>
 #include <stdio.h>

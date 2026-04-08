@@ -2,7 +2,7 @@
  * bootstrap.c - Bootstrap command implementation
  */
 
-#include "bootstrap.h"
+#include "cmds/bootstrap.h"
 
 #include <git2.h>
 #include <stdio.h>
@@ -11,16 +11,16 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "base/buffer.h"
 #include "base/error.h"
-#include "base/filesystem.h"
-#include "base/gitops.h"
-#include "core/bootstrap.h"
+#include "base/output.h"
+#include "base/string.h"
 #include "core/profiles.h"
-#include "utils/buffer.h"
-#include "utils/editor.h"
-#include "utils/output.h"
+#include "sys/bootstrap.h"
+#include "sys/editor.h"
+#include "sys/filesystem.h"
+#include "sys/gitops.h"
 #include "utils/repo.h"
-#include "utils/string.h"
 
 /* Bootstrap script template */
 static const char *BOOTSTRAP_TEMPLATE =

@@ -2,21 +2,21 @@
  * key.c - Encryption key management command
  */
 
-#include "key.h"
+#include "cmds/key.h"
 
+#include <config.h>
 #include <git2.h>
 #include <hydrogen.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
-#include <config.h>
 
+#include "base/array.h"
 #include "base/error.h"
+#include "base/output.h"
 #include "core/metadata.h"
 #include "core/state.h"
 #include "crypto/keymanager.h"
-#include "utils/array.h"
-#include "utils/output.h"
 
 /**
  * Count encrypted files in current profiles

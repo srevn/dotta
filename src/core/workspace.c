@@ -17,8 +17,9 @@
  * - Built once in workspace_load(), used by all analysis functions
  */
 
-#include "workspace.h"
+#include "core/workspace.h"
 
+#include <config.h>
 #include <dirent.h>
 #include <errno.h>
 #include <grp.h>
@@ -29,10 +30,11 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <config.h>
 
+#include "base/arena.h"
 #include "base/error.h"
-#include "base/filesystem.h"
+#include "base/hashmap.h"
+#include "base/string.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
@@ -41,10 +43,8 @@
 #include "crypto/policy.h"
 #include "infra/compare.h"
 #include "infra/content.h"
-#include "utils/arena.h"
-#include "utils/hashmap.h"
+#include "sys/filesystem.h"
 #include "utils/privilege.h"
-#include "utils/string.h"
 
 /**
  * Merged metadata entry (internal structure)

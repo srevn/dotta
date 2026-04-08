@@ -2,16 +2,16 @@
  * ignore.c - Multi-layered ignore pattern system implementation
  */
 
-#include "ignore.h"
+#include "core/ignore.h"
 
+#include <config.h>
 #include <stdlib.h>
 #include <string.h>
-#include <config.h>
 
 #include "base/error.h"
-#include "base/gitops.h"
-#include "utils/match.h"
-#include "utils/string.h"
+#include "base/match.h"
+#include "base/string.h"
+#include "sys/gitops.h"
 
 /* Maximum path length for git repository discovery */
 #ifndef GIT_PATH_MAX

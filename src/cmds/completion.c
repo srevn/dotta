@@ -6,17 +6,17 @@
  * no output rather than error messages to stderr.
  */
 
-#include "completion.h"
+#include "cmds/completion.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/array.h"
 #include "base/error.h"
-#include "base/gitops.h"
 #include "core/state.h"
-#include "core/upstream.h"
-#include "utils/array.h"
+#include "sys/gitops.h"
+#include "sys/upstream.h"
 
 /* Constants */
 #define COMPLETE_COMMIT_SHORT_OID_LEN 8

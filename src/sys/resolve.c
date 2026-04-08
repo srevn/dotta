@@ -1,26 +1,26 @@
 /**
- * divergence.c - Branch divergence resolution implementation
+ * resolve.c - Branch divergence resolution implementation
  */
 
-#include "divergence.h"
+#include "sys/resolve.h"
 
 #include <git2.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "base/error.h"
-#include "base/gitops.h"
-#include "core/upstream.h"
+#include "sys/gitops.h"
+#include "sys/upstream.h"
 
 /**
  * Initialize divergence context
  */
-error_t *divergence_context_init(
-    divergence_context_t *ctx,
+error_t *resolve_init(
+    resolve_context_t *ctx,
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
-    divergence_strategy_t strategy
+    resolve_strategy_t strategy
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(repo);
@@ -59,7 +59,7 @@ error_t *divergence_context_init(
  * Resolve with rebase strategy (in-memory)
  */
 static error_t *resolve_rebase_inmemory(
-    divergence_context_t *ctx,
+    resolve_context_t *ctx,
     git_oid *out_oid
 ) {
     CHECK_NULL(ctx);
@@ -125,7 +125,7 @@ static error_t *resolve_rebase_inmemory(
  * Resolve with merge strategy (tree-based merge)
  */
 static error_t *resolve_merge_trees(
-    divergence_context_t *ctx,
+    resolve_context_t *ctx,
     git_oid *out_oid
 ) {
     CHECK_NULL(ctx);
@@ -261,7 +261,7 @@ static error_t *resolve_merge_trees(
  * This strategy doesn't modify the local branch - it stays at saved_oid.
  * The actual force push to remote is handled by the caller.
  */
-static error_t *resolve_ours(divergence_context_t *ctx, git_oid *out_oid) {
+static error_t *resolve_ours(resolve_context_t *ctx, git_oid *out_oid) {
     CHECK_NULL(ctx);
 
     /* Local branch remains unchanged at its current position */
@@ -276,7 +276,7 @@ static error_t *resolve_ours(divergence_context_t *ctx, git_oid *out_oid) {
 /**
  * Resolve with "theirs" strategy (reset to remote)
  */
-static error_t *resolve_theirs(divergence_context_t *ctx, git_oid *out_oid) {
+static error_t *resolve_theirs(resolve_context_t *ctx, git_oid *out_oid) {
     CHECK_NULL(ctx);
 
     /* Get remote reference */
@@ -328,8 +328,8 @@ static error_t *resolve_theirs(divergence_context_t *ctx, git_oid *out_oid) {
 /**
  * Resolve branch divergence using specified strategy
  */
-error_t *divergence_resolve(
-    divergence_context_t *ctx,
+error_t *resolve_execute(
+    resolve_context_t *ctx,
     git_oid *out_oid
 ) {
     CHECK_NULL(ctx);
@@ -339,16 +339,16 @@ error_t *divergence_resolve(
 
     /* Dispatch to appropriate strategy implementation */
     switch (ctx->strategy) {
-        case DIVERGENCE_STRATEGY_REBASE:
+        case RESOLVE_STRATEGY_REBASE:
             return resolve_rebase_inmemory(ctx, out_oid);
 
-        case DIVERGENCE_STRATEGY_MERGE:
+        case RESOLVE_STRATEGY_MERGE:
             return resolve_merge_trees(ctx, out_oid);
 
-        case DIVERGENCE_STRATEGY_OURS:
+        case RESOLVE_STRATEGY_OURS:
             return resolve_ours(ctx, out_oid);
 
-        case DIVERGENCE_STRATEGY_THEIRS:
+        case RESOLVE_STRATEGY_THEIRS:
             return resolve_theirs(ctx, out_oid);
 
         default:
@@ -362,7 +362,7 @@ error_t *divergence_resolve(
 /**
  * Rollback divergence resolution to saved state
  */
-error_t *divergence_rollback(divergence_context_t *ctx) {
+error_t *resolve_rollback(resolve_context_t *ctx) {
     CHECK_NULL(ctx);
     CHECK_NULL(ctx->repo);
     CHECK_NULL(ctx->branch_name);
@@ -378,8 +378,8 @@ error_t *divergence_rollback(divergence_context_t *ctx) {
 /**
  * Verify divergence was resolved
  */
-error_t *divergence_verify(
-    divergence_context_t *ctx,
+error_t *resolve_verify(
+    resolve_context_t *ctx,
     size_t *out_ahead,
     size_t *out_behind
 ) {

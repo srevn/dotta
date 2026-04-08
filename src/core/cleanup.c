@@ -9,18 +9,18 @@
  * This module focuses exclusively on safe removal operations.
  */
 
-#include "cleanup.h"
+#include "core/cleanup.h"
 
 #include <git2.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/array.h"
 #include "base/error.h"
-#include "base/filesystem.h"
+#include "base/hashmap.h"
 #include "core/safety.h"
 #include "core/state.h"
-#include "utils/array.h"
-#include "utils/hashmap.h"
+#include "sys/filesystem.h"
 
 /**
  * Directory pruning state

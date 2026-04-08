@@ -2,14 +2,14 @@
  * transfer.c - Unified transfer context for network operations
  */
 
-#include "transfer.h"
+#include "sys/transfer.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "credentials.h"
-#include "utils/output.h"
+#include "base/output.h"
+#include "sys/credentials.h"
 
 /**
  * Finalize the current progress line

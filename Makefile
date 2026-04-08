@@ -85,6 +85,7 @@ FISHDIR ?= $(PREFIX)/share/fish/vendor_completions.d
 
 # Source files by layer
 BASE_SRC := $(wildcard $(SRC_DIR)/base/*.c)
+SYS_SRC := $(wildcard $(SRC_DIR)/sys/*.c)
 INFRA_SRC := $(wildcard $(SRC_DIR)/infra/*.c)
 CRYPTO_SRC := $(wildcard $(SRC_DIR)/crypto/*.c)
 CORE_SRC := $(wildcard $(SRC_DIR)/core/*.c)
@@ -97,7 +98,7 @@ TOML_OBJ := $(BUILD_DIR)/lib/tomlc17.o
 HYDROGEN_OBJ := $(BUILD_DIR)/lib/hydrogen.o
 
 # All source files (excluding main.c for library)
-LIB_SRC := $(BASE_SRC) $(INFRA_SRC) $(CRYPTO_SRC) $(CORE_SRC) $(CMDS_SRC) $(UTILS_SRC)
+LIB_SRC := $(BASE_SRC) $(SYS_SRC) $(INFRA_SRC) $(CRYPTO_SRC) $(CORE_SRC) $(CMDS_SRC) $(UTILS_SRC)
 LIB_OBJ := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(LIB_SRC)) $(CJSON_OBJ) $(TOML_OBJ) $(HYDROGEN_OBJ)
 
 # Main executable
@@ -113,11 +114,11 @@ all: $(TARGET)
 $(BUILD_DIR) $(BIN_DIR):
 	@mkdir -p $@
 
-$(BUILD_DIR)/base $(BUILD_DIR)/infra $(BUILD_DIR)/crypto $(BUILD_DIR)/core $(BUILD_DIR)/cmds $(BUILD_DIR)/utils $(BUILD_DIR)/lib:
+$(BUILD_DIR)/base $(BUILD_DIR)/sys $(BUILD_DIR)/infra $(BUILD_DIR)/crypto $(BUILD_DIR)/core $(BUILD_DIR)/cmds $(BUILD_DIR)/utils $(BUILD_DIR)/lib:
 	@mkdir -p $@
 
 # Compile source files
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)/base $(BUILD_DIR)/infra $(BUILD_DIR)/crypto $(BUILD_DIR)/core $(BUILD_DIR)/cmds $(BUILD_DIR)/utils
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)/base $(BUILD_DIR)/sys $(BUILD_DIR)/infra $(BUILD_DIR)/crypto $(BUILD_DIR)/core $(BUILD_DIR)/cmds $(BUILD_DIR)/utils
 	@echo "CC $<"
 	@$(CC) $(CFLAGS) $(INCLUDES) $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) $(VERSION_FLAGS) -c $< -o $@
 

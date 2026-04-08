@@ -4,7 +4,7 @@
  * See content.h for API documentation.
  */
 
-#include "content.h"
+#include "infra/content.h"
 
 #include <errno.h>
 #include <git2.h>
@@ -12,12 +12,12 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "base/buffer.h"
 #include "base/error.h"
-#include "base/filesystem.h"
+#include "base/hashmap.h"
 #include "crypto/encryption.h"
 #include "crypto/keymanager.h"
-#include "utils/buffer.h"
-#include "utils/hashmap.h"
+#include "sys/filesystem.h"
 
 /**
  * Maximum file size for encryption (100MB)

@@ -9,9 +9,9 @@
 #include <string.h>
 #include <sys/mman.h>
 
+#include "base/buffer.h"
 #include "base/error.h"
-#include "utils/buffer.h"
-#include "utils/hashmap.h"
+#include "base/hashmap.h"
 
 /* File format constants */
 static const unsigned char MAGIC_HEADER[8] = {

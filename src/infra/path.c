@@ -4,7 +4,7 @@
  * SECURITY: All path operations validate against path traversal attacks.
  */
 
-#include "path.h"
+#include "infra/path.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -14,10 +14,10 @@
 #include <unistd.h>
 
 #include "base/error.h"
-#include "base/filesystem.h"
-#include "utils/hashmap.h"
-#include "utils/match.h"
-#include "utils/string.h"
+#include "base/hashmap.h"
+#include "base/match.h"
+#include "base/string.h"
+#include "sys/filesystem.h"
 
 /**
  * Get $HOME directory

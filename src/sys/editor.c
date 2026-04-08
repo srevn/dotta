@@ -2,7 +2,7 @@
  * editor.c - Editor invocation utilities implementation
  */
 
-#include "editor.h"
+#include "sys/editor.h"
 
 #include <stdlib.h>
 #include <sys/wait.h>

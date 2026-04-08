@@ -2,15 +2,15 @@
  * config.c - Configuration file parsing implementation
  */
 
-#include "config.h"
+#include "utils/config.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <tomlc17.h>
 
 #include "base/error.h"
-#include "base/filesystem.h"
 #include "infra/path.h"
+#include "sys/filesystem.h"
 
 /* Default values */
 #define DEFAULT_REPO_DIR "~/.local/share/dotta/repo"

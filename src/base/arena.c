@@ -6,7 +6,7 @@
  * the request, whichever is larger).  Typical workloads fit in one block.
  */
 
-#include "arena.h"
+#include "base/arena.h"
 
 #include <stdlib.h>
 #include <string.h>

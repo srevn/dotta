@@ -8,7 +8,7 @@
 #include <string.h>
 
 #include "base/error.h"
-#include "utils/string.h"
+#include "base/string.h"
 
 /**
  * Parse refspec: [profile:]<path>[@commit]

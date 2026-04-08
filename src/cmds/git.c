@@ -2,7 +2,7 @@
  * git.c - Git passthrough command
  */
 
-#include "git.h"
+#include "cmds/git.h"
 
 #include <errno.h>
 #include <stdio.h>

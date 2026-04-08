@@ -7,7 +7,7 @@
  * 3. File History (with -p <file>) - Show commits affecting a file
  */
 
-#include "list.h"
+#include "cmds/list.h"
 
 #include <git2.h>
 #include <stdio.h>
@@ -15,18 +15,18 @@
 #include <string.h>
 #include <time.h>
 
+#include "base/array.h"
 #include "base/error.h"
-#include "base/gitops.h"
+#include "base/output.h"
+#include "base/timeutil.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "core/stats.h"
-#include "core/upstream.h"
 #include "crypto/encryption.h"
 #include "infra/path.h"
-#include "utils/array.h"
-#include "utils/output.h"
-#include "utils/timeutil.h"
+#include "sys/gitops.h"
+#include "sys/stats.h"
+#include "sys/upstream.h"
 
 /* Display configuration constants */
 #define LIST_SHORT_OID_BUF_SIZE 8

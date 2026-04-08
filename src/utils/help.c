@@ -4,12 +4,12 @@
  * Provides help text and usage information for all commands.
  */
 
+#include "utils/help.h"
+
 #include <git2.h>
 #include <stdio.h>
 #include <string.h>
-
-#include "help.h"
-#include "version.h"
+#include <version.h>
 
 void print_usage(const char *prog_name) {
     printf("Usage: %s <command> [options]\n\n", prog_name);

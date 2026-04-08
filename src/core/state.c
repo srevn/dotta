@@ -11,7 +11,7 @@
  * - Persistent B-tree indexes (no hashmap rebuilding)
  */
 
-#include "state.h"
+#include "core/state.h"
 
 #include <git2.h>
 #include <sqlite3.h>
@@ -21,12 +21,12 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "base/arena.h"
+#include "base/array.h"
 #include "base/error.h"
-#include "base/filesystem.h"
-#include "utils/arena.h"
+#include "base/hashmap.h"
 #include "infra/path.h"
-#include "utils/array.h"
-#include "utils/hashmap.h"
+#include "sys/filesystem.h"
 
 /* Schema version - must match database */
 #define STATE_SCHEMA_VERSION "6"

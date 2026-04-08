@@ -2,14 +2,17 @@
  * apply.c - Apply profiles to filesystem
  */
 
-#include "apply.h"
+#include "cmds/apply.h"
 
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/array.h"
 #include "base/error.h"
+#include "base/match.h"
+#include "base/output.h"
 #include "core/cleanup.h"
 #include "core/deploy.h"
 #include "core/manifest.h"
@@ -19,11 +22,8 @@
 #include "core/workspace.h"
 #include "infra/content.h"
 #include "infra/path.h"
-#include "utils/array.h"
 #include "utils/config.h"
 #include "utils/hooks.h"
-#include "utils/match.h"
-#include "utils/output.h"
 #include "utils/privilege.h"
 
 /**

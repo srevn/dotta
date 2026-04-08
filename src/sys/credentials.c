@@ -2,7 +2,7 @@
  * credentials.c - Git credential handling implementation
  */
 
-#include "credentials.h"
+#include "sys/credentials.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -10,7 +10,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "utils/string.h"
+#include "base/string.h"
 
 /* Maximum length for username and password */
 #define CRED_MAX_LEN 256

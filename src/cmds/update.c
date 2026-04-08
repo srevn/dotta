@@ -2,7 +2,7 @@
  * update.c - Update profiles with modified files
  */
 
-#include "update.h"
+#include "cmds/update.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -13,8 +13,12 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "base/array.h"
 #include "base/error.h"
-#include "base/filesystem.h"
+#include "base/hashmap.h"
+#include "base/match.h"
+#include "base/output.h"
+#include "base/string.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
@@ -25,15 +29,11 @@
 #include "infra/content.h"
 #include "infra/path.h"
 #include "infra/worktree.h"
-#include "utils/array.h"
+#include "sys/filesystem.h"
 #include "utils/commit.h"
 #include "utils/config.h"
-#include "utils/hashmap.h"
 #include "utils/hooks.h"
-#include "utils/match.h"
-#include "utils/output.h"
 #include "utils/privilege.h"
-#include "utils/string.h"
 
 /**
  * Copy file from filesystem to worktree (with optional encryption)

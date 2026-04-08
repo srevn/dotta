@@ -14,7 +14,7 @@
  * 5. Fail-fast - never proceeds with degraded functionality
  */
 
-#include "privilege.h"
+#include "utils/privilege.h"
 
 #include <errno.h>
 #include <grp.h>
@@ -25,10 +25,10 @@
 #include <unistd.h>
 
 #include "base/error.h"
-#include "base/filesystem.h"
+#include "base/string.h"
+#include "base/terminal.h"
 #include "infra/path.h"
-#include "utils/string.h"
-#include "utils/terminal.h"
+#include "sys/filesystem.h"
 
 /**
  * Check if running with elevated privileges

@@ -2,7 +2,7 @@
  * compare.c - File comparison engine implementation
  */
 
-#include "compare.h"
+#include "infra/compare.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -12,9 +12,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "base/buffer.h"
 #include "base/error.h"
-#include "base/filesystem.h"
-#include "utils/buffer.h"
+#include "sys/filesystem.h"
 
 const char *compare_result_string(compare_result_t result) {
     switch (result) {

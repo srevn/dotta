@@ -12,7 +12,7 @@
  * Capacity: always a power of two for fast masking.
  */
 
-#include "hashmap.h"
+#include "base/hashmap.h"
 
 #include <stdio.h>
 #include <stdlib.h>

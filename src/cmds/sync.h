@@ -12,7 +12,7 @@
 #include <git2.h>
 #include <types.h>
 
-#include "core/upstream.h"
+#include "sys/upstream.h"
 
 /* Use upstream module's state tracking */
 typedef upstream_state_t sync_branch_state_t;
@@ -29,7 +29,7 @@ typedef enum {
     DIVERGE_MERGE,        /* Create merge commit */
     DIVERGE_OURS,         /* Keep local, force push (destructive) */
     DIVERGE_THEIRS        /* Keep remote, reset local (destructive) */
-} sync_divergence_strategy_t;
+} sync_strategy_t;
 
 /**
  * Sync command options

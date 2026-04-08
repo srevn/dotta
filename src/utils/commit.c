@@ -2,7 +2,7 @@
  * commit.c - Commit message template builder implementation
  */
 
-#include "commit.h"
+#include "utils/commit.h"
 
 #include <config.h>
 #include <stdio.h>
@@ -11,8 +11,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "base/buffer.h"
 #include "base/error.h"
-#include "buffer.h"
 
 /* Maximum length for hostname and username */
 #define MAX_HOSTNAME 256

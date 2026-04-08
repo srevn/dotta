@@ -2,20 +2,20 @@
  * hooks.c - Hook execution system implementation
  */
 
-#include "hooks.h"
+#include "utils/hooks.h"
 
+#include <config.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <config.h>
 
 #include "base/error.h"
-#include "base/filesystem.h"
+#include "base/string.h"
 #include "infra/path.h"
-#include "string.h"
+#include "sys/filesystem.h"
 
 /* Hook script names */
 static const char *HOOK_NAMES[] = {

@@ -2,24 +2,24 @@
  * status.c - Show status of managed files
  */
 
-#include "status.h"
+#include "cmds/status.h"
 
+#include <config.h>
 #include <git2.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-#include <config.h>
 
 #include "base/error.h"
-#include "base/gitops.h"
-#include "base/transfer.h"
+#include "base/output.h"
+#include "base/timeutil.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "core/upstream.h"
+#include "sys/upstream.h"
 #include "core/workspace.h"
-#include "utils/output.h"
+#include "sys/gitops.h"
+#include "sys/transfer.h"
 #include "utils/privilege.h"
-#include "utils/timeutil.h"
 
 /**
  * Display enabled profiles and last deployment info

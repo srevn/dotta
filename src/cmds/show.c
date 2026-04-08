@@ -2,26 +2,26 @@
  * show.c - Show file content or commit details
  */
 
-#include "show.h"
+#include "cmds/show.h"
 
+#include <config.h>
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <config.h>
 
+#include "base/array.h"
+#include "base/buffer.h"
 #include "base/error.h"
-#include "base/gitops.h"
+#include "base/output.h"
+#include "base/timeutil.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "crypto/keymanager.h"
 #include "infra/content.h"
 #include "infra/path.h"
-#include "utils/array.h"
-#include "utils/buffer.h"
-#include "utils/output.h"
-#include "utils/timeutil.h"
+#include "sys/gitops.h"
 
 /**
  * Check if content appears to be binary

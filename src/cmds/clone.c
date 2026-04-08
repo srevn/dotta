@@ -8,25 +8,25 @@
  * - Supports hub mode (--all) for backup workflows
  */
 
-#include "clone.h"
+#include "cmds/clone.h"
 
+#include <config.h>
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <config.h>
 
+#include "base/array.h"
 #include "base/error.h"
-#include "base/gitops.h"
-#include "base/transfer.h"
-#include "core/bootstrap.h"
+#include "base/output.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "core/upstream.h"
 #include "infra/path.h"
-#include "utils/array.h"
-#include "utils/output.h"
+#include "sys/bootstrap.h"
+#include "sys/gitops.h"
+#include "sys/transfer.h"
+#include "sys/upstream.h"
 
 /* Default repository name when URL parsing fails */
 #define DEFAULT_REPO_NAME "dotta-repo"

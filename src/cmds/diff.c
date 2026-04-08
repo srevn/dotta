@@ -2,17 +2,20 @@
  * diff.c - Show differences between profiles and filesystem
  */
 
-#include "diff.h"
+#include "cmds/diff.h"
 
+#include <config.h>
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <config.h>
 
 #include "base/error.h"
-#include "base/gitops.h"
+#include "base/hashmap.h"
+#include "base/match.h"
+#include "base/output.h"
+#include "base/timeutil.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/workspace.h"
@@ -20,10 +23,7 @@
 #include "infra/compare.h"
 #include "infra/content.h"
 #include "infra/path.h"
-#include "utils/hashmap.h"
-#include "utils/match.h"
-#include "utils/output.h"
-#include "utils/timeutil.h"
+#include "sys/gitops.h"
 
 /**
  * Determine if workspace item should be shown for the given direction

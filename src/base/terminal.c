@@ -4,7 +4,7 @@
  * Provides POSIX-compliant terminal control for building inline TUIs.
  */
 
-#include "terminal.h"
+#include "base/terminal.h"
 
 #include <errno.h>
 #include <stdlib.h>

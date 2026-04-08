@@ -41,8 +41,8 @@
 #include <time.h>
 #include <types.h>
 
+#include "base/hashmap.h"
 #include "core/state.h"
-#include "utils/hashmap.h"
 
 /**
  * Profile structure

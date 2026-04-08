@@ -2,7 +2,7 @@
  * string.c - String utility functions implementation
  */
 
-#include "string.h"
+#include "base/string.h"
 
 #include <ctype.h>
 #include <stdarg.h>

@@ -25,7 +25,7 @@
 #include <stdbool.h>
 #include <types.h>
 
-#include "utils/terminal.h"
+#include "base/terminal.h"
 
 /**
  * Profile item in UI list

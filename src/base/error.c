@@ -2,7 +2,7 @@
  * error.c - Error handling implementation
  */
 
-#include "error.h"
+#include "base/error.h"
 
 #include <errno.h>
 #include <git2/errors.h>

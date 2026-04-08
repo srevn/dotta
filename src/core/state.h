@@ -28,7 +28,7 @@
 #include <time.h>
 #include <types.h>
 
-#include "metadata.h"
+#include "core/metadata.h"
 
 /**
  * File type in state

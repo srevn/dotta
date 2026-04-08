@@ -2,18 +2,18 @@
  * upstream.c - Remote profile tracking and metadata implementation
  */
 
-#include "upstream.h"
+#include "sys/upstream.h"
 
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "base/credentials.h"
+#include "base/array.h"
 #include "base/error.h"
-#include "base/gitops.h"
-#include "utils/array.h"
-#include "utils/string.h"
+#include "base/string.h"
+#include "sys/credentials.h"
+#include "sys/gitops.h"
 
 /**
  * Analyze upstream state for a single profile

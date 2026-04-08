@@ -8,7 +8,7 @@
  * - Overflow protection on size accumulation
  */
 
-#include "stats.h"
+#include "sys/stats.h"
 
 #include <ctype.h>
 #include <git2.h>
@@ -16,8 +16,8 @@
 #include <string.h>
 
 #include "base/error.h"
-#include "base/gitops.h"
-#include "utils/hashmap.h"
+#include "base/hashmap.h"
+#include "sys/gitops.h"
 
 /* Configuration constants */
 #define PATH_BUFFER_SIZE 1024

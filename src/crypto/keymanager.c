@@ -16,10 +16,10 @@
 #include <unistd.h>
 
 #include "base/error.h"
-#include "base/filesystem.h"
+#include "base/hashmap.h"
 #include "crypto/encryption.h"
+#include "sys/filesystem.h"
 #include "utils/config.h"
-#include "utils/hashmap.h"
 
 /**
  * Session Cache File Format

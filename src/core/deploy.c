@@ -2,7 +2,7 @@
  * deploy.c - File deployment engine implementation
  */
 
-#include "deploy.h"
+#include "core/deploy.h"
 
 #include <errno.h>
 #include <git2.h>
@@ -10,17 +10,17 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/array.h"
 #include "base/error.h"
-#include "base/filesystem.h"
-#include "base/gitops.h"
+#include "base/hashmap.h"
+#include "base/string.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/workspace.h"
 #include "infra/content.h"
-#include "utils/array.h"
-#include "utils/hashmap.h"
+#include "sys/filesystem.h"
+#include "sys/gitops.h"
 #include "utils/privilege.h"
-#include "utils/string.h"
 
 /**
  * Run pre-flight checks using workspace divergence analysis

@@ -4,7 +4,7 @@
  * All functions validate inputs and handle errors explicitly.
  */
 
-#include "filesystem.h"
+#include "sys/filesystem.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -17,9 +17,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "error.h"
-#include "utils/array.h"
-#include "utils/buffer.h"
+#include "base/array.h"
+#include "base/buffer.h"
+#include "base/error.h"
 
 /* Buffer size for file I/O */
 #define IO_BUFFER_SIZE 8192

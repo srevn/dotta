@@ -18,8 +18,8 @@
 #include <git2.h>
 #include <stdbool.h>
 
-#include "credentials.h"
-#include "utils/output.h"
+#include "base/output.h"
+#include "sys/credentials.h"
 
 /**
  * Transfer context for network operations

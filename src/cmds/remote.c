@@ -2,7 +2,7 @@
  * remote.c - Manage remote repositories
  */
 
-#include "remote.h"
+#include "cmds/remote.h"
 
 #include <ctype.h>
 #include <git2.h>
@@ -11,7 +11,7 @@
 #include <string.h>
 
 #include "base/error.h"
-#include "utils/output.h"
+#include "base/output.h"
 
 /**
  * Validate remote name

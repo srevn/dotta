@@ -12,7 +12,9 @@
 #include <types.h>
 
 #include "base/error.h"
+#include "base/output.h"
 #include "base/refspec.h"
+#include "base/string.h"
 #include "cmds/add.h"
 #include "cmds/apply.h"
 #include "cmds/bootstrap.h"
@@ -37,10 +39,8 @@
 #include "crypto/keymanager.h"
 #include "utils/config.h"
 #include "utils/help.h"
-#include "utils/output.h"
 #include "utils/privilege.h"
 #include "utils/repo.h"
-#include "utils/string.h"
 
 /**
  * Parse init command

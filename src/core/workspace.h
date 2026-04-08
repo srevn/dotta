@@ -22,12 +22,12 @@
 #include <git2.h>
 #include <types.h>
 
+#include "base/output.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "crypto/keymanager.h"
 #include "infra/content.h"
-#include "utils/output.h"
 
 /* Maximum number of display tags that can be extracted from a workspace item */
 #define WORKSPACE_ITEM_MAX_DISPLAY_TAGS 5

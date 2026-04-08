@@ -2,7 +2,7 @@
  * revert.c - Revert file to previous commit state
  */
 
-#include "revert.h"
+#include "cmds/revert.h"
 
 #include <git2.h>
 #include <stdio.h>
@@ -10,20 +10,20 @@
 #include <string.h>
 #include <time.h>
 
+#include "base/array.h"
+#include "base/buffer.h"
 #include "base/error.h"
-#include "base/gitops.h"
+#include "base/output.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "core/stats.h"
 #include "crypto/keymanager.h"
 #include "infra/content.h"
 #include "infra/path.h"
-#include "utils/array.h"
-#include "utils/buffer.h"
+#include "sys/gitops.h"
+#include "sys/stats.h"
 #include "utils/commit.h"
-#include "utils/output.h"
 
 /**
  * Discover file in history (fallback when not found in HEAD)

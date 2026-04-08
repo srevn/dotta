@@ -4,7 +4,7 @@
  * All libgit2 calls are wrapped with error handling and resource cleanup.
  */
 
-#include "gitops.h"
+#include "sys/gitops.h"
 
 #include <git2.h>
 #include <stdarg.h>
@@ -12,11 +12,11 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "credentials.h"
-#include "error.h"
-#include "transfer.h"
-#include "utils/array.h"
-#include "utils/string.h"
+#include "base/array.h"
+#include "base/error.h"
+#include "base/string.h"
+#include "sys/credentials.h"
+#include "sys/transfer.h"
 
 /**
  * Get commit signature with fallback for missing git config

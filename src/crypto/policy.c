@@ -11,9 +11,9 @@
 #include <string.h>
 
 #include "base/error.h"
+#include "base/match.h"
+#include "base/string.h"
 #include "core/metadata.h"
-#include "utils/match.h"
-#include "utils/string.h"
 
 /**
  * System files that must NEVER be encrypted

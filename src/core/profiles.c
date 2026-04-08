@@ -2,7 +2,7 @@
  * profiles.c - Profile management implementation
  */
 
-#include "profiles.h"
+#include "core/profiles.h"
 
 #include <ctype.h>
 #include <git2.h>
@@ -12,14 +12,14 @@
 #include <sys/utsname.h>
 #include <unistd.h>
 
+#include "base/arena.h"
+#include "base/array.h"
 #include "base/error.h"
-#include "base/gitops.h"
+#include "base/hashmap.h"
+#include "base/string.h"
 #include "core/state.h"
 #include "infra/path.h"
-#include "utils/arena.h"
-#include "utils/array.h"
-#include "utils/hashmap.h"
-#include "utils/string.h"
+#include "sys/gitops.h"
 
 /**
  * Check if profile exists
@@ -102,6 +102,7 @@ cleanup:
         free(profile->name);
         free(profile);
     }
+
     return err;
 }
 
@@ -189,8 +190,7 @@ error_t *file_entry_ensure_tree_entry(
 
     /* Lookup tree entry from Git (creates owned reference) */
     int git_err = git_tree_entry_bypath(
-        &entry->entry, entry->source_profile->tree,
-        entry->storage_path
+        &entry->entry, entry->source_profile->tree, entry->storage_path
     );
     if (git_err != 0) {
         if (git_err == GIT_ENOTFOUND) {
@@ -557,16 +557,12 @@ static error_t *validate_state_profiles(
 
         if (profile_exists(repo, name)) {
             err = string_array_push(valid, name);
-            if (err) {
-                goto cleanup;
-            }
+            if (err) goto cleanup;
         } else {
             /* Profile doesn't exist */
             if (missing) {
                 err = string_array_push(missing, name);
-                if (err) {
-                    goto cleanup;
-                }
+                if (err) goto cleanup;
             }
         }
     }
@@ -991,15 +987,10 @@ error_t *profile_list_all_local(
     return NULL;
 
 cleanup:
-    if (ref) {
-        git_reference_free(ref);
-    }
-    if (iter) {
-        git_reference_iterator_free(iter);
-    }
-    if (err) {
-        profile_list_free(list);
-    }
+    if (ref) git_reference_free(ref);
+    if (iter) git_reference_iterator_free(iter);
+    if (err) profile_list_free(list);
+
     return err;
 }
 
@@ -1548,9 +1539,7 @@ error_t *profile_build_manifest(
 
 cleanup:
     hashmap_free(path_map, NULL);
-    if (err) {
-        manifest_free(manifest);
-    }
+    if (err) manifest_free(manifest);
 
     return err;
 }
@@ -1672,6 +1661,7 @@ cleanup:
         /* Free index and all its arrays */
         hashmap_free(index, string_array_free_cb);
     }
+
     return err;
 }
 

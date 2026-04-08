@@ -4,19 +4,19 @@
  * Inline interface for profile management and ordering.
  */
 
-#include "interactive.h"
+#include "cmds/interactive.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
+#include "base/array.h"
 #include "base/error.h"
+#include "base/hashmap.h"
+#include "base/terminal.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "utils/array.h"
-#include "utils/hashmap.h"
-#include "utils/terminal.h"
 
 /**
  * Interactive UI state

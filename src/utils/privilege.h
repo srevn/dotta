@@ -21,7 +21,7 @@
 #include <sys/types.h>
 #include <types.h>
 
-#include "utils/output.h"
+#include "base/output.h"
 
 /**
  * Check if running with elevated privileges (effective UID is 0)

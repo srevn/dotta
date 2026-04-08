@@ -2,7 +2,7 @@
  * ignore.c - Manage ignore patterns
  */
 
-#include "ignore.h"
+#include "cmds/ignore.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,13 +11,13 @@
 #include <unistd.h>
 
 #include "base/error.h"
-#include "base/filesystem.h"
-#include "base/gitops.h"
+#include "base/output.h"
+#include "base/string.h"
 #include "core/ignore.h"
 #include "core/profiles.h"
-#include "utils/editor.h"
-#include "utils/output.h"
-#include "utils/string.h"
+#include "sys/editor.h"
+#include "sys/filesystem.h"
+#include "sys/gitops.h"
 
 /**
  * Check if a pattern already exists in content (zero-allocation)

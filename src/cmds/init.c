@@ -2,7 +2,7 @@
  * init.c - Initialize dotta repository
  */
 
-#include "init.h"
+#include "cmds/init.h"
 
 #include <git2.h>
 #include <stdio.h>
@@ -10,11 +10,11 @@
 #include <string.h>
 
 #include "base/error.h"
-#include "base/filesystem.h"
-#include "base/gitops.h"
+#include "base/output.h"
 #include "core/ignore.h"
 #include "core/state.h"
-#include "utils/output.h"
+#include "sys/filesystem.h"
+#include "sys/gitops.h"
 #include "utils/repo.h"
 
 /**

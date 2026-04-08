@@ -2,27 +2,27 @@
  * sync.c - Intelligent synchronization command
  */
 
-#include "sync.h"
+#include "cmds/sync.h"
 
+#include <config.h>
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <config.h>
 
-#include "base/credentials.h"
+#include "base/array.h"
 #include "base/error.h"
-#include "base/gitops.h"
-#include "base/transfer.h"
-#include "core/divergence.h"
+#include "base/output.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "core/upstream.h"
 #include "core/workspace.h"
-#include "utils/array.h"
-#include "utils/output.h"
+#include "sys/credentials.h"
+#include "sys/gitops.h"
+#include "sys/resolve.h"
+#include "sys/transfer.h"
+#include "sys/upstream.h"
 
 /**
  * Per-profile sync result
@@ -98,7 +98,7 @@ static void sync_results_free(sync_results_t *results) {
  */
 static bool parse_divergence_strategy(
     const char *str,
-    sync_divergence_strategy_t *out_strategy
+    sync_strategy_t *out_strategy
 ) {
     if (!str) {
         *out_strategy = DIVERGE_WARN;
@@ -631,12 +631,12 @@ static void sync_manifest_and_report(
  * Returns NULL and prints informational message on successful rollback.
  */
 static error_t *attempt_rollback(
-    divergence_context_t *ctx,
+    resolve_context_t *ctx,
     const char *profile_name,
     const char *failure_reason,
     output_ctx_t *out
 ) {
-    error_t *err = divergence_rollback(ctx);
+    error_t *err = resolve_rollback(ctx);
     if (err) {
         output_error(out, "     ✗ Critical: Rollback failed: %s", error_message(err));
         output_newline(out, OUTPUT_NORMAL);
@@ -772,18 +772,18 @@ static error_t *resolve_and_push_divergence(
     profile_sync_result_t *result,
     sync_results_t *results,
     output_ctx_t *out,
-    divergence_strategy_t strategy,
+    resolve_strategy_t strategy,
     const char *strategy_name,
     transfer_context_t *xfer,
     state_t *state,
     const string_array_t *enabled_profiles,
     bool no_push
 ) {
-    const char *cap_name = (strategy == DIVERGENCE_STRATEGY_REBASE)
+    const char *cap_name = (strategy == RESOLVE_STRATEGY_REBASE)
         ? "Rebase" : "Merge";
-    const char *past_desc = (strategy == DIVERGENCE_STRATEGY_REBASE)
+    const char *past_desc = (strategy == RESOLVE_STRATEGY_REBASE)
         ? "rebased onto remote" : "merged with remote";
-    const char *push_desc = (strategy == DIVERGENCE_STRATEGY_REBASE)
+    const char *push_desc = (strategy == RESOLVE_STRATEGY_REBASE)
         ? "rebased commits" : "merge commit";
 
     output_info(
@@ -792,8 +792,8 @@ static error_t *resolve_and_push_divergence(
     );
 
     /* Initialize divergence context (saves current state for rollback) */
-    divergence_context_t ctx;
-    error_t *err = divergence_context_init(
+    resolve_context_t ctx;
+    error_t *err = resolve_init(
         &ctx, repo, remote_name, result->profile_name, strategy
     );
     if (err) {
@@ -807,7 +807,7 @@ static error_t *resolve_and_push_divergence(
 
     /* Perform in-memory resolution (never modifies HEAD) */
     git_oid new_oid;
-    err = divergence_resolve(&ctx, &new_oid);
+    err = resolve_execute(&ctx, &new_oid);
     if (err) {
         output_error(
             out, "     ✗ %s failed: %s",
@@ -819,7 +819,7 @@ static error_t *resolve_and_push_divergence(
 
     /* Verify resolution */
     size_t ahead = 0;
-    err = divergence_verify(&ctx, &ahead, NULL);
+    err = resolve_verify(&ctx, &ahead, NULL);
     if (err) {
         output_error(
             out, "     ✗ %s verification failed: %s",
@@ -968,9 +968,9 @@ static error_t *handle_diverged_theirs(
     }
 
     /* Initialize divergence context (saves current state for rollback) */
-    divergence_context_t ctx;
-    error_t *err = divergence_context_init(
-        &ctx, repo, remote_name, result->profile_name, DIVERGENCE_STRATEGY_THEIRS
+    resolve_context_t ctx;
+    error_t *err = resolve_init(
+        &ctx, repo, remote_name, result->profile_name, RESOLVE_STRATEGY_THEIRS
     );
     if (err) {
         output_error(
@@ -983,7 +983,7 @@ static error_t *handle_diverged_theirs(
 
     /* Resolve divergence (resets local branch to remote) */
     git_oid new_oid;
-    err = divergence_resolve(&ctx, &new_oid);
+    err = resolve_execute(&ctx, &new_oid);
     if (err) {
         output_error(
             out, "     ✗ Reset failed: %s",
@@ -998,7 +998,7 @@ static error_t *handle_diverged_theirs(
      * No rollback on failure — theirs strategy already reset the branch to
      * the desired state. Rolling back would undo what the user requested.
      */
-    err = divergence_verify(&ctx, NULL, NULL);
+    err = resolve_verify(&ctx, NULL, NULL);
     if (err) {
         output_error(out, "     ✗ Reset verification failed: %s", error_message(err));
         output_warning(out, OUTPUT_NORMAL, "     Local branch was reset but verification failed");
@@ -1029,7 +1029,7 @@ static error_t *handle_diverged(
     profile_sync_result_t *result,
     sync_results_t *results,
     output_ctx_t *out,
-    sync_divergence_strategy_t strategy,
+    sync_strategy_t strategy,
     transfer_context_t *xfer,
     bool confirm_destructive,
     state_t *state,
@@ -1056,14 +1056,14 @@ static error_t *handle_diverged(
 
         case DIVERGE_REBASE: {
             return resolve_and_push_divergence(
-                repo, remote_name, result, results, out, DIVERGENCE_STRATEGY_REBASE,
+                repo, remote_name, result, results, out, RESOLVE_STRATEGY_REBASE,
                 "rebase", xfer, state, enabled_profiles, no_push
             );
         }
 
         case DIVERGE_MERGE: {
             return resolve_and_push_divergence(
-                repo, remote_name, result, results, out, DIVERGENCE_STRATEGY_MERGE,
+                repo, remote_name, result, results, out, RESOLVE_STRATEGY_MERGE,
                 "merge", xfer, state, enabled_profiles, no_push
             );
         }
@@ -1111,7 +1111,7 @@ static error_t *sync_push_phase(
     bool auto_pull,
     bool no_pull,
     bool no_push,
-    sync_divergence_strategy_t diverged_strategy,
+    sync_strategy_t diverged_strategy,
     transfer_context_t *xfer,
     bool confirm_destructive,
     state_t *state,                           /* For manifest updates */
@@ -1600,7 +1600,7 @@ error_t *cmd_sync(
 
     /* Determine divergence strategy: CLI overrides config */
     const char *strategy_str = opts->diverged ? opts->diverged : config->diverged_strategy;
-    sync_divergence_strategy_t diverged_strategy;
+    sync_strategy_t diverged_strategy;
     if (!parse_divergence_strategy(strategy_str, &diverged_strategy)) {
         err = ERROR(
             ERR_INVALID_ARG, "Invalid divergence strategy '%s' "

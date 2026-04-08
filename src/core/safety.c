@@ -21,17 +21,17 @@
  * - Profile existence caching: Each profile checked at most once
  */
 
-#include "safety.h"
+#include "core/safety.h"
 
 #include <git2.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "base/error.h"
-#include "base/gitops.h"
+#include "base/hashmap.h"
 #include "core/state.h"
 #include "core/workspace.h"
-#include "utils/hashmap.h"
+#include "sys/gitops.h"
 
 /* Initial capacity for dynamic arrays */
 #define INITIAL_CAPACITY 16

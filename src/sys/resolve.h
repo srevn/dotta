@@ -1,7 +1,7 @@
 /**
- * divergence.h - Branch divergence resolution strategies
+ * resolve.h - Branch divergence resolution strategies
  *
- * This module encapsulates all divergence resolution logic for sync operations.
+ * This module encapsulates all branch resolution logic for sync operations.
  * It provides a clean abstraction over merge/rebase operations that never
  * modifies HEAD, maintaining dotta's architectural principle.
  *
@@ -9,8 +9,8 @@
  * and the branch is updated, or it fails and the branch remains unchanged.
  */
 
-#ifndef DOTTA_DIVERGENCE_H
-#define DOTTA_DIVERGENCE_H
+#ifndef DOTTA_RESOLVE_H
+#define DOTTA_RESOLVE_H
 
 #include <git2.h>
 #include <types.h>
@@ -19,11 +19,11 @@
  * Divergence resolution strategies
  */
 typedef enum {
-    DIVERGENCE_STRATEGY_REBASE,   /* Rebase local onto remote */
-    DIVERGENCE_STRATEGY_MERGE,    /* Merge remote into local */
-    DIVERGENCE_STRATEGY_OURS,     /* Force push local (destructive) */
-    DIVERGENCE_STRATEGY_THEIRS    /* Reset to remote (destructive) */
-} divergence_strategy_t;
+    RESOLVE_STRATEGY_REBASE,   /* Rebase local onto remote */
+    RESOLVE_STRATEGY_MERGE,    /* Merge remote into local */
+    RESOLVE_STRATEGY_OURS,     /* Force push local (destructive) */
+    RESOLVE_STRATEGY_THEIRS    /* Reset to remote (destructive) */
+} resolve_strategy_t;
 
 /**
  * Divergence resolution context
@@ -32,12 +32,12 @@ typedef enum {
  * The saved_oid is used for rollback if resolution fails.
  */
 typedef struct {
-    git_repository *repo;              /* Repository handle (must not be NULL) */
-    const char *remote_name;           /* Remote name (e.g., "origin") */
-    const char *branch_name;           /* Branch name to resolve */
-    divergence_strategy_t strategy;    /* Resolution strategy */
-    git_oid saved_oid;                 /* Original branch OID (for rollback) */
-} divergence_context_t;
+    git_repository *repo;           /* Repository handle (must not be NULL) */
+    const char *remote_name;        /* Remote name (e.g., "origin") */
+    const char *branch_name;        /* Branch name to resolve */
+    resolve_strategy_t strategy;    /* Resolution strategy */
+    git_oid saved_oid;              /* Original branch OID (for rollback) */
+} resolve_context_t;
 
 /**
  * Initialize divergence context
@@ -51,12 +51,12 @@ typedef struct {
  * @param strategy Resolution strategy
  * @return Error or NULL on success
  */
-error_t *divergence_context_init(
-    divergence_context_t *ctx,
+error_t *resolve_init(
+    resolve_context_t *ctx,
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
-    divergence_strategy_t strategy
+    resolve_strategy_t strategy
 );
 
 /**
@@ -65,14 +65,14 @@ error_t *divergence_context_init(
  * Performs merge or rebase WITHOUT modifying HEAD. Uses in-memory operations
  * and only updates the branch reference upon successful completion.
  *
- * The context must be initialized with divergence_context_init() first.
+ * The context must be initialized with resolve_init() first.
  *
  * @param ctx Divergence context (must not be NULL, must be initialized)
  * @param out_oid Final commit OID after resolution (can be NULL if not needed)
  * @return Error or NULL on success
  */
-error_t *divergence_resolve(
-    divergence_context_t *ctx,
+error_t *resolve_execute(
+    resolve_context_t *ctx,
     git_oid *out_oid
 );
 
@@ -86,7 +86,7 @@ error_t *divergence_resolve(
  * @param ctx Divergence context (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *divergence_rollback(divergence_context_t *ctx);
+error_t *resolve_rollback(resolve_context_t *ctx);
 
 /**
  * Verify divergence was resolved
@@ -99,10 +99,10 @@ error_t *divergence_rollback(divergence_context_t *ctx);
  * @param out_behind Commits behind remote (can be NULL)
  * @return Error or NULL on success
  */
-error_t *divergence_verify(
-    divergence_context_t *ctx,
+error_t *resolve_verify(
+    resolve_context_t *ctx,
     size_t *out_ahead,
     size_t *out_behind
 );
 
-#endif /* DOTTA_DIVERGENCE_H */
+#endif /* DOTTA_RESOLVE_H */

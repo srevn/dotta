@@ -2,7 +2,7 @@
  * metadata.c - Unified metadata system implementation
  */
 
-#include "metadata.h"
+#include "core/metadata.h"
 
 #include <cJSON.h>
 #include <git2.h>
@@ -15,14 +15,14 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "base/buffer.h"
 #include "base/error.h"
-#include "base/filesystem.h"
-#include "base/gitops.h"
+#include "base/hashmap.h"
+#include "base/string.h"
 #include "infra/path.h"
-#include "utils/buffer.h"
-#include "utils/hashmap.h"
+#include "sys/filesystem.h"
+#include "sys/gitops.h"
 #include "utils/privilege.h"
-#include "utils/string.h"
 
 #define INITIAL_CAPACITY 16
 

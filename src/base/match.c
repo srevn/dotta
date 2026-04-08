@@ -5,7 +5,7 @@
  * support for **, directory matching, and all edge cases.
  */
 
-#include "match.h"
+#include "base/match.h"
 
 #include <fnmatch.h>
 #include <stdbool.h>

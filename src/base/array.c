@@ -2,7 +2,7 @@
  * array.c - Dynamic string array implementation
  */
 
-#include "array.h"
+#include "base/array.h"
 
 #include <stdlib.h>
 #include <string.h>

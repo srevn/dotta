@@ -45,7 +45,7 @@ char *str_trim(char *str);
  * @param delimiter Delimiter to insert between strings
  * @return Newly allocated joined string (must be freed)
  */
-char *str_join(char **strings, size_t count, const char *delimiter);
+char *str_join(const char *const *strings, size_t count, const char *delimiter);
 
 /**
  * Format string (like sprintf but allocates)

@@ -2057,7 +2057,7 @@ error_t *cmd_update(
     /* Execute pre-update hook (using operation profiles for context) */
     if (config && repo_dir) {
         /* Build array of profile names and join with spaces */
-        char **profile_names_array = malloc(operation_profiles->count * sizeof(char *));
+        const char **profile_names_array = malloc(operation_profiles->count * sizeof(const char *));
         if (profile_names_array) {
             for (size_t i = 0; i < operation_profiles->count; i++) {
                 profile_names_array[i] = operation_profiles->profiles[i].name;

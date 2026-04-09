@@ -987,6 +987,23 @@ error_t *profile_list_all_local_names(
 }
 
 /**
+ * Check if a storage path is profile metadata (not a user file)
+ *
+ * These are internal files maintained by dotta within each profile branch.
+ * They should be excluded when listing user-deployable files.
+ */
+static bool profile_is_metadata_path(const char *path)
+{
+    return strcmp(path, ".dottaignore") == 0 ||
+           strcmp(path, ".bootstrap") == 0 ||
+           strcmp(path, ".gitignore") == 0 ||
+           strcmp(path, "README.md") == 0 ||
+           strcmp(path, "README") == 0 ||
+           str_starts_with(path, ".git/") ||
+           str_starts_with(path, ".dotta/");
+}
+
+/**
  * Tree walk callback data
  */
 struct walk_data {
@@ -1036,14 +1053,8 @@ static int tree_walk_callback(
     }
 
     /* Skip repository metadata files */
-    if (strcmp(full_path, ".dottaignore") == 0 ||
-        strcmp(full_path, ".bootstrap") == 0 ||
-        strcmp(full_path, ".gitignore") == 0 ||
-        strcmp(full_path, "README.md") == 0 ||
-        strcmp(full_path, "README") == 0 ||
-        str_starts_with(full_path, ".git/") ||
-        str_starts_with(full_path, ".dotta/")) {
-        return 0;  /* Skip, continue walk */
+    if (profile_is_metadata_path(full_path)) {
+        return 0;
     }
 
     /* Add to array */
@@ -1054,6 +1065,38 @@ static int tree_walk_callback(
     }
 
     return 0;
+}
+
+/**
+ * List deployable files in a Git tree
+ *
+ * Walks the tree, filters metadata paths, and returns storage paths.
+ * This is the lightweight primitive for "files in a branch" without
+ * requiring a profile_t.
+ *
+ * @param tree Git tree to walk (must not be NULL)
+ * @param out String array of storage paths (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+static error_t *profile_list_tree_files(git_tree *tree, string_array_t **out)
+{
+    struct walk_data data = {
+        .paths = string_array_new(0),
+        .error = NULL
+    };
+
+    if (!data.paths) {
+        return ERROR(ERR_MEMORY, "Failed to allocate paths array");
+    }
+
+    error_t *err = gitops_tree_walk(tree, tree_walk_callback, &data);
+    if (err || data.error) {
+        string_array_free(data.paths);
+        return err ? err : data.error;
+    }
+
+    *out = data.paths;
+    return NULL;
 }
 
 /**
@@ -1140,14 +1183,8 @@ static int manifest_build_callback(
     }
 
     /* Skip repository metadata files */
-    if (strcmp(storage_path, ".dottaignore") == 0 ||
-        strcmp(storage_path, ".bootstrap") == 0 ||
-        strcmp(storage_path, ".gitignore") == 0 ||
-        strcmp(storage_path, "README.md") == 0 ||
-        strcmp(storage_path, "README") == 0 ||
-        str_starts_with(storage_path, ".git/") ||
-        str_starts_with(storage_path, ".dotta/")) {
-        return 0;  /* Skip, continue walk */
+    if (profile_is_metadata_path(storage_path)) {
+        return 0;
     }
 
     /* Convert storage path to filesystem path */
@@ -1370,23 +1407,7 @@ error_t *profile_list_files(
         return err;
     }
 
-    /* Walk tree */
-    struct walk_data data = { 0 };
-    data.paths = string_array_new(0);
-    if (!data.paths) {
-        return ERROR(ERR_MEMORY, "Failed to allocate paths array");
-    }
-    data.error = NULL;
-
-    err = gitops_tree_walk(profile->tree, tree_walk_callback, &data);
-    if (err || data.error) {
-        string_array_free(data.paths);
-        return err ? err : data.error;
-    }
-
-    *out = data.paths;
-
-    return NULL;
+    return profile_list_tree_files(profile->tree, out);
 }
 
 /**
@@ -1406,30 +1427,30 @@ error_t *profile_has_custom_files(
 
     *out_has_custom = false;
 
-    /* Load profile */
-    profile_t *profile = NULL;
-    error_t *err = profile_load(repo, profile_name, &profile);
+    char refname[DOTTA_REFNAME_MAX];
+    error_t *err = gitops_build_refname(
+        refname, sizeof(refname), "refs/heads/%s", profile_name
+    );
     if (err) {
-        return error_wrap(err, "Failed to load profile");
+        return error_wrap(err, "Invalid profile name '%s'", profile_name);
     }
 
     /* Load tree if not loaded (lazy loading) */
-    err = profile_load_tree(repo, profile);
+    git_tree *tree = NULL;
+    err = gitops_load_tree(repo, refname, &tree);
     if (err) {
-        profile_free(profile);
-        return error_wrap(err, "Failed to load tree");
+        return error_wrap(err, "Failed to load tree for profile '%s'", profile_name);
     }
 
-    /* Check for custom/ directory using O(log k) lookup */
-    const git_tree_entry *entry = git_tree_entry_byname(profile->tree, "custom");
+    /* Check for custom/ directory using O(log k) lookup.
+     * git_tree_entry_byname returns a pointer owned by the tree —
+     * must read before git_tree_free. */
+    const git_tree_entry *entry = git_tree_entry_byname(tree, "custom");
     if (entry) {
-        /* Verify it's a tree (directory), not a blob (file) */
-        git_object_t type = git_tree_entry_type(entry);
-        *out_has_custom = (type == GIT_OBJECT_TREE);
+        *out_has_custom = (git_tree_entry_type(entry) == GIT_OBJECT_TREE);
     }
 
-    profile_free(profile);
-
+    git_tree_free(tree);
     return NULL;
 }
 
@@ -1543,12 +1564,92 @@ cleanup:
 }
 
 /**
+ * Context for file_index_callback
+ */
+struct file_index_ctx {
+    hashmap_t *index;          /* Target hashmap: storage_path -> string_array_t* */
+    const char *branch_name;   /* Current branch (borrowed from all_branches) */
+    error_t *error;            /* Error propagation */
+    bool fatal;                /* If true, error is unrecoverable (propagate to caller) */
+};
+
+/**
+ * Tree walk callback that populates the file index directly
+ *
+ * Inserts each file's storage path into the index hashmap during the walk,
+ * eliminating the intermediate string_array_t that the old approach needed
+ * per branch (each path was strdup'd into the array, strdup'd again into
+ * the hashmap, then the array copy was freed).
+ */
+static int file_index_callback(
+    const char *root,
+    const git_tree_entry *entry,
+    void *payload
+) {
+    struct file_index_ctx *ctx = (struct file_index_ctx *) payload;
+
+    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
+        return 0;
+    }
+
+    const char *name = git_tree_entry_name(entry);
+    char full_path[1024];
+    int ret;
+
+    if (root && root[0] != '\0') {
+        ret = snprintf(full_path, sizeof(full_path), "%s%s", root, name);
+    } else {
+        ret = snprintf(full_path, sizeof(full_path), "%s", name);
+    }
+
+    if (ret < 0 || (size_t) ret >= sizeof(full_path)) {
+        ctx->error = ERROR(
+            ERR_INTERNAL, "Path exceeds maximum length: %s%s",
+            root ? root : "", name
+        );
+        return -1;
+    }
+
+    if (profile_is_metadata_path(full_path)) {
+        return 0;
+    }
+
+    /* Get or create profile list for this path */
+    string_array_t *profiles = hashmap_get(ctx->index, full_path);
+    if (!profiles) {
+        profiles = string_array_new(0);
+        if (!profiles) {
+            ctx->error = ERROR(ERR_MEMORY, "Failed to create profile list for file");
+            ctx->fatal = true;
+            return -1;
+        }
+
+        error_t *err = hashmap_set(ctx->index, full_path, profiles);
+        if (err) {
+            string_array_free(profiles);
+            ctx->error = error_wrap(err, "Failed to index file");
+            ctx->fatal = true;
+            return -1;
+        }
+    }
+
+    /* Add this branch to the list (non-fatal on failure) */
+    error_t *err = string_array_push(profiles, ctx->branch_name);
+    if (err) {
+        error_free(err);
+    }
+
+    return 0;
+}
+
+/**
  * Build inverted index of all files across profiles
  *
- * Loads all profile branches once and builds an in-memory hashmap that maps
- * each storage path to a list of profile names containing that file.
+ * Walks each branch tree directly into a hashmap that maps storage paths
+ * to lists of profile names. Uses gitops_load_tree instead of profile_t
+ * to avoid per-branch allocation overhead, and populates the hashmap
+ * during the tree walk to eliminate intermediate string arrays.
  *
- * This is the centralized, optimized solution for multi-profile operations.
  * Complexity: O(M×P) where M = profile count, P = avg files per profile.
  * Lookups are then O(1) instead of O(M×GitOps).
  */
@@ -1563,7 +1664,6 @@ error_t *profile_build_file_index(
     error_t *err = NULL;
     hashmap_t *index = NULL;
     string_array_t *all_branches = NULL;
-    string_array_t *files = NULL;
 
     /* Create index hashmap */
     index = hashmap_create(256);  /* Reasonable initial size */
@@ -1592,58 +1692,46 @@ error_t *profile_build_file_index(
             continue;
         }
 
-        /* Try to load profile */
-        profile_t *profile = NULL;
-        err = profile_load(repo, branch_name, &profile);
+        char refname[DOTTA_REFNAME_MAX];
+        err = gitops_build_refname(
+            refname, sizeof(refname), "refs/heads/%s", branch_name
+        );
         if (err) {
             error_free(err);
             err = NULL;
             continue;  /* Non-fatal: skip this profile */
         }
 
-        /* Get list of all files in this profile */
-        files = NULL;
-        err = profile_list_files(repo, profile, &files);
-        profile_free(profile);
-
+        git_tree *tree = NULL;
+        err = gitops_load_tree(repo, refname, &tree);
         if (err) {
             error_free(err);
             err = NULL;
             continue;  /* Non-fatal: skip this profile */
         }
 
-        /* Add this profile to the index for each of its files */
-        for (size_t j = 0; j < files->count; j++) {
-            const char *storage_path = files->items[j];
+        struct file_index_ctx ctx = {
+            .index       = index,
+            .branch_name = branch_name,
+            .error       = NULL,
+            .fatal       = false
+        };
 
-            /* Get or create profile list for this storage path */
-            string_array_t *profile_list = hashmap_get(index, storage_path);
-            if (!profile_list) {
-                profile_list = string_array_new(0);
-                if (!profile_list) {
-                    err = ERROR(ERR_MEMORY, "Failed to create profile list for file");
-                    goto cleanup;
-                }
+        err = gitops_tree_walk(tree, file_index_callback, &ctx);
+        git_tree_free(tree);
 
-                err = hashmap_set(index, storage_path, profile_list);
-                if (err) {
-                    string_array_free(profile_list);
-                    err = error_wrap(err, "Failed to index file");
-                    goto cleanup;
-                }
-            }
-
-            /* Add this profile to the list */
-            err = string_array_push(profile_list, branch_name);
-            if (err) {
-                /* Non-fatal: continue without this entry */
-                error_free(err);
-                err = NULL;
-            }
+        if (ctx.fatal) {
+            error_free(err);
+            err = ctx.error;
+            goto cleanup;
         }
 
-        string_array_free(files);
-        files = NULL;
+        if (err || ctx.error) {
+            error_free(err);
+            error_free(ctx.error);
+            err = NULL;
+            continue;
+        }
     }
 
     /* Success */
@@ -1653,7 +1741,6 @@ error_t *profile_build_file_index(
     return NULL;
 
 cleanup:
-    string_array_free(files);
     string_array_free(all_branches);
     if (index) {
         /* Free index and all its arrays */
@@ -1721,39 +1808,68 @@ error_t *profile_discover_file(
         return NULL;
     }
 
-    /* Branch scan: O(M×P) via profile_build_file_index().
-     * Returns ALL profiles containing the file across all local branches. */
-    hashmap_t *index = NULL;
-    err = profile_build_file_index(repo, NULL, &index);
+    /* Targeted branch scan: O(M×D) where D = path depth in tree.
+     * Checks each branch for the specific file instead of building the */
+    string_array_t *all_branches = NULL;
+    err = gitops_list_branches(repo, &all_branches);
     if (err) {
-        return error_wrap(
-            err, "Failed to build profile index for file discovery"
-        );
+        return error_wrap(err, "Failed to list branches for file discovery");
     }
 
-    string_array_t *matches = hashmap_get(index, storage_path);
+    string_array_t *result = string_array_new(0);
+    if (!result) {
+        string_array_free(all_branches);
+        return ERROR(ERR_MEMORY, "Failed to allocate result array");
+    }
 
-    if (!matches || matches->count == 0) {
-        hashmap_free(index, string_array_free_cb);
+    for (size_t i = 0; i < all_branches->count; i++) {
+        const char *branch = all_branches->items[i];
+
+        if (strcmp(branch, "dotta-worktree") == 0) {
+            continue;
+        }
+
+        char refname[DOTTA_REFNAME_MAX];
+        err = gitops_build_refname(
+            refname, sizeof(refname), "refs/heads/%s", branch
+        );
+        if (err) {
+            error_free(err);
+            err = NULL;
+            continue;
+        }
+
+        git_tree *tree = NULL;
+        err = gitops_load_tree(repo, refname, &tree);
+        if (err) {
+            error_free(err);
+            err = NULL;
+            continue;
+        }
+
+        /* O(D) targeted lookup instead of full tree walk */
+        git_tree_entry *found = NULL;
+        int rc = git_tree_entry_bypath(&found, tree, storage_path);
+        git_tree_free(tree);
+
+        if (rc == 0) {
+            git_tree_entry_free(found);
+            err = string_array_push(result, branch);
+            if (err) {
+                error_free(err);
+                err = NULL;
+            }
+        }
+    }
+
+    string_array_free(all_branches);
+
+    if (result->count == 0) {
+        string_array_free(result);
         return ERROR(
             ERR_NOT_FOUND, "File '%s' not found in any profile",
             storage_path
         );
-    }
-
-    /* Clone the result — hashmap owns the original */
-    string_array_t *result = string_array_new(matches->count);
-    if (!result) {
-        hashmap_free(index, string_array_free_cb);
-        return ERROR(ERR_MEMORY, "Failed to allocate profile matches");
-    }
-
-    error_t *clone_err = string_array_clone(matches, result);
-    hashmap_free(index, string_array_free_cb);
-
-    if (clone_err) {
-        string_array_free(result);
-        return clone_err;
     }
 
     *out_profiles = result;

@@ -10,6 +10,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
 #include "base/string.h"
@@ -1283,21 +1284,16 @@ static error_t *test_path_ignore(
     }
 
     /* Test against all enabled profiles */
-    profile_list_t *profiles = NULL;
-    error_t *err = profile_resolve(
-        repo,
-        NULL, 0, /* No explicit profiles */
-        false,   /* Not strict - skip missing profiles */
-        &profiles,
-        NULL
-    );
+    string_array_t *profile_names = NULL;
+    error_t *err = profile_resolve_state_names(repo, &profile_names);
 
     if (err) {
-        return error_wrap(err, "Failed to load profiles");
-    }
+        if (error_code(err) != ERR_NOT_FOUND) {
+            return error_wrap(err, "Failed to load profiles");
+        }
+        error_free(err);
 
-    if (!profiles || profiles->count == 0) {
-        profile_list_free(profiles);
+        /* No enabled profiles - test against baseline .dottaignore only */
         output_info(
             out, OUTPUT_NORMAL, "No enabled profiles found"
         );
@@ -1339,21 +1335,21 @@ static error_t *test_path_ignore(
 
     /* Test against each enabled profile */
     output_info(out, OUTPUT_NORMAL, "Testing path: %s", test_path);
-    output_info(out, OUTPUT_NORMAL, "Enabled profiles: %zu", profiles->count);
+    output_info(out, OUTPUT_NORMAL, "Enabled profiles: %zu", profile_names->count);
     output_newline(out, OUTPUT_NORMAL);
 
     bool any_ignored = false;
-    for (size_t i = 0; i < profiles->count; i++) {
-        profile_t *profile = &profiles->profiles[i];
+    for (size_t i = 0; i < profile_names->count; i++) {
+        const char *name = profile_names->items[i];
 
         /* Create ignore context for this profile */
         ignore_context_t *ctx = NULL;
-        err = ignore_context_create(repo, config, profile->name, NULL, 0, &ctx);
+        err = ignore_context_create(repo, config, name, NULL, 0, &ctx);
         if (err) {
-            profile_list_free(profiles);
+            string_array_free(profile_names);
             return error_wrap(
                 err, "Failed to create ignore context for profile '%s'",
-                profile->name
+                name
             );
         }
 
@@ -1363,10 +1359,10 @@ static error_t *test_path_ignore(
         ignore_context_free(ctx);
 
         if (err) {
-            profile_list_free(profiles);
+            string_array_free(profile_names);
             return error_wrap(
                 err, "Failed to test path against profile '%s'",
-                profile->name
+                name
             );
         }
 
@@ -1374,7 +1370,7 @@ static error_t *test_path_ignore(
         if (result.ignored) {
             output_styled(
                 out, OUTPUT_NORMAL, "{red}✗{reset} Profile '%s': IGNORED\n",
-                profile->name
+                name
             );
             if (output_is_verbose(out)) {
                 output_info(
@@ -1386,12 +1382,12 @@ static error_t *test_path_ignore(
         } else {
             output_success(
                 out, OUTPUT_NORMAL, "Profile '%s': NOT IGNORED",
-                profile->name
+                name
             );
         }
     }
 
-    profile_list_free(profiles);
+    string_array_free(profile_names);
 
     /* Summary */
     output_newline(out, OUTPUT_NORMAL);

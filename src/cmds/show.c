@@ -576,7 +576,7 @@ error_t *cmd_show(
     CHECK_NULL(opts);
 
     error_t *err = NULL;
-    profile_list_t *profiles = NULL;
+    string_array_t *profile_names = NULL;
     string_array_t *matches = NULL;
     char *converted = NULL;
     const char *found_profile = NULL;
@@ -590,20 +590,28 @@ error_t *cmd_show(
 
         if (!profile_name) {
             /* No profile specified - use enabled profiles */
-            err = profile_resolve(repo, NULL, 0, config->strict_mode, &profiles, NULL);
+            err = profile_resolve_state_names(repo, &profile_names);
             if (err) {
-                err = error_wrap(err, "Failed to load profiles");
-                goto cleanup;
-            }
-
-            if (profiles->count == 0) {
-                err = ERROR(ERR_NOT_FOUND, "No enabled profiles found");
+                if (error_code(err) == ERR_NOT_FOUND) {
+                    error_free(err);
+                    err = ERROR(
+                        ERR_NOT_FOUND,
+                        "No enabled profiles found\n\n"
+                        "To search a specific profile:\n"
+                        "  dotta show -p <profile> %s\n\n"
+                        "To enable profiles:\n"
+                        "  dotta profile enable <name>",
+                        opts->commit
+                    );
+                } else {
+                    err = error_wrap(err, "Failed to load profiles");
+                }
                 goto cleanup;
             }
 
             /* Try to find commit in enabled profiles (in order) */
-            for (size_t i = 0; i < profiles->count; i++) {
-                profile_name = profiles->profiles[i].name;
+            for (size_t i = 0; i < profile_names->count; i++) {
+                profile_name = profile_names->items[i];
                 error_t *try_err = show_commit(
                     repo, opts->commit, profile_name, opts->raw, out
                 );
@@ -718,7 +726,7 @@ error_t *cmd_show(
     );
 
 cleanup:
-    if (profiles) profile_list_free(profiles);
+    string_array_free(profile_names);
     if (matches) string_array_free(matches);
     if (converted) free(converted);
 

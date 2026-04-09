@@ -66,20 +66,6 @@ typedef enum {
 } path_prefix_t;
 
 /**
- * Profile resolution source - tracks where profiles came from
- *
- * Used for informational/diagnostic purposes only.
- *
- * Priority order (highest to lowest):
- *   EXPLICIT - CLI flags (-p/--profile), temporary override
- *   STATE    - State file profiles array, persistent management
- */
-typedef enum {
-    PROFILE_SOURCE_EXPLICIT,   /* CLI -p flag (temporary override) */
-    PROFILE_SOURCE_STATE       /* State file (persistent management) */
-} profile_source_t;
-
-/**
  * Workspace state - where an item exists
  *
  * Represents the location/deployment status of a file or directory across

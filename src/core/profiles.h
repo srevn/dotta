@@ -228,36 +228,6 @@ error_t *profiles_enrich_with_prefixes(
 );
 
 /**
- * Resolve profiles based on priority hierarchy (unified profile resolution)
- *
- * This is the primary function for loading profiles throughout the application.
- * All commands (apply, update, sync, status, etc.) use this function.
- *
- * Resolution priority (highest to lowest):
- * 1. Explicit profiles (CLI -p/--profile) - Temporary override
- * 2. State file profiles - Persistent management (via 'dotta profile enable')
- *
- * If no profiles are found from any source, returns an error. Profiles must be
- * explicitly enabled using 'dotta profile enable' or specified via CLI.
- *
- * @param repo Repository (must not be NULL)
- * @param explicit_profiles CLI profiles (can be NULL)
- * @param explicit_count Count of CLI profiles (0 if none)
- * @param strict_mode If true, error on missing profiles; if false, skip them
- * @param out Profile list (must not be NULL, caller must free)
- * @param source_out Optional: receives the source of resolved profiles (can be NULL)
- * @return Error or NULL on success
- */
-error_t *profile_resolve(
-    git_repository *repo,
-    char **explicit_profiles,
-    size_t explicit_count,
-    bool strict_mode,
-    profile_list_t **out,
-    profile_source_t *source_out
-);
-
-/**
  * Resolve CLI profile names for operation filtering
  *
  * Lightweight validation of CLI profile arguments: checks that each name

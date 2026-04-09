@@ -129,6 +129,15 @@ void string_array_sort(string_array_t *arr);
  */
 error_t *string_array_clone(const string_array_t *src, string_array_t *dst);
 
+/**
+ * Join array elements into a single delimiter-separated string.
+ *
+ * @param arr Array (NULL or empty returns strdup(""))
+ * @param delimiter Separator between elements (NULL treated as empty)
+ * @return Heap-allocated string, or NULL on allocation failure
+ */
+char *string_array_join(const string_array_t *arr, const char *delimiter);
+
 /** Cleanup helper for heap-allocated arrays (string_array_t *) */
 static inline void cleanup_string_array(string_array_t **arr) {
     if (arr && *arr) {

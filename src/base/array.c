@@ -301,3 +301,65 @@ error_t *string_array_clone(const string_array_t *src, string_array_t *dst) {
 
     return NULL;
 }
+
+char *string_array_join(const string_array_t *arr, const char *delimiter) {
+    if (!arr || arr->count == 0) {
+        return strdup("");
+    }
+
+    size_t delim_len = delimiter ? strlen(delimiter) : 0;
+
+    /* Measure total length, caching individual lengths to avoid double strlen */
+    size_t *lengths = NULL;
+    if (arr->count <= 64) {
+        lengths = (size_t [64]){0};
+    } else {
+        lengths = calloc(arr->count, sizeof(size_t));
+        if (!lengths) {
+            return NULL;
+        }
+    }
+
+    size_t total = 0;
+    for (size_t i = 0; i < arr->count; i++) {
+        lengths[i] = strlen(arr->items[i]);
+        if (total + lengths[i] < total) {
+            goto overflow;
+        }
+        total += lengths[i];
+    }
+    if (delim_len > 0 && arr->count > 1) {
+        size_t delim_total = delim_len * (arr->count - 1);
+        if (delim_total / delim_len != (arr->count - 1) ||
+            total + delim_total < total) {
+            goto overflow;
+        }
+        total += delim_total;
+    }
+
+    /* Allocate result */
+    char *result = malloc(total + 1);
+    if (!result) {
+        if (arr->count > 64) free(lengths);
+        return NULL;
+    }
+
+    /* Build result */
+    char *p = result;
+    for (size_t i = 0; i < arr->count; i++) {
+        if (i > 0 && delim_len > 0) {
+            memcpy(p, delimiter, delim_len);
+            p += delim_len;
+        }
+        memcpy(p, arr->items[i], lengths[i]);
+        p += lengths[i];
+    }
+    *p = '\0';
+
+    if (arr->count > 64) free(lengths);
+    return result;
+
+overflow:
+    if (arr->count > 64) free(lengths);
+    return NULL;
+}

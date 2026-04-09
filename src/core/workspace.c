@@ -2746,9 +2746,7 @@ error_t *workspace_load(
      * Non-strict: silently skip profiles whose branches disappeared between
      * name validation (at command layer) and this load (tiny race window). */
     profile_list_t *profiles = NULL;
-    err = profile_list_load(
-        repo, profile_names->items, profile_names->count, false, &profiles
-    );
+    err = profile_list_load(repo, profile_names, false, &profiles);
     if (err) {
         return error_wrap(err, "Failed to load profiles from names");
     }
@@ -3049,8 +3047,7 @@ const workspace_item_t *workspace_get_all_diverged(
  */
 error_t *workspace_extract_orphans(
     const workspace_t *ws,
-    const char *const *filter_names,
-    size_t filter_count,
+    const string_array_t *filter,
     const workspace_item_t ***out_file_orphans,
     size_t *out_file_count,
     const workspace_item_t ***out_dir_orphans,
@@ -3081,8 +3078,8 @@ error_t *workspace_extract_orphans(
         if (ws->diverged[i].state == WORKSPACE_STATE_ORPHANED ||
             ws->diverged[i].state == WORKSPACE_STATE_RELEASED) {
             /* Apply profile filter if specified */
-            if (filter_names &&
-                !profile_filter_matches(ws->diverged[i].profile, filter_names, filter_count)) {
+            if (filter &&
+                !profile_filter_matches(ws->diverged[i].profile, filter)) {
                 continue;  /* Skip orphans from other profiles */
             }
 
@@ -3124,8 +3121,8 @@ error_t *workspace_extract_orphans(
         if (ws->diverged[i].state == WORKSPACE_STATE_ORPHANED ||
             ws->diverged[i].state == WORKSPACE_STATE_RELEASED) {
             /* Apply same profile filter as Pass 1 */
-            if (filter_names &&
-                !profile_filter_matches(ws->diverged[i].profile, filter_names, filter_count)) {
+            if (filter &&
+                !profile_filter_matches(ws->diverged[i].profile, filter)) {
                 continue;
             }
 

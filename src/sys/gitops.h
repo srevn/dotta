@@ -387,16 +387,14 @@ error_t *gitops_fetch_branch(
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin") (must not be NULL)
- * @param branch_names Array of branch names (must not be NULL)
- * @param branch_count Number of branches to fetch (must be > 0)
+ * @param branches Branch names to fetch (must not be NULL, count > 0)
  * @param xfer Transfer context for credentials and progress (may be NULL)
  * @return Error or NULL on success
  */
 error_t *gitops_fetch_branches(
     git_repository *repo,
     const char *remote_name,
-    char **branch_names,
-    size_t branch_count,
+    const string_array_t *branches,
     transfer_context_t *xfer
 );
 

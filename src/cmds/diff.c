@@ -291,8 +291,7 @@ static error_t *present_diffs_for_direction(
     content_cache_t *content_cache,
     git_repository *repo,
     diff_direction_t direction,
-    const char *const *filter_names,
-    size_t filter_count,
+    const string_array_t *filter,
     const path_filter_t *file_filter,
     const cmd_diff_options_t *opts,
     output_ctx_t *out,
@@ -332,7 +331,7 @@ static error_t *present_diffs_for_direction(
         }
 
         /* Filter 4: Profile filter (CLI filtering) */
-        if (!profile_filter_matches(item->profile, filter_names, filter_count)) {
+        if (!profile_filter_matches(item->profile, filter)) {
             continue;
         }
 
@@ -1000,7 +999,7 @@ static error_t *diff_commit_to_workspace(
      * Query custom_prefix for the matched profile from state. */
     const char *custom_prefix = NULL;
     err = profile_get_custom_prefixes(
-        repo, (const char *const *)&profile_name, 1, &prefixes
+        repo, &(string_array_t){ .items = (char **)&profile_name, .count = 1 }, &prefixes
     );
     if (err) {
         error_free(err);  /* Non-fatal — custom/ paths degrade gracefully */
@@ -1302,8 +1301,7 @@ cleanup:
 static error_t *diff_workspace(
     git_repository *repo,
     const string_array_t *profile_names,
-    const char *const *filter_names,
-    size_t filter_count,
+    const string_array_t *filter,
     const path_filter_t *file_filter,
     const config_t *config,
     const cmd_diff_options_t *opts,
@@ -1386,7 +1384,7 @@ static error_t *diff_workspace(
 
         err = present_diffs_for_direction(
             diverged, diverged_count, manifest, cache, repo, DIFF_UPSTREAM,
-            filter_names, filter_count, file_filter, opts, out, &upstream_count
+            filter, file_filter, opts, out, &upstream_count
         );
         if (err) goto cleanup;
 
@@ -1400,7 +1398,7 @@ static error_t *diff_workspace(
 
         err = present_diffs_for_direction(
             diverged, diverged_count, manifest, cache, repo, DIFF_DOWNSTREAM,
-            filter_names, filter_count, file_filter, opts, out, &downstream_count
+            filter, file_filter, opts, out, &downstream_count
         );
         if (err) goto cleanup;
 
@@ -1414,7 +1412,7 @@ static error_t *diff_workspace(
         /* Single direction */
         err = present_diffs_for_direction(
             diverged, diverged_count, manifest, cache, repo, opts->direction,
-            filter_names, filter_count, file_filter, opts, out, &total_diff_count
+            filter, file_filter, opts, out, &total_diff_count
         );
         if (err) goto cleanup;
 
@@ -1451,10 +1449,8 @@ error_t *cmd_diff(
     error_t *err = NULL;
     string_array_t *workspace_names = NULL;
     string_array_t *cli_names = NULL;
-    const char *const *op_names = NULL;
-    size_t op_count = 0;
-    const char **filter_names = NULL;
-    size_t filter_count = 0;
+    const string_array_t *op_names = NULL;
+    const string_array_t *filter = NULL;
     path_filter_t *file_filter = NULL;
     bool has_profile_filter = (opts->profiles != NULL && opts->profile_count > 0);
 
@@ -1489,18 +1485,13 @@ error_t *cmd_diff(
             goto cleanup;
         }
 
-        err = profile_validate_filter(
-            workspace_names, (const char *const *) cli_names->items, cli_names->count
-        );
+        err = profile_validate_filter(workspace_names, cli_names);
         if (err) goto cleanup;
 
-        filter_names = (const char **) cli_names->items;
-        filter_count = cli_names->count;
-        op_names = (const char *const *) cli_names->items;
-        op_count = cli_names->count;
+        filter = cli_names;
+        op_names = cli_names;
     } else {
-        op_names = (const char *const *) workspace_names->items;
-        op_count = workspace_names->count;
+        op_names = workspace_names;
     }
 
     /* Create file filter from CLI arguments */
@@ -1508,7 +1499,7 @@ error_t *cmd_diff(
         /* Collect custom prefixes from profiles for path resolution */
         string_array_t *prefixes = NULL;
         err = profile_get_custom_prefixes(
-            repo, op_names, op_count, &prefixes
+            repo, op_names, &prefixes
         );
         if (err) {
             err = error_wrap(err, "Failed to get custom prefixes");
@@ -1548,7 +1539,7 @@ error_t *cmd_diff(
         case DIFF_WORKSPACE:
             /* Workspace diff uses workspace_profiles for accurate analysis */
             err = diff_workspace(
-                repo, workspace_names, filter_names, filter_count,
+                repo, workspace_names, filter,
                 file_filter, config, opts, out
             );
             goto cleanup;

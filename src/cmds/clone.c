@@ -651,8 +651,7 @@ error_t *cmd_clone(
     if (run_bootstrap && fetched_profiles->count > 0) {
         output_newline(out, OUTPUT_NORMAL);
         err = bootstrap_run_for_profiles(
-            repo, local_path, (const char *const *) fetched_profiles->items,
-            fetched_profiles->count, false, true
+            repo, local_path, fetched_profiles, false, true
         );
         if (err) {
             output_error(out, "Bootstrap failed: %s", error_message(err));

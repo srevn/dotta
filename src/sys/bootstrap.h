@@ -152,8 +152,7 @@ error_t *bootstrap_execute(
 error_t *bootstrap_run_for_profiles(
     git_repository *repo,
     const char *repo_dir,
-    const char *const *profile_names,
-    size_t profile_count,
+    const string_array_t *profile_names,
     bool dry_run,
     bool stop_on_error
 );

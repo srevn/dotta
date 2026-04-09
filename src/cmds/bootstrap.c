@@ -307,8 +307,7 @@ static error_t *bootstrap_show(
  */
 static error_t *bootstrap_list(
     git_repository *repo,
-    const char *const *profile_names,
-    size_t profile_count,
+    const string_array_t *profile_names,
     const char *script_name,
     output_ctx_t *out
 ) {
@@ -322,8 +321,8 @@ static error_t *bootstrap_list(
     if (out) {
         output_section(out, OUTPUT_NORMAL, "Bootstrap scripts");
 
-        for (size_t i = 0; i < profile_count; i++) {
-            const char *name = profile_names[i];
+        for (size_t i = 0; i < profile_names->count; i++) {
+            const char *name = profile_names->items[i];
             bool exists = bootstrap_exists(repo, name, script_name);
 
             if (exists) {
@@ -448,10 +447,7 @@ error_t *cmd_bootstrap(
 
     /* Handle --list flag */
     if (opts->list) {
-        err = bootstrap_list(
-            repo, (const char *const *) profile_names->items,
-            profile_names->count, NULL, out
-        );
+        err = bootstrap_list(repo, profile_names, NULL, out);
         if (err) {
             err = error_wrap(err, "Failed to list bootstrap scripts");
         }
@@ -528,8 +524,7 @@ error_t *cmd_bootstrap(
     bool stop_on_error = !opts->continue_on_error;
     bool had_failures = false;
     err = bootstrap_run_for_profiles(
-        repo, repo_path, (const char *const *) profile_names->items,
-        profile_names->count, opts->dry_run, stop_on_error
+        repo, repo_path, profile_names, opts->dry_run, stop_on_error
     );
     if (err) {
         if (opts->continue_on_error) {

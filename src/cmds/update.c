@@ -359,8 +359,7 @@ static error_t *filter_items_for_update(
     const workspace_t *ws,
     const cmd_update_options_t *opts,
     const path_filter_t *file_filter,
-    const char *const *filter_names,
-    size_t filter_count,
+    const string_array_t *filter,
     const config_t *config,
     output_ctx_t *out,
     const workspace_item_t ***out_items,
@@ -404,7 +403,7 @@ static error_t *filter_items_for_update(
         }
 
         /* Apply profile filter (CLI -p filtering) */
-        if (!profile_filter_matches(item->profile, filter_names, filter_count)) {
+        if (!profile_filter_matches(item->profile, filter)) {
             continue;
         }
 
@@ -438,7 +437,7 @@ static error_t *filter_items_for_update(
             continue;
         }
         /* Apply profile filter (CLI -p filtering) */
-        if (!profile_filter_matches(item->profile, filter_names, filter_count)) {
+        if (!profile_filter_matches(item->profile, filter)) {
             continue;
         }
 
@@ -1945,10 +1944,8 @@ error_t *cmd_update(
     workspace_t *ws = NULL;
     string_array_t *workspace_names = NULL;
     string_array_t *cli_names = NULL;
-    const char *const *op_names = NULL;
-    size_t op_count = 0;
-    const char **filter_names = NULL;
-    size_t filter_count = 0;
+    const string_array_t *op_names = NULL;
+    const string_array_t *filter = NULL;
     hook_context_t *hook_ctx = NULL;
     char *repo_dir = NULL;
     char *profiles_str = NULL;
@@ -1997,18 +1994,13 @@ error_t *cmd_update(
         }
 
         /* Validate: filter profiles must be enabled in workspace */
-        err = profile_validate_filter(
-            workspace_names, (const char *const *) cli_names->items, cli_names->count
-        );
+        err = profile_validate_filter(workspace_names, cli_names);
         if (err) goto cleanup;
 
-        filter_names = (const char **) cli_names->items;
-        filter_count = cli_names->count;
-        op_names = (const char *const *) cli_names->items;
-        op_count = cli_names->count;
+        filter = cli_names;
+        op_names = cli_names;
     } else {
-        op_names = (const char *const *) workspace_names->items;
-        op_count = workspace_names->count;
+        op_names = workspace_names;
     }
 
     /* Get repository directory for hooks */
@@ -2019,7 +2011,7 @@ error_t *cmd_update(
 
     /* Execute pre-update hook (using operation profiles for context) */
     if (config && repo_dir) {
-        profiles_str = str_join(op_names, op_count, " ");
+        profiles_str = string_array_join(op_names, " ");
 
         if (profiles_str) {
             /* Create hook context with operation profiles */
@@ -2091,7 +2083,7 @@ error_t *cmd_update(
         /* Extract custom prefixes from operation profiles */
         string_array_t *prefixes = NULL;
         err = profile_get_custom_prefixes(
-            repo, (const char *const *) op_names, op_count, &prefixes
+            repo, op_names, &prefixes
         );
         if (err) {
             err = error_wrap(err, "Failed to get custom prefixes");
@@ -2116,7 +2108,7 @@ error_t *cmd_update(
      * matches execution - only items from specified profiles are shown.
      */
     err = filter_items_for_update(
-        ws, opts, file_filter, filter_names, filter_count, config, out,
+        ws, opts, file_filter, filter, config, out,
         &update_items, &update_count
     );
     if (err) {

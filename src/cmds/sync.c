@@ -321,8 +321,7 @@ static error_t *pull_branch_ff(
 static error_t *sync_fetch_enabled_profiles(
     git_repository *repo,
     const char *remote_name,
-    const char *const *names,
-    size_t name_count,
+    const string_array_t *names,
     sync_results_t *results,
     output_ctx_t *out,
     transfer_context_t *xfer
@@ -367,7 +366,7 @@ static error_t *sync_fetch_enabled_profiles(
      * to exist (or have existed) on the remote. Local-only profiles (never
      * pushed) have no tracking ref and would cause the entire batched fetch
      * to fail with a "ref not found" error from the remote. */
-    char **branch_names = malloc(name_count * sizeof(char *));
+    char **branch_names = malloc(names->count * sizeof(char *));
     if (!branch_names) {
         if (ephemeral) {
             output_clear_line(out);
@@ -378,11 +377,11 @@ static error_t *sync_fetch_enabled_profiles(
     }
 
     size_t fetch_count = 0;
-    for (size_t i = 0; i < name_count; i++) {
+    for (size_t i = 0; i < names->count; i++) {
         char remote_refname[DOTTA_REFNAME_MAX];
         error_t *err_build = gitops_build_refname(
             remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
-            remote_name, names[i]
+            remote_name, names->items[i]
         );
         if (err_build) {
             error_free(err_build);
@@ -393,7 +392,7 @@ static error_t *sync_fetch_enabled_profiles(
         int rc = git_reference_lookup(&ref, repo, remote_refname);
         if (rc == 0) {
             git_reference_free(ref);
-            branch_names[fetch_count++] = (char *) names[i];
+            branch_names[fetch_count++] = names->items[i];
         }
     }
 
@@ -409,9 +408,8 @@ static error_t *sync_fetch_enabled_profiles(
     }
 
     /* Perform batched fetch - single network operation for all branches */
-    error_t *err = gitops_fetch_branches(
-        repo, remote_name, branch_names, fetch_count, xfer
-    );
+    string_array_t fetch_arr = { .items = branch_names, .count = fetch_count };
+    error_t *err = gitops_fetch_branches(repo, remote_name, &fetch_arr, xfer);
     free(branch_names);
 
     /* Resolve the ephemeral fetch/progress line. Handles all cases:
@@ -455,8 +453,7 @@ static error_t *sync_fetch_enabled_profiles(
 static error_t *sync_analyze_phase(
     git_repository *repo,
     const char *remote_name,
-    const char *const *names,
-    size_t name_count,
+    const string_array_t *names,
     sync_results_t *results,
     output_ctx_t *out
 ) {
@@ -466,10 +463,10 @@ static error_t *sync_analyze_phase(
     CHECK_NULL(results);
     CHECK_NULL(out);
 
-    for (size_t i = 0; i < name_count; i++) {
+    for (size_t i = 0; i < names->count; i++) {
         profile_sync_result_t *result = &results->profiles[i];
 
-        result->profile_name = strdup(names[i]);
+        result->profile_name = strdup(names->items[i]);
         if (!result->profile_name) {
             return ERROR(ERR_MEMORY, "Failed to allocate profile name");
         }
@@ -477,7 +474,7 @@ static error_t *sync_analyze_phase(
         /* Analyze state */
         upstream_info_t *info = NULL;
         error_t *err = upstream_analyze_profile(
-            repo, remote_name, names[i], &info
+            repo, remote_name, names->items[i], &info
         );
 
         if (err) {
@@ -1322,8 +1319,7 @@ error_t *cmd_sync(
     workspace_t *ws = NULL;
     string_array_t *workspace_names = NULL;
     string_array_t *cli_names = NULL;
-    const char *const *op_names = NULL;
-    size_t op_count = 0;
+    const string_array_t *op_names = NULL;
     sync_results_t *results = NULL;
     char *remote_name = NULL;
     char *remote_url = NULL;
@@ -1388,20 +1384,16 @@ error_t *cmd_sync(
         }
 
         /* Validate: filter profiles must be enabled in workspace */
-        err = profile_validate_filter(
-            workspace_names, (const char *const *) cli_names->items, cli_names->count
-        );
+        err = profile_validate_filter(workspace_names, cli_names);
         if (err) goto cleanup;
 
-        op_names = (const char *const *) cli_names->items;
-        op_count = cli_names->count;
+        op_names = cli_names;
     } else {
-        op_names = (const char *const *) workspace_names->items;
-        op_count = workspace_names->count;
+        op_names = workspace_names;
     }
 
     /* Create results tracker */
-    results = sync_results_create(op_count);
+    results = sync_results_create(op_names->count);
     if (!results) {
         err = ERROR(ERR_MEMORY, "Failed to create results");
         goto cleanup;
@@ -1616,7 +1608,7 @@ error_t *cmd_sync(
 
     /* Phase 1: Fetch enabled profiles from remote */
     err = sync_fetch_enabled_profiles(
-        repo, remote_name, (const char *const *) op_names, op_count, results, out, xfer
+        repo, remote_name, op_names, results, out, xfer
     );
     if (err) {
         goto cleanup;
@@ -1624,7 +1616,7 @@ error_t *cmd_sync(
 
     /* Phase 2: Analyze branch states */
     err = sync_analyze_phase(
-        repo, remote_name, (const char *const *) op_names, op_count, results, out
+        repo, remote_name, op_names, results, out
     );
     if (err) {
         goto cleanup;

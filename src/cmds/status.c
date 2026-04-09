@@ -27,8 +27,7 @@
  */
 static void display_enabled_profiles(
     output_ctx_t *out,
-    const char *const *names,
-    size_t count,
+    const string_array_t *names,
     const manifest_t *manifest,
     const state_t *state
 ) {
@@ -37,8 +36,8 @@ static void display_enabled_profiles(
     /* Show enabled profiles */
     output_section(out, OUTPUT_NORMAL, "Enabled profiles");
 
-    for (size_t i = 0; i < count; i++) {
-        const char *name = names[i];
+    for (size_t i = 0; i < names->count; i++) {
+        const char *name = names->items[i];
 
         /* Format profile name */
         output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", name);
@@ -98,8 +97,7 @@ static void display_enabled_profiles(
  */
 static void display_workspace_status(
     workspace_t *ws,
-    const char *const *filter_names,
-    size_t filter_count,
+    const string_array_t *filter,
     const manifest_t *manifest,
     output_ctx_t *out
 ) {
@@ -118,13 +116,13 @@ static void display_workspace_status(
     size_t filtered_diverged = 0;
     size_t hidden_count = 0;
 
-    if (filter_names) {
+    if (filter) {
         /* Count total managed files from manifest for filtered profile(s) */
         if (manifest) {
             for (size_t i = 0; i < manifest->count; i++) {
                 if (manifest->entries[i].profile_name &&
                     profile_filter_matches(
-                    manifest->entries[i].profile_name, filter_names, filter_count
+                    manifest->entries[i].profile_name, filter
                     )) {
                     profile_file_count++;
                 }
@@ -133,7 +131,7 @@ static void display_workspace_status(
 
         /* Partition diverged items into filtered vs hidden */
         for (size_t i = 0; i < all_count; i++) {
-            if (profile_filter_matches(all_items[i].profile, filter_names, filter_count)) {
+            if (profile_filter_matches(all_items[i].profile, filter)) {
                 filtered_diverged++;
             } else {
                 hidden_count++;
@@ -146,7 +144,7 @@ static void display_workspace_status(
      * - Clean with hidden divergence from other profiles: always show
      * - Clean with no divergence anywhere: show only with verbose
      */
-    bool has_divergence = filter_names ? (filtered_diverged > 0)
+    bool has_divergence = filter ? (filtered_diverged > 0)
                                        : (ws_status != WORKSPACE_CLEAN);
     if (!has_divergence && hidden_count == 0 && !output_is_verbose(out)) {
         return;
@@ -155,7 +153,7 @@ static void display_workspace_status(
     output_section(out, OUTPUT_NORMAL, "Workspace status");
 
     /* Display status line */
-    if (filter_names) {
+    if (filter) {
         /* Profile-scoped status: reflects the filtered profile */
         if (filtered_diverged == 0) {
             if (profile_file_count > 0) {
@@ -222,7 +220,7 @@ static void display_workspace_status(
     /* Show sectioned output for dirty/invalid workspace */
     if (ws_status != WORKSPACE_CLEAN) {
         /* When filter active and filtered profile is clean, skip detailed sections */
-        if (!filter_names || filtered_diverged > 0) {
+        if (!filter || filtered_diverged > 0) {
 
             /* Single allocation for all category pointers (5 categories × all_count slots)
              * Memory layout: [uncommitted][undeployed][new_files][orphaned][reassigned]
@@ -257,8 +255,8 @@ static void display_workspace_status(
                  * When profile filter is active, only show items from matching
                  * profiles. This ensures status output matches what apply would do.
                  */
-                if (filter_names &&
-                    !profile_filter_matches(item->profile, filter_names, filter_count)) {
+                if (filter &&
+                    !profile_filter_matches(item->profile, filter)) {
                     continue;  /* Skip items from other profiles */
                 }
 
@@ -480,7 +478,7 @@ static void display_workspace_status(
         }
 
         /* Show hidden items note when profile filter is active */
-        if (filter_names && hidden_count > 0) {
+        if (filter && hidden_count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "  {dim}(%zu item%s from other profiles hidden){reset}\n",
                 hidden_count, hidden_count == 1 ? "" : "s"
@@ -497,8 +495,7 @@ static void display_workspace_status(
  */
 static error_t *display_remote_status(
     git_repository *repo,
-    const char *const *names,
-    size_t count,
+    const string_array_t *names,
     output_ctx_t *out,
     bool show_all_profiles,
     bool no_fetch
@@ -520,8 +517,7 @@ static error_t *display_remote_status(
 
     /* Build name array for profiles to check */
     string_array_t *all_local = NULL;
-    const char **check_names = NULL;
-    size_t check_count = 0;
+    const string_array_t *check = names;
 
     if (show_all_profiles) {
         /* Explicit request: show ALL local profiles (lightweight, no ref resolution) */
@@ -530,15 +526,10 @@ static error_t *display_remote_status(
             free(remote_name);
             return error_wrap(err, "Failed to list all profiles");
         }
-        check_names = (const char **) all_local->items;
-        check_count = all_local->count;
-    } else {
-        /* Default: use provided names directly */
-        check_names = (const char **) names;
-        check_count = count;
+        check = all_local;
     }
 
-    if (check_count == 0) {
+    if (check->count == 0) {
         string_array_free(all_local);
         free(remote_name);
         return NULL;
@@ -574,7 +565,7 @@ static error_t *display_remote_status(
 
         /* Perform batched fetch - single network operation for all branches */
         error_t *fetch_err = gitops_fetch_branches(
-            repo, remote_name, (char **) check_names, check_count, xfer
+            repo, remote_name, check, xfer
         );
 
         /* Resolve the ephemeral fetch/progress line */
@@ -620,8 +611,8 @@ static error_t *display_remote_status(
     size_t diverged = 0;
     size_t no_remote = 0;
 
-    for (size_t i = 0; i < check_count; i++) {
-        const char *profile_name = check_names[i];
+    for (size_t i = 0; i < check->count; i++) {
+        const char *profile_name = check->items[i];
 
         /* Analyze upstream state */
         upstream_info_t *info = NULL;
@@ -859,10 +850,8 @@ error_t *cmd_status(
     const manifest_t *manifest = NULL;
     string_array_t *workspace_names = NULL;
     string_array_t *cli_names = NULL;
-    const char *const *op_names = NULL;
-    size_t op_count = 0;
-    const char **filter_names = NULL;
-    size_t filter_count = 0;
+    const string_array_t *op_names = NULL;
+    const string_array_t *filter = NULL;
     bool has_profile_filter = (opts->profiles != NULL && opts->profile_count > 0);
 
     /* CLI flags override config */
@@ -901,18 +890,13 @@ error_t *cmd_status(
             goto cleanup;
         }
 
-        err = profile_validate_filter(
-            workspace_names, (const char *const *) cli_names->items, cli_names->count
-        );
+        err = profile_validate_filter(workspace_names, cli_names);
         if (err) goto cleanup;
 
-        filter_names = (const char **) cli_names->items;
-        filter_count = cli_names->count;
-        op_names = (const char *const *) cli_names->items;
-        op_count = cli_names->count;
+        filter = cli_names;
+        op_names = cli_names;
     } else {
-        op_names = (const char *const *) workspace_names->items;
-        op_count = workspace_names->count;
+        op_names = workspace_names;
     }
 
     /* Load workspace for divergence analysis (only needed for local status)
@@ -1009,7 +993,7 @@ error_t *cmd_status(
     }
 
     /* Display enabled profiles and last deployment info */
-    display_enabled_profiles(out, op_names, op_count, manifest, state);
+    display_enabled_profiles(out, op_names, manifest, state);
 
     /* Display workspace status (with profile filtering for Coherent Scope)
      *
@@ -1020,16 +1004,13 @@ error_t *cmd_status(
      * `dotta apply -p work` behavior.
      */
     if (opts->show_local) {
-        display_workspace_status(
-            ws, filter_names, filter_count, manifest, out
-        );
+        display_workspace_status(ws, filter, manifest, out);
     }
 
     /* Show remote sync status (if requested) */
     if (opts->show_remote) {
         err = display_remote_status(
-            repo, (const char *const *) op_names, op_count, out,
-            opts->all_profiles, opts->no_fetch
+            repo, op_names, out, opts->all_profiles, opts->no_fetch
         );
         if (err) {
             /* Non-fatal: might not have remote configured */

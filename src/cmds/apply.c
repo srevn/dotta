@@ -13,7 +13,6 @@
 #include "base/error.h"
 #include "base/match.h"
 #include "base/output.h"
-#include "base/string.h"
 #include "core/cleanup.h"
 #include "core/deploy.h"
 #include "core/manifest.h"
@@ -824,10 +823,8 @@ error_t *cmd_apply(
     state_t *state = NULL;
     string_array_t *workspace_names = NULL;
     string_array_t *cli_names = NULL;
-    const char *const *op_names = NULL;
-    size_t op_count = 0;
-    const char **filter_names = NULL;
-    size_t filter_count = 0;
+    const string_array_t *op_names = NULL;
+    const string_array_t *filter = NULL;
     const manifest_t *manifest = NULL;
     manifest_t *deploy_manifest = NULL;
     workspace_t *ws = NULL;
@@ -952,28 +949,23 @@ error_t *cmd_apply(
         }
 
         /* Validate: filter profiles must be enabled in workspace */
-        err = profile_validate_filter(
-            workspace_names, (const char *const *) cli_names->items, cli_names->count
-        );
+        err = profile_validate_filter(workspace_names, cli_names);
         if (err) goto cleanup;
 
-        filter_names = (const char **) cli_names->items;
-        filter_count = cli_names->count;
-        op_names = (const char *const *) cli_names->items;
-        op_count = cli_names->count;
+        filter = cli_names;
+        op_names = cli_names;
     } else {
-        op_names = (const char *const *) workspace_names->items;
-        op_count = workspace_names->count;
+        op_names = workspace_names;
     }
 
     output_print(
         out, OUTPUT_VERBOSE, "Using %zu profile%s:\n",
-        op_count, op_count == 1 ? "" : "s"
+        op_names->count, op_names->count == 1 ? "" : "s"
     );
-    for (size_t i = 0; i < op_count; i++) {
+    for (size_t i = 0; i < op_names->count; i++) {
         output_styled(
             out, OUTPUT_VERBOSE, "  {cyan}•{reset} %s\n",
-            op_names[i]
+            op_names->items[i]
         );
     }
 
@@ -986,9 +978,7 @@ error_t *cmd_apply(
     if (opts->files && opts->file_count > 0) {
         /* Extract custom prefixes from operation profiles */
         string_array_t *prefixes = NULL;
-        err = profile_get_custom_prefixes(
-            repo, (const char *const *) op_names, op_count, &prefixes
-        );
+        err = profile_get_custom_prefixes(repo, op_names, &prefixes);
         if (err) {
             err = error_wrap(err, "Failed to get custom prefixes");
             goto cleanup;
@@ -1088,7 +1078,7 @@ error_t *cmd_apply(
 
         /* Filter by operation profiles (skip files not in filter) */
         if (entry->profile_name &&
-            !profile_filter_matches(entry->profile_name, filter_names, filter_count)) {
+            !profile_filter_matches(entry->profile_name, filter)) {
             continue;
         }
 
@@ -1143,7 +1133,7 @@ error_t *cmd_apply(
 
             /* Filter by operation profiles (skip files not in filter) */
             if (entry->profile_name &&
-                !profile_filter_matches(entry->profile_name, filter_names, filter_count)) {
+                !profile_filter_matches(entry->profile_name, filter)) {
                 continue;
             }
 
@@ -1257,7 +1247,7 @@ error_t *cmd_apply(
         size_t total_file_orphans = 0, total_dir_orphans = 0;
 
         err = workspace_extract_orphans(
-            ws, filter_names, filter_count, &all_file_orphans, &total_file_orphans,
+            ws, filter, &all_file_orphans, &total_file_orphans,
             &all_dir_orphans, &total_dir_orphans
         );
         if (err) {
@@ -1385,7 +1375,7 @@ error_t *cmd_apply(
         }
 
         /* Coherent Scope: same filters as deployment pipeline */
-        if (!profile_filter_matches(all_items[i].profile, filter_names, filter_count)) {
+        if (!profile_filter_matches(all_items[i].profile, filter)) {
             continue;
         }
         if (!path_filter_matches(file_filter, all_items[i].storage_path)) {
@@ -1437,7 +1427,7 @@ error_t *cmd_apply(
                     continue;
                 }
 
-                if (!profile_filter_matches(all_items[i].profile, filter_names, filter_count)) {
+                if (!profile_filter_matches(all_items[i].profile, filter)) {
                     continue;
                 }
                 if (!path_filter_matches(file_filter, all_items[i].storage_path)) {
@@ -1539,8 +1529,7 @@ error_t *cmd_apply(
         .skip_unchanged   = opts->skip_unchanged,
         .strict_ownership = config->strict_mode,
         .targeted_mode    = (file_filter != NULL),
-        .scope_names      = filter_names,
-        .scope_count      = filter_count
+        .scope            = filter
     };
 
     err = deploy_workspace_preflight(ws, deploy_manifest, &deploy_opts, &preflight);
@@ -1634,7 +1623,7 @@ error_t *cmd_apply(
 
     /* Execute pre-apply hook */
     if (config && repo_dir) {
-        profiles_str = str_join(op_names, op_count, " ");
+        profiles_str = string_array_join(op_names, " ");
 
         /* Create hook context with all profiles */
         hook_ctx = hook_context_create(repo_dir, "apply", profiles_str);
@@ -2165,7 +2154,7 @@ error_t *cmd_apply(
                 continue;
             }
 
-            if (!profile_filter_matches(all_items[i].profile, filter_names, filter_count)) {
+            if (!profile_filter_matches(all_items[i].profile, filter)) {
                 continue;
             }
             if (!path_filter_matches(file_filter, all_items[i].storage_path)) {

@@ -290,9 +290,7 @@ static error_t *build_manifest(
     manifest_t *manifest = NULL;
 
     /* Load profiles from Git (profiles module - pure Git operations) */
-    err = profile_list_load(
-        repo, profile_names->items, profile_names->count, false /* strict */, &profiles
-    );
+    err = profile_list_load(repo, profile_names, false, /* strict */ &profiles);
     if (err) {
         return error_wrap(err, "Failed to load profiles for manifest build");
     }
@@ -2545,9 +2543,7 @@ error_t *manifest_update_files(
     if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
 
     /* 1. Load enabled profiles from Git */
-    err = profile_list_load(
-        repo, enabled_profiles->items, enabled_profiles->count, false, &profiles
-    );
+    err = profile_list_load(repo, enabled_profiles, false, &profiles);
     if (err) {
         arena_destroy(arena);
         return error_wrap(err, "Failed to load profiles for bulk sync");
@@ -2941,9 +2937,7 @@ error_t *manifest_add_files(
     if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
 
     /* 1. Load enabled profiles from Git */
-    err = profile_list_load(
-        repo, enabled_profiles->items, enabled_profiles->count, false, &profiles
-    );
+    err = profile_list_load(repo, enabled_profiles, false, &profiles);
     if (err) {
         arena_destroy(arena);
         return error_wrap(err, "Failed to load profiles for bulk sync");
@@ -3183,11 +3177,7 @@ error_t *manifest_sync_diff(
     /* PHASE 1: BUILD CONTEXT (O(M)) */
     /* 1.0. Load all enabled profiles from Git (current state) */
     err = profile_list_load(
-        repo,
-        enabled_profiles->items,
-        enabled_profiles->count,
-        false,  /* strict=false: skip missing profiles */
-        &profiles
+        repo, enabled_profiles, false, /* strict=false: skip missing profiles */ &profiles
     );
     if (err) {
         err = error_wrap(err, "Failed to load enabled profiles");

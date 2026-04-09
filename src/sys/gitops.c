@@ -1207,15 +1207,14 @@ error_t *gitops_fetch_branch(
 error_t *gitops_fetch_branches(
     git_repository *repo,
     const char *remote_name,
-    char **branch_names,
-    size_t branch_count,
+    const string_array_t *branches,
     transfer_context_t *xfer
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
-    CHECK_NULL(branch_names);
+    CHECK_NULL(branches);
     CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
-    CHECK_ARG(branch_count > 0, "branch_count must be greater than 0");
+    CHECK_ARG(branches->count > 0, "branches must not be empty");
 
     /* Look up remote once */
     git_remote *remote = NULL;
@@ -1225,7 +1224,7 @@ error_t *gitops_fetch_branches(
     }
 
     /* Build array of refspecs for all branches */
-    char **refspecs = calloc(branch_count, sizeof(char *));
+    char **refspecs = calloc(branches->count, sizeof(char *));
     if (!refspecs) {
         git_remote_free(remote);
         return ERROR(ERR_MEMORY, "Failed to allocate refspecs array");
@@ -1233,16 +1232,16 @@ error_t *gitops_fetch_branches(
 
     /* Construct refspecs for each branch */
     error_t *err_result = NULL;
-    for (size_t i = 0; i < branch_count; i++) {
-        if (!branch_names[i]) {
+    for (size_t i = 0; i < branches->count; i++) {
+        if (!branches->items[i]) {
             err_result = ERROR(
-                ERR_INVALID_ARG, "branch_names[%zu] is NULL", i
+                ERR_INVALID_ARG, "branches[%zu] is NULL", i
             );
             goto cleanup;
         }
-        if (branch_names[i][0] == '\0') {
+        if (branches->items[i][0] == '\0') {
             err_result = ERROR(
-                ERR_INVALID_ARG, "branch_names[%zu] cannot be empty", i
+                ERR_INVALID_ARG, "branches[%zu] cannot be empty", i
             );
             goto cleanup;
         }
@@ -1257,12 +1256,12 @@ error_t *gitops_fetch_branches(
         /* Build refspec: refs/heads/branch:refs/remotes/origin/branch */
         error_t *err_build = gitops_build_refname(
             refspecs[i], DOTTA_REFSPEC_MAX, "refs/heads/%s:refs/remotes/%s/%s",
-            branch_names[i], remote_name, branch_names[i]
+            branches->items[i], remote_name, branches->items[i]
         );
         if (err_build) {
             err_result = error_wrap(
                 err_build, "Invalid branch/remote name '%s/%s'",
-                remote_name, branch_names[i]
+                remote_name, branches->items[i]
             );
             goto cleanup;
         }
@@ -1281,7 +1280,7 @@ error_t *gitops_fetch_branches(
     }
 
     /* Build git_strarray from our refspecs */
-    git_strarray refs = { refspecs, branch_count };
+    git_strarray refs = { refspecs, branches->count };
 
     /* Perform the batched fetch */
     err = git_remote_fetch(remote, &refs, &fetch_opts, NULL);
@@ -1303,7 +1302,7 @@ error_t *gitops_fetch_branches(
 cleanup:
     /* Free refspecs array */
     if (refspecs) {
-        for (size_t i = 0; i < branch_count; i++) {
+        for (size_t i = 0; i < branches->count; i++) {
             free(refspecs[i]);
         }
         free(refspecs);

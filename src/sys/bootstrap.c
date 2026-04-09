@@ -18,6 +18,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/string.h"
@@ -929,8 +930,7 @@ error_t *bootstrap_execute(
 error_t *bootstrap_run_for_profiles(
     git_repository *repo,
     const char *repo_dir,
-    const char *const *profile_names,
-    size_t profile_count,
+    const string_array_t *profile_names,
     bool dry_run,
     bool stop_on_error
 ) {
@@ -942,8 +942,8 @@ error_t *bootstrap_run_for_profiles(
 
     /* Count scripts that exist */
     size_t script_count = 0;
-    for (size_t i = 0; i < profile_count; i++) {
-        if (bootstrap_exists(repo, profile_names[i], script_name)) {
+    for (size_t i = 0; i < profile_names->count; i++) {
+        if (bootstrap_exists(repo, profile_names->items[i], script_name)) {
             script_count++;
         }
     }
@@ -954,7 +954,7 @@ error_t *bootstrap_run_for_profiles(
     }
 
     /* Build space-separated list of all profiles for environment variable */
-    char *all_profiles = str_join(profile_names, profile_count, " ");
+    char *all_profiles = string_array_join(profile_names, " ");
     if (!all_profiles) {
         return ERROR(ERR_MEMORY, "Failed to join profile names");
     }
@@ -968,8 +968,8 @@ error_t *bootstrap_run_for_profiles(
         return ERROR(ERR_MEMORY, "Failed to allocate failed profiles array");
     }
 
-    for (size_t i = 0; i < profile_count; i++) {
-        const char *profile_name = profile_names[i];
+    for (size_t i = 0; i < profile_names->count; i++) {
+        const char *profile_name = profile_names->items[i];
 
         /* Check if bootstrap script exists */
         if (!bootstrap_exists(repo, profile_name, script_name)) {

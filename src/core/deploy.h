@@ -69,8 +69,7 @@ typedef struct {
      *
      * NULL = process all directories (full sync mode)
      */
-    const char *const *scope_names;
-    size_t scope_count;
+    const string_array_t *scope;
 } deploy_options_t;
 
 /**

@@ -363,8 +363,7 @@ cleanup:
  */
 error_t *profile_list_load(
     git_repository *repo,
-    char **names,
-    size_t count,
+    const string_array_t *names,
     bool strict,
     profile_list_t **out
 ) {
@@ -381,22 +380,22 @@ error_t *profile_list_load(
         goto cleanup;
     }
 
-    list->profiles = calloc(count, sizeof(profile_t));
+    list->profiles = calloc(names->count, sizeof(profile_t));
     if (!list->profiles) {
         err = ERROR(ERR_MEMORY, "Failed to allocate profiles array");
         goto cleanup;
     }
     list->count = 0;
 
-    for (size_t i = 0; i < count; i++) {
+    for (size_t i = 0; i < names->count; i++) {
         profile_t *profile = NULL;
-        err = profile_load(repo, names[i], &profile);
+        err = profile_load(repo, names->items[i], &profile);
         if (err) {
             if (strict) {
                 /* In strict mode, fail on missing profiles */
                 err = error_wrap(
                     err, "Failed to load profile '%s'",
-                    names[i]
+                    names->items[i]
                 );
                 goto cleanup;
             } else {
@@ -489,8 +488,7 @@ error_t *profiles_enrich_with_prefixes(
  */
 error_t *profile_get_custom_prefixes(
     git_repository *repo,
-    const char *const *names,
-    size_t count,
+    const string_array_t *names,
     string_array_t **out_prefixes
 ) {
     CHECK_NULL(repo);
@@ -526,8 +524,8 @@ error_t *profile_get_custom_prefixes(
         return error_wrap(err, "Failed to get custom prefix map");
     }
 
-    for (size_t i = 0; i < count; i++) {
-        const char *prefix = (const char *) hashmap_get(prefix_map, names[i]);
+    for (size_t i = 0; i < names->count; i++) {
+        const char *prefix = (const char *) hashmap_get(prefix_map, names->items[i]);
         if (prefix) {
             err = string_array_push(prefixes, prefix);
             if (err) {
@@ -739,16 +737,17 @@ error_t *profile_resolve(
     error_t *err = NULL;
     state_t *state = NULL;
     string_array_t *valid_profiles = NULL;
-    char **names = NULL;
 
     /* Priority 1: Explicit CLI profiles (temporary override) */
     if (explicit_profiles && explicit_count > 0) {
         if (source_out) {
             *source_out = PROFILE_SOURCE_EXPLICIT;
         }
-        err = profile_list_load(
-            repo, explicit_profiles, explicit_count, strict_mode, out
-        );
+        string_array_t explicit_array = {
+            .items = explicit_profiles,
+            .count = explicit_count
+        };
+        err = profile_list_load(repo, &explicit_array, strict_mode, out);
         if (err) {
             return err;
         }
@@ -786,18 +785,7 @@ error_t *profile_resolve(
     }
 
     /* Load full profile_t structs from validated names */
-    size_t count = valid_profiles->count;
-    names = malloc(count * sizeof(char *));
-    if (!names) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate profile names");
-        goto cleanup;
-    }
-
-    for (size_t i = 0; i < count; i++) {
-        names[i] = valid_profiles->items[i];
-    }
-
-    err = profile_list_load(repo, names, count, strict_mode, out);
+    err = profile_list_load(repo, valid_profiles, strict_mode, out);
     if (err) {
         goto cleanup;
     }
@@ -813,7 +801,6 @@ error_t *profile_resolve(
     /* Success */
     if (source_out) *source_out = PROFILE_SOURCE_STATE;
 
-    free(names);
     string_array_free(valid_profiles);
     state_free(state);
 
@@ -837,7 +824,6 @@ no_profiles:
     );
 
 cleanup:
-    free(names);
     string_array_free(valid_profiles);
     state_free(state);
 
@@ -917,19 +903,18 @@ error_t *profile_resolve_state_names(
  */
 error_t *profile_validate_filter(
     const string_array_t *workspace_names,
-    const char *const *filter_names,
-    size_t filter_count
+    const string_array_t *filter
 ) {
     CHECK_NULL(workspace_names);
 
     /* NULL filter is valid (no filter) */
-    if (!filter_names) {
+    if (!filter) {
         return NULL;
     }
 
     /* Check each filter profile is in workspace */
-    for (size_t i = 0; i < filter_count; i++) {
-        const char *filter_name = filter_names[i];
+    for (size_t i = 0; i < filter->count; i++) {
+        const char *filter_name = filter->items[i];
         bool found = false;
 
         for (size_t j = 0; j < workspace_names->count; j++) {
@@ -959,8 +944,7 @@ error_t *profile_validate_filter(
  */
 bool profile_filter_matches(
     const char *profile_name,
-    const char *const *filter_names,
-    size_t filter_count
+    const string_array_t *filter
 ) {
     /* NULL name never matches (defensive) */
     if (!profile_name) {
@@ -968,13 +952,13 @@ bool profile_filter_matches(
     }
 
     /* NULL filter matches all (no filter = match all) */
-    if (!filter_names) {
+    if (!filter) {
         return true;
     }
 
     /* Check if name is in filter list */
-    for (size_t i = 0; i < filter_count; i++) {
-        if (strcmp(profile_name, filter_names[i]) == 0) {
+    for (size_t i = 0; i < filter->count; i++) {
+        if (strcmp(profile_name, filter->items[i]) == 0) {
             return true;
         }
     }

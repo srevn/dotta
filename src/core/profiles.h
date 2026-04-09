@@ -196,15 +196,13 @@ error_t *profile_load(
  *
  * @param repo Repository (must not be NULL)
  * @param names Profile names (must not be NULL)
- * @param count Number of profiles
  * @param strict If true, error on non-existent profiles; if false, skip them
  * @param out Profile list (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
 error_t *profile_list_load(
     git_repository *repo,
-    char **names,
-    size_t count,
+    const string_array_t *names,
     bool strict,
     profile_list_t **out
 );
@@ -321,8 +319,7 @@ error_t *profile_resolve_state_names(
  */
 error_t *profile_get_custom_prefixes(
     git_repository *repo,
-    const char *const *names,
-    size_t count,
+    const string_array_t *names,
     string_array_t **out_prefixes
 );
 
@@ -334,14 +331,12 @@ error_t *profile_get_custom_prefixes(
  * to a disabled profile.
  *
  * @param workspace_names Enabled profile names from state (must not be NULL)
- * @param filter_names CLI filter profile names (NULL is valid = no filter)
- * @param filter_count Number of filter names (ignored when filter_names is NULL)
+ * @param filter CLI filter profile names (NULL = no filter)
  * @return Error if any filter profile is not enabled, NULL on success
  */
 error_t *profile_validate_filter(
     const string_array_t *workspace_names,
-    const char *const *filter_names,
-    size_t filter_count
+    const string_array_t *filter
 );
 
 /**
@@ -356,14 +351,12 @@ error_t *profile_validate_filter(
  * NULL name semantics: Returns false (defensive, NULL name never matches).
  *
  * @param profile_name Profile name to check (NULL returns false)
- * @param filter_names Array of profile names to match against (NULL = match all)
- * @param filter_count Number of names in filter (ignored when filter_names is NULL)
+ * @param filter Profile names to match against (NULL = match all)
  * @return true if profile matches filter, false otherwise
  */
 bool profile_filter_matches(
     const char *profile_name,
-    const char *const *filter_names,
-    size_t filter_count
+    const string_array_t *filter
 );
 
 /**

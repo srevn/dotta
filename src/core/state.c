@@ -898,68 +898,6 @@ bool state_has_profile(const state_t *state, const char *profile_name) {
 }
 
 /**
- * Get unique profiles that have deployed files
- *
- * Extracts all unique profile names from the virtual_manifest table.
- * Uses SQL DISTINCT for efficient deduplication at database level.
- */
-error_t *state_get_deployed_profiles(const state_t *state, string_array_t **out) {
-    CHECK_NULL(state);
-    CHECK_NULL(out);
-    CHECK_NULL(state->db);
-
-    *out = NULL;
-
-    /* Create output array */
-    string_array_t *profiles = string_array_new(0);
-    if (!profiles) {
-        return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
-    }
-
-    /* Query for unique profile names (DISTINCT ensures deduplication) */
-    const char *sql =
-        "SELECT DISTINCT profile FROM virtual_manifest ORDER BY profile;";
-
-    sqlite3_stmt *stmt = NULL;
-    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
-        string_array_free(profiles);
-        return sqlite_error(state->db, "Failed to prepare deployed profiles query");
-    }
-
-    /* Collect profile names */
-    error_t *err = NULL;
-    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
-        const char *profile_name = (const char *) sqlite3_column_text(stmt, 0);
-
-        if (!profile_name) {
-            /* NULL profile name should never happen (NOT NULL constraint) */
-            sqlite3_finalize(stmt);
-            string_array_free(profiles);
-            return ERROR(ERR_STATE_INVALID, "NULL profile in virtual_manifest");
-        }
-
-        err = string_array_push(profiles, profile_name);
-        if (err) {
-            sqlite3_finalize(stmt);
-            string_array_free(profiles);
-            return error_wrap(err, "Failed to add profile to array");
-        }
-    }
-
-    sqlite3_finalize(stmt);
-
-    /* Check for query errors */
-    if (rc != SQLITE_DONE) {
-        string_array_free(profiles);
-        return sqlite_error(state->db, "Failed to fetch deployed profiles");
-    }
-
-    *out = profiles;
-    return NULL;
-}
-
-/**
  * Enable profile with optional custom prefix
  */
 error_t *state_enable_profile(
@@ -969,6 +907,7 @@ error_t *state_enable_profile(
 ) {
     CHECK_NULL(state);
     CHECK_NULL(profile_name);
+    CHECK_NULL(state->db);
 
     if (profile_name[0] == '\0') {
         return ERROR(ERR_INVALID_ARG, "Profile name cannot be empty");
@@ -1017,6 +956,7 @@ error_t *state_disable_profile(
 ) {
     CHECK_NULL(state);
     CHECK_NULL(profile_name);
+    CHECK_NULL(state->db);
 
     const char *sql = "DELETE FROM enabled_profiles WHERE name = ?1";
 
@@ -1579,10 +1519,12 @@ error_t *state_get_all_files(
     CHECK_NULL(state);
     CHECK_NULL(out);
     CHECK_NULL(count);
-    CHECK_NULL(state->db);
 
     *out = NULL;
     *count = 0;
+
+    /* Empty state (no DB file) — return empty results */
+    if (!state->db) return NULL;
 
     /* Count files first (avoid double iteration) */
     const char *sql_count = "SELECT COUNT(*) FROM virtual_manifest;";
@@ -1874,6 +1816,7 @@ error_t *state_add_directory(state_t *state, const state_directory_entry_t *entr
     CHECK_NULL(entry->filesystem_path);
     CHECK_NULL(entry->storage_path);
     CHECK_NULL(entry->profile);
+    CHECK_NULL(state->db);
 
     /* Prepare statement if not already prepared */
     if (!state->stmt_insert_directory) {
@@ -1957,10 +1900,12 @@ error_t *state_get_all_directories(
     CHECK_NULL(state);
     CHECK_NULL(out);
     CHECK_NULL(count);
-    CHECK_NULL(state->db);
 
     *out = NULL;
     *count = 0;
+
+    /* Empty state (no DB file) — return empty results */
+    if (!state->db) return NULL;
 
     /* Count directories first (avoid realloc, required for arena mode) */
     const char *sql_count = "SELECT COUNT(*) FROM tracked_directories;";
@@ -2104,10 +2049,12 @@ error_t *state_get_directories_by_profile(
     CHECK_NULL(profile);
     CHECK_NULL(out);
     CHECK_NULL(count);
-    CHECK_NULL(state->db);
 
     *out = NULL;
     *count = 0;
+
+    /* Empty state (no DB file) — return empty results */
+    if (!state->db) return NULL;
 
     /* Count directories first (avoid realloc, required for arena mode) */
     const char *sql_count = "SELECT COUNT(*) FROM tracked_directories WHERE profile = ?;";
@@ -2411,6 +2358,7 @@ error_t *state_get_directory(
     CHECK_NULL(state);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(out);
+    CHECK_NULL(state->db);
 
     *out = NULL;
 
@@ -3513,11 +3461,14 @@ error_t *state_get_entries_by_profile(
     CHECK_NULL(profile);
     CHECK_NULL(out);
     CHECK_NULL(count);
-    CHECK_NULL(state->db);
-    CHECK_NULL(state->stmt_get_by_profile);
 
     *out = NULL;
     *count = 0;
+
+    /* Empty state (no DB file) — return empty results */
+    if (!state->db) return NULL;
+
+    CHECK_NULL(state->stmt_get_by_profile);
 
     /* First, count entries */
     char count_sql[512];

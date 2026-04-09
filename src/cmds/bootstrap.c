@@ -430,7 +430,7 @@ error_t *cmd_bootstrap(
         }
     } else {
         /* Use enabled profiles from state */
-        err = profile_resolve_state_names(repo, &profile_names);
+        err = profile_resolve_state_names(repo, NULL, &profile_names);
         if (err) {
             if (error_code(err) == ERR_NOT_FOUND) {
                 /* No profiles enabled — expected case, show guidance */

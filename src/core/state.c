@@ -2901,6 +2901,13 @@ void state_rollback_transaction(state_t *state) {
 }
 
 /**
+ * Check if state has an active transaction
+ */
+bool state_in_transaction(const state_t *state) {
+    return state && state->in_transaction;
+}
+
+/**
  * Create empty state
  *
  * Returns in-memory state with no database connection.

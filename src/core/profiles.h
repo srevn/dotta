@@ -236,14 +236,17 @@ error_t *profile_resolve_cli_names(
  * Warns on stderr about profiles referenced in state that no longer exist.
  *
  * Does NOT resolve Git references or allocate profile_t structs.
- * Use this when only profile names are needed (e.g., bootstrap).
  *
  * @param repo Repository (must not be NULL)
+ * @param state State handle for connection reuse (NULL = load internally)
+ *              When non-NULL, only reads from the handle (const). Safe to
+ *              pass a state_load_for_update() handle — only SELECTs executed.
  * @param out Validated profile names (must not be NULL, caller must free)
  * @return Error (ERR_NOT_FOUND if no enabled profiles) or NULL on success
  */
 error_t *profile_resolve_state_names(
     git_repository *repo,
+    const state_t *state,
     string_array_t **out
 );
 
@@ -258,14 +261,16 @@ error_t *profile_resolve_state_names(
  * (apply, update, diff). Commands that only filter by name (status, sync)
  * do not need this.
  *
- * @param repo Repository (must not be NULL)
+ * @param repo Repository (only used when state==NULL)
+ * @param state State handle for connection reuse (NULL = load internally)
+ *              When non-NULL, only reads from the handle (const).
  * @param names Profile names to query (must not be NULL)
- * @param count Number of names (must be > 0)
  * @param out_prefixes Non-NULL custom prefixes (must not be NULL, caller frees)
  * @return Error or NULL on success (empty array if no custom prefixes)
  */
 error_t *profile_get_custom_prefixes(
     git_repository *repo,
+    const state_t *state,
     const string_array_t *names,
     string_array_t **out_prefixes
 );

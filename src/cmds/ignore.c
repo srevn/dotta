@@ -1285,7 +1285,7 @@ static error_t *test_path_ignore(
 
     /* Test against all enabled profiles */
     string_array_t *profile_names = NULL;
-    error_t *err = profile_resolve_state_names(repo, &profile_names);
+    error_t *err = profile_resolve_state_names(repo, NULL, &profile_names);
 
     if (err) {
         if (error_code(err) != ERR_NOT_FOUND) {

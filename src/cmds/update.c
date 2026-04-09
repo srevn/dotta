@@ -1941,6 +1941,7 @@ error_t *cmd_update(
 
     /* Declare all resources at top, initialized to NULL */
     error_t *err = NULL;
+    state_t *state = NULL;
     workspace_t *ws = NULL;
     string_array_t *workspace_names = NULL;
     string_array_t *cli_names = NULL;
@@ -1968,8 +1969,16 @@ error_t *cmd_update(
      * - cli_names / op_names: CLI filter names or workspace names for update operations
      */
 
+    /* Load state once for the command's lifetime.
+     * Shared across profile resolution, prefix queries, and workspace loading. */
+    err = state_load(repo, &state);
+    if (err) {
+        err = error_wrap(err, "Failed to load state");
+        goto cleanup;
+    }
+
     /* Phase 1: Resolve enabled profile names (persistent) */
-    err = profile_resolve_state_names(repo, &workspace_names);
+    err = profile_resolve_state_names(repo, state, &workspace_names);
     if (err) {
         err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
@@ -2056,8 +2065,8 @@ error_t *cmd_update(
      * (files from enabled profiles) and new files. Orphaned files (in state but not
      * in any enabled profile) are out of scope for update operations.
      *
-     * State is NULL - this is read-only analysis. The transaction for manifest updates
-     * opens later in update_manifest_after_update().
+     * State is borrowed from the command-level state_load(). Read-only analysis.
+     * The transaction for manifest updates opens later in update_manifest_after_update().
      */
     workspace_load_t ws_opts = {
         .analyze_files       = true,                    /* Detect content and metadata changes */
@@ -2067,7 +2076,7 @@ error_t *cmd_update(
         .analyze_directories = true,                    /* Directory metadata change detection */
         .analyze_encryption  = true                     /* Encryption policy validation */
     };
-    err = workspace_load(repo, NULL, workspace_names, config, &ws_opts, &ws);
+    err = workspace_load(repo, state, workspace_names, config, &ws_opts, &ws);
     if (err) {
         err = error_wrap(err, "Failed to analyze workspace");
         goto cleanup;
@@ -2083,7 +2092,7 @@ error_t *cmd_update(
         /* Extract custom prefixes from operation profiles */
         string_array_t *prefixes = NULL;
         err = profile_get_custom_prefixes(
-            repo, op_names, &prefixes
+            repo, state, op_names, &prefixes
         );
         if (err) {
             err = error_wrap(err, "Failed to get custom prefixes");
@@ -2358,10 +2367,12 @@ error_t *cmd_update(
     }
 
 cleanup:
-    /* Free all resources in reverse order */
+    /* Free all resources in reverse order.
+     * state_free after workspace_free — workspace borrows state. */
     if (update_items) free(update_items);
     if (hook_ctx) hook_context_free(hook_ctx);
     if (ws) workspace_free(ws);
+    if (state) state_free(state);
     if (profiles_str) free(profiles_str);
     if (file_filter) path_filter_free(file_filter);
     if (repo_dir) free(repo_dir);

@@ -3540,10 +3540,12 @@ error_t *workspace_flush_stat_caches(workspace_t *ws) {
         return NULL;
     }
 
-    /* Batch writes in a transaction when no external transaction is active.
-     * owns_state == true means state_load() (read-only, no transaction).
-     * owns_state == false means borrowed from state_load_for_update() (has transaction). */
-    bool needs_transaction = ws->owns_state;
+    /* Begin our own transaction only when no external transaction is active.
+     * This handles all cases:
+     *   - apply: borrowed state_load_for_update → transaction active → skip
+     *   - status/diff/sync: borrowed state_load → no transaction → begin/commit
+     *   - legacy workspace-owned: state_load → no transaction → begin/commit */
+    bool needs_transaction = !state_in_transaction(ws->state);
 
     if (needs_transaction) {
         error_t *err = state_begin_transaction(ws->state);

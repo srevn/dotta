@@ -428,10 +428,10 @@ cleanup:
  */
 error_t *profile_get_custom_prefixes(
     git_repository *repo,
+    const state_t *state,
     const string_array_t *names,
     string_array_t **out_prefixes
 ) {
-    CHECK_NULL(repo);
     CHECK_NULL(names);
     CHECK_NULL(out_prefixes);
 
@@ -441,25 +441,29 @@ error_t *profile_get_custom_prefixes(
         return ERROR(ERR_MEMORY, "Failed to allocate prefixes array");
     }
 
-    /* Load state (read-only) to get prefix map */
-    state_t *state = NULL;
-    err = state_load(repo, &state);
-    if (err) {
-        /* State load failure is non-fatal — no custom prefixes available */
-        error_free(err);
-        *out_prefixes = prefixes;
-        return NULL;
-    }
+    /* Use provided state or load internally */
+    state_t *local_state = NULL;
+    const state_t *effective_state = state;
 
-    if (!state) {
-        *out_prefixes = prefixes;
-        return NULL;
+    if (!effective_state) {
+        err = state_load(repo, &local_state);
+        if (err) {
+            /* State load failure is non-fatal — no custom prefixes available */
+            error_free(err);
+            *out_prefixes = prefixes;
+            return NULL;
+        }
+        if (!local_state) {
+            *out_prefixes = prefixes;
+            return NULL;
+        }
+        effective_state = local_state;
     }
 
     hashmap_t *prefix_map = NULL;
-    err = state_get_prefix_map(state, &prefix_map);
+    err = state_get_prefix_map(effective_state, &prefix_map);
     if (err) {
-        state_free(state);
+        state_free(local_state);
         string_array_free(prefixes);
         return error_wrap(err, "Failed to get custom prefix map");
     }
@@ -470,7 +474,7 @@ error_t *profile_get_custom_prefixes(
             err = string_array_push(prefixes, prefix);
             if (err) {
                 hashmap_free(prefix_map, free);
-                state_free(state);
+                state_free(local_state);
                 string_array_free(prefixes);
                 return error_wrap(err, "Failed to collect custom prefix");
             }
@@ -478,7 +482,7 @@ error_t *profile_get_custom_prefixes(
     }
 
     hashmap_free(prefix_map, free);
-    state_free(state);
+    state_free(local_state);
 
     *out_prefixes = prefixes;
     return NULL;
@@ -570,32 +574,36 @@ cleanup:
  */
 static error_t *resolve_state_profile_names(
     git_repository *repo,
-    string_array_t **out_names,
-    state_t **out_state
+    const state_t *state,
+    string_array_t **out_names
 ) {
     error_t *err = NULL;
-    state_t *state = NULL;
+    state_t *local_state = NULL;
+    const state_t *effective_state = state;
     string_array_t *state_profiles = NULL;
     string_array_t *valid_profiles = NULL;
     string_array_t *missing_profiles = NULL;
 
-    /* Load state */
-    err = state_load(repo, &state);
-    if (err) {
-        return error_wrap(err, "Failed to load state for profile resolution");
+    /* Use provided state or load internally */
+    if (!effective_state) {
+        err = state_load(repo, &local_state);
+        if (err) {
+            return error_wrap(err, "Failed to load state for profile resolution");
+        }
+        effective_state = local_state;
     }
 
     /* Get profile names from state */
-    err = state_get_profiles(state, &state_profiles);
+    err = state_get_profiles(effective_state, &state_profiles);
     if (err) {
         error_free(err);
-        state_free(state);
+        state_free(local_state);
         return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
     }
 
     if (!state_profiles || state_profiles->count == 0) {
         string_array_free(state_profiles);
-        state_free(state);
+        state_free(local_state);
         return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
     }
 
@@ -631,17 +639,13 @@ static error_t *resolve_state_profile_names(
     if (valid_profiles->count == 0) {
         string_array_free(valid_profiles);
         string_array_free(state_profiles);
-        state_free(state);
+        state_free(local_state);
         return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
     }
 
     /* Success */
     *out_names = valid_profiles;
-    if (out_state) {
-        *out_state = state;
-    } else {
-        state_free(state);
-    }
+    state_free(local_state);
     string_array_free(state_profiles);
 
     return NULL;
@@ -650,7 +654,7 @@ cleanup:
     string_array_free(valid_profiles);
     string_array_free(missing_profiles);
     string_array_free(state_profiles);
-    state_free(state);
+    state_free(local_state);
 
     return err;
 }
@@ -712,12 +716,13 @@ error_t *profile_resolve_cli_names(
  */
 error_t *profile_resolve_state_names(
     git_repository *repo,
+    const state_t *state,
     string_array_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
 
-    return resolve_state_profile_names(repo, out, NULL);
+    return resolve_state_profile_names(repo, state, out);
 }
 
 /**

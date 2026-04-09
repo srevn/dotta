@@ -920,7 +920,7 @@ error_t *cmd_apply(
     output_print(out, OUTPUT_VERBOSE, "Loading profiles...\n");
 
     /* Phase 1: Resolve enabled profile names (ALWAYS persistent, ignore CLI overrides) */
-    err = profile_resolve_state_names(repo, &workspace_names);
+    err = profile_resolve_state_names(repo, state, &workspace_names);
     if (err) {
         err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
@@ -978,7 +978,7 @@ error_t *cmd_apply(
     if (opts->files && opts->file_count > 0) {
         /* Extract custom prefixes from operation profiles */
         string_array_t *prefixes = NULL;
-        err = profile_get_custom_prefixes(repo, op_names, &prefixes);
+        err = profile_get_custom_prefixes(repo, state, op_names, &prefixes);
         if (err) {
             err = error_wrap(err, "Failed to get custom prefixes");
             goto cleanup;

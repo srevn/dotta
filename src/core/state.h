@@ -255,6 +255,18 @@ error_t *state_commit_transaction(state_t *state);
 void state_rollback_transaction(state_t *state);
 
 /**
+ * Check if state has an active transaction
+ *
+ * Returns true if BEGIN IMMEDIATE has been executed and not yet
+ * committed or rolled back. Used by workspace_flush_stat_caches()
+ * to decide whether to manage its own transaction.
+ *
+ * @param state State handle (must not be NULL)
+ * @return true if transaction is active
+ */
+bool state_in_transaction(const state_t *state);
+
+/**
  * Create empty state
  *
  * @param out State structure (must not be NULL, caller must free with state_free)

@@ -590,7 +590,7 @@ error_t *cmd_show(
 
         if (!profile_name) {
             /* No profile specified - use enabled profiles */
-            err = profile_resolve_state_names(repo, &profile_names);
+            err = profile_resolve_state_names(repo, NULL, &profile_names);
             if (err) {
                 if (error_code(err) == ERR_NOT_FOUND) {
                     error_free(err);

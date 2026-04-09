@@ -1316,6 +1316,7 @@ error_t *cmd_sync(
     /* Declare all resources, initialized to NULL */
     error_t *err = NULL;
     state_t *state = NULL;
+    state_t *read_state = NULL;
     workspace_t *ws = NULL;
     string_array_t *workspace_names = NULL;
     string_array_t *cli_names = NULL;
@@ -1357,8 +1358,17 @@ error_t *cmd_sync(
      * - cli_names / op_names: CLI filter names or workspace names (for sync operations)
      */
 
+    /* Load state once for the validation phase.
+     * Shared across profile resolution and workspace loading.
+     * Freed after validation, before the write transaction opens. */
+    err = state_load(repo, &read_state);
+    if (err) {
+        err = error_wrap(err, "Failed to load state");
+        goto cleanup;
+    }
+
     /* Phase 1: Resolve enabled profile names (persistent) */
-    err = profile_resolve_state_names(repo, &workspace_names);
+    err = profile_resolve_state_names(repo, read_state, &workspace_names);
     if (err) {
         err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
@@ -1421,9 +1431,7 @@ error_t *cmd_sync(
             .analyze_directories = false,  /* Directory metadata is apply's concern */
             .analyze_encryption  = false   /* Encryption is apply's concern */
         };
-        /* Pass NULL for state - this is read-only validation, not a transactional operation.
-         * State transaction opened later for manifest updates after sync completes. */
-        err = workspace_load(repo, NULL, workspace_names, config, &ws_opts, &ws);
+        err = workspace_load(repo, read_state, workspace_names, config, &ws_opts, &ws);
         if (err) {
             err = error_wrap(err, "Failed to load workspace");
             goto cleanup;
@@ -1833,11 +1841,14 @@ error_t *cmd_sync(
     err = NULL;
 
 cleanup:
-    /* Free resources in reverse order of allocation */
+    /* Free resources in reverse order of allocation.
+     * workspace borrows read_state — free workspace first, then read_state.
+     * state (write handle) is independent of workspace. */
     if (current_branch) free(current_branch);
     if (enabled_profiles) string_array_free(enabled_profiles);
     if (state) state_free(state);
     if (ws) workspace_free(ws);
+    if (read_state) state_free(read_state);
     if (xfer) transfer_context_free(xfer);
     if (remote_url) free(remote_url);
     if (remote_name) free(remote_name);

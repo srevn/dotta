@@ -846,7 +846,7 @@ error_t *cmd_status(
     /* Declare all resources at top and initialize to NULL */
     error_t *err = NULL;
     workspace_t *ws = NULL;
-    const state_t *state = NULL;
+    state_t *state = NULL;
     const manifest_t *manifest = NULL;
     string_array_t *workspace_names = NULL;
     string_array_t *cli_names = NULL;
@@ -859,6 +859,14 @@ error_t *cmd_status(
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
+    /* Load state once for the command's lifetime.
+     * Shared across profile resolution, workspace loading, and display. */
+    err = state_load(repo, &state);
+    if (err) {
+        err = error_wrap(err, "Failed to load state");
+        goto cleanup;
+    }
+
     /* Load profiles
      *
      * Separate workspace scope (persistent) from display filter (temporary):
@@ -868,7 +876,7 @@ error_t *cmd_status(
      * Workspace always loads with persistent profiles to maintain accurate
      * orphan detection. Display operations filter by CLI profiles if specified.
      */
-    err = profile_resolve_state_names(repo, &workspace_names);
+    err = profile_resolve_state_names(repo, state, &workspace_names);
     if (err) {
         err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
@@ -912,7 +920,7 @@ error_t *cmd_status(
             .analyze_directories = true,
             .analyze_encryption  = true
         };
-        err = workspace_load(repo, NULL, workspace_names, config, &ws_opts, &ws);
+        err = workspace_load(repo, state, workspace_names, config, &ws_opts, &ws);
         if (err) {
             err = error_wrap(err, "Failed to load workspace");
             goto cleanup;
@@ -930,13 +938,6 @@ error_t *cmd_status(
         manifest = workspace_get_manifest(ws);
         if (!manifest) {
             err = ERROR(ERR_INTERNAL, "Workspace manifest is NULL");
-            goto cleanup;
-        }
-
-        /* Extract state from workspace (borrowed reference, owned by workspace) */
-        state = workspace_get_state(ws);
-        if (!state) {
-            err = ERROR(ERR_INTERNAL, "Workspace state is NULL");
             goto cleanup;
         }
 
@@ -1020,8 +1021,10 @@ error_t *cmd_status(
     }
 
 cleanup:
-    /* Free all resources (safe with NULL pointers) */
+    /* Free all resources (safe with NULL pointers).
+     * state_free after workspace_free — workspace borrows state. */
     if (ws) workspace_free(ws);
+    if (state) state_free(state);
     if (cli_names) string_array_free(cli_names);
     if (workspace_names) string_array_free(workspace_names);
 

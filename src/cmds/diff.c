@@ -927,6 +927,7 @@ static size_t validate_filter_paths(
  */
 static error_t *diff_commit_to_workspace(
     git_repository *repo,
+    const state_t *state,
     const char *commit_ref,
     const string_array_t *profile_names,
     const path_filter_t *file_filter,
@@ -999,7 +1000,7 @@ static error_t *diff_commit_to_workspace(
      * Query custom_prefix for the matched profile from state. */
     const char *custom_prefix = NULL;
     err = profile_get_custom_prefixes(
-        repo, &(string_array_t){ .items = (char **)&profile_name, .count = 1 }, &prefixes
+        repo, state, &(string_array_t){ .items = (char **)&profile_name, .count = 1 }, &prefixes
     );
     if (err) {
         error_free(err);  /* Non-fatal — custom/ paths degrade gracefully */
@@ -1300,6 +1301,7 @@ cleanup:
  */
 static error_t *diff_workspace(
     git_repository *repo,
+    state_t *state,
     const string_array_t *profile_names,
     const string_array_t *filter,
     const path_filter_t *file_filter,
@@ -1325,8 +1327,7 @@ static error_t *diff_workspace(
         .analyze_encryption  = false  /* Not needed for diff */
     };
 
-    /* Pass NULL for state - diff is read-only, workspace allocates its own state */
-    err = workspace_load(repo, NULL, profile_names, config, &ws_opts, &ws);
+    err = workspace_load(repo, state, profile_names, config, &ws_opts, &ws);
     if (err) {
         return error_wrap(err, "Failed to load workspace");
     }
@@ -1447,12 +1448,21 @@ error_t *cmd_diff(
     CHECK_NULL(opts);
 
     error_t *err = NULL;
+    state_t *state = NULL;
     string_array_t *workspace_names = NULL;
     string_array_t *cli_names = NULL;
     const string_array_t *op_names = NULL;
     const string_array_t *filter = NULL;
     path_filter_t *file_filter = NULL;
     bool has_profile_filter = (opts->profiles != NULL && opts->profile_count > 0);
+
+    /* Load state once for the command's lifetime.
+     * Shared across profile resolution, prefix queries, and workspace loading. */
+    err = state_load(repo, &state);
+    if (err) {
+        err = error_wrap(err, "Failed to load state");
+        goto cleanup;
+    }
 
     /* Load profiles
      *
@@ -1463,7 +1473,7 @@ error_t *cmd_diff(
      * Workspace operations use persistent profiles. Diff operations filter
      * by CLI profiles when specified.
      */
-    err = profile_resolve_state_names(repo, &workspace_names);
+    err = profile_resolve_state_names(repo, state, &workspace_names);
     if (err) {
         err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
@@ -1499,7 +1509,7 @@ error_t *cmd_diff(
         /* Collect custom prefixes from profiles for path resolution */
         string_array_t *prefixes = NULL;
         err = profile_get_custom_prefixes(
-            repo, op_names, &prefixes
+            repo, state, op_names, &prefixes
         );
         if (err) {
             err = error_wrap(err, "Failed to get custom prefixes");
@@ -1531,7 +1541,7 @@ error_t *cmd_diff(
         case DIFF_COMMIT_TO_WORKSPACE:
             /* Commit-to-workspace — search workspace profiles for branch resolution */
             err = diff_commit_to_workspace(
-                repo, opts->commit1, workspace_names, file_filter,
+                repo, state, opts->commit1, workspace_names, file_filter,
                 opts, config, out
             );
             goto cleanup;
@@ -1539,7 +1549,7 @@ error_t *cmd_diff(
         case DIFF_WORKSPACE:
             /* Workspace diff uses workspace_profiles for accurate analysis */
             err = diff_workspace(
-                repo, workspace_names, filter,
+                repo, state, workspace_names, filter,
                 file_filter, config, opts, out
             );
             goto cleanup;
@@ -1547,6 +1557,7 @@ error_t *cmd_diff(
 
 cleanup:
     if (file_filter) path_filter_free(file_filter);
+    if (state) state_free(state);
     if (cli_names) string_array_free(cli_names);
     if (workspace_names) string_array_free(workspace_names);
 

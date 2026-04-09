@@ -238,8 +238,13 @@ bool privilege_path_is_under_home(const char *filesystem_path) {
 
 /**
  * Check if a storage path requires elevation for pre-flight purposes
+ *
+ * For custom/ paths, checks whether the resolved filesystem_path is under $HOME.
+ * This works because filesystem_path = custom_prefix + /relative, and is_path_under()
+ * on the full path gives the same result as on the prefix alone (no traversal allowed
+ * in custom paths, enforced by path_validate_custom_prefix).
  */
-bool privilege_needs_elevation(const char *storage_path, const char *custom_prefix) {
+bool privilege_needs_elevation(const char *storage_path, const char *filesystem_path) {
     if (!storage_path || storage_path[0] == '\0') {
         return false;
     }
@@ -249,7 +254,7 @@ bool privilege_needs_elevation(const char *storage_path, const char *custom_pref
     }
 
     if (str_starts_with(storage_path, "custom/")) {
-        return privilege_custom_prefix_needs_elevation(custom_prefix);
+        return privilege_custom_prefix_needs_elevation(filesystem_path);
     }
 
     /* home/ and other prefixes don't need elevation */

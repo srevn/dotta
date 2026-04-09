@@ -288,6 +288,7 @@ static error_t *build_manifest(
     error_t *err = NULL;
     profile_list_t *profiles = NULL;
     manifest_t *manifest = NULL;
+    hashmap_t *prefix_map = NULL;
 
     /* Load profiles from Git (profiles module - pure Git operations) */
     err = profile_list_load(repo, profile_names, false, /* strict */ &profiles);
@@ -295,34 +296,39 @@ static error_t *build_manifest(
         return error_wrap(err, "Failed to load profiles for manifest build");
     }
 
-    /* Enrich profiles with custom prefixes from state */
-    err = profiles_enrich_with_prefixes(profiles, state);
+    /* Get custom prefix map from state (deployment configuration) */
+    err = state_get_prefix_map(state, &prefix_map);
     if (err) {
         profile_list_free(profiles);
-        return error_wrap(err, "Failed to enrich profiles with prefixes");
+        return error_wrap(err, "Failed to get custom prefix map");
     }
 
     /* Apply transient prefix override (enable path only).
      *
      * When enabling a profile with --prefix, the prefix isn't in state yet
-     * (it's about to be stored). Override the enriched value so the manifest
+     * (it's about to be stored). Override the map value so the manifest
      * oracle includes custom/ files for this profile. */
     if (transient_profile && transient_prefix) {
-        for (size_t i = 0; i < profiles->count; i++) {
-            if (strcmp(profiles->profiles[i].name, transient_profile) == 0) {
-                free(profiles->profiles[i].custom_prefix);
-                profiles->profiles[i].custom_prefix = strdup(transient_prefix);
-                if (!profiles->profiles[i].custom_prefix) {
-                    profile_list_free(profiles);
-                    return ERROR(ERR_MEMORY, "Failed to set transient custom prefix");
-                }
-                break;
-            }
+        char *dup_value = strdup(transient_prefix);
+        if (!dup_value) {
+            hashmap_free(prefix_map, free);
+            profile_list_free(profiles);
+            return ERROR(ERR_MEMORY, "Failed to set transient custom prefix");
+        }
+        void *old_value = NULL;
+        err = hashmap_put(prefix_map, transient_profile, dup_value, &old_value);
+        free(old_value);  /* Free displaced value if key existed (NULL-safe) */
+        if (err) {
+            free(dup_value);
+            hashmap_free(prefix_map, free);
+            profile_list_free(profiles);
+            return error_wrap(err, "Failed to set transient custom prefix");
         }
     }
 
-    /* Build manifest from enriched profiles (applies precedence rules) */
-    err = profile_build_manifest(repo, profiles, arena, &manifest);
+    /* Build manifest from profiles with prefix map (applies precedence rules) */
+    err = profile_build_manifest(repo, profiles, prefix_map, arena, &manifest);
+    hashmap_free(prefix_map, free);
     if (err) {
         profile_list_free(profiles);
         return error_wrap(err, "Failed to build manifest from profiles");
@@ -1356,6 +1362,7 @@ error_t *manifest_remove_files(
     manifest_t *fresh_manifest = NULL;
     profile_list_t *profiles = NULL;
     hashmap_t *profile_oids = NULL;
+    hashmap_t *prefix_map = NULL;
     metadata_t *metadata = NULL;
     size_t removed_count = 0;
     size_t fallback_count = 0;
@@ -1407,20 +1414,18 @@ error_t *manifest_remove_files(
         err = NULL;
     }
 
-    /* 4. Lookup custom prefix for the removed profile (if in profiles list) */
-    const char *removed_profile_custom_prefix = NULL;
-    for (size_t i = 0; i < profiles->count; i++) {
-        if (strcmp(profiles->profiles[i].name, removed_profile) == 0) {
-            removed_profile_custom_prefix = profiles->profiles[i].custom_prefix;
-            break;
-        }
+    /* 4. Get custom prefix for the removed profile from state */
+    err = state_get_prefix_map(state, &prefix_map);
+    if (err) {
+        err = error_wrap(err, "Failed to get custom prefix map");
+        goto cleanup;
     }
+    const char *removed_profile_custom_prefix =
+        prefix_map ? (const char *) hashmap_get(prefix_map, removed_profile) : NULL;
 
     /* 5. Process each removed file */
     for (size_t i = 0; i < removed_storage_paths->count; i++) {
         const char *storage_path = removed_storage_paths->items[i];
-
-        /* Use custom prefix from profile (attached by orchestrator) */
         const char *custom_prefix = removed_profile_custom_prefix;
 
         /* Resolve to filesystem path with appropriate prefix */
@@ -1632,6 +1637,7 @@ error_t *manifest_remove_files(
 
 cleanup:
     if (metadata) metadata_free(metadata);
+    if (prefix_map) hashmap_free(prefix_map, free);
     if (profile_oids) hashmap_free(profile_oids, NULL);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);
@@ -2549,16 +2555,18 @@ error_t *manifest_update_files(
         return error_wrap(err, "Failed to load profiles for bulk sync");
     }
 
-    /* 2. Enrich profiles with prefixes */
-    err = profiles_enrich_with_prefixes(profiles, state);
+    /* 2. Get custom prefix map from state */
+    hashmap_t *prefix_map = NULL;
+    err = state_get_prefix_map(state, &prefix_map);
     if (err) {
         profile_list_free(profiles);
         arena_destroy(arena);
-        return error_wrap(err, "Failed to enrich profiles with prefixes");
+        return error_wrap(err, "Failed to get custom prefix map");
     }
 
     /* 3. Build FRESH manifest from Git (post-commit state) */
-    err = profile_build_manifest(repo, profiles, arena, &fresh_manifest);
+    err = profile_build_manifest(repo, profiles, prefix_map, arena, &fresh_manifest);
+    hashmap_free(prefix_map, free);
     if (err) {
         profile_list_free(profiles);
         arena_destroy(arena);
@@ -2943,16 +2951,18 @@ error_t *manifest_add_files(
         return error_wrap(err, "Failed to load profiles for bulk sync");
     }
 
-    /* 2. Enrich profiles with prefixes */
-    err = profiles_enrich_with_prefixes(profiles, state);
+    /* 2. Get custom prefix map from state */
+    hashmap_t *prefix_map = NULL;
+    err = state_get_prefix_map(state, &prefix_map);
     if (err) {
         profile_list_free(profiles);
         arena_destroy(arena);
-        return error_wrap(err, "Failed to enrich profiles with prefixes");
+        return error_wrap(err, "Failed to get custom prefix map");
     }
 
     /* 3. Build FRESH manifest from Git (post-commit state) */
-    err = profile_build_manifest(repo, profiles, arena, &fresh_manifest);
+    err = profile_build_manifest(repo, profiles, prefix_map, arena, &fresh_manifest);
+    hashmap_free(prefix_map, free);
     if (err) {
         profile_list_free(profiles);
         arena_destroy(arena);
@@ -3164,6 +3174,7 @@ error_t *manifest_sync_diff(
     profile_list_t *profiles = NULL;
     manifest_t *fresh_manifest = NULL;
     hashmap_t *profile_oids = NULL;
+    hashmap_t *prefix_map = NULL;
     metadata_t *metadata_merged = NULL;
     git_tree *old_tree = NULL;
     git_tree *new_tree = NULL;
@@ -3184,10 +3195,10 @@ error_t *manifest_sync_diff(
         goto cleanup;
     }
 
-    /* 1.1. Enrich profiles with prefixes */
-    err = profiles_enrich_with_prefixes(profiles, state);
+    /* 1.1. Get custom prefix map from state */
+    err = state_get_prefix_map(state, &prefix_map);
     if (err) {
-        err = error_wrap(err, "Failed to enrich profiles with prefixes");
+        err = error_wrap(err, "Failed to get custom prefix map");
         goto cleanup;
     }
 
@@ -3197,7 +3208,7 @@ error_t *manifest_sync_diff(
      * not from specific OIDs, because profile_build_manifest() reads current state.
      * This is correct because after pull/rebase/merge, branch HEAD already points
      * to the new commit. */
-    err = profile_build_manifest(repo, profiles, arena, &fresh_manifest);
+    err = profile_build_manifest(repo, profiles, prefix_map, arena, &fresh_manifest);
     if (err) {
         err = error_wrap(err, "Failed to build fresh manifest");
         goto cleanup;
@@ -3266,14 +3277,9 @@ error_t *manifest_sync_diff(
 
     /* PHASE 3: PROCESS DELTAS (O(D)) */
 
-    /* Lookup custom prefix for the synced profile (if in profiles list) */
-    const char *synced_profile_custom_prefix = NULL;
-    for (size_t i = 0; i < profiles->count; i++) {
-        if (strcmp(profiles->profiles[i].name, profile_name) == 0) {
-            synced_profile_custom_prefix = profiles->profiles[i].custom_prefix;
-            break;
-        }
-    }
+    /* Lookup custom prefix for the synced profile from prefix map */
+    const char *synced_profile_custom_prefix =
+        prefix_map ? (const char *) hashmap_get(prefix_map, profile_name) : NULL;
 
     for (size_t i = 0; i < num_deltas; i++) {
         const git_diff_delta *delta = git_diff_get_delta(diff, i);
@@ -3585,6 +3591,7 @@ cleanup:
     if (new_tree) git_tree_free(new_tree);
     if (old_tree) git_tree_free(old_tree);
     if (metadata_merged) metadata_free(metadata_merged);
+    if (prefix_map) hashmap_free(prefix_map, free);
     if (profile_oids) hashmap_free(profile_oids, NULL);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);

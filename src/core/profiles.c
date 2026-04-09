@@ -421,66 +421,6 @@ cleanup:
 }
 
 /**
- * Enrich profiles with custom prefixes from state
- *
- * Populates profile->custom_prefix for each profile by querying the state
- * database prefix map. Bridges profile loading (Git-based) with deployment
- * configuration (state-based).
- *
- * Safe for re-enrichment: frees existing custom_prefix before setting.
- * Empty state (from state_create_empty) produces no enrichment — correct
- * behavior for pre-init or missing DB scenarios.
- */
-error_t *profiles_enrich_with_prefixes(
-    profile_list_t *profiles,
-    const state_t *state
-) {
-    CHECK_NULL(profiles);
-    CHECK_NULL(state);
-
-    if (profiles->count == 0) {
-        return NULL;
-    }
-
-    /* Get prefix map from state */
-    hashmap_t *prefix_map = NULL;
-    error_t *err = state_get_prefix_map(state, &prefix_map);
-    if (err) {
-        return error_wrap(err, "Failed to get custom prefix map");
-    }
-
-    /* Enrich each profile with its custom prefix (if any) */
-    for (size_t i = 0; i < profiles->count; i++) {
-        profile_t *profile = &profiles->profiles[i];
-        const char *custom_prefix = (const char *) hashmap_get(prefix_map, profile->name);
-
-        /* Free existing custom_prefix before setting (safe for re-enrichment) */
-        free(profile->custom_prefix);
-
-        /* Attach to profile (owned by profile, freed in profile_list_free) */
-        if (custom_prefix) {
-            profile->custom_prefix = strdup(custom_prefix);
-            if (!profile->custom_prefix) {
-                hashmap_free(prefix_map, free);
-                return ERROR(
-                    ERR_MEMORY,
-                    "Failed to allocate custom_prefix for profile '%s'",
-                    profile->name
-                );
-            }
-        } else {
-            /* No custom prefix - ensure field is NULL */
-            profile->custom_prefix = NULL;
-        }
-    }
-
-    /* Cleanup temporary resources */
-    hashmap_free(prefix_map, free);
-
-    return NULL;
-}
-
-/**
  * Get custom deployment prefixes for named profiles
  *
  * Queries the state database for custom prefixes. Only profiles with
@@ -996,7 +936,7 @@ static error_t *profile_list_tree_files(git_tree *tree, string_array_t **out)
  * - manifest: borrowed, caller retains ownership
  * - path_map: borrowed, caller retains ownership
  * - profile: borrowed, caller retains ownership
- * - custom_prefix: borrowed, can be NULL
+ * - custom_prefix: borrowed, can be NULL (used for path_from_storage only)
  * - error: owned by callback, caller must free on error
  */
 struct manifest_build_ctx {
@@ -1005,7 +945,7 @@ struct manifest_build_ctx {
     hashmap_t *path_map;        /* For O(1) dedup/override detection */
     profile_t *profile;         /* Current profile (borrowed, NULL for tree-based manifests) */
     const char *profile_name;   /* Profile name for entries and error messages */
-    const char *custom_prefix;  /* For path_from_storage and entry custom_prefix (can be NULL) */
+    const char *custom_prefix;  /* For path_from_storage (can be NULL) */
     arena_t *arena;             /* Arena for string allocations (NULL = heap) */
     error_t *error;             /* Error propagation (set on failure) */
 };
@@ -1155,7 +1095,6 @@ static int manifest_build_callback(
         ctx->manifest->entries[existing_idx].entry = dup_entry;
         ctx->manifest->entries[existing_idx].source_profile = ctx->profile;
         ctx->manifest->entries[existing_idx].profile_name = ctx->profile_name;
-        ctx->manifest->entries[existing_idx].custom_prefix = ctx->custom_prefix;
 
         /* Update type from overriding entry's filemode (may differ between profiles) */
         switch (git_tree_entry_filemode(dup_entry)) {
@@ -1215,7 +1154,6 @@ static int manifest_build_callback(
         new_entry->entry = dup_entry;
         new_entry->source_profile = ctx->profile;
         new_entry->profile_name = ctx->profile_name;
-        new_entry->custom_prefix = ctx->custom_prefix;
 
         /* Initialize VWD expected state cache to NULL/0
          *
@@ -1317,14 +1255,20 @@ error_t *profile_has_custom_files(
         refname, sizeof(refname), "refs/heads/%s", profile_name
     );
     if (err) {
-        return error_wrap(err, "Invalid profile name '%s'", profile_name);
+        return error_wrap(
+            err, "Invalid profile name '%s'",
+            profile_name
+        );
     }
 
     /* Load tree if not loaded (lazy loading) */
     git_tree *tree = NULL;
     err = gitops_load_tree(repo, refname, &tree);
     if (err) {
-        return error_wrap(err, "Failed to load tree for profile '%s'", profile_name);
+        return error_wrap(
+            err, "Failed to load tree for profile '%s'",
+            profile_name
+        );
     }
 
     /* Check for custom/ directory using O(log k) lookup.
@@ -1349,6 +1293,7 @@ error_t *profile_has_custom_files(
 error_t *profile_build_manifest(
     git_repository *repo,
     profile_list_t *profiles,
+    const hashmap_t *prefix_map,
     arena_t *arena,
     manifest_t **out
 ) {
@@ -1415,7 +1360,9 @@ error_t *profile_build_manifest(
             .path_map      = path_map,
             .profile       = profile,
             .profile_name  = profile->name,
-            .custom_prefix = profile->custom_prefix,
+            .custom_prefix = prefix_map
+                ? (const char *) hashmap_get(prefix_map, profile->name)
+                : NULL,
             .arena         = arena,
             .error         = NULL
         };
@@ -1482,9 +1429,13 @@ static int file_index_callback(
     int ret;
 
     if (root && root[0] != '\0') {
-        ret = snprintf(full_path, sizeof(full_path), "%s%s", root, name);
+        ret = snprintf(
+            full_path, sizeof(full_path), "%s%s", root, name
+        );
     } else {
-        ret = snprintf(full_path, sizeof(full_path), "%s", name);
+        ret = snprintf(
+            full_path, sizeof(full_path), "%s", name
+        );
     }
 
     if (ret < 0 || (size_t) ret >= sizeof(full_path)) {
@@ -1504,7 +1455,9 @@ static int file_index_callback(
     if (!profiles) {
         profiles = string_array_new(0);
         if (!profiles) {
-            ctx->error = ERROR(ERR_MEMORY, "Failed to create profile list for file");
+            ctx->error = ERROR(
+                ERR_MEMORY, "Failed to create profile list for file"
+            );
             ctx->fatal = true;
             return -1;
         }
@@ -1811,20 +1764,13 @@ error_t *profile_build_manifest_from_tree(
         goto cleanup;
     }
 
-    /* Own copies of profile name and custom prefix for entry borrowing.
-     * Entries set profile_name and custom_prefix to these pointers —
-     * manifest lifetime guarantees they remain valid until manifest_free(). */
+    /* Own copy of profile name for entry borrowing.
+     * Entries set profile_name to this pointer —
+     * manifest lifetime guarantees it remains valid until manifest_free(). */
     manifest->owned_profile_name = strdup(profile_name);
     if (!manifest->owned_profile_name) {
         err = ERROR(ERR_MEMORY, "Failed to duplicate profile name");
         goto cleanup;
-    }
-    if (custom_prefix) {
-        manifest->owned_custom_prefix = strdup(custom_prefix);
-        if (!manifest->owned_custom_prefix) {
-            err = ERROR(ERR_MEMORY, "Failed to duplicate custom prefix");
-            goto cleanup;
-        }
     }
 
     /* Build manifest entries via single-pass tree traversal
@@ -1833,14 +1779,16 @@ error_t *profile_build_manifest_from_tree(
      * converts paths, and populates file_entry_t directly—all in O(N) time.
      *
      * No source_profile for tree-based manifests — entries have pre-populated
-     * tree entries from git_tree_entry_dup() and never need lazy loading. */
+     * tree entries from git_tree_entry_dup() and never need lazy loading.
+     *
+     * custom_prefix borrows from function parameter — outlives tree walk. */
     struct manifest_build_ctx ctx = {
         .manifest      = manifest,
         .capacity      = capacity,
         .path_map      = path_map,
         .profile       = NULL,
         .profile_name  = manifest->owned_profile_name,
-        .custom_prefix = manifest->owned_custom_prefix,
+        .custom_prefix = custom_prefix,
         .arena         = NULL,
         .error         = NULL
     };
@@ -1876,7 +1824,6 @@ void profile_free(profile_t *profile) {
     }
 
     free(profile->name);
-    free(profile->custom_prefix);
     if (profile->ref) {
         git_reference_free(profile->ref);
     }
@@ -1898,7 +1845,6 @@ void profile_list_free(profile_list_t *list) {
         for (size_t i = 0; i < list->count; i++) {
             profile_t *profile = &list->profiles[i];
             free(profile->name);
-            free(profile->custom_prefix);
             if (profile->ref) {
                 git_reference_free(profile->ref);
             }
@@ -1946,9 +1892,8 @@ void manifest_free(manifest_t *manifest) {
         hashmap_free(manifest->index, NULL);
     }
 
-    /* Free owned strings (used by tree-based manifests, NULL otherwise) */
+    /* Free owned profile name (used by tree-based manifests, NULL otherwise) */
     free(manifest->owned_profile_name);
-    free(manifest->owned_custom_prefix);
 
     free(manifest);
 }

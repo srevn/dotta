@@ -52,7 +52,6 @@ typedef struct {
     git_reference *ref;      /* Branch reference */
     git_tree *tree;          /* Profile tree (loaded lazily) */
     bool auto_detected;      /* Auto-detected vs manually specified */
-    char *custom_prefix;     /* Custom deployment root (NULL for home/root profiles) */
 } profile_t;
 
 /**
@@ -73,8 +72,8 @@ typedef struct {
  * - All string fields are owned and must be freed in manifest_free()
  * - git_tree_entry is owned and must be freed (NULL is valid, means not loaded)
  * - source_profile is borrowed (from profile_list_t or workspace profile_index)
- * - profile_name and custom_prefix are borrowed (same lifetime as source_profile
- *   or manifest's owned strings for tree-based manifests)
+ * - profile_name is borrowed (same lifetime as source_profile
+ *   or manifest's owned_profile_name for tree-based manifests)
  */
 typedef struct {
     /* Paths */
@@ -100,7 +99,6 @@ typedef struct {
      */
     profile_t *source_profile;       /* Git tree-loading handle (borrowed, core-internal) */
     const char *profile_name;        /* Profile name (borrowed, used for all name-based operations) */
-    const char *custom_prefix;       /* Custom deployment root (borrowed, NULL for home/root) */
 
     /* VWD Expected State Cache (populated from state database)
      *
@@ -129,8 +127,8 @@ typedef struct {
  * manifests built by other means (e.g., workspace_build_manifest_from_state).
  *
  * For tree-based manifests (profile_build_manifest_from_tree), the manifest
- * owns the profile name and custom prefix strings that entries borrow.
- * These are NULL for manifests from profile_build_manifest() (which borrow
+ * owns the profile name string that entries borrow.
+ * This is NULL for manifests from profile_build_manifest() (which borrow
  * from the caller's profile_list_t) and workspace_build_manifest_from_state()
  * (which borrow from the workspace's profile_index).
  */
@@ -139,7 +137,6 @@ typedef struct {
     size_t count;
     hashmap_t *index;              /* Maps filesystem_path -> index in entries array (offset by 1), can be NULL */
     char *owned_profile_name;      /* Owned name for tree-based manifests (NULL otherwise) */
-    char *owned_custom_prefix;     /* Owned prefix for tree-based manifests (NULL otherwise) */
     bool arena_backed;             /* If true, entry string fields are arena-owned (skip free) */
 } manifest_t;
 
@@ -205,26 +202,6 @@ error_t *profile_list_load(
     const string_array_t *names,
     bool strict,
     profile_list_t **out
-);
-
-/**
- * Enrich profiles with custom prefixes from state
- *
- * Populates profile->custom_prefix for each profile by querying the state
- * database prefix map. Bridges profile loading (Git-based) with deployment
- * configuration (state-based).
- *
- * Safe for re-enrichment: frees existing custom_prefix before setting.
- * Empty state (from state_create_empty) produces no enrichment — correct
- * behavior for pre-init or missing DB scenarios.
- *
- * @param profiles Profile list to enrich (must not be NULL)
- * @param state State handle (must not be NULL; empty state is valid)
- * @return Error or NULL on success
- */
-error_t *profiles_enrich_with_prefixes(
-    profile_list_t *profiles,
-    const state_t *state
 );
 
 /**
@@ -436,17 +413,22 @@ error_t *profile_has_custom_files(
  * Merges files from all profiles according to precedence rules.
  * Later profiles override earlier ones.
  *
- * For profiles with custom/ files, uses profile->custom_prefix.
- * Profiles without custom prefix (NULL) deploy to home/root normally.
+ * For profiles with custom/ files, resolves deployment prefix from
+ * prefix_map (profile_name → custom_prefix). Profiles not in the map
+ * or with NULL prefix deploy to home/root normally. Custom/ files are
+ * skipped for profiles without a prefix entry.
  *
  * @param repo Repository (must not be NULL)
  * @param profiles Profile list (must not be NULL)
+ * @param prefix_map Custom prefix map (can be NULL — all profiles use home/root)
+ * @param arena Arena for string allocations (NULL = heap)
  * @param out Manifest (must not be NULL, caller must free with manifest_free)
  * @return Error or NULL on success
  */
 error_t *profile_build_manifest(
     git_repository *repo,
     profile_list_t *profiles,
+    const hashmap_t *prefix_map,
     arena_t *arena,
     manifest_t **out
 );

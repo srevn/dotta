@@ -51,7 +51,6 @@
  * - filesystem_path, storage_path: borrowed from arena-backed manifest/state entries
  * - profile, metadata_profile: arena_strdup'd (arena-owned, freed via arena_destroy)
  * - old_profile: borrowed from arena-backed manifest entry (can be NULL)
- * - custom_prefix: borrowed from workspace-owned profile_t (NULL for home/root profiles)
  */
 typedef struct {
     char *filesystem_path;      /* Target path on filesystem (arena-borrowed) */
@@ -59,9 +58,6 @@ typedef struct {
     char *profile;              /* Winning profile name (arena-owned) */
     char *metadata_profile;     /* Which profile's metadata won, can differ from profile (arena-owned) */
     char *old_profile;          /* Previous profile from state, NULL if unchanged (arena-borrowed) */
-
-    /* Custom deployment root for privilege checks (borrowed from profile_t, NULL for home/root) */
-    const char *custom_prefix;
 
     /* Item classification */
     workspace_state_t state;          /* Where the item exists (deployed/undeployed/etc.) */

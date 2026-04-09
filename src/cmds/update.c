@@ -2164,7 +2164,7 @@ error_t *cmd_update(
                 const workspace_item_t *item = update_items[i];
                 if (item->item_kind == WORKSPACE_ITEM_FILE) {
                     if (privilege_needs_elevation(item->storage_path,
-                                                 item->custom_prefix)) {
+                                                 item->filesystem_path)) {
                         storage_paths[elevation_count++] = item->storage_path;
                     }
                 }

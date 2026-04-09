@@ -631,11 +631,11 @@ static error_t *ensure_complete_apply_privileges(
     }
 
     /* 1. Collect paths needing elevation from manifest (files being deployed).
-     * Uses privilege_needs_elevation() which considers whether the custom prefix
-     * is under $HOME — custom/ paths under $HOME don't need sudo. */
+     * Uses privilege_needs_elevation() which considers whether the resolved
+     * filesystem path is under $HOME — custom/ paths under $HOME don't need sudo. */
     for (size_t i = 0; i < manifest->count; i++) {
         if (privilege_needs_elevation(manifest->entries[i].storage_path,
-                                     manifest->entries[i].custom_prefix)) {
+                                     manifest->entries[i].filesystem_path)) {
             error_t *err = string_array_push(root_paths, manifest->entries[i].storage_path);
             if (err) {
                 string_array_free(root_paths);
@@ -648,7 +648,7 @@ static error_t *ensure_complete_apply_privileges(
     if (file_orphans && file_orphan_count > 0) {
         for (size_t i = 0; i < file_orphan_count; i++) {
             if (privilege_needs_elevation(file_orphans[i]->storage_path,
-                                         file_orphans[i]->custom_prefix)) {
+                                         file_orphans[i]->filesystem_path)) {
                 error_t *err = string_array_push(root_paths, file_orphans[i]->storage_path);
                 if (err) {
                     string_array_free(root_paths);
@@ -662,7 +662,7 @@ static error_t *ensure_complete_apply_privileges(
     if (dir_orphans && dir_orphan_count > 0) {
         for (size_t i = 0; i < dir_orphan_count; i++) {
             if (privilege_needs_elevation(dir_orphans[i]->storage_path,
-                                         dir_orphans[i]->custom_prefix)) {
+                                         dir_orphans[i]->filesystem_path)) {
                 error_t *err = string_array_push(root_paths, dir_orphans[i]->storage_path);
                 if (err) {
                     string_array_free(root_paths);

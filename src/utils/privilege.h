@@ -114,17 +114,17 @@ bool privilege_path_is_under_home(const char *filesystem_path);
  * Unlike privilege_path_requires_root() which answers "could this path
  * type carry ownership metadata?" (used by metadata/deploy layers),
  * this function answers the narrower pre-flight question by considering
- * whether the custom prefix is actually under $HOME.
+ * whether the resolved filesystem path is under $HOME.
  *
  * - home/ paths: never need elevation
  * - root/ paths: always need elevation
- * - custom/ paths: need elevation only if custom_prefix is NOT under $HOME
+ * - custom/ paths: need elevation only if filesystem_path is NOT under $HOME
  *
  * @param storage_path Storage path (e.g., "custom/etc/nginx.conf")
- * @param custom_prefix Custom prefix for this path's profile (NULL if unknown)
+ * @param filesystem_path Resolved filesystem path (NULL if unknown → conservative true)
  * @return true if elevation needed, false otherwise
  */
-bool privilege_needs_elevation(const char *storage_path, const char *custom_prefix);
+bool privilege_needs_elevation(const char *storage_path, const char *filesystem_path);
 
 /**
  * Get actual user UID/GID (handling sudo context)

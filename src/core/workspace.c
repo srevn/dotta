@@ -367,10 +367,6 @@ static error_t *workspace_add_diverged(
     entry->profile = arena_strdup(ws->arena, profile);
     entry->metadata_profile = NULL;  /* Will be set below if metadata exists */
 
-    /* Extract custom_prefix from profile (borrowed, NULL if profile not enabled or has no custom prefix) */
-    const profile_t *profile_prefix = profile ? hashmap_get(ws->profile_index, profile) : NULL;
-    entry->custom_prefix = profile_prefix ? profile_prefix->custom_prefix : NULL;
-
     entry->state = state;
     entry->divergence = divergence;
     entry->item_kind = item_kind;
@@ -2342,7 +2338,6 @@ static error_t *patch_entry_from_fresh(
         vwd_entry->source_profile != fresh_entry->source_profile) {
         vwd_entry->source_profile = fresh_entry->source_profile;
         vwd_entry->profile_name = fresh_entry->profile_name;
-        vwd_entry->custom_prefix = fresh_entry->custom_prefix;
     }
 
     return NULL;
@@ -2434,7 +2429,16 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
     if (stale_profiles) {
         ws->manifest_stale = true;
 
-        err = profile_build_manifest(ws->repo, ws->profiles, NULL, &fresh_manifest);
+        /* Get prefix map for path resolution during fresh manifest build */
+        hashmap_t *prefix_map = NULL;
+        err = state_get_prefix_map(ws->state, &prefix_map);
+        if (err) {
+            hashmap_free(stale_profiles, free);
+            return error_wrap(err, "Failed to get prefix map for stale repair");
+        }
+
+        err = profile_build_manifest(ws->repo, ws->profiles, prefix_map, NULL, &fresh_manifest);
+        hashmap_free(prefix_map, free);
         if (err) {
             hashmap_free(stale_profiles, free);
             return error_wrap(err, "Failed to build fresh manifest for stale repair");
@@ -2505,9 +2509,8 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             continue;
         }
 
-        /* Cache profile name and custom_prefix (borrowed, same lifetime as workspace) */
+        /* Cache profile name (borrowed, same lifetime as workspace) */
         entry->profile_name = entry->source_profile->name;
-        entry->custom_prefix = entry->source_profile->custom_prefix;
 
         /* Borrow paths from arena-backed state entries (same lifetime) */
         entry->storage_path = state_entry->storage_path;
@@ -2921,17 +2924,6 @@ error_t *workspace_load(
             return error_wrap(err, "Failed to load state");
         }
         ws->owns_state = true;
-    }
-
-    /* Enrich profiles with custom prefixes from state.
-     *
-     * Must happen after state is loaded (above) and before manifest building
-     * (below). Nothing between workspace_create_empty and here reads
-     * custom_prefix — metadata loading only accesses profile names. */
-    err = profiles_enrich_with_prefixes(ws->profiles, ws->state);
-    if (err) {
-        workspace_free(ws);
-        return error_wrap(err, "Failed to enrich profiles with custom prefixes");
     }
 
     /* Build manifest from state (Virtual Working Directory architecture)

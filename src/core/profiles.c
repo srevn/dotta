@@ -422,19 +422,27 @@ cleanup:
 }
 
 /**
- * Enrich profiles with custom prefixes from an already-loaded state
+ * Enrich profiles with custom prefixes from state
  *
- * Core enrichment logic: queries the prefix map and populates each profile's
- * custom_prefix field. Caller must provide a valid, loaded state.
+ * Populates profile->custom_prefix for each profile by querying the state
+ * database prefix map. Bridges profile loading (Git-based) with deployment
+ * configuration (state-based).
  *
- * @param profiles Profile list to enrich (must not be NULL, count > 0)
- * @param state Loaded state database (must not be NULL)
- * @return Error or NULL on success
+ * Safe for re-enrichment: frees existing custom_prefix before setting.
+ * Empty state (from state_create_empty) produces no enrichment — correct
+ * behavior for pre-init or missing DB scenarios.
  */
-static error_t *enrich_profiles_from_state(
+error_t *profiles_enrich_with_prefixes(
     profile_list_t *profiles,
-    state_t *state
+    const state_t *state
 ) {
+    CHECK_NULL(profiles);
+    CHECK_NULL(state);
+
+    if (profiles->count == 0) {
+        return NULL;
+    }
+
     /* Get prefix map from state */
     hashmap_t *prefix_map = NULL;
     error_t *err = state_get_prefix_map(state, &prefix_map);
@@ -445,26 +453,24 @@ static error_t *enrich_profiles_from_state(
     /* Enrich each profile with its custom prefix (if any) */
     for (size_t i = 0; i < profiles->count; i++) {
         profile_t *profile = &profiles->profiles[i];
-        const char *custom_prefix = NULL;
+        const char *custom_prefix = (const char *) hashmap_get(prefix_map, profile->name);
 
-        /* Query from state */
-        custom_prefix = (const char *) hashmap_get(prefix_map, profile->name);
+        /* Free existing custom_prefix before setting (safe for re-enrichment) */
+        free(profile->custom_prefix);
 
         /* Attach to profile (owned by profile, freed in profile_list_free) */
         if (custom_prefix) {
-            /* Free any existing custom_prefix (defensive) and set new prefix */
-            free(profile->custom_prefix);
             profile->custom_prefix = strdup(custom_prefix);
             if (!profile->custom_prefix) {
                 hashmap_free(prefix_map, free);
                 return ERROR(
-                    ERR_MEMORY, "Failed to allocate custom_prefix for profile '%s'",
+                    ERR_MEMORY,
+                    "Failed to allocate custom_prefix for profile '%s'",
                     profile->name
                 );
             }
         } else {
             /* No custom prefix - ensure field is NULL */
-            free(profile->custom_prefix);
             profile->custom_prefix = NULL;
         }
     }
@@ -473,42 +479,6 @@ static error_t *enrich_profiles_from_state(
     hashmap_free(prefix_map, free);
 
     return NULL;
-}
-
-/**
- * Enrich profiles with custom prefixes from state
- *
- * Bridges profile loading (Git-based) with deployment configuration (state-based)
- * by populating the custom_prefix field for each profile from the state database.
- */
-error_t *profiles_enrich_with_prefixes(
-    profile_list_t *profiles,
-    git_repository *repo
-) {
-    CHECK_NULL(profiles);
-    CHECK_NULL(repo);
-
-    /* Early return for empty profile list */
-    if (profiles->count == 0) {
-        return NULL;
-    }
-
-    /* Load state (read-only) to get prefix map */
-    state_t *state = NULL;
-    error_t *err = state_load(repo, &state);
-    if (err) {
-        /* State load failure is non-fatal - profiles just won't have custom_prefix
-         * This preserves current behavior for environments without state */
-        error_free(err);
-        return NULL;
-    }
-
-    if (!state) return NULL;  /* No state database = no prefixes */
-
-    err = enrich_profiles_from_state(profiles, state);
-    state_free(state);
-
-    return err;
 }
 
 /**
@@ -674,13 +644,7 @@ static error_t *resolve_state_profile_names(
     /* Load state */
     err = state_load(repo, &state);
     if (err) {
-        /* Non-fatal: state loading failed */
-        error_free(err);
-        return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
-    }
-
-    if (!state) {
-        return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
+        return error_wrap(err, "Failed to load state for profile resolution");
     }
 
     /* Get profile names from state */
@@ -788,8 +752,17 @@ error_t *profile_resolve(
         if (err) {
             return err;
         }
-        /* Enrich with custom prefixes from state */
-        err = profiles_enrich_with_prefixes(*out, repo);
+        /* Enrich with custom prefixes from state.
+         * Explicit-profiles path has no pre-loaded state — load temporarily. */
+        state_t *enrich_state = NULL;
+        err = state_load(repo, &enrich_state);
+        if (err) {
+            profile_list_free(*out);
+            *out = NULL;
+            return error_wrap(err, "Failed to load state for prefix enrichment");
+        }
+        err = profiles_enrich_with_prefixes(*out, enrich_state);
+        state_free(enrich_state);
         if (err) {
             profile_list_free(*out);
             *out = NULL;
@@ -829,8 +802,8 @@ error_t *profile_resolve(
         goto cleanup;
     }
 
-    /* Enrich with custom prefixes (state already loaded) */
-    err = enrich_profiles_from_state(*out, state);
+    /* Enrich with custom prefixes (state already loaded by resolve_state_profile_names) */
+    err = profiles_enrich_with_prefixes(*out, state);
     if (err) {
         profile_list_free(*out);
         *out = NULL;

@@ -2753,12 +2753,6 @@ error_t *workspace_load(
         return error_wrap(err, "Failed to load profiles from names");
     }
 
-    err = profiles_enrich_with_prefixes(profiles, repo);
-    if (err) {
-        profile_list_free(profiles);
-        return error_wrap(err, "Failed to enrich profiles with custom prefixes");
-    }
-
     /* Create empty workspace (takes ownership of profiles on success) */
     err = workspace_create_empty(repo, profiles, &ws);
     if (err) {
@@ -2929,6 +2923,17 @@ error_t *workspace_load(
             return error_wrap(err, "Failed to load state");
         }
         ws->owns_state = true;
+    }
+
+    /* Enrich profiles with custom prefixes from state.
+     *
+     * Must happen after state is loaded (above) and before manifest building
+     * (below). Nothing between workspace_create_empty and here reads
+     * custom_prefix — metadata loading only accesses profile names. */
+    err = profiles_enrich_with_prefixes(ws->profiles, ws->state);
+    if (err) {
+        workspace_free(ws);
+        return error_wrap(err, "Failed to enrich profiles with custom prefixes");
     }
 
     /* Build manifest from state (Virtual Working Directory architecture)

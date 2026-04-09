@@ -213,20 +213,20 @@ error_t *profile_list_load(
  * Enrich profiles with custom prefixes from state
  *
  * Populates profile->custom_prefix for each profile by querying the state
- * database. This bridges profile loading (Git-based) with deployment
+ * database prefix map. Bridges profile loading (Git-based) with deployment
  * configuration (state-based).
  *
- * Error semantics:
- * - State load failure: Non-fatal (profiles remain without custom_prefix)
- * - Memory allocation failure: Fatal (returns error, caller must handle)
+ * Safe for re-enrichment: frees existing custom_prefix before setting.
+ * Empty state (from state_create_empty) produces no enrichment — correct
+ * behavior for pre-init or missing DB scenarios.
  *
  * @param profiles Profile list to enrich (must not be NULL)
- * @param repo Repository for state access (must not be NULL)
+ * @param state State handle (must not be NULL; empty state is valid)
  * @return Error or NULL on success
  */
 error_t *profiles_enrich_with_prefixes(
     profile_list_t *profiles,
-    git_repository *repo
+    const state_t *state
 );
 
 /**

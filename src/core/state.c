@@ -779,12 +779,13 @@ static void finalize_statements(state_t *state) {
  */
 static error_t *load_profiles(state_t *state) {
     CHECK_NULL(state);
-    CHECK_NULL(state->db);
 
-    /* Already loaded - return immediately */
-    if (state->profiles_loaded) {
-        return NULL;
-    }
+    /* Already loaded - return immediately.
+     * Must precede the db check: state_create_empty() sets
+     * profiles_loaded=true with db=NULL (empty state, no DB file). */
+    if (state->profiles_loaded) return NULL;
+
+    CHECK_NULL(state->db);
 
     /* Create array if needed */
     if (!state->profiles) {
@@ -1057,13 +1058,17 @@ error_t *state_get_prefix_map(
         return ERROR(ERR_MEMORY, "Failed to create prefix map");
     }
 
+    /* Empty state (no DB file) has no prefixes — return empty map */
+    if (!state->db) {
+        *out_map = map;
+        return NULL;
+    }
+
     /* Query: Only select profiles with custom_prefix set
      * This is efficient - most profiles won't have custom prefixes */
     const char *sql =
-        "SELECT name, custom_prefix "
-        "FROM enabled_profiles "
-        "WHERE custom_prefix IS NOT NULL "
-        "ORDER BY position ASC";
+        "SELECT name, custom_prefix FROM enabled_profiles "
+        "WHERE custom_prefix IS NOT NULL ORDER BY position ASC";
 
     sqlite3_stmt *stmt = NULL;
     int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);

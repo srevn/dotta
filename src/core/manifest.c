@@ -250,98 +250,6 @@ static error_t *extract_file_metadata_from_tree_entry(
 }
 
 /**
- * Enrich profiles with custom prefixes from state
- *
- * Modifies profiles in-place by attaching custom_prefix strings.
- * Caller owns profiles and must free with profile_list_free().
- *
- * Transient Override:
- * Used during profile enable when custom_prefix isn't in state yet.
- * Transient parameters override state for the specified profile, enabling
- * re-enabling a profile with a different prefix.
- *
- * @param state State handle (must not be NULL)
- * @param profiles Profile list to enrich (must not be NULL, modified in-place)
- * @param transient_profile Optional profile for transient override (can be NULL)
- * @param transient_prefix Optional prefix for transient profile (can be NULL)
- * @return Error or NULL on success
- */
-static error_t *enrich_profiles_with_prefixes(
-    const state_t *state,
-    profile_list_t *profiles,
-    const char *transient_profile,
-    const char *transient_prefix
-) {
-    CHECK_NULL(state);
-    CHECK_NULL(profiles);
-
-    /* Validate transient parameters: both or neither */
-    if ((transient_profile && !transient_prefix) ||
-        (!transient_profile && transient_prefix)) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "transient_profile and transient_prefix must be provided together"
-        );
-    }
-
-    /* Validate non-empty prefix */
-    if (transient_prefix && transient_prefix[0] == '\0') {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "transient_prefix must not be empty string"
-        );
-    }
-
-    /* Early return for empty profile list */
-    if (profiles->count == 0) {
-        return NULL;
-    }
-
-    error_t *err = NULL;
-    hashmap_t *prefix_map = NULL;
-
-    /* Query custom prefix configuration from state */
-    err = state_get_prefix_map(state, &prefix_map);
-    if (err) {
-        return error_wrap(
-            err, "Failed to load custom prefix configuration"
-        );
-    }
-
-    /* Enrich each profile with custom prefix */
-    for (size_t i = 0; i < profiles->count; i++) {
-        profile_t *profile = &profiles->profiles[i];
-        const char *custom_prefix = NULL;
-
-        /* Check transient override FIRST (takes precedence over state) */
-        if (transient_profile && profile->name &&
-            strcmp(profile->name, transient_profile) == 0) {
-            custom_prefix = transient_prefix;
-        } else {
-            /* Normal case: query from state */
-            custom_prefix = (const char *) hashmap_get(prefix_map, profile->name);
-        }
-
-        /* Attach to profile (owned by profile, freed in profile_list_free) */
-        if (custom_prefix) {
-            profile->custom_prefix = strdup(custom_prefix);
-            if (!profile->custom_prefix) {
-                hashmap_free(prefix_map, free);
-                return ERROR(
-                    ERR_MEMORY, "Failed to duplicate custom_prefix for profile '%s'",
-                    profile->name
-                );
-            }
-        }
-        /* else: custom_prefix remains NULL (normal for home/root profiles) */
-    }
-
-    /* Cleanup temporary resources */
-    hashmap_free(prefix_map, free);
-    return NULL;
-}
-
-/**
  * Build manifest from profiles
  *
  * Orchestrates profile loading (Git), prefix enrichment (State),
@@ -389,13 +297,30 @@ static error_t *build_manifest(
         return error_wrap(err, "Failed to load profiles for manifest build");
     }
 
-    /* Enrich profiles with prefixes */
-    err = enrich_profiles_with_prefixes(
-        state, profiles, transient_profile, transient_prefix
-    );
+    /* Enrich profiles with custom prefixes from state */
+    err = profiles_enrich_with_prefixes(profiles, state);
     if (err) {
         profile_list_free(profiles);
         return error_wrap(err, "Failed to enrich profiles with prefixes");
+    }
+
+    /* Apply transient prefix override (enable path only).
+     *
+     * When enabling a profile with --prefix, the prefix isn't in state yet
+     * (it's about to be stored). Override the enriched value so the manifest
+     * oracle includes custom/ files for this profile. */
+    if (transient_profile && transient_prefix) {
+        for (size_t i = 0; i < profiles->count; i++) {
+            if (strcmp(profiles->profiles[i].name, transient_profile) == 0) {
+                free(profiles->profiles[i].custom_prefix);
+                profiles->profiles[i].custom_prefix = strdup(transient_prefix);
+                if (!profiles->profiles[i].custom_prefix) {
+                    profile_list_free(profiles);
+                    return ERROR(ERR_MEMORY, "Failed to set transient custom prefix");
+                }
+                break;
+            }
+        }
     }
 
     /* Build manifest from enriched profiles (applies precedence rules) */
@@ -2629,7 +2554,7 @@ error_t *manifest_update_files(
     }
 
     /* 2. Enrich profiles with prefixes */
-    err = enrich_profiles_with_prefixes(state, profiles, NULL, NULL);
+    err = profiles_enrich_with_prefixes(profiles, state);
     if (err) {
         profile_list_free(profiles);
         arena_destroy(arena);
@@ -3025,7 +2950,7 @@ error_t *manifest_add_files(
     }
 
     /* 2. Enrich profiles with prefixes */
-    err = enrich_profiles_with_prefixes(state, profiles, NULL, NULL);
+    err = profiles_enrich_with_prefixes(profiles, state);
     if (err) {
         profile_list_free(profiles);
         arena_destroy(arena);
@@ -3270,7 +3195,7 @@ error_t *manifest_sync_diff(
     }
 
     /* 1.1. Enrich profiles with prefixes */
-    err = enrich_profiles_with_prefixes(state, profiles, NULL, NULL);
+    err = profiles_enrich_with_prefixes(profiles, state);
     if (err) {
         err = error_wrap(err, "Failed to enrich profiles with prefixes");
         goto cleanup;

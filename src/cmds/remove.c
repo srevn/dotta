@@ -636,7 +636,6 @@ static bool confirm_removal(
 static bool confirm_profile_deletion(
     const char *profile_name,
     size_t file_count,
-    bool is_auto_detected,
     const cmd_remove_options_t *opts,
     const config_t *config,
     output_ctx_t *out
@@ -648,14 +647,6 @@ static bool confirm_profile_deletion(
     /* Skip confirmation if --force */
     if (opts->force) {
         return true;
-    }
-
-    /* Extra warning for auto-detected profiles */
-    if (is_auto_detected) {
-        output_warning(
-            out, OUTPUT_NORMAL, "'%s' is an auto-detected profile",
-            profile_name
-        );
     }
 
     output_newline(out, OUTPUT_NORMAL);
@@ -1416,7 +1407,6 @@ static error_t *delete_profile_branch(
     }
 
     size_t file_count = files->count;
-    bool is_auto_detected = profile->auto_detected;
 
     /* Keep files alive for hook context; freed in cleanup */
     profile_free(profile);
@@ -1560,7 +1550,7 @@ static error_t *delete_profile_branch(
 
     /* Confirm deletion */
     if (!confirm_profile_deletion(
-        opts->profile, file_count, is_auto_detected, opts, config, out
+        opts->profile, file_count, opts, config, out
         )) {
         output_print(out, OUTPUT_NORMAL, "Cancelled\n");
         goto cleanup;  /* err is NULL, will return success */

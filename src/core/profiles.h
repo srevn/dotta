@@ -51,7 +51,6 @@ typedef struct {
     char *name;              /* Profile name (e.g., "global", "darwin") */
     git_reference *ref;      /* Branch reference */
     git_tree *tree;          /* Profile tree (loaded lazily) */
-    bool auto_detected;      /* Auto-detected vs manually specified */
 } profile_t;
 
 /**

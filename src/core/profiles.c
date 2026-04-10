@@ -91,7 +91,6 @@ error_t *profile_load(
 
     /* Tree will be loaded lazily */
     profile->tree = NULL;
-    profile->auto_detected = false;
 
     *out = profile;
 

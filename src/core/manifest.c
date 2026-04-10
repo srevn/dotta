@@ -1217,36 +1217,50 @@ error_t *manifest_disable_profile(
         const char *fallback_profile = hashmap_get(fallback_dir_profiles, entry->storage_path);
 
         if (fallback && fallback_profile) {
-            /* Directory exists in lower-precedence profile - update to fallback */
-
-            /* MEMORY SAFETY: Must use str_replace_owned() to properly free old
-             * strings and allocate independent copies. Direct assignment would cause:
-             * 1. Memory leak (old values not freed)
-             * 2. Use-after-free (aliasing memory freed with loaded_metadata)
-             * 3. Double-free crash (cleanup path tries to free already-freed memory)
+            /* Directory exists in lower-precedence profile - update to fallback.
              *
-             * This mirrors file handling pattern (see file fallback section above).
-             */
-            err = str_replace_owned(&entry->profile, fallback_profile);
-            if (err) {
+             * entry->{profile,owner,group,storage_path} were allocated from the
+             * function-local arena by state_get_directories_by_profile(). We
+             * overwrite them with fresh arena_strdup() pointers — the old
+             * pointers leak into the arena and are reclaimed wholesale by
+             * arena_destroy() at function exit. state_update_directory() binds
+             * with SQLITE_TRANSIENT, so SQLite copies the strings immediately. */
+            entry->profile = arena_strdup(arena, fallback_profile);
+            if (!entry->profile) {
+                err = ERROR(ERR_MEMORY, "Failed to allocate fallback profile name");
                 goto directory_cleanup;
             }
 
             /* Update metadata from fallback */
             entry->mode = fallback->mode;
 
-            err = str_replace_owned(&entry->owner, fallback->owner);
-            if (err) {
-                goto directory_cleanup;
+            /* owner and group may legitimately be NULL for non-root/ directories.
+             * Skip the strdup in that case to keep the NULL semantics intact —
+             * arena_strdup(NULL) returns NULL (same as OOM), so a NULL return
+             * can't be distinguished from failure without this explicit check. */
+            if (fallback->owner) {
+                entry->owner = arena_strdup(arena, fallback->owner);
+                if (!entry->owner) {
+                    err = ERROR(ERR_MEMORY, "Failed to allocate fallback owner");
+                    goto directory_cleanup;
+                }
+            } else {
+                entry->owner = NULL;
             }
 
-            err = str_replace_owned(&entry->group, fallback->group);
-            if (err) {
-                goto directory_cleanup;
+            if (fallback->group) {
+                entry->group = arena_strdup(arena, fallback->group);
+                if (!entry->group) {
+                    err = ERROR(ERR_MEMORY, "Failed to allocate fallback group");
+                    goto directory_cleanup;
+                }
+            } else {
+                entry->group = NULL;
             }
 
-            err = str_replace_owned(&entry->storage_path, fallback->key);
-            if (err) {
+            entry->storage_path = arena_strdup(arena, fallback->key);
+            if (!entry->storage_path) {
+                err = ERROR(ERR_MEMORY, "Failed to allocate fallback storage path");
                 goto directory_cleanup;
             }
 

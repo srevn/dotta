@@ -23,7 +23,7 @@
  */
 #define DOTTA_VERSION_MAJOR 0
 #define DOTTA_VERSION_MINOR 53
-#define DOTTA_VERSION_PATCH 10
+#define DOTTA_VERSION_PATCH 11
 
 /**
  * Pre-release identifier (empty string for release versions)
@@ -37,7 +37,7 @@
  *
  * Format: "MAJOR.MINOR.PATCH[-PRERELEASE]"
  */
-#define DOTTA_VERSION_STRING "0.53.10-dev"
+#define DOTTA_VERSION_STRING "0.53.11-dev"
 
 /**
  * Numeric version for comparisons

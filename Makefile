@@ -117,21 +117,35 @@ $(BUILD_DIR) $(BIN_DIR):
 $(BUILD_DIR)/base $(BUILD_DIR)/sys $(BUILD_DIR)/infra $(BUILD_DIR)/crypto $(BUILD_DIR)/core $(BUILD_DIR)/cmds $(BUILD_DIR)/utils $(BUILD_DIR)/lib:
 	@mkdir -p $@
 
+# Build configuration sentinel: invalidates every .o when CFLAGS changes.
+BUILD_CONFIG := $(BUILD_DIR)/.build-config
+
+.PHONY: FORCE
+FORCE:
+
+$(BUILD_CONFIG): FORCE | $(BUILD_DIR)
+	@NEW='$(CFLAGS)'; \
+	 OLD=$$(cat $@ 2>/dev/null || true); \
+	 if [ "$$NEW" != "$$OLD" ]; then \
+	   [ -f $@ ] && echo "Build flags changed — rebuilding all objects"; \
+	   printf '%s\n' "$$NEW" > $@; \
+	 fi
+
 # Compile source files
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)/base $(BUILD_DIR)/sys $(BUILD_DIR)/infra $(BUILD_DIR)/crypto $(BUILD_DIR)/core $(BUILD_DIR)/cmds $(BUILD_DIR)/utils
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(BUILD_CONFIG) | $(BUILD_DIR)/base $(BUILD_DIR)/sys $(BUILD_DIR)/infra $(BUILD_DIR)/crypto $(BUILD_DIR)/core $(BUILD_DIR)/cmds $(BUILD_DIR)/utils
 	@echo "CC $<"
 	@$(CC) $(CFLAGS) $(INCLUDES) $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) $(VERSION_FLAGS) -c $< -o $@
 
 # Compile vendor files
-$(BUILD_DIR)/lib/cJSON.o: $(CJSON_SRC) | $(BUILD_DIR)/lib
+$(BUILD_DIR)/lib/cJSON.o: $(CJSON_SRC) $(BUILD_CONFIG) | $(BUILD_DIR)/lib
 	@echo "CC $<"
 	@$(CC) $(CFLAGS) $(LIB_INCLUDES) -c $< -o $@
 
-$(BUILD_DIR)/lib/tomlc17.o: $(TOML_SRC) | $(BUILD_DIR)/lib
+$(BUILD_DIR)/lib/tomlc17.o: $(TOML_SRC) $(BUILD_CONFIG) | $(BUILD_DIR)/lib
 	@echo "CC $<"
 	@$(CC) $(CFLAGS) $(LIB_INCLUDES) -c $< -o $@
 
-$(BUILD_DIR)/lib/hydrogen.o: $(HYDROGEN_SRC) | $(BUILD_DIR)/lib
+$(BUILD_DIR)/lib/hydrogen.o: $(HYDROGEN_SRC) $(BUILD_CONFIG) | $(BUILD_DIR)/lib
 	@echo "CC $<"
 	@$(CC) $(CFLAGS) $(LIB_INCLUDES) -c $< -o $@
 

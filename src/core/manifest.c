@@ -96,9 +96,19 @@ static error_t *sync_profile_git_oids(
  * Helper for bulk operations that need git_oid for multiple profiles.
  * Creates a map: profile_name (string) -> git_oid (40-char hex string).
  *
- * @param repo Git repository
- * @param profiles Profile list (with loaded references)
- * @param out_map Output hashmap (caller must free with hashmap_free(map, free))
+ * Peels each profile's cached git_reference directly instead of re-resolving
+ * by name. profile_list_load() guarantees profile->ref is non-NULL for every
+ * returned profile, so this replaces N name-based ref lookups with N
+ * reference peels. Peeling (vs. git_reference_target) mirrors the pattern in
+ * profile_load_tree() and uniformly handles both commit-backed branches and
+ * orphan branches pointing directly at a tree.
+ *
+ * @param repo Unused (retained for signature stability; Phase 4 deletes this
+ *             function entirely when manifest callers take session_t).
+ * @param profiles Profile list with loaded references (must not be NULL)
+ * @param arena Optional arena; when NULL, hex strings are heap-allocated and
+ *              the caller frees with hashmap_free(map, free)
+ * @param out_map Output hashmap (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *build_profile_oid_map(
@@ -107,7 +117,7 @@ static error_t *build_profile_oid_map(
     arena_t *arena,
     hashmap_t **out_map
 ) {
-    CHECK_NULL(repo);
+    (void) repo;
     CHECK_NULL(profiles);
     CHECK_NULL(out_map);
 
@@ -119,28 +129,43 @@ static error_t *build_profile_oid_map(
         return ERROR(ERR_MEMORY, "Failed to create profile oid map");
     }
 
-    /* Get HEAD oid for each profile */
+    /* Get HEAD oid for each profile by peeling its cached reference */
     for (size_t i = 0; i < profiles->count; i++) {
         const profile_t *profile = &profiles->profiles[i];
-        git_oid oid;
 
-        /* Get branch HEAD */
-        err = get_branch_head_oid(repo, profile->name, &oid);
-        if (err) {
+        /* Invariant: profile_list_load populates ref for every returned
+         * profile. Defensive check guards against stack-allocated profiles
+         * that bypass profile_load. */
+        if (!profile->ref) {
             hashmap_free(map, arena ? NULL : free);
-            return error_wrap(err, "Failed to get HEAD for profile '%s'", profile->name);
+            return ERROR(
+                ERR_INTERNAL,
+                "Profile '%s' has no cached reference", profile->name
+            );
         }
 
-        /* Convert to hex string */
+        git_object *obj = NULL;
+        int git_err = git_reference_peel(&obj, profile->ref, GIT_OBJECT_ANY);
+        if (git_err < 0) {
+            hashmap_free(map, arena ? NULL : free);
+            return error_wrap(
+                error_from_git(git_err),
+                "Failed to peel reference for profile '%s'", profile->name
+            );
+        }
+
+        /* Convert peeled object OID to hex string (arena or heap) */
         char *oid_str = arena
             ? arena_alloc(arena, GIT_OID_HEXSZ + 1)
             : malloc(GIT_OID_HEXSZ + 1);
         if (!oid_str) {
+            git_object_free(obj);
             hashmap_free(map, arena ? NULL : free);
             return ERROR(ERR_MEMORY, "Failed to allocate oid string");
         }
 
-        git_oid_tostr(oid_str, GIT_OID_HEXSZ + 1, &oid);
+        git_oid_tostr(oid_str, GIT_OID_HEXSZ + 1, git_object_id(obj));
+        git_object_free(obj);
 
         /* Store in map */
         err = hashmap_set(map, profile->name, oid_str);

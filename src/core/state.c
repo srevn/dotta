@@ -787,12 +787,19 @@ static error_t *load_profiles(state_t *state) {
 
     CHECK_NULL(state->db);
 
-    /* Create array if needed */
+    /* Create array if needed, or clear stale entries from a previous load.
+     *
+     * Invalidation points (state_enable_profile, state_disable_profile) only
+     * flip profiles_loaded=false; they do not clear the cached array. Without
+     * this clear, every reload would append on top of the previous contents
+     * and the cache would grow with stale entries forever. */
     if (!state->profiles) {
         state->profiles = string_array_new(0);
         if (!state->profiles) {
             return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
         }
+    } else {
+        string_array_clear(state->profiles);
     }
 
     /* Query profiles ordered by position */

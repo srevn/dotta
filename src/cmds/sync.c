@@ -321,14 +321,15 @@ static error_t *pull_branch_ff(
 static error_t *sync_fetch_enabled_profiles(
     git_repository *repo,
     const char *remote_name,
-    profile_list_t *profiles,
+    const char *const *names,
+    size_t name_count,
     sync_results_t *results,
     output_ctx_t *out,
     transfer_context_t *xfer
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
-    CHECK_NULL(profiles);
+    CHECK_NULL(names);
     CHECK_NULL(results);
     CHECK_NULL(out);
 
@@ -366,7 +367,7 @@ static error_t *sync_fetch_enabled_profiles(
      * to exist (or have existed) on the remote. Local-only profiles (never
      * pushed) have no tracking ref and would cause the entire batched fetch
      * to fail with a "ref not found" error from the remote. */
-    char **branch_names = malloc(profiles->count * sizeof(char *));
+    char **branch_names = malloc(name_count * sizeof(char *));
     if (!branch_names) {
         if (ephemeral) {
             output_clear_line(out);
@@ -377,11 +378,11 @@ static error_t *sync_fetch_enabled_profiles(
     }
 
     size_t fetch_count = 0;
-    for (size_t i = 0; i < profiles->count; i++) {
+    for (size_t i = 0; i < name_count; i++) {
         char remote_refname[DOTTA_REFNAME_MAX];
         error_t *err_build = gitops_build_refname(
             remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
-            remote_name, profiles->profiles[i].name
+            remote_name, names[i]
         );
         if (err_build) {
             error_free(err_build);
@@ -392,7 +393,7 @@ static error_t *sync_fetch_enabled_profiles(
         int rc = git_reference_lookup(&ref, repo, remote_refname);
         if (rc == 0) {
             git_reference_free(ref);
-            branch_names[fetch_count++] = profiles->profiles[i].name;
+            branch_names[fetch_count++] = (char *) names[i];
         }
     }
 
@@ -454,21 +455,21 @@ static error_t *sync_fetch_enabled_profiles(
 static error_t *sync_analyze_phase(
     git_repository *repo,
     const char *remote_name,
-    profile_list_t *profiles,
+    const char *const *names,
+    size_t name_count,
     sync_results_t *results,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
-    CHECK_NULL(profiles);
+    CHECK_NULL(names);
     CHECK_NULL(results);
     CHECK_NULL(out);
 
-    for (size_t i = 0; i < profiles->count; i++) {
-        profile_t *profile = &profiles->profiles[i];
+    for (size_t i = 0; i < name_count; i++) {
         profile_sync_result_t *result = &results->profiles[i];
 
-        result->profile_name = strdup(profile->name);
+        result->profile_name = strdup(names[i]);
         if (!result->profile_name) {
             return ERROR(ERR_MEMORY, "Failed to allocate profile name");
         }
@@ -476,7 +477,7 @@ static error_t *sync_analyze_phase(
         /* Analyze state */
         upstream_info_t *info = NULL;
         error_t *err = upstream_analyze_profile(
-            repo, remote_name, profile->name, &info
+            repo, remote_name, names[i], &info
         );
 
         if (err) {
@@ -1317,16 +1318,19 @@ error_t *cmd_sync(
 
     /* Declare all resources, initialized to NULL */
     error_t *err = NULL;
-    profile_list_t *workspace_profiles = NULL;
-    profile_list_t *sync_profiles = NULL;
+    state_t *state = NULL;
+    workspace_t *ws = NULL;
+    string_array_t *workspace_names = NULL;
+    string_array_t *cli_names = NULL;
+    const char *const *op_names = NULL;
+    size_t op_count = 0;
     sync_results_t *results = NULL;
     char *remote_name = NULL;
     char *remote_url = NULL;
     transfer_context_t *xfer = NULL;
-    workspace_t *ws = NULL;
-    state_t *state = NULL;
     string_array_t *enabled_profiles = NULL;
     char *current_branch = NULL;
+    bool has_profile_filter = (opts->profiles != NULL && opts->profile_count > 0);
 
     /* Verify main worktree is on dotta-worktree branch */
     err = gitops_current_branch(repo, &current_branch);
@@ -1353,20 +1357,18 @@ error_t *cmd_sync(
     }
 
     /* Load profiles
-     * - workspace_profiles: ALWAYS persistent enabled profiles (for VWD scope)
-     * - sync_profiles: CLI filter or shared pointer (for sync operations)
+     * - workspace_names: ALWAYS persistent enabled profile names (for VWD scope)
+     * - cli_names / op_names: CLI filter names or workspace names (for sync operations)
      */
 
-    /* Phase 1: Load workspace profiles (ALWAYS persistent) */
-    err = profile_resolve_for_workspace(
-        repo, config->strict_mode, &workspace_profiles
-    );
+    /* Phase 1: Resolve enabled profile names (persistent) */
+    err = profile_resolve_state_names(repo, &workspace_names);
     if (err) {
         err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
     }
 
-    if (workspace_profiles->count == 0) {
+    if (workspace_names->count == 0) {
         err = ERROR(
             ERR_NOT_FOUND, "No enabled profiles to sync\n"
             "Hint: Run 'dotta profile enable <name>' to enable profiles\n"
@@ -1375,12 +1377,10 @@ error_t *cmd_sync(
         goto cleanup;
     }
 
-    /* Phase 2: Load sync profiles (CLI filter or shared pointer) */
-    if (opts->profiles && opts->profile_count > 0) {
-        /* User specified CLI filter */
-        err = profile_resolve_for_operations(
-            repo, opts->profiles, opts->profile_count, config->strict_mode,
-            &sync_profiles
+    /* Phase 2: Resolve sync profile names */
+    if (has_profile_filter) {
+        err = profile_resolve_cli_names(
+            repo, opts->profiles, opts->profile_count, config->strict_mode, &cli_names
         );
         if (err) {
             err = error_wrap(err, "Failed to resolve sync profiles");
@@ -1388,15 +1388,20 @@ error_t *cmd_sync(
         }
 
         /* Validate: filter profiles must be enabled in workspace */
-        err = profile_validate_filter(workspace_profiles, sync_profiles);
+        err = profile_validate_filter(
+            workspace_names, (const char *const *) cli_names->items, cli_names->count
+        );
         if (err) goto cleanup;
+
+        op_names = (const char *const *) cli_names->items;
+        op_count = cli_names->count;
     } else {
-        /* No CLI filter - share workspace profiles */
-        sync_profiles = workspace_profiles;
+        op_names = (const char *const *) workspace_names->items;
+        op_count = workspace_names->count;
     }
 
     /* Create results tracker */
-    results = sync_results_create(sync_profiles->count);
+    results = sync_results_create(op_count);
     if (!results) {
         err = ERROR(ERR_MEMORY, "Failed to create results");
         goto cleanup;
@@ -1413,7 +1418,7 @@ error_t *cmd_sync(
      * Skip entirely when --force is used: the clean check result is unused, and
      * workspace_load can be expensive (filesystem analysis, directory scanning).
      *
-     * CRITICAL: Use workspace_profiles (persistent) for VWD scope, NOT sync_profiles.
+     * CRITICAL: Use workspace_names (persistent) for VWD scope, NOT op_names.
      * This ensures manifest scope matches state scope for accurate divergence detection.
      */
     if (!opts->force) {
@@ -1426,7 +1431,7 @@ error_t *cmd_sync(
         };
         /* Pass NULL for state - this is read-only validation, not a transactional operation.
          * State transaction opened later for manifest updates after sync completes. */
-        err = workspace_load(repo, NULL, workspace_profiles, config, &ws_opts, &ws);
+        err = workspace_load(repo, NULL, workspace_names, config, &ws_opts, &ws);
         if (err) {
             err = error_wrap(err, "Failed to load workspace");
             goto cleanup;
@@ -1599,26 +1604,28 @@ error_t *cmd_sync(
     bool auto_pull = opts->no_pull ? false : config->auto_pull;
 
     /* Determine divergence strategy: CLI overrides config */
-    const char *strategy_str = opts->diverged ? opts->diverged : config->diverged_strategy;
+    const char *strategy = opts->diverged ? opts->diverged : config->diverged_strategy;
     sync_strategy_t diverged_strategy;
-    if (!parse_divergence_strategy(strategy_str, &diverged_strategy)) {
+    if (!parse_divergence_strategy(strategy, &diverged_strategy)) {
         err = ERROR(
             ERR_INVALID_ARG, "Invalid divergence strategy '%s' "
-            "(valid: warn, rebase, merge, ours, theirs)", strategy_str
+            "(valid: warn, rebase, merge, ours, theirs)", strategy
         );
         goto cleanup;
     }
 
-    /* Phase 1: Fetch enabled profiles from remote (use sync_profiles for operations) */
+    /* Phase 1: Fetch enabled profiles from remote */
     err = sync_fetch_enabled_profiles(
-        repo, remote_name, sync_profiles, results, out, xfer
+        repo, remote_name, (const char *const *) op_names, op_count, results, out, xfer
     );
     if (err) {
         goto cleanup;
     }
 
-    /* Phase 2: Analyze branch states (use sync_profiles for operations) */
-    err = sync_analyze_phase(repo, remote_name, sync_profiles, results, out);
+    /* Phase 2: Analyze branch states */
+    err = sync_analyze_phase(
+        repo, remote_name, (const char *const *) op_names, op_count, results, out
+    );
     if (err) {
         goto cleanup;
     }
@@ -1684,7 +1691,7 @@ error_t *cmd_sync(
         goto cleanup;
     }
 
-    /* Build enabled profiles array for manifest operations (use workspace_profiles) */
+    /* Build enabled profiles array for manifest operations */
     err = state_get_profiles(state, &enabled_profiles);
     if (err) {
         err = error_wrap(err, "Failed to get enabled profiles");
@@ -1843,12 +1850,8 @@ cleanup:
     if (remote_url) free(remote_url);
     if (remote_name) free(remote_name);
     if (results) sync_results_free(results);
-    if (sync_profiles && sync_profiles != workspace_profiles) {
-        profile_list_free(sync_profiles);
-    }
-    if (workspace_profiles) {
-        profile_list_free(workspace_profiles);
-    }
+    if (cli_names) string_array_free(cli_names);
+    if (workspace_names) string_array_free(workspace_names);
 
     return err;
 }

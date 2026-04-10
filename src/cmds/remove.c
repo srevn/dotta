@@ -1353,7 +1353,7 @@ static error_t *delete_profile_branch(
     state_t *state = NULL;
     char *repo_dir = NULL;
     hook_context_t *hook_ctx = NULL;
-    profile_list_t *all_profiles = NULL;
+    string_array_t *all_profiles = NULL;
     profile_t *profile = NULL;
     string_array_t *files = NULL;
     string_array_t *hook_fs_paths = NULL;
@@ -1386,7 +1386,7 @@ static error_t *delete_profile_branch(
     }
 
     /* SAFETY: Prevent deletion of last remaining profile */
-    err = profile_list_all_local(repo, &all_profiles);
+    err = profile_list_all_local_names(repo, &all_profiles);
     if (err) {
         err = error_wrap(err, "Failed to list profiles");
         goto cleanup;
@@ -1399,7 +1399,7 @@ static error_t *delete_profile_branch(
         );
         goto cleanup;
     }
-    profile_list_free(all_profiles);
+    string_array_free(all_profiles);
     all_profiles = NULL;
 
     /* Load profile to count files */
@@ -1939,7 +1939,7 @@ static error_t *delete_profile_branch(
 cleanup:
     /* Free all resources in reverse order of allocation */
     if (hook_fs_paths) string_array_free(hook_fs_paths);
-    free(hook_custom_prefix);
+    if (hook_custom_prefix) free(hook_custom_prefix);
     if (hook_ctx) hook_context_free(hook_ctx);
     if (repo_dir) free(repo_dir);
     if (state) state_free(state);
@@ -1947,7 +1947,7 @@ cleanup:
     if (remote_name) free(remote_name);
     if (files) string_array_free(files);
     if (profile) profile_free(profile);
-    if (all_profiles) profile_list_free(all_profiles);
+    if (all_profiles) string_array_free(all_profiles);
 
     return err;
 }

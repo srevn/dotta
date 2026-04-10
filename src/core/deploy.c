@@ -476,7 +476,7 @@ error_t *deploy_file(
         cache,
         entry->entry,
         entry->storage_path,
-        entry->source_profile ? entry->source_profile->name : "unknown",
+        entry->profile_name ? entry->profile_name : "unknown",
         entry->encrypted,
         &content_buffer
     );
@@ -508,8 +508,8 @@ error_t *deploy_file(
                 "         This may indicate state database corruption. Consider running:\n"
                 "         dotta profile disable %s && dotta profile enable %s\n",
                 entry->filesystem_path, file_mode,
-                entry->source_profile ? entry->source_profile->name : "<profile>",
-                entry->source_profile ? entry->source_profile->name : "<profile>"
+                entry->profile_name ? entry->profile_name : "<profile>",
+                entry->profile_name ? entry->profile_name : "<profile>"
             );
         }
     }

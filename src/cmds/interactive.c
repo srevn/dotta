@@ -60,7 +60,7 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
 
     error_t *err = NULL;
     interactive_state_t *state = NULL;
-    profile_list_t *all_profiles = NULL;
+    string_array_t *all_profiles = NULL;
     state_t *deploy_state = NULL;
     string_array_t *state_profiles = NULL;
     hashmap_t *profile_map = NULL;
@@ -79,7 +79,7 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
     state->modified = false;
 
     /* Load all available profiles */
-    err = profile_list_all_local(repo, &all_profiles);
+    err = profile_list_all_local_names(repo, &all_profiles);
     if (err) {
         goto cleanup;
     }
@@ -116,7 +116,7 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
         /* Store (index + 1) to avoid NULL for index 0 */
         err = hashmap_set(
             profile_map,
-            all_profiles->profiles[i].name,
+            all_profiles->items[i],
             (void *) (uintptr_t) (i + 1)
         );
         if (err) goto cleanup;
@@ -170,10 +170,8 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
         /* O(1) check if already added */
         if (used[i]) continue;
 
-        profile_t *p = &all_profiles->profiles[i];
-
         /* Add to items */
-        state->items[item_idx].name = strdup(p->name);
+        state->items[item_idx].name = strdup(all_profiles->items[i]);
         if (!state->items[item_idx].name) {
             err = error_create(ERR_MEMORY, "failed to duplicate profile name");
             goto cleanup;
@@ -199,7 +197,7 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
         string_array_free(state_profiles);
     }
     state_free(deploy_state);
-    profile_list_free(all_profiles);
+    string_array_free(all_profiles);
     hashmap_free(profile_map, NULL);
     free(used);
 
@@ -212,7 +210,7 @@ cleanup:
         string_array_free(state_profiles);
     }
     state_free(deploy_state);
-    profile_list_free(all_profiles);
+    string_array_free(all_profiles);
     hashmap_free(profile_map, NULL);
     free(used);
     if (state) {
@@ -308,15 +306,14 @@ static error_t *interactive_save_profile_order(
     }
 
     /* Extract enabled profile names in current display order */
-    char **profile_names = malloc(state->enabled_count * sizeof(char *));
-    if (!profile_names) {
-        return error_create(ERR_MEMORY, "failed to allocate profile names");
-    }
-
-    size_t idx = 0;
+    string_array_t profile_names STRING_ARRAY_AUTO = {0};
     for (size_t i = 0; i < state->item_count; i++) {
         if (state->items[i].enabled) {
-            profile_names[idx++] = state->items[i].name;
+            error_t *push_err = string_array_push(
+                &profile_names,
+                state->items[i].name
+            );
+            if (push_err) return push_err;
         }
     }
 
@@ -324,25 +321,16 @@ static error_t *interactive_save_profile_order(
     state_t *deploy_state = NULL;
     error_t *err = state_load_for_update(repo, &deploy_state);
     if (err) {
-        free(profile_names);
         return err;
     }
 
     /* Set profiles in new order (updates enabled_profiles table) */
-    err = state_set_profiles(deploy_state, profile_names, state->enabled_count);
+    err = state_set_profiles(deploy_state, &profile_names);
     if (err) {
         state_free(deploy_state);
-        free(profile_names);
-        return error_wrap(err, "Failed to update profile order in state");
-    }
-
-    /* Get new profile order as string_array_t for manifest sync */
-    string_array_t *new_order = NULL;
-    err = state_get_profiles(deploy_state, &new_order);
-    if (err) {
-        state_free(deploy_state);
-        free(profile_names);
-        return error_wrap(err, "Failed to get new profile order");
+        return error_wrap(
+            err, "Failed to update profile order in state"
+        );
     }
 
     /* Update manifest to reflect new precedence order
@@ -350,20 +338,18 @@ static error_t *interactive_save_profile_order(
      * This synchronizes the virtual_manifest table with the new profile order.
      * Reassigned files will be updated (deployed_at preserved), while
      * files whose assignment remains unchanged preserve their existing entry. */
-    err = manifest_reorder_profiles(repo, deploy_state, new_order);
-    string_array_free(new_order);
-
+    err = manifest_reorder_profiles(repo, deploy_state, &profile_names);
     if (err) {
         state_free(deploy_state);
-        free(profile_names);
-        return error_wrap(err, "Failed to update manifest with new precedence");
+        return error_wrap(
+            err, "Failed to update manifest with new precedence"
+        );
     }
 
     /* Commit transaction */
     err = state_save(repo, deploy_state);
 
     state_free(deploy_state);
-    free(profile_names);
 
     /* Update interactive state on success */
     if (!err) {
@@ -395,11 +381,13 @@ int interactive_render(const interactive_state_t *state) {
     fprintf(stdout, "\r" ANSI_CLEAR_LINE);
     if (state->modified) {
         fprintf(
-            stdout, "  \033[1mProfiles:\033[0m \033[33m(modified)\033[0m\r\n"
+            stdout,
+            "  \033[1mProfiles:\033[0m \033[33m(modified)\033[0m\r\n"
         );
     } else {
         fprintf(
-            stdout, "  \033[1mProfiles:\033[0m\r\n"
+            stdout,
+            "  \033[1mProfiles:\033[0m\r\n"
         );
     }
     lines_rendered++;

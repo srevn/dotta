@@ -458,7 +458,7 @@ static error_t *sync_entry_to_state(
     CHECK_NULL(state);
     CHECK_NULL(manifest_entry);
     CHECK_NULL(git_oid);
-    CHECK_NULL(manifest_entry->source_profile);
+    CHECK_NULL(manifest_entry->profile_name);
 
     error_t *err = NULL;
     char *blob_oid = NULL;
@@ -519,7 +519,7 @@ static error_t *sync_entry_to_state(
     state_file_entry_t state_entry = {
         .storage_path    = manifest_entry->storage_path,
         .filesystem_path = manifest_entry->filesystem_path,
-        .profile         = manifest_entry->source_profile->name,
+        .profile         = (char *) manifest_entry->profile_name,
         .type            = file_type,
         .git_oid         = (char *) git_oid,
         .blob_oid        = blob_oid,
@@ -646,7 +646,7 @@ error_t *manifest_enable_profile(
         file_entry_t *entry = &manifest->entries[i];
 
         /* Only process files owned by this profile */
-        if (strcmp(entry->source_profile->name, profile_name) != 0) {
+        if (strcmp(entry->profile_name, profile_name) != 0) {
             continue;
         }
 
@@ -1059,12 +1059,12 @@ error_t *manifest_disable_profile(
 
             /* Get git_oid from pre-built map (O(1) lookup) */
             const char *fallback_oid_str = hashmap_get(
-                profile_oids, fallback->source_profile->name
+                profile_oids, fallback->profile_name
             );
             if (!fallback_oid_str) {
                 err = ERROR(
                     ERR_INTERNAL, "Missing OID for profile '%s'",
-                    fallback->source_profile->name
+                    fallback->profile_name
                 );
                 goto cleanup;
             }
@@ -1551,7 +1551,7 @@ error_t *manifest_remove_files(
              * This extracts blob_oid, type, mode from fallback's Git tree entry
              * and applies metadata precedence from .dotta/metadata.json.
              */
-            const char *fallback_profile = fallback->source_profile->name;
+            const char *fallback_profile = fallback->profile_name;
 
             /* Get HEAD oid for fallback profile (hex string) */
             const char *fallback_oid_str = hashmap_get(profile_oids, fallback_profile);
@@ -1836,11 +1836,11 @@ error_t *manifest_rebuild(
         file_entry_t *entry = &manifest->entries[i];
 
         /* Get git_oid for this entry's source profile */
-        const char *git_oid = hashmap_get(profile_oids, entry->source_profile->name);
+        const char *git_oid = hashmap_get(profile_oids, entry->profile_name);
         if (!git_oid) {
             err = ERROR(
                 ERR_INTERNAL, "Missing OID for profile '%s'",
-                entry->source_profile->name
+                entry->profile_name
             );
             goto cleanup;
         }
@@ -2145,11 +2145,11 @@ error_t *manifest_repair_stale(
              * Preserve deployed_at — the file's lifecycle history is unchanged,
              * only the expected state cache needs updating.
              */
-            const char *git_oid = hashmap_get(profile_oids, fresh_entry->source_profile->name);
+            const char *git_oid = hashmap_get(profile_oids, fresh_entry->profile_name);
             if (!git_oid) {
                 err = ERROR(
                     ERR_INTERNAL, "Missing OID for profile '%s'",
-                    fresh_entry->source_profile->name
+                    fresh_entry->profile_name
                 );
                 goto cleanup;
             }
@@ -2219,7 +2219,7 @@ error_t *manifest_repair_stale(
              *
              * Triggers: external git rm (fallback to lower precedence),
              *           external git add (higher precedence takes over). */
-            if (strcmp(fresh_entry->source_profile->name, entry->profile) != 0) {
+            if (strcmp(fresh_entry->profile_name, entry->profile) != 0) {
                 state_file_entry_t *updated_entry = NULL;
                 err = state_get_file(state, entry->filesystem_path, &updated_entry);
                 if (err) {
@@ -2403,11 +2403,11 @@ error_t *manifest_reorder_profiles(
             /* New file (rare in reorder, but handle it) */
 
             /* Get OID from pre-built map (O(1) lookup) */
-            const char *oid_str = hashmap_get(profile_oids, new_entry->source_profile->name);
+            const char *oid_str = hashmap_get(profile_oids, new_entry->profile_name);
             if (!oid_str) {
                 err = ERROR(
                     ERR_INTERNAL, "Missing OID for profile '%s'",
-                    new_entry->source_profile->name
+                    new_entry->profile_name
                 );
                 goto cleanup;
             }
@@ -2420,17 +2420,17 @@ error_t *manifest_reorder_profiles(
         } else {
             /* Existing entry - check if owner changed */
             bool owner_changed =
-                strcmp(old_entry->profile, new_entry->source_profile->name) != 0;
+                strcmp(old_entry->profile, new_entry->profile_name) != 0;
 
             if (owner_changed) {
                 /* Owner changed - update entry to new owner */
 
                 /* Get OID from pre-built map (O(1) lookup) */
-                const char *oid_str = hashmap_get(profile_oids, new_entry->source_profile->name);
+                const char *oid_str = hashmap_get(profile_oids, new_entry->profile_name);
                 if (!oid_str) {
                     err = ERROR(
                         ERR_INTERNAL, "Missing OID for profile '%s'",
-                        new_entry->source_profile->name
+                        new_entry->profile_name
                     );
                     goto cleanup;
                 }
@@ -2703,11 +2703,11 @@ error_t *manifest_update_files(
 
             if (fallback) {
                 /* Fallback exists - update to fallback profile */
-                const char *git_oid = hashmap_get(profile_oids, fallback->source_profile->name);
+                const char *git_oid = hashmap_get(profile_oids, fallback->profile_name);
                 if (!git_oid) {
                     err = ERROR(
                         ERR_INTERNAL, "Missing OID for profile '%s'",
-                        fallback->source_profile->name
+                        fallback->profile_name
                     );
                     goto cleanup;
                 }
@@ -2715,7 +2715,7 @@ error_t *manifest_update_files(
                 /* Get metadata - from cache if available, otherwise use merged */
                 const metadata_t *metadata = NULL;
                 if (using_cache) {
-                    metadata = hashmap_get(metadata_cache, fallback->source_profile->name);
+                    metadata = hashmap_get(metadata_cache, fallback->profile_name);
                 } else {
                     metadata = metadata_merged;
                 }
@@ -2822,8 +2822,8 @@ error_t *manifest_update_files(
             }
 
             /* Check precedence matches */
-            if (entry->source_profile &&
-                strcmp(entry->source_profile->name, item->profile) != 0) {
+            if (entry->profile_name &&
+                strcmp(entry->profile_name, item->profile) != 0) {
                 /* Different profile won precedence - skip this file
                  * (higher precedence profile will handle it) */
                 continue;
@@ -3098,18 +3098,18 @@ error_t *manifest_add_files(
             continue;
         }
 
-        /* Defensive: Verify entry has source profile (should never be NULL) */
-        if (!entry->source_profile) {
+        /* Defensive: Verify entry has profile name (should never be NULL) */
+        if (!entry->profile_name) {
             /* Should never happen - indicates data corruption or manifest bug */
             err = ERROR(
-                ERR_INTERNAL, "Manifest entry '%s' has NULL source_profile",
+                ERR_INTERNAL, "Manifest entry '%s' has NULL profile_name",
                 filesystem_path
             );
             goto cleanup;
         }
 
         /* Check precedence matches */
-        if (strcmp(entry->source_profile->name, profile_name) != 0) {
+        if (strcmp(entry->profile_name, profile_name) != 0) {
             /* Different profile won precedence - skip this file
              * (higher precedence profile owns it) */
             continue;
@@ -3119,12 +3119,12 @@ error_t *manifest_add_files(
          *
          * Key insight: ADD captures files FROM filesystem, so they're
          * already deployed. We set deployed_at to mark them as known. */
-        const char *profile_git_oid = hashmap_get(profile_oids, entry->source_profile->name);
+        const char *profile_git_oid = hashmap_get(profile_oids, entry->profile_name);
 
         /* Get metadata - from cache if available, otherwise use merged */
         const metadata_t *metadata = NULL;
         if (using_cache) {
-            metadata = hashmap_get(metadata_cache, entry->source_profile->name);
+            metadata = hashmap_get(metadata_cache, entry->profile_name);
         } else {
             metadata = metadata_merged;
         }
@@ -3415,8 +3415,8 @@ error_t *manifest_sync_diff(
              * This is critical: if a different profile won precedence for this file,
              * we should NOT update the manifest entry. The winning profile will handle
              * it when its changes are synced. */
-            if (entry->source_profile &&
-                strcmp(entry->source_profile->name, profile_name) != 0) {
+            if (entry->profile_name &&
+                strcmp(entry->profile_name, profile_name) != 0) {
                 /* Different profile won precedence - skip this file */
                 free(filesystem_path);
                 continue;
@@ -3491,8 +3491,8 @@ error_t *manifest_sync_diff(
                 entry = &fresh_manifest->entries[idx];
             }
 
-            if (entry && entry->source_profile &&
-                strcmp(entry->source_profile->name, profile_name) != 0) {
+            if (entry && entry->profile_name &&
+                strcmp(entry->profile_name, profile_name) != 0) {
                 /* File exists in another profile (fallback found!)
                  *
                  * Update manifest entry to point to the new profile owner.
@@ -3500,12 +3500,12 @@ error_t *manifest_sync_diff(
 
                 const char *fallback_git_oid = hashmap_get(
                     profile_oids,
-                    entry->source_profile->name
+                    entry->profile_name
                 );
                 if (!fallback_git_oid) {
                     err = ERROR(
                         ERR_INTERNAL, "Missing OID for profile '%s'",
-                        entry->source_profile->name
+                        entry->profile_name
                     );
                     free(filesystem_path);
                     goto cleanup;
@@ -3514,7 +3514,7 @@ error_t *manifest_sync_diff(
                 /* Get metadata - from cache if available, otherwise use merged */
                 const metadata_t *fallback_metadata = NULL;
                 if (metadata_cache) {
-                    fallback_metadata = hashmap_get(metadata_cache, entry->source_profile->name);
+                    fallback_metadata = hashmap_get(metadata_cache, entry->profile_name);
                 } else {
                     fallback_metadata = metadata_merged;
                 }

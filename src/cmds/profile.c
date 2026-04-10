@@ -1359,22 +1359,19 @@ static error_t *profile_reorder(
     output_newline(out, OUTPUT_VERBOSE);
 
     /* Update state with new order */
-    err = state_set_profiles(state, opts->profiles, opts->profile_count);
+    string_array_t new_order = {
+        .items = opts->profiles,
+        .count = opts->profile_count,
+        .capacity = opts->profile_count
+    };
+    err = state_set_profiles(state, &new_order);
     if (err) {
         err = error_wrap(err, "Failed to update state");
         goto cleanup;
     }
 
     /* Update manifest to reflect new precedence order */
-    string_array_t *new_order = NULL;
-    err = state_get_profiles(state, &new_order);
-    if (err) {
-        err = error_wrap(err, "Failed to get new profile order");
-        goto cleanup;
-    }
-
-    err = manifest_reorder_profiles(repo, state, new_order);
-    string_array_free(new_order);
+    err = manifest_reorder_profiles(repo, state, &new_order);
     if (err) {
         err = error_wrap(err, "Failed to update manifest with new precedence");
         goto cleanup;

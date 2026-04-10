@@ -85,7 +85,7 @@ struct workspace {
     manifest_t *manifest;            /* Profile state (owned) */
     state_t *state;                  /* Deployment state (owned or borrowed) */
     bool owns_state;                 /* True if state is owned, false if borrowed */
-    profile_list_t *profiles;        /* Selected profiles for this workspace (borrowed) */
+    profile_list_t *profiles;        /* Selected profiles for this workspace (owned) */
     hashmap_t *profile_index;        /* Maps profile_name -> profile_t* (for O(1) lookup) */
 
     /* Cached state query (shared between workspace_build_manifest_from_state
@@ -184,7 +184,7 @@ static error_t *workspace_create_empty(
     }
 
     ws->repo = repo;
-    ws->profiles = profiles;                /* Borrowed reference */
+    ws->profiles = profiles;                /* Owned - freed in workspace_free */
 
     ws->profile_index = hashmap_borrow(32); /* Keys: profile->name (borrowed from caller) */
     if (!ws->profile_index) {
@@ -367,8 +367,9 @@ static error_t *workspace_add_diverged(
     entry->profile = arena_strdup(ws->arena, profile);
     entry->metadata_profile = NULL;  /* Will be set below if metadata exists */
 
-    /* Lookup profile pointer from profile_index (borrowed, can be NULL if profile not in enabled set) */
-    entry->source_profile = profile ? hashmap_get(ws->profile_index, profile) : NULL;
+    /* Extract custom_prefix from profile (borrowed, NULL if profile not enabled or has no custom prefix) */
+    const profile_t *profile_prefix = profile ? hashmap_get(ws->profile_index, profile) : NULL;
+    entry->custom_prefix = profile_prefix ? profile_prefix->custom_prefix : NULL;
 
     entry->state = state;
     entry->divergence = divergence;
@@ -462,7 +463,7 @@ static error_t *analyze_file_divergence(
 
     const char *fs_path = manifest_entry->filesystem_path;
     const char *storage_path = manifest_entry->storage_path;
-    const char *profile = manifest_entry->source_profile->name;
+    const char *profile = manifest_entry->profile_name;
 
     /* Determine if entry came from state database using VWD cache
      *
@@ -2053,7 +2054,7 @@ static error_t *analyze_encryption_policy_mismatch(
     for (size_t i = 0; i < ws->manifest->count; i++) {
         const file_entry_t *manifest_entry = &ws->manifest->entries[i];
         const char *storage_path = manifest_entry->storage_path;
-        const char *profile_name = manifest_entry->source_profile->name;
+        const char *profile_name = manifest_entry->profile_name;
 
         /* Check if file should be auto-encrypted */
         bool should_auto_encrypt = false;
@@ -2336,10 +2337,12 @@ static error_t *patch_entry_from_fresh(
      * filesystem content against the NEW expected blob_oid. */
     vwd_entry->stat_cache = STAT_CACHE_UNSET;
 
-    /* Update source_profile if owner changed (precedence shift) */
+    /* Update profile ownership if owner changed (precedence shift) */
     if (fresh_entry->source_profile &&
         vwd_entry->source_profile != fresh_entry->source_profile) {
         vwd_entry->source_profile = fresh_entry->source_profile;
+        vwd_entry->profile_name = fresh_entry->profile_name;
+        vwd_entry->custom_prefix = fresh_entry->custom_prefix;
     }
 
     return NULL;
@@ -2502,6 +2505,10 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             continue;
         }
 
+        /* Cache profile name and custom_prefix (borrowed, same lifetime as workspace) */
+        entry->profile_name = entry->source_profile->name;
+        entry->custom_prefix = entry->source_profile->custom_prefix;
+
         /* Borrow paths from arena-backed state entries (same lifetime) */
         entry->storage_path = state_entry->storage_path;
         entry->filesystem_path = state_entry->filesystem_path;
@@ -2573,7 +2580,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
                 entry->entry = NULL;
 
                 /* Now overwrite stale fields from fresh manifest */
-                const metadata_t *meta = ws_get_metadata(ws, fresh_entry->source_profile->name);
+                const metadata_t *meta = ws_get_metadata(ws, fresh_entry->profile_name);
                 err = patch_entry_from_fresh(entry, fresh_entry, head_oid_hex, meta, ws->arena);
                 if (err) {
                     err = error_wrap(
@@ -2710,13 +2717,13 @@ cleanup:
 error_t *workspace_load(
     git_repository *repo,
     state_t *state,
-    profile_list_t *profiles,
+    const string_array_t *profile_names,
     const config_t *config,
     const workspace_load_t *options,
     workspace_t **out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profiles);
+    CHECK_NULL(profile_names);
     CHECK_NULL(options);
     CHECK_NULL(out);
 
@@ -2734,9 +2741,28 @@ error_t *workspace_load(
     workspace_t *ws = NULL;
     error_t *err = NULL;
 
-    /* Create empty workspace */
+    /* Construct profile_list_t from validated names.
+     * Workspace owns the result — freed in workspace_free().
+     * Non-strict: silently skip profiles whose branches disappeared between
+     * name validation (at command layer) and this load (tiny race window). */
+    profile_list_t *profiles = NULL;
+    err = profile_list_load(
+        repo, profile_names->items, profile_names->count, false, &profiles
+    );
+    if (err) {
+        return error_wrap(err, "Failed to load profiles from names");
+    }
+
+    err = profiles_enrich_with_prefixes(profiles, repo);
+    if (err) {
+        profile_list_free(profiles);
+        return error_wrap(err, "Failed to enrich profiles with custom prefixes");
+    }
+
+    /* Create empty workspace (takes ownership of profiles on success) */
     err = workspace_create_empty(repo, profiles, &ws);
     if (err) {
+        profile_list_free(profiles);
         return err;
     }
 
@@ -3609,6 +3635,11 @@ void workspace_free(workspace_t *ws) {
      * in manifest entries, state entries, and diverged items.
      * Also frees cached_state_files array (arena_calloc'd). */
     arena_destroy(ws->arena);
+
+    /* Free profiles AFTER manifest and arena — manifest entries hold
+     * borrowed source_profile pointers into this list, and arena strings
+     * may reference profile names. Both are freed above. */
+    profile_list_free(ws->profiles);
 
     /* Only free state if we own it (allocated via state_load).
      * If borrowed from caller (state_load_for_update), caller is responsible. */

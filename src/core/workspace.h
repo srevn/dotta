@@ -51,8 +51,7 @@
  * - filesystem_path, storage_path: borrowed from arena-backed manifest/state entries
  * - profile, metadata_profile: arena_strdup'd (arena-owned, freed via arena_destroy)
  * - old_profile: borrowed from arena-backed manifest entry (can be NULL)
- * - source_profile: borrowed pointer, valid while workspace lives
- *   (workspace borrows profiles list from caller, so pointer is safe)
+ * - custom_prefix: borrowed from workspace-owned profile_t (NULL for home/root profiles)
  */
 typedef struct {
     char *filesystem_path;      /* Target path on filesystem (arena-borrowed) */
@@ -61,8 +60,8 @@ typedef struct {
     char *metadata_profile;     /* Which profile's metadata won, can differ from profile (arena-owned) */
     char *old_profile;          /* Previous profile from state, NULL if unchanged (arena-borrowed) */
 
-    /* Direct pointer to profile structure for convenience (borrowed, can be NULL if not enabled) */
-    profile_t *source_profile;
+    /* Custom deployment root for privilege checks (borrowed from profile_t, NULL for home/root) */
+    const char *custom_prefix;
 
     /* Item classification */
     workspace_state_t state;          /* Where the item exists (deployed/undeployed/etc.) */
@@ -132,10 +131,14 @@ typedef struct {
  * Additionally scans tracked directories for untracked files (new files
  * that appeared in directories previously added via 'dotta add').
  *
- * The workspace is scoped to the provided profiles. State entries
+ * The workspace is scoped to the provided profile names. State entries
  * and tracked directories from profiles NOT in the list are ignored. This ensures
  * that operations like `dotta status -p global` only report divergence for the
  * specified profile, not the entire repository.
+ *
+ * Profile loading: The workspace constructs and owns its profile_list_t
+ * internally from the provided names. Callers never need to construct
+ * profile_list_t — only validated profile names are required.
  *
  * State Ownership:
  * - If state is NULL: Workspace allocates its own state via state_load() and
@@ -152,7 +155,7 @@ typedef struct {
  *              - NULL: Allocate read-only state internally (workspace owns it)
  *              - non-NULL: Borrow existing state (caller owns it, typically from
  *                state_load_for_update for transactional operations)
- * @param profiles Profile list to analyze (must not be NULL)
+ * @param profile_names Validated profile names in precedence order (must not be NULL)
  * @param config Configuration (for ignore patterns, can be NULL)
  * @param options Analysis options (must not be NULL)
  * @param out Workspace (must not be NULL, caller must free with workspace_free)
@@ -161,7 +164,7 @@ typedef struct {
 error_t *workspace_load(
     git_repository *repo,
     state_t *state,
-    profile_list_t *profiles,
+    const string_array_t *profile_names,
     const struct config *config,
     const workspace_load_t *options,
     workspace_t **out

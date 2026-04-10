@@ -10,6 +10,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
 #include "base/timeutil.h"
@@ -26,36 +27,30 @@
  */
 static void display_enabled_profiles(
     output_ctx_t *out,
-    const profile_list_t *profiles,
+    const char *const *names,
+    size_t count,
     const manifest_t *manifest,
     const state_t *state
 ) {
-    if (!out || !profiles) return;
+    if (!out || !names) return;
 
     /* Show enabled profiles */
     output_section(out, OUTPUT_NORMAL, "Enabled profiles");
 
-    for (size_t i = 0; i < profiles->count; i++) {
-        const profile_t *profile = &profiles->profiles[i];
+    for (size_t i = 0; i < count; i++) {
+        const char *name = names[i];
 
         /* Format profile name */
-        output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile->name);
+        output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", name);
 
         /* Show per-profile last deployed timestamp */
         if (state) {
-            time_t profile_deploy_time = state_get_profile_timestamp(state, profile->name);
+            time_t profile_deploy_time = state_get_profile_timestamp(state, name);
             if (profile_deploy_time > 0) {
-                char time_buf[64];
                 char relative_buf[64];
-
-                /* Format both absolute and relative time */
-                struct tm tm_storage;
-                localtime_r(&profile_deploy_time, &tm_storage);
-                strftime(
-                    time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S",
-                    &tm_storage
+                format_relative_time(
+                    profile_deploy_time, relative_buf, sizeof(relative_buf)
                 );
-                format_relative_time(profile_deploy_time, relative_buf, sizeof(relative_buf));
 
                 /* Display dimmed timestamp */
                 output_styled(
@@ -69,8 +64,8 @@ static void display_enabled_profiles(
         if (output_is_verbose(out) && manifest) {
             size_t profile_file_count = 0;
             for (size_t j = 0; j < manifest->count; j++) {
-                if (manifest->entries[j].source_profile &&
-                    strcmp(manifest->entries[j].source_profile->name, profile->name) == 0) {
+                if (manifest->entries[j].profile_name &&
+                    strcmp(manifest->entries[j].profile_name, name) == 0) {
                     profile_file_count++;
                 }
             }
@@ -127,9 +122,9 @@ static void display_workspace_status(
         /* Count total managed files from manifest for filtered profile(s) */
         if (manifest) {
             for (size_t i = 0; i < manifest->count; i++) {
-                if (manifest->entries[i].source_profile &&
+                if (manifest->entries[i].profile_name &&
                     profile_filter_matches(
-                    manifest->entries[i].source_profile->name, filter_names, filter_count
+                    manifest->entries[i].profile_name, filter_names, filter_count
                     )) {
                     profile_file_count++;
                 }
@@ -502,13 +497,14 @@ static void display_workspace_status(
  */
 static error_t *display_remote_status(
     git_repository *repo,
-    const profile_list_t *enabled_profiles,
+    const char *const *names,
+    size_t count,
     output_ctx_t *out,
     bool show_all_profiles,
     bool no_fetch
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(enabled_profiles);
+    CHECK_NULL(names);
     CHECK_NULL(out);
 
     bool verbose = output_is_verbose(out);
@@ -522,27 +518,28 @@ static error_t *display_remote_status(
         return NULL;
     }
 
-    /* Determine which profiles to check */
-    profile_list_t *profiles_to_check = NULL;
-    bool should_free_profiles = false;
+    /* Build name array for profiles to check */
+    string_array_t *all_local = NULL;
+    const char **check_names = NULL;
+    size_t check_count = 0;
 
     if (show_all_profiles) {
-        /* Explicit request: show ALL local profiles */
-        err = profile_list_all_local(repo, &profiles_to_check);
+        /* Explicit request: show ALL local profiles (lightweight, no ref resolution) */
+        err = profile_list_all_local_names(repo, &all_local);
         if (err) {
             free(remote_name);
-            return error_wrap(err, "Failed to load all profiles");
+            return error_wrap(err, "Failed to list all profiles");
         }
-        should_free_profiles = true;
+        check_names = (const char **) all_local->items;
+        check_count = all_local->count;
     } else {
-        /* Default: show only enabled profiles (consistent with workspace status) */
-        profiles_to_check = (profile_list_t *) enabled_profiles;  /* Borrowed reference */
+        /* Default: use provided names directly */
+        check_names = (const char **) names;
+        check_count = count;
     }
 
-    if (profiles_to_check->count == 0) {
-        if (should_free_profiles) {
-            profile_list_free(profiles_to_check);
-        }
+    if (check_count == 0) {
+        string_array_free(all_local);
         free(remote_name);
         return NULL;
     }
@@ -575,64 +572,39 @@ static error_t *display_remote_status(
             ephemeral = output_is_tty(out);  /* ANSI clear only works on TTY */
         }
 
-        /* Build array of branch names for batched fetch */
-        char **branch_names = calloc(profiles_to_check->count, sizeof(char *));
-        if (!branch_names) {
-            /* Memory allocation failed - non-fatal, just warn */
-            if (verbose) {
-                if (ephemeral) {
-                    output_clear_line(out);
-                } else {
-                    output_newline(out, OUTPUT_VERBOSE);
-                }
-                output_warning(
-                    out, OUTPUT_VERBOSE,
-                    "Failed to allocate memory for fetch operation"
-                );
-            }
-        } else {
-            /* Populate array with borrowed references to profile names */
-            for (size_t i = 0; i < profiles_to_check->count; i++) {
-                branch_names[i] = (char *) profiles_to_check->profiles[i].name;
-            }
+        /* Perform batched fetch - single network operation for all branches */
+        error_t *fetch_err = gitops_fetch_branches(
+            repo, remote_name, (char **) check_names, check_count, xfer
+        );
 
-            /* Perform batched fetch - single network operation for all branches */
-            error_t *fetch_err = gitops_fetch_branches(
-                repo, remote_name, branch_names, profiles_to_check->count, xfer
+        /* Resolve the ephemeral fetch/progress line */
+        if (verbose) {
+            if (ephemeral) {
+                /* Clear any remaining text on the line. Handles all cases:
+                 *   - Callback completed: already cleared, harmless no-op
+                 *   - Mid-progress error: clears partial progress
+                 *   - Up-to-date: clears "Fetching..." text */
+                if (xfer && xfer->progress_active) {
+                    xfer->progress_active = false;
+                }
+                output_clear_line(out);
+            } else if (fetch_err) {
+                /* Non-TTY: finish the line before warning */
+                output_newline(out, OUTPUT_VERBOSE);
+            } else if (!xfer || xfer->total_objects == 0) {
+                /* Non-TTY, up-to-date: resolve inline */
+                output_print(out, OUTPUT_VERBOSE, " done.\n");
+            }
+            /* Non-TTY with objects: callback wrote ", done.\n" */
+        }
+
+        if (fetch_err) {
+            /* Non-fatal: just warn and continue with status display */
+            output_warning(
+                out, OUTPUT_VERBOSE, "Failed to fetch branches: %s",
+                error_message(fetch_err)
             );
-
-            /* Resolve the ephemeral fetch/progress line */
-            if (verbose) {
-                if (ephemeral) {
-                    /* Clear any remaining text on the line. Handles all cases:
-                     *   - Callback completed: already cleared, harmless no-op
-                     *   - Mid-progress error: clears partial progress
-                     *   - Up-to-date: clears "Fetching..." text */
-                    if (xfer && xfer->progress_active) {
-                        xfer->progress_active = false;
-                    }
-                    output_clear_line(out);
-                } else if (fetch_err) {
-                    /* Non-TTY: finish the line before warning */
-                    output_newline(out, OUTPUT_VERBOSE);
-                } else if (!xfer || xfer->total_objects == 0) {
-                    /* Non-TTY, up-to-date: resolve inline */
-                    output_print(out, OUTPUT_VERBOSE, " done.\n");
-                }
-                /* Non-TTY with objects: callback wrote ", done.\n" */
-            }
-
-            if (fetch_err) {
-                /* Non-fatal: just warn and continue with status display */
-                output_warning(
-                    out, OUTPUT_VERBOSE, "Failed to fetch branches: %s",
-                    error_message(fetch_err)
-                );
-                error_free(fetch_err);
-            }
-
-            /* Free the array (strings are borrowed, don't free them) */
-            free(branch_names);
+            error_free(fetch_err);
         }
 
         transfer_context_free(xfer);
@@ -648,8 +620,8 @@ static error_t *display_remote_status(
     size_t diverged = 0;
     size_t no_remote = 0;
 
-    for (size_t i = 0; i < profiles_to_check->count; i++) {
-        const char *profile_name = profiles_to_check->profiles[i].name;
+    for (size_t i = 0; i < check_count; i++) {
+        const char *profile_name = check_names[i];
 
         /* Analyze upstream state */
         upstream_info_t *info = NULL;
@@ -814,11 +786,8 @@ static error_t *display_remote_status(
         output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no remote\n", no_remote);
     }
 
-    /* Free profiles if we allocated them */
-    if (should_free_profiles) {
-        profile_list_free(profiles_to_check);
-    }
-
+    /* Free name resources */
+    string_array_free(all_local);
     free(remote_name);
 
     return NULL;
@@ -859,10 +828,8 @@ static error_t *extract_elevation_paths_from_manifest(
 
     size_t count = 0;
     for (size_t i = 0; i < manifest->count; i++) {
-        const char *prefix = manifest->entries[i].source_profile
-                           ? manifest->entries[i].source_profile->custom_prefix : NULL;
-
-        if (privilege_needs_elevation(manifest->entries[i].storage_path, prefix)) {
+        if (privilege_needs_elevation(manifest->entries[i].storage_path,
+                                     manifest->entries[i].custom_prefix)) {
             paths[count++] = manifest->entries[i].storage_path;
         }
     }
@@ -887,13 +854,16 @@ error_t *cmd_status(
 
     /* Declare all resources at top and initialize to NULL */
     error_t *err = NULL;
-    profile_list_t *workspace_profiles = NULL;
-    profile_list_t *display_profiles = NULL;
+    workspace_t *ws = NULL;
+    const state_t *state = NULL;
+    const manifest_t *manifest = NULL;
+    string_array_t *workspace_names = NULL;
+    string_array_t *cli_names = NULL;
+    const char *const *op_names = NULL;
+    size_t op_count = 0;
     const char **filter_names = NULL;
     size_t filter_count = 0;
-    const manifest_t *manifest = NULL;
-    const state_t *state = NULL;
-    workspace_t *ws = NULL;
+    bool has_profile_filter = (opts->profiles != NULL && opts->profile_count > 0);
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -903,48 +873,46 @@ error_t *cmd_status(
     /* Load profiles
      *
      * Separate workspace scope (persistent) from display filter (temporary):
-     *   - workspace_profiles: Persistent enabled profiles (VWD scope)
-     *   - display_profiles: CLI filter or shared pointer
+     *   - workspace_names: Persistent enabled profile names (VWD scope)
+     *   - cli_names / op_names: CLI filter names or workspace names (for display)
      *
      * Workspace always loads with persistent profiles to maintain accurate
      * orphan detection. Display operations filter by CLI profiles if specified.
      */
-    err = profile_resolve_for_workspace(
-        repo, config->strict_mode, &workspace_profiles
-    );
+    err = profile_resolve_state_names(repo, &workspace_names);
     if (err) {
         err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
     }
 
-    if (workspace_profiles->count == 0) {
+    if (workspace_names->count == 0) {
         output_info(out, OUTPUT_NORMAL, "No enabled profiles found");
         output_hint(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>'");
         goto cleanup;
     }
 
-    /* Load display profiles (CLI filter or shared pointer) */
-    if (opts->profiles && opts->profile_count > 0) {
-        err = profile_resolve_for_operations(
-            repo, opts->profiles, opts->profile_count,
-            config->strict_mode, &display_profiles
+    /* Resolve display profile names */
+    if (has_profile_filter) {
+        err = profile_resolve_cli_names(
+            repo, opts->profiles, opts->profile_count, config->strict_mode, &cli_names
         );
         if (err) {
             err = error_wrap(err, "Failed to resolve display profiles");
             goto cleanup;
         }
 
-        err = profile_validate_filter(workspace_profiles, display_profiles);
+        err = profile_validate_filter(
+            workspace_names, (const char *const *) cli_names->items, cli_names->count
+        );
         if (err) goto cleanup;
 
-        /* Extract filter names for downstream filtering (name-only consumers) */
-        filter_names = profile_list_extract_names(display_profiles, &filter_count);
-        if (!filter_names) {
-            err = ERROR(ERR_MEMORY, "Failed to extract filter profile names");
-            goto cleanup;
-        }
+        filter_names = (const char **) cli_names->items;
+        filter_count = cli_names->count;
+        op_names = (const char *const *) cli_names->items;
+        op_count = cli_names->count;
     } else {
-        display_profiles = workspace_profiles;
+        op_names = (const char *const *) workspace_names->items;
+        op_count = workspace_names->count;
     }
 
     /* Load workspace for divergence analysis (only needed for local status)
@@ -960,7 +928,7 @@ error_t *cmd_status(
             .analyze_directories = true,
             .analyze_encryption  = true
         };
-        err = workspace_load(repo, NULL, workspace_profiles, config, &ws_opts, &ws);
+        err = workspace_load(repo, NULL, workspace_names, config, &ws_opts, &ws);
         if (err) {
             err = error_wrap(err, "Failed to load workspace");
             goto cleanup;
@@ -1041,18 +1009,15 @@ error_t *cmd_status(
     }
 
     /* Display enabled profiles and last deployment info */
-    display_enabled_profiles(out, display_profiles, manifest, state);
+    display_enabled_profiles(out, op_names, op_count, manifest, state);
 
     /* Display workspace status (with profile filtering for Coherent Scope)
      *
-     * The workspace was loaded with persistent profiles (workspace_profiles)
+     * The workspace was loaded with persistent profiles (workspace_names)
      * for accurate divergence analysis. When CLI filter is specified,
      * we pass the filter to display_workspace_status to show only items
      * from those profiles. This ensures `dotta status -p work` matches
      * `dotta apply -p work` behavior.
-     *
-     * Explicit detection (opts->profiles != NULL) is more robust than
-     * pointer comparison and matches the pattern used in apply.c.
      */
     if (opts->show_local) {
         display_workspace_status(
@@ -1063,7 +1028,8 @@ error_t *cmd_status(
     /* Show remote sync status (if requested) */
     if (opts->show_remote) {
         err = display_remote_status(
-            repo, display_profiles, out, opts->all_profiles, opts->no_fetch
+            repo, (const char *const *) op_names, op_count, out,
+            opts->all_profiles, opts->no_fetch
         );
         if (err) {
             /* Non-fatal: might not have remote configured */
@@ -1075,11 +1041,8 @@ error_t *cmd_status(
 cleanup:
     /* Free all resources (safe with NULL pointers) */
     if (ws) workspace_free(ws);
-    if (filter_names) free(filter_names);
-    if (display_profiles && display_profiles != workspace_profiles) {
-        profile_list_free(display_profiles);
-    }
-    profile_list_free(workspace_profiles);
+    if (cli_names) string_array_free(cli_names);
+    if (workspace_names) string_array_free(workspace_names);
 
     return err;
 }

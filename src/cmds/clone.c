@@ -239,26 +239,18 @@ static error_t *fetch_all_profiles(
  * Initialize state with fetched profiles
  *
  * @param repo Repository
- * @param profile_names Profile names to set as enabled
- * @param count Number of profiles
+ * @param profiles Profile names to set as enabled (must not be NULL)
  * @param out Output context
  * @return Error or NULL on success
  */
 static error_t *initialize_state(
     git_repository *repo,
-    char **profile_names,
-    size_t count,
+    const string_array_t *profiles,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(profiles);
     CHECK_NULL(out);
-
-    if (count > 0 && !profile_names) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "profile_names must not be NULL when count > 0"
-        );
-    }
 
     /* Create state database (with or without profiles) */
     state_t *state = NULL;
@@ -267,28 +259,12 @@ static error_t *initialize_state(
         return error_wrap(err, "Failed to initialize state database");
     }
 
-    /* Set enabled profiles (if any) */
-    if (count > 0) {
-        err = state_set_profiles(state, profile_names, count);
+    /* Set enabled profiles and populate manifest */
+    if (profiles->count > 0) {
+        err = state_set_profiles(state, profiles);
         if (err) {
             state_free(state);
             return error_wrap(err, "Failed to set profiles in state");
-        }
-
-        /* Build string_array_t for manifest_rebuild */
-        string_array_t *profiles_array = string_array_new(count);
-        if (!profiles_array) {
-            state_free(state);
-            return ERROR(ERR_MEMORY, "Failed to allocate profile array");
-        }
-
-        for (size_t i = 0; i < count; i++) {
-            err = string_array_push(profiles_array, profile_names[i]);
-            if (err) {
-                string_array_free(profiles_array);
-                state_free(state);
-                return error_wrap(err, "Failed to build profile array");
-            }
         }
 
         /* Populate manifest from enabled profiles
@@ -297,9 +273,7 @@ static error_t *initialize_state(
          * enabled profiles and adding their files with correct precedence.
          * Without this, the manifest would be empty and 'dotta apply' would
          * have nothing to deploy. */
-        err = manifest_rebuild(repo, state, profiles_array);
-        string_array_free(profiles_array);
-
+        err = manifest_rebuild(repo, state, profiles);
         if (err) {
             state_free(state);
             return error_wrap(err, "Failed to populate manifest");
@@ -318,11 +292,11 @@ static error_t *initialize_state(
     /* Build profile list string */
     char profiles_str[1024] = { 0 };
     size_t offset = 0;
-    for (size_t i = 0; i < count && offset < sizeof(profiles_str) - 1; i++) {
+    for (size_t i = 0; i < profiles->count && offset < sizeof(profiles_str) - 1; i++) {
 
         int written = snprintf(
             profiles_str + offset, sizeof(profiles_str) - offset,
-            "%s%s", profile_names[i], (i < count - 1) ? ", " : ""
+            "%s%s", profiles->items[i], (i < profiles->count - 1) ? ", " : ""
         );
 
         if (written > 0) offset += written;
@@ -573,9 +547,7 @@ error_t *cmd_clone(
             }
         }
 
-        err = initialize_state(
-            repo, profile_names->items, profile_names->count, out
-        );
+        err = initialize_state(repo, profile_names, out);
         if (err) {
             output_error(out, "Failed to initialize state: %s", error_message(err));
             error_free(err);
@@ -585,12 +557,10 @@ error_t *cmd_clone(
     } else {
         /* No profiles fetched - initialize empty state */
         output_warning(out, OUTPUT_NORMAL, "No profiles were fetched");
-        err = initialize_state(repo, NULL, 0, out);
+        string_array_t empty = {0};
+        err = initialize_state(repo, &empty, out);
         if (err) {
-            output_error(
-                out, "Failed to initialize state: %s",
-                error_message(err)
-            );
+            output_error(out, "Failed to initialize state: %s", error_message(err));
             error_free(err);
         }
     }

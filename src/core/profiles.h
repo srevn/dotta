@@ -72,7 +72,9 @@ typedef struct {
  * Memory ownership:
  * - All string fields are owned and must be freed in manifest_free()
  * - git_tree_entry is owned and must be freed (NULL is valid, means not loaded)
- * - profile_t pointers are borrowed (except owned_profile in manifest_t)
+ * - source_profile is borrowed (from profile_list_t or workspace profile_index)
+ * - profile_name and custom_prefix are borrowed (same lifetime as source_profile
+ *   or manifest's owned strings for tree-based manifests)
  */
 typedef struct {
     /* Paths */
@@ -82,8 +84,23 @@ typedef struct {
     /* Git tree reference */
     git_tree_entry *entry;           /* Git tree entry (owned, lazy-loaded, can be NULL) */
 
-    /* Profile ownership */
-    profile_t *source_profile;       /* Which profile provides this file (borrowed) */
+    /* Profile ownership
+     *
+     * source_profile is a tree-loading handle — only used by
+     * file_entry_ensure_tree_entry() for lazy Git tree access and by
+     * patch_entry_from_fresh() for pointer identity comparison.
+     * All name-based operations use profile_name instead.
+     *
+     * NULL invariant: For manifests from profile_build_manifest() and
+     * workspace_build_manifest_from_state(), profile_name is NULL iff
+     * source_profile is NULL (set together at all assignment sites).
+     * For tree-based manifests (profile_build_manifest_from_tree()),
+     * source_profile is NULL while profile_name is set (tree entries
+     * are pre-populated, so lazy loading is never needed).
+     */
+    profile_t *source_profile;       /* Git tree-loading handle (borrowed, core-internal) */
+    const char *profile_name;        /* Profile name (borrowed, used for all name-based operations) */
+    const char *custom_prefix;       /* Custom deployment root (borrowed, NULL for home/root) */
 
     /* VWD Expected State Cache (populated from state database)
      *
@@ -111,17 +128,19 @@ typedef struct {
  * The index is populated by profile_build_manifest() and can be NULL for
  * manifests built by other means (e.g., workspace_build_manifest_from_state).
  *
- * The owned_profile field stores a heap-allocated profile_t used by
- * profile_build_manifest_from_tree() to prevent dangling pointers in
- * file_entry_t.source_profile. This is NULL for manifests created by
- * profile_build_manifest() (which use borrowed profile pointers).
+ * For tree-based manifests (profile_build_manifest_from_tree), the manifest
+ * owns the profile name and custom prefix strings that entries borrow.
+ * These are NULL for manifests from profile_build_manifest() (which borrow
+ * from the caller's profile_list_t) and workspace_build_manifest_from_state()
+ * (which borrow from the workspace's profile_index).
  */
 typedef struct {
     file_entry_t *entries;
     size_t count;
-    hashmap_t *index;         /* Maps filesystem_path -> index in entries array (offset by 1), can be NULL */
-    profile_t *owned_profile; /* Owned profile for single-profile manifests, NULL otherwise */
-    bool arena_backed;        /* If true, entry string fields are arena-owned (skip free) */
+    hashmap_t *index;              /* Maps filesystem_path -> index in entries array (offset by 1), can be NULL */
+    char *owned_profile_name;      /* Owned name for tree-based manifests (NULL otherwise) */
+    char *owned_custom_prefix;     /* Owned prefix for tree-based manifests (NULL otherwise) */
+    bool arena_backed;             /* If true, entry string fields are arena-owned (skip free) */
 } manifest_t;
 
 /**
@@ -241,52 +260,70 @@ error_t *profile_resolve(
 );
 
 /**
- * Resolve enabled profiles for workspace validation (VWD scope)
+ * Resolve CLI profile names for operation filtering
  *
- * ALWAYS returns persistent enabled profiles from state database,
- * ignoring any CLI overrides. This ensures workspace scope matches
- * state scope, which is required for accurate orphan detection.
- *
- * Use this for ALL workspace_load() calls.
- *
- * Architectural note: The VWD (Virtual Working Directory) must always
- * reflect persistent enabled profiles to maintain the invariant that
- * manifest scope equals state scope.
- *
- * @param repo Repository (must not be NULL)
- * @param strict_mode Strict mode flag
- * @param out Output profile list (must not be NULL, caller must free)
- * @return Error or NULL on success
- */
-error_t *profile_resolve_for_workspace(
-    git_repository *repo,
-    bool strict_mode,
-    profile_list_t **out
-);
-
-/**
- * Resolve CLI profiles for operation filtering
- *
- * Loads explicitly specified CLI profiles for use as operation filter.
- * This function should ONLY be called when user provides CLI profile
- * arguments. If no CLI profiles, use workspace_profiles directly
- * (pointer sharing optimization).
+ * Lightweight validation of CLI profile arguments: checks that each name
+ * corresponds to an existing branch without resolving Git refs or loading
+ * profile objects. Returns validated names as a string array.
  *
  * Use this when opts->profiles != NULL && opts->profile_count > 0.
  *
  * @param repo Repository (must not be NULL)
  * @param cli_profiles CLI profile arguments (must not be NULL)
  * @param cli_count Number of CLI profiles (must be > 0)
- * @param strict_mode Strict mode flag
- * @param out Output profile list (must not be NULL, caller must free)
+ * @param strict_mode If true, error on non-existent profiles; if false, skip them
+ * @param out Validated profile names (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *profile_resolve_for_operations(
+error_t *profile_resolve_cli_names(
     git_repository *repo,
     char **cli_profiles,
     size_t cli_count,
     bool strict_mode,
-    profile_list_t **out
+    string_array_t **out
+);
+
+/**
+ * Resolve enabled profile names from state database
+ *
+ * Lightweight name-only resolution: reads enabled profiles from state,
+ * validates that each exists as a branch, and returns validated names.
+ * Warns on stderr about profiles referenced in state that no longer exist.
+ *
+ * Does NOT resolve Git references or allocate profile_t structs.
+ * Use this when only profile names are needed (e.g., bootstrap).
+ *
+ * @param repo Repository (must not be NULL)
+ * @param out Validated profile names (must not be NULL, caller must free)
+ * @return Error (ERR_NOT_FOUND if no enabled profiles) or NULL on success
+ */
+error_t *profile_resolve_state_names(
+    git_repository *repo,
+    string_array_t **out
+);
+
+/**
+ * Get custom deployment prefixes for named profiles
+ *
+ * Queries the state database for custom prefixes associated with the given
+ * profile names. Returns only non-NULL prefixes (profiles with standard
+ * home/root deployment are omitted).
+ *
+ * Used by commands that need custom prefix information for path resolution
+ * (apply, update, diff). Commands that only filter by name (status, sync)
+ * do not need this.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param names Profile names to query (must not be NULL)
+ * @param count Number of names (must be > 0)
+ * @param out_prefixes Non-NULL custom prefixes (must not be NULL, caller frees)
+ * @return Error or NULL on success (empty array if no custom prefixes)
+ */
+error_t *profile_get_custom_prefixes(
+    git_repository *repo,
+    const char *const *names,
+    size_t count,
+    string_array_t **out_prefixes
 );
 
 /**
@@ -296,16 +333,15 @@ error_t *profile_resolve_for_operations(
  * in the workspace. This prevents confusing behavior where user filters
  * to a disabled profile.
  *
- * Call this after loading both workspace_profiles and operation_profiles
- * to provide clear error messages when user specifies disabled profiles.
- *
- * @param workspace_profiles Enabled profiles from state (must not be NULL)
- * @param filter_profiles CLI filter profiles (NULL is valid = no filter)
+ * @param workspace_names Enabled profile names from state (must not be NULL)
+ * @param filter_names CLI filter profile names (NULL is valid = no filter)
+ * @param filter_count Number of filter names (ignored when filter_names is NULL)
  * @return Error if any filter profile is not enabled, NULL on success
  */
 error_t *profile_validate_filter(
-    const profile_list_t *workspace_profiles,
-    const profile_list_t *filter_profiles
+    const string_array_t *workspace_names,
+    const char *const *filter_names,
+    size_t filter_count
 );
 
 /**
@@ -331,34 +367,20 @@ bool profile_filter_matches(
 );
 
 /**
- * Extract name pointers from profile list
+ * List all local profile branch names
  *
- * Returns a malloc'd array of borrowed const char * pointers into the
- * profile list's name fields. Caller must free the returned array (not
- * the strings — they are borrowed from the profile list).
- *
- * @param list Profile list (can be NULL)
- * @param out_count Output count (must not be NULL, set to 0 on NULL/empty/error)
- * @return Array of name pointers (caller frees), NULL on failure or empty input
- */
-const char **profile_list_extract_names(
-    const profile_list_t *list,
-    size_t *out_count
-);
-
-/**
- * List all local profile branches
- *
- * Returns all local branches except 'dotta-worktree'.
- * Used by sync in 'local' mode to sync all existing local profiles.
+ * Returns names of all local branches except 'dotta-worktree'.
+ * Lightweight alternative to profile_list_load — iterates Git refs
+ * but only extracts branch names without resolving references or
+ * allocating profile_t structs.
  *
  * @param repo Repository (must not be NULL)
- * @param out Profile list (must not be NULL, caller must free)
+ * @param out String array of branch names (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *profile_list_all_local(
+error_t *profile_list_all_local_names(
     git_repository *repo,
-    profile_list_t **out
+    string_array_t **out
 );
 
 /**

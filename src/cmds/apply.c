@@ -13,6 +13,7 @@
 #include "base/error.h"
 #include "base/match.h"
 #include "base/output.h"
+#include "base/string.h"
 #include "core/cleanup.h"
 #include "core/deploy.h"
 #include "core/manifest.h"
@@ -634,10 +635,8 @@ static error_t *ensure_complete_apply_privileges(
      * Uses privilege_needs_elevation() which considers whether the custom prefix
      * is under $HOME — custom/ paths under $HOME don't need sudo. */
     for (size_t i = 0; i < manifest->count; i++) {
-        const char *prefix = manifest->entries[i].source_profile
-                           ? manifest->entries[i].source_profile->custom_prefix : NULL;
-
-        if (privilege_needs_elevation(manifest->entries[i].storage_path, prefix)) {
+        if (privilege_needs_elevation(manifest->entries[i].storage_path,
+                                     manifest->entries[i].custom_prefix)) {
             error_t *err = string_array_push(root_paths, manifest->entries[i].storage_path);
             if (err) {
                 string_array_free(root_paths);
@@ -649,10 +648,8 @@ static error_t *ensure_complete_apply_privileges(
     /* 2. Collect paths needing elevation from file orphans (files being removed) */
     if (file_orphans && file_orphan_count > 0) {
         for (size_t i = 0; i < file_orphan_count; i++) {
-            const char *prefix = file_orphans[i]->source_profile
-                               ? file_orphans[i]->source_profile->custom_prefix : NULL;
-
-            if (privilege_needs_elevation(file_orphans[i]->storage_path, prefix)) {
+            if (privilege_needs_elevation(file_orphans[i]->storage_path,
+                                         file_orphans[i]->custom_prefix)) {
                 error_t *err = string_array_push(root_paths, file_orphans[i]->storage_path);
                 if (err) {
                     string_array_free(root_paths);
@@ -665,10 +662,8 @@ static error_t *ensure_complete_apply_privileges(
     /* 3. Collect paths needing elevation from directory orphans (directories being removed) */
     if (dir_orphans && dir_orphan_count > 0) {
         for (size_t i = 0; i < dir_orphan_count; i++) {
-            const char *prefix = dir_orphans[i]->source_profile
-                               ? dir_orphans[i]->source_profile->custom_prefix : NULL;
-
-            if (privilege_needs_elevation(dir_orphans[i]->storage_path, prefix)) {
+            if (privilege_needs_elevation(dir_orphans[i]->storage_path,
+                                         dir_orphans[i]->custom_prefix)) {
                 error_t *err = string_array_push(root_paths, dir_orphans[i]->storage_path);
                 if (err) {
                     string_array_free(root_paths);
@@ -827,8 +822,10 @@ error_t *cmd_apply(
     error_t *err = NULL;
     char *repo_dir = NULL;
     state_t *state = NULL;
-    profile_list_t *workspace_profiles = NULL;
-    profile_list_t *operation_profiles = NULL;
+    string_array_t *workspace_names = NULL;
+    string_array_t *cli_names = NULL;
+    const char *const *op_names = NULL;
+    size_t op_count = 0;
     const char **filter_names = NULL;
     size_t filter_count = 0;
     const manifest_t *manifest = NULL;
@@ -846,6 +843,7 @@ error_t *cmd_apply(
     char *profiles_str = NULL;
     deploy_result_t *deploy_res = NULL;
     path_filter_t *file_filter = NULL;
+    bool has_profile_filter = (opts->profiles != NULL && opts->profile_count > 0);
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -917,21 +915,21 @@ error_t *cmd_apply(
     /* Load profiles
      *
      * Separate workspace scope (persistent) from operation filter (temporary).
-     *   - workspace_profiles: ALWAYS persistent enabled profiles (for VWD scope)
-     *   - operation_profiles: CLI filter or shared pointer (for filtering operations)
+     *   - workspace_names: ALWAYS persistent enabled profile names (for VWD scope)
+     *   - cli_names / op_names: CLI filter names or workspace names (for filtering operations)
      *
      * This ensures accurate orphan detection while supporting CLI filtering.
      */
     output_print(out, OUTPUT_VERBOSE, "Loading profiles...\n");
 
-    /* Phase 1: Load workspace profiles (ALWAYS persistent, ignore CLI overrides) */
-    err = profile_resolve_for_workspace(repo, config->strict_mode, &workspace_profiles);
+    /* Phase 1: Resolve enabled profile names (ALWAYS persistent, ignore CLI overrides) */
+    err = profile_resolve_state_names(repo, &workspace_names);
     if (err) {
         err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
     }
 
-    if (workspace_profiles->count == 0) {
+    if (workspace_names->count == 0) {
         err = ERROR(
             ERR_NOT_FOUND, "No enabled profiles found\n"
             "Hint: Run 'dotta profile enable <name>' to enable profiles"
@@ -939,12 +937,14 @@ error_t *cmd_apply(
         goto cleanup;
     }
 
-    /* Phase 2: Load operation profiles */
-    if (opts->profiles && opts->profile_count > 0) {
-        /* User specified CLI filter - load filter profiles */
-        err = profile_resolve_for_operations(
-            repo, opts->profiles, opts->profile_count, config->strict_mode,
-            &operation_profiles
+    /* Phase 2: Resolve operation profile names
+     *
+     * CLI filter path: validate names exist as branches (lightweight, no Git ref resolution)
+     * No-filter path: use workspace names directly
+     */
+    if (has_profile_filter) {
+        err = profile_resolve_cli_names(
+            repo, opts->profiles, opts->profile_count, config->strict_mode, &cli_names
         );
         if (err) {
             err = error_wrap(err, "Failed to resolve operation profiles");
@@ -952,71 +952,53 @@ error_t *cmd_apply(
         }
 
         /* Validate: filter profiles must be enabled in workspace */
-        err = profile_validate_filter(workspace_profiles, operation_profiles);
+        err = profile_validate_filter(
+            workspace_names, (const char *const *) cli_names->items, cli_names->count
+        );
         if (err) goto cleanup;
+
+        filter_names = (const char **) cli_names->items;
+        filter_count = cli_names->count;
+        op_names = (const char *const *) cli_names->items;
+        op_count = cli_names->count;
     } else {
-        /* No CLI filter - share workspace profiles */
-        operation_profiles = workspace_profiles;
+        op_names = (const char *const *) workspace_names->items;
+        op_count = workspace_names->count;
     }
 
     output_print(
         out, OUTPUT_VERBOSE, "Using %zu profile%s:\n",
-        operation_profiles->count, operation_profiles->count == 1 ? "" : "s"
+        op_count, op_count == 1 ? "" : "s"
     );
-    for (size_t i = 0; i < operation_profiles->count; i++) {
+    for (size_t i = 0; i < op_count; i++) {
         output_styled(
             out, OUTPUT_VERBOSE, "  {cyan}•{reset} %s\n",
-            operation_profiles->profiles[i].name
+            op_names[i]
         );
-    }
-
-    /* Explicit profile filter detection (Coherent Scope)
-     *
-     * Directly checks CLI arguments to determine if profile filtering is requested.
-     * Used to scope orphan cleanup and directory processing.
-     */
-    bool has_profile_filter = (opts->profiles != NULL && opts->profile_count > 0);
-
-    /* Extract filter names for downstream filtering (name-only consumers) */
-    if (has_profile_filter) {
-        filter_names = profile_list_extract_names(operation_profiles, &filter_count);
-        if (!filter_names) {
-            err = ERROR(ERR_MEMORY, "Failed to extract filter profile names");
-            goto cleanup;
-        }
     }
 
     /* Create file filter from CLI arguments
      *
-     * Extract custom prefixes from operation profiles to enable proper resolution
-     * of filesystem paths like /mnt/jail/etc/nginx.conf to custom/etc/nginx.conf.
+     * Query custom prefixes from state to enable proper resolution of filesystem
+     * paths like /mnt/jail/etc/nginx.conf to custom/etc/nginx.conf.
      * Without this, such paths would incorrectly resolve to root/mnt/jail/etc/nginx.conf.
      */
     if (opts->files && opts->file_count > 0) {
         /* Extract custom prefixes from operation profiles */
-        const char **custom_prefixes = NULL;
-        size_t prefix_count = 0;
-
-        if (operation_profiles && operation_profiles->count > 0) {
-            custom_prefixes = calloc(
-                operation_profiles->count,
-                sizeof(char *)
-            );
-            if (custom_prefixes) {
-                for (size_t i = 0; i < operation_profiles->count; i++) {
-                    if (operation_profiles->profiles[i].custom_prefix) {
-                        custom_prefixes[prefix_count++] =
-                            operation_profiles->profiles[i].custom_prefix;
-                    }
-                }
-            }
+        string_array_t *prefixes = NULL;
+        err = profile_get_custom_prefixes(
+            repo, (const char *const *) op_names, op_count, &prefixes
+        );
+        if (err) {
+            err = error_wrap(err, "Failed to get custom prefixes");
+            goto cleanup;
         }
 
         err = path_filter_create(
-            (const char **) opts->files, opts->file_count, custom_prefixes,
-            prefix_count, &file_filter
+            (const char **) opts->files, opts->file_count,
+            (const char **) prefixes->items, prefixes->count, &file_filter
         );
-        free(custom_prefixes);  /* Array only, strings are borrowed from profiles */
+        string_array_free(prefixes);
 
         if (err) {
             err = error_wrap(err, "Failed to create file filter");
@@ -1044,7 +1026,7 @@ error_t *cmd_apply(
 
     /* Apply needs file divergence + orphan detection for deployment and cleanup
      *
-     * Use workspace_profiles (persistent) for VWD scope, NOT operation_profiles.
+     * Use workspace_names (persistent) for VWD scope, NOT cli_names/op_names.
      * This ensures manifest scope matches state scope for accurate orphan detection.
      */
     workspace_load_t ws_opts = {
@@ -1055,7 +1037,7 @@ error_t *cmd_apply(
         .analyze_encryption  = false,         /* Not needed for deployment */
         .repaired_paths      = repaired_paths /* From stale repair: path → old_blob_oid */
     };
-    err = workspace_load(repo, state, workspace_profiles, config, &ws_opts, &ws);
+    err = workspace_load(repo, state, workspace_names, config, &ws_opts, &ws);
     if (err) {
         err = error_wrap(err, "Failed to load workspace");
         goto cleanup;
@@ -1105,8 +1087,8 @@ error_t *cmd_apply(
         const file_entry_t *entry = &manifest->entries[i];
 
         /* Filter by operation profiles (skip files not in filter) */
-        if (entry->source_profile &&
-            !profile_filter_matches(entry->source_profile->name, filter_names, filter_count)) {
+        if (entry->profile_name &&
+            !profile_filter_matches(entry->profile_name, filter_names, filter_count)) {
             continue;
         }
 
@@ -1160,8 +1142,8 @@ error_t *cmd_apply(
             const file_entry_t *entry = &manifest->entries[i];
 
             /* Filter by operation profiles (skip files not in filter) */
-            if (entry->source_profile &&
-                !profile_filter_matches(entry->source_profile->name, filter_names, filter_count)) {
+            if (entry->profile_name &&
+                !profile_filter_matches(entry->profile_name, filter_names, filter_count)) {
                 continue;
             }
 
@@ -1652,31 +1634,7 @@ error_t *cmd_apply(
 
     /* Execute pre-apply hook */
     if (config && repo_dir) {
-        /* Join all profile names into a space-separated string */
-        size_t total_len = 0;
-        for (size_t i = 0; i < operation_profiles->count; i++) {
-            total_len += strlen(operation_profiles->profiles[i].name);
-            if (i < operation_profiles->count - 1) {
-                total_len++; /* For space separator */
-            }
-        }
-
-        profiles_str = malloc(total_len + 1);
-        if (!profiles_str) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate profile names string");
-            goto cleanup;
-        }
-
-        char *p = profiles_str;
-        for (size_t i = 0; i < operation_profiles->count; i++) {
-            const char *name = operation_profiles->profiles[i].name;
-            strcpy(p, name);
-            p += strlen(name);
-            if (i < operation_profiles->count - 1) {
-                *p++ = ' ';
-            }
-        }
-        *p = '\0';
+        profiles_str = str_join(op_names, op_count, " ");
 
         /* Create hook context with all profiles */
         hook_ctx = hook_context_create(repo_dir, "apply", profiles_str);
@@ -2297,11 +2255,8 @@ cleanup:
     if (file_orphans) free(file_orphans);
     if (repaired_paths) hashmap_free(repaired_paths, free);
     if (ws) workspace_free(ws);
-    if (filter_names) free(filter_names);
-    if (operation_profiles && operation_profiles != workspace_profiles) {
-        profile_list_free(operation_profiles);
-    }
-    if (workspace_profiles) profile_list_free(workspace_profiles);
+    if (cli_names) string_array_free(cli_names);
+    if (workspace_names) string_array_free(workspace_names);
     if (state) state_free(state);
     if (repo_dir) free(repo_dir);
 

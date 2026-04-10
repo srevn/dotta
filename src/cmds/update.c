@@ -457,8 +457,8 @@ static error_t *filter_items_for_update(
  * Creates a hashmap: profile_name -> item_array_t*
  * Each profile gets an array of items that belong to it.
  *
- * Uses item->profile string for grouping (not source_profile pointer,
- * as that may be NULL for items from disabled profiles).
+ * Uses item->profile string for grouping (not file_entry_t.source_profile
+ * pointer, as that may be NULL for items from disabled profiles).
  *
  * @param items Array of workspace item pointers (must not be NULL)
  * @param count Number of items
@@ -827,7 +827,7 @@ static error_t *update_metadata_for_profile(
  */
 static error_t *update_profile(
     worktree_handle_t *wt,
-    profile_t *profile,
+    const char *profile_name,
     const workspace_item_t **items,
     size_t item_count,
     const cmd_update_options_t *opts,
@@ -837,7 +837,7 @@ static error_t *update_profile(
     size_t *out_processed
 ) {
     CHECK_NULL(wt);
-    CHECK_NULL(profile);
+    CHECK_NULL(profile_name);
     CHECK_NULL(items);
     CHECK_NULL(opts);
     CHECK_NULL(out);
@@ -867,7 +867,7 @@ static error_t *update_profile(
 
     /* Try to get metadata from workspace cache first */
     if (ws) {
-        existing_metadata = (metadata_t *) workspace_get_metadata(ws, profile->name);
+        existing_metadata = (metadata_t *) workspace_get_metadata(ws, profile_name);
         if (existing_metadata) {
             owns_metadata = false;  /* Borrowed from workspace */
         }
@@ -875,7 +875,7 @@ static error_t *update_profile(
 
     /* Fallback: load from Git if not in cache */
     if (!existing_metadata) {
-        err = metadata_load_from_branch(wt_repo, profile->name, &existing_metadata);
+        err = metadata_load_from_branch(wt_repo, profile_name, &existing_metadata);
         if (err) {
             if (err->code == ERR_NOT_FOUND) {
                 error_free(err);
@@ -886,7 +886,7 @@ static error_t *update_profile(
             } else {
                 return error_wrap(
                     err, "Failed to load metadata from profile '%s'",
-                    profile->name
+                    profile_name
                 );
             }
         }
@@ -994,7 +994,7 @@ static error_t *update_profile(
                     wt,
                     item->filesystem_path,
                     item->storage_path,
-                    profile->name,
+                    profile_name,
                     key_mgr,
                     config,
                     existing_metadata,
@@ -1070,7 +1070,7 @@ static error_t *update_profile(
     /* Build commit message context */
     commit_message_context_t ctx = {
         .action        = COMMIT_ACTION_UPDATE,
-        .profile       = profile->name,
+        .profile       = profile_name,
         .files         = storage_paths,
         .file_count    = path_count,
         .custom_msg    = opts->message,
@@ -1084,7 +1084,7 @@ static error_t *update_profile(
     }
 
     /* Create commit */
-    err = worktree_commit(wt, profile->name, message, NULL);
+    err = worktree_commit(wt, profile_name, message, NULL);
     if (err) {
         err = error_wrap(err, "Failed to create commit");
         goto cleanup;
@@ -1373,7 +1373,6 @@ cleanup:
  */
 static error_t *update_execute_for_all_profiles(
     git_repository *repo,
-    profile_list_t *profiles,
     const workspace_item_t **update_items,
     size_t update_count,
     const cmd_update_options_t *opts,
@@ -1384,7 +1383,6 @@ static error_t *update_execute_for_all_profiles(
     hashmap_t **out_by_profile
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profiles);
     CHECK_NULL(update_items);
     CHECK_NULL(opts);
     CHECK_NULL(out);
@@ -1401,7 +1399,6 @@ static error_t *update_execute_for_all_profiles(
     /* Initialize all resources to NULL for goto cleanup */
     worktree_handle_t *wt = NULL;
     hashmap_t *by_profile = NULL;
-    hashmap_t *profile_index = NULL;
     error_t *err = NULL;
 
     /* Create shared temporary worktree for all profile updates */
@@ -1417,23 +1414,9 @@ static error_t *update_execute_for_all_profiles(
         goto cleanup;
     }
 
-    /* Create hashmap for O(1) profile lookup */
-    profile_index = hashmap_borrow(32);
-    if (!profile_index) {
-        err = ERROR(ERR_MEMORY, "Failed to create profile index");
-        goto cleanup;
-    }
-
-    for (size_t i = 0; i < profiles->count; i++) {
-        profile_t *profile = &profiles->profiles[i];
-        error_t *index_err = hashmap_set(profile_index, profile->name, profile);
-        if (index_err) {
-            err = error_wrap(index_err, "Failed to index profile");
-            goto cleanup;
-        }
-    }
-
-    /* Update each profile using iterator */
+    /* Update each profile using iterator.
+     * Profile names come from workspace items which are already validated
+     * against the enabled profile set during workspace_load. */
     hashmap_iter_t iter;
     hashmap_iter_init(&iter, by_profile);
     const char *profile_name;
@@ -1442,19 +1425,6 @@ static error_t *update_execute_for_all_profiles(
     while (hashmap_iter_next(&iter, &profile_name, &value)) {
         item_array_t *array = (item_array_t *) value;
 
-        /* Look up profile pointer */
-        profile_t *profile = hashmap_get(profile_index, profile_name);
-
-        if (!profile) {
-            /* Profile not in enabled set - skip (shouldn't happen due to filtering) */
-            output_warning(
-                out, OUTPUT_NORMAL,
-                "Profile '%s' not found in enabled profiles, skipping",
-                profile_name
-            );
-            continue;
-        }
-
         if (array->count == 0) {
             continue;
         }
@@ -1462,15 +1432,15 @@ static error_t *update_execute_for_all_profiles(
         /* Display profile header */
         output_info(
             out, OUTPUT_NORMAL, "Updating profile '{cyan}%s{reset}':",
-            profile->name
+            profile_name
         );
 
         /* Checkout profile branch in shared worktree */
-        err = worktree_checkout_branch(wt, profile->name);
+        err = worktree_checkout_branch(wt, profile_name);
         if (err) {
             err = error_wrap(
                 err, "Failed to checkout profile '%s'",
-                profile->name
+                profile_name
             );
             break;
         }
@@ -1478,14 +1448,14 @@ static error_t *update_execute_for_all_profiles(
         /* Update this profile using shared worktree */
         size_t processed = 0;
         err = update_profile(
-            wt, profile, array->items, array->count, opts,
+            wt, profile_name, array->items, array->count, opts,
             out, config, ws, &processed
         );
 
         if (err) {
             err = error_wrap(
                 err, "Failed to update profile '%s'",
-                profile->name
+                profile_name
             );
             break;
         }
@@ -1501,10 +1471,6 @@ static error_t *update_execute_for_all_profiles(
     }
 
 cleanup:
-    /* Cleanup resources in reverse order */
-    if (profile_index) {
-        hashmap_free(profile_index, NULL);
-    }
     /* Pass by_profile to caller (for manifest sync), or free on error */
     if (by_profile) {
         if (err) {
@@ -1976,11 +1942,13 @@ error_t *cmd_update(
 
     /* Declare all resources at top, initialized to NULL */
     error_t *err = NULL;
-    profile_list_t *workspace_profiles = NULL;
-    profile_list_t *operation_profiles = NULL;
+    workspace_t *ws = NULL;
+    string_array_t *workspace_names = NULL;
+    string_array_t *cli_names = NULL;
+    const char *const *op_names = NULL;
+    size_t op_count = 0;
     const char **filter_names = NULL;
     size_t filter_count = 0;
-    workspace_t *ws = NULL;
     hook_context_t *hook_ctx = NULL;
     char *repo_dir = NULL;
     char *profiles_str = NULL;
@@ -1988,6 +1956,8 @@ error_t *cmd_update(
     const workspace_item_t **update_items = NULL;
     size_t update_count = 0;
     size_t total_updated = 0;
+
+    bool has_profile_filter = (opts->profiles != NULL && opts->profile_count > 0);
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1997,23 +1967,18 @@ error_t *cmd_update(
     /* Load profiles
      *
      * Dual-list pattern ensures workspace scope consistency:
-     * - workspace_profiles: Persistent enabled profiles for VWD scope and orphan detection
-     * - operation_profiles: CLI filter or shared pointer for update operations
-     *
-     * This separation maintains accurate workspace analysis while supporting
-     * selective update operations via CLI filtering.
+     * - workspace_names: Persistent enabled profile names for VWD scope
+     * - cli_names / op_names: CLI filter names or workspace names for update operations
      */
 
-    /* Phase 1: Load workspace profiles (persistent enabled profiles) */
-    err = profile_resolve_for_workspace(
-        repo, config->strict_mode, &workspace_profiles
-    );
+    /* Phase 1: Resolve enabled profile names (persistent) */
+    err = profile_resolve_state_names(repo, &workspace_names);
     if (err) {
         err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
     }
 
-    if (workspace_profiles->count == 0) {
+    if (workspace_names->count == 0) {
         err = ERROR(
             ERR_NOT_FOUND, "No enabled profiles found\n"
             "Hint: Run 'dotta profile enable <name>' to enable profiles"
@@ -2021,12 +1986,10 @@ error_t *cmd_update(
         goto cleanup;
     }
 
-    /* Phase 2: Load operation profiles (CLI filter or shared pointer) */
-    if (opts->profiles && opts->profile_count > 0) {
-        /* CLI filter specified - load operation filter profiles */
-        err = profile_resolve_for_operations(
-            repo, opts->profiles, opts->profile_count,
-            config->strict_mode, &operation_profiles
+    /* Phase 2: Resolve operation profile names */
+    if (has_profile_filter) {
+        err = profile_resolve_cli_names(
+            repo, opts->profiles, opts->profile_count, config->strict_mode, &cli_names
         );
         if (err) {
             err = error_wrap(err, "Failed to resolve operation profiles");
@@ -2034,18 +1997,18 @@ error_t *cmd_update(
         }
 
         /* Validate: filter profiles must be enabled in workspace */
-        err = profile_validate_filter(workspace_profiles, operation_profiles);
+        err = profile_validate_filter(
+            workspace_names, (const char *const *) cli_names->items, cli_names->count
+        );
         if (err) goto cleanup;
 
-        /* Extract filter names for downstream filtering (name-only consumers) */
-        filter_names = profile_list_extract_names(operation_profiles, &filter_count);
-        if (!filter_names) {
-            err = ERROR(ERR_MEMORY, "Failed to extract filter profile names");
-            goto cleanup;
-        }
+        filter_names = (const char **) cli_names->items;
+        filter_count = cli_names->count;
+        op_names = (const char *const *) cli_names->items;
+        op_count = cli_names->count;
     } else {
-        /* No CLI filter - share workspace profiles (optimization) */
-        operation_profiles = workspace_profiles;
+        op_names = (const char *const *) workspace_names->items;
+        op_count = workspace_names->count;
     }
 
     /* Get repository directory for hooks */
@@ -2056,15 +2019,7 @@ error_t *cmd_update(
 
     /* Execute pre-update hook (using operation profiles for context) */
     if (config && repo_dir) {
-        /* Build array of profile names and join with spaces */
-        const char **profile_names_array = malloc(operation_profiles->count * sizeof(const char *));
-        if (profile_names_array) {
-            for (size_t i = 0; i < operation_profiles->count; i++) {
-                profile_names_array[i] = operation_profiles->profiles[i].name;
-            }
-            profiles_str = str_join(profile_names_array, operation_profiles->count, " ");
-            free(profile_names_array);
-        }
+        profiles_str = str_join(op_names, op_count, " ");
 
         if (profiles_str) {
             /* Create hook context with operation profiles */
@@ -2120,7 +2075,7 @@ error_t *cmd_update(
         .analyze_directories = true,                    /* Directory metadata change detection */
         .analyze_encryption  = true                     /* Encryption policy validation */
     };
-    err = workspace_load(repo, NULL, workspace_profiles, config, &ws_opts, &ws);
+    err = workspace_load(repo, NULL, workspace_names, config, &ws_opts, &ws);
     if (err) {
         err = error_wrap(err, "Failed to analyze workspace");
         goto cleanup;
@@ -2134,26 +2089,20 @@ error_t *cmd_update(
      */
     if (opts->files && opts->file_count > 0) {
         /* Extract custom prefixes from operation profiles */
-        const char **custom_prefixes = NULL;
-        size_t prefix_count = 0;
-
-        if (operation_profiles && operation_profiles->count > 0) {
-            custom_prefixes = calloc(operation_profiles->count, sizeof(char *));
-            if (custom_prefixes) {
-                for (size_t i = 0; i < operation_profiles->count; i++) {
-                    if (operation_profiles->profiles[i].custom_prefix) {
-                        custom_prefixes[prefix_count++] = operation_profiles->profiles[i].
-                            custom_prefix;
-                    }
-                }
-            }
+        string_array_t *prefixes = NULL;
+        err = profile_get_custom_prefixes(
+            repo, (const char *const *) op_names, op_count, &prefixes
+        );
+        if (err) {
+            err = error_wrap(err, "Failed to get custom prefixes");
+            goto cleanup;
         }
 
         err = path_filter_create(
-            (const char **) opts->files, opts->file_count, custom_prefixes,
-            prefix_count, &file_filter
+            (const char **) opts->files, opts->file_count,
+            (const char **) prefixes->items, prefixes->count, &file_filter
         );
-        free(custom_prefixes);  /* Array only, strings are borrowed from profiles */
+        string_array_free(prefixes);
 
         if (err) {
             err = error_wrap(err, "Failed to create file filter");
@@ -2222,10 +2171,8 @@ error_t *cmd_update(
             for (size_t i = 0; i < update_count; i++) {
                 const workspace_item_t *item = update_items[i];
                 if (item->item_kind == WORKSPACE_ITEM_FILE) {
-                    const char *prefix = item->source_profile
-                                       ? item->source_profile->custom_prefix : NULL;
-
-                    if (privilege_needs_elevation(item->storage_path, prefix)) {
+                    if (privilege_needs_elevation(item->storage_path,
+                                                 item->custom_prefix)) {
                         storage_paths[elevation_count++] = item->storage_path;
                     }
                 }
@@ -2308,15 +2255,12 @@ error_t *cmd_update(
             break;
     }
 
-    /* Execute profile updates - workspace provides metadata cache for O(1) lookups
-     *
-     * Use operation_profiles to determine which profiles to update. This allows
-     * CLI filtering while maintaining accurate workspace analysis with persistent profiles.
-     */
+    /* Execute profile updates - workspace provides metadata cache for O(1) lookups.
+     * Items are already filtered to operation scope by filter_items_for_update. */
     hashmap_t *by_profile = NULL;
     err = update_execute_for_all_profiles(
-        repo, operation_profiles, update_items, update_count,
-        opts, out, config, ws, &total_updated, &by_profile
+        repo, update_items, update_count, opts, out, config, ws,
+        &total_updated, &by_profile
     );
 
     /* Capture count before by_profile is freed */
@@ -2429,12 +2373,8 @@ cleanup:
     if (profiles_str) free(profiles_str);
     if (file_filter) path_filter_free(file_filter);
     if (repo_dir) free(repo_dir);
-    /* Free operation profiles only if not shared with workspace profiles */
-    if (filter_names) free(filter_names);
-    if (operation_profiles && operation_profiles != workspace_profiles) {
-        profile_list_free(operation_profiles);
-    }
-    if (workspace_profiles) profile_list_free(workspace_profiles);
+    if (cli_names) string_array_free(cli_names);
+    if (workspace_names) string_array_free(workspace_names);
 
     return err;
 }

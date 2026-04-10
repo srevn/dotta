@@ -184,7 +184,7 @@ error_t *file_entry_ensure_tree_entry(
     if (err) {
         return error_wrap(
             err, "Failed to load tree for profile '%s'",
-            entry->source_profile->name
+            entry->profile_name
         );
     }
 
@@ -196,13 +196,13 @@ error_t *file_entry_ensure_tree_entry(
         if (git_err == GIT_ENOTFOUND) {
             return ERROR(
                 ERR_NOT_FOUND, "File '%s' not found in profile '%s' Git tree",
-                entry->storage_path, entry->source_profile->name
+                entry->storage_path, entry->profile_name
             );
         }
         err = error_from_git(git_err);
         return error_wrap(
             err, "Failed to lookup tree entry for '%s' in profile '%s'",
-            entry->storage_path, entry->source_profile->name
+            entry->storage_path, entry->profile_name
         );
     }
 
@@ -512,6 +512,71 @@ error_t *profiles_enrich_with_prefixes(
 }
 
 /**
+ * Get custom deployment prefixes for named profiles
+ *
+ * Queries the state database for custom prefixes. Only profiles with
+ * non-NULL custom prefixes are included in the output.
+ */
+error_t *profile_get_custom_prefixes(
+    git_repository *repo,
+    const char *const *names,
+    size_t count,
+    string_array_t **out_prefixes
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(names);
+    CHECK_NULL(out_prefixes);
+
+    error_t *err = NULL;
+    string_array_t *prefixes = string_array_new(0);
+    if (!prefixes) {
+        return ERROR(ERR_MEMORY, "Failed to allocate prefixes array");
+    }
+
+    /* Load state (read-only) to get prefix map */
+    state_t *state = NULL;
+    err = state_load(repo, &state);
+    if (err) {
+        /* State load failure is non-fatal — no custom prefixes available */
+        error_free(err);
+        *out_prefixes = prefixes;
+        return NULL;
+    }
+
+    if (!state) {
+        *out_prefixes = prefixes;
+        return NULL;
+    }
+
+    hashmap_t *prefix_map = NULL;
+    err = state_get_prefix_map(state, &prefix_map);
+    if (err) {
+        state_free(state);
+        string_array_free(prefixes);
+        return error_wrap(err, "Failed to get custom prefix map");
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        const char *prefix = (const char *) hashmap_get(prefix_map, names[i]);
+        if (prefix) {
+            err = string_array_push(prefixes, prefix);
+            if (err) {
+                hashmap_free(prefix_map, free);
+                state_free(state);
+                string_array_free(prefixes);
+                return error_wrap(err, "Failed to collect custom prefix");
+            }
+        }
+    }
+
+    hashmap_free(prefix_map, free);
+    state_free(state);
+
+    *out_prefixes = prefixes;
+    return NULL;
+}
+
+/**
  * Validate state profiles and filter out non-existent ones
  *
  * Checks that all profiles listed in state exist as local branches.
@@ -581,77 +646,58 @@ cleanup:
 }
 
 /**
- * Resolve profiles based on priority hierarchy
+ * Resolve enabled profile names from state database (internal helper)
  *
- * Priority order (highest to lowest):
- * 1. Explicit CLI profiles (-p flag) - Temporary override
- * 2. State profiles - Persistent management (set via 'dotta profile enable')
- * 3. Error - No profiles found
+ * Loads state, validates that referenced profiles exist as branches,
+ * and returns the validated names. Warns on stderr about missing profiles.
+ *
+ * When out_state is non-NULL, transfers ownership of the state handle
+ * to the caller (for enrichment or further queries). When NULL, state
+ * is freed internally.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param out_names Validated profile names (must not be NULL, caller frees)
+ * @param out_state Optional: receives state handle (caller frees). NULL to discard.
+ * @return Error (ERR_NOT_FOUND if no enabled profiles) or NULL on success
  */
-error_t *profile_resolve(
+static error_t *resolve_state_profile_names(
     git_repository *repo,
-    char **explicit_profiles,
-    size_t explicit_count,
-    bool strict_mode,
-    profile_list_t **out,
-    profile_source_t *source_out
+    string_array_t **out_names,
+    state_t **out_state
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(out);
-
     error_t *err = NULL;
     state_t *state = NULL;
     string_array_t *state_profiles = NULL;
     string_array_t *valid_profiles = NULL;
     string_array_t *missing_profiles = NULL;
-    char **names = NULL;
 
-    /* Priority 1: Explicit CLI profiles (temporary override) */
-    if (explicit_profiles && explicit_count > 0) {
-        if (source_out) {
-            *source_out = PROFILE_SOURCE_EXPLICIT;
-        }
-        err = profile_list_load(
-            repo, explicit_profiles, explicit_count, strict_mode, out
-        );
-        if (err) {
-            return err;
-        }
-        /* Enrich with custom prefixes from state */
-        err = profiles_enrich_with_prefixes(*out, repo);
-        if (err) {
-            profile_list_free(*out);
-            *out = NULL;
-            return err;
-        }
-        return NULL;
-    }
-
-    /* Priority 2: State profiles (persistent management) */
+    /* Load state */
     err = state_load(repo, &state);
     if (err) {
-        /* Non-fatal: if state loading fails, fall through to "no profiles" error */
+        /* Non-fatal: state loading failed */
         error_free(err);
-        err = NULL;
-        goto no_profiles;
+        return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
     }
 
     if (!state) {
-        goto no_profiles;
+        return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
     }
 
+    /* Get profile names from state */
     err = state_get_profiles(state, &state_profiles);
     if (err) {
         error_free(err);
-        err = NULL;
-        goto no_profiles;
+        state_free(state);
+        return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
     }
 
     if (!state_profiles || state_profiles->count == 0) {
-        goto no_profiles;
+        string_array_free(state_profiles);
+        state_free(state);
+        return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
     }
 
-    /* State has enabled profiles - validate and use them */
+    /* Validate: check which profiles still exist as branches */
     err = validate_state_profiles(
         repo, state_profiles, &valid_profiles, &missing_profiles
     );
@@ -679,12 +725,94 @@ error_t *profile_resolve(
     string_array_free(missing_profiles);
     missing_profiles = NULL;
 
-    /* Use valid profiles if any exist */
+    /* No valid profiles after filtering */
     if (valid_profiles->count == 0) {
-        goto no_profiles;
+        string_array_free(valid_profiles);
+        string_array_free(state_profiles);
+        state_free(state);
+        return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
     }
 
-    /* Convert string_array to const char** for profile_list_load */
+    /* Success */
+    *out_names = valid_profiles;
+    if (out_state) {
+        *out_state = state;
+    } else {
+        state_free(state);
+    }
+    string_array_free(state_profiles);
+
+    return NULL;
+
+cleanup:
+    string_array_free(valid_profiles);
+    string_array_free(missing_profiles);
+    string_array_free(state_profiles);
+    state_free(state);
+
+    return err;
+}
+
+/**
+ * Resolve profiles based on priority hierarchy
+ *
+ * Priority order (highest to lowest):
+ * 1. Explicit CLI profiles (-p flag) - Temporary override
+ * 2. State profiles - Persistent management (set via 'dotta profile enable')
+ * 3. Error - No profiles found
+ */
+error_t *profile_resolve(
+    git_repository *repo,
+    char **explicit_profiles,
+    size_t explicit_count,
+    bool strict_mode,
+    profile_list_t **out,
+    profile_source_t *source_out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(out);
+
+    error_t *err = NULL;
+    state_t *state = NULL;
+    string_array_t *valid_profiles = NULL;
+    char **names = NULL;
+
+    /* Priority 1: Explicit CLI profiles (temporary override) */
+    if (explicit_profiles && explicit_count > 0) {
+        if (source_out) {
+            *source_out = PROFILE_SOURCE_EXPLICIT;
+        }
+        err = profile_list_load(
+            repo, explicit_profiles, explicit_count, strict_mode, out
+        );
+        if (err) {
+            return err;
+        }
+        /* Enrich with custom prefixes from state */
+        err = profiles_enrich_with_prefixes(*out, repo);
+        if (err) {
+            profile_list_free(*out);
+            *out = NULL;
+            return err;
+        }
+        return NULL;
+    }
+
+    /* Priority 2: State profiles (persistent management)
+     *
+     * Resolve validated names from state, keeping the state handle
+     * for custom prefix enrichment after profile loading.
+     */
+    err = resolve_state_profile_names(repo, &valid_profiles, &state);
+    if (err) {
+        if (error_code(err) == ERR_NOT_FOUND) {
+            error_free(err);
+            goto no_profiles;
+        }
+        goto cleanup;
+    }
+
+    /* Load full profile_t structs from validated names */
     size_t count = valid_profiles->count;
     names = malloc(count * sizeof(char *));
     if (!names) {
@@ -693,7 +821,7 @@ error_t *profile_resolve(
     }
 
     for (size_t i = 0; i < count; i++) {
-        names[i] = (char *) valid_profiles->items[i];
+        names[i] = valid_profiles->items[i];
     }
 
     err = profile_list_load(repo, names, count, strict_mode, out);
@@ -710,14 +838,10 @@ error_t *profile_resolve(
     }
 
     /* Success */
-    if (source_out) {
-        *source_out = PROFILE_SOURCE_STATE;
-    }
+    if (source_out) *source_out = PROFILE_SOURCE_STATE;
 
-    /* Cleanup and return success */
     free(names);
     string_array_free(valid_profiles);
-    string_array_free(state_profiles);
     state_free(state);
 
     return NULL;
@@ -742,44 +866,23 @@ no_profiles:
 cleanup:
     free(names);
     string_array_free(valid_profiles);
-    string_array_free(missing_profiles);
-    string_array_free(state_profiles);
     state_free(state);
 
     return err;
 }
 
 /**
- * Resolve enabled profiles for workspace validation (VWD scope)
+ * Resolve CLI profile names for operation filtering
  *
- * Wrapper around profile_resolve() that always loads persistent enabled
- * profiles from state database, ignoring CLI overrides. This ensures
- * workspace scope matches state scope for accurate orphan detection.
+ * Lightweight validation: checks branch existence without resolving
+ * Git refs or loading profile objects.
  */
-error_t *profile_resolve_for_workspace(
-    git_repository *repo,
-    bool strict_mode,
-    profile_list_t **out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(out);
-
-    /* Always load persistent enabled profiles (ignore CLI overrides) */
-    return profile_resolve(repo, NULL, 0, strict_mode, out, NULL);
-}
-
-/**
- * Resolve CLI profiles for operation filtering
- *
- * Loads explicitly specified CLI profiles for use as operation filter.
- * Validates inputs and delegates to profile_list_load().
- */
-error_t *profile_resolve_for_operations(
+error_t *profile_resolve_cli_names(
     git_repository *repo,
     char **cli_profiles,
     size_t cli_count,
     bool strict_mode,
-    profile_list_t **out
+    string_array_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(cli_profiles);
@@ -789,23 +892,48 @@ error_t *profile_resolve_for_operations(
         return ERROR(ERR_INVALID_ARG, "CLI profile count cannot be zero");
     }
 
-    /* Load explicitly specified profiles */
-    error_t *err = profile_list_load(
-        repo, cli_profiles, cli_count, strict_mode, out
-    );
-    if (err) {
-        return err;
+    error_t *err = NULL;
+    string_array_t *names = string_array_new(cli_count);
+    if (!names) {
+        return ERROR(ERR_MEMORY, "Failed to allocate profile names");
     }
 
-    /* Enrich with custom prefixes from state */
-    err = profiles_enrich_with_prefixes(*out, repo);
-    if (err) {
-        profile_list_free(*out);
-        *out = NULL;
-        return err;
+    for (size_t i = 0; i < cli_count; i++) {
+        if (profile_exists(repo, cli_profiles[i])) {
+            err = string_array_push(names, cli_profiles[i]);
+            if (err) {
+                string_array_free(names);
+                return error_wrap(err, "Failed to add profile name '%s'", cli_profiles[i]);
+            }
+        } else if (strict_mode) {
+            string_array_free(names);
+            return ERROR(
+                ERR_NOT_FOUND, "Profile not found: %s\n"
+                "Hint: Run 'dotta profile list' to see available profiles",
+                cli_profiles[i]
+            );
+        }
+        /* Non-strict: skip non-existent profiles silently */
     }
 
+    *out = names;
     return NULL;
+}
+
+/**
+ * Resolve enabled profile names from state database
+ *
+ * Lightweight name-only resolution — no Git ref resolution or profile_t
+ * allocation. Thin wrapper around the internal resolve_state_profile_names.
+ */
+error_t *profile_resolve_state_names(
+    git_repository *repo,
+    string_array_t **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(out);
+
+    return resolve_state_profile_names(repo, out, NULL);
 }
 
 /**
@@ -815,23 +943,24 @@ error_t *profile_resolve_for_operations(
  * in the workspace.
  */
 error_t *profile_validate_filter(
-    const profile_list_t *workspace_profiles,
-    const profile_list_t *filter_profiles
+    const string_array_t *workspace_names,
+    const char *const *filter_names,
+    size_t filter_count
 ) {
-    CHECK_NULL(workspace_profiles);
+    CHECK_NULL(workspace_names);
 
     /* NULL filter is valid (no filter) */
-    if (!filter_profiles) {
+    if (!filter_names) {
         return NULL;
     }
 
     /* Check each filter profile is in workspace */
-    for (size_t i = 0; i < filter_profiles->count; i++) {
-        const char *filter_name = filter_profiles->profiles[i].name;
+    for (size_t i = 0; i < filter_count; i++) {
+        const char *filter_name = filter_names[i];
         bool found = false;
 
-        for (size_t j = 0; j < workspace_profiles->count; j++) {
-            if (strcmp(workspace_profiles->profiles[j].name, filter_name) == 0) {
+        for (size_t j = 0; j < workspace_names->count; j++) {
+            if (strcmp(workspace_names->items[j], filter_name) == 0) {
                 found = true;
                 break;
             }
@@ -881,145 +1010,23 @@ bool profile_filter_matches(
 }
 
 /**
- * Extract name pointers from profile list
+ * List all local profile branch names (lightweight, no ref resolution)
  */
-const char **profile_list_extract_names(
-    const profile_list_t *list,
-    size_t *out_count
-) {
-    if (!out_count) return NULL;
-    *out_count = 0;
-
-    if (!list || list->count == 0) {
-        return NULL;
-    }
-
-    const char **names = malloc(list->count * sizeof(const char *));
-    if (!names) {
-        return NULL;
-    }
-
-    for (size_t i = 0; i < list->count; i++) {
-        names[i] = list->profiles[i].name;
-    }
-
-    *out_count = list->count;
-    return names;
-}
-
-/**
- * List all local profile branches
- *
- * Similar to what clone does, but returns profiles instead of just creating branches.
- */
-error_t *profile_list_all_local(
+error_t *profile_list_all_local_names(
     git_repository *repo,
-    profile_list_t **out
+    string_array_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
 
-    error_t *err = NULL;
-    profile_list_t *list = NULL;
-    git_reference_iterator *iter = NULL;
-    git_reference *ref = NULL;
+    string_array_t *branches = NULL;
+    error_t *err = gitops_list_branches(repo, &branches);
+    if (err) return err;
 
-    /* Allocate profile list */
-    list = calloc(1, sizeof(profile_list_t));
-    if (!list) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate profile list");
-        goto cleanup;
-    }
+    string_array_remove_value(branches, "dotta-worktree");
 
-    /* Start with capacity for 32 profiles to reduce reallocations */
-    size_t capacity = 32;
-    list->profiles = calloc(capacity, sizeof(profile_t));
-    if (!list->profiles) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate profiles array");
-        goto cleanup;
-    }
-    list->count = 0;
-
-    /* Create git reference iterator */
-    int git_err = git_reference_iterator_new(&iter, repo);
-    if (git_err < 0) {
-        err = error_from_git(git_err);
-        goto cleanup;
-    }
-
-    /* Iterate over all local branches */
-    while (git_reference_next(&ref, iter) == 0) {
-        const char *refname = git_reference_name(ref);
-
-        /* Only process local branches (refs/heads/...) */
-        if (!str_starts_with(refname, "refs/heads/")) {
-            git_reference_free(ref);
-            ref = NULL;
-            continue;
-        }
-
-        /* Extract branch name */
-        const char *branch_name = refname + 11;
-
-        /* Skip dotta-worktree */
-        if (strcmp(branch_name, "dotta-worktree") == 0) {
-            git_reference_free(ref);
-            ref = NULL;
-            continue;
-        }
-
-        /* Grow array if needed */
-        if (list->count >= capacity) {
-            /* Check for overflow */
-            if (capacity > SIZE_MAX / 2) {
-                err = ERROR(ERR_INTERNAL, "Profile capacity overflow");
-                goto cleanup;
-            }
-            capacity *= 2;
-
-            profile_t *new_profiles = realloc(
-                list->profiles,
-                capacity * sizeof(profile_t)
-            );
-            if (!new_profiles) {
-                err = ERROR(ERR_MEMORY, "Failed to grow profiles array");
-                goto cleanup;
-            }
-            list->profiles = new_profiles;
-        }
-
-        /* Load this profile */
-        profile_t *profile = NULL;
-        err = profile_load(repo, branch_name, &profile);
-        if (err) {
-            /* Skip profiles we can't load (non-fatal) */
-            error_free(err);
-            err = NULL;
-            git_reference_free(ref);
-            ref = NULL;
-            continue;
-        }
-
-        /* Add to list (shallow copy) */
-        list->profiles[list->count++] = *profile;
-        free(profile);  /* Don't free internals, they're copied */
-
-        git_reference_free(ref);
-        ref = NULL;
-    }
-
-    /* Success */
-    git_reference_iterator_free(iter);
-    *out = list;
-
+    *out = branches;
     return NULL;
-
-cleanup:
-    if (ref) git_reference_free(ref);
-    if (iter) git_reference_iterator_free(iter);
-    if (err) profile_list_free(list);
-
-    return err;
 }
 
 /**
@@ -1111,8 +1118,9 @@ struct manifest_build_ctx {
     manifest_t *manifest;       /* Target manifest (modified by callback) */
     size_t capacity;            /* Current entries capacity (updated on growth) */
     hashmap_t *path_map;        /* For O(1) dedup/override detection */
-    profile_t *profile;         /* Current profile (borrowed) */
-    const char *custom_prefix;  /* For path_from_storage (can be NULL) */
+    profile_t *profile;         /* Current profile (borrowed, NULL for tree-based manifests) */
+    const char *profile_name;   /* Profile name for entries and error messages */
+    const char *custom_prefix;  /* For path_from_storage and entry custom_prefix (can be NULL) */
     arena_t *arena;             /* Arena for string allocations (NULL = heap) */
     error_t *error;             /* Error propagation (set on failure) */
 };
@@ -1203,7 +1211,7 @@ static int manifest_build_callback(
         if (err) {
             ctx->error = error_wrap(
                 err, "Failed to convert path '%s' from profile '%s'",
-                storage_path, ctx->profile->name
+                storage_path, ctx->profile_name
             );
             return -1;
         }
@@ -1267,6 +1275,8 @@ static int manifest_build_callback(
         ctx->manifest->entries[existing_idx].filesystem_path = filesystem_path;
         ctx->manifest->entries[existing_idx].entry = dup_entry;
         ctx->manifest->entries[existing_idx].source_profile = ctx->profile;
+        ctx->manifest->entries[existing_idx].profile_name = ctx->profile_name;
+        ctx->manifest->entries[existing_idx].custom_prefix = ctx->custom_prefix;
 
         /* Update type from overriding entry's filemode (may differ between profiles) */
         switch (git_tree_entry_filemode(dup_entry)) {
@@ -1325,6 +1335,8 @@ static int manifest_build_callback(
         new_entry->filesystem_path = filesystem_path;
         new_entry->entry = dup_entry;
         new_entry->source_profile = ctx->profile;
+        new_entry->profile_name = ctx->profile_name;
+        new_entry->custom_prefix = ctx->custom_prefix;
 
         /* Initialize VWD expected state cache to NULL/0
          *
@@ -1539,6 +1551,7 @@ error_t *profile_build_manifest(
             .capacity      = capacity,
             .path_map      = path_map,
             .profile       = profile,
+            .profile_name  = profile->name,
             .custom_prefix = profile->custom_prefix,
             .arena         = arena,
             .error         = NULL
@@ -1816,7 +1829,6 @@ error_t *profile_build_manifest_from_tree(
     error_t *err = NULL;
     manifest_t *manifest = NULL;
     hashmap_t *path_map = NULL;
-    profile_t *temp_profile = NULL;
 
     /* Allocate manifest */
     manifest = calloc(1, sizeof(manifest_t));
@@ -1833,8 +1845,6 @@ error_t *profile_build_manifest_from_tree(
         goto cleanup;
     }
     manifest->count = 0;
-    manifest->index = NULL;
-    manifest->owned_profile = NULL;
 
     /* Create hash map for O(1) duplicate detection */
     path_map = hashmap_create(128);
@@ -1843,61 +1853,41 @@ error_t *profile_build_manifest_from_tree(
         goto cleanup;
     }
 
-    /* Create a heap-allocated profile_t for the manifest entries
-     * This prevents dangling pointers when file_entry_t.source_profile is accessed.
-     * The profile is owned by the manifest and freed in manifest_free(). */
-    temp_profile = calloc(1, sizeof(profile_t));
-    if (!temp_profile) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate profile");
-        goto cleanup;
-    }
-
-    temp_profile->name = strdup(profile_name);
-    if (!temp_profile->name) {
-        free(temp_profile);
-        temp_profile = NULL;
+    /* Own copies of profile name and custom prefix for entry borrowing.
+     * Entries set profile_name and custom_prefix to these pointers —
+     * manifest lifetime guarantees they remain valid until manifest_free(). */
+    manifest->owned_profile_name = strdup(profile_name);
+    if (!manifest->owned_profile_name) {
         err = ERROR(ERR_MEMORY, "Failed to duplicate profile name");
         goto cleanup;
     }
-    temp_profile->ref = NULL;
-    temp_profile->tree = tree;  /* Borrowed - caller owns tree lifetime */
-    temp_profile->auto_detected = false;
     if (custom_prefix) {
-        temp_profile->custom_prefix = strdup(custom_prefix);
-        if (!temp_profile->custom_prefix) {
-            free(temp_profile->name);
-            free(temp_profile);
-            temp_profile = NULL;
-            err = ERROR(ERR_MEMORY, "Failed to duplicate custom_prefix");
+        manifest->owned_custom_prefix = strdup(custom_prefix);
+        if (!manifest->owned_custom_prefix) {
+            err = ERROR(ERR_MEMORY, "Failed to duplicate custom prefix");
             goto cleanup;
         }
-    } else {
-        temp_profile->custom_prefix = NULL;
     }
-
-    /* Store in manifest for cleanup */
-    manifest->owned_profile = temp_profile;
 
     /* Build manifest entries via single-pass tree traversal
      *
      * The callback captures owned tree entries with git_tree_entry_dup(),
-     * converts paths, and populates file_entry_t directly—all in O(N) time. */
+     * converts paths, and populates file_entry_t directly—all in O(N) time.
+     *
+     * No source_profile for tree-based manifests — entries have pre-populated
+     * tree entries from git_tree_entry_dup() and never need lazy loading. */
     struct manifest_build_ctx ctx = {
         .manifest      = manifest,
         .capacity      = capacity,
         .path_map      = path_map,
-        .profile       = temp_profile,
-        .custom_prefix = custom_prefix,  /* May be NULL for graceful degradation */
+        .profile       = NULL,
+        .profile_name  = manifest->owned_profile_name,
+        .custom_prefix = manifest->owned_custom_prefix,
         .arena         = NULL,
         .error         = NULL
     };
 
     err = gitops_tree_walk(tree, manifest_build_callback, &ctx);
-
-    /* Release borrowed tree reference — walk complete, entries hold owned copies.
-     * This prevents double-free: caller owns tree lifetime, profile_free must not
-     * free it when manifest_free() cleans up owned_profile. */
-    temp_profile->tree = NULL;
 
     if (err || ctx.error) {
         err = ctx.error ? ctx.error : err;
@@ -1990,7 +1980,7 @@ void manifest_free(manifest_t *manifest) {
         }
     }
 
-    /* entries array, index, owned_profile, and manifest struct are always heap */
+    /* entries array, index, owned strings, and manifest struct are always heap */
     free(manifest->entries);
 
     /* Free index if present */
@@ -1998,10 +1988,9 @@ void manifest_free(manifest_t *manifest) {
         hashmap_free(manifest->index, NULL);
     }
 
-    /* Free owned profile if present (used by profile_build_manifest_from_tree) */
-    if (manifest->owned_profile) {
-        profile_free(manifest->owned_profile);
-    }
+    /* Free owned strings (used by tree-based manifests, NULL otherwise) */
+    free(manifest->owned_profile_name);
+    free(manifest->owned_custom_prefix);
 
     free(manifest);
 }

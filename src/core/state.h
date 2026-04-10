@@ -480,15 +480,10 @@ error_t *state_get_prefix_map(
  *   - Transaction remains open (caller commits)
  *
  * @param state State (must not be NULL)
- * @param profiles Array of profile names (must not be NULL)
- * @param count Number of profiles
+ * @param profiles Profile names (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_set_profiles(
-    state_t *state,
-    char **profiles,
-    size_t count
-);
+error_t *state_set_profiles(state_t *state, const string_array_t *profiles);
 
 /**
  * Get enabled profiles

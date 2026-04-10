@@ -1127,14 +1127,12 @@ error_t *state_get_prefix_map(
  * Only modifies enabled_profiles table (virtual_manifest untouched).
  *
  * @param state State (must not be NULL)
- * @param profiles Array of profile names (must not be NULL)
- * @param count Number of profiles
+ * @param profiles Profile names (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *state_set_profiles(
     state_t *state,
-    char **profiles,
-    size_t count
+    const string_array_t *profiles
 ) {
     CHECK_NULL(state);
     CHECK_NULL(profiles);
@@ -1164,18 +1162,18 @@ error_t *state_set_profiles(
 
     /* Insert new profiles with preserved custom_prefix values */
     time_t now = time(NULL);
-    for (size_t i = 0; i < count; i++) {
+    for (size_t i = 0; i < profiles->count; i++) {
         /* Reset and bind statement */
         sqlite3_reset(state->stmt_insert_profile);
         sqlite3_clear_bindings(state->stmt_insert_profile);
 
         /* Bind parameters: position, name, enabled_at, custom_prefix */
         sqlite3_bind_int64(state->stmt_insert_profile, 1, (sqlite3_int64) i);
-        sqlite3_bind_text(state->stmt_insert_profile, 2, profiles[i], -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(state->stmt_insert_profile, 2, profiles->items[i], -1, SQLITE_TRANSIENT);
         sqlite3_bind_int64(state->stmt_insert_profile, 3, (sqlite3_int64) now);
 
         /* Lookup and bind preserved custom_prefix (or NULL if not set) */
-        const char *custom_prefix = (const char *) hashmap_get(prefix_map, profiles[i]);
+        const char *custom_prefix = (const char *) hashmap_get(prefix_map, profiles->items[i]);
         if (custom_prefix) {
             sqlite3_bind_text(state->stmt_insert_profile, 4, custom_prefix, -1, SQLITE_STATIC);
         } else {
@@ -1202,8 +1200,8 @@ error_t *state_set_profiles(
         }
     }
 
-    for (size_t i = 0; i < count; i++) {
-        err = string_array_push(state->profiles, profiles[i]);
+    for (size_t i = 0; i < profiles->count; i++) {
+        err = string_array_push(state->profiles, profiles->items[i]);
         if (err) return err;
     }
 
@@ -2854,22 +2852,7 @@ error_t *state_save(git_repository *repo, state_t *state) {
 
         /* Write profiles if any */
         if (state->profiles && state->profiles->count > 0) {
-            char **profile_names = calloc(state->profiles->count, sizeof(char *));
-            if (!profile_names) {
-                sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
-                finalize_statements(state);
-                sqlite3_close(db);
-                state->db = NULL;
-                return ERROR(ERR_MEMORY, "Failed to allocate profile array");
-            }
-
-            for (size_t i = 0; i < state->profiles->count; i++) {
-                profile_names[i] = (char *) state->profiles->items[i];
-            }
-
-            err = state_set_profiles(state, profile_names, state->profiles->count);
-            free(profile_names);
-
+            err = state_set_profiles(state, state->profiles);
             if (err) {
                 sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
                 finalize_statements(state);

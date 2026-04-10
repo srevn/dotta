@@ -1581,6 +1581,7 @@ cleanup:
 
 error_t *profile_discover_file(
     git_repository *repo,
+    const state_t *state,
     const char *storage_path,
     bool enabled_only,
     string_array_t **out_profiles
@@ -1594,18 +1595,26 @@ error_t *profile_discover_file(
 
     if (enabled_only) {
         /* Manifest fast path: O(1) via state DB index.
-         * Returns the single owning profile (precedence already resolved). */
-        state_t *state = NULL;
-        err = state_load(repo, &state);
-        if (err) {
-            return error_wrap(err, "Failed to load state for file discovery");
+         * Returns the single owning profile (precedence already resolved).
+         *
+         * Reuse the caller's handle when provided; otherwise open a
+         * short-lived read-only handle for this lookup. */
+        state_t *local_state = NULL;
+        const state_t *effective_state = state;
+
+        if (!effective_state) {
+            err = state_load(repo, &local_state);
+            if (err) {
+                return error_wrap(err, "Failed to load state for file discovery");
+            }
+            effective_state = local_state;
         }
 
         state_file_entry_t *entry = NULL;
-        err = state_get_file_by_storage(state, storage_path, &entry);
+        err = state_get_file_by_storage(effective_state, storage_path, &entry);
 
         if (err) {
-            state_free(state);
+            state_free(local_state);
             if (error_code(err) == ERR_NOT_FOUND) {
                 error_free(err);
                 return ERROR(
@@ -1619,13 +1628,13 @@ error_t *profile_discover_file(
         string_array_t *profiles = string_array_new(0);
         if (!profiles) {
             state_free_entry(entry);
-            state_free(state);
+            state_free(local_state);
             return ERROR(ERR_MEMORY, "Failed to allocate profile array");
         }
 
         err = string_array_push(profiles, entry->profile);
         state_free_entry(entry);
-        state_free(state);
+        state_free(local_state);
 
         if (err) {
             string_array_free(profiles);

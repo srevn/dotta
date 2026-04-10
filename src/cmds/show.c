@@ -696,7 +696,7 @@ error_t *cmd_show(
     }
 
     /* Discover owning profile via manifest (O(1) indexed lookup) */
-    err = profile_discover_file(repo, search_path, true, &matches);
+    err = profile_discover_file(repo, NULL, search_path, true, &matches);
     if (err) {
         if (error_code(err) == ERR_NOT_FOUND) {
             error_free(err);

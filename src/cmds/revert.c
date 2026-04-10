@@ -207,7 +207,7 @@ static error_t *discover_file(
 
     /* Search across all local branches for the file */
     string_array_t *matches = NULL;
-    err = profile_discover_file(repo, storage_path, false, &matches);
+    err = profile_discover_file(repo, NULL, storage_path, false, &matches);
 
     if (err) {
         if (error_code(err) == ERR_NOT_FOUND) {

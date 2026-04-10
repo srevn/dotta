@@ -648,7 +648,7 @@ static error_t *list_file_history(
 
     if (!profile_name) {
         string_array_t *matches = NULL;
-        err = profile_discover_file(repo, storage_path, true, &matches);
+        err = profile_discover_file(repo, NULL, storage_path, true, &matches);
         if (err) {
             if (error_code(err) == ERR_NOT_FOUND) {
                 error_free(err);

@@ -524,6 +524,9 @@ error_t *profile_build_file_index(
  * The storage_path must already be resolved (use path_resolve_input() first).
  *
  * @param repo Repository (must not be NULL)
+ * @param state Optional borrowed state handle for connection reuse.
+ *              NULL to load internally. Ignored when enabled_only is false
+ *              (the branch-scan path does not touch state).
  * @param storage_path Storage path (e.g., "home/.bashrc")
  * @param enabled_only If true, only search manifest (enabled profiles).
  *                     If false, search all local branches.
@@ -532,6 +535,7 @@ error_t *profile_build_file_index(
  */
 error_t *profile_discover_file(
     git_repository *repo,
+    const state_t *state,
     const char *storage_path,
     bool enabled_only,
     string_array_t **out_profiles

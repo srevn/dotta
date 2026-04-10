@@ -379,10 +379,17 @@ error_t *profile_list_load(
         goto cleanup;
     }
 
-    list->profiles = calloc(names->count, sizeof(profile_t));
-    if (!list->profiles) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate profiles array");
-        goto cleanup;
+    /* calloc(0, X) is implementation-defined per C17 §7.22.3.2p2 — may
+     * return NULL or a unique non-NULL pointer depending on the libc.
+     * Skip the allocation entirely for empty name arrays: a profile_list_t
+     * with profiles=NULL, count=0 is a valid empty list, and
+     * profile_list_free already tolerates list->profiles == NULL. */
+    if (names->count > 0) {
+        list->profiles = calloc(names->count, sizeof(profile_t));
+        if (!list->profiles) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate profiles array");
+            goto cleanup;
+        }
     }
     list->count = 0;
 

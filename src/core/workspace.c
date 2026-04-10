@@ -2369,9 +2369,16 @@ static error_t *patch_entry_from_fresh(
  *   Stale case: O(M × DB) + O(F) fresh manifest build, F = total files in Git
  *
  * @param ws Workspace (must not be NULL, state must be loaded)
+ * @param skip_stale_detection If true, assume state is current and bypass both
+ *                             manifest_detect_stale_profiles() and the in-memory
+ *                             patching path. Only safe when the caller has
+ *                             persistently repaired staleness via
+ *                             manifest_repair_stale() within the same transaction.
  * @return Error or NULL on success
  */
-static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
+static error_t *workspace_build_manifest_from_state(
+    workspace_t *ws, bool skip_stale_detection
+) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->state);
     CHECK_NULL(ws->profile_index);
@@ -2409,12 +2416,20 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
      * P = enabled profile count (typically < 10).
      * Fast path: If no staleness detected, stale_profiles is NULL and the rest
      * of this function proceeds identically to the non-stale case.
+     *
+     * When the caller has already persisted a fresh manifest via
+     * manifest_repair_stale() within its transaction (apply.c), the state we
+     * just read is current by construction. Skipping detection avoids the
+     * redundant ref lookups and leaves stale_profiles NULL, which naturally
+     * routes the loop below through the non-stale branch.
      */
-    err = manifest_detect_stale_profiles(
-        ws->repo, state_entries, state_count, ws->profile_index, &stale_profiles
-    );
-    if (err) {
-        return error_wrap(err, "Failed to detect stale profiles");
+    if (!skip_stale_detection) {
+        err = manifest_detect_stale_profiles(
+            ws->repo, state_entries, state_count, ws->profile_index, &stale_profiles
+        );
+        if (err) {
+            return error_wrap(err, "Failed to detect stale profiles");
+        }
     }
 
     /* If staleness detected, build fresh manifest from Git for patching.
@@ -2930,7 +2945,7 @@ error_t *workspace_load(
      * This replaces the old profile_build_manifest() which walked Git trees.
      * Now we read from the manifest table (expected state cache) for O(M) performance
      * where M = entries in manifest, not O(N) where N = all files in Git. */
-    err = workspace_build_manifest_from_state(ws);
+    err = workspace_build_manifest_from_state(ws, resolved_opts.repair_completed);
     if (err) {
         workspace_free(ws);
         return error_wrap(err, "Failed to build manifest from state");

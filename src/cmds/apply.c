@@ -1020,12 +1020,13 @@ error_t *cmd_apply(
      * This ensures manifest scope matches state scope for accurate orphan detection.
      */
     workspace_load_t ws_opts = {
-        .analyze_files       = true,
-        .analyze_orphans     = true,
-        .analyze_untracked   = false,         /* Skip expensive directory scan */
-        .analyze_directories = true,          /* Directory metadata convergence */
-        .analyze_encryption  = false,         /* Not needed for deployment */
-        .repaired_paths      = repaired_paths /* From stale repair: path → old_blob_oid */
+        .analyze_files          = true,
+        .analyze_orphans        = true,
+        .analyze_untracked      = false,          /* Skip expensive directory scan */
+        .analyze_directories    = true,           /* Directory metadata convergence */
+        .analyze_encryption     = false,          /* Not needed for deployment */
+        .repaired_paths         = repaired_paths, /* From stale repair: path → old_blob_oid */
+        .repair_completed       = true            /* manifest_repair_stale ran above */
     };
     err = workspace_load(repo, state, workspace_names, config, &ws_opts, &ws);
     if (err) {

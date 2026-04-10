@@ -114,6 +114,21 @@ typedef struct {
      * Borrowed reference — workspace does NOT free this. Caller owns it.
      */
     const hashmap_t *repaired_paths;
+
+    /* Set by callers that have already run manifest_repair_stale() to persist
+     * fresh Git state into the manifest before this load. When true, the
+     * workspace trusts the state to be current and skips its own
+     * manifest_detect_stale_profiles() pass plus the in-memory patching path.
+     *
+     * Only apply.c sets this — it repairs inside its write transaction, then
+     * loads the workspace. Read-only commands (status, diff) cannot repair
+     * persistently and must leave this false. Sync also leaves it false: its
+     * workspace load precedes the repair call.
+     *
+     * Orthogonal to repaired_paths, which is still consulted for display
+     * tagging of freshly-repaired entries.
+     */
+    bool repair_completed;
 } workspace_load_t;
 
 /**

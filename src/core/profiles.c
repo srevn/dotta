@@ -557,25 +557,29 @@ cleanup:
 }
 
 /**
- * Resolve enabled profile names from state database (internal helper)
+ * Resolve enabled profile names from state database
  *
- * Loads state, validates that referenced profiles exist as branches,
- * and returns the validated names. Warns on stderr about missing profiles.
+ * Lightweight name-only resolution — no Git ref resolution or profile_t
+ * allocation. Loads state, validates that referenced profiles exist as
+ * branches, and returns the validated names. Warns on stderr about
+ * missing profiles.
  *
- * When out_state is non-NULL, transfers ownership of the state handle
- * to the caller (for enrichment or further queries). When NULL, state
- * is freed internally.
+ * When state is non-NULL, reads from the provided handle without taking
+ * ownership. When NULL, opens and closes a private read-only state handle.
  *
  * @param repo Repository (must not be NULL)
- * @param out_names Validated profile names (must not be NULL, caller frees)
- * @param out_state Optional: receives state handle (caller frees). NULL to discard.
+ * @param state State handle for connection reuse (NULL = load internally)
+ * @param out Validated profile names (must not be NULL, caller frees)
  * @return Error (ERR_NOT_FOUND if no enabled profiles) or NULL on success
  */
-static error_t *resolve_state_profile_names(
+error_t *profile_resolve_state_names(
     git_repository *repo,
     const state_t *state,
-    string_array_t **out_names
+    string_array_t **out
 ) {
+    CHECK_NULL(repo);
+    CHECK_NULL(out);
+
     error_t *err = NULL;
     state_t *local_state = NULL;
     const state_t *effective_state = state;
@@ -643,7 +647,7 @@ static error_t *resolve_state_profile_names(
     }
 
     /* Success */
-    *out_names = valid_profiles;
+    *out = valid_profiles;
     state_free(local_state);
     string_array_free(state_profiles);
 
@@ -705,23 +709,6 @@ error_t *profile_resolve_cli_names(
 
     *out = names;
     return NULL;
-}
-
-/**
- * Resolve enabled profile names from state database
- *
- * Lightweight name-only resolution — no Git ref resolution or profile_t
- * allocation. Thin wrapper around the internal resolve_state_profile_names.
- */
-error_t *profile_resolve_state_names(
-    git_repository *repo,
-    const state_t *state,
-    string_array_t **out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(out);
-
-    return resolve_state_profile_names(repo, state, out);
 }
 
 /**

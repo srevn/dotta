@@ -206,16 +206,19 @@ error_t *profile_load(
 /**
  * Load multiple profiles
  *
+ * Strict: any name whose branch cannot be loaded produces a wrapped error.
+ * Callers relying on prior name validation get a loud failure on race
+ * (e.g., external `git branch -D` between validation and load) instead of
+ * a silently truncated profile list.
+ *
  * @param repo Repository (must not be NULL)
  * @param names Profile names (must not be NULL)
- * @param strict If true, error on non-existent profiles; if false, skip them
  * @param out Profile list (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
 error_t *profile_list_load(
     git_repository *repo,
     const string_array_t *names,
-    bool strict,
     profile_list_t **out
 );
 

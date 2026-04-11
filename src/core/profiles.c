@@ -376,11 +376,17 @@ cleanup:
 
 /**
  * Load multiple profiles
+ *
+ * Strict: any name whose branch cannot be loaded produces a wrapped error.
+ * Callers are expected to have validated names against branch existence
+ * already (see profile_resolve_enabled, profile_resolve_filter). A failure
+ * here indicates a race with an external operation that deleted the branch
+ * between validation and load — surface it rather than silently shrink the
+ * list.
  */
 error_t *profile_list_load(
     git_repository *repo,
     const string_array_t *names,
-    bool strict,
     profile_list_t **out
 ) {
     CHECK_NULL(repo);
@@ -414,19 +420,11 @@ error_t *profile_list_load(
         profile_t *profile = NULL;
         err = profile_load(repo, names->items[i], &profile);
         if (err) {
-            if (strict) {
-                /* In strict mode, fail on missing profiles */
-                err = error_wrap(
-                    err, "Failed to load profile '%s'",
-                    names->items[i]
-                );
-                goto cleanup;
-            } else {
-                /* In non-strict mode, skip missing profiles silently */
-                error_free(err);
-                err = NULL;
-                continue;
-            }
+            err = error_wrap(
+                err, "Failed to load profile '%s'",
+                names->items[i]
+            );
+            goto cleanup;
         }
 
         list->profiles[list->count++] = *profile;

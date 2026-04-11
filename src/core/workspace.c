@@ -2762,18 +2762,20 @@ error_t *workspace_load(
 
     /* Construct profile_list_t from validated names.
      * Workspace owns the result — freed in workspace_free().
-     * Non-strict: silently skip profiles whose branches disappeared between
-     * name validation (at command layer) and this load (tiny race window). */
-    profile_list_t *list = NULL;
-    err = profile_list_load(repo, profiles, false, &list);
+     * Strict: callers validate names upstream (profile_resolve_enabled,
+     * profile_resolve_filter). A load failure here means a branch
+     * disappeared between validation and load and is surfaced to the
+     * caller rather than silently dropped. */
+    profile_list_t *loaded_profiles = NULL;
+    err = profile_list_load(repo, profiles, &loaded_profiles);
     if (err) {
         return error_wrap(err, "Failed to load profiles from names");
     }
 
-    /* Create empty workspace (takes ownership of list on success) */
-    err = workspace_create_empty(repo, list, &ws);
+    /* Create empty workspace (takes ownership of loaded_profiles on success) */
+    err = workspace_create_empty(repo, loaded_profiles, &ws);
     if (err) {
-        profile_list_free(list);
+        profile_list_free(loaded_profiles);
         return err;
     }
 
@@ -2796,9 +2798,13 @@ error_t *workspace_load(
         return ERROR(ERR_MEMORY, "Failed to create metadata cache");
     }
 
-    /* Pre-load metadata for all profiles (performance optimization) */
-    for (size_t i = 0; i < list->count; i++) {
-        const char *profile_name = list->profiles[i].name;
+    /* Pre-load metadata for all profiles (performance optimization).
+     *
+     * Iterates the caller's name array directly. Strict profile_list_load
+     * guarantees loaded_profiles->count == profiles->count, so the two
+     * iteration sets are identical. */
+    for (size_t i = 0; i < profiles->count; i++) {
+        const char *profile_name = profiles->items[i];
         metadata_t *metadata = NULL;
 
         error_t *meta_err = metadata_load_from_branch(repo, profile_name, &metadata);
@@ -2846,8 +2852,8 @@ error_t *workspace_load(
         return ERROR(ERR_MEMORY, "Failed to create merged metadata map");
     }
 
-    for (size_t p = 0; p < list->count; p++) {
-        const char *profile_name = list->profiles[p].name;
+    for (size_t p = 0; p < profiles->count; p++) {
+        const char *profile_name = profiles->items[p];
         const metadata_t *metadata = hashmap_get(ws->metadata_cache, profile_name);
 
         if (!metadata) {

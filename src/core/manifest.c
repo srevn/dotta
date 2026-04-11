@@ -226,7 +226,7 @@ static error_t *build_manifest(
     hashmap_t *prefix_map = NULL;
 
     /* Load profiles from Git (profiles module - pure Git operations) */
-    err = profile_list_load(repo, profiles, false, /* strict */ &list);
+    err = profile_list_load(repo, profiles, &list);
     if (err) {
         return error_wrap(err, "Failed to load profiles for manifest build");
     }
@@ -1722,11 +1722,22 @@ cleanup:
  * Uses a dedup hashmap to ensure each profile is checked exactly once,
  * regardless of how many entries it has.
  *
+ * HEAD OID source: the scope map's values are treated as optional
+ * profile_t * pointers. When non-NULL, the cached profile->head_oid is
+ * used directly (zero Git calls). When NULL, the function falls back to
+ * resolving the branch HEAD via get_branch_head_oid. Callers that already
+ * hold loaded profile_t's (e.g., workspace via ws->profile_index) get the
+ * fast path automatically; callers that only have profile names pass NULL
+ * values and use the fallback.
+ *
  * @param repo Git repository (must not be NULL)
  * @param entries State file entries to scan (must not be NULL if count > 0)
  * @param entry_count Number of entries
- * @param profile_scope Profile scope filter (must not be NULL).
- *                      Only profiles present as keys are checked.
+ * @param profile_scope Profile scope filter (must not be NULL). Keys mark
+ *                      in-scope profiles; values are profile_t * with cached
+ *                      head_oid or NULL. Membership is checked with
+ *                      hashmap_has so NULL values remain distinct from
+ *                      absent keys.
  * @param out_stale Output: hashmap of profile_name -> head_hex for stale profiles.
  *                  NULL if no profiles are stale. Caller frees with hashmap_free(map, free).
  * @return Error or NULL on success
@@ -1761,7 +1772,7 @@ error_t *manifest_detect_stale_profiles(
         if (!entry->profile || !entry->git_oid) {
             continue;
         }
-        if (!hashmap_get(profile_scope, entry->profile)) {
+        if (!hashmap_has(profile_scope, entry->profile)) {
             continue;  /* Profile not in scope */
         }
 
@@ -1774,14 +1785,19 @@ error_t *manifest_detect_stale_profiles(
         err = hashmap_set(checked, entry->profile, (void *) (uintptr_t) 1);
         if (err) goto cleanup;
 
-        /* Get profile's current HEAD */
+        /* Fetch profile HEAD — prefer cached OID from scope value */
         git_oid head_oid;
-        err = get_branch_head_oid(repo, entry->profile, &head_oid);
-        if (err) {
-            /* Branch may have been deleted — skip (safety handles this) */
-            error_free(err);
-            err = NULL;
-            continue;
+        profile_t *scoped = hashmap_get(profile_scope, entry->profile);
+        if (scoped) {
+            git_oid_cpy(&head_oid, &scoped->head_oid);
+        } else {
+            err = get_branch_head_oid(repo, entry->profile, &head_oid);
+            if (err) {
+                /* Branch may have been deleted — skip (safety handles this) */
+                error_free(err);
+                err = NULL;
+                continue;
+            }
         }
 
         char head_hex[GIT_OID_HEXSZ + 1];
@@ -1874,16 +1890,18 @@ error_t *manifest_repair_stale(
         return error_wrap(err, "Failed to load state entries for stale detection");
     }
 
-    /* Build profile scope hashmap for O(1) lookups during detection */
+    /* Build profile scope hashmap for O(1) lookups during detection.
+     *
+     * Values are NULL: this path only has profile names, so stale detection
+     * falls back to ref lookups via get_branch_head_oid. Membership is tested
+     * via hashmap_has, which stays distinct from NULL values. */
     profile_scope = hashmap_borrow(enabled_profiles->count);
     if (!profile_scope) {
         err = ERROR(ERR_MEMORY, "Failed to create profile scope map");
         goto cleanup;
     }
     for (size_t i = 0; i < enabled_profiles->count; i++) {
-        err = hashmap_set(
-            profile_scope, enabled_profiles->items[i], (void *) (uintptr_t) 1
-        );
+        err = hashmap_set(profile_scope, enabled_profiles->items[i], NULL);
         if (err) goto cleanup;
     }
 
@@ -2408,7 +2426,7 @@ error_t *manifest_update_files(
     if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
 
     /* 1. Load enabled profiles from Git (each profile_t carries cached head_oid) */
-    err = profile_list_load(repo, enabled_profiles, false, &profiles);
+    err = profile_list_load(repo, enabled_profiles, &profiles);
     if (err) {
         arena_destroy(arena);
         return error_wrap(err, "Failed to load profiles for bulk sync");
@@ -2785,7 +2803,7 @@ error_t *manifest_add_files(
     if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
 
     /* 1. Load enabled profiles from Git (each profile_t carries cached head_oid) */
-    err = profile_list_load(repo, enabled_profiles, false, &profiles);
+    err = profile_list_load(repo, enabled_profiles, &profiles);
     if (err) {
         arena_destroy(arena);
         return error_wrap(err, "Failed to load profiles for bulk sync");
@@ -3017,9 +3035,7 @@ error_t *manifest_sync_diff(
 
     /* PHASE 1: BUILD CONTEXT (O(M)) */
     /* 1.0. Load all enabled profiles from Git (current state) */
-    err = profile_list_load(
-        repo, enabled_profiles, false, /* strict=false: skip missing profiles */ &profiles
-    );
+    err = profile_list_load(repo, enabled_profiles, &profiles);
     if (err) {
         err = error_wrap(err, "Failed to load enabled profiles");
         goto cleanup;

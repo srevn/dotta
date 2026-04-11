@@ -422,14 +422,22 @@ error_t *manifest_rebuild(
  *     3. Compare entry's git_oid with profile branch HEAD
  *     4. If mismatch: add to stale map (profile_name -> HEAD_oid_hex)
  *
- * Performance: O(N) scan + O(P) ref lookups where N = entry count,
- * P = unique enabled profiles (typically < 10).
+ * HEAD OID source: for each unique in-scope profile, the function prefers
+ * the cached head_oid on its profile_t * value in the scope map. When the
+ * value is NULL (caller only has names), it falls back to resolving the
+ * branch HEAD via a ref lookup.
+ *
+ * Performance: O(N) scan + O(P) ref lookups for profiles with NULL scope
+ * values; zero ref lookups when the caller supplies loaded profile_t *.
  *
  * @param repo Git repository (must not be NULL)
  * @param entries State file entries to scan (must not be NULL if count > 0)
  * @param entry_count Number of entries
- * @param profile_scope Profile scope filter (must not be NULL).
- *                      Only profiles present as keys are checked.
+ * @param profile_scope Profile scope filter (must not be NULL). Keys mark
+ *                      in-scope profile names; values are profile_t * with
+ *                      cached head_oid (fast path) or NULL (fallback path).
+ *                      Membership is tested via hashmap_has so NULL values
+ *                      remain distinguishable from absent keys.
  * @param out_stale Output: hashmap of profile_name -> head_hex for stale profiles.
  *                  NULL if no profiles are stale. Caller frees with hashmap_free(map, free).
  * @return Error or NULL on success

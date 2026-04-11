@@ -90,33 +90,33 @@ static char *extract_repo_name(const char *url) {
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (typically "origin")
- * @param profile_names Array of profile names to fetch
+ * @param profiles Array of profile names to fetch
  * @param count Number of profiles
  * @param out Output context for messages
  * @param cred_ctx Credential context
  * @param fetched_count Output: number successfully fetched (can be NULL)
- * @param fetched_names Optional: array to populate with successfully fetched names (can be NULL)
+ * @param fetched_profiles Optional: array to populate with successfully fetched names (can be NULL)
  * @return Error or NULL on success
  */
 static error_t *fetch_profiles(
     git_repository *repo,
     const char *remote_name,
-    char **profile_names,
+    char **profiles,
     size_t count,
     output_ctx_t *out,
     transfer_context_t *xfer,
     size_t *fetched_count,
-    string_array_t *fetched_names
+    string_array_t *fetched_profiles
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile_names);
+    CHECK_NULL(profiles);
     CHECK_NULL(out);
 
     size_t local_count = 0;
     error_t *err = NULL;
 
     for (size_t i = 0; i < count; i++) {
-        const char *profile_name = profile_names[i];
+        const char *profile_name = profiles[i];
 
         if (output_is_tty(out)) {
             output_info(out, OUTPUT_NORMAL, "  Fetching %s...", profile_name);
@@ -155,8 +155,8 @@ static error_t *fetch_profiles(
         }
 
         /* Add to fetched names array if provided */
-        if (fetched_names) {
-            string_array_push(fetched_names, profile_name);
+        if (fetched_profiles) {
+            string_array_push(fetched_profiles, profile_name);
         }
     }
 
@@ -329,7 +329,7 @@ error_t *cmd_clone(
     bool allocated_path = false;
     transfer_context_t *xfer = NULL;
     string_array_t *fetched_profiles = NULL;
-    string_array_t *detected_names = NULL;
+    string_array_t *detected_profiles = NULL;
 
     if (opts->quiet) {
         output_set_verbosity(out, OUTPUT_QUIET);
@@ -452,7 +452,7 @@ error_t *cmd_clone(
 
         /* Name-based detection against remote branches */
         if (remote_branches) {
-            err = profile_detect_names(remote_branches, &detected_names);
+            err = profile_detect(remote_branches, &detected_profiles);
             if (err) {
                 output_warning(
                     out, OUTPUT_NORMAL, "Failed to detect profiles: %s",
@@ -462,17 +462,17 @@ error_t *cmd_clone(
             }
         }
 
-        if (detected_names && detected_names->count > 0) {
+        if (detected_profiles && detected_profiles->count > 0) {
             /* Show detected profiles */
-            for (size_t i = 0; i < detected_names->count; i++) {
-                output_info(out, OUTPUT_NORMAL, "  • %s", detected_names->items[i]);
+            for (size_t i = 0; i < detected_profiles->count; i++) {
+                output_info(out, OUTPUT_NORMAL, "  • %s", detected_profiles->items[i]);
             }
             output_newline(out, OUTPUT_NORMAL);
 
             /* Fetch detected profiles */
             size_t fetched_count = 0;
             err = fetch_profiles(
-                repo, "origin", detected_names->items, detected_names->count,
+                repo, "origin", detected_profiles->items, detected_profiles->count,
                 out, xfer, &fetched_count, fetched_profiles
             );
             if (err) {
@@ -515,45 +515,45 @@ error_t *cmd_clone(
      * that breaks other operations. Filter them out and hint the user instead.
      * The branch data is already fetched and available locally. */
     if (fetched_profiles->count > 0) {
-        string_array_t *profile_names = string_array_new(0);
-        if (!profile_names) {
+        string_array_t *profiles = string_array_new(0);
+        if (!profiles) {
             final_err = ERROR(ERR_MEMORY, "Failed to allocate profile array");
             goto cleanup;
         }
 
         for (size_t i = 0; i < fetched_profiles->count; i++) {
-            const char *name = fetched_profiles->items[i];
+            const char *profile_name = fetched_profiles->items[i];
             bool has_custom = false;
 
-            error_t *check_err = profile_has_custom_files(repo, name, &has_custom);
+            error_t *check_err = profile_has_custom_files(repo, profile_name, &has_custom);
             if (check_err) {
                 error_free(check_err);
                 /* Can't determine — include it to avoid silently dropping profiles */
-                string_array_push(profile_names, name);
+                string_array_push(profiles, profile_name);
                 continue;
             }
 
             if (has_custom) {
                 output_warning(
                     out, OUTPUT_NORMAL, "Profile '%s' requires --prefix (not enabled)",
-                    name
+                    profile_name
                 );
                 output_hint(
                     out, OUTPUT_NORMAL, "Run: dotta profile enable --prefix <path> %s",
-                    name
+                    profile_name
                 );
             } else {
-                string_array_push(profile_names, name);
+                string_array_push(profiles, profile_name);
             }
         }
 
-        err = initialize_state(repo, profile_names, out);
+        err = initialize_state(repo, profiles, out);
         if (err) {
             output_error(out, "Failed to initialize state: %s", error_message(err));
             error_free(err);
         }
 
-        string_array_free(profile_names);
+        string_array_free(profiles);
     } else {
         /* No profiles fetched - initialize empty state */
         output_warning(out, OUTPUT_NORMAL, "No profiles were fetched");
@@ -676,7 +676,7 @@ error_t *cmd_clone(
 
 cleanup:
     /* Cleanup resources */
-    string_array_free(detected_names);
+    string_array_free(detected_profiles);
     if (xfer) {
         transfer_context_free(xfer);
     }

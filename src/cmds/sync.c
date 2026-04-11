@@ -1318,14 +1318,13 @@ error_t *cmd_sync(
     state_t *state = NULL;
     state_t *read_state = NULL;
     workspace_t *ws = NULL;
-    string_array_t *workspace_names = NULL;
-    string_array_t *cli_names = NULL;
-    const string_array_t *op_names = NULL;
+    string_array_t *enabled_profiles = NULL;
+    string_array_t *filter_profiles = NULL;
+    const string_array_t *active_profiles = NULL;
     sync_results_t *results = NULL;
     char *remote_name = NULL;
     char *remote_url = NULL;
     transfer_context_t *xfer = NULL;
-    string_array_t *enabled_profiles = NULL;
     char *current_branch = NULL;
     bool has_profile_filter = (opts->profiles != NULL && opts->profile_count > 0);
 
@@ -1354,8 +1353,8 @@ error_t *cmd_sync(
     }
 
     /* Load profiles
-     * - workspace_names: ALWAYS persistent enabled profile names (for VWD scope)
-     * - cli_names / op_names: CLI filter names or workspace names (for sync operations)
+     * - enabled_profiles: ALWAYS persistent enabled profile names (for VWD scope)
+     * - filter_profiles / active_profiles: CLI filter names or workspace names (for sync operations)
      */
 
     /* Load state once for the validation phase.
@@ -1368,13 +1367,13 @@ error_t *cmd_sync(
     }
 
     /* Phase 1: Resolve enabled profile names (persistent) */
-    err = profile_resolve_state_names(repo, read_state, &workspace_names);
+    err = profile_resolve_enabled(repo, read_state, &enabled_profiles);
     if (err) {
         err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
     }
 
-    if (workspace_names->count == 0) {
+    if (enabled_profiles->count == 0) {
         err = ERROR(
             ERR_NOT_FOUND, "No enabled profiles to sync\n"
             "Hint: Run 'dotta profile enable <name>' to enable profiles\n"
@@ -1385,8 +1384,8 @@ error_t *cmd_sync(
 
     /* Phase 2: Resolve sync profile names */
     if (has_profile_filter) {
-        err = profile_resolve_cli_names(
-            repo, opts->profiles, opts->profile_count, config->strict_mode, &cli_names
+        err = profile_resolve_filter(
+            repo, opts->profiles, opts->profile_count, config->strict_mode, &filter_profiles
         );
         if (err) {
             err = error_wrap(err, "Failed to resolve sync profiles");
@@ -1394,16 +1393,16 @@ error_t *cmd_sync(
         }
 
         /* Validate: filter profiles must be enabled in workspace */
-        err = profile_validate_filter(workspace_names, cli_names);
+        err = profile_validate_filter(enabled_profiles, filter_profiles);
         if (err) goto cleanup;
 
-        op_names = cli_names;
+        active_profiles = filter_profiles;
     } else {
-        op_names = workspace_names;
+        active_profiles = enabled_profiles;
     }
 
     /* Create results tracker */
-    results = sync_results_create(op_names->count);
+    results = sync_results_create(active_profiles->count);
     if (!results) {
         err = ERROR(ERR_MEMORY, "Failed to create results");
         goto cleanup;
@@ -1420,7 +1419,7 @@ error_t *cmd_sync(
      * Skip entirely when --force is used: the clean check result is unused, and
      * workspace_load can be expensive (filesystem analysis, directory scanning).
      *
-     * CRITICAL: Use workspace_names (persistent) for VWD scope, NOT op_names.
+     * CRITICAL: Use enabled_profiles (persistent) for VWD scope, NOT active_profiles.
      * This ensures manifest scope matches state scope for accurate divergence detection.
      */
     if (!opts->force) {
@@ -1431,7 +1430,7 @@ error_t *cmd_sync(
             .analyze_directories = false,  /* Directory metadata is apply's concern */
             .analyze_encryption  = false   /* Encryption is apply's concern */
         };
-        err = workspace_load(repo, read_state, workspace_names, config, &ws_opts, &ws);
+        err = workspace_load(repo, read_state, enabled_profiles, config, &ws_opts, &ws);
         if (err) {
             err = error_wrap(err, "Failed to load workspace");
             goto cleanup;
@@ -1616,7 +1615,7 @@ error_t *cmd_sync(
 
     /* Phase 1: Fetch enabled profiles from remote */
     err = sync_fetch_enabled_profiles(
-        repo, remote_name, op_names, results, out, xfer
+        repo, remote_name, active_profiles, results, out, xfer
     );
     if (err) {
         goto cleanup;
@@ -1624,7 +1623,7 @@ error_t *cmd_sync(
 
     /* Phase 2: Analyze branch states */
     err = sync_analyze_phase(
-        repo, remote_name, op_names, results, out
+        repo, remote_name, active_profiles, results, out
     );
     if (err) {
         goto cleanup;
@@ -1690,6 +1689,13 @@ error_t *cmd_sync(
         err = error_wrap(err, "Failed to open state transaction");
         goto cleanup;
     }
+
+    /* Release phase-1 validated list (populated via read_state) and re-query
+     * under the write transaction so stale repair and push see the transaction
+     * snapshot. active_profiles was a borrowed pointer into enabled_profiles —
+     * nothing reads it after this point. */
+    string_array_free(enabled_profiles);
+    enabled_profiles = NULL;
 
     /* Build enabled profiles array for manifest operations */
     err = state_get_profiles(state, &enabled_profiles);
@@ -1845,7 +1851,6 @@ cleanup:
      * workspace borrows read_state — free workspace first, then read_state.
      * state (write handle) is independent of workspace. */
     if (current_branch) free(current_branch);
-    if (enabled_profiles) string_array_free(enabled_profiles);
     if (state) state_free(state);
     if (ws) workspace_free(ws);
     if (read_state) state_free(read_state);
@@ -1853,8 +1858,8 @@ cleanup:
     if (remote_url) free(remote_url);
     if (remote_name) free(remote_name);
     if (results) sync_results_free(results);
-    if (cli_names) string_array_free(cli_names);
-    if (workspace_names) string_array_free(workspace_names);
+    if (filter_profiles) string_array_free(filter_profiles);
+    if (enabled_profiles) string_array_free(enabled_profiles);
 
     return err;
 }

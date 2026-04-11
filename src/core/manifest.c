@@ -197,7 +197,7 @@ static error_t *extract_file_metadata_from_tree_entry(
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle for prefix resolution (must not be NULL)
- * @param profile_names Profile names to build from (must not be NULL)
+ * @param profiles Profile names to build from (must not be NULL)
  * @param transient_profile Optional profile for transient override (can be NULL)
  * @param transient_prefix Optional prefix for transient profile (can be NULL)
  * @param out_manifest Output manifest (caller must free with manifest_free)
@@ -207,7 +207,7 @@ static error_t *extract_file_metadata_from_tree_entry(
 static error_t *build_manifest(
     git_repository *repo,
     const state_t *state,
-    const string_array_t *profile_names,
+    const string_array_t *profiles,
     const char *transient_profile,
     const char *transient_prefix,
     arena_t *arena,
@@ -216,17 +216,17 @@ static error_t *build_manifest(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
-    CHECK_NULL(profile_names);
+    CHECK_NULL(profiles);
     CHECK_NULL(out_manifest);
     CHECK_NULL(out_profiles);
 
     error_t *err = NULL;
-    profile_list_t *profiles = NULL;
+    profile_list_t *list = NULL;
     manifest_t *manifest = NULL;
     hashmap_t *prefix_map = NULL;
 
     /* Load profiles from Git (profiles module - pure Git operations) */
-    err = profile_list_load(repo, profile_names, false, /* strict */ &profiles);
+    err = profile_list_load(repo, profiles, false, /* strict */ &list);
     if (err) {
         return error_wrap(err, "Failed to load profiles for manifest build");
     }
@@ -234,7 +234,7 @@ static error_t *build_manifest(
     /* Get custom prefix map from state (deployment configuration) */
     err = state_get_prefix_map(state, &prefix_map);
     if (err) {
-        profile_list_free(profiles);
+        profile_list_free(list);
         return error_wrap(err, "Failed to get custom prefix map");
     }
 
@@ -247,7 +247,7 @@ static error_t *build_manifest(
         char *dup_value = strdup(transient_prefix);
         if (!dup_value) {
             hashmap_free(prefix_map, free);
-            profile_list_free(profiles);
+            profile_list_free(list);
             return ERROR(ERR_MEMORY, "Failed to set transient custom prefix");
         }
         void *old_value = NULL;
@@ -256,23 +256,23 @@ static error_t *build_manifest(
         if (err) {
             free(dup_value);
             hashmap_free(prefix_map, free);
-            profile_list_free(profiles);
+            profile_list_free(list);
             return error_wrap(err, "Failed to set transient custom prefix");
         }
     }
 
     /* Build manifest from profiles with prefix map (applies precedence rules) */
-    err = profile_build_manifest(repo, profiles, prefix_map, arena, &manifest);
+    err = profile_build_manifest(repo, list, prefix_map, arena, &manifest);
     hashmap_free(prefix_map, free);
     if (err) {
-        profile_list_free(profiles);
+        profile_list_free(list);
         return error_wrap(err, "Failed to build manifest from profiles");
     }
 
-    /* DO NOT free profiles here - caller must keep them alive while using manifest */
+    /* DO NOT free list here - caller must keep them alive while using manifest */
 
     *out_manifest = manifest;
-    *out_profiles = profiles;
+    *out_profiles = list;
     return NULL;
 }
 

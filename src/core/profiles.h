@@ -181,12 +181,12 @@ typedef struct {
  * All detection steps are non-fatal (skip on system call failure).
  *
  * @param available_branches List of branch names to match against (must not be NULL)
- * @param out_names Matched profile names in precedence order (must not be NULL, caller must free)
+ * @param out_profiles Matched profile names in precedence order (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *profile_detect_names(
+error_t *profile_detect(
     const string_array_t *available_branches,
-    string_array_t **out_names
+    string_array_t **out_profiles
 );
 
 /**
@@ -235,7 +235,7 @@ error_t *profile_list_load(
  * @param out Validated profile names (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *profile_resolve_cli_names(
+error_t *profile_resolve_filter(
     git_repository *repo,
     char **cli_profiles,
     size_t cli_count,
@@ -259,7 +259,7 @@ error_t *profile_resolve_cli_names(
  * @param out Validated profile names (must not be NULL, caller must free)
  * @return Error (ERR_NOT_FOUND if no enabled profiles) or NULL on success
  */
-error_t *profile_resolve_state_names(
+error_t *profile_resolve_enabled(
     git_repository *repo,
     const state_t *state,
     string_array_t **out
@@ -297,12 +297,12 @@ error_t *profile_get_custom_prefixes(
  * in the workspace. This prevents confusing behavior where user filters
  * to a disabled profile.
  *
- * @param workspace_names Enabled profile names from state (must not be NULL)
+ * @param enabled_profiles Enabled profile names from state (must not be NULL)
  * @param filter CLI filter profile names (NULL = no filter)
  * @return Error if any filter profile is not enabled, NULL on success
  */
 error_t *profile_validate_filter(
-    const string_array_t *workspace_names,
+    const string_array_t *enabled_profiles,
     const string_array_t *filter
 );
 
@@ -338,7 +338,7 @@ bool profile_filter_matches(
  * @param out String array of branch names (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *profile_list_all_local_names(
+error_t *profile_list_all_local(
     git_repository *repo,
     string_array_t **out
 );

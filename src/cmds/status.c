@@ -27,24 +27,24 @@
  */
 static void display_enabled_profiles(
     output_ctx_t *out,
-    const string_array_t *names,
+    const string_array_t *profiles,
     const manifest_t *manifest,
     const state_t *state
 ) {
-    if (!out || !names) return;
+    if (!out || !profiles) return;
 
     /* Show enabled profiles */
     output_section(out, OUTPUT_NORMAL, "Enabled profiles");
 
-    for (size_t i = 0; i < names->count; i++) {
-        const char *name = names->items[i];
+    for (size_t i = 0; i < profiles->count; i++) {
+        const char *profile_name = profiles->items[i];
 
         /* Format profile name */
-        output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", name);
+        output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile_name);
 
         /* Show per-profile last deployed timestamp */
         if (state) {
-            time_t profile_deploy_time = state_get_profile_timestamp(state, name);
+            time_t profile_deploy_time = state_get_profile_timestamp(state, profile_name);
             if (profile_deploy_time > 0) {
                 char relative_buf[64];
                 format_relative_time(
@@ -64,7 +64,7 @@ static void display_enabled_profiles(
             size_t profile_file_count = 0;
             for (size_t j = 0; j < manifest->count; j++) {
                 if (manifest->entries[j].profile_name &&
-                    strcmp(manifest->entries[j].profile_name, name) == 0) {
+                    strcmp(manifest->entries[j].profile_name, profile_name) == 0) {
                     profile_file_count++;
                 }
             }
@@ -495,13 +495,13 @@ static void display_workspace_status(
  */
 static error_t *display_remote_status(
     git_repository *repo,
-    const string_array_t *names,
+    const string_array_t *profiles,
     output_ctx_t *out,
     bool show_all_profiles,
     bool no_fetch
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(names);
+    CHECK_NULL(profiles);
     CHECK_NULL(out);
 
     bool verbose = output_is_verbose(out);
@@ -515,13 +515,13 @@ static error_t *display_remote_status(
         return NULL;
     }
 
-    /* Build name array for profiles to check */
+    /* Build profile array to check */
     string_array_t *all_local = NULL;
-    const string_array_t *check = names;
+    const string_array_t *check = profiles;
 
     if (show_all_profiles) {
         /* Explicit request: show ALL local profiles (lightweight, no ref resolution) */
-        err = profile_list_all_local_names(repo, &all_local);
+        err = profile_list_all_local(repo, &all_local);
         if (err) {
             free(remote_name);
             return error_wrap(err, "Failed to list all profiles");
@@ -848,9 +848,9 @@ error_t *cmd_status(
     workspace_t *ws = NULL;
     state_t *state = NULL;
     const manifest_t *manifest = NULL;
-    string_array_t *workspace_names = NULL;
-    string_array_t *cli_names = NULL;
-    const string_array_t *op_names = NULL;
+    string_array_t *enabled_profiles = NULL;
+    string_array_t *filter_profiles = NULL;
+    const string_array_t *active_profiles = NULL;
     const string_array_t *filter = NULL;
     bool has_profile_filter = (opts->profiles != NULL && opts->profile_count > 0);
 
@@ -870,19 +870,19 @@ error_t *cmd_status(
     /* Load profiles
      *
      * Separate workspace scope (persistent) from display filter (temporary):
-     *   - workspace_names: Persistent enabled profile names (VWD scope)
-     *   - cli_names / op_names: CLI filter names or workspace names (for display)
+     *   - enabled_profiles: Persistent enabled profile names (VWD scope)
+     *   - filter_profiles / active_profiles: CLI filter names or workspace names (for display)
      *
      * Workspace always loads with persistent profiles to maintain accurate
      * orphan detection. Display operations filter by CLI profiles if specified.
      */
-    err = profile_resolve_state_names(repo, state, &workspace_names);
+    err = profile_resolve_enabled(repo, state, &enabled_profiles);
     if (err) {
         err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
     }
 
-    if (workspace_names->count == 0) {
+    if (enabled_profiles->count == 0) {
         output_info(out, OUTPUT_NORMAL, "No enabled profiles found");
         output_hint(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>'");
         goto cleanup;
@@ -890,21 +890,21 @@ error_t *cmd_status(
 
     /* Resolve display profile names */
     if (has_profile_filter) {
-        err = profile_resolve_cli_names(
-            repo, opts->profiles, opts->profile_count, config->strict_mode, &cli_names
+        err = profile_resolve_filter(
+            repo, opts->profiles, opts->profile_count, config->strict_mode, &filter_profiles
         );
         if (err) {
             err = error_wrap(err, "Failed to resolve display profiles");
             goto cleanup;
         }
 
-        err = profile_validate_filter(workspace_names, cli_names);
+        err = profile_validate_filter(enabled_profiles, filter_profiles);
         if (err) goto cleanup;
 
-        filter = cli_names;
-        op_names = cli_names;
+        filter = filter_profiles;
+        active_profiles = filter_profiles;
     } else {
-        op_names = workspace_names;
+        active_profiles = enabled_profiles;
     }
 
     /* Load workspace for divergence analysis (only needed for local status)
@@ -920,7 +920,7 @@ error_t *cmd_status(
             .analyze_directories = true,
             .analyze_encryption  = true
         };
-        err = workspace_load(repo, state, workspace_names, config, &ws_opts, &ws);
+        err = workspace_load(repo, state, enabled_profiles, config, &ws_opts, &ws);
         if (err) {
             err = error_wrap(err, "Failed to load workspace");
             goto cleanup;
@@ -994,11 +994,11 @@ error_t *cmd_status(
     }
 
     /* Display enabled profiles and last deployment info */
-    display_enabled_profiles(out, op_names, manifest, state);
+    display_enabled_profiles(out, active_profiles, manifest, state);
 
     /* Display workspace status (with profile filtering for Coherent Scope)
      *
-     * The workspace was loaded with persistent profiles (workspace_names)
+     * The workspace was loaded with persistent profiles (enabled_profiles)
      * for accurate divergence analysis. When CLI filter is specified,
      * we pass the filter to display_workspace_status to show only items
      * from those profiles. This ensures `dotta status -p work` matches
@@ -1011,7 +1011,7 @@ error_t *cmd_status(
     /* Show remote sync status (if requested) */
     if (opts->show_remote) {
         err = display_remote_status(
-            repo, op_names, out, opts->all_profiles, opts->no_fetch
+            repo, active_profiles, out, opts->all_profiles, opts->no_fetch
         );
         if (err) {
             /* Non-fatal: might not have remote configured */
@@ -1025,8 +1025,8 @@ cleanup:
      * state_free after workspace_free — workspace borrows state. */
     if (ws) workspace_free(ws);
     if (state) state_free(state);
-    if (cli_names) string_array_free(cli_names);
-    if (workspace_names) string_array_free(workspace_names);
+    if (filter_profiles) string_array_free(filter_profiles);
+    if (enabled_profiles) string_array_free(enabled_profiles);
 
     return err;
 }

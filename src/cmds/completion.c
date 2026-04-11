@@ -72,10 +72,10 @@ static void complete_all_profiles(git_repository *repo) {
     if (!err) {
         string_array_sort(branches);
         for (size_t i = 0; i < branches->count; i++) {
-            const char *name = branches->items[i];
+            const char *profile_name = branches->items[i];
             /* Skip internal worktree branch */
-            if (strcmp(name, "dotta-worktree") != 0) {
-                printf("%s\tProfile\n", name);
+            if (strcmp(profile_name, "dotta-worktree") != 0) {
+                printf("%s\tProfile\n", profile_name);
             }
         }
     } else {

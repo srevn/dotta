@@ -821,9 +821,9 @@ error_t *cmd_apply(
     error_t *err = NULL;
     char *repo_dir = NULL;
     state_t *state = NULL;
-    string_array_t *workspace_names = NULL;
-    string_array_t *cli_names = NULL;
-    const string_array_t *op_names = NULL;
+    string_array_t *enabled_profiles = NULL;
+    string_array_t *filter_profiles = NULL;
+    const string_array_t *active_profiles = NULL;
     const string_array_t *filter = NULL;
     const manifest_t *manifest = NULL;
     manifest_t *deploy_manifest = NULL;
@@ -872,22 +872,23 @@ error_t *cmd_apply(
      *
      * After repair, workspace_load's in-memory patching path won't trigger
      * (git_oid matches HEAD), eliminating redundant fresh manifest builds.
+     *
+     * Uses the raw DB list (state_get_profiles), then frees and re-populates
+     * enabled_profiles with the validated list below for Phase 1.
      */
-    string_array_t *enabled_names = NULL;
-    err = state_get_profiles(state, &enabled_names);
+    err = state_get_profiles(state, &enabled_profiles);
     if (err) {
         err = error_wrap(err, "Failed to get enabled profiles for stale repair");
         goto cleanup;
     }
 
-    if (enabled_names && enabled_names->count > 0) {
+    if (enabled_profiles && enabled_profiles->count > 0) {
         manifest_repair_stats_t repair_stats = { 0 };
         err = manifest_repair_stale(
-            repo, state, enabled_names, &repair_stats, &repaired_paths
+            repo, state, enabled_profiles, &repair_stats, &repaired_paths
         );
 
         if (err) {
-            string_array_free(enabled_names);
             err = error_wrap(err, "Failed to repair stale manifest");
             goto cleanup;
         }
@@ -907,26 +908,27 @@ error_t *cmd_apply(
         }
     }
 
-    string_array_free(enabled_names);
+    string_array_free(enabled_profiles);
+    enabled_profiles = NULL;
 
     /* Load profiles
      *
      * Separate workspace scope (persistent) from operation filter (temporary).
-     *   - workspace_names: ALWAYS persistent enabled profile names (for VWD scope)
-     *   - cli_names / op_names: CLI filter names or workspace names (for filtering operations)
+     *   - enabled_profiles: ALWAYS persistent enabled profile names (for VWD scope)
+     *   - filter_profiles / active_profiles: CLI filter names or workspace names (for filtering operations)
      *
      * This ensures accurate orphan detection while supporting CLI filtering.
      */
     output_print(out, OUTPUT_VERBOSE, "Loading profiles...\n");
 
     /* Phase 1: Resolve enabled profile names (ALWAYS persistent, ignore CLI overrides) */
-    err = profile_resolve_state_names(repo, state, &workspace_names);
+    err = profile_resolve_enabled(repo, state, &enabled_profiles);
     if (err) {
         err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
     }
 
-    if (workspace_names->count == 0) {
+    if (enabled_profiles->count == 0) {
         err = ERROR(
             ERR_NOT_FOUND, "No enabled profiles found\n"
             "Hint: Run 'dotta profile enable <name>' to enable profiles"
@@ -940,8 +942,8 @@ error_t *cmd_apply(
      * No-filter path: use workspace names directly
      */
     if (has_profile_filter) {
-        err = profile_resolve_cli_names(
-            repo, opts->profiles, opts->profile_count, config->strict_mode, &cli_names
+        err = profile_resolve_filter(
+            repo, opts->profiles, opts->profile_count, config->strict_mode, &filter_profiles
         );
         if (err) {
             err = error_wrap(err, "Failed to resolve operation profiles");
@@ -949,23 +951,23 @@ error_t *cmd_apply(
         }
 
         /* Validate: filter profiles must be enabled in workspace */
-        err = profile_validate_filter(workspace_names, cli_names);
+        err = profile_validate_filter(enabled_profiles, filter_profiles);
         if (err) goto cleanup;
 
-        filter = cli_names;
-        op_names = cli_names;
+        filter = filter_profiles;
+        active_profiles = filter_profiles;
     } else {
-        op_names = workspace_names;
+        active_profiles = enabled_profiles;
     }
 
     output_print(
         out, OUTPUT_VERBOSE, "Using %zu profile%s:\n",
-        op_names->count, op_names->count == 1 ? "" : "s"
+        active_profiles->count, active_profiles->count == 1 ? "" : "s"
     );
-    for (size_t i = 0; i < op_names->count; i++) {
+    for (size_t i = 0; i < active_profiles->count; i++) {
         output_styled(
             out, OUTPUT_VERBOSE, "  {cyan}•{reset} %s\n",
-            op_names->items[i]
+            active_profiles->items[i]
         );
     }
 
@@ -978,7 +980,7 @@ error_t *cmd_apply(
     if (opts->files && opts->file_count > 0) {
         /* Extract custom prefixes from operation profiles */
         string_array_t *prefixes = NULL;
-        err = profile_get_custom_prefixes(repo, state, op_names, &prefixes);
+        err = profile_get_custom_prefixes(repo, state, active_profiles, &prefixes);
         if (err) {
             err = error_wrap(err, "Failed to get custom prefixes");
             goto cleanup;
@@ -1016,7 +1018,7 @@ error_t *cmd_apply(
 
     /* Apply needs file divergence + orphan detection for deployment and cleanup
      *
-     * Use workspace_names (persistent) for VWD scope, NOT cli_names/op_names.
+     * Use enabled_profiles (persistent) for VWD scope, NOT filter_profiles/active_profiles.
      * This ensures manifest scope matches state scope for accurate orphan detection.
      */
     workspace_load_t ws_opts = {
@@ -1028,7 +1030,7 @@ error_t *cmd_apply(
         .repaired_paths         = repaired_paths, /* From stale repair: path → old_blob_oid */
         .repair_completed       = true            /* manifest_repair_stale ran above */
     };
-    err = workspace_load(repo, state, workspace_names, config, &ws_opts, &ws);
+    err = workspace_load(repo, state, enabled_profiles, config, &ws_opts, &ws);
     if (err) {
         err = error_wrap(err, "Failed to load workspace");
         goto cleanup;
@@ -1624,7 +1626,7 @@ error_t *cmd_apply(
 
     /* Execute pre-apply hook */
     if (config && repo_dir) {
-        profiles_str = string_array_join(op_names, " ");
+        profiles_str = string_array_join(active_profiles, " ");
 
         /* Create hook context with all profiles */
         hook_ctx = hook_context_create(repo_dir, "apply", profiles_str);
@@ -2245,8 +2247,8 @@ cleanup:
     if (file_orphans) free(file_orphans);
     if (repaired_paths) hashmap_free(repaired_paths, free);
     if (ws) workspace_free(ws);
-    if (cli_names) string_array_free(cli_names);
-    if (workspace_names) string_array_free(workspace_names);
+    if (filter_profiles) string_array_free(filter_profiles);
+    if (enabled_profiles) string_array_free(enabled_profiles);
     if (state) state_free(state);
     if (repo_dir) free(repo_dir);
 

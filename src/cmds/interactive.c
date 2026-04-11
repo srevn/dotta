@@ -79,7 +79,7 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
     state->modified = false;
 
     /* Load all available profiles */
-    err = profile_list_all_local_names(repo, &all_profiles);
+    err = profile_list_all_local(repo, &all_profiles);
     if (err) {
         goto cleanup;
     }
@@ -306,11 +306,11 @@ static error_t *interactive_save_profile_order(
     }
 
     /* Extract enabled profile names in current display order */
-    string_array_t profile_names STRING_ARRAY_AUTO = {0};
+    string_array_t profiles STRING_ARRAY_AUTO = {0};
     for (size_t i = 0; i < state->item_count; i++) {
         if (state->items[i].enabled) {
             error_t *push_err = string_array_push(
-                &profile_names,
+                &profiles,
                 state->items[i].name
             );
             if (push_err) return push_err;
@@ -325,7 +325,7 @@ static error_t *interactive_save_profile_order(
     }
 
     /* Set profiles in new order (updates enabled_profiles table) */
-    err = state_set_profiles(deploy_state, &profile_names);
+    err = state_set_profiles(deploy_state, &profiles);
     if (err) {
         state_free(deploy_state);
         return error_wrap(
@@ -338,7 +338,7 @@ static error_t *interactive_save_profile_order(
      * This synchronizes the virtual_manifest table with the new profile order.
      * Reassigned files will be updated (deployed_at preserved), while
      * files whose assignment remains unchanged preserve their existing entry. */
-    err = manifest_reorder_profiles(repo, deploy_state, &profile_names);
+    err = manifest_reorder_profiles(repo, deploy_state, &profiles);
     if (err) {
         state_free(deploy_state);
         return error_wrap(

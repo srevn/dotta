@@ -2736,13 +2736,13 @@ cleanup:
 error_t *workspace_load(
     git_repository *repo,
     state_t *state,
-    const string_array_t *profile_names,
+    const string_array_t *profiles,
     const config_t *config,
     const workspace_load_t *options,
     workspace_t **out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile_names);
+    CHECK_NULL(profiles);
     CHECK_NULL(options);
     CHECK_NULL(out);
 
@@ -2764,16 +2764,16 @@ error_t *workspace_load(
      * Workspace owns the result — freed in workspace_free().
      * Non-strict: silently skip profiles whose branches disappeared between
      * name validation (at command layer) and this load (tiny race window). */
-    profile_list_t *profiles = NULL;
-    err = profile_list_load(repo, profile_names, false, &profiles);
+    profile_list_t *list = NULL;
+    err = profile_list_load(repo, profiles, false, &list);
     if (err) {
         return error_wrap(err, "Failed to load profiles from names");
     }
 
-    /* Create empty workspace (takes ownership of profiles on success) */
-    err = workspace_create_empty(repo, profiles, &ws);
+    /* Create empty workspace (takes ownership of list on success) */
+    err = workspace_create_empty(repo, list, &ws);
     if (err) {
-        profile_list_free(profiles);
+        profile_list_free(list);
         return err;
     }
 
@@ -2797,8 +2797,8 @@ error_t *workspace_load(
     }
 
     /* Pre-load metadata for all profiles (performance optimization) */
-    for (size_t i = 0; i < profiles->count; i++) {
-        const char *profile_name = profiles->profiles[i].name;
+    for (size_t i = 0; i < list->count; i++) {
+        const char *profile_name = list->profiles[i].name;
         metadata_t *metadata = NULL;
 
         error_t *meta_err = metadata_load_from_branch(repo, profile_name, &metadata);
@@ -2846,8 +2846,8 @@ error_t *workspace_load(
         return ERROR(ERR_MEMORY, "Failed to create merged metadata map");
     }
 
-    for (size_t p = 0; p < profiles->count; p++) {
-        const char *profile_name = profiles->profiles[p].name;
+    for (size_t p = 0; p < list->count; p++) {
+        const char *profile_name = list->profiles[p].name;
         const metadata_t *metadata = hashmap_get(ws->metadata_cache, profile_name);
 
         if (!metadata) {

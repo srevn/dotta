@@ -1681,15 +1681,15 @@ cleanup:
  */
 error_t *metadata_load_from_profiles(
     git_repository *repo,
-    const string_array_t *profile_names,
+    const string_array_t *profiles,
     metadata_t **out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile_names);
+    CHECK_NULL(profiles);
     CHECK_NULL(out);
 
     error_t *err = NULL;
-    size_t profile_count = profile_names->count;
+    size_t profile_count = profiles->count;
 
     /* Handle empty profile list */
     if (profile_count == 0) {
@@ -1707,7 +1707,7 @@ error_t *metadata_load_from_profiles(
 
     /* Load metadata from each profile (in order for proper layering) */
     for (size_t i = 0; i < profile_count; i++) {
-        const char *profile_name = profile_names->items[i];
+        const char *profile_name = profiles->items[i];
         metadata_t *meta = NULL;
 
         error_t *load_err = metadata_load_from_branch(repo, profile_name, &meta);

@@ -166,7 +166,7 @@ typedef struct {
  *              - NULL: Allocate read-only state internally (workspace owns it)
  *              - non-NULL: Borrow existing state (caller owns it, typically from
  *                state_load_for_update for transactional operations)
- * @param profile_names Validated profile names in precedence order (must not be NULL)
+ * @param profiles Validated profile names in precedence order (must not be NULL)
  * @param config Configuration (for ignore patterns, can be NULL)
  * @param options Analysis options (must not be NULL)
  * @param out Workspace (must not be NULL, caller must free with workspace_free)
@@ -175,7 +175,7 @@ typedef struct {
 error_t *workspace_load(
     git_repository *repo,
     state_t *state,
-    const string_array_t *profile_names,
+    const string_array_t *profiles,
     const struct config *config,
     const workspace_load_t *options,
     workspace_t **out

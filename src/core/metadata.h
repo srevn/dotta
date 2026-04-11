@@ -565,13 +565,13 @@ error_t *metadata_load_from_file(
  * - Returns empty metadata if no profiles have metadata files
  *
  * @param repo Repository (must not be NULL)
- * @param profile_names Array of profile names to load (must not be NULL)
+ * @param profiles Array of profile names to load (must not be NULL)
  * @param out Merged metadata (must not be NULL, caller must free with metadata_free)
  * @return Error or NULL on success (empty metadata if no profiles have metadata)
  */
 error_t *metadata_load_from_profiles(
     git_repository *repo,
-    const string_array_t *profile_names,
+    const string_array_t *profiles,
     metadata_t **out
 );
 

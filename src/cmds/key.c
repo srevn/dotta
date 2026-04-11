@@ -45,16 +45,16 @@ static error_t *count_encrypted_files(
     }
 
     /* Get profile names from state */
-    string_array_t *profile_names = NULL;
-    err = state_get_profiles(state, &profile_names);
+    string_array_t *profiles = NULL;
+    err = state_get_profiles(state, &profiles);
     if (err) {
         state_free(state);
         return error_wrap(err, "Failed to get profiles from state");
     }
 
-    if (!profile_names || profile_names->count == 0) {
-        if (profile_names) {
-            string_array_free(profile_names);
+    if (!profiles || profiles->count == 0) {
+        if (profiles) {
+            string_array_free(profiles);
         }
         state_free(state);
         return NULL;
@@ -62,16 +62,16 @@ static error_t *count_encrypted_files(
 
     /* Load metadata from all profiles */
     metadata_t *metadata = NULL;
-    err = metadata_load_from_profiles(repo, profile_names, &metadata);
+    err = metadata_load_from_profiles(repo, profiles, &metadata);
     if (err) {
         /* If metadata loading fails, it's not fatal for status display */
         if (error_code(err) == ERR_NOT_FOUND) {
             error_free(err);
-            string_array_free(profile_names);
+            string_array_free(profiles);
             state_free(state);
             return NULL;
         }
-        string_array_free(profile_names);
+        string_array_free(profiles);
         state_free(state);
         return error_wrap(err, "Failed to load metadata");
     }
@@ -91,7 +91,7 @@ static error_t *count_encrypted_files(
     }
 
     metadata_free(metadata);
-    string_array_free(profile_names);
+    string_array_free(profiles);
     state_free(state);
 
     return NULL;

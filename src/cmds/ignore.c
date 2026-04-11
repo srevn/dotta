@@ -1284,8 +1284,8 @@ static error_t *test_path_ignore(
     }
 
     /* Test against all enabled profiles */
-    string_array_t *profile_names = NULL;
-    error_t *err = profile_resolve_state_names(repo, NULL, &profile_names);
+    string_array_t *profiles = NULL;
+    error_t *err = profile_resolve_enabled(repo, NULL, &profiles);
 
     if (err) {
         if (error_code(err) != ERR_NOT_FOUND) {
@@ -1335,21 +1335,21 @@ static error_t *test_path_ignore(
 
     /* Test against each enabled profile */
     output_info(out, OUTPUT_NORMAL, "Testing path: %s", test_path);
-    output_info(out, OUTPUT_NORMAL, "Enabled profiles: %zu", profile_names->count);
+    output_info(out, OUTPUT_NORMAL, "Enabled profiles: %zu", profiles->count);
     output_newline(out, OUTPUT_NORMAL);
 
     bool any_ignored = false;
-    for (size_t i = 0; i < profile_names->count; i++) {
-        const char *name = profile_names->items[i];
+    for (size_t i = 0; i < profiles->count; i++) {
+        const char *profile_name = profiles->items[i];
 
         /* Create ignore context for this profile */
         ignore_context_t *ctx = NULL;
-        err = ignore_context_create(repo, config, name, NULL, 0, &ctx);
+        err = ignore_context_create(repo, config, profile_name, NULL, 0, &ctx);
         if (err) {
-            string_array_free(profile_names);
+            string_array_free(profiles);
             return error_wrap(
                 err, "Failed to create ignore context for profile '%s'",
-                name
+                profile_name
             );
         }
 
@@ -1359,10 +1359,10 @@ static error_t *test_path_ignore(
         ignore_context_free(ctx);
 
         if (err) {
-            string_array_free(profile_names);
+            string_array_free(profiles);
             return error_wrap(
                 err, "Failed to test path against profile '%s'",
-                name
+                profile_name
             );
         }
 
@@ -1370,7 +1370,7 @@ static error_t *test_path_ignore(
         if (result.ignored) {
             output_styled(
                 out, OUTPUT_NORMAL, "{red}✗{reset} Profile '%s': IGNORED\n",
-                name
+                profile_name
             );
             if (output_is_verbose(out)) {
                 output_info(
@@ -1382,12 +1382,12 @@ static error_t *test_path_ignore(
         } else {
             output_success(
                 out, OUTPUT_NORMAL, "Profile '%s': NOT IGNORED",
-                name
+                profile_name
             );
         }
     }
 
-    string_array_free(profile_names);
+    string_array_free(profiles);
 
     /* Summary */
     output_newline(out, OUTPUT_NORMAL);

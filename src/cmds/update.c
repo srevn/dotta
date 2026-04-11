@@ -1943,9 +1943,9 @@ error_t *cmd_update(
     error_t *err = NULL;
     state_t *state = NULL;
     workspace_t *ws = NULL;
-    string_array_t *workspace_names = NULL;
-    string_array_t *cli_names = NULL;
-    const string_array_t *op_names = NULL;
+    string_array_t *enabled_profiles = NULL;
+    string_array_t *filter_profiles = NULL;
+    const string_array_t *active_profiles = NULL;
     const string_array_t *filter = NULL;
     hook_context_t *hook_ctx = NULL;
     char *repo_dir = NULL;
@@ -1965,8 +1965,8 @@ error_t *cmd_update(
     /* Load profiles
      *
      * Dual-list pattern ensures workspace scope consistency:
-     * - workspace_names: Persistent enabled profile names for VWD scope
-     * - cli_names / op_names: CLI filter names or workspace names for update operations
+     * - enabled_profiles: Persistent enabled profile names for VWD scope
+     * - filter_profiles / active_profiles: CLI filter names or workspace names for update operations
      */
 
     /* Load state once for the command's lifetime.
@@ -1978,13 +1978,13 @@ error_t *cmd_update(
     }
 
     /* Phase 1: Resolve enabled profile names (persistent) */
-    err = profile_resolve_state_names(repo, state, &workspace_names);
+    err = profile_resolve_enabled(repo, state, &enabled_profiles);
     if (err) {
         err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
     }
 
-    if (workspace_names->count == 0) {
+    if (enabled_profiles->count == 0) {
         err = ERROR(
             ERR_NOT_FOUND, "No enabled profiles found\n"
             "Hint: Run 'dotta profile enable <name>' to enable profiles"
@@ -1994,8 +1994,8 @@ error_t *cmd_update(
 
     /* Phase 2: Resolve operation profile names */
     if (has_profile_filter) {
-        err = profile_resolve_cli_names(
-            repo, opts->profiles, opts->profile_count, config->strict_mode, &cli_names
+        err = profile_resolve_filter(
+            repo, opts->profiles, opts->profile_count, config->strict_mode, &filter_profiles
         );
         if (err) {
             err = error_wrap(err, "Failed to resolve operation profiles");
@@ -2003,13 +2003,13 @@ error_t *cmd_update(
         }
 
         /* Validate: filter profiles must be enabled in workspace */
-        err = profile_validate_filter(workspace_names, cli_names);
+        err = profile_validate_filter(enabled_profiles, filter_profiles);
         if (err) goto cleanup;
 
-        filter = cli_names;
-        op_names = cli_names;
+        filter = filter_profiles;
+        active_profiles = filter_profiles;
     } else {
-        op_names = workspace_names;
+        active_profiles = enabled_profiles;
     }
 
     /* Get repository directory for hooks */
@@ -2020,7 +2020,7 @@ error_t *cmd_update(
 
     /* Execute pre-update hook (using operation profiles for context) */
     if (config && repo_dir) {
-        profiles_str = string_array_join(op_names, " ");
+        profiles_str = string_array_join(active_profiles, " ");
 
         if (profiles_str) {
             /* Create hook context with operation profiles */
@@ -2076,7 +2076,7 @@ error_t *cmd_update(
         .analyze_directories = true,                    /* Directory metadata change detection */
         .analyze_encryption  = true                     /* Encryption policy validation */
     };
-    err = workspace_load(repo, state, workspace_names, config, &ws_opts, &ws);
+    err = workspace_load(repo, state, enabled_profiles, config, &ws_opts, &ws);
     if (err) {
         err = error_wrap(err, "Failed to analyze workspace");
         goto cleanup;
@@ -2092,7 +2092,7 @@ error_t *cmd_update(
         /* Extract custom prefixes from operation profiles */
         string_array_t *prefixes = NULL;
         err = profile_get_custom_prefixes(
-            repo, state, op_names, &prefixes
+            repo, state, active_profiles, &prefixes
         );
         if (err) {
             err = error_wrap(err, "Failed to get custom prefixes");
@@ -2376,8 +2376,8 @@ cleanup:
     if (profiles_str) free(profiles_str);
     if (file_filter) path_filter_free(file_filter);
     if (repo_dir) free(repo_dir);
-    if (cli_names) string_array_free(cli_names);
-    if (workspace_names) string_array_free(workspace_names);
+    if (filter_profiles) string_array_free(filter_profiles);
+    if (enabled_profiles) string_array_free(enabled_profiles);
 
     return err;
 }

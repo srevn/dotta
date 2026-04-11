@@ -238,21 +238,21 @@ static error_t *list_profiles(
 
     /* List profiles */
     for (size_t i = 0; i < branches->count; i++) {
-        const char *name = branches->items[i];
+        const char *profile_name = branches->items[i];
 
         /* Skip dotta-worktree branch */
-        if (strcmp(name, "dotta-worktree") == 0) {
+        if (strcmp(profile_name, "dotta-worktree") == 0) {
             continue;
         }
 
-        bool is_enabled = state && state_has_profile(state, name);
+        bool is_enabled = state && state_has_profile(state, profile_name);
         const char *indicator = is_enabled ? "* " : "  ";
 
         /* Simple mode: Just name with enabled indicator */
         if (!verbose && !show_remote) {
             output_styled(
                 out, OUTPUT_NORMAL, "  %s{cyan}%s{reset}\n",
-                indicator, name
+                indicator, profile_name
             );
             continue;
         }
@@ -260,11 +260,11 @@ static error_t *list_profiles(
         /* Verbose/remote: Load profile for stats */
         profile_t *profile = NULL;
         if (verbose) {
-            err = profile_load(repo, name, &profile);
+            err = profile_load(repo, profile_name, &profile);
             if (err) {
                 output_warning(
                     out, OUTPUT_NORMAL, "Failed to load profile '%s': %s",
-                    name, error_message(err)
+                    profile_name, error_message(err)
                 );
                 error_free(err);
                 err = NULL;
@@ -275,7 +275,7 @@ static error_t *list_profiles(
         /* Start line with indicator and name */
         output_styled(
             out, OUTPUT_NORMAL, "  %s{cyan}%-*s{reset}",
-            indicator, (int) max_name_len, name
+            indicator, (int) max_name_len, profile_name
         );
 
         /* Verbose: Add stats (requires successfully loaded profile) */
@@ -298,7 +298,7 @@ static error_t *list_profiles(
         if (verbose) {
             char refname[DOTTA_REFNAME_MAX];
             error_t *ref_err = gitops_build_refname(
-                refname, sizeof(refname), "refs/heads/%s", name
+                refname, sizeof(refname), "refs/heads/%s", profile_name
             );
             if (!ref_err) {
                 git_commit *last_commit = NULL;
@@ -336,7 +336,7 @@ static error_t *list_profiles(
         /* Remote: Add tracking state */
         if (show_remote) {
             upstream_info_t *info = NULL;
-            error_t *upstream_err = upstream_analyze_profile(repo, remote_name, name, &info);
+            error_t *upstream_err = upstream_analyze_profile(repo, remote_name, profile_name, &info);
             if (!upstream_err && info) {
                 print_upstream_state(out, info);
                 upstream_info_free(info);

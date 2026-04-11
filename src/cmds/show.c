@@ -576,7 +576,7 @@ error_t *cmd_show(
     CHECK_NULL(opts);
 
     error_t *err = NULL;
-    string_array_t *profile_names = NULL;
+    string_array_t *profiles = NULL;
     string_array_t *matches = NULL;
     char *converted = NULL;
     const char *found_profile = NULL;
@@ -590,7 +590,7 @@ error_t *cmd_show(
 
         if (!profile_name) {
             /* No profile specified - use enabled profiles */
-            err = profile_resolve_state_names(repo, NULL, &profile_names);
+            err = profile_resolve_enabled(repo, NULL, &profiles);
             if (err) {
                 if (error_code(err) == ERR_NOT_FOUND) {
                     error_free(err);
@@ -610,8 +610,8 @@ error_t *cmd_show(
             }
 
             /* Try to find commit in enabled profiles (in order) */
-            for (size_t i = 0; i < profile_names->count; i++) {
-                profile_name = profile_names->items[i];
+            for (size_t i = 0; i < profiles->count; i++) {
+                profile_name = profiles->items[i];
                 error_t *try_err = show_commit(
                     repo, opts->commit, profile_name, opts->raw, out
                 );
@@ -726,7 +726,7 @@ error_t *cmd_show(
     );
 
 cleanup:
-    string_array_free(profile_names);
+    string_array_free(profiles);
     if (matches) string_array_free(matches);
     if (converted) free(converted);
 

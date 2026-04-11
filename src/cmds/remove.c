@@ -1377,7 +1377,7 @@ static error_t *delete_profile_branch(
     }
 
     /* SAFETY: Prevent deletion of last remaining profile */
-    err = profile_list_all_local_names(repo, &all_profiles);
+    err = profile_list_all_local(repo, &all_profiles);
     if (err) {
         err = error_wrap(err, "Failed to list profiles");
         goto cleanup;

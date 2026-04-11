@@ -252,18 +252,18 @@ static error_t *match_hierarchical_names(
     }
 
     for (size_t i = 0; i < available->count; i++) {
-        const char *name = available->items[i];
+        const char *profile_name = available->items[i];
 
         /* Check if branch starts with prefix */
-        if (!str_starts_with(name, prefix)) {
+        if (!str_starts_with(profile_name, prefix)) {
             continue;
         }
 
-        const char *suffix = name + prefix_len;
+        const char *suffix = profile_name + prefix_len;
 
         if (suffix[0] == '\0') {
             /* Exact match: base profile — add directly to output */
-            err = string_array_push(out, name);
+            err = string_array_push(out, profile_name);
             if (err) {
                 goto cleanup;
             }
@@ -271,7 +271,7 @@ static error_t *match_hierarchical_names(
             const char *variant = suffix + 1;
             /* One level deep only: non-empty variant with no further '/' */
             if (variant[0] != '\0' && strchr(variant, '/') == NULL) {
-                err = string_array_push(sub_profiles, name);
+                err = string_array_push(sub_profiles, profile_name);
                 if (err) {
                     goto cleanup;
                 }
@@ -299,12 +299,12 @@ cleanup:
 /**
  * Detect matching profile names from a list of available branches
  */
-error_t *profile_detect_names(
+error_t *profile_detect(
     const string_array_t *available_branches,
-    string_array_t **out_names
+    string_array_t **out_profiles
 ) {
     CHECK_NULL(available_branches);
-    CHECK_NULL(out_names);
+    CHECK_NULL(out_profiles);
 
     error_t *err = NULL;
     char *os_name = NULL;
@@ -363,7 +363,7 @@ error_t *profile_detect_names(
 
     /* Success */
     free(os_name);
-    *out_names = names;
+    *out_profiles = names;
 
     return NULL;
 
@@ -553,15 +553,15 @@ static error_t *validate_state_profiles(
 
     /* Check each profile */
     for (size_t i = 0; i < state_profiles->count; i++) {
-        const char *name = state_profiles->items[i];
+        const char *profile_name = state_profiles->items[i];
 
-        if (profile_exists(repo, name)) {
-            err = string_array_push(valid, name);
+        if (profile_exists(repo, profile_name)) {
+            err = string_array_push(valid, profile_name);
             if (err) goto cleanup;
         } else {
             /* Profile doesn't exist */
             if (missing) {
-                err = string_array_push(missing, name);
+                err = string_array_push(missing, profile_name);
                 if (err) goto cleanup;
             }
         }
@@ -596,7 +596,7 @@ cleanup:
  * @param out Validated profile names (must not be NULL, caller frees)
  * @return Error (ERR_NOT_FOUND if no enabled profiles) or NULL on success
  */
-error_t *profile_resolve_state_names(
+error_t *profile_resolve_enabled(
     git_repository *repo,
     const state_t *state,
     string_array_t **out
@@ -692,7 +692,7 @@ cleanup:
  * Lightweight validation: checks branch existence without resolving
  * Git refs or loading profile objects.
  */
-error_t *profile_resolve_cli_names(
+error_t *profile_resolve_filter(
     git_repository *repo,
     char **cli_profiles,
     size_t cli_count,
@@ -742,10 +742,10 @@ error_t *profile_resolve_cli_names(
  * in the workspace.
  */
 error_t *profile_validate_filter(
-    const string_array_t *workspace_names,
+    const string_array_t *enabled_profiles,
     const string_array_t *filter
 ) {
-    CHECK_NULL(workspace_names);
+    CHECK_NULL(enabled_profiles);
 
     /* NULL filter is valid (no filter) */
     if (!filter) {
@@ -757,8 +757,8 @@ error_t *profile_validate_filter(
         const char *filter_name = filter->items[i];
         bool found = false;
 
-        for (size_t j = 0; j < workspace_names->count; j++) {
-            if (strcmp(workspace_names->items[j], filter_name) == 0) {
+        for (size_t j = 0; j < enabled_profiles->count; j++) {
+            if (strcmp(enabled_profiles->items[j], filter_name) == 0) {
                 found = true;
                 break;
             }
@@ -809,7 +809,7 @@ bool profile_filter_matches(
 /**
  * List all local profile branch names (lightweight, no ref resolution)
  */
-error_t *profile_list_all_local_names(
+error_t *profile_list_all_local(
     git_repository *repo,
     string_array_t **out
 ) {

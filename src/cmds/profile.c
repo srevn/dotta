@@ -259,24 +259,24 @@ static error_t *profile_list(
     }
 
     for (size_t i = 0; i < all_branches->count; i++) {
-        const char *name = all_branches->items[i];
+        const char *profile_name = all_branches->items[i];
 
         /* Skip dotta-worktree */
-        if (strcmp(name, "dotta-worktree") == 0) {
+        if (strcmp(profile_name, "dotta-worktree") == 0) {
             continue;
         }
 
         /* Check if enabled */
         bool is_enabled = false;
         for (size_t j = 0; j < enabled_profiles->count; j++) {
-            if (strcmp(enabled_profiles->items[j], name) == 0) {
+            if (strcmp(enabled_profiles->items[j], profile_name) == 0) {
                 is_enabled = true;
                 break;
             }
         }
 
         if (!is_enabled) {
-            err = string_array_push(available, name);
+            err = string_array_push(available, profile_name);
             if (err) {
                 err = error_wrap(
                     err, "Failed to add profile to available list"
@@ -290,21 +290,21 @@ static error_t *profile_list(
     if (enabled_profiles->count > 0) {
         output_section(out, OUTPUT_NORMAL, "Enabled profiles (in layering order)");
         for (size_t i = 0; i < enabled_profiles->count; i++) {
-            const char *name = enabled_profiles->items[i];
+            const char *profile_name = enabled_profiles->items[i];
             size_t file_count = 0;
-            error_t *count_err = count_profile_files(repo, name, &file_count);
+            error_t *count_err = count_profile_files(repo, profile_name, &file_count);
 
             /* Show file counts if available, otherwise indicate error */
             if (count_err) {
                 output_styled(
                     out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (file count unavailable)\n",
-                    i + 1, name
+                    i + 1, profile_name
                 );
                 error_free(count_err);
             } else {
                 output_styled(
                     out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (%zu file%s)\n",
-                    i + 1, name, file_count, file_count == 1 ? "" : "s"
+                    i + 1, profile_name, file_count, file_count == 1 ? "" : "s"
                 );
             }
         }
@@ -317,21 +317,21 @@ static error_t *profile_list(
     if (available->count > 0 && opts->show_available) {
         output_section(out, OUTPUT_NORMAL, "Available (disabled)");
         for (size_t i = 0; i < available->count; i++) {
-            const char *name = available->items[i];
+            const char *profile_name = available->items[i];
             size_t file_count = 0;
-            error_t *count_err = count_profile_files(repo, name, &file_count);
+            error_t *count_err = count_profile_files(repo, profile_name, &file_count);
 
             /* Show file counts if available, otherwise indicate error */
             if (count_err) {
                 output_styled(
                     out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (file count unavailable)\n",
-                    name
+                    profile_name
                 );
                 error_free(count_err);
             } else {
                 output_styled(
                     out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (%zu file%s)\n",
-                    name, file_count, file_count == 1 ? "" : "s"
+                    profile_name, file_count, file_count == 1 ? "" : "s"
                 );
             }
         }
@@ -723,9 +723,9 @@ static error_t *profile_enable(
         }
 
         for (size_t i = 0; i < all_branches->count; i++) {
-            const char *name = all_branches->items[i];
-            if (strcmp(name, "dotta-worktree") != 0) {
-                err = string_array_push(to_enable, name);
+            const char *profile_name = all_branches->items[i];
+            if (strcmp(profile_name, "dotta-worktree") != 0) {
+                err = string_array_push(to_enable, profile_name);
                 if (err) {
                     err = error_wrap(err, "Failed to add profile to enable list");
                     goto cleanup;
@@ -1486,12 +1486,12 @@ static error_t *profile_validate(
         if (opts->fix) {
             /* Remove missing profiles from state */
             for (size_t i = 0; i < missing->count; i++) {
-                const char *name = missing->items[i];
-                err = state_disable_profile(state, name);
+                const char *profile_name = missing->items[i];
+                err = state_disable_profile(state, profile_name);
                 if (err) {
                     err = error_wrap(
                         err, "Failed to remove missing profile '%s' from state",
-                        name
+                        profile_name
                     );
                     goto cleanup;
                 }

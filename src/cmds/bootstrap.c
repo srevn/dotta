@@ -307,12 +307,12 @@ static error_t *bootstrap_show(
  */
 static error_t *bootstrap_list(
     git_repository *repo,
-    const string_array_t *profile_names,
+    const string_array_t *profiles,
     const char *script_name,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile_names);
+    CHECK_NULL(profiles);
 
     if (!script_name) {
         script_name = BOOTSTRAP_DEFAULT_SCRIPT_NAME;
@@ -321,21 +321,21 @@ static error_t *bootstrap_list(
     if (out) {
         output_section(out, OUTPUT_NORMAL, "Bootstrap scripts");
 
-        for (size_t i = 0; i < profile_names->count; i++) {
-            const char *name = profile_names->items[i];
-            bool exists = bootstrap_exists(repo, name, script_name);
+        for (size_t i = 0; i < profiles->count; i++) {
+            const char *profile_name = profiles->items[i];
+            bool exists = bootstrap_exists(repo, profile_name, script_name);
 
             if (exists) {
                 output_styled(
                     out, OUTPUT_NORMAL,
                     "  {green}✓{reset} %-15s %s/%s\n",
-                    name, name, script_name
+                    profile_name, profile_name, script_name
                 );
             } else {
                 output_styled(
                     out, OUTPUT_NORMAL,
                     "  {red}✗{reset} %-15s (no bootstrap script)\n",
-                    name
+                    profile_name
                 );
             }
         }
@@ -362,7 +362,7 @@ error_t *cmd_bootstrap(
     error_t *err = NULL;
     git_repository *repo = NULL;
     char *repo_path = NULL;
-    string_array_t *profile_names = NULL;
+    string_array_t *profiles = NULL;
 
     /* Resolve repository path */
     err = resolve_repo_path(config, &repo_path);
@@ -414,8 +414,8 @@ error_t *cmd_bootstrap(
      * Bootstrap never needs full profile_t structs (Git refs, trees). */
     if (opts->profile_count > 0) {
         /* Explicit profiles: validate branch existence */
-        err = profile_resolve_cli_names(
-            repo, opts->profiles, opts->profile_count, true, &profile_names
+        err = profile_resolve_filter(
+            repo, opts->profiles, opts->profile_count, true, &profiles
         );
         if (err) {
             err = error_wrap(err, "Failed to resolve profiles");
@@ -423,14 +423,14 @@ error_t *cmd_bootstrap(
         }
     } else if (opts->all_profiles) {
         /* List all local profile names (lightweight, no ref resolution) */
-        err = profile_list_all_local_names(repo, &profile_names);
+        err = profile_list_all_local(repo, &profiles);
         if (err) {
             err = error_wrap(err, "Failed to list all profiles");
             goto cleanup;
         }
     } else {
         /* Use enabled profiles from state */
-        err = profile_resolve_state_names(repo, NULL, &profile_names);
+        err = profile_resolve_enabled(repo, NULL, &profiles);
         if (err) {
             if (error_code(err) == ERR_NOT_FOUND) {
                 /* No profiles enabled — expected case, show guidance */
@@ -447,7 +447,7 @@ error_t *cmd_bootstrap(
 
     /* Handle --list flag */
     if (opts->list) {
-        err = bootstrap_list(repo, profile_names, NULL, out);
+        err = bootstrap_list(repo, profiles, NULL, out);
         if (err) {
             err = error_wrap(err, "Failed to list bootstrap scripts");
         }
@@ -476,8 +476,8 @@ error_t *cmd_bootstrap(
 
     /* Count bootstrap scripts that exist */
     size_t script_count = 0;
-    for (size_t i = 0; i < profile_names->count; i++) {
-        if (bootstrap_exists(repo, profile_names->items[i], NULL)) {
+    for (size_t i = 0; i < profiles->count; i++) {
+        if (bootstrap_exists(repo, profiles->items[i], NULL)) {
             script_count++;
         }
     }
@@ -487,8 +487,8 @@ error_t *cmd_bootstrap(
         output_newline(out, OUTPUT_NORMAL);
         output_section(out, OUTPUT_NORMAL, "Profiles checked");
 
-        for (size_t i = 0; i < profile_names->count; i++) {
-            output_print(out, OUTPUT_NORMAL, "  - %s\n", profile_names->items[i]);
+        for (size_t i = 0; i < profiles->count; i++) {
+            output_print(out, OUTPUT_NORMAL, "  - %s\n", profiles->items[i]);
         }
         output_newline(out, OUTPUT_NORMAL);
         output_hint(out, OUTPUT_NORMAL, "Create a bootstrap script with:");
@@ -498,11 +498,11 @@ error_t *cmd_bootstrap(
 
     /* Display what will be executed */
     output_section(out, OUTPUT_NORMAL, "Found bootstrap scripts");
-    for (size_t i = 0; i < profile_names->count; i++) {
-        if (bootstrap_exists(repo, profile_names->items[i], NULL)) {
+    for (size_t i = 0; i < profiles->count; i++) {
+        if (bootstrap_exists(repo, profiles->items[i], NULL)) {
             output_styled(
                 out, OUTPUT_NORMAL, "  {green}✓{reset} %s/.bootstrap\n",
-                profile_names->items[i]
+                profiles->items[i]
             );
         }
     }
@@ -524,7 +524,7 @@ error_t *cmd_bootstrap(
     bool stop_on_error = !opts->continue_on_error;
     bool had_failures = false;
     err = bootstrap_run_for_profiles(
-        repo, repo_path, profile_names, opts->dry_run, stop_on_error
+        repo, repo_path, profiles, opts->dry_run, stop_on_error
     );
     if (err) {
         if (opts->continue_on_error) {
@@ -552,7 +552,7 @@ error_t *cmd_bootstrap(
     }
 
 cleanup:
-    if (profile_names) string_array_free(profile_names);
+    if (profiles) string_array_free(profiles);
     if (repo) gitops_close_repository(repo);
     if (repo_path) free(repo_path);
 

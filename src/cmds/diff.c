@@ -391,22 +391,22 @@ static error_t *present_diffs_for_direction(
  */
 static error_t *resolve_commit_in_profiles(
     git_repository *repo,
-    const string_array_t *profile_names,
+    const string_array_t *profiles,
     const char *commit_ref,
     git_oid *out_oid,
     git_commit **out_commit,
     char **out_profile_name
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile_names);
+    CHECK_NULL(profiles);
     CHECK_NULL(commit_ref);
     CHECK_NULL(out_oid);
 
     error_t *last_err = NULL;
 
     /* Search profiles in order */
-    for (size_t i = 0; i < profile_names->count; i++) {
-        const char *profile_name = profile_names->items[i];
+    for (size_t i = 0; i < profiles->count; i++) {
+        const char *profile_name = profiles->items[i];
 
         error_t *err = gitops_resolve_commit_in_branch(
             repo, profile_name, commit_ref, out_oid, out_commit
@@ -929,7 +929,7 @@ static error_t *diff_commit_to_workspace(
     git_repository *repo,
     const state_t *state,
     const char *commit_ref,
-    const string_array_t *profile_names,
+    const string_array_t *profiles,
     const path_filter_t *file_filter,
     const cmd_diff_options_t *opts,
     const config_t *config,
@@ -937,7 +937,7 @@ static error_t *diff_commit_to_workspace(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(commit_ref);
-    CHECK_NULL(profile_names);
+    CHECK_NULL(profiles);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
@@ -952,7 +952,7 @@ static error_t *diff_commit_to_workspace(
 
     /* Step 1: Resolve commit to find which profile contains it */
     err = resolve_commit_in_profiles(
-        repo, profile_names, commit_ref, &commit_oid, &commit, &profile_name
+        repo, profiles, commit_ref, &commit_oid, &commit, &profile_name
     );
     if (err) {
         goto cleanup;
@@ -964,7 +964,7 @@ static error_t *diff_commit_to_workspace(
 
     /* Warn when multiple profiles are enabled: only the profile containing
      * the commit is compared against the filesystem. */
-    if (profile_names->count > 1) {
+    if (profiles->count > 1) {
         output_info(
             out, OUTPUT_NORMAL, "Note: comparing commit against profile '%s' only "
             "(commit-to-workspace compares one profile at a time)\n", profile_name
@@ -1142,7 +1142,7 @@ static error_t *diff_commits(
     git_repository *repo,
     const char *commit1_ref,
     const char *commit2_ref,
-    const string_array_t *profile_names,
+    const string_array_t *profiles,
     const path_filter_t *file_filter,
     const cmd_diff_options_t *opts,
     output_ctx_t *out
@@ -1150,7 +1150,7 @@ static error_t *diff_commits(
     CHECK_NULL(repo);
     CHECK_NULL(commit1_ref);
     CHECK_NULL(commit2_ref);
-    CHECK_NULL(profile_names);
+    CHECK_NULL(profiles);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
@@ -1166,7 +1166,7 @@ static error_t *diff_commits(
 
     /* Resolve first commit */
     err = resolve_commit_in_profiles(
-        repo, profile_names, commit1_ref, &commit1_oid, &commit1, &profile1_name
+        repo, profiles, commit1_ref, &commit1_oid, &commit1, &profile1_name
     );
     if (err) {
         goto cleanup;
@@ -1174,7 +1174,7 @@ static error_t *diff_commits(
 
     /* Resolve second commit */
     err = resolve_commit_in_profiles(
-        repo, profile_names, commit2_ref, &commit2_oid, &commit2, &profile2_name
+        repo, profiles, commit2_ref, &commit2_oid, &commit2, &profile2_name
     );
     if (err) {
         goto cleanup;
@@ -1302,7 +1302,7 @@ cleanup:
 static error_t *diff_workspace(
     git_repository *repo,
     state_t *state,
-    const string_array_t *profile_names,
+    const string_array_t *profiles,
     const string_array_t *filter,
     const path_filter_t *file_filter,
     const config_t *config,
@@ -1310,7 +1310,7 @@ static error_t *diff_workspace(
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile_names);
+    CHECK_NULL(profiles);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
@@ -1327,7 +1327,7 @@ static error_t *diff_workspace(
         .analyze_encryption  = false  /* Not needed for diff */
     };
 
-    err = workspace_load(repo, state, profile_names, config, &ws_opts, &ws);
+    err = workspace_load(repo, state, profiles, config, &ws_opts, &ws);
     if (err) {
         return error_wrap(err, "Failed to load workspace");
     }
@@ -1449,9 +1449,9 @@ error_t *cmd_diff(
 
     error_t *err = NULL;
     state_t *state = NULL;
-    string_array_t *workspace_names = NULL;
-    string_array_t *cli_names = NULL;
-    const string_array_t *op_names = NULL;
+    string_array_t *enabled_profiles = NULL;
+    string_array_t *filter_profiles = NULL;
+    const string_array_t *active_profiles = NULL;
     const string_array_t *filter = NULL;
     path_filter_t *file_filter = NULL;
     bool has_profile_filter = (opts->profiles != NULL && opts->profile_count > 0);
@@ -1467,19 +1467,19 @@ error_t *cmd_diff(
     /* Load profiles
      *
      * Separate workspace scope (persistent) from diff filter (temporary):
-     *   - workspace_names: Persistent enabled profile names (VWD scope)
-     *   - cli_names / op_names: CLI filter names or workspace names
+     *   - enabled_profiles: Persistent enabled profile names (VWD scope)
+     *   - filter_profiles / active_profiles: CLI filter names or workspace names
      *
      * Workspace operations use persistent profiles. Diff operations filter
      * by CLI profiles when specified.
      */
-    err = profile_resolve_state_names(repo, state, &workspace_names);
+    err = profile_resolve_enabled(repo, state, &enabled_profiles);
     if (err) {
         err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
     }
 
-    if (workspace_names->count == 0) {
+    if (enabled_profiles->count == 0) {
         output_info(out, OUTPUT_NORMAL, "No enabled profiles found");
         output_hint(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>'");
         goto cleanup;
@@ -1487,21 +1487,21 @@ error_t *cmd_diff(
 
     /* Load diff profiles (CLI filter or workspace names directly) */
     if (has_profile_filter) {
-        err = profile_resolve_cli_names(
-            repo, opts->profiles, opts->profile_count, config->strict_mode, &cli_names
+        err = profile_resolve_filter(
+            repo, opts->profiles, opts->profile_count, config->strict_mode, &filter_profiles
         );
         if (err) {
             err = error_wrap(err, "Failed to resolve diff profiles");
             goto cleanup;
         }
 
-        err = profile_validate_filter(workspace_names, cli_names);
+        err = profile_validate_filter(enabled_profiles, filter_profiles);
         if (err) goto cleanup;
 
-        filter = cli_names;
-        op_names = cli_names;
+        filter = filter_profiles;
+        active_profiles = filter_profiles;
     } else {
-        op_names = workspace_names;
+        active_profiles = enabled_profiles;
     }
 
     /* Create file filter from CLI arguments */
@@ -1509,7 +1509,7 @@ error_t *cmd_diff(
         /* Collect custom prefixes from profiles for path resolution */
         string_array_t *prefixes = NULL;
         err = profile_get_custom_prefixes(
-            repo, state, op_names, &prefixes
+            repo, state, active_profiles, &prefixes
         );
         if (err) {
             err = error_wrap(err, "Failed to get custom prefixes");
@@ -1533,7 +1533,7 @@ error_t *cmd_diff(
         case DIFF_COMMIT_TO_COMMIT:
             /* Diff two commits — search workspace profiles for branch resolution */
             err = diff_commits(
-                repo, opts->commit1, opts->commit2, workspace_names,
+                repo, opts->commit1, opts->commit2, enabled_profiles,
                 file_filter, opts, out
             );
             goto cleanup;
@@ -1541,7 +1541,7 @@ error_t *cmd_diff(
         case DIFF_COMMIT_TO_WORKSPACE:
             /* Commit-to-workspace — search workspace profiles for branch resolution */
             err = diff_commit_to_workspace(
-                repo, state, opts->commit1, workspace_names, file_filter,
+                repo, state, opts->commit1, enabled_profiles, file_filter,
                 opts, config, out
             );
             goto cleanup;
@@ -1549,7 +1549,7 @@ error_t *cmd_diff(
         case DIFF_WORKSPACE:
             /* Workspace diff uses workspace_profiles for accurate analysis */
             err = diff_workspace(
-                repo, state, workspace_names, filter,
+                repo, state, enabled_profiles, filter,
                 file_filter, config, opts, out
             );
             goto cleanup;
@@ -1558,8 +1558,8 @@ error_t *cmd_diff(
 cleanup:
     if (file_filter) path_filter_free(file_filter);
     if (state) state_free(state);
-    if (cli_names) string_array_free(cli_names);
-    if (workspace_names) string_array_free(workspace_names);
+    if (filter_profiles) string_array_free(filter_profiles);
+    if (enabled_profiles) string_array_free(enabled_profiles);
 
     return err;
 }

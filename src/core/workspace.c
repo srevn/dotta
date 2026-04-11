@@ -464,13 +464,11 @@ static error_t *analyze_file_divergence(
 
     /* Determine if entry came from state database using VWD cache
      *
-     * If manifest was built from state, VWD fields are populated (blob_oid != NULL).
-     * If manifest was built from Git, VWD fields are NULL/0.
-     *
-     * blob_oid is the most reliable indicator because it's always populated
-     * during sync_entry_to_state() when writing to the manifest table.
-     */
-    bool in_state = (manifest_entry->blob_oid != NULL);
+     * If manifest was built from state, VWD fields are populated (blob_oid is
+     * a real OID). If manifest was built from Git, blob_oid is left all-zero
+     * by the profile_build_manifest() callback. git_oid_is_zero() distinguishes
+     * the two cases — a real Git blob can never have the null OID. */
+    bool in_state = !git_oid_is_zero(&manifest_entry->blob_oid);
 
     /* Single stat capture for the entire analysis
      *
@@ -518,15 +516,11 @@ static error_t *analyze_file_divergence(
      * - Stat propagation (single stat used for all checks)
      * - TOCTOU-aware (handles files deleted during analysis)
      */
-    if (on_filesystem && in_state && manifest_entry->blob_oid) {
-        /* Parse blob_oid from VWD cache (defensive validation) */
-        git_oid blob_oid;
-        if (git_oid_fromstr(&blob_oid, manifest_entry->blob_oid) != 0) {
-            return ERROR(
-                ERR_INTERNAL, "Invalid blob_oid '%s' for '%s' "
-                "(database corruption?)", manifest_entry->blob_oid, fs_path
-            );
-        }
+    if (on_filesystem && in_state) {
+        /* VWD cache blob_oid is already a 20-byte binary OID — no parse step.
+         * The in_state guard above (git_oid_is_zero check) protects us from
+         * operating on an un-populated entry. */
+        const git_oid *blob_oid_ptr = &manifest_entry->blob_oid;
 
         /* Extract expected filemode from VWD cache type field
          *
@@ -574,7 +568,7 @@ static error_t *analyze_file_divergence(
              */
             if (!manifest_entry->encrypted) {
                 err = compare_oid_to_disk(
-                    &blob_oid,
+                    blob_oid_ptr,
                     fs_path,
                     expected_mode,
                     &initial_stat,
@@ -585,7 +579,7 @@ static error_t *analyze_file_divergence(
                 const buffer_t *expected_content = NULL;
                 err = content_cache_get_from_blob_oid(
                     ws->content_cache,
-                    &blob_oid,
+                    blob_oid_ptr,
                     storage_path,
                     profile,
                     manifest_entry->encrypted,
@@ -782,19 +776,42 @@ static error_t *analyze_file_divergence(
          * Only check when content diverges (file ≠ new expected blob). If content
          * matches new blob, there's no divergence and no need for STALE flag.
          */
-        const char *old_blob_hex = hashmap_get((hashmap_t *) ws->repaired_paths, fs_path);
-        if (old_blob_hex) {
-            git_oid old_blob_oid;
-            if (git_oid_fromstr(&old_blob_oid, old_blob_hex) == 0) {
-                /* Compare file on disk against OLD blob (what dotta deployed).
-                 * Reuse the same verification strategy as Phase 1. */
-                git_filemode_t expected_mode = state_type_to_git_filemode(manifest_entry->type);
-                struct stat verify_stat;
-                compare_result_t verify_result;
+        const git_oid *old_blob_oid = hashmap_get((hashmap_t *) ws->repaired_paths, fs_path);
+        if (old_blob_oid) {
+            /* Compare file on disk against OLD blob (what dotta deployed).
+             * Reuse the same verification strategy as Phase 1. */
+            git_filemode_t expected_mode = state_type_to_git_filemode(manifest_entry->type);
+            struct stat verify_stat;
+            compare_result_t verify_result;
 
-                if (!manifest_entry->encrypted) {
-                    error_t *verify_err = compare_oid_to_disk(
-                        &old_blob_oid,
+            if (!manifest_entry->encrypted) {
+                error_t *verify_err = compare_oid_to_disk(
+                    old_blob_oid,
+                    fs_path,
+                    expected_mode,
+                    &initial_stat,
+                    &verify_result,
+                    &verify_stat
+                );
+                if (!verify_err && verify_result == CMP_EQUAL) {
+                    /* File matches old deployed content — stale repair is safe */
+                    divergence |= DIVERGENCE_STALE;
+                }
+                if (verify_err) error_free(verify_err);
+            } else {
+                /* Encrypted: compare decrypted content */
+                const buffer_t *old_content = NULL;
+                error_t *verify_err = content_cache_get_from_blob_oid(
+                    ws->content_cache,
+                    old_blob_oid,
+                    storage_path,
+                    profile,
+                    manifest_entry->encrypted,
+                    &old_content
+                );
+                if (!verify_err && old_content) {
+                    verify_err = compare_buffer_to_disk(
+                        old_content,
                         fs_path,
                         expected_mode,
                         &initial_stat,
@@ -802,36 +819,10 @@ static error_t *analyze_file_divergence(
                         &verify_stat
                     );
                     if (!verify_err && verify_result == CMP_EQUAL) {
-                        /* File matches old deployed content — stale repair is safe */
                         divergence |= DIVERGENCE_STALE;
                     }
-                    if (verify_err) error_free(verify_err);
-                } else {
-                    /* Encrypted: compare decrypted content */
-                    const buffer_t *old_content = NULL;
-                    error_t *verify_err = content_cache_get_from_blob_oid(
-                        ws->content_cache,
-                        &old_blob_oid,
-                        storage_path,
-                        profile,
-                        manifest_entry->encrypted,
-                        &old_content
-                    );
-                    if (!verify_err && old_content) {
-                        verify_err = compare_buffer_to_disk(
-                            old_content,
-                            fs_path,
-                            expected_mode,
-                            &initial_stat,
-                            &verify_result,
-                            &verify_stat
-                        );
-                        if (!verify_err && verify_result == CMP_EQUAL) {
-                            divergence |= DIVERGENCE_STALE;
-                        }
-                    }
-                    if (verify_err) error_free(verify_err);
                 }
+                if (verify_err) error_free(verify_err);
             }
         }
     }
@@ -905,21 +896,14 @@ static divergence_type_t compute_orphan_divergence(
 
     /* Step 1: Validate blob_oid (defensive programming)
      *
-     * Every state entry SHOULD have blob_oid. If missing, it's data corruption.
-     * Handle gracefully rather than crashing.
+     * state.c's read path already rejects wrong-sized BLOB columns, so by the
+     * time we get here the OID should be well-formed. A zero OID (Git null)
+     * still indicates a bad row — treat it as corruption.
      */
-    if (!state_entry->blob_oid) {
-        /* Data corruption: state entry without blob_oid
-         * This should never happen, but handle gracefully */
+    if (git_oid_is_zero(&state_entry->blob_oid)) {
         return DIVERGENCE_UNVERIFIED;
     }
-
-    /* Parse blob OID string to git_oid struct */
-    git_oid blob_oid;
-    if (git_oid_fromstr(&blob_oid, state_entry->blob_oid) != 0) {
-        /* Invalid OID string in state database (corruption) */
-        return DIVERGENCE_UNVERIFIED;
-    }
+    const git_oid *blob_oid_ptr = &state_entry->blob_oid;
 
     /* Step 2: Extract expected filemode from type field
      *
@@ -944,7 +928,7 @@ static divergence_type_t compute_orphan_divergence(
     if (!state_entry->encrypted) {
         /* Fast path: OID hash verification */
         err = compare_oid_to_disk(
-            &blob_oid,
+            blob_oid_ptr,
             fs_path,
             expected_mode,
             in_stat,
@@ -972,7 +956,7 @@ static divergence_type_t compute_orphan_divergence(
         const buffer_t *expected_content = NULL;
         err = content_cache_get_from_blob_oid(
             ws->content_cache,
-            &blob_oid,
+            blob_oid_ptr,
             storage_path,
             profile,
             state_entry->encrypted, /* VWD pattern: use cached flag */
@@ -2230,14 +2214,14 @@ static error_t *analyze_encryption_policy_mismatch(
  *
  * @param vwd_entry Manifest entry to patch (VWD cache fields will be replaced)
  * @param fresh_entry Fresh entry from profile_build_manifest (has tree entry)
- * @param head_oid_hex Current HEAD oid hex string for the profile
+ * @param head_oid Current HEAD oid for the profile (binary, borrowed)
  * @param metadata Pre-loaded metadata for the profile (can be NULL)
  * @return Error or NULL on success
  */
 static error_t *patch_entry_from_fresh(
     file_entry_t *vwd_entry,
     const file_entry_t *fresh_entry,
-    const char *head_oid_hex,
+    const git_oid *head_oid,
     const metadata_t *metadata,
     arena_t *arena
 ) {
@@ -2255,9 +2239,6 @@ static error_t *patch_entry_from_fresh(
             fresh_entry->storage_path
         );
     }
-
-    char blob_hex[GIT_OID_HEXSZ + 1];
-    git_oid_tostr(blob_hex, sizeof(blob_hex), blob_oid);
 
     /* Derive type and default mode from git filemode */
     git_filemode_t filemode = git_tree_entry_filemode(fresh_entry->entry);
@@ -2304,23 +2285,20 @@ static error_t *patch_entry_from_fresh(
         }
     }
 
-    /* Arena-allocate replacement strings. The VWD entry fields
-     * being overwritten are borrowed from cached_state_files */
-    char *dup_git_oid = arena_strdup(arena, head_oid_hex);
-    char *dup_blob_oid = arena_strdup(arena, blob_hex);
+    /* Arena-allocate replacement strings. Owner/group are the only strings the
+     * patch actually replaces now that git_oid/blob_oid are inline binary. */
     char *dup_owner = arena_strdup(arena, new_owner);
     char *dup_group = arena_strdup(arena, new_group);
 
-    if (!dup_git_oid || !dup_blob_oid ||
-        (new_owner && !dup_owner) || (new_group && !dup_group)) {
+    if ((new_owner && !dup_owner) || (new_group && !dup_group)) {
         return ERROR(
             ERR_MEMORY, "Failed to allocate patched fields for '%s'",
             fresh_entry->storage_path
         );
     }
 
-    vwd_entry->git_oid = dup_git_oid;
-    vwd_entry->blob_oid = dup_blob_oid;
+    git_oid_cpy(&vwd_entry->git_oid, head_oid);
+    git_oid_cpy(&vwd_entry->blob_oid, blob_oid);
     vwd_entry->type = new_type;
     vwd_entry->mode = new_mode;
     vwd_entry->owner = dup_owner;
@@ -2546,11 +2524,11 @@ static error_t *workspace_build_manifest_from_state(
 
         /* Check if this entry is from a stale profile and needs patching */
         bool entry_is_stale = false;
-        const char *head_oid_hex = NULL;
+        const git_oid *head_oid = NULL;
 
         if (stale_profiles && state_entry->profile) {
-            head_oid_hex = hashmap_get(stale_profiles, state_entry->profile);
-            if (head_oid_hex) {
+            head_oid = hashmap_get(stale_profiles, state_entry->profile);
+            if (head_oid) {
                 entry_is_stale = true;
             }
         }
@@ -2574,17 +2552,16 @@ static error_t *workspace_build_manifest_from_state(
                 size_t fresh_idx = (size_t) (uintptr_t) fresh_idx_ptr - 1;
                 const file_entry_t *fresh_entry = &fresh_manifest->entries[fresh_idx];
 
-                /* Save old blob_oid before patching — needed to determine if
-                 * the file's content actually changed (not just git_oid/metadata).
-                 * When blob_oid is unchanged, the file is not stale from the
-                 * user's perspective — only the profile HEAD moved. */
-                const char *old_blob_oid = state_entry->blob_oid;
+                /* Save the old blob OID before patching — needed to determine
+                 * whether the file's content actually changed (as opposed to
+                 * only the profile HEAD moving). Inline copy is 20 bytes. */
+                git_oid old_blob_oid = state_entry->blob_oid;
 
                 /* Populate VWD fields from state (baseline).
                  *
-                 * Borrow arena-backed strings from state entries.
-                 * Most string fields (git_oid, blob_oid, owner, group)
-                 * will be overwritten by patch_entry_from_fresh. */
+                 * Borrow arena-backed strings (old_profile, owner, group) from
+                 * state entries. git_oid and blob_oid are inline binary struct
+                 * copies; patch_entry_from_fresh will overwrite them below. */
                 entry->old_profile = state_entry->old_profile;
                 entry->git_oid = state_entry->git_oid;
                 entry->blob_oid = state_entry->blob_oid;
@@ -2600,7 +2577,7 @@ static error_t *workspace_build_manifest_from_state(
 
                 /* Now overwrite stale fields from fresh manifest */
                 const metadata_t *meta = ws_get_metadata(ws, fresh_entry->profile_name);
-                err = patch_entry_from_fresh(entry, fresh_entry, head_oid_hex, meta, ws->arena);
+                err = patch_entry_from_fresh(entry, fresh_entry, head_oid, meta, ws->arena);
                 if (err) {
                     err = error_wrap(
                         err, "Failed to patch stale entry '%s'", state_entry->
@@ -2620,8 +2597,7 @@ static error_t *workspace_build_manifest_from_state(
                  * Only files whose content actually changed in Git (new blob_oid)
                  * need the DIVERGENCE_STALE flag for deployment/display purposes.
                  */
-                bool blob_changed = !old_blob_oid || !entry->blob_oid ||
-                    strcmp(old_blob_oid, entry->blob_oid) != 0;
+                bool blob_changed = !git_oid_equal(&old_blob_oid, &entry->blob_oid);
 
                 /* Preserve stat cache when blob_oid is unchanged.
                  *

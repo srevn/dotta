@@ -120,10 +120,15 @@ typedef struct {
      * These fields cache the expected state from the manifest table,
      * eliminating N+1 queries during divergence analysis. They represent
      * what the file SHOULD be according to enabled profiles.
+     *
+     * git_oid / blob_oid are inline binary OIDs that mirror the corresponding
+     * state_file_entry_t fields. For Git-built manifests (profile_build_manifest),
+     * they are zero-initialised; git_oid_is_zero() distinguishes the
+     * "not populated from state" case from a real OID.
      */
     char *old_profile;               /* Previous owner if changed, NULL otherwise (VWD cache) */
-    char *git_oid;                   /* Git commit reference (40-char hex, can be NULL) */
-    char *blob_oid;                  /* Git blob OID (40-char hex, can be NULL) */
+    git_oid git_oid;                 /* Commit OID of source profile HEAD (zero = not cached) */
+    git_oid blob_oid;                /* Blob OID for content identity (zero = not cached) */
     state_file_type_t type;          /* File type (REGULAR, SYMLINK, EXECUTABLE) */
     mode_t mode;                     /* Permission mode (e.g., 0644), 0 if no metadata tracked */
     char *owner;                     /* Owner username (root/ files only, can be NULL) */

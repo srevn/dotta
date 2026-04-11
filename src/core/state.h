@@ -123,8 +123,8 @@ static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
  *   - > 0 = file known to dotta (either deployed or existed when profile enabled)
  *
  * Key fields:
- * - git_oid: Git commit reference
- * - blob_oid: Git blob OID for content identity and fast path lookups
+ * - git_oid: Commit OID of the source profile's HEAD at sync time (binary)
+ * - blob_oid: Blob OID for file content identity (binary)
  * - owner/group: For root/ files
  * - encrypted: Encryption flag
  * - state: Lifecycle state (STATE_ACTIVE or STATE_INACTIVE)
@@ -140,9 +140,10 @@ typedef struct {
     /* Type */
     state_file_type_t type;     /* File type */
 
-    /* Git tracking */
-    char *git_oid;              /* Git commit reference (40-char hex) */
-    char *blob_oid;             /* Git blob OID (40-char hex) */
+    /* Git tracking (binary OIDs — mirror the BLOB columns in virtual_manifest).
+     * Hex conversion lives only at display boundaries, never on the hot path. */
+    git_oid git_oid;            /* Commit OID of source profile HEAD at sync time */
+    git_oid blob_oid;           /* Blob OID for file content identity */
 
     /* Metadata */
     mode_t mode;                /* Permission mode (e.g., 0644), 0 if no metadata tracked */
@@ -545,13 +546,18 @@ error_t *state_clear_files(state_t *state);
 /**
  * Helper: Create file entry
  *
+ * The commit_oid/blob_oid parameters use distinct names from the state_file_entry_t
+ * fields (git_oid, blob_oid) to avoid shadowing the git_oid type within this
+ * parameter list — C treats a prior parameter name as in scope for subsequent
+ * parameters, which breaks `const git_oid *git_oid` followed by `const git_oid *...`.
+ *
  * @param storage_path Storage path (must not be NULL)
  * @param filesystem_path Filesystem path (must not be NULL)
  * @param profile Profile name (must not be NULL)
  * @param old_profile Previous profile (can be NULL)
  * @param type File type
- * @param git_oid Git commit reference (can be NULL)
- * @param blob_oid Git blob OID (can be NULL)
+ * @param commit_oid Commit OID of source profile HEAD (must not be NULL, copied)
+ * @param blob_oid Blob OID for content identity (must not be NULL, copied)
  * @param mode Permission mode (0 if no metadata tracked)
  * @param owner Owner username (can be NULL)
  * @param group Group name (can be NULL)
@@ -567,8 +573,8 @@ error_t *state_create_entry(
     const char *profile,
     const char *old_profile,
     state_file_type_t type,
-    const char *git_oid,
-    const char *blob_oid,
+    const git_oid *commit_oid,
+    const git_oid *blob_oid,
     mode_t mode,
     const char *owner,
     const char *group,

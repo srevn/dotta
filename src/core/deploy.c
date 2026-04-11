@@ -371,11 +371,13 @@ error_t *deploy_file(
     /* Handle symlinks - these are never encrypted, so handle separately */
     if (mode == GIT_FILEMODE_LINK) {
         /* For symlinks, we need to load the blob directly since content layer
-         * is designed for regular files with potential encryption */
-
-        /* Parse cached blob_oid */
-        git_oid oid;
-        if (!entry->blob_oid) {
+         * is designed for regular files with potential encryption.
+         *
+         * The VWD cache's blob_oid is now a 20-byte binary OID. A zero OID
+         * means the entry was never populated from state — which should be
+         * impossible for an entry reaching the deploy path, but we keep the
+         * defensive check. */
+        if (git_oid_is_zero(&entry->blob_oid)) {
             err = ERROR(
                 ERR_INTERNAL, "Missing blob_oid for symlink '%s'",
                 entry->storage_path
@@ -383,16 +385,10 @@ error_t *deploy_file(
             goto cleanup;
         }
 
-        if (git_oid_fromstr(&oid, entry->blob_oid) != 0) {
-            err = ERROR(
-                ERR_INTERNAL, "Invalid blob_oid for symlink '%s'",
-                entry->storage_path
-            );
-            goto cleanup;
-        }
-
         size_t target_len = 0;
-        err = gitops_read_blob_content(repo, &oid, (void **) &target_str, &target_len);
+        err = gitops_read_blob_content(
+            repo, &entry->blob_oid, (void **) &target_str, &target_len
+        );
         if (err) goto cleanup;
 
         /* Clear path for symlink deployment (handles files, symlinks, and directories)

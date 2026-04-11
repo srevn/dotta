@@ -331,33 +331,16 @@ static error_t *sync_entry_to_state(
     CHECK_NULL(manifest_entry->profile_name);
 
     error_t *err = NULL;
-    char *blob_oid = NULL;
     metadata_item_t *meta_item = NULL;
+    (void) arena;  /* No arena allocations needed now that OIDs are binary. */
 
-    /* Derive git_oid hex from source profile's cached HEAD. The hex form is
-     * a transport artifact for the SQLite TEXT column — no caller needs it
-     * outside this function. */
-    char git_oid_hex[GIT_OID_HEXSZ + 1];
-    git_oid_tostr(
-        git_oid_hex, sizeof(git_oid_hex),
-        &manifest_entry->source_profile->head_oid
-    );
-
-    /* 1. Extract blob_oid from tree entry */
-    const struct git_oid *blob_oid_obj = git_tree_entry_id(manifest_entry->entry);
+    /* 1. Extract blob_oid from tree entry (binary, borrowed from libgit2). */
+    const git_oid *blob_oid_obj = git_tree_entry_id(manifest_entry->entry);
     if (!blob_oid_obj) {
         return ERROR(
             ERR_INTERNAL, "Tree entry has no OID for '%s'",
             manifest_entry->storage_path
         );
-    }
-
-    char oid_str[GIT_OID_HEXSZ + 1];
-    git_oid_tostr(oid_str, sizeof(oid_str), blob_oid_obj);
-
-    blob_oid = arena ? arena_strdup(arena, oid_str) : strdup(oid_str);
-    if (!blob_oid) {
-        return ERROR(ERR_MEMORY, "Failed to allocate blob_oid string");
     }
 
     /* 2. Get metadata item (may not exist for old profiles) */
@@ -367,7 +350,7 @@ static error_t *sync_entry_to_state(
         );
         /* Allow NOT_FOUND (old profiles without metadata) */
         if (err && err->code != ERR_NOT_FOUND) {
-            goto cleanup;
+            return err;
         }
         if (err) {
             error_free(err);
@@ -382,9 +365,7 @@ static error_t *sync_entry_to_state(
     err = extract_file_metadata_from_tree_entry(
         manifest_entry->entry, &file_type, &git_mode
     );
-    if (err) {
-        goto cleanup;
-    }
+    if (err) return err;
 
     /* 4. Determine mode with metadata precedence (no allocation needed!)
      *
@@ -394,14 +375,16 @@ static error_t *sync_entry_to_state(
      *   2. Git mode (fallback) - authoritative for type, good default for permissions */
     mode_t mode = meta_item ? meta_item->mode : git_mode;
 
-    /* 5. Build state entry */
+    /* 5. Build state entry. git_oid/blob_oid are inline struct copies — the
+     * commit OID comes from source_profile's cached HEAD (populated by
+     * profile_load), the blob OID is the libgit2-owned tree entry id. */
     state_file_entry_t state_entry = {
         .storage_path    = manifest_entry->storage_path,
         .filesystem_path = manifest_entry->filesystem_path,
         .profile         = (char *) manifest_entry->profile_name,
         .type            = file_type,
-        .git_oid         = git_oid_hex,
-        .blob_oid        = blob_oid,
+        .git_oid         = manifest_entry->source_profile->head_oid,
+        .blob_oid        = *blob_oid_obj,
         .mode            = mode,
         .owner           = meta_item ? meta_item->owner : NULL,
         .group           = meta_item ? meta_item->group : NULL,
@@ -425,8 +408,6 @@ static error_t *sync_entry_to_state(
         );
     }
 
-cleanup:
-    if (!arena) free(blob_oid);
     return err;
 }
 
@@ -1738,8 +1719,10 @@ cleanup:
  *                      head_oid or NULL. Membership is checked with
  *                      hashmap_has so NULL values remain distinct from
  *                      absent keys.
- * @param out_stale Output: hashmap of profile_name -> head_hex for stale profiles.
- *                  NULL if no profiles are stale. Caller frees with hashmap_free(map, free).
+ * @param out_stale Output: hashmap of profile_name -> git_oid * (current HEAD)
+ *                  for stale profiles. NULL if no profiles are stale. Caller
+ *                  frees with hashmap_free(map, free); the git_oid payloads
+ *                  are heap-allocated and free() releases them cleanly.
  * @return Error or NULL on success
  */
 error_t *manifest_detect_stale_profiles(
@@ -1765,11 +1748,12 @@ error_t *manifest_detect_stale_profiles(
     for (size_t i = 0; i < entry_count; i++) {
         const state_file_entry_t *entry = &entries[i];
 
-        /* Only check ACTIVE entries with valid profile and git_oid */
+        /* Only check ACTIVE entries with a valid profile name. The git_oid
+         * field is inline now — its presence is guaranteed by the schema. */
         if (!entry->state || strcmp(entry->state, STATE_ACTIVE) != 0) {
             continue;
         }
-        if (!entry->profile || !entry->git_oid) {
+        if (!entry->profile) {
             continue;
         }
         if (!hashmap_has(profile_scope, entry->profile)) {
@@ -1800,10 +1784,7 @@ error_t *manifest_detect_stale_profiles(
             }
         }
 
-        char head_hex[GIT_OID_HEXSZ + 1];
-        git_oid_tostr(head_hex, sizeof(head_hex), &head_oid);
-
-        if (strcmp(entry->git_oid, head_hex) != 0) {
+        if (!git_oid_equal(&entry->git_oid, &head_oid)) {
             /* Profile is stale — HEAD moved since last dotta operation */
             if (!stale_map) {
                 stale_map = hashmap_borrow(16);
@@ -1813,11 +1794,12 @@ error_t *manifest_detect_stale_profiles(
                 }
             }
 
-            char *oid_copy = strdup(head_hex);
+            git_oid *oid_copy = malloc(sizeof(git_oid));
             if (!oid_copy) {
-                err = ERROR(ERR_MEMORY, "Failed to allocate HEAD oid string");
+                err = ERROR(ERR_MEMORY, "Failed to allocate HEAD oid");
                 goto cleanup;
             }
+            git_oid_cpy(oid_copy, &head_oid);
 
             err = hashmap_set(stale_map, entry->profile, oid_copy);
             if (err) {
@@ -1998,11 +1980,9 @@ error_t *manifest_repair_stale(
              * (Path A) for symmetric treatment across both staleness paths.
              */
             bool blob_changed = true;  /* Default: assume changed (safe) */
-            const struct git_oid *new_blob_oid = git_tree_entry_id(fresh_entry->entry);
-            if (new_blob_oid && entry->blob_oid) {
-                char new_blob_hex[GIT_OID_HEXSZ + 1];
-                git_oid_tostr(new_blob_hex, sizeof(new_blob_hex), new_blob_oid);
-                blob_changed = (strcmp(entry->blob_oid, new_blob_hex) != 0);
+            const git_oid *new_blob_oid = git_tree_entry_id(fresh_entry->entry);
+            if (new_blob_oid) {
+                blob_changed = !git_oid_equal(&entry->blob_oid, new_blob_oid);
             }
 
             /* Save old blob_oid for content-changed entries BEFORE updating.
@@ -2015,13 +1995,15 @@ error_t *manifest_repair_stale(
              * won't trigger DIVERGENCE_CONTENT in workspace, so Path B's
              * content-divergence guard would skip them anyway.
              */
-            if (repaired_paths && entry->blob_oid && blob_changed) {
-                /* Heap-allocate: values escape to caller, outliving this arena */
-                char *old_blob = strdup(entry->blob_oid);
+            if (repaired_paths && blob_changed) {
+                /* Heap-allocate a standalone git_oid: the map outlives this arena
+                 * (it escapes to apply.c) and hashmap_free(..., free) releases it. */
+                git_oid *old_blob = malloc(sizeof(git_oid));
                 if (!old_blob) {
                     err = ERROR(ERR_MEMORY, "Failed to save old blob_oid");
                     goto cleanup;
                 }
+                git_oid_cpy(old_blob, &entry->blob_oid);
                 err = hashmap_set(repaired_paths, entry->filesystem_path, old_blob);
                 if (err) {
                     free(old_blob);

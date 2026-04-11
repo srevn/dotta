@@ -1159,24 +1159,20 @@ static int manifest_build_callback(
             return -1;
         }
 
-        /* Initialize entry */
+        /* Initialize entry.
+         *
+         * realloc() does NOT zero new memory. Zero the whole slot first so
+         * every VWD cache field (including the inline git_oid/blob_oid) starts
+         * in the "not populated from state" state; then overwrite the fields
+         * this Git-built path actually sets. Matches the contract that
+         * git_oid_is_zero() == "no state cache". */
         file_entry_t *new_entry = &ctx->manifest->entries[ctx->manifest->count];
+        memset(new_entry, 0, sizeof(*new_entry));
         new_entry->storage_path = dup_storage_path;
         new_entry->filesystem_path = filesystem_path;
         new_entry->entry = dup_entry;
         new_entry->source_profile = ctx->profile;
         new_entry->profile_name = ctx->profile_name;
-
-        /* Initialize VWD expected state cache to NULL/0
-         *
-         * These fields are only populated when manifest is built from state database.
-         * For manifests built from Git (this callback), they remain NULL/0 except
-         * for the type field which we derive from the Git tree entry's filemode.
-         *
-         * IMPORTANT: After realloc(), new memory is NOT zero-initialized. */
-        new_entry->old_profile = NULL;
-        new_entry->git_oid = NULL;
-        new_entry->blob_oid = NULL;
 
         /* Derive type from Git filemode (executable bit detection) */
         switch (git_tree_entry_filemode(dup_entry)) {
@@ -1191,13 +1187,6 @@ static int manifest_build_callback(
                 new_entry->type = STATE_FILE_REGULAR;
                 break;
         }
-
-        new_entry->mode = 0;
-        new_entry->owner = NULL;
-        new_entry->group = NULL;
-        new_entry->encrypted = false;
-        new_entry->deployed_at = 0;
-        new_entry->stat_cache = STAT_CACHE_UNSET;
 
         /* Store index in hashmap (offset by 1 to distinguish from NULL) */
         err = hashmap_set(
@@ -1899,13 +1888,12 @@ void manifest_free(manifest_t *manifest) {
             git_tree_entry_free(manifest->entries[i].entry);
         }
 
-        /* Skip string field frees when arena-backed */
+        /* Skip string field frees when arena-backed.
+         * git_oid and blob_oid are inline binary fields — no free. */
         if (!manifest->arena_backed) {
             free(manifest->entries[i].storage_path);
             free(manifest->entries[i].filesystem_path);
             free(manifest->entries[i].old_profile);
-            free(manifest->entries[i].git_oid);
-            free(manifest->entries[i].blob_oid);
             free(manifest->entries[i].owner);
             free(manifest->entries[i].group);
         }

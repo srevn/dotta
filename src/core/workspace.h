@@ -106,10 +106,11 @@ typedef struct {
 
     /* Stale repair context (from manifest_repair_stale)
      *
-     * When non-NULL, maps filesystem_path → old_blob_oid (hex string) for entries
-     * that were persistently repaired before workspace_load(). Used to set
-     * DIVERGENCE_STALE on items whose file content matches the old (deployed) blob,
-     * enabling preflight to distinguish "expected state changed" from "user modified."
+     * When non-NULL, maps filesystem_path → git_oid * (old blob OID, binary)
+     * for entries that were persistently repaired before workspace_load(). Used
+     * to set DIVERGENCE_STALE on items whose file content matches the old
+     * (deployed) blob, enabling preflight to distinguish "expected state
+     * changed" from "user modified."
      *
      * Borrowed reference — workspace does NOT free this. Caller owns it.
      */

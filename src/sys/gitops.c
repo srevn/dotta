@@ -1095,6 +1095,178 @@ error_t *gitops_update_file(
     return err;
 }
 
+error_t *gitops_commit_tree_updates_safe(
+    git_repository *repo,
+    const char *branch_name,
+    const gitops_tree_update_t *updates,
+    size_t update_count,
+    const char *const *removals,
+    size_t removal_count,
+    const char *message,
+    git_oid *out_oid
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(branch_name);
+    CHECK_NULL(message);
+
+    if (update_count > 0 && !updates) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "updates is NULL but update_count is %zu", update_count
+        );
+    }
+    if (removal_count > 0 && !removals) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "removals is NULL but removal_count is %zu", removal_count
+        );
+    }
+    if (update_count == 0 && removal_count == 0) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "gitops_commit_tree_updates_safe requires at least one update or removal"
+        );
+    }
+
+    /* Validate updates: non-empty path and supported mode */
+    for (size_t i = 0; i < update_count; i++) {
+        if (!updates[i].path || updates[i].path[0] == '\0') {
+            return ERROR(
+                ERR_INVALID_ARG,
+                "updates[%zu].path is NULL or empty", i
+            );
+        }
+        git_filemode_t m = updates[i].mode;
+        if (m != GIT_FILEMODE_BLOB &&
+            m != GIT_FILEMODE_BLOB_EXECUTABLE &&
+            m != GIT_FILEMODE_LINK) {
+            return ERROR(
+                ERR_INVALID_ARG,
+                "updates[%zu].mode 0%o is not a supported blob mode "
+                "(expected BLOB, BLOB_EXECUTABLE, or LINK)",
+                i, (unsigned int) m
+            );
+        }
+    }
+
+    /* Validate removals: non-empty path */
+    for (size_t i = 0; i < removal_count; i++) {
+        if (!removals[i] || removals[i][0] == '\0') {
+            return ERROR(
+                ERR_INVALID_ARG,
+                "removals[%zu] is NULL or empty", i
+            );
+        }
+    }
+
+    /* Resolve branch HEAD tree */
+    char ref_name[DOTTA_REFNAME_MAX];
+    error_t *err = gitops_build_refname(
+        ref_name, sizeof(ref_name), "refs/heads/%s", branch_name
+    );
+    if (err) {
+        return error_wrap(err, "Invalid branch name '%s'", branch_name);
+    }
+
+    git_tree *head_tree = NULL;
+    err = gitops_load_tree(repo, ref_name, &head_tree);
+    if (err) {
+        return error_wrap(
+            err, "Failed to load tree from branch '%s'", branch_name
+        );
+    }
+
+    /* Standalone in-memory index for HEAD-safe tree construction.
+     *
+     * CRITICAL: We must NOT call git_repository_index() here. That
+     * returns the repository's shared index (backed by .git/index),
+     * which is tied to whichever branch HEAD currently points at
+     * (typically dotta-worktree). Mutating it would corrupt the
+     * checked-out branch's staging area.
+     *
+     * A standalone index has no backing file, so we:
+     *   - Seed it from the branch HEAD tree via git_index_read_tree()
+     *   - Stage entries by blob OID with git_index_add() (no worktree
+     *     I/O — the blobs already live in the ODB)
+     *   - Write the resulting tree directly to the repo ODB via
+     *     git_index_write_tree_to(), NOT git_index_write() which
+     *     would try to persist to a non-existent backing file.
+     */
+    git_index *index = NULL;
+    git_tree *new_tree = NULL;
+
+    int git_err = git_index_new(&index);
+    if (git_err < 0) {
+        err = error_from_git(git_err);
+        goto cleanup;
+    }
+
+    git_err = git_index_read_tree(index, head_tree);
+    if (git_err < 0) {
+        err = error_from_git(git_err);
+        goto cleanup;
+    }
+
+    /* Apply updates. git_index_add() replaces entries at the same
+     * path, so explicit remove-before-add is not needed. */
+    for (size_t i = 0; i < update_count; i++) {
+        git_index_entry entry;
+        memset(&entry, 0, sizeof(entry));
+        entry.mode = updates[i].mode;
+        entry.path = updates[i].path;
+        git_oid_cpy(&entry.id, &updates[i].blob_oid);
+
+        git_err = git_index_add(index, &entry);
+        if (git_err < 0) {
+            err = error_wrap(
+                error_from_git(git_err),
+                "Failed to stage '%s' in branch '%s'",
+                updates[i].path, branch_name
+            );
+            goto cleanup;
+        }
+    }
+
+    /* Apply removals. Missing entries are an error so the caller
+     * notices bugs rather than silently no-op'ing. */
+    for (size_t i = 0; i < removal_count; i++) {
+        git_err = git_index_remove_bypath(index, removals[i]);
+        if (git_err < 0) {
+            err = error_wrap(
+                error_from_git(git_err),
+                "Failed to remove '%s' from branch '%s'",
+                removals[i], branch_name
+            );
+            goto cleanup;
+        }
+    }
+
+    /* Write tree to repo ODB (not to disk — the index has no backing file) */
+    git_oid new_tree_oid;
+    git_err = git_index_write_tree_to(&new_tree_oid, index, repo);
+    if (git_err < 0) {
+        err = error_from_git(git_err);
+        goto cleanup;
+    }
+
+    git_err = git_tree_lookup(&new_tree, repo, &new_tree_oid);
+    if (git_err < 0) {
+        err = error_from_git(git_err);
+        goto cleanup;
+    }
+
+    /* Commit the new tree onto the branch (gitops_create_commit
+     * handles signature, parent lookup, and reference update). */
+    err = gitops_create_commit(repo, branch_name, new_tree, message, out_oid);
+
+cleanup:
+    if (new_tree) git_tree_free(new_tree);
+    if (index) git_index_free(index);
+    if (head_tree) git_tree_free(head_tree);
+
+    return err;
+}
+
 /**
  * Remote operations
  */

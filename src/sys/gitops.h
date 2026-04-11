@@ -393,6 +393,72 @@ error_t *gitops_update_file(
 );
 
 /**
+ * Describes one blob to set/replace in a tree update batch.
+ *
+ * The blob referenced by `blob_oid` MUST already exist in the
+ * repository's ODB. Callers creating fresh content are responsible
+ * for writing the blob (e.g. git_blob_create_from_buffer) before
+ * passing it in.
+ */
+typedef struct {
+    const char     *path;      /* Path within the tree (must not be empty) */
+    git_oid         blob_oid;  /* Blob OID (must exist in repo ODB) */
+    git_filemode_t  mode;      /* BLOB, BLOB_EXECUTABLE, or LINK */
+} gitops_tree_update_t;
+
+/**
+ * Atomic multi-file tree update on a branch (HEAD-safe)
+ *
+ * Loads the current tree of `branch_name`, applies the requested
+ * `updates` (blob replacements/insertions) and `removals` (path
+ * deletions), writes the resulting tree, and creates a single commit
+ * with `message`.
+ *
+ * This operation is HEAD-safe: it never touches the repository's
+ * shared index (.git/index), the worktree, or HEAD. Safe to call
+ * regardless of which branch HEAD points at — in dotta this matters
+ * because HEAD always tracks `dotta-worktree`, not the profile
+ * branches we mutate here.
+ *
+ * Mechanism: builds a standalone in-memory git_index, seeds it from
+ * the branch HEAD tree, applies updates/removals, writes the
+ * resulting tree directly to the ODB via git_index_write_tree_to,
+ * and delegates commit creation to gitops_create_commit.
+ *
+ * git_index_add replaces entries at the same path, so updates that
+ * overlap existing paths are "upserts" without needing an explicit
+ * remove-before-add.
+ *
+ * At least one update or removal is required. Supported modes are
+ * GIT_FILEMODE_BLOB, GIT_FILEMODE_BLOB_EXECUTABLE, and
+ * GIT_FILEMODE_LINK (symlinks).
+ *
+ * No-op detection is the caller's responsibility: if all updates
+ * collapse to the current tree, an empty-diff commit is still
+ * created.
+ *
+ * @param repo          Repository (must not be NULL)
+ * @param branch_name   Target branch (must not be NULL, must exist)
+ * @param updates       Update entries (may be NULL if update_count is 0)
+ * @param update_count  Number of update entries
+ * @param removals      Paths to remove (may be NULL if removal_count is 0)
+ * @param removal_count Number of removal paths
+ * @param message       Commit message (must not be NULL)
+ * @param out_oid       New commit OID (may be NULL if not needed)
+ * @return Error or NULL on success
+ */
+error_t *gitops_commit_tree_updates_safe(
+    git_repository *repo,
+    const char *branch_name,
+    const gitops_tree_update_t *updates,
+    size_t update_count,
+    const char *const *removals,
+    size_t removal_count,
+    const char *message,
+    git_oid *out_oid
+);
+
+/**
  * Remote operations
  */
 

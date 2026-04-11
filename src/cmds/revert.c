@@ -614,11 +614,8 @@ static error_t *revert_file_in_branch(
     metadata_t *target_metadata = NULL;
     metadata_item_t *meta_to_restore = NULL;
     git_commit *head_commit = NULL;
-    git_tree *head_tree = NULL;
     metadata_t *current_metadata = NULL;
     buffer_t metadata_json_buf = BUFFER_INIT;
-    git_index *index = NULL;
-    git_tree *new_tree = NULL;
     char *msg = NULL;
     git_oid target_blob_oid_copy;
     git_filemode_t target_mode = 0;
@@ -732,33 +729,16 @@ static error_t *revert_file_in_branch(
     metadata_free(target_metadata);
     target_metadata = NULL;
 
-    /* PHASE 2: Load Current HEAD */
-
-    /* Build branch reference name */
-    char ref_name[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(
-        ref_name, sizeof(ref_name), "refs/heads/%s", profile_name
-    );
-    if (err) {
-        err = error_wrap(err, "Invalid profile name '%s'", profile_name);
-        goto cleanup;
-    }
+    /* PHASE 2: Load Current HEAD Metadata */
 
     git_oid head_oid;
-    err = gitops_resolve_reference_oid(repo, ref_name, &head_oid);
+    err = gitops_resolve_commit_in_branch(
+        repo, profile_name, "HEAD", &head_oid, &head_commit
+    );
     if (err) {
-        goto cleanup;
-    }
-
-    ret = git_commit_lookup(&head_commit, repo, &head_oid);
-    if (ret < 0) {
-        err = error_from_git(ret);
-        goto cleanup;
-    }
-
-    ret = git_commit_tree(&head_tree, head_commit);
-    if (ret < 0) {
-        err = error_from_git(ret);
+        err = error_wrap(
+            err, "Failed to resolve HEAD of profile '%s'", profile_name
+        );
         goto cleanup;
     }
 
@@ -769,47 +749,7 @@ static error_t *revert_file_in_branch(
         goto cleanup;
     }
 
-    /* PHASE 3: Build New Tree */
-
-    /* Use standalone in-memory index for tree construction.
-     *
-     * We must NOT use git_repository_index() here — that returns the repo's
-     * shared index (backed by .git/index). Modifying it would corrupt the
-     * index for the dotta-worktree branch that HEAD points to.
-     *
-     * A standalone index has no backing file or ODB, so we:
-     *   - Populate it from the HEAD tree (git_index_read_tree)
-     *   - Add entries with pre-existing blob OIDs (git_index_add)
-     *   - Create blobs for new content directly in the ODB (git_blob_create_from_buffer)
-     *   - Write the tree via git_index_write_tree_to(index, repo)
-     */
-    ret = git_index_new(&index);
-    if (ret < 0) {
-        err = error_from_git(ret);
-        goto cleanup;
-    }
-
-    /* Read HEAD tree into index */
-    ret = git_index_read_tree(index, head_tree);
-    if (ret < 0) {
-        err = error_from_git(ret);
-        goto cleanup;
-    }
-
-    /* Replace file entry — blob already exists in ODB from target commit */
-    git_index_remove_bypath(index, file_path);
-
-    git_index_entry source_entry;
-    memset(&source_entry, 0, sizeof(source_entry));
-    source_entry.mode = target_mode;
-    source_entry.path = file_path;
-    git_oid_cpy(&source_entry.id, &target_blob_oid_copy);
-
-    ret = git_index_add(index, &source_entry);
-    if (ret < 0) {
-        err = error_from_git(ret);
-        goto cleanup;
-    }
+    /* PHASE 3: Merge target metadata item, serialize, stage blob */
 
     /* Update metadata entry (if not symlink) */
     if (meta_to_restore) {
@@ -838,39 +778,7 @@ static error_t *revert_file_in_branch(
         goto cleanup;
     }
 
-    /* Stage updated metadata.json */
-    git_index_remove_bypath(index, METADATA_FILE_PATH);
-
-    git_index_entry meta_entry;
-    memset(&meta_entry, 0, sizeof(meta_entry));
-    meta_entry.mode = GIT_FILEMODE_BLOB;
-    meta_entry.path = METADATA_FILE_PATH;
-    git_oid_cpy(&meta_entry.id, &metadata_blob_oid);
-
-    ret = git_index_add(index, &meta_entry);
-    if (ret < 0) {
-        err = error_from_git(ret);
-        goto cleanup;
-    }
-
-    /* PHASE 4: Create Atomic Commit */
-
-    /* Create tree from standalone in-memory index.
-     *
-     * Do NOT call git_index_write() — this standalone index has no backing
-     * file. Writing the tree directly to the repo ODB is the correct approach. */
-    git_oid new_tree_oid;
-    ret = git_index_write_tree_to(&new_tree_oid, index, repo);
-    if (ret < 0) {
-        err = error_from_git(ret);
-        goto cleanup;
-    }
-
-    ret = git_tree_lookup(&new_tree, repo, &new_tree_oid);
-    if (ret < 0) {
-        err = error_from_git(ret);
-        goto cleanup;
-    }
+    /* PHASE 4: Atomic Commit (file + metadata.json) */
 
     /* Build commit message */
     msg = build_revert_commit_message(
@@ -882,7 +790,17 @@ static error_t *revert_file_in_branch(
     }
 
     /* Create commit (handles signature and parent lookup internally) */
-    err = gitops_create_commit(repo, profile_name, new_tree, msg, NULL);
+    gitops_tree_update_t updates[2];
+    updates[0].path = file_path;
+    updates[0].mode = target_mode;
+    git_oid_cpy(&updates[0].blob_oid, &target_blob_oid_copy);
+    updates[1].path = METADATA_FILE_PATH;
+    updates[1].mode = GIT_FILEMODE_BLOB;
+    git_oid_cpy(&updates[1].blob_oid, &metadata_blob_oid);
+
+    err = gitops_commit_tree_updates_safe(
+        repo, profile_name, updates, 2, NULL, 0, msg, NULL
+    );
 
 cleanup:
     if (target_commit) git_commit_free(target_commit);
@@ -891,11 +809,8 @@ cleanup:
     if (target_metadata) metadata_free(target_metadata);
     if (meta_to_restore) metadata_item_free(meta_to_restore);
     if (head_commit) git_commit_free(head_commit);
-    if (head_tree) git_tree_free(head_tree);
     if (current_metadata) metadata_free(current_metadata);
     buffer_free(&metadata_json_buf);
-    if (index) git_index_free(index);
-    if (new_tree) git_tree_free(new_tree);
     if (msg) free(msg);
 
     return err;

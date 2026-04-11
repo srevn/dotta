@@ -53,11 +53,19 @@
  * its current HEAD OID without further Git operations. Stack-initialized
  * profile_t bypassing profile_load would have a zero head_oid — none exist
  * in the codebase.
+ *
+ * peeled retains the git_object produced by that single peel so profile_load_tree
+ * can reuse it instead of re-peeling the same ref. It is consumed (freed or
+ * ownership-transferred to profile->tree) by the first profile_load_tree call;
+ * if tree loading is never invoked, profile_free releases it. NULL after
+ * consumption.
  */
 typedef struct {
     char *name;              /* Profile name (e.g., "global", "darwin") */
     git_reference *ref;      /* Branch reference */
     git_tree *tree;          /* Profile tree (loaded lazily) */
+    git_object *peeled;      /* Peeled ref object from profile_load, consumed by
+                                profile_load_tree or released by profile_free */
     git_oid head_oid;        /* Peeled HEAD OID (set by profile_load) */
 } profile_t;
 

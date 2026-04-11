@@ -89,12 +89,12 @@ error_t *profile_load(
         goto cleanup;
     }
 
-    /* Peel ref to its underlying object to cache the HEAD OID. Mirrors
-     * profile_load_tree's pattern (GIT_OBJECT_ANY handles both commit-backed
-     * and orphan-tree branches uniformly). Doing this once at load time lets
-     * downstream code read profile->head_oid without re-resolving the ref. */
-    git_object *peeled = NULL;
-    int git_err = git_reference_peel(&peeled, profile->ref, GIT_OBJECT_ANY);
+    /* Peel ref to its underlying object to cache the HEAD OID.
+     * GIT_OBJECT_ANY handles both commit-backed and orphan-tree branches
+     * uniformly. The peeled object is retained on the profile so that a
+     * subsequent profile_load_tree call can consume it instead of peeling
+     * the same ref a second time. */
+    int git_err = git_reference_peel(&profile->peeled, profile->ref, GIT_OBJECT_ANY);
     if (git_err < 0) {
         err = error_wrap(
             error_from_git(git_err),
@@ -102,8 +102,7 @@ error_t *profile_load(
         );
         goto cleanup;
     }
-    git_oid_cpy(&profile->head_oid, git_object_id(peeled));
-    git_object_free(peeled);
+    git_oid_cpy(&profile->head_oid, git_object_id(profile->peeled));
 
     /* Tree will be loaded lazily */
     profile->tree = NULL;
@@ -115,6 +114,9 @@ error_t *profile_load(
 cleanup:
     if (profile) {
         free(profile->name);
+        if (profile->peeled) {
+            git_object_free(profile->peeled);
+        }
         if (profile->ref) {
             git_reference_free(profile->ref);
         }
@@ -126,6 +128,12 @@ cleanup:
 
 /**
  * Load profile tree (lazy)
+ *
+ * Consumes profile->peeled (produced by profile_load) instead of re-peeling
+ * the same reference. For commit-backed branches, the commit object is used
+ * to derive the tree and then released. For orphan-tree branches, the tree
+ * object is transferred directly. profile->peeled is cleared after consumption
+ * so profile_free won't double-release it.
  */
 error_t *profile_load_tree(git_repository *repo, profile_t *profile) {
     CHECK_NULL(repo);
@@ -135,52 +143,42 @@ error_t *profile_load_tree(git_repository *repo, profile_t *profile) {
         return NULL;  /* Already loaded */
     }
 
-    /* Use cached reference if available (avoids redundant ref lookup) */
-    if (profile->ref) {
-        git_object *obj = NULL;
-        int git_err = git_reference_peel(&obj, profile->ref, GIT_OBJECT_ANY);
-        if (git_err < 0) {
-            error_t *err = error_from_git(git_err);
-            return error_wrap(
-                err, "Failed to peel reference for profile '%s'",
-                profile->name
-            );
-        }
-
-        git_object_t obj_type = git_object_type(obj);
-        if (obj_type == GIT_OBJECT_COMMIT) {
-            git_commit *commit = (git_commit *) obj;
-            git_err = git_commit_tree(&profile->tree, commit);
-            git_object_free(obj);
-            if (git_err < 0) {
-                return error_from_git(git_err);
-            }
-        } else if (obj_type == GIT_OBJECT_TREE) {
-            profile->tree = (git_tree *) obj;
-        } else {
-            git_object_free(obj);
-            return ERROR(
-                ERR_GIT, "Profile '%s': unexpected object type %d",
-                profile->name, (int) obj_type
-            );
-        }
-
-        return NULL;
-    }
-
-    /* Fallback: resolve by name (for profiles without cached reference) */
-    char refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(
-        refname, sizeof(refname), "refs/heads/%s", profile->name
-    );
-    if (err) {
-        return error_wrap(
-            err, "Invalid profile name '%s'",
+    /* The cached peel from profile_load should always be present for a
+     * profile constructed via profile_load. Missing it means a second call
+     * after the first consumed it without loading a tree (shouldn't happen
+     * because the first call sets profile->tree before clearing peeled) or
+     * a profile_t that bypassed the loader (no such path exists). Treat it
+     * as an invariant violation. */
+    if (!profile->peeled) {
+        return ERROR(
+            ERR_INTERNAL, "Profile '%s': no peeled object cached",
             profile->name
         );
     }
 
-    return gitops_load_tree(repo, refname, &profile->tree);
+    git_object *obj = profile->peeled;
+    profile->peeled = NULL;
+
+    git_object_t obj_type = git_object_type(obj);
+    if (obj_type == GIT_OBJECT_COMMIT) {
+        int git_err = git_commit_tree(&profile->tree, (git_commit *) obj);
+        git_object_free(obj);
+        if (git_err < 0) {
+            return error_from_git(git_err);
+        }
+        return NULL;
+    }
+
+    if (obj_type == GIT_OBJECT_TREE) {
+        profile->tree = (git_tree *) obj;  /* Ownership transferred */
+        return NULL;
+    }
+
+    git_object_free(obj);
+    return ERROR(
+        ERR_GIT, "Profile '%s': unexpected object type %d",
+        profile->name, (int) obj_type
+    );
 }
 
 error_t *file_entry_ensure_tree_entry(
@@ -1849,6 +1847,9 @@ void profile_free(profile_t *profile) {
     }
 
     free(profile->name);
+    if (profile->peeled) {
+        git_object_free(profile->peeled);
+    }
     if (profile->ref) {
         git_reference_free(profile->ref);
     }
@@ -1870,6 +1871,9 @@ void profile_list_free(profile_list_t *list) {
         for (size_t i = 0; i < list->count; i++) {
             profile_t *profile = &list->profiles[i];
             free(profile->name);
+            if (profile->peeled) {
+                git_object_free(profile->peeled);
+            }
             if (profile->ref) {
                 git_reference_free(profile->ref);
             }

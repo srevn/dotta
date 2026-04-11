@@ -123,7 +123,7 @@ static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
  *   - > 0 = file known to dotta (either deployed or existed when profile enabled)
  *
  * Key fields:
- * - git_oid: Commit OID of the source profile's HEAD at sync time (binary)
+ * - commit_oid: Commit OID of the source profile's HEAD at sync time (binary)
  * - blob_oid: Blob OID for file content identity (binary)
  * - owner/group: For root/ files
  * - encrypted: Encryption flag
@@ -142,7 +142,7 @@ typedef struct {
 
     /* Git tracking (binary OIDs — mirror the BLOB columns in virtual_manifest).
      * Hex conversion lives only at display boundaries, never on the hot path. */
-    git_oid git_oid;            /* Commit OID of source profile HEAD at sync time */
+    git_oid commit_oid;         /* Commit OID of source profile HEAD at sync time */
     git_oid blob_oid;           /* Blob OID for file content identity */
 
     /* Metadata */
@@ -546,10 +546,10 @@ error_t *state_clear_files(state_t *state);
 /**
  * Helper: Create file entry
  *
- * The commit_oid/blob_oid parameters use distinct names from the state_file_entry_t
- * fields (git_oid, blob_oid) to avoid shadowing the git_oid type within this
- * parameter list — C treats a prior parameter name as in scope for subsequent
- * parameters, which breaks `const git_oid *git_oid` followed by `const git_oid *...`.
+ * The commit_oid/blob_oid parameters mirror the state_file_entry_t fields.
+ * Named explicitly (not `git_oid`) because C treats a prior parameter name as
+ * in scope for subsequent parameters, which would break
+ * `const git_oid *git_oid` followed by `const git_oid *...`.
  *
  * @param storage_path Storage path (must not be NULL)
  * @param filesystem_path Filesystem path (must not be NULL)
@@ -692,10 +692,10 @@ error_t *state_update_entry(
 );
 
 /**
- * Update git_oid for all manifest entries from a specific profile
+ * Update commit_oid for all manifest entries from a specific profile
  *
- * Synchronizes git_oid to match the profile's current branch HEAD.
- * Maintains invariant: all files from profile P have git_oid = P's HEAD.
+ * Synchronizes commit_oid to match the profile's current branch HEAD.
+ * Maintains invariant: all files from profile P have commit_oid = P's HEAD.
  *
  * Called after operations that move branch HEAD:
  * - manifest_sync_diff (after pull/merge)
@@ -708,13 +708,13 @@ error_t *state_update_entry(
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param profile_name Profile name (must not be NULL)
- * @param new_git_oid New commit OID for profile HEAD (must not be NULL)
+ * @param new_commit_oid New commit OID for profile HEAD (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_update_git_oid_for_profile(
+error_t *state_update_commit_oid_for_profile(
     state_t *state,
     const char *profile_name,
-    const git_oid *new_git_oid
+    const git_oid *new_commit_oid
 );
 
 /**

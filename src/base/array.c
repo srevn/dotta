@@ -312,7 +312,7 @@ char *string_array_join(const string_array_t *arr, const char *delimiter) {
     /* Measure total length, caching individual lengths to avoid double strlen */
     size_t *lengths = NULL;
     if (arr->count <= 64) {
-        lengths = (size_t [64]){0};
+        lengths = (size_t [64]){ 0 };
     } else {
         lengths = calloc(arr->count, sizeof(size_t));
         if (!lengths) {

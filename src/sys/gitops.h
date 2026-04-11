@@ -223,9 +223,9 @@ error_t *gitops_find_file_in_tree(
  * The `_handle` field is opaque; do not touch it directly.
  */
 typedef struct {
-    git_blob   *_handle;
+    git_blob *_handle;
     const void *data;
-    size_t      size;
+    size_t size;
 } gitops_blob_view_t;
 
 /**
@@ -401,9 +401,9 @@ error_t *gitops_update_file(
  * passing it in.
  */
 typedef struct {
-    const char     *path;      /* Path within the tree (must not be empty) */
-    git_oid         blob_oid;  /* Blob OID (must exist in repo ODB) */
-    git_filemode_t  mode;      /* BLOB, BLOB_EXECUTABLE, or LINK */
+    const char *path;          /* Path within the tree (must not be empty) */
+    git_oid blob_oid;          /* Blob OID (must exist in repo ODB) */
+    git_filemode_t mode;       /* BLOB, BLOB_EXECUTABLE, or LINK */
 } gitops_tree_update_t;
 
 /**

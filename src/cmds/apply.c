@@ -634,8 +634,9 @@ static error_t *ensure_complete_apply_privileges(
      * Uses privilege_needs_elevation() which considers whether the resolved
      * filesystem path is under $HOME — custom/ paths under $HOME don't need sudo. */
     for (size_t i = 0; i < manifest->count; i++) {
-        if (privilege_needs_elevation(manifest->entries[i].storage_path,
-                                     manifest->entries[i].filesystem_path)) {
+        if (privilege_needs_elevation(
+            manifest->entries[i].storage_path, manifest->entries[i].filesystem_path
+            )) {
             error_t *err = string_array_push(root_paths, manifest->entries[i].storage_path);
             if (err) {
                 string_array_free(root_paths);
@@ -647,8 +648,9 @@ static error_t *ensure_complete_apply_privileges(
     /* 2. Collect paths needing elevation from file orphans (files being removed) */
     if (file_orphans && file_orphan_count > 0) {
         for (size_t i = 0; i < file_orphan_count; i++) {
-            if (privilege_needs_elevation(file_orphans[i]->storage_path,
-                                         file_orphans[i]->filesystem_path)) {
+            if (privilege_needs_elevation(
+                file_orphans[i]->storage_path, file_orphans[i]->filesystem_path
+                )) {
                 error_t *err = string_array_push(root_paths, file_orphans[i]->storage_path);
                 if (err) {
                     string_array_free(root_paths);
@@ -661,8 +663,9 @@ static error_t *ensure_complete_apply_privileges(
     /* 3. Collect paths needing elevation from directory orphans (directories being removed) */
     if (dir_orphans && dir_orphan_count > 0) {
         for (size_t i = 0; i < dir_orphan_count; i++) {
-            if (privilege_needs_elevation(dir_orphans[i]->storage_path,
-                                         dir_orphans[i]->filesystem_path)) {
+            if (privilege_needs_elevation(
+                dir_orphans[i]->storage_path, dir_orphans[i]->filesystem_path
+                )) {
                 error_t *err = string_array_push(root_paths, dir_orphans[i]->storage_path);
                 if (err) {
                     string_array_free(root_paths);
@@ -862,16 +865,16 @@ error_t *cmd_apply(
 
     /* Persistent stale manifest repair
      *
-     * Detect and fix state entries whose git_oid no longer matches the
+     * Detect and fix state entries whose commit_oid no longer matches the
      * profile branch HEAD (caused by external Git operations). This runs
      * BEFORE workspace_load() so the workspace sees accurate state.
      *
      * Algorithm:
-     * - Quick check: O(P) per-profile git_oid comparison (zero cost if clean)
+     * - Quick check: O(P) per-profile commit_oid comparison (zero cost if clean)
      * - If stale: build fresh Git manifest, update or release state entries
      *
      * After repair, workspace_load's in-memory patching path won't trigger
-     * (git_oid matches HEAD), eliminating redundant fresh manifest builds.
+     * (commit_oid matches HEAD), eliminating redundant fresh manifest builds.
      *
      * Uses the raw DB list (state_get_profiles), then frees and re-populates
      * enabled_profiles with the validated list below for Phase 1.
@@ -1022,13 +1025,13 @@ error_t *cmd_apply(
      * This ensures manifest scope matches state scope for accurate orphan detection.
      */
     workspace_load_t ws_opts = {
-        .analyze_files          = true,
-        .analyze_orphans        = true,
-        .analyze_untracked      = false,          /* Skip expensive directory scan */
-        .analyze_directories    = true,           /* Directory metadata convergence */
-        .analyze_encryption     = false,          /* Not needed for deployment */
-        .repaired_paths         = repaired_paths, /* From stale repair: path → old_blob_oid */
-        .repair_completed       = true            /* manifest_repair_stale ran above */
+        .analyze_files       = true,
+        .analyze_orphans     = true,
+        .analyze_untracked   = false,             /* Skip expensive directory scan */
+        .analyze_directories = true,              /* Directory metadata convergence */
+        .analyze_encryption  = false,             /* Not needed for deployment */
+        .repaired_paths      = repaired_paths,    /* From stale repair: path → old_blob_oid */
+        .repair_completed    = true               /* manifest_repair_stale ran above */
     };
     err = workspace_load(repo, state, enabled_profiles, config, &ws_opts, &ws);
     if (err) {

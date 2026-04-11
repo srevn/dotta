@@ -55,9 +55,9 @@ static error_t *get_branch_head_oid(
 }
 
 /**
- * Synchronize git_oid for all files in a profile to match branch HEAD
+ * Synchronize commit_oid for all files in a profile to match branch HEAD
  *
- * Maintains critical invariant: all files from profile P have git_oid = P's HEAD.
+ * Maintains critical invariant: all files from profile P have commit_oid = P's HEAD.
  *
  * Called after any operation that moves a profile's branch HEAD:
  * - After sync (remote changes pulled)
@@ -87,7 +87,7 @@ static error_t *sync_profile_git_oids(
     }
 
     /* Update all entries from this profile */
-    return state_update_git_oid_for_profile(state, profile_name, &head_oid);
+    return state_update_commit_oid_for_profile(state, profile_name, &head_oid);
 }
 
 /**
@@ -292,7 +292,7 @@ static error_t *build_manifest(
  *   2. Caller passes existing->deployed_at to this function
  *   3. Function writes that exact value
  *
- * The git_oid column is derived from manifest_entry->source_profile->head_oid
+ * The commit_oid column is derived from manifest_entry->source_profile->head_oid
  * — every caller has a profile_t in hand via the entry, and the loader caches
  * head_oid at construction time. This function trusts that contract: callers
  * must use entries from profile_build_manifest (or equivalent) where
@@ -321,8 +321,7 @@ static error_t *sync_entry_to_state(
     state_t *state,
     const file_entry_t *manifest_entry,
     const metadata_t *metadata,
-    time_t deployed_at,
-    arena_t *arena
+    time_t deployed_at
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -332,7 +331,6 @@ static error_t *sync_entry_to_state(
 
     error_t *err = NULL;
     metadata_item_t *meta_item = NULL;
-    (void) arena;  /* No arena allocations needed now that OIDs are binary. */
 
     /* 1. Extract blob_oid from tree entry (binary, borrowed from libgit2). */
     const git_oid *blob_oid_obj = git_tree_entry_id(manifest_entry->entry);
@@ -375,7 +373,7 @@ static error_t *sync_entry_to_state(
      *   2. Git mode (fallback) - authoritative for type, good default for permissions */
     mode_t mode = meta_item ? meta_item->mode : git_mode;
 
-    /* 5. Build state entry. git_oid/blob_oid are inline struct copies — the
+    /* 5. Build state entry. commit_oid/blob_oid are inline struct copies — the
      * commit OID comes from source_profile's cached HEAD (populated by
      * profile_load), the blob OID is the libgit2-owned tree entry id. */
     state_file_entry_t state_entry = {
@@ -383,7 +381,7 @@ static error_t *sync_entry_to_state(
         .filesystem_path = manifest_entry->filesystem_path,
         .profile         = (char *) manifest_entry->profile_name,
         .type            = file_type,
-        .git_oid         = manifest_entry->source_profile->head_oid,
+        .commit_oid      = manifest_entry->source_profile->head_oid,
         .blob_oid        = *blob_oid_obj,
         .mode            = mode,
         .owner           = meta_item ? meta_item->owner : NULL,
@@ -595,7 +593,7 @@ error_t *manifest_enable_profile(
         }
 
         /* Sync entry with deployed_at timestamp */
-        err = sync_entry_to_state(repo, state, entry, metadata, deployed_at, arena);
+        err = sync_entry_to_state(repo, state, entry, metadata, deployed_at);
         if (err) goto cleanup;
     }
 
@@ -903,10 +901,9 @@ error_t *manifest_disable_profile(
 
             /* Sync to state using proven, tested logic. The fallback entry's
              * source_profile (set by profile_build_manifest) carries the cached
-             * head_oid, which sync_entry_to_state derives the git_oid hex from. */
+             * head_oid, which sync_entry_to_state derives the commit_oid from. */
             err = sync_entry_to_state(
-                repo, state, fallback, fallback_metadata,
-                entry->deployed_at, arena
+                repo, state, fallback, fallback_metadata, entry->deployed_at
             );
             if (err) {
                 err = error_wrap(
@@ -1222,7 +1219,7 @@ cleanup:
  *
  * Algorithm:
  *   1. Build fresh manifest from enabled profiles (precedence oracle)
- *   2. Build profile→oid map for git_oid field
+ *   2. Build profile→oid map for commit_oid field
  *   3. For each removed file:
  *      a. Resolve to filesystem path
  *      b. Lookup current manifest entry
@@ -1388,7 +1385,7 @@ error_t *manifest_remove_files(
              * CRITICAL: Use sync_entry_to_state to ensure consistent metadata.
              * This extracts blob_oid, type, mode from fallback's Git tree entry
              * and applies metadata precedence from .dotta/metadata.json. The
-             * git_oid hex is derived from fallback->source_profile->head_oid.
+             * commit_oid is derived from fallback->source_profile->head_oid.
              */
 
             /* Preserve deployed_at (lifecycle history) before sync overwrites entry */
@@ -1416,7 +1413,7 @@ error_t *manifest_remove_files(
              * 3. Uses INSERT OR REPLACE for atomic, complete entry update
              */
             err = sync_entry_to_state(
-                repo, state, fallback, metadata, preserved_deployed_at, arena
+                repo, state, fallback, metadata, preserved_deployed_at
             );
             if (err) {
                 state_free_entry(current_entry);
@@ -1516,12 +1513,12 @@ error_t *manifest_remove_files(
     if (out_fallbacks) *out_fallbacks = fallback_count;
 
     /* After removing files, the profile's branch HEAD has moved to a new commit.
-     * ALL files from this profile must have their git_oid updated to match the new HEAD,
+     * ALL files from this profile must have their commit_oid updated to match the new HEAD,
      * not just the removed files. */
     err = sync_profile_git_oids(repo, state, removed_profile);
     if (err) {
         err = error_wrap(
-            err, "Failed to sync git_oid for profile '%s'",
+            err, "Failed to sync commit_oid for profile '%s'",
             removed_profile
         );
         goto cleanup;
@@ -1553,7 +1550,7 @@ cleanup:
  * Algorithm:
  *   1. Clear all file entries from state
  *   2. Build manifest ONCE from all enabled profiles (precedence oracle)
- *   3. Build profile→oid map for git_oid field
+ *   3. Build profile→oid map for commit_oid field
  *   4. Load merged metadata from all profiles
  *   5. Sync ALL entries from manifest to state (single pass, no filtering)
  *   6. Sync tracked directories
@@ -1673,7 +1670,7 @@ error_t *manifest_rebuild(
         }
 
         /* Sync to state with preserved/computed deployed_at */
-        err = sync_entry_to_state(repo, state, entry, metadata, deployed_at, arena);
+        err = sync_entry_to_state(repo, state, entry, metadata, deployed_at);
         if (err) goto cleanup;
     }
 
@@ -1696,7 +1693,7 @@ cleanup:
 /**
  * Detect which enabled profiles have stale manifest entries
  *
- * Single-pass scan of state entries to find profiles whose stored git_oid
+ * Single-pass scan of state entries to find profiles whose stored commit_oid
  * doesn't match the profile branch's current HEAD. Mismatch means external
  * Git operations occurred (commit, rebase, etc.) since the last dotta operation.
  *
@@ -1748,7 +1745,7 @@ error_t *manifest_detect_stale_profiles(
     for (size_t i = 0; i < entry_count; i++) {
         const state_file_entry_t *entry = &entries[i];
 
-        /* Only check ACTIVE entries with a valid profile name. The git_oid
+        /* Only check ACTIVE entries with a valid profile name. The commit_oid
          * field is inline now — its presence is guaranteed by the schema. */
         if (!entry->state || strcmp(entry->state, STATE_ACTIVE) != 0) {
             continue;
@@ -1784,7 +1781,7 @@ error_t *manifest_detect_stale_profiles(
             }
         }
 
-        if (!git_oid_equal(&entry->git_oid, &head_oid)) {
+        if (!git_oid_equal(&entry->commit_oid, &head_oid)) {
             /* Profile is stale — HEAD moved since last dotta operation */
             if (!stale_map) {
                 stale_map = hashmap_borrow(16);
@@ -1822,7 +1819,7 @@ cleanup:
 /**
  * Repair stale manifest entries from external Git changes
  *
- * Persistent repair: detects state entries whose git_oid no longer matches
+ * Persistent repair: detects state entries whose commit_oid no longer matches
  * the profile branch HEAD, then either updates them from fresh Git state
  * or marks them STATE_RELEASED for release.
  *
@@ -1964,7 +1961,7 @@ error_t *manifest_repair_stale(
              *
              * Use sync_entry_to_state to update with current Git truth.
              * Preserve deployed_at — the file's lifecycle history is unchanged,
-             * only the expected state cache needs updating. The git_oid hex is
+             * only the expected state cache needs updating. The commit_oid is
              * derived from fresh_entry->source_profile->head_oid.
              */
 
@@ -1972,7 +1969,7 @@ error_t *manifest_repair_stale(
              *
              * A profile HEAD can move without changing this file's blob
              * (other files in the commit changed). Distinguishing content
-             * changes from git_oid-only refreshes enables:
+             * changes from commit_oid-only refreshes enables:
              *   - Accurate repaired_paths (Path B only verifies content-changed files)
              *   - Accurate stats (user sees real content changes, not bookkeeping)
              *
@@ -2012,7 +2009,7 @@ error_t *manifest_repair_stale(
             }
 
             err = sync_entry_to_state(
-                repo, state, fresh_entry, metadata, entry->deployed_at, arena
+                repo, state, fresh_entry, metadata, entry->deployed_at
             );
             if (err) {
                 err = error_wrap(
@@ -2213,7 +2210,7 @@ error_t *manifest_reorder_profiles(
             /* New file (rare in reorder, but handle it) */
 
             /* New file - deployed_at=0 (never deployed) */
-            err = sync_entry_to_state(repo, state, new_entry, metadata, 0, arena);
+            err = sync_entry_to_state(repo, state, new_entry, metadata, 0);
             if (err) {
                 goto cleanup;
             }
@@ -2227,7 +2224,7 @@ error_t *manifest_reorder_profiles(
 
                 /* Sync with new owner, preserve existing deployed_at */
                 err = sync_entry_to_state(
-                    repo, state, new_entry, metadata, old_entry->deployed_at, arena
+                    repo, state, new_entry, metadata, old_entry->deployed_at
                 );
                 if (err) {
                     goto cleanup;
@@ -2334,7 +2331,7 @@ cleanup:
  *   1. Load enabled profiles from Git
  *   2. Build FRESH manifest via profile_build_manifest() (O(M))
  *   3. Build hashmap index for O(1) lookups
- *   4. Build profile→oid map for git_oid field
+ *   4. Build profile→oid map for commit_oid field
  *   5. For each item (O(N)):
  *      - If DELETED: check fresh manifest for fallback
  *        → Fallback exists: update to fallback profile
@@ -2484,7 +2481,7 @@ error_t *manifest_update_files(
 
             if (fallback) {
                 /* Fallback exists - update to fallback profile.
-                 * git_oid hex is derived from fallback->source_profile->head_oid
+                 * commit_oid is derived from fallback->source_profile->head_oid
                  * inside sync_entry_to_state. */
 
                 /* Get metadata - from cache if available, otherwise use merged */
@@ -2518,9 +2515,7 @@ error_t *manifest_update_files(
                     }
                 }
 
-                err = sync_entry_to_state(
-                    repo, state, fallback, metadata, deployed_at, arena
-                );
+                err = sync_entry_to_state(repo, state, fallback, metadata, deployed_at);
                 if (err) {
                     err = error_wrap(
                         err, "Failed to sync fallback for '%s'",
@@ -2621,7 +2616,7 @@ error_t *manifest_update_files(
                 metadata = metadata_merged;
             }
 
-            err = sync_entry_to_state(repo, state, entry, metadata, time(NULL), arena);
+            err = sync_entry_to_state(repo, state, entry, metadata, time(NULL));
             if (err) {
                 err = error_wrap(
                     err, "Failed to sync '%s' to manifest",
@@ -2634,7 +2629,7 @@ error_t *manifest_update_files(
         }
     }
 
-    /* After updating files, synchronize git_oid for ALL files from affected profiles.
+    /* After updating files, synchronize commit_oid for ALL files from affected profiles.
      * Each profile that had files updated has a new HEAD commit.
      * Build set of unique profile names from items and sync each. */
     string_array_t *updated_profiles = string_array_new(0);
@@ -2664,13 +2659,13 @@ error_t *manifest_update_files(
         }
     }
 
-    /* Sync git_oid for each unique profile */
+    /* Sync commit_oid for each unique profile */
     for (size_t i = 0; i < updated_profiles->count; i++) {
         const char *prof = updated_profiles->items[i];
         err = sync_profile_git_oids(repo, state, prof);
         if (err) {
             string_array_free(updated_profiles);
-            err = error_wrap(err, "Failed to sync git_oid for profile '%s'", prof);
+            err = error_wrap(err, "Failed to sync commit_oid for profile '%s'", prof);
             goto cleanup;
         }
     }
@@ -2710,7 +2705,7 @@ cleanup:
  *   1. Load enabled profiles from Git (current HEAD, post-commit)
  *   2. Build fresh manifest with profile_build_manifest() (ONCE)
  *   3. Build hashmap index for O(1) precedence lookups
- *   4. Build profile→oid map for git_oid field
+ *   4. Build profile→oid map for commit_oid field
  *   5. For each file:
  *      - Convert filesystem_path → storage_path
  *      - Lookup in fresh manifest
@@ -2880,7 +2875,7 @@ error_t *manifest_add_files(
          *
          * Key insight: ADD captures files FROM filesystem, so they're
          * already deployed. We set deployed_at to mark them as known.
-         * git_oid hex is derived from entry->source_profile->head_oid. */
+         * commit_oid is derived from entry->source_profile->head_oid. */
 
         /* Get metadata - from cache if available, otherwise use merged */
         const metadata_t *metadata = NULL;
@@ -2890,7 +2885,7 @@ error_t *manifest_add_files(
             metadata = metadata_merged;
         }
 
-        err = sync_entry_to_state(repo, state, entry, metadata, time(NULL), arena);
+        err = sync_entry_to_state(repo, state, entry, metadata, time(NULL));
 
         if (err) {
             err = error_wrap(
@@ -2904,12 +2899,12 @@ error_t *manifest_add_files(
     }
 
     /* After adding files, the profile's branch HEAD has moved to a new commit.
-     * ALL files from this profile must have their git_oid updated to match the new HEAD,
+     * ALL files from this profile must have their commit_oid updated to match the new HEAD,
      * not just the newly added files. */
     err = sync_profile_git_oids(repo, state, profile_name);
     if (err) {
         err = error_wrap(
-            err, "Failed to sync git_oid for profile '%s'",
+            err, "Failed to sync commit_oid for profile '%s'",
             profile_name
         );
         goto cleanup;
@@ -2963,7 +2958,7 @@ cleanup:
  *              (state_save) after calling. This function works within an active
  *              transaction.
  *
- * Convergence: Sync updates VWD expected state (git_oid, blob_oid) but doesn't
+ * Convergence: Sync updates VWD expected state (commit_oid, blob_oid) but doesn't
  * Semantics    deploy to filesystem. User must run 'dotta apply' which uses runtime
  *              divergence analysis to deploy changes.
  *
@@ -3199,9 +3194,7 @@ error_t *manifest_sync_diff(
                 }
             }
 
-            err = sync_entry_to_state(
-                repo, state, entry, profile_metadata, deployed_at, arena
-            );
+            err = sync_entry_to_state(repo, state, entry, profile_metadata, deployed_at);
             if (err) {
                 err = error_wrap(
                     err, "Failed to sync '%s' to manifest",
@@ -3234,7 +3227,7 @@ error_t *manifest_sync_diff(
                  *
                  * Update manifest entry to point to the new profile owner.
                  * Preserve deployed_at to maintain lifecycle tracking.
-                 * git_oid hex is derived from entry->source_profile->head_oid. */
+                 * commit_oid is derived from entry->source_profile->head_oid. */
 
                 /* Get metadata - from cache if available, otherwise use merged */
                 const metadata_t *fallback_metadata = NULL;
@@ -3266,9 +3259,7 @@ error_t *manifest_sync_diff(
                     }
                 }
 
-                err = sync_entry_to_state(
-                    repo, state, entry, fallback_metadata, deployed_at, arena
-                );
+                err = sync_entry_to_state(repo, state, entry, fallback_metadata, deployed_at);
                 if (err) {
                     err = error_wrap(
                         err, "Failed to sync fallback for '%s'",
@@ -3370,14 +3361,14 @@ error_t *manifest_sync_diff(
     if (out_fallbacks) *out_fallbacks = fallbacks;
     if (out_skipped) *out_skipped = skipped;
 
-    /* Synchronize git_oid for ALL files from this profile.
+    /* Synchronize commit_oid for ALL files from this profile.
      * After sync, the branch HEAD has moved to new_oid. ALL files from this
-     * profile must have their git_oid updated to match, not just files in the diff.
-     * This maintains the invariant: all files from profile P have git_oid = P's HEAD. */
+     * profile must have their commit_oid updated to match, not just files in the diff.
+     * This maintains the invariant: all files from profile P have commit_oid = P's HEAD. */
     err = sync_profile_git_oids(repo, state, profile_name);
     if (err) {
         err = error_wrap(
-            err, "Failed to sync git_oid for profile '%s'",
+            err, "Failed to sync commit_oid for profile '%s'",
             profile_name
         );
         goto cleanup;

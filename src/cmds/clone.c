@@ -557,7 +557,7 @@ error_t *cmd_clone(
     } else {
         /* No profiles fetched - initialize empty state */
         output_warning(out, OUTPUT_NORMAL, "No profiles were fetched");
-        string_array_t empty = {0};
+        string_array_t empty = { 0 };
         err = initialize_state(repo, &empty, out);
         if (err) {
             output_error(out, "Failed to initialize state: %s", error_message(err));

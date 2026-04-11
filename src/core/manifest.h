@@ -57,7 +57,7 @@ typedef struct {
  */
 typedef struct {
     size_t updated;     /* Files with changed blob_oid (content changed in Git) */
-    size_t refreshed;   /* Files with only git_oid refresh (content unchanged) */
+    size_t refreshed;   /* Files with only commit_oid refresh (content unchanged) */
     size_t released;    /* Files set to STATE_RELEASED (removed from Git externally) */
     size_t reassigned;  /* Files whose owning profile shifted during repair */
 } manifest_repair_stats_t;
@@ -126,7 +126,7 @@ error_t *manifest_enable_profile(
  *   1. Get all manifest entries owned by disabled profile
  *   2. Build manifest from remaining profiles (fallback check)
  *   3. For each entry:
- *      - If fallback found: update source_profile + git_oid (profile reassignment)
+ *      - If fallback found: update source_profile + commit_oid (profile reassignment)
  *      - If no fallback: mark as STATE_INACTIVE (staged for removal by apply)
  *
  * Preconditions:
@@ -135,7 +135,7 @@ error_t *manifest_enable_profile(
  *
  * Postconditions:
  *   - Files unique to profile marked STATE_INACTIVE (apply will remove)
- *   - Files with fallback updated to fallback profile (source and git_oid changed)
+ *   - Files with fallback updated to fallback profile (source and commit_oid changed)
  *   - Entries with fallbacks keep same deployed_at timestamp
  *   - Transaction remains open (caller commits)
  *
@@ -177,7 +177,7 @@ error_t *manifest_disable_profile(
  *   1. Load enabled profiles from Git
  *   2. Build FRESH manifest via profile_build_manifest() (O(M))
  *   3. Use transferred index for O(1) lookups
- *   4. Build profile→oid map for git_oid field
+ *   4. Build profile→oid map for commit_oid field
  *   5. For each item (O(N)):
  *      - If DELETED: check fresh manifest for fallback
  *        → Fallback exists: update to fallback profile (deployed_at preserved)
@@ -244,7 +244,7 @@ error_t *manifest_update_files(
  *   1. Load enabled profiles from Git (current HEAD, post-commit)
  *   2. Build fresh manifest with profile_build_manifest() (ONCE)
  *   3. Use transferred index for O(1) precedence lookups
- *   4. Build profile→oid map for git_oid field
+ *   4. Build profile→oid map for commit_oid field
  *   5. For each file:
  *      - Convert filesystem_path → storage_path
  *      - Lookup in fresh manifest
@@ -305,7 +305,7 @@ error_t *manifest_add_files(
  *
  * Algorithm:
  *   1. Build fresh manifest from enabled profiles (precedence oracle)
- *   2. Build profile→oid map for git_oid field
+ *   2. Build profile→oid map for commit_oid field
  *   3. For each removed file:
  *      a. Resolve to filesystem path
  *      b. Lookup current manifest entry
@@ -364,7 +364,7 @@ error_t *manifest_remove_files(
  * Algorithm (optimized O(M) approach):
  *   1. Clear all file entries from manifest
  *   2. Build manifest ONCE from all enabled profiles (precedence oracle)
- *   3. Build profile→oid map for git_oid field
+ *   3. Build profile→oid map for commit_oid field
  *   4. Load merged metadata from all profiles
  *   5. Sync ALL entries from manifest to state (single pass, no filtering)
  *   6. Sync tracked directories
@@ -411,15 +411,15 @@ error_t *manifest_rebuild(
 /**
  * Detect which enabled profiles have stale manifest entries
  *
- * Single-pass scan of state entries to find profiles whose stored git_oid
+ * Single-pass scan of state entries to find profiles whose stored commit_oid
  * doesn't match the profile branch's current HEAD. Mismatch means external
  * Git operations occurred (commit, rebase, etc.) since the last dotta operation.
  *
  * Algorithm:
  *   For each state entry:
- *     1. Skip non-ACTIVE, missing profile/git_oid, out-of-scope
+ *     1. Skip non-ACTIVE, missing profile/commit_oid, out-of-scope
  *     2. Skip if profile already checked (O(1) dedup hashmap)
- *     3. Compare entry's git_oid with profile branch HEAD
+ *     3. Compare entry's commit_oid with profile branch HEAD
  *     4. If mismatch: add to stale map (profile_name -> HEAD_oid_hex)
  *
  * HEAD OID source: for each unique in-scope profile, the function prefers
@@ -453,7 +453,7 @@ error_t *manifest_detect_stale_profiles(
 /**
  * Repair stale manifest entries from external Git changes
  *
- * Detects and repairs state entries whose git_oid no longer matches the
+ * Detects and repairs state entries whose commit_oid no longer matches the
  * profile branch's current HEAD. This happens when Git operations occur
  * outside dotta (git commit, git rebase, git rm, etc.).
  *
@@ -463,12 +463,12 @@ error_t *manifest_detect_stale_profiles(
  *
  * Algorithm:
  *   1. Quick staleness check: O(P) — one state query per enabled profile,
- *      compare git_oid against branch HEAD. If all current: return (zero cost).
+ *      compare commit_oid against branch HEAD. If all current: return (zero cost).
  *   2. For stale profiles: build fresh manifest from Git (precedence oracle).
  *   3. For each ACTIVE state entry from stale profiles:
- *      - Found in fresh manifest: update entry (new blob_oid, metadata, git_oid)
+ *      - Found in fresh manifest: update entry (new blob_oid, metadata, commit_oid)
  *      - Not in fresh manifest: mark STATE_RELEASED (loss of authority)
- *   4. Sync git_oid for all entries in repaired profiles.
+ *   4. Sync commit_oid for all entries in repaired profiles.
  *   5. Sync tracked directories for consistency.
  *
  * Preconditions:
@@ -476,7 +476,7 @@ error_t *manifest_detect_stale_profiles(
  *   - enabled_profiles MUST be current enabled set
  *
  * Postconditions:
- *   - Updated entries have current git_oid, blob_oid, and metadata
+ *   - Updated entries have current commit_oid, blob_oid, and metadata
  *   - Released entries marked STATE_RELEASED (orphan pipeline handles cleanup)
  *   - Tracked directories synced to reflect current Git state
  *   - Transaction remains open (caller commits)
@@ -490,7 +490,7 @@ error_t *manifest_detect_stale_profiles(
  * @param enabled_profiles Current enabled profiles (must not be NULL)
  * @param out_stats Output repair statistics (must not be NULL)
  * @param out_repaired_paths Optional output: hashmap of filesystem_path → old_blob_oid
- *            for entries whose blob actually changed. Entries with only git_oid
+ *            for entries whose blob actually changed. Entries with only commit_oid
  *            refresh (same blob) are excluded — they won't trigger content
  *            divergence in workspace, so Path B's guard would skip them anyway.
  *            Caller must free with hashmap_free(map, free). NULL to skip.
@@ -518,7 +518,7 @@ error_t *manifest_repair_stale(
  *   2. Get all current manifest entries and build hashmap for O(1) lookups
  *   3. For each file in new manifest:
  *      - If not in old manifest: add with deployed_at = 0 (rare, file never deployed)
- *      - If owner changed: update source_profile + git_oid (deployed_at preserved)
+ *      - If owner changed: update source_profile + commit_oid (deployed_at preserved)
  *      - If owner unchanged: skip (preserve existing entry)
  *   4. For files in old manifest but not new: remain for orphan detection (apply removes)
  *
@@ -615,7 +615,7 @@ error_t *manifest_reorder_profiles(
  * Performance: O(M + D) where M = total files in all profiles, D = changed files
  *
  * Convergence Semantics:
- *   Sync updates VWD expected state (git_oid, blob_oid) but doesn't deploy to filesystem.
+ *   Sync updates VWD expected state (commit_oid, blob_oid) but doesn't deploy to filesystem.
  *   User must run 'dotta apply' which uses runtime divergence analysis to deploy changes.
  *
  * @param repo Repository (must not be NULL)

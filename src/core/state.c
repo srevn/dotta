@@ -29,7 +29,7 @@
 #include "sys/filesystem.h"
 
 /* Schema version - must match database */
-#define STATE_SCHEMA_VERSION "7"
+#define STATE_SCHEMA_VERSION "8"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -117,29 +117,6 @@ static error_t *sqlite_error(sqlite3 *db, const char *context) {
 }
 
 /**
- * Read a binary OID column (exactly GIT_OID_RAWSZ bytes) into out.
- *
- * The virtual_manifest git_oid and blob_oid columns are BLOB NOT NULL, so any
- * NULL or wrong-length value indicates database corruption. Returning an error
- * there gives a concrete complaint instead of silently copying garbage.
- */
-static error_t *read_oid_column(
-    sqlite3_stmt *stmt, int col, git_oid *out, const char *col_name
-) {
-    const void *blob = sqlite3_column_blob(stmt, col);
-    int size = sqlite3_column_bytes(stmt, col);
-    if (!blob || size != GIT_OID_RAWSZ) {
-        return ERROR(
-            ERR_STATE_INVALID,
-            "Corrupt %s column: expected %d bytes, got %d",
-            col_name, GIT_OID_RAWSZ, size
-        );
-    }
-    memcpy(out->id, blob, GIT_OID_RAWSZ);
-    return NULL;
-}
-
-/**
  * Initialize database schema
  *
  * Creates tables if they don't exist:
@@ -187,7 +164,7 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    profile TEXT NOT NULL,"
         "    old_profile TEXT,"
         "    "
-        "    git_oid BLOB NOT NULL,"
+        "    commit_oid BLOB NOT NULL,"
         "    blob_oid BLOB NOT NULL,"
         "    "
         "    type TEXT NOT NULL CHECK(type IN ('file', 'symlink', 'executable')),"
@@ -489,7 +466,7 @@ static error_t *prepare_statements(state_t *state) {
      * Uses IS NOT for NULL-safe comparison (IS NOT treats NULL = NULL). */
     const char *sql_insert =
         "INSERT INTO virtual_manifest "
-        "(filesystem_path, storage_path, profile, old_profile, git_oid, blob_oid, "
+        "(filesystem_path, storage_path, profile, old_profile, commit_oid, blob_oid, "
         " type, mode, owner, \"group\", encrypted, state, deployed_at, "
         " stat_mtime, stat_size, stat_ino) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
@@ -497,7 +474,7 @@ static error_t *prepare_statements(state_t *state) {
         "  storage_path = excluded.storage_path, "
         "  profile      = excluded.profile, "
         "  old_profile  = COALESCE(excluded.old_profile, virtual_manifest.old_profile), "
-        "  git_oid      = excluded.git_oid, "
+        "  commit_oid   = excluded.commit_oid, "
         "  blob_oid     = excluded.blob_oid, "
         "  type         = excluded.type, "
         "  mode         = excluded.mode, "
@@ -558,7 +535,7 @@ static error_t *prepare_statements(state_t *state) {
      * (blob_oid) without additional bindings. */
     const char *sql_update_entry =
         "UPDATE virtual_manifest SET "
-        "storage_path = ?1, profile = ?2, old_profile = ?3, git_oid = ?4, "
+        "storage_path = ?1, profile = ?2, old_profile = ?3, commit_oid = ?4, "
         "blob_oid = ?5, type = ?6, mode = ?7, owner = ?8, \"group\" = ?9, "
         "encrypted = ?10, state = ?11, deployed_at = ?12, "
         "stat_mtime = CASE WHEN ?5 IS NOT virtual_manifest.blob_oid "
@@ -594,7 +571,7 @@ static error_t *prepare_statements(state_t *state) {
 
     /* Get file (used in workspace analysis) */
     const char *sql_get =
-        "SELECT storage_path, profile, old_profile, git_oid, blob_oid, "
+        "SELECT storage_path, profile, old_profile, commit_oid, blob_oid, "
         "type, mode, owner, \"group\", encrypted, state, deployed_at, "
         "stat_mtime, stat_size, stat_ino "
         "FROM virtual_manifest WHERE filesystem_path = ?;";
@@ -611,7 +588,7 @@ static error_t *prepare_statements(state_t *state) {
 
     /* Get file by storage path (used by profile discovery) */
     const char *sql_get_by_storage =
-        "SELECT filesystem_path, profile, old_profile, git_oid, blob_oid, "
+        "SELECT filesystem_path, profile, old_profile, commit_oid, blob_oid, "
         "type, mode, owner, \"group\", encrypted, state, deployed_at, "
         "stat_mtime, stat_size, stat_ino "
         "FROM virtual_manifest WHERE storage_path = ? AND state = 'active' LIMIT 1;";
@@ -631,7 +608,7 @@ static error_t *prepare_statements(state_t *state) {
 
     /* Get entries by profile (used by profile disable) */
     const char *sql_by_profile =
-        "SELECT filesystem_path, storage_path, profile, old_profile, git_oid, blob_oid, "
+        "SELECT filesystem_path, storage_path, profile, old_profile, commit_oid, blob_oid, "
         "type, mode, owner, \"group\", encrypted, state, deployed_at, "
         "stat_mtime, stat_size, stat_ino FROM virtual_manifest WHERE profile = ?;";
 
@@ -1217,12 +1194,12 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
         sqlite3_bind_null(state->stmt_insert_file, 4);
     }
 
-    /* 5-6. git_oid & blob_oid — bound as 20-byte BLOB. Using entry->x.id (the
+    /* 5-6. commit_oid & blob_oid — bound as 20-byte BLOB. Using entry->x.id (the
      * backing byte array) rather than &entry->x keeps the intent explicit: we
      * are writing the raw hash bytes, not a struct snapshot whose layout happens
      * to start with them. SQLITE_TRANSIENT lets SQLite copy before we modify. */
     sqlite3_bind_blob(
-        state->stmt_insert_file, 5, entry->git_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
+        state->stmt_insert_file, 5, entry->commit_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
     );
     sqlite3_bind_blob(
         state->stmt_insert_file, 6, entry->blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
@@ -1396,10 +1373,10 @@ error_t *state_get_file(
 
     git_oid commit_oid;
     git_oid blob_oid;
-    error_t *err = read_oid_column(stmt, 3, &commit_oid, "git_oid");
-    if (err) return err;
-    err = read_oid_column(stmt, 4, &blob_oid, "blob_oid");
-    if (err) return err;
+    /* Read path trusts sqlite3's schema enforcement: BLOB NOT NULL means non-NULL,
+     * and our own bind path is the only writer so length is always GIT_OID_RAWSZ. */
+    memcpy(commit_oid.id, sqlite3_column_blob(stmt, 3), GIT_OID_RAWSZ);
+    memcpy(blob_oid.id, sqlite3_column_blob(stmt, 4), GIT_OID_RAWSZ);
 
     const char *type_str = (const char *) sqlite3_column_text(stmt, 5);
 
@@ -1440,7 +1417,7 @@ error_t *state_get_file(
 
     /* Create entry (caller owns) */
     state_file_entry_t *entry = NULL;
-    err = state_create_entry(
+    error_t *err = state_create_entry(
         storage_path, filesystem_path, profile, old_profile, type,
         &commit_oid, &blob_oid, mode, owner, group, encrypted != 0,
         state_str, (time_t) deployed_at, &entry
@@ -1492,10 +1469,10 @@ error_t *state_get_file_by_storage(
 
     git_oid commit_oid;
     git_oid blob_oid;
-    error_t *err = read_oid_column(stmt, 3, &commit_oid, "git_oid");
-    if (err) return err;
-    err = read_oid_column(stmt, 4, &blob_oid, "blob_oid");
-    if (err) return err;
+    /* Read path trusts sqlite3's schema enforcement: BLOB NOT NULL means non-NULL,
+     * and our own bind path is the only writer so length is always GIT_OID_RAWSZ. */
+    memcpy(commit_oid.id, sqlite3_column_blob(stmt, 3), GIT_OID_RAWSZ);
+    memcpy(blob_oid.id, sqlite3_column_blob(stmt, 4), GIT_OID_RAWSZ);
 
     const char *type_str = (const char *) sqlite3_column_text(stmt, 5);
 
@@ -1531,7 +1508,7 @@ error_t *state_get_file_by_storage(
     }
 
     state_file_entry_t *entry = NULL;
-    err = state_create_entry(
+    error_t *err = state_create_entry(
         storage_path, filesystem_path, profile, old_profile, type,
         &commit_oid, &blob_oid, mode, owner, group, encrypted != 0,
         state_str, (time_t) deployed_at, &entry
@@ -1611,7 +1588,7 @@ error_t *state_get_all_files(
 
     /* Query all files (16 columns: 13 core + 3 stat cache) */
     const char *sql_files =
-        "SELECT filesystem_path, storage_path, profile, old_profile, git_oid, blob_oid, "
+        "SELECT filesystem_path, storage_path, profile, old_profile, commit_oid, blob_oid, "
         "type, mode, owner, \"group\", encrypted, state, deployed_at, "
         "stat_mtime, stat_size, stat_ino "
         "FROM virtual_manifest ORDER BY filesystem_path;";
@@ -1632,21 +1609,9 @@ error_t *state_get_all_files(
         const char *profile = (const char *) sqlite3_column_text(stmt, 2);
         const char *old_profile = (const char *) sqlite3_column_text(stmt, 3);
 
-        /* Read binary OIDs directly into the entry (no intermediate allocation).
-         * read_oid_column validates the BLOB size; corruption surfaces here with
-         * a concrete complaint rather than propagating garbage into the VWD. */
-        error_t *oid_err = read_oid_column(stmt, 4, &entries[i].git_oid, "git_oid");
-        if (oid_err) {
-            sqlite3_finalize(stmt);
-            if (!arena) state_free_all_files(entries, i);
-            return oid_err;
-        }
-        oid_err = read_oid_column(stmt, 5, &entries[i].blob_oid, "blob_oid");
-        if (oid_err) {
-            sqlite3_finalize(stmt);
-            if (!arena) state_free_all_files(entries, i);
-            return oid_err;
-        }
+        /* Read binary OIDs directly into the entry (no intermediate allocation). */
+        memcpy(entries[i].commit_oid.id, sqlite3_column_blob(stmt, 4), GIT_OID_RAWSZ);
+        memcpy(entries[i].blob_oid.id, sqlite3_column_blob(stmt, 5), GIT_OID_RAWSZ);
 
         const char *type_str = (const char *) sqlite3_column_text(stmt, 6);
 
@@ -1736,7 +1701,7 @@ error_t *state_get_all_files(
 void state_free_all_files(state_file_entry_t *entries, size_t count) {
     if (!entries) return;
 
-    /* git_oid and blob_oid are inline binary fields — no allocation to free. */
+    /* commit_oid and blob_oid are inline binary fields — no allocation to free. */
     for (size_t i = 0; i < count; i++) {
         free(entries[i].filesystem_path);
         free(entries[i].storage_path);
@@ -3099,7 +3064,7 @@ error_t *state_create_entry(
     entry->profile = strdup(profile);
 
     /* Copy binary OIDs (20 bytes each, no allocation) */
-    git_oid_cpy(&entry->git_oid, commit_oid);
+    git_oid_cpy(&entry->commit_oid, commit_oid);
     git_oid_cpy(&entry->blob_oid, blob_oid);
 
     /* Copy optional string fields */
@@ -3383,7 +3348,7 @@ error_t *state_update_entry(
     }
 
     sqlite3_bind_blob(
-        state->stmt_update_entry, 4, entry->git_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
+        state->stmt_update_entry, 4, entry->commit_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
     );
     sqlite3_bind_blob(
         state->stmt_update_entry, 5, entry->blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
@@ -3448,10 +3413,10 @@ error_t *state_update_entry(
 }
 
 /**
- * Update git_oid for all manifest entries from a specific profile
+ * Update commit_oid for all manifest entries from a specific profile
  *
- * Synchronizes git_oid to match the profile's current branch HEAD.
- * Maintains invariant: all files from profile P have git_oid = P's HEAD.
+ * Synchronizes commit_oid to match the profile's current branch HEAD.
+ * Maintains invariant: all files from profile P have commit_oid = P's HEAD.
  *
  * Called after operations that move branch HEAD:
  * - manifest_sync_diff (after pull/merge)
@@ -3464,35 +3429,35 @@ error_t *state_update_entry(
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param profile_name Profile name (must not be NULL)
- * @param new_git_oid New commit OID for profile HEAD (must not be NULL)
+ * @param new_commit_oid New commit OID for profile HEAD (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_update_git_oid_for_profile(
+error_t *state_update_commit_oid_for_profile(
     state_t *state,
     const char *profile_name,
-    const git_oid *new_git_oid
+    const git_oid *new_commit_oid
 ) {
     CHECK_NULL(state);
     CHECK_NULL(state->db);
     CHECK_NULL(profile_name);
-    CHECK_NULL(new_git_oid);
+    CHECK_NULL(new_commit_oid);
 
     /* Update ALL entries for this profile (active and inactive).
-     * Maintains invariant: all files from profile P have git_oid = P's HEAD.
+     * Maintains invariant: all files from profile P have commit_oid = P's HEAD.
      * Inactive entries will be removed by apply, but should stay consistent. */
-    const char *sql = "UPDATE virtual_manifest SET git_oid = ?1 WHERE profile = ?2";
+    const char *sql = "UPDATE virtual_manifest SET commit_oid = ?1 WHERE profile = ?2";
 
     sqlite3_stmt *stmt = NULL;
     int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         return ERROR(
-            ERR_STATE_INVALID, "Failed to prepare git_oid update: %s",
+            ERR_STATE_INVALID, "Failed to prepare commit_oid update: %s",
             sqlite3_errmsg(state->db)
         );
     }
 
     /* Bind parameters (20-byte BLOB for the OID column) */
-    sqlite3_bind_blob(stmt, 1, new_git_oid->id, GIT_OID_RAWSZ, SQLITE_TRANSIENT);
+    sqlite3_bind_blob(stmt, 1, new_commit_oid->id, GIT_OID_RAWSZ, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 2, profile_name, -1, SQLITE_TRANSIENT);
 
     /* Execute */
@@ -3501,7 +3466,7 @@ error_t *state_update_git_oid_for_profile(
 
     if (rc != SQLITE_DONE) {
         return ERROR(
-            ERR_STATE_INVALID, "Failed to update git_oid for profile '%s': %s",
+            ERR_STATE_INVALID, "Failed to update commit_oid for profile '%s': %s",
             profile_name, sqlite3_errmsg(state->db)
         );
     }
@@ -3596,18 +3561,8 @@ error_t *state_get_entries_by_profile(
         const char *old_profile = (const char *) sqlite3_column_text(stmt, 3);
 
         /* Read binary OIDs directly into the entry (no intermediate allocation). */
-        error_t *oid_err = read_oid_column(stmt, 4, &entries[i].git_oid, "git_oid");
-        if (oid_err) {
-            sqlite3_reset(stmt);
-            if (!arena) state_free_all_files(entries, i);
-            return oid_err;
-        }
-        oid_err = read_oid_column(stmt, 5, &entries[i].blob_oid, "blob_oid");
-        if (oid_err) {
-            sqlite3_reset(stmt);
-            if (!arena) state_free_all_files(entries, i);
-            return oid_err;
-        }
+        memcpy(entries[i].commit_oid.id, sqlite3_column_blob(stmt, 4), GIT_OID_RAWSZ);
+        memcpy(entries[i].blob_oid.id, sqlite3_column_blob(stmt, 5), GIT_OID_RAWSZ);
 
         const char *type_str = (const char *) sqlite3_column_text(stmt, 6);
 
@@ -3726,7 +3681,7 @@ void state_free_entry(state_file_entry_t *entry) {
         return;
     }
 
-    /* git_oid and blob_oid are inline binary fields — no allocation to free. */
+    /* commit_oid and blob_oid are inline binary fields — no allocation to free. */
     free(entry->storage_path);
     free(entry->filesystem_path);
     free(entry->profile);

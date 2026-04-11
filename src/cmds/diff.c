@@ -1000,7 +1000,7 @@ static error_t *diff_commit_to_workspace(
      * Query custom_prefix for the matched profile from state. */
     const char *custom_prefix = NULL;
     err = profile_get_custom_prefixes(
-        repo, state, &(string_array_t){ .items = (char **)&profile_name, .count = 1 }, &prefixes
+        repo, state, &(string_array_t){ .items = (char **) &profile_name, .count = 1 }, &prefixes
     );
     if (err) {
         error_free(err);  /* Non-fatal — custom/ paths degrade gracefully */

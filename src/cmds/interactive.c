@@ -306,7 +306,7 @@ static error_t *interactive_save_profile_order(
     }
 
     /* Extract enabled profile names in current display order */
-    string_array_t profiles STRING_ARRAY_AUTO = {0};
+    string_array_t profiles STRING_ARRAY_AUTO = { 0 };
     for (size_t i = 0; i < state->item_count; i++) {
         if (state->items[i].enabled) {
             error_t *push_err = string_array_push(

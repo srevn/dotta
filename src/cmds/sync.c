@@ -1707,11 +1707,11 @@ error_t *cmd_sync(
     /* Repair stale manifest before sync operations.
      *
      * If external Git changes moved a branch HEAD since the last dotta operation,
-     * state entries have stale git_oid/blob_oid values. manifest_sync_diff() computes
+     * state entries have stale commit_oid/blob_oid values. manifest_sync_diff() computes
      * a diff between old_oid (local HEAD before fetch) and new_oid (after merge). It
-     * then calls sync_profile_git_oids() which updates ALL entries' git_oid to match
+     * then calls sync_profile_git_oids() which updates ALL entries' commit_oid to match
      * the new HEAD. This masks pre-existing staleness: files changed between the stale
-     * state and the pre-fetch HEAD would have their git_oid updated (now matching HEAD)
+     * state and the pre-fetch HEAD would have their commit_oid updated (now matching HEAD)
      * but blob_oid unchanged (still from the stale commit). These entries become
      * permanently invisible to staleness detection — ghost entries with wrong blob_oid.
      *

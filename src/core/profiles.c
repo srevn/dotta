@@ -830,8 +830,7 @@ error_t *profile_list_all_local(
  * These are internal files maintained by dotta within each profile branch.
  * They should be excluded when listing user-deployable files.
  */
-static bool profile_is_metadata_path(const char *path)
-{
+static bool profile_is_metadata_path(const char *path) {
     return strcmp(path, ".dottaignore") == 0 ||
            strcmp(path, ".bootstrap") == 0 ||
            strcmp(path, ".gitignore") == 0 ||
@@ -916,8 +915,7 @@ static int tree_walk_callback(
  * @param out String array of storage paths (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-static error_t *profile_list_tree_files(git_tree *tree, string_array_t **out)
-{
+static error_t *profile_list_tree_files(git_tree *tree, string_array_t **out) {
     struct walk_data data = {
         .paths = string_array_new(0),
         .error = NULL
@@ -1162,7 +1160,7 @@ static int manifest_build_callback(
         /* Initialize entry.
          *
          * realloc() does NOT zero new memory. Zero the whole slot first so
-         * every VWD cache field (including the inline git_oid/blob_oid) starts
+         * every VWD cache field (including the inline commit_oid/blob_oid) starts
          * in the "not populated from state" state; then overwrite the fields
          * this Git-built path actually sets. Matches the contract that
          * git_oid_is_zero() == "no state cache". */
@@ -1889,7 +1887,7 @@ void manifest_free(manifest_t *manifest) {
         }
 
         /* Skip string field frees when arena-backed.
-         * git_oid and blob_oid are inline binary fields — no free. */
+         * commit_oid and blob_oid are inline binary fields — no free. */
         if (!manifest->arena_backed) {
             free(manifest->entries[i].storage_path);
             free(manifest->entries[i].filesystem_path);

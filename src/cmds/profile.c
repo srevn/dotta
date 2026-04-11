@@ -1360,8 +1360,8 @@ static error_t *profile_reorder(
 
     /* Update state with new order */
     string_array_t new_order = {
-        .items = opts->profiles,
-        .count = opts->profile_count,
+        .items    = opts->profiles,
+        .count    = opts->profile_count,
         .capacity = opts->profile_count
     };
     err = state_set_profiles(state, &new_order);

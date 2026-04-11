@@ -819,8 +819,9 @@ static error_t *extract_elevation_paths_from_manifest(
 
     size_t count = 0;
     for (size_t i = 0; i < manifest->count; i++) {
-        if (privilege_needs_elevation(manifest->entries[i].storage_path,
-                                     manifest->entries[i].filesystem_path)) {
+        if (privilege_needs_elevation(
+            manifest->entries[i].storage_path, manifest->entries[i].filesystem_path
+            )) {
             paths[count++] = manifest->entries[i].storage_path;
         }
     }

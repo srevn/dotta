@@ -112,7 +112,7 @@ struct workspace {
     hashmap_t *diverged_index;       /* Maps filesystem_path -> array index+1 (as void*) */
 
     /* Staleness tracking */
-    bool manifest_stale;             /* True if any profile had stale git_oid */
+    bool manifest_stale;             /* True if any profile had stale commit_oid */
     hashmap_t *stale_paths;          /* Patched entries (NULL if no staleness) */
     hashmap_t *released_paths;       /* Entries removed from Git (NULL if no staleness) */
     const hashmap_t *repaired_paths; /* From manifest_repair_stale: path -> old_blob_oid (borrowed) */
@@ -751,7 +751,7 @@ static error_t *analyze_file_divergence(
      * Two complementary detection paths:
      *
      * Path A (in-memory patching): For read-only commands (status, diff).
-     * workspace_build_manifest_from_state detected stale git_oid, patched VWD
+     * workspace_build_manifest_from_state detected stale commit_oid, patched VWD
      * cache from fresh Git manifest. Unconditional DIVERGENCE_STALE — safe
      * because read-only commands don't modify files.
      *
@@ -1179,7 +1179,7 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
              *
              * 2. Persistent repair (apply): manifest_repair_stale() already ran and
              *    set STATE_RELEASED in database. The in-memory patching path doesn't
-             *    trigger (git_oids match post-repair), so released_paths is empty.
+             *    trigger (commit_oids match post-repair), so released_paths is empty.
              *    Check state lifecycle directly.
              *
              * Orphaned: File out of scope for other reasons (profile disabled,
@@ -2286,7 +2286,7 @@ static error_t *patch_entry_from_fresh(
     }
 
     /* Arena-allocate replacement strings. Owner/group are the only strings the
-     * patch actually replaces now that git_oid/blob_oid are inline binary. */
+     * patch actually replaces now that commit_oid/blob_oid are inline binary. */
     char *dup_owner = arena_strdup(arena, new_owner);
     char *dup_group = arena_strdup(arena, new_group);
 
@@ -2297,7 +2297,7 @@ static error_t *patch_entry_from_fresh(
         );
     }
 
-    git_oid_cpy(&vwd_entry->git_oid, head_oid);
+    git_oid_cpy(&vwd_entry->commit_oid, head_oid);
     git_oid_cpy(&vwd_entry->blob_oid, blob_oid);
     vwd_entry->type = new_type;
     vwd_entry->mode = new_mode;
@@ -2330,7 +2330,7 @@ static error_t *patch_entry_from_fresh(
  * lazy-loaded only when needed for content display (diffs, conflict resolution).
  *
  * Staleness Detection and In-Memory Patching:
- * After loading state entries, compares each profile's stored git_oid against
+ * After loading state entries, compares each profile's stored commit_oid against
  * the branch's current HEAD. If any profile is stale (external Git changes):
  *   - Builds a fresh manifest from Git via profile_build_manifest()
  *   - Patches VWD cache fields for stale entries found in fresh manifest
@@ -2388,7 +2388,7 @@ static error_t *workspace_build_manifest_from_state(
 
     /* Staleness Detection (Phase 1 of stale manifest healing)
      *
-     * Compare each profile's stored git_oid against its branch's current HEAD.
+     * Compare each profile's stored commit_oid against its branch's current HEAD.
      * If any mismatch: external Git operations occurred, VWD cache is stale.
      *
      * Cost: O(N) scan + O(P) ref lookups where N = entry count,
@@ -2560,10 +2560,10 @@ static error_t *workspace_build_manifest_from_state(
                 /* Populate VWD fields from state (baseline).
                  *
                  * Borrow arena-backed strings (old_profile, owner, group) from
-                 * state entries. git_oid and blob_oid are inline binary struct
+                 * state entries. commit_oid and blob_oid are inline binary struct
                  * copies; patch_entry_from_fresh will overwrite them below. */
                 entry->old_profile = state_entry->old_profile;
-                entry->git_oid = state_entry->git_oid;
+                entry->commit_oid = state_entry->commit_oid;
                 entry->blob_oid = state_entry->blob_oid;
                 entry->type = state_entry->type;
                 entry->mode = state_entry->mode;
@@ -2590,7 +2590,7 @@ static error_t *workspace_build_manifest_from_state(
                  *
                  * When blob_oid is unchanged (profile HEAD moved but this file's
                  * content was not modified in Git), the file is not stale from the
-                 * user's perspective — it just needs a git_oid update in state.
+                 * user's perspective — it just needs a commit_oid update in state.
                  * Flagging these as DIVERGENCE_STALE would show them as "uncommitted
                  * changes" even though their content is correct.
                  *
@@ -2604,7 +2604,7 @@ static error_t *workspace_build_manifest_from_state(
                  * When profile HEAD moved but this file's blob is identical,
                  * the cached stat triple is still valid (it was recorded against
                  * the same blob_oid). Restoring it avoids the slow content-
-                 * comparison path for files that only had a git_oid refresh.
+                 * comparison path for files that only had a commit_oid refresh.
                  *
                  * When blob_oid changed, stat_cache stays STAT_CACHE_UNSET
                  * (from patch_entry_from_fresh), correctly forcing the slow path. */
@@ -2650,7 +2650,7 @@ static error_t *workspace_build_manifest_from_state(
              *
              * Both state entries and manifest entries share the workspace lifetime. */
             entry->old_profile = state_entry->old_profile;
-            entry->git_oid = state_entry->git_oid;
+            entry->commit_oid = state_entry->commit_oid;
             entry->blob_oid = state_entry->blob_oid;
             entry->type = state_entry->type;
             entry->mode = state_entry->mode;

@@ -1821,8 +1821,8 @@ error_t *gitops_blob_view_open(
     }
 
     out->_handle = blob;
-    out->data    = git_blob_rawcontent(blob);
-    out->size    = (size_t) git_blob_rawsize(blob);
+    out->data = git_blob_rawcontent(blob);
+    out->size = (size_t) git_blob_rawsize(blob);
     return NULL;
 }
 
@@ -1869,7 +1869,7 @@ error_t *gitops_read_blob_content(
     ((char *) content)[view.size] = '\0';
 
     *out_content = content;
-    *out_size    = view.size;
+    *out_size = view.size;
 
     gitops_blob_view_close(&view);
     return NULL;

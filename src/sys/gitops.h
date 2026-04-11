@@ -208,11 +208,63 @@ error_t *gitops_find_file_in_tree(
 );
 
 /**
+ * Zero-copy view into a git blob's raw bytes.
+ *
+ * Holds an open git_blob handle and exposes its raw content without
+ * copying. The `data` pointer is owned by libgit2's object cache and
+ * is valid only between gitops_blob_view_open() and
+ * gitops_blob_view_close().
+ *
+ * Use this when you only need to inspect or stream the bytes through
+ * another consumer (e.g. magic header check, decryption pipeline).
+ * Use gitops_read_blob_content() when you need an owned, null-terminated
+ * copy for parsing.
+ *
+ * The `_handle` field is opaque; do not touch it directly.
+ */
+typedef struct {
+    git_blob   *_handle;
+    const void *data;
+    size_t      size;
+} gitops_blob_view_t;
+
+/**
+ * Open a zero-copy view onto a blob.
+ *
+ * On failure, `*out` is left in a safe state (NULL handle/data, zero
+ * size) so gitops_blob_view_close() is a no-op.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param oid Blob OID (must not be NULL)
+ * @param out View handle (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *gitops_blob_view_open(
+    git_repository *repo,
+    const git_oid *oid,
+    gitops_blob_view_t *out
+);
+
+/**
+ * Close a blob view and release its libgit2 handle.
+ *
+ * Safe to call with NULL, a zero-initialised view, or an already-closed
+ * view. After close, all fields are zeroed so double-close is safe.
+ *
+ * @param view View to close (can be NULL)
+ */
+void gitops_blob_view_close(gitops_blob_view_t *view);
+
+/**
  * Read blob content by OID
  *
  * Looks up a blob by OID, copies its content into a caller-owned
  * null-terminated buffer. The returned size is the raw blob size
  * (not including the null terminator).
+ *
+ * For callers that only need to inspect or stream the bytes without
+ * owning a copy, prefer gitops_blob_view_open() to avoid the extra
+ * allocation and memcpy.
  *
  * @param repo Repository (must not be NULL)
  * @param oid Blob OID (must not be NULL)

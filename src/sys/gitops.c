@@ -1629,6 +1629,43 @@ error_t *gitops_find_file_in_tree(
 }
 
 /**
+ * Open a zero-copy view onto a blob
+ */
+error_t *gitops_blob_view_open(
+    git_repository *repo,
+    const git_oid *oid,
+    gitops_blob_view_t *out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(oid);
+    CHECK_NULL(out);
+
+    *out = (gitops_blob_view_t){ 0 };
+
+    git_blob *blob = NULL;
+    int git_err = git_blob_lookup(&blob, repo, oid);
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    out->_handle = blob;
+    out->data    = git_blob_rawcontent(blob);
+    out->size    = (size_t) git_blob_rawsize(blob);
+    return NULL;
+}
+
+/**
+ * Close a blob view
+ */
+void gitops_blob_view_close(gitops_blob_view_t *view) {
+    if (!view || !view->_handle) {
+        return;
+    }
+    git_blob_free(view->_handle);
+    *view = (gitops_blob_view_t){ 0 };
+}
+
+/**
  * Read blob content by OID
  */
 error_t *gitops_read_blob_content(
@@ -1642,30 +1679,27 @@ error_t *gitops_read_blob_content(
     CHECK_NULL(out_content);
     CHECK_NULL(out_size);
 
-    git_blob *blob = NULL;
-    int git_err = git_blob_lookup(&blob, repo, oid);
-    if (git_err < 0) {
-        return error_from_git(git_err);
+    gitops_blob_view_t view;
+    error_t *err = gitops_blob_view_open(repo, oid, &view);
+    if (err) {
+        return err;
     }
 
-    const void *raw = git_blob_rawcontent(blob);
-    size_t size = (size_t) git_blob_rawsize(blob);
-
-    void *content = malloc(size + 1);
+    void *content = malloc(view.size + 1);
     if (!content) {
-        git_blob_free(blob);
+        gitops_blob_view_close(&view);
         return ERROR(ERR_MEMORY, "Failed to allocate blob content buffer");
     }
 
-    if (size > 0) {
-        memcpy(content, raw, size);
+    if (view.size > 0) {
+        memcpy(content, view.data, view.size);
     }
-    ((char *) content)[size] = '\0';
-
-    git_blob_free(blob);
+    ((char *) content)[view.size] = '\0';
 
     *out_content = content;
-    *out_size = size;
+    *out_size    = view.size;
+
+    gitops_blob_view_close(&view);
     return NULL;
 }
 

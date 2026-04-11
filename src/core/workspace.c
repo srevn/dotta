@@ -44,6 +44,7 @@
 #include "infra/compare.h"
 #include "infra/content.h"
 #include "sys/filesystem.h"
+#include "sys/gitops.h"
 #include "utils/privilege.h"
 
 /**
@@ -2085,29 +2086,29 @@ static error_t *analyze_encryption_policy_mismatch(
             continue;
         }
 
-        /* Tier 1: Check magic header in blob (source of truth) */
-        const git_oid *blob_oid = git_tree_entry_id(manifest_entry->entry);
-        git_blob *blob = NULL;
-        int git_err = git_blob_lookup(&blob, ws->repo, blob_oid);
-
-        if (git_err != 0) {
+        /* Tier 1: Check magic header in blob (source of truth).
+         * Zero-copy view — we only peek at the first few header bytes,
+         * so copying the full blob here would be wasteful. */
+        gitops_blob_view_t blob_view;
+        error_t *view_err = gitops_blob_view_open(
+            ws->repo, git_tree_entry_id(manifest_entry->entry), &blob_view
+        );
+        if (view_err) {
             /* Non-fatal: can't read blob - skip this file */
             fprintf(
                 stderr, "warning: failed to read blob for '%s' in profile '%s': %s\n",
                 storage_path, profile_name,
-                git_error_last() ? git_error_last()->message : "unknown error"
+                view_err->message ? view_err->message : "unknown error"
             );
+            error_free(view_err);
             continue;
         }
 
-        const unsigned char *blob_data = git_blob_rawcontent(blob);
-        size_t blob_size = (size_t) git_blob_rawsize(blob);
-        is_encrypted = encryption_is_encrypted(blob_data, blob_size);
+        is_encrypted = encryption_is_encrypted(blob_view.data, blob_view.size);
 
-        /* Free blob immediately — only needed for magic header check above.
+        /* Close view immediately — only needed for magic header check above.
          * Prevents leak if future code adds early returns in metadata block. */
-        git_blob_free(blob);
-        blob = NULL;    /* Poison to catch use-after-free during development */
+        gitops_blob_view_close(&blob_view);
 
         /* Tier 2: Cross-validate with metadata (defense in depth) */
         const metadata_t *metadata = ws_get_metadata(ws, profile_name);

@@ -18,6 +18,7 @@
 #include "crypto/encryption.h"
 #include "crypto/keymanager.h"
 #include "sys/filesystem.h"
+#include "sys/gitops.h"
 
 /**
  * Maximum file size for encryption (100MB)
@@ -73,8 +74,9 @@ static void buffer_destroy_secure(void *ptr) {
 /**
  * Get plaintext from blob (internal workhorse)
  *
- * This function handles the core logic of loading a blob and
- * transparently decrypting it if needed.
+ * This function handles the core logic of transparently decrypting
+ * raw blob bytes if needed. Works on a zero-copy view, so callers
+ * must keep the backing blob alive for the duration of the call.
  *
  * Architecture:
  * - VWD operations: expected_encrypted comes from entry->encrypted (state cache)
@@ -87,8 +89,8 @@ static void buffer_destroy_secure(void *ptr) {
  * 3. Decrypt if needed
  * 4. Return plaintext buffer
  *
- * @param repo Git repository
- * @param blob Loaded git blob (must not be NULL)
+ * @param blob_data Raw blob bytes (must not be NULL unless blob_size == 0)
+ * @param blob_size Raw blob size in bytes
  * @param storage_path File path in profile
  * @param profile_name Profile name
  * @param expected_encrypted Expected encryption state (from VWD cache or metadata)
@@ -97,24 +99,19 @@ static void buffer_destroy_secure(void *ptr) {
  * @return Error or NULL on success
  */
 static error_t *get_plaintext_from_blob(
-    git_repository *repo,
-    git_blob *blob,
+    const unsigned char *blob_data,
+    size_t blob_size,
     const char *storage_path,
     const char *profile_name,
     bool expected_encrypted,
     keymanager_t *km,
     buffer_t *out_content
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(blob);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile_name);
     CHECK_NULL(out_content);
 
     *out_content = (buffer_t){ 0 };
-
-    const unsigned char *blob_data = git_blob_rawcontent(blob);
-    size_t blob_size = (size_t) git_blob_rawsize(blob);
 
     /* Step 1: Check magic header for encryption (source of truth) */
     bool is_encrypted = encryption_is_encrypted(blob_data, blob_size);
@@ -210,23 +207,20 @@ error_t *content_get_from_blob_oid(
     CHECK_NULL(profile_name);
     CHECK_NULL(out_content);
 
-    /* Load blob from repository */
-    git_blob *blob = NULL;
-    int git_err = git_blob_lookup(&blob, repo, blob_oid);
-    if (git_err != 0) {
-        const git_error *e = git_error_last();
-        return ERROR(
-            ERR_NOT_FOUND, "Failed to load blob: %s",
-            e ? e->message : "unknown error"
-        );
+    /* Open zero-copy view onto the blob */
+    gitops_blob_view_t view;
+    error_t *err = gitops_blob_view_open(repo, blob_oid, &view);
+    if (err) {
+        return error_wrap(err, "Failed to load blob for '%s'", storage_path);
     }
 
-    /* Get plaintext content */
-    error_t *err = get_plaintext_from_blob(
-        repo, blob, storage_path, profile_name, expected_encrypted, km, out_content
+    /* Get plaintext content (view bytes valid until close) */
+    err = get_plaintext_from_blob(
+        view.data, view.size, storage_path, profile_name,
+        expected_encrypted, km, out_content
     );
 
-    git_blob_free(blob);
+    gitops_blob_view_close(&view);
     return err;
 }
 
@@ -315,31 +309,27 @@ error_t *content_cache_get_from_blob_oid(
 
     /* Cache miss - load blob and decrypt if needed */
 
-    /* Load blob from repository */
-    git_blob *blob = NULL;
-    int git_err = git_blob_lookup(&blob, cache->repo, blob_oid);
-    if (git_err != 0) {
-        const git_error *e = git_error_last();
-        return ERROR(
-            ERR_NOT_FOUND, "Failed to load blob: %s",
-            e ? e->message : "unknown error"
-        );
+    /* Open zero-copy view onto the blob */
+    gitops_blob_view_t view;
+    error_t *err = gitops_blob_view_open(cache->repo, blob_oid, &view);
+    if (err) {
+        return error_wrap(err, "Failed to load blob for '%s'", storage_path);
     }
 
     /* Heap-allocate buffer for cache storage */
     buffer_t *content = buffer_new(0);
     if (!content) {
-        git_blob_free(blob);
+        gitops_blob_view_close(&view);
         return ERROR(ERR_MEMORY, "Failed to allocate content buffer");
     }
 
-    /* Get plaintext content */
-    error_t *err = get_plaintext_from_blob(
-        cache->repo, blob, storage_path, profile_name, expected_encrypted,
-        cache->km, content
+    /* Get plaintext content (view bytes valid until close) */
+    err = get_plaintext_from_blob(
+        view.data, view.size, storage_path, profile_name,
+        expected_encrypted, cache->km, content
     );
 
-    git_blob_free(blob);
+    gitops_blob_view_close(&view);
 
     if (err) {
         buffer_destroy(content);

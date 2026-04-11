@@ -204,6 +204,39 @@ error_t *profile_list_load(
 );
 
 /**
+ * Peel every profile's cached ref into a profile_name → HEAD-oid-hex map
+ *
+ * Given a loaded profile_list_t, iterates once and peels each profile->ref
+ * to its commit OID, storing a 40-char hex string per entry. The returned
+ * map has borrowed-mode keys (profile->name pointers, owned by the profile
+ * list) and arena-allocated values. Callers free with hashmap_free(map,
+ * NULL); the hex strings are reclaimed when the arena is destroyed.
+ *
+ * Peeling profile->ref (vs. re-resolving by name) mirrors profile_load_tree()
+ * and uniformly handles commit-backed branches as well as orphan branches
+ * pointing directly at a tree. profile_list_load() guarantees profile->ref
+ * is non-NULL for every returned profile, so a missing ref signals a
+ * stack-initialized profile_t that bypassed the loader — this function
+ * reports that as ERR_INTERNAL.
+ *
+ * Typical use: paired with profile_list_load() by any caller that needs to
+ * stamp records with their source profile's current git_oid. See manifest.c
+ * mutation paths.
+ *
+ * @param profiles Loaded profile list (must not be NULL)
+ * @param arena Arena for hex string allocation (must not be NULL; the
+ *              returned map borrows values from this arena)
+ * @param out_map Output hashmap (must not be NULL; caller frees with
+ *                hashmap_free(map, NULL))
+ * @return Error or NULL on success
+ */
+error_t *profile_list_head_oids(
+    const profile_list_t *profiles,
+    arena_t *arena,
+    hashmap_t **out_map
+);
+
+/**
  * Resolve CLI profile names for operation filtering
  *
  * Lightweight validation of CLI profile arguments: checks that each name

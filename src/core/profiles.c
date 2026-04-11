@@ -427,6 +427,75 @@ cleanup:
 }
 
 /**
+ * Peel every profile's cached ref into a profile_name → HEAD-oid-hex map
+ */
+error_t *profile_list_head_oids(
+    const profile_list_t *profiles,
+    arena_t *arena,
+    hashmap_t **out_map
+) {
+    CHECK_NULL(profiles);
+    CHECK_NULL(arena);
+    CHECK_NULL(out_map);
+
+    /* hashmap_borrow(0) falls back to the default capacity, so an empty
+     * profile list is safe — no special-case branch needed here. */
+    hashmap_t *map = hashmap_borrow(profiles->count);
+    if (!map) {
+        return ERROR(ERR_MEMORY, "Failed to create profile oid map");
+    }
+
+    for (size_t i = 0; i < profiles->count; i++) {
+        const profile_t *profile = &profiles->profiles[i];
+
+        /* Invariant: profile_list_load populates ref for every returned
+         * profile. Defensive check guards against stack-allocated profiles
+         * that bypass profile_load. */
+        if (!profile->ref) {
+            hashmap_free(map, NULL);
+            return ERROR(
+                ERR_INTERNAL,
+                "Profile '%s' has no cached reference", profile->name
+            );
+        }
+
+        /* Peel to the underlying commit (or tree, for orphan branches).
+         * git_reference_peel handles both uniformly — mirrors the pattern
+         * in profile_load_tree(). */
+        git_object *obj = NULL;
+        int git_err = git_reference_peel(&obj, profile->ref, GIT_OBJECT_ANY);
+        if (git_err < 0) {
+            hashmap_free(map, NULL);
+            return error_wrap(
+                error_from_git(git_err),
+                "Failed to peel reference for profile '%s'", profile->name
+            );
+        }
+
+        char *oid_str = arena_alloc(arena, GIT_OID_HEXSZ + 1);
+        if (!oid_str) {
+            git_object_free(obj);
+            hashmap_free(map, NULL);
+            return ERROR(ERR_MEMORY, "Failed to allocate oid string");
+        }
+
+        git_oid_tostr(oid_str, GIT_OID_HEXSZ + 1, git_object_id(obj));
+        git_object_free(obj);
+
+        /* Key borrowed from profile->name (owned by the profile list).
+         * Value is arena-owned. Both lifetimes exceed the map's. */
+        error_t *err = hashmap_set(map, profile->name, oid_str);
+        if (err) {
+            hashmap_free(map, NULL);
+            return error_wrap(err, "Failed to add oid to map");
+        }
+    }
+
+    *out_map = map;
+    return NULL;
+}
+
+/**
  * Get custom deployment prefixes for named profiles
  *
  * Queries the state database for custom prefixes. Only profiles with
